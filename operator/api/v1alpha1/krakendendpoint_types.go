@@ -18,35 +18,110 @@ package v1alpha1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
+// +kubebuilder:validation:Enum=Pending;Active;Invalid;Conflicted;Detached
+type EndpointPhase string
+
+const (
+	EndpointPhasePending    EndpointPhase = "Pending"
+	EndpointPhaseActive     EndpointPhase = "Active"
+	EndpointPhaseInvalid    EndpointPhase = "Invalid"
+	EndpointPhaseConflicted EndpointPhase = "Conflicted"
+	EndpointPhaseDetached   EndpointPhase = "Detached"
+)
 
 // KrakenDEndpointSpec defines the desired state of KrakenDEndpoint.
 type KrakenDEndpointSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
+	// GatewayRef references the KrakenDGateway this endpoint belongs to.
+	GatewayRef GatewayRef `json:"gatewayRef"`
 
-	// Foo is an example field of KrakenDEndpoint. Edit krakendendpoint_types.go to remove/update
-	Foo string `json:"foo,omitempty"`
+	// Endpoints is the list of endpoint definitions.
+	Endpoints []EndpointEntry `json:"endpoints"`
+}
+
+// EndpointEntry defines a single KrakenD endpoint.
+type EndpointEntry struct {
+	// Endpoint is the public path exposed by KrakenD (e.g. "/api/v1/users").
+	Endpoint string `json:"endpoint"`
+
+	// Method is the HTTP method (GET, POST, PUT, DELETE, PATCH).
+	Method string `json:"method"`
+
+	// Backends is the list of backend services for this endpoint.
+	Backends []BackendSpec `json:"backends"`
+
+	// Timeout overrides the global endpoint timeout.
+	Timeout *metav1.Duration `json:"timeout,omitempty"`
+
+	// CacheTTL overrides the global cache TTL.
+	CacheTTL *metav1.Duration `json:"cacheTTL,omitempty"`
+
+	// InputHeaders is the list of headers forwarded to backends.
+	InputHeaders []string `json:"inputHeaders,omitempty"`
+
+	// InputQueryStrings is the list of query string parameters forwarded to backends.
+	InputQueryStrings []string `json:"inputQueryStrings,omitempty"`
+
+	// OutputEncoding overrides the default response encoding.
+	OutputEncoding string `json:"outputEncoding,omitempty"`
+
+	// ConcurrentCalls sets concurrent backend calls for this endpoint.
+	ConcurrentCalls *int32 `json:"concurrentCalls,omitempty"`
+
+	// ExtraConfig holds arbitrary endpoint-level extra_config JSON.
+	ExtraConfig *runtime.RawExtension `json:"extraConfig,omitempty"`
+}
+
+// BackendSpec defines a backend service target.
+type BackendSpec struct {
+	// Host is the list of backend host URLs.
+	Host []string `json:"host"`
+
+	// URLPattern is the backend URL path pattern.
+	URLPattern string `json:"urlPattern"`
+
+	// Method overrides the endpoint method for this backend.
+	Method string `json:"method,omitempty"`
+
+	// Encoding selects the backend response encoding.
+	Encoding string `json:"encoding,omitempty"`
+
+	// Allow is the allowlist of response fields to keep.
+	Allow []string `json:"allow,omitempty"`
+
+	// Mapping renames response fields.
+	Mapping map[string]string `json:"mapping,omitempty"`
+
+	// PolicyRef references a KrakenDBackendPolicy to apply.
+	PolicyRef *PolicyRef `json:"policyRef,omitempty"`
+
+	// ExtraConfig holds arbitrary backend-level extra_config JSON.
+	ExtraConfig *runtime.RawExtension `json:"extraConfig,omitempty"`
 }
 
 // KrakenDEndpointStatus defines the observed state of KrakenDEndpoint.
 type KrakenDEndpointStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
+	Phase              EndpointPhase      `json:"phase,omitempty"`
+	ObservedGeneration int64              `json:"observedGeneration,omitempty"`
+	EndpointCount      int32              `json:"endpointCount,omitempty"`
+	Conditions         []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Gateway",type=string,JSONPath=`.spec.gatewayRef.name`
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Endpoints",type=integer,JSONPath=`.status.endpointCount`
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // KrakenDEndpoint is the Schema for the krakendendpoints API.
 type KrakenDEndpoint struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   KrakenDEndpointSpec   `json:"spec,omitempty"`
+	Spec   KrakenDEndpointSpec   `json:"spec"`
 	Status KrakenDEndpointStatus `json:"status,omitempty"`
 }
 

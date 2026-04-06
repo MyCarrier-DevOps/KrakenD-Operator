@@ -18,28 +18,54 @@ package v1alpha1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
-
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
 // KrakenDBackendPolicySpec defines the desired state of KrakenDBackendPolicy.
 type KrakenDBackendPolicySpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
+	// CircuitBreaker configures the circuit breaker for backends referencing this policy.
+	CircuitBreaker *CircuitBreakerSpec `json:"circuitBreaker,omitempty"`
 
-	// Foo is an example field of KrakenDBackendPolicy. Edit krakendbackendpolicy_types.go to remove/update
-	Foo string `json:"foo,omitempty"`
+	// RateLimit configures backend-level rate limiting.
+	RateLimit *RateLimitSpec `json:"rateLimit,omitempty"`
+
+	// Cache configures backend response caching.
+	Cache *CacheSpec `json:"cache,omitempty"`
+
+	// Raw holds arbitrary backend extra_config JSON that is merged verbatim.
+	Raw *runtime.RawExtension `json:"raw,omitempty"`
+}
+
+// CircuitBreakerSpec configures the circuit breaker pattern.
+type CircuitBreakerSpec struct {
+	Interval        int  `json:"interval"`
+	Timeout         int  `json:"timeout"`
+	MaxErrors       int  `json:"maxErrors"`
+	LogStatusChange bool `json:"logStatusChange,omitempty"`
+}
+
+// RateLimitSpec configures backend-level rate limiting.
+type RateLimitSpec struct {
+	MaxRate  int `json:"maxRate"`
+	Capacity int `json:"capacity,omitempty"`
+}
+
+// CacheSpec configures backend response caching.
+type CacheSpec struct {
+	Shared bool `json:"shared,omitempty"`
 }
 
 // KrakenDBackendPolicyStatus defines the observed state of KrakenDBackendPolicy.
 type KrakenDBackendPolicyStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
+	ReferencedBy int                `json:"referencedBy,omitempty"`
+	Conditions   []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:resource:shortName=kbp
+// +kubebuilder:printcolumn:name="ReferencedBy",type=integer,JSONPath=`.status.referencedBy`
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // KrakenDBackendPolicy is the Schema for the krakendbackendpolicies API.
 type KrakenDBackendPolicy struct {
