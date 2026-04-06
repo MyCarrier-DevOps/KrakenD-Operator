@@ -39,6 +39,7 @@ import (
 
 	gatewayv1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/controller"
+	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -47,14 +48,13 @@ var (
 	setupLog = ctrl.Log.WithName("setup")
 )
 
-func init() {
+func init() { //nolint:gochecknoinits // required by controller-runtime scheme registration
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
 	utilruntime.Must(gatewayv1alpha1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
-// nolint:gocyclo
 func main() {
 	var metricsAddr string
 	var metricsCertPath, metricsCertName, metricsCertKey string
@@ -110,9 +110,12 @@ func main() {
 	// Initial webhook TLS options
 	webhookTLSOpts := tlsOpts
 
-	if len(webhookCertPath) > 0 {
+	if webhookCertPath != "" {
 		setupLog.Info("Initializing webhook certificate watcher using provided certificates",
-			"webhook-cert-path", webhookCertPath, "webhook-cert-name", webhookCertName, "webhook-cert-key", webhookCertKey)
+			"webhook-cert-path", webhookCertPath,
+			"webhook-cert-name", webhookCertName,
+			"webhook-cert-key", webhookCertKey,
+		)
 
 		var err error
 		webhookCertWatcher, err = certwatcher.New(
@@ -159,9 +162,12 @@ func main() {
 	// - [METRICS-WITH-CERTS] at config/default/kustomization.yaml to generate and use certificates
 	// managed by cert-manager for the metrics server.
 	// - [PROMETHEUS-WITH-CERTS] at config/prometheus/kustomization.yaml for TLS certification.
-	if len(metricsCertPath) > 0 {
+	if metricsCertPath != "" {
 		setupLog.Info("Initializing metrics certificate watcher using provided certificates",
-			"metrics-cert-path", metricsCertPath, "metrics-cert-name", metricsCertName, "metrics-cert-key", metricsCertKey)
+			"metrics-cert-path", metricsCertPath,
+			"metrics-cert-name", metricsCertName,
+			"metrics-cert-key", metricsCertKey,
+		)
 
 		var err error
 		metricsCertWatcher, err = certwatcher.New(
@@ -202,23 +208,34 @@ func main() {
 		os.Exit(1)
 	}
 
+	krakendRenderer := renderer.New(renderer.Options{})
+	krakendValidator := renderer.NewValidator(renderer.ValidatorOptions{
+		Executor:   renderer.NewKrakenDExecutor("/usr/bin/krakend"),
+		BinaryPath: "/usr/bin/krakend",
+	})
+
 	if err := (&controller.KrakenDGatewayReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		Recorder:  mgr.GetEventRecorderFor("krakendgateway-controller"),
+		Renderer:  krakendRenderer,
+		Validator: krakendValidator,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "KrakenDGateway")
 		os.Exit(1)
 	}
 	if err := (&controller.KrakenDEndpointReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("krakendendpoint-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "KrakenDEndpoint")
 		os.Exit(1)
 	}
 	if err := (&controller.KrakenDBackendPolicyReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("krakendbackendpolicy-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "KrakenDBackendPolicy")
 		os.Exit(1)

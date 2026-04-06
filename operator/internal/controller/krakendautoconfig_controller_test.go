@@ -18,67 +18,23 @@ package controller
 
 import (
 	"context"
+	"testing"
 
-	. "github.com/onsi/ginkgo/v2"
-	. "github.com/onsi/gomega"
-	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
-	gatewayv1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	ctrl "sigs.k8s.io/controller-runtime"
 )
 
-var _ = Describe("KrakenDAutoConfig Controller", func() {
-	Context("When reconciling a resource", func() {
-		const resourceName = "test-resource"
+func TestAutoConfigReconcile_NotFound(t *testing.T) {
+	c := fakeClientBuilder().Build()
+	r := &KrakenDAutoConfigReconciler{Client: c, Scheme: testScheme()}
 
-		ctx := context.Background()
-
-		typeNamespacedName := types.NamespacedName{
-			Name:      resourceName,
-			Namespace: "default", // TODO(user):Modify as needed
-		}
-		krakendautoconfig := &gatewayv1alpha1.KrakenDAutoConfig{}
-
-		BeforeEach(func() {
-			By("creating the custom resource for the Kind KrakenDAutoConfig")
-			err := k8sClient.Get(ctx, typeNamespacedName, krakendautoconfig)
-			if err != nil && errors.IsNotFound(err) {
-				resource := &gatewayv1alpha1.KrakenDAutoConfig{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      resourceName,
-						Namespace: "default",
-					},
-					// TODO(user): Specify other spec details if needed.
-				}
-				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
-			}
-		})
-
-		AfterEach(func() {
-			// TODO(user): Cleanup logic after each test, like removing the resource instance.
-			resource := &gatewayv1alpha1.KrakenDAutoConfig{}
-			err := k8sClient.Get(ctx, typeNamespacedName, resource)
-			Expect(err).NotTo(HaveOccurred())
-
-			By("Cleanup the specific resource instance KrakenDAutoConfig")
-			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
-		})
-		It("should successfully reconcile the resource", func() {
-			By("Reconciling the created resource")
-			controllerReconciler := &KrakenDAutoConfigReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
-			}
-
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
-			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
-			// Example: If you expect a certain status condition after reconciliation, verify it here.
-		})
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "missing", Namespace: "default"},
 	})
-})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Requeue {
+		t.Error("should not requeue for missing resource")
+	}
+}
