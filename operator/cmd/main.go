@@ -40,6 +40,8 @@ import (
 	gatewayv1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/controller"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
+	licenseutil "github.com/mycarrier-devops/krakend-operator/internal/util/license"
+	"k8s.io/utils/clock"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -248,6 +250,17 @@ func main() {
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder
+
+	licenseMonitor := controller.NewLicenseMonitor(
+		mgr.GetClient(),
+		mgr.GetEventRecorderFor("license-monitor"),
+		clock.RealClock{},
+		licenseutil.NewX509LicenseParser(),
+	)
+	if err := mgr.Add(licenseMonitor); err != nil {
+		setupLog.Error(err, "unable to add license monitor")
+		os.Exit(1)
+	}
 
 	if metricsCertWatcher != nil {
 		setupLog.Info("Adding metrics certificate watcher to manager")
