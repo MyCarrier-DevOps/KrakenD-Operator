@@ -11,10 +11,25 @@ spec:
     kind: KrakenDGateway
     listKind: KrakenDGatewayList
     plural: krakendgateways
+    shortNames:
+    - kgw
     singular: krakendgateway
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .spec.edition
+      name: Edition
+      type: string
+    - jsonPath: .spec.version
+      name: Version
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: KrakenDGateway is the Schema for the krakendgateways API.
@@ -39,14 +54,856 @@ spec:
           spec:
             description: KrakenDGatewaySpec defines the desired state of KrakenDGateway.
             properties:
-              foo:
-                description: Foo is an example field of KrakenDGateway. Edit krakendgateway_types.go
-                  to remove/update
+              autoscaling:
+                description: Autoscaling configures the HorizontalPodAutoscaler for
+                  KrakenD pods.
+                properties:
+                  maxReplicas:
+                    format: int32
+                    type: integer
+                  minReplicas:
+                    format: int32
+                    type: integer
+                  targetCPUUtilizationPercentage:
+                    format: int32
+                    type: integer
+                required:
+                - maxReplicas
+                type: object
+              ceImage:
+                description: CEImage overrides the default KrakenD CE image used as
+                  fallback.
                 type: string
+              config:
+                description: Config holds gateway-level KrakenD configuration.
+                properties:
+                  cacheTTL:
+                    description: CacheTTL is the global cache TTL (e.g. "0s").
+                    type: string
+                  cors:
+                    description: CORS configures Cross-Origin Resource Sharing headers.
+                    properties:
+                      allowHeaders:
+                        items:
+                          type: string
+                        type: array
+                      allowMethods:
+                        items:
+                          type: string
+                        type: array
+                      allowOrigins:
+                        items:
+                          type: string
+                        type: array
+                      maxAge:
+                        type: string
+                    type: object
+                  dnsCacheTTL:
+                    description: DNSCacheTTL is the DNS lookup cache duration (e.g.
+                      "30s").
+                    type: string
+                  extraConfig:
+                    description: ExtraConfig holds arbitrary gateway-level extra_config
+                      JSON.
+                    type: object
+                    x-kubernetes-preserve-unknown-fields: true
+                  logging:
+                    description: Logging configures KrakenD logging behavior.
+                    properties:
+                      format:
+                        type: string
+                      level:
+                        type: string
+                      stdout:
+                        type: boolean
+                    type: object
+                  outputEncoding:
+                    description: 'OutputEncoding selects the default response encoding:
+                      json, negotiate, no-op.'
+                    type: string
+                  port:
+                    description: Port is the KrakenD listen port (default 8080).
+                    format: int32
+                    type: integer
+                  router:
+                    description: Router configures KrakenD router behavior.
+                    properties:
+                      autoOptions:
+                        type: boolean
+                      disableAccessLog:
+                        type: boolean
+                      healthPath:
+                        type: string
+                      returnErrorMsg:
+                        type: boolean
+                    type: object
+                  security:
+                    description: Security configures HTTP security headers.
+                    properties:
+                      browserXssFilter:
+                        type: boolean
+                      contentSecurityPolicy:
+                        type: string
+                      contentTypeNosniff:
+                        type: boolean
+                      frameOptions:
+                        type: string
+                      hstsSeconds:
+                        format: int64
+                        type: integer
+                      sslProxyHeaders:
+                        additionalProperties:
+                          type: string
+                        type: object
+                      sslRedirect:
+                        type: boolean
+                    type: object
+                  telemetry:
+                    description: Telemetry configures observability integrations.
+                    properties:
+                      openTelemetry:
+                        description: OpenTelemetryConfig configures OpenTelemetry
+                          export.
+                        properties:
+                          exporters:
+                            description: OTelExporters configures OpenTelemetry exporters.
+                            properties:
+                              otlp:
+                                description: OTLPExporter configures the OTLP exporter.
+                                properties:
+                                  host:
+                                    type: string
+                                  port:
+                                    format: int32
+                                    type: integer
+                                required:
+                                - host
+                                type: object
+                            type: object
+                          serviceName:
+                            type: string
+                        type: object
+                      prometheus:
+                        description: PrometheusConfig configures the Prometheus metrics
+                          exporter.
+                        properties:
+                          enabled:
+                            type: boolean
+                          port:
+                            format: int32
+                            type: integer
+                        type: object
+                    type: object
+                  timeout:
+                    description: Timeout is the global request timeout (e.g. "3s").
+                    type: string
+                type: object
+              dragonfly:
+                description: Dragonfly configures an in-cluster Dragonfly instance
+                  for caching.
+                properties:
+                  args:
+                    items:
+                      type: string
+                    type: array
+                  authentication:
+                    description: DragonflyAuthSpec configures Dragonfly authentication.
+                    properties:
+                      passwordFromSecret:
+                        description: SecretKeySelector selects a key of a Secret.
+                        properties:
+                          key:
+                            description: The key of the secret to select from.  Must
+                              be a valid secret key.
+                            type: string
+                          name:
+                            default: ""
+                            description: |-
+                              Name of the referent.
+                              This field is effectively required, but due to backwards compatibility is
+                              allowed to be empty. Instances of this type with an empty value here are
+                              almost certainly wrong.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                          optional:
+                            description: Specify whether the Secret or its key must
+                              be defined
+                            type: boolean
+                        required:
+                        - key
+                        type: object
+                        x-kubernetes-map-type: atomic
+                    type: object
+                  enabled:
+                    type: boolean
+                  image:
+                    type: string
+                  replicas:
+                    format: int32
+                    type: integer
+                  resources:
+                    description: ResourceRequirements describes the compute resource
+                      requirements.
+                    properties:
+                      claims:
+                        description: |-
+                          Claims lists the names of resources, defined in spec.resourceClaims,
+                          that are used by this container.
+
+                          This is an alpha field and requires enabling the
+                          DynamicResourceAllocation feature gate.
+
+                          This field is immutable. It can only be set for containers.
+                        items:
+                          description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                          properties:
+                            name:
+                              description: |-
+                                Name must match the name of one entry in pod.spec.resourceClaims of
+                                the Pod where this field is used. It makes that resource available
+                                inside a container.
+                              type: string
+                            request:
+                              description: |-
+                                Request is the name chosen for a request in the referenced claim.
+                                If empty, everything from the claim is made available, otherwise
+                                only the result of this request.
+                              type: string
+                          required:
+                          - name
+                          type: object
+                        type: array
+                        x-kubernetes-list-map-keys:
+                        - name
+                        x-kubernetes-list-type: map
+                      limits:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: |-
+                          Limits describes the maximum amount of compute resources allowed.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                      requests:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: |-
+                          Requests describes the minimum amount of compute resources required.
+                          If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                          otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                    type: object
+                  snapshot:
+                    description: DragonflySnapshotSpec configures Dragonfly snapshotting.
+                    properties:
+                      cron:
+                        type: string
+                      persistentVolumeClaimSpec:
+                        description: |-
+                          PersistentVolumeClaimSpec describes the common attributes of storage devices
+                          and allows a Source for provider-specific attributes
+                        properties:
+                          accessModes:
+                            description: |-
+                              accessModes contains the desired access modes the volume should have.
+                              More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#access-modes-1
+                            items:
+                              type: string
+                            type: array
+                            x-kubernetes-list-type: atomic
+                          dataSource:
+                            description: |-
+                              dataSource field can be used to specify either:
+                              * An existing VolumeSnapshot object (snapshot.storage.k8s.io/VolumeSnapshot)
+                              * An existing PVC (PersistentVolumeClaim)
+                              If the provisioner or an external controller can support the specified data source,
+                              it will create a new volume based on the contents of the specified data source.
+                              When the AnyVolumeDataSource feature gate is enabled, dataSource contents will be copied to dataSourceRef,
+                              and dataSourceRef contents will be copied to dataSource when dataSourceRef.namespace is not specified.
+                              If the namespace is specified, then dataSourceRef will not be copied to dataSource.
+                            properties:
+                              apiGroup:
+                                description: |-
+                                  APIGroup is the group for the resource being referenced.
+                                  If APIGroup is not specified, the specified Kind must be in the core API group.
+                                  For any other third-party types, APIGroup is required.
+                                type: string
+                              kind:
+                                description: Kind is the type of resource being referenced
+                                type: string
+                              name:
+                                description: Name is the name of resource being referenced
+                                type: string
+                            required:
+                            - kind
+                            - name
+                            type: object
+                            x-kubernetes-map-type: atomic
+                          dataSourceRef:
+                            description: |-
+                              dataSourceRef specifies the object from which to populate the volume with data, if a non-empty
+                              volume is desired. This may be any object from a non-empty API group (non
+                              core object) or a PersistentVolumeClaim object.
+                              When this field is specified, volume binding will only succeed if the type of
+                              the specified object matches some installed volume populator or dynamic
+                              provisioner.
+                              This field will replace the functionality of the dataSource field and as such
+                              if both fields are non-empty, they must have the same value. For backwards
+                              compatibility, when namespace isn't specified in dataSourceRef,
+                              both fields (dataSource and dataSourceRef) will be set to the same
+                              value automatically if one of them is empty and the other is non-empty.
+                              When namespace is specified in dataSourceRef,
+                              dataSource isn't set to the same value and must be empty.
+                              There are three important differences between dataSource and dataSourceRef:
+                              * While dataSource only allows two specific types of objects, dataSourceRef
+                                allows any non-core object, as well as PersistentVolumeClaim objects.
+                              * While dataSource ignores disallowed values (dropping them), dataSourceRef
+                                preserves all values, and generates an error if a disallowed value is
+                                specified.
+                              * While dataSource only allows local objects, dataSourceRef allows objects
+                                in any namespaces.
+                              (Beta) Using this field requires the AnyVolumeDataSource feature gate to be enabled.
+                              (Alpha) Using the namespace field of dataSourceRef requires the CrossNamespaceVolumeDataSource feature gate to be enabled.
+                            properties:
+                              apiGroup:
+                                description: |-
+                                  APIGroup is the group for the resource being referenced.
+                                  If APIGroup is not specified, the specified Kind must be in the core API group.
+                                  For any other third-party types, APIGroup is required.
+                                type: string
+                              kind:
+                                description: Kind is the type of resource being referenced
+                                type: string
+                              name:
+                                description: Name is the name of resource being referenced
+                                type: string
+                              namespace:
+                                description: |-
+                                  Namespace is the namespace of resource being referenced
+                                  Note that when a namespace is specified, a gateway.networking.k8s.io/ReferenceGrant object is required in the referent namespace to allow that namespace's owner to accept the reference. See the ReferenceGrant documentation for details.
+                                  (Alpha) This field requires the CrossNamespaceVolumeDataSource feature gate to be enabled.
+                                type: string
+                            required:
+                            - kind
+                            - name
+                            type: object
+                          resources:
+                            description: |-
+                              resources represents the minimum resources the volume should have.
+                              If RecoverVolumeExpansionFailure feature is enabled users are allowed to specify resource requirements
+                              that are lower than previous value but must still be higher than capacity recorded in the
+                              status field of the claim.
+                              More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#resources
+                            properties:
+                              limits:
+                                additionalProperties:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                                description: |-
+                                  Limits describes the maximum amount of compute resources allowed.
+                                  More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                                type: object
+                              requests:
+                                additionalProperties:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                                description: |-
+                                  Requests describes the minimum amount of compute resources required.
+                                  If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                                  otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                                  More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                                type: object
+                            type: object
+                          selector:
+                            description: selector is a label query over volumes to
+                              consider for binding.
+                            properties:
+                              matchExpressions:
+                                description: matchExpressions is a list of label selector
+                                  requirements. The requirements are ANDed.
+                                items:
+                                  description: |-
+                                    A label selector requirement is a selector that contains values, a key, and an operator that
+                                    relates the key and values.
+                                  properties:
+                                    key:
+                                      description: key is the label key that the selector
+                                        applies to.
+                                      type: string
+                                    operator:
+                                      description: |-
+                                        operator represents a key's relationship to a set of values.
+                                        Valid operators are In, NotIn, Exists and DoesNotExist.
+                                      type: string
+                                    values:
+                                      description: |-
+                                        values is an array of string values. If the operator is In or NotIn,
+                                        the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                        the values array must be empty. This array is replaced during a strategic
+                                        merge patch.
+                                      items:
+                                        type: string
+                                      type: array
+                                      x-kubernetes-list-type: atomic
+                                  required:
+                                  - key
+                                  - operator
+                                  type: object
+                                type: array
+                                x-kubernetes-list-type: atomic
+                              matchLabels:
+                                additionalProperties:
+                                  type: string
+                                description: |-
+                                  matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                                  map is equivalent to an element of matchExpressions, whose key field is "key", the
+                                  operator is "In", and the values array contains only "value". The requirements are ANDed.
+                                type: object
+                            type: object
+                            x-kubernetes-map-type: atomic
+                          storageClassName:
+                            description: |-
+                              storageClassName is the name of the StorageClass required by the claim.
+                              More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#class-1
+                            type: string
+                          volumeAttributesClassName:
+                            description: |-
+                              volumeAttributesClassName may be used to set the VolumeAttributesClass used by this claim.
+                              If specified, the CSI driver will create or update the volume with the attributes defined
+                              in the corresponding VolumeAttributesClass. This has a different purpose than storageClassName,
+                              it can be changed after the claim is created. An empty string value means that no VolumeAttributesClass
+                              will be applied to the claim but it's not allowed to reset this field to empty string once it is set.
+                              If unspecified and the PersistentVolumeClaim is unbound, the default VolumeAttributesClass
+                              will be set by the persistentvolume controller if it exists.
+                              If the resource referred to by volumeAttributesClass does not exist, this PersistentVolumeClaim will be
+                              set to a Pending state, as reflected by the modifyVolumeStatus field, until such as a resource
+                              exists.
+                              More info: https://kubernetes.io/docs/concepts/storage/volume-attributes-classes/
+                              (Beta) Using this field requires the VolumeAttributesClass feature gate to be enabled (off by default).
+                            type: string
+                          volumeMode:
+                            description: |-
+                              volumeMode defines what type of volume is required by the claim.
+                              Value of Filesystem is implied when not included in claim spec.
+                            type: string
+                          volumeName:
+                            description: volumeName is the binding reference to the
+                              PersistentVolume backing this claim.
+                            type: string
+                        type: object
+                    type: object
+                required:
+                - enabled
+                type: object
+              edition:
+                description: 'Edition selects the KrakenD edition: "CE" (Community)
+                  or "EE" (Enterprise).'
+                enum:
+                - CE
+                - EE
+                type: string
+              image:
+                description: Image overrides the default KrakenD EE image.
+                type: string
+              istio:
+                description: Istio configures Istio VirtualService integration.
+                properties:
+                  enabled:
+                    type: boolean
+                  gateways:
+                    items:
+                      type: string
+                    type: array
+                  hosts:
+                    items:
+                      type: string
+                    type: array
+                required:
+                - enabled
+                type: object
+              license:
+                description: License configures the Enterprise license source.
+                properties:
+                  expiryWarningDays:
+                    type: integer
+                  externalSecret:
+                    description: ExternalSecretLicenseConfig configures an ExternalSecret
+                      for the license.
+                    properties:
+                      enabled:
+                        type: boolean
+                      remoteRef:
+                        description: ExternalRemoteRef references a key in an external
+                          secrets store.
+                        properties:
+                          key:
+                            type: string
+                          property:
+                            type: string
+                        required:
+                        - key
+                        type: object
+                      secretStoreRef:
+                        description: SecretStoreRef references a SecretStore or ClusterSecretStore.
+                        properties:
+                          kind:
+                            type: string
+                          name:
+                            type: string
+                        required:
+                        - name
+                        type: object
+                    type: object
+                  fallbackToCE:
+                    type: boolean
+                  secretRef:
+                    description: SecretKeySelector selects a key of a Secret.
+                    properties:
+                      key:
+                        description: The key of the secret to select from.  Must be
+                          a valid secret key.
+                        type: string
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                      optional:
+                        description: Specify whether the Secret or its key must be
+                          defined
+                        type: boolean
+                    required:
+                    - key
+                    type: object
+                    x-kubernetes-map-type: atomic
+                type: object
+              plugins:
+                description: Plugins configures KrakenD plugin sources.
+                properties:
+                  sources:
+                    items:
+                      description: PluginSource defines a single plugin source (one
+                        of imageRef, configMapRef, or persistentVolumeClaimRef).
+                      properties:
+                        configMapRef:
+                          description: ConfigMapKeyRef references a key within a ConfigMap.
+                          properties:
+                            key:
+                              type: string
+                            name:
+                              type: string
+                          required:
+                          - name
+                          type: object
+                        imageRef:
+                          description: OCIImageRef references a plugin container image.
+                          properties:
+                            image:
+                              type: string
+                            imagePullSecrets:
+                              items:
+                                description: |-
+                                  LocalObjectReference contains enough information to let you locate the
+                                  referenced object inside the same namespace.
+                                properties:
+                                  name:
+                                    default: ""
+                                    description: |-
+                                      Name of the referent.
+                                      This field is effectively required, but due to backwards compatibility is
+                                      allowed to be empty. Instances of this type with an empty value here are
+                                      almost certainly wrong.
+                                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                    type: string
+                                type: object
+                                x-kubernetes-map-type: atomic
+                              type: array
+                            pullPolicy:
+                              description: PullPolicy describes a policy for if/when
+                                to pull a container image
+                              type: string
+                          required:
+                          - image
+                          type: object
+                        persistentVolumeClaimRef:
+                          description: |-
+                            PersistentVolumeClaimVolumeSource references the user's PVC in the same namespace.
+                            This volume finds the bound PV and mounts that volume for the pod. A
+                            PersistentVolumeClaimVolumeSource is, essentially, a wrapper around another
+                            type of volume that is owned by someone else (the system).
+                          properties:
+                            claimName:
+                              description: |-
+                                claimName is the name of a PersistentVolumeClaim in the same namespace as the pod using this volume.
+                                More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#persistentvolumeclaims
+                              type: string
+                            readOnly:
+                              description: |-
+                                readOnly Will force the ReadOnly setting in VolumeMounts.
+                                Default false.
+                              type: boolean
+                          required:
+                          - claimName
+                          type: object
+                      type: object
+                    type: array
+                required:
+                - sources
+                type: object
+              redis:
+                description: Redis configures the connection pool to an external Redis/Dragonfly.
+                properties:
+                  connectionPool:
+                    description: RedisConnectionPool holds Redis connection pool parameters.
+                    properties:
+                      addresses:
+                        items:
+                          type: string
+                        type: array
+                      dialTimeout:
+                        type: string
+                      minIdleConns:
+                        type: integer
+                      password:
+                        description: SecretKeySelector selects a key of a Secret.
+                        properties:
+                          key:
+                            description: The key of the secret to select from.  Must
+                              be a valid secret key.
+                            type: string
+                          name:
+                            default: ""
+                            description: |-
+                              Name of the referent.
+                              This field is effectively required, but due to backwards compatibility is
+                              allowed to be empty. Instances of this type with an empty value here are
+                              almost certainly wrong.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                          optional:
+                            description: Specify whether the Secret or its key must
+                              be defined
+                            type: boolean
+                        required:
+                        - key
+                        type: object
+                        x-kubernetes-map-type: atomic
+                      poolSize:
+                        type: integer
+                      readTimeout:
+                        type: string
+                      tls:
+                        description: RedisTLSConfig configures TLS for Redis connections.
+                        properties:
+                          enabled:
+                            type: boolean
+                          secretName:
+                            type: string
+                        type: object
+                      writeTimeout:
+                        type: string
+                    required:
+                    - addresses
+                    type: object
+                required:
+                - connectionPool
+                type: object
+              replicas:
+                description: Replicas is the desired number of KrakenD pods when autoscaling
+                  is not configured.
+                format: int32
+                type: integer
+              resources:
+                description: Resources defines the compute resource requirements for
+                  KrakenD pods.
+                properties:
+                  claims:
+                    description: |-
+                      Claims lists the names of resources, defined in spec.resourceClaims,
+                      that are used by this container.
+
+                      This is an alpha field and requires enabling the
+                      DynamicResourceAllocation feature gate.
+
+                      This field is immutable. It can only be set for containers.
+                    items:
+                      description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                      properties:
+                        name:
+                          description: |-
+                            Name must match the name of one entry in pod.spec.resourceClaims of
+                            the Pod where this field is used. It makes that resource available
+                            inside a container.
+                          type: string
+                        request:
+                          description: |-
+                            Request is the name chosen for a request in the referenced claim.
+                            If empty, everything from the claim is made available, otherwise
+                            only the result of this request.
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  limits:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Limits describes the maximum amount of compute resources allowed.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                  requests:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Requests describes the minimum amount of compute resources required.
+                      If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                      otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                type: object
+              tls:
+                description: TLS configures TLS termination at the KrakenD pod level.
+                properties:
+                  enabled:
+                    type: boolean
+                  minVersion:
+                    type: string
+                  privateKey:
+                    type: string
+                  publicKey:
+                    type: string
+                type: object
+              version:
+                description: Version is the KrakenD version to deploy (e.g. "2.13").
+                type: string
+            required:
+            - config
+            - edition
+            - version
             type: object
           status:
             description: KrakenDGatewayStatus defines the observed state of KrakenDGateway.
+            properties:
+              activeImage:
+                type: string
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              configChecksum:
+                type: string
+              dragonflyAddress:
+                type: string
+              endpointCount:
+                format: int32
+                type: integer
+              licenseExpiry:
+                format: date-time
+                type: string
+              observedGeneration:
+                format: int64
+                type: integer
+              phase:
+                enum:
+                - Pending
+                - Rendering
+                - Validating
+                - Deploying
+                - Running
+                - Degraded
+                - Error
+                type: string
+              readyReplicas:
+                format: int32
+                type: integer
+              replicas:
+                format: int32
+                type: integer
             type: object
+        required:
+        - spec
         type: object
     served: true
     storage: true
