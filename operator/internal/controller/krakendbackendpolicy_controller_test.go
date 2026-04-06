@@ -18,67 +18,292 @@ package controller
 
 import (
 	"context"
+	"testing"
 
-	. "github.com/onsi/ginkgo/v2"
-	. "github.com/onsi/gomega"
-	"k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-
+	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
-	gatewayv1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-var _ = Describe("KrakenDBackendPolicy Controller", func() {
-	Context("When reconciling a resource", func() {
-		const resourceName = "test-resource"
+func TestPolicyReconcile_NotFound(t *testing.T) {
+	c := fakeClientBuilder().Build()
+	rec := fakeRecorder()
+	r := &KrakenDBackendPolicyReconciler{Client: c, Scheme: testScheme(), Recorder: rec}
 
-		ctx := context.Background()
-
-		typeNamespacedName := types.NamespacedName{
-			Name:      resourceName,
-			Namespace: "default", // TODO(user):Modify as needed
-		}
-		krakendbackendpolicy := &gatewayv1alpha1.KrakenDBackendPolicy{}
-
-		BeforeEach(func() {
-			By("creating the custom resource for the Kind KrakenDBackendPolicy")
-			err := k8sClient.Get(ctx, typeNamespacedName, krakendbackendpolicy)
-			if err != nil && errors.IsNotFound(err) {
-				resource := &gatewayv1alpha1.KrakenDBackendPolicy{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      resourceName,
-						Namespace: "default",
-					},
-					// TODO(user): Specify other spec details if needed.
-				}
-				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
-			}
-		})
-
-		AfterEach(func() {
-			// TODO(user): Cleanup logic after each test, like removing the resource instance.
-			resource := &gatewayv1alpha1.KrakenDBackendPolicy{}
-			err := k8sClient.Get(ctx, typeNamespacedName, resource)
-			Expect(err).NotTo(HaveOccurred())
-
-			By("Cleanup the specific resource instance KrakenDBackendPolicy")
-			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
-		})
-		It("should successfully reconcile the resource", func() {
-			By("Reconciling the created resource")
-			controllerReconciler := &KrakenDBackendPolicyReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
-			}
-
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
-			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
-			// Example: If you expect a certain status condition after reconciliation, verify it here.
-		})
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "missing", Namespace: "default"},
 	})
-})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Requeue {
+		t.Error("should not requeue for missing resource")
+	}
+}
+
+func TestPolicyReconcile_NoReferences(t *testing.T) {
+	policy := &v1alpha1.KrakenDBackendPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "pol1", Namespace: "default"},
+		Spec: v1alpha1.KrakenDBackendPolicySpec{
+			RateLimit: &v1alpha1.RateLimitSpec{MaxRate: 100},
+		},
+	}
+	c := fakeClientBuilder().
+		WithObjects(policy).
+		WithStatusSubresource(policy).
+		Build()
+	rec := fakeRecorder()
+	r := &KrakenDBackendPolicyReconciler{Client: c, Scheme: testScheme(), Recorder: rec}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: client.ObjectKeyFromObject(policy),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var updated v1alpha1.KrakenDBackendPolicy
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(policy), &updated); err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status.ReferencedBy != 0 {
+		t.Errorf("expected 0 references, got %d", updated.Status.ReferencedBy)
+	}
+}
+
+func TestPolicyReconcile_WithReferences(t *testing.T) {
+	policy := &v1alpha1.KrakenDBackendPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "pol1", Namespace: "default"},
+		Spec: v1alpha1.KrakenDBackendPolicySpec{
+			RateLimit: &v1alpha1.RateLimitSpec{MaxRate: 100},
+		},
+	}
+	ep1 := &v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "ep1", Namespace: "default"},
+		Spec: v1alpha1.KrakenDEndpointSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: "gw1"},
+			Endpoints: []v1alpha1.EndpointEntry{
+				{
+					Endpoint: "/test",
+					Method:   "GET",
+					Backends: []v1alpha1.BackendSpec{
+						{
+							Host:       []string{"http://svc:8080"},
+							URLPattern: "/",
+							PolicyRef:  &v1alpha1.PolicyRef{Name: "pol1"},
+						},
+					},
+				},
+			},
+		},
+	}
+	ep2 := &v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "ep2", Namespace: "default"},
+		Spec: v1alpha1.KrakenDEndpointSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: "gw1"},
+			Endpoints: []v1alpha1.EndpointEntry{
+				{
+					Endpoint: "/other",
+					Method:   "POST",
+					Backends: []v1alpha1.BackendSpec{
+						{
+							Host:       []string{"http://svc2:8080"},
+							URLPattern: "/other",
+							PolicyRef:  &v1alpha1.PolicyRef{Name: "pol1"},
+						},
+					},
+				},
+			},
+		},
+	}
+	ep3 := &v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "ep3", Namespace: "default"},
+		Spec: v1alpha1.KrakenDEndpointSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: "gw1"},
+			Endpoints: []v1alpha1.EndpointEntry{
+				{
+					Endpoint: "/nopolicy",
+					Method:   "GET",
+					Backends: []v1alpha1.BackendSpec{
+						{Host: []string{"http://svc3:8080"}, URLPattern: "/"},
+					},
+				},
+			},
+		},
+	}
+	c := fakeClientBuilder().
+		WithObjects(policy, ep1, ep2, ep3).
+		WithStatusSubresource(policy).
+		Build()
+	rec := fakeRecorder()
+	r := &KrakenDBackendPolicyReconciler{Client: c, Scheme: testScheme(), Recorder: rec}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: client.ObjectKeyFromObject(policy),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var updated v1alpha1.KrakenDBackendPolicy
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(policy), &updated); err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status.ReferencedBy != 2 {
+		t.Errorf("expected 2 references, got %d", updated.Status.ReferencedBy)
+	}
+}
+
+func TestPolicyReconcile_InvalidCircuitBreaker(t *testing.T) {
+	policy := &v1alpha1.KrakenDBackendPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "pol1", Namespace: "default"},
+		Spec: v1alpha1.KrakenDBackendPolicySpec{
+			CircuitBreaker: &v1alpha1.CircuitBreakerSpec{
+				MaxErrors: 0,
+				Interval:  60,
+				Timeout:   30,
+			},
+		},
+	}
+	c := fakeClientBuilder().
+		WithObjects(policy).
+		WithStatusSubresource(policy).
+		Build()
+	rec := fakeRecorder()
+	r := &KrakenDBackendPolicyReconciler{Client: c, Scheme: testScheme(), Recorder: rec}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: client.ObjectKeyFromObject(policy),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var updated v1alpha1.KrakenDBackendPolicy
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(policy), &updated); err != nil {
+		t.Fatal(err)
+	}
+
+	found := false
+	for _, c := range updated.Status.Conditions {
+		if c.Type == "Valid" && c.Status == metav1.ConditionFalse {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected Valid=False condition for invalid circuit breaker")
+	}
+}
+
+func TestPolicyReconcile_InvalidRateLimit(t *testing.T) {
+	policy := &v1alpha1.KrakenDBackendPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "pol1", Namespace: "default"},
+		Spec: v1alpha1.KrakenDBackendPolicySpec{
+			RateLimit: &v1alpha1.RateLimitSpec{MaxRate: -1},
+		},
+	}
+	c := fakeClientBuilder().
+		WithObjects(policy).
+		WithStatusSubresource(policy).
+		Build()
+	r := &KrakenDBackendPolicyReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: client.ObjectKeyFromObject(policy),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var updated v1alpha1.KrakenDBackendPolicy
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(policy), &updated); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, c := range updated.Status.Conditions {
+		if c.Type == "Valid" && c.Status == metav1.ConditionFalse {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected Valid=False for invalid rate limit")
+	}
+}
+
+func TestPolicyReconcile_ValidCondition(t *testing.T) {
+	policy := &v1alpha1.KrakenDBackendPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "pol1", Namespace: "default"},
+		Spec: v1alpha1.KrakenDBackendPolicySpec{
+			CircuitBreaker: &v1alpha1.CircuitBreakerSpec{MaxErrors: 5, Interval: 60, Timeout: 30},
+			RateLimit:      &v1alpha1.RateLimitSpec{MaxRate: 100},
+		},
+	}
+	c := fakeClientBuilder().
+		WithObjects(policy).
+		WithStatusSubresource(policy).
+		Build()
+	r := &KrakenDBackendPolicyReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: client.ObjectKeyFromObject(policy),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var updated v1alpha1.KrakenDBackendPolicy
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(policy), &updated); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, c := range updated.Status.Conditions {
+		if c.Type == "Valid" && c.Status == metav1.ConditionTrue {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected Valid=True condition")
+	}
+}
+
+func TestPolicyMapper_EndpointToReferencedPolicies(t *testing.T) {
+	ep := &v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "ep1", Namespace: "default"},
+		Spec: v1alpha1.KrakenDEndpointSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: "gw1"},
+			Endpoints: []v1alpha1.EndpointEntry{
+				{
+					Endpoint: "/a",
+					Method:   "GET",
+					Backends: []v1alpha1.BackendSpec{
+						{Host: []string{"http://a"}, URLPattern: "/", PolicyRef: &v1alpha1.PolicyRef{Name: "pol1"}},
+						{Host: []string{"http://b"}, URLPattern: "/", PolicyRef: &v1alpha1.PolicyRef{Name: "pol2"}},
+					},
+				},
+				{
+					Endpoint: "/b",
+					Method:   "POST",
+					Backends: []v1alpha1.BackendSpec{
+						{Host: []string{"http://c"}, URLPattern: "/", PolicyRef: &v1alpha1.PolicyRef{Name: "pol1"}},
+					},
+				},
+			},
+		},
+	}
+	c := fakeClientBuilder().Build()
+	r := &KrakenDBackendPolicyReconciler{Client: c, Scheme: testScheme()}
+
+	requests := r.endpointToReferencedPolicies(context.Background(), ep)
+	if len(requests) != 2 {
+		t.Fatalf("expected 2 unique policy requests, got %d", len(requests))
+	}
+	names := map[string]bool{}
+	for _, req := range requests {
+		names[req.Name] = true
+	}
+	if !names["pol1"] || !names["pol2"] {
+		t.Errorf("expected pol1 and pol2, got %v", names)
+	}
+}

@@ -18,46 +18,163 @@ package controller
 
 import (
 	"context"
+	"fmt"
 
+	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	gatewayv1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 )
 
-// KrakenDBackendPolicyReconciler reconciles a KrakenDBackendPolicy object
+// KrakenDBackendPolicyReconciler reconciles a KrakenDBackendPolicy object.
+// It maintains the referencedBy count and validates policy fields.
 type KrakenDBackendPolicyReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme   *runtime.Scheme
+	Recorder record.EventRecorder
 }
 
 // +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendbackendpolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendbackendpolicies/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendbackendpolicies/finalizers,verbs=update
 
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
-// move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the KrakenDBackendPolicy object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.21.0/pkg/reconcile
+// Reconcile counts endpoint references and validates policy fields.
 func (r *KrakenDBackendPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = logf.FromContext(ctx)
+	log := logf.FromContext(ctx)
 
-	// TODO(user): your logic here
+	var policy v1alpha1.KrakenDBackendPolicy
+	if err := r.Get(ctx, req.NamespacedName, &policy); err != nil {
+		if errors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, fmt.Errorf("getting policy %s: %w", req.NamespacedName, err)
+	}
 
+	// Count how many endpoints reference this policy
+	var endpoints v1alpha1.KrakenDEndpointList
+	if err := r.List(ctx, &endpoints, client.InNamespace(policy.Namespace)); err != nil {
+		return ctrl.Result{}, fmt.Errorf("listing endpoints: %w", err)
+	}
+
+	refCount := 0
+	for i := range endpoints.Items {
+		if endpointReferencesPolicy(&endpoints.Items[i], policy.Name) {
+			refCount++
+		}
+	}
+
+	policy.Status.ReferencedBy = refCount
+
+	// Validate policy fields
+	if reason, msg := validatePolicy(&policy); reason != "" {
+		meta.SetStatusCondition(&policy.Status.Conditions, metav1.Condition{
+			Type:               "Valid",
+			Status:             metav1.ConditionFalse,
+			ObservedGeneration: policy.Generation,
+			Reason:             reason,
+			Message:            msg,
+		})
+		r.Recorder.Event(&policy, "Warning", "PolicyInvalid", msg)
+	} else {
+		meta.SetStatusCondition(&policy.Status.Conditions, metav1.Condition{
+			Type:               "Valid",
+			Status:             metav1.ConditionTrue,
+			ObservedGeneration: policy.Generation,
+			Reason:             "Valid",
+			Message:            "Policy configuration is valid",
+		})
+	}
+
+	if err := r.Status().Update(ctx, &policy); err != nil {
+		return ctrl.Result{}, fmt.Errorf("updating policy status: %w", err)
+	}
+
+	log.V(1).Info("policy reconciled", "referencedBy", refCount)
 	return ctrl.Result{}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *KrakenDBackendPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&gatewayv1alpha1.KrakenDBackendPolicy{}).
+		For(&v1alpha1.KrakenDBackendPolicy{}).
+		Watches(
+			&v1alpha1.KrakenDEndpoint{},
+			handler.EnqueueRequestsFromMapFunc(r.endpointToReferencedPolicies),
+		).
 		Named("krakendbackendpolicy").
 		Complete(r)
+}
+
+// endpointReferencesPolicy checks if any backend in the endpoint references
+// the given policy name.
+func endpointReferencesPolicy(ep *v1alpha1.KrakenDEndpoint, policyName string) bool {
+	for _, entry := range ep.Spec.Endpoints {
+		for _, be := range entry.Backends {
+			if be.PolicyRef != nil && be.PolicyRef.Name == policyName {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// validatePolicy checks policy fields for validity. Returns (reason, message)
+// if invalid, or ("", "") if valid.
+func validatePolicy(policy *v1alpha1.KrakenDBackendPolicy) (reason, message string) {
+	if cb := policy.Spec.CircuitBreaker; cb != nil {
+		if cb.MaxErrors <= 0 {
+			return "InvalidCircuitBreaker", "circuitBreaker.maxErrors must be positive"
+		}
+		if cb.Interval <= 0 {
+			return "InvalidCircuitBreaker", "circuitBreaker.interval must be positive"
+		}
+		if cb.Timeout <= 0 {
+			return "InvalidCircuitBreaker", "circuitBreaker.timeout must be positive"
+		}
+	}
+	if rl := policy.Spec.RateLimit; rl != nil {
+		if rl.MaxRate <= 0 {
+			return "InvalidRateLimit", "rateLimit.maxRate must be positive"
+		}
+	}
+	return "", ""
+}
+
+// endpointToReferencedPolicies maps an endpoint event to all policies it references.
+func (r *KrakenDBackendPolicyReconciler) endpointToReferencedPolicies(
+	ctx context.Context, obj client.Object,
+) []reconcile.Request {
+	ep, ok := obj.(*v1alpha1.KrakenDEndpoint)
+	if !ok {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	var requests []reconcile.Request
+	for _, entry := range ep.Spec.Endpoints {
+		for _, be := range entry.Backends {
+			if be.PolicyRef == nil {
+				continue
+			}
+			if _, ok := seen[be.PolicyRef.Name]; ok {
+				continue
+			}
+			seen[be.PolicyRef.Name] = struct{}{}
+			requests = append(requests, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      be.PolicyRef.Name,
+					Namespace: ep.Namespace,
+				},
+			})
+		}
+	}
+	return requests
 }
