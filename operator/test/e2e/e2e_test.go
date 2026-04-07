@@ -23,6 +23,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"time"
+	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -327,3 +328,113 @@ type tokenRequest struct {
 		Token string `json:"token"`
 	} `json:"status"`
 }
+
+var _ = Describe("KrakenD CRD Lifecycle", Ordered, func() {
+	const testNamespace = "krakend-e2e-test"
+
+	BeforeAll(func() {
+		By("creating test namespace")
+		cmd := exec.Command("kubectl", "create", "ns", testNamespace)
+		_, err := utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred())
+	})
+
+	AfterAll(func() {
+		By("deleting test namespace")
+		cmd := exec.Command("kubectl", "delete", "ns", testNamespace, "--ignore-not-found")
+		_, _ = utils.Run(cmd)
+	})
+
+	It("should reconcile a KrakenDGateway and create owned resources", func() {
+		By("creating a KrakenDGateway CR")
+		cmd := exec.Command("kubectl", "apply", "-n", testNamespace, "-f", "-")
+		cmd.Stdin = strings.NewReader(`
+apiVersion: gateway.krakend.io/v1alpha1
+kind: KrakenDGateway
+metadata:
+  name: e2e-gateway
+spec:
+  version: "2.9"
+  edition: CE
+  config: {}
+`)
+		_, err := utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred())
+
+		By("verifying the Deployment is created")
+		verifyDeployment := func(g Gomega) {
+			cmd := exec.Command("kubectl", "get", "deployment", "e2e-gateway",
+"-n", testNamespace, "-o", "jsonpath={.metadata.name}")
+			output, err := utils.Run(cmd)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(output).To(Equal("e2e-gateway"))
+		}
+		Eventually(verifyDeployment).Should(Succeed())
+
+		By("verifying the Service is created")
+		verifyService := func(g Gomega) {
+			cmd := exec.Command("kubectl", "get", "service", "e2e-gateway",
+"-n", testNamespace, "-o", "jsonpath={.metadata.name}")
+			output, err := utils.Run(cmd)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(output).To(Equal("e2e-gateway"))
+		}
+		Eventually(verifyService).Should(Succeed())
+
+		By("creating a KrakenDEndpoint CR")
+		cmd = exec.Command("kubectl", "apply", "-n", testNamespace, "-f", "-")
+		cmd.Stdin = strings.NewReader(`
+apiVersion: gateway.krakend.io/v1alpha1
+kind: KrakenDEndpoint
+metadata:
+  name: e2e-users
+spec:
+  gatewayRef:
+    name: e2e-gateway
+  endpoints:
+  - endpoint: /api/v1/users
+    method: GET
+    backends:
+    - host:
+      - http://users-svc:8080
+      url_pattern: /users
+`)
+		_, err = utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred())
+
+		By("verifying the endpoint is Active")
+		verifyEndpointActive := func(g Gomega) {
+			cmd := exec.Command("kubectl", "get", "krakendendpoint", "e2e-users",
+"-n", testNamespace, "-o", "jsonpath={.status.phase}")
+			output, err := utils.Run(cmd)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(output).To(Equal("Active"))
+		}
+		Eventually(verifyEndpointActive).Should(Succeed())
+
+		By("verifying the gateway has endpoint count")
+		verifyGatewayEndpoints := func(g Gomega) {
+			cmd := exec.Command("kubectl", "get", "krakendgateway", "e2e-gateway",
+"-n", testNamespace, "-o", "jsonpath={.status.endpointCount}")
+			output, err := utils.Run(cmd)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(output).To(Equal("1"))
+		}
+		Eventually(verifyGatewayEndpoints).Should(Succeed())
+
+		By("cleaning up the gateway")
+		cmd = exec.Command("kubectl", "delete", "krakendgateway", "e2e-gateway", "-n", testNamespace)
+		_, err = utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred())
+
+		By("verifying the endpoint is Detached after gateway deletion")
+		verifyEndpointDetached := func(g Gomega) {
+			cmd := exec.Command("kubectl", "get", "krakendendpoint", "e2e-users",
+"-n", testNamespace, "-o", "jsonpath={.status.phase}")
+			output, err := utils.Run(cmd)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(output).To(Equal("Detached"))
+		}
+		Eventually(verifyEndpointDetached).Should(Succeed())
+	})
+})
