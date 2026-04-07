@@ -304,6 +304,7 @@ type OCIImageRef struct {
 type KrakenDGatewayStatus struct {
 	Phase              GatewayPhase       `json:"phase,omitempty"`
 	ConfigChecksum     string             `json:"configChecksum,omitempty"`
+	PluginChecksum     string             `json:"pluginChecksum,omitempty"`
 	ObservedGeneration int64              `json:"observedGeneration,omitempty"`
 	Conditions         []metav1.Condition `json:"conditions,omitempty"`
 	Replicas           int32              `json:"replicas,omitempty"`

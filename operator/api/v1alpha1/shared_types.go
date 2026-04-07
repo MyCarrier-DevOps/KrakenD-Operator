@@ -45,6 +45,7 @@ const (
 	ConditionProgressing              = "Progressing"
 	ConditionSpecAvailable            = "SpecAvailable"
 	ConditionSynced                   = "Synced"
+	ConditionPolicyValid              = "Valid"
 )
 
 // Event reason constants for the EventRecorder.
@@ -58,6 +59,7 @@ const (
 	ReasonDragonflyNotReady        = "DragonflyNotReady"
 	ReasonIstioVSCreated           = "IstioVirtualServiceCreated"
 	ReasonEndpointConflict         = "EndpointConflict"
+	ReasonEndpointInvalid          = "EndpointInvalid"
 	ReasonLicenseSecretSyncFailed  = "LicenseSecretSyncFailed"
 	ReasonLicenseSecretMissing     = "LicenseSecretMissing"
 	ReasonSpecFetched              = "SpecFetched"

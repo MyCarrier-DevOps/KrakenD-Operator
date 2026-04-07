@@ -35,10 +35,12 @@ import (
 	"k8s.io/client-go/tools/record"
 	utilclock "k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
@@ -155,7 +157,7 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// Determine if config changed
 	configChanged := output.Checksum != gw.Status.ConfigChecksum
 	imageChanged := output.DesiredImage != gw.Status.ActiveImage
-	pluginChanged := output.PluginChecksum != "" && output.PluginChecksum != gw.Status.ConfigChecksum
+	pluginChanged := output.PluginChecksum != "" && output.PluginChecksum != gw.Status.PluginChecksum
 
 	if configChanged {
 		// Rendering pipeline: validate and update ConfigMap
@@ -198,11 +200,11 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			Type:               v1alpha1.ConditionProgressing,
 			Status:             metav1.ConditionTrue,
 			ObservedGeneration: gw.Generation,
-			Reason:             "ConfigUpdated",
+			Reason:             v1alpha1.ReasonConfigDeployed,
 			Message:            "Configuration updated, rolling deployment",
 		})
 
-		r.Recorder.Event(&gw, "Normal", "ConfigUpdated",
+		r.Recorder.Event(&gw, "Normal", v1alpha1.ReasonConfigDeployed,
 			fmt.Sprintf("Configuration updated, checksum: %s", output.Checksum))
 		rollingRestarts.Inc()
 	} else if imageChanged || pluginChanged {
@@ -214,6 +216,7 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			Reason:             "DeploymentUpdated",
 			Message:            "Deployment updated for image or plugin change",
 		})
+		rollingRestarts.Inc()
 	}
 
 	// Reconcile owned resources
@@ -221,14 +224,20 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, err
 	}
 
+	// Inspect Deployment rollout status
+	r.inspectDeploymentStatus(ctx, &gw)
+
 	// Update final status
 	gw.Status.ActiveImage = output.DesiredImage
+	gw.Status.PluginChecksum = output.PluginChecksum
 	gw.Status.ObservedGeneration = gw.Generation
 	gw.Status.EndpointCount = int32(len(endpoints))
 	endpointsPerGateway.WithLabelValues(gw.Namespace, gw.Name).Set(float64(len(endpoints)))
 	gatewayInfo.WithLabelValues(gw.Namespace, gw.Name, string(gw.Spec.Edition), gw.Spec.Version).Set(1)
 	if gw.Status.Phase != v1alpha1.PhaseDegraded && gw.Status.Phase != v1alpha1.PhaseError {
-		if gw.Status.Phase != v1alpha1.PhaseDeploying {
+		if ceFallback {
+			gw.Status.Phase = v1alpha1.PhaseDegraded
+		} else if gw.Status.Phase != v1alpha1.PhaseDeploying {
 			gw.Status.Phase = v1alpha1.PhaseRunning
 		}
 	}
@@ -273,10 +282,12 @@ func (r *KrakenDGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(
 			&v1alpha1.KrakenDEndpoint{},
 			handler.EnqueueRequestsFromMapFunc(r.endpointToGateway),
+			builder.WithPredicates(predicate.GenerationChangedPredicate{}),
 		).
 		Watches(
 			&v1alpha1.KrakenDBackendPolicy{},
 			handler.EnqueueRequestsFromMapFunc(r.policyToGateways),
+			builder.WithPredicates(predicate.GenerationChangedPredicate{}),
 		).
 		Watches(
 			&corev1.Secret{},
@@ -397,7 +408,12 @@ func (r *KrakenDGatewayReconciler) detectDragonflyState(
 			Message:            "Dragonfly instance is ready",
 		})
 		dragonflyReady.WithLabelValues(gw.Namespace, gw.Name).Set(1)
+		gw.Status.DragonflyAddress = resources.DragonflyServiceDNS(gw)
 	} else {
+		// Only emit DragonflyNotReady event on condition transition
+		prevCond := meta.FindStatusCondition(gw.Status.Conditions, v1alpha1.ConditionDragonflyReady)
+		wasReady := prevCond != nil && prevCond.Status == metav1.ConditionTrue
+
 		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
 			Type:               v1alpha1.ConditionDragonflyReady,
 			Status:             metav1.ConditionFalse,
@@ -406,11 +422,90 @@ func (r *KrakenDGatewayReconciler) detectDragonflyState(
 			Message:            fmt.Sprintf("Dragonfly phase: %s", phase),
 		})
 		dragonflyReady.WithLabelValues(gw.Namespace, gw.Name).Set(0)
-		r.Recorder.Event(gw, "Warning", v1alpha1.ReasonDragonflyNotReady,
-			fmt.Sprintf("Dragonfly instance is not ready (phase: %s)", phase))
+		if wasReady || prevCond == nil {
+			r.Recorder.Event(gw, "Warning", v1alpha1.ReasonDragonflyNotReady,
+				fmt.Sprintf("Dragonfly instance is not ready (phase: %s)", phase))
+		}
 	}
 
 	return &renderer.DragonflyState{Enabled: true, ServiceDNS: resources.DragonflyServiceDNS(gw)}
+}
+
+// inspectDeploymentStatus reads the owned Deployment's status and updates
+// the gateway's replica counts, Available and Progressing conditions, and
+// phase based on rollout health.
+func (r *KrakenDGatewayReconciler) inspectDeploymentStatus(
+	ctx context.Context,
+	gw *v1alpha1.KrakenDGateway,
+) {
+	log := logf.FromContext(ctx)
+	var dep appsv1.Deployment
+	key := types.NamespacedName{Name: gw.Name, Namespace: gw.Namespace}
+	if err := r.Get(ctx, key, &dep); err != nil {
+		if errors.IsNotFound(err) {
+			return
+		}
+		log.Error(err, "failed to get deployment for status inspection")
+		return
+	}
+
+	// Propagate observed replica counts.
+	gw.Status.Replicas = dep.Status.Replicas
+	gw.Status.ReadyReplicas = dep.Status.ReadyReplicas
+
+	// Check for ProgressDeadlineExceeded.
+	for _, c := range dep.Status.Conditions {
+		if c.Type != appsv1.DeploymentProgressing ||
+			c.Status != corev1.ConditionFalse ||
+			c.Reason != "ProgressDeadlineExceeded" {
+			continue
+		}
+		gw.Status.Phase = v1alpha1.PhaseError
+		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+			Type:               v1alpha1.ConditionProgressing,
+			Status:             metav1.ConditionFalse,
+			ObservedGeneration: gw.Generation,
+			Reason:             v1alpha1.ReasonRolloutFailed,
+			Message:            "Deployment exceeded its progress deadline",
+		})
+		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+			Type:               v1alpha1.ConditionAvailable,
+			Status:             metav1.ConditionFalse,
+			ObservedGeneration: gw.Generation,
+			Reason:             v1alpha1.ReasonRolloutFailed,
+			Message:            "Deployment exceeded its progress deadline",
+		})
+		r.Recorder.Event(gw, "Warning", v1alpha1.ReasonRolloutFailed,
+			"Deployment exceeded its progress deadline")
+		return
+	}
+
+	// Detect rollout convergence: all replicas updated and available.
+	desired := int32(1)
+	if dep.Spec.Replicas != nil {
+		desired = *dep.Spec.Replicas
+	}
+	if dep.Status.UpdatedReplicas == desired &&
+		dep.Status.AvailableReplicas == desired {
+		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+			Type:               v1alpha1.ConditionProgressing,
+			Status:             metav1.ConditionFalse,
+			ObservedGeneration: gw.Generation,
+			Reason:             "RolloutComplete",
+			Message:            "Deployment rollout completed successfully",
+		})
+		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+			Type:               v1alpha1.ConditionAvailable,
+			Status:             metav1.ConditionTrue,
+			ObservedGeneration: gw.Generation,
+			Reason:             "DeploymentAvailable",
+			Message:            "All replicas are available",
+		})
+		// Clear Deploying phase on convergence (Degraded/Error take precedence)
+		if gw.Status.Phase == v1alpha1.PhaseDeploying {
+			gw.Status.Phase = v1alpha1.PhaseRunning
+		}
+	}
 }
 
 // validateConfig runs the krakend check validation pipeline.
@@ -439,11 +534,11 @@ func (r *KrakenDGatewayReconciler) handleValidationError(
 		Type:               v1alpha1.ConditionConfigValid,
 		Status:             metav1.ConditionFalse,
 		ObservedGeneration: gw.Generation,
-		Reason:             "ValidationFailed",
+		Reason:             v1alpha1.ReasonConfigValidationFailed,
 		Message:            validationErr.Error(),
 	})
 	gw.Status.Phase = v1alpha1.PhaseError
-	r.Recorder.Event(gw, "Warning", "ValidationFailed", validationErr.Error())
+	r.Recorder.Event(gw, "Warning", v1alpha1.ReasonConfigValidationFailed, validationErr.Error())
 	if err := r.Status().Update(ctx, gw); err != nil {
 		return fmt.Errorf("updating status after validation failure: %w", err)
 	}
@@ -468,13 +563,13 @@ func (r *KrakenDGatewayReconciler) updateEndpointStatuses(
 			Type:               v1alpha1.ConditionAvailable,
 			Status:             metav1.ConditionFalse,
 			ObservedGeneration: ep.Generation,
-			Reason:             "EndpointConflict",
+			Reason:             v1alpha1.ReasonEndpointConflict,
 			Message:            "Endpoint path/method conflicts with an older KrakenDEndpoint",
 		})
 		if err := r.Status().Update(ctx, &ep); err != nil {
 			return fmt.Errorf("updating conflicted endpoint status %s: %w", nn, err)
 		}
-		r.Recorder.Event(&ep, "Warning", "EndpointConflict",
+		r.Recorder.Event(&ep, "Warning", v1alpha1.ReasonEndpointConflict,
 			"Endpoint excluded due to path/method conflict with older resource")
 	}
 	for _, nn := range output.InvalidEndpoints {
@@ -490,13 +585,13 @@ func (r *KrakenDGatewayReconciler) updateEndpointStatuses(
 			Type:               v1alpha1.ConditionAvailable,
 			Status:             metav1.ConditionFalse,
 			ObservedGeneration: ep.Generation,
-			Reason:             "EndpointInvalid",
+			Reason:             v1alpha1.ReasonEndpointInvalid,
 			Message:            "Endpoint excluded due to missing policy reference",
 		})
 		if err := r.Status().Update(ctx, &ep); err != nil {
 			return fmt.Errorf("updating invalid endpoint status %s: %w", nn, err)
 		}
-		r.Recorder.Event(&ep, "Warning", "EndpointInvalid",
+		r.Recorder.Event(&ep, "Warning", v1alpha1.ReasonEndpointInvalid,
 			"Endpoint excluded due to missing policy reference")
 	}
 	return nil
@@ -623,6 +718,14 @@ func (r *KrakenDGatewayReconciler) reconcileOwnedResources(
 		}); err != nil {
 			return fmt.Errorf("reconciling virtualservice: %w", err)
 		}
+		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+			Type:               v1alpha1.ConditionIstioConfigured,
+			Status:             metav1.ConditionTrue,
+			ObservedGeneration: gw.Generation,
+			Reason:             v1alpha1.ReasonIstioVSCreated,
+			Message:            "Istio VirtualService reconciled",
+		})
+		r.Recorder.Event(gw, "Normal", v1alpha1.ReasonIstioVSCreated, "Istio VirtualService reconciled")
 	}
 
 	return nil

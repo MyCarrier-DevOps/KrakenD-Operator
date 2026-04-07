@@ -895,6 +895,8 @@ spec:
                 - Degraded
                 - Error
                 type: string
+              pluginChecksum:
+                type: string
               readyReplicas:
                 format: int32
                 type: integer

@@ -959,3 +959,118 @@ func TestGatewayReconcile_VirtualServiceCreated(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestInspectDeploymentStatus_ProgressDeadlineExceeded(t *testing.T) {
+	gw := testGateway()
+	gw.Status.Phase = v1alpha1.PhaseDeploying
+
+	replicas := int32(3)
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace},
+		Spec:       appsv1.DeploymentSpec{Replicas: &replicas},
+		Status: appsv1.DeploymentStatus{
+			Replicas:          3,
+			ReadyReplicas:     1,
+			UpdatedReplicas:   2,
+			AvailableReplicas: 1,
+			Conditions: []appsv1.DeploymentCondition{
+				{
+					Type:   appsv1.DeploymentProgressing,
+					Status: corev1.ConditionFalse,
+					Reason: "ProgressDeadlineExceeded",
+				},
+			},
+		},
+	}
+
+	c := fakeClientBuilder().
+		WithObjects(gw, dep).
+		WithStatusSubresource(gw).
+		Build()
+
+	r := &KrakenDGatewayReconciler{
+		Client:   c,
+		Scheme:   testScheme(),
+		Recorder: fakeRecorder(),
+	}
+
+	r.inspectDeploymentStatus(context.Background(), gw)
+
+	if gw.Status.Phase != v1alpha1.PhaseError {
+		t.Errorf("expected phase Error, got %s", gw.Status.Phase)
+	}
+	if gw.Status.Replicas != 3 {
+		t.Errorf("expected Replicas=3, got %d", gw.Status.Replicas)
+	}
+	if gw.Status.ReadyReplicas != 1 {
+		t.Errorf("expected ReadyReplicas=1, got %d", gw.Status.ReadyReplicas)
+	}
+}
+
+func TestInspectDeploymentStatus_RolloutConverged(t *testing.T) {
+	gw := testGateway()
+	gw.Status.Phase = v1alpha1.PhaseDeploying
+
+	replicas := int32(3)
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace},
+		Spec:       appsv1.DeploymentSpec{Replicas: &replicas},
+		Status: appsv1.DeploymentStatus{
+			Replicas:          3,
+			ReadyReplicas:     3,
+			UpdatedReplicas:   3,
+			AvailableReplicas: 3,
+			Conditions: []appsv1.DeploymentCondition{
+				{
+					Type:   appsv1.DeploymentProgressing,
+					Status: corev1.ConditionTrue,
+					Reason: "NewReplicaSetAvailable",
+				},
+			},
+		},
+	}
+
+	c := fakeClientBuilder().
+		WithObjects(gw, dep).
+		WithStatusSubresource(gw).
+		Build()
+
+	r := &KrakenDGatewayReconciler{
+		Client:   c,
+		Scheme:   testScheme(),
+		Recorder: fakeRecorder(),
+	}
+
+	r.inspectDeploymentStatus(context.Background(), gw)
+
+	if gw.Status.Replicas != 3 {
+		t.Errorf("expected Replicas=3, got %d", gw.Status.Replicas)
+	}
+	if gw.Status.ReadyReplicas != 3 {
+		t.Errorf("expected ReadyReplicas=3, got %d", gw.Status.ReadyReplicas)
+	}
+}
+
+func TestInspectDeploymentStatus_DeploymentNotFound(t *testing.T) {
+	gw := testGateway()
+	gw.Status.Phase = v1alpha1.PhaseDeploying
+	gw.Status.Replicas = 0
+	gw.Status.ReadyReplicas = 0
+
+	c := fakeClientBuilder().Build()
+
+	r := &KrakenDGatewayReconciler{
+		Client:   c,
+		Scheme:   testScheme(),
+		Recorder: fakeRecorder(),
+	}
+
+	r.inspectDeploymentStatus(context.Background(), gw)
+
+	if gw.Status.Replicas != 0 {
+		t.Errorf("expected Replicas=0 (unchanged), got %d", gw.Status.Replicas)
+	}
+	if gw.Status.Phase != v1alpha1.PhaseDeploying {
+		t.Errorf("expected phase unchanged at Deploying, got %s", gw.Status.Phase)
+	}
+}
