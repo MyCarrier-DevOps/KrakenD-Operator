@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 func TestCUEEvaluator_BasicEvaluation(t *testing.T) {
@@ -322,5 +323,154 @@ func TestNormalizeToJSON_AutoDetect(t *testing.T) {
 	}
 	if string(out) != `{"key":"value"}` {
 		t.Errorf("auto-detect should convert YAML, got %s", string(out))
+	}
+}
+
+func TestCUEEvaluator_Overrides(t *testing.T) {
+	eval := NewCUEEvaluator()
+	defs := map[string]string{
+		"main.cue": `
+import "strings"
+
+_spec: _
+_overrides: [string]: _
+
+endpoint: {
+	for path, methods in _spec.paths {
+		for method, op in methods {
+			"\(path):\(strings.ToUpper(method))": {
+				"endpoint": path
+				"method": strings.ToUpper(method)
+				"backends": [{
+					"host": ["http://svc"]
+					"url_pattern": path
+				}]
+				// sanitizeName lowercases operationId
+				if _overrides[strings.ToLower(op.operationId)] != _|_ {
+					"extraConfig": _overrides[strings.ToLower(op.operationId)]
+				}
+				_operationId: op.operationId
+			}
+		}
+	}
+}
+`,
+	}
+
+	specJSON := []byte(`{
+		"paths": {
+			"/api/users": {
+				"get": {
+					"operationId": "listUsers",
+					"tags": ["users"]
+				}
+			}
+		}
+	}`)
+
+	overrides := []v1alpha1.OperationOverride{
+		{
+			OperationID: "listUsers",
+			ExtraConfig: &runtime.RawExtension{
+				Raw: []byte(`{"auth/validator": {"alg": "RS256"}}`),
+			},
+		},
+	}
+
+	out, err := eval.Evaluate(context.Background(), CUEInput{
+		SpecData:    specJSON,
+		SpecFormat:  v1alpha1.SpecFormatJSON,
+		DefaultDefs: defs,
+		Overrides:   overrides,
+		ServiceName: "_spec",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(out.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(out.Entries))
+	}
+	// Verify the extra_config was applied
+	if out.Entries[0].ExtraConfig == nil {
+		t.Error("expected extra_config from override to be present")
+	}
+}
+
+func TestCUEEvaluator_OverridesWithoutExtraConfig(t *testing.T) {
+	eval := NewCUEEvaluator()
+	defs := map[string]string{
+		"main.cue": `
+_spec: _
+endpoint: {
+	"/test:GET": {
+		"endpoint": "/test"
+		"method": "GET"
+		"backends": [{
+			"host": ["http://svc"]
+			"url_pattern": "/test"
+		}]
+	}
+}
+`,
+	}
+
+	// Override without ExtraConfig should be a no-op
+	overrides := []v1alpha1.OperationOverride{
+		{OperationID: "someOp"},
+	}
+
+	out, err := eval.Evaluate(context.Background(), CUEInput{
+		SpecData:    []byte(`{"paths": {}}`),
+		SpecFormat:  v1alpha1.SpecFormatJSON,
+		DefaultDefs: defs,
+		Overrides:   overrides,
+		ServiceName: "_spec",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(out.Entries) != 1 {
+		t.Errorf("expected 1 entry, got %d", len(out.Entries))
+	}
+}
+
+func TestCUEEvaluator_OverridesNilRaw(t *testing.T) {
+	eval := NewCUEEvaluator()
+	defs := map[string]string{
+		"main.cue": `
+_spec: _
+endpoint: {
+	"/test:GET": {
+		"endpoint": "/test"
+		"method": "GET"
+		"backends": [{
+			"host": ["http://svc"]
+			"url_pattern": "/test"
+		}]
+	}
+}
+`,
+	}
+
+	// Override with ExtraConfig but nil Raw should be a no-op
+	overrides := []v1alpha1.OperationOverride{
+		{
+			OperationID: "someOp",
+			ExtraConfig: &runtime.RawExtension{Raw: nil},
+		},
+	}
+
+	out, err := eval.Evaluate(context.Background(), CUEInput{
+		SpecData:    []byte(`{"paths": {}}`),
+		SpecFormat:  v1alpha1.SpecFormatJSON,
+		DefaultDefs: defs,
+		Overrides:   overrides,
+		ServiceName: "_spec",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(out.Entries) != 1 {
+		t.Errorf("expected 1 entry, got %d", len(out.Entries))
 	}
 }

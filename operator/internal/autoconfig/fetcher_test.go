@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
@@ -234,5 +235,329 @@ func TestIsRFC1918(t *testing.T) {
 		if got := isRFC1918(net.ParseIP(tt.ip)); got != tt.expected {
 			t.Errorf("isRFC1918(%s) = %v, want %v", tt.ip, got, tt.expected)
 		}
+	}
+}
+
+func TestFetcher_BearerTokenAuth(t *testing.T) {
+	var gotAuth string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		fmt.Fprint(w, `{"openapi": "3.0.0"}`)
+	}))
+	defer ts.Close()
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-token", Namespace: "default"},
+		Data:       map[string][]byte{"token": []byte("super-secret-token")},
+	}
+
+	fetcher := &httpFetcher{
+		client:           fakeClient(secret),
+		strictTransport:  http.DefaultTransport,
+		lenientTransport: http.DefaultTransport,
+	}
+
+	_, err := fetcher.Fetch(context.Background(), FetchSource{
+		URL:       ts.URL,
+		Namespace: "default",
+		Auth: &v1alpha1.AuthConfig{
+			BearerTokenSecret: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: "my-token"},
+				Key:                  "token",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotAuth != "Bearer super-secret-token" {
+		t.Errorf("expected Bearer auth header, got %q", gotAuth)
+	}
+}
+
+func TestFetcher_BasicAuth(t *testing.T) {
+	var gotUser, gotPass string
+	var gotOK bool
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUser, gotPass, gotOK = r.BasicAuth()
+		fmt.Fprint(w, `{"openapi": "3.0.0"}`)
+	}))
+	defer ts.Close()
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-creds", Namespace: "default"},
+		Data:       map[string][]byte{"username": []byte("admin"), "password": []byte("p@ss")},
+	}
+
+	fetcher := &httpFetcher{
+		client:           fakeClient(secret),
+		strictTransport:  http.DefaultTransport,
+		lenientTransport: http.DefaultTransport,
+	}
+
+	_, err := fetcher.Fetch(context.Background(), FetchSource{
+		URL:       ts.URL,
+		Namespace: "default",
+		Auth: &v1alpha1.AuthConfig{
+			BasicAuthSecret: &v1alpha1.BasicAuthSecretRef{Name: "my-creds"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !gotOK || gotUser != "admin" || gotPass != "p@ss" {
+		t.Errorf("expected basic auth admin/p@ss, got %s/%s (ok=%v)", gotUser, gotPass, gotOK)
+	}
+}
+
+func TestFetcher_BasicAuthCustomKeys(t *testing.T) {
+	var gotUser, gotPass string
+	var gotOK bool
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUser, gotPass, gotOK = r.BasicAuth()
+		fmt.Fprint(w, `{"openapi": "3.0.0"}`)
+	}))
+	defer ts.Close()
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-creds", Namespace: "default"},
+		Data:       map[string][]byte{"usr": []byte("bob"), "pwd": []byte("s3cret")},
+	}
+
+	fetcher := &httpFetcher{
+		client:           fakeClient(secret),
+		strictTransport:  http.DefaultTransport,
+		lenientTransport: http.DefaultTransport,
+	}
+
+	_, err := fetcher.Fetch(context.Background(), FetchSource{
+		URL:       ts.URL,
+		Namespace: "default",
+		Auth: &v1alpha1.AuthConfig{
+			BasicAuthSecret: &v1alpha1.BasicAuthSecretRef{
+				Name:        "my-creds",
+				UsernameKey: "usr",
+				PasswordKey: "pwd",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !gotOK || gotUser != "bob" || gotPass != "s3cret" {
+		t.Errorf("expected basic auth bob/s3cret, got %s/%s (ok=%v)", gotUser, gotPass, gotOK)
+	}
+}
+
+func TestFetcher_BearerTokenSecretNotFound(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"openapi": "3.0.0"}`)
+	}))
+	defer ts.Close()
+
+	fetcher := &httpFetcher{
+		client:           fakeClient(),
+		strictTransport:  http.DefaultTransport,
+		lenientTransport: http.DefaultTransport,
+	}
+
+	_, err := fetcher.Fetch(context.Background(), FetchSource{
+		URL:       ts.URL,
+		Namespace: "default",
+		Auth: &v1alpha1.AuthConfig{
+			BearerTokenSecret: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: "missing"},
+				Key:                  "token",
+			},
+		},
+	})
+	if err == nil {
+		t.Error("expected error for missing bearer secret")
+	}
+}
+
+func TestFetcher_BearerTokenKeyNotFound(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"openapi": "3.0.0"}`)
+	}))
+	defer ts.Close()
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-token", Namespace: "default"},
+		Data:       map[string][]byte{"other-key": []byte("val")},
+	}
+
+	fetcher := &httpFetcher{
+		client:           fakeClient(secret),
+		strictTransport:  http.DefaultTransport,
+		lenientTransport: http.DefaultTransport,
+	}
+
+	_, err := fetcher.Fetch(context.Background(), FetchSource{
+		URL:       ts.URL,
+		Namespace: "default",
+		Auth: &v1alpha1.AuthConfig{
+			BearerTokenSecret: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: "my-token"},
+				Key:                  "token",
+			},
+		},
+	})
+	if err == nil {
+		t.Error("expected error for missing key in bearer secret")
+	}
+}
+
+func TestFetcher_BasicAuthSecretNotFound(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"openapi": "3.0.0"}`)
+	}))
+	defer ts.Close()
+
+	fetcher := &httpFetcher{
+		client:           fakeClient(),
+		strictTransport:  http.DefaultTransport,
+		lenientTransport: http.DefaultTransport,
+	}
+
+	_, err := fetcher.Fetch(context.Background(), FetchSource{
+		URL:       ts.URL,
+		Namespace: "default",
+		Auth: &v1alpha1.AuthConfig{
+			BasicAuthSecret: &v1alpha1.BasicAuthSecretRef{Name: "missing"},
+		},
+	})
+	if err == nil {
+		t.Error("expected error for missing basic auth secret")
+	}
+}
+
+func TestFetcher_AllowClusterLocal(t *testing.T) {
+	body := `{"openapi": "3.0.0"}`
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, body)
+	}))
+	defer ts.Close()
+
+	fetcher := &httpFetcher{
+		client:           fakeClient(),
+		strictTransport:  http.DefaultTransport,
+		lenientTransport: http.DefaultTransport,
+	}
+
+	result, err := fetcher.Fetch(context.Background(), FetchSource{
+		URL:               ts.URL,
+		AllowClusterLocal: true,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(result.Data) != body {
+		t.Errorf("expected %s, got %s", body, string(result.Data))
+	}
+}
+
+func TestSSRFSafeTransport_BlocksLoopback(t *testing.T) {
+	transport := SSRFSafeTransportWithPolicy(false)
+	client := &http.Client{Transport: transport}
+
+	// Attempt to connect to loopback — the DialContext should reject it.
+	_, err := client.Get("http://127.0.0.1:1/test")
+	if err == nil {
+		t.Error("expected SSRF transport to block loopback")
+	}
+}
+
+func TestSSRFSafeTransport_BlocksPrivateStrict(t *testing.T) {
+	transport := SSRFSafeTransportWithPolicy(false)
+	client := &http.Client{Transport: transport}
+
+	// 10.x.x.x should be blocked in strict mode
+	_, err := client.Get("http://10.0.0.1:1/test")
+	if err == nil {
+		t.Error("expected strict SSRF transport to block RFC1918 address")
+	}
+}
+
+func TestSSRFSafeTransport_AllowsPrivateLenient(t *testing.T) {
+	// In lenient mode, RFC1918 should pass the IP validation stage.
+	// We verify by starting a listener on the loopback interface — which is
+	// blocked by both modes — and instead rely on the existing ValidateIPAllowPrivate
+	// unit tests for IP-level behavior. Here we verify the transport is wired correctly.
+	transport := SSRFSafeTransportWithPolicy(true)
+	if transport == nil {
+		t.Fatal("expected non-nil transport")
+	}
+	if transport.DialContext == nil {
+		t.Fatal("expected custom DialContext")
+	}
+	// Strict mode should block 10.x, lenient should not.
+	// Use a short-lived context to avoid long timeouts on unreachable IPs.
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	_, err := transport.DialContext(ctx, "tcp", "10.0.0.1:80")
+	if err == nil {
+		return // unexpectedly connected — not blocked, which is correct
+	}
+	errStr := err.Error()
+	for _, blocked := range []string{"blocked address", "private address"} {
+		if contains(errStr, blocked) {
+			t.Errorf("lenient mode should not block RFC1918, got: %v", err)
+		}
+	}
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && searchSubstring(s, substr)
+}
+
+func searchSubstring(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
+
+func TestValidateIP_IPv6ULA(t *testing.T) {
+	// fc00::/7 addresses should be blocked
+	ulaIPs := []string{"fc00::1", "fd00::1", "fdab:cdef:1234::1"}
+	for _, ip := range ulaIPs {
+		if err := validateIP(net.ParseIP(ip)); err == nil {
+			t.Errorf("expected ULA address %s to be blocked", ip)
+		}
+	}
+}
+
+func TestValidateIPStrict_PublicAllowed(t *testing.T) {
+	if err := ValidateIPStrict(net.ParseIP("8.8.8.8")); err != nil {
+		t.Errorf("expected public IP to pass strict validation, got %v", err)
+	}
+}
+
+func TestIsRFC1918_IPv6(t *testing.T) {
+	// IPv6 address should return false
+	if isRFC1918(net.ParseIP("::1")) {
+		t.Error("IPv6 loopback should not be RFC1918")
+	}
+	if isRFC1918(net.ParseIP("2001:db8::1")) {
+		t.Error("IPv6 documentation address should not be RFC1918")
+	}
+}
+
+func TestNormalizeIP_PureIPv6(t *testing.T) {
+	ip := net.ParseIP("2001:db8::1")
+	normalized := normalizeIP(ip)
+	if normalized.To4() != nil {
+		t.Error("pure IPv6 should remain IPv6 after normalization")
+	}
+}
+
+func TestFetcher_InvalidURL(t *testing.T) {
+	f := NewFetcher(fakeClient())
+	_, err := f.Fetch(context.Background(), FetchSource{URL: "://invalid"})
+	if err == nil {
+		t.Error("expected error for invalid URL")
 	}
 }
