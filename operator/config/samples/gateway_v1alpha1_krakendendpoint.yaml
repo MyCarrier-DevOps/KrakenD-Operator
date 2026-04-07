@@ -6,4 +6,12 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: krakendendpoint-sample
 spec:
-  # TODO(user): Add fields here
+  gatewayRef:
+    name: krakendgateway-sample
+  endpoints:
+    - endpoint: /api/users
+      method: GET
+      backends:
+        - host:
+            - http://users-service.default.svc.cluster.local:8080
+          urlPattern: /v1/users

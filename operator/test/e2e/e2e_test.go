@@ -259,14 +259,26 @@ var _ = Describe("Manager", Ordered, func() {
 
 		// +kubebuilder:scaffold:e2e-webhooks-checks
 
-		// TODO: Customize the e2e test suite with scenarios specific to your project.
-		// Consider applying sample/CR(s) and check their status and/or verifying
-		// the reconciliation by using the metrics, i.e.:
-		// metricsOutput := getMetricsOutput()
-		// Expect(metricsOutput).To(ContainSubstring(
-		//    fmt.Sprintf(`controller_runtime_reconcile_total{controller="%s",result="success"} 1`,
-		//    strings.ToLower(<Kind>),
-		// ))
+		It("should reconcile sample CRs successfully", func() {
+			By("applying the sample CRs")
+			cmd := exec.Command("kubectl", "apply", "-k", "config/samples/", "-n", "default")
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to apply sample CRs")
+
+			By("verifying that the gateway controller reconciled successfully")
+			verifyGatewayReconciled := func(g Gomega) {
+				metricsOutput := getMetricsOutput()
+				g.Expect(metricsOutput).To(ContainSubstring(
+					fmt.Sprintf(`controller_runtime_reconcile_total{controller="%s",result="success"}`,
+						strings.ToLower("KrakenDGateway")),
+				))
+			}
+			Eventually(verifyGatewayReconciled).Should(Succeed())
+
+			By("cleaning up the sample CRs")
+			cmd = exec.Command("kubectl", "delete", "-k", "config/samples/", "-n", "default", "--ignore-not-found")
+			_, _ = utils.Run(cmd)
+		})
 	})
 })
 

@@ -6,4 +6,10 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: krakendautoconfig-sample
 spec:
-  # TODO(user): Add fields here
+  gatewayRef:
+    name: krakendgateway-sample
+  openapi:
+    configMapRef:
+      name: my-openapi-spec
+      key: openapi.json
+  trigger: OnChange

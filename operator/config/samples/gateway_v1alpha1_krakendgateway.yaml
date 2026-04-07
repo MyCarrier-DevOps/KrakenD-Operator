@@ -6,4 +6,9 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: krakendgateway-sample
 spec:
-  # TODO(user): Add fields here
+  version: "2.8"
+  edition: CE
+  replicas: 2
+  config:
+    port: 8080
+    timeout: "30s"

@@ -112,10 +112,9 @@ vet: ## Run go vet against code.
 test: manifests generate fmt vet setup-envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
-# TODO(user): To use a different vendor for e2e tests, modify the setup under 'tests/e2e'.
-# The default setup assumes Kind is pre-installed and builds/loads the Manager Docker image locally.
-# CertManager is installed by default; skip with:
-# - CERT_MANAGER_INSTALL_SKIP=true
+# E2E tests use Kind by default. To use a different cluster provider, update
+# test/e2e/e2e_suite_test.go and the setup-test-e2e target accordingly.
+# CertManager is installed by default; skip with CERT_MANAGER_INSTALL_SKIP=true.
 KIND_CLUSTER ?= krakend-operator-test-e2e
 
 .PHONY: setup-test-e2e
