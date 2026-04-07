@@ -37,7 +37,9 @@ type GenerateInput struct {
 type GenerateOutput struct {
 	Endpoints         []*v1alpha1.KrakenDEndpoint
 	SkippedOperations int
-	DuplicateIDs      []string
+	// Duplicates holds the identifiers that caused deduplication skips.
+	// Each entry may be a path:method key, an operationId, or a generated name.
+	Duplicates []string
 }
 
 // Generator wraps endpoint entries in KrakenDEndpoint CRs with metadata and labels.
@@ -69,21 +71,21 @@ func (g *endpointGenerator) Generate(
 
 		if _, exists := seenKeys[key]; exists {
 			output.SkippedOperations++
-			output.DuplicateIDs = append(output.DuplicateIDs, key)
+			output.Duplicates = append(output.Duplicates, key)
 			continue
 		}
 
 		if opID != "" {
 			if _, exists := seenOperationIDs[opID]; exists {
 				output.SkippedOperations++
-				output.DuplicateIDs = append(output.DuplicateIDs, opID)
+				output.Duplicates = append(output.Duplicates, opID)
 				continue
 			}
 		}
 
 		if _, exists := seenNames[name]; exists {
 			output.SkippedOperations++
-			output.DuplicateIDs = append(output.DuplicateIDs, name)
+			output.Duplicates = append(output.Duplicates, name)
 			continue
 		}
 

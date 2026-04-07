@@ -117,8 +117,8 @@ func TestGenerator_DuplicateOperationID(t *testing.T) {
 	if out.SkippedOperations != 1 {
 		t.Errorf("expected 1 skipped, got %d", out.SkippedOperations)
 	}
-	if len(out.DuplicateIDs) != 1 || out.DuplicateIDs[0] != "listUsers" {
-		t.Errorf("expected duplicate listUsers, got %v", out.DuplicateIDs)
+	if len(out.Duplicates) != 1 || out.Duplicates[0] != "listUsers" {
+		t.Errorf("expected duplicate listUsers, got %v", out.Duplicates)
 	}
 }
 

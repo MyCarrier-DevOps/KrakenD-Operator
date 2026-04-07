@@ -183,10 +183,12 @@ func (r *KrakenDEndpointReconciler) setErrorPhase(
 	reason, message string,
 ) (ctrl.Result, error) {
 	origPhase := ep.Status.Phase
+	origCount := ep.Status.EndpointCount
 	origConditions := ep.Status.DeepCopy().Conditions
 
 	ep.Status.Phase = phase
 	ep.Status.ObservedGeneration = ep.Generation
+	ep.Status.EndpointCount = int32(len(ep.Spec.Endpoints))
 	meta.SetStatusCondition(&ep.Status.Conditions, metav1.Condition{
 		Type:               v1alpha1.ConditionAvailable,
 		Status:             metav1.ConditionFalse,
@@ -199,6 +201,7 @@ func (r *KrakenDEndpointReconciler) setErrorPhase(
 		r.Recorder.Event(ep, "Warning", reason, message)
 	}
 	changed := ep.Status.Phase != origPhase ||
+		ep.Status.EndpointCount != origCount ||
 		!conditionsEqual(origConditions, ep.Status.Conditions)
 	if changed {
 		if err := r.Status().Update(ctx, ep); err != nil {

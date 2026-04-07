@@ -120,4 +120,4 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           body_path: body.md
-          generate_release_notes: true
+          generate_release_notes: false

@@ -185,10 +185,10 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return r.handleCUEError(ctx, &ac, fmt.Errorf("generating endpoints: %w", err))
 	}
 
-	// Emit events for duplicate operation IDs
-	for _, dupID := range genOutput.DuplicateIDs {
+	// Emit events for duplicate operations
+	for _, dup := range genOutput.Duplicates {
 		r.Recorder.Eventf(&ac, "Warning", v1alpha1.ReasonDuplicateOperationId,
-			"Duplicate operationId %q skipped", dupID)
+			"Duplicate operation %q skipped", dup)
 	}
 
 	// Diff and reconcile endpoints
