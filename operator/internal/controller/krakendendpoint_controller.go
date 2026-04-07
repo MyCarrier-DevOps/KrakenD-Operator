@@ -166,6 +166,7 @@ func (r *KrakenDEndpointReconciler) SetupWithManager(mgr ctrl.Manager) error {
 func (r *KrakenDEndpointReconciler) setDetached(
 	ctx context.Context, ep *v1alpha1.KrakenDEndpoint, reason, message string,
 ) (ctrl.Result, error) {
+	prevPhase := ep.Status.Phase
 	ep.Status.Phase = v1alpha1.EndpointPhaseDetached
 	ep.Status.ObservedGeneration = ep.Generation
 	meta.SetStatusCondition(&ep.Status.Conditions, metav1.Condition{
@@ -175,7 +176,9 @@ func (r *KrakenDEndpointReconciler) setDetached(
 		Reason:             reason,
 		Message:            message,
 	})
-	r.Recorder.Event(ep, "Warning", reason, message)
+	if prevPhase != v1alpha1.EndpointPhaseDetached {
+		r.Recorder.Event(ep, "Warning", reason, message)
+	}
 	if err := r.Status().Update(ctx, ep); err != nil {
 		return ctrl.Result{}, fmt.Errorf("updating endpoint status to Detached: %w", err)
 	}
@@ -185,6 +188,7 @@ func (r *KrakenDEndpointReconciler) setDetached(
 func (r *KrakenDEndpointReconciler) setInvalid(
 	ctx context.Context, ep *v1alpha1.KrakenDEndpoint, reason, message string,
 ) (ctrl.Result, error) {
+	prevPhase := ep.Status.Phase
 	ep.Status.Phase = v1alpha1.EndpointPhaseInvalid
 	ep.Status.ObservedGeneration = ep.Generation
 	meta.SetStatusCondition(&ep.Status.Conditions, metav1.Condition{
@@ -194,7 +198,9 @@ func (r *KrakenDEndpointReconciler) setInvalid(
 		Reason:             reason,
 		Message:            message,
 	})
-	r.Recorder.Event(ep, "Warning", reason, message)
+	if prevPhase != v1alpha1.EndpointPhaseInvalid {
+		r.Recorder.Event(ep, "Warning", reason, message)
+	}
 	if err := r.Status().Update(ctx, ep); err != nil {
 		return ctrl.Result{}, fmt.Errorf("updating endpoint status to Invalid: %w", err)
 	}

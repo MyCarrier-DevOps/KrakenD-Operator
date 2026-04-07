@@ -50,9 +50,6 @@ spec:
     - **Istio Integration** — Optional VirtualService generation for mesh routing
     - **External Secrets** — ExternalSecret integration for license secret management
   displayName: KrakenD Operator
-  icon:
-  - base64data: ""
-    mediatype: image/png
   install:
     spec:
       deployments: []

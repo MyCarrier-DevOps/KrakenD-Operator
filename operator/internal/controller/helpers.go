@@ -52,30 +52,35 @@ func conditionsEqual(a, b []metav1.Condition) bool {
 	return true
 }
 
+// endpointIndexRegistration tracks one in-flight or completed index
+// registration attempt for a specific field indexer.
+type endpointIndexRegistration struct {
+	ready chan struct{}
+	err   error
+}
+
 // indexRegistry tracks which managers have had endpoint field indexes
 // registered, scoped per-manager so multiple managers (e.g. in tests)
 // each get their own registrations.
-var indexRegistry sync.Map // map[client.FieldIndexer]error
+var indexRegistry sync.Map // map[client.FieldIndexer]*endpointIndexRegistration
 
 // ensureEndpointIndexes registers field indexes for KrakenDEndpoint lookups.
 // It is safe to call from multiple controllers sharing the same manager;
 // indexes are registered exactly once per manager instance.
 func ensureEndpointIndexes(mgr ctrl.Manager) error {
 	indexer := mgr.GetFieldIndexer()
+	reg := &endpointIndexRegistration{ready: make(chan struct{})}
 
-	actual, loaded := indexRegistry.LoadOrStore(indexer, nil)
+	actual, loaded := indexRegistry.LoadOrStore(indexer, reg)
 	if loaded {
-		if err, ok := actual.(error); ok {
-			return err
-		}
-		return nil
+		existing := actual.(*endpointIndexRegistration)
+		<-existing.ready
+		return existing.err
 	}
 
-	if err := registerEndpointIndexes(indexer); err != nil {
-		indexRegistry.Store(indexer, err)
-		return err
-	}
-	return nil
+	defer close(reg.ready)
+	reg.err = registerEndpointIndexes(indexer)
+	return reg.err
 }
 
 func registerEndpointIndexes(indexer client.FieldIndexer) error {
