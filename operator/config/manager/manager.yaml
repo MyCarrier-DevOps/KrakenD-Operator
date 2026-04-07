@@ -5,12 +5,15 @@ metadata:
     control-plane: controller-manager
     app.kubernetes.io/name: krakend-operator
     app.kubernetes.io/managed-by: kustomize
+  # Kustomize namespace transformer (config/default/kustomization.yaml) overrides
+  # this to "krakend-operator-system" and prepends the namePrefix.
   name: system
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: controller-manager
+  # Overridden by kustomize namespace transformer to "krakend-operator-system".
   namespace: system
   labels:
     control-plane: controller-manager

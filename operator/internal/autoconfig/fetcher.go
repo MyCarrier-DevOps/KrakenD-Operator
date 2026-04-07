@@ -30,6 +30,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 const (
@@ -146,7 +147,11 @@ func (f *httpFetcher) fetchFromURL(ctx context.Context, source FetchSource) (*Fe
 	if err != nil {
 		return nil, fmt.Errorf("fetching %s: %w", source.URL, err)
 	}
-	defer func() { resp.Body.Close() }() //nolint:errcheck // best-effort close on HTTP response
+	defer func() {
+		if cerr := resp.Body.Close(); cerr != nil {
+			logf.FromContext(ctx).V(1).Info("failed to close response body", "error", cerr)
+		}
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("unexpected status %d from %s", resp.StatusCode, source.URL)

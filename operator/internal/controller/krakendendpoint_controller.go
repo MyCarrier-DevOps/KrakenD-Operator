@@ -69,6 +69,7 @@ func (r *KrakenDEndpointReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	origPhase := ep.Status.Phase
 	origGeneration := ep.Status.ObservedGeneration
 	origCount := ep.Status.EndpointCount
+	origConditions := ep.Status.DeepCopy().Conditions
 
 	// Initialize phase on first reconcile
 	if ep.Status.Phase == "" {
@@ -120,7 +121,8 @@ func (r *KrakenDEndpointReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	// Only write status if it actually changed
 	statusChanged := ep.Status.Phase != origPhase ||
 		ep.Status.ObservedGeneration != origGeneration ||
-		ep.Status.EndpointCount != origCount
+		ep.Status.EndpointCount != origCount ||
+		!conditionsEqual(origConditions, ep.Status.Conditions)
 	if statusChanged {
 		if err := r.Status().Update(ctx, &ep); err != nil {
 			return ctrl.Result{}, fmt.Errorf("updating endpoint status to Active: %w", err)
@@ -139,38 +141,8 @@ const (
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *KrakenDEndpointReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	if err := mgr.GetFieldIndexer().IndexField(
-		context.Background(), &v1alpha1.KrakenDEndpoint{}, endpointGatewayIndex,
-		func(obj client.Object) []string {
-			ep, ok := obj.(*v1alpha1.KrakenDEndpoint)
-			if !ok {
-				return nil
-			}
-			return []string{ep.Spec.GatewayRef.Name}
-		},
-	); err != nil {
-		return fmt.Errorf("indexing %s: %w", endpointGatewayIndex, err)
-	}
-
-	if err := mgr.GetFieldIndexer().IndexField(
-		context.Background(), &v1alpha1.KrakenDEndpoint{}, endpointPolicyIndex,
-		func(obj client.Object) []string {
-			ep, ok := obj.(*v1alpha1.KrakenDEndpoint)
-			if !ok {
-				return nil
-			}
-			var refs []string
-			for _, entry := range ep.Spec.Endpoints {
-				for _, be := range entry.Backends {
-					if be.PolicyRef != nil {
-						refs = append(refs, be.PolicyRef.Name)
-					}
-				}
-			}
-			return refs
-		},
-	); err != nil {
-		return fmt.Errorf("indexing %s: %w", endpointPolicyIndex, err)
+	if err := ensureEndpointIndexes(mgr); err != nil {
+		return err
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).

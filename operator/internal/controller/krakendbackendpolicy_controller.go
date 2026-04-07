@@ -61,6 +61,10 @@ func (r *KrakenDBackendPolicyReconciler) Reconcile(ctx context.Context, req ctrl
 		return ctrl.Result{}, fmt.Errorf("getting policy %s: %w", req.NamespacedName, err)
 	}
 
+	// Capture original status for change detection
+	origRef := policy.Status.ReferencedBy
+	origConditions := policy.Status.DeepCopy().Conditions
+
 	// Count how many endpoints reference this policy using the field index
 	var endpoints v1alpha1.KrakenDEndpointList
 	if err := r.List(ctx, &endpoints,
@@ -94,8 +98,12 @@ func (r *KrakenDBackendPolicyReconciler) Reconcile(ctx context.Context, req ctrl
 		})
 	}
 
-	if err := r.Status().Update(ctx, &policy); err != nil {
-		return ctrl.Result{}, fmt.Errorf("updating policy status: %w", err)
+	// Only write status if it actually changed
+	if policy.Status.ReferencedBy != origRef ||
+		!conditionsEqual(origConditions, policy.Status.Conditions) {
+		if err := r.Status().Update(ctx, &policy); err != nil {
+			return ctrl.Result{}, fmt.Errorf("updating policy status: %w", err)
+		}
 	}
 
 	log.V(1).Info("policy reconciled", "referencedBy", refCount)
@@ -104,6 +112,10 @@ func (r *KrakenDBackendPolicyReconciler) Reconcile(ctx context.Context, req ctrl
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *KrakenDBackendPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if err := ensureEndpointIndexes(mgr); err != nil {
+		return err
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.KrakenDBackendPolicy{},
 			builder.WithPredicates(predicate.GenerationChangedPredicate{}),
