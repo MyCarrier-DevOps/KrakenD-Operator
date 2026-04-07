@@ -317,7 +317,7 @@ func ResolveImage(gw *v1alpha1.KrakenDGateway, ceFallback bool) string {
 		if gw.Spec.CEImage != "" {
 			return gw.Spec.CEImage
 		}
-		return fmt.Sprintf("krakend/krakend:%s", gw.Spec.Version)
+		return fmt.Sprintf("krakend:%s", gw.Spec.Version)
 	}
 	if gw.Spec.Image != "" {
 		return gw.Spec.Image
@@ -326,9 +326,9 @@ func ResolveImage(gw *v1alpha1.KrakenDGateway, ceFallback bool) string {
 	case v1alpha1.EditionEE:
 		return fmt.Sprintf("krakend/krakend-ee:%s", gw.Spec.Version)
 	case v1alpha1.EditionCE:
-		return fmt.Sprintf("krakend/krakend:%s", gw.Spec.Version)
+		return fmt.Sprintf("krakend:%s", gw.Spec.Version)
 	}
-	return fmt.Sprintf("krakend/krakend:%s", gw.Spec.Version)
+	return fmt.Sprintf("krakend:%s", gw.Spec.Version)
 }
 
 // serializeJSON produces deterministic pretty-printed JSON from a config map.

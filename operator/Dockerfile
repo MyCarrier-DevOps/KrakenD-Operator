@@ -21,7 +21,7 @@ COPY internal/ internal/
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -ldflags="-s -w" -a -o manager cmd/main.go
 
 # Stage 2: Extract KrakenD CE binary for config validation
-FROM krakend/krakend:${KRAKEND_VERSION} AS krakend
+FROM krakend:${KRAKEND_VERSION} AS krakend
 
 # Stage 3: Final distroless image
 FROM gcr.io/distroless/static:nonroot

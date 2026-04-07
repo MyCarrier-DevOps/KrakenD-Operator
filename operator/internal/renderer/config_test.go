@@ -54,7 +54,7 @@ func TestRender_MinimalGateway(t *testing.T) {
 	if out.Checksum == "" {
 		t.Fatal("expected non-empty checksum")
 	}
-	if out.DesiredImage != "krakend/krakend:2.7.0" {
+	if out.DesiredImage != "krakend:2.7.0" {
 		t.Errorf("expected CE image, got %s", out.DesiredImage)
 	}
 
@@ -287,8 +287,8 @@ func TestResolveImage_CEEdition(t *testing.T) {
 	gw.Spec.Version = "2.7.0"
 
 	got := ResolveImage(gw, false)
-	if got != "krakend/krakend:2.7.0" {
-		t.Errorf("expected krakend/krakend:2.7.0, got %s", got)
+	if got != "krakend:2.7.0" {
+		t.Errorf("expected krakend:2.7.0, got %s", got)
 	}
 }
 
@@ -319,7 +319,7 @@ func TestResolveImage_CEFallback(t *testing.T) {
 	gw.Spec.Version = "2.7.0"
 
 	got := ResolveImage(gw, true)
-	if got != "krakend/krakend:2.7.0" {
+	if got != "krakend:2.7.0" {
 		t.Errorf("expected CE fallback image, got %s", got)
 	}
 }
