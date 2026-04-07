@@ -131,6 +131,8 @@ func (m *LicenseMonitor) checkGateway(ctx context.Context, gw *v1alpha1.KrakenDG
 	}
 
 	now := m.Clock.Now()
+	licenseExpirySeconds.WithLabelValues(gw.Namespace, gw.Name).Set(info.NotAfter.Sub(now).Seconds())
+
 	warningDays := defaultExpiryWarningDays
 	if gw.Spec.License != nil && gw.Spec.License.ExpiryWarningDays > 0 {
 		warningDays = gw.Spec.License.ExpiryWarningDays

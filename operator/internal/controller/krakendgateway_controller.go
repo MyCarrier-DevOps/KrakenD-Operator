@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
@@ -72,6 +73,11 @@ type KrakenDGatewayReconciler struct {
 // render config, validate, update resource, and reconcile owned objects.
 func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
+	start := time.Now()
+	defer func() {
+		reconcileDuration.WithLabelValues("gateway", req.Namespace, req.Name).
+			Observe(time.Since(start).Seconds())
+	}()
 
 	var gw v1alpha1.KrakenDGateway
 	if err := r.Get(ctx, req.NamespacedName, &gw); err != nil {
@@ -128,6 +134,7 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("rendering config: %w", err)
 	}
+	configRenders.Inc()
 
 	// Update endpoint statuses for conflicted/invalid
 	if err := r.updateEndpointStatuses(ctx, output); err != nil {
@@ -152,7 +159,8 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 
 		if err := r.validateConfig(ctx, &gw, output.JSON, ceFallback); err != nil {
-			return r.handleValidationError(ctx, &gw, err)
+			configValidationFailures.Inc()
+			return ctrl.Result{}, r.handleValidationError(ctx, &gw, err)
 		}
 
 		// Update ConfigMap
@@ -185,6 +193,7 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 		r.Recorder.Event(&gw, "Normal", "ConfigUpdated",
 			fmt.Sprintf("Configuration updated, checksum: %s", output.Checksum))
+		rollingRestarts.Inc()
 	} else if imageChanged || pluginChanged {
 		gw.Status.Phase = v1alpha1.PhaseDeploying
 		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
@@ -205,6 +214,8 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	gw.Status.ActiveImage = output.DesiredImage
 	gw.Status.ObservedGeneration = gw.Generation
 	gw.Status.EndpointCount = int32(len(endpoints))
+	endpointsPerGateway.WithLabelValues(gw.Namespace, gw.Name).Set(float64(len(endpoints)))
+	gatewayInfo.WithLabelValues(gw.Namespace, gw.Name, string(gw.Spec.Edition), gw.Spec.Version).Set(1)
 	if gw.Status.Phase != v1alpha1.PhaseDegraded && gw.Status.Phase != v1alpha1.PhaseError {
 		if gw.Status.Phase != v1alpha1.PhaseDeploying {
 			gw.Status.Phase = v1alpha1.PhaseRunning
@@ -328,7 +339,7 @@ func (r *KrakenDGatewayReconciler) handleValidationError(
 	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
 	validationErr error,
-) (ctrl.Result, error) {
+) error {
 	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
 		Type:               v1alpha1.ConditionConfigValid,
 		Status:             metav1.ConditionFalse,
@@ -339,9 +350,9 @@ func (r *KrakenDGatewayReconciler) handleValidationError(
 	gw.Status.Phase = v1alpha1.PhaseError
 	r.Recorder.Event(gw, "Warning", "ValidationFailed", validationErr.Error())
 	if err := r.Status().Update(ctx, gw); err != nil {
-		return ctrl.Result{}, fmt.Errorf("updating status after validation failure: %w", err)
+		return fmt.Errorf("updating status after validation failure: %w", err)
 	}
-	return ctrl.Result{}, nil
+	return nil
 }
 
 // updateEndpointStatuses marks conflicted and invalid endpoints.
