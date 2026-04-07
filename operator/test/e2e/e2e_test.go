@@ -22,8 +22,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"time"
 	"strings"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -364,7 +364,7 @@ spec:
 		By("verifying the Deployment is created")
 		verifyDeployment := func(g Gomega) {
 			cmd := exec.Command("kubectl", "get", "deployment", "e2e-gateway",
-"-n", testNamespace, "-o", "jsonpath={.metadata.name}")
+				"-n", testNamespace, "-o", "jsonpath={.metadata.name}")
 			output, err := utils.Run(cmd)
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(output).To(Equal("e2e-gateway"))
@@ -374,7 +374,7 @@ spec:
 		By("verifying the Service is created")
 		verifyService := func(g Gomega) {
 			cmd := exec.Command("kubectl", "get", "service", "e2e-gateway",
-"-n", testNamespace, "-o", "jsonpath={.metadata.name}")
+				"-n", testNamespace, "-o", "jsonpath={.metadata.name}")
 			output, err := utils.Run(cmd)
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(output).To(Equal("e2e-gateway"))
@@ -405,7 +405,7 @@ spec:
 		By("verifying the endpoint is Active")
 		verifyEndpointActive := func(g Gomega) {
 			cmd := exec.Command("kubectl", "get", "krakendendpoint", "e2e-users",
-"-n", testNamespace, "-o", "jsonpath={.status.phase}")
+				"-n", testNamespace, "-o", "jsonpath={.status.phase}")
 			output, err := utils.Run(cmd)
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(output).To(Equal("Active"))
@@ -415,7 +415,7 @@ spec:
 		By("verifying the gateway has endpoint count")
 		verifyGatewayEndpoints := func(g Gomega) {
 			cmd := exec.Command("kubectl", "get", "krakendgateway", "e2e-gateway",
-"-n", testNamespace, "-o", "jsonpath={.status.endpointCount}")
+				"-n", testNamespace, "-o", "jsonpath={.status.endpointCount}")
 			output, err := utils.Run(cmd)
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(output).To(Equal("1"))
@@ -430,7 +430,7 @@ spec:
 		By("verifying the endpoint is Detached after gateway deletion")
 		verifyEndpointDetached := func(g Gomega) {
 			cmd := exec.Command("kubectl", "get", "krakendendpoint", "e2e-users",
-"-n", testNamespace, "-o", "jsonpath={.status.phase}")
+				"-n", testNamespace, "-o", "jsonpath={.status.phase}")
 			output, err := utils.Run(cmd)
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(output).To(Equal("Detached"))
