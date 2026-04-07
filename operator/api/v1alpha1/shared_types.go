@@ -45,7 +45,7 @@ const (
 	ConditionProgressing              = "Progressing"
 	ConditionSpecAvailable            = "SpecAvailable"
 	ConditionSynced                   = "Synced"
-	ConditionPolicyValid              = "Valid"
+	ConditionPolicyValid              = "PolicyValid"
 )
 
 // Event reason constants for the EventRecorder.

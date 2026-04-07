@@ -133,6 +133,10 @@ func (r *KrakenDEndpointReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			&v1alpha1.KrakenDGateway{},
 			handler.EnqueueRequestsFromMapFunc(r.gatewayToEndpoints),
 		).
+		Watches(
+			&v1alpha1.KrakenDBackendPolicy{},
+			handler.EnqueueRequestsFromMapFunc(r.policyToEndpoints),
+		).
 		Named("krakendendpoint").
 		Complete(r)
 }
@@ -192,6 +196,32 @@ func (r *KrakenDEndpointReconciler) gatewayToEndpoints(
 					Namespace: endpoints.Items[i].Namespace,
 				},
 			})
+		}
+	}
+	return requests
+}
+
+// policyToEndpoints maps a BackendPolicy event to all endpoints that reference it.
+func (r *KrakenDEndpointReconciler) policyToEndpoints(
+	ctx context.Context, obj client.Object,
+) []reconcile.Request {
+	var endpoints v1alpha1.KrakenDEndpointList
+	if err := r.List(ctx, &endpoints, client.InNamespace(obj.GetNamespace())); err != nil {
+		return nil
+	}
+	var requests []reconcile.Request
+	for i := range endpoints.Items {
+		for _, entry := range endpoints.Items[i].Spec.Endpoints {
+			for _, be := range entry.Backends {
+				if be.PolicyRef != nil && be.PolicyRef.Name == obj.GetName() {
+					requests = append(requests, reconcile.Request{
+						NamespacedName: types.NamespacedName{
+							Name:      endpoints.Items[i].Name,
+							Namespace: endpoints.Items[i].Namespace,
+						},
+					})
+				}
+			}
 		}
 	}
 	return requests

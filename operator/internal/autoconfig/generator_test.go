@@ -169,7 +169,7 @@ func TestSanitizePath(t *testing.T) {
 	}{
 		{"/api/users", "api-users"},
 		{"/api/users/{id}", "api-users-id"},
-		{"/api/orders/{orderId}/items", "api-orders-orderId-items"},
+		{"/api/orders/{orderId}/items", "api-orders-orderid-items"},
 	}
 	for _, tt := range tests {
 		if got := sanitizePath(tt.input); got != tt.expected {

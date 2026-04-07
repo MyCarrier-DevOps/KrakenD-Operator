@@ -561,3 +561,80 @@ func TestFetcher_InvalidURL(t *testing.T) {
 		t.Error("expected error for invalid URL")
 	}
 }
+
+func TestFetcher_BasicAuthMissingUsernameKey(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{}`)
+	}))
+	defer ts.Close()
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "creds", Namespace: "default"},
+		Data:       map[string][]byte{"password": []byte("p@ss")},
+	}
+	fetcher := &httpFetcher{
+		client:           fakeClient(secret),
+		strictTransport:  http.DefaultTransport,
+		lenientTransport: http.DefaultTransport,
+	}
+	_, err := fetcher.Fetch(context.Background(), FetchSource{
+		URL:       ts.URL,
+		Namespace: "default",
+		Auth: &v1alpha1.AuthConfig{
+			BasicAuthSecret: &v1alpha1.BasicAuthSecretRef{Name: "creds"},
+		},
+	})
+	if err == nil {
+		t.Error("expected error for missing username key")
+	}
+}
+
+func TestFetcher_BasicAuthMissingPasswordKey(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{}`)
+	}))
+	defer ts.Close()
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "creds", Namespace: "default"},
+		Data:       map[string][]byte{"username": []byte("admin")},
+	}
+	fetcher := &httpFetcher{
+		client:           fakeClient(secret),
+		strictTransport:  http.DefaultTransport,
+		lenientTransport: http.DefaultTransport,
+	}
+	_, err := fetcher.Fetch(context.Background(), FetchSource{
+		URL:       ts.URL,
+		Namespace: "default",
+		Auth: &v1alpha1.AuthConfig{
+			BasicAuthSecret: &v1alpha1.BasicAuthSecretRef{Name: "creds"},
+		},
+	})
+	if err == nil {
+		t.Error("expected error for missing password key")
+	}
+}
+
+func TestFetcher_RedirectLimit(t *testing.T) {
+	redirectCount := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		redirectCount++
+		if redirectCount <= maxRedirects+1 {
+			http.Redirect(w, r, r.URL.String(), http.StatusFound)
+			return
+		}
+		fmt.Fprint(w, `{}`)
+	}))
+	defer ts.Close()
+
+	fetcher := &httpFetcher{
+		client:           fakeClient(),
+		strictTransport:  http.DefaultTransport,
+		lenientTransport: http.DefaultTransport,
+	}
+	_, err := fetcher.Fetch(context.Background(), FetchSource{URL: ts.URL})
+	if err == nil {
+		t.Error("expected error for too many redirects")
+	}
+}

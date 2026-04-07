@@ -202,9 +202,15 @@ func (f *httpFetcher) applyAuth(
 		if passwordKey == "" {
 			passwordKey = "password"
 		}
-		username := string(secret.Data[usernameKey])
-		password := string(secret.Data[passwordKey])
-		req.SetBasicAuth(username, password)
+		usernameVal, ok := secret.Data[usernameKey]
+		if !ok {
+			return fmt.Errorf("key %q not found in secret %s", usernameKey, auth.BasicAuthSecret.Name)
+		}
+		passwordVal, ok := secret.Data[passwordKey]
+		if !ok {
+			return fmt.Errorf("key %q not found in secret %s", passwordKey, auth.BasicAuthSecret.Name)
+		}
+		req.SetBasicAuth(string(usernameVal), string(passwordVal))
 	}
 
 	return nil
@@ -276,6 +282,10 @@ func SSRFSafeTransportWithPolicy(allowClusterLocal bool) *http.Transport {
 			ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
 			if err != nil {
 				return nil, fmt.Errorf("resolving %s: %w", host, err)
+			}
+
+			if len(ips) == 0 {
+				return nil, fmt.Errorf("resolving %s: no IP addresses returned", host)
 			}
 
 			for _, ipAddr := range ips {

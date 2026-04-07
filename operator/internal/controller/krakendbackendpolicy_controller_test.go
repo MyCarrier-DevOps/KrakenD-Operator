@@ -188,7 +188,7 @@ func TestPolicyReconcile_InvalidCircuitBreaker(t *testing.T) {
 
 	found := false
 	for _, c := range updated.Status.Conditions {
-		if c.Type == "Valid" && c.Status == metav1.ConditionFalse {
+		if c.Type == "PolicyValid" && c.Status == metav1.ConditionFalse {
 			found = true
 		}
 	}
@@ -223,7 +223,7 @@ func TestPolicyReconcile_InvalidRateLimit(t *testing.T) {
 	}
 	found := false
 	for _, c := range updated.Status.Conditions {
-		if c.Type == "Valid" && c.Status == metav1.ConditionFalse {
+		if c.Type == "PolicyValid" && c.Status == metav1.ConditionFalse {
 			found = true
 		}
 	}
@@ -259,7 +259,7 @@ func TestPolicyReconcile_ValidCondition(t *testing.T) {
 	}
 	found := false
 	for _, c := range updated.Status.Conditions {
-		if c.Type == "Valid" && c.Status == metav1.ConditionTrue {
+		if c.Type == "PolicyValid" && c.Status == metav1.ConditionTrue {
 			found = true
 		}
 	}

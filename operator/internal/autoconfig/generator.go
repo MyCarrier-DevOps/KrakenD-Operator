@@ -114,8 +114,9 @@ func sanitizeName(s string) string {
 
 func sanitizePath(path string) string {
 	path = strings.TrimPrefix(path, "/")
+	path = strings.ToLower(path)
 	path = strings.ReplaceAll(path, "/", "-")
 	path = strings.ReplaceAll(path, "{", "")
 	path = strings.ReplaceAll(path, "}", "")
-	return path
+	return strings.Trim(path, "-")
 }
