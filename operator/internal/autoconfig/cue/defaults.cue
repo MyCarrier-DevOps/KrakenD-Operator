@@ -1,8 +1,7 @@
 // Default CUE definitions for the KrakenD Operator autoconfig pipeline.
 //
-// This faithfully adapts the transformation logic from KrakenD-SwaggerParse's
-// endpoints.cue to produce KrakenDEndpoint EndpointEntry objects instead of
-// raw KrakenD JSON endpoints.
+// This provides the transformation logic to produce KrakenDEndpoint
+// EndpointEntry objects from raw openapi JSON endpoints.
 //
 // Inputs (injected by the operator):
 //   _spec — the fetched OpenAPI spec (JSON), structured as a single-service
