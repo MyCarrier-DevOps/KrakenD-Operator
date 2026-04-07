@@ -1,4 +1,5 @@
 # Stage 1: Build operator binary
+ARG KRAKEND_VERSION=2.13
 FROM golang:1.26-alpine AS builder
 ARG TARGETOS
 ARG TARGETARCH
@@ -20,7 +21,6 @@ COPY internal/ internal/
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -ldflags="-s -w" -a -o manager cmd/main.go
 
 # Stage 2: Extract KrakenD CE binary for config validation
-ARG KRAKEND_VERSION=2.13
 FROM krakend/krakend:${KRAKEND_VERSION} AS krakend
 
 # Stage 3: Final distroless image
