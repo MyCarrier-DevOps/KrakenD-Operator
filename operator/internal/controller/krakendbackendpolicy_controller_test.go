@@ -305,3 +305,177 @@ func TestPolicyMapper_PolicyRefsFromEndpoint(t *testing.T) {
 		t.Errorf("expected pol1 and pol2, got %v", names)
 	}
 }
+
+func TestPolicyMapper_PolicyRefsFromNonEndpoint(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw1", Namespace: "default"},
+	}
+	requests := policyRefsFromEndpoint(gw)
+	if len(requests) != 0 {
+		t.Errorf("expected 0 requests from non-endpoint object, got %d", len(requests))
+	}
+}
+
+func TestPolicyMapper_PolicyRefsFromEndpointNoPolicies(t *testing.T) {
+	ep := &v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "ep1", Namespace: "default"},
+		Spec: v1alpha1.KrakenDEndpointSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: "gw1"},
+			Endpoints: []v1alpha1.EndpointEntry{
+				{Endpoint: "/a", Method: "GET", Backends: []v1alpha1.BackendSpec{
+					{Host: []string{"http://a"}, URLPattern: "/"},
+				}},
+			},
+		},
+	}
+	requests := policyRefsFromEndpoint(ep)
+	if len(requests) != 0 {
+		t.Errorf("expected 0 requests, got %d", len(requests))
+	}
+}
+
+func TestPolicyReconcile_StatusNoOpWhenUnchanged(t *testing.T) {
+	policy := &v1alpha1.KrakenDBackendPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "pol1", Namespace: "default"},
+		Spec: v1alpha1.KrakenDBackendPolicySpec{
+			RateLimit: &v1alpha1.RateLimitSpec{MaxRate: 100},
+		},
+	}
+	c := fakeClientBuilder().
+		WithObjects(policy).
+		WithStatusSubresource(policy).
+		Build()
+	r := &KrakenDBackendPolicyReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
+
+	// First reconcile sets status
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(policy)})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Second reconcile should detect no change
+	_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(policy)})
+	if err != nil {
+		t.Fatalf("unexpected error on second reconcile: %v", err)
+	}
+}
+
+func TestPolicyReconcile_InvalidCircuitBreakerInterval(t *testing.T) {
+	policy := &v1alpha1.KrakenDBackendPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "pol1", Namespace: "default"},
+		Spec: v1alpha1.KrakenDBackendPolicySpec{
+			CircuitBreaker: &v1alpha1.CircuitBreakerSpec{
+				MaxErrors: 5,
+				Interval:  0,
+				Timeout:   30,
+			},
+		},
+	}
+	c := fakeClientBuilder().
+		WithObjects(policy).
+		WithStatusSubresource(policy).
+		Build()
+	r := &KrakenDBackendPolicyReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(policy)})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var updated v1alpha1.KrakenDBackendPolicy
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(policy), &updated); err != nil {
+		t.Fatal(err)
+	}
+	for _, cond := range updated.Status.Conditions {
+		if cond.Type == v1alpha1.ConditionPolicyValid && cond.Status == metav1.ConditionFalse {
+			if cond.Reason != "InvalidCircuitBreaker" {
+				t.Errorf("expected InvalidCircuitBreaker reason, got %s", cond.Reason)
+			}
+			return
+		}
+	}
+	t.Error("expected Invalid condition for zero interval")
+}
+
+func TestPolicyReconcile_InvalidCircuitBreakerTimeout(t *testing.T) {
+	policy := &v1alpha1.KrakenDBackendPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "pol1", Namespace: "default"},
+		Spec: v1alpha1.KrakenDBackendPolicySpec{
+			CircuitBreaker: &v1alpha1.CircuitBreakerSpec{
+				MaxErrors: 5,
+				Interval:  60,
+				Timeout:   0,
+			},
+		},
+	}
+	c := fakeClientBuilder().
+		WithObjects(policy).
+		WithStatusSubresource(policy).
+		Build()
+	r := &KrakenDBackendPolicyReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(policy)})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var updated v1alpha1.KrakenDBackendPolicy
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(policy), &updated); err != nil {
+		t.Fatal(err)
+	}
+	for _, cond := range updated.Status.Conditions {
+		if cond.Type == v1alpha1.ConditionPolicyValid && cond.Status == metav1.ConditionFalse {
+			if cond.Reason != "InvalidCircuitBreaker" {
+				t.Errorf("expected InvalidCircuitBreaker reason, got %s", cond.Reason)
+			}
+			return
+		}
+	}
+	t.Error("expected Invalid condition for zero timeout")
+}
+
+func TestPolicyReconcile_InvalidToValid(t *testing.T) {
+	// Start with an invalid policy that already has an invalid condition
+	policy := &v1alpha1.KrakenDBackendPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "pol1", Namespace: "default"},
+		Spec: v1alpha1.KrakenDBackendPolicySpec{
+			RateLimit: &v1alpha1.RateLimitSpec{MaxRate: 100},
+		},
+		Status: v1alpha1.KrakenDBackendPolicyStatus{
+			Conditions: []metav1.Condition{
+				{Type: v1alpha1.ConditionPolicyValid, Status: metav1.ConditionFalse, Reason: "InvalidRateLimit"},
+			},
+		},
+	}
+	c := fakeClientBuilder().
+		WithObjects(policy).
+		WithStatusSubresource(policy).
+		Build()
+	r := &KrakenDBackendPolicyReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(policy)})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var updated v1alpha1.KrakenDBackendPolicy
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(policy), &updated); err != nil {
+		t.Fatal(err)
+	}
+	for _, cond := range updated.Status.Conditions {
+		if cond.Type == v1alpha1.ConditionPolicyValid && cond.Status == metav1.ConditionTrue {
+			return
+		}
+	}
+	t.Error("expected Valid=True after fixing policy")
+}
+
+func TestValidatePolicy_NilSpecs(t *testing.T) {
+	policy := &v1alpha1.KrakenDBackendPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "pol1", Namespace: "default"},
+		Spec:       v1alpha1.KrakenDBackendPolicySpec{},
+	}
+	reason, msg := validatePolicy(policy)
+	if reason != "" || msg != "" {
+		t.Errorf("expected valid for nil specs, got reason=%q msg=%q", reason, msg)
+	}
+}

@@ -300,3 +300,157 @@ func TestEndpointReconcile_ActiveNoPolicyRef(t *testing.T) {
 		t.Errorf("expected Active, got %s", updated.Status.Phase)
 	}
 }
+
+func TestEndpointReconcile_PolicyToEndpoints(t *testing.T) {
+	policy := &v1alpha1.KrakenDBackendPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "pol1", Namespace: "default"},
+		Spec:       v1alpha1.KrakenDBackendPolicySpec{RateLimit: &v1alpha1.RateLimitSpec{MaxRate: 100}},
+	}
+	ep1 := &v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "ep1", Namespace: "default"},
+		Spec: v1alpha1.KrakenDEndpointSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: "gw1"},
+			Endpoints: []v1alpha1.EndpointEntry{
+				{Endpoint: "/a", Method: "GET", Backends: []v1alpha1.BackendSpec{
+					{Host: []string{"http://svc:8080"}, URLPattern: "/", PolicyRef: &v1alpha1.PolicyRef{Name: "pol1"}},
+				}},
+			},
+		},
+	}
+	ep2 := &v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "ep2", Namespace: "default"},
+		Spec: v1alpha1.KrakenDEndpointSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: "gw1"},
+			Endpoints: []v1alpha1.EndpointEntry{
+				{Endpoint: "/b", Method: "GET", Backends: []v1alpha1.BackendSpec{
+					{Host: []string{"http://svc:8080"}, URLPattern: "/"},
+				}},
+			},
+		},
+	}
+	c := fakeClientBuilder().WithObjects(ep1, ep2).Build()
+	r := &KrakenDEndpointReconciler{Client: c, Scheme: testScheme()}
+
+	requests := r.policyToEndpoints(context.Background(), policy)
+	if len(requests) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(requests))
+	}
+	if requests[0].Name != "ep1" {
+		t.Errorf("expected ep1, got %s", requests[0].Name)
+	}
+}
+
+func TestEndpointReconcile_NoOpWhenUnchanged(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw1", Namespace: "default"},
+		Spec:       v1alpha1.KrakenDGatewaySpec{Version: "2.7.0", Edition: v1alpha1.EditionCE},
+	}
+	ep := &v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "ep1", Namespace: "default", Generation: 1},
+		Spec: v1alpha1.KrakenDEndpointSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: "gw1"},
+			Endpoints:  []v1alpha1.EndpointEntry{{Endpoint: "/test", Method: "GET", Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc:8080"}, URLPattern: "/"}}}},
+		},
+		Status: v1alpha1.KrakenDEndpointStatus{
+			Phase:              v1alpha1.EndpointPhaseActive,
+			ObservedGeneration: 1,
+			EndpointCount:      1,
+			Conditions: []metav1.Condition{
+				{Type: v1alpha1.ConditionAvailable, Status: metav1.ConditionTrue, Reason: "ReferencesValid", Message: "All gateway and policy references are valid", ObservedGeneration: 1},
+			},
+		},
+	}
+	c := fakeClientBuilder().
+		WithObjects(gw, ep).
+		WithStatusSubresource(ep).
+		Build()
+	r := &KrakenDEndpointReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
+
+	// First reconcile sets Active
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(ep)})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Second reconcile should be a no-op (no status update needed)
+	_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(ep)})
+	if err != nil {
+		t.Fatalf("unexpected error on second reconcile: %v", err)
+	}
+}
+
+func TestEndpointReconcile_DetachedToActive(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw1", Namespace: "default"},
+		Spec:       v1alpha1.KrakenDGatewaySpec{Version: "2.7.0", Edition: v1alpha1.EditionCE},
+	}
+	ep := &v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "ep1", Namespace: "default"},
+		Spec: v1alpha1.KrakenDEndpointSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: "gw1"},
+			Endpoints:  []v1alpha1.EndpointEntry{{Endpoint: "/test", Method: "GET", Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc:8080"}, URLPattern: "/"}}}},
+		},
+		Status: v1alpha1.KrakenDEndpointStatus{Phase: v1alpha1.EndpointPhaseDetached},
+	}
+	c := fakeClientBuilder().
+		WithObjects(gw, ep).
+		WithStatusSubresource(ep).
+		Build()
+	r := &KrakenDEndpointReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(ep)})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var updated v1alpha1.KrakenDEndpoint
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(ep), &updated); err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status.Phase != v1alpha1.EndpointPhaseActive {
+		t.Errorf("expected Active after gateway discovered, got %s", updated.Status.Phase)
+	}
+}
+
+func TestEndpointReconcile_MultiplePoliciesDedup(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw1", Namespace: "default"},
+		Spec:       v1alpha1.KrakenDGatewaySpec{Version: "2.7.0", Edition: v1alpha1.EditionCE},
+	}
+	policy := &v1alpha1.KrakenDBackendPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "pol1", Namespace: "default"},
+		Spec:       v1alpha1.KrakenDBackendPolicySpec{RateLimit: &v1alpha1.RateLimitSpec{MaxRate: 100}},
+	}
+	ep := &v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "ep1", Namespace: "default"},
+		Spec: v1alpha1.KrakenDEndpointSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: "gw1"},
+			Endpoints: []v1alpha1.EndpointEntry{
+				{Endpoint: "/a", Method: "GET", Backends: []v1alpha1.BackendSpec{
+					{Host: []string{"http://svc:8080"}, URLPattern: "/a", PolicyRef: &v1alpha1.PolicyRef{Name: "pol1"}},
+				}},
+				{Endpoint: "/b", Method: "POST", Backends: []v1alpha1.BackendSpec{
+					{Host: []string{"http://svc:8080"}, URLPattern: "/b", PolicyRef: &v1alpha1.PolicyRef{Name: "pol1"}},
+				}},
+			},
+		},
+		Status: v1alpha1.KrakenDEndpointStatus{Phase: v1alpha1.EndpointPhasePending},
+	}
+	c := fakeClientBuilder().
+		WithObjects(gw, policy, ep).
+		WithStatusSubresource(ep).
+		Build()
+	r := &KrakenDEndpointReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(ep)})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var updated v1alpha1.KrakenDEndpoint
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(ep), &updated); err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status.Phase != v1alpha1.EndpointPhaseActive {
+		t.Errorf("expected Active with deduped policy, got %s", updated.Status.Phase)
+	}
+}
