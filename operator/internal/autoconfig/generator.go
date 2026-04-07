@@ -145,7 +145,11 @@ func sanitizePath(path string) string {
 	path = strings.TrimPrefix(path, "/")
 	path = strings.ToLower(path)
 	path = strings.ReplaceAll(path, "/", "-")
-	path = strings.ReplaceAll(path, "{", "")
-	path = strings.ReplaceAll(path, "}", "")
+	path = strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+			return r
+		}
+		return -1
+	}, path)
 	return strings.Trim(path, "-")
 }
