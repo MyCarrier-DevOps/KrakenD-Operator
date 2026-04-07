@@ -87,22 +87,24 @@ func (r *KrakenDEndpointReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, fmt.Errorf("getting gateway %s: %w", gwKey, err)
 	}
 
-	// Validate all policy references exist
+	// Validate all policy references exist (deduplicated)
+	policyNames := make(map[string]struct{})
 	for _, entry := range ep.Spec.Endpoints {
 		for _, be := range entry.Backends {
-			if be.PolicyRef == nil {
-				continue
+			if be.PolicyRef != nil {
+				policyNames[be.PolicyRef.Name] = struct{}{}
 			}
-			var policy v1alpha1.KrakenDBackendPolicy
-			policyKey := types.NamespacedName{Name: be.PolicyRef.Name, Namespace: ep.Namespace}
-			if err := r.Get(ctx, policyKey, &policy); err != nil {
-				if errors.IsNotFound(err) {
-					return r.setInvalid(ctx, &ep, "PolicyNotFound",
-						fmt.Sprintf("policy %q referenced by backend in endpoint %q not found",
-							be.PolicyRef.Name, entry.Endpoint))
-				}
-				return ctrl.Result{}, fmt.Errorf("getting policy %s: %w", policyKey, err)
+		}
+	}
+	for policyName := range policyNames {
+		var policy v1alpha1.KrakenDBackendPolicy
+		policyKey := types.NamespacedName{Name: policyName, Namespace: ep.Namespace}
+		if err := r.Get(ctx, policyKey, &policy); err != nil {
+			if errors.IsNotFound(err) {
+				return r.setInvalid(ctx, &ep, "PolicyNotFound",
+					fmt.Sprintf("policy %q referenced by a backend not found", policyName))
 			}
+			return ctrl.Result{}, fmt.Errorf("getting policy %s: %w", policyKey, err)
 		}
 	}
 

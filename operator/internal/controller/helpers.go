@@ -52,53 +52,66 @@ func conditionsEqual(a, b []metav1.Condition) bool {
 	return true
 }
 
-var (
-	endpointIndexOnce    sync.Once
-	errEndpointIndexInit error
-)
+// indexRegistry tracks which managers have had endpoint field indexes
+// registered, scoped per-manager so multiple managers (e.g. in tests)
+// each get their own registrations.
+var indexRegistry sync.Map // map[client.FieldIndexer]error
 
 // ensureEndpointIndexes registers field indexes for KrakenDEndpoint lookups.
-// It is safe to call from multiple controllers; the indexes are registered
-// exactly once via sync.Once.
+// It is safe to call from multiple controllers sharing the same manager;
+// indexes are registered exactly once per manager instance.
 func ensureEndpointIndexes(mgr ctrl.Manager) error {
-	endpointIndexOnce.Do(func() {
-		indexer := mgr.GetFieldIndexer()
+	indexer := mgr.GetFieldIndexer()
 
-		if err := indexer.IndexField(
-			context.Background(), &v1alpha1.KrakenDEndpoint{}, endpointGatewayIndex,
-			func(obj client.Object) []string {
-				ep, ok := obj.(*v1alpha1.KrakenDEndpoint)
-				if !ok {
-					return nil
-				}
-				return []string{ep.Spec.GatewayRef.Name}
-			},
-		); err != nil {
-			errEndpointIndexInit = fmt.Errorf("indexing %s: %w", endpointGatewayIndex, err)
-			return
+	actual, loaded := indexRegistry.LoadOrStore(indexer, nil)
+	if loaded {
+		if err, ok := actual.(error); ok {
+			return err
 		}
+		return nil
+	}
 
-		if err := indexer.IndexField(
-			context.Background(), &v1alpha1.KrakenDEndpoint{}, endpointPolicyIndex,
-			func(obj client.Object) []string {
-				ep, ok := obj.(*v1alpha1.KrakenDEndpoint)
-				if !ok {
-					return nil
-				}
-				var refs []string
-				for _, entry := range ep.Spec.Endpoints {
-					for _, be := range entry.Backends {
-						if be.PolicyRef != nil {
-							refs = append(refs, be.PolicyRef.Name)
-						}
+	if err := registerEndpointIndexes(indexer); err != nil {
+		indexRegistry.Store(indexer, err)
+		return err
+	}
+	return nil
+}
+
+func registerEndpointIndexes(indexer client.FieldIndexer) error {
+	if err := indexer.IndexField(
+		context.Background(), &v1alpha1.KrakenDEndpoint{}, endpointGatewayIndex,
+		func(obj client.Object) []string {
+			ep, ok := obj.(*v1alpha1.KrakenDEndpoint)
+			if !ok {
+				return nil
+			}
+			return []string{ep.Spec.GatewayRef.Name}
+		},
+	); err != nil {
+		return fmt.Errorf("indexing %s: %w", endpointGatewayIndex, err)
+	}
+
+	if err := indexer.IndexField(
+		context.Background(), &v1alpha1.KrakenDEndpoint{}, endpointPolicyIndex,
+		func(obj client.Object) []string {
+			ep, ok := obj.(*v1alpha1.KrakenDEndpoint)
+			if !ok {
+				return nil
+			}
+			var refs []string
+			for _, entry := range ep.Spec.Endpoints {
+				for _, be := range entry.Backends {
+					if be.PolicyRef != nil {
+						refs = append(refs, be.PolicyRef.Name)
 					}
 				}
-				return refs
-			},
-		); err != nil {
-			errEndpointIndexInit = fmt.Errorf("indexing %s: %w", endpointPolicyIndex, err)
-			return
-		}
-	})
-	return errEndpointIndexInit
+			}
+			return refs
+		},
+	); err != nil {
+		return fmt.Errorf("indexing %s: %w", endpointPolicyIndex, err)
+	}
+
+	return nil
 }

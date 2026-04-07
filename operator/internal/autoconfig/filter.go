@@ -94,7 +94,7 @@ func (f *pathFilter) matchesExclude(
 	if hasAnyTag(entryTags, spec.ExcludeTags) {
 		return true
 	}
-	if operationID != "" && containsString(spec.ExcludeOperationIds, operationID) {
+	if operationID != "" && containsExact(spec.ExcludeOperationIds, operationID) {
 		return true
 	}
 	return false
@@ -133,6 +133,15 @@ func hasAnyTag(entryTags, filterTags []string) bool {
 func containsString(slice []string, s string) bool {
 	for _, v := range slice {
 		if strings.EqualFold(v, s) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsExact(slice []string, s string) bool {
+	for _, v := range slice {
+		if v == s {
 			return true
 		}
 	}

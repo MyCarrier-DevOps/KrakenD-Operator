@@ -26,9 +26,11 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -122,10 +124,45 @@ func (r *KrakenDBackendPolicyReconciler) SetupWithManager(mgr ctrl.Manager) erro
 		).
 		Watches(
 			&v1alpha1.KrakenDEndpoint{},
-			handler.EnqueueRequestsFromMapFunc(r.endpointToReferencedPolicies),
+			r.endpointPolicyHandler(),
 		).
 		Named("krakendbackendpolicy").
 		Complete(r)
+}
+
+// endpointPolicyHandler returns an EventHandler that enqueues policies
+// referenced by endpoints. On updates it enqueues the union of old and
+// new policy refs so that removed references get their count decremented.
+func (r *KrakenDBackendPolicyReconciler) endpointPolicyHandler() handler.EventHandler {
+	return handler.Funcs{
+		CreateFunc: func(ctx context.Context, e event.CreateEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+			for _, req := range policyRefsFromEndpoint(e.Object) {
+				q.Add(req)
+			}
+		},
+		UpdateFunc: func(ctx context.Context, e event.UpdateEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+			// Enqueue union of old and new refs so removed policyRefs
+			// get their referencedBy count updated.
+			seen := map[types.NamespacedName]struct{}{}
+			for _, req := range policyRefsFromEndpoint(e.ObjectOld) {
+				if _, ok := seen[req.NamespacedName]; !ok {
+					seen[req.NamespacedName] = struct{}{}
+					q.Add(req)
+				}
+			}
+			for _, req := range policyRefsFromEndpoint(e.ObjectNew) {
+				if _, ok := seen[req.NamespacedName]; !ok {
+					seen[req.NamespacedName] = struct{}{}
+					q.Add(req)
+				}
+			}
+		},
+		DeleteFunc: func(ctx context.Context, e event.DeleteEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+			for _, req := range policyRefsFromEndpoint(e.Object) {
+				q.Add(req)
+			}
+		},
+	}
 }
 
 // validatePolicy checks policy fields for validity. Returns (reason, message)
@@ -150,10 +187,9 @@ func validatePolicy(policy *v1alpha1.KrakenDBackendPolicy) (reason, message stri
 	return "", ""
 }
 
-// endpointToReferencedPolicies maps an endpoint event to all policies it references.
-func (r *KrakenDBackendPolicyReconciler) endpointToReferencedPolicies(
-	ctx context.Context, obj client.Object,
-) []reconcile.Request {
+// policyRefsFromEndpoint extracts deduplicated reconcile requests for all
+// policies referenced by the given endpoint object.
+func policyRefsFromEndpoint(obj client.Object) []reconcile.Request {
 	ep, ok := obj.(*v1alpha1.KrakenDEndpoint)
 	if !ok {
 		return nil

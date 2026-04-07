@@ -241,8 +241,17 @@ func validateIP(ip net.IP) error {
 	if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
 		return fmt.Errorf("link-local address")
 	}
+	if ip.IsUnspecified() {
+		return fmt.Errorf("unspecified address")
+	}
+	if ip.IsMulticast() {
+		return fmt.Errorf("multicast address")
+	}
 	if isIPv6ULA(ip) {
 		return fmt.Errorf("IPv6 ULA address")
+	}
+	if !ip.IsGlobalUnicast() {
+		return fmt.Errorf("non-global-unicast address")
 	}
 	return nil
 }

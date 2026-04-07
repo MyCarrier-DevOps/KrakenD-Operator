@@ -268,7 +268,7 @@ func TestPolicyReconcile_ValidCondition(t *testing.T) {
 	}
 }
 
-func TestPolicyMapper_EndpointToReferencedPolicies(t *testing.T) {
+func TestPolicyMapper_PolicyRefsFromEndpoint(t *testing.T) {
 	ep := &v1alpha1.KrakenDEndpoint{
 		ObjectMeta: metav1.ObjectMeta{Name: "ep1", Namespace: "default"},
 		Spec: v1alpha1.KrakenDEndpointSpec{
@@ -292,10 +292,8 @@ func TestPolicyMapper_EndpointToReferencedPolicies(t *testing.T) {
 			},
 		},
 	}
-	c := fakeClientBuilder().Build()
-	r := &KrakenDBackendPolicyReconciler{Client: c, Scheme: testScheme()}
 
-	requests := r.endpointToReferencedPolicies(context.Background(), ep)
+	requests := policyRefsFromEndpoint(ep)
 	if len(requests) != 2 {
 		t.Fatalf("expected 2 unique policy requests, got %d", len(requests))
 	}
