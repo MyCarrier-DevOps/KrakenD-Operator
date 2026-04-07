@@ -65,13 +65,14 @@ func (r *KrakenDEndpointReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, fmt.Errorf("getting endpoint %s: %w", req.NamespacedName, err)
 	}
 
+	// Capture original status for change detection
+	origPhase := ep.Status.Phase
+	origGeneration := ep.Status.ObservedGeneration
+	origCount := ep.Status.EndpointCount
+
 	// Initialize phase on first reconcile
 	if ep.Status.Phase == "" {
 		ep.Status.Phase = v1alpha1.EndpointPhasePending
-		if err := r.Status().Update(ctx, &ep); err != nil {
-			return ctrl.Result{}, fmt.Errorf("setting initial phase: %w", err)
-		}
-		return ctrl.Result{Requeue: true}, nil
 	}
 
 	// Validate gateway reference exists
@@ -115,16 +116,63 @@ func (r *KrakenDEndpointReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		Reason:             "ReferencesValid",
 		Message:            "All gateway and policy references are valid",
 	})
-	if err := r.Status().Update(ctx, &ep); err != nil {
-		return ctrl.Result{}, fmt.Errorf("updating endpoint status to Active: %w", err)
+
+	// Only write status if it actually changed
+	statusChanged := ep.Status.Phase != origPhase ||
+		ep.Status.ObservedGeneration != origGeneration ||
+		ep.Status.EndpointCount != origCount
+	if statusChanged {
+		if err := r.Status().Update(ctx, &ep); err != nil {
+			return ctrl.Result{}, fmt.Errorf("updating endpoint status to Active: %w", err)
+		}
 	}
 
 	log.V(1).Info("endpoint reconciled", "phase", ep.Status.Phase, "endpoints", ep.Status.EndpointCount)
 	return ctrl.Result{}, nil
 }
 
+// Field index keys for efficient watch-to-reconcile mapping.
+const (
+	endpointGatewayIndex = ".spec.gatewayRef.name"
+	endpointPolicyIndex  = ".spec.endpoints.backends.policyRef.name"
+)
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *KrakenDEndpointReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if err := mgr.GetFieldIndexer().IndexField(
+		context.Background(), &v1alpha1.KrakenDEndpoint{}, endpointGatewayIndex,
+		func(obj client.Object) []string {
+			ep, ok := obj.(*v1alpha1.KrakenDEndpoint)
+			if !ok {
+				return nil
+			}
+			return []string{ep.Spec.GatewayRef.Name}
+		},
+	); err != nil {
+		return fmt.Errorf("indexing %s: %w", endpointGatewayIndex, err)
+	}
+
+	if err := mgr.GetFieldIndexer().IndexField(
+		context.Background(), &v1alpha1.KrakenDEndpoint{}, endpointPolicyIndex,
+		func(obj client.Object) []string {
+			ep, ok := obj.(*v1alpha1.KrakenDEndpoint)
+			if !ok {
+				return nil
+			}
+			var refs []string
+			for _, entry := range ep.Spec.Endpoints {
+				for _, be := range entry.Backends {
+					if be.PolicyRef != nil {
+						refs = append(refs, be.PolicyRef.Name)
+					}
+				}
+			}
+			return refs
+		},
+	); err != nil {
+		return fmt.Errorf("indexing %s: %w", endpointPolicyIndex, err)
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.KrakenDEndpoint{},
 			builder.WithPredicates(predicate.GenerationChangedPredicate{}),
@@ -179,50 +227,48 @@ func (r *KrakenDEndpointReconciler) setInvalid(
 	return ctrl.Result{}, nil
 }
 
-// gatewayToEndpoints maps a Gateway event to all endpoints that reference it.
+// gatewayToEndpoints maps a Gateway event to endpoints that reference it via field index.
 func (r *KrakenDEndpointReconciler) gatewayToEndpoints(
 	ctx context.Context, obj client.Object,
 ) []reconcile.Request {
 	var endpoints v1alpha1.KrakenDEndpointList
-	if err := r.List(ctx, &endpoints, client.InNamespace(obj.GetNamespace())); err != nil {
+	if err := r.List(ctx, &endpoints,
+		client.InNamespace(obj.GetNamespace()),
+		client.MatchingFields{endpointGatewayIndex: obj.GetName()},
+	); err != nil {
 		return nil
 	}
-	var requests []reconcile.Request
+	requests := make([]reconcile.Request, 0, len(endpoints.Items))
 	for i := range endpoints.Items {
-		if endpoints.Items[i].Spec.GatewayRef.Name == obj.GetName() {
-			requests = append(requests, reconcile.Request{
-				NamespacedName: types.NamespacedName{
-					Name:      endpoints.Items[i].Name,
-					Namespace: endpoints.Items[i].Namespace,
-				},
-			})
-		}
+		requests = append(requests, reconcile.Request{
+			NamespacedName: types.NamespacedName{
+				Name:      endpoints.Items[i].Name,
+				Namespace: endpoints.Items[i].Namespace,
+			},
+		})
 	}
 	return requests
 }
 
-// policyToEndpoints maps a BackendPolicy event to all endpoints that reference it.
+// policyToEndpoints maps a BackendPolicy event to endpoints that reference it via field index.
 func (r *KrakenDEndpointReconciler) policyToEndpoints(
 	ctx context.Context, obj client.Object,
 ) []reconcile.Request {
 	var endpoints v1alpha1.KrakenDEndpointList
-	if err := r.List(ctx, &endpoints, client.InNamespace(obj.GetNamespace())); err != nil {
+	if err := r.List(ctx, &endpoints,
+		client.InNamespace(obj.GetNamespace()),
+		client.MatchingFields{endpointPolicyIndex: obj.GetName()},
+	); err != nil {
 		return nil
 	}
-	var requests []reconcile.Request
+	requests := make([]reconcile.Request, 0, len(endpoints.Items))
 	for i := range endpoints.Items {
-		for _, entry := range endpoints.Items[i].Spec.Endpoints {
-			for _, be := range entry.Backends {
-				if be.PolicyRef != nil && be.PolicyRef.Name == obj.GetName() {
-					requests = append(requests, reconcile.Request{
-						NamespacedName: types.NamespacedName{
-							Name:      endpoints.Items[i].Name,
-							Namespace: endpoints.Items[i].Namespace,
-						},
-					})
-				}
-			}
-		}
+		requests = append(requests, reconcile.Request{
+			NamespacedName: types.NamespacedName{
+				Name:      endpoints.Items[i].Name,
+				Namespace: endpoints.Items[i].Namespace,
+			},
+		})
 	}
 	return requests
 }

@@ -23,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
@@ -39,7 +40,34 @@ func testScheme() *runtime.Scheme {
 }
 
 func fakeClientBuilder() *fake.ClientBuilder {
-	return fake.NewClientBuilder().WithScheme(testScheme())
+	return fake.NewClientBuilder().
+		WithScheme(testScheme()).
+		WithIndex(&v1alpha1.KrakenDEndpoint{}, endpointGatewayIndex,
+			func(obj client.Object) []string {
+				ep, ok := obj.(*v1alpha1.KrakenDEndpoint)
+				if !ok {
+					return nil
+				}
+				return []string{ep.Spec.GatewayRef.Name}
+			},
+		).
+		WithIndex(&v1alpha1.KrakenDEndpoint{}, endpointPolicyIndex,
+			func(obj client.Object) []string {
+				ep, ok := obj.(*v1alpha1.KrakenDEndpoint)
+				if !ok {
+					return nil
+				}
+				var refs []string
+				for _, entry := range ep.Spec.Endpoints {
+					for _, be := range entry.Backends {
+						if be.PolicyRef != nil {
+							refs = append(refs, be.PolicyRef.Name)
+						}
+					}
+				}
+				return refs
+			},
+		)
 }
 
 func fakeRecorder() *record.FakeRecorder {

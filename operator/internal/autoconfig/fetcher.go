@@ -86,7 +86,7 @@ func (f *httpFetcher) fetchFromConfigMap(ctx context.Context, source FetchSource
 		Name:      source.ConfigMapRef.Name,
 		Namespace: source.Namespace,
 	}, cm); err != nil {
-		return nil, fmt.Errorf("getting configmap %s: %w", source.ConfigMapRef.Name, err)
+		return nil, fmt.Errorf("getting configmap %s/%s: %w", source.Namespace, source.ConfigMapRef.Name, err)
 	}
 
 	key := source.ConfigMapRef.Key
@@ -95,7 +95,7 @@ func (f *httpFetcher) fetchFromConfigMap(ctx context.Context, source FetchSource
 	}
 	data, ok := cm.Data[key]
 	if !ok {
-		return nil, fmt.Errorf("key %q not found in configmap %s", key, source.ConfigMapRef.Name)
+		return nil, fmt.Errorf("key %q not found in configmap %s/%s", key, source.Namespace, source.ConfigMapRef.Name)
 	}
 
 	raw := []byte(data)
@@ -146,19 +146,18 @@ func (f *httpFetcher) fetchFromURL(ctx context.Context, source FetchSource) (*Fe
 	if err != nil {
 		return nil, fmt.Errorf("fetching %s: %w", source.URL, err)
 	}
-	defer func() {
-		if closeErr := resp.Body.Close(); closeErr != nil {
-			_ = closeErr
-		}
-	}()
+	defer func() { resp.Body.Close() }() //nolint:errcheck // best-effort close on HTTP response
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("unexpected status %d from %s", resp.StatusCode, source.URL)
 	}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("reading response body: %w", err)
+	}
+	if int64(len(body)) > maxBodyBytes {
+		return nil, fmt.Errorf("response body exceeds maximum size of %d bytes", maxBodyBytes)
 	}
 
 	checksum := fmt.Sprintf("%x", sha256.Sum256(body))
@@ -177,11 +176,14 @@ func (f *httpFetcher) applyAuth(
 			Name:      auth.BearerTokenSecret.Name,
 			Namespace: namespace,
 		}, secret); err != nil {
-			return fmt.Errorf("getting bearer token secret: %w", err)
+			return fmt.Errorf("getting bearer token secret %s/%s: %w", namespace, auth.BearerTokenSecret.Name, err)
 		}
 		token, ok := secret.Data[auth.BearerTokenSecret.Key]
 		if !ok {
-			return fmt.Errorf("key %q not found in secret %s", auth.BearerTokenSecret.Key, auth.BearerTokenSecret.Name)
+			return fmt.Errorf(
+				"key %q not found in secret %s/%s",
+				auth.BearerTokenSecret.Key, namespace, auth.BearerTokenSecret.Name,
+			)
 		}
 		req.Header.Set("Authorization", "Bearer "+string(token))
 	}
@@ -192,7 +194,7 @@ func (f *httpFetcher) applyAuth(
 			Name:      auth.BasicAuthSecret.Name,
 			Namespace: namespace,
 		}, secret); err != nil {
-			return fmt.Errorf("getting basic auth secret: %w", err)
+			return fmt.Errorf("getting basic auth secret %s/%s: %w", namespace, auth.BasicAuthSecret.Name, err)
 		}
 		usernameKey := auth.BasicAuthSecret.UsernameKey
 		if usernameKey == "" {
@@ -204,11 +206,11 @@ func (f *httpFetcher) applyAuth(
 		}
 		usernameVal, ok := secret.Data[usernameKey]
 		if !ok {
-			return fmt.Errorf("key %q not found in secret %s", usernameKey, auth.BasicAuthSecret.Name)
+			return fmt.Errorf("key %q not found in secret %s/%s", usernameKey, namespace, auth.BasicAuthSecret.Name)
 		}
 		passwordVal, ok := secret.Data[passwordKey]
 		if !ok {
-			return fmt.Errorf("key %q not found in secret %s", passwordKey, auth.BasicAuthSecret.Name)
+			return fmt.Errorf("key %q not found in secret %s/%s", passwordKey, namespace, auth.BasicAuthSecret.Name)
 		}
 		req.SetBasicAuth(string(usernameVal), string(passwordVal))
 	}

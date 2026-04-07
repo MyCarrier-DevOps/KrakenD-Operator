@@ -61,18 +61,16 @@ func (r *KrakenDBackendPolicyReconciler) Reconcile(ctx context.Context, req ctrl
 		return ctrl.Result{}, fmt.Errorf("getting policy %s: %w", req.NamespacedName, err)
 	}
 
-	// Count how many endpoints reference this policy
+	// Count how many endpoints reference this policy using the field index
 	var endpoints v1alpha1.KrakenDEndpointList
-	if err := r.List(ctx, &endpoints, client.InNamespace(policy.Namespace)); err != nil {
+	if err := r.List(ctx, &endpoints,
+		client.InNamespace(policy.Namespace),
+		client.MatchingFields{endpointPolicyIndex: policy.Name},
+	); err != nil {
 		return ctrl.Result{}, fmt.Errorf("listing endpoints: %w", err)
 	}
 
-	refCount := 0
-	for i := range endpoints.Items {
-		if endpointReferencesPolicy(&endpoints.Items[i], policy.Name) {
-			refCount++
-		}
-	}
+	refCount := len(endpoints.Items)
 
 	policy.Status.ReferencedBy = refCount
 
@@ -116,19 +114,6 @@ func (r *KrakenDBackendPolicyReconciler) SetupWithManager(mgr ctrl.Manager) erro
 		).
 		Named("krakendbackendpolicy").
 		Complete(r)
-}
-
-// endpointReferencesPolicy checks if any backend in the endpoint references
-// the given policy name.
-func endpointReferencesPolicy(ep *v1alpha1.KrakenDEndpoint, policyName string) bool {
-	for _, entry := range ep.Spec.Endpoints {
-		for _, be := range entry.Backends {
-			if be.PolicyRef != nil && be.PolicyRef.Name == policyName {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // validatePolicy checks policy fields for validity. Returns (reason, message)

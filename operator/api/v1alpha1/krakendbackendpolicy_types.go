@@ -38,15 +38,32 @@ type KrakenDBackendPolicySpec struct {
 
 // CircuitBreakerSpec configures the circuit breaker pattern.
 type CircuitBreakerSpec struct {
-	Interval        int  `json:"interval"`
-	Timeout         int  `json:"timeout"`
-	MaxErrors       int  `json:"maxErrors"`
+	// Interval is the window duration in seconds for error counting.
+	// +kubebuilder:validation:Minimum=1
+	Interval int `json:"interval"`
+
+	// Timeout is the duration in seconds the circuit breaker stays open before
+	// transitioning to half-open.
+	// +kubebuilder:validation:Minimum=1
+	Timeout int `json:"timeout"`
+
+	// MaxErrors is the number of consecutive errors within Interval that triggers
+	// the circuit breaker to open.
+	// +kubebuilder:validation:Minimum=1
+	MaxErrors int `json:"maxErrors"`
+
+	// LogStatusChange enables logging when the circuit breaker changes state.
 	LogStatusChange bool `json:"logStatusChange,omitempty"`
 }
 
 // RateLimitSpec configures backend-level rate limiting.
 type RateLimitSpec struct {
-	MaxRate  int `json:"maxRate"`
+	// MaxRate is the maximum number of requests per second allowed.
+	// +kubebuilder:validation:Minimum=1
+	MaxRate int `json:"maxRate"`
+
+	// Capacity is the token bucket capacity for burst handling.
+	// +kubebuilder:validation:Minimum=0
 	Capacity int `json:"capacity,omitempty"`
 }
 

@@ -44,6 +44,13 @@ func TestEndpointReconcile_NotFound(t *testing.T) {
 }
 
 func TestEndpointReconcile_InitialPhase(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw1", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.7.0",
+			Edition: v1alpha1.EditionCE,
+		},
+	}
 	ep := &v1alpha1.KrakenDEndpoint{
 		ObjectMeta: metav1.ObjectMeta{Name: "ep1", Namespace: "default"},
 		Spec: v1alpha1.KrakenDEndpointSpec{
@@ -52,7 +59,7 @@ func TestEndpointReconcile_InitialPhase(t *testing.T) {
 		},
 	}
 	c := fakeClientBuilder().
-		WithObjects(ep).
+		WithObjects(gw, ep).
 		WithStatusSubresource(ep).
 		Build()
 	rec := fakeRecorder()
@@ -64,16 +71,16 @@ func TestEndpointReconcile_InitialPhase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !result.Requeue {
-		t.Error("expected requeue after setting initial phase")
+	if result.Requeue {
+		t.Error("should not requeue; initial phase is set inline")
 	}
 
 	var updated v1alpha1.KrakenDEndpoint
 	if err := c.Get(context.Background(), types.NamespacedName{Name: "ep1", Namespace: "default"}, &updated); err != nil {
 		t.Fatalf("failed to get endpoint: %v", err)
 	}
-	if updated.Status.Phase != v1alpha1.EndpointPhasePending {
-		t.Errorf("expected phase Pending, got %s", updated.Status.Phase)
+	if updated.Status.Phase != v1alpha1.EndpointPhaseActive {
+		t.Errorf("expected phase Active (gateway exists), got %s", updated.Status.Phase)
 	}
 }
 

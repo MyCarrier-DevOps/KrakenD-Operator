@@ -60,12 +60,25 @@ spec:
                   referencing this policy.
                 properties:
                   interval:
+                    description: Interval is the window duration in seconds for error
+                      counting.
+                    minimum: 1
                     type: integer
                   logStatusChange:
+                    description: LogStatusChange enables logging when the circuit
+                      breaker changes state.
                     type: boolean
                   maxErrors:
+                    description: |-
+                      MaxErrors is the number of consecutive errors within Interval that triggers
+                      the circuit breaker to open.
+                    minimum: 1
                     type: integer
                   timeout:
+                    description: |-
+                      Timeout is the duration in seconds the circuit breaker stays open before
+                      transitioning to half-open.
+                    minimum: 1
                     type: integer
                 required:
                 - interval
@@ -76,8 +89,13 @@ spec:
                 description: RateLimit configures backend-level rate limiting.
                 properties:
                   capacity:
+                    description: Capacity is the token bucket capacity for burst handling.
+                    minimum: 0
                     type: integer
                   maxRate:
+                    description: MaxRate is the maximum number of requests per second
+                      allowed.
+                    minimum: 1
                     type: integer
                 required:
                 - maxRate

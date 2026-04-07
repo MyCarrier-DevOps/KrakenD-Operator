@@ -638,3 +638,42 @@ func TestFetcher_RedirectLimit(t *testing.T) {
 		t.Error("expected error for too many redirects")
 	}
 }
+
+func TestFetcher_OversizedBodyRejected(t *testing.T) {
+	// Serve a body that exceeds maxBodyBytes
+	oversized := make([]byte, maxBodyBytes+1)
+	for i := range oversized {
+		oversized[i] = 'x'
+	}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write(oversized) //nolint:errcheck
+	}))
+	defer ts.Close()
+
+	fetcher := &httpFetcher{
+		client:           fakeClient(),
+		strictTransport:  http.DefaultTransport,
+		lenientTransport: http.DefaultTransport,
+	}
+	_, err := fetcher.Fetch(context.Background(), FetchSource{URL: ts.URL})
+	if err == nil {
+		t.Error("expected error for oversized body")
+	}
+	if !searchSubstring(err.Error(), "exceeds maximum size") {
+		t.Errorf("expected 'exceeds maximum size' error, got: %v", err)
+	}
+}
+
+func TestFetcher_ConfigMapErrorIncludesNamespace(t *testing.T) {
+	f := NewFetcher(fakeClient())
+	_, err := f.Fetch(context.Background(), FetchSource{
+		ConfigMapRef: &v1alpha1.ConfigMapKeyRef{Name: "missing"},
+		Namespace:    "production",
+	})
+	if err == nil {
+		t.Fatal("expected error for missing configmap")
+	}
+	if !searchSubstring(err.Error(), "production/missing") {
+		t.Errorf("expected namespace/name in error, got: %v", err)
+	}
+}
