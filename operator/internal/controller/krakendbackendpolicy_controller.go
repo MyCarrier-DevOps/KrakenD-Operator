@@ -81,6 +81,7 @@ func (r *KrakenDBackendPolicyReconciler) Reconcile(ctx context.Context, req ctrl
 	policy.Status.ReferencedBy = refCount
 
 	// Validate policy fields
+	prevValid := meta.FindStatusCondition(origConditions, v1alpha1.ConditionPolicyValid)
 	if reason, msg := validatePolicy(&policy); reason != "" {
 		meta.SetStatusCondition(&policy.Status.Conditions, metav1.Condition{
 			Type:               v1alpha1.ConditionPolicyValid,
@@ -89,7 +90,12 @@ func (r *KrakenDBackendPolicyReconciler) Reconcile(ctx context.Context, req ctrl
 			Reason:             reason,
 			Message:            msg,
 		})
-		r.Recorder.Event(&policy, "Warning", "PolicyInvalid", msg)
+		if prevValid == nil ||
+			prevValid.Status != metav1.ConditionFalse ||
+			prevValid.Reason != reason ||
+			prevValid.Message != msg {
+			r.Recorder.Event(&policy, "Warning", "PolicyInvalid", msg)
+		}
 	} else {
 		meta.SetStatusCondition(&policy.Status.Conditions, metav1.Condition{
 			Type:               v1alpha1.ConditionPolicyValid,

@@ -57,23 +57,41 @@ func (g *endpointGenerator) Generate(
 	input GenerateInput,
 ) (*GenerateOutput, error) {
 	ac := input.AutoConfig
-	seen := map[string]struct{}{}
+	seenKeys := map[string]struct{}{}
+	seenOperationIDs := map[string]struct{}{}
+	seenNames := map[string]struct{}{}
 	output := &GenerateOutput{}
 
 	for _, entry := range input.Entries {
 		key := entry.Endpoint + ":" + entry.Method
 		opID := input.OperationIDs[key]
+		name := endpointName(ac.Name, opID, entry.Method, entry.Endpoint)
+
+		if _, exists := seenKeys[key]; exists {
+			output.SkippedOperations++
+			output.DuplicateIDs = append(output.DuplicateIDs, key)
+			continue
+		}
 
 		if opID != "" {
-			if _, exists := seen[opID]; exists {
+			if _, exists := seenOperationIDs[opID]; exists {
 				output.SkippedOperations++
 				output.DuplicateIDs = append(output.DuplicateIDs, opID)
 				continue
 			}
-			seen[opID] = struct{}{}
 		}
 
-		name := endpointName(ac.Name, opID, entry.Method, entry.Endpoint)
+		if _, exists := seenNames[name]; exists {
+			output.SkippedOperations++
+			output.DuplicateIDs = append(output.DuplicateIDs, name)
+			continue
+		}
+
+		seenKeys[key] = struct{}{}
+		if opID != "" {
+			seenOperationIDs[opID] = struct{}{}
+		}
+		seenNames[name] = struct{}{}
 		ep := &v1alpha1.KrakenDEndpoint{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      name,

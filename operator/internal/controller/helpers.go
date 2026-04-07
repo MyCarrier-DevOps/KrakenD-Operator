@@ -73,7 +73,10 @@ func ensureEndpointIndexes(mgr ctrl.Manager) error {
 
 	actual, loaded := indexRegistry.LoadOrStore(indexer, reg)
 	if loaded {
-		existing := actual.(*endpointIndexRegistration)
+		existing, ok := actual.(*endpointIndexRegistration)
+		if !ok {
+			return fmt.Errorf("unexpected type in index registry")
+		}
 		<-existing.ready
 		return existing.err
 	}
@@ -105,11 +108,17 @@ func registerEndpointIndexes(indexer client.FieldIndexer) error {
 				return nil
 			}
 			var refs []string
+			seen := make(map[string]struct{})
 			for _, entry := range ep.Spec.Endpoints {
 				for _, be := range entry.Backends {
-					if be.PolicyRef != nil {
-						refs = append(refs, be.PolicyRef.Name)
+					if be.PolicyRef == nil {
+						continue
 					}
+					if _, ok := seen[be.PolicyRef.Name]; ok {
+						continue
+					}
+					seen[be.PolicyRef.Name] = struct{}{}
+					refs = append(refs, be.PolicyRef.Name)
 				}
 			}
 			return refs

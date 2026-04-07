@@ -166,30 +166,26 @@ func (r *KrakenDEndpointReconciler) SetupWithManager(mgr ctrl.Manager) error {
 func (r *KrakenDEndpointReconciler) setDetached(
 	ctx context.Context, ep *v1alpha1.KrakenDEndpoint, reason, message string,
 ) (ctrl.Result, error) {
-	prevPhase := ep.Status.Phase
-	ep.Status.Phase = v1alpha1.EndpointPhaseDetached
-	ep.Status.ObservedGeneration = ep.Generation
-	meta.SetStatusCondition(&ep.Status.Conditions, metav1.Condition{
-		Type:               v1alpha1.ConditionAvailable,
-		Status:             metav1.ConditionFalse,
-		ObservedGeneration: ep.Generation,
-		Reason:             reason,
-		Message:            message,
-	})
-	if prevPhase != v1alpha1.EndpointPhaseDetached {
-		r.Recorder.Event(ep, "Warning", reason, message)
-	}
-	if err := r.Status().Update(ctx, ep); err != nil {
-		return ctrl.Result{}, fmt.Errorf("updating endpoint status to Detached: %w", err)
-	}
-	return ctrl.Result{}, nil
+	return r.setErrorPhase(ctx, ep, v1alpha1.EndpointPhaseDetached, reason, message)
 }
 
 func (r *KrakenDEndpointReconciler) setInvalid(
 	ctx context.Context, ep *v1alpha1.KrakenDEndpoint, reason, message string,
 ) (ctrl.Result, error) {
-	prevPhase := ep.Status.Phase
-	ep.Status.Phase = v1alpha1.EndpointPhaseInvalid
+	return r.setErrorPhase(ctx, ep, v1alpha1.EndpointPhaseInvalid, reason, message)
+}
+
+// setErrorPhase sets the endpoint to the given error phase with change detection.
+func (r *KrakenDEndpointReconciler) setErrorPhase(
+	ctx context.Context,
+	ep *v1alpha1.KrakenDEndpoint,
+	phase v1alpha1.EndpointPhase,
+	reason, message string,
+) (ctrl.Result, error) {
+	origPhase := ep.Status.Phase
+	origConditions := ep.Status.DeepCopy().Conditions
+
+	ep.Status.Phase = phase
 	ep.Status.ObservedGeneration = ep.Generation
 	meta.SetStatusCondition(&ep.Status.Conditions, metav1.Condition{
 		Type:               v1alpha1.ConditionAvailable,
@@ -198,11 +194,16 @@ func (r *KrakenDEndpointReconciler) setInvalid(
 		Reason:             reason,
 		Message:            message,
 	})
-	if prevPhase != v1alpha1.EndpointPhaseInvalid {
+
+	if origPhase != phase {
 		r.Recorder.Event(ep, "Warning", reason, message)
 	}
-	if err := r.Status().Update(ctx, ep); err != nil {
-		return ctrl.Result{}, fmt.Errorf("updating endpoint status to Invalid: %w", err)
+	changed := ep.Status.Phase != origPhase ||
+		!conditionsEqual(origConditions, ep.Status.Conditions)
+	if changed {
+		if err := r.Status().Update(ctx, ep); err != nil {
+			return ctrl.Result{}, fmt.Errorf("updating endpoint status to %s: %w", phase, err)
+		}
 	}
 	return ctrl.Result{}, nil
 }
@@ -211,11 +212,13 @@ func (r *KrakenDEndpointReconciler) setInvalid(
 func (r *KrakenDEndpointReconciler) gatewayToEndpoints(
 	ctx context.Context, obj client.Object,
 ) []reconcile.Request {
+	log := logf.FromContext(ctx)
 	var endpoints v1alpha1.KrakenDEndpointList
 	if err := r.List(ctx, &endpoints,
 		client.InNamespace(obj.GetNamespace()),
 		client.MatchingFields{endpointGatewayIndex: obj.GetName()},
 	); err != nil {
+		log.Error(err, "failed to list endpoints for gateway mapping", "gateway", obj.GetName())
 		return nil
 	}
 	requests := make([]reconcile.Request, 0, len(endpoints.Items))
@@ -234,11 +237,13 @@ func (r *KrakenDEndpointReconciler) gatewayToEndpoints(
 func (r *KrakenDEndpointReconciler) policyToEndpoints(
 	ctx context.Context, obj client.Object,
 ) []reconcile.Request {
+	log := logf.FromContext(ctx)
 	var endpoints v1alpha1.KrakenDEndpointList
 	if err := r.List(ctx, &endpoints,
 		client.InNamespace(obj.GetNamespace()),
 		client.MatchingFields{endpointPolicyIndex: obj.GetName()},
 	); err != nil {
+		log.Error(err, "failed to list endpoints for policy mapping", "policy", obj.GetName())
 		return nil
 	}
 	requests := make([]reconcile.Request, 0, len(endpoints.Items))
