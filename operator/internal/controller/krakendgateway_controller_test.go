@@ -799,3 +799,163 @@ func TestGatewayReconcile_MissingPolicySkipped(t *testing.T) {
 		t.Errorf("expected 0 policies for missing ref, got %d", len((*capturedInput).Policies))
 	}
 }
+
+func TestDetectDragonflyState_NotEnabled(t *testing.T) {
+	gw := testGateway()
+	c := fakeClientBuilder().WithObjects(gw).Build()
+	r := &KrakenDGatewayReconciler{
+		Client: c, Scheme: testScheme(), Recorder: fakeRecorder(),
+	}
+
+	state := r.detectDragonflyState(context.Background(), gw)
+	if state != nil {
+		t.Error("expected nil state when Dragonfly is not enabled")
+	}
+}
+
+func TestDetectDragonflyState_CRNotFound(t *testing.T) {
+	gw := testGateway()
+	gw.Spec.Dragonfly = &v1alpha1.DragonflySpec{Enabled: true}
+	c := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).Build()
+	r := &KrakenDGatewayReconciler{
+		Client: c, Scheme: testScheme(), Recorder: fakeRecorder(),
+	}
+
+	state := r.detectDragonflyState(context.Background(), gw)
+	if state == nil {
+		t.Fatal("expected non-nil state")
+	}
+	if !state.Enabled {
+		t.Error("expected Enabled=true")
+	}
+	if state.ServiceDNS == "" {
+		t.Error("expected non-empty ServiceDNS")
+	}
+}
+
+func TestDetectDragonflyState_Disabled(t *testing.T) {
+	gw := testGateway()
+	gw.Spec.Dragonfly = &v1alpha1.DragonflySpec{Enabled: false}
+	c := fakeClientBuilder().Build()
+	r := &KrakenDGatewayReconciler{
+		Client: c, Scheme: testScheme(), Recorder: fakeRecorder(),
+	}
+
+	state := r.detectDragonflyState(context.Background(), gw)
+	if state != nil {
+		t.Error("expected nil state when Dragonfly is disabled")
+	}
+}
+
+func TestGatewayReconcile_WithDragonflyEnabled(t *testing.T) {
+	gw := testGateway()
+	gw.Status.Phase = v1alpha1.PhaseRunning
+	gw.Spec.Dragonfly = &v1alpha1.DragonflySpec{Enabled: true}
+	c := fakeClientBuilder().
+		WithObjects(gw).
+		WithStatusSubresource(gw).
+		Build()
+
+	var capturedInput *renderer.RenderInput
+	mockRend := &mockRenderer{
+		output: &renderer.RenderOutput{
+			JSON: []byte(`{}`), Checksum: "cs", DesiredImage: "img:v1",
+		},
+	}
+	capturingRend := &capturingRenderer{delegate: mockRend, captured: &capturedInput}
+
+	r := &KrakenDGatewayReconciler{
+		Client:    c,
+		Scheme:    testScheme(),
+		Recorder:  fakeRecorder(),
+		Renderer:  capturingRend,
+		Validator: &mockValidator{},
+	}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: client.ObjectKeyFromObject(gw),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if capturedInput == nil {
+		t.Fatal("renderer was not called")
+	}
+	if (*capturedInput).Dragonfly == nil {
+		t.Error("expected DragonflyState to be set in RenderInput")
+	}
+	if !(*capturedInput).Dragonfly.Enabled {
+		t.Error("expected DragonflyState.Enabled=true")
+	}
+}
+
+func TestGatewayReconcile_ExternalSecretCreated(t *testing.T) {
+	gw := testGateway()
+	gw.Spec.Edition = v1alpha1.EditionEE
+	gw.Spec.License = &v1alpha1.LicenseConfig{
+		ExternalSecret: v1alpha1.ExternalSecretLicenseConfig{
+			Enabled: true,
+			SecretStoreRef: v1alpha1.SecretStoreRef{
+				Name: "vault", Kind: "ClusterSecretStore",
+			},
+			RemoteRef: v1alpha1.ExternalRemoteRef{Key: "krakend/license"},
+		},
+	}
+	gw.Status.Phase = v1alpha1.PhaseRunning
+	c := fakeClientBuilder().
+		WithObjects(gw).
+		WithStatusSubresource(gw).
+		Build()
+
+	r := &KrakenDGatewayReconciler{
+		Client:   c,
+		Scheme:   testScheme(),
+		Recorder: fakeRecorder(),
+		Renderer: &mockRenderer{
+			output: &renderer.RenderOutput{
+				JSON: []byte(`{}`), Checksum: "cs", DesiredImage: "img:v1",
+			},
+		},
+		Validator: &mockValidator{},
+	}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: client.ObjectKeyFromObject(gw),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestGatewayReconcile_VirtualServiceCreated(t *testing.T) {
+	gw := testGateway()
+	gw.Spec.Istio = &v1alpha1.IstioSpec{
+		Enabled:  true,
+		Hosts:    []string{"api.example.com"},
+		Gateways: []string{"istio-system/gateway"},
+	}
+	gw.Status.Phase = v1alpha1.PhaseRunning
+	c := fakeClientBuilder().
+		WithObjects(gw).
+		WithStatusSubresource(gw).
+		Build()
+
+	r := &KrakenDGatewayReconciler{
+		Client:   c,
+		Scheme:   testScheme(),
+		Recorder: fakeRecorder(),
+		Renderer: &mockRenderer{
+			output: &renderer.RenderOutput{
+				JSON: []byte(`{}`), Checksum: "cs", DesiredImage: "img:v1",
+			},
+		},
+		Validator: &mockValidator{},
+	}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: client.ObjectKeyFromObject(gw),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

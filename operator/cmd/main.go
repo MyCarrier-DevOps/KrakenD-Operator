@@ -42,6 +42,7 @@ import (
 	"github.com/mycarrier-devops/krakend-operator/internal/controller"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 	licenseutil "github.com/mycarrier-devops/krakend-operator/internal/util/license"
+	webhooksetup "github.com/mycarrier-devops/krakend-operator/internal/webhook"
 	"k8s.io/utils/clock"
 	// +kubebuilder:scaffold:imports
 )
@@ -193,7 +194,7 @@ func main() {
 		WebhookServer:          webhookServer,
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       "672753c6.krakend.io",
+		LeaderElectionID:       "krakend-operator-leader",
 		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
 		// when the Manager ends. This requires the binary to immediately end when the
 		// Manager is stopped, otherwise, this setting is unsafe. Setting this significantly
@@ -223,6 +224,7 @@ func main() {
 		Recorder:  mgr.GetEventRecorderFor("krakendgateway-controller"),
 		Renderer:  krakendRenderer,
 		Validator: krakendValidator,
+		Clock:     clock.RealClock{},
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "KrakenDGateway")
 		os.Exit(1)
@@ -253,6 +255,10 @@ func main() {
 		Generator:    autoconfig.NewGenerator(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "KrakenDAutoConfig")
+		os.Exit(1)
+	}
+	if err := webhooksetup.SetupWebhooks(mgr); err != nil {
+		setupLog.Error(err, "unable to set up webhooks")
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder

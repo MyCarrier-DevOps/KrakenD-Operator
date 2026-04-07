@@ -28,9 +28,12 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	utilclock "k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -52,6 +55,7 @@ type KrakenDGatewayReconciler struct {
 	Recorder  record.EventRecorder
 	Renderer  renderer.Renderer
 	Validator renderer.Validator
+	Clock     utilclock.Clock
 }
 
 // +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendgateways,verbs=get;list;watch;create;update;patch;delete
@@ -68,6 +72,9 @@ type KrakenDGatewayReconciler struct {
 // +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=autoscaling,resources=horizontalpodautoscalers,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups=dragonflydb.io,resources=dragonflies,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=external-secrets.io,resources=externalsecrets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=networking.istio.io,resources=virtualservices,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile implements the gateway rendering pipeline: gather inputs,
 // render config, validate, update resource, and reconcile owned objects.
@@ -123,12 +130,16 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, err
 	}
 
+	// Detect Dragonfly state
+	dragonflyState := r.detectDragonflyState(ctx, &gw)
+
 	// Render configuration
 	output, err := r.Renderer.Render(renderer.RenderInput{
 		Gateway:          &gw,
 		Endpoints:        endpoints,
 		Policies:         policies,
 		CEFallback:       ceFallback,
+		Dragonfly:        dragonflyState,
 		PluginConfigMaps: pluginConfigMaps,
 	})
 	if err != nil {
@@ -235,6 +246,19 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *KrakenDGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	dfObj := &unstructured.Unstructured{}
+	dfObj.SetGroupVersionKind(schema.GroupVersionKind{
+		Group: "dragonflydb.io", Version: "v1alpha1", Kind: "Dragonfly",
+	})
+	esObj := &unstructured.Unstructured{}
+	esObj.SetGroupVersionKind(schema.GroupVersionKind{
+		Group: "external-secrets.io", Version: "v1", Kind: "ExternalSecret",
+	})
+	vsObj := &unstructured.Unstructured{}
+	vsObj.SetGroupVersionKind(schema.GroupVersionKind{
+		Group: "networking.istio.io", Version: "v1", Kind: "VirtualService",
+	})
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.KrakenDGateway{}).
 		Owns(&appsv1.Deployment{}).
@@ -243,6 +267,9 @@ func (r *KrakenDGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.ServiceAccount{}).
 		Owns(&policyv1.PodDisruptionBudget{}).
 		Owns(&autoscalingv2.HorizontalPodAutoscaler{}).
+		Owns(dfObj).
+		Owns(esObj).
+		Owns(vsObj).
 		Watches(
 			&v1alpha1.KrakenDEndpoint{},
 			handler.EnqueueRequestsFromMapFunc(r.endpointToGateway),
@@ -316,6 +343,74 @@ func (r *KrakenDGatewayReconciler) gatherPluginConfigMaps(
 		cms = append(cms, cm)
 	}
 	return cms, nil
+}
+
+// detectDragonflyState checks if a Dragonfly CR exists and reports its readiness.
+// It returns nil if Dragonfly is not enabled, and sets the DragonflyReady
+// condition and metric on the gateway.
+func (r *KrakenDGatewayReconciler) detectDragonflyState(
+	ctx context.Context,
+	gw *v1alpha1.KrakenDGateway,
+) *renderer.DragonflyState {
+	if gw.Spec.Dragonfly == nil || !gw.Spec.Dragonfly.Enabled {
+		return nil
+	}
+
+	log := logf.FromContext(ctx)
+	dfName := resources.DragonflyName(gw)
+	df := &unstructured.Unstructured{}
+	df.SetGroupVersionKind(schema.GroupVersionKind{
+		Group: "dragonflydb.io", Version: "v1alpha1", Kind: "Dragonfly",
+	})
+
+	key := types.NamespacedName{Name: dfName, Namespace: gw.Namespace}
+	if err := r.Get(ctx, key, df); err != nil {
+		if errors.IsNotFound(err) {
+			meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+				Type:               v1alpha1.ConditionDragonflyReady,
+				Status:             metav1.ConditionFalse,
+				ObservedGeneration: gw.Generation,
+				Reason:             v1alpha1.ReasonDragonflyNotReady,
+				Message:            "Dragonfly CR not yet created",
+			})
+			dragonflyReady.WithLabelValues(gw.Namespace, gw.Name).Set(0)
+			return &renderer.DragonflyState{Enabled: true, ServiceDNS: resources.DragonflyServiceDNS(gw)}
+		}
+		log.Error(err, "failed to get Dragonfly CR", "name", dfName)
+		dragonflyReady.WithLabelValues(gw.Namespace, gw.Name).Set(0)
+		return &renderer.DragonflyState{Enabled: true, ServiceDNS: resources.DragonflyServiceDNS(gw)}
+	}
+
+	// Check Dragonfly status phase — absent field defaults to empty string
+	phase, _, err := unstructured.NestedString(df.Object, "status", "phase")
+	if err != nil {
+		log.V(1).Info("unable to read Dragonfly status phase", "error", err)
+	}
+	isReady := phase == "ready"
+
+	if isReady {
+		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+			Type:               v1alpha1.ConditionDragonflyReady,
+			Status:             metav1.ConditionTrue,
+			ObservedGeneration: gw.Generation,
+			Reason:             "DragonflyReady",
+			Message:            "Dragonfly instance is ready",
+		})
+		dragonflyReady.WithLabelValues(gw.Namespace, gw.Name).Set(1)
+	} else {
+		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+			Type:               v1alpha1.ConditionDragonflyReady,
+			Status:             metav1.ConditionFalse,
+			ObservedGeneration: gw.Generation,
+			Reason:             v1alpha1.ReasonDragonflyNotReady,
+			Message:            fmt.Sprintf("Dragonfly phase: %s", phase),
+		})
+		dragonflyReady.WithLabelValues(gw.Namespace, gw.Name).Set(0)
+		r.Recorder.Event(gw, "Warning", v1alpha1.ReasonDragonflyNotReady,
+			fmt.Sprintf("Dragonfly instance is not ready (phase: %s)", phase))
+	}
+
+	return &renderer.DragonflyState{Enabled: true, ServiceDNS: resources.DragonflyServiceDNS(gw)}
 }
 
 // validateConfig runs the krakend check validation pipeline.
@@ -479,6 +574,54 @@ func (r *KrakenDGatewayReconciler) reconcileOwnedResources(
 			return controllerutil.SetControllerReference(gw, hpa, r.Scheme)
 		}); err != nil {
 			return fmt.Errorf("reconciling hpa: %w", err)
+		}
+	}
+
+	// Dragonfly (only if enabled)
+	if gw.Spec.Dragonfly != nil && gw.Spec.Dragonfly.Enabled {
+		df := &unstructured.Unstructured{}
+		df.SetGroupVersionKind(schema.GroupVersionKind{
+			Group: "dragonflydb.io", Version: "v1alpha1", Kind: "Dragonfly",
+		})
+		df.SetName(resources.DragonflyName(gw))
+		df.SetNamespace(gw.Namespace)
+		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, df, func() error {
+			resources.BuildDragonfly(df, gw)
+			return controllerutil.SetControllerReference(gw, df, r.Scheme)
+		}); err != nil {
+			return fmt.Errorf("reconciling dragonfly: %w", err)
+		}
+	}
+
+	// ExternalSecret (only if license.externalSecret is enabled)
+	if gw.Spec.License != nil && gw.Spec.License.ExternalSecret.Enabled {
+		es := &unstructured.Unstructured{}
+		es.SetGroupVersionKind(schema.GroupVersionKind{
+			Group: "external-secrets.io", Version: "v1", Kind: "ExternalSecret",
+		})
+		es.SetName(resources.ExternalSecretName(gw))
+		es.SetNamespace(gw.Namespace)
+		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, es, func() error {
+			resources.BuildExternalSecret(es, gw)
+			return controllerutil.SetControllerReference(gw, es, r.Scheme)
+		}); err != nil {
+			return fmt.Errorf("reconciling externalsecret: %w", err)
+		}
+	}
+
+	// VirtualService (only if Istio is enabled)
+	if gw.Spec.Istio != nil && gw.Spec.Istio.Enabled {
+		vs := &unstructured.Unstructured{}
+		vs.SetGroupVersionKind(schema.GroupVersionKind{
+			Group: "networking.istio.io", Version: "v1", Kind: "VirtualService",
+		})
+		vs.SetName(gw.Name)
+		vs.SetNamespace(gw.Namespace)
+		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, vs, func() error {
+			resources.BuildVirtualService(vs, gw)
+			return controllerutil.SetControllerReference(gw, vs, r.Scheme)
+		}); err != nil {
+			return fmt.Errorf("reconciling virtualservice: %w", err)
 		}
 	}
 

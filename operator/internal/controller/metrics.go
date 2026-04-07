@@ -53,6 +53,11 @@ var (
 		Buckets: prometheus.DefBuckets,
 	}, []string{"controller", "namespace", "name"})
 
+	dragonflyReady = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "krakend_operator_dragonfly_ready",
+		Help: "1 if Dragonfly is ready, 0 otherwise",
+	}, []string{"namespace", "name"})
+
 	gatewayInfo = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "krakend_operator_gateway_info",
 		Help: "Gateway metadata labels",
@@ -67,6 +72,7 @@ func init() { //nolint:gochecknoinits // required by prometheus metric registrat
 		licenseExpirySeconds,
 		endpointsPerGateway,
 		reconcileDuration,
+		dragonflyReady,
 		gatewayInfo,
 	)
 }
