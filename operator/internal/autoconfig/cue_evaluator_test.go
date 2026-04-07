@@ -474,3 +474,150 @@ endpoint: {
 		t.Errorf("expected 1 entry, got %d", len(out.Entries))
 	}
 }
+
+func TestCUEEvaluator_URLTransform_HostMapping(t *testing.T) {
+	eval := NewCUEEvaluator()
+	defs := map[string]string{
+		"test.cue": `
+_spec: _
+endpoint: {
+	"/api/users:GET": {
+		endpoint: "/api/users"
+		method: "GET"
+		backends: [{host: ["https://api.example.com"], urlPattern: "/api/users", method: "GET"}]
+	}
+	"/api/orders:POST": {
+		endpoint: "/api/orders"
+		method: "POST"
+		backends: [
+			{host: ["https://api.example.com"], urlPattern: "/api/orders", method: "POST"},
+			{host: ["https://payments.example.com"], urlPattern: "/pay", method: "POST"},
+		]
+	}
+}`,
+	}
+
+	out, err := eval.Evaluate(context.Background(), CUEInput{
+		SpecData:    []byte(`{"paths": {}}`),
+		SpecFormat:  v1alpha1.SpecFormatJSON,
+		DefaultDefs: defs,
+		ServiceName: "_spec",
+		URLTransform: &v1alpha1.URLTransformSpec{
+			HostMapping: []v1alpha1.HostMappingEntry{
+				{From: "https://api.example.com", To: "http://user-service.default.svc.cluster.local:8080"},
+				{From: "https://payments.example.com", To: "http://payment-service.default.svc.cluster.local:8080"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(out.Entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(out.Entries))
+	}
+
+	byKey := map[string]v1alpha1.EndpointEntry{}
+	for _, e := range out.Entries {
+		byKey[e.Endpoint+":"+e.Method] = e
+	}
+
+	users := byKey["/api/users:GET"]
+	if users.Backends[0].Host[0] != "http://user-service.default.svc.cluster.local:8080" {
+		t.Errorf("expected mapped host for users, got %s", users.Backends[0].Host[0])
+	}
+
+	orders := byKey["/api/orders:POST"]
+	if orders.Backends[0].Host[0] != "http://user-service.default.svc.cluster.local:8080" {
+		t.Errorf("expected mapped host for orders backend 0, got %s", orders.Backends[0].Host[0])
+	}
+	if orders.Backends[1].Host[0] != "http://payment-service.default.svc.cluster.local:8080" {
+		t.Errorf("expected mapped host for orders backend 1, got %s", orders.Backends[1].Host[0])
+	}
+}
+
+func TestCUEEvaluator_URLTransform_StripAndAddPrefix(t *testing.T) {
+	eval := NewCUEEvaluator()
+	defs := map[string]string{
+		"test.cue": `
+_spec: _
+endpoint: {
+	"/api/v1/users:GET": {
+		endpoint: "/api/v1/users"
+		method: "GET"
+		backends: [{host: ["http://localhost"], urlPattern: "/api/v1/users", method: "GET"}]
+		_operationId: "listUsers"
+		_tags: ["users"]
+	}
+}`,
+	}
+
+	out, err := eval.Evaluate(context.Background(), CUEInput{
+		SpecData:    []byte(`{"paths": {}}`),
+		SpecFormat:  v1alpha1.SpecFormatJSON,
+		DefaultDefs: defs,
+		ServiceName: "_spec",
+		URLTransform: &v1alpha1.URLTransformSpec{
+			StripPathPrefix: "/api/v1",
+			AddPathPrefix:   "/gateway",
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(out.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(out.Entries))
+	}
+
+	entry := out.Entries[0]
+	if entry.Endpoint != "/gateway/users" {
+		t.Errorf("expected endpoint /gateway/users, got %s", entry.Endpoint)
+	}
+
+	// Verify OperationIDs map key was updated
+	if opID, ok := out.OperationIDs["/gateway/users:GET"]; !ok || opID != "listUsers" {
+		t.Errorf("expected operationID under new key, got %v", out.OperationIDs)
+	}
+	if _, ok := out.OperationIDs["/api/v1/users:GET"]; ok {
+		t.Error("old operationID key should have been removed")
+	}
+
+	// Verify Tags map key was updated
+	if tags, ok := out.Tags["/gateway/users:GET"]; !ok || len(tags) != 1 || tags[0] != "users" {
+		t.Errorf("expected tags under new key, got %v", out.Tags)
+	}
+}
+
+func TestCUEEvaluator_URLTransform_NoMatchingHost(t *testing.T) {
+	eval := NewCUEEvaluator()
+	defs := map[string]string{
+		"test.cue": `
+_spec: _
+endpoint: {
+	"/test:GET": {
+		endpoint: "/test"
+		method: "GET"
+		backends: [{host: ["http://unmatched.example.com"], urlPattern: "/test", method: "GET"}]
+	}
+}`,
+	}
+
+	out, err := eval.Evaluate(context.Background(), CUEInput{
+		SpecData:    []byte(`{"paths": {}}`),
+		SpecFormat:  v1alpha1.SpecFormatJSON,
+		DefaultDefs: defs,
+		ServiceName: "_spec",
+		URLTransform: &v1alpha1.URLTransformSpec{
+			HostMapping: []v1alpha1.HostMappingEntry{
+				{From: "https://other.example.com", To: "http://other.svc.cluster.local"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Host should remain unchanged when no mapping matches
+	if out.Entries[0].Backends[0].Host[0] != "http://unmatched.example.com" {
+		t.Errorf("expected unchanged host, got %s", out.Entries[0].Backends[0].Host[0])
+	}
+}

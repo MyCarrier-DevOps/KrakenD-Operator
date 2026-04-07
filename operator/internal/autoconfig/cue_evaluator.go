@@ -20,6 +20,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
 
 	"cuelang.org/go/cue"
 	"cuelang.org/go/cue/cuecontext"
@@ -96,7 +98,18 @@ func (e *cueEvaluator) Evaluate(_ context.Context, input CUEInput) (*CUEOutput, 
 	}
 
 	endpointsValue := unified.LookupPath(cue.ParsePath("endpoint"))
-	return exportEndpointEntries(endpointsValue)
+	output, err := exportEndpointEntries(endpointsValue)
+	if err != nil {
+		return nil, err
+	}
+
+	if input.URLTransform != nil {
+		applyURLTransform(output, input.URLTransform)
+	}
+
+	applyFieldOverrides(output, input.Overrides)
+
+	return output, nil
 }
 
 func loadDefinitions(cueCtx *cue.Context, defs map[string]string) cue.Value {
@@ -191,4 +204,134 @@ func exportEndpointEntries(endpointsValue cue.Value) (*CUEOutput, error) {
 	}
 
 	return output, nil
+}
+
+// applyURLTransform applies host mapping, path stripping, and path prefixing
+// to the evaluated endpoint entries. This runs as a post-processing step after
+// CUE evaluation, allowing the CR's URLTransformSpec to override hosts and
+// transform paths without requiring custom CUE definitions.
+func applyURLTransform(output *CUEOutput, transform *v1alpha1.URLTransformSpec) {
+	hostMap := make(map[string]string, len(transform.HostMapping))
+	for _, m := range transform.HostMapping {
+		hostMap[m.From] = m.To
+	}
+
+	for i := range output.Entries {
+		entry := &output.Entries[i]
+
+		// Host mapping: replace matching backend hosts
+		for j := range entry.Backends {
+			for k, host := range entry.Backends[j].Host {
+				if to, ok := hostMap[host]; ok {
+					entry.Backends[j].Host[k] = to
+				}
+			}
+		}
+
+		oldKey := entry.Endpoint + ":" + entry.Method
+
+		// Strip path prefix
+		if transform.StripPathPrefix != "" {
+			entry.Endpoint = strings.TrimPrefix(entry.Endpoint, transform.StripPathPrefix)
+			if entry.Endpoint == "" {
+				entry.Endpoint = "/"
+			}
+		}
+
+		// Add path prefix
+		if transform.AddPathPrefix != "" {
+			entry.Endpoint = transform.AddPathPrefix + entry.Endpoint
+		}
+
+		// Update keys in OperationIDs and Tags maps if endpoint changed
+		newKey := entry.Endpoint + ":" + entry.Method
+		if newKey != oldKey {
+			if opID, ok := output.OperationIDs[oldKey]; ok {
+				delete(output.OperationIDs, oldKey)
+				output.OperationIDs[newKey] = opID
+			}
+			if tags, ok := output.Tags[oldKey]; ok {
+				delete(output.Tags, oldKey)
+				output.Tags[newKey] = tags
+			}
+		}
+	}
+}
+
+// applyFieldOverrides applies non-ExtraConfig override fields (Timeout,
+// CacheTTL, PolicyRef, Endpoint, Method, Backends) to the evaluated
+// endpoint entries. ExtraConfig overrides are already handled via CUE
+// unification in applyOverrides.
+func applyFieldOverrides(output *CUEOutput, overrides []v1alpha1.OperationOverride) {
+	if len(overrides) == 0 {
+		return
+	}
+
+	// Build operationID → entry index lookup
+	opIDIndex := make(map[string]int, len(output.Entries))
+	for _, key := range sortedKeys(output.OperationIDs) {
+		opID := output.OperationIDs[key]
+		for i := range output.Entries {
+			entryKey := output.Entries[i].Endpoint + ":" + output.Entries[i].Method
+			if entryKey == key {
+				opIDIndex[opID] = i
+				break
+			}
+		}
+	}
+
+	for _, ov := range overrides {
+		idx, ok := opIDIndex[ov.OperationID]
+		if !ok {
+			continue
+		}
+		entry := &output.Entries[idx]
+		oldKey := entry.Endpoint + ":" + entry.Method
+
+		if ov.Timeout != nil {
+			entry.Timeout = ov.Timeout
+		}
+		if ov.CacheTTL != nil {
+			entry.CacheTTL = ov.CacheTTL
+		}
+		if ov.Endpoint != "" {
+			entry.Endpoint = ov.Endpoint
+		}
+		if ov.Method != "" {
+			entry.Method = ov.Method
+		}
+		if ov.PolicyRef != nil {
+			for i := range entry.Backends {
+				entry.Backends[i].PolicyRef = ov.PolicyRef
+			}
+		}
+		for _, bo := range ov.Backends {
+			if bo.Index >= 0 && bo.Index < len(entry.Backends) && bo.ExtraConfig != nil {
+				entry.Backends[bo.Index].ExtraConfig = bo.ExtraConfig
+			}
+		}
+
+		// Update OperationIDs and Tags maps if endpoint/method changed
+		newKey := entry.Endpoint + ":" + entry.Method
+		if newKey != oldKey {
+			if opID, ok := output.OperationIDs[oldKey]; ok {
+				delete(output.OperationIDs, oldKey)
+				output.OperationIDs[newKey] = opID
+			}
+			if tags, ok := output.Tags[oldKey]; ok {
+				delete(output.Tags, oldKey)
+				output.Tags[newKey] = tags
+			}
+		}
+	}
+}
+
+// sortedKeys returns the keys of a map in stable order for deterministic processing.
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
