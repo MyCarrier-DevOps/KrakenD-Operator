@@ -77,7 +77,7 @@ func (r *KrakenDBackendPolicyReconciler) Reconcile(ctx context.Context, req ctrl
 	// Validate policy fields
 	if reason, msg := validatePolicy(&policy); reason != "" {
 		meta.SetStatusCondition(&policy.Status.Conditions, metav1.Condition{
-			Type:               "Valid",
+			Type:               v1alpha1.ConditionPolicyValid,
 			Status:             metav1.ConditionFalse,
 			ObservedGeneration: policy.Generation,
 			Reason:             reason,
@@ -86,7 +86,7 @@ func (r *KrakenDBackendPolicyReconciler) Reconcile(ctx context.Context, req ctrl
 		r.Recorder.Event(&policy, "Warning", "PolicyInvalid", msg)
 	} else {
 		meta.SetStatusCondition(&policy.Status.Conditions, metav1.Condition{
-			Type:               "Valid",
+			Type:               v1alpha1.ConditionPolicyValid,
 			Status:             metav1.ConditionTrue,
 			ObservedGeneration: policy.Generation,
 			Reason:             "Valid",

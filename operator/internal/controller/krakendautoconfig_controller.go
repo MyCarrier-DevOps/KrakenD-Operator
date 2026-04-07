@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	utilclock "k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -51,6 +52,7 @@ type KrakenDAutoConfigReconciler struct {
 	CUEEvaluator autoconfig.CUEEvaluator
 	Filter       autoconfig.Filter
 	Generator    autoconfig.Generator
+	Clock        utilclock.Clock
 }
 
 // +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendautoconfigs,verbs=get;list;watch;create;update;patch;delete
@@ -125,10 +127,16 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, fmt.Errorf("setting phase Rendering: %w", err)
 	}
 
-	// Load CUE definitions
+	// Load CUE definitions: prefer ConfigMap, fall back to embedded defaults
 	defaultDefs, err := r.loadCUEDefinitions(ctx, ac.Namespace, defaultCUEDefinitionsConfigMap)
 	if err != nil {
-		return r.handleCUEError(ctx, &ac, fmt.Errorf("loading default CUE definitions: %w", err))
+		if !errors.IsNotFound(err) {
+			return r.handleCUEError(ctx, &ac, fmt.Errorf("loading default CUE definitions: %w", err))
+		}
+		defaultDefs, err = autoconfig.EmbeddedCUEDefinitions()
+		if err != nil {
+			return r.handleCUEError(ctx, &ac, fmt.Errorf("loading embedded CUE definitions: %w", err))
+		}
 	}
 
 	var customDefs map[string]string
@@ -175,6 +183,12 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	})
 	if err != nil {
 		return r.handleCUEError(ctx, &ac, fmt.Errorf("generating endpoints: %w", err))
+	}
+
+	// Emit events for duplicate operation IDs
+	for _, dupID := range genOutput.DuplicateIDs {
+		r.Recorder.Eventf(&ac, "Warning", v1alpha1.ReasonDuplicateOperationId,
+			"Duplicate operationId %q skipped", dupID)
 	}
 
 	// Diff and reconcile endpoints
@@ -242,7 +256,12 @@ func (r *KrakenDAutoConfigReconciler) handleFetchError(
 		return ctrl.Result{}, fmt.Errorf("updating fetch error status: %w", err)
 	}
 	r.Recorder.Event(ac, "Warning", v1alpha1.ReasonSpecFetchFailed, fetchErr.Error())
-	return r.requeueResult(ac), nil
+	// For periodic triggers, requeue via interval; for OnChange, return error
+	// so controller-runtime retries with exponential backoff.
+	if ac.Spec.Trigger == v1alpha1.TriggerPeriodic {
+		return r.requeueResult(ac), nil
+	}
+	return ctrl.Result{}, fetchErr
 }
 
 func (r *KrakenDAutoConfigReconciler) handleCUEError(
@@ -262,7 +281,12 @@ func (r *KrakenDAutoConfigReconciler) handleCUEError(
 		return ctrl.Result{}, fmt.Errorf("updating CUE error status: %w", err)
 	}
 	r.Recorder.Event(ac, "Warning", v1alpha1.ReasonCUEEvaluationFailed, cueErr.Error())
-	return r.requeueResult(ac), nil
+	// For periodic triggers, requeue via interval; for OnChange, return error
+	// so controller-runtime retries with exponential backoff.
+	if ac.Spec.Trigger == v1alpha1.TriggerPeriodic {
+		return r.requeueResult(ac), nil
+	}
+	return ctrl.Result{}, cueErr
 }
 
 func (r *KrakenDAutoConfigReconciler) requeueResult(ac *v1alpha1.KrakenDAutoConfig) ctrl.Result {

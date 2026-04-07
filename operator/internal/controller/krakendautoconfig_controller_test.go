@@ -47,9 +47,11 @@ func (m *mockFetcher) Fetch(_ context.Context, _ autoconfig.FetchSource) (*autoc
 type mockCUEEvaluator struct {
 	output *autoconfig.CUEOutput
 	err    error
+	called bool
 }
 
 func (m *mockCUEEvaluator) Evaluate(_ context.Context, _ autoconfig.CUEInput) (*autoconfig.CUEOutput, error) {
+	m.called = true
 	return m.output, m.err
 }
 
@@ -234,8 +236,8 @@ func TestAutoConfigReconcile_FetchError(t *testing.T) {
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
 	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if err == nil {
+		t.Fatal("expected error for OnChange trigger, got nil")
 	}
 
 	var updated v1alpha1.KrakenDAutoConfig
@@ -263,8 +265,8 @@ func TestAutoConfigReconcile_CUEError(t *testing.T) {
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
 	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if err == nil {
+		t.Fatal("expected error for OnChange trigger, got nil")
 	}
 
 	var updated v1alpha1.KrakenDAutoConfig
@@ -475,8 +477,8 @@ func TestAutoConfigReconcile_GeneratorError(t *testing.T) {
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
 	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if err == nil {
+		t.Fatal("expected error for OnChange trigger, got nil")
 	}
 
 	var updated v1alpha1.KrakenDAutoConfig
@@ -548,5 +550,29 @@ func TestCueConfigMapToAutoConfig_UnrelatedCM(t *testing.T) {
 	requests := r.cueConfigMapToAutoConfig(context.Background(), cm)
 	if len(requests) != 0 {
 		t.Errorf("expected 0 requests for unrelated ConfigMap, got %d", len(requests))
+	}
+}
+
+func TestAutoConfigReconcile_FallbackToEmbeddedCUE(t *testing.T) {
+	ac := testAutoConfig()
+	ac.Status.Phase = v1alpha1.AutoConfigPhasePending
+	// No CUE definitions ConfigMap — controller should fall back to embedded defs
+	c := fakeClientBuilder().
+		WithObjects(ac).
+		WithStatusSubresource(ac).
+		Build()
+	f, ce, fi, g := defaultMocks()
+	r := newACReconciler(c, f, ce, fi, g)
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify the CUE evaluator was still called (using embedded defs)
+	if !ce.called {
+		t.Error("expected CUE evaluator to be called with embedded defs")
 	}
 }
