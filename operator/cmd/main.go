@@ -38,6 +38,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	gatewayv1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/autoconfig"
 	"github.com/mycarrier-devops/krakend-operator/internal/controller"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 	licenseutil "github.com/mycarrier-devops/krakend-operator/internal/util/license"
@@ -243,8 +244,13 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.KrakenDAutoConfigReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:       mgr.GetClient(),
+		Scheme:       mgr.GetScheme(),
+		Recorder:     mgr.GetEventRecorderFor("krakendautoconfig-controller"),
+		Fetcher:      autoconfig.NewFetcher(mgr.GetClient()),
+		CUEEvaluator: autoconfig.NewCUEEvaluator(),
+		Filter:       autoconfig.NewFilter(),
+		Generator:    autoconfig.NewGenerator(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "KrakenDAutoConfig")
 		os.Exit(1)
