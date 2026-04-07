@@ -133,7 +133,3 @@ type KrakenDEndpointList struct {
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []KrakenDEndpoint `json:"items"`
 }
-
-func init() { //nolint:gochecknoinits // required by controller-runtime scheme registration
-	SchemeBuilder.Register(&KrakenDEndpoint{}, &KrakenDEndpointList{})
-}

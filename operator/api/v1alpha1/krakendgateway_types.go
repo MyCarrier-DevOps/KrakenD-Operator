@@ -340,7 +340,3 @@ type KrakenDGatewayList struct {
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []KrakenDGateway `json:"items"`
 }
-
-func init() { //nolint:gochecknoinits // required by controller-runtime scheme registration
-	SchemeBuilder.Register(&KrakenDGateway{}, &KrakenDGatewayList{})
-}

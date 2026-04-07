@@ -235,7 +235,3 @@ type KrakenDAutoConfigList struct {
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []KrakenDAutoConfig `json:"items"`
 }
-
-func init() { //nolint:gochecknoinits // required by controller-runtime scheme registration
-	SchemeBuilder.Register(&KrakenDAutoConfig{}, &KrakenDAutoConfigList{})
-}

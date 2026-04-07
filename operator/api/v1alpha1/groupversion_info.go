@@ -33,4 +33,17 @@ var (
 
 	// AddToScheme adds the types in this group-version to the given scheme.
 	AddToScheme = SchemeBuilder.AddToScheme
+
+	// Trigger type registration at package load time.
+	_ = registerTypes()
 )
+
+func registerTypes() bool {
+	SchemeBuilder.Register(
+		&KrakenDGateway{}, &KrakenDGatewayList{},
+		&KrakenDEndpoint{}, &KrakenDEndpointList{},
+		&KrakenDBackendPolicy{}, &KrakenDBackendPolicyList{},
+		&KrakenDAutoConfig{}, &KrakenDAutoConfigList{},
+	)
+	return true
+}
