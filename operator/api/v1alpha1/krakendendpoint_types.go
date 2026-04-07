@@ -134,6 +134,6 @@ type KrakenDEndpointList struct {
 	Items           []KrakenDEndpoint `json:"items"`
 }
 
-func init() {
+func init() { //nolint:gochecknoinits // required by controller-runtime scheme registration
 	SchemeBuilder.Register(&KrakenDEndpoint{}, &KrakenDEndpointList{})
 }

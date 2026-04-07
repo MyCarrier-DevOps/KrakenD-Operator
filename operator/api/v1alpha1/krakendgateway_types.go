@@ -340,6 +340,6 @@ type KrakenDGatewayList struct {
 	Items           []KrakenDGateway `json:"items"`
 }
 
-func init() {
+func init() { //nolint:gochecknoinits // required by controller-runtime scheme registration
 	SchemeBuilder.Register(&KrakenDGateway{}, &KrakenDGatewayList{})
 }

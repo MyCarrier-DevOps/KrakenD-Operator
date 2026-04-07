@@ -24,7 +24,7 @@ import (
 	"os/exec"
 	"strings"
 
-	. "github.com/onsi/ginkgo/v2" // nolint:revive,staticcheck
+	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck // dot-import required by Ginkgo DSL
 )
 
 const (
@@ -37,21 +37,21 @@ const (
 )
 
 func warnError(err error) {
-	_, _ = fmt.Fprintf(GinkgoWriter, "warning: %v\n", err)
+	fmt.Fprintf(GinkgoWriter, "warning: %v\n", err) //nolint:errcheck // best-effort log
 }
 
 // Run executes the provided command within this context
 func Run(cmd *exec.Cmd) (string, error) {
-	dir, _ := GetProjectDir()
+	dir, _ := GetProjectDir() //nolint:errcheck // best-effort directory resolution
 	cmd.Dir = dir
 
 	if err := os.Chdir(cmd.Dir); err != nil {
-		_, _ = fmt.Fprintf(GinkgoWriter, "chdir dir: %q\n", err)
+		fmt.Fprintf(GinkgoWriter, "chdir dir: %q\n", err) //nolint:errcheck // best-effort log
 	}
 
 	cmd.Env = append(os.Environ(), "GO111MODULE=on")
 	command := strings.Join(cmd.Args, " ")
-	_, _ = fmt.Fprintf(GinkgoWriter, "running: %q\n", command)
+	fmt.Fprintf(GinkgoWriter, "running: %q\n", command) //nolint:errcheck // best-effort log
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return string(output), fmt.Errorf("%q failed with error %q: %w", command, string(output), err)
@@ -204,9 +204,7 @@ func GetProjectDir() (string, error) {
 // UncommentCode searches for target in the file and remove the comment prefix
 // of the target content. The target content may span multiple lines.
 func UncommentCode(filename, target, prefix string) error {
-	// false positive
-	// nolint:gosec
-	content, err := os.ReadFile(filename)
+	content, err := os.ReadFile(filename) //nolint:gosec // filename is from test fixture, not user input
 	if err != nil {
 		return fmt.Errorf("failed to read file %q: %w", filename, err)
 	}
@@ -244,9 +242,8 @@ func UncommentCode(filename, target, prefix string) error {
 		return fmt.Errorf("failed to write to output: %w", err)
 	}
 
-	// false positive
-	// nolint:gosec
-	if err = os.WriteFile(filename, out.Bytes(), 0644); err != nil {
+	//nolint:gosec // filename is from test fixture, not user input
+	if err = os.WriteFile(filename, out.Bytes(), 0o644); err != nil {
 		return fmt.Errorf("failed to write file %q: %w", filename, err)
 	}
 
