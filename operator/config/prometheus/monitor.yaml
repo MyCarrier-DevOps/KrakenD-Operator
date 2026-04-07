@@ -17,7 +17,7 @@ spec:
       tlsConfig:
         # insecureSkipVerify is set to true for development convenience.
         # For production, enable cert-manager and apply the patch at
-        # config/prometheus/servicemonitor_tls_patch.yaml to reference
+        # config/prometheus/monitor_tls_patch.yaml to reference
         # certificates from the 'metrics-server-cert' secret.
         insecureSkipVerify: true
   selector:

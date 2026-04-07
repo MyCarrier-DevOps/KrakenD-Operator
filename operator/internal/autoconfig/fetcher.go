@@ -61,17 +61,31 @@ type Fetcher interface {
 
 // NewFetcher creates a Fetcher that can read from HTTP and ConfigMaps.
 func NewFetcher(k8sClient client.Client) Fetcher {
+	checkRedirect := func(_ *http.Request, via []*http.Request) error {
+		if len(via) >= maxRedirects {
+			return fmt.Errorf("too many redirects (max %d)", maxRedirects)
+		}
+		return nil
+	}
 	return &httpFetcher{
-		client:           k8sClient,
-		strictTransport:  SSRFSafeTransportWithPolicy(false),
-		lenientTransport: SSRFSafeTransportWithPolicy(true),
+		client: k8sClient,
+		strictClient: &http.Client{
+			Transport:     SSRFSafeTransportWithPolicy(false),
+			Timeout:       fetchTimeout,
+			CheckRedirect: checkRedirect,
+		},
+		lenientClient: &http.Client{
+			Transport:     SSRFSafeTransportWithPolicy(true),
+			Timeout:       fetchTimeout,
+			CheckRedirect: checkRedirect,
+		},
 	}
 }
 
 type httpFetcher struct {
-	client           client.Client
-	strictTransport  http.RoundTripper
-	lenientTransport http.RoundTripper
+	client        client.Client
+	strictClient  *http.Client
+	lenientClient *http.Client
 }
 
 func (f *httpFetcher) Fetch(ctx context.Context, source FetchSource) (*FetchResult, error) {
@@ -128,19 +142,9 @@ func (f *httpFetcher) fetchFromURL(ctx context.Context, source FetchSource) (*Fe
 		}
 	}
 
-	transport := f.strictTransport
+	httpClient := f.strictClient
 	if source.AllowClusterLocal {
-		transport = f.lenientTransport
-	}
-	httpClient := &http.Client{
-		Transport: transport,
-		Timeout:   fetchTimeout,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= maxRedirects {
-				return fmt.Errorf("too many redirects (max %d)", maxRedirects)
-			}
-			return nil
-		},
+		httpClient = f.lenientClient
 	}
 
 	resp, err := httpClient.Do(req)

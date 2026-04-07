@@ -4,7 +4,7 @@ This directory contains the operator source code, built with [Operator SDK](http
 
 ## Prerequisites
 
-- Go 1.24+
+- Go 1.26+
 - Docker or Podman
 - kubectl configured for a Kubernetes 1.28+ cluster
 - operator-sdk v1.42+

@@ -127,9 +127,9 @@ func TestFetcher_HTTPSuccess(t *testing.T) {
 	defer ts.Close()
 
 	fetcher := &httpFetcher{
-		client:           fakeClient(),
-		strictTransport:  http.DefaultTransport,
-		lenientTransport: http.DefaultTransport,
+		client:        fakeClient(),
+		strictClient:  &http.Client{Transport: http.DefaultTransport, Timeout: fetchTimeout},
+		lenientClient: &http.Client{Transport: http.DefaultTransport, Timeout: fetchTimeout},
 	}
 
 	result, err := fetcher.Fetch(context.Background(), FetchSource{URL: ts.URL})
@@ -148,9 +148,9 @@ func TestFetcher_HTTPBadStatus(t *testing.T) {
 	defer ts.Close()
 
 	fetcher := &httpFetcher{
-		client:           fakeClient(),
-		strictTransport:  http.DefaultTransport,
-		lenientTransport: http.DefaultTransport,
+		client:        fakeClient(),
+		strictClient:  &http.Client{Transport: http.DefaultTransport, Timeout: fetchTimeout},
+		lenientClient: &http.Client{Transport: http.DefaultTransport, Timeout: fetchTimeout},
 	}
 
 	_, err := fetcher.Fetch(context.Background(), FetchSource{URL: ts.URL})
@@ -252,9 +252,9 @@ func TestFetcher_BearerTokenAuth(t *testing.T) {
 	}
 
 	fetcher := &httpFetcher{
-		client:           fakeClient(secret),
-		strictTransport:  http.DefaultTransport,
-		lenientTransport: http.DefaultTransport,
+		client:        fakeClient(secret),
+		strictClient:  &http.Client{Transport: http.DefaultTransport, Timeout: fetchTimeout},
+		lenientClient: &http.Client{Transport: http.DefaultTransport, Timeout: fetchTimeout},
 	}
 
 	_, err := fetcher.Fetch(context.Background(), FetchSource{
@@ -290,9 +290,9 @@ func TestFetcher_BasicAuth(t *testing.T) {
 	}
 
 	fetcher := &httpFetcher{
-		client:           fakeClient(secret),
-		strictTransport:  http.DefaultTransport,
-		lenientTransport: http.DefaultTransport,
+		client:        fakeClient(secret),
+		strictClient:  &http.Client{Transport: http.DefaultTransport, Timeout: fetchTimeout},
+		lenientClient: &http.Client{Transport: http.DefaultTransport, Timeout: fetchTimeout},
 	}
 
 	_, err := fetcher.Fetch(context.Background(), FetchSource{
@@ -325,9 +325,9 @@ func TestFetcher_BasicAuthCustomKeys(t *testing.T) {
 	}
 
 	fetcher := &httpFetcher{
-		client:           fakeClient(secret),
-		strictTransport:  http.DefaultTransport,
-		lenientTransport: http.DefaultTransport,
+		client:        fakeClient(secret),
+		strictClient:  &http.Client{Transport: http.DefaultTransport, Timeout: fetchTimeout},
+		lenientClient: &http.Client{Transport: http.DefaultTransport, Timeout: fetchTimeout},
 	}
 
 	_, err := fetcher.Fetch(context.Background(), FetchSource{
@@ -356,9 +356,9 @@ func TestFetcher_BearerTokenSecretNotFound(t *testing.T) {
 	defer ts.Close()
 
 	fetcher := &httpFetcher{
-		client:           fakeClient(),
-		strictTransport:  http.DefaultTransport,
-		lenientTransport: http.DefaultTransport,
+		client:        fakeClient(),
+		strictClient:  &http.Client{Transport: http.DefaultTransport, Timeout: fetchTimeout},
+		lenientClient: &http.Client{Transport: http.DefaultTransport, Timeout: fetchTimeout},
 	}
 
 	_, err := fetcher.Fetch(context.Background(), FetchSource{
@@ -388,9 +388,9 @@ func TestFetcher_BearerTokenKeyNotFound(t *testing.T) {
 	}
 
 	fetcher := &httpFetcher{
-		client:           fakeClient(secret),
-		strictTransport:  http.DefaultTransport,
-		lenientTransport: http.DefaultTransport,
+		client:        fakeClient(secret),
+		strictClient:  &http.Client{Transport: http.DefaultTransport, Timeout: fetchTimeout},
+		lenientClient: &http.Client{Transport: http.DefaultTransport, Timeout: fetchTimeout},
 	}
 
 	_, err := fetcher.Fetch(context.Background(), FetchSource{
@@ -415,9 +415,9 @@ func TestFetcher_BasicAuthSecretNotFound(t *testing.T) {
 	defer ts.Close()
 
 	fetcher := &httpFetcher{
-		client:           fakeClient(),
-		strictTransport:  http.DefaultTransport,
-		lenientTransport: http.DefaultTransport,
+		client:        fakeClient(),
+		strictClient:  &http.Client{Transport: http.DefaultTransport, Timeout: fetchTimeout},
+		lenientClient: &http.Client{Transport: http.DefaultTransport, Timeout: fetchTimeout},
 	}
 
 	_, err := fetcher.Fetch(context.Background(), FetchSource{
@@ -440,9 +440,9 @@ func TestFetcher_AllowClusterLocal(t *testing.T) {
 	defer ts.Close()
 
 	fetcher := &httpFetcher{
-		client:           fakeClient(),
-		strictTransport:  http.DefaultTransport,
-		lenientTransport: http.DefaultTransport,
+		client:        fakeClient(),
+		strictClient:  &http.Client{Transport: http.DefaultTransport, Timeout: fetchTimeout},
+		lenientClient: &http.Client{Transport: http.DefaultTransport, Timeout: fetchTimeout},
 	}
 
 	result, err := fetcher.Fetch(context.Background(), FetchSource{
@@ -573,9 +573,9 @@ func TestFetcher_BasicAuthMissingUsernameKey(t *testing.T) {
 		Data:       map[string][]byte{"password": []byte("p@ss")},
 	}
 	fetcher := &httpFetcher{
-		client:           fakeClient(secret),
-		strictTransport:  http.DefaultTransport,
-		lenientTransport: http.DefaultTransport,
+		client:        fakeClient(secret),
+		strictClient:  &http.Client{Transport: http.DefaultTransport, Timeout: fetchTimeout},
+		lenientClient: &http.Client{Transport: http.DefaultTransport, Timeout: fetchTimeout},
 	}
 	_, err := fetcher.Fetch(context.Background(), FetchSource{
 		URL:       ts.URL,
@@ -600,9 +600,9 @@ func TestFetcher_BasicAuthMissingPasswordKey(t *testing.T) {
 		Data:       map[string][]byte{"username": []byte("admin")},
 	}
 	fetcher := &httpFetcher{
-		client:           fakeClient(secret),
-		strictTransport:  http.DefaultTransport,
-		lenientTransport: http.DefaultTransport,
+		client:        fakeClient(secret),
+		strictClient:  &http.Client{Transport: http.DefaultTransport, Timeout: fetchTimeout},
+		lenientClient: &http.Client{Transport: http.DefaultTransport, Timeout: fetchTimeout},
 	}
 	_, err := fetcher.Fetch(context.Background(), FetchSource{
 		URL:       ts.URL,
@@ -628,10 +628,16 @@ func TestFetcher_RedirectLimit(t *testing.T) {
 	}))
 	defer ts.Close()
 
+	checkRedirect := func(_ *http.Request, via []*http.Request) error {
+		if len(via) >= maxRedirects {
+			return fmt.Errorf("too many redirects (max %d)", maxRedirects)
+		}
+		return nil
+	}
 	fetcher := &httpFetcher{
-		client:           fakeClient(),
-		strictTransport:  http.DefaultTransport,
-		lenientTransport: http.DefaultTransport,
+		client:        fakeClient(),
+		strictClient:  &http.Client{Transport: http.DefaultTransport, Timeout: fetchTimeout, CheckRedirect: checkRedirect},
+		lenientClient: &http.Client{Transport: http.DefaultTransport, Timeout: fetchTimeout, CheckRedirect: checkRedirect},
 	}
 	_, err := fetcher.Fetch(context.Background(), FetchSource{URL: ts.URL})
 	if err == nil {
@@ -651,9 +657,9 @@ func TestFetcher_OversizedBodyRejected(t *testing.T) {
 	defer ts.Close()
 
 	fetcher := &httpFetcher{
-		client:           fakeClient(),
-		strictTransport:  http.DefaultTransport,
-		lenientTransport: http.DefaultTransport,
+		client:        fakeClient(),
+		strictClient:  &http.Client{Transport: http.DefaultTransport, Timeout: fetchTimeout},
+		lenientClient: &http.Client{Transport: http.DefaultTransport, Timeout: fetchTimeout},
 	}
 	_, err := fetcher.Fetch(context.Background(), FetchSource{URL: ts.URL})
 	if err == nil {

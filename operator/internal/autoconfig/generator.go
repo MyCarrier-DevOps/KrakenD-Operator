@@ -94,11 +94,20 @@ func (g *endpointGenerator) Generate(
 	return output, nil
 }
 
+// maxNameLength is the Kubernetes DNS-1123 subdomain name limit.
+const maxNameLength = 253
+
 func endpointName(autoconfigName, operationID, method, path string) string {
+	var name string
 	if operationID != "" {
-		return fmt.Sprintf("%s-%s", autoconfigName, sanitizeName(operationID))
+		name = fmt.Sprintf("%s-%s", autoconfigName, sanitizeName(operationID))
+	} else {
+		name = fmt.Sprintf("%s-%s-%s", autoconfigName, strings.ToLower(method), sanitizePath(path))
 	}
-	return fmt.Sprintf("%s-%s-%s", autoconfigName, strings.ToLower(method), sanitizePath(path))
+	if len(name) > maxNameLength {
+		name = name[:maxNameLength]
+	}
+	return strings.TrimRight(name, "-")
 }
 
 func sanitizeName(s string) string {

@@ -68,7 +68,7 @@ spec:
         - host:
             - http://users-service.default.svc.cluster.local:8080
           urlPattern: /v1/users
-          timeout: "10s"
+      timeout: 10s
 ```
 
 ## Documentation

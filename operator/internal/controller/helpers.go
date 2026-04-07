@@ -29,18 +29,23 @@ import (
 )
 
 // conditionsEqual returns true if two condition slices have the same semantic
-// content, ignoring LastTransitionTime which is updated on every
-// meta.SetStatusCondition call.
+// content, compared as a set keyed by Type. LastTransitionTime is ignored
+// because meta.SetStatusCondition updates it on every call.
 func conditionsEqual(a, b []metav1.Condition) bool {
 	if len(a) != len(b) {
 		return false
 	}
-	for i := range a {
-		if a[i].Type != b[i].Type ||
-			a[i].Status != b[i].Status ||
-			a[i].Reason != b[i].Reason ||
-			a[i].Message != b[i].Message ||
-			a[i].ObservedGeneration != b[i].ObservedGeneration {
+	index := make(map[string]metav1.Condition, len(a))
+	for _, c := range a {
+		index[c.Type] = c
+	}
+	for _, c := range b {
+		prev, ok := index[c.Type]
+		if !ok ||
+			prev.Status != c.Status ||
+			prev.Reason != c.Reason ||
+			prev.Message != c.Message ||
+			prev.ObservedGeneration != c.ObservedGeneration {
 			return false
 		}
 	}
@@ -48,8 +53,8 @@ func conditionsEqual(a, b []metav1.Condition) bool {
 }
 
 var (
-	endpointIndexOnce sync.Once
-	endpointIndexErr  error
+	endpointIndexOnce    sync.Once
+	errEndpointIndexInit error
 )
 
 // ensureEndpointIndexes registers field indexes for KrakenDEndpoint lookups.
@@ -69,7 +74,7 @@ func ensureEndpointIndexes(mgr ctrl.Manager) error {
 				return []string{ep.Spec.GatewayRef.Name}
 			},
 		); err != nil {
-			endpointIndexErr = fmt.Errorf("indexing %s: %w", endpointGatewayIndex, err)
+			errEndpointIndexInit = fmt.Errorf("indexing %s: %w", endpointGatewayIndex, err)
 			return
 		}
 
@@ -91,9 +96,9 @@ func ensureEndpointIndexes(mgr ctrl.Manager) error {
 				return refs
 			},
 		); err != nil {
-			endpointIndexErr = fmt.Errorf("indexing %s: %w", endpointPolicyIndex, err)
+			errEndpointIndexInit = fmt.Errorf("indexing %s: %w", endpointPolicyIndex, err)
 			return
 		}
 	})
-	return endpointIndexErr
+	return errEndpointIndexInit
 }
