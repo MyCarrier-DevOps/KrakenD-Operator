@@ -214,8 +214,8 @@ func main() {
 
 	krakendRenderer := renderer.New(renderer.Options{})
 	krakendValidator := renderer.NewValidator(renderer.ValidatorOptions{
-		Executor:   renderer.NewKrakenDExecutor("/usr/bin/krakend"),
-		BinaryPath: "/usr/bin/krakend",
+		Executor:   renderer.NewKrakenDExecutor("/usr/local/bin/krakend"),
+		BinaryPath: "/usr/local/bin/krakend",
 	})
 
 	if err := (&controller.KrakenDGatewayReconciler{
@@ -253,6 +253,7 @@ func main() {
 		CUEEvaluator: autoconfig.NewCUEEvaluator(),
 		Filter:       autoconfig.NewFilter(),
 		Generator:    autoconfig.NewGenerator(),
+		Clock:        clock.RealClock{},
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "KrakenDAutoConfig")
 		os.Exit(1)

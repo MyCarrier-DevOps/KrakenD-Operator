@@ -1,0 +1,409 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.18.0
+  creationTimestamp: null
+  name: krakendautoconfigs.gateway.krakend.io
+spec:
+  group: gateway.krakend.io
+  names:
+    kind: KrakenDAutoConfig
+    listKind: KrakenDAutoConfigList
+    plural: krakendautoconfigs
+    shortNames:
+    - kac
+    singular: krakendautoconfig
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.gatewayRef.name
+      name: Gateway
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.generatedEndpoints
+      name: Generated
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: KrakenDAutoConfig is the Schema for the krakendautoconfigs API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: KrakenDAutoConfigSpec defines the desired state of KrakenDAutoConfig.
+            properties:
+              cue:
+                description: CUE configures optional custom CUE definitions for endpoint
+                  generation.
+                properties:
+                  definitionsConfigMapRef:
+                    description: |-
+                      DefinitionsConfigMapRef references a ConfigMap containing custom CUE definitions.
+                      When omitted, only the operator's default CUE definitions are used.
+                      When provided, custom definitions are unified with defaults.
+                    properties:
+                      key:
+                        type: string
+                      name:
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  environment:
+                    description: |-
+                      Environment is injected into CUE evaluation via FillPath("_env", ...).
+                      Controls per-environment host resolution and other env-specific CUE branches.
+                    type: string
+                type: object
+              defaults:
+                description: Defaults sets default values for generated endpoints.
+                properties:
+                  cacheTTL:
+                    type: string
+                  concurrentCalls:
+                    format: int32
+                    type: integer
+                  inputHeaders:
+                    items:
+                      type: string
+                    type: array
+                  inputQueryStrings:
+                    items:
+                      type: string
+                    type: array
+                  outputEncoding:
+                    type: string
+                  policyRef:
+                    description: PolicyRef references a KrakenDBackendPolicy by name
+                      (same namespace).
+                    properties:
+                      name:
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  timeout:
+                    type: string
+                type: object
+              filter:
+                description: Filter restricts which OpenAPI operations are converted
+                  to endpoints.
+                properties:
+                  excludeOperationIds:
+                    items:
+                      type: string
+                    type: array
+                  excludePaths:
+                    items:
+                      type: string
+                    type: array
+                  excludeTags:
+                    items:
+                      type: string
+                    type: array
+                  includeMethods:
+                    items:
+                      type: string
+                    type: array
+                  includePaths:
+                    items:
+                      type: string
+                    type: array
+                  includeTags:
+                    items:
+                      type: string
+                    type: array
+                type: object
+              gatewayRef:
+                description: GatewayRef references the KrakenDGateway that generated
+                  endpoints belong to.
+                properties:
+                  name:
+                    type: string
+                required:
+                - name
+                type: object
+              openapi:
+                description: OpenAPI defines the OpenAPI spec source.
+                properties:
+                  allowClusterLocal:
+                    description: AllowClusterLocal permits fetching from cluster-local
+                      addresses.
+                    type: boolean
+                  auth:
+                    description: Auth configures authentication for HTTP fetching.
+                    properties:
+                      basicAuthSecret:
+                        description: BasicAuthSecret references a Secret containing
+                          basic auth credentials.
+                        properties:
+                          name:
+                            type: string
+                          passwordKey:
+                            type: string
+                          usernameKey:
+                            type: string
+                        required:
+                        - name
+                        type: object
+                      bearerTokenSecret:
+                        description: BearerTokenSecret references a Secret key containing
+                          a bearer token.
+                        properties:
+                          key:
+                            description: The key of the secret to select from.  Must
+                              be a valid secret key.
+                            type: string
+                          name:
+                            default: ""
+                            description: |-
+                              Name of the referent.
+                              This field is effectively required, but due to backwards compatibility is
+                              allowed to be empty. Instances of this type with an empty value here are
+                              almost certainly wrong.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                          optional:
+                            description: Specify whether the Secret or its key must
+                              be defined
+                            type: boolean
+                        required:
+                        - key
+                        type: object
+                        x-kubernetes-map-type: atomic
+                    type: object
+                  configMapRef:
+                    description: ConfigMapRef references a ConfigMap key containing
+                      the OpenAPI spec.
+                    properties:
+                      key:
+                        type: string
+                      name:
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  format:
+                    description: 'Format is the spec format: json or yaml. Auto-detected
+                      if omitted.'
+                    enum:
+                    - json
+                    - yaml
+                    type: string
+                  url:
+                    description: URL is the HTTP(S) URL to fetch the OpenAPI spec
+                      from.
+                    type: string
+                type: object
+              overrides:
+                description: Overrides applies per-operation overrides to generated
+                  endpoints.
+                items:
+                  description: OperationOverride applies per-operation overrides to
+                    generated endpoints.
+                  properties:
+                    backends:
+                      description: Backends applies per-backend overrides by index.
+                      items:
+                        description: BackendOverride applies extra_config to a specific
+                          backend by index.
+                        properties:
+                          extraConfig:
+                            description: ExtraConfig holds arbitrary backend-level
+                              extra_config JSON.
+                            type: object
+                            x-kubernetes-preserve-unknown-fields: true
+                          index:
+                            description: Index is the 0-based backend index.
+                            type: integer
+                        required:
+                        - index
+                        type: object
+                      type: array
+                    cacheTTL:
+                      description: CacheTTL overrides the endpoint cache TTL.
+                      type: string
+                    endpoint:
+                      description: Endpoint overrides the generated endpoint path.
+                      type: string
+                    extraConfig:
+                      description: ExtraConfig overrides the endpoint extra_config.
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                    method:
+                      description: Method overrides the HTTP method.
+                      type: string
+                    operationId:
+                      description: OperationID identifies the OpenAPI operation to
+                        override.
+                      type: string
+                    policyRef:
+                      description: PolicyRef overrides the backend policy reference.
+                      properties:
+                        name:
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    timeout:
+                      description: Timeout overrides the endpoint timeout.
+                      type: string
+                  required:
+                  - operationId
+                  type: object
+                type: array
+              periodic:
+                description: Periodic configures the polling interval when trigger
+                  is "Periodic".
+                properties:
+                  interval:
+                    type: string
+                required:
+                - interval
+                type: object
+              trigger:
+                description: Trigger selects the reconciliation trigger mode.
+                enum:
+                - OnChange
+                - Periodic
+                type: string
+              urlTransform:
+                description: URLTransform configures host mapping, path stripping,
+                  and path prefixing.
+                properties:
+                  addPathPrefix:
+                    type: string
+                  hostMapping:
+                    items:
+                      description: HostMappingEntry maps an OpenAPI server URL to
+                        a backend host.
+                      properties:
+                        from:
+                          type: string
+                        to:
+                          type: string
+                      required:
+                      - from
+                      - to
+                      type: object
+                    type: array
+                  stripPathPrefix:
+                    type: string
+                type: object
+            required:
+            - gatewayRef
+            - openapi
+            - trigger
+            type: object
+          status:
+            description: KrakenDAutoConfigStatus defines the observed state of KrakenDAutoConfig.
+            properties:
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              generatedEndpoints:
+                type: integer
+              lastSyncTime:
+                format: date-time
+                type: string
+              phase:
+                enum:
+                - Pending
+                - Fetching
+                - Rendering
+                - Synced
+                - Error
+                type: string
+              skippedOperations:
+                type: integer
+              specChecksum:
+                type: string
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+status:
+  acceptedNames:
+    kind: ""
+    plural: ""
+  conditions: null
+  storedVersions: null

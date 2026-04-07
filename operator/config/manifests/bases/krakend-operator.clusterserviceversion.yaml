@@ -1,0 +1,88 @@
+apiVersion: operators.coreos.com/v1alpha1
+kind: ClusterServiceVersion
+metadata:
+  annotations:
+    alm-examples: '[]'
+    capabilities: Full Lifecycle
+    categories: Networking
+    containerImage: ghcr.io/mycarrier-devops/krakend-operator:latest
+    description: Kubernetes operator for managing KrakenD API Gateway instances declaratively via Custom Resources
+    repository: https://github.com/MyCarrier-DevOps/KrakenD-Operator
+  name: krakend-operator.v0.0.0
+  namespace: placeholder
+spec:
+  apiservicedefinitions: {}
+  customresourcedefinitions:
+    owned:
+    - description: KrakenDGateway is the Schema for the krakendgateways API. Represents a KrakenD API Gateway deployment.
+      displayName: KrakenD Gateway
+      kind: KrakenDGateway
+      name: krakendgateways.gateway.krakend.io
+      version: v1alpha1
+    - description: KrakenDEndpoint is the Schema for the krakendendpoints API. Defines a single API endpoint routed through the gateway.
+      displayName: KrakenD Endpoint
+      kind: KrakenDEndpoint
+      name: krakendendpoints.gateway.krakend.io
+      version: v1alpha1
+    - description: KrakenDBackendPolicy is the Schema for the krakendbackendpolicies API. Defines reusable backend policies (rate limiting, circuit breaker, caching).
+      displayName: KrakenD Backend Policy
+      kind: KrakenDBackendPolicy
+      name: krakendbackendpolicies.gateway.krakend.io
+      version: v1alpha1
+    - description: KrakenDAutoConfig is the Schema for the krakendautoconfigs API. Automates endpoint generation from OpenAPI/Swagger specs.
+      displayName: KrakenD AutoConfig
+      kind: KrakenDAutoConfig
+      name: krakendautoconfigs.gateway.krakend.io
+      version: v1alpha1
+  description: |
+    The KrakenD Operator manages KrakenD API Gateway instances on Kubernetes.
+    It allows you to define your API gateway configuration declaratively using
+    Custom Resources, enabling atomic microservice deploys to push routing
+    changes through GitOps workflows.
+
+    ### Features
+    - **KrakenDGateway** — Deploy and manage KrakenD API Gateway instances
+    - **KrakenDEndpoint** — Define API endpoints with backend routing, headers, and query string forwarding
+    - **KrakenDBackendPolicy** — Reusable policies for rate limiting, circuit breaking, and HTTP caching
+    - **KrakenDAutoConfig** — Automatically generate endpoints from OpenAPI/Swagger specifications
+    - **License Management** — EE license monitoring with expiry warnings and CE fallback
+    - **Dragonfly Integration** — Optional DragonflyDB-based response caching
+    - **Istio Integration** — Optional VirtualService generation for mesh routing
+    - **External Secrets** — ExternalSecret integration for license secret management
+  displayName: KrakenD Operator
+  icon:
+  - base64data: ""
+    mediatype: image/png
+  install:
+    spec:
+      deployments: []
+    strategy: deployment
+  installModes:
+  - supported: true
+    type: OwnNamespace
+  - supported: true
+    type: SingleNamespace
+  - supported: false
+    type: MultiNamespace
+  - supported: true
+    type: AllNamespaces
+  keywords:
+  - api-gateway
+  - krakend
+  - api-management
+  - microservices
+  - openapi
+  links:
+  - name: KrakenD Operator
+    url: https://github.com/MyCarrier-DevOps/KrakenD-Operator
+  - name: KrakenD
+    url: https://www.krakend.io
+  maintainers:
+  - email: devops@mycarrier.com
+    name: MyCarrier DevOps
+  maturity: alpha
+  minKubeVersion: 1.28.0
+  provider:
+    name: MyCarrier DevOps
+    url: https://github.com/MyCarrier-DevOps
+  version: 0.0.0

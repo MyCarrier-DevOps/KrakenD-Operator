@@ -1,0 +1,390 @@
+apiVersion: operators.coreos.com/v1alpha1
+kind: ClusterServiceVersion
+metadata:
+  annotations:
+    alm-examples: |-
+      [
+        {
+          "apiVersion": "gateway.krakend.io/v1alpha1",
+          "kind": "KrakenDAutoConfig",
+          "metadata": {
+            "labels": {
+              "app.kubernetes.io/managed-by": "kustomize",
+              "app.kubernetes.io/name": "krakend-operator"
+            },
+            "name": "krakendautoconfig-sample"
+          },
+          "spec": null
+        },
+        {
+          "apiVersion": "gateway.krakend.io/v1alpha1",
+          "kind": "KrakenDBackendPolicy",
+          "metadata": {
+            "labels": {
+              "app.kubernetes.io/managed-by": "kustomize",
+              "app.kubernetes.io/name": "krakend-operator"
+            },
+            "name": "krakendbackendpolicy-sample"
+          },
+          "spec": null
+        },
+        {
+          "apiVersion": "gateway.krakend.io/v1alpha1",
+          "kind": "KrakenDEndpoint",
+          "metadata": {
+            "labels": {
+              "app.kubernetes.io/managed-by": "kustomize",
+              "app.kubernetes.io/name": "krakend-operator"
+            },
+            "name": "krakendendpoint-sample"
+          },
+          "spec": null
+        },
+        {
+          "apiVersion": "gateway.krakend.io/v1alpha1",
+          "kind": "KrakenDGateway",
+          "metadata": {
+            "labels": {
+              "app.kubernetes.io/managed-by": "kustomize",
+              "app.kubernetes.io/name": "krakend-operator"
+            },
+            "name": "krakendgateway-sample"
+          },
+          "spec": null
+        }
+      ]
+    capabilities: Full Lifecycle
+    categories: Networking
+    containerImage: ghcr.io/mycarrier-devops/krakend-operator:latest
+    createdAt: "2026-04-07T18:08:18Z"
+    description: Kubernetes operator for managing KrakenD API Gateway instances declaratively
+      via Custom Resources
+    operators.operatorframework.io/builder: operator-sdk-v1.42.2
+    operators.operatorframework.io/project_layout: go.kubebuilder.io/v4
+    repository: https://github.com/MyCarrier-DevOps/KrakenD-Operator
+  name: krakend-operator.v0.0.1
+  namespace: placeholder
+spec:
+  apiservicedefinitions: {}
+  customresourcedefinitions:
+    owned:
+    - description: KrakenDAutoConfig is the Schema for the krakendautoconfigs API.
+        Automates endpoint generation from OpenAPI/Swagger specs.
+      displayName: KrakenD AutoConfig
+      kind: KrakenDAutoConfig
+      name: krakendautoconfigs.gateway.krakend.io
+      version: v1alpha1
+    - description: KrakenDBackendPolicy is the Schema for the krakendbackendpolicies
+        API. Defines reusable backend policies (rate limiting, circuit breaker, caching).
+      displayName: KrakenD Backend Policy
+      kind: KrakenDBackendPolicy
+      name: krakendbackendpolicies.gateway.krakend.io
+      version: v1alpha1
+    - description: KrakenDEndpoint is the Schema for the krakendendpoints API. Defines
+        a single API endpoint routed through the gateway.
+      displayName: KrakenD Endpoint
+      kind: KrakenDEndpoint
+      name: krakendendpoints.gateway.krakend.io
+      version: v1alpha1
+    - description: KrakenDGateway is the Schema for the krakendgateways API. Represents
+        a KrakenD API Gateway deployment.
+      displayName: KrakenD Gateway
+      kind: KrakenDGateway
+      name: krakendgateways.gateway.krakend.io
+      version: v1alpha1
+  description: |
+    The KrakenD Operator manages KrakenD API Gateway instances on Kubernetes.
+    It allows you to define your API gateway configuration declaratively using
+    Custom Resources, enabling atomic microservice deploys to push routing
+    changes through GitOps workflows.
+
+    ### Features
+    - **KrakenDGateway** — Deploy and manage KrakenD API Gateway instances
+    - **KrakenDEndpoint** — Define API endpoints with backend routing, headers, and query string forwarding
+    - **KrakenDBackendPolicy** — Reusable policies for rate limiting, circuit breaking, and HTTP caching
+    - **KrakenDAutoConfig** — Automatically generate endpoints from OpenAPI/Swagger specifications
+    - **License Management** — EE license monitoring with expiry warnings and CE fallback
+    - **Dragonfly Integration** — Optional DragonflyDB-based response caching
+    - **Istio Integration** — Optional VirtualService generation for mesh routing
+    - **External Secrets** — ExternalSecret integration for license secret management
+  displayName: KrakenD Operator
+  icon:
+  - base64data: ""
+    mediatype: image/png
+  install:
+    spec:
+      clusterPermissions:
+      - rules:
+        - apiGroups:
+          - ""
+          resources:
+          - configmaps
+          - serviceaccounts
+          - services
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
+        - apiGroups:
+          - ""
+          resources:
+          - events
+          verbs:
+          - create
+          - patch
+        - apiGroups:
+          - ""
+          resources:
+          - secrets
+          verbs:
+          - get
+          - list
+          - watch
+        - apiGroups:
+          - apps
+          resources:
+          - deployments
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
+        - apiGroups:
+          - autoscaling
+          resources:
+          - horizontalpodautoscalers
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
+        - apiGroups:
+          - dragonflydb.io
+          resources:
+          - dragonflies
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
+        - apiGroups:
+          - external-secrets.io
+          resources:
+          - externalsecrets
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
+        - apiGroups:
+          - gateway.krakend.io
+          resources:
+          - krakendautoconfigs
+          - krakendbackendpolicies
+          - krakendendpoints
+          - krakendgateways
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
+        - apiGroups:
+          - gateway.krakend.io
+          resources:
+          - krakendautoconfigs/finalizers
+          - krakendbackendpolicies/finalizers
+          - krakendendpoints/finalizers
+          - krakendgateways/finalizers
+          verbs:
+          - update
+        - apiGroups:
+          - gateway.krakend.io
+          resources:
+          - krakendautoconfigs/status
+          - krakendbackendpolicies/status
+          - krakendendpoints/status
+          - krakendgateways/status
+          verbs:
+          - get
+          - patch
+          - update
+        - apiGroups:
+          - networking.istio.io
+          resources:
+          - virtualservices
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
+        - apiGroups:
+          - policy
+          resources:
+          - poddisruptionbudgets
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
+        - apiGroups:
+          - authentication.k8s.io
+          resources:
+          - tokenreviews
+          verbs:
+          - create
+        - apiGroups:
+          - authorization.k8s.io
+          resources:
+          - subjectaccessreviews
+          verbs:
+          - create
+        serviceAccountName: krakend-operator-controller-manager
+      deployments:
+      - label:
+          app.kubernetes.io/managed-by: kustomize
+          app.kubernetes.io/name: krakend-operator
+          control-plane: controller-manager
+        name: krakend-operator-controller-manager
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              app.kubernetes.io/name: krakend-operator
+              control-plane: controller-manager
+          strategy: {}
+          template:
+            metadata:
+              annotations:
+                kubectl.kubernetes.io/default-container: manager
+              labels:
+                app.kubernetes.io/name: krakend-operator
+                control-plane: controller-manager
+            spec:
+              containers:
+              - args:
+                - --metrics-bind-address=:8443
+                - --leader-elect
+                - --health-probe-bind-address=:8081
+                command:
+                - /manager
+                image: ghcr.io/mycarrier-devops/krakend-operator:v0.0.1
+                livenessProbe:
+                  httpGet:
+                    path: /healthz
+                    port: 8081
+                  initialDelaySeconds: 15
+                  periodSeconds: 20
+                name: manager
+                readinessProbe:
+                  httpGet:
+                    path: /readyz
+                    port: 8081
+                  initialDelaySeconds: 5
+                  periodSeconds: 10
+                resources:
+                  limits:
+                    cpu: 500m
+                    memory: 128Mi
+                  requests:
+                    cpu: 10m
+                    memory: 64Mi
+                securityContext:
+                  allowPrivilegeEscalation: false
+                  capabilities:
+                    drop:
+                    - ALL
+              securityContext:
+                runAsNonRoot: true
+                seccompProfile:
+                  type: RuntimeDefault
+              serviceAccountName: krakend-operator-controller-manager
+              terminationGracePeriodSeconds: 10
+      permissions:
+      - rules:
+        - apiGroups:
+          - ""
+          resources:
+          - configmaps
+          verbs:
+          - get
+          - list
+          - watch
+          - create
+          - update
+          - patch
+          - delete
+        - apiGroups:
+          - coordination.k8s.io
+          resources:
+          - leases
+          verbs:
+          - get
+          - list
+          - watch
+          - create
+          - update
+          - patch
+          - delete
+        - apiGroups:
+          - ""
+          resources:
+          - events
+          verbs:
+          - create
+          - patch
+        serviceAccountName: krakend-operator-controller-manager
+    strategy: deployment
+  installModes:
+  - supported: true
+    type: OwnNamespace
+  - supported: true
+    type: SingleNamespace
+  - supported: false
+    type: MultiNamespace
+  - supported: true
+    type: AllNamespaces
+  keywords:
+  - api-gateway
+  - krakend
+  - api-management
+  - microservices
+  - openapi
+  links:
+  - name: KrakenD Operator
+    url: https://github.com/MyCarrier-DevOps/KrakenD-Operator
+  - name: KrakenD
+    url: https://www.krakend.io
+  maintainers:
+  - email: devops@mycarrier.com
+    name: MyCarrier DevOps
+  maturity: alpha
+  minKubeVersion: 1.28.0
+  provider:
+    name: MyCarrier DevOps
+    url: https://github.com/MyCarrier-DevOps
+  version: 0.0.1

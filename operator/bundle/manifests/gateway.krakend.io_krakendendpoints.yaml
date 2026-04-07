@@ -1,0 +1,255 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.18.0
+  creationTimestamp: null
+  name: krakendendpoints.gateway.krakend.io
+spec:
+  group: gateway.krakend.io
+  names:
+    kind: KrakenDEndpoint
+    listKind: KrakenDEndpointList
+    plural: krakendendpoints
+    singular: krakendendpoint
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.gatewayRef.name
+      name: Gateway
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.endpointCount
+      name: Endpoints
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: KrakenDEndpoint is the Schema for the krakendendpoints API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: KrakenDEndpointSpec defines the desired state of KrakenDEndpoint.
+            properties:
+              endpoints:
+                description: Endpoints is the list of endpoint definitions.
+                items:
+                  description: EndpointEntry defines a single KrakenD endpoint.
+                  properties:
+                    backends:
+                      description: Backends is the list of backend services for this
+                        endpoint.
+                      items:
+                        description: BackendSpec defines a backend service target.
+                        properties:
+                          allow:
+                            description: Allow is the allowlist of response fields
+                              to keep.
+                            items:
+                              type: string
+                            type: array
+                          encoding:
+                            description: Encoding selects the backend response encoding.
+                            type: string
+                          extraConfig:
+                            description: ExtraConfig holds arbitrary backend-level
+                              extra_config JSON.
+                            type: object
+                            x-kubernetes-preserve-unknown-fields: true
+                          host:
+                            description: Host is the list of backend host URLs.
+                            items:
+                              type: string
+                            type: array
+                          mapping:
+                            additionalProperties:
+                              type: string
+                            description: Mapping renames response fields.
+                            type: object
+                          method:
+                            description: Method overrides the endpoint method for
+                              this backend.
+                            type: string
+                          policyRef:
+                            description: PolicyRef references a KrakenDBackendPolicy
+                              to apply.
+                            properties:
+                              name:
+                                type: string
+                            required:
+                            - name
+                            type: object
+                          urlPattern:
+                            description: URLPattern is the backend URL path pattern.
+                            type: string
+                        required:
+                        - host
+                        - urlPattern
+                        type: object
+                      type: array
+                    cacheTTL:
+                      description: CacheTTL overrides the global cache TTL.
+                      type: string
+                    concurrentCalls:
+                      description: ConcurrentCalls sets concurrent backend calls for
+                        this endpoint.
+                      format: int32
+                      type: integer
+                    endpoint:
+                      description: Endpoint is the public path exposed by KrakenD
+                        (e.g. "/api/v1/users").
+                      type: string
+                    extraConfig:
+                      description: ExtraConfig holds arbitrary endpoint-level extra_config
+                        JSON.
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                    inputHeaders:
+                      description: InputHeaders is the list of headers forwarded to
+                        backends.
+                      items:
+                        type: string
+                      type: array
+                    inputQueryStrings:
+                      description: InputQueryStrings is the list of query string parameters
+                        forwarded to backends.
+                      items:
+                        type: string
+                      type: array
+                    method:
+                      description: Method is the HTTP method (GET, POST, PUT, DELETE,
+                        PATCH).
+                      type: string
+                    outputEncoding:
+                      description: OutputEncoding overrides the default response encoding.
+                      type: string
+                    timeout:
+                      description: Timeout overrides the global endpoint timeout.
+                      type: string
+                  required:
+                  - backends
+                  - endpoint
+                  - method
+                  type: object
+                type: array
+              gatewayRef:
+                description: GatewayRef references the KrakenDGateway this endpoint
+                  belongs to.
+                properties:
+                  name:
+                    type: string
+                required:
+                - name
+                type: object
+            required:
+            - endpoints
+            - gatewayRef
+            type: object
+          status:
+            description: KrakenDEndpointStatus defines the observed state of KrakenDEndpoint.
+            properties:
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              endpointCount:
+                format: int32
+                type: integer
+              observedGeneration:
+                format: int64
+                type: integer
+              phase:
+                enum:
+                - Pending
+                - Active
+                - Invalid
+                - Conflicted
+                - Detached
+                type: string
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+status:
+  acceptedNames:
+    kind: ""
+    plural: ""
+  conditions: null
+  storedVersions: null
