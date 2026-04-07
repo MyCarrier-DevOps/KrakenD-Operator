@@ -18,46 +18,375 @@ package controller
 
 import (
 	"context"
+	"fmt"
 
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	gatewayv1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/autoconfig"
 )
 
-// KrakenDAutoConfigReconciler reconciles a KrakenDAutoConfig object
+const defaultCUEDefinitionsConfigMap = "krakend-cue-definitions"
+
+// KrakenDAutoConfigReconciler reconciles a KrakenDAutoConfig object.
+// It orchestrates the OpenAPI-to-endpoint pipeline: fetch spec,
+// evaluate CUE, filter, generate, and diff/create/update/delete endpoints.
 type KrakenDAutoConfigReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme       *runtime.Scheme
+	Recorder     record.EventRecorder
+	Fetcher      autoconfig.Fetcher
+	CUEEvaluator autoconfig.CUEEvaluator
+	Filter       autoconfig.Filter
+	Generator    autoconfig.Generator
 }
 
 // +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendautoconfigs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendautoconfigs/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendautoconfigs/finalizers,verbs=update
+// +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendendpoints,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
-// move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the KrakenDAutoConfig object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.21.0/pkg/reconcile
+// Reconcile implements the autoconfig pipeline: fetch → checksum → CUE evaluate
+// → filter → generate → diff/create/update/delete endpoints.
 func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = logf.FromContext(ctx)
+	log := logf.FromContext(ctx)
 
-	// TODO(user): your logic here
+	var ac v1alpha1.KrakenDAutoConfig
+	if err := r.Get(ctx, req.NamespacedName, &ac); err != nil {
+		if errors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, fmt.Errorf("getting autoconfig %s: %w", req.NamespacedName, err)
+	}
 
-	return ctrl.Result{}, nil
+	if ac.Status.Phase == "" {
+		ac.Status.Phase = v1alpha1.AutoConfigPhasePending
+		if err := r.Status().Update(ctx, &ac); err != nil {
+			return ctrl.Result{}, fmt.Errorf("setting initial phase: %w", err)
+		}
+		return ctrl.Result{Requeue: true}, nil
+	}
+
+	// Phase: Fetching
+	ac.Status.Phase = v1alpha1.AutoConfigPhaseFetching
+	if err := r.Status().Update(ctx, &ac); err != nil {
+		return ctrl.Result{}, fmt.Errorf("setting phase Fetching: %w", err)
+	}
+
+	fetchResult, err := r.Fetcher.Fetch(ctx, autoconfig.FetchSource{
+		URL:               ac.Spec.OpenAPI.URL,
+		ConfigMapRef:      ac.Spec.OpenAPI.ConfigMapRef,
+		Auth:              ac.Spec.OpenAPI.Auth,
+		AllowClusterLocal: ac.Spec.OpenAPI.AllowClusterLocal,
+		Namespace:         ac.Namespace,
+	})
+	if err != nil {
+		return r.handleFetchError(ctx, &ac, err)
+	}
+
+	meta.SetStatusCondition(&ac.Status.Conditions, metav1.Condition{
+		Type:               v1alpha1.ConditionSpecAvailable,
+		Status:             metav1.ConditionTrue,
+		ObservedGeneration: ac.Generation,
+		Reason:             v1alpha1.ReasonSpecFetched,
+		Message:            "OpenAPI spec fetched successfully",
+	})
+
+	// Check if spec or CUE defs changed
+	cueDefsRV := r.getCUEDefsResourceVersion(ctx, &ac)
+	combinedChecksum := fetchResult.Checksum + ":" + cueDefsRV
+	if combinedChecksum == ac.Status.SpecChecksum {
+		ac.Status.Phase = v1alpha1.AutoConfigPhaseSynced
+		if err := r.Status().Update(ctx, &ac); err != nil {
+			return ctrl.Result{}, fmt.Errorf("updating synced status: %w", err)
+		}
+		log.V(1).Info("spec unchanged, skipping re-evaluation")
+		return r.requeueResult(&ac), nil
+	}
+
+	// Phase: Rendering
+	ac.Status.Phase = v1alpha1.AutoConfigPhaseRendering
+	if err := r.Status().Update(ctx, &ac); err != nil {
+		return ctrl.Result{}, fmt.Errorf("setting phase Rendering: %w", err)
+	}
+
+	// Load CUE definitions
+	defaultDefs, err := r.loadCUEDefinitions(ctx, ac.Namespace, defaultCUEDefinitionsConfigMap)
+	if err != nil {
+		return r.handleCUEError(ctx, &ac, fmt.Errorf("loading default CUE definitions: %w", err))
+	}
+
+	var customDefs map[string]string
+	if ac.Spec.CUE != nil && ac.Spec.CUE.DefinitionsConfigMapRef != nil {
+		customDefs, err = r.loadCUEDefinitions(ctx, ac.Namespace, ac.Spec.CUE.DefinitionsConfigMapRef.Name)
+		if err != nil {
+			return r.handleCUEError(ctx, &ac, fmt.Errorf("loading custom CUE definitions: %w", err))
+		}
+	}
+
+	env := ""
+	if ac.Spec.CUE != nil {
+		env = ac.Spec.CUE.Environment
+	}
+
+	// CUE evaluation
+	cueOutput, err := r.CUEEvaluator.Evaluate(ctx, autoconfig.CUEInput{
+		SpecData:     fetchResult.Data,
+		SpecFormat:   ac.Spec.OpenAPI.Format,
+		DefaultDefs:  defaultDefs,
+		CustomDefs:   customDefs,
+		Defaults:     ac.Spec.Defaults,
+		Overrides:    ac.Spec.Overrides,
+		URLTransform: ac.Spec.URLTransform,
+		Environment:  env,
+		ServiceName:  "_spec",
+	})
+	if err != nil {
+		return r.handleCUEError(ctx, &ac, err)
+	}
+
+	// Apply filters
+	filtered := cueOutput.Entries
+	if ac.Spec.Filter != nil {
+		filtered = r.Filter.Apply(cueOutput.Entries, cueOutput.Tags, cueOutput.OperationIDs, *ac.Spec.Filter)
+	}
+
+	// Generate endpoint CRs
+	genOutput, err := r.Generator.Generate(ctx, autoconfig.GenerateInput{
+		AutoConfig:     &ac,
+		Entries:        filtered,
+		OperationIDs:   cueOutput.OperationIDs,
+		GatewayRefName: ac.Spec.GatewayRef.Name,
+	})
+	if err != nil {
+		return r.handleCUEError(ctx, &ac, fmt.Errorf("generating endpoints: %w", err))
+	}
+
+	// Diff and reconcile endpoints
+	if err := r.reconcileEndpoints(ctx, &ac, genOutput.Endpoints); err != nil {
+		return ctrl.Result{}, fmt.Errorf("reconciling endpoints: %w", err)
+	}
+
+	// Update status
+	now := metav1.Now()
+	ac.Status.Phase = v1alpha1.AutoConfigPhaseSynced
+	ac.Status.SpecChecksum = combinedChecksum
+	ac.Status.LastSyncTime = &now
+	ac.Status.GeneratedEndpoints = len(genOutput.Endpoints)
+	ac.Status.SkippedOperations = genOutput.SkippedOperations
+	meta.SetStatusCondition(&ac.Status.Conditions, metav1.Condition{
+		Type:               v1alpha1.ConditionSynced,
+		Status:             metav1.ConditionTrue,
+		ObservedGeneration: ac.Generation,
+		Reason:             "Synced",
+		Message:            fmt.Sprintf("Generated %d endpoints", len(genOutput.Endpoints)),
+	})
+	if err := r.Status().Update(ctx, &ac); err != nil {
+		return ctrl.Result{}, fmt.Errorf("updating final status: %w", err)
+	}
+
+	r.Recorder.Eventf(&ac, "Normal", v1alpha1.ReasonEndpointsGenerated,
+		"Generated %d endpoints (%d skipped)", len(genOutput.Endpoints), genOutput.SkippedOperations)
+
+	log.V(1).Info("autoconfig reconciled",
+		"phase", ac.Status.Phase,
+		"endpoints", len(genOutput.Endpoints),
+		"skipped", genOutput.SkippedOperations,
+	)
+
+	return r.requeueResult(&ac), nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *KrakenDAutoConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&gatewayv1alpha1.KrakenDAutoConfig{}).
+		For(&v1alpha1.KrakenDAutoConfig{}).
+		Owns(&v1alpha1.KrakenDEndpoint{}).
+		Watches(
+			&corev1.ConfigMap{},
+			handler.EnqueueRequestsFromMapFunc(r.cueConfigMapToAutoConfig),
+		).
 		Named("krakendautoconfig").
 		Complete(r)
+}
+
+func (r *KrakenDAutoConfigReconciler) handleFetchError(
+	ctx context.Context,
+	ac *v1alpha1.KrakenDAutoConfig,
+	fetchErr error,
+) (ctrl.Result, error) {
+	ac.Status.Phase = v1alpha1.AutoConfigPhaseError
+	meta.SetStatusCondition(&ac.Status.Conditions, metav1.Condition{
+		Type:               v1alpha1.ConditionSpecAvailable,
+		Status:             metav1.ConditionFalse,
+		ObservedGeneration: ac.Generation,
+		Reason:             v1alpha1.ReasonSpecFetchFailed,
+		Message:            fetchErr.Error(),
+	})
+	if err := r.Status().Update(ctx, ac); err != nil {
+		return ctrl.Result{}, fmt.Errorf("updating fetch error status: %w", err)
+	}
+	r.Recorder.Event(ac, "Warning", v1alpha1.ReasonSpecFetchFailed, fetchErr.Error())
+	return r.requeueResult(ac), nil
+}
+
+func (r *KrakenDAutoConfigReconciler) handleCUEError(
+	ctx context.Context,
+	ac *v1alpha1.KrakenDAutoConfig,
+	cueErr error,
+) (ctrl.Result, error) {
+	ac.Status.Phase = v1alpha1.AutoConfigPhaseError
+	meta.SetStatusCondition(&ac.Status.Conditions, metav1.Condition{
+		Type:               v1alpha1.ConditionSynced,
+		Status:             metav1.ConditionFalse,
+		ObservedGeneration: ac.Generation,
+		Reason:             v1alpha1.ReasonCUEEvaluationFailed,
+		Message:            cueErr.Error(),
+	})
+	if err := r.Status().Update(ctx, ac); err != nil {
+		return ctrl.Result{}, fmt.Errorf("updating CUE error status: %w", err)
+	}
+	r.Recorder.Event(ac, "Warning", v1alpha1.ReasonCUEEvaluationFailed, cueErr.Error())
+	return r.requeueResult(ac), nil
+}
+
+func (r *KrakenDAutoConfigReconciler) requeueResult(ac *v1alpha1.KrakenDAutoConfig) ctrl.Result {
+	if ac.Spec.Trigger == v1alpha1.TriggerPeriodic && ac.Spec.Periodic != nil {
+		return ctrl.Result{RequeueAfter: ac.Spec.Periodic.Interval.Duration}
+	}
+	return ctrl.Result{}
+}
+
+func (r *KrakenDAutoConfigReconciler) getCUEDefsResourceVersion(
+	ctx context.Context,
+	ac *v1alpha1.KrakenDAutoConfig,
+) string {
+	rv := ""
+	var cm corev1.ConfigMap
+	if err := r.Get(ctx, types.NamespacedName{
+		Name:      defaultCUEDefinitionsConfigMap,
+		Namespace: ac.Namespace,
+	}, &cm); err == nil {
+		rv = cm.ResourceVersion
+	}
+	if ac.Spec.CUE != nil && ac.Spec.CUE.DefinitionsConfigMapRef != nil {
+		var customCM corev1.ConfigMap
+		if err := r.Get(ctx, types.NamespacedName{
+			Name:      ac.Spec.CUE.DefinitionsConfigMapRef.Name,
+			Namespace: ac.Namespace,
+		}, &customCM); err == nil {
+			rv += ":" + customCM.ResourceVersion
+		}
+	}
+	return rv
+}
+
+func (r *KrakenDAutoConfigReconciler) loadCUEDefinitions(
+	ctx context.Context,
+	namespace string,
+	configMapName string,
+) (map[string]string, error) {
+	var cm corev1.ConfigMap
+	if err := r.Get(ctx, types.NamespacedName{
+		Name:      configMapName,
+		Namespace: namespace,
+	}, &cm); err != nil {
+		return nil, fmt.Errorf("getting CUE definitions ConfigMap %s: %w", configMapName, err)
+	}
+	return cm.Data, nil
+}
+
+func (r *KrakenDAutoConfigReconciler) reconcileEndpoints(
+	ctx context.Context,
+	ac *v1alpha1.KrakenDAutoConfig,
+	desired []*v1alpha1.KrakenDEndpoint,
+) error {
+	// Build set of desired endpoint names
+	desiredNames := map[string]struct{}{}
+	for _, ep := range desired {
+		desiredNames[ep.Name] = struct{}{}
+	}
+
+	// List existing generated endpoints owned by this autoconfig
+	var existing v1alpha1.KrakenDEndpointList
+	if err := r.List(ctx, &existing,
+		client.InNamespace(ac.Namespace),
+		client.MatchingLabels{"gateway.krakend.io/autoconfig": ac.Name},
+	); err != nil {
+		return fmt.Errorf("listing existing endpoints: %w", err)
+	}
+
+	// Delete endpoints that are no longer desired
+	for i := range existing.Items {
+		if _, ok := desiredNames[existing.Items[i].Name]; !ok {
+			if err := r.Delete(ctx, &existing.Items[i]); err != nil && !errors.IsNotFound(err) {
+				return fmt.Errorf("deleting endpoint %s: %w", existing.Items[i].Name, err)
+			}
+		}
+	}
+
+	// Create or update desired endpoints
+	for _, ep := range desired {
+		existing := &v1alpha1.KrakenDEndpoint{ObjectMeta: metav1.ObjectMeta{
+			Name:      ep.Name,
+			Namespace: ep.Namespace,
+		}}
+		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, existing, func() error {
+			existing.Labels = ep.Labels
+			existing.Spec = ep.Spec
+			return controllerutil.SetControllerReference(ac, existing, r.Scheme)
+		}); err != nil {
+			return fmt.Errorf("upserting endpoint %s: %w", ep.Name, err)
+		}
+	}
+
+	return nil
+}
+
+func (r *KrakenDAutoConfigReconciler) cueConfigMapToAutoConfig(
+	ctx context.Context,
+	obj client.Object,
+) []reconcile.Request {
+	cm, ok := obj.(*corev1.ConfigMap)
+	if !ok {
+		return nil
+	}
+
+	var acList v1alpha1.KrakenDAutoConfigList
+	if err := r.List(ctx, &acList, client.InNamespace(cm.Namespace)); err != nil {
+		return nil
+	}
+
+	var requests []reconcile.Request
+	for i := range acList.Items {
+		ac := &acList.Items[i]
+		if cm.Name == defaultCUEDefinitionsConfigMap {
+			requests = append(requests, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+			})
+			continue
+		}
+		if ac.Spec.CUE != nil && ac.Spec.CUE.DefinitionsConfigMapRef != nil &&
+			ac.Spec.CUE.DefinitionsConfigMapRef.Name == cm.Name {
+			requests = append(requests, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+			})
+		}
+	}
+	return requests
 }
