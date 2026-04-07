@@ -130,6 +130,21 @@ func (m *LicenseMonitor) checkGateway(ctx context.Context, gw *v1alpha1.KrakenDG
 		return m.handleSecretUnavailable(ctx, gw, err)
 	}
 
+	// Populate license expiry in gateway status
+	patch := client.MergeFrom(gw.DeepCopy())
+	gw.Status.LicenseExpiry = &metav1.Time{Time: info.NotAfter}
+	// Clear LicenseSecretUnavailable if previously set
+	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+		Type:               v1alpha1.ConditionLicenseSecretUnavailable,
+		Status:             metav1.ConditionFalse,
+		Reason:             "SecretAvailable",
+		Message:            "license secret is available",
+		ObservedGeneration: gw.Generation,
+	})
+	if err := m.Status().Patch(ctx, gw, patch); err != nil {
+		log.Error(err, "failed to update LicenseExpiry status")
+	}
+
 	now := m.Clock.Now()
 	licenseExpirySeconds.WithLabelValues(gw.Namespace, gw.Name).Set(info.NotAfter.Sub(now).Seconds())
 
@@ -308,6 +323,16 @@ func (m *LicenseMonitor) handleRecoveryIfNeeded(
 		Message:            "license is now valid",
 		ObservedGeneration: gw.Generation,
 	})
+	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+		Type:               v1alpha1.ConditionLicenseSecretUnavailable,
+		Status:             metav1.ConditionFalse,
+		Reason:             v1alpha1.ReasonLicenseRestored,
+		Message:            "license secret is available",
+		ObservedGeneration: gw.Generation,
+	})
+	// Reset phase so the gateway controller can re-assess (enables
+	// recovery from PhaseError after license-expired-without-fallback).
+	gw.Status.Phase = v1alpha1.PhasePending
 
 	if err := m.Status().Patch(ctx, gw, patch); err != nil {
 		return err

@@ -138,13 +138,14 @@ func TestLicenseMonitor_HealthyLicense(t *testing.T) {
 
 	monitor.checkAll(context.Background())
 
-	// No conditions should be set for a healthy license
+	// Healthy license should only set LicenseSecretUnavailable=False
 	var updated v1alpha1.KrakenDGateway
 	if err := c.Get(context.Background(), types.NamespacedName{Name: "test-gw", Namespace: "default"}, &updated); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(updated.Status.Conditions) != 0 {
-		t.Errorf("expected no conditions, got %d", len(updated.Status.Conditions))
+	unavailCond := meta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionLicenseSecretUnavailable)
+	if unavailCond == nil || unavailCond.Status != metav1.ConditionFalse {
+		t.Error("expected LicenseSecretUnavailable=False for healthy license")
 	}
 }
 
@@ -573,8 +574,9 @@ func TestLicenseMonitor_ExternalSecretConvention(t *testing.T) {
 	if err := c.Get(context.Background(), types.NamespacedName{Name: "test-gw", Namespace: "default"}, &updated); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(updated.Status.Conditions) != 0 {
-		t.Errorf("expected no conditions for healthy external secret, got %d", len(updated.Status.Conditions))
+	unavailCond := meta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionLicenseSecretUnavailable)
+	if unavailCond == nil || unavailCond.Status != metav1.ConditionFalse {
+		t.Error("expected LicenseSecretUnavailable=False for healthy external secret")
 	}
 }
 

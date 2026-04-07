@@ -191,15 +191,24 @@ func buildVolumes(gw *v1alpha1.KrakenDGateway) (
 
 	// License Secret (EE only)
 	if gw.Spec.Edition == v1alpha1.EditionEE && gw.Spec.License != nil {
+		var licenseSecretName, licenseKey string
 		if gw.Spec.License.SecretRef != nil {
+			licenseSecretName = gw.Spec.License.SecretRef.Name
+			licenseKey = gw.Spec.License.SecretRef.Key
+		} else if gw.Spec.License.ExternalSecret.Enabled {
+			// ExternalSecret convention: target Secret is {gw.Name}-license with key LICENSE
+			licenseSecretName = gw.Name + "-license"
+			licenseKey = "LICENSE"
+		}
+		if licenseSecretName != "" {
 			volumes = append(volumes, corev1.Volume{
 				Name: "license",
 				VolumeSource: corev1.VolumeSource{
 					Secret: &corev1.SecretVolumeSource{
-						SecretName: gw.Spec.License.SecretRef.Name,
+						SecretName: licenseSecretName,
 						Items: []corev1.KeyToPath{
 							{
-								Key:  gw.Spec.License.SecretRef.Key,
+								Key:  licenseKey,
 								Path: "LICENSE",
 							},
 						},
