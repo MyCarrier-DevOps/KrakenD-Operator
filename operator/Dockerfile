@@ -28,6 +28,10 @@ FROM gcr.io/distroless/static:nonroot
 WORKDIR /
 COPY --from=builder /workspace/manager .
 COPY --from=krakend /usr/bin/krakend /usr/local/bin/krakend
+# KrakenD binary is dynamically linked against musl; copy the dynamic linker
+# and libc from the Alpine-based krakend image.
+COPY --from=krakend /lib/ld-musl-x86_64.so.1 /lib/ld-musl-x86_64.so.1
+COPY --from=krakend /lib/libc.musl-x86_64.so.1 /lib/libc.musl-x86_64.so.1
 USER 65532:65532
 
 ENTRYPOINT ["/manager"]

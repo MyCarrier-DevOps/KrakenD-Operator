@@ -12,4 +12,8 @@ spec:
     configMapRef:
       name: my-openapi-spec
       key: openapi.json
+  urlTransform:
+    hostMapping:
+      - from: users-service
+        to: http://users-service.default.svc.cluster.local:8080
   trigger: OnChange

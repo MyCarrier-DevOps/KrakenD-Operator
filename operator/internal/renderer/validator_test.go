@@ -154,3 +154,69 @@ func TestPrepareValidationCopy_InvalidJSON(t *testing.T) {
 		t.Fatal("expected error for invalid JSON")
 	}
 }
+
+func TestPrepareValidationCopy_StripsEEExtraConfig(t *testing.T) {
+	v := NewValidator(ValidatorOptions{Executor: &mockExecutor{}, BinaryPath: "krakend"})
+	input := []byte(`{"version":3,"extra_config":{"backend/redis":{"host":"dragonfly:6379"},"telemetry/logging":{"level":"DEBUG"}}}`)
+	out, err := v.PrepareValidationCopy(input, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var config map[string]any
+	if err := json.Unmarshal(out, &config); err != nil {
+		t.Fatalf("invalid JSON output: %v", err)
+	}
+	ec, ok := config["extra_config"].(map[string]any)
+	if !ok {
+		t.Fatal("expected extra_config to exist")
+	}
+	if _, exists := ec["backend/redis"]; exists {
+		t.Error("expected backend/redis to be stripped")
+	}
+	if _, exists := ec["telemetry/logging"]; !exists {
+		t.Error("expected telemetry/logging to remain")
+	}
+}
+
+func TestPrepareValidationCopy_StripsEEExtraConfigRemovesEmptyBlock(t *testing.T) {
+	v := NewValidator(ValidatorOptions{Executor: &mockExecutor{}, BinaryPath: "krakend"})
+	input := []byte(`{"version":3,"extra_config":{"backend/redis":{"host":"dragonfly:6379"}}}`)
+	out, err := v.PrepareValidationCopy(input, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var config map[string]any
+	if err := json.Unmarshal(out, &config); err != nil {
+		t.Fatalf("invalid JSON output: %v", err)
+	}
+	if _, exists := config["extra_config"]; exists {
+		t.Error("expected extra_config block to be removed when empty")
+	}
+}
+
+func TestPrepareValidationCopy_StripsEEExtraConfigAndWildcard(t *testing.T) {
+	v := NewValidator(ValidatorOptions{Executor: &mockExecutor{}, BinaryPath: "krakend"})
+	input := []byte(`{"version":3,"extra_config":{"backend/redis":{"host":"dragonfly:6379"}},"endpoints":[{"endpoint":"/api","method":"GET"},{"endpoint":"/*","method":"GET"}]}`)
+	out, err := v.PrepareValidationCopy(input, true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var config map[string]any
+	if err := json.Unmarshal(out, &config); err != nil {
+		t.Fatalf("invalid JSON output: %v", err)
+	}
+	if _, exists := config["extra_config"]; exists {
+		t.Error("expected extra_config block to be removed")
+	}
+	endpoints := config["endpoints"].([]any)
+	if len(endpoints) != 1 {
+		t.Fatalf("expected 1 endpoint after stripping wildcard, got %d", len(endpoints))
+	}
+	ep := endpoints[0].(map[string]any)
+	if ep["endpoint"] != "/api" {
+		t.Errorf("expected /api endpoint, got %v", ep["endpoint"])
+	}
+}

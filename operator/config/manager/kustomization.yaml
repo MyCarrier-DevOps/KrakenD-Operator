@@ -5,4 +5,4 @@ kind: Kustomization
 images:
 - name: controller
   newName: ghcr.io/mycarrier-devops/krakend-operator
-  newTag: v0.0.1
+  newTag: e2e

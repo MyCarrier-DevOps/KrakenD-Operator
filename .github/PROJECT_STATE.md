@@ -1,7 +1,7 @@
 # Project State — KrakenD Operator
 
 > **Last Updated:** 2026-04-08
-> **Status:** All §1-§19 fully wired; OLM bundle, Helm chart, CI pipelines, and operational docs complete; PR #1 review complete (62 threads resolved); test coverage 84.8%
+> **Status:** All §1-§19 fully wired; OLM bundle, Helm chart, CI pipelines, and operational docs complete; PR #1 review complete (62 threads resolved); all 8 e2e tests pass (testcontainers + K3s); unit test coverage: renderer 94.1%, resources 98.4%, autoconfig 88.2%, webhook 84.3%, controller 75.2%
 
 ## Overview
 
@@ -41,9 +41,9 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 - `config.go` — Core Render() method, buildRootConfig, buildGatewayExtraConfig (refactored into 6 helpers), ResolveImage, serializeJSON
 - `endpoints.go` — flattenEndpoints (oldest-wins conflict resolution), buildEndpointJSON, buildBackendJSON
 - `extra_config.go` — 3-layer merge (raw < typed < inline) for backend/endpoint extra_config
-- `validator.go` — KrakenD CLI validation via temp file, PrepareValidationCopy for CE
+- `validator.go` — KrakenD CLI validation via temp file, PrepareValidationCopy strips EE-only extra_config keys (e.g. `backend/redis`) and wildcard endpoints before CE validation
 - `plugins.go` — buildPluginBlock, computePluginChecksum
-- 57 tests, 93.9% coverage, 0 lint issues
+- 60 tests, 94.1% coverage, 0 lint issues
 
 ### Resource Builders (`internal/resources/`)
 - `labels.go` — StandardLabels (6 labels), SelectorLabels (2), DragonflyLabels (4)
@@ -110,6 +110,19 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 - 28 unit tests, 84.3% webhook package coverage
 
 ## Recent Changes
+
+### 2026-04-08 (continued)
+- Refactored e2e tests from Kind-cluster to testcontainers-go + K3s module for fully ephemeral isolated test environments
+- Added `testcontainers-go` v0.41.0, K3s module v0.41.0, docker/docker v28.5.2 dependencies
+- `test/e2e/e2e_suite_test.go` — Complete rewrite: BeforeSuite creates K3s container (`rancher/k3s:v1.31.6-k3s1`), extracts kubeconfig, builds operator image, loads image into K3s, installs cert-manager + all CRDs; AfterSuite terminates container
+- `test/utils/utils.go` — Added kubeconfig management (`SetKubeconfig`/`GetKubeconfig`), `KUBECONFIG` injection in `Run()`, `CONTAINER_HOST` propagation for podman CLI compatibility, removed Kind image loader
+- `test/e2e/e2e_test.go` — Fixed `serviceAccountToken()` to use `utils.Run()` for KUBECONFIG injection
+- Fixed `PrepareValidationCopy` in `internal/renderer/validator.go`: now strips EE-only extra_config keys (`backend/redis`) before CE validation. CE JSON schema rejects EE-only keys like `backend/redis` — this was causing validation failures for Dragonfly/Istio gateway tests
+- Added `ceUnsupportedExtraConfig` list for keys that must be stripped before CE linter runs
+- Added 3 new unit tests: `TestPrepareValidationCopy_StripsEEExtraConfig`, `TestPrepareValidationCopy_StripsEEExtraConfigRemovesEmptyBlock`, `TestPrepareValidationCopy_StripsEEExtraConfigAndWildcard`
+- All 8 e2e tests pass: Controller Manager (pod running, metrics, sample CRs), Basic CE Gateway (create, endpoint lifecycle), Dragonfly Gateway, Istio Gateway, Dragonfly+Istio Gateway
+- E2e tests require rootful podman machine with SSH tunnel to `/tmp/podman-rootful.sock` (rootless podman can't delegate cgroup v2 for K3s pod sandboxes)
+- Required env vars: `DOCKER_HOST=unix:///tmp/podman-rootful.sock`, `TESTCONTAINERS_RYUK_DISABLED=true`
 
 ### 2026-04-08
 - Increased test coverage from 55.2% (unfiltered) to 84.8% (filtered) — above 80% CI threshold
@@ -198,7 +211,9 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 ### Testing Infrastructure
 - `test/integration/suite_test.go` — envtest setup: starts real API server + etcd, wires Gateway/Endpoint/Policy controllers with noopValidator
 - `test/integration/gateway_test.go` — 6 integration tests: resource creation with owner refs, endpoint triggers re-reconcile, owner reference verification, Active/Detached endpoint status, policy referenced-by count
-- `test/e2e/e2e_test.go` — Scaffolded by operator-sdk (manager pod + metrics validation) + KrakenD CRD lifecycle test (create gateway → Deployment/Service → create endpoint → Active → delete gateway → Detached)
+- `test/e2e/e2e_suite_test.go` — testcontainers-go + K3s module: ephemeral K3s cluster per test run, image build + load, cert-manager + CRD install, full teardown. Requires rootful podman machine
+- `test/e2e/e2e_test.go` — 8 e2e specs: Controller Manager (pod running, metrics, sample CRs), Basic CE Gateway (create, endpoint lifecycle), Dragonfly Gateway, Istio Gateway, Dragonfly+Istio Gateway
+- `test/utils/utils.go` — Shared e2e helpers: kubeconfig management, command execution with KUBECONFIG/CONTAINER_HOST injection, cert-manager install, CRD installers (Dragonfly, Istio, ExternalSecrets)
 
 ### OLM Bundle (`operator/bundle/`)
 - Generated via `make bundle` with validated CSV, CRDs, RBAC roles
@@ -225,7 +240,7 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 
 ## Current Focus
 
-All §1-§19 architecture sections fully implemented and wired. OLM bundle generated and validated. Helm chart created with full RBAC and templating. CI pipelines (source + chart + release) configured. Operational documentation complete. PR #1 review complete — all 62 threads resolved. Test coverage at 84.8% (filtered), above 80% CI threshold.
+All §1-§19 architecture sections fully implemented and wired. All 8 e2e tests pass using testcontainers-go + K3s (ephemeral cluster per run). OLM bundle generated and validated. Helm chart created with full RBAC and templating. CI pipelines configured. PR #1 review complete — all 62 threads resolved.
 
 ## Architectural Decisions
 
@@ -245,7 +260,8 @@ All §1-§19 architecture sections fully implemented and wired. OLM bundle gener
 
 - Architecture §17 specifies `licenseExpiryDays` metric name but `promlinter` enforces Prometheus base-unit convention (seconds). Metric kept as `license_expiry_seconds` per Prometheus best practice.
 - Architecture §2 scheme registration shows typed external CRD imports (dragonflyv1alpha1, esv1, istiov1), but implementation uses `unstructured.Unstructured` per architectural decision to avoid heavy dependency chains. Watches use unstructured GVK objects.
-- E2e tests require Kind cluster + Docker image build — CI only
+- E2e tests require rootful podman machine (rootless can't delegate cgroup v2 for K3s). SSH tunnel: `ssh -i ~/.ssh/rootful-machine -p 41941 -nNT -L /tmp/podman-rootful.sock:/run/podman/podman.sock root@127.0.0.1`
+- `ceUnsupportedExtraConfig` list in `validator.go` may need expansion as more EE-only features are supported
 
 ## Next Steps (Not Yet Implemented)
 

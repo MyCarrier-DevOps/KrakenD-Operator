@@ -47,7 +47,7 @@ func (r *krakendRenderer) Render(input RenderInput) (*RenderOutput, error) {
 	config := buildRootConfig(gw)
 
 	// Build endpoints array
-	var endpointsJSON []any
+	endpointsJSON := make([]any, 0, len(flat))
 	for _, fe := range flat {
 		ep := buildEndpointJSON(fe.Entry, input.Policies)
 		endpointsJSON = append(endpointsJSON, ep)

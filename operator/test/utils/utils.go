@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck // dot-import required by Ginkgo DSL
 )
@@ -32,15 +33,41 @@ const (
 	prometheusOperatorURL     = "https://github.com/prometheus-operator/prometheus-operator/" +
 		"releases/download/%s/bundle.yaml"
 
-	certmanagerVersion = "v1.16.3"
+	certmanagerVersion = "v1.20.1"
 	certmanagerURLTmpl = "https://github.com/cert-manager/cert-manager/releases/download/%s/cert-manager.yaml"
+
+	// dragonflyCRDURL is the Dragonfly operator CRD manifest used to satisfy the operator's
+	// unstructured watches and resource creation when dragonfly.enabled is true.
+	dragonflyCRDURL = "https://raw.githubusercontent.com/dragonflydb/dragonfly-operator/" +
+		"main/config/crd/bases/dragonflydb.io_dragonflies.yaml"
+
+	// istioCRDURL is the Istio networking CRD manifest (VirtualService, Gateway, etc.)
+	// used to satisfy the operator's unstructured watches when istio.enabled is true.
+	istioCRDURL = "https://raw.githubusercontent.com/istio/istio/master/" +
+		"manifests/charts/base/files/crd-all.gen.yaml"
+
+	// externalSecretsCRDURL is the External Secrets Operator CRD bundle used to satisfy
+	// the operator's unstructured watches when license.externalSecret is enabled.
+	externalSecretsCRDURL = "https://raw.githubusercontent.com/external-secrets/" +
+		"external-secrets/main/deploy/crds/bundle.yaml"
 )
+
+// kubeconfigPath holds the path to the kubeconfig file for the ephemeral K3s cluster.
+// Set by the suite setup; all kubectl commands use this automatically.
+var kubeconfigPath string
+
+// SetKubeconfig stores the kubeconfig path for the ephemeral cluster.
+func SetKubeconfig(path string) { kubeconfigPath = path }
+
+// GetKubeconfig returns the current kubeconfig path.
+func GetKubeconfig() string { return kubeconfigPath }
 
 func warnError(err error) {
 	fmt.Fprintf(GinkgoWriter, "warning: %v\n", err) //nolint:errcheck // best-effort log
 }
 
-// Run executes the provided command within this context
+// Run executes the provided command within this context.
+// If a kubeconfig has been set (ephemeral K3s cluster), it is injected via KUBECONFIG env var.
 func Run(cmd *exec.Cmd) (string, error) {
 	dir, _ := GetProjectDir() //nolint:errcheck // best-effort directory resolution
 	cmd.Dir = dir
@@ -50,6 +77,14 @@ func Run(cmd *exec.Cmd) (string, error) {
 	}
 
 	cmd.Env = append(os.Environ(), "GO111MODULE=on")
+	if kubeconfigPath != "" {
+		cmd.Env = append(cmd.Env, "KUBECONFIG="+kubeconfigPath)
+	}
+	// When DOCKER_HOST is set (e.g. for testcontainers), also propagate CONTAINER_HOST
+	// so that podman CLI commands (used by Makefile as CONTAINER_TOOL) connect to the same daemon.
+	if dh := os.Getenv("DOCKER_HOST"); dh != "" {
+		cmd.Env = append(cmd.Env, "CONTAINER_HOST="+dh)
+	}
 	command := strings.Join(cmd.Args, " ")
 	fmt.Fprintf(GinkgoWriter, "running: %q\n", command) //nolint:errcheck // best-effort log
 	output, err := cmd.CombinedOutput()
@@ -111,6 +146,16 @@ func UninstallCertManager() {
 	if _, err := Run(cmd); err != nil {
 		warnError(err)
 	}
+	// Delete stale leader election leases so a fresh install can acquire leadership immediately.
+	for _, lease := range []string{
+		"cert-manager-cainjector-leader-election",
+		"cert-manager-controller",
+	} {
+		cmd = exec.Command("kubectl", "delete", "lease", lease, "-n", "kube-system", "--ignore-not-found")
+		if _, err := Run(cmd); err != nil {
+			warnError(err)
+		}
+	}
 }
 
 // InstallCertManager installs the cert manager bundle.
@@ -125,11 +170,56 @@ func InstallCertManager() error {
 	cmd = exec.Command("kubectl", "wait", "deployment.apps/cert-manager-webhook",
 		"--for", "condition=Available",
 		"--namespace", "cert-manager",
-		"--timeout", "5m",
+		"--timeout", "10m",
 	)
+	if _, err := Run(cmd); err != nil {
+		return err
+	}
 
-	_, err := Run(cmd)
-	return err
+	// Wait for the cert-manager webhook to be fully operational by verifying
+	// it can validate a dry-run Certificate resource. The webhook deployment
+	// may report Available before its TLS CA bundle is fully propagated.
+	cmd = exec.Command("kubectl", "apply", "--dry-run=server", "-f", "-")
+	cmd.Stdin = strings.NewReader(`
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: cert-manager-readiness-probe
+  namespace: cert-manager
+spec:
+  secretName: readiness-probe-tls
+  issuerRef:
+    name: does-not-exist
+    kind: Issuer
+  dnsNames:
+  - readiness-probe.example.com
+`)
+	// Retry until the webhook accepts the request (even if the issuer doesn't exist,
+	// the webhook validation itself passes which proves the CA bundle is propagated).
+	for range 30 {
+		if _, err := Run(cmd); err == nil {
+			return nil
+		}
+		// Re-create the command since Run() consumes it.
+		cmd = exec.Command("kubectl", "apply", "--dry-run=server", "-f", "-")
+		cmd.Stdin = strings.NewReader(`
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: cert-manager-readiness-probe
+  namespace: cert-manager
+spec:
+  secretName: readiness-probe-tls
+  issuerRef:
+    name: does-not-exist
+    kind: Issuer
+  dnsNames:
+  - readiness-probe.example.com
+`)
+		time.Sleep(2 * time.Second)
+	}
+
+	return fmt.Errorf("cert-manager webhook did not become ready after waiting")
 }
 
 // IsCertManagerCRDsInstalled checks if any Cert Manager CRDs are installed
@@ -163,18 +253,6 @@ func IsCertManagerCRDsInstalled() bool {
 	}
 
 	return false
-}
-
-// LoadImageToKindClusterWithName loads a local docker image to the kind cluster
-func LoadImageToKindClusterWithName(name string) error {
-	cluster := "kind"
-	if v, ok := os.LookupEnv("KIND_CLUSTER"); ok {
-		cluster = v
-	}
-	kindOptions := []string{"load", "docker-image", name, "--name", cluster}
-	cmd := exec.Command("kind", kindOptions...)
-	_, err := Run(cmd)
-	return err
 }
 
 // GetNonEmptyLines converts given command output string into individual objects
@@ -248,4 +326,72 @@ func UncommentCode(filename, target, prefix string) error {
 	}
 
 	return nil
+}
+
+// InstallDragonflyCRD applies the Dragonfly operator CRD to the cluster.
+func InstallDragonflyCRD() error {
+	cmd := exec.Command("kubectl", "apply", "-f", dragonflyCRDURL)
+	_, err := Run(cmd)
+	return err
+}
+
+// UninstallDragonflyCRD removes the Dragonfly operator CRD from the cluster.
+func UninstallDragonflyCRD() {
+	cmd := exec.Command("kubectl", "delete", "-f", dragonflyCRDURL, "--ignore-not-found")
+	if _, err := Run(cmd); err != nil {
+		warnError(err)
+	}
+}
+
+// IsDragonflyCRDInstalled checks if the Dragonfly CRD is present in the cluster.
+func IsDragonflyCRDInstalled() bool {
+	cmd := exec.Command("kubectl", "get", "crd", "dragonflies.dragonflydb.io")
+	_, err := Run(cmd)
+	return err == nil
+}
+
+// InstallIstioCRDs applies the Istio networking CRDs to the cluster.
+func InstallIstioCRDs() error {
+	cmd := exec.Command("kubectl", "apply", "-f", istioCRDURL)
+	_, err := Run(cmd)
+	return err
+}
+
+// UninstallIstioCRDs removes the Istio networking CRDs from the cluster.
+func UninstallIstioCRDs() {
+	cmd := exec.Command("kubectl", "delete", "-f", istioCRDURL, "--ignore-not-found")
+	if _, err := Run(cmd); err != nil {
+		warnError(err)
+	}
+}
+
+// IsIstioCRDInstalled checks if the Istio VirtualService CRD is present in the cluster.
+func IsIstioCRDInstalled() bool {
+	cmd := exec.Command("kubectl", "get", "crd", "virtualservices.networking.istio.io")
+	_, err := Run(cmd)
+	return err == nil
+}
+
+// InstallExternalSecretsCRDs applies the External Secrets Operator CRDs to the cluster.
+func InstallExternalSecretsCRDs() error {
+	// Use server-side apply because some CRDs exceed the 262144-byte annotation limit
+	// imposed by client-side kubectl apply.
+	cmd := exec.Command("kubectl", "apply", "--server-side", "-f", externalSecretsCRDURL)
+	_, err := Run(cmd)
+	return err
+}
+
+// UninstallExternalSecretsCRDs removes the External Secrets Operator CRDs from the cluster.
+func UninstallExternalSecretsCRDs() {
+	cmd := exec.Command("kubectl", "delete", "-f", externalSecretsCRDURL, "--ignore-not-found")
+	if _, err := Run(cmd); err != nil {
+		warnError(err)
+	}
+}
+
+// IsExternalSecretsCRDInstalled checks if the ExternalSecret CRD is present in the cluster.
+func IsExternalSecretsCRDInstalled() bool {
+	cmd := exec.Command("kubectl", "get", "crd", "externalsecrets.external-secrets.io")
+	_, err := Run(cmd)
+	return err == nil
 }

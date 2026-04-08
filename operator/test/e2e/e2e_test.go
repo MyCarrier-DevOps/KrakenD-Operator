@@ -25,8 +25,8 @@ import (
 	"strings"
 	"time"
 
-	. "github.com/onsi/ginkgo/v2"
-	. "github.com/onsi/gomega"
+	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck // dot-import required by Ginkgo DSL
+	. "github.com/onsi/gomega"    //nolint:revive,staticcheck // dot-import required by Gomega DSL
 
 	"github.com/mycarrier-devops/krakend-operator/test/utils"
 )
@@ -43,12 +43,14 @@ const metricsServiceName = "krakend-operator-controller-manager-metrics-service"
 // metricsRoleBindingName is the name of the RBAC that will be created to allow get the metrics data
 const metricsRoleBindingName = "krakend-operator-metrics-binding"
 
-var _ = Describe("Manager", Ordered, func() {
+// testNamespace is a dedicated namespace for CRD lifecycle tests.
+const testNamespace = "krakend-e2e-test"
+
+var _ = Describe("KrakenD Operator", Ordered, func() {
 	var controllerPodName string
 
-	// Before running the tests, set up the environment by creating the namespace,
-	// enforce the restricted security policy to the namespace, installing CRDs,
-	// and deploying the controller.
+	// ── Setup ──────────────────────────────────────────────────────────────
+
 	BeforeAll(func() {
 		By("creating manager namespace")
 		cmd := exec.Command("kubectl", "create", "ns", namespace)
@@ -70,13 +72,23 @@ var _ = Describe("Manager", Ordered, func() {
 		cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", projectImage))
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
+
+		By("creating test namespace for CRD lifecycle tests")
+		cmd = exec.Command("kubectl", "create", "ns", testNamespace)
+		_, err = utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred(), "Failed to create test namespace")
 	})
 
-	// After all tests have been executed, clean up by undeploying the controller, uninstalling CRDs,
-	// and deleting the namespace.
+	// ── Teardown ───────────────────────────────────────────────────────────
+
 	AfterAll(func() {
+		By("deleting test namespace")
+		cmd := exec.Command("kubectl", "delete", "ns", testNamespace, "--ignore-not-found")
+		_, _ = utils.Run(cmd)
+
 		By("cleaning up the curl pod for metrics")
-		cmd := exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", namespace)
+		cmd = exec.Command("kubectl", "delete", "pod", "curl-metrics",
+			"-n", namespace, "--ignore-not-found")
 		_, _ = utils.Run(cmd)
 
 		By("undeploying the controller-manager")
@@ -87,13 +99,16 @@ var _ = Describe("Manager", Ordered, func() {
 		cmd = exec.Command("make", "uninstall")
 		_, _ = utils.Run(cmd)
 
+		By("cleaning up metrics ClusterRoleBinding")
+		cmd = exec.Command("kubectl", "delete", "clusterrolebinding", metricsRoleBindingName, "--ignore-not-found")
+		_, _ = utils.Run(cmd)
+
 		By("removing manager namespace")
-		cmd = exec.Command("kubectl", "delete", "ns", namespace)
+		cmd = exec.Command("kubectl", "delete", "ns", namespace, "--ignore-not-found")
 		_, _ = utils.Run(cmd)
 	})
 
-	// After each test, check for failures and collect logs, events,
-	// and pod descriptions for debugging.
+	// After each test, collect diagnostic info on failure.
 	AfterEach(func() {
 		specReport := CurrentSpecReport()
 		if specReport.Failed() {
@@ -138,11 +153,12 @@ var _ = Describe("Manager", Ordered, func() {
 	SetDefaultEventuallyTimeout(2 * time.Minute)
 	SetDefaultEventuallyPollingInterval(time.Second)
 
-	Context("Manager", func() {
+	// ── Controller Manager Tests ───────────────────────────────────────────
+
+	Context("Controller Manager", func() {
 		It("should run successfully", func() {
 			By("validating that the controller-manager pod is running as expected")
 			verifyControllerUp := func(g Gomega) {
-				// Get the name of the controller-manager pod
 				cmd := exec.Command("kubectl", "get",
 					"pods", "-l", "control-plane=controller-manager",
 					"-o", "go-template={{ range .items }}"+
@@ -159,7 +175,6 @@ var _ = Describe("Manager", Ordered, func() {
 				controllerPodName = podNames[0]
 				g.Expect(controllerPodName).To(ContainSubstring("controller-manager"))
 
-				// Validate the pod's status
 				cmd = exec.Command("kubectl", "get",
 					"pods", controllerPodName, "-o", "jsonpath={.status.phase}",
 					"-n", namespace,
@@ -176,9 +191,15 @@ var _ = Describe("Manager", Ordered, func() {
 			cmd := exec.Command("kubectl", "create", "clusterrolebinding", metricsRoleBindingName,
 				"--clusterrole=krakend-operator-metrics-reader",
 				fmt.Sprintf("--serviceaccount=%s:%s", namespace, serviceAccountName),
+				"--dry-run=client", "-o", "yaml",
 			)
-			_, err := utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred(), "Failed to create ClusterRoleBinding")
+			crb, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to generate ClusterRoleBinding")
+
+			cmd = exec.Command("kubectl", "apply", "-f", "-")
+			cmd.Stdin = strings.NewReader(crb)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to apply ClusterRoleBinding")
 
 			By("validating that the metrics service is available")
 			cmd = exec.Command("kubectl", "get", "service", metricsServiceName, "-n", namespace)
@@ -260,10 +281,21 @@ var _ = Describe("Manager", Ordered, func() {
 		// +kubebuilder:scaffold:e2e-webhooks-checks
 
 		It("should reconcile sample CRs successfully", func() {
-			By("applying the sample CRs")
-			cmd := exec.Command("kubectl", "apply", "-k", "config/samples/", "-n", "default")
+			By("applying the gateway sample CR first")
+			cmd := exec.Command("kubectl", "apply",
+				"-f", "config/samples/gateway_v1alpha1_krakendgateway.yaml",
+				"-n", "default")
 			_, err := utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred(), "Failed to apply sample CRs")
+			Expect(err).NotTo(HaveOccurred(), "Failed to apply gateway sample CR")
+
+			By("applying the remaining sample CRs")
+			cmd = exec.Command("kubectl", "apply",
+				"-f", "config/samples/gateway_v1alpha1_krakendbackendpolicy.yaml",
+				"-f", "config/samples/gateway_v1alpha1_krakendendpoint.yaml",
+				"-f", "config/samples/gateway_v1alpha1_krakendautoconfig.yaml",
+				"-n", "default")
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to apply dependent sample CRs")
 
 			By("verifying that the gateway controller reconciled successfully")
 			verifyGatewayReconciled := func(g Gomega) {
@@ -276,22 +308,422 @@ var _ = Describe("Manager", Ordered, func() {
 			Eventually(verifyGatewayReconciled).Should(Succeed())
 
 			By("cleaning up the sample CRs")
-			cmd = exec.Command("kubectl", "delete", "-k", "config/samples/", "-n", "default", "--ignore-not-found")
+			cmd = exec.Command("kubectl", "delete",
+				"-f", "config/samples/gateway_v1alpha1_krakendautoconfig.yaml",
+				"-f", "config/samples/gateway_v1alpha1_krakendendpoint.yaml",
+				"-f", "config/samples/gateway_v1alpha1_krakendbackendpolicy.yaml",
+				"-f", "config/samples/gateway_v1alpha1_krakendgateway.yaml",
+				"-n", "default", "--ignore-not-found")
 			_, _ = utils.Run(cmd)
+		})
+	})
+
+	// ── CRD Lifecycle: Basic CE Gateway ────────────────────────────────────
+
+	Context("CRD Lifecycle — Basic CE Gateway", func() {
+		It("should create and reconcile a basic CE gateway", func() {
+			By("creating a KrakenDGateway CR")
+			cmd := exec.Command("kubectl", "apply", "-n", testNamespace, "-f", "-")
+			cmd.Stdin = strings.NewReader(`
+apiVersion: gateway.krakend.io/v1alpha1
+kind: KrakenDGateway
+metadata:
+  name: e2e-basic
+spec:
+  version: "2.9"
+  edition: CE
+  config: {}
+`)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("verifying the Deployment is created")
+			verifyDeployment := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "deployment", "e2e-basic",
+					"-n", testNamespace, "-o", "jsonpath={.metadata.name}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("e2e-basic"))
+			}
+			Eventually(verifyDeployment).Should(Succeed())
+
+			By("verifying the Service is created")
+			verifyService := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "service", "e2e-basic",
+					"-n", testNamespace, "-o", "jsonpath={.metadata.name}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("e2e-basic"))
+			}
+			Eventually(verifyService).Should(Succeed())
+
+			By("verifying no VirtualService is created (Istio disabled)")
+			Consistently(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "virtualservice", "e2e-basic",
+					"-n", testNamespace, "-o", "jsonpath={.metadata.name}")
+				_, err := utils.Run(cmd)
+				g.Expect(err).To(HaveOccurred(), "VirtualService should not exist when Istio is disabled")
+			}, 5*time.Second, time.Second).Should(Succeed())
+
+			By("verifying no Dragonfly is created (Dragonfly disabled)")
+			Consistently(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "dragonfly", "e2e-basic-dragonfly",
+					"-n", testNamespace, "-o", "jsonpath={.metadata.name}")
+				_, err := utils.Run(cmd)
+				g.Expect(err).To(HaveOccurred(), "Dragonfly should not exist when disabled")
+			}, 5*time.Second, time.Second).Should(Succeed())
+		})
+
+		It("should manage endpoint lifecycle with the basic gateway", func() {
+			By("creating a KrakenDEndpoint CR")
+			cmd := exec.Command("kubectl", "apply", "-n", testNamespace, "-f", "-")
+			cmd.Stdin = strings.NewReader(`
+apiVersion: gateway.krakend.io/v1alpha1
+kind: KrakenDEndpoint
+metadata:
+  name: e2e-users
+spec:
+  gatewayRef:
+    name: e2e-basic
+  endpoints:
+  - endpoint: /api/v1/users
+    method: GET
+    backends:
+    - host:
+      - http://users-svc:8080
+      urlPattern: /users
+`)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("verifying the endpoint is Active")
+			verifyEndpointActive := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "krakendendpoint", "e2e-users",
+					"-n", testNamespace, "-o", "jsonpath={.status.phase}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("Active"))
+			}
+			Eventually(verifyEndpointActive).Should(Succeed())
+
+			By("verifying the gateway has endpoint count")
+			verifyGatewayEndpoints := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "krakendgateway", "e2e-basic",
+					"-n", testNamespace, "-o", "jsonpath={.status.endpointCount}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("1"))
+			}
+			Eventually(verifyGatewayEndpoints).Should(Succeed())
+
+			By("deleting the basic gateway")
+			cmd = exec.Command("kubectl", "delete", "krakendgateway", "e2e-basic",
+				"-n", testNamespace, "--timeout=60s")
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("verifying the endpoint is Detached after gateway deletion")
+			verifyEndpointDetached := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "krakendendpoint", "e2e-users",
+					"-n", testNamespace, "-o", "jsonpath={.status.phase}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("Detached"))
+			}
+			Eventually(verifyEndpointDetached).Should(Succeed())
+
+			By("cleaning up the endpoint")
+			cmd = exec.Command("kubectl", "delete", "krakendendpoint", "e2e-users",
+				"-n", testNamespace, "--ignore-not-found")
+			_, _ = utils.Run(cmd)
+		})
+	})
+
+	// ── CRD Lifecycle: Gateway with Dragonfly ──────────────────────────────
+
+	Context("CRD Lifecycle — Gateway with Dragonfly", func() {
+		It("should create a gateway with Dragonfly enabled and reconcile the Dragonfly CR", func() {
+			By("creating a KrakenDGateway with Dragonfly enabled")
+			cmd := exec.Command("kubectl", "apply", "-n", testNamespace, "-f", "-")
+			cmd.Stdin = strings.NewReader(`
+apiVersion: gateway.krakend.io/v1alpha1
+kind: KrakenDGateway
+metadata:
+  name: e2e-dragonfly
+spec:
+  version: "2.9"
+  edition: CE
+  config: {}
+  dragonfly:
+    enabled: true
+    replicas: 1
+`)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("verifying the Deployment is created")
+			verifyDeployment := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "deployment", "e2e-dragonfly",
+					"-n", testNamespace, "-o", "jsonpath={.metadata.name}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("e2e-dragonfly"))
+			}
+			Eventually(verifyDeployment).Should(Succeed())
+
+			By("verifying the Dragonfly CR is created")
+			verifyDragonfly := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "dragonfly", "e2e-dragonfly-dragonfly",
+					"-n", testNamespace, "-o", "jsonpath={.metadata.name}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("e2e-dragonfly-dragonfly"))
+			}
+			Eventually(verifyDragonfly).Should(Succeed())
+
+			By("verifying the Dragonfly CR has correct replicas")
+			verifyDragonflyReplicas := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "dragonfly", "e2e-dragonfly-dragonfly",
+					"-n", testNamespace, "-o", "jsonpath={.spec.replicas}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("1"))
+			}
+			Eventually(verifyDragonflyReplicas).Should(Succeed())
+
+			By("verifying the Dragonfly CR has owner reference to the gateway")
+			verifyOwnerRef := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "dragonfly", "e2e-dragonfly-dragonfly",
+					"-n", testNamespace,
+					"-o", "jsonpath={.metadata.ownerReferences[0].name}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("e2e-dragonfly"))
+			}
+			Eventually(verifyOwnerRef).Should(Succeed())
+
+			By("cleaning up the Dragonfly gateway")
+			cmd = exec.Command("kubectl", "delete", "krakendgateway", "e2e-dragonfly",
+				"-n", testNamespace, "--timeout=60s")
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("verifying the Dragonfly CR is garbage collected")
+			verifyDragonflyDeleted := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "dragonfly", "e2e-dragonfly-dragonfly",
+					"-n", testNamespace)
+				_, err := utils.Run(cmd)
+				g.Expect(err).To(HaveOccurred(), "Dragonfly CR should be garbage collected")
+			}
+			Eventually(verifyDragonflyDeleted).Should(Succeed())
+		})
+	})
+
+	// ── CRD Lifecycle: Gateway with Istio ──────────────────────────────────
+
+	Context("CRD Lifecycle — Gateway with Istio", func() {
+		It("should create a gateway with Istio enabled and reconcile the VirtualService", func() {
+			By("creating a KrakenDGateway with Istio enabled")
+			cmd := exec.Command("kubectl", "apply", "-n", testNamespace, "-f", "-")
+			cmd.Stdin = strings.NewReader(`
+apiVersion: gateway.krakend.io/v1alpha1
+kind: KrakenDGateway
+metadata:
+  name: e2e-istio
+spec:
+  version: "2.9"
+  edition: CE
+  config: {}
+  istio:
+    enabled: true
+    hosts:
+    - "api.example.com"
+    gateways:
+    - "istio-system/default-gateway"
+`)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("verifying the Deployment is created")
+			verifyDeployment := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "deployment", "e2e-istio",
+					"-n", testNamespace, "-o", "jsonpath={.metadata.name}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("e2e-istio"))
+			}
+			Eventually(verifyDeployment).Should(Succeed())
+
+			By("verifying the VirtualService is created")
+			verifyVS := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "virtualservice", "e2e-istio",
+					"-n", testNamespace, "-o", "jsonpath={.metadata.name}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("e2e-istio"))
+			}
+			Eventually(verifyVS).Should(Succeed())
+
+			By("verifying the VirtualService has correct hosts")
+			verifyVSHosts := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "virtualservice", "e2e-istio",
+					"-n", testNamespace, "-o", "jsonpath={.spec.hosts[0]}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("api.example.com"))
+			}
+			Eventually(verifyVSHosts).Should(Succeed())
+
+			By("verifying the VirtualService has correct gateways")
+			verifyVSGateways := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "virtualservice", "e2e-istio",
+					"-n", testNamespace, "-o", "jsonpath={.spec.gateways[0]}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("istio-system/default-gateway"))
+			}
+			Eventually(verifyVSGateways).Should(Succeed())
+
+			By("verifying the VirtualService has owner reference to the gateway")
+			verifyOwnerRef := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "virtualservice", "e2e-istio",
+					"-n", testNamespace,
+					"-o", "jsonpath={.metadata.ownerReferences[0].name}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("e2e-istio"))
+			}
+			Eventually(verifyOwnerRef).Should(Succeed())
+
+			By("cleaning up the Istio gateway")
+			cmd = exec.Command("kubectl", "delete", "krakendgateway", "e2e-istio",
+				"-n", testNamespace, "--timeout=60s")
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("verifying the VirtualService is garbage collected")
+			verifyVSDeleted := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "virtualservice", "e2e-istio",
+					"-n", testNamespace)
+				_, err := utils.Run(cmd)
+				g.Expect(err).To(HaveOccurred(), "VirtualService should be garbage collected")
+			}
+			Eventually(verifyVSDeleted).Should(Succeed())
+		})
+	})
+
+	// ── CRD Lifecycle: Gateway with Dragonfly + Istio ──────────────────────
+
+	Context("CRD Lifecycle — Gateway with Dragonfly and Istio", func() {
+		It("should create a gateway with both Dragonfly and Istio enabled", func() {
+			By("creating a KrakenDGateway with Dragonfly and Istio enabled")
+			cmd := exec.Command("kubectl", "apply", "-n", testNamespace, "-f", "-")
+			cmd.Stdin = strings.NewReader(`
+apiVersion: gateway.krakend.io/v1alpha1
+kind: KrakenDGateway
+metadata:
+  name: e2e-full
+spec:
+  version: "2.9"
+  edition: CE
+  config: {}
+  dragonfly:
+    enabled: true
+    replicas: 1
+  istio:
+    enabled: true
+    hosts:
+    - "api-full.example.com"
+    gateways:
+    - "istio-system/default-gateway"
+`)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("verifying the Deployment is created")
+			verifyDeployment := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "deployment", "e2e-full",
+					"-n", testNamespace, "-o", "jsonpath={.metadata.name}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("e2e-full"))
+			}
+			Eventually(verifyDeployment).Should(Succeed())
+
+			By("verifying the Dragonfly CR is created")
+			verifyDragonfly := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "dragonfly", "e2e-full-dragonfly",
+					"-n", testNamespace, "-o", "jsonpath={.metadata.name}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("e2e-full-dragonfly"))
+			}
+			Eventually(verifyDragonfly).Should(Succeed())
+
+			By("verifying the VirtualService is created")
+			verifyVS := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "virtualservice", "e2e-full",
+					"-n", testNamespace, "-o", "jsonpath={.metadata.name}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("e2e-full"))
+			}
+			Eventually(verifyVS).Should(Succeed())
+
+			By("verifying both have owner references")
+			verifyDFOwner := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "dragonfly", "e2e-full-dragonfly",
+					"-n", testNamespace,
+					"-o", "jsonpath={.metadata.ownerReferences[0].name}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("e2e-full"))
+			}
+			Eventually(verifyDFOwner).Should(Succeed())
+
+			verifyVSOwner := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "virtualservice", "e2e-full",
+					"-n", testNamespace,
+					"-o", "jsonpath={.metadata.ownerReferences[0].name}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("e2e-full"))
+			}
+			Eventually(verifyVSOwner).Should(Succeed())
+
+			By("cleaning up the full gateway")
+			cmd = exec.Command("kubectl", "delete", "krakendgateway", "e2e-full",
+				"-n", testNamespace, "--timeout=60s")
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("verifying Dragonfly and VirtualService are garbage collected")
+			verifyDFDeleted := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "dragonfly", "e2e-full-dragonfly",
+					"-n", testNamespace)
+				_, err := utils.Run(cmd)
+				g.Expect(err).To(HaveOccurred())
+			}
+			Eventually(verifyDFDeleted).Should(Succeed())
+
+			verifyVSDeleted := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "virtualservice", "e2e-full",
+					"-n", testNamespace)
+				_, err := utils.Run(cmd)
+				g.Expect(err).To(HaveOccurred())
+			}
+			Eventually(verifyVSDeleted).Should(Succeed())
 		})
 	})
 })
 
 // serviceAccountToken returns a token for the specified service account in the given namespace.
-// It uses the Kubernetes TokenRequest API to generate a token by directly sending a request
-// and parsing the resulting token from the API response.
 func serviceAccountToken() (string, error) {
 	const tokenRequestRawString = `{
 		"apiVersion": "authentication.k8s.io/v1",
 		"kind": "TokenRequest"
 	}`
 
-	// Temporary file to store the token request
 	secretName := fmt.Sprintf("%s-token-request", serviceAccountName)
 	tokenRequestFile := filepath.Join("/tmp", secretName)
 	err := os.WriteFile(tokenRequestFile, []byte(tokenRequestRawString), os.FileMode(0o644))
@@ -301,19 +733,17 @@ func serviceAccountToken() (string, error) {
 
 	var out string
 	verifyTokenCreation := func(g Gomega) {
-		// Execute kubectl command to create the token
 		cmd := exec.Command("kubectl", "create", "--raw", fmt.Sprintf(
 			"/api/v1/namespaces/%s/serviceaccounts/%s/token",
 			namespace,
 			serviceAccountName,
 		), "-f", tokenRequestFile)
 
-		output, err := cmd.CombinedOutput()
+		output, err := utils.Run(cmd)
 		g.Expect(err).NotTo(HaveOccurred())
 
-		// Parse the JSON output to extract the token
 		var token tokenRequest
-		err = json.Unmarshal(output, &token)
+		err = json.Unmarshal([]byte(output), &token)
 		g.Expect(err).NotTo(HaveOccurred())
 
 		out = token.Status.Token
@@ -333,120 +763,9 @@ func getMetricsOutput() string {
 	return metricsOutput
 }
 
-// tokenRequest is a simplified representation of the Kubernetes TokenRequest API response,
-// containing only the token field that we need to extract.
+// tokenRequest is a simplified representation of the Kubernetes TokenRequest API response.
 type tokenRequest struct {
 	Status struct {
 		Token string `json:"token"`
 	} `json:"status"`
 }
-
-var _ = Describe("KrakenD CRD Lifecycle", Ordered, func() {
-	const testNamespace = "krakend-e2e-test"
-
-	BeforeAll(func() {
-		By("creating test namespace")
-		cmd := exec.Command("kubectl", "create", "ns", testNamespace)
-		_, err := utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred())
-	})
-
-	AfterAll(func() {
-		By("deleting test namespace")
-		cmd := exec.Command("kubectl", "delete", "ns", testNamespace, "--ignore-not-found")
-		_, _ = utils.Run(cmd)
-	})
-
-	It("should reconcile a KrakenDGateway and create owned resources", func() {
-		By("creating a KrakenDGateway CR")
-		cmd := exec.Command("kubectl", "apply", "-n", testNamespace, "-f", "-")
-		cmd.Stdin = strings.NewReader(`
-apiVersion: gateway.krakend.io/v1alpha1
-kind: KrakenDGateway
-metadata:
-  name: e2e-gateway
-spec:
-  version: "2.9"
-  edition: CE
-  config: {}
-`)
-		_, err := utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred())
-
-		By("verifying the Deployment is created")
-		verifyDeployment := func(g Gomega) {
-			cmd := exec.Command("kubectl", "get", "deployment", "e2e-gateway",
-				"-n", testNamespace, "-o", "jsonpath={.metadata.name}")
-			output, err := utils.Run(cmd)
-			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(output).To(Equal("e2e-gateway"))
-		}
-		Eventually(verifyDeployment).Should(Succeed())
-
-		By("verifying the Service is created")
-		verifyService := func(g Gomega) {
-			cmd := exec.Command("kubectl", "get", "service", "e2e-gateway",
-				"-n", testNamespace, "-o", "jsonpath={.metadata.name}")
-			output, err := utils.Run(cmd)
-			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(output).To(Equal("e2e-gateway"))
-		}
-		Eventually(verifyService).Should(Succeed())
-
-		By("creating a KrakenDEndpoint CR")
-		cmd = exec.Command("kubectl", "apply", "-n", testNamespace, "-f", "-")
-		cmd.Stdin = strings.NewReader(`
-apiVersion: gateway.krakend.io/v1alpha1
-kind: KrakenDEndpoint
-metadata:
-  name: e2e-users
-spec:
-  gatewayRef:
-    name: e2e-gateway
-  endpoints:
-  - endpoint: /api/v1/users
-    method: GET
-    backends:
-    - host:
-      - http://users-svc:8080
-      url_pattern: /users
-`)
-		_, err = utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred())
-
-		By("verifying the endpoint is Active")
-		verifyEndpointActive := func(g Gomega) {
-			cmd := exec.Command("kubectl", "get", "krakendendpoint", "e2e-users",
-				"-n", testNamespace, "-o", "jsonpath={.status.phase}")
-			output, err := utils.Run(cmd)
-			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(output).To(Equal("Active"))
-		}
-		Eventually(verifyEndpointActive).Should(Succeed())
-
-		By("verifying the gateway has endpoint count")
-		verifyGatewayEndpoints := func(g Gomega) {
-			cmd := exec.Command("kubectl", "get", "krakendgateway", "e2e-gateway",
-				"-n", testNamespace, "-o", "jsonpath={.status.endpointCount}")
-			output, err := utils.Run(cmd)
-			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(output).To(Equal("1"))
-		}
-		Eventually(verifyGatewayEndpoints).Should(Succeed())
-
-		By("cleaning up the gateway")
-		cmd = exec.Command("kubectl", "delete", "krakendgateway", "e2e-gateway", "-n", testNamespace)
-		_, err = utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred())
-
-		By("verifying the endpoint is Detached after gateway deletion")
-		verifyEndpointDetached := func(g Gomega) {
-			cmd := exec.Command("kubectl", "get", "krakendendpoint", "e2e-users",
-				"-n", testNamespace, "-o", "jsonpath={.status.phase}")
-			output, err := utils.Run(cmd)
-			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(output).To(Equal("Detached"))
-		}
-		Eventually(verifyEndpointDetached).Should(Succeed())
-	})
-})

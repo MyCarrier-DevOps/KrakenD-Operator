@@ -85,7 +85,7 @@ func (v *KrakenDValidator) Validate(ctx context.Context, jsonData []byte) (retEr
 		return fmt.Errorf("closing temp file: %w", err)
 	}
 
-	output, err := v.Executor.Execute(ctx, v.BinaryPath, "check", "-tlc", "-c", tmpName)
+	output, err := v.Executor.Execute(ctx, v.BinaryPath, "check", "-t", "-l", "-c", tmpName)
 	if err != nil {
 		return &ValidationError{
 			Output: string(output),
@@ -95,31 +95,62 @@ func (v *KrakenDValidator) Validate(ctx context.Context, jsonData []byte) (retEr
 	return nil
 }
 
-// PrepareValidationCopy strips wildcard endpoints for EE configs that use
-// the CE validator (which rejects /* patterns).
+// ceUnsupportedExtraConfig lists root extra_config keys that are not
+// recognised by the KrakenD CE JSON-schema linter. The operator's embedded
+// KrakenD binary is always CE, so these keys must be stripped before
+// validation to avoid false-positive lint failures.
+var ceUnsupportedExtraConfig = []string{
+	"backend/redis",
+}
+
+// PrepareValidationCopy creates a copy of the rendered config suitable for
+// validation with the embedded CE krakend binary. It strips:
+//   - EE-only extra_config keys that the CE linter rejects.
+//   - Wildcard (/*) endpoints when eeWithoutFallback is true, since the CE
+//     validator does not support them.
 func (v *KrakenDValidator) PrepareValidationCopy(jsonData []byte, eeWithoutFallback bool) ([]byte, error) {
-	if !eeWithoutFallback {
-		return jsonData, nil
-	}
 	var config map[string]any
 	if err := json.Unmarshal(jsonData, &config); err != nil {
 		return nil, fmt.Errorf("unmarshaling config for validation copy: %w", err)
 	}
-	endpoints, ok := config["endpoints"].([]any)
-	if !ok {
+
+	modified := false
+
+	// Strip EE-only root extra_config keys for all configs.
+	if ec, ok := config["extra_config"].(map[string]any); ok {
+		for _, key := range ceUnsupportedExtraConfig {
+			if _, exists := ec[key]; exists {
+				delete(ec, key)
+				modified = true
+			}
+		}
+		if len(ec) == 0 {
+			delete(config, "extra_config")
+			modified = true
+		}
+	}
+
+	// Strip wildcard endpoints for EE configs validated against CE.
+	if eeWithoutFallback {
+		if endpoints, ok := config["endpoints"].([]any); ok {
+			var filtered []any
+			for _, ep := range endpoints {
+				epMap, ok := ep.(map[string]any)
+				if !ok {
+					continue
+				}
+				if path, ok := epMap["endpoint"].(string); ok && path == "/*" {
+					continue
+				}
+				filtered = append(filtered, ep)
+			}
+			config["endpoints"] = filtered
+			modified = true
+		}
+	}
+
+	if !modified {
 		return jsonData, nil
 	}
-	var filtered []any
-	for _, ep := range endpoints {
-		epMap, ok := ep.(map[string]any)
-		if !ok {
-			continue
-		}
-		if path, ok := epMap["endpoint"].(string); ok && path == "/*" {
-			continue
-		}
-		filtered = append(filtered, ep)
-	}
-	config["endpoints"] = filtered
 	return serializeJSON(config)
 }

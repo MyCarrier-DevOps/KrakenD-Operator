@@ -1,0 +1,87 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: validating-webhook-configuration
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-gateway-krakend-io-v1alpha1-krakendgateway
+  failurePolicy: Fail
+  name: vkrakendgateway.kb.io
+  rules:
+  - apiGroups:
+    - gateway.krakend.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    - DELETE
+    resources:
+    - krakendgateways
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-gateway-krakend-io-v1alpha1-krakendendpoint
+  failurePolicy: Fail
+  name: vkrakendendpoint.kb.io
+  rules:
+  - apiGroups:
+    - gateway.krakend.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - krakendendpoints
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-gateway-krakend-io-v1alpha1-krakendbackendpolicy
+  failurePolicy: Fail
+  name: vkrakendbackendpolicy.kb.io
+  rules:
+  - apiGroups:
+    - gateway.krakend.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    - DELETE
+    resources:
+    - krakendbackendpolicies
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-gateway-krakend-io-v1alpha1-krakendautoconfig
+  failurePolicy: Fail
+  name: vkrakendautoconfig.kb.io
+  rules:
+  - apiGroups:
+    - gateway.krakend.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - krakendautoconfigs
+  sideEffects: None
