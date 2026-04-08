@@ -80,10 +80,12 @@ jobs:
       - name: Ensure gh-pages branch exists
         run: |
           if ! git ls-remote --exit-code --heads origin gh-pages >/dev/null 2>&1; then
+            git stash --include-untracked
             git switch --orphan gh-pages
             git commit --allow-empty -m "Initialize gh-pages for Helm chart releases"
             git push origin gh-pages
-            git switch -
+            git checkout -
+            git stash pop
           fi
 
       - name: Release Helm chart
