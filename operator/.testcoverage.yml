@@ -1,7 +1,7 @@
 # go-test-coverage configuration
 # https://github.com/vladopajic/go-test-coverage
 
-profile: coverage.out
+profile: operator/coverage.out
 
 threshold:
   total: 80
