@@ -112,6 +112,13 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 ## Recent Changes
 
 ### 2026-04-08 (continued)
+- Unified release pipeline: `release.yml` now triggers on push to main, auto-calculates next semver from conventional commits via `mathieudutour/github-tag-action@v6.2`, runs full CI gates (lint, test, build, e2e, helm-lint), then simultaneously releases Docker image to GHCR and Helm chart via chart-releaser-action, and creates a GitHub release with auto-generated changelog
+- `ci.yml` changed to PR-only trigger (removes push-to-main, which is now handled by `release.yml`)
+- `helm-ci.yml` changed to PR-only trigger
+- E2e CI job updated: removed Kind install step, runs `go test` directly (testcontainers manages ephemeral K3s)
+- Makefile: removed Kind-based `setup-test-e2e`/`cleanup-test-e2e` targets, simplified `test-e2e` to direct `go test` invocation, removed `KIND` tool variable
+
+### 2026-04-08 (continued)
 - Refactored e2e tests from Kind-cluster to testcontainers-go + K3s module for fully ephemeral isolated test environments
 - Added `testcontainers-go` v0.41.0, K3s module v0.41.0, docker/docker v28.5.2 dependencies
 - `test/e2e/e2e_suite_test.go` — Complete rewrite: BeforeSuite creates K3s container (`rancher/k3s:v1.31.6-k3s1`), extracts kubeconfig, builds operator image, loads image into K3s, installs cert-manager + all CRDs; AfterSuite terminates container
@@ -229,9 +236,9 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 - Validated: `helm lint` + `helm template` pass
 
 ### CI Pipelines (`.github/workflows/`)
-- `ci.yml` — Lint (golangci-lint v2.11.4), test (race, coverage >=80%), build; triggers on `operator/**` changes; excludes generated code from coverage threshold
-- `helm-ci.yml` — Helm lint + template; triggers on `charts/**` changes
-- `release.yml` — On tag push: build/push multi-arch image to GHCR, auto-version Helm chart via chart-releaser-action, GitHub release
+- `ci.yml` — PR-only gate: lint (golangci-lint v2.11.4), test (race, coverage >=80%), build, e2e (testcontainers + K3s); triggers on `operator/**` changes
+- `helm-ci.yml` — PR-only gate: Helm lint + template; triggers on `charts/**` changes
+- `release.yml` — On push to main: runs lint/test/build/e2e/helm-lint gates, then auto-calculates next semver from conventional commits (`mathieudutour/github-tag-action`), builds+pushes multi-arch image to GHCR, releases Helm chart via chart-releaser-action, creates GitHub release with changelog
 
 ### Operational Documentation (`docs/`)
 - `runbook.md` — Health checks, Prometheus metrics, alerts, gateway lifecycle phases, troubleshooting, scaling, backup/recovery, log analysis
