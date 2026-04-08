@@ -1,0 +1,19 @@
+apiVersion: gateway.krakend.io/v1alpha1
+kind: KrakenDAutoConfig
+metadata:
+  labels:
+    app.kubernetes.io/name: krakend-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: krakendautoconfig-sample
+spec:
+  gatewayRef:
+    name: krakendgateway-sample
+  openapi:
+    configMapRef:
+      name: my-openapi-spec
+      key: openapi.json
+  urlTransform:
+    hostMapping:
+      - from: users-service
+        to: http://users-service.default.svc.cluster.local:8080
+  trigger: OnChange

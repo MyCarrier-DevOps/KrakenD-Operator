@@ -2128,71 +2128,76 @@ If an OpenAPI spec contains duplicate `operationId` values (technically invalid 
 
 ## 17. Directory Structure
 
-Proposed Go project layout following [Standard Go Project Layout](https://github.com/golang-standards/project-layout) conventions:
+Go project layout following [Standard Go Project Layout](https://github.com/golang-standards/project-layout) conventions. The `operator/` directory is the Go module root; all Go imports, build commands, and `make` targets run from this directory.
 
 ```
 .
-├── api/
-│   └── v1alpha1/
-│       ├── krakendgateway_types.go        # KrakenDGateway CRD types
-│       ├── krakendendpoint_types.go        # KrakenDEndpoint CRD types
-│       ├── krakendbackendpolicy_types.go   # KrakenDBackendPolicy CRD types
-│       ├── krakendautoconfig_types.go      # KrakenDAutoConfig CRD types
-│       ├── groupversion_info.go            # API group registration
-│       └── zz_generated.deepcopy.go        # Generated deep copy methods
-├── cmd/
-│   └── operator/
-│       └── main.go                         # Entrypoint
-├── internal/
-│   ├── controller/
-│   │   ├── gateway_controller.go           # KrakenDGateway reconciler
-│   │   ├── endpoint_controller.go          # KrakenDEndpoint reconciler
-│   │   ├── policy_controller.go            # KrakenDBackendPolicy reconciler
-│   │   ├── autoconfig_controller.go        # KrakenDAutoConfig reconciler (OpenAPI watcher)
-│   │   └── license_monitor.go              # Periodic license expiry checker
-│   ├── autoconfig/
-│   │   ├── fetcher.go                      # OpenAPI spec fetcher (HTTP + ConfigMap sources)
-│   │   ├── cue_evaluator.go                # CUE evaluation engine (cuelang.org/go/cue)
-│   │   ├── filter.go                       # Include/exclude filter engine
-│   │   └── generator.go                    # EndpointEntry → KrakenDEndpoint CRD renderer
-│   ├── renderer/
-│   │   ├── config.go                       # KrakenD JSON config builder
-│   │   ├── endpoints.go                    # Endpoint array builder
-│   │   ├── extra_config.go                 # extra_config namespace builder
-│   │   ├── plugins.go                      # Plugin volume + krakend.json plugin block builder
-│   │   └── validator.go                    # krakend check -tlc wrapper
-│   ├── resources/
-│   │   ├── deployment.go                   # Deployment builder (includes plugin volume assembly)
-│   │   ├── service.go                      # Service builder
-│   │   ├── configmap.go                    # ConfigMap builder
-│   │   ├── serviceaccount.go               # ServiceAccount builder
-│   │   ├── pdb.go                          # PodDisruptionBudget builder
-│   │   ├── hpa.go                          # HorizontalPodAutoscaler builder
-│   │   ├── dragonfly.go                    # Dragonfly CR builder (dragonflydb.io/v1alpha1)
-│   │   ├── virtualservice.go               # Istio VirtualService builder
-│   │   └── externalsecret.go               # ExternalSecret builder
-│   ├── webhook/
-│   │   └── validation.go                   # ValidatingAdmissionWebhook handlers
-│   └── util/
-│       ├── hash.go                         # SHA-256 config checksumming
-│       └── license.go                      # X.509 license parsing
-├── config/
-│   ├── crd/
-│   │   └── bases/                          # Generated CRD YAML manifests
-│   ├── cue/
-│   │   └── defaults/                       # Default CUE transformation definitions (deployed as ConfigMap by Helm)
-│   │       ├── endpoints.cue               # Core transformation: OpenAPI paths → KrakenDEndpointSpec CRDs
-│   │       ├── schema.cue                  # KrakenDEndpointSpec output schema constraints
-│   │       └── defaults.cue                # Default rate limits, headers, timeouts, policyRef, extraConfig
-│   ├── rbac/                               # RBAC manifests
-│   ├── webhook/                            # Webhook manifests (ValidatingWebhookConfiguration)
-│   ├── manager/                            # Operator Deployment manifests
-│   └── samples/                            # Example CR YAML files
-├── test/
-│   ├── e2e/                                # End-to-end tests
-│   └── integration/                        # Integration tests
-├── go.mod
-├── go.sum
-├── Makefile
-└── Dockerfile
+├── architecture/                           # Architecture documentation (not part of Go module)
+│   ├── README.md                           # Operator architecture (this document)
+│   └── application/
+│       └── application-architecture.md     # Application architecture
+├── operator/                               # Go module root (all paths below are relative to here)
+│   ├── api/
+│   │   └── v1alpha1/
+│   │       ├── krakendgateway_types.go        # KrakenDGateway CRD types
+│   │       ├── krakendendpoint_types.go        # KrakenDEndpoint CRD types
+│   │       ├── krakendbackendpolicy_types.go   # KrakenDBackendPolicy CRD types
+│   │       ├── krakendautoconfig_types.go      # KrakenDAutoConfig CRD types
+│   │       ├── groupversion_info.go            # API group registration
+│   │       └── zz_generated.deepcopy.go        # Generated deep copy methods
+│   ├── cmd/
+│   │   └── main.go                             # Entrypoint
+│   ├── internal/
+│   │   ├── controller/
+│   │   │   ├── gateway_controller.go           # KrakenDGateway reconciler
+│   │   │   ├── endpoint_controller.go          # KrakenDEndpoint reconciler
+│   │   │   ├── policy_controller.go            # KrakenDBackendPolicy reconciler
+│   │   │   ├── autoconfig_controller.go        # KrakenDAutoConfig reconciler (OpenAPI watcher)
+│   │   │   └── license_monitor.go              # Periodic license expiry checker
+│   │   ├── autoconfig/
+│   │   │   ├── fetcher.go                      # OpenAPI spec fetcher (HTTP + ConfigMap sources)
+│   │   │   ├── cue_evaluator.go                # CUE evaluation engine (cuelang.org/go/cue)
+│   │   │   ├── filter.go                       # Include/exclude filter engine
+│   │   │   └── generator.go                    # EndpointEntry → KrakenDEndpoint CRD renderer
+│   │   ├── renderer/
+│   │   │   ├── config.go                       # KrakenD JSON config builder
+│   │   │   ├── endpoints.go                    # Endpoint array builder
+│   │   │   ├── extra_config.go                 # extra_config namespace builder
+│   │   │   ├── plugins.go                      # Plugin volume + krakend.json plugin block builder
+│   │   │   └── validator.go                    # krakend check -tlc wrapper
+│   │   ├── resources/
+│   │   │   ├── deployment.go                   # Deployment builder (includes plugin volume assembly)
+│   │   │   ├── service.go                      # Service builder
+│   │   │   ├── configmap.go                    # ConfigMap builder
+│   │   │   ├── serviceaccount.go               # ServiceAccount builder
+│   │   │   ├── pdb.go                          # PodDisruptionBudget builder
+│   │   │   ├── hpa.go                          # HorizontalPodAutoscaler builder
+│   │   │   ├── dragonfly.go                    # Dragonfly CR builder (dragonflydb.io/v1alpha1)
+│   │   │   ├── virtualservice.go               # Istio VirtualService builder
+│   │   │   └── externalsecret.go               # ExternalSecret builder
+│   │   ├── webhook/
+│   │   │   └── validation.go                   # ValidatingAdmissionWebhook handlers
+│   │   └── util/
+│   │       ├── hash.go                         # SHA-256 config checksumming
+│   │       └── license.go                      # X.509 license parsing
+│   ├── config/
+│   │   ├── crd/
+│   │   │   └── bases/                          # Generated CRD YAML manifests
+│   │   ├── cue/
+│   │   │   └── defaults/                       # Default CUE transformation definitions (deployed as ConfigMap by Helm)
+│   │   │       ├── endpoints.cue               # Core transformation: OpenAPI paths → KrakenDEndpointSpec CRDs
+│   │   │       ├── schema.cue                  # KrakenDEndpointSpec output schema constraints
+│   │   │       └── defaults.cue                # Default rate limits, headers, timeouts, policyRef, extraConfig
+│   │   ├── rbac/                               # RBAC manifests
+│   │   ├── webhook/                            # Webhook manifests (ValidatingWebhookConfiguration)
+│   │   ├── manager/                            # Operator Deployment manifests
+│   │   └── samples/                            # Example CR YAML files
+│   ├── test/
+│   │   └── e2e/                                # End-to-end tests
+│   ├── go.mod
+│   ├── go.sum
+│   ├── Makefile
+│   ├── Dockerfile
+│   └── PROJECT                                 # operator-sdk project metadata
+└── .github/                                # CI, linting, and AI development instructions
 ```

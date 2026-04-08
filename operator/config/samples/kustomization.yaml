@@ -1,0 +1,7 @@
+## Append samples of your project ##
+resources:
+- gateway_v1alpha1_krakendgateway.yaml
+- gateway_v1alpha1_krakendendpoint.yaml
+- gateway_v1alpha1_krakendbackendpolicy.yaml
+- gateway_v1alpha1_krakendautoconfig.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples

@@ -1,0 +1,5 @@
+# This patch sets the metrics bind address for the manager container.
+# Whether metrics are served over HTTPS depends on controller-runtime TLS configuration.
+- op: add
+  path: /spec/template/spec/containers/0/args/0
+  value: --metrics-bind-address=:8443

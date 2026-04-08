@@ -8,6 +8,8 @@
 
 This document describes the Go application architecture for the KrakenD Operator. It specifies package structure, interfaces, type hierarchies, reconciliation logic, and testing strategy at the implementation level. Every system, controller, status condition, event, and webhook rule described in the [operator architecture](../operator-architecture.md) is mapped to concrete Go code.
 
+> **Source Root:** All file paths in this document are relative to the `operator/` directory, which is the Go module root. The repository root contains `operator/`, `architecture/`, and `.github/` at the top level.
+
 ---
 
 ## Table of Contents
@@ -52,7 +54,7 @@ These principles govern all application code. They complement the Go coding stan
 
 ## 2. Entrypoint
 
-**File:** `cmd/operator/main.go`
+**File:** `cmd/main.go`
 
 The entrypoint is responsible for wiring dependencies, registering controllers with the manager, and starting the controller-runtime manager. It contains no business logic.
 
@@ -2446,7 +2448,7 @@ When a status update fails after a successful mutation (e.g., ConfigMap updated 
 
 ## 17. Metrics Implementation
 
-**Registered in:** `cmd/operator/main.go` via `prometheus.MustRegister`
+**Registered in:** `cmd/main.go` via `prometheus.MustRegister`
 **Instrumented in:** controller `Reconcile` methods
 
 ### Metric Definitions
@@ -2705,7 +2707,7 @@ WORKDIR /workspace
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o operator ./cmd/operator
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o manager cmd/main.go
 
 # Stage 2: Extract KrakenD CE binary for config validation
 ARG KRAKEND_VERSION=2.13
@@ -2714,10 +2716,10 @@ FROM krakend/krakend:${KRAKEND_VERSION} AS krakend
 # Stage 3: Final distroless image
 FROM gcr.io/distroless/static:nonroot
 WORKDIR /
-COPY --from=builder /workspace/operator .
+COPY --from=builder /workspace/manager .
 COPY --from=krakend /usr/bin/krakend /usr/local/bin/krakend
 USER 65532:65532
-ENTRYPOINT ["/operator"]
+ENTRYPOINT ["/manager"]
 ```
 
 ### Makefile Targets
@@ -2739,7 +2741,7 @@ lint:                             ## Run linter
 	golangci-lint run -c .github/.golangci.yml
 
 build:                            ## Build operator binary
-	go build -o bin/operator ./cmd/operator
+	go build -o bin/manager cmd/main.go
 
 docker-build:                     ## Build Docker image
 	docker build -t krakend-operator:latest .

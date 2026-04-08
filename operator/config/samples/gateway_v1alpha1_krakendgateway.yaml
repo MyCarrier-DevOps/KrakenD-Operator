@@ -1,0 +1,14 @@
+apiVersion: gateway.krakend.io/v1alpha1
+kind: KrakenDGateway
+metadata:
+  labels:
+    app.kubernetes.io/name: krakend-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: krakendgateway-sample
+spec:
+  version: "2.8"
+  edition: CE
+  replicas: 2
+  config:
+    port: 8080
+    timeout: "30s"

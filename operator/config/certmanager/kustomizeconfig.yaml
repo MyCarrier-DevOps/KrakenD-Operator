@@ -1,0 +1,8 @@
+# the following config is for teaching kustomize how to do kustomization for cert-manager resources.
+nameReference:
+- kind: Issuer
+  group: cert-manager.io
+  fieldSpecs:
+  - kind: Certificate
+    group: cert-manager.io
+    path: spec/issuerRef/name

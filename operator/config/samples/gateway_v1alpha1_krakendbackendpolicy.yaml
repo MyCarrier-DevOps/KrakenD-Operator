@@ -1,0 +1,16 @@
+apiVersion: gateway.krakend.io/v1alpha1
+kind: KrakenDBackendPolicy
+metadata:
+  labels:
+    app.kubernetes.io/name: krakend-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: krakendbackendpolicy-sample
+spec:
+  circuitBreaker:
+    interval: 60
+    timeout: 10
+    maxErrors: 3
+    logStatusChange: true
+  rateLimit:
+    maxRate: 100
+    capacity: 100

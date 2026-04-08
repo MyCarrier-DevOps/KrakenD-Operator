@@ -1,0 +1,17 @@
+apiVersion: gateway.krakend.io/v1alpha1
+kind: KrakenDEndpoint
+metadata:
+  labels:
+    app.kubernetes.io/name: krakend-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: krakendendpoint-sample
+spec:
+  gatewayRef:
+    name: krakendgateway-sample
+  endpoints:
+    - endpoint: /api/users
+      method: GET
+      backends:
+        - host:
+            - http://users-service.default.svc.cluster.local:8080
+          urlPattern: /v1/users
