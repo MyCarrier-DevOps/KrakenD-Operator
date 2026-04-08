@@ -1,7 +1,7 @@
 # Project State — KrakenD Operator
 
-> **Last Updated:** 2026-04-07
-> **Status:** All §1-§19 fully wired; OLM bundle, Helm chart, CI pipelines, and operational docs complete
+> **Last Updated:** 2026-04-08
+> **Status:** All §1-§19 fully wired; OLM bundle, Helm chart, CI pipelines, and operational docs complete; PR #1 review complete (62 threads resolved); test coverage 84.8%
 
 ## Overview
 
@@ -61,7 +61,8 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 - `krakendbackendpolicy_controller.go` — Counts endpoint references (referencedBy), validates CircuitBreaker/RateLimit fields, sets Valid condition. Mapper: endpointToReferencedPolicies. Pure function: validatePolicy with named returns.
 - `krakendautoconfig_controller.go` — AutoConfig reconciler: fetch spec → checksum comparison → load CUE definitions → CUE evaluate → filter → generate → diff/create/update/delete KrakenDEndpoint CRs. Phase-based status tracking (Pending/Fetching/Rendering/Synced/Error). Periodic requeue support. ConfigMap watch for CUE definitions changes. Owner-reference-based endpoint lifecycle. `Clock` field for timing.
 - `suite_test.go` — Standard Go test helpers (testScheme, fakeClientBuilder, fakeRecorder) replacing Ginkgo+envtest
-- 46 tests across 5 test files, ~82% coverage, 0 lint issues
+- `helpers_test.go` — 10 tests for conditionsEqual() covering both-empty, different-length, same-content, ignore-LastTransitionTime, different-status/reason/message/generation, missing-type
+- 69 tests across 6 test files, ~84.8% coverage (filtered), 0 lint issues
 
 ### Prometheus Metrics (`internal/controller/metrics.go`)
 - 8 metrics registered via controller-runtime `metrics.Registry`
@@ -109,6 +110,17 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 - 28 unit tests, 84.3% webhook package coverage
 
 ## Recent Changes
+
+### 2026-04-08
+- Increased test coverage from 55.2% (unfiltered) to 84.8% (filtered) — above 80% CI threshold
+- CI coverage config: excluded `zz_generated.deepcopy.go` and `cmd/main.go` from coverage threshold, bumped threshold to 80%
+- Created `internal/controller/helpers_test.go` with 10 tests for `conditionsEqual()` function
+- Added 5 endpoint controller tests: PolicyToEndpoints mapper, NoOpWhenUnchanged, DetachedToActive, MultiplePoliciesDedup
+- Added 8 policy controller tests: PolicyRefsFromNonEndpoint, NoPolicies, StatusNoOpWhenUnchanged, InvalidCircuitBreakerInterval/Timeout, InvalidToValid, ValidatePolicy_NilSpecs
+- Resolved PR review comments #59-#62: sanitizePath() rune-mapping fix, init()→registerTypes() refactor (eliminates all //nolint:gochecknoinits)
+- Fixed KrakenD CE image: `krakend/krakend:{version}` → `krakend:{version}` (CE is top-level Docker Hub, EE is `krakend/krakend-ee:{version}`)
+- Bumped golangci-lint from v2.1.0 to v2.11.4 for Go 1.26 compatibility
+- All 62 PR review threads resolved
 
 ### 2026-04-07 (continued)
 - Embedded default CUE definitions in the operator binary via `//go:embed cue/*.cue` (`internal/autoconfig/embed.go`, `internal/autoconfig/cue/defaults.cue`)
@@ -202,7 +214,7 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 - Validated: `helm lint` + `helm template` pass
 
 ### CI Pipelines (`.github/workflows/`)
-- `ci.yml` — Lint (golangci-lint), test (race, coverage >=75%), build; triggers on `operator/**` changes
+- `ci.yml` — Lint (golangci-lint v2.11.4), test (race, coverage >=80%), build; triggers on `operator/**` changes; excludes generated code from coverage threshold
 - `helm-ci.yml` — Helm lint + template; triggers on `charts/**` changes
 - `release.yml` — On tag push: build/push multi-arch image to GHCR, auto-version Helm chart via chart-releaser-action, GitHub release
 
@@ -213,7 +225,7 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 
 ## Current Focus
 
-All §1-§19 architecture sections fully implemented and wired. OLM bundle generated and validated. Helm chart created with full RBAC and templating. CI pipelines (source + chart + release) configured. Operational documentation complete.
+All §1-§19 architecture sections fully implemented and wired. OLM bundle generated and validated. Helm chart created with full RBAC and templating. CI pipelines (source + chart + release) configured. Operational documentation complete. PR #1 review complete — all 62 threads resolved. Test coverage at 84.8% (filtered), above 80% CI threshold.
 
 ## Architectural Decisions
 
