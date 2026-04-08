@@ -83,7 +83,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
       - name: Lint Helm chart
         run: helm lint charts/krakend-operator
       - name: Template Helm chart
@@ -147,7 +147,7 @@ jobs:
       - name: Copy CRDs into chart
         run: cp operator/config/crd/bases/*.yaml charts/krakend-operator/crds/
 
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
 
       - name: Release Helm chart
         uses: helm/chart-releaser-action@v1.7.0
