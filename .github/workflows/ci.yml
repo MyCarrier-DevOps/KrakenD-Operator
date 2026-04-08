@@ -47,12 +47,8 @@ jobs:
       - name: Check coverage threshold
         uses: vladopajic/go-test-coverage@v2
         with:
-          profile: operator/coverage.out
-          threshold-total: 80
+          config: operator/.testcoverage.yml
           source-dir: ./operator
-          exclude: |-
-            api/v1alpha1/zz_generated.deepcopy.go
-            cmd/main.go
 
   build:
     name: Build

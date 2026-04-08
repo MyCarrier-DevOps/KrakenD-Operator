@@ -1,0 +1,12 @@
+# go-test-coverage configuration
+# https://github.com/vladopajic/go-test-coverage
+
+profile: coverage.out
+
+threshold:
+  total: 80
+
+exclude:
+  paths:
+    - zz_generated\.deepcopy\.go$
+    - ^cmd/main\.go$
