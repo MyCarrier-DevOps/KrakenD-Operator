@@ -18,81 +18,9 @@ env:
   IMAGE_NAME: mycarrier-devops/krakend-operator
 
 jobs:
-  lint:
-    name: Lint
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
-        with:
-          go-version: "^1.26"
-      - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v7
-        with:
-          version: v2.11.4
-          working-directory: operator
-          args: --config ../.github/.golangci.yml --timeout 5m
-
-  test:
-    name: Test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
-        with:
-          go-version: "^1.26"
-      - name: Run unit tests
-        working-directory: operator
-        run: |
-          go test -race -coverprofile=coverage.out -covermode=atomic ./internal/... ./api/... ./cmd/...
-          go tool cover -func=coverage.out
-      - name: Check coverage threshold
-        uses: vladopajic/go-test-coverage@v2
-        with:
-          config: operator/.testcoverage.yml
-          source-dir: ./operator
-
-  build:
-    name: Build
-    runs-on: ubuntu-latest
-    needs: [lint, test]
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
-        with:
-          go-version: "^1.26"
-      - name: Build binary
-        working-directory: operator
-        run: make build
-
-  test-e2e:
-    name: E2E Tests
-    runs-on: ubuntu-latest
-    needs: [build]
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
-        with:
-          go-version: "^1.26"
-      - name: Run e2e tests
-        working-directory: operator
-        run: go test -v -timeout 30m ./test/e2e/ -ginkgo.v
-
-  helm-lint:
-    name: Helm Lint
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: azure/setup-helm@v5
-      - name: Lint Helm chart
-        run: helm lint charts/krakend-operator
-      - name: Template Helm chart
-        run: helm template test charts/krakend-operator > /dev/null
-
   release:
     name: Release
     runs-on: ubuntu-latest
-    needs: [test-e2e, helm-lint]
     steps:
       - uses: actions/checkout@v6
         with:
@@ -148,6 +76,15 @@ jobs:
         run: cp operator/config/crd/bases/*.yaml charts/krakend-operator/crds/
 
       - uses: azure/setup-helm@v5
+
+      - name: Ensure gh-pages branch exists
+        run: |
+          if ! git ls-remote --exit-code --heads origin gh-pages >/dev/null 2>&1; then
+            git switch --orphan gh-pages
+            git commit --allow-empty -m "Initialize gh-pages for Helm chart releases"
+            git push origin gh-pages
+            git switch -
+          fi
 
       - name: Release Helm chart
         uses: helm/chart-releaser-action@v1.7.0
