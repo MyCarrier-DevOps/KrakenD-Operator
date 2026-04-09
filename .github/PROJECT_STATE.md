@@ -111,6 +111,14 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 
 ## Recent Changes
 
+### 2026-04-09
+- Added full webhook infrastructure to Helm chart: webhook Service, ValidatingWebhookConfiguration (4 webhooks for Gateway/Endpoint/Policy/AutoConfig), cert-manager self-signed Issuer+Certificate, cert volume mount in Deployment
+- New templates: `webhook-service.yaml`, `validating-webhook-configuration.yaml`, `webhook-certificate.yaml`
+- Updated `deployment.yaml`: webhook port (9443), `--webhook-cert-path` arg, cert volume/mount
+- Updated `values.yaml`: `webhooks.enabled`, `webhooks.failurePolicy`, `webhooks.certManager.enabled`, `webhooks.caBundle`
+- Fixed operator crash: `open /tmp/k8s-webhook-server/serving-certs/tls.crt: no such file or directory` — cert-manager now provisions TLS certs via the Helm chart
+- Fixed multi-arch Dockerfile: musl libraries now glob-copied via staging directory instead of hardcoded x86_64 paths (arm64 uses `ld-musl-aarch64.so.1`)
+
 ### 2026-04-08 (continued)
 - Unified release pipeline: `release.yml` now triggers on push to main, auto-calculates next semver from conventional commits via `mathieudutour/github-tag-action@v6.2`, runs full CI gates (lint, test, build, e2e, helm-lint), then simultaneously releases Docker image to GHCR and Helm chart via chart-releaser-action, and creates a GitHub release with auto-generated changelog
 - `ci.yml` changed to PR-only trigger (removes push-to-main, which is now handled by `release.yml`)
@@ -231,8 +239,10 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 ### Helm Chart (`charts/krakend-operator/`)
 - `Chart.yaml` with kubeVersion >=1.28 constraint
 - Templated: Deployment, ClusterRole/Binding, leader-election Role/Binding, ServiceAccount, metrics Service
+- Webhook infrastructure: ValidatingWebhookConfiguration (4 webhooks), webhook Service, cert-manager Issuer+Certificate, cert volume mount in Deployment
+- Webhooks enabled by default (`webhooks.enabled=true`, `webhooks.certManager.enabled=true`); can be disabled or used with external CA bundle
 - CRDs in `crds/` directory (auto-installed by Helm)
-- Configurable: image, replicas, resources, security context, probes, affinity, tolerations
+- Configurable: image, replicas, resources, security context, probes, affinity, tolerations, webhooks, cert-manager
 - Validated: `helm lint` + `helm template` pass
 
 ### CI Pipelines (`.github/workflows/`)

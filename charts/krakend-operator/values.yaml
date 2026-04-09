@@ -28,6 +28,20 @@ metrics:
 healthProbes:
   port: 8081
 
+webhooks:
+  enabled: true
+  # failurePolicy determines what happens when the webhook is unavailable.
+  # Use "Fail" for production (block invalid resources) or "Ignore" to allow
+  # resources through when the operator is down.
+  failurePolicy: Fail
+  certManager:
+    # Enable cert-manager integration for automatic TLS certificate provisioning.
+    # Requires cert-manager to be installed in the cluster.
+    enabled: true
+  # caBundle is only used when certManager.enabled is false.
+  # Provide a base64-encoded CA certificate bundle for the webhook server.
+  caBundle: ""
+
 podAnnotations: {}
 
 podSecurityContext:
