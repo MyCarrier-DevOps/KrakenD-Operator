@@ -55,6 +55,13 @@ var (
 )
 
 func TestMain(m *testing.M) {
+	os.Exit(runTests(m))
+}
+
+// runTests sets up the K3s cluster, controllers, runs the test suite, and
+// returns the exit code. Using a separate function lets deferred cleanup
+// (container termination) run even when setup fails partway through.
+func runTests(m *testing.M) int {
 	logf.SetLogger(zap.New(zap.UseDevMode(true)))
 
 	ctx, cancel = context.WithCancel(context.Background())
@@ -73,27 +80,38 @@ func TestMain(m *testing.M) {
 	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to start K3s container: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
+	defer func() {
+		cancel()
+		terminateCtx, terminateCancel := context.WithTimeout(
+			context.Background(), 30*time.Second,
+		)
+		if err := k3sContainer.Terminate(terminateCtx); err != nil {
+			fmt.Fprintf(os.Stderr,
+				"warning: failed to terminate K3s container: %v\n", err)
+		}
+		terminateCancel()
+	}()
 
 	// Extract kubeconfig from the K3s cluster.
 	kubeConfigYaml, err := k3sContainer.GetKubeConfig(ctx)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to get kubeconfig: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
 
 	// Build rest.Config from the kubeconfig.
 	cfg, err := clientcmd.RESTConfigFromKubeConfig(kubeConfigYaml)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to build rest config: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
 
 	// Wait for K3s nodes to be ready using client-go.
 	if err := waitForNodes(ctx, cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "K3s nodes did not become ready: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
 
 	// Install CRDs into the K3s cluster using the apiextensions client.
@@ -102,17 +120,17 @@ func TestMain(m *testing.M) {
 	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to resolve CRD directory path: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
 	if err := installCRDs(ctx, cfg, crdDir); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to install CRDs: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
 
 	k8sClient, err = client.New(cfg, client.Options{Scheme: scheme})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to create client: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
 
 	// Start a controller manager in the background.
@@ -121,7 +139,7 @@ func TestMain(m *testing.M) {
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to create manager: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
 
 	// Wire up the Gateway controller with a real renderer and no-op validator.
@@ -133,7 +151,7 @@ func TestMain(m *testing.M) {
 		Validator: &noopValidator{},
 	}).SetupWithManager(mgr); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to setup gateway controller: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
 
 	// Wire up the Endpoint controller.
@@ -143,7 +161,7 @@ func TestMain(m *testing.M) {
 		Recorder: mgr.GetEventRecorderFor("krakendendpoint-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to setup endpoint controller: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
 
 	// Wire up the BackendPolicy controller.
@@ -153,7 +171,7 @@ func TestMain(m *testing.M) {
 		Recorder: mgr.GetEventRecorderFor("krakendbackendpolicy-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to setup policy controller: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
 
 	go func() {
@@ -163,19 +181,7 @@ func TestMain(m *testing.M) {
 		}
 	}()
 
-	code := m.Run()
-	cancel()
-	if k3sContainer != nil {
-		terminateCtx, terminateCancel := context.WithTimeout(
-			context.Background(), 30*time.Second,
-		)
-		if err := k3sContainer.Terminate(terminateCtx); err != nil {
-			fmt.Fprintf(os.Stderr,
-				"warning: failed to terminate K3s container: %v\n", err)
-		}
-		terminateCancel()
-	}
-	os.Exit(code)
+	return m.Run()
 }
 
 // noopValidator performs no validation (CE binary not available in integration tests).
