@@ -133,7 +133,7 @@ func (v *KrakenDValidator) PrepareValidationCopy(jsonData []byte, eeWithoutFallb
 	// Strip wildcard endpoints for EE configs validated against CE.
 	if eeWithoutFallback {
 		if endpoints, ok := config["endpoints"].([]any); ok {
-			var filtered []any
+			filtered := make([]any, 0, len(endpoints))
 			for _, ep := range endpoints {
 				epMap, ok := ep.(map[string]any)
 				if !ok {

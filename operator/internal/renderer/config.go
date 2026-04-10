@@ -175,13 +175,6 @@ func appendTelemetryConfig(ec map[string]any, tel *v1alpha1.TelemetryConfig) {
 			ec["telemetry/opentelemetry"] = otelConfig
 		}
 	}
-	if tel.Prometheus != nil && tel.Prometheus.Enabled {
-		promConfig := map[string]any{}
-		if tel.Prometheus.Port != 0 {
-			promConfig["listen_address"] = fmt.Sprintf(":%d", tel.Prometheus.Port)
-		}
-		ec["telemetry/prometheus"] = promConfig
-	}
 }
 
 func buildOpenTelemetryConfig(otel *v1alpha1.OpenTelemetryConfig) map[string]any {
@@ -211,9 +204,11 @@ func buildOTelExporters(exp *v1alpha1.OTelExporters) map[string]any {
 			if o.Port != 0 {
 				entry["port"] = o.Port
 			}
-			if o.Name != "" {
-				entry["name"] = o.Name
+			name := o.Name
+			if name == "" {
+				name = "default_otlp"
 			}
+			entry["name"] = name
 			if o.UseHTTP {
 				entry["use_http"] = true
 			}

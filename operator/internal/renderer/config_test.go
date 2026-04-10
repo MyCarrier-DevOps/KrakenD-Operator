@@ -389,15 +389,21 @@ func TestBuildGatewayExtraConfig_Telemetry(t *testing.T) {
 				OTLP: []v1alpha1.OTLPExporter{{Host: "otel-collector", Port: 4317}},
 			},
 		},
-		Prometheus: &v1alpha1.PrometheusConfig{Enabled: true, Port: 9090},
 	}
 
 	ec := buildGatewayExtraConfig(gw, nil)
-	if _, ok := ec["telemetry/opentelemetry"]; !ok {
+	otel, ok := ec["telemetry/opentelemetry"]
+	if !ok {
 		t.Fatal("expected telemetry/opentelemetry in extra_config")
 	}
-	if _, ok := ec["telemetry/prometheus"]; !ok {
-		t.Fatal("expected telemetry/prometheus in extra_config")
+	otelMap := otel.(map[string]any)
+	exporters := otelMap["exporters"].(map[string]any)
+	otlpArr := exporters["otlp"].([]map[string]any)
+	if otlpArr[0]["name"] != "default_otlp" {
+		t.Errorf("expected default OTLP name 'default_otlp', got %v", otlpArr[0]["name"])
+	}
+	if _, ok := ec["telemetry/prometheus"]; ok {
+		t.Error("standalone telemetry/prometheus should not be emitted")
 	}
 }
 
