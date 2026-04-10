@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
@@ -813,7 +814,7 @@ func TestDetectDragonflyState_NotEnabled(t *testing.T) {
 	}
 }
 
-func TestDetectDragonflyState_CRNotFound(t *testing.T) {
+func TestDetectDragonflyState_CRDNotInstalled(t *testing.T) {
 	gw := testGateway()
 	gw.Spec.Dragonfly = &v1alpha1.DragonflySpec{Enabled: true}
 	c := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).Build()
@@ -822,14 +823,8 @@ func TestDetectDragonflyState_CRNotFound(t *testing.T) {
 	}
 
 	state := r.detectDragonflyState(context.Background(), gw)
-	if state == nil {
-		t.Fatal("expected non-nil state")
-	}
-	if !state.Enabled {
-		t.Error("expected Enabled=true")
-	}
-	if state.ServiceDNS == "" {
-		t.Error("expected non-empty ServiceDNS")
+	if state != nil {
+		t.Error("expected nil state when Dragonfly CRD is not installed")
 	}
 }
 
@@ -881,15 +876,12 @@ func TestGatewayReconcile_WithDragonflyEnabled(t *testing.T) {
 	if capturedInput == nil {
 		t.Fatal("renderer was not called")
 	}
-	if (*capturedInput).Dragonfly == nil {
-		t.Error("expected DragonflyState to be set in RenderInput")
-	}
-	if !(*capturedInput).Dragonfly.Enabled {
-		t.Error("expected DragonflyState.Enabled=true")
+	if (*capturedInput).Dragonfly != nil {
+		t.Error("expected nil DragonflyState when CRD is not installed")
 	}
 }
 
-func TestGatewayReconcile_ExternalSecretCreated(t *testing.T) {
+func TestGatewayReconcile_ExternalSecretSkippedWhenCRDMissing(t *testing.T) {
 	gw := testGateway()
 	gw.Spec.Edition = v1alpha1.EditionEE
 	gw.Spec.License = &v1alpha1.LicenseConfig{
@@ -902,6 +894,7 @@ func TestGatewayReconcile_ExternalSecretCreated(t *testing.T) {
 		},
 	}
 	gw.Status.Phase = v1alpha1.PhaseRunning
+	rec := fakeRecorder()
 	c := fakeClientBuilder().
 		WithObjects(gw).
 		WithStatusSubresource(gw).
@@ -910,7 +903,7 @@ func TestGatewayReconcile_ExternalSecretCreated(t *testing.T) {
 	r := &KrakenDGatewayReconciler{
 		Client:   c,
 		Scheme:   testScheme(),
-		Recorder: fakeRecorder(),
+		Recorder: rec,
 		Renderer: &mockRenderer{
 			output: &renderer.RenderOutput{
 				JSON: []byte(`{}`), Checksum: "cs", DesiredImage: "img:v1",
@@ -925,9 +918,22 @@ func TestGatewayReconcile_ExternalSecretCreated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+
+	// Verify warning event was emitted about missing CRD.
+	found := false
+	for len(rec.Events) > 0 {
+		e := <-rec.Events
+		if strings.Contains(e, "CRDNotInstalled") && strings.Contains(e, "external-secrets.io") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected CRDNotInstalled warning event for ExternalSecret")
+	}
 }
 
-func TestGatewayReconcile_VirtualServiceCreated(t *testing.T) {
+func TestGatewayReconcile_VirtualServiceSkippedWhenCRDMissing(t *testing.T) {
 	gw := testGateway()
 	gw.Spec.Istio = &v1alpha1.IstioSpec{
 		Enabled:  true,
@@ -935,6 +941,7 @@ func TestGatewayReconcile_VirtualServiceCreated(t *testing.T) {
 		Gateways: []string{"istio-system/gateway"},
 	}
 	gw.Status.Phase = v1alpha1.PhaseRunning
+	rec := fakeRecorder()
 	c := fakeClientBuilder().
 		WithObjects(gw).
 		WithStatusSubresource(gw).
@@ -943,7 +950,7 @@ func TestGatewayReconcile_VirtualServiceCreated(t *testing.T) {
 	r := &KrakenDGatewayReconciler{
 		Client:   c,
 		Scheme:   testScheme(),
-		Recorder: fakeRecorder(),
+		Recorder: rec,
 		Renderer: &mockRenderer{
 			output: &renderer.RenderOutput{
 				JSON: []byte(`{}`), Checksum: "cs", DesiredImage: "img:v1",
@@ -957,6 +964,19 @@ func TestGatewayReconcile_VirtualServiceCreated(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify warning event was emitted about missing CRD.
+	found := false
+	for len(rec.Events) > 0 {
+		e := <-rec.Events
+		if strings.Contains(e, "CRDNotInstalled") && strings.Contains(e, "networking.istio.io") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected CRDNotInstalled warning event for VirtualService")
 	}
 }
 

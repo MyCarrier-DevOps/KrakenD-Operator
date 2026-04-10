@@ -147,6 +147,45 @@ func TestPrepareValidationCopy_NoEndpoints(t *testing.T) {
 	}
 }
 
+func TestPrepareValidationCopy_AllWildcardEndpoints(t *testing.T) {
+	v := NewValidator(ValidatorOptions{Executor: &mockExecutor{}, BinaryPath: "krakend"})
+	input := []byte(`{"endpoints":[{"endpoint":"/*","method":"GET"}],"version":3}`)
+	out, err := v.PrepareValidationCopy(input, true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var config map[string]any
+	if err := json.Unmarshal(out, &config); err != nil {
+		t.Fatalf("invalid JSON output: %v", err)
+	}
+	endpoints := config["endpoints"].([]any)
+	if endpoints == nil {
+		t.Fatal("endpoints should be an empty array, not null")
+	}
+	if len(endpoints) != 0 {
+		t.Fatalf("expected 0 endpoints after stripping all wildcards, got %d", len(endpoints))
+	}
+}
+
+func TestPrepareValidationCopy_EmptyEndpointsArray(t *testing.T) {
+	v := NewValidator(ValidatorOptions{Executor: &mockExecutor{}, BinaryPath: "krakend"})
+	input := []byte(`{"endpoints":[],"version":3}`)
+	out, err := v.PrepareValidationCopy(input, true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var config map[string]any
+	if err := json.Unmarshal(out, &config); err != nil {
+		t.Fatalf("invalid JSON output: %v", err)
+	}
+	endpoints := config["endpoints"].([]any)
+	if endpoints == nil {
+		t.Fatal("endpoints should be an empty array, not null")
+	}
+}
+
 func TestPrepareValidationCopy_InvalidJSON(t *testing.T) {
 	v := NewValidator(ValidatorOptions{Executor: &mockExecutor{}, BinaryPath: "krakend"})
 	_, err := v.PrepareValidationCopy([]byte(`{invalid`), true)

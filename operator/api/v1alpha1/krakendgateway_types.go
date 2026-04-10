@@ -90,8 +90,17 @@ type KrakenDGatewaySpec struct {
 
 // GatewayConfig holds KrakenD service-level configuration.
 type GatewayConfig struct {
+	// Name is the gateway name included in the root KrakenD config.
+	Name string `json:"name,omitempty"`
+
 	// Port is the KrakenD listen port (default 8080).
 	Port int32 `json:"port,omitempty"`
+
+	// ListenIP is the bind address (default "0.0.0.0").
+	ListenIP string `json:"listenIP,omitempty"`
+
+	// Host is the list of default backend hosts inherited by backends without their own host.
+	Host []string `json:"host,omitempty"`
 
 	// Timeout is the global request timeout (e.g. "3s").
 	Timeout string `json:"timeout,omitempty"`
@@ -104,6 +113,12 @@ type GatewayConfig struct {
 
 	// DNSCacheTTL is the DNS lookup cache duration (e.g. "30s").
 	DNSCacheTTL string `json:"dnsCacheTTL,omitempty"`
+
+	// EchoEndpoint enables the /__echo/ endpoint for debugging.
+	EchoEndpoint bool `json:"echoEndpoint,omitempty"`
+
+	// DebugEndpoint enables the /__debug/ endpoint.
+	DebugEndpoint bool `json:"debugEndpoint,omitempty"`
 
 	// CORS configures Cross-Origin Resource Sharing headers.
 	CORS *CORSConfig `json:"cors,omitempty"`
@@ -120,16 +135,22 @@ type GatewayConfig struct {
 	// Telemetry configures observability integrations.
 	Telemetry *TelemetryConfig `json:"telemetry,omitempty"`
 
+	// Documentation configures gateway-level OpenAPI documentation.
+	Documentation *DocumentationConfig `json:"documentation,omitempty"`
+
 	// ExtraConfig holds arbitrary gateway-level extra_config JSON.
 	ExtraConfig *runtime.RawExtension `json:"extraConfig,omitempty"`
 }
 
 // CORSConfig configures Cross-Origin Resource Sharing headers.
 type CORSConfig struct {
-	AllowOrigins []string `json:"allowOrigins,omitempty"`
-	AllowMethods []string `json:"allowMethods,omitempty"`
-	AllowHeaders []string `json:"allowHeaders,omitempty"`
-	MaxAge       string   `json:"maxAge,omitempty"`
+	AllowOrigins     []string `json:"allowOrigins,omitempty"`
+	AllowMethods     []string `json:"allowMethods,omitempty"`
+	AllowHeaders     []string `json:"allowHeaders,omitempty"`
+	ExposeHeaders    []string `json:"exposeHeaders,omitempty"`
+	AllowCredentials bool     `json:"allowCredentials,omitempty"`
+	MaxAge           string   `json:"maxAge,omitempty"`
+	Debug            bool     `json:"debug,omitempty"`
 }
 
 // SecurityConfig configures HTTP security headers.
@@ -146,16 +167,21 @@ type SecurityConfig struct {
 // LoggingConfig configures KrakenD logging.
 type LoggingConfig struct {
 	Level  string `json:"level,omitempty"`
-	Format string `json:"format,omitempty"`
+	Prefix string `json:"prefix,omitempty"`
 	Stdout bool   `json:"stdout,omitempty"`
+	Syslog bool   `json:"syslog,omitempty"`
+	Format string `json:"format,omitempty"`
 }
 
 // RouterConfig configures KrakenD router behavior.
 type RouterConfig struct {
-	ReturnErrorMsg   bool   `json:"returnErrorMsg,omitempty"`
-	HealthPath       string `json:"healthPath,omitempty"`
-	AutoOptions      bool   `json:"autoOptions,omitempty"`
-	DisableAccessLog bool   `json:"disableAccessLog,omitempty"`
+	ReturnErrorMsg               bool     `json:"returnErrorMsg,omitempty"`
+	HealthPath                   string   `json:"healthPath,omitempty"`
+	AutoOptions                  bool     `json:"autoOptions,omitempty"`
+	DisableAccessLog             bool     `json:"disableAccessLog,omitempty"`
+	LoggerSkipPaths              []string `json:"loggerSkipPaths,omitempty"`
+	DisableRedirectFixedPath     bool     `json:"disableRedirectFixedPath,omitempty"`
+	DisableRedirectTrailingSlash bool     `json:"disableRedirectTrailingSlash,omitempty"`
 }
 
 // TelemetryConfig configures observability integrations.
@@ -166,25 +192,86 @@ type TelemetryConfig struct {
 
 // OpenTelemetryConfig configures OpenTelemetry export.
 type OpenTelemetryConfig struct {
-	Exporters   *OTelExporters `json:"exporters,omitempty"`
 	ServiceName string         `json:"serviceName,omitempty"`
+	Exporters   *OTelExporters `json:"exporters,omitempty"`
+	Layers      *OTelLayers    `json:"layers,omitempty"`
 }
 
 // OTelExporters configures OpenTelemetry exporters.
 type OTelExporters struct {
-	OTLP *OTLPExporter `json:"otlp,omitempty"`
+	OTLP       []OTLPExporter           `json:"otlp,omitempty"`
+	Prometheus []OTelPrometheusExporter `json:"prometheus,omitempty"`
 }
 
-// OTLPExporter configures the OTLP exporter.
+// OTLPExporter configures an OTLP exporter instance.
 type OTLPExporter struct {
-	Host string `json:"host"`
-	Port int32  `json:"port,omitempty"`
+	Name    string `json:"name,omitempty"`
+	Host    string `json:"host"`
+	Port    int32  `json:"port,omitempty"`
+	UseHTTP bool   `json:"useHTTP,omitempty"`
 }
 
-// PrometheusConfig configures the Prometheus metrics exporter.
+// OTelPrometheusExporter configures a Prometheus exporter within OpenTelemetry.
+type OTelPrometheusExporter struct {
+	Name           string `json:"name,omitempty"`
+	Port           int32  `json:"port,omitempty"`
+	ListenIP       string `json:"listenIP,omitempty"`
+	ProcessMetrics bool   `json:"processMetrics,omitempty"`
+	GoMetrics      bool   `json:"goMetrics,omitempty"`
+}
+
+// OTelLayers configures OpenTelemetry instrumentation layers.
+type OTelLayers struct {
+	Global  *OTelGlobalLayer  `json:"global,omitempty"`
+	Proxy   *OTelProxyLayer   `json:"proxy,omitempty"`
+	Backend *OTelBackendLayer `json:"backend,omitempty"`
+}
+
+// OTelGlobalLayer configures global-level OpenTelemetry instrumentation.
+type OTelGlobalLayer struct {
+	DisableMetrics     bool `json:"disableMetrics,omitempty"`
+	DisableTraces      bool `json:"disableTraces,omitempty"`
+	DisablePropagation bool `json:"disablePropagation,omitempty"`
+	ReportHeaders      bool `json:"reportHeaders,omitempty"`
+}
+
+// OTelProxyLayer configures proxy-level OpenTelemetry instrumentation.
+type OTelProxyLayer struct {
+	DisableMetrics bool `json:"disableMetrics,omitempty"`
+	DisableTraces  bool `json:"disableTraces,omitempty"`
+}
+
+// OTelBackendLayer configures backend-level OpenTelemetry instrumentation.
+type OTelBackendLayer struct {
+	Metrics *OTelBackendDetail `json:"metrics,omitempty"`
+	Traces  *OTelBackendDetail `json:"traces,omitempty"`
+}
+
+// OTelBackendDetail configures detailed backend-level metrics or traces.
+type OTelBackendDetail struct {
+	DisableStage       bool                  `json:"disableStage,omitempty"`
+	RoundTrip          bool                  `json:"roundTrip,omitempty"`
+	ReadPayload        bool                  `json:"readPayload,omitempty"`
+	DetailedConnection bool                  `json:"detailedConnection,omitempty"`
+	StaticAttributes   []OTelStaticAttribute `json:"staticAttributes,omitempty"`
+}
+
+// OTelStaticAttribute is a key-value pair added to telemetry data.
+type OTelStaticAttribute struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+// PrometheusConfig configures a standalone Prometheus metrics endpoint.
 type PrometheusConfig struct {
 	Enabled bool  `json:"enabled,omitempty"`
 	Port    int32 `json:"port,omitempty"`
+}
+
+// DocumentationConfig configures gateway-level OpenAPI documentation.
+type DocumentationConfig struct {
+	BasePath string `json:"basePath,omitempty"`
+	Version  string `json:"version,omitempty"`
 }
 
 // AutoscalingSpec configures the HorizontalPodAutoscaler.

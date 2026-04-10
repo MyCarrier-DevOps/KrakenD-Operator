@@ -254,20 +254,11 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 }
 
 // SetupWithManager sets up the controller with the Manager.
+// Optional third-party CRDs (Dragonfly, ExternalSecret, VirtualService) are
+// NOT registered with Owns() because they may not be installed in the cluster.
+// The operator still sets ownerReferences on instances it creates so that GC
+// cleans them up when the gateway is deleted.
 func (r *KrakenDGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	dfObj := &unstructured.Unstructured{}
-	dfObj.SetGroupVersionKind(schema.GroupVersionKind{
-		Group: "dragonflydb.io", Version: "v1alpha1", Kind: "Dragonfly",
-	})
-	esObj := &unstructured.Unstructured{}
-	esObj.SetGroupVersionKind(schema.GroupVersionKind{
-		Group: "external-secrets.io", Version: "v1", Kind: "ExternalSecret",
-	})
-	vsObj := &unstructured.Unstructured{}
-	vsObj.SetGroupVersionKind(schema.GroupVersionKind{
-		Group: "networking.istio.io", Version: "v1", Kind: "VirtualService",
-	})
-
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.KrakenDGateway{}).
 		Owns(&appsv1.Deployment{}).
@@ -276,9 +267,6 @@ func (r *KrakenDGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.ServiceAccount{}).
 		Owns(&policyv1.PodDisruptionBudget{}).
 		Owns(&autoscalingv2.HorizontalPodAutoscaler{}).
-		Owns(dfObj).
-		Owns(esObj).
-		Owns(vsObj).
 		Watches(
 			&v1alpha1.KrakenDEndpoint{},
 			handler.EnqueueRequestsFromMapFunc(r.endpointToGateway),
@@ -295,6 +283,20 @@ func (r *KrakenDGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		).
 		Named("krakendgateway").
 		Complete(r)
+}
+
+// crdAvailable checks whether the given GVK is registered in the cluster's
+// API discovery. Returns (false, nil) when the CRD is simply not installed,
+// and (false, err) for transient or unexpected errors.
+func (r *KrakenDGatewayReconciler) crdAvailable(gvk schema.GroupVersionKind) (bool, error) {
+	_, err := r.RESTMapper().RESTMapping(gvk.GroupKind(), gvk.Version)
+	if err == nil {
+		return true, nil
+	}
+	if meta.IsNoMatchError(err) {
+		return false, nil
+	}
+	return false, fmt.Errorf("checking CRD availability for %s: %w", gvk, err)
 }
 
 // gatherPolicies fetches all unique KrakenDBackendPolicy resources referenced
@@ -368,11 +370,20 @@ func (r *KrakenDGatewayReconciler) detectDragonflyState(
 	}
 
 	log := logf.FromContext(ctx)
+	dfGVK := schema.GroupVersionKind{Group: "dragonflydb.io", Version: "v1alpha1", Kind: "Dragonfly"}
+	available, err := r.crdAvailable(dfGVK)
+	if err != nil {
+		log.Error(err, "failed to check Dragonfly CRD availability")
+		return nil
+	}
+	if !available {
+		log.V(1).Info("Dragonfly CRD not installed, skipping state detection")
+		return nil
+	}
+
 	dfName := resources.DragonflyName(gw)
 	df := &unstructured.Unstructured{}
-	df.SetGroupVersionKind(schema.GroupVersionKind{
-		Group: "dragonflydb.io", Version: "v1alpha1", Kind: "Dragonfly",
-	})
+	df.SetGroupVersionKind(dfGVK)
 
 	key := types.NamespacedName{Name: dfName, Namespace: gw.Namespace}
 	if err := r.Get(ctx, key, df); err != nil {
@@ -604,6 +615,9 @@ func (r *KrakenDGatewayReconciler) reconcileOwnedResources(
 	gw *v1alpha1.KrakenDGateway,
 	output *renderer.RenderOutput,
 ) error {
+	log := logf.FromContext(ctx)
+	errCRDMissing := fmt.Errorf("CRD not installed")
+
 	// ServiceAccount
 	sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{
 		Name: gw.Name, Namespace: gw.Namespace,
@@ -672,60 +686,90 @@ func (r *KrakenDGatewayReconciler) reconcileOwnedResources(
 		}
 	}
 
-	// Dragonfly (only if enabled)
+	// Dragonfly (only if enabled AND CRD is installed)
 	if gw.Spec.Dragonfly != nil && gw.Spec.Dragonfly.Enabled {
-		df := &unstructured.Unstructured{}
-		df.SetGroupVersionKind(schema.GroupVersionKind{
-			Group: "dragonflydb.io", Version: "v1alpha1", Kind: "Dragonfly",
-		})
-		df.SetName(resources.DragonflyName(gw))
-		df.SetNamespace(gw.Namespace)
-		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, df, func() error {
-			resources.BuildDragonfly(df, gw)
-			return controllerutil.SetControllerReference(gw, df, r.Scheme)
-		}); err != nil {
-			return fmt.Errorf("reconciling dragonfly: %w", err)
+		dfGVK := schema.GroupVersionKind{Group: "dragonflydb.io", Version: "v1alpha1", Kind: "Dragonfly"}
+		dfAvailable, dfErr := r.crdAvailable(dfGVK)
+		if dfErr != nil {
+			return fmt.Errorf("checking Dragonfly CRD: %w", dfErr)
+		}
+		if !dfAvailable {
+			log.Error(errCRDMissing,
+				"Dragonfly requested but dragonflydb.io CRD is not available")
+			r.Recorder.Event(gw, "Warning", "CRDNotInstalled",
+				"Dragonfly is enabled but the dragonflydb.io CRD is not installed in the cluster")
+		} else {
+			df := &unstructured.Unstructured{}
+			df.SetGroupVersionKind(dfGVK)
+			df.SetName(resources.DragonflyName(gw))
+			df.SetNamespace(gw.Namespace)
+			if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, df, func() error {
+				resources.BuildDragonfly(df, gw)
+				return controllerutil.SetControllerReference(gw, df, r.Scheme)
+			}); err != nil {
+				return fmt.Errorf("reconciling dragonfly: %w", err)
+			}
 		}
 	}
 
-	// ExternalSecret (only if license.externalSecret is enabled)
+	// ExternalSecret (only if license.externalSecret is enabled AND CRD is installed)
 	if gw.Spec.License != nil && gw.Spec.License.ExternalSecret.Enabled {
-		es := &unstructured.Unstructured{}
-		es.SetGroupVersionKind(schema.GroupVersionKind{
-			Group: "external-secrets.io", Version: "v1", Kind: "ExternalSecret",
-		})
-		es.SetName(resources.ExternalSecretName(gw))
-		es.SetNamespace(gw.Namespace)
-		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, es, func() error {
-			resources.BuildExternalSecret(es, gw)
-			return controllerutil.SetControllerReference(gw, es, r.Scheme)
-		}); err != nil {
-			return fmt.Errorf("reconciling externalsecret: %w", err)
+		esGVK := schema.GroupVersionKind{Group: "external-secrets.io", Version: "v1", Kind: "ExternalSecret"}
+		esAvailable, esErr := r.crdAvailable(esGVK)
+		if esErr != nil {
+			return fmt.Errorf("checking ExternalSecret CRD: %w", esErr)
+		}
+		if !esAvailable {
+			log.Error(errCRDMissing,
+				"ExternalSecret requested but external-secrets.io CRD is not available")
+			r.Recorder.Event(gw, "Warning", "CRDNotInstalled",
+				"ExternalSecret is enabled but the external-secrets.io CRD is not installed in the cluster")
+		} else {
+			es := &unstructured.Unstructured{}
+			es.SetGroupVersionKind(esGVK)
+			es.SetName(resources.ExternalSecretName(gw))
+			es.SetNamespace(gw.Namespace)
+			if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, es, func() error {
+				resources.BuildExternalSecret(es, gw)
+				return controllerutil.SetControllerReference(gw, es, r.Scheme)
+			}); err != nil {
+				return fmt.Errorf("reconciling externalsecret: %w", err)
+			}
 		}
 	}
 
-	// VirtualService (only if Istio is enabled)
+	// VirtualService (only if Istio is enabled AND CRD is installed)
 	if gw.Spec.Istio != nil && gw.Spec.Istio.Enabled {
-		vs := &unstructured.Unstructured{}
-		vs.SetGroupVersionKind(schema.GroupVersionKind{
-			Group: "networking.istio.io", Version: "v1", Kind: "VirtualService",
-		})
-		vs.SetName(gw.Name)
-		vs.SetNamespace(gw.Namespace)
-		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, vs, func() error {
-			resources.BuildVirtualService(vs, gw)
-			return controllerutil.SetControllerReference(gw, vs, r.Scheme)
-		}); err != nil {
-			return fmt.Errorf("reconciling virtualservice: %w", err)
+		vsGVK := schema.GroupVersionKind{Group: "networking.istio.io", Version: "v1", Kind: "VirtualService"}
+		vsAvailable, vsErr := r.crdAvailable(vsGVK)
+		if vsErr != nil {
+			return fmt.Errorf("checking VirtualService CRD: %w", vsErr)
 		}
-		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
-			Type:               v1alpha1.ConditionIstioConfigured,
-			Status:             metav1.ConditionTrue,
-			ObservedGeneration: gw.Generation,
-			Reason:             v1alpha1.ReasonIstioVSCreated,
-			Message:            "Istio VirtualService reconciled",
-		})
-		r.Recorder.Event(gw, "Normal", v1alpha1.ReasonIstioVSCreated, "Istio VirtualService reconciled")
+		if !vsAvailable {
+			log.Error(errCRDMissing,
+				"VirtualService requested but networking.istio.io CRD is not available")
+			r.Recorder.Event(gw, "Warning", "CRDNotInstalled",
+				"Istio is enabled but the networking.istio.io VirtualService CRD is not installed in the cluster")
+		} else {
+			vs := &unstructured.Unstructured{}
+			vs.SetGroupVersionKind(vsGVK)
+			vs.SetName(gw.Name)
+			vs.SetNamespace(gw.Namespace)
+			if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, vs, func() error {
+				resources.BuildVirtualService(vs, gw)
+				return controllerutil.SetControllerReference(gw, vs, r.Scheme)
+			}); err != nil {
+				return fmt.Errorf("reconciling virtualservice: %w", err)
+			}
+			meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+				Type:               v1alpha1.ConditionIstioConfigured,
+				Status:             metav1.ConditionTrue,
+				ObservedGeneration: gw.Generation,
+				Reason:             v1alpha1.ReasonIstioVSCreated,
+				Message:            "Istio VirtualService reconciled",
+			})
+			r.Recorder.Event(gw, "Normal", v1alpha1.ReasonIstioVSCreated, "Istio VirtualService reconciled")
+		}
 	}
 
 	return nil
