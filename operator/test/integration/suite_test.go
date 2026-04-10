@@ -58,7 +58,6 @@ func TestMain(m *testing.M) {
 	logf.SetLogger(zap.New(zap.UseDevMode(true)))
 
 	ctx, cancel = context.WithCancel(context.Background())
-	defer cancel()
 
 	scheme := runtime.NewScheme()
 	_ = clientgoscheme.AddToScheme(scheme)
@@ -76,11 +75,6 @@ func TestMain(m *testing.M) {
 		fmt.Fprintf(os.Stderr, "failed to start K3s container: %v\n", err)
 		os.Exit(1)
 	}
-	defer func() {
-		if err := testcontainers.TerminateContainer(k3sContainer); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: failed to terminate K3s container: %v\n", err)
-		}
-	}()
 
 	// Extract kubeconfig from the K3s cluster.
 	kubeConfigYaml, err := k3sContainer.GetKubeConfig(ctx)
@@ -103,7 +97,13 @@ func TestMain(m *testing.M) {
 	}
 
 	// Install CRDs into the K3s cluster using the apiextensions client.
-	crdDir, _ := filepath.Abs(filepath.Join("..", "..", "config", "crd", "bases"))
+	crdDir, err := filepath.Abs(
+		filepath.Join("..", "..", "config", "crd", "bases"),
+	)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to resolve CRD directory path: %v\n", err)
+		os.Exit(1)
+	}
 	if err := installCRDs(ctx, cfg, crdDir); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to install CRDs: %v\n", err)
 		os.Exit(1)
@@ -159,10 +159,23 @@ func TestMain(m *testing.M) {
 	go func() {
 		if err := mgr.Start(ctx); err != nil {
 			fmt.Fprintf(os.Stderr, "manager exited with error: %v\n", err)
+			cancel()
 		}
 	}()
 
-	os.Exit(m.Run())
+	code := m.Run()
+	cancel()
+	if k3sContainer != nil {
+		terminateCtx, terminateCancel := context.WithTimeout(
+			context.Background(), 30*time.Second,
+		)
+		defer terminateCancel()
+		if err := k3sContainer.Terminate(terminateCtx); err != nil {
+			fmt.Fprintf(os.Stderr,
+				"warning: failed to terminate K3s container: %v\n", err)
+		}
+	}
+	os.Exit(code)
 }
 
 // noopValidator performs no validation (CE binary not available in integration tests).
@@ -186,7 +199,7 @@ func waitForNodes(ctx context.Context, cfg *rest.Config) error {
 	return wait.PollUntilContextTimeout(ctx, 2*time.Second, 60*time.Second, true, func(ctx context.Context) (bool, error) {
 		nodes, err := clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
 		if err != nil {
-			return false, nil // retry on transient errors
+			return false, fmt.Errorf("listing nodes: %w", err)
 		}
 		if len(nodes.Items) == 0 {
 			return false, nil
