@@ -823,14 +823,8 @@ func TestDetectDragonflyState_CRDNotInstalled(t *testing.T) {
 	}
 
 	state := r.detectDragonflyState(context.Background(), gw)
-	if state == nil {
-		t.Fatal("expected non-nil state")
-	}
-	if !state.Enabled {
-		t.Error("expected Enabled=true")
-	}
-	if state.ServiceDNS == "" {
-		t.Error("expected non-empty ServiceDNS")
+	if state != nil {
+		t.Error("expected nil state when Dragonfly CRD is not installed")
 	}
 }
 
@@ -882,11 +876,8 @@ func TestGatewayReconcile_WithDragonflyEnabled(t *testing.T) {
 	if capturedInput == nil {
 		t.Fatal("renderer was not called")
 	}
-	if (*capturedInput).Dragonfly == nil {
-		t.Error("expected DragonflyState to be set in RenderInput")
-	}
-	if !(*capturedInput).Dragonfly.Enabled {
-		t.Error("expected DragonflyState.Enabled=true")
+	if (*capturedInput).Dragonfly != nil {
+		t.Error("expected nil DragonflyState when CRD is not installed")
 	}
 }
 

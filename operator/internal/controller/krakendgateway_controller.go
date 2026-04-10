@@ -286,10 +286,17 @@ func (r *KrakenDGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 // crdAvailable checks whether the given GVK is registered in the cluster's
-// API discovery. Returns false when the CRD is not installed.
-func (r *KrakenDGatewayReconciler) crdAvailable(gvk schema.GroupVersionKind) bool {
+// API discovery. Returns (false, nil) when the CRD is simply not installed,
+// and (false, err) for transient or unexpected errors.
+func (r *KrakenDGatewayReconciler) crdAvailable(gvk schema.GroupVersionKind) (bool, error) {
 	_, err := r.RESTMapper().RESTMapping(gvk.GroupKind(), gvk.Version)
-	return err == nil
+	if err == nil {
+		return true, nil
+	}
+	if meta.IsNoMatchError(err) {
+		return false, nil
+	}
+	return false, fmt.Errorf("checking CRD availability for %s: %w", gvk, err)
 }
 
 // gatherPolicies fetches all unique KrakenDBackendPolicy resources referenced
@@ -364,9 +371,14 @@ func (r *KrakenDGatewayReconciler) detectDragonflyState(
 
 	log := logf.FromContext(ctx)
 	dfGVK := schema.GroupVersionKind{Group: "dragonflydb.io", Version: "v1alpha1", Kind: "Dragonfly"}
-	if !r.crdAvailable(dfGVK) {
+	available, err := r.crdAvailable(dfGVK)
+	if err != nil {
+		log.Error(err, "failed to check Dragonfly CRD availability")
+		return nil
+	}
+	if !available {
 		log.V(1).Info("Dragonfly CRD not installed, skipping state detection")
-		return &renderer.DragonflyState{Enabled: true, ServiceDNS: resources.DragonflyServiceDNS(gw)}
+		return nil
 	}
 
 	dfName := resources.DragonflyName(gw)
@@ -677,7 +689,11 @@ func (r *KrakenDGatewayReconciler) reconcileOwnedResources(
 	// Dragonfly (only if enabled AND CRD is installed)
 	if gw.Spec.Dragonfly != nil && gw.Spec.Dragonfly.Enabled {
 		dfGVK := schema.GroupVersionKind{Group: "dragonflydb.io", Version: "v1alpha1", Kind: "Dragonfly"}
-		if !r.crdAvailable(dfGVK) {
+		dfAvailable, dfErr := r.crdAvailable(dfGVK)
+		if dfErr != nil {
+			return fmt.Errorf("checking Dragonfly CRD: %w", dfErr)
+		}
+		if !dfAvailable {
 			log.Error(errCRDMissing,
 				"Dragonfly requested but dragonflydb.io CRD is not available")
 			r.Recorder.Event(gw, "Warning", "CRDNotInstalled",
@@ -699,7 +715,11 @@ func (r *KrakenDGatewayReconciler) reconcileOwnedResources(
 	// ExternalSecret (only if license.externalSecret is enabled AND CRD is installed)
 	if gw.Spec.License != nil && gw.Spec.License.ExternalSecret.Enabled {
 		esGVK := schema.GroupVersionKind{Group: "external-secrets.io", Version: "v1", Kind: "ExternalSecret"}
-		if !r.crdAvailable(esGVK) {
+		esAvailable, esErr := r.crdAvailable(esGVK)
+		if esErr != nil {
+			return fmt.Errorf("checking ExternalSecret CRD: %w", esErr)
+		}
+		if !esAvailable {
 			log.Error(errCRDMissing,
 				"ExternalSecret requested but external-secrets.io CRD is not available")
 			r.Recorder.Event(gw, "Warning", "CRDNotInstalled",
@@ -721,7 +741,11 @@ func (r *KrakenDGatewayReconciler) reconcileOwnedResources(
 	// VirtualService (only if Istio is enabled AND CRD is installed)
 	if gw.Spec.Istio != nil && gw.Spec.Istio.Enabled {
 		vsGVK := schema.GroupVersionKind{Group: "networking.istio.io", Version: "v1", Kind: "VirtualService"}
-		if !r.crdAvailable(vsGVK) {
+		vsAvailable, vsErr := r.crdAvailable(vsGVK)
+		if vsErr != nil {
+			return fmt.Errorf("checking VirtualService CRD: %w", vsErr)
+		}
+		if !vsAvailable {
 			log.Error(errCRDMissing,
 				"VirtualService requested but networking.istio.io CRD is not available")
 			r.Recorder.Event(gw, "Warning", "CRDNotInstalled",

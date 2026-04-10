@@ -65,7 +65,7 @@ func TestMain(m *testing.M) {
 
 	// Start an ephemeral K3s cluster via testcontainers.
 	var err error
-	k3sContainer, err = k3s.Run(ctx, "rancher/k3s:v1.31.6-k3s1",
+	k3sContainer, err = k3s.Run(ctx, "rancher/k3s:v1.33.10-k3s1",
 		testcontainers.WithCmdArgs(
 			"--disable=traefik",
 			"--disable=metrics-server",
@@ -169,11 +169,11 @@ func TestMain(m *testing.M) {
 		terminateCtx, terminateCancel := context.WithTimeout(
 			context.Background(), 30*time.Second,
 		)
-		defer terminateCancel()
 		if err := k3sContainer.Terminate(terminateCtx); err != nil {
 			fmt.Fprintf(os.Stderr,
 				"warning: failed to terminate K3s container: %v\n", err)
 		}
+		terminateCancel()
 	}
 	os.Exit(code)
 }
@@ -244,7 +244,7 @@ func installCRDs(ctx context.Context, cfg *rest.Config, crdDir string) error {
 		}
 
 		var crd apiextensionsv1.CustomResourceDefinition
-		if err := yaml.NewYAMLOrJSONDecoder(bytes.NewReader(data), len(data)).Decode(&crd); err != nil {
+		if err := yaml.NewYAMLOrJSONDecoder(bytes.NewReader(data), 4096).Decode(&crd); err != nil {
 			return fmt.Errorf("decoding CRD %s: %w", entry.Name(), err)
 		}
 
@@ -258,7 +258,7 @@ func installCRDs(ctx context.Context, cfg *rest.Config, crdDir string) error {
 	return wait.PollUntilContextTimeout(ctx, time.Second, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		crdList, err := extClient.ApiextensionsV1().CustomResourceDefinitions().List(ctx, metav1.ListOptions{})
 		if err != nil {
-			return false, nil
+			return false, fmt.Errorf("listing CRDs: %w", err)
 		}
 		for _, crd := range crdList.Items {
 			established := false
