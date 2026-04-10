@@ -206,8 +206,6 @@ func TestGateway_DeletionCleansUpResources(t *testing.T) {
 	})
 
 	// Verify the Deployment has an owner reference pointing to the gateway.
-	// (envtest does not run the garbage collector, so we verify owner refs
-	// instead of waiting for cascade deletion.)
 	found := false
 	for _, ref := range dep.OwnerReferences {
 		if ref.Name == gw.Name && ref.Kind == "KrakenDGateway" {

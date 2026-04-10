@@ -103,6 +103,9 @@ func buildRootConfig(gw *v1alpha1.KrakenDGateway) map[string]any {
 
 	spec := gw.Spec.Config
 
+	if spec.Name != "" {
+		config["name"] = spec.Name
+	}
 	if spec.Timeout != "" {
 		config["timeout"] = spec.Timeout
 	}
@@ -114,6 +117,18 @@ func buildRootConfig(gw *v1alpha1.KrakenDGateway) map[string]any {
 	}
 	if spec.Port != 0 {
 		config["port"] = spec.Port
+	}
+	if spec.ListenIP != "" {
+		config["listen_ip"] = spec.ListenIP
+	}
+	if len(spec.Host) > 0 {
+		config["host"] = spec.Host
+	}
+	if spec.EchoEndpoint {
+		config["echo_endpoint"] = true
+	}
+	if spec.DebugEndpoint {
+		config["debug_endpoint"] = true
 	}
 
 	return config
@@ -130,6 +145,7 @@ func buildGatewayExtraConfig(gw *v1alpha1.KrakenDGateway, df *DragonflyState) ma
 	appendSecurityConfig(ec, spec.Security)
 	appendRouterConfig(ec, spec.Router)
 	appendLoggingConfig(ec, spec.Logging)
+	appendDocumentationConfig(ec, spec.Documentation)
 
 	if spec.DNSCacheTTL != "" {
 		ec["qos/dns"] = map[string]any{"ttl": spec.DNSCacheTTL}
@@ -155,20 +171,7 @@ func appendTelemetryConfig(ec map[string]any, tel *v1alpha1.TelemetryConfig) {
 		return
 	}
 	if tel.OpenTelemetry != nil {
-		otel := tel.OpenTelemetry
-		otelConfig := make(map[string]any)
-		if otel.ServiceName != "" {
-			otelConfig["service_name"] = otel.ServiceName
-		}
-		if otel.Exporters != nil && otel.Exporters.OTLP != nil {
-			otelConfig["exporters"] = map[string]any{
-				"otlp": []map[string]any{{
-					"host": otel.Exporters.OTLP.Host,
-					"port": otel.Exporters.OTLP.Port,
-				}},
-			}
-		}
-		if len(otelConfig) > 0 {
+		if otelConfig := buildOpenTelemetryConfig(tel.OpenTelemetry); len(otelConfig) > 0 {
 			ec["telemetry/opentelemetry"] = otelConfig
 		}
 	}
@@ -179,6 +182,115 @@ func appendTelemetryConfig(ec map[string]any, tel *v1alpha1.TelemetryConfig) {
 		}
 		ec["telemetry/prometheus"] = promConfig
 	}
+}
+
+func buildOpenTelemetryConfig(otel *v1alpha1.OpenTelemetryConfig) map[string]any {
+	cfg := make(map[string]any)
+	if otel.ServiceName != "" {
+		cfg["service_name"] = otel.ServiceName
+	}
+	if otel.Exporters != nil {
+		if exporters := buildOTelExporters(otel.Exporters); len(exporters) > 0 {
+			cfg["exporters"] = exporters
+		}
+	}
+	if otel.Layers != nil {
+		if layers := buildOTelLayers(otel.Layers); len(layers) > 0 {
+			cfg["layers"] = layers
+		}
+	}
+	return cfg
+}
+
+func buildOTelExporters(exp *v1alpha1.OTelExporters) map[string]any {
+	exporters := make(map[string]any)
+	if len(exp.OTLP) > 0 {
+		otlpArr := make([]map[string]any, 0, len(exp.OTLP))
+		for _, o := range exp.OTLP {
+			entry := map[string]any{"host": o.Host}
+			if o.Port != 0 {
+				entry["port"] = o.Port
+			}
+			if o.Name != "" {
+				entry["name"] = o.Name
+			}
+			if o.UseHTTP {
+				entry["use_http"] = true
+			}
+			otlpArr = append(otlpArr, entry)
+		}
+		exporters["otlp"] = otlpArr
+	}
+	if len(exp.Prometheus) > 0 {
+		promArr := make([]map[string]any, 0, len(exp.Prometheus))
+		for _, p := range exp.Prometheus {
+			entry := make(map[string]any)
+			if p.Name != "" {
+				entry["name"] = p.Name
+			}
+			if p.Port != 0 {
+				entry["port"] = p.Port
+			}
+			if p.ListenIP != "" {
+				entry["listen_ip"] = p.ListenIP
+			}
+			if p.ProcessMetrics {
+				entry["process_metrics"] = true
+			}
+			if p.GoMetrics {
+				entry["go_metrics"] = true
+			}
+			promArr = append(promArr, entry)
+		}
+		exporters["prometheus"] = promArr
+	}
+	return exporters
+}
+
+func buildOTelLayers(l *v1alpha1.OTelLayers) map[string]any {
+	layers := make(map[string]any)
+	if g := l.Global; g != nil {
+		layers["global"] = map[string]any{
+			"disable_metrics":     g.DisableMetrics,
+			"disable_traces":      g.DisableTraces,
+			"disable_propagation": g.DisablePropagation,
+			"report_headers":      g.ReportHeaders,
+		}
+	}
+	if p := l.Proxy; p != nil {
+		layers["proxy"] = map[string]any{
+			"disable_metrics": p.DisableMetrics,
+			"disable_traces":  p.DisableTraces,
+		}
+	}
+	if b := l.Backend; b != nil {
+		bl := make(map[string]any)
+		if b.Metrics != nil {
+			bl["metrics"] = buildOTelBackendDetail(b.Metrics)
+		}
+		if b.Traces != nil {
+			bl["traces"] = buildOTelBackendDetail(b.Traces)
+		}
+		layers["backend"] = bl
+	}
+	return layers
+}
+
+func buildOTelBackendDetail(d *v1alpha1.OTelBackendDetail) map[string]any {
+	m := map[string]any{
+		"disable_stage":       d.DisableStage,
+		"round_trip":          d.RoundTrip,
+		"read_payload":        d.ReadPayload,
+		"detailed_connection": d.DetailedConnection,
+	}
+	if len(d.StaticAttributes) > 0 {
+		attrs := make([]map[string]string, 0, len(d.StaticAttributes))
+		for _, a := range d.StaticAttributes {
+			attrs = append(attrs, map[string]string{"key": a.Key, "value": a.Value})
+		}
+		m["static_attributes"] = attrs
+	}
+	return m
 }
 
 func appendCORSConfig(ec map[string]any, cors *v1alpha1.CORSConfig) {
@@ -195,8 +307,17 @@ func appendCORSConfig(ec map[string]any, cors *v1alpha1.CORSConfig) {
 	if len(cors.AllowHeaders) > 0 {
 		c["allow_headers"] = cors.AllowHeaders
 	}
+	if len(cors.ExposeHeaders) > 0 {
+		c["expose_headers"] = cors.ExposeHeaders
+	}
+	if cors.AllowCredentials {
+		c["allow_credentials"] = true
+	}
 	if cors.MaxAge != "" {
 		c["max_age"] = cors.MaxAge
+	}
+	if cors.Debug {
+		c["debug"] = true
 	}
 	if len(c) > 0 {
 		ec["security/cors"] = c
@@ -252,6 +373,15 @@ func appendRouterConfig(ec map[string]any, router *v1alpha1.RouterConfig) {
 	if router.DisableAccessLog {
 		r["disable_access_log"] = true
 	}
+	if len(router.LoggerSkipPaths) > 0 {
+		r["logger_skip_paths"] = router.LoggerSkipPaths
+	}
+	if router.DisableRedirectFixedPath {
+		r["disable_redirect_fixed_path"] = true
+	}
+	if router.DisableRedirectTrailingSlash {
+		r["disable_redirect_trailing_slash"] = true
+	}
 	if len(r) > 0 {
 		ec["router"] = r
 	}
@@ -265,14 +395,36 @@ func appendLoggingConfig(ec map[string]any, logging *v1alpha1.LoggingConfig) {
 	if logging.Level != "" {
 		l["level"] = logging.Level
 	}
-	if logging.Format != "" {
-		l["syslog"] = logging.Format == "logstash"
+	if logging.Prefix != "" {
+		l["prefix"] = logging.Prefix
 	}
 	if logging.Stdout {
 		l["stdout"] = true
 	}
+	if logging.Syslog {
+		l["syslog"] = true
+	}
+	if logging.Format != "" {
+		l["format"] = logging.Format
+	}
 	if len(l) > 0 {
 		ec["telemetry/logging"] = l
+	}
+}
+
+func appendDocumentationConfig(ec map[string]any, doc *v1alpha1.DocumentationConfig) {
+	if doc == nil {
+		return
+	}
+	d := make(map[string]any)
+	if doc.BasePath != "" {
+		d["base_path"] = doc.BasePath
+	}
+	if doc.Version != "" {
+		d["version"] = doc.Version
+	}
+	if len(d) > 0 {
+		ec["documentation/openapi"] = d
 	}
 }
 

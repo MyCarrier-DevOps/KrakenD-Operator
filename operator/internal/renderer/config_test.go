@@ -386,7 +386,7 @@ func TestBuildGatewayExtraConfig_Telemetry(t *testing.T) {
 		OpenTelemetry: &v1alpha1.OpenTelemetryConfig{
 			ServiceName: "my-gateway",
 			Exporters: &v1alpha1.OTelExporters{
-				OTLP: &v1alpha1.OTLPExporter{Host: "otel-collector", Port: 4317},
+				OTLP: []v1alpha1.OTLPExporter{{Host: "otel-collector", Port: 4317}},
 			},
 		},
 		Prometheus: &v1alpha1.PrometheusConfig{Enabled: true, Port: 9090},
@@ -428,8 +428,10 @@ func TestBuildGatewayExtraConfig_Logging(t *testing.T) {
 	gw := minimalGateway()
 	gw.Spec.Config.Logging = &v1alpha1.LoggingConfig{
 		Level:  "DEBUG",
+		Prefix: "[KRAKEND]",
 		Format: "logstash",
 		Stdout: true,
+		Syslog: false,
 	}
 
 	ec := buildGatewayExtraConfig(gw, nil)
@@ -441,8 +443,14 @@ func TestBuildGatewayExtraConfig_Logging(t *testing.T) {
 	if logMap["level"] != "DEBUG" {
 		t.Errorf("expected level DEBUG, got %v", logMap["level"])
 	}
-	if logMap["syslog"] != true {
-		t.Error("expected syslog true for logstash format")
+	if logMap["prefix"] != "[KRAKEND]" {
+		t.Errorf("expected prefix [KRAKEND], got %v", logMap["prefix"])
+	}
+	if logMap["format"] != "logstash" {
+		t.Errorf("expected format logstash, got %v", logMap["format"])
+	}
+	if logMap["stdout"] != true {
+		t.Error("expected stdout true")
 	}
 }
 
