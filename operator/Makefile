@@ -113,7 +113,7 @@ test: manifests generate fmt vet ## Run unit tests.
 	go test $$(go list ./... | grep -v /test/) -coverprofile cover.out
 
 # Integration tests use testcontainers-go with an ephemeral K3s cluster
-# and run controllers in-process. No external dependencies required.
+# and run controllers in-process. Requires a container runtime (docker/podman).
 .PHONY: test-integration
 test-integration: manifests generate fmt vet ## Run integration tests in an ephemeral K3s cluster via testcontainers.
 	go test -v -timeout 15m ./test/integration/

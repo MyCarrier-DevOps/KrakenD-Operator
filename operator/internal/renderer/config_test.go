@@ -576,3 +576,274 @@ func TestSerializeJSON_Deterministic(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestBuildRootConfig_AllFields(t *testing.T) {
+	gw := minimalGateway()
+	gw.Spec.Config.Name = "My Gateway"
+	gw.Spec.Config.Port = 9090
+	gw.Spec.Config.ListenIP = "0.0.0.0"
+	gw.Spec.Config.Host = []string{"http://backend:8080"}
+	gw.Spec.Config.Timeout = "5s"
+	gw.Spec.Config.CacheTTL = "60s"
+	gw.Spec.Config.OutputEncoding = "json"
+	gw.Spec.Config.EchoEndpoint = true
+	gw.Spec.Config.DebugEndpoint = true
+
+	config := buildRootConfig(gw)
+
+	if config["name"] != "My Gateway" {
+		t.Errorf("expected name 'My Gateway', got %v", config["name"])
+	}
+	if config["port"] != int32(9090) {
+		t.Errorf("expected port 9090, got %v", config["port"])
+	}
+	if config["listen_ip"] != "0.0.0.0" {
+		t.Errorf("expected listen_ip 0.0.0.0, got %v", config["listen_ip"])
+	}
+	hosts := config["host"].([]string)
+	if len(hosts) != 1 || hosts[0] != "http://backend:8080" {
+		t.Errorf("unexpected host: %v", hosts)
+	}
+	if config["echo_endpoint"] != true {
+		t.Error("expected echo_endpoint true")
+	}
+	if config["debug_endpoint"] != true {
+		t.Error("expected debug_endpoint true")
+	}
+}
+
+func TestBuildRootConfig_OmitsZeroValues(t *testing.T) {
+	gw := minimalGateway()
+	config := buildRootConfig(gw)
+
+	for _, key := range []string{"name", "listen_ip", "host", "echo_endpoint", "debug_endpoint", "timeout", "cache_ttl", "output_encoding", "port"} {
+		if _, ok := config[key]; ok {
+			t.Errorf("expected key %q to be omitted for zero value", key)
+		}
+	}
+	if config["version"] != 3 {
+		t.Errorf("expected version 3, got %v", config["version"])
+	}
+}
+
+func TestBuildGatewayExtraConfig_CORSAllFields(t *testing.T) {
+	gw := minimalGateway()
+	gw.Spec.Config.CORS = &v1alpha1.CORSConfig{
+		AllowOrigins:     []string{"https://example.com"},
+		AllowMethods:     []string{"GET", "POST"},
+		AllowHeaders:     []string{"Authorization"},
+		ExposeHeaders:    []string{"X-Request-Id", "X-Trace-Id"},
+		AllowCredentials: true,
+		MaxAge:           "12h",
+		Debug:            true,
+	}
+
+	ec := buildGatewayExtraConfig(gw, nil)
+	cors, ok := ec["security/cors"]
+	if !ok {
+		t.Fatal("expected security/cors in extra_config")
+	}
+	corsMap := cors.(map[string]any)
+
+	expose := corsMap["expose_headers"].([]string)
+	if len(expose) != 2 || expose[0] != "X-Request-Id" {
+		t.Errorf("unexpected expose_headers: %v", expose)
+	}
+	if corsMap["allow_credentials"] != true {
+		t.Error("expected allow_credentials true")
+	}
+	if corsMap["debug"] != true {
+		t.Error("expected debug true")
+	}
+}
+
+func TestBuildGatewayExtraConfig_CORSOmitsDefaults(t *testing.T) {
+	gw := minimalGateway()
+	gw.Spec.Config.CORS = &v1alpha1.CORSConfig{
+		AllowOrigins: []string{"*"},
+	}
+
+	ec := buildGatewayExtraConfig(gw, nil)
+	corsMap := ec["security/cors"].(map[string]any)
+
+	if _, ok := corsMap["expose_headers"]; ok {
+		t.Error("expose_headers should be omitted when empty")
+	}
+	if _, ok := corsMap["allow_credentials"]; ok {
+		t.Error("allow_credentials should be omitted when false")
+	}
+	if _, ok := corsMap["debug"]; ok {
+		t.Error("debug should be omitted when false")
+	}
+}
+
+func TestBuildOpenTelemetryConfig_FullExporters(t *testing.T) {
+	otel := &v1alpha1.OpenTelemetryConfig{
+		ServiceName: "test-svc",
+		Exporters: &v1alpha1.OTelExporters{
+			OTLP: []v1alpha1.OTLPExporter{
+				{Name: "primary", Host: "otel:4317", Port: 4317, UseHTTP: false},
+				{Name: "secondary", Host: "otel-http:4318", Port: 4318, UseHTTP: true},
+			},
+			Prometheus: []v1alpha1.OTelPrometheusExporter{
+				{Name: "prom", Port: 9090, ListenIP: "::1", ProcessMetrics: true, GoMetrics: true},
+			},
+		},
+	}
+
+	cfg := buildOpenTelemetryConfig(otel)
+
+	if cfg["service_name"] != "test-svc" {
+		t.Errorf("expected service_name test-svc, got %v", cfg["service_name"])
+	}
+
+	exporters := cfg["exporters"].(map[string]any)
+
+	// Validate OTLP array
+	otlpArr := exporters["otlp"].([]map[string]any)
+	if len(otlpArr) != 2 {
+		t.Fatalf("expected 2 OTLP exporters, got %d", len(otlpArr))
+	}
+	if otlpArr[0]["name"] != "primary" {
+		t.Errorf("expected name primary, got %v", otlpArr[0]["name"])
+	}
+	if otlpArr[0]["host"] != "otel:4317" {
+		t.Errorf("expected host otel:4317, got %v", otlpArr[0]["host"])
+	}
+	if _, ok := otlpArr[0]["use_http"]; ok {
+		t.Error("use_http should be omitted when false")
+	}
+	if otlpArr[1]["use_http"] != true {
+		t.Error("expected use_http true for secondary exporter")
+	}
+
+	// Validate Prometheus array
+	promArr := exporters["prometheus"].([]map[string]any)
+	if len(promArr) != 1 {
+		t.Fatalf("expected 1 Prometheus exporter, got %d", len(promArr))
+	}
+	if promArr[0]["name"] != "prom" {
+		t.Errorf("expected name prom, got %v", promArr[0]["name"])
+	}
+	if promArr[0]["listen_ip"] != "::1" {
+		t.Errorf("expected listen_ip ::1, got %v", promArr[0]["listen_ip"])
+	}
+	if promArr[0]["process_metrics"] != true {
+		t.Error("expected process_metrics true")
+	}
+	if promArr[0]["go_metrics"] != true {
+		t.Error("expected go_metrics true")
+	}
+}
+
+func TestBuildOTelLayers_AllLayers(t *testing.T) {
+	layers := &v1alpha1.OTelLayers{
+		Global: &v1alpha1.OTelGlobalLayer{
+			DisableMetrics:     false,
+			DisableTraces:      false,
+			DisablePropagation: true,
+			ReportHeaders:      true,
+		},
+		Proxy: &v1alpha1.OTelProxyLayer{
+			DisableMetrics: false,
+			DisableTraces:  true,
+		},
+		Backend: &v1alpha1.OTelBackendLayer{
+			Metrics: &v1alpha1.OTelBackendDetail{
+				DisableStage:       false,
+				RoundTrip:          true,
+				ReadPayload:        true,
+				DetailedConnection: true,
+				StaticAttributes: []v1alpha1.OTelStaticAttribute{
+					{Key: "env", Value: "prod"},
+				},
+			},
+			Traces: &v1alpha1.OTelBackendDetail{
+				RoundTrip: true,
+			},
+		},
+	}
+
+	result := buildOTelLayers(layers)
+
+	// Global layer
+	global := result["global"].(map[string]any)
+	if global["disable_propagation"] != true {
+		t.Error("expected disable_propagation true")
+	}
+	if global["report_headers"] != true {
+		t.Error("expected report_headers true")
+	}
+
+	// Proxy layer
+	proxy := result["proxy"].(map[string]any)
+	if proxy["disable_traces"] != true {
+		t.Error("expected disable_traces true")
+	}
+
+	// Backend layer
+	backend := result["backend"].(map[string]any)
+	metrics := backend["metrics"].(map[string]any)
+	if metrics["round_trip"] != true {
+		t.Error("expected round_trip true")
+	}
+	if metrics["detailed_connection"] != true {
+		t.Error("expected detailed_connection true")
+	}
+	attrs := metrics["static_attributes"].([]map[string]string)
+	if len(attrs) != 1 || attrs[0]["key"] != "env" || attrs[0]["value"] != "prod" {
+		t.Errorf("unexpected static_attributes: %v", attrs)
+	}
+
+	traces := backend["traces"].(map[string]any)
+	if traces["round_trip"] != true {
+		t.Error("expected traces round_trip true")
+	}
+	if _, ok := traces["static_attributes"]; ok {
+		t.Error("static_attributes should be omitted when empty")
+	}
+}
+
+func TestBuildGatewayExtraConfig_Documentation(t *testing.T) {
+	gw := minimalGateway()
+	gw.Spec.Config.Documentation = &v1alpha1.DocumentationConfig{
+		BasePath: "/api",
+		Version:  "v2",
+	}
+
+	ec := buildGatewayExtraConfig(gw, nil)
+	doc, ok := ec["documentation/openapi"]
+	if !ok {
+		t.Fatal("expected documentation/openapi in extra_config")
+	}
+	docMap := doc.(map[string]any)
+	if docMap["base_path"] != "/api" {
+		t.Errorf("expected base_path /api, got %v", docMap["base_path"])
+	}
+	if docMap["version"] != "v2" {
+		t.Errorf("expected version v2, got %v", docMap["version"])
+	}
+}
+
+func TestBuildGatewayExtraConfig_RouterNewFields(t *testing.T) {
+	gw := minimalGateway()
+	gw.Spec.Config.Router = &v1alpha1.RouterConfig{
+		LoggerSkipPaths:              []string{"/__health", "/__debug"},
+		DisableRedirectFixedPath:     true,
+		DisableRedirectTrailingSlash: true,
+	}
+
+	ec := buildGatewayExtraConfig(gw, nil)
+	router := ec["router"].(map[string]any)
+
+	skipPaths := router["logger_skip_paths"].([]string)
+	if len(skipPaths) != 2 || skipPaths[0] != "/__health" {
+		t.Errorf("unexpected logger_skip_paths: %v", skipPaths)
+	}
+	if router["disable_redirect_fixed_path"] != true {
+		t.Error("expected disable_redirect_fixed_path true")
+	}
+	if router["disable_redirect_trailing_slash"] != true {
+		t.Error("expected disable_redirect_trailing_slash true")
+	}
+}
