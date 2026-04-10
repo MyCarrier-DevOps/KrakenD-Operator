@@ -162,7 +162,8 @@ func TestGateway_EndpointTriggersReReconcile(t *testing.T) {
 		t.Fatalf("create endpoint: %v", err)
 	}
 
-	// Wait for gateway config checksum to change (re-reconcile happened).
+	// Wait for gateway config checksum to change (re-reconcile happened)
+	// and endpoint count to reflect the new endpoint.
 	eventually(t, func() error {
 		var updated v1alpha1.KrakenDGateway
 		if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(gw), &updated); err != nil {
@@ -171,17 +172,11 @@ func TestGateway_EndpointTriggersReReconcile(t *testing.T) {
 		if updated.Status.ConfigChecksum == initialChecksum {
 			return fmt.Errorf("config checksum unchanged")
 		}
+		if updated.Status.EndpointCount != 1 {
+			return fmt.Errorf("expected endpoint count 1, got %d", updated.Status.EndpointCount)
+		}
 		return nil
 	})
-
-	// Verify endpoint count updated.
-	var gwAfter v1alpha1.KrakenDGateway
-	if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(gw), &gwAfter); err != nil {
-		t.Fatal(err)
-	}
-	if gwAfter.Status.EndpointCount != 1 {
-		t.Errorf("expected endpoint count 1, got %d", gwAfter.Status.EndpointCount)
-	}
 }
 
 func TestGateway_DeletionCleansUpResources(t *testing.T) {

@@ -71,11 +71,21 @@ func runTests(m *testing.M) int {
 	_ = v1alpha1.AddToScheme(scheme)
 
 	// Start an ephemeral K3s cluster via testcontainers.
+	// K3s 1.32.x is used instead of 1.33.x because K8s 1.33 removed the
+	// KubeletInUserNamespace feature gate (graduated to GA).
+	// client-go v0.33.0 supports +/-1 minor version skew per the K8s policy.
+	// Kubelet args work around rootless podman constraints:
+	//   - KubeletInUserNamespace: graceful fallback when /dev/kmsg unavailable
+	//   - cgroups-per-qos=false + enforce-node-allocatable="": skip cgroup
+	//     hierarchy creation that fails in rootless cgroupv2 containers
 	var err error
-	k3sContainer, err = k3s.Run(ctx, "rancher/k3s:v1.33.10-k3s1",
+	k3sContainer, err = k3s.Run(ctx, "rancher/k3s:v1.32.13-k3s1",
 		testcontainers.WithCmdArgs(
 			"--disable=traefik",
 			"--disable=metrics-server",
+			"--kubelet-arg=feature-gates=KubeletInUserNamespace=true",
+			"--kubelet-arg=cgroups-per-qos=false",
+			"--kubelet-arg=enforce-node-allocatable=",
 		),
 	)
 	if err != nil {
