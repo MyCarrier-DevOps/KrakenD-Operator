@@ -144,6 +144,27 @@ func TestBuildDeployment_Minimal(t *testing.T) {
 	if len(dep.Spec.Template.Spec.Volumes) != 2 {
 		t.Errorf("expected 2 base volumes, got %d", len(dep.Spec.Template.Spec.Volumes))
 	}
+
+	// Config volume mount uses SubPath for krakend.json
+	var foundConfigMount bool
+	for _, m := range c.VolumeMounts {
+		if m.Name == "config" {
+			foundConfigMount = true
+			if m.MountPath != "/etc/krakend/krakend.json" {
+				t.Errorf("expected config mount at /etc/krakend/krakend.json, got %s", m.MountPath)
+			}
+			if m.SubPath != "krakend.json" {
+				t.Errorf("expected config subPath krakend.json, got %s", m.SubPath)
+			}
+			if !m.ReadOnly {
+				t.Error("expected config mount to be read-only")
+			}
+		}
+	}
+	if !foundConfigMount {
+		t.Error("expected config volume mount")
+	}
+
 	// No init containers
 	if len(dep.Spec.Template.Spec.InitContainers) != 0 {
 		t.Errorf("expected no init containers, got %d", len(dep.Spec.Template.Spec.InitContainers))
