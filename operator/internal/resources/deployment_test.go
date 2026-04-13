@@ -105,6 +105,12 @@ func TestBuildDeployment_Minimal(t *testing.T) {
 	if !*c.SecurityContext.RunAsNonRoot {
 		t.Error("expected runAsNonRoot")
 	}
+	if *c.SecurityContext.RunAsUser != 1000 {
+		t.Errorf("expected runAsUser 1000, got %d", *c.SecurityContext.RunAsUser)
+	}
+	if *c.SecurityContext.RunAsGroup != 1000 {
+		t.Errorf("expected runAsGroup 1000, got %d", *c.SecurityContext.RunAsGroup)
+	}
 	if *c.SecurityContext.AllowPrivilegeEscalation {
 		t.Error("expected no privilege escalation")
 	}

@@ -131,6 +131,8 @@ func BuildDeployment(
 		SecurityContext: &corev1.SecurityContext{
 			ReadOnlyRootFilesystem:   ptr.To(true),
 			RunAsNonRoot:             ptr.To(true),
+			RunAsUser:                ptr.To(int64(1000)),
+			RunAsGroup:               ptr.To(int64(1000)),
 			AllowPrivilegeEscalation: ptr.To(false),
 		},
 	}
