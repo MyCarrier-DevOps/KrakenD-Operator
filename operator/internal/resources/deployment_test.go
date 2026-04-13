@@ -105,6 +105,9 @@ func TestBuildDeployment_Minimal(t *testing.T) {
 	if *c.SecurityContext.AllowPrivilegeEscalation {
 		t.Error("expected no privilege escalation")
 	}
+	if c.SecurityContext.Capabilities == nil || len(c.SecurityContext.Capabilities.Drop) != 1 || c.SecurityContext.Capabilities.Drop[0] != "ALL" {
+		t.Error("expected capabilities drop ALL")
+	}
 
 	// Pod security context
 	psc := dep.Spec.Template.Spec.SecurityContext
@@ -122,6 +125,9 @@ func TestBuildDeployment_Minimal(t *testing.T) {
 	}
 	if *psc.FSGroup != 1000 {
 		t.Errorf("expected fsGroup 1000, got %d", *psc.FSGroup)
+	}
+	if psc.SeccompProfile == nil || psc.SeccompProfile.Type != corev1.SeccompProfileTypeRuntimeDefault {
+		t.Error("expected seccompProfile RuntimeDefault")
 	}
 
 	// Termination grace period

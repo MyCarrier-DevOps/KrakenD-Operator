@@ -1,6 +1,6 @@
 # Project State — KrakenD Operator
 
-> **Last Updated:** 2026-04-09
+> **Last Updated:** 2026-04-13
 > **Status:** All §1-§19 fully wired; OLM bundle, Helm chart, CI pipelines, and operational docs complete; PR #2 merged; telemetry CRD flattened (removed openTelemetry/prometheus wrappers); all unit tests pass; 0 lint issues
 
 ## Overview
