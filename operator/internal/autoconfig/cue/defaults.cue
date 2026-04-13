@@ -31,8 +31,8 @@ _env: string | *"dev"
 _httpMethods: ["get", "post", "put", "delete", "patch", "head", "options", "trace"]
 
 // _defaultHost is the backend host URL. The operator injects this value
-// from the OpenAPI spec's servers[0].url (or the openapi.url host when
-// the spec has no servers block). Custom CUE definitions can override it
+// from the host derived from spec.openapi.url, which is the location used
+// to fetch the OpenAPI document. Custom CUE definitions can override it
 // for per-environment resolution.
 _defaultHost: string | *"http://localhost"
 

@@ -417,12 +417,13 @@ func (r *KrakenDAutoConfigReconciler) cueConfigMapToAutoConfig(
 	return requests
 }
 
-// extractHost returns the scheme+host+port from a URL string.
+// extractHost returns the scheme, host, and optional port from an absolute URL string.
 // For example, "http://svc.ns.svc.cluster.local:8080/swagger/v1/swagger.json"
 // becomes "http://svc.ns.svc.cluster.local:8080".
+// It returns an empty string for non-absolute URLs or invalid inputs.
 func extractHost(rawURL string) string {
 	u, err := url.Parse(rawURL)
-	if err != nil || u.Host == "" {
+	if err != nil || u.Scheme == "" || u.Host == "" {
 		return ""
 	}
 	return u.Scheme + "://" + u.Host

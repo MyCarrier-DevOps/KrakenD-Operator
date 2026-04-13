@@ -105,22 +105,18 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{Requeue: true}, nil
 	}
 
-	// Gather endpoints
+	// Gather endpoints via field index
 	var endpointList v1alpha1.KrakenDEndpointList
-	if err := r.List(ctx, &endpointList); err != nil {
+	indexKey := gw.Namespace + "/" + gw.Name
+	if err := r.List(ctx, &endpointList,
+		client.MatchingFields{endpointGatewayIndex: indexKey},
+	); err != nil {
 		return ctrl.Result{}, fmt.Errorf("listing endpoints: %w", err)
 	}
-	var endpoints []v1alpha1.KrakenDEndpoint
-	for i := range endpointList.Items {
-		ep := &endpointList.Items[i]
-		if ep.Spec.GatewayRef.Name == gw.Name &&
-			ep.Spec.GatewayRef.ResolvedNamespace(ep.Namespace) == gw.Namespace {
-			endpoints = append(endpoints, *ep)
-		}
-	}
+	endpoints := endpointList.Items
 
 	// Gather referenced policies
-	policies, err := r.gatherPolicies(ctx, gw.Namespace, endpoints)
+	policies, err := r.gatherPolicies(ctx, endpoints)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -261,6 +257,10 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 // The operator still sets ownerReferences on instances it creates so that GC
 // cleans them up when the gateway is deleted.
 func (r *KrakenDGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if err := ensureEndpointIndexes(mgr); err != nil {
+		return err
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.KrakenDGateway{}).
 		Owns(&appsv1.Deployment{}).
@@ -302,10 +302,11 @@ func (r *KrakenDGatewayReconciler) crdAvailable(gvk schema.GroupVersionKind) (bo
 }
 
 // gatherPolicies fetches all unique KrakenDBackendPolicy resources referenced
-// by the given endpoints.
+// by the given endpoints. Each policy is looked up in the same namespace as
+// the endpoint that references it. The returned map is keyed by policy name
+// for compatibility with the renderer.
 func (r *KrakenDGatewayReconciler) gatherPolicies(
 	ctx context.Context,
-	namespace string,
 	endpoints []v1alpha1.KrakenDEndpoint,
 ) (map[string]*v1alpha1.KrakenDBackendPolicy, error) {
 	policies := make(map[string]*v1alpha1.KrakenDBackendPolicy)
@@ -319,7 +320,7 @@ func (r *KrakenDGatewayReconciler) gatherPolicies(
 					continue
 				}
 				var policy v1alpha1.KrakenDBackendPolicy
-				key := types.NamespacedName{Name: be.PolicyRef.Name, Namespace: namespace}
+				key := types.NamespacedName{Name: be.PolicyRef.Name, Namespace: ep.Namespace}
 				if err := r.Get(ctx, key, &policy); err != nil {
 					if errors.IsNotFound(err) {
 						// Missing policy — renderer will mark endpoint as invalid

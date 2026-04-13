@@ -454,3 +454,123 @@ func TestEndpointReconcile_MultiplePoliciesDedup(t *testing.T) {
 		t.Errorf("expected Active with deduped policy, got %s", updated.Status.Phase)
 	}
 }
+
+func TestEndpointReconcile_CrossNamespaceGatewayRef(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw1", Namespace: "operator-ns"},
+		Spec:       v1alpha1.KrakenDGatewaySpec{Version: "2.7.0", Edition: v1alpha1.EditionCE},
+	}
+	ep := &v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "ep1", Namespace: "app-ns"},
+		Spec: v1alpha1.KrakenDEndpointSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: "gw1", Namespace: "operator-ns"},
+			Endpoints: []v1alpha1.EndpointEntry{
+				{Endpoint: "/test", Method: "GET", Backends: []v1alpha1.BackendSpec{
+					{Host: []string{"http://svc:8080"}, URLPattern: "/"},
+				}},
+			},
+		},
+		Status: v1alpha1.KrakenDEndpointStatus{Phase: v1alpha1.EndpointPhasePending},
+	}
+	c := fakeClientBuilder().
+		WithObjects(gw, ep).
+		WithStatusSubresource(ep).
+		Build()
+	r := &KrakenDEndpointReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: client.ObjectKeyFromObject(ep),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var updated v1alpha1.KrakenDEndpoint
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(ep), &updated); err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status.Phase != v1alpha1.EndpointPhaseActive {
+		t.Errorf("expected Active for cross-namespace gateway, got %s", updated.Status.Phase)
+	}
+}
+
+func TestEndpointReconcile_CrossNamespaceGatewayNotFound(t *testing.T) {
+	// Gateway exists in "operator-ns" but endpoint references "wrong-ns"
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw1", Namespace: "operator-ns"},
+		Spec:       v1alpha1.KrakenDGatewaySpec{Version: "2.7.0", Edition: v1alpha1.EditionCE},
+	}
+	ep := &v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "ep1", Namespace: "app-ns"},
+		Spec: v1alpha1.KrakenDEndpointSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: "gw1", Namespace: "wrong-ns"},
+			Endpoints:  []v1alpha1.EndpointEntry{},
+		},
+		Status: v1alpha1.KrakenDEndpointStatus{Phase: v1alpha1.EndpointPhasePending},
+	}
+	c := fakeClientBuilder().
+		WithObjects(gw, ep).
+		WithStatusSubresource(ep).
+		Build()
+	r := &KrakenDEndpointReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: client.ObjectKeyFromObject(ep),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var updated v1alpha1.KrakenDEndpoint
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(ep), &updated); err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status.Phase != v1alpha1.EndpointPhaseDetached {
+		t.Errorf("expected Detached when gateway in wrong namespace, got %s", updated.Status.Phase)
+	}
+}
+
+func TestEndpointReconcile_GatewayToEndpointsCrossNamespace(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw1", Namespace: "operator-ns"},
+		Spec:       v1alpha1.KrakenDGatewaySpec{Version: "2.7.0", Edition: v1alpha1.EditionCE},
+	}
+	epSameNs := &v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "ep-same", Namespace: "operator-ns"},
+		Spec: v1alpha1.KrakenDEndpointSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: "gw1"},
+			Endpoints:  []v1alpha1.EndpointEntry{},
+		},
+	}
+	epCrossNs := &v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "ep-cross", Namespace: "app-ns"},
+		Spec: v1alpha1.KrakenDEndpointSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: "gw1", Namespace: "operator-ns"},
+			Endpoints:  []v1alpha1.EndpointEntry{},
+		},
+	}
+	epOther := &v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "ep-other", Namespace: "app-ns"},
+		Spec: v1alpha1.KrakenDEndpointSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: "other-gw"},
+			Endpoints:  []v1alpha1.EndpointEntry{},
+		},
+	}
+	c := fakeClientBuilder().WithObjects(epSameNs, epCrossNs, epOther).Build()
+	r := &KrakenDEndpointReconciler{Client: c, Scheme: testScheme()}
+
+	requests := r.gatewayToEndpoints(context.Background(), gw)
+	if len(requests) != 2 {
+		t.Fatalf("expected 2 requests (same-ns + cross-ns), got %d", len(requests))
+	}
+	names := map[string]bool{}
+	for _, req := range requests {
+		names[req.Name] = true
+	}
+	if !names["ep-same"] {
+		t.Error("expected ep-same in results")
+	}
+	if !names["ep-cross"] {
+		t.Error("expected ep-cross in results")
+	}
+}
