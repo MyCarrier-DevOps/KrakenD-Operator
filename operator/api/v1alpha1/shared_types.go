@@ -16,9 +16,20 @@ limitations under the License.
 
 package v1alpha1
 
-// GatewayRef references a KrakenDGateway by name (same namespace).
+// GatewayRef references a KrakenDGateway by name.
+// When Namespace is empty the gateway is assumed to live in the same namespace
+// as the referencing resource.
 type GatewayRef struct {
-	Name string `json:"name"`
+	Name      string `json:"name"`
+	Namespace string `json:"namespace,omitempty"`
+}
+
+// ResolvedNamespace returns the explicit namespace if set, otherwise fallback.
+func (r *GatewayRef) ResolvedNamespace(fallback string) string {
+	if r.Namespace != "" {
+		return r.Namespace
+	}
+	return fallback
 }
 
 // PolicyRef references a KrakenDBackendPolicy by name (same namespace).

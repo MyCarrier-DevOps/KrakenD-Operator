@@ -78,7 +78,10 @@ func (r *KrakenDEndpointReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 	// Validate gateway reference exists
 	var gw v1alpha1.KrakenDGateway
-	gwKey := types.NamespacedName{Name: ep.Spec.GatewayRef.Name, Namespace: ep.Namespace}
+	gwKey := types.NamespacedName{
+		Name:      ep.Spec.GatewayRef.Name,
+		Namespace: ep.Spec.GatewayRef.ResolvedNamespace(ep.Namespace),
+	}
 	if err := r.Get(ctx, gwKey, &gw); err != nil {
 		if errors.IsNotFound(err) {
 			return r.setDetached(ctx, &ep, "GatewayNotFound",
@@ -137,7 +140,7 @@ func (r *KrakenDEndpointReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 // Field index keys for efficient watch-to-reconcile mapping.
 const (
-	endpointGatewayIndex = ".spec.gatewayRef.name"
+	endpointGatewayIndex = ".spec.gatewayRef.namespacedName"
 	endpointPolicyIndex  = ".spec.endpoints.backends.policyRef.name"
 )
 
@@ -218,8 +221,7 @@ func (r *KrakenDEndpointReconciler) gatewayToEndpoints(
 	log := logf.FromContext(ctx)
 	var endpoints v1alpha1.KrakenDEndpointList
 	if err := r.List(ctx, &endpoints,
-		client.InNamespace(obj.GetNamespace()),
-		client.MatchingFields{endpointGatewayIndex: obj.GetName()},
+		client.MatchingFields{endpointGatewayIndex: obj.GetNamespace() + "/" + obj.GetName()},
 	); err != nil {
 		log.Error(err, "failed to list endpoints for gateway mapping", "gateway", obj.GetName())
 		return nil

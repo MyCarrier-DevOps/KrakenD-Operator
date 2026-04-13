@@ -94,7 +94,8 @@ func registerEndpointIndexes(indexer client.FieldIndexer) error {
 			if !ok {
 				return nil
 			}
-			return []string{ep.Spec.GatewayRef.Name}
+			ns := ep.Spec.GatewayRef.ResolvedNamespace(ep.Namespace)
+			return []string{ns + "/" + ep.Spec.GatewayRef.Name}
 		},
 	); err != nil {
 		return fmt.Errorf("indexing %s: %w", endpointGatewayIndex, err)

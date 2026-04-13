@@ -27,10 +27,10 @@ import (
 
 // GenerateInput provides the data needed to generate KrakenDEndpoint CRs.
 type GenerateInput struct {
-	AutoConfig     *v1alpha1.KrakenDAutoConfig
-	Entries        []v1alpha1.EndpointEntry
-	OperationIDs   map[string]string
-	GatewayRefName string
+	AutoConfig   *v1alpha1.KrakenDAutoConfig
+	Entries      []v1alpha1.EndpointEntry
+	OperationIDs map[string]string
+	GatewayRef   v1alpha1.GatewayRef
 }
 
 // GenerateOutput contains the generated endpoint CRs and metadata.
@@ -104,7 +104,7 @@ func (g *endpointGenerator) Generate(
 				},
 			},
 			Spec: v1alpha1.KrakenDEndpointSpec{
-				GatewayRef: v1alpha1.GatewayRef{Name: input.GatewayRefName},
+				GatewayRef: input.GatewayRef,
 				Endpoints:  []v1alpha1.EndpointEntry{entry},
 			},
 		}

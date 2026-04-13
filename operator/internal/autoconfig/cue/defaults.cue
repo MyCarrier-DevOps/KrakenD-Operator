@@ -30,8 +30,10 @@ _env: string | *"dev"
 // Path-item keys not in this set (parameters, summary, etc.) are skipped.
 _httpMethods: ["get", "post", "put", "delete", "patch", "head", "options", "trace"]
 
-// _defaultHost is the backend host URL. Custom CUE definitions should
-// override this for per-environment resolution. Defaults to http://localhost.
+// _defaultHost is the backend host URL. The operator injects this value
+// from the OpenAPI spec's servers[0].url (or the openapi.url host when
+// the spec has no servers block). Custom CUE definitions can override it
+// for per-environment resolution.
 _defaultHost: string | *"http://localhost"
 
 // _defaultTimeout is the endpoint timeout. Per-operation overrides can set

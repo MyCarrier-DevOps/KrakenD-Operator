@@ -48,7 +48,8 @@ func fakeClientBuilder() *fake.ClientBuilder {
 				if !ok {
 					return nil
 				}
-				return []string{ep.Spec.GatewayRef.Name}
+				ns := ep.Spec.GatewayRef.ResolvedNamespace(ep.Namespace)
+				return []string{ns + "/" + ep.Spec.GatewayRef.Name}
 			},
 		).
 		WithIndex(&v1alpha1.KrakenDEndpoint{}, endpointPolicyIndex,

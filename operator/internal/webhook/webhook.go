@@ -170,7 +170,7 @@ func (v *EndpointValidator) validate(
 	gw := &v1alpha1.KrakenDGateway{}
 	if err := v.Get(ctx, types.NamespacedName{
 		Name:      ep.Spec.GatewayRef.Name,
-		Namespace: ep.Namespace,
+		Namespace: ep.Spec.GatewayRef.ResolvedNamespace(ep.Namespace),
 	}, gw); err != nil {
 		errs = append(errs, field.NotFound(
 			field.NewPath("spec", "gatewayRef", "name"),
@@ -381,7 +381,7 @@ func (v *AutoConfigValidator) validate(
 	gw := &v1alpha1.KrakenDGateway{}
 	if err := v.Get(ctx, types.NamespacedName{
 		Name:      ac.Spec.GatewayRef.Name,
-		Namespace: ac.Namespace,
+		Namespace: ac.Spec.GatewayRef.ResolvedNamespace(ac.Namespace),
 	}, gw); err != nil {
 		errs = append(errs, field.NotFound(
 			field.NewPath("spec", "gatewayRef", "name"),

@@ -107,13 +107,15 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	// Gather endpoints
 	var endpointList v1alpha1.KrakenDEndpointList
-	if err := r.List(ctx, &endpointList, client.InNamespace(gw.Namespace)); err != nil {
+	if err := r.List(ctx, &endpointList); err != nil {
 		return ctrl.Result{}, fmt.Errorf("listing endpoints: %w", err)
 	}
 	var endpoints []v1alpha1.KrakenDEndpoint
 	for i := range endpointList.Items {
-		if endpointList.Items[i].Spec.GatewayRef.Name == gw.Name {
-			endpoints = append(endpoints, endpointList.Items[i])
+		ep := &endpointList.Items[i]
+		if ep.Spec.GatewayRef.Name == gw.Name &&
+			ep.Spec.GatewayRef.ResolvedNamespace(ep.Namespace) == gw.Namespace {
+			endpoints = append(endpoints, *ep)
 		}
 	}
 
@@ -786,7 +788,7 @@ func (r *KrakenDGatewayReconciler) endpointToGateway(
 	return []reconcile.Request{{
 		NamespacedName: types.NamespacedName{
 			Name:      ep.Spec.GatewayRef.Name,
-			Namespace: ep.Namespace,
+			Namespace: ep.Spec.GatewayRef.ResolvedNamespace(ep.Namespace),
 		},
 	}}
 }
@@ -809,7 +811,7 @@ func (r *KrakenDGatewayReconciler) policyToGateways(
 				if be.PolicyRef != nil && be.PolicyRef.Name == obj.GetName() {
 					nn := types.NamespacedName{
 						Name:      ep.Spec.GatewayRef.Name,
-						Namespace: ep.Namespace,
+						Namespace: ep.Spec.GatewayRef.ResolvedNamespace(ep.Namespace),
 					}
 					if _, ok := seen[nn]; !ok {
 						seen[nn] = struct{}{}
