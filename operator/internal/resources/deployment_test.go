@@ -95,24 +95,33 @@ func TestBuildDeployment_Minimal(t *testing.T) {
 		t.Error("expected startup probe on /__health")
 	}
 
-	// Security context
+	// Container security context
 	if c.SecurityContext == nil {
 		t.Fatal("expected security context")
 	}
 	if !*c.SecurityContext.ReadOnlyRootFilesystem {
 		t.Error("expected readOnlyRootFilesystem")
 	}
-	if !*c.SecurityContext.RunAsNonRoot {
-		t.Error("expected runAsNonRoot")
-	}
-	if *c.SecurityContext.RunAsUser != 1000 {
-		t.Errorf("expected runAsUser 1000, got %d", *c.SecurityContext.RunAsUser)
-	}
-	if *c.SecurityContext.RunAsGroup != 1000 {
-		t.Errorf("expected runAsGroup 1000, got %d", *c.SecurityContext.RunAsGroup)
-	}
 	if *c.SecurityContext.AllowPrivilegeEscalation {
 		t.Error("expected no privilege escalation")
+	}
+
+	// Pod security context
+	psc := dep.Spec.Template.Spec.SecurityContext
+	if psc == nil {
+		t.Fatal("expected pod security context")
+	}
+	if !*psc.RunAsNonRoot {
+		t.Error("expected runAsNonRoot")
+	}
+	if *psc.RunAsUser != 1000 {
+		t.Errorf("expected runAsUser 1000, got %d", *psc.RunAsUser)
+	}
+	if *psc.RunAsGroup != 1000 {
+		t.Errorf("expected runAsGroup 1000, got %d", *psc.RunAsGroup)
+	}
+	if *psc.FSGroup != 1000 {
+		t.Errorf("expected fsGroup 1000, got %d", *psc.FSGroup)
 	}
 
 	// Termination grace period
