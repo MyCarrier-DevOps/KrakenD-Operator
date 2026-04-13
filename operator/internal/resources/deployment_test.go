@@ -95,18 +95,39 @@ func TestBuildDeployment_Minimal(t *testing.T) {
 		t.Error("expected startup probe on /__health")
 	}
 
-	// Security context
+	// Container security context
 	if c.SecurityContext == nil {
 		t.Fatal("expected security context")
 	}
 	if !*c.SecurityContext.ReadOnlyRootFilesystem {
 		t.Error("expected readOnlyRootFilesystem")
 	}
-	if !*c.SecurityContext.RunAsNonRoot {
-		t.Error("expected runAsNonRoot")
-	}
 	if *c.SecurityContext.AllowPrivilegeEscalation {
 		t.Error("expected no privilege escalation")
+	}
+	if c.SecurityContext.Capabilities == nil || len(c.SecurityContext.Capabilities.Drop) != 1 || c.SecurityContext.Capabilities.Drop[0] != "ALL" {
+		t.Error("expected capabilities drop ALL")
+	}
+
+	// Pod security context
+	psc := dep.Spec.Template.Spec.SecurityContext
+	if psc == nil {
+		t.Fatal("expected pod security context")
+	}
+	if !*psc.RunAsNonRoot {
+		t.Error("expected runAsNonRoot")
+	}
+	if *psc.RunAsUser != 1000 {
+		t.Errorf("expected runAsUser 1000, got %d", *psc.RunAsUser)
+	}
+	if *psc.RunAsGroup != 1000 {
+		t.Errorf("expected runAsGroup 1000, got %d", *psc.RunAsGroup)
+	}
+	if *psc.FSGroup != 1000 {
+		t.Errorf("expected fsGroup 1000, got %d", *psc.FSGroup)
+	}
+	if psc.SeccompProfile == nil || psc.SeccompProfile.Type != corev1.SeccompProfileTypeRuntimeDefault {
+		t.Error("expected seccompProfile RuntimeDefault")
 	}
 
 	// Termination grace period

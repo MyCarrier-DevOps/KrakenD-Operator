@@ -208,149 +208,134 @@ spec:
                   telemetry:
                     description: Telemetry configures observability integrations.
                     properties:
-                      openTelemetry:
-                        description: OpenTelemetryConfig configures OpenTelemetry
-                          export.
+                      exporters:
+                        description: OTelExporters configures OpenTelemetry exporters.
                         properties:
-                          exporters:
-                            description: OTelExporters configures OpenTelemetry exporters.
+                          otlp:
+                            items:
+                              description: OTLPExporter configures an OTLP exporter
+                                instance.
+                              properties:
+                                host:
+                                  type: string
+                                name:
+                                  type: string
+                                port:
+                                  format: int32
+                                  type: integer
+                                useHTTP:
+                                  type: boolean
+                              required:
+                              - host
+                              type: object
+                            type: array
+                          prometheus:
+                            items:
+                              description: OTelPrometheusExporter configures a Prometheus
+                                exporter within OpenTelemetry.
+                              properties:
+                                goMetrics:
+                                  type: boolean
+                                listenIP:
+                                  type: string
+                                name:
+                                  type: string
+                                port:
+                                  format: int32
+                                  type: integer
+                                processMetrics:
+                                  type: boolean
+                              type: object
+                            type: array
+                        type: object
+                      layers:
+                        description: OTelLayers configures OpenTelemetry instrumentation
+                          layers.
+                        properties:
+                          backend:
+                            description: OTelBackendLayer configures backend-level
+                              OpenTelemetry instrumentation.
                             properties:
-                              otlp:
-                                items:
-                                  description: OTLPExporter configures an OTLP exporter
-                                    instance.
-                                  properties:
-                                    host:
-                                      type: string
-                                    name:
-                                      type: string
-                                    port:
-                                      format: int32
-                                      type: integer
-                                    useHTTP:
-                                      type: boolean
-                                  required:
-                                  - host
-                                  type: object
-                                type: array
-                              prometheus:
-                                items:
-                                  description: OTelPrometheusExporter configures a
-                                    Prometheus exporter within OpenTelemetry.
-                                  properties:
-                                    goMetrics:
-                                      type: boolean
-                                    listenIP:
-                                      type: string
-                                    name:
-                                      type: string
-                                    port:
-                                      format: int32
-                                      type: integer
-                                    processMetrics:
-                                      type: boolean
-                                  type: object
-                                type: array
-                            type: object
-                          layers:
-                            description: OTelLayers configures OpenTelemetry instrumentation
-                              layers.
-                            properties:
-                              backend:
-                                description: OTelBackendLayer configures backend-level
-                                  OpenTelemetry instrumentation.
+                              metrics:
+                                description: OTelBackendDetail configures detailed
+                                  backend-level metrics or traces.
                                 properties:
-                                  metrics:
-                                    description: OTelBackendDetail configures detailed
-                                      backend-level metrics or traces.
-                                    properties:
-                                      detailedConnection:
-                                        type: boolean
-                                      disableStage:
-                                        type: boolean
-                                      readPayload:
-                                        type: boolean
-                                      roundTrip:
-                                        type: boolean
-                                      staticAttributes:
-                                        items:
-                                          description: OTelStaticAttribute is a key-value
-                                            pair added to telemetry data.
-                                          properties:
-                                            key:
-                                              type: string
-                                            value:
-                                              type: string
-                                          required:
-                                          - key
-                                          - value
-                                          type: object
-                                        type: array
-                                    type: object
-                                  traces:
-                                    description: OTelBackendDetail configures detailed
-                                      backend-level metrics or traces.
-                                    properties:
-                                      detailedConnection:
-                                        type: boolean
-                                      disableStage:
-                                        type: boolean
-                                      readPayload:
-                                        type: boolean
-                                      roundTrip:
-                                        type: boolean
-                                      staticAttributes:
-                                        items:
-                                          description: OTelStaticAttribute is a key-value
-                                            pair added to telemetry data.
-                                          properties:
-                                            key:
-                                              type: string
-                                            value:
-                                              type: string
-                                          required:
-                                          - key
-                                          - value
-                                          type: object
-                                        type: array
-                                    type: object
+                                  detailedConnection:
+                                    type: boolean
+                                  disableStage:
+                                    type: boolean
+                                  readPayload:
+                                    type: boolean
+                                  roundTrip:
+                                    type: boolean
+                                  staticAttributes:
+                                    items:
+                                      description: OTelStaticAttribute is a key-value
+                                        pair added to telemetry data.
+                                      properties:
+                                        key:
+                                          type: string
+                                        value:
+                                          type: string
+                                      required:
+                                      - key
+                                      - value
+                                      type: object
+                                    type: array
                                 type: object
-                              global:
-                                description: OTelGlobalLayer configures global-level
-                                  OpenTelemetry instrumentation.
+                              traces:
+                                description: OTelBackendDetail configures detailed
+                                  backend-level metrics or traces.
                                 properties:
-                                  disableMetrics:
+                                  detailedConnection:
                                     type: boolean
-                                  disablePropagation:
+                                  disableStage:
                                     type: boolean
-                                  disableTraces:
+                                  readPayload:
                                     type: boolean
-                                  reportHeaders:
+                                  roundTrip:
                                     type: boolean
-                                type: object
-                              proxy:
-                                description: OTelProxyLayer configures proxy-level
-                                  OpenTelemetry instrumentation.
-                                properties:
-                                  disableMetrics:
-                                    type: boolean
-                                  disableTraces:
-                                    type: boolean
+                                  staticAttributes:
+                                    items:
+                                      description: OTelStaticAttribute is a key-value
+                                        pair added to telemetry data.
+                                      properties:
+                                        key:
+                                          type: string
+                                        value:
+                                          type: string
+                                      required:
+                                      - key
+                                      - value
+                                      type: object
+                                    type: array
                                 type: object
                             type: object
-                          serviceName:
-                            type: string
+                          global:
+                            description: OTelGlobalLayer configures global-level OpenTelemetry
+                              instrumentation.
+                            properties:
+                              disableMetrics:
+                                type: boolean
+                              disablePropagation:
+                                type: boolean
+                              disableTraces:
+                                type: boolean
+                              reportHeaders:
+                                type: boolean
+                            type: object
+                          proxy:
+                            description: OTelProxyLayer configures proxy-level OpenTelemetry
+                              instrumentation.
+                            properties:
+                              disableMetrics:
+                                type: boolean
+                              disableTraces:
+                                type: boolean
+                            type: object
                         type: object
-                      prometheus:
-                        description: PrometheusConfig configures a standalone Prometheus
-                          metrics endpoint.
-                        properties:
-                          enabled:
-                            type: boolean
-                          port:
-                            format: int32
-                            type: integer
-                        type: object
+                      serviceName:
+                        type: string
                     type: object
                   timeout:
                     description: Timeout is the global request timeout (e.g. "3s").

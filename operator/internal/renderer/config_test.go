@@ -383,11 +383,9 @@ func TestBuildGatewayExtraConfig_Security(t *testing.T) {
 func TestBuildGatewayExtraConfig_Telemetry(t *testing.T) {
 	gw := minimalGateway()
 	gw.Spec.Config.Telemetry = &v1alpha1.TelemetryConfig{
-		OpenTelemetry: &v1alpha1.OpenTelemetryConfig{
-			ServiceName: "my-gateway",
-			Exporters: &v1alpha1.OTelExporters{
-				OTLP: []v1alpha1.OTLPExporter{{Host: "otel-collector", Port: 4317}},
-			},
+		ServiceName: "my-gateway",
+		Exporters: &v1alpha1.OTelExporters{
+			OTLP: []v1alpha1.OTLPExporter{{Host: "otel-collector", Port: 4317}},
 		},
 	}
 
@@ -401,9 +399,6 @@ func TestBuildGatewayExtraConfig_Telemetry(t *testing.T) {
 	otlpArr := exporters["otlp"].([]map[string]any)
 	if otlpArr[0]["name"] != "default_otlp" {
 		t.Errorf("expected default OTLP name 'default_otlp', got %v", otlpArr[0]["name"])
-	}
-	if _, ok := ec["telemetry/prometheus"]; ok {
-		t.Error("standalone telemetry/prometheus should not be emitted")
 	}
 }
 
@@ -684,7 +679,7 @@ func TestBuildGatewayExtraConfig_CORSOmitsDefaults(t *testing.T) {
 }
 
 func TestBuildOpenTelemetryConfig_FullExporters(t *testing.T) {
-	otel := &v1alpha1.OpenTelemetryConfig{
+	tel := &v1alpha1.TelemetryConfig{
 		ServiceName: "test-svc",
 		Exporters: &v1alpha1.OTelExporters{
 			OTLP: []v1alpha1.OTLPExporter{
@@ -697,7 +692,7 @@ func TestBuildOpenTelemetryConfig_FullExporters(t *testing.T) {
 		},
 	}
 
-	cfg := buildOpenTelemetryConfig(otel)
+	cfg := buildOpenTelemetryConfig(tel)
 
 	if cfg["service_name"] != "test-svc" {
 		t.Errorf("expected service_name test-svc, got %v", cfg["service_name"])

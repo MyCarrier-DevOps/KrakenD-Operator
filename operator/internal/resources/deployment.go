@@ -130,8 +130,10 @@ func BuildDeployment(
 		},
 		SecurityContext: &corev1.SecurityContext{
 			ReadOnlyRootFilesystem:   ptr.To(true),
-			RunAsNonRoot:             ptr.To(true),
 			AllowPrivilegeEscalation: ptr.To(false),
+			Capabilities: &corev1.Capabilities{
+				Drop: []corev1.Capability{"ALL"},
+			},
 		},
 	}
 
@@ -149,9 +151,18 @@ func BuildDeployment(
 		Spec: corev1.PodSpec{
 			ServiceAccountName:            gw.Name,
 			TerminationGracePeriodSeconds: &gracePeriod,
-			InitContainers:                initContainers,
-			Containers:                    []corev1.Container{container},
-			Volumes:                       volumes,
+			SecurityContext: &corev1.PodSecurityContext{
+				RunAsNonRoot: ptr.To(true),
+				RunAsUser:    ptr.To(int64(1000)),
+				RunAsGroup:   ptr.To(int64(1000)),
+				FSGroup:      ptr.To(int64(1000)),
+				SeccompProfile: &corev1.SeccompProfile{
+					Type: corev1.SeccompProfileTypeRuntimeDefault,
+				},
+			},
+			InitContainers: initContainers,
+			Containers:     []corev1.Container{container},
+			Volumes:        volumes,
 		},
 	}
 }
@@ -344,8 +355,10 @@ func buildMultiSourcePluginVolumes(
 				},
 				SecurityContext: &corev1.SecurityContext{
 					ReadOnlyRootFilesystem:   ptr.To(true),
-					RunAsNonRoot:             ptr.To(true),
 					AllowPrivilegeEscalation: ptr.To(false),
+					Capabilities: &corev1.Capabilities{
+						Drop: []corev1.Capability{"ALL"},
+					},
 				},
 			})
 			if src.ImageRef.PullPolicy != "" {
@@ -375,8 +388,10 @@ func buildMultiSourcePluginVolumes(
 				},
 				SecurityContext: &corev1.SecurityContext{
 					ReadOnlyRootFilesystem:   ptr.To(true),
-					RunAsNonRoot:             ptr.To(true),
 					AllowPrivilegeEscalation: ptr.To(false),
+					Capabilities: &corev1.Capabilities{
+						Drop: []corev1.Capability{"ALL"},
+					},
 				},
 			})
 		}
@@ -399,8 +414,10 @@ func buildMultiSourcePluginVolumes(
 				},
 				SecurityContext: &corev1.SecurityContext{
 					ReadOnlyRootFilesystem:   ptr.To(true),
-					RunAsNonRoot:             ptr.To(true),
 					AllowPrivilegeEscalation: ptr.To(false),
+					Capabilities: &corev1.Capabilities{
+						Drop: []corev1.Capability{"ALL"},
+					},
 				},
 			})
 		}
