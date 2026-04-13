@@ -17,8 +17,10 @@ limitations under the License.
 package controller
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -114,6 +116,15 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, fmt.Errorf("listing endpoints: %w", err)
 	}
 	endpoints := endpointList.Items
+
+	// Sort endpoints for deterministic policy resolution when same-named
+	// policies exist across namespaces (first-one-wins by namespace/name).
+	slices.SortFunc(endpoints, func(a, b v1alpha1.KrakenDEndpoint) int {
+		if c := cmp.Compare(a.Namespace, b.Namespace); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.Name, b.Name)
+	})
 
 	// Gather referenced policies
 	policies, err := r.gatherPolicies(ctx, endpoints)
