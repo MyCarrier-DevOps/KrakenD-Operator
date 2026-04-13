@@ -70,8 +70,7 @@ func (r *KrakenDBackendPolicyReconciler) Reconcile(ctx context.Context, req ctrl
 	// Count how many endpoints reference this policy using the field index
 	var endpoints v1alpha1.KrakenDEndpointList
 	if err := r.List(ctx, &endpoints,
-		client.InNamespace(policy.Namespace),
-		client.MatchingFields{endpointPolicyIndex: policy.Name},
+		client.MatchingFields{endpointPolicyIndex: policy.Namespace + "/" + policy.Name},
 	); err != nil {
 		return ctrl.Result{}, fmt.Errorf("listing endpoints: %w", err)
 	}
@@ -207,14 +206,15 @@ func policyRefsFromEndpoint(obj client.Object) []reconcile.Request {
 			if be.PolicyRef == nil {
 				continue
 			}
-			if _, ok := seen[be.PolicyRef.Name]; ok {
+			key := be.PolicyRef.PolicyKey(ep.Namespace)
+			if _, ok := seen[key]; ok {
 				continue
 			}
-			seen[be.PolicyRef.Name] = struct{}{}
+			seen[key] = struct{}{}
 			requests = append(requests, reconcile.Request{
 				NamespacedName: types.NamespacedName{
 					Name:      be.PolicyRef.Name,
-					Namespace: ep.Namespace,
+					Namespace: be.PolicyRef.ResolvedNamespace(ep.Namespace),
 				},
 			})
 		}

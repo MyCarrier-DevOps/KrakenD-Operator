@@ -91,21 +91,26 @@ func (r *KrakenDEndpointReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}
 
 	// Validate all policy references exist (deduplicated)
-	policyNames := make(map[string]struct{})
+	policyKeys := make(map[string]types.NamespacedName)
 	for _, entry := range ep.Spec.Endpoints {
 		for _, be := range entry.Backends {
 			if be.PolicyRef != nil {
-				policyNames[be.PolicyRef.Name] = struct{}{}
+				mapKey := be.PolicyRef.PolicyKey(ep.Namespace)
+				if _, ok := policyKeys[mapKey]; !ok {
+					policyKeys[mapKey] = types.NamespacedName{
+						Name:      be.PolicyRef.Name,
+						Namespace: be.PolicyRef.ResolvedNamespace(ep.Namespace),
+					}
+				}
 			}
 		}
 	}
-	for policyName := range policyNames {
+	for _, policyKey := range policyKeys {
 		var policy v1alpha1.KrakenDBackendPolicy
-		policyKey := types.NamespacedName{Name: policyName, Namespace: ep.Namespace}
 		if err := r.Get(ctx, policyKey, &policy); err != nil {
 			if errors.IsNotFound(err) {
 				return r.setInvalid(ctx, &ep, "PolicyNotFound",
-					fmt.Sprintf("policy %q referenced by a backend not found", policyName))
+					fmt.Sprintf("policy %q not found in namespace %q", policyKey.Name, policyKey.Namespace))
 			}
 			return ctrl.Result{}, fmt.Errorf("getting policy %s: %w", policyKey, err)
 		}
@@ -141,7 +146,7 @@ func (r *KrakenDEndpointReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 // Field index keys for efficient watch-to-reconcile mapping.
 const (
 	endpointGatewayIndex = ".spec.gatewayRef.namespacedName"
-	endpointPolicyIndex  = ".spec.endpoints.backends.policyRef.name"
+	endpointPolicyIndex  = ".spec.endpoints.backends.policyRef.namespacedName"
 )
 
 // SetupWithManager sets up the controller with the Manager.
@@ -243,10 +248,10 @@ func (r *KrakenDEndpointReconciler) policyToEndpoints(
 	ctx context.Context, obj client.Object,
 ) []reconcile.Request {
 	log := logf.FromContext(ctx)
+	indexKey := obj.GetNamespace() + "/" + obj.GetName()
 	var endpoints v1alpha1.KrakenDEndpointList
 	if err := r.List(ctx, &endpoints,
-		client.InNamespace(obj.GetNamespace()),
-		client.MatchingFields{endpointPolicyIndex: obj.GetName()},
+		client.MatchingFields{endpointPolicyIndex: indexKey},
 	); err != nil {
 		log.Error(err, "failed to list endpoints for policy mapping", "policy", obj.GetName())
 		return nil

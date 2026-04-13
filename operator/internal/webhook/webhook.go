@@ -184,7 +184,7 @@ func (v *EndpointValidator) validate(
 				policy := &v1alpha1.KrakenDBackendPolicy{}
 				if err := v.Get(ctx, types.NamespacedName{
 					Name:      be.PolicyRef.Name,
-					Namespace: ep.Namespace,
+					Namespace: be.PolicyRef.ResolvedNamespace(ep.Namespace),
 				}, policy); err != nil {
 					errs = append(errs, field.NotFound(
 						field.NewPath("spec", "endpoints").Index(i).
@@ -266,7 +266,7 @@ func (v *PolicyValidator) ValidateDelete(
 	}
 
 	var endpoints v1alpha1.KrakenDEndpointList
-	if err := v.List(ctx, &endpoints, client.InNamespace(policy.Namespace)); err != nil {
+	if err := v.List(ctx, &endpoints); err != nil {
 		return nil, fmt.Errorf("listing endpoints: %w", err)
 	}
 
@@ -274,8 +274,10 @@ func (v *PolicyValidator) ValidateDelete(
 	for _, ep := range endpoints.Items {
 		for _, entry := range ep.Spec.Endpoints {
 			for _, be := range entry.Backends {
-				if be.PolicyRef != nil && be.PolicyRef.Name == policy.Name {
-					references = append(references, ep.Name)
+				if be.PolicyRef != nil &&
+					be.PolicyRef.Name == policy.Name &&
+					be.PolicyRef.ResolvedNamespace(ep.Namespace) == policy.Namespace {
+					references = append(references, ep.Namespace+"/"+ep.Name)
 					break
 				}
 			}

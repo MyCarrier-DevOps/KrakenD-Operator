@@ -115,11 +115,12 @@ func registerEndpointIndexes(indexer client.FieldIndexer) error {
 					if be.PolicyRef == nil {
 						continue
 					}
-					if _, ok := seen[be.PolicyRef.Name]; ok {
+					key := be.PolicyRef.PolicyKey(ep.Namespace)
+					if _, ok := seen[key]; ok {
 						continue
 					}
-					seen[be.PolicyRef.Name] = struct{}{}
-					refs = append(refs, be.PolicyRef.Name)
+					seen[key] = struct{}{}
+					refs = append(refs, key)
 				}
 			}
 			return refs

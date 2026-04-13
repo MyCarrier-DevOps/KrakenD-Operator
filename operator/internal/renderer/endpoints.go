@@ -62,7 +62,7 @@ func flattenEndpoints(
 		for _, entry := range ep.Spec.Endpoints {
 			for _, be := range entry.Backends {
 				if be.PolicyRef != nil {
-					if _, ok := policies[be.PolicyRef.Name]; !ok {
+					if _, ok := policies[be.PolicyRef.PolicyKey(ep.Namespace)]; !ok {
 						hasInvalidPolicy = true
 						break
 					}
@@ -129,6 +129,7 @@ func flattenEndpoints(
 func buildEndpointJSON(
 	entry v1alpha1.EndpointEntry,
 	policies map[string]*v1alpha1.KrakenDBackendPolicy,
+	endpointNamespace string,
 ) map[string]any {
 	ep := map[string]any{
 		"endpoint": entry.Endpoint,
@@ -171,7 +172,7 @@ func buildEndpointJSON(
 	// Backends
 	var backends []any
 	for _, be := range entry.Backends {
-		b := buildBackendJSON(be, policies)
+		b := buildBackendJSON(be, policies, endpointNamespace)
 		backends = append(backends, b)
 	}
 	ep["backend"] = backends
@@ -183,6 +184,7 @@ func buildEndpointJSON(
 func buildBackendJSON(
 	backend v1alpha1.BackendSpec,
 	policies map[string]*v1alpha1.KrakenDBackendPolicy,
+	endpointNamespace string,
 ) map[string]any {
 	b := map[string]any{
 		"url_pattern": backend.URLPattern,
@@ -210,7 +212,7 @@ func buildBackendJSON(
 		b["mapping"] = backend.Mapping
 	}
 
-	ec := buildBackendExtraConfig(backend, policies)
+	ec := buildBackendExtraConfig(backend, policies, endpointNamespace)
 	if ec != nil {
 		b["extra_config"] = ec
 	}

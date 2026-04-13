@@ -28,7 +28,7 @@ func TestBuildBackendExtraConfig_NoPolicyNoInline(t *testing.T) {
 		Host:       []string{"http://svc:80"},
 		URLPattern: "/api",
 	}
-	ec := buildBackendExtraConfig(backend, nil)
+	ec := buildBackendExtraConfig(backend, nil, "default")
 	if ec != nil {
 		t.Errorf("expected nil, got %v", ec)
 	}
@@ -36,7 +36,7 @@ func TestBuildBackendExtraConfig_NoPolicyNoInline(t *testing.T) {
 
 func TestBuildBackendExtraConfig_PolicyRawOnly(t *testing.T) {
 	policies := map[string]*v1alpha1.KrakenDBackendPolicy{
-		"raw-policy": {
+		"default/raw-policy": {
 			Spec: v1alpha1.KrakenDBackendPolicySpec{
 				Raw: &runtime.RawExtension{
 					Raw: []byte(`{"custom/namespace":{"key":"value"}}`),
@@ -49,7 +49,7 @@ func TestBuildBackendExtraConfig_PolicyRawOnly(t *testing.T) {
 		URLPattern: "/api",
 		PolicyRef:  &v1alpha1.PolicyRef{Name: "raw-policy"},
 	}
-	ec := buildBackendExtraConfig(backend, policies)
+	ec := buildBackendExtraConfig(backend, policies, "default")
 	if ec == nil {
 		t.Fatal("expected non-nil extra_config")
 	}
@@ -60,7 +60,7 @@ func TestBuildBackendExtraConfig_PolicyRawOnly(t *testing.T) {
 
 func TestBuildBackendExtraConfig_TypedFieldsOverrideRaw(t *testing.T) {
 	policies := map[string]*v1alpha1.KrakenDBackendPolicy{
-		"mixed-policy": {
+		"default/mixed-policy": {
 			Spec: v1alpha1.KrakenDBackendPolicySpec{
 				Raw: &runtime.RawExtension{
 					Raw: []byte(`{"qos/circuit-breaker":{"interval":1,"timeout":1,"max_errors":1}}`),
@@ -78,7 +78,7 @@ func TestBuildBackendExtraConfig_TypedFieldsOverrideRaw(t *testing.T) {
 		URLPattern: "/api",
 		PolicyRef:  &v1alpha1.PolicyRef{Name: "mixed-policy"},
 	}
-	ec := buildBackendExtraConfig(backend, policies)
+	ec := buildBackendExtraConfig(backend, policies, "default")
 	cb := ec["qos/circuit-breaker"].(map[string]any)
 	if cb["interval"] != 60 {
 		t.Errorf("expected typed interval 60 to override raw, got %v", cb["interval"])
@@ -87,7 +87,7 @@ func TestBuildBackendExtraConfig_TypedFieldsOverrideRaw(t *testing.T) {
 
 func TestBuildBackendExtraConfig_InlineOverridesAll(t *testing.T) {
 	policies := map[string]*v1alpha1.KrakenDBackendPolicy{
-		"policy": {
+		"default/policy": {
 			Spec: v1alpha1.KrakenDBackendPolicySpec{
 				CircuitBreaker: &v1alpha1.CircuitBreakerSpec{
 					Interval: 60, Timeout: 10, MaxErrors: 5,
@@ -103,7 +103,7 @@ func TestBuildBackendExtraConfig_InlineOverridesAll(t *testing.T) {
 			Raw: []byte(`{"qos/circuit-breaker":{"interval":999}}`),
 		},
 	}
-	ec := buildBackendExtraConfig(backend, policies)
+	ec := buildBackendExtraConfig(backend, policies, "default")
 	cb := ec["qos/circuit-breaker"].(map[string]any)
 	// Inline completely replaces the policy key
 	if cb["interval"] != float64(999) {
@@ -113,7 +113,7 @@ func TestBuildBackendExtraConfig_InlineOverridesAll(t *testing.T) {
 
 func TestBuildBackendExtraConfig_AllTypedFields(t *testing.T) {
 	policies := map[string]*v1alpha1.KrakenDBackendPolicy{
-		"full-policy": {
+		"default/full-policy": {
 			Spec: v1alpha1.KrakenDBackendPolicySpec{
 				CircuitBreaker: &v1alpha1.CircuitBreakerSpec{
 					Interval: 60, Timeout: 10, MaxErrors: 5, LogStatusChange: true,
@@ -130,7 +130,7 @@ func TestBuildBackendExtraConfig_AllTypedFields(t *testing.T) {
 		URLPattern: "/api",
 		PolicyRef:  &v1alpha1.PolicyRef{Name: "full-policy"},
 	}
-	ec := buildBackendExtraConfig(backend, policies)
+	ec := buildBackendExtraConfig(backend, policies, "default")
 	if _, ok := ec["qos/circuit-breaker"]; !ok {
 		t.Error("expected qos/circuit-breaker")
 	}
@@ -153,7 +153,7 @@ func TestBuildBackendExtraConfig_MissingPolicyRef(t *testing.T) {
 		URLPattern: "/api",
 		PolicyRef:  &v1alpha1.PolicyRef{Name: "nonexistent"},
 	}
-	ec := buildBackendExtraConfig(backend, nil)
+	ec := buildBackendExtraConfig(backend, nil, "default")
 	if ec != nil {
 		t.Errorf("expected nil for missing policy, got %v", ec)
 	}
@@ -190,7 +190,7 @@ func TestBuildEndpointExtraConfig_Empty(t *testing.T) {
 
 func TestBuildBackendExtraConfig_RateLimitNoCapacity(t *testing.T) {
 	policies := map[string]*v1alpha1.KrakenDBackendPolicy{
-		"rl": {
+		"default/rl": {
 			Spec: v1alpha1.KrakenDBackendPolicySpec{
 				RateLimit: &v1alpha1.RateLimitSpec{MaxRate: 100},
 			},
@@ -201,7 +201,7 @@ func TestBuildBackendExtraConfig_RateLimitNoCapacity(t *testing.T) {
 		URLPattern: "/api",
 		PolicyRef:  &v1alpha1.PolicyRef{Name: "rl"},
 	}
-	ec := buildBackendExtraConfig(backend, policies)
+	ec := buildBackendExtraConfig(backend, policies, "default")
 	rl := ec["qos/ratelimit/proxy"].(map[string]any)
 	if _, ok := rl["capacity"]; ok {
 		t.Error("expected no capacity key when zero")

@@ -581,7 +581,7 @@ func TestGatewayReconcile_GathersPolicies(t *testing.T) {
 	if len((*capturedInput).Policies) != 1 {
 		t.Errorf("expected 1 policy in render input, got %d", len((*capturedInput).Policies))
 	}
-	if _, ok := (*capturedInput).Policies["pol1"]; !ok {
+	if _, ok := (*capturedInput).Policies["default/pol1"]; !ok {
 		t.Error("expected pol1 in policies map")
 	}
 	if len((*capturedInput).Endpoints) != 1 {
@@ -1221,7 +1221,7 @@ func TestGatewayReconcile_CrossNamespacePolicies(t *testing.T) {
 	if len((*capturedInput).Policies) != 1 {
 		t.Errorf("expected 1 policy from cross-ns endpoint, got %d", len((*capturedInput).Policies))
 	}
-	if _, ok := (*capturedInput).Policies["cross-pol"]; !ok {
+	if _, ok := (*capturedInput).Policies["app-ns/cross-pol"]; !ok {
 		t.Error("expected cross-pol in policies map")
 	}
 }

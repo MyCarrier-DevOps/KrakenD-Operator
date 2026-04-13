@@ -62,7 +62,7 @@ func fakeClientBuilder() *fake.ClientBuilder {
 				for _, entry := range ep.Spec.Endpoints {
 					for _, be := range entry.Backends {
 						if be.PolicyRef != nil {
-							refs = append(refs, be.PolicyRef.Name)
+							refs = append(refs, be.PolicyRef.PolicyKey(ep.Namespace))
 						}
 					}
 				}

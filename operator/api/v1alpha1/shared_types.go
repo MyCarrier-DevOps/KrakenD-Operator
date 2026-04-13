@@ -32,9 +32,26 @@ func (r *GatewayRef) ResolvedNamespace(fallback string) string {
 	return fallback
 }
 
-// PolicyRef references a KrakenDBackendPolicy by name (same namespace).
+// PolicyRef references a KrakenDBackendPolicy by name.
+// When Namespace is empty the policy is assumed to live in the same namespace
+// as the referencing resource.
 type PolicyRef struct {
-	Name string `json:"name"`
+	Name      string `json:"name"`
+	Namespace string `json:"namespace,omitempty"`
+}
+
+// ResolvedNamespace returns the explicit namespace if set, otherwise fallback.
+func (r *PolicyRef) ResolvedNamespace(fallback string) string {
+	if r.Namespace != "" {
+		return r.Namespace
+	}
+	return fallback
+}
+
+// PolicyKey returns the namespace-qualified key ("namespace/name") used to
+// look up the policy in the gathered-policies map.
+func (r *PolicyRef) PolicyKey(fallback string) string {
+	return r.ResolvedNamespace(fallback) + "/" + r.Name
 }
 
 // ConfigMapKeyRef references a key within a ConfigMap.
