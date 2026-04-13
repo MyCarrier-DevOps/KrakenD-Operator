@@ -79,9 +79,13 @@ var _ = BeforeSuite(func() {
 	_, _ = fmt.Fprintf(GinkgoWriter, "K3s kubeconfig written to %s\n", kubeconfigFile)
 
 	By("building the manager(Operator) image")
-	cmd := exec.Command("make", "docker-build", fmt.Sprintf("IMG=%s", projectImage))
-	_, err = utils.Run(cmd)
-	Expect(err).NotTo(HaveOccurred(), "Failed to build the manager(Operator) image")
+	if os.Getenv("SKIP_OPERATOR_BUILD") != "true" {
+		cmd := exec.Command("make", "docker-build", fmt.Sprintf("IMG=%s", projectImage))
+		_, err = utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred(), "Failed to build the manager(Operator) image")
+	} else {
+		_, _ = fmt.Fprintf(GinkgoWriter, "Skipping operator image build (SKIP_OPERATOR_BUILD=true)\n")
+	}
 
 	By("loading the manager(Operator) image into the K3s cluster")
 	err = k3sContainer.LoadImages(ctx, projectImage)

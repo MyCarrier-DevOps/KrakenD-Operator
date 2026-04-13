@@ -57,8 +57,8 @@ jobs:
             org.opencontainers.image.version=${{ steps.version.outputs.new_version }}
             org.opencontainers.image.source=https://github.com/MyCarrier-DevOps/KrakenD-Operator
           platforms: linux/amd64,linux/arm64
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=operator-image
+          cache-to: type=gha,mode=max,scope=operator-image
 
       - name: Configure Git
         run: |
