@@ -186,7 +186,8 @@ func buildVolumes(gw *v1alpha1.KrakenDGateway) (
 	})
 	mounts = append(mounts, corev1.VolumeMount{
 		Name:      "config",
-		MountPath: "/etc/krakend",
+		MountPath: "/etc/krakend/krakend.json",
+		SubPath:   "krakend.json",
 		ReadOnly:  true,
 	})
 
