@@ -25,7 +25,6 @@ import (
 	"github.com/mycarrier-devops/krakend-operator/internal/util/hash"
 
 	"k8s.io/apimachinery/pkg/types"
-	logf "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 type krakendRenderer struct{}
@@ -172,34 +171,23 @@ func appendTelemetryConfig(ec map[string]any, tel *v1alpha1.TelemetryConfig) {
 	if tel == nil {
 		return
 	}
-	if tel.OpenTelemetry != nil {
-		if otelConfig := buildOpenTelemetryConfig(tel.OpenTelemetry); len(otelConfig) > 0 {
-			ec["telemetry/opentelemetry"] = otelConfig
-		}
-	}
-	// Standalone telemetry/prometheus was removed in KrakenD v2.6+.
-	// Prometheus metrics should be configured via the OpenTelemetry
-	// Prometheus exporter (spec.config.telemetry.openTelemetry.exporters.prometheus).
-	if tel.Prometheus != nil && tel.Prometheus.Enabled {
-		logf.Log.Info(
-			"DEPRECATION: spec.config.telemetry.prometheus is ignored; " +
-				"use spec.config.telemetry.openTelemetry.exporters.prometheus instead",
-		)
+	if otelConfig := buildOpenTelemetryConfig(tel); len(otelConfig) > 0 {
+		ec["telemetry/opentelemetry"] = otelConfig
 	}
 }
 
-func buildOpenTelemetryConfig(otel *v1alpha1.OpenTelemetryConfig) map[string]any {
+func buildOpenTelemetryConfig(tel *v1alpha1.TelemetryConfig) map[string]any {
 	cfg := make(map[string]any)
-	if otel.ServiceName != "" {
-		cfg["service_name"] = otel.ServiceName
+	if tel.ServiceName != "" {
+		cfg["service_name"] = tel.ServiceName
 	}
-	if otel.Exporters != nil {
-		if exporters := buildOTelExporters(otel.Exporters); len(exporters) > 0 {
+	if tel.Exporters != nil {
+		if exporters := buildOTelExporters(tel.Exporters); len(exporters) > 0 {
 			cfg["exporters"] = exporters
 		}
 	}
-	if otel.Layers != nil {
-		if layers := buildOTelLayers(otel.Layers); len(layers) > 0 {
+	if tel.Layers != nil {
+		if layers := buildOTelLayers(tel.Layers); len(layers) > 0 {
 			cfg["layers"] = layers
 		}
 	}

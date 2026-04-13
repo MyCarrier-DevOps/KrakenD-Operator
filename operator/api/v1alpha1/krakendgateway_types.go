@@ -184,14 +184,8 @@ type RouterConfig struct {
 	DisableRedirectTrailingSlash bool     `json:"disableRedirectTrailingSlash,omitempty"`
 }
 
-// TelemetryConfig configures observability integrations.
+// TelemetryConfig configures observability integrations via OpenTelemetry.
 type TelemetryConfig struct {
-	OpenTelemetry *OpenTelemetryConfig `json:"openTelemetry,omitempty"`
-	Prometheus    *PrometheusConfig    `json:"prometheus,omitempty"`
-}
-
-// OpenTelemetryConfig configures OpenTelemetry export.
-type OpenTelemetryConfig struct {
 	ServiceName string         `json:"serviceName,omitempty"`
 	Exporters   *OTelExporters `json:"exporters,omitempty"`
 	Layers      *OTelLayers    `json:"layers,omitempty"`
@@ -260,12 +254,6 @@ type OTelBackendDetail struct {
 type OTelStaticAttribute struct {
 	Key   string `json:"key"`
 	Value string `json:"value"`
-}
-
-// PrometheusConfig configures a standalone Prometheus metrics endpoint.
-type PrometheusConfig struct {
-	Enabled bool  `json:"enabled,omitempty"`
-	Port    int32 `json:"port,omitempty"`
 }
 
 // DocumentationConfig configures gateway-level OpenAPI documentation.

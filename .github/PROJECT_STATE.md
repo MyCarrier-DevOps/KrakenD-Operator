@@ -1,7 +1,7 @@
 # Project State — KrakenD Operator
 
-> **Last Updated:** 2026-04-08
-> **Status:** All §1-§19 fully wired; OLM bundle, Helm chart, CI pipelines, and operational docs complete; PR #1 review complete (62 threads resolved); all 8 e2e tests pass (testcontainers + K3s); unit test coverage: renderer 94.1%, resources 98.4%, autoconfig 88.2%, webhook 84.3%, controller 75.2%
+> **Last Updated:** 2026-04-09
+> **Status:** All §1-§19 fully wired; OLM bundle, Helm chart, CI pipelines, and operational docs complete; PR #2 merged; telemetry CRD flattened (removed openTelemetry/prometheus wrappers); all unit tests pass; 0 lint issues
 
 ## Overview
 
@@ -110,6 +110,17 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 - 28 unit tests, 84.3% webhook package coverage
 
 ## Recent Changes
+
+### 2026-04-09 (continued)
+- **Breaking CRD change: Flattened telemetry config** — removed `openTelemetry` wrapper and standalone `prometheus` from `TelemetryConfig`
+  - Old: `spec.config.telemetry.openTelemetry.{serviceName,exporters,layers}` + `spec.config.telemetry.prometheus`
+  - New: `spec.config.telemetry.{serviceName,exporters,layers}` (directly on TelemetryConfig)
+  - Removed types: `OpenTelemetryConfig`, `PrometheusConfig`
+  - Renderer (`config.go`): `appendTelemetryConfig` and `buildOpenTelemetryConfig` updated to read directly from `TelemetryConfig`; removed deprecated standalone prometheus warning; removed unused `logf` import
+  - Tests updated: `TestBuildGatewayExtraConfig_Telemetry`, `TestBuildOpenTelemetryConfig_FullExporters` use flat structure
+  - Rendered JSON output (`telemetry/opentelemetry` extra_config key) remains identical
+  - Regenerated: deepcopy, CRD manifests, Helm chart CRDs, OLM bundle CRDs
+  - Updated: sample CR (`krakendgateway.yaml`), architecture README example
 
 ### 2026-04-09
 - Added full webhook infrastructure to Helm chart: webhook Service, ValidatingWebhookConfiguration (4 webhooks for Gateway/Endpoint/Policy/AutoConfig), cert-manager self-signed Issuer+Certificate, cert volume mount in Deployment

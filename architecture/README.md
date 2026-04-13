@@ -225,15 +225,17 @@ spec:
       disableAccessLog: false
 
     telemetry:
-      openTelemetry:
-        exporters:
-          otlp:
-            host: otel-collector.monitoring
+      serviceName: krakend-gateway
+      exporters:
+        otlp:
+          - host: otel-collector.monitoring
             port: 4317
-        serviceName: krakend-gateway
-      prometheus:
-        enabled: true
-        port: 9091                   # Prometheus exporter listen port (default: 9091)
+        prometheus:
+          - port: 9091
+      layers:
+        global:
+          disableMetrics: false
+          disableTraces: false
 
   # --- TLS (only when NOT using Istio) ---
   tls:
