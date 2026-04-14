@@ -18,9 +18,12 @@ package autoconfig
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
+	"time"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
@@ -619,5 +622,534 @@ endpoint: {
 	// Host should remain unchanged when no mapping matches
 	if out.Entries[0].Backends[0].Host[0] != "http://unmatched.example.com" {
 		t.Errorf("expected unchanged host, got %s", out.Entries[0].Backends[0].Host[0])
+	}
+}
+
+func TestMergeExtraConfig_ShallowMerge(t *testing.T) {
+	existing := &runtime.RawExtension{
+		Raw: []byte(`{"qos/ratelimit/router":{"every":"2s","max_rate":10},"documentation/openapi":{"operation_id":"foo"}}`),
+	}
+	override := &runtime.RawExtension{
+		Raw: []byte(`{"qos/ratelimit/router":{"every":"1s","max_rate":20}}`),
+	}
+
+	result := mergeExtraConfig(existing, override)
+
+	var merged map[string]json.RawMessage
+	if err := json.Unmarshal(result.Raw, &merged); err != nil {
+		t.Fatalf("unmarshal merged: %v", err)
+	}
+
+	// Override key should be replaced
+	var rateLimit map[string]interface{}
+	if err := json.Unmarshal(merged["qos/ratelimit/router"], &rateLimit); err != nil {
+		t.Fatalf("unmarshal rate limit: %v", err)
+	}
+	if rateLimit["every"] != "1s" {
+		t.Errorf("expected every=1s, got %v", rateLimit["every"])
+	}
+	if rateLimit["max_rate"] != float64(20) {
+		t.Errorf("expected max_rate=20, got %v", rateLimit["max_rate"])
+	}
+
+	// Non-override key should be preserved
+	if _, ok := merged["documentation/openapi"]; !ok {
+		t.Error("documentation/openapi should be preserved")
+	}
+}
+
+func TestMergeExtraConfig_NilExisting(t *testing.T) {
+	override := &runtime.RawExtension{
+		Raw: []byte(`{"auth/validator":{"alg":"RS256"}}`),
+	}
+	result := mergeExtraConfig(nil, override)
+	if string(result.Raw) != string(override.Raw) {
+		t.Errorf("expected override to be returned as-is, got %s", result.Raw)
+	}
+}
+
+func TestMergeExtraConfig_NilOverride(t *testing.T) {
+	existing := &runtime.RawExtension{
+		Raw: []byte(`{"qos/ratelimit/router":{"every":"2s"}}`),
+	}
+	result := mergeExtraConfig(existing, nil)
+	if string(result.Raw) != string(existing.Raw) {
+		t.Errorf("expected existing to be returned as-is, got %s", result.Raw)
+	}
+}
+
+// --- applyFieldOverrides comprehensive tests ---
+
+// testOutputWithEntries creates a CUEOutput with entries and operationID mappings.
+func testOutputWithEntries() *CUEOutput {
+	return &CUEOutput{
+		Entries: []v1alpha1.EndpointEntry{
+			{
+				Endpoint: "/api/users",
+				Method:   "GET",
+				Backends: []v1alpha1.BackendSpec{
+					{Host: []string{"http://svc"}, URLPattern: "/api/users", Method: "GET"},
+				},
+				ExtraConfig: &runtime.RawExtension{
+					Raw: []byte(`{"qos/ratelimit/router":{"every":"2s","max_rate":10}}`),
+				},
+			},
+			{
+				Endpoint: "/api/orders",
+				Method:   "POST",
+				Backends: []v1alpha1.BackendSpec{
+					{Host: []string{"http://orders"}, URLPattern: "/api/orders", Method: "POST"},
+					{Host: []string{"http://audit"}, URLPattern: "/audit", Method: "POST"},
+				},
+			},
+		},
+		OperationIDs: map[string]string{
+			"/api/users:GET":   "listUsers",
+			"/api/orders:POST": "createOrder",
+		},
+		Tags: map[string][]string{
+			"/api/users:GET":   {"users"},
+			"/api/orders:POST": {"orders"},
+		},
+	}
+}
+
+func TestApplyFieldOverrides_Timeout(t *testing.T) {
+	out := testOutputWithEntries()
+	timeout := metav1.Duration{Duration: 30 * time.Second}
+	applyFieldOverrides(out, []v1alpha1.OperationOverride{
+		{OperationID: "listUsers", Timeout: &timeout},
+	})
+
+	if out.Entries[0].Timeout == nil || out.Entries[0].Timeout.Duration != 30*time.Second {
+		t.Errorf("expected timeout 30s, got %v", out.Entries[0].Timeout)
+	}
+}
+
+func TestApplyFieldOverrides_CacheTTL(t *testing.T) {
+	out := testOutputWithEntries()
+	ttl := metav1.Duration{Duration: 5 * time.Minute}
+	applyFieldOverrides(out, []v1alpha1.OperationOverride{
+		{OperationID: "listUsers", CacheTTL: &ttl},
+	})
+
+	if out.Entries[0].CacheTTL == nil || out.Entries[0].CacheTTL.Duration != 5*time.Minute {
+		t.Errorf("expected cacheTTL 5m, got %v", out.Entries[0].CacheTTL)
+	}
+}
+
+func TestApplyFieldOverrides_Endpoint(t *testing.T) {
+	out := testOutputWithEntries()
+	applyFieldOverrides(out, []v1alpha1.OperationOverride{
+		{OperationID: "listUsers", Endpoint: "/api/v2/users"},
+	})
+
+	if out.Entries[0].Endpoint != "/api/v2/users" {
+		t.Errorf("expected endpoint /api/v2/users, got %s", out.Entries[0].Endpoint)
+	}
+	// OperationIDs map should be updated
+	if out.OperationIDs["/api/v2/users:GET"] != "listUsers" {
+		t.Errorf("expected OperationIDs to be remapped, got %v", out.OperationIDs)
+	}
+	if _, exists := out.OperationIDs["/api/users:GET"]; exists {
+		t.Error("old key should be removed from OperationIDs")
+	}
+	// Tags map should be updated
+	if tags := out.Tags["/api/v2/users:GET"]; len(tags) == 0 || tags[0] != "users" {
+		t.Errorf("expected Tags to be remapped, got %v", out.Tags)
+	}
+	if _, exists := out.Tags["/api/users:GET"]; exists {
+		t.Error("old key should be removed from Tags")
+	}
+}
+
+func TestApplyFieldOverrides_Method(t *testing.T) {
+	out := testOutputWithEntries()
+	applyFieldOverrides(out, []v1alpha1.OperationOverride{
+		{OperationID: "listUsers", Method: "HEAD"},
+	})
+
+	if out.Entries[0].Method != "HEAD" {
+		t.Errorf("expected method HEAD, got %s", out.Entries[0].Method)
+	}
+	if out.OperationIDs["/api/users:HEAD"] != "listUsers" {
+		t.Errorf("expected OperationIDs to be remapped for method, got %v", out.OperationIDs)
+	}
+}
+
+func TestApplyFieldOverrides_PolicyRef(t *testing.T) {
+	out := testOutputWithEntries()
+	policyRef := &v1alpha1.PolicyRef{Name: "rate-limit-policy", Namespace: "infra"}
+	applyFieldOverrides(out, []v1alpha1.OperationOverride{
+		{OperationID: "createOrder", PolicyRef: policyRef},
+	})
+
+	for i, be := range out.Entries[1].Backends {
+		if be.PolicyRef == nil {
+			t.Errorf("backend[%d] should have PolicyRef", i)
+			continue
+		}
+		if be.PolicyRef.Name != "rate-limit-policy" || be.PolicyRef.Namespace != "infra" {
+			t.Errorf("backend[%d] PolicyRef = %+v, want rate-limit-policy/infra", i, be.PolicyRef)
+		}
+	}
+}
+
+func TestApplyFieldOverrides_BackendExtraConfig(t *testing.T) {
+	out := testOutputWithEntries()
+	backendEC := &runtime.RawExtension{
+		Raw: []byte(`{"backend/http":{"return_error_code":true}}`),
+	}
+	applyFieldOverrides(out, []v1alpha1.OperationOverride{
+		{
+			OperationID: "createOrder",
+			Backends: []v1alpha1.BackendOverride{
+				{Index: 0, ExtraConfig: backendEC},
+			},
+		},
+	})
+
+	if out.Entries[1].Backends[0].ExtraConfig == nil {
+		t.Fatal("backend[0] should have ExtraConfig")
+	}
+	if string(out.Entries[1].Backends[0].ExtraConfig.Raw) != string(backendEC.Raw) {
+		t.Errorf("backend[0] ExtraConfig = %s, want %s", out.Entries[1].Backends[0].ExtraConfig.Raw, backendEC.Raw)
+	}
+	// backend[1] should not be affected
+	if out.Entries[1].Backends[1].ExtraConfig != nil {
+		t.Error("backend[1] should not have ExtraConfig")
+	}
+}
+
+func TestApplyFieldOverrides_BackendIndexOutOfBounds(t *testing.T) {
+	out := testOutputWithEntries()
+	backendEC := &runtime.RawExtension{
+		Raw: []byte(`{"backend/http":{"return_error_code":true}}`),
+	}
+	applyFieldOverrides(out, []v1alpha1.OperationOverride{
+		{
+			OperationID: "listUsers",
+			Backends: []v1alpha1.BackendOverride{
+				{Index: 99, ExtraConfig: backendEC},
+			},
+		},
+	})
+
+	// Should not panic; backend[0] should remain unmodified
+	if out.Entries[0].Backends[0].ExtraConfig != nil {
+		t.Error("backend[0] ExtraConfig should remain nil (out-of-bounds index should be skipped)")
+	}
+}
+
+func TestApplyFieldOverrides_NonExistentOperationID(t *testing.T) {
+	out := testOutputWithEntries()
+	timeout := metav1.Duration{Duration: 30 * time.Second}
+	applyFieldOverrides(out, []v1alpha1.OperationOverride{
+		{OperationID: "nonExistent", Timeout: &timeout},
+	})
+
+	// Nothing should change
+	if out.Entries[0].Timeout != nil {
+		t.Error("timeout should remain nil for unmatched operationID")
+	}
+}
+
+func TestApplyFieldOverrides_CombinedOverrides(t *testing.T) {
+	out := testOutputWithEntries()
+	timeout := metav1.Duration{Duration: 60 * time.Second}
+	cacheTTL := metav1.Duration{Duration: 10 * time.Minute}
+	policyRef := &v1alpha1.PolicyRef{Name: "my-policy"}
+	extraConfig := &runtime.RawExtension{
+		Raw: []byte(`{"auth/validator":{"alg":"RS256"}}`),
+	}
+
+	applyFieldOverrides(out, []v1alpha1.OperationOverride{
+		{
+			OperationID: "listUsers",
+			Endpoint:    "/api/v3/users",
+			Method:      "OPTIONS",
+			Timeout:     &timeout,
+			CacheTTL:    &cacheTTL,
+			PolicyRef:   policyRef,
+			ExtraConfig: extraConfig,
+		},
+	})
+
+	entry := &out.Entries[0]
+	if entry.Endpoint != "/api/v3/users" {
+		t.Errorf("endpoint = %s, want /api/v3/users", entry.Endpoint)
+	}
+	if entry.Method != "OPTIONS" {
+		t.Errorf("method = %s, want OPTIONS", entry.Method)
+	}
+	if entry.Timeout == nil || entry.Timeout.Duration != 60*time.Second {
+		t.Errorf("timeout = %v, want 60s", entry.Timeout)
+	}
+	if entry.CacheTTL == nil || entry.CacheTTL.Duration != 10*time.Minute {
+		t.Errorf("cacheTTL = %v, want 10m", entry.CacheTTL)
+	}
+	if entry.Backends[0].PolicyRef == nil || entry.Backends[0].PolicyRef.Name != "my-policy" {
+		t.Errorf("PolicyRef = %v, want my-policy", entry.Backends[0].PolicyRef)
+	}
+	// ExtraConfig should be merged (auth key added, qos preserved)
+	var ec map[string]json.RawMessage
+	if err := json.Unmarshal(entry.ExtraConfig.Raw, &ec); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := ec["auth/validator"]; !ok {
+		t.Error("auth/validator should be added from override")
+	}
+	if _, ok := ec["qos/ratelimit/router"]; !ok {
+		t.Error("qos/ratelimit/router should be preserved from original")
+	}
+	// Keys should be remapped
+	if out.OperationIDs["/api/v3/users:OPTIONS"] != "listUsers" {
+		t.Errorf("OperationIDs not remapped: %v", out.OperationIDs)
+	}
+}
+
+func TestApplyFieldOverrides_EmptySlice(t *testing.T) {
+	out := testOutputWithEntries()
+	originalEndpoint := out.Entries[0].Endpoint
+	applyFieldOverrides(out, []v1alpha1.OperationOverride{})
+
+	if out.Entries[0].Endpoint != originalEndpoint {
+		t.Error("empty overrides should not modify entries")
+	}
+}
+
+func TestApplyFieldOverrides_ExtraConfigMergeWithEmbeddedCUE(t *testing.T) {
+	// End-to-end: verify that embedded CUE output with extraConfig gets
+	// properly merged (not replaced) by an override.
+	defs, err := EmbeddedCUEDefinitions()
+	if err != nil {
+		t.Fatalf("loading defs: %v", err)
+	}
+
+	specJSON := []byte(`{
+		"paths": {
+			"/api/items": {
+				"get": {
+					"operationId": "listItems",
+					"tags": ["items"],
+					"parameters": [{"name": "page", "in": "query"}]
+				}
+			}
+		}
+	}`)
+
+	eval := NewCUEEvaluator()
+	out, err := eval.Evaluate(context.Background(), CUEInput{
+		SpecData:    specJSON,
+		SpecFormat:  v1alpha1.SpecFormatJSON,
+		DefaultDefs: defs,
+		Overrides: []v1alpha1.OperationOverride{
+			{
+				OperationID: "listItems",
+				ExtraConfig: &runtime.RawExtension{
+					Raw: []byte(`{"qos/ratelimit/router":{"every":"1s","max_rate":50}}`),
+				},
+			},
+		},
+		ServiceName: "_spec",
+		DefaultHost: "http://items.svc:8080",
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if len(out.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(out.Entries))
+	}
+
+	var ec map[string]json.RawMessage
+	if err := json.Unmarshal(out.Entries[0].ExtraConfig.Raw, &ec); err != nil {
+		t.Fatalf("unmarshal extraConfig: %v", err)
+	}
+
+	// Rate limit override should be applied
+	var rl map[string]interface{}
+	if err := json.Unmarshal(ec["qos/ratelimit/router"], &rl); err != nil {
+		t.Fatalf("unmarshal rate limit: %v", err)
+	}
+	if rl["every"] != "1s" {
+		t.Errorf("expected every=1s from override, got %v", rl["every"])
+	}
+	if rl["max_rate"] != float64(50) {
+		t.Errorf("expected max_rate=50 from override, got %v", rl["max_rate"])
+	}
+
+	// Documentation should be preserved from CUE
+	if _, ok := ec["documentation/openapi"]; !ok {
+		t.Error("documentation/openapi should be preserved from CUE evaluation")
+	}
+}
+
+// --- applyDefaults tests ---
+
+func TestApplyDefaults_Timeout(t *testing.T) {
+	out := testOutputWithEntries()
+	timeout := metav1.Duration{Duration: 20 * time.Second}
+	applyDefaults(out, &v1alpha1.EndpointDefaults{Timeout: &timeout})
+
+	for i, entry := range out.Entries {
+		if entry.Timeout == nil || entry.Timeout.Duration != 20*time.Second {
+			t.Errorf("entry[%d]: expected timeout 20s, got %v", i, entry.Timeout)
+		}
+	}
+}
+
+func TestApplyDefaults_InputHeaders(t *testing.T) {
+	out := testOutputWithEntries()
+	headers := []string{"Authorization", "X-Custom"}
+	applyDefaults(out, &v1alpha1.EndpointDefaults{InputHeaders: headers})
+
+	for i, entry := range out.Entries {
+		if len(entry.InputHeaders) != 2 || entry.InputHeaders[0] != "Authorization" || entry.InputHeaders[1] != "X-Custom" {
+			t.Errorf("entry[%d]: expected [Authorization, X-Custom], got %v", i, entry.InputHeaders)
+		}
+	}
+}
+
+func TestApplyDefaults_InputQueryStrings(t *testing.T) {
+	out := testOutputWithEntries()
+	applyDefaults(out, &v1alpha1.EndpointDefaults{InputQueryStrings: []string{}})
+
+	for i, entry := range out.Entries {
+		if entry.InputQueryStrings == nil {
+			t.Errorf("entry[%d]: expected empty slice, got nil", i)
+		}
+		if len(entry.InputQueryStrings) != 0 {
+			t.Errorf("entry[%d]: expected empty query strings, got %v", i, entry.InputQueryStrings)
+		}
+	}
+}
+
+func TestApplyDefaults_PolicyRef(t *testing.T) {
+	out := testOutputWithEntries()
+	policyRef := &v1alpha1.PolicyRef{Name: "default-policy"}
+	applyDefaults(out, &v1alpha1.EndpointDefaults{PolicyRef: policyRef})
+
+	for i, entry := range out.Entries {
+		for j, be := range entry.Backends {
+			if be.PolicyRef == nil || be.PolicyRef.Name != "default-policy" {
+				t.Errorf("entry[%d].backend[%d]: expected default-policy, got %v", i, j, be.PolicyRef)
+			}
+		}
+	}
+}
+
+func TestApplyDefaults_CacheTTL(t *testing.T) {
+	out := testOutputWithEntries()
+	ttl := metav1.Duration{Duration: 5 * time.Minute}
+	applyDefaults(out, &v1alpha1.EndpointDefaults{CacheTTL: &ttl})
+
+	for i, entry := range out.Entries {
+		if entry.CacheTTL == nil || entry.CacheTTL.Duration != 5*time.Minute {
+			t.Errorf("entry[%d]: expected cacheTTL 5m, got %v", i, entry.CacheTTL)
+		}
+	}
+}
+
+func TestApplyDefaults_OutputEncoding(t *testing.T) {
+	out := testOutputWithEntries()
+	applyDefaults(out, &v1alpha1.EndpointDefaults{OutputEncoding: "no-op"})
+
+	for i, entry := range out.Entries {
+		if entry.OutputEncoding != "no-op" {
+			t.Errorf("entry[%d]: expected no-op, got %s", i, entry.OutputEncoding)
+		}
+	}
+}
+
+func TestApplyDefaults_ConcurrentCalls(t *testing.T) {
+	out := testOutputWithEntries()
+	cc := int32(3)
+	applyDefaults(out, &v1alpha1.EndpointDefaults{ConcurrentCalls: &cc})
+
+	for i, entry := range out.Entries {
+		if entry.ConcurrentCalls == nil || *entry.ConcurrentCalls != 3 {
+			t.Errorf("entry[%d]: expected concurrentCalls=3, got %v", i, entry.ConcurrentCalls)
+		}
+	}
+}
+
+func TestApplyDefaults_Nil(t *testing.T) {
+	out := testOutputWithEntries()
+	originalTimeout := out.Entries[0].Timeout
+	applyDefaults(out, nil)
+
+	if out.Entries[0].Timeout != originalTimeout {
+		t.Error("nil defaults should not modify entries")
+	}
+}
+
+func TestApplyDefaults_OverriddenByFieldOverrides(t *testing.T) {
+	// Verify ordering: defaults are applied first, then per-operation overrides win.
+	defs, err := EmbeddedCUEDefinitions()
+	if err != nil {
+		t.Fatalf("loading defs: %v", err)
+	}
+
+	specJSON := []byte(`{
+		"paths": {
+			"/api/items": {
+				"get": {
+					"operationId": "listItems",
+					"tags": ["items"]
+				}
+			},
+			"/api/items/{id}": {
+				"parameters": [{"name": "id", "in": "path", "required": true}],
+				"delete": {
+					"operationId": "deleteItem",
+					"tags": ["items"]
+				}
+			}
+		}
+	}`)
+
+	defaultTimeout := metav1.Duration{Duration: 20 * time.Second}
+	overrideTimeout := metav1.Duration{Duration: 60 * time.Second}
+
+	eval := NewCUEEvaluator()
+	out, err := eval.Evaluate(context.Background(), CUEInput{
+		SpecData:    specJSON,
+		SpecFormat:  v1alpha1.SpecFormatJSON,
+		DefaultDefs: defs,
+		Defaults: &v1alpha1.EndpointDefaults{
+			Timeout:      &defaultTimeout,
+			InputHeaders: []string{"Authorization", "Content-Type"},
+		},
+		Overrides: []v1alpha1.OperationOverride{
+			{OperationID: "deleteItem", Timeout: &overrideTimeout},
+		},
+		ServiceName: "_spec",
+		DefaultHost: "http://items.svc:8080",
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if len(out.Entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(out.Entries))
+	}
+
+	for _, entry := range out.Entries {
+		opID := out.OperationIDs[entry.Endpoint+":"+entry.Method]
+		switch opID {
+		case "listItems":
+			// Should have default timeout (20s)
+			if entry.Timeout == nil || entry.Timeout.Duration != 20*time.Second {
+				t.Errorf("listItems: expected timeout 20s from defaults, got %v", entry.Timeout)
+			}
+		case "deleteItem":
+			// Should have override timeout (60s), not default (20s)
+			if entry.Timeout == nil || entry.Timeout.Duration != 60*time.Second {
+				t.Errorf("deleteItem: expected timeout 60s from override, got %v", entry.Timeout)
+			}
+		}
+		// Both should have the default inputHeaders
+		if len(entry.InputHeaders) != 2 || entry.InputHeaders[0] != "Authorization" {
+			t.Errorf("%s: expected [Authorization, Content-Type], got %v", opID, entry.InputHeaders)
+		}
 	}
 }

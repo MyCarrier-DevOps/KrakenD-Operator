@@ -24,6 +24,7 @@ import (
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // TestEmbeddedCUE_FullPipeline verifies the embedded CUE definitions produce
@@ -362,4 +363,120 @@ func TestEmbeddedCUE_FullPipeline(t *testing.T) {
 	}
 
 	t.Logf("Pipeline produced valid krakend.json with %d endpoints, checksum=%s", len(endpoints), renderOutput.Checksum)
+}
+
+func TestEmbeddedCUE_OverridesApplied(t *testing.T) {
+	defs, err := EmbeddedCUEDefinitions()
+	if err != nil {
+		t.Fatalf("loading embedded CUE defs: %v", err)
+	}
+
+	specJSON := []byte(`{
+		"openapi": "3.0.3",
+		"info": {"title": "Order Service", "version": "1.0.0"},
+		"paths": {
+			"/api/Orders": {
+				"post": {
+					"operationId": "UploadOrder",
+					"summary": "Create order",
+					"tags": ["Orders"]
+				}
+			},
+			"/api/Orders/{referenceId}": {
+				"parameters": [{"name": "referenceId", "in": "path", "required": true}],
+				"get": {
+					"operationId": "Order",
+					"summary": "Get order",
+					"tags": ["Orders"]
+				},
+				"delete": {
+					"operationId": "DeleteOrder",
+					"summary": "Delete order",
+					"tags": ["Orders"]
+				}
+			}
+		}
+	}`)
+
+	overrides := []v1alpha1.OperationOverride{
+		{
+			OperationID: "UploadOrder",
+			Endpoint:    "/api/v1/orders",
+			ExtraConfig: &runtime.RawExtension{
+				Raw: []byte(`{"qos/ratelimit/router":{"every":"1s","max_rate":10,"strategy":"header","key":"Authorization"}}`),
+			},
+		},
+		{
+			OperationID: "Order",
+			Endpoint:    "/api/v1/orders/referenceId/{referenceId}",
+			ExtraConfig: &runtime.RawExtension{
+				Raw: []byte(`{"qos/ratelimit/router":{"every":"1s","max_rate":10,"strategy":"header","key":"Authorization"}}`),
+			},
+		},
+		{
+			OperationID: "DeleteOrder",
+			Endpoint:    "/api/v1/orders/referenceId/{referenceId}",
+			ExtraConfig: &runtime.RawExtension{
+				Raw: []byte(`{"qos/ratelimit/router":{"every":"1s","max_rate":10,"strategy":"header","key":"Authorization"}}`),
+			},
+		},
+	}
+
+	eval := NewCUEEvaluator()
+	out, err := eval.Evaluate(context.Background(), CUEInput{
+		SpecData:    specJSON,
+		SpecFormat:  v1alpha1.SpecFormatJSON,
+		DefaultDefs: defs,
+		Overrides:   overrides,
+		ServiceName: "_spec",
+		DefaultHost: "http://order-service.dev.svc.cluster.local:8080",
+	})
+	if err != nil {
+		t.Fatalf("CUE evaluation failed: %v", err)
+	}
+	if len(out.Entries) != 3 {
+		t.Fatalf("expected 3 entries, got %d", len(out.Entries))
+	}
+
+	for _, entry := range out.Entries {
+		// Verify endpoint path overrides were applied
+		switch out.OperationIDs[entry.Endpoint+":"+entry.Method] {
+		case "UploadOrder":
+			if entry.Endpoint != "/api/v1/orders" {
+				t.Errorf("UploadOrder: expected endpoint /api/v1/orders, got %s", entry.Endpoint)
+			}
+		case "Order":
+			if entry.Endpoint != "/api/v1/orders/referenceId/{referenceId}" {
+				t.Errorf("Order: expected endpoint /api/v1/orders/referenceId/{referenceId}, got %s", entry.Endpoint)
+			}
+		case "DeleteOrder":
+			if entry.Endpoint != "/api/v1/orders/referenceId/{referenceId}" {
+				t.Errorf("DeleteOrder: expected endpoint /api/v1/orders/referenceId/{referenceId}, got %s", entry.Endpoint)
+			}
+		}
+
+		// Verify ExtraConfig rate limit override was applied
+		if entry.ExtraConfig == nil {
+			t.Errorf("%s: expected extraConfig, got nil", entry.Endpoint)
+			continue
+		}
+		var ec map[string]json.RawMessage
+		if err := json.Unmarshal(entry.ExtraConfig.Raw, &ec); err != nil {
+			t.Fatalf("unmarshal extraConfig: %v", err)
+		}
+
+		// Rate limit should have override value
+		var rateLimit map[string]interface{}
+		if err := json.Unmarshal(ec["qos/ratelimit/router"], &rateLimit); err != nil {
+			t.Fatalf("unmarshal rate limit: %v", err)
+		}
+		if rateLimit["every"] != "1s" {
+			t.Errorf("%s: expected rate limit every=1s, got %v", entry.Endpoint, rateLimit["every"])
+		}
+
+		// Documentation/openapi should be preserved from CUE
+		if _, ok := ec["documentation/openapi"]; !ok {
+			t.Errorf("%s: documentation/openapi should be preserved after override merge", entry.Endpoint)
+		}
+	}
 }
