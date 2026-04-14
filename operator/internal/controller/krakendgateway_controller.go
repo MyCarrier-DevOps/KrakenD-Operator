@@ -117,8 +117,7 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 	endpoints := endpointList.Items
 
-	// Sort endpoints for deterministic policy resolution when same-named
-	// policies exist across namespaces (first-one-wins by namespace/name).
+	// Sort endpoints to keep processing and rendered output deterministic.
 	slices.SortFunc(endpoints, func(a, b v1alpha1.KrakenDEndpoint) int {
 		if c := cmp.Compare(a.Namespace, b.Namespace); c != 0 {
 			return c

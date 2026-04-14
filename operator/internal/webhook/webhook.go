@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"strings"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -168,30 +169,45 @@ func (v *EndpointValidator) validate(
 	var warnings admission.Warnings
 
 	gw := &v1alpha1.KrakenDGateway{}
+	gwNS := ep.Spec.GatewayRef.ResolvedNamespace(ep.Namespace)
 	if err := v.Get(ctx, types.NamespacedName{
 		Name:      ep.Spec.GatewayRef.Name,
-		Namespace: ep.Spec.GatewayRef.ResolvedNamespace(ep.Namespace),
+		Namespace: gwNS,
 	}, gw); err != nil {
-		errs = append(errs, field.NotFound(
-			field.NewPath("spec", "gatewayRef", "name"),
-			ep.Spec.GatewayRef.Name,
-		))
+		if apierrors.IsNotFound(err) {
+			refPath := field.NewPath("spec", "gatewayRef", "name")
+			if gwNS != ep.Namespace {
+				refPath = field.NewPath("spec", "gatewayRef", "namespace")
+			}
+			errs = append(errs, field.NotFound(refPath, ep.Spec.GatewayRef.Name))
+		} else {
+			return errs, warnings
+		}
 	}
 
 	for i, entry := range ep.Spec.Endpoints {
 		for j, be := range entry.Backends {
 			if be.PolicyRef != nil {
 				policy := &v1alpha1.KrakenDBackendPolicy{}
+				polNS := be.PolicyRef.ResolvedNamespace(ep.Namespace)
 				if err := v.Get(ctx, types.NamespacedName{
 					Name:      be.PolicyRef.Name,
-					Namespace: be.PolicyRef.ResolvedNamespace(ep.Namespace),
+					Namespace: polNS,
 				}, policy); err != nil {
-					errs = append(errs, field.NotFound(
-						field.NewPath("spec", "endpoints").Index(i).
-							Child("backends").Index(j).
-							Child("policyRef", "name"),
-						be.PolicyRef.Name,
-					))
+					if apierrors.IsNotFound(err) {
+						refField := "name"
+						if polNS != ep.Namespace {
+							refField = "namespace"
+						}
+						errs = append(errs, field.NotFound(
+							field.NewPath("spec", "endpoints").Index(i).
+								Child("backends").Index(j).
+								Child("policyRef", refField),
+							be.PolicyRef.Name,
+						))
+					} else {
+						return errs, warnings
+					}
 				}
 			}
 		}
@@ -270,16 +286,27 @@ func (v *PolicyValidator) ValidateDelete(
 		return nil, fmt.Errorf("listing endpoints: %w", err)
 	}
 
+	seen := make(map[string]struct{})
 	var references []string
 	for _, ep := range endpoints.Items {
+		key := ep.Namespace + "/" + ep.Name
+		if _, dup := seen[key]; dup {
+			continue
+		}
 		for _, entry := range ep.Spec.Endpoints {
+			matched := false
 			for _, be := range entry.Backends {
 				if be.PolicyRef != nil &&
 					be.PolicyRef.Name == policy.Name &&
 					be.PolicyRef.ResolvedNamespace(ep.Namespace) == policy.Namespace {
-					references = append(references, ep.Namespace+"/"+ep.Name)
+					references = append(references, key)
+					seen[key] = struct{}{}
+					matched = true
 					break
 				}
+			}
+			if matched {
+				break
 			}
 		}
 	}
@@ -381,14 +408,20 @@ func (v *AutoConfigValidator) validate(
 	var errs field.ErrorList
 
 	gw := &v1alpha1.KrakenDGateway{}
+	gwNS := ac.Spec.GatewayRef.ResolvedNamespace(ac.Namespace)
 	if err := v.Get(ctx, types.NamespacedName{
 		Name:      ac.Spec.GatewayRef.Name,
-		Namespace: ac.Spec.GatewayRef.ResolvedNamespace(ac.Namespace),
+		Namespace: gwNS,
 	}, gw); err != nil {
-		errs = append(errs, field.NotFound(
-			field.NewPath("spec", "gatewayRef", "name"),
-			ac.Spec.GatewayRef.Name,
-		))
+		if apierrors.IsNotFound(err) {
+			refPath := field.NewPath("spec", "gatewayRef", "name")
+			if gwNS != ac.Namespace {
+				refPath = field.NewPath("spec", "gatewayRef", "namespace")
+			}
+			errs = append(errs, field.NotFound(refPath, ac.Spec.GatewayRef.Name))
+		} else {
+			return errs.ToAggregate()
+		}
 	}
 
 	hasURL := ac.Spec.OpenAPI.URL != ""
