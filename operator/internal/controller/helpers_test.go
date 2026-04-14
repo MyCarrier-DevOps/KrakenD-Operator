@@ -25,7 +25,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 )
@@ -113,25 +112,33 @@ func TestConditionsEqual_MissingType(t *testing.T) {
 	}
 }
 
-func TestEnsureEndpointIndexes_Idempotent(t *testing.T) {
-	ResetIndexRegistry()
-	defer ResetIndexRegistry()
+func TestEnsureEndpointIndexes_Sequential(t *testing.T) {
+	resetIndexRegistry()
+	defer resetIndexRegistry()
 
-	// stubIndexer records IndexField calls and succeeds on each.
 	indexer := &stubIndexer{}
+	mgr := &stubManager{indexer: indexer}
 
-	// First call should register both indexes.
-	if err := registerEndpointIndexes(indexer); err != nil {
-		t.Fatalf("first registration failed: %v", err)
+	// First call registers both indexes (2 IndexField calls).
+	if err := EnsureEndpointIndexes(mgr); err != nil {
+		t.Fatalf("first call failed: %v", err)
 	}
 	if indexer.callCount() != 2 {
-		t.Fatalf("expected 2 IndexField calls, got %d", indexer.callCount())
+		t.Fatalf("expected 2 IndexField calls after first call, got %d", indexer.callCount())
+	}
+
+	// Second call should be a no-op (idempotent — returns from cache).
+	if err := EnsureEndpointIndexes(mgr); err != nil {
+		t.Fatalf("second (idempotent) call failed: %v", err)
+	}
+	if indexer.callCount() != 2 {
+		t.Errorf("expected still 2 IndexField calls after idempotent call, got %d", indexer.callCount())
 	}
 }
 
 func TestEnsureEndpointIndexes_ConcurrentCallers(t *testing.T) {
-	ResetIndexRegistry()
-	defer ResetIndexRegistry()
+	resetIndexRegistry()
+	defer resetIndexRegistry()
 
 	indexer := &stubIndexer{}
 	mgr := &stubManager{indexer: indexer}
@@ -164,52 +171,25 @@ func TestEnsureEndpointIndexes_ConcurrentCallers(t *testing.T) {
 }
 
 func TestFieldIndexesReturnCorrectValues(t *testing.T) {
-	scheme := testScheme()
-	c := fake.NewClientBuilder().WithScheme(scheme).
-		WithIndex(&v1alpha1.KrakenDEndpoint{}, EndpointGatewayIndex,
-			func(obj client.Object) []string {
-				ep, ok := obj.(*v1alpha1.KrakenDEndpoint)
-				if !ok {
-					return nil
-				}
-				ns := ep.Spec.GatewayRef.ResolvedNamespace(ep.Namespace)
-				return []string{ns + "/" + ep.Spec.GatewayRef.Name}
+	// Use fakeClientBuilder which registers the canonical index functions,
+	// rather than duplicating closures inline.
+	ep := &v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "ep1", Namespace: "default"},
+		Spec: v1alpha1.KrakenDEndpointSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: "gw1"},
+			Endpoints: []v1alpha1.EndpointEntry{
+				{Endpoint: "/api", Method: "GET", Backends: []v1alpha1.BackendSpec{
+					{Host: []string{"http://svc:80"}, URLPattern: "/",
+						PolicyRef: &v1alpha1.PolicyRef{Name: "pol1"}},
+					{Host: []string{"http://svc:80"}, URLPattern: "/alt",
+						PolicyRef: &v1alpha1.PolicyRef{Name: "pol1"}},
+				}},
 			},
-		).
-		WithIndex(&v1alpha1.KrakenDEndpoint{}, EndpointPolicyIndex,
-			func(obj client.Object) []string {
-				ep, ok := obj.(*v1alpha1.KrakenDEndpoint)
-				if !ok {
-					return nil
-				}
-				var refs []string
-				seen := make(map[string]struct{})
-				for _, entry := range ep.Spec.Endpoints {
-					for _, be := range entry.Backends {
-						if be.PolicyRef == nil {
-							continue
-						}
-						key := be.PolicyRef.PolicyKey(ep.Namespace)
-						if _, ok := seen[key]; !ok {
-							seen[key] = struct{}{}
-							refs = append(refs, key)
-						}
-					}
-				}
-				return refs
-			},
-		).
-		WithObjects(
-			&v1alpha1.KrakenDEndpoint{
-				ObjectMeta: metav1.ObjectMeta{Name: "ep1", Namespace: "default"},
-				Spec: v1alpha1.KrakenDEndpointSpec{
-					GatewayRef: v1alpha1.GatewayRef{Name: "gw1"},
-					Endpoints:  []v1alpha1.EndpointEntry{},
-				},
-			},
-		).
-		Build()
+		},
+	}
+	c := fakeClientBuilder().WithObjects(ep).Build()
 
+	// Verify the gateway index works.
 	var list v1alpha1.KrakenDEndpointList
 	if err := c.List(context.Background(), &list,
 		client.MatchingFields{EndpointGatewayIndex: "default/gw1"},
@@ -220,6 +200,18 @@ func TestFieldIndexesReturnCorrectValues(t *testing.T) {
 		t.Errorf("expected 1 endpoint, got %d", len(list.Items))
 	}
 
+	// Verify the policy index works and deduplicates:
+	// ep1 has two backends both referencing "pol1" — index should return one entry.
+	if err := c.List(context.Background(), &list,
+		client.MatchingFields{EndpointPolicyIndex: "default/pol1"},
+	); err != nil {
+		t.Fatalf("policy index lookup failed: %v", err)
+	}
+	if len(list.Items) != 1 {
+		t.Errorf("expected 1 endpoint (deduped), got %d", len(list.Items))
+	}
+
+	// Verify non-matching lookup returns 0.
 	if err := c.List(context.Background(), &list,
 		client.MatchingFields{EndpointPolicyIndex: "default/nonexistent"},
 	); err != nil {
@@ -228,6 +220,14 @@ func TestFieldIndexesReturnCorrectValues(t *testing.T) {
 	if len(list.Items) != 0 {
 		t.Errorf("expected 0 endpoints for nonexistent policy, got %d", len(list.Items))
 	}
+}
+
+// resetIndexRegistry clears the index registry for test isolation.
+func resetIndexRegistry() {
+	indexRegistry.Range(func(key, _ any) bool {
+		indexRegistry.Delete(key)
+		return true
+	})
 }
 
 // stubIndexer implements client.FieldIndexer to track IndexField calls.

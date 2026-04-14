@@ -64,15 +64,6 @@ type endpointIndexRegistration struct {
 // each get their own registrations.
 var indexRegistry sync.Map // map[client.FieldIndexer]*endpointIndexRegistration
 
-// ResetIndexRegistry clears the index registry for test isolation.
-// This package is internal, so external callers cannot reach this function.
-func ResetIndexRegistry() {
-	indexRegistry.Range(func(key, _ any) bool {
-		indexRegistry.Delete(key)
-		return true
-	})
-}
-
 // EnsureEndpointIndexes registers field indexes for KrakenDEndpoint lookups.
 // It is safe to call from multiple controllers and the webhook package sharing
 // the same manager; indexes are registered exactly once per manager instance.
