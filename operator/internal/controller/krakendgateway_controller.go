@@ -111,7 +111,7 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	var endpointList v1alpha1.KrakenDEndpointList
 	indexKey := gw.Namespace + "/" + gw.Name
 	if err := r.List(ctx, &endpointList,
-		client.MatchingFields{endpointGatewayIndex: indexKey},
+		client.MatchingFields{EndpointGatewayIndex: indexKey},
 	); err != nil {
 		return ctrl.Result{}, fmt.Errorf("listing endpoints: %w", err)
 	}
@@ -267,7 +267,7 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 // The operator still sets ownerReferences on instances it creates so that GC
 // cleans them up when the gateway is deleted.
 func (r *KrakenDGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	if err := ensureEndpointIndexes(mgr); err != nil {
+	if err := EnsureEndpointIndexes(mgr); err != nil {
 		return err
 	}
 

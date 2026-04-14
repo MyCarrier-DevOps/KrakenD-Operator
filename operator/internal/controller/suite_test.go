@@ -42,7 +42,7 @@ func testScheme() *runtime.Scheme {
 func fakeClientBuilder() *fake.ClientBuilder {
 	return fake.NewClientBuilder().
 		WithScheme(testScheme()).
-		WithIndex(&v1alpha1.KrakenDEndpoint{}, endpointGatewayIndex,
+		WithIndex(&v1alpha1.KrakenDEndpoint{}, EndpointGatewayIndex,
 			func(obj client.Object) []string {
 				ep, ok := obj.(*v1alpha1.KrakenDEndpoint)
 				if !ok {

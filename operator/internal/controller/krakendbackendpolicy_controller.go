@@ -119,7 +119,7 @@ func (r *KrakenDBackendPolicyReconciler) Reconcile(ctx context.Context, req ctrl
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *KrakenDBackendPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	if err := ensureEndpointIndexes(mgr); err != nil {
+	if err := EnsureEndpointIndexes(mgr); err != nil {
 		return err
 	}
 

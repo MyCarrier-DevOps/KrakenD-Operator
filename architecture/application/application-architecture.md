@@ -659,11 +659,13 @@ type KrakenDAutoConfigStatus struct {
 
 ```go
 type GatewayRef struct {
-    Name string `json:"name"`
+    Name      string `json:"name"`
+    Namespace string `json:"namespace,omitempty"` // defaults to referencing resource's namespace
 }
 
 type PolicyRef struct {
-    Name string `json:"name"`
+    Name      string `json:"name"`
+    Namespace string `json:"namespace,omitempty"` // defaults to referencing resource's namespace
 }
 
 type ConfigMapKeyRef struct {

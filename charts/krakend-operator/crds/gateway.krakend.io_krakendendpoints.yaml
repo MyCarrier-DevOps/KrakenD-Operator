@@ -144,6 +144,16 @@ spec:
                     method:
                       description: Method is the HTTP method (GET, POST, PUT, DELETE,
                         PATCH).
+                      enum:
+                      - GET
+                      - POST
+                      - PUT
+                      - DELETE
+                      - PATCH
+                      - HEAD
+                      - OPTIONS
+                      - CONNECT
+                      - TRACE
                       type: string
                     outputEncoding:
                       description: OutputEncoding overrides the default response encoding.

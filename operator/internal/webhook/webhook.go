@@ -228,28 +228,44 @@ func (v *EndpointValidator) validate(
 		}
 	}
 
+	// Detect duplicate (endpoint, method) pairs within this CR.
+	seenPaths := make(map[string]struct{})
+	for i, entry := range ep.Spec.Endpoints {
+		key := entry.Method + " " + entry.Endpoint
+		if _, dup := seenPaths[key]; dup {
+			errs = append(errs, field.Duplicate(
+				field.NewPath("spec", "endpoints").Index(i),
+				key,
+			))
+		}
+		seenPaths[key] = struct{}{}
+	}
+
+	gwKey := ep.Spec.GatewayRef.ResolvedNamespace(ep.Namespace) + "/" + ep.Spec.GatewayRef.Name
 	var existing v1alpha1.KrakenDEndpointList
-	if err := v.List(ctx, &existing, client.InNamespace(ep.Namespace)); err == nil {
-		for _, newEntry := range ep.Spec.Endpoints {
-			for _, other := range existing.Items {
-				if other.Name == ep.Name && other.Namespace == ep.Namespace {
-					continue
-				}
-				if other.Spec.GatewayRef.Name != ep.Spec.GatewayRef.Name ||
-					other.Spec.GatewayRef.ResolvedNamespace(other.Namespace) !=
-						ep.Spec.GatewayRef.ResolvedNamespace(ep.Namespace) {
-					continue
-				}
-				for _, otherEntry := range other.Spec.Endpoints {
-					if otherEntry.Endpoint == newEntry.Endpoint &&
-						otherEntry.Method == newEntry.Method {
-						warnings = append(warnings, fmt.Sprintf(
-							"endpoint %s %s already exists on gateway %s "+
-								"(defined by %s) — conflict resolved by creationTimestamp",
-							newEntry.Method, newEntry.Endpoint,
-							ep.Spec.GatewayRef.Name, other.Name,
-						))
-					}
+	if err := v.List(ctx, &existing,
+		client.MatchingFields{controller.EndpointGatewayIndex: gwKey},
+	); err != nil {
+		errs = append(errs, field.InternalError(
+			field.NewPath("spec", "gatewayRef"),
+			fmt.Errorf("listing endpoints for conflict check: %w", err),
+		))
+		return errs, warnings
+	}
+	for _, newEntry := range ep.Spec.Endpoints {
+		for _, other := range existing.Items {
+			if other.Name == ep.Name && other.Namespace == ep.Namespace {
+				continue
+			}
+			for _, otherEntry := range other.Spec.Endpoints {
+				if otherEntry.Endpoint == newEntry.Endpoint &&
+					otherEntry.Method == newEntry.Method {
+					warnings = append(warnings, fmt.Sprintf(
+						"endpoint %s %s already exists on gateway %s "+
+							"(defined by %s/%s) — conflict resolved by creationTimestamp",
+						newEntry.Method, newEntry.Endpoint,
+						gwKey, other.Namespace, other.Name,
+					))
 				}
 			}
 		}
@@ -480,6 +496,12 @@ func (v *AutoConfigValidator) validate(
 
 // SetupWebhooks registers all validating webhooks with the manager.
 func SetupWebhooks(mgr ctrl.Manager) error {
+	// Ensure field indexes are registered — needed for conflict detection
+	// and policy-delete validation even when running webhook-only.
+	if err := controller.EnsureEndpointIndexes(mgr); err != nil {
+		return fmt.Errorf("registering endpoint indexes: %w", err)
+	}
+
 	if err := ctrl.NewWebhookManagedBy(mgr).
 		For(&v1alpha1.KrakenDGateway{}).
 		WithValidator(&GatewayValidator{Client: mgr.GetClient()}).

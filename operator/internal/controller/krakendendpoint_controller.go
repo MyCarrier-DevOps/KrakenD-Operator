@@ -145,7 +145,9 @@ func (r *KrakenDEndpointReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 // Field index keys for efficient watch-to-reconcile mapping.
 const (
-	endpointGatewayIndex = ".spec.gatewayRef.namespacedName"
+	// EndpointGatewayIndex is the field index key for looking up endpoints
+	// by their gateway reference. Exported for use by the webhook package.
+	EndpointGatewayIndex = ".spec.gatewayRef.namespacedName"
 
 	// EndpointPolicyIndex is the field index key for looking up endpoints
 	// by their policy references. Exported for use by the webhook package.
@@ -154,7 +156,7 @@ const (
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *KrakenDEndpointReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	if err := ensureEndpointIndexes(mgr); err != nil {
+	if err := EnsureEndpointIndexes(mgr); err != nil {
 		return err
 	}
 
@@ -229,7 +231,7 @@ func (r *KrakenDEndpointReconciler) gatewayToEndpoints(
 	log := logf.FromContext(ctx)
 	var endpoints v1alpha1.KrakenDEndpointList
 	if err := r.List(ctx, &endpoints,
-		client.MatchingFields{endpointGatewayIndex: obj.GetNamespace() + "/" + obj.GetName()},
+		client.MatchingFields{EndpointGatewayIndex: obj.GetNamespace() + "/" + obj.GetName()},
 	); err != nil {
 		log.Error(err, "failed to list endpoints for gateway mapping", "gateway", obj.GetName())
 		return nil

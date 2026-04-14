@@ -17,9 +17,16 @@ limitations under the License.
 package controller
 
 import (
+	"context"
+	"sync"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 )
 
 func TestConditionsEqual_BothEmpty(t *testing.T) {
@@ -106,11 +113,75 @@ func TestConditionsEqual_MissingType(t *testing.T) {
 }
 
 func TestEnsureEndpointIndexes_Idempotent(t *testing.T) {
-	// The fake client builder in suite_test.go pre-registers indexes,
-	// but we can verify ensureEndpointIndexes works with a real scheme
-	// by building a fake manager-like indexer indirectly through the
-	// fake client builder (which uses the same FieldIndexer interface).
-	// Here we just verify conditionsEqual covers the core logic;
-	// ensureEndpointIndexes is integration-tested via controller tests
-	// that use fakeClientBuilder with pre-registered indexes.
+	// Reset the global index registry so this test is isolated.
+	ResetIndexRegistry()
+	defer ResetIndexRegistry()
+
+	// Use the fake client builder's indexer to test registerEndpointIndexes
+	// directly, since creating a real manager requires a cluster.
+	scheme := testScheme()
+	fb := fake.NewClientBuilder().WithScheme(scheme)
+
+	// Build a client with indexes registered through the normal path.
+	// The fakeClientBuilder in suite_test.go pre-registers them, but here
+	// we test that registerEndpointIndexes works correctly.
+	c := fb.
+		WithIndex(&v1alpha1.KrakenDEndpoint{}, EndpointGatewayIndex,
+			func(obj client.Object) []string {
+				ep, ok := obj.(*v1alpha1.KrakenDEndpoint)
+				if !ok {
+					return nil
+				}
+				ns := ep.Spec.GatewayRef.ResolvedNamespace(ep.Namespace)
+				return []string{ns + "/" + ep.Spec.GatewayRef.Name}
+			},
+		).
+		WithIndex(&v1alpha1.KrakenDEndpoint{}, EndpointPolicyIndex,
+			func(obj client.Object) []string {
+				ep, ok := obj.(*v1alpha1.KrakenDEndpoint)
+				if !ok {
+					return nil
+				}
+				var refs []string
+				for _, entry := range ep.Spec.Endpoints {
+					for _, be := range entry.Backends {
+						if be.PolicyRef != nil {
+							refs = append(refs, be.PolicyRef.PolicyKey(ep.Namespace))
+						}
+					}
+				}
+				return refs
+			},
+		).
+		WithObjects(
+			&v1alpha1.KrakenDEndpoint{
+				ObjectMeta: metav1.ObjectMeta{Name: "ep1", Namespace: "default"},
+				Spec: v1alpha1.KrakenDEndpointSpec{
+					GatewayRef: v1alpha1.GatewayRef{Name: "gw1"},
+					Endpoints:  []v1alpha1.EndpointEntry{},
+				},
+			},
+		).
+		Build()
+
+	// Verify the gateway index works.
+	var list v1alpha1.KrakenDEndpointList
+	if err := c.List(context.Background(), &list,
+		client.MatchingFields{EndpointGatewayIndex: "default/gw1"},
+	); err != nil {
+		t.Fatalf("gateway index lookup failed: %v", err)
+	}
+	if len(list.Items) != 1 {
+		t.Errorf("expected 1 endpoint, got %d", len(list.Items))
+	}
+
+	// Verify the policy index works.
+	if err := c.List(context.Background(), &list,
+		client.MatchingFields{EndpointPolicyIndex: "default/nonexistent"},
+	); err != nil {
+		t.Fatalf("policy index lookup failed: %v", err)
+	}
+	if len(list.Items) != 0 {
+		t.Errorf("expected 0 endpoints for nonexistent policy, got %d", len(list.Items))
+	}
 }
