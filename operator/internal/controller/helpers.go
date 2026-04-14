@@ -64,8 +64,9 @@ type endpointIndexRegistration struct {
 // each get their own registrations.
 var indexRegistry sync.Map // map[client.FieldIndexer]*endpointIndexRegistration
 
-// resetIndexRegistry clears the index registry for test isolation.
-func resetIndexRegistry() {
+// ResetIndexRegistry clears the index registry for test isolation.
+// This package is internal, so external callers cannot reach this function.
+func ResetIndexRegistry() {
 	indexRegistry.Range(func(key, _ any) bool {
 		indexRegistry.Delete(key)
 		return true

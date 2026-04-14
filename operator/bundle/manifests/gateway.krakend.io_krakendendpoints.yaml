@@ -142,8 +142,7 @@ spec:
                         type: string
                       type: array
                     method:
-                      description: Method is the HTTP method (GET, POST, PUT, DELETE,
-                        PATCH).
+                      description: Method is the HTTP method for this endpoint.
                       enum:
                       - GET
                       - POST
