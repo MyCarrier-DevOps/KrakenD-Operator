@@ -59,10 +59,15 @@ func fakeClientBuilder() *fake.ClientBuilder {
 					return nil
 				}
 				var refs []string
+				seen := make(map[string]struct{})
 				for _, entry := range ep.Spec.Endpoints {
 					for _, be := range entry.Backends {
 						if be.PolicyRef != nil {
-							refs = append(refs, be.PolicyRef.PolicyKey(ep.Namespace))
+							key := be.PolicyRef.PolicyKey(ep.Namespace)
+							if _, ok := seen[key]; !ok {
+								seen[key] = struct{}{}
+								refs = append(refs, key)
+							}
 						}
 					}
 				}

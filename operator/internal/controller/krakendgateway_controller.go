@@ -814,11 +814,14 @@ func (r *KrakenDGatewayReconciler) endpointToGateway(
 func (r *KrakenDGatewayReconciler) policyToGateways(
 	ctx context.Context, obj client.Object,
 ) []reconcile.Request {
+	log := logf.FromContext(ctx)
 	indexKey := obj.GetNamespace() + "/" + obj.GetName()
 	var endpoints v1alpha1.KrakenDEndpointList
 	if err := r.List(ctx, &endpoints,
 		client.MatchingFields{EndpointPolicyIndex: indexKey},
 	); err != nil {
+		log.Error(err, "policyToGateways: index lookup failed, gateway may not reconcile",
+			"policy", obj.GetName(), "namespace", obj.GetNamespace())
 		return nil
 	}
 	seen := map[types.NamespacedName]struct{}{}

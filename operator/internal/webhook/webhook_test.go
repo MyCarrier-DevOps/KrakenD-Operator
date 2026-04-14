@@ -616,3 +616,233 @@ func TestEndpointValidator_DeleteNoOp(t *testing.T) {
 		t.Errorf("expected no error, got %v", err)
 	}
 }
+
+// --- Cross-namespace tests ---
+
+func TestEndpointValidator_CrossNamespaceGatewayValid(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-gw", Namespace: "infra"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Config: v1alpha1.GatewayConfig{},
+		},
+	}
+	ep := &v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "ep1", Namespace: "app"},
+		Spec: v1alpha1.KrakenDEndpointSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: "my-gw", Namespace: "infra"},
+			Endpoints: []v1alpha1.EndpointEntry{
+				{Endpoint: "/api", Method: "GET",
+					Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/"}}},
+			},
+		},
+	}
+	v := &EndpointValidator{Client: fakeClient(gw)}
+	_, err := v.ValidateCreate(context.Background(), ep)
+	if err != nil {
+		t.Errorf("expected no error for cross-ns gateway, got %v", err)
+	}
+}
+
+func TestEndpointValidator_CrossNamespaceGatewayNotFound(t *testing.T) {
+	// Gateway in "infra", endpoint references "other" namespace → not found.
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-gw", Namespace: "infra"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Config: v1alpha1.GatewayConfig{},
+		},
+	}
+	ep := &v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "ep1", Namespace: "app"},
+		Spec: v1alpha1.KrakenDEndpointSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: "my-gw", Namespace: "other"},
+			Endpoints:  []v1alpha1.EndpointEntry{},
+		},
+	}
+	v := &EndpointValidator{Client: fakeClient(gw)}
+	_, err := v.ValidateCreate(context.Background(), ep)
+	if err == nil {
+		t.Error("expected error for gateway in wrong namespace")
+	}
+}
+
+func TestEndpointValidator_CrossNamespacePolicyValid(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-gw", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Config: v1alpha1.GatewayConfig{},
+		},
+	}
+	pol := &v1alpha1.KrakenDBackendPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "shared-policy", Namespace: "policies"},
+		Spec: v1alpha1.KrakenDBackendPolicySpec{
+			RateLimit: &v1alpha1.RateLimitSpec{MaxRate: 100},
+		},
+	}
+	ep := &v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "ep1", Namespace: "default"},
+		Spec: v1alpha1.KrakenDEndpointSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: "my-gw"},
+			Endpoints: []v1alpha1.EndpointEntry{
+				{Endpoint: "/api", Method: "GET",
+					Backends: []v1alpha1.BackendSpec{{
+						Host: []string{"http://svc"}, URLPattern: "/",
+						PolicyRef: &v1alpha1.PolicyRef{Name: "shared-policy", Namespace: "policies"},
+					}}},
+			},
+		},
+	}
+	v := &EndpointValidator{Client: fakeClient(gw, pol)}
+	_, err := v.ValidateCreate(context.Background(), ep)
+	if err != nil {
+		t.Errorf("expected no error for cross-ns policy, got %v", err)
+	}
+}
+
+func TestEndpointValidator_CrossNamespacePolicyNotFound(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-gw", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Config: v1alpha1.GatewayConfig{},
+		},
+	}
+	ep := &v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "ep1", Namespace: "default"},
+		Spec: v1alpha1.KrakenDEndpointSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: "my-gw"},
+			Endpoints: []v1alpha1.EndpointEntry{
+				{Endpoint: "/api", Method: "GET",
+					Backends: []v1alpha1.BackendSpec{{
+						Host: []string{"http://svc"}, URLPattern: "/",
+						PolicyRef: &v1alpha1.PolicyRef{Name: "missing", Namespace: "other-ns"},
+					}}},
+			},
+		},
+	}
+	v := &EndpointValidator{Client: fakeClient(gw)}
+	_, err := v.ValidateCreate(context.Background(), ep)
+	if err == nil {
+		t.Error("expected error for cross-ns policy not found")
+	}
+}
+
+func TestEndpointValidator_ConflictSameNameDifferentNamespace(t *testing.T) {
+	// Two gateways named "my-gw" in different namespaces.
+	// Endpoints referencing each should NOT produce a conflict warning.
+	gwA := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-gw", Namespace: "ns-a"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Config: v1alpha1.GatewayConfig{},
+		},
+	}
+	gwB := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-gw", Namespace: "ns-b"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Config: v1alpha1.GatewayConfig{},
+		},
+	}
+	// Existing endpoint points to gw in ns-a.
+	existing := &v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "ep-a", Namespace: "default",
+			CreationTimestamp: metav1.NewTime(time.Now().Add(-time.Hour)),
+		},
+		Spec: v1alpha1.KrakenDEndpointSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: "my-gw", Namespace: "ns-a"},
+			Endpoints: []v1alpha1.EndpointEntry{
+				{Endpoint: "/api", Method: "GET",
+					Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/"}}},
+			},
+		},
+	}
+	// New endpoint points to gw in ns-b — same path, different gateway.
+	newEP := &v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "ep-b", Namespace: "default"},
+		Spec: v1alpha1.KrakenDEndpointSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: "my-gw", Namespace: "ns-b"},
+			Endpoints: []v1alpha1.EndpointEntry{
+				{Endpoint: "/api", Method: "GET",
+					Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc2"}, URLPattern: "/"}}},
+			},
+		},
+	}
+	v := &EndpointValidator{Client: fakeClient(gwA, gwB, existing)}
+	warnings, err := v.ValidateCreate(context.Background(), newEP)
+	if err != nil {
+		t.Errorf("expected no error, got %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Errorf("expected no conflict warning for different gateway namespaces, got %v", warnings)
+	}
+}
+
+func TestPolicyValidator_DeleteBlockedCrossNamespace(t *testing.T) {
+	p := &v1alpha1.KrakenDBackendPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "shared-policy", Namespace: "policies"},
+	}
+	ep := &v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "ep1", Namespace: "app"},
+		Spec: v1alpha1.KrakenDEndpointSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: "gw"},
+			Endpoints: []v1alpha1.EndpointEntry{
+				{Endpoint: "/api", Method: "GET",
+					Backends: []v1alpha1.BackendSpec{{
+						Host: []string{"http://svc"}, URLPattern: "/",
+						PolicyRef: &v1alpha1.PolicyRef{Name: "shared-policy", Namespace: "policies"},
+					}}},
+			},
+		},
+	}
+	v := &PolicyValidator{Client: fakeClientWithPolicyIndex(p, ep)}
+	_, err := v.ValidateDelete(context.Background(), p)
+	if err == nil {
+		t.Error("expected error: cross-ns policy still referenced")
+	}
+	if !strings.Contains(err.Error(), "ep1") {
+		t.Errorf("expected ep1 in error, got: %v", err)
+	}
+}
+
+func TestAutoConfigValidator_CrossNamespaceGatewayValid(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-gw", Namespace: "infra"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Config: v1alpha1.GatewayConfig{},
+		},
+	}
+	ac := &v1alpha1.KrakenDAutoConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "ac1", Namespace: "app"},
+		Spec: v1alpha1.KrakenDAutoConfigSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: "my-gw", Namespace: "infra"},
+			OpenAPI:    v1alpha1.OpenAPISource{URL: "https://example.com/api"},
+			Trigger:    v1alpha1.TriggerOnChange,
+		},
+	}
+	v := &AutoConfigValidator{Client: fakeClient(gw)}
+	_, err := v.ValidateCreate(context.Background(), ac)
+	if err != nil {
+		t.Errorf("expected no error for cross-ns autoconfig gateway, got %v", err)
+	}
+}
+
+func TestAutoConfigValidator_CrossNamespaceGatewayNotFound(t *testing.T) {
+	ac := &v1alpha1.KrakenDAutoConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "ac1", Namespace: "app"},
+		Spec: v1alpha1.KrakenDAutoConfigSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: "my-gw", Namespace: "infra"},
+			OpenAPI:    v1alpha1.OpenAPISource{URL: "https://example.com/api"},
+			Trigger:    v1alpha1.TriggerOnChange,
+		},
+	}
+	v := &AutoConfigValidator{Client: fakeClient()}
+	_, err := v.ValidateCreate(context.Background(), ac)
+	if err == nil {
+		t.Error("expected error for cross-ns gateway not found")
+	}
+}

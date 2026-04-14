@@ -20,7 +20,10 @@ package v1alpha1
 // When Namespace is empty the gateway is assumed to live in the same namespace
 // as the referencing resource.
 type GatewayRef struct {
-	Name      string `json:"name"`
+	Name string `json:"name"`
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
 	Namespace string `json:"namespace,omitempty"`
 }
 
@@ -36,7 +39,10 @@ func (r *GatewayRef) ResolvedNamespace(fallback string) string {
 // When Namespace is empty the policy is assumed to live in the same namespace
 // as the referencing resource.
 type PolicyRef struct {
-	Name      string `json:"name"`
+	Name string `json:"name"`
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
 	Namespace string `json:"namespace,omitempty"`
 }
 

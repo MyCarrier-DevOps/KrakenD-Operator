@@ -98,6 +98,8 @@ spec:
                               name:
                                 type: string
                               namespace:
+                                maxLength: 63
+                                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                                 type: string
                             required:
                             - name
@@ -162,6 +164,8 @@ spec:
                   name:
                     type: string
                   namespace:
+                    maxLength: 63
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                     type: string
                 required:
                 - name

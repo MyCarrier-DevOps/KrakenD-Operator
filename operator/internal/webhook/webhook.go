@@ -232,10 +232,12 @@ func (v *EndpointValidator) validate(
 	if err := v.List(ctx, &existing, client.InNamespace(ep.Namespace)); err == nil {
 		for _, newEntry := range ep.Spec.Endpoints {
 			for _, other := range existing.Items {
-				if other.Name == ep.Name {
+				if other.Name == ep.Name && other.Namespace == ep.Namespace {
 					continue
 				}
-				if other.Spec.GatewayRef.Name != ep.Spec.GatewayRef.Name {
+				if other.Spec.GatewayRef.Name != ep.Spec.GatewayRef.Name ||
+					other.Spec.GatewayRef.ResolvedNamespace(other.Namespace) !=
+						ep.Spec.GatewayRef.ResolvedNamespace(ep.Namespace) {
 					continue
 				}
 				for _, otherEntry := range other.Spec.Endpoints {
