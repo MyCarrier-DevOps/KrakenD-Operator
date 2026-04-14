@@ -2737,7 +2737,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o manager cmd/main.go
 
 # Stage 2: Extract KrakenD CE binary for config validation
 ARG KRAKEND_VERSION=2.13
-FROM krakend/krakend:${KRAKEND_VERSION} AS krakend
+FROM krakend:${KRAKEND_VERSION} AS krakend
 
 # Stage 3: Final distroless image
 FROM gcr.io/distroless/static:nonroot
