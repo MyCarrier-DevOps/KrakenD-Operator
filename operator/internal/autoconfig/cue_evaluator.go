@@ -26,6 +26,7 @@ import (
 	"cuelang.org/go/cue"
 	"cuelang.org/go/cue/cuecontext"
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/yaml"
 )
 
@@ -109,6 +110,8 @@ func (e *cueEvaluator) Evaluate(_ context.Context, input CUEInput) (*CUEOutput, 
 	if err != nil {
 		return nil, err
 	}
+
+	applyDefaults(output, input.Defaults)
 
 	if input.URLTransform != nil {
 		applyURLTransform(output, input.URLTransform)
@@ -213,6 +216,41 @@ func exportEndpointEntries(endpointsValue cue.Value) (*CUEOutput, error) {
 	return output, nil
 }
 
+// applyDefaults applies CR-level EndpointDefaults to all entries. These replace
+// the CUE-generated defaults (e.g. _defaultTimeout) and give the user
+// control over baseline values without custom CUE definitions.
+func applyDefaults(output *CUEOutput, defaults *v1alpha1.EndpointDefaults) {
+	if defaults == nil {
+		return
+	}
+	for i := range output.Entries {
+		entry := &output.Entries[i]
+		if defaults.Timeout != nil {
+			entry.Timeout = defaults.Timeout
+		}
+		if defaults.CacheTTL != nil {
+			entry.CacheTTL = defaults.CacheTTL
+		}
+		if defaults.OutputEncoding != "" {
+			entry.OutputEncoding = defaults.OutputEncoding
+		}
+		if defaults.ConcurrentCalls != nil {
+			entry.ConcurrentCalls = defaults.ConcurrentCalls
+		}
+		if defaults.InputHeaders != nil {
+			entry.InputHeaders = defaults.InputHeaders
+		}
+		if defaults.InputQueryStrings != nil {
+			entry.InputQueryStrings = defaults.InputQueryStrings
+		}
+		if defaults.PolicyRef != nil {
+			for j := range entry.Backends {
+				entry.Backends[j].PolicyRef = defaults.PolicyRef
+			}
+		}
+	}
+}
+
 // applyURLTransform applies host mapping, path stripping, and path prefixing
 // to the evaluated endpoint entries. This runs as a post-processing step after
 // CUE evaluation, allowing the CR's URLTransformSpec to override hosts and
@@ -307,6 +345,9 @@ func applyFieldOverrides(output *CUEOutput, overrides []v1alpha1.OperationOverri
 		if ov.Method != "" {
 			entry.Method = ov.Method
 		}
+		if ov.ExtraConfig != nil {
+			entry.ExtraConfig = mergeExtraConfig(entry.ExtraConfig, ov.ExtraConfig)
+		}
 		if ov.PolicyRef != nil {
 			for i := range entry.Backends {
 				entry.Backends[i].PolicyRef = ov.PolicyRef
@@ -331,6 +372,38 @@ func applyFieldOverrides(output *CUEOutput, overrides []v1alpha1.OperationOverri
 			}
 		}
 	}
+}
+
+// mergeExtraConfig performs a shallow merge of override keys into existing
+// ExtraConfig. Override keys replace existing keys; keys not in the override
+// are preserved. If unmarshalling fails, the override replaces entirely.
+func mergeExtraConfig(existing, override *runtime.RawExtension) *runtime.RawExtension {
+	if existing == nil || len(existing.Raw) == 0 {
+		return override
+	}
+	if override == nil || len(override.Raw) == 0 {
+		return existing
+	}
+
+	var base map[string]json.RawMessage
+	if err := json.Unmarshal(existing.Raw, &base); err != nil {
+		return override
+	}
+
+	var patch map[string]json.RawMessage
+	if err := json.Unmarshal(override.Raw, &patch); err != nil {
+		return override
+	}
+
+	for k, v := range patch {
+		base[k] = v
+	}
+
+	merged, err := json.Marshal(base)
+	if err != nil {
+		return override
+	}
+	return &runtime.RawExtension{Raw: merged}
 }
 
 // sortedKeys returns the keys of a map in stable order for deterministic processing.
