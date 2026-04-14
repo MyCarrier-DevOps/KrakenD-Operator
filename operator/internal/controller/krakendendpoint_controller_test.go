@@ -225,6 +225,9 @@ func TestEndpointReconcile_Active(t *testing.T) {
 	if updated.Status.EndpointCount != 1 {
 		t.Errorf("expected endpoint count 1, got %d", updated.Status.EndpointCount)
 	}
+	if updated.Status.Methods != "GET" {
+		t.Errorf("expected methods %q, got %q", "GET", updated.Status.Methods)
+	}
 }
 
 func TestEndpointReconcile_GatewayToEndpoints(t *testing.T) {
@@ -355,6 +358,7 @@ func TestEndpointReconcile_NoOpWhenUnchanged(t *testing.T) {
 			Phase:              v1alpha1.EndpointPhaseActive,
 			ObservedGeneration: 1,
 			EndpointCount:      1,
+			Methods:            "GET",
 			Conditions: []metav1.Condition{
 				{Type: v1alpha1.ConditionAvailable, Status: metav1.ConditionTrue, Reason: "ReferencesValid", Message: "All gateway and policy references are valid", ObservedGeneration: 1},
 			},

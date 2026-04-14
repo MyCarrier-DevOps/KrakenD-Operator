@@ -19,6 +19,8 @@ package controller
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -69,6 +71,7 @@ func (r *KrakenDEndpointReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	origPhase := ep.Status.Phase
 	origGeneration := ep.Status.ObservedGeneration
 	origCount := ep.Status.EndpointCount
+	origMethods := ep.Status.Methods
 	origConditions := ep.Status.DeepCopy().Conditions
 
 	// Initialize phase on first reconcile
@@ -120,6 +123,7 @@ func (r *KrakenDEndpointReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	ep.Status.Phase = v1alpha1.EndpointPhaseActive
 	ep.Status.ObservedGeneration = ep.Generation
 	ep.Status.EndpointCount = int32(len(ep.Spec.Endpoints))
+	ep.Status.Methods = distinctMethods(ep.Spec.Endpoints)
 	meta.SetStatusCondition(&ep.Status.Conditions, metav1.Condition{
 		Type:               v1alpha1.ConditionAvailable,
 		Status:             metav1.ConditionTrue,
@@ -132,6 +136,7 @@ func (r *KrakenDEndpointReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	statusChanged := ep.Status.Phase != origPhase ||
 		ep.Status.ObservedGeneration != origGeneration ||
 		ep.Status.EndpointCount != origCount ||
+		ep.Status.Methods != origMethods ||
 		!conditionsEqual(origConditions, ep.Status.Conditions)
 	if statusChanged {
 		if err := r.Status().Update(ctx, &ep); err != nil {
@@ -197,11 +202,13 @@ func (r *KrakenDEndpointReconciler) setErrorPhase(
 ) (ctrl.Result, error) {
 	origPhase := ep.Status.Phase
 	origCount := ep.Status.EndpointCount
+	origMethods := ep.Status.Methods
 	origConditions := ep.Status.DeepCopy().Conditions
 
 	ep.Status.Phase = phase
 	ep.Status.ObservedGeneration = ep.Generation
 	ep.Status.EndpointCount = int32(len(ep.Spec.Endpoints))
+	ep.Status.Methods = distinctMethods(ep.Spec.Endpoints)
 	meta.SetStatusCondition(&ep.Status.Conditions, metav1.Condition{
 		Type:               v1alpha1.ConditionAvailable,
 		Status:             metav1.ConditionFalse,
@@ -215,6 +222,7 @@ func (r *KrakenDEndpointReconciler) setErrorPhase(
 	}
 	changed := ep.Status.Phase != origPhase ||
 		ep.Status.EndpointCount != origCount ||
+		ep.Status.Methods != origMethods ||
 		!conditionsEqual(origConditions, ep.Status.Conditions)
 	if changed {
 		if err := r.Status().Update(ctx, ep); err != nil {
@@ -271,4 +279,19 @@ func (r *KrakenDEndpointReconciler) policyToEndpoints(
 		})
 	}
 	return requests
+}
+
+// distinctMethods returns a sorted, comma-separated string of unique HTTP
+// methods across all endpoint entries (e.g. "DELETE,GET,POST").
+func distinctMethods(entries []v1alpha1.EndpointEntry) string {
+	seen := make(map[string]struct{}, len(entries))
+	for _, e := range entries {
+		seen[e.Method] = struct{}{}
+	}
+	methods := make([]string, 0, len(seen))
+	for m := range seen {
+		methods = append(methods, m)
+	}
+	sort.Strings(methods)
+	return strings.Join(methods, ",")
 }
