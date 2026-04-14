@@ -102,7 +102,7 @@ func registerEndpointIndexes(indexer client.FieldIndexer) error {
 	}
 
 	if err := indexer.IndexField(
-		context.Background(), &v1alpha1.KrakenDEndpoint{}, endpointPolicyIndex,
+		context.Background(), &v1alpha1.KrakenDEndpoint{}, EndpointPolicyIndex,
 		func(obj client.Object) []string {
 			ep, ok := obj.(*v1alpha1.KrakenDEndpoint)
 			if !ok {
@@ -126,7 +126,7 @@ func registerEndpointIndexes(indexer client.FieldIndexer) error {
 			return refs
 		},
 	); err != nil {
-		return fmt.Errorf("indexing %s: %w", endpointPolicyIndex, err)
+		return fmt.Errorf("indexing %s: %w", EndpointPolicyIndex, err)
 	}
 
 	return nil

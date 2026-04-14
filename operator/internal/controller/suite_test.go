@@ -52,7 +52,7 @@ func fakeClientBuilder() *fake.ClientBuilder {
 				return []string{ns + "/" + ep.Spec.GatewayRef.Name}
 			},
 		).
-		WithIndex(&v1alpha1.KrakenDEndpoint{}, endpointPolicyIndex,
+		WithIndex(&v1alpha1.KrakenDEndpoint{}, EndpointPolicyIndex,
 			func(obj client.Object) []string {
 				ep, ok := obj.(*v1alpha1.KrakenDEndpoint)
 				if !ok {

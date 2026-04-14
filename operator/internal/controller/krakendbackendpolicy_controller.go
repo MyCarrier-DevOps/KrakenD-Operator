@@ -70,7 +70,7 @@ func (r *KrakenDBackendPolicyReconciler) Reconcile(ctx context.Context, req ctrl
 	// Count how many endpoints reference this policy using the field index
 	var endpoints v1alpha1.KrakenDEndpointList
 	if err := r.List(ctx, &endpoints,
-		client.MatchingFields{endpointPolicyIndex: policy.Namespace + "/" + policy.Name},
+		client.MatchingFields{EndpointPolicyIndex: policy.Namespace + "/" + policy.Name},
 	); err != nil {
 		return ctrl.Result{}, fmt.Errorf("listing endpoints: %w", err)
 	}

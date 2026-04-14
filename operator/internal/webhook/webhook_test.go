@@ -14,6 +14,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/controller"
 )
 
 func testScheme() *runtime.Scheme {
@@ -27,6 +28,39 @@ func fakeClient(objs ...client.Object) client.Client {
 	return fake.NewClientBuilder().
 		WithScheme(testScheme()).
 		WithObjects(objs...).
+		Build()
+}
+
+// fakeClientWithPolicyIndex builds a fake client with the endpoint-policy
+// field index registered, required for PolicyValidator.ValidateDelete.
+func fakeClientWithPolicyIndex(objs ...client.Object) client.Client {
+	return fake.NewClientBuilder().
+		WithScheme(testScheme()).
+		WithObjects(objs...).
+		WithIndex(&v1alpha1.KrakenDEndpoint{}, controller.EndpointPolicyIndex,
+			func(obj client.Object) []string {
+				ep, ok := obj.(*v1alpha1.KrakenDEndpoint)
+				if !ok {
+					return nil
+				}
+				var refs []string
+				seen := make(map[string]struct{})
+				for _, entry := range ep.Spec.Endpoints {
+					for _, be := range entry.Backends {
+						if be.PolicyRef == nil {
+							continue
+						}
+						key := be.PolicyRef.PolicyKey(ep.Namespace)
+						if _, ok := seen[key]; ok {
+							continue
+						}
+						seen[key] = struct{}{}
+						refs = append(refs, key)
+					}
+				}
+				return refs
+			},
+		).
 		Build()
 }
 
@@ -350,7 +384,7 @@ func TestPolicyValidator_DeleteBlocked(t *testing.T) {
 			},
 		},
 	}
-	v := &PolicyValidator{Client: fakeClient(p, ep)}
+	v := &PolicyValidator{Client: fakeClientWithPolicyIndex(p, ep)}
 	_, err := v.ValidateDelete(context.Background(), p)
 	if err == nil {
 		t.Error("expected error: policy referenced")
@@ -364,7 +398,7 @@ func TestPolicyValidator_DeleteAllowed(t *testing.T) {
 	p := &v1alpha1.KrakenDBackendPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: "my-policy", Namespace: "default"},
 	}
-	v := &PolicyValidator{Client: fakeClient(p)}
+	v := &PolicyValidator{Client: fakeClientWithPolicyIndex(p)}
 	_, err := v.ValidateDelete(context.Background(), p)
 	if err != nil {
 		t.Errorf("expected no error, got %v", err)

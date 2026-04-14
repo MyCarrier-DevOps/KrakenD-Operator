@@ -817,7 +817,7 @@ func (r *KrakenDGatewayReconciler) policyToGateways(
 	indexKey := obj.GetNamespace() + "/" + obj.GetName()
 	var endpoints v1alpha1.KrakenDEndpointList
 	if err := r.List(ctx, &endpoints,
-		client.MatchingFields{endpointPolicyIndex: indexKey},
+		client.MatchingFields{EndpointPolicyIndex: indexKey},
 	); err != nil {
 		return nil
 	}

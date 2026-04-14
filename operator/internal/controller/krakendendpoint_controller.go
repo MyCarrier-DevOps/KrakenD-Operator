@@ -146,7 +146,10 @@ func (r *KrakenDEndpointReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 // Field index keys for efficient watch-to-reconcile mapping.
 const (
 	endpointGatewayIndex = ".spec.gatewayRef.namespacedName"
-	endpointPolicyIndex  = ".spec.endpoints.backends.policyRef.namespacedName"
+
+	// EndpointPolicyIndex is the field index key for looking up endpoints
+	// by their policy references. Exported for use by the webhook package.
+	EndpointPolicyIndex = ".spec.endpoints.backends.policyRef.namespacedName"
 )
 
 // SetupWithManager sets up the controller with the Manager.
@@ -251,7 +254,7 @@ func (r *KrakenDEndpointReconciler) policyToEndpoints(
 	indexKey := obj.GetNamespace() + "/" + obj.GetName()
 	var endpoints v1alpha1.KrakenDEndpointList
 	if err := r.List(ctx, &endpoints,
-		client.MatchingFields{endpointPolicyIndex: indexKey},
+		client.MatchingFields{EndpointPolicyIndex: indexKey},
 	); err != nil {
 		log.Error(err, "failed to list endpoints for policy mapping", "policy", obj.GetName())
 		return nil
