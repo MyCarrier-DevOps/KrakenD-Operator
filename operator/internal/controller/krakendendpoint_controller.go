@@ -85,7 +85,7 @@ func (r *KrakenDEndpointReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	if err := r.Get(ctx, gwKey, &gw); err != nil {
 		if errors.IsNotFound(err) {
 			return r.setDetached(ctx, &ep, "GatewayNotFound",
-				fmt.Sprintf("gateway %q not found", ep.Spec.GatewayRef.Name))
+				fmt.Sprintf("gateway %s/%s not found", gwKey.Namespace, gwKey.Name))
 		}
 		return ctrl.Result{}, fmt.Errorf("getting gateway %s: %w", gwKey, err)
 	}

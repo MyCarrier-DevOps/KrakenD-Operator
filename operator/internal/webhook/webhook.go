@@ -20,6 +20,7 @@ package webhook
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -307,6 +308,7 @@ func (v *PolicyValidator) ValidateDelete(
 	for _, ep := range endpoints.Items {
 		references = append(references, ep.Namespace+"/"+ep.Name)
 	}
+	sort.Strings(references)
 
 	if len(references) > 0 {
 		return nil, field.ErrorList{
