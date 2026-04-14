@@ -22,7 +22,6 @@ import (
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -200,15 +199,14 @@ func TestFieldIndexesReturnCorrectValues(t *testing.T) {
 		t.Errorf("expected 1 endpoint, got %d", len(list.Items))
 	}
 
-	// Verify the policy index works and deduplicates:
-	// ep1 has two backends both referencing "pol1" — index should return one entry.
+	// Verify the policy index query returns the endpoint.
 	if err := c.List(context.Background(), &list,
 		client.MatchingFields{EndpointPolicyIndex: "default/pol1"},
 	); err != nil {
 		t.Fatalf("policy index lookup failed: %v", err)
 	}
 	if len(list.Items) != 1 {
-		t.Errorf("expected 1 endpoint (deduped), got %d", len(list.Items))
+		t.Errorf("expected 1 endpoint, got %d", len(list.Items))
 	}
 
 	// Verify non-matching lookup returns 0.
@@ -222,6 +220,77 @@ func TestFieldIndexesReturnCorrectValues(t *testing.T) {
 	}
 }
 
+func TestPolicyIndexFunc_Deduplicates(t *testing.T) {
+	resetIndexRegistry()
+	defer resetIndexRegistry()
+
+	indexer := &stubIndexer{}
+	mgr := &stubManager{indexer: indexer}
+	if err := EnsureEndpointIndexes(mgr); err != nil {
+		t.Fatalf("setup failed: %v", err)
+	}
+
+	fn := indexer.funcs[EndpointPolicyIndex]
+	if fn == nil {
+		t.Fatal("policy index function not captured")
+	}
+
+	t.Run("intra-entry", func(t *testing.T) {
+		// Two backends in the same entry both reference "pol1".
+		ep := &v1alpha1.KrakenDEndpoint{
+			ObjectMeta: metav1.ObjectMeta{Name: "ep1", Namespace: "default"},
+			Spec: v1alpha1.KrakenDEndpointSpec{
+				GatewayRef: v1alpha1.GatewayRef{Name: "gw1"},
+				Endpoints: []v1alpha1.EndpointEntry{
+					{Endpoint: "/api", Method: "GET", Backends: []v1alpha1.BackendSpec{
+						{Host: []string{"http://svc:80"}, URLPattern: "/",
+							PolicyRef: &v1alpha1.PolicyRef{Name: "pol1"}},
+						{Host: []string{"http://svc:80"}, URLPattern: "/alt",
+							PolicyRef: &v1alpha1.PolicyRef{Name: "pol1"}},
+					}},
+				},
+			},
+		}
+
+		refs := fn(ep)
+		if len(refs) != 1 {
+			t.Errorf("expected 1 deduped policy ref, got %d: %v", len(refs), refs)
+		}
+		if len(refs) > 0 && refs[0] != "default/pol1" {
+			t.Errorf("expected %q, got %q", "default/pol1", refs[0])
+		}
+	})
+
+	t.Run("cross-entry", func(t *testing.T) {
+		// Same policy referenced in two different entries.
+		// Verifies the seen map is scoped outside the outer loop.
+		ep := &v1alpha1.KrakenDEndpoint{
+			ObjectMeta: metav1.ObjectMeta{Name: "ep2", Namespace: "default"},
+			Spec: v1alpha1.KrakenDEndpointSpec{
+				GatewayRef: v1alpha1.GatewayRef{Name: "gw1"},
+				Endpoints: []v1alpha1.EndpointEntry{
+					{Endpoint: "/a", Method: "GET", Backends: []v1alpha1.BackendSpec{
+						{Host: []string{"http://svc:80"}, URLPattern: "/",
+							PolicyRef: &v1alpha1.PolicyRef{Name: "pol1"}},
+					}},
+					{Endpoint: "/b", Method: "POST", Backends: []v1alpha1.BackendSpec{
+						{Host: []string{"http://svc:80"}, URLPattern: "/",
+							PolicyRef: &v1alpha1.PolicyRef{Name: "pol1"}},
+					}},
+				},
+			},
+		}
+
+		refs := fn(ep)
+		if len(refs) != 1 {
+			t.Errorf("expected 1 deduped policy ref, got %d: %v", len(refs), refs)
+		}
+		if len(refs) > 0 && refs[0] != "default/pol1" {
+			t.Errorf("expected %q, got %q", "default/pol1", refs[0])
+		}
+	})
+}
+
 // resetIndexRegistry clears the index registry for test isolation.
 func resetIndexRegistry() {
 	indexRegistry.Range(func(key, _ any) bool {
@@ -230,18 +299,24 @@ func resetIndexRegistry() {
 	})
 }
 
-// stubIndexer implements client.FieldIndexer to track IndexField calls.
+// stubIndexer implements client.FieldIndexer to track IndexField calls
+// and capture the registered functions for direct invocation in tests.
 type stubIndexer struct {
 	mu    sync.Mutex
 	calls int
+	funcs map[string]client.IndexerFunc
 }
 
 func (s *stubIndexer) IndexField(
-	_ context.Context, _ client.Object, _ string, _ client.IndexerFunc,
+	_ context.Context, _ client.Object, field string, fn client.IndexerFunc,
 ) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls++
+	if s.funcs == nil {
+		s.funcs = make(map[string]client.IndexerFunc)
+	}
+	s.funcs[field] = fn
 	return nil
 }
 
@@ -258,4 +333,3 @@ type stubManager struct {
 }
 
 func (m *stubManager) GetFieldIndexer() client.FieldIndexer { return m.indexer }
-func (m *stubManager) GetScheme() *runtime.Scheme           { return testScheme() }

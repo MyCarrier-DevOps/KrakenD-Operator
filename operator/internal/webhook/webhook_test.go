@@ -304,7 +304,14 @@ func TestEndpointValidator_ConflictWarning(t *testing.T) {
 		t.Errorf("expected no error, got %v", err)
 	}
 	if len(warnings) == 0 {
-		t.Error("expected conflict warning")
+		t.Fatal("expected conflict warning")
+	}
+	w := warnings[0]
+	if !strings.Contains(w, "default/old-ep") {
+		t.Errorf("warning should reference existing endpoint, got: %s", w)
+	}
+	if !strings.Contains(w, "default/my-gw") {
+		t.Errorf("warning should reference gateway, got: %s", w)
 	}
 }
 

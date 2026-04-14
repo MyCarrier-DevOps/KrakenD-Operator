@@ -1795,11 +1795,25 @@ func (v *EndpointValidator) ValidateCreate(
     var warnings admission.Warnings
     var errs field.ErrorList
 
-    // gatewayRef must exist
+    // Detect intra-CR duplicate (endpoint, method) pairs
+    seenPaths := make(map[string]struct{})
+    for i, entry := range ep.Spec.Endpoints {
+        key := entry.Method + " " + entry.Endpoint
+        if _, exists := seenPaths[key]; exists {
+            errs = append(errs, field.Duplicate(
+                field.NewPath("spec", "endpoints").Index(i),
+                key,
+            ))
+        }
+        seenPaths[key] = struct{}{}
+    }
+
+    // gatewayRef must exist (namespace-aware)
+    gwNS := ep.Spec.GatewayRef.ResolvedNamespace(ep.Namespace)
     gw := &v1alpha1.KrakenDGateway{}
     if err := v.Get(ctx, types.NamespacedName{
         Name:      ep.Spec.GatewayRef.Name,
-        Namespace: ep.Namespace,
+        Namespace: gwNS,
     }, gw); err != nil {
         errs = append(errs, field.NotFound(
             field.NewPath("spec", "gatewayRef", "name"),
@@ -1807,14 +1821,14 @@ func (v *EndpointValidator) ValidateCreate(
         ))
     }
 
-    // policyRef must exist for each backend in each endpoint entry
+    // policyRef must exist for each backend (namespace-aware)
     for i, entry := range ep.Spec.Endpoints {
         for j, be := range entry.Backends {
             if be.PolicyRef != nil {
                 policy := &v1alpha1.KrakenDBackendPolicy{}
                 if err := v.Get(ctx, types.NamespacedName{
                     Name:      be.PolicyRef.Name,
-                    Namespace: ep.Namespace,
+                    Namespace: be.PolicyRef.ResolvedNamespace(ep.Namespace),
                 }, policy); err != nil {
                     errs = append(errs, field.NotFound(
                         field.NewPath("spec", "endpoints").Index(i).Child("backends").Index(j).Child("policyRef", "name"),
@@ -1825,22 +1839,32 @@ func (v *EndpointValidator) ValidateCreate(
         }
     }
 
-    // Warn on conflict (but allow)
+    // Warn on conflict via field index (cluster-wide, not namespace-scoped)
+    gwKey := gwNS + "/" + ep.Spec.GatewayRef.Name
     var existing v1alpha1.KrakenDEndpointList
-    if err := v.List(ctx, &existing, client.InNamespace(ep.Namespace)); err == nil {
-        for _, newEntry := range ep.Spec.Endpoints {
-            for _, other := range existing.Items {
-                if other.Spec.GatewayRef.Name != ep.Spec.GatewayRef.Name {
-                    continue
-                }
-                for _, otherEntry := range other.Spec.Endpoints {
-                    if otherEntry.Endpoint == newEntry.Endpoint &&
-                        otherEntry.Method == newEntry.Method {
-                        warnings = append(warnings, fmt.Sprintf(
-                            "endpoint %s %s already exists on gateway %s (defined by %s) — conflict will be resolved by creationTimestamp",
-                            newEntry.Method, newEntry.Endpoint, ep.Spec.GatewayRef.Name, other.Name,
-                        ))
-                    }
+    if err := v.List(ctx, &existing,
+        client.MatchingFields{controller.EndpointGatewayIndex: gwKey},
+    ); err != nil {
+        errs = append(errs, field.InternalError(
+            field.NewPath("spec", "gatewayRef"),
+            fmt.Errorf("listing endpoints for conflict check: %w", err),
+        ))
+        return errs, warnings
+    }
+    for _, newEntry := range ep.Spec.Endpoints {
+        for _, other := range existing.Items {
+            if other.Name == ep.Name && other.Namespace == ep.Namespace {
+                continue
+            }
+            for _, otherEntry := range other.Spec.Endpoints {
+                if otherEntry.Endpoint == newEntry.Endpoint &&
+                    otherEntry.Method == newEntry.Method {
+                    warnings = append(warnings, fmt.Sprintf(
+                        "endpoint %s %s already exists on gateway %s "+
+                            "(defined by %s/%s) — conflict resolved by creationTimestamp",
+                        newEntry.Method, newEntry.Endpoint,
+                        gwKey, other.Namespace, other.Name,
+                    ))
                 }
             }
         }
