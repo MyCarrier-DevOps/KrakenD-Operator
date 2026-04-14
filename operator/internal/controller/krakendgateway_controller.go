@@ -293,6 +293,10 @@ func (r *KrakenDGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			&corev1.Secret{},
 			handler.EnqueueRequestsFromMapFunc(r.licenseSecretToGateway),
 		).
+		Watches(
+			&corev1.ConfigMap{},
+			handler.EnqueueRequestsFromMapFunc(r.pluginConfigMapToGateway),
+		).
 		Named("krakendgateway").
 		Complete(r)
 }
@@ -866,6 +870,33 @@ func (r *KrakenDGatewayReconciler) licenseSecretToGateway(
 			requests = append(requests, reconcile.Request{
 				NamespacedName: types.NamespacedName{Name: gw.Name, Namespace: gw.Namespace},
 			})
+		}
+	}
+	return requests
+}
+
+// pluginConfigMapToGateway maps a ConfigMap change to gateways that reference
+// it as a plugin source via spec.plugins.sources[].configMapRef.
+func (r *KrakenDGatewayReconciler) pluginConfigMapToGateway(
+	ctx context.Context, obj client.Object,
+) []reconcile.Request {
+	var gateways v1alpha1.KrakenDGatewayList
+	if err := r.List(ctx, &gateways, client.InNamespace(obj.GetNamespace())); err != nil {
+		return nil
+	}
+	var requests []reconcile.Request
+	for i := range gateways.Items {
+		gw := &gateways.Items[i]
+		if gw.Spec.Plugins == nil {
+			continue
+		}
+		for _, src := range gw.Spec.Plugins.Sources {
+			if src.ConfigMapRef != nil && src.ConfigMapRef.Name == obj.GetName() {
+				requests = append(requests, reconcile.Request{
+					NamespacedName: types.NamespacedName{Name: gw.Name, Namespace: gw.Namespace},
+				})
+				break
+			}
 		}
 	}
 	return requests
