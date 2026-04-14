@@ -16,14 +16,48 @@ limitations under the License.
 
 package v1alpha1
 
-// GatewayRef references a KrakenDGateway by name (same namespace).
+// GatewayRef references a KrakenDGateway by name.
+// When Namespace is empty the gateway is assumed to live in the same namespace
+// as the referencing resource.
 type GatewayRef struct {
 	Name string `json:"name"`
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	Namespace string `json:"namespace,omitempty"`
 }
 
-// PolicyRef references a KrakenDBackendPolicy by name (same namespace).
+// ResolvedNamespace returns the explicit namespace if set, otherwise fallback.
+func (r *GatewayRef) ResolvedNamespace(fallback string) string {
+	if r.Namespace != "" {
+		return r.Namespace
+	}
+	return fallback
+}
+
+// PolicyRef references a KrakenDBackendPolicy by name.
+// When Namespace is empty the policy is assumed to live in the same namespace
+// as the referencing resource.
 type PolicyRef struct {
 	Name string `json:"name"`
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	Namespace string `json:"namespace,omitempty"`
+}
+
+// ResolvedNamespace returns the explicit namespace if set, otherwise fallback.
+func (r *PolicyRef) ResolvedNamespace(fallback string) string {
+	if r.Namespace != "" {
+		return r.Namespace
+	}
+	return fallback
+}
+
+// PolicyKey returns the namespace-qualified key ("namespace/name") used to
+// look up the policy in the gathered-policies map.
+func (r *PolicyRef) PolicyKey(fallback string) string {
+	return r.ResolvedNamespace(fallback) + "/" + r.Name
 }
 
 // ConfigMapKeyRef references a key within a ConfigMap.

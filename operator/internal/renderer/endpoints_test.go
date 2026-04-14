@@ -226,7 +226,7 @@ func TestBuildEndpointJSON_AllFields(t *testing.T) {
 		},
 	}
 
-	result := buildEndpointJSON(entry, nil)
+	result := buildEndpointJSON(entry, nil, "default")
 	if result["endpoint"] != "/api/v1/users" {
 		t.Errorf("unexpected endpoint: %v", result["endpoint"])
 	}
@@ -254,7 +254,7 @@ func TestBuildEndpointJSON_WithExtraConfig(t *testing.T) {
 			Raw: []byte(`{"auth/validator":{"alg":"RS256"}}`),
 		},
 	}
-	result := buildEndpointJSON(entry, nil)
+	result := buildEndpointJSON(entry, nil, "default")
 	ec, ok := result["extra_config"].(map[string]any)
 	if !ok {
 		t.Fatal("expected extra_config")
@@ -273,7 +273,7 @@ func TestBuildBackendJSON_AllFields(t *testing.T) {
 		Allow:      []string{"id", "name", "email"},
 		Mapping:    map[string]string{"id": "user_id"},
 	}
-	result := buildBackendJSON(backend, nil)
+	result := buildBackendJSON(backend, nil, "default")
 	// Hosts should be sorted
 	hosts := result["host"].([]string)
 	if hosts[0] != "http://a:80" || hosts[1] != "http://b:80" {
@@ -288,7 +288,7 @@ func TestBuildBackendJSON_AllFields(t *testing.T) {
 
 func TestBuildBackendJSON_WithPolicy(t *testing.T) {
 	policies := map[string]*v1alpha1.KrakenDBackendPolicy{
-		"my-policy": {
+		"default/my-policy": {
 			Spec: v1alpha1.KrakenDBackendPolicySpec{
 				CircuitBreaker: &v1alpha1.CircuitBreakerSpec{
 					Interval:  60,
@@ -303,7 +303,7 @@ func TestBuildBackendJSON_WithPolicy(t *testing.T) {
 		URLPattern: "/api",
 		PolicyRef:  &v1alpha1.PolicyRef{Name: "my-policy"},
 	}
-	result := buildBackendJSON(backend, policies)
+	result := buildBackendJSON(backend, policies, "default")
 	ec, ok := result["extra_config"].(map[string]any)
 	if !ok {
 		t.Fatal("expected extra_config from policy")

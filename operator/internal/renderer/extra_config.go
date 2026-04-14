@@ -27,11 +27,12 @@ import (
 func buildBackendExtraConfig(
 	backend v1alpha1.BackendSpec,
 	policies map[string]*v1alpha1.KrakenDBackendPolicy,
+	endpointNamespace string,
 ) map[string]any {
 	merged := make(map[string]any)
 
 	// Layer 1 + 2: policy raw and typed fields
-	applyPolicyExtraConfig(merged, backend.PolicyRef, policies)
+	applyPolicyExtraConfig(merged, backend.PolicyRef, policies, endpointNamespace)
 
 	// Layer 3: inline backend extraConfig (highest precedence)
 	if backend.ExtraConfig != nil && backend.ExtraConfig.Raw != nil {
@@ -53,11 +54,12 @@ func applyPolicyExtraConfig(
 	merged map[string]any,
 	policyRef *v1alpha1.PolicyRef,
 	policies map[string]*v1alpha1.KrakenDBackendPolicy,
+	endpointNamespace string,
 ) {
 	if policyRef == nil {
 		return
 	}
-	policy, ok := policies[policyRef.Name]
+	policy, ok := policies[policyRef.PolicyKey(endpointNamespace)]
 	if !ok {
 		return
 	}

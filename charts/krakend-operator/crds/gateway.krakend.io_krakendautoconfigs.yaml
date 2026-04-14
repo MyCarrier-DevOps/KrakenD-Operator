@@ -96,10 +96,16 @@ spec:
                   outputEncoding:
                     type: string
                   policyRef:
-                    description: PolicyRef references a KrakenDBackendPolicy by name
-                      (same namespace).
+                    description: |-
+                      PolicyRef references a KrakenDBackendPolicy by name.
+                      When Namespace is empty the policy is assumed to live in the same namespace
+                      as the referencing resource.
                     properties:
                       name:
+                        type: string
+                      namespace:
+                        maxLength: 63
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                         type: string
                     required:
                     - name
@@ -141,6 +147,10 @@ spec:
                   endpoints belong to.
                 properties:
                   name:
+                    type: string
+                  namespace:
+                    maxLength: 63
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                     type: string
                 required:
                 - name
@@ -263,6 +273,10 @@ spec:
                       description: PolicyRef overrides the backend policy reference.
                       properties:
                         name:
+                          type: string
+                        namespace:
+                          maxLength: 63
+                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                           type: string
                       required:
                       - name

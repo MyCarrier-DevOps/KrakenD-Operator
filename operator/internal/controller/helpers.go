@@ -64,10 +64,10 @@ type endpointIndexRegistration struct {
 // each get their own registrations.
 var indexRegistry sync.Map // map[client.FieldIndexer]*endpointIndexRegistration
 
-// ensureEndpointIndexes registers field indexes for KrakenDEndpoint lookups.
-// It is safe to call from multiple controllers sharing the same manager;
-// indexes are registered exactly once per manager instance.
-func ensureEndpointIndexes(mgr ctrl.Manager) error {
+// EnsureEndpointIndexes registers field indexes for KrakenDEndpoint lookups.
+// It is safe to call from multiple controllers and the webhook package sharing
+// the same manager; indexes are registered exactly once per manager instance.
+func EnsureEndpointIndexes(mgr ctrl.Manager) error {
 	indexer := mgr.GetFieldIndexer()
 	reg := &endpointIndexRegistration{ready: make(chan struct{})}
 
@@ -88,20 +88,21 @@ func ensureEndpointIndexes(mgr ctrl.Manager) error {
 
 func registerEndpointIndexes(indexer client.FieldIndexer) error {
 	if err := indexer.IndexField(
-		context.Background(), &v1alpha1.KrakenDEndpoint{}, endpointGatewayIndex,
+		context.Background(), &v1alpha1.KrakenDEndpoint{}, EndpointGatewayIndex,
 		func(obj client.Object) []string {
 			ep, ok := obj.(*v1alpha1.KrakenDEndpoint)
 			if !ok {
 				return nil
 			}
-			return []string{ep.Spec.GatewayRef.Name}
+			ns := ep.Spec.GatewayRef.ResolvedNamespace(ep.Namespace)
+			return []string{ns + "/" + ep.Spec.GatewayRef.Name}
 		},
 	); err != nil {
-		return fmt.Errorf("indexing %s: %w", endpointGatewayIndex, err)
+		return fmt.Errorf("indexing %s: %w", EndpointGatewayIndex, err)
 	}
 
 	if err := indexer.IndexField(
-		context.Background(), &v1alpha1.KrakenDEndpoint{}, endpointPolicyIndex,
+		context.Background(), &v1alpha1.KrakenDEndpoint{}, EndpointPolicyIndex,
 		func(obj client.Object) []string {
 			ep, ok := obj.(*v1alpha1.KrakenDEndpoint)
 			if !ok {
@@ -114,17 +115,18 @@ func registerEndpointIndexes(indexer client.FieldIndexer) error {
 					if be.PolicyRef == nil {
 						continue
 					}
-					if _, ok := seen[be.PolicyRef.Name]; ok {
+					key := be.PolicyRef.PolicyKey(ep.Namespace)
+					if _, ok := seen[key]; ok {
 						continue
 					}
-					seen[be.PolicyRef.Name] = struct{}{}
-					refs = append(refs, be.PolicyRef.Name)
+					seen[key] = struct{}{}
+					refs = append(refs, key)
 				}
 			}
 			return refs
 		},
 	); err != nil {
-		return fmt.Errorf("indexing %s: %w", endpointPolicyIndex, err)
+		return fmt.Errorf("indexing %s: %w", EndpointPolicyIndex, err)
 	}
 
 	return nil

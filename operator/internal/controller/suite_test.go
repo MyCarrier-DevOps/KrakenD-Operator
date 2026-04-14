@@ -42,26 +42,32 @@ func testScheme() *runtime.Scheme {
 func fakeClientBuilder() *fake.ClientBuilder {
 	return fake.NewClientBuilder().
 		WithScheme(testScheme()).
-		WithIndex(&v1alpha1.KrakenDEndpoint{}, endpointGatewayIndex,
+		WithIndex(&v1alpha1.KrakenDEndpoint{}, EndpointGatewayIndex,
 			func(obj client.Object) []string {
 				ep, ok := obj.(*v1alpha1.KrakenDEndpoint)
 				if !ok {
 					return nil
 				}
-				return []string{ep.Spec.GatewayRef.Name}
+				ns := ep.Spec.GatewayRef.ResolvedNamespace(ep.Namespace)
+				return []string{ns + "/" + ep.Spec.GatewayRef.Name}
 			},
 		).
-		WithIndex(&v1alpha1.KrakenDEndpoint{}, endpointPolicyIndex,
+		WithIndex(&v1alpha1.KrakenDEndpoint{}, EndpointPolicyIndex,
 			func(obj client.Object) []string {
 				ep, ok := obj.(*v1alpha1.KrakenDEndpoint)
 				if !ok {
 					return nil
 				}
 				var refs []string
+				seen := make(map[string]struct{})
 				for _, entry := range ep.Spec.Endpoints {
 					for _, be := range entry.Backends {
 						if be.PolicyRef != nil {
-							refs = append(refs, be.PolicyRef.Name)
+							key := be.PolicyRef.PolicyKey(ep.Namespace)
+							if _, ok := seen[key]; !ok {
+								seen[key] = struct{}{}
+								refs = append(refs, key)
+							}
 						}
 					}
 				}

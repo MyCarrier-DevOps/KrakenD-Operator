@@ -46,7 +46,8 @@ type EndpointEntry struct {
 	// Endpoint is the public path exposed by KrakenD (e.g. "/api/v1/users").
 	Endpoint string `json:"endpoint"`
 
-	// Method is the HTTP method (GET, POST, PUT, DELETE, PATCH).
+	// Method is the HTTP method for this endpoint.
+	// +kubebuilder:validation:Enum=GET;POST;PUT;DELETE;PATCH;HEAD;OPTIONS;CONNECT;TRACE
 	Method string `json:"method"`
 
 	// Backends is the list of backend services for this endpoint.

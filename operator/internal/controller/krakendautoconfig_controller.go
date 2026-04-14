@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"net/url"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -163,6 +164,7 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		URLTransform: ac.Spec.URLTransform,
 		Environment:  env,
 		ServiceName:  "_spec",
+		DefaultHost:  extractHost(ac.Spec.OpenAPI.URL),
 	})
 	if err != nil {
 		return r.handleCUEError(ctx, &ac, err)
@@ -176,10 +178,10 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	// Generate endpoint CRs
 	genOutput, err := r.Generator.Generate(ctx, autoconfig.GenerateInput{
-		AutoConfig:     &ac,
-		Entries:        filtered,
-		OperationIDs:   cueOutput.OperationIDs,
-		GatewayRefName: ac.Spec.GatewayRef.Name,
+		AutoConfig:   &ac,
+		Entries:      filtered,
+		OperationIDs: cueOutput.OperationIDs,
+		GatewayRef:   ac.Spec.GatewayRef,
 	})
 	if err != nil {
 		return r.handleCUEError(ctx, &ac, fmt.Errorf("generating endpoints: %w", err))
@@ -413,4 +415,16 @@ func (r *KrakenDAutoConfigReconciler) cueConfigMapToAutoConfig(
 		}
 	}
 	return requests
+}
+
+// extractHost returns the scheme, host, and optional port from an absolute URL string.
+// For example, "http://svc.ns.svc.cluster.local:8080/swagger/v1/swagger.json"
+// becomes "http://svc.ns.svc.cluster.local:8080".
+// It returns an empty string for non-absolute URLs or invalid inputs.
+func extractHost(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host
 }

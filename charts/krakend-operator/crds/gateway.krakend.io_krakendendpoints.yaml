@@ -97,6 +97,10 @@ spec:
                             properties:
                               name:
                                 type: string
+                              namespace:
+                                maxLength: 63
+                                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                                type: string
                             required:
                             - name
                             type: object
@@ -138,8 +142,17 @@ spec:
                         type: string
                       type: array
                     method:
-                      description: Method is the HTTP method (GET, POST, PUT, DELETE,
-                        PATCH).
+                      description: Method is the HTTP method for this endpoint.
+                      enum:
+                      - GET
+                      - POST
+                      - PUT
+                      - DELETE
+                      - PATCH
+                      - HEAD
+                      - OPTIONS
+                      - CONNECT
+                      - TRACE
                       type: string
                     outputEncoding:
                       description: OutputEncoding overrides the default response encoding.
@@ -158,6 +171,10 @@ spec:
                   belongs to.
                 properties:
                   name:
+                    type: string
+                  namespace:
+                    maxLength: 63
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                     type: string
                 required:
                 - name

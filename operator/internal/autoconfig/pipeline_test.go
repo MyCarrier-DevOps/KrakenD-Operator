@@ -169,10 +169,10 @@ func TestEmbeddedCUE_FullPipeline(t *testing.T) {
 	}
 	gen := NewGenerator()
 	genOutput, err := gen.Generate(context.Background(), GenerateInput{
-		AutoConfig:     ac,
-		Entries:        cueOutput.Entries,
-		OperationIDs:   cueOutput.OperationIDs,
-		GatewayRefName: ac.Spec.GatewayRef.Name,
+		AutoConfig:   ac,
+		Entries:      cueOutput.Entries,
+		OperationIDs: cueOutput.OperationIDs,
+		GatewayRef:   ac.Spec.GatewayRef,
 	})
 	if err != nil {
 		t.Fatalf("Generator failed: %v", err)

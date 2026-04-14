@@ -92,7 +92,7 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred(), "Failed to load the manager(Operator) image into K3s")
 
 	By("waiting for K3s API server to be ready")
-	cmd = exec.Command("kubectl", "wait", "--for=condition=Ready", "node", "--all", "--timeout=60s")
+	cmd := exec.Command("kubectl", "wait", "--for=condition=Ready", "node", "--all", "--timeout=60s")
 	_, err = utils.Run(cmd)
 	Expect(err).NotTo(HaveOccurred(), "K3s nodes did not become ready")
 

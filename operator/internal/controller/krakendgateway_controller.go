@@ -17,8 +17,10 @@ limitations under the License.
 package controller
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -105,20 +107,26 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{Requeue: true}, nil
 	}
 
-	// Gather endpoints
+	// Gather endpoints via field index
 	var endpointList v1alpha1.KrakenDEndpointList
-	if err := r.List(ctx, &endpointList, client.InNamespace(gw.Namespace)); err != nil {
+	indexKey := gw.Namespace + "/" + gw.Name
+	if err := r.List(ctx, &endpointList,
+		client.MatchingFields{EndpointGatewayIndex: indexKey},
+	); err != nil {
 		return ctrl.Result{}, fmt.Errorf("listing endpoints: %w", err)
 	}
-	var endpoints []v1alpha1.KrakenDEndpoint
-	for i := range endpointList.Items {
-		if endpointList.Items[i].Spec.GatewayRef.Name == gw.Name {
-			endpoints = append(endpoints, endpointList.Items[i])
+	endpoints := endpointList.Items
+
+	// Sort endpoints to keep processing and rendered output deterministic.
+	slices.SortFunc(endpoints, func(a, b v1alpha1.KrakenDEndpoint) int {
+		if c := cmp.Compare(a.Namespace, b.Namespace); c != 0 {
+			return c
 		}
-	}
+		return cmp.Compare(a.Name, b.Name)
+	})
 
 	// Gather referenced policies
-	policies, err := r.gatherPolicies(ctx, gw.Namespace, endpoints)
+	policies, err := r.gatherPolicies(ctx, endpoints)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -259,6 +267,10 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 // The operator still sets ownerReferences on instances it creates so that GC
 // cleans them up when the gateway is deleted.
 func (r *KrakenDGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if err := EnsureEndpointIndexes(mgr); err != nil {
+		return err
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.KrakenDGateway{}).
 		Owns(&appsv1.Deployment{}).
@@ -300,10 +312,11 @@ func (r *KrakenDGatewayReconciler) crdAvailable(gvk schema.GroupVersionKind) (bo
 }
 
 // gatherPolicies fetches all unique KrakenDBackendPolicy resources referenced
-// by the given endpoints.
+// by the given endpoints. Each policy is looked up in the namespace resolved
+// from the PolicyRef (explicit namespace or endpoint namespace as fallback).
+// The returned map is keyed by "namespace/name" for full disambiguation.
 func (r *KrakenDGatewayReconciler) gatherPolicies(
 	ctx context.Context,
-	namespace string,
 	endpoints []v1alpha1.KrakenDEndpoint,
 ) (map[string]*v1alpha1.KrakenDBackendPolicy, error) {
 	policies := make(map[string]*v1alpha1.KrakenDBackendPolicy)
@@ -313,11 +326,15 @@ func (r *KrakenDGatewayReconciler) gatherPolicies(
 				if be.PolicyRef == nil {
 					continue
 				}
-				if _, ok := policies[be.PolicyRef.Name]; ok {
+				mapKey := be.PolicyRef.PolicyKey(ep.Namespace)
+				if _, ok := policies[mapKey]; ok {
 					continue
 				}
 				var policy v1alpha1.KrakenDBackendPolicy
-				key := types.NamespacedName{Name: be.PolicyRef.Name, Namespace: namespace}
+				key := types.NamespacedName{
+					Name:      be.PolicyRef.Name,
+					Namespace: be.PolicyRef.ResolvedNamespace(ep.Namespace),
+				}
 				if err := r.Get(ctx, key, &policy); err != nil {
 					if errors.IsNotFound(err) {
 						// Missing policy — renderer will mark endpoint as invalid
@@ -325,7 +342,7 @@ func (r *KrakenDGatewayReconciler) gatherPolicies(
 					}
 					return nil, fmt.Errorf("getting policy %s: %w", key, err)
 				}
-				policies[be.PolicyRef.Name] = &policy
+				policies[mapKey] = &policy
 			}
 		}
 	}
@@ -786,37 +803,38 @@ func (r *KrakenDGatewayReconciler) endpointToGateway(
 	return []reconcile.Request{{
 		NamespacedName: types.NamespacedName{
 			Name:      ep.Spec.GatewayRef.Name,
-			Namespace: ep.Namespace,
+			Namespace: ep.Spec.GatewayRef.ResolvedNamespace(ep.Namespace),
 		},
 	}}
 }
 
 // policyToGateways maps a KrakenDBackendPolicy to all gateways with
-// endpoints that reference it.
+// endpoints that reference it. Uses the policy field index for cross-namespace
+// lookup.
 func (r *KrakenDGatewayReconciler) policyToGateways(
 	ctx context.Context, obj client.Object,
 ) []reconcile.Request {
+	log := logf.FromContext(ctx)
+	indexKey := obj.GetNamespace() + "/" + obj.GetName()
 	var endpoints v1alpha1.KrakenDEndpointList
-	if err := r.List(ctx, &endpoints, client.InNamespace(obj.GetNamespace())); err != nil {
+	if err := r.List(ctx, &endpoints,
+		client.MatchingFields{EndpointPolicyIndex: indexKey},
+	); err != nil {
+		log.Error(err, "policyToGateways: index lookup failed, gateway may not reconcile",
+			"policy", obj.GetName(), "namespace", obj.GetNamespace())
 		return nil
 	}
 	seen := map[types.NamespacedName]struct{}{}
 	var requests []reconcile.Request
 	for i := range endpoints.Items {
 		ep := &endpoints.Items[i]
-		for _, entry := range ep.Spec.Endpoints {
-			for _, be := range entry.Backends {
-				if be.PolicyRef != nil && be.PolicyRef.Name == obj.GetName() {
-					nn := types.NamespacedName{
-						Name:      ep.Spec.GatewayRef.Name,
-						Namespace: ep.Namespace,
-					}
-					if _, ok := seen[nn]; !ok {
-						seen[nn] = struct{}{}
-						requests = append(requests, reconcile.Request{NamespacedName: nn})
-					}
-				}
-			}
+		nn := types.NamespacedName{
+			Name:      ep.Spec.GatewayRef.Name,
+			Namespace: ep.Spec.GatewayRef.ResolvedNamespace(ep.Namespace),
+		}
+		if _, ok := seen[nn]; !ok {
+			seen[nn] = struct{}{}
+			requests = append(requests, reconcile.Request{NamespacedName: nn})
 		}
 	}
 	return requests

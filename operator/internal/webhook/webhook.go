@@ -20,8 +20,10 @@ package webhook
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -30,6 +32,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/controller"
 )
 
 // GatewayValidator validates KrakenDGateway resources.
@@ -168,55 +171,101 @@ func (v *EndpointValidator) validate(
 	var warnings admission.Warnings
 
 	gw := &v1alpha1.KrakenDGateway{}
+	gwNS := ep.Spec.GatewayRef.ResolvedNamespace(ep.Namespace)
 	if err := v.Get(ctx, types.NamespacedName{
 		Name:      ep.Spec.GatewayRef.Name,
-		Namespace: ep.Namespace,
+		Namespace: gwNS,
 	}, gw); err != nil {
-		errs = append(errs, field.NotFound(
-			field.NewPath("spec", "gatewayRef", "name"),
-			ep.Spec.GatewayRef.Name,
-		))
+		if apierrors.IsNotFound(err) {
+			refPath := field.NewPath("spec", "gatewayRef", "name")
+			refValue := ep.Spec.GatewayRef.Name
+			if gwNS != ep.Namespace {
+				refPath = field.NewPath("spec", "gatewayRef", "namespace")
+				refValue = gwNS
+			}
+			errs = append(errs, field.NotFound(refPath, refValue))
+		} else {
+			errs = append(errs, field.InternalError(
+				field.NewPath("spec", "gatewayRef"),
+				fmt.Errorf("looking up gateway: %w", err),
+			))
+			return errs, warnings
+		}
 	}
 
 	for i, entry := range ep.Spec.Endpoints {
 		for j, be := range entry.Backends {
 			if be.PolicyRef != nil {
 				policy := &v1alpha1.KrakenDBackendPolicy{}
+				polNS := be.PolicyRef.ResolvedNamespace(ep.Namespace)
 				if err := v.Get(ctx, types.NamespacedName{
 					Name:      be.PolicyRef.Name,
-					Namespace: ep.Namespace,
+					Namespace: polNS,
 				}, policy); err != nil {
-					errs = append(errs, field.NotFound(
-						field.NewPath("spec", "endpoints").Index(i).
-							Child("backends").Index(j).
-							Child("policyRef", "name"),
-						be.PolicyRef.Name,
-					))
+					policyPath := field.NewPath("spec", "endpoints").Index(i).
+						Child("backends").Index(j).
+						Child("policyRef")
+					if apierrors.IsNotFound(err) {
+						refField := "name"
+						refValue := be.PolicyRef.Name
+						if polNS != ep.Namespace {
+							refField = "namespace"
+							refValue = polNS
+						}
+						errs = append(errs, field.NotFound(
+							policyPath.Child(refField),
+							refValue,
+						))
+					} else {
+						errs = append(errs, field.InternalError(
+							policyPath,
+							fmt.Errorf("looking up policy: %w", err),
+						))
+						return errs, warnings
+					}
 				}
 			}
 		}
 	}
 
+	// Detect duplicate (endpoint, method) pairs within this CR.
+	seenPaths := make(map[string]struct{})
+	for i, entry := range ep.Spec.Endpoints {
+		key := entry.Method + " " + entry.Endpoint
+		if _, dup := seenPaths[key]; dup {
+			errs = append(errs, field.Duplicate(
+				field.NewPath("spec", "endpoints").Index(i),
+				key,
+			))
+		}
+		seenPaths[key] = struct{}{}
+	}
+
+	gwKey := ep.Spec.GatewayRef.ResolvedNamespace(ep.Namespace) + "/" + ep.Spec.GatewayRef.Name
 	var existing v1alpha1.KrakenDEndpointList
-	if err := v.List(ctx, &existing, client.InNamespace(ep.Namespace)); err == nil {
-		for _, newEntry := range ep.Spec.Endpoints {
-			for _, other := range existing.Items {
-				if other.Name == ep.Name {
-					continue
-				}
-				if other.Spec.GatewayRef.Name != ep.Spec.GatewayRef.Name {
-					continue
-				}
-				for _, otherEntry := range other.Spec.Endpoints {
-					if otherEntry.Endpoint == newEntry.Endpoint &&
-						otherEntry.Method == newEntry.Method {
-						warnings = append(warnings, fmt.Sprintf(
-							"endpoint %s %s already exists on gateway %s "+
-								"(defined by %s) — conflict resolved by creationTimestamp",
-							newEntry.Method, newEntry.Endpoint,
-							ep.Spec.GatewayRef.Name, other.Name,
-						))
-					}
+	if err := v.List(ctx, &existing,
+		client.MatchingFields{controller.EndpointGatewayIndex: gwKey},
+	); err != nil {
+		errs = append(errs, field.InternalError(
+			field.NewPath("spec", "gatewayRef"),
+			fmt.Errorf("listing endpoints for conflict check: %w", err),
+		))
+		return errs, warnings
+	}
+	for _, newEntry := range ep.Spec.Endpoints {
+		for _, other := range existing.Items {
+			if other.Name == ep.Name && other.Namespace == ep.Namespace {
+				continue
+			}
+			for _, otherEntry := range other.Spec.Endpoints {
+				if otherEntry.Endpoint == newEntry.Endpoint &&
+					otherEntry.Method == newEntry.Method {
+					warnings = append(warnings, fmt.Sprintf(
+						"endpoint %s %s already exists on gateway %s "+
+							"(defined by %s/%s) — conflict resolved by creationTimestamp",
+						newEntry.Method, newEntry.Endpoint,
+						gwKey, other.Namespace, other.Name,
+					))
 				}
 			}
 		}
@@ -266,21 +315,18 @@ func (v *PolicyValidator) ValidateDelete(
 	}
 
 	var endpoints v1alpha1.KrakenDEndpointList
-	if err := v.List(ctx, &endpoints, client.InNamespace(policy.Namespace)); err != nil {
+	indexKey := policy.Namespace + "/" + policy.Name
+	if err := v.List(ctx, &endpoints,
+		client.MatchingFields{controller.EndpointPolicyIndex: indexKey},
+	); err != nil {
 		return nil, fmt.Errorf("listing endpoints: %w", err)
 	}
 
 	var references []string
 	for _, ep := range endpoints.Items {
-		for _, entry := range ep.Spec.Endpoints {
-			for _, be := range entry.Backends {
-				if be.PolicyRef != nil && be.PolicyRef.Name == policy.Name {
-					references = append(references, ep.Name)
-					break
-				}
-			}
-		}
+		references = append(references, ep.Namespace+"/"+ep.Name)
 	}
+	sort.Strings(references)
 
 	if len(references) > 0 {
 		return nil, field.ErrorList{
@@ -379,14 +425,25 @@ func (v *AutoConfigValidator) validate(
 	var errs field.ErrorList
 
 	gw := &v1alpha1.KrakenDGateway{}
+	gwNS := ac.Spec.GatewayRef.ResolvedNamespace(ac.Namespace)
 	if err := v.Get(ctx, types.NamespacedName{
 		Name:      ac.Spec.GatewayRef.Name,
-		Namespace: ac.Namespace,
+		Namespace: gwNS,
 	}, gw); err != nil {
-		errs = append(errs, field.NotFound(
-			field.NewPath("spec", "gatewayRef", "name"),
-			ac.Spec.GatewayRef.Name,
-		))
+		if apierrors.IsNotFound(err) {
+			refPath := field.NewPath("spec", "gatewayRef", "name")
+			refValue := ac.Spec.GatewayRef.Name
+			if gwNS != ac.Namespace {
+				refPath = field.NewPath("spec", "gatewayRef", "namespace")
+				refValue = gwNS
+			}
+			errs = append(errs, field.NotFound(refPath, refValue))
+		} else {
+			return field.ErrorList{field.InternalError(
+				field.NewPath("spec", "gatewayRef"),
+				fmt.Errorf("looking up gateway: %w", err),
+			)}.ToAggregate()
+		}
 	}
 
 	hasURL := ac.Spec.OpenAPI.URL != ""
@@ -439,6 +496,12 @@ func (v *AutoConfigValidator) validate(
 
 // SetupWebhooks registers all validating webhooks with the manager.
 func SetupWebhooks(mgr ctrl.Manager) error {
+	// Ensure field indexes are registered — needed for conflict detection
+	// and policy-delete validation even when running webhook-only.
+	if err := controller.EnsureEndpointIndexes(mgr); err != nil {
+		return fmt.Errorf("registering endpoint indexes: %w", err)
+	}
+
 	if err := ctrl.NewWebhookManagedBy(mgr).
 		For(&v1alpha1.KrakenDGateway{}).
 		WithValidator(&GatewayValidator{Client: mgr.GetClient()}).

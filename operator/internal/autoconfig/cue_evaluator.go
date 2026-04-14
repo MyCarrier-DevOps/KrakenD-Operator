@@ -40,6 +40,7 @@ type CUEInput struct {
 	URLTransform *v1alpha1.URLTransformSpec
 	Environment  string
 	ServiceName  string
+	DefaultHost  string
 }
 
 // CUEOutput holds the result of CUE evaluation.
@@ -84,6 +85,12 @@ func (e *cueEvaluator) Evaluate(_ context.Context, input CUEInput) (*CUEOutput, 
 		envCUE := fmt.Sprintf("_env: %q", input.Environment)
 		envFill := cueCtx.CompileString(envCUE, cue.Filename("env-inject.cue"))
 		unified = unified.Unify(envFill)
+	}
+
+	if input.DefaultHost != "" {
+		hostCUE := fmt.Sprintf("_defaultHost: %q", input.DefaultHost)
+		hostFill := cueCtx.CompileString(hostCUE, cue.Filename("host-inject.cue"))
+		unified = unified.Unify(hostFill)
 	}
 
 	if len(input.CustomDefs) > 0 {

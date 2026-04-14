@@ -581,7 +581,7 @@ func TestGatewayReconcile_GathersPolicies(t *testing.T) {
 	if len((*capturedInput).Policies) != 1 {
 		t.Errorf("expected 1 policy in render input, got %d", len((*capturedInput).Policies))
 	}
-	if _, ok := (*capturedInput).Policies["pol1"]; !ok {
+	if _, ok := (*capturedInput).Policies["default/pol1"]; !ok {
 		t.Error("expected pol1 in policies map")
 	}
 	if len((*capturedInput).Endpoints) != 1 {
@@ -1092,5 +1092,157 @@ func TestInspectDeploymentStatus_DeploymentNotFound(t *testing.T) {
 	}
 	if gw.Status.Phase != v1alpha1.PhaseDeploying {
 		t.Errorf("expected phase unchanged at Deploying, got %s", gw.Status.Phase)
+	}
+}
+
+func TestGatewayReconcile_CrossNamespaceEndpoints(t *testing.T) {
+	gw := testGateway()
+	gw.Status.Phase = v1alpha1.PhasePending
+
+	// Endpoint in same namespace (implicit gatewayRef.namespace)
+	epSame := &v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "ep-same", Namespace: "default"},
+		Spec: v1alpha1.KrakenDEndpointSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: "test-gw"},
+			Endpoints: []v1alpha1.EndpointEntry{
+				{Endpoint: "/same", Method: "GET", Backends: []v1alpha1.BackendSpec{
+					{Host: []string{"http://svc:8080"}, URLPattern: "/same"},
+				}},
+			},
+		},
+	}
+	// Endpoint in different namespace with explicit gatewayRef.namespace
+	epCross := &v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "ep-cross", Namespace: "app-ns"},
+		Spec: v1alpha1.KrakenDEndpointSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: "test-gw", Namespace: "default"},
+			Endpoints: []v1alpha1.EndpointEntry{
+				{Endpoint: "/cross", Method: "POST", Backends: []v1alpha1.BackendSpec{
+					{Host: []string{"http://other:8080"}, URLPattern: "/cross"},
+				}},
+			},
+		},
+	}
+
+	c := fakeClientBuilder().
+		WithObjects(gw, epSame, epCross).
+		WithStatusSubresource(gw, epSame, epCross).
+		Build()
+
+	var capturedInput *renderer.RenderInput
+	mockRend := &mockRenderer{
+		output: &renderer.RenderOutput{
+			JSON:         []byte(`{"version":3}`),
+			Checksum:     "crossns",
+			DesiredImage: "img:v1",
+		},
+	}
+	capturingRend := &capturingRenderer{delegate: mockRend, captured: &capturedInput}
+
+	r := &KrakenDGatewayReconciler{
+		Client:    c,
+		Scheme:    testScheme(),
+		Recorder:  fakeRecorder(),
+		Renderer:  capturingRend,
+		Validator: &mockValidator{},
+	}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: client.ObjectKeyFromObject(gw),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if capturedInput == nil {
+		t.Fatal("renderer was not called")
+	}
+	if len((*capturedInput).Endpoints) != 2 {
+		t.Errorf("expected 2 endpoints (same-ns + cross-ns), got %d", len((*capturedInput).Endpoints))
+	}
+}
+
+func TestGatewayReconcile_CrossNamespacePolicies(t *testing.T) {
+	gw := testGateway()
+	gw.Status.Phase = v1alpha1.PhasePending
+
+	// Endpoint in different namespace referencing a policy in its own namespace
+	policy := &v1alpha1.KrakenDBackendPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "cross-pol", Namespace: "app-ns"},
+		Spec: v1alpha1.KrakenDBackendPolicySpec{
+			RateLimit: &v1alpha1.RateLimitSpec{MaxRate: 50},
+		},
+	}
+	ep := &v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "ep1", Namespace: "app-ns"},
+		Spec: v1alpha1.KrakenDEndpointSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: "test-gw", Namespace: "default"},
+			Endpoints: []v1alpha1.EndpointEntry{
+				{Endpoint: "/api", Method: "GET", Backends: []v1alpha1.BackendSpec{
+					{Host: []string{"http://svc:8080"}, URLPattern: "/", PolicyRef: &v1alpha1.PolicyRef{Name: "cross-pol"}},
+				}},
+			},
+		},
+	}
+
+	c := fakeClientBuilder().
+		WithObjects(gw, ep, policy).
+		WithStatusSubresource(gw, ep).
+		Build()
+
+	var capturedInput *renderer.RenderInput
+	mockRend := &mockRenderer{
+		output: &renderer.RenderOutput{
+			JSON:         []byte(`{"version":3}`),
+			Checksum:     "crossnspol",
+			DesiredImage: "img:v1",
+		},
+	}
+	capturingRend := &capturingRenderer{delegate: mockRend, captured: &capturedInput}
+
+	r := &KrakenDGatewayReconciler{
+		Client:    c,
+		Scheme:    testScheme(),
+		Recorder:  fakeRecorder(),
+		Renderer:  capturingRend,
+		Validator: &mockValidator{},
+	}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: client.ObjectKeyFromObject(gw),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if capturedInput == nil {
+		t.Fatal("renderer was not called")
+	}
+	if len((*capturedInput).Policies) != 1 {
+		t.Errorf("expected 1 policy from cross-ns endpoint, got %d", len((*capturedInput).Policies))
+	}
+	if _, ok := (*capturedInput).Policies["app-ns/cross-pol"]; !ok {
+		t.Error("expected cross-pol in policies map")
+	}
+}
+
+func TestGatewayMapper_EndpointToGatewayCrossNamespace(t *testing.T) {
+	ep := &v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "ep1", Namespace: "app-ns"},
+		Spec: v1alpha1.KrakenDEndpointSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: "gw1", Namespace: "operator-ns"},
+			Endpoints:  []v1alpha1.EndpointEntry{},
+		},
+	}
+	r := &KrakenDGatewayReconciler{}
+	requests := r.endpointToGateway(context.Background(), ep)
+	if len(requests) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(requests))
+	}
+	if requests[0].Name != "gw1" {
+		t.Errorf("expected gw1, got %s", requests[0].Name)
+	}
+	if requests[0].Namespace != "operator-ns" {
+		t.Errorf("expected namespace operator-ns, got %s", requests[0].Namespace)
 	}
 }

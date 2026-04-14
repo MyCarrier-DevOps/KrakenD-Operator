@@ -35,10 +35,10 @@ func TestGenerator_BasicGeneration(t *testing.T) {
 	opIDs := map[string]string{"/api/users:GET": "listUsers"}
 
 	out, err := g.Generate(context.Background(), GenerateInput{
-		AutoConfig:     ac,
-		Entries:        entries,
-		OperationIDs:   opIDs,
-		GatewayRefName: "my-gw",
+		AutoConfig:   ac,
+		Entries:      entries,
+		OperationIDs: opIDs,
+		GatewayRef:   v1alpha1.GatewayRef{Name: "my-gw"},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -75,10 +75,10 @@ func TestGenerator_NameWithoutOperationID(t *testing.T) {
 	}
 
 	out, err := g.Generate(context.Background(), GenerateInput{
-		AutoConfig:     ac,
-		Entries:        entries,
-		OperationIDs:   map[string]string{},
-		GatewayRefName: "gw",
+		AutoConfig:   ac,
+		Entries:      entries,
+		OperationIDs: map[string]string{},
+		GatewayRef:   v1alpha1.GatewayRef{Name: "gw"},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -103,10 +103,10 @@ func TestGenerator_DuplicateOperationID(t *testing.T) {
 	}
 
 	out, err := g.Generate(context.Background(), GenerateInput{
-		AutoConfig:     ac,
-		Entries:        entries,
-		OperationIDs:   opIDs,
-		GatewayRefName: "gw",
+		AutoConfig:   ac,
+		Entries:      entries,
+		OperationIDs: opIDs,
+		GatewayRef:   v1alpha1.GatewayRef{Name: "gw"},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -131,10 +131,10 @@ func TestGenerator_MultipleEntries(t *testing.T) {
 	opIDs := sampleOperationIDs()
 
 	out, err := g.Generate(context.Background(), GenerateInput{
-		AutoConfig:     ac,
-		Entries:        entries,
-		OperationIDs:   opIDs,
-		GatewayRefName: "gw",
+		AutoConfig:   ac,
+		Entries:      entries,
+		OperationIDs: opIDs,
+		GatewayRef:   v1alpha1.GatewayRef{Name: "gw"},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
