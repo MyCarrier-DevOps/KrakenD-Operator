@@ -2,6 +2,30 @@ apiVersion: v1
 entries:
   krakend-operator:
   - apiVersion: v2
+    appVersion: 0.4.2
+    created: "2026-04-14T23:47:19.8248151Z"
+    description: Kubernetes operator for managing KrakenD API Gateway instances declaratively
+      via Custom Resources
+    digest: 443f4903abd467f2a475fdffc9cb059fe3a5a55504600b2f9742566221ad35c5
+    home: https://github.com/MyCarrier-DevOps/KrakenD-Operator
+    keywords:
+    - krakend
+    - api-gateway
+    - operator
+    - api-management
+    - openapi
+    kubeVersion: '>=1.28.0-0'
+    maintainers:
+    - email: devops@mycarrier.com
+      name: MyCarrier DevOps
+    name: krakend-operator
+    sources:
+    - https://github.com/MyCarrier-DevOps/KrakenD-Operator
+    type: application
+    urls:
+    - https://github.com/MyCarrier-DevOps/KrakenD-Operator/releases/download/krakend-operator-0.4.2/krakend-operator-0.4.2.tgz
+    version: 0.4.2
+  - apiVersion: v2
     appVersion: 0.4.1
     created: "2026-04-14T22:53:14.260555491Z"
     description: Kubernetes operator for managing KrakenD API Gateway instances declaratively
@@ -217,4 +241,4 @@ entries:
     urls:
     - https://github.com/MyCarrier-DevOps/KrakenD-Operator/releases/download/krakend-operator-0.1.6/krakend-operator-0.1.6.tgz
     version: 0.1.6
-generated: "2026-04-14T22:53:14.260588252Z"
+generated: "2026-04-14T23:47:19.824858551Z"
