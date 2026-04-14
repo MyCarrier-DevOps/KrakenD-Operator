@@ -18,9 +18,12 @@ package controller
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -111,19 +114,58 @@ func TestConditionsEqual_MissingType(t *testing.T) {
 }
 
 func TestEnsureEndpointIndexes_Idempotent(t *testing.T) {
-	// Reset the global index registry so this test is isolated.
 	ResetIndexRegistry()
 	defer ResetIndexRegistry()
 
-	// Use the fake client builder's indexer to test registerEndpointIndexes
-	// directly, since creating a real manager requires a cluster.
-	scheme := testScheme()
-	fb := fake.NewClientBuilder().WithScheme(scheme)
+	// stubIndexer records IndexField calls and succeeds on each.
+	indexer := &stubIndexer{}
 
-	// Build a client with indexes registered through the normal path.
-	// The fakeClientBuilder in suite_test.go pre-registers them, but here
-	// we test that registerEndpointIndexes works correctly.
-	c := fb.
+	// First call should register both indexes.
+	if err := registerEndpointIndexes(indexer); err != nil {
+		t.Fatalf("first registration failed: %v", err)
+	}
+	if indexer.callCount() != 2 {
+		t.Fatalf("expected 2 IndexField calls, got %d", indexer.callCount())
+	}
+}
+
+func TestEnsureEndpointIndexes_ConcurrentCallers(t *testing.T) {
+	ResetIndexRegistry()
+	defer ResetIndexRegistry()
+
+	indexer := &stubIndexer{}
+	mgr := &stubManager{indexer: indexer}
+
+	const goroutines = 10
+	var wg sync.WaitGroup
+	errs := make(chan error, goroutines)
+
+	wg.Add(goroutines)
+	for range goroutines {
+		go func() {
+			defer wg.Done()
+			if err := EnsureEndpointIndexes(mgr); err != nil {
+				errs <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		t.Errorf("concurrent EnsureEndpointIndexes failed: %v", err)
+	}
+
+	// registerEndpointIndexes should have been called exactly once
+	// (2 IndexField calls) regardless of how many goroutines raced.
+	if indexer.callCount() != 2 {
+		t.Errorf("expected exactly 2 IndexField calls (one registration), got %d", indexer.callCount())
+	}
+}
+
+func TestFieldIndexesReturnCorrectValues(t *testing.T) {
+	scheme := testScheme()
+	c := fake.NewClientBuilder().WithScheme(scheme).
 		WithIndex(&v1alpha1.KrakenDEndpoint{}, EndpointGatewayIndex,
 			func(obj client.Object) []string {
 				ep, ok := obj.(*v1alpha1.KrakenDEndpoint)
@@ -141,10 +183,16 @@ func TestEnsureEndpointIndexes_Idempotent(t *testing.T) {
 					return nil
 				}
 				var refs []string
+				seen := make(map[string]struct{})
 				for _, entry := range ep.Spec.Endpoints {
 					for _, be := range entry.Backends {
-						if be.PolicyRef != nil {
-							refs = append(refs, be.PolicyRef.PolicyKey(ep.Namespace))
+						if be.PolicyRef == nil {
+							continue
+						}
+						key := be.PolicyRef.PolicyKey(ep.Namespace)
+						if _, ok := seen[key]; !ok {
+							seen[key] = struct{}{}
+							refs = append(refs, key)
 						}
 					}
 				}
@@ -162,7 +210,6 @@ func TestEnsureEndpointIndexes_Idempotent(t *testing.T) {
 		).
 		Build()
 
-	// Verify the gateway index works.
 	var list v1alpha1.KrakenDEndpointList
 	if err := c.List(context.Background(), &list,
 		client.MatchingFields{EndpointGatewayIndex: "default/gw1"},
@@ -173,7 +220,6 @@ func TestEnsureEndpointIndexes_Idempotent(t *testing.T) {
 		t.Errorf("expected 1 endpoint, got %d", len(list.Items))
 	}
 
-	// Verify the policy index works.
 	if err := c.List(context.Background(), &list,
 		client.MatchingFields{EndpointPolicyIndex: "default/nonexistent"},
 	); err != nil {
@@ -183,3 +229,33 @@ func TestEnsureEndpointIndexes_Idempotent(t *testing.T) {
 		t.Errorf("expected 0 endpoints for nonexistent policy, got %d", len(list.Items))
 	}
 }
+
+// stubIndexer implements client.FieldIndexer to track IndexField calls.
+type stubIndexer struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (s *stubIndexer) IndexField(
+	_ context.Context, _ client.Object, _ string, _ client.IndexerFunc,
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls++
+	return nil
+}
+
+func (s *stubIndexer) callCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls
+}
+
+// stubManager implements enough of ctrl.Manager for EnsureEndpointIndexes.
+type stubManager struct {
+	ctrl.Manager // embed to satisfy interface; nil methods panic if called
+	indexer      client.FieldIndexer
+}
+
+func (m *stubManager) GetFieldIndexer() client.FieldIndexer { return m.indexer }
+func (m *stubManager) GetScheme() *runtime.Scheme           { return testScheme() }
