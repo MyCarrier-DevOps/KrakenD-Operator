@@ -329,7 +329,8 @@ func TestAutoConfigReconcile_NoChangeSkipsReEvaluation(t *testing.T) {
 	cm := testCUEDefinitionsCM()
 	ac := testAutoConfig()
 	ac.Status.Phase = v1alpha1.AutoConfigPhaseSynced
-	ac.Status.SpecChecksum = "abc123:" + cm.ResourceVersion
+	// Checksum format: fetchChecksum:cueDefsRV:generation
+	ac.Status.SpecChecksum = "abc123:" + cm.ResourceVersion + ":0"
 	c := fakeClientBuilder().
 		WithObjects(ac, cm).
 		WithStatusSubresource(ac).
@@ -350,6 +351,46 @@ func TestAutoConfigReconcile_NoChangeSkipsReEvaluation(t *testing.T) {
 	}
 	if updated.Status.Phase != v1alpha1.AutoConfigPhaseSynced {
 		t.Errorf("expected phase Synced (no change), got %s", updated.Status.Phase)
+	}
+}
+
+func TestAutoConfigReconcile_SpecChangeTriggersReEvaluation(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	ac.Status.Phase = v1alpha1.AutoConfigPhaseSynced
+	// Stale checksum from generation 0; AC is now at generation 1
+	// (simulating a spec edit like adding an override).
+	ac.ObjectMeta.Generation = 1
+	ac.Status.SpecChecksum = "abc123:" + cm.ResourceVersion + ":0"
+	c := fakeClientBuilder().
+		WithObjects(ac, cm).
+		WithStatusSubresource(ac).
+		Build()
+	f, ce, fi, g := defaultMocks()
+	r := newACReconciler(c, f, ce, fi, g)
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// CUE evaluator should have been called (not skipped)
+	if !ce.called {
+		t.Error("expected CUE evaluator to be called on generation change")
+	}
+
+	var updated v1alpha1.KrakenDAutoConfig
+	if err := c.Get(context.Background(), types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace}, &updated); err != nil {
+		t.Fatalf("getting updated autoconfig: %v", err)
+	}
+	if updated.Status.Phase != v1alpha1.AutoConfigPhaseSynced {
+		t.Errorf("expected phase Synced after re-evaluation, got %s", updated.Status.Phase)
+	}
+	// Checksum should now include the new generation
+	if updated.Status.SpecChecksum != "abc123:"+cm.ResourceVersion+":1" {
+		t.Errorf("expected checksum with generation 1, got %q", updated.Status.SpecChecksum)
 	}
 }
 

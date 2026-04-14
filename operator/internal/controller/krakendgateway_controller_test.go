@@ -465,6 +465,79 @@ func TestGatewayMapper_LicenseSecretToGateway_NoMatch(t *testing.T) {
 	}
 }
 
+func TestGatewayMapper_PluginConfigMapToGateway_Match(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw1", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.7.0",
+			Edition: v1alpha1.EditionCE,
+			Plugins: &v1alpha1.PluginsSpec{
+				Sources: []v1alpha1.PluginSource{
+					{ConfigMapRef: &v1alpha1.ConfigMapKeyRef{Name: "my-plugin"}},
+				},
+			},
+		},
+	}
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-plugin", Namespace: "default"},
+	}
+	c := fakeClientBuilder().WithObjects(gw).Build()
+	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme()}
+
+	requests := r.pluginConfigMapToGateway(context.Background(), cm)
+	if len(requests) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(requests))
+	}
+	if requests[0].Name != "gw1" {
+		t.Errorf("expected gw1, got %s", requests[0].Name)
+	}
+}
+
+func TestGatewayMapper_PluginConfigMapToGateway_NoMatch(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw1", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.7.0",
+			Edition: v1alpha1.EditionCE,
+			Plugins: &v1alpha1.PluginsSpec{
+				Sources: []v1alpha1.PluginSource{
+					{ConfigMapRef: &v1alpha1.ConfigMapKeyRef{Name: "other-plugin"}},
+				},
+			},
+		},
+	}
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: "unrelated", Namespace: "default"},
+	}
+	c := fakeClientBuilder().WithObjects(gw).Build()
+	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme()}
+
+	requests := r.pluginConfigMapToGateway(context.Background(), cm)
+	if len(requests) != 0 {
+		t.Errorf("expected 0 requests, got %d", len(requests))
+	}
+}
+
+func TestGatewayMapper_PluginConfigMapToGateway_NoPlugins(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw1", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.7.0",
+			Edition: v1alpha1.EditionCE,
+		},
+	}
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: "something", Namespace: "default"},
+	}
+	c := fakeClientBuilder().WithObjects(gw).Build()
+	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme()}
+
+	requests := r.pluginConfigMapToGateway(context.Background(), cm)
+	if len(requests) != 0 {
+		t.Errorf("expected 0 requests, got %d", len(requests))
+	}
+}
+
 func TestGatewayReconcile_ConflictedEndpoints(t *testing.T) {
 	gw := testGateway()
 	gw.Status.Phase = v1alpha1.PhasePending

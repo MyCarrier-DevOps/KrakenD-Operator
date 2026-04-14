@@ -112,7 +112,10 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	// Check if spec or CUE defs changed
 	cueDefsRV := r.getCUEDefsResourceVersion(ctx, &ac)
-	combinedChecksum := fetchResult.Checksum + ":" + cueDefsRV
+	// Include generation so spec-only changes (overrides, defaults,
+	// urlTransform, filter) also trigger re-evaluation even when the
+	// OpenAPI spec and CUE definitions are unchanged.
+	combinedChecksum := fmt.Sprintf("%s:%s:%d", fetchResult.Checksum, cueDefsRV, ac.Generation)
 	if combinedChecksum == ac.Status.SpecChecksum {
 		ac.Status.Phase = v1alpha1.AutoConfigPhaseSynced
 		if err := r.Status().Update(ctx, &ac); err != nil {
