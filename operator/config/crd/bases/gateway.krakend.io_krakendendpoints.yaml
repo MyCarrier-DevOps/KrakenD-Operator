@@ -24,6 +24,9 @@ spec:
     - jsonPath: .status.endpointCount
       name: Endpoints
       type: integer
+    - jsonPath: .status.methods
+      name: Methods
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -245,6 +248,8 @@ spec:
               endpointCount:
                 format: int32
                 type: integer
+              methods:
+                type: string
               observedGeneration:
                 format: int64
                 type: integer

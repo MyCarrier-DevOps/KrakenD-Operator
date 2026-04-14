@@ -107,6 +107,7 @@ type KrakenDEndpointStatus struct {
 	Phase              EndpointPhase      `json:"phase,omitempty"`
 	ObservedGeneration int64              `json:"observedGeneration,omitempty"`
 	EndpointCount      int32              `json:"endpointCount,omitempty"`
+	Methods            string             `json:"methods,omitempty"`
 	Conditions         []metav1.Condition `json:"conditions,omitempty"`
 }
 
@@ -115,6 +116,7 @@ type KrakenDEndpointStatus struct {
 // +kubebuilder:printcolumn:name="Gateway",type=string,JSONPath=`.spec.gatewayRef.name`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Endpoints",type=integer,JSONPath=`.status.endpointCount`
+// +kubebuilder:printcolumn:name="Methods",type=string,JSONPath=`.status.methods`,priority=0
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // KrakenDEndpoint is the Schema for the krakendendpoints API.

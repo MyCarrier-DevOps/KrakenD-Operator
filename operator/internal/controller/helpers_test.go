@@ -111,6 +111,33 @@ func TestConditionsEqual_MissingType(t *testing.T) {
 	}
 }
 
+func TestDistinctMethods(t *testing.T) {
+	tests := []struct {
+		name    string
+		entries []v1alpha1.EndpointEntry
+		want    string
+	}{
+		{name: "empty", entries: nil, want: ""},
+		{name: "single", entries: []v1alpha1.EndpointEntry{
+			{Method: "GET"},
+		}, want: "GET"},
+		{name: "multiple sorted", entries: []v1alpha1.EndpointEntry{
+			{Method: "POST"}, {Method: "GET"}, {Method: "DELETE"},
+		}, want: "DELETE,GET,POST"},
+		{name: "duplicates removed", entries: []v1alpha1.EndpointEntry{
+			{Method: "GET"}, {Method: "GET"}, {Method: "POST"},
+		}, want: "GET,POST"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := distinctMethods(tt.entries)
+			if got != tt.want {
+				t.Errorf("distinctMethods() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestEnsureEndpointIndexes_Sequential(t *testing.T) {
 	resetIndexRegistry()
 	defer resetIndexRegistry()
