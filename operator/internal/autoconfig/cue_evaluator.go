@@ -303,10 +303,12 @@ func applyURLTransform(output *CUEOutput, transform *v1alpha1.URLTransformSpec) 
 	}
 }
 
-// applyFieldOverrides applies non-ExtraConfig override fields (Timeout,
-// CacheTTL, PolicyRef, Endpoint, Method, Backends) to the evaluated
-// endpoint entries. ExtraConfig overrides are already handled via CUE
-// unification in applyOverrides.
+// applyFieldOverrides applies per-operation override fields (Timeout,
+// CacheTTL, OutputEncoding, ConcurrentCalls, InputHeaders, InputQueryStrings,
+// PolicyRef, Endpoint, Method, ExtraConfig, Backends) to the evaluated
+// endpoint entries. ExtraConfig is merged here via mergeExtraConfig;
+// applyOverrides separately injects override data into the CUE tree for
+// custom CUE definitions that reference _overrides.
 func applyFieldOverrides(output *CUEOutput, overrides []v1alpha1.OperationOverride) {
 	if len(overrides) == 0 {
 		return
@@ -338,6 +340,18 @@ func applyFieldOverrides(output *CUEOutput, overrides []v1alpha1.OperationOverri
 		}
 		if ov.CacheTTL != nil {
 			entry.CacheTTL = ov.CacheTTL
+		}
+		if ov.OutputEncoding != "" {
+			entry.OutputEncoding = ov.OutputEncoding
+		}
+		if ov.ConcurrentCalls != nil {
+			entry.ConcurrentCalls = ov.ConcurrentCalls
+		}
+		if ov.InputHeaders != nil {
+			entry.InputHeaders = ov.InputHeaders
+		}
+		if ov.InputQueryStrings != nil {
+			entry.InputQueryStrings = ov.InputQueryStrings
 		}
 		if ov.Endpoint != "" {
 			entry.Endpoint = ov.Endpoint

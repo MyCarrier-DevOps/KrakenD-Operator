@@ -166,6 +166,18 @@ type OperationOverride struct {
 	// CacheTTL overrides the endpoint cache TTL.
 	CacheTTL *metav1.Duration `json:"cacheTTL,omitempty"`
 
+	// OutputEncoding overrides the response encoding (e.g. "no-op", "json").
+	OutputEncoding string `json:"outputEncoding,omitempty"`
+
+	// ConcurrentCalls overrides the number of concurrent backend calls.
+	ConcurrentCalls *int32 `json:"concurrentCalls,omitempty"`
+
+	// InputHeaders overrides the list of headers forwarded to backends.
+	InputHeaders []string `json:"inputHeaders,omitempty"`
+
+	// InputQueryStrings overrides the list of query parameters forwarded to backends.
+	InputQueryStrings []string `json:"inputQueryStrings,omitempty"`
+
 	// PolicyRef overrides the backend policy reference.
 	PolicyRef *PolicyRef `json:"policyRef,omitempty"`
 
