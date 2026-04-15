@@ -47,7 +47,7 @@ type EndpointEntry struct {
 	Endpoint string `json:"endpoint"`
 
 	// Method is the HTTP method for this endpoint.
-	// +kubebuilder:validation:Enum=GET;POST;PUT;DELETE;PATCH;HEAD;OPTIONS;CONNECT;TRACE
+	// +kubebuilder:validation:Enum=GET;POST;PUT;PATCH;DELETE
 	Method string `json:"method"`
 
 	// Backends is the list of backend services for this endpoint.
@@ -69,6 +69,8 @@ type EndpointEntry struct {
 	OutputEncoding string `json:"outputEncoding,omitempty"`
 
 	// ConcurrentCalls sets concurrent backend calls for this endpoint.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=5
 	ConcurrentCalls *int32 `json:"concurrentCalls,omitempty"`
 
 	// ExtraConfig holds arbitrary endpoint-level extra_config JSON.
@@ -89,8 +91,36 @@ type BackendSpec struct {
 	// Encoding selects the backend response encoding.
 	Encoding string `json:"encoding,omitempty"`
 
+	// SD selects the service discovery provider (e.g. "static", "dns").
+	SD string `json:"sd,omitempty"`
+
+	// SDScheme sets the service discovery scheme (e.g. "http", "https").
+	SDScheme string `json:"sdScheme,omitempty"`
+
+	// DisableHostSanitize skips host protocol validation. Required for non-HTTP
+	// protocols (amqp://, nats://, kafka://) or when using sd=dns.
+	DisableHostSanitize *bool `json:"disableHostSanitize,omitempty"`
+
+	// InputHeaders is the list of headers forwarded to this backend.
+	InputHeaders []string `json:"inputHeaders,omitempty"`
+
+	// InputQueryStrings is the list of query parameters forwarded to this backend.
+	InputQueryStrings []string `json:"inputQueryStrings,omitempty"`
+
 	// Allow is the allowlist of response fields to keep.
 	Allow []string `json:"allow,omitempty"`
+
+	// Deny is the denylist of response fields to remove.
+	Deny []string `json:"deny,omitempty"`
+
+	// Group wraps the backend response under a named key to avoid collisions.
+	Group string `json:"group,omitempty"`
+
+	// Target extracts a nested object and returns only its contents.
+	Target string `json:"target,omitempty"`
+
+	// IsCollection marks that the backend returns an array instead of an object.
+	IsCollection *bool `json:"isCollection,omitempty"`
 
 	// Mapping renames response fields.
 	Mapping map[string]string `json:"mapping,omitempty"`

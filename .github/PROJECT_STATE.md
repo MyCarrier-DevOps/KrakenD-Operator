@@ -268,7 +268,17 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 
 ## Current Focus
 
-All §1-§19 architecture sections fully implemented and wired. All 8 e2e tests pass using testcontainers-go + K3s (ephemeral cluster per run). OLM bundle generated and validated. Helm chart created with full RBAC and templating. CI pipelines configured. PR #1 review complete — all 62 threads resolved.
+PR #12 (`fix/deepmerge-deepcopy-bug`): Deep merge/deep copy bug fixes, defaults restructuring, BackendDefaults expansion, Devil's Advocate schema review fixes. All unit tests pass (7 packages), 0 lint issues. Ready for commit.
+
+### Recent Changes (PR #12, 2026-07-XX)
+- **Defaults restructured**: `spec.defaults` changed from flat `EndpointDefaults` to nested `Defaults{Endpoint, Backend, PolicyRef}`
+- **BackendDefaults expanded**: Added `Encoding`, `SD`, `SDScheme`, `DisableHostSanitize`, `InputHeaders`, `InputQueryStrings`, `ExtraConfig` — all non-per-backend-specific fields from KrakenD v2.13 backend schema
+- **BackendSpec expanded**: Added `SD`, `SDScheme`, `DisableHostSanitize`, `InputHeaders`, `InputQueryStrings`, `Deny`, `Group`, `Target`, `IsCollection` fields
+- **PolicyRef moved**: From `EndpointDefaults`/`BackendDefaults` to `Defaults.PolicyRef` (operator-level concept, not KrakenD schema)
+- **New function `applyDefaultPolicyRef()`**: Sets PolicyRef on backends that don't already have one
+- **Renderer updated**: `buildBackendJSON()` now serializes all new fields (sd, sd_scheme, disable_host_sanitize, input_headers, input_query_strings, deny, group, target, is_collection)
+- **Devil's Advocate review fixes**: Method enum restricted to GET/POST/PUT/PATCH/DELETE, ConcurrentCalls bounded 1-5, EndpointDefaults doc comments added
+- **Comprehensive tests added**: Deep merge interaction tests, BackendDefaults field tests (all 7 fields), PolicyRef tests, scenario tests for 3-layer override chains, expanded renderer tests
 
 ## Architectural Decisions
 

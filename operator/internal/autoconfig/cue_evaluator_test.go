@@ -1024,10 +1024,10 @@ func TestApplyDefaults_InputQueryStrings(t *testing.T) {
 	}
 }
 
-func TestApplyDefaults_PolicyRef(t *testing.T) {
+func TestApplyDefaultPolicyRef(t *testing.T) {
 	out := testOutputWithEntries()
 	policyRef := &v1alpha1.PolicyRef{Name: "default-policy"}
-	applyDefaults(out, &v1alpha1.EndpointDefaults{PolicyRef: policyRef})
+	applyDefaultPolicyRef(out, policyRef)
 
 	for i, entry := range out.Entries {
 		for j, be := range entry.Backends {
@@ -1083,6 +1083,381 @@ func TestApplyDefaults_Nil(t *testing.T) {
 	}
 }
 
+func TestApplyBackendDefaults_ExtraConfig(t *testing.T) {
+	out := testOutputWithEntries()
+	defaults := &v1alpha1.BackendDefaults{
+		ExtraConfig: &runtime.RawExtension{
+			Raw: []byte(`{"backend/http":{"return_error_code":true}}`),
+		},
+	}
+	applyBackendDefaults(out, defaults)
+
+	for i, entry := range out.Entries {
+		for j, be := range entry.Backends {
+			if be.ExtraConfig == nil {
+				t.Fatalf("entry[%d].backend[%d]: expected extraConfig, got nil", i, j)
+			}
+			var ec map[string]json.RawMessage
+			if err := json.Unmarshal(be.ExtraConfig.Raw, &ec); err != nil {
+				t.Fatalf("entry[%d].backend[%d]: unmarshal: %v", i, j, err)
+			}
+			if _, ok := ec["backend/http"]; !ok {
+				t.Errorf("entry[%d].backend[%d]: missing backend/http", i, j)
+			}
+		}
+	}
+}
+
+func TestApplyBackendDefaults_Nil(t *testing.T) {
+	out := testOutputWithEntries()
+	original := out.Entries[0].Backends[0].ExtraConfig
+	applyBackendDefaults(out, nil)
+
+	if out.Entries[0].Backends[0].ExtraConfig != original {
+		t.Error("nil backend defaults should not modify backends")
+	}
+}
+
+func TestApplyDefaultPolicyRef_Nil(t *testing.T) {
+	out := testOutputWithEntries()
+	applyDefaultPolicyRef(out, nil)
+
+	for i, entry := range out.Entries {
+		for j, be := range entry.Backends {
+			if be.PolicyRef != nil {
+				t.Errorf("entry[%d].backend[%d]: expected nil PolicyRef, got %v", i, j, be.PolicyRef)
+			}
+		}
+	}
+}
+
+func TestApplyDefaultPolicyRef_DoesNotOverrideExisting(t *testing.T) {
+	out := testOutputWithEntries()
+	out.Entries[0].Backends[0].PolicyRef = &v1alpha1.PolicyRef{Name: "existing"}
+	applyDefaultPolicyRef(out, &v1alpha1.PolicyRef{Name: "default"})
+
+	if out.Entries[0].Backends[0].PolicyRef.Name != "existing" {
+		t.Errorf("expected existing PolicyRef preserved, got %s", out.Entries[0].Backends[0].PolicyRef.Name)
+	}
+	// Second entry's backend should get the default
+	if out.Entries[1].Backends[0].PolicyRef == nil || out.Entries[1].Backends[0].PolicyRef.Name != "default" {
+		t.Errorf("expected default PolicyRef on entry[1].backend[0], got %v", out.Entries[1].Backends[0].PolicyRef)
+	}
+}
+
+// --- BackendDefaults scalar field tests ---
+
+func TestApplyBackendDefaults_SD(t *testing.T) {
+	out := testOutputWithEntries()
+	applyBackendDefaults(out, &v1alpha1.BackendDefaults{SD: "static"})
+
+	for i, entry := range out.Entries {
+		for j, be := range entry.Backends {
+			if be.SD != "static" {
+				t.Errorf("entry[%d].backend[%d]: expected sd=static, got %s", i, j, be.SD)
+			}
+		}
+	}
+}
+
+func TestApplyBackendDefaults_SDDoesNotOverrideExisting(t *testing.T) {
+	out := testOutputWithEntries()
+	out.Entries[0].Backends[0].SD = "dns"
+	applyBackendDefaults(out, &v1alpha1.BackendDefaults{SD: "static"})
+
+	if out.Entries[0].Backends[0].SD != "dns" {
+		t.Errorf("expected existing sd=dns preserved, got %s", out.Entries[0].Backends[0].SD)
+	}
+}
+
+func TestApplyBackendDefaults_Encoding(t *testing.T) {
+	out := testOutputWithEntries()
+	applyBackendDefaults(out, &v1alpha1.BackendDefaults{Encoding: "safejson"})
+
+	for i, entry := range out.Entries {
+		for j, be := range entry.Backends {
+			if be.Encoding != "safejson" {
+				t.Errorf("entry[%d].backend[%d]: expected encoding=safejson, got %s", i, j, be.Encoding)
+			}
+		}
+	}
+}
+
+func TestApplyBackendDefaults_EncodingDoesNotOverrideExisting(t *testing.T) {
+	out := testOutputWithEntries()
+	out.Entries[0].Backends[0].Encoding = "xml"
+	applyBackendDefaults(out, &v1alpha1.BackendDefaults{Encoding: "safejson"})
+
+	if out.Entries[0].Backends[0].Encoding != "xml" {
+		t.Errorf("expected existing encoding=xml preserved, got %s", out.Entries[0].Backends[0].Encoding)
+	}
+}
+
+func TestApplyBackendDefaults_SDScheme(t *testing.T) {
+	out := testOutputWithEntries()
+	applyBackendDefaults(out, &v1alpha1.BackendDefaults{SDScheme: "https"})
+
+	for i, entry := range out.Entries {
+		for j, be := range entry.Backends {
+			if be.SDScheme != "https" {
+				t.Errorf("entry[%d].backend[%d]: expected sdScheme=https, got %s", i, j, be.SDScheme)
+			}
+		}
+	}
+}
+
+func TestApplyBackendDefaults_DisableHostSanitize(t *testing.T) {
+	out := testOutputWithEntries()
+	val := true
+	applyBackendDefaults(out, &v1alpha1.BackendDefaults{DisableHostSanitize: &val})
+
+	for i, entry := range out.Entries {
+		for j, be := range entry.Backends {
+			if be.DisableHostSanitize == nil || *be.DisableHostSanitize != true {
+				t.Errorf("entry[%d].backend[%d]: expected disableHostSanitize=true", i, j)
+			}
+		}
+	}
+}
+
+func TestApplyBackendDefaults_DisableHostSanitizeDoesNotOverride(t *testing.T) {
+	out := testOutputWithEntries()
+	existing := false
+	out.Entries[0].Backends[0].DisableHostSanitize = &existing
+	val := true
+	applyBackendDefaults(out, &v1alpha1.BackendDefaults{DisableHostSanitize: &val})
+
+	if *out.Entries[0].Backends[0].DisableHostSanitize != false {
+		t.Error("expected existing disableHostSanitize=false preserved")
+	}
+}
+
+func TestApplyBackendDefaults_InputHeaders(t *testing.T) {
+	out := testOutputWithEntries()
+	applyBackendDefaults(out, &v1alpha1.BackendDefaults{InputHeaders: []string{"X-Forwarded-For"}})
+
+	for i, entry := range out.Entries {
+		for j, be := range entry.Backends {
+			if len(be.InputHeaders) != 1 || be.InputHeaders[0] != "X-Forwarded-For" {
+				t.Errorf("entry[%d].backend[%d]: expected [X-Forwarded-For], got %v", i, j, be.InputHeaders)
+			}
+		}
+	}
+}
+
+func TestApplyBackendDefaults_InputQueryStrings(t *testing.T) {
+	out := testOutputWithEntries()
+	applyBackendDefaults(out, &v1alpha1.BackendDefaults{InputQueryStrings: []string{"page", "limit"}})
+
+	for i, entry := range out.Entries {
+		for j, be := range entry.Backends {
+			if len(be.InputQueryStrings) != 2 {
+				t.Errorf("entry[%d].backend[%d]: expected 2 query strings, got %v", i, j, be.InputQueryStrings)
+			}
+		}
+	}
+}
+
+// --- Deep merge interaction tests ---
+// These verify the 3-layer merge pipeline (CUE → defaults → overrides)
+// produces the correct result when layers interact.
+
+func TestDeepMergeJSON_BothObjects(t *testing.T) {
+	base := json.RawMessage(`{"a":1,"b":{"x":10,"y":20}}`)
+	patch := json.RawMessage(`{"b":{"y":99,"z":30},"c":3}`)
+	result := deepMergeJSON(base, patch)
+
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(result, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	// "a" preserved from base
+	if string(m["a"]) != "1" {
+		t.Errorf("expected a=1 preserved, got %s", m["a"])
+	}
+	// "c" added from patch
+	if string(m["c"]) != "3" {
+		t.Errorf("expected c=3 from patch, got %s", m["c"])
+	}
+	// "b" recursively merged
+	var b map[string]json.RawMessage
+	if err := json.Unmarshal(m["b"], &b); err != nil {
+		t.Fatalf("unmarshal b: %v", err)
+	}
+	if string(b["x"]) != "10" {
+		t.Errorf("expected b.x=10 preserved, got %s", b["x"])
+	}
+	if string(b["y"]) != "99" {
+		t.Errorf("expected b.y=99 from patch, got %s", b["y"])
+	}
+	if string(b["z"]) != "30" {
+		t.Errorf("expected b.z=30 from patch, got %s", b["z"])
+	}
+}
+
+func TestDeepMergeJSON_BaseNotObject(t *testing.T) {
+	base := json.RawMessage(`"a string"`)
+	patch := json.RawMessage(`{"key":"val"}`)
+	result := deepMergeJSON(base, patch)
+	if string(result) != `{"key":"val"}` {
+		t.Errorf("expected patch to win when base is not object, got %s", result)
+	}
+}
+
+func TestDeepMergeJSON_PatchNotObject(t *testing.T) {
+	base := json.RawMessage(`{"key":"val"}`)
+	patch := json.RawMessage(`42`)
+	result := deepMergeJSON(base, patch)
+	if string(result) != "42" {
+		t.Errorf("expected patch to win when patch is not object, got %s", result)
+	}
+}
+
+func TestDeepMergeJSON_ThreeLevelNesting(t *testing.T) {
+	base := json.RawMessage(`{"l1":{"l2":{"l3_a":"keep","l3_b":"original"}}}`)
+	patch := json.RawMessage(`{"l1":{"l2":{"l3_b":"replaced","l3_c":"new"}}}`)
+	result := deepMergeJSON(base, patch)
+
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(result, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	var l1 map[string]json.RawMessage
+	if err := json.Unmarshal(m["l1"], &l1); err != nil {
+		t.Fatalf("unmarshal l1: %v", err)
+	}
+	var l2 map[string]json.RawMessage
+	if err := json.Unmarshal(l1["l2"], &l2); err != nil {
+		t.Fatalf("unmarshal l2: %v", err)
+	}
+	if string(l2["l3_a"]) != `"keep"` {
+		t.Errorf("expected l3_a preserved, got %s", l2["l3_a"])
+	}
+	if string(l2["l3_b"]) != `"replaced"` {
+		t.Errorf("expected l3_b replaced, got %s", l2["l3_b"])
+	}
+	if string(l2["l3_c"]) != `"new"` {
+		t.Errorf("expected l3_c added, got %s", l2["l3_c"])
+	}
+}
+
+func TestMergeExtraConfig_DeepMergePreservesNestedKeys(t *testing.T) {
+	existing := &runtime.RawExtension{
+		Raw: []byte(`{"backend/http":{"return_error_code":true,"return_error_msg":false},"qos/ratelimit/proxy":{"max_rate":100}}`),
+	}
+	override := &runtime.RawExtension{
+		Raw: []byte(`{"backend/http":{"return_error_msg":true}}`),
+	}
+	result := mergeExtraConfig(existing, override)
+
+	var ec map[string]json.RawMessage
+	if err := json.Unmarshal(result.Raw, &ec); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	// qos/ratelimit/proxy preserved (not in override)
+	if _, ok := ec["qos/ratelimit/proxy"]; !ok {
+		t.Error("expected qos/ratelimit/proxy preserved")
+	}
+	// backend/http deep-merged
+	var http map[string]interface{}
+	if err := json.Unmarshal(ec["backend/http"], &http); err != nil {
+		t.Fatalf("unmarshal backend/http: %v", err)
+	}
+	if http["return_error_code"] != true {
+		t.Error("expected return_error_code=true preserved")
+	}
+	if http["return_error_msg"] != true {
+		t.Error("expected return_error_msg=true from override")
+	}
+}
+
+func TestMergeExtraConfig_BothNil(t *testing.T) {
+	result := mergeExtraConfig(nil, nil)
+	if result != nil {
+		t.Errorf("expected nil when both nil, got %v", result)
+	}
+}
+
+func TestMergeExtraConfig_EmptyExistingRaw(t *testing.T) {
+	existing := &runtime.RawExtension{Raw: []byte{}}
+	override := &runtime.RawExtension{
+		Raw: []byte(`{"key":"val"}`),
+	}
+	result := mergeExtraConfig(existing, override)
+	if string(result.Raw) != `{"key":"val"}` {
+		t.Errorf("expected override when existing empty, got %s", result.Raw)
+	}
+}
+
+func TestApplyBackendDefaults_ExtraConfigDeepMergesWithExisting(t *testing.T) {
+	out := testOutputWithEntries()
+	// Give first backend an existing ExtraConfig
+	out.Entries[0].Backends[0].ExtraConfig = &runtime.RawExtension{
+		Raw: []byte(`{"qos/circuit-breaker":{"interval":60}}`),
+	}
+	defaults := &v1alpha1.BackendDefaults{
+		ExtraConfig: &runtime.RawExtension{
+			Raw: []byte(`{"backend/http":{"return_error_code":true}}`),
+		},
+	}
+	applyBackendDefaults(out, defaults)
+
+	// First backend: should have BOTH circuit-breaker (existing) and backend/http (default)
+	var ec map[string]json.RawMessage
+	if err := json.Unmarshal(out.Entries[0].Backends[0].ExtraConfig.Raw, &ec); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if _, ok := ec["qos/circuit-breaker"]; !ok {
+		t.Error("existing qos/circuit-breaker should be preserved after merge")
+	}
+	if _, ok := ec["backend/http"]; !ok {
+		t.Error("default backend/http should be merged in")
+	}
+}
+
+func TestApplyBackendDefaults_AllFieldsCombined(t *testing.T) {
+	out := testOutputWithEntries()
+	disableHS := true
+	defaults := &v1alpha1.BackendDefaults{
+		SD:                  "static",
+		SDScheme:            "https",
+		Encoding:            "safejson",
+		DisableHostSanitize: &disableHS,
+		InputHeaders:        []string{"X-Request-ID"},
+		InputQueryStrings:   []string{"page"},
+		ExtraConfig: &runtime.RawExtension{
+			Raw: []byte(`{"backend/http":{"return_error_code":true}}`),
+		},
+	}
+	applyBackendDefaults(out, defaults)
+
+	for i, entry := range out.Entries {
+		for j, be := range entry.Backends {
+			if be.SD != "static" {
+				t.Errorf("entry[%d].backend[%d]: sd=%s, want static", i, j, be.SD)
+			}
+			if be.SDScheme != "https" {
+				t.Errorf("entry[%d].backend[%d]: sdScheme=%s, want https", i, j, be.SDScheme)
+			}
+			if be.Encoding != "safejson" {
+				t.Errorf("entry[%d].backend[%d]: encoding=%s, want safejson", i, j, be.Encoding)
+			}
+			if be.DisableHostSanitize == nil || *be.DisableHostSanitize != true {
+				t.Errorf("entry[%d].backend[%d]: disableHostSanitize should be true", i, j)
+			}
+			if len(be.InputHeaders) != 1 || be.InputHeaders[0] != "X-Request-ID" {
+				t.Errorf("entry[%d].backend[%d]: inputHeaders=%v, want [X-Request-ID]", i, j, be.InputHeaders)
+			}
+			if len(be.InputQueryStrings) != 1 || be.InputQueryStrings[0] != "page" {
+				t.Errorf("entry[%d].backend[%d]: inputQueryStrings=%v, want [page]", i, j, be.InputQueryStrings)
+			}
+			if be.ExtraConfig == nil {
+				t.Errorf("entry[%d].backend[%d]: extraConfig should not be nil", i, j)
+			}
+		}
+	}
+}
+
 func TestApplyDefaults_OverriddenByFieldOverrides(t *testing.T) {
 	// Verify ordering: defaults are applied first, then per-operation overrides win.
 	defs, err := EmbeddedCUEDefinitions()
@@ -1116,10 +1491,10 @@ func TestApplyDefaults_OverriddenByFieldOverrides(t *testing.T) {
 		SpecData:    specJSON,
 		SpecFormat:  v1alpha1.SpecFormatJSON,
 		DefaultDefs: defs,
-		Defaults: &v1alpha1.EndpointDefaults{
+		Defaults: &v1alpha1.Defaults{Endpoint: &v1alpha1.EndpointDefaults{
 			Timeout:      &defaultTimeout,
 			InputHeaders: []string{"Authorization", "Content-Type"},
-		},
+		}},
 		Overrides: []v1alpha1.OperationOverride{
 			{OperationID: "deleteItem", Timeout: &overrideTimeout},
 		},

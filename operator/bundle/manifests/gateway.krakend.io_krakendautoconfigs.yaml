@@ -78,31 +78,92 @@ spec:
                     type: string
                 type: object
               defaults:
-                description: Defaults sets default values for generated endpoints.
+                description: Defaults sets default values for generated endpoints
+                  and backends.
                 properties:
-                  cacheTTL:
-                    type: string
-                  concurrentCalls:
-                    format: int32
-                    type: integer
-                  extraConfig:
-                    type: object
-                    x-kubernetes-preserve-unknown-fields: true
-                  inputHeaders:
-                    items:
-                      type: string
-                    type: array
-                  inputQueryStrings:
-                    items:
-                      type: string
-                    type: array
-                  outputEncoding:
-                    type: string
-                  policyRef:
+                  backend:
                     description: |-
-                      PolicyRef references a KrakenDBackendPolicy by name.
-                      When Namespace is empty the policy is assumed to live in the same namespace
-                      as the referencing resource.
+                      Backend sets default values applied to all backends within generated endpoints.
+                      Valid fields correspond to KrakenD v2.13 backend schema properties.
+                    properties:
+                      disableHostSanitize:
+                        description: DisableHostSanitize skips host protocol validation
+                          for all backends.
+                        type: boolean
+                      encoding:
+                        description: Encoding sets the default backend response encoding
+                          (e.g. "json", "safejson", "no-op").
+                        type: string
+                      extraConfig:
+                        description: |-
+                          ExtraConfig holds arbitrary backend-level extra_config JSON
+                          (e.g. backend/http, qos/circuit-breaker, qos/ratelimit/proxy).
+                        type: object
+                        x-kubernetes-preserve-unknown-fields: true
+                      inputHeaders:
+                        description: InputHeaders sets the default list of headers
+                          forwarded to all backends.
+                        items:
+                          type: string
+                        type: array
+                      inputQueryStrings:
+                        description: InputQueryStrings sets the default list of query
+                          parameters forwarded to all backends.
+                        items:
+                          type: string
+                        type: array
+                      sd:
+                        description: SD sets the default service discovery provider
+                          (e.g. "static", "dns").
+                        type: string
+                      sdScheme:
+                        description: SDScheme sets the default service discovery scheme
+                          (e.g. "http", "https").
+                        type: string
+                    type: object
+                  endpoint:
+                    description: |-
+                      Endpoint sets default values applied to all generated endpoints.
+                      Valid fields correspond to KrakenD v2.13 endpoint schema properties.
+                    properties:
+                      cacheTTL:
+                        description: CacheTTL sets the default endpoint cache TTL.
+                        type: string
+                      concurrentCalls:
+                        description: ConcurrentCalls sets the default number of concurrent
+                          backend calls.
+                        format: int32
+                        maximum: 5
+                        minimum: 1
+                        type: integer
+                      extraConfig:
+                        description: ExtraConfig holds arbitrary endpoint-level extra_config
+                          JSON.
+                        type: object
+                        x-kubernetes-preserve-unknown-fields: true
+                      inputHeaders:
+                        description: InputHeaders sets the default list of headers
+                          forwarded to backends.
+                        items:
+                          type: string
+                        type: array
+                      inputQueryStrings:
+                        description: InputQueryStrings sets the default list of query
+                          parameters forwarded.
+                        items:
+                          type: string
+                        type: array
+                      outputEncoding:
+                        description: OutputEncoding sets the default response encoding
+                          (e.g. "json", "no-op").
+                        type: string
+                      timeout:
+                        description: Timeout sets the default endpoint timeout.
+                        type: string
+                    type: object
+                  policyRef:
+                    description: PolicyRef sets the default KrakenDBackendPolicy applied
+                      to all backends.
                     properties:
                       name:
                         type: string
@@ -113,8 +174,6 @@ spec:
                     required:
                     - name
                     type: object
-                  timeout:
-                    type: string
                 type: object
               filter:
                 description: Filter restricts which OpenAPI operations are converted

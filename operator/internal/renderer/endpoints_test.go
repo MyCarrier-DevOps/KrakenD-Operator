@@ -265,13 +265,23 @@ func TestBuildEndpointJSON_WithExtraConfig(t *testing.T) {
 }
 
 func TestBuildBackendJSON_AllFields(t *testing.T) {
+	boolTrue := true
 	backend := v1alpha1.BackendSpec{
-		Host:       []string{"http://b:80", "http://a:80"},
-		URLPattern: "/api",
-		Method:     "POST",
-		Encoding:   "json",
-		Allow:      []string{"id", "name", "email"},
-		Mapping:    map[string]string{"id": "user_id"},
+		Host:                []string{"http://b:80", "http://a:80"},
+		URLPattern:          "/api",
+		Method:              "POST",
+		Encoding:            "json",
+		SD:                  "static",
+		SDScheme:            "https",
+		DisableHostSanitize: &boolTrue,
+		InputHeaders:        []string{"X-Custom", "Authorization"},
+		InputQueryStrings:   []string{"page", "limit"},
+		Allow:               []string{"id", "name", "email"},
+		Deny:                []string{"secret", "internal_id"},
+		Group:               "user_data",
+		Target:              "data.user",
+		IsCollection:        &boolTrue,
+		Mapping:             map[string]string{"id": "user_id"},
 	}
 	result := buildBackendJSON(backend, nil, "default")
 	// Hosts should be sorted
@@ -283,6 +293,42 @@ func TestBuildBackendJSON_AllFields(t *testing.T) {
 	allow := result["allow"].([]string)
 	if allow[0] != "email" {
 		t.Errorf("expected sorted allow list, got %v", allow)
+	}
+	// Deny should be sorted
+	deny := result["deny"].([]string)
+	if deny[0] != "internal_id" || deny[1] != "secret" {
+		t.Errorf("expected sorted deny list, got %v", deny)
+	}
+	// SD fields
+	if result["sd"] != "static" {
+		t.Errorf("expected sd=static, got %v", result["sd"])
+	}
+	if result["sd_scheme"] != "https" {
+		t.Errorf("expected sd_scheme=https, got %v", result["sd_scheme"])
+	}
+	// Disable host sanitize
+	if result["disable_host_sanitize"] != true {
+		t.Errorf("expected disable_host_sanitize=true, got %v", result["disable_host_sanitize"])
+	}
+	// Group and target
+	if result["group"] != "user_data" {
+		t.Errorf("expected group=user_data, got %v", result["group"])
+	}
+	if result["target"] != "data.user" {
+		t.Errorf("expected target=data.user, got %v", result["target"])
+	}
+	// IsCollection
+	if result["is_collection"] != true {
+		t.Errorf("expected is_collection=true, got %v", result["is_collection"])
+	}
+	// Input headers/query strings should be sorted
+	ih := result["input_headers"].([]string)
+	if ih[0] != "Authorization" || ih[1] != "X-Custom" {
+		t.Errorf("expected sorted input_headers, got %v", ih)
+	}
+	iqs := result["input_query_strings"].([]string)
+	if iqs[0] != "limit" || iqs[1] != "page" {
+		t.Errorf("expected sorted input_query_strings, got %v", iqs)
 	}
 }
 

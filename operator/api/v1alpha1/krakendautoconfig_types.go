@@ -63,8 +63,8 @@ type KrakenDAutoConfigSpec struct {
 	// URLTransform configures host mapping, path stripping, and path prefixing.
 	URLTransform *URLTransformSpec `json:"urlTransform,omitempty"`
 
-	// Defaults sets default values for generated endpoints.
-	Defaults *EndpointDefaults `json:"defaults,omitempty"`
+	// Defaults sets default values for generated endpoints and backends.
+	Defaults *Defaults `json:"defaults,omitempty"`
 
 	// Overrides applies per-operation overrides to generated endpoints.
 	Overrides []OperationOverride `json:"overrides,omitempty"`
@@ -138,16 +138,72 @@ type HostMappingEntry struct {
 	To   string `json:"to"`
 }
 
+// Defaults groups endpoint-level and backend-level default values.
+type Defaults struct {
+	// Endpoint sets default values applied to all generated endpoints.
+	// Valid fields correspond to KrakenD v2.13 endpoint schema properties.
+	Endpoint *EndpointDefaults `json:"endpoint,omitempty"`
+
+	// Backend sets default values applied to all backends within generated endpoints.
+	// Valid fields correspond to KrakenD v2.13 backend schema properties.
+	Backend *BackendDefaults `json:"backend,omitempty"`
+
+	// PolicyRef sets the default KrakenDBackendPolicy applied to all backends.
+	PolicyRef *PolicyRef `json:"policyRef,omitempty"`
+}
+
 // EndpointDefaults sets default values for generated endpoints.
 type EndpointDefaults struct {
-	Timeout           *metav1.Duration      `json:"timeout,omitempty"`
-	CacheTTL          *metav1.Duration      `json:"cacheTTL,omitempty"`
-	OutputEncoding    string                `json:"outputEncoding,omitempty"`
-	ConcurrentCalls   *int32                `json:"concurrentCalls,omitempty"`
-	InputHeaders      []string              `json:"inputHeaders,omitempty"`
-	InputQueryStrings []string              `json:"inputQueryStrings,omitempty"`
-	PolicyRef         *PolicyRef            `json:"policyRef,omitempty"`
-	ExtraConfig       *runtime.RawExtension `json:"extraConfig,omitempty"`
+	// Timeout sets the default endpoint timeout.
+	Timeout *metav1.Duration `json:"timeout,omitempty"`
+
+	// CacheTTL sets the default endpoint cache TTL.
+	CacheTTL *metav1.Duration `json:"cacheTTL,omitempty"`
+
+	// OutputEncoding sets the default response encoding (e.g. "json", "no-op").
+	OutputEncoding string `json:"outputEncoding,omitempty"`
+
+	// ConcurrentCalls sets the default number of concurrent backend calls.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=5
+	ConcurrentCalls *int32 `json:"concurrentCalls,omitempty"`
+
+	// InputHeaders sets the default list of headers forwarded to backends.
+	InputHeaders []string `json:"inputHeaders,omitempty"`
+
+	// InputQueryStrings sets the default list of query parameters forwarded.
+	InputQueryStrings []string `json:"inputQueryStrings,omitempty"`
+
+	// ExtraConfig holds arbitrary endpoint-level extra_config JSON.
+	ExtraConfig *runtime.RawExtension `json:"extraConfig,omitempty"`
+}
+
+// BackendDefaults sets default values applied to all backends within
+// generated endpoints. Fields correspond to KrakenD v2.13 backend schema.
+// Only non-per-backend-specific fields are included; Host, URLPattern,
+// Method, Allow, and Mapping are per-backend and set via overrides.
+type BackendDefaults struct {
+	// Encoding sets the default backend response encoding (e.g. "json", "safejson", "no-op").
+	Encoding string `json:"encoding,omitempty"`
+
+	// SD sets the default service discovery provider (e.g. "static", "dns").
+	SD string `json:"sd,omitempty"`
+
+	// SDScheme sets the default service discovery scheme (e.g. "http", "https").
+	SDScheme string `json:"sdScheme,omitempty"`
+
+	// DisableHostSanitize skips host protocol validation for all backends.
+	DisableHostSanitize *bool `json:"disableHostSanitize,omitempty"`
+
+	// InputHeaders sets the default list of headers forwarded to all backends.
+	InputHeaders []string `json:"inputHeaders,omitempty"`
+
+	// InputQueryStrings sets the default list of query parameters forwarded to all backends.
+	InputQueryStrings []string `json:"inputQueryStrings,omitempty"`
+
+	// ExtraConfig holds arbitrary backend-level extra_config JSON
+	// (e.g. backend/http, qos/circuit-breaker, qos/ratelimit/proxy).
+	ExtraConfig *runtime.RawExtension `json:"extraConfig,omitempty"`
 }
 
 // OperationOverride applies per-operation overrides to generated endpoints.

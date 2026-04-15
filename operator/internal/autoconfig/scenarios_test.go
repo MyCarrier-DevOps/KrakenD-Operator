@@ -177,10 +177,10 @@ func TestScenario_DefaultsAppliedToAllEndpoints(t *testing.T) {
 	entries := evaluateScenario(t, CUEInput{
 		SpecData:    orderServiceSpec,
 		DefaultHost: "http://order-api.dev.svc:8080",
-		Defaults: &v1alpha1.EndpointDefaults{
+		Defaults: &v1alpha1.Defaults{Endpoint: &v1alpha1.EndpointDefaults{
 			Timeout:      &timeout,
 			InputHeaders: []string{"Authorization", "X-MC-Api-Key", "Content-Type"},
-		},
+		}},
 	})
 
 	for opID, entry := range entries {
@@ -210,10 +210,10 @@ func TestScenario_PerOperationOverrides(t *testing.T) {
 	entries := evaluateScenario(t, CUEInput{
 		SpecData:    orderServiceSpec,
 		DefaultHost: "http://order-api.dev.svc:8080",
-		Defaults: &v1alpha1.EndpointDefaults{
+		Defaults: &v1alpha1.Defaults{Endpoint: &v1alpha1.EndpointDefaults{
 			Timeout:      &defaultTimeout,
 			InputHeaders: []string{"Authorization", "X-MC-Api-Key", "Content-Type"},
-		},
+		}},
 		Overrides: []v1alpha1.OperationOverride{
 			{
 				OperationID: "UploadOrder",
@@ -426,10 +426,10 @@ func TestScenario_FullPipelineWithAllFeatures(t *testing.T) {
 		DefaultDefs: defs,
 		ServiceName: "_spec",
 		DefaultHost: "http://order-api.dev.svc:8080",
-		Defaults: &v1alpha1.EndpointDefaults{
+		Defaults: &v1alpha1.Defaults{Endpoint: &v1alpha1.EndpointDefaults{
 			Timeout:      &defaultTimeout,
 			InputHeaders: []string{"Authorization", "Content-Type"},
-		},
+		}},
 		Overrides: []v1alpha1.OperationOverride{
 			{
 				OperationID: "UploadOrder",
@@ -614,7 +614,7 @@ func TestScenario_DefaultPolicyRefOverriddenPerOperation(t *testing.T) {
 	entries := evaluateScenario(t, CUEInput{
 		SpecData:    orderServiceSpec,
 		DefaultHost: "http://order-api:8080",
-		Defaults: &v1alpha1.EndpointDefaults{
+		Defaults: &v1alpha1.Defaults{
 			PolicyRef: &v1alpha1.PolicyRef{Name: "default-policy"},
 		},
 		Overrides: []v1alpha1.OperationOverride{
@@ -671,9 +671,9 @@ func TestScenario_EmptyQueryStringsOverridesCUE(t *testing.T) {
 	entries := evaluateScenario(t, CUEInput{
 		SpecData:    specWithQuery,
 		DefaultHost: "http://items:8080",
-		Defaults: &v1alpha1.EndpointDefaults{
+		Defaults: &v1alpha1.Defaults{Endpoint: &v1alpha1.EndpointDefaults{
 			InputQueryStrings: []string{},
-		},
+		}},
 	})
 
 	item := entries["listItems"]
@@ -700,10 +700,10 @@ func TestScenario_PerOperationFieldOverrides(t *testing.T) {
 	entries := evaluateScenario(t, CUEInput{
 		SpecData:    orderServiceSpec,
 		DefaultHost: "http://order-api.dev.svc:8080",
-		Defaults: &v1alpha1.EndpointDefaults{
+		Defaults: &v1alpha1.Defaults{Endpoint: &v1alpha1.EndpointDefaults{
 			Timeout:      &defaultTimeout,
 			InputHeaders: []string{"Authorization", "X-MC-Api-Key", "Content-Type"},
-		},
+		}},
 		Overrides: []v1alpha1.OperationOverride{
 			{
 				OperationID:       "UploadOrder",
@@ -762,13 +762,13 @@ func TestScenario_DefaultExtraConfig(t *testing.T) {
 	entries := evaluateScenario(t, CUEInput{
 		SpecData:    orderServiceSpec,
 		DefaultHost: "http://order-api.dev.svc:8080",
-		Defaults: &v1alpha1.EndpointDefaults{
+		Defaults: &v1alpha1.Defaults{Endpoint: &v1alpha1.EndpointDefaults{
 			Timeout:      &defaultTimeout,
 			InputHeaders: []string{"Authorization", "X-MC-Api-Key", "Content-Type"},
 			ExtraConfig: &runtime.RawExtension{
 				Raw: []byte(`{"qos/ratelimit/router":{"every":"2s","max_rate":5,"strategy":"header","key":"Authorization"}}`),
 			},
-		},
+		}},
 		Overrides: []v1alpha1.OperationOverride{
 			{
 				OperationID: "UploadOrder",
@@ -834,13 +834,13 @@ func TestScenario_DefaultAndOverrideDifferentExtraConfigKeys(t *testing.T) {
 	entries := evaluateScenario(t, CUEInput{
 		SpecData:    orderServiceSpec,
 		DefaultHost: "http://order-api.dev.svc:8080",
-		Defaults: &v1alpha1.EndpointDefaults{
+		Defaults: &v1alpha1.Defaults{Endpoint: &v1alpha1.EndpointDefaults{
 			Timeout:      &defaultTimeout,
 			InputHeaders: []string{"Authorization", "X-MC-Api-Key", "Content-Type"},
 			ExtraConfig: &runtime.RawExtension{
 				Raw: []byte(`{"auth/validator":{"alg":"RS256","audience":["https://api.example.com"]}}`),
 			},
-		},
+		}},
 		Overrides: []v1alpha1.OperationOverride{
 			{
 				OperationID: "UploadOrder",
@@ -913,18 +913,18 @@ func TestScenario_OverrideSameExtraConfigKeyDeepMerge(t *testing.T) {
 	entries := evaluateScenario(t, CUEInput{
 		SpecData:    orderServiceSpec,
 		DefaultHost: "http://order-api.dev.svc:8080",
-		Defaults: &v1alpha1.EndpointDefaults{
+		Defaults: &v1alpha1.Defaults{Endpoint: &v1alpha1.EndpointDefaults{
 			Timeout:      &defaultTimeout,
 			InputHeaders: []string{"Authorization", "X-MC-Api-Key", "Content-Type"},
 			ExtraConfig: &runtime.RawExtension{
 				Raw: []byte(`{"qos/ratelimit/router":{"every":"1s","max_rate":10,"strategy":"header","key":"Authorization"}}`),
 			},
-		},
+		}},
 		Overrides: []v1alpha1.OperationOverride{
 			{
 				OperationID: "UploadOrder",
 				Endpoint:    "/api/v1/orders",
-			// Only specifies "every"; deep merge preserves the remaining default sub-fields.
+				// Only specifies "every"; deep merge preserves the remaining default sub-fields.
 				ExtraConfig: &runtime.RawExtension{
 					Raw: []byte(`{"qos/ratelimit/router":{"every":"2s"}}`),
 				},
@@ -963,5 +963,296 @@ func TestScenario_OverrideSameExtraConfigKeyDeepMerge(t *testing.T) {
 	}
 	if rl["key"] != "Authorization" {
 		t.Errorf("Order: expected default key=Authorization, got %v", rl["key"])
+	}
+}
+
+// =========================================================================
+// Scenario: Backend defaults apply backend-level extraConfig (e.g.
+// backend/http) to all backends across all endpoints. This was a real
+// bug — users had to set backend/http in endpoint-level extraConfig
+// because no backendDefaults mechanism existed. The backend/http key
+// appeared at the wrong JSON level in the rendered KrakenD config.
+// =========================================================================
+
+func TestScenario_BackendDefaultsExtraConfig(t *testing.T) {
+	defaultTimeout := metav1.Duration{Duration: 20 * time.Second}
+
+	entries := evaluateScenario(t, CUEInput{
+		SpecData:    orderServiceSpec,
+		DefaultHost: "http://order-api.dev.svc:8080",
+		Defaults: &v1alpha1.Defaults{
+			Endpoint: &v1alpha1.EndpointDefaults{
+				Timeout:      &defaultTimeout,
+				InputHeaders: []string{"Authorization", "X-MC-Api-Key", "Content-Type"},
+			},
+			Backend: &v1alpha1.BackendDefaults{
+				ExtraConfig: &runtime.RawExtension{
+					Raw: []byte(`{"backend/http":{"return_error_code":true}}`),
+				},
+			},
+		},
+	})
+
+	// Every backend across all endpoints should have backend/http.return_error_code
+	for opID, entry := range entries {
+		for i, be := range entry.Backends {
+			if be.ExtraConfig == nil {
+				t.Fatalf("%s backend[%d]: expected backend extraConfig, got nil", opID, i)
+			}
+			var ec map[string]json.RawMessage
+			if err := json.Unmarshal(be.ExtraConfig.Raw, &ec); err != nil {
+				t.Fatalf("%s backend[%d]: unmarshal: %v", opID, i, err)
+			}
+			httpRaw, ok := ec["backend/http"]
+			if !ok {
+				t.Errorf("%s backend[%d]: missing backend/http key", opID, i)
+				continue
+			}
+			var httpCfg map[string]interface{}
+			if err := json.Unmarshal(httpRaw, &httpCfg); err != nil {
+				t.Fatalf("%s backend[%d]: unmarshal backend/http: %v", opID, i, err)
+			}
+			if httpCfg["return_error_code"] != true {
+				t.Errorf("%s backend[%d]: expected return_error_code=true, got %v", opID, i, httpCfg["return_error_code"])
+			}
+		}
+
+		// Endpoint-level extraConfig should NOT contain backend/http
+		if entry.ExtraConfig != nil {
+			ec := extraConfigMap(t, entry.ExtraConfig)
+			if _, ok := ec["backend/http"]; ok {
+				t.Errorf("%s: backend/http should NOT appear in endpoint-level extraConfig", opID)
+			}
+		}
+	}
+}
+
+// =========================================================================
+// Scenario: Backend defaults deep-merge with per-operation backend
+// overrides. The per-operation backend override adds/changes keys;
+// backend defaults keys not in the override are preserved.
+// =========================================================================
+
+func TestScenario_BackendDefaultsMergeWithOverride(t *testing.T) {
+	entries := evaluateScenario(t, CUEInput{
+		SpecData:    orderServiceSpec,
+		DefaultHost: "http://order-api.dev.svc:8080",
+		Defaults: &v1alpha1.Defaults{
+			Backend: &v1alpha1.BackendDefaults{
+				ExtraConfig: &runtime.RawExtension{
+					Raw: []byte(`{"backend/http":{"return_error_code":true},"qos/ratelimit/proxy":{"max_rate":100,"capacity":100}}`),
+				},
+			},
+		},
+		Overrides: []v1alpha1.OperationOverride{
+			{
+				OperationID: "UploadOrder",
+				Backends: []v1alpha1.BackendOverride{
+					{
+						Index: 0,
+						ExtraConfig: &runtime.RawExtension{
+							Raw: []byte(`{"qos/circuit-breaker":{"interval":60,"timeout":10,"max_errors":5}}`),
+						},
+					},
+				},
+			},
+		},
+	})
+
+	// UploadOrder backend[0]: per-operation override replaces the entire
+	// backend ExtraConfig (BackendOverride is a direct set, not a merge).
+	// So it should have qos/circuit-breaker but NOT backend/http from defaults.
+	upload := entries["UploadOrder"]
+	if upload.Backends[0].ExtraConfig == nil {
+		t.Fatal("UploadOrder backend[0]: expected extraConfig, got nil")
+	}
+	var uploadEC map[string]json.RawMessage
+	if err := json.Unmarshal(upload.Backends[0].ExtraConfig.Raw, &uploadEC); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if _, ok := uploadEC["qos/circuit-breaker"]; !ok {
+		t.Error("UploadOrder backend[0]: missing qos/circuit-breaker from override")
+	}
+
+	// Order: should still have both backend defaults (no override)
+	order := entries["Order"]
+	if order.Backends[0].ExtraConfig == nil {
+		t.Fatal("Order backend[0]: expected extraConfig, got nil")
+	}
+	var orderEC map[string]json.RawMessage
+	if err := json.Unmarshal(order.Backends[0].ExtraConfig.Raw, &orderEC); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if _, ok := orderEC["backend/http"]; !ok {
+		t.Error("Order backend[0]: missing backend/http from defaults")
+	}
+	if _, ok := orderEC["qos/ratelimit/proxy"]; !ok {
+		t.Error("Order backend[0]: missing qos/ratelimit/proxy from defaults")
+	}
+}
+
+// =========================================================================
+// Scenario: Full 3-layer merge: CUE generates documentation/openapi,
+// endpoint defaults add qos/ratelimit/router, per-operation override
+// deep-merges a single sub-field of the rate limit, backend defaults
+// add backend/http and sd to every backend, and default policyRef
+// applies to all backends. Verifies all layers coexist correctly.
+// =========================================================================
+
+func TestScenario_FullDefaultsAndOverridesInteraction(t *testing.T) {
+	defaultTimeout := metav1.Duration{Duration: 20 * time.Second}
+
+	entries := evaluateScenario(t, CUEInput{
+		SpecData:    orderServiceSpec,
+		DefaultHost: "http://order-api.dev.svc:8080",
+		Defaults: &v1alpha1.Defaults{
+			PolicyRef: &v1alpha1.PolicyRef{Name: "global-policy"},
+			Endpoint: &v1alpha1.EndpointDefaults{
+				Timeout:      &defaultTimeout,
+				InputHeaders: []string{"Authorization", "X-MC-Api-Key", "Content-Type"},
+				ExtraConfig: &runtime.RawExtension{
+					Raw: []byte(`{"qos/ratelimit/router":{"every":"1s","max_rate":10,"strategy":"header","key":"Authorization"}}`),
+				},
+			},
+			Backend: &v1alpha1.BackendDefaults{
+				SD: "static",
+				ExtraConfig: &runtime.RawExtension{
+					Raw: []byte(`{"backend/http":{"return_error_code":true}}`),
+				},
+			},
+		},
+		Overrides: []v1alpha1.OperationOverride{
+			{
+				OperationID: "UploadOrder",
+				Endpoint:    "/api/v1/orders",
+				ExtraConfig: &runtime.RawExtension{
+					Raw: []byte(`{"qos/ratelimit/router":{"max_rate":25}}`),
+				},
+			},
+		},
+	})
+
+	// UploadOrder: endpoint extraConfig should be deep-merged (CUE + default + override)
+	upload := entries["UploadOrder"]
+	ec := extraConfigMap(t, upload.ExtraConfig)
+	// CUE-generated
+	if _, ok := ec["documentation/openapi"]; !ok {
+		t.Error("UploadOrder: missing CUE-generated documentation/openapi")
+	}
+	// Default + override deep-merged rate limit
+	rl := extraConfigField(t, upload.ExtraConfig, "qos/ratelimit/router")
+	if rl["max_rate"] != float64(25) {
+		t.Errorf("UploadOrder: expected max_rate=25 from override, got %v", rl["max_rate"])
+	}
+	if rl["strategy"] != "header" {
+		t.Errorf("UploadOrder: expected strategy=header preserved from default, got %v", rl["strategy"])
+	}
+	if rl["key"] != "Authorization" {
+		t.Errorf("UploadOrder: expected key=Authorization preserved from default, got %v", rl["key"])
+	}
+	// Backend: sd and backend/http from backend defaults
+	for i, be := range upload.Backends {
+		if be.SD != "static" {
+			t.Errorf("UploadOrder backend[%d]: expected sd=static, got %s", i, be.SD)
+		}
+		if be.ExtraConfig == nil {
+			t.Fatalf("UploadOrder backend[%d]: expected extraConfig, got nil", i)
+		}
+		var bec map[string]json.RawMessage
+		if err := json.Unmarshal(be.ExtraConfig.Raw, &bec); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if _, ok := bec["backend/http"]; !ok {
+			t.Errorf("UploadOrder backend[%d]: missing backend/http from defaults", i)
+		}
+		if be.PolicyRef == nil || be.PolicyRef.Name != "global-policy" {
+			t.Errorf("UploadOrder backend[%d]: expected global-policy, got %v", i, be.PolicyRef)
+		}
+	}
+	// Endpoint-level should NOT contain backend/http
+	if _, ok := ec["backend/http"]; ok {
+		t.Error("UploadOrder: backend/http should NOT be in endpoint-level extraConfig")
+	}
+
+	// Order: no per-operation override, just CUE + defaults
+	order := entries["Order"]
+	ec = extraConfigMap(t, order.ExtraConfig)
+	if _, ok := ec["documentation/openapi"]; !ok {
+		t.Error("Order: missing documentation/openapi")
+	}
+	rl = extraConfigField(t, order.ExtraConfig, "qos/ratelimit/router")
+	if rl["max_rate"] != float64(10) {
+		t.Errorf("Order: expected default max_rate=10, got %v", rl["max_rate"])
+	}
+	for i, be := range order.Backends {
+		if be.SD != "static" {
+			t.Errorf("Order backend[%d]: expected sd=static, got %s", i, be.SD)
+		}
+		if be.PolicyRef == nil || be.PolicyRef.Name != "global-policy" {
+			t.Errorf("Order backend[%d]: expected global-policy, got %v", i, be.PolicyRef)
+		}
+	}
+}
+
+// =========================================================================
+// Scenario: Backend defaults set sd and encoding; one operation uses
+// BackendOverride to replace the backend ExtraConfig entirely. Backend
+// scalar defaults (sd, encoding) should still be present because
+// BackendOverride only replaces ExtraConfig.
+// =========================================================================
+
+func TestScenario_BackendDefaultsScalarFieldsSurviveOverride(t *testing.T) {
+	entries := evaluateScenario(t, CUEInput{
+		SpecData:    orderServiceSpec,
+		DefaultHost: "http://order-api.dev.svc:8080",
+		Defaults: &v1alpha1.Defaults{
+			Backend: &v1alpha1.BackendDefaults{
+				SD:       "static",
+				Encoding: "safejson",
+				ExtraConfig: &runtime.RawExtension{
+					Raw: []byte(`{"backend/http":{"return_error_code":true}}`),
+				},
+			},
+		},
+		Overrides: []v1alpha1.OperationOverride{
+			{
+				OperationID: "UploadOrder",
+				Backends: []v1alpha1.BackendOverride{
+					{
+						Index: 0,
+						ExtraConfig: &runtime.RawExtension{
+							Raw: []byte(`{"qos/circuit-breaker":{"interval":60}}`),
+						},
+					},
+				},
+			},
+		},
+	})
+
+	// UploadOrder: BackendOverride replaces ExtraConfig, but sd/encoding from
+	// BackendDefaults should persist (they're set before overrides run).
+	upload := entries["UploadOrder"]
+	if upload.Backends[0].SD != "static" {
+		t.Errorf("UploadOrder backend[0]: expected sd=static, got %s", upload.Backends[0].SD)
+	}
+	if upload.Backends[0].Encoding != "safejson" {
+		t.Errorf("UploadOrder backend[0]: expected encoding=safejson, got %s", upload.Backends[0].Encoding)
+	}
+	// ExtraConfig was replaced by override
+	var ec map[string]json.RawMessage
+	if err := json.Unmarshal(upload.Backends[0].ExtraConfig.Raw, &ec); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if _, ok := ec["qos/circuit-breaker"]; !ok {
+		t.Error("UploadOrder backend[0]: missing qos/circuit-breaker from override")
+	}
+
+	// Order: no override, should have all defaults
+	order := entries["Order"]
+	if order.Backends[0].SD != "static" {
+		t.Errorf("Order backend[0]: expected sd=static, got %s", order.Backends[0].SD)
+	}
+	if order.Backends[0].Encoding != "safejson" {
+		t.Errorf("Order backend[0]: expected encoding=safejson, got %s", order.Backends[0].Encoding)
 	}
 }
