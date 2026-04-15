@@ -303,11 +303,12 @@ func applyURLTransform(output *CUEOutput, transform *v1alpha1.URLTransformSpec) 
 	}
 }
 
-// applyFieldOverrides applies non-ExtraConfig override fields (Timeout,
+// applyFieldOverrides applies per-operation override fields (Timeout,
 // CacheTTL, OutputEncoding, ConcurrentCalls, InputHeaders, InputQueryStrings,
-// PolicyRef, Endpoint, Method, Backends) to the evaluated endpoint entries.
-// ExtraConfig overrides are already handled via CUE unification in
-// applyOverrides.
+// PolicyRef, Endpoint, Method, ExtraConfig, Backends) to the evaluated
+// endpoint entries. ExtraConfig is merged here via mergeExtraConfig;
+// applyOverrides separately injects override data into the CUE tree for
+// custom CUE definitions that reference _overrides.
 func applyFieldOverrides(output *CUEOutput, overrides []v1alpha1.OperationOverride) {
 	if len(overrides) == 0 {
 		return

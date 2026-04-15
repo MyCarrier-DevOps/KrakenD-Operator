@@ -739,7 +739,13 @@ func TestScenario_PerOperationFieldOverrides(t *testing.T) {
 	if order.ConcurrentCalls != nil {
 		t.Errorf("Order: concurrentCalls should be nil (not overridden), got %v", order.ConcurrentCalls)
 	}
-	if len(order.InputHeaders) != 3 {
-		t.Errorf("Order: expected 3 default inputHeaders, got %v", order.InputHeaders)
+	if len(order.InputHeaders) != 3 ||
+		order.InputHeaders[0] != "Authorization" ||
+		order.InputHeaders[1] != "X-MC-Api-Key" ||
+		order.InputHeaders[2] != "Content-Type" {
+		t.Errorf("Order: expected default inputHeaders [Authorization X-MC-Api-Key Content-Type], got %v", order.InputHeaders)
+	}
+	if len(order.InputQueryStrings) != 0 {
+		t.Errorf("Order: expected no inputQueryStrings, got %v", order.InputQueryStrings)
 	}
 }
