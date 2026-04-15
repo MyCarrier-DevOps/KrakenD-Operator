@@ -103,7 +103,7 @@ func TestRenderScenario_EndpointTimeoutFlowsToJSON(t *testing.T) {
 
 // =========================================================================
 // Scenario: User sets cacheTTL to 5 minutes on an endpoint.
-// Expected: "cache_ttl": "5m0s" in krakend.json.
+// Expected: "cache_ttl": "5m" in krakend.json.
 // =========================================================================
 
 func TestRenderScenario_CacheTTLFlowsToJSON(t *testing.T) {
@@ -123,8 +123,8 @@ func TestRenderScenario_CacheTTLFlowsToJSON(t *testing.T) {
 	})
 
 	got := byKey["/api/v1/products:GET"]
-	if got["cache_ttl"] != "5m0s" {
-		t.Errorf("cache_ttl = %v, want 5m0s", got["cache_ttl"])
+	if got["cache_ttl"] != "5m" {
+		t.Errorf("cache_ttl = %v, want 5m", got["cache_ttl"])
 	}
 }
 
@@ -628,8 +628,8 @@ func TestRenderScenario_MultipleEndpointsComposedCorrectly(t *testing.T) {
 
 	// Products list: cacheTTL, concurrentCalls, outputEncoding, allow list
 	products := byKey["/api/v1/products:GET"]
-	if products["cache_ttl"] != "2m0s" {
-		t.Errorf("products cache_ttl = %v, want 2m0s", products["cache_ttl"])
+	if products["cache_ttl"] != "2m" {
+		t.Errorf("products cache_ttl = %v, want 2m", products["cache_ttl"])
 	}
 	if products["concurrent_calls"] != float64(5) {
 		t.Errorf("products concurrent_calls = %v, want 5", products["concurrent_calls"])

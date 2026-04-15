@@ -85,10 +85,13 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{Requeue: true}, nil
 	}
 
-	// Phase: Fetching
-	ac.Status.Phase = v1alpha1.AutoConfigPhaseFetching
-	if err := r.Status().Update(ctx, &ac); err != nil {
-		return ctrl.Result{}, fmt.Errorf("setting phase Fetching: %w", err)
+	// Phase: Fetching — only update if phase actually changed to avoid
+	// triggering unnecessary Watch events that cause reconciliation loops.
+	if ac.Status.Phase != v1alpha1.AutoConfigPhaseFetching {
+		ac.Status.Phase = v1alpha1.AutoConfigPhaseFetching
+		if err := r.Status().Update(ctx, &ac); err != nil {
+			return ctrl.Result{}, fmt.Errorf("setting phase Fetching: %w", err)
+		}
 	}
 
 	fetchResult, err := r.Fetcher.Fetch(ctx, autoconfig.FetchSource{
@@ -117,18 +120,22 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// OpenAPI spec and CUE definitions are unchanged.
 	combinedChecksum := fmt.Sprintf("%s:%s:%d", fetchResult.Checksum, cueDefsRV, ac.Generation)
 	if combinedChecksum == ac.Status.SpecChecksum {
-		ac.Status.Phase = v1alpha1.AutoConfigPhaseSynced
-		if err := r.Status().Update(ctx, &ac); err != nil {
-			return ctrl.Result{}, fmt.Errorf("updating synced status: %w", err)
+		if ac.Status.Phase != v1alpha1.AutoConfigPhaseSynced {
+			ac.Status.Phase = v1alpha1.AutoConfigPhaseSynced
+			if err := r.Status().Update(ctx, &ac); err != nil {
+				return ctrl.Result{}, fmt.Errorf("updating synced status: %w", err)
+			}
 		}
 		log.V(1).Info("spec unchanged, skipping re-evaluation")
 		return r.requeueResult(&ac), nil
 	}
 
 	// Phase: Rendering
-	ac.Status.Phase = v1alpha1.AutoConfigPhaseRendering
-	if err := r.Status().Update(ctx, &ac); err != nil {
-		return ctrl.Result{}, fmt.Errorf("setting phase Rendering: %w", err)
+	if ac.Status.Phase != v1alpha1.AutoConfigPhaseRendering {
+		ac.Status.Phase = v1alpha1.AutoConfigPhaseRendering
+		if err := r.Status().Update(ctx, &ac); err != nil {
+			return ctrl.Result{}, fmt.Errorf("setting phase Rendering: %w", err)
+		}
 	}
 
 	// Load CUE definitions: prefer ConfigMap, fall back to embedded defaults
