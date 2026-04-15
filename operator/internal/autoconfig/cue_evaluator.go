@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -238,15 +239,18 @@ func applyDefaults(output *CUEOutput, defaults *v1alpha1.EndpointDefaults) {
 			entry.ConcurrentCalls = defaults.ConcurrentCalls
 		}
 		if defaults.InputHeaders != nil {
-			entry.InputHeaders = defaults.InputHeaders
+			entry.InputHeaders = slices.Clone(defaults.InputHeaders)
 		}
 		if defaults.InputQueryStrings != nil {
-			entry.InputQueryStrings = defaults.InputQueryStrings
+			entry.InputQueryStrings = slices.Clone(defaults.InputQueryStrings)
 		}
 		if defaults.PolicyRef != nil {
 			for j := range entry.Backends {
 				entry.Backends[j].PolicyRef = defaults.PolicyRef
 			}
+		}
+		if defaults.ExtraConfig != nil {
+			entry.ExtraConfig = mergeExtraConfig(entry.ExtraConfig, defaults.ExtraConfig)
 		}
 	}
 }
@@ -348,10 +352,10 @@ func applyFieldOverrides(output *CUEOutput, overrides []v1alpha1.OperationOverri
 			entry.ConcurrentCalls = ov.ConcurrentCalls
 		}
 		if ov.InputHeaders != nil {
-			entry.InputHeaders = ov.InputHeaders
+			entry.InputHeaders = slices.Clone(ov.InputHeaders)
 		}
 		if ov.InputQueryStrings != nil {
-			entry.InputQueryStrings = ov.InputQueryStrings
+			entry.InputQueryStrings = slices.Clone(ov.InputQueryStrings)
 		}
 		if ov.Endpoint != "" {
 			entry.Endpoint = ov.Endpoint
@@ -369,7 +373,9 @@ func applyFieldOverrides(output *CUEOutput, overrides []v1alpha1.OperationOverri
 		}
 		for _, bo := range ov.Backends {
 			if bo.Index >= 0 && bo.Index < len(entry.Backends) && bo.ExtraConfig != nil {
-				entry.Backends[bo.Index].ExtraConfig = bo.ExtraConfig
+				entry.Backends[bo.Index].ExtraConfig = &runtime.RawExtension{
+					Raw: append([]byte(nil), bo.ExtraConfig.Raw...),
+				}
 			}
 		}
 
@@ -388,9 +394,11 @@ func applyFieldOverrides(output *CUEOutput, overrides []v1alpha1.OperationOverri
 	}
 }
 
-// mergeExtraConfig performs a shallow merge of override keys into existing
-// ExtraConfig. Override keys replace existing keys; keys not in the override
-// are preserved. If unmarshalling fails, the override replaces entirely.
+// mergeExtraConfig performs a deep merge of override keys into existing
+// ExtraConfig. When both base and override contain JSON objects for the same
+// key, the objects are merged recursively so that only the specified sub-fields
+// are overwritten. Keys not present in the override are preserved at every
+// level. If unmarshalling fails, the override replaces entirely.
 func mergeExtraConfig(existing, override *runtime.RawExtension) *runtime.RawExtension {
 	if existing == nil || len(existing.Raw) == 0 {
 		return override
@@ -410,7 +418,11 @@ func mergeExtraConfig(existing, override *runtime.RawExtension) *runtime.RawExte
 	}
 
 	for k, v := range patch {
-		base[k] = v
+		if orig, ok := base[k]; ok {
+			base[k] = deepMergeJSON(orig, v)
+		} else {
+			base[k] = v
+		}
 	}
 
 	merged, err := json.Marshal(base)
@@ -418,6 +430,37 @@ func mergeExtraConfig(existing, override *runtime.RawExtension) *runtime.RawExte
 		return override
 	}
 	return &runtime.RawExtension{Raw: merged}
+}
+
+// deepMergeJSON recursively merges two JSON values. If both are objects, their
+// keys are merged recursively. Otherwise the patch value wins.
+func deepMergeJSON(base, patch json.RawMessage) json.RawMessage {
+	var baseMap map[string]json.RawMessage
+	var patchMap map[string]json.RawMessage
+
+	if err := json.Unmarshal(base, &baseMap); err != nil {
+		return patch
+	}
+	if err := json.Unmarshal(patch, &patchMap); err != nil {
+		return patch
+	}
+	if baseMap == nil || patchMap == nil {
+		return patch
+	}
+
+	for k, v := range patchMap {
+		if orig, ok := baseMap[k]; ok {
+			baseMap[k] = deepMergeJSON(orig, v)
+		} else {
+			baseMap[k] = v
+		}
+	}
+
+	merged, err := json.Marshal(baseMap)
+	if err != nil {
+		return patch
+	}
+	return merged
 }
 
 // sortedKeys returns the keys of a map in stable order for deterministic processing.

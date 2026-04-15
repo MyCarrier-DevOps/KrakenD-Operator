@@ -749,3 +749,219 @@ func TestScenario_PerOperationFieldOverrides(t *testing.T) {
 		t.Errorf("Order: expected no inputQueryStrings, got %v", order.InputQueryStrings)
 	}
 }
+
+// =========================================================================
+// Scenario: Default extraConfig is applied to all endpoints. Per-operation
+// extraConfig overrides merge with (and take precedence over) the default.
+// CUE-generated extraConfig (e.g. documentation/openapi) is preserved.
+// =========================================================================
+
+func TestScenario_DefaultExtraConfig(t *testing.T) {
+	defaultTimeout := metav1.Duration{Duration: 20 * time.Second}
+
+	entries := evaluateScenario(t, CUEInput{
+		SpecData:    orderServiceSpec,
+		DefaultHost: "http://order-api.dev.svc:8080",
+		Defaults: &v1alpha1.EndpointDefaults{
+			Timeout:      &defaultTimeout,
+			InputHeaders: []string{"Authorization", "X-MC-Api-Key", "Content-Type"},
+			ExtraConfig: &runtime.RawExtension{
+				Raw: []byte(`{"qos/ratelimit/router":{"every":"2s","max_rate":5,"strategy":"header","key":"Authorization"}}`),
+			},
+		},
+		Overrides: []v1alpha1.OperationOverride{
+			{
+				OperationID: "UploadOrder",
+				Endpoint:    "/api/v1/orders",
+				ExtraConfig: &runtime.RawExtension{
+					Raw: []byte(`{"qos/ratelimit/router":{"every":"1s","max_rate":25}}`),
+				},
+			},
+		},
+	})
+
+	// Order: should have default rate limit (not overridden)
+	order := entries["Order"]
+	rl := extraConfigField(t, order.ExtraConfig, "qos/ratelimit/router")
+	if rl["every"] != "2s" {
+		t.Errorf("Order: expected default rate limit every=2s, got %v", rl["every"])
+	}
+	// CUE-generated documentation/openapi should still be present
+	ec := extraConfigMap(t, order.ExtraConfig)
+	if _, ok := ec["documentation/openapi"]; !ok {
+		t.Error("Order: documentation/openapi should be preserved from CUE")
+	}
+
+	// UploadOrder: per-operation override deep-merges with the default rate limit config
+	upload := entries["UploadOrder"]
+	rl = extraConfigField(t, upload.ExtraConfig, "qos/ratelimit/router")
+	if rl["every"] != "1s" {
+		t.Errorf("UploadOrder: expected override rate limit every=1s, got %v", rl["every"])
+	}
+	if rl["max_rate"] != float64(25) {
+		t.Errorf("UploadOrder: expected override max_rate=25, got %v", rl["max_rate"])
+	}
+	if rl["strategy"] != "header" {
+		t.Errorf("UploadOrder: expected preserved default strategy=header, got %v", rl["strategy"])
+	}
+	if rl["key"] != "Authorization" {
+		t.Errorf("UploadOrder: expected preserved default key=Authorization, got %v", rl["key"])
+	}
+	// CUE-generated documentation/openapi should still be present
+	ec = extraConfigMap(t, upload.ExtraConfig)
+	if _, ok := ec["documentation/openapi"]; !ok {
+		t.Error("UploadOrder: documentation/openapi should be preserved from CUE")
+	}
+
+	// DeleteOrder: should also have default rate limit
+	del := entries["DeleteOrder"]
+	rl = extraConfigField(t, del.ExtraConfig, "qos/ratelimit/router")
+	if rl["every"] != "2s" {
+		t.Errorf("DeleteOrder: expected default rate limit every=2s, got %v", rl["every"])
+	}
+}
+
+// =========================================================================
+// Scenario: Default extraConfig sets one key (auth/validator), per-operation
+// override sets a DIFFERENT key (qos/ratelimit/router). Both must coexist
+// alongside CUE-generated keys (documentation/openapi). This proves that
+// the 3-layer merge (CUE → defaults → overrides) is additive and stable.
+// =========================================================================
+
+func TestScenario_DefaultAndOverrideDifferentExtraConfigKeys(t *testing.T) {
+	defaultTimeout := metav1.Duration{Duration: 20 * time.Second}
+
+	entries := evaluateScenario(t, CUEInput{
+		SpecData:    orderServiceSpec,
+		DefaultHost: "http://order-api.dev.svc:8080",
+		Defaults: &v1alpha1.EndpointDefaults{
+			Timeout:      &defaultTimeout,
+			InputHeaders: []string{"Authorization", "X-MC-Api-Key", "Content-Type"},
+			ExtraConfig: &runtime.RawExtension{
+				Raw: []byte(`{"auth/validator":{"alg":"RS256","audience":["https://api.example.com"]}}`),
+			},
+		},
+		Overrides: []v1alpha1.OperationOverride{
+			{
+				OperationID: "UploadOrder",
+				Endpoint:    "/api/v1/orders",
+				ExtraConfig: &runtime.RawExtension{
+					Raw: []byte(`{"qos/ratelimit/router":{"every":"1s","max_rate":10,"strategy":"header","key":"Authorization"}}`),
+				},
+			},
+		},
+	})
+
+	// UploadOrder: should have ALL three layers
+	upload := entries["UploadOrder"]
+	ec := extraConfigMap(t, upload.ExtraConfig)
+
+	// Layer 1: CUE-generated documentation/openapi
+	if _, ok := ec["documentation/openapi"]; !ok {
+		t.Error("UploadOrder: missing CUE-generated documentation/openapi")
+	}
+	// Layer 2: default auth/validator
+	if _, ok := ec["auth/validator"]; !ok {
+		t.Error("UploadOrder: missing default auth/validator")
+	}
+	auth := extraConfigField(t, upload.ExtraConfig, "auth/validator")
+	if auth["alg"] != "RS256" {
+		t.Errorf("UploadOrder: expected auth/validator alg=RS256, got %v", auth["alg"])
+	}
+	// Layer 3: per-operation rate limit
+	rl := extraConfigField(t, upload.ExtraConfig, "qos/ratelimit/router")
+	if rl["every"] != "1s" {
+		t.Errorf("UploadOrder: expected rate limit every=1s, got %v", rl["every"])
+	}
+
+	// Order: should have CUE + default, but NOT the per-operation rate limit
+	order := entries["Order"]
+	ec = extraConfigMap(t, order.ExtraConfig)
+
+	if _, ok := ec["documentation/openapi"]; !ok {
+		t.Error("Order: missing CUE-generated documentation/openapi")
+	}
+	if _, ok := ec["auth/validator"]; !ok {
+		t.Error("Order: missing default auth/validator")
+	}
+	// No per-operation override was set for Order, so rate limit should
+	// only be present if CUE generated one (it does from defaults.cue)
+	// — the key point is auth/validator coexists with everything else.
+
+	// DeleteOrder: same as Order — CUE + default, no per-operation override
+	del := entries["DeleteOrder"]
+	ec = extraConfigMap(t, del.ExtraConfig)
+
+	if _, ok := ec["documentation/openapi"]; !ok {
+		t.Error("DeleteOrder: missing CUE-generated documentation/openapi")
+	}
+	if _, ok := ec["auth/validator"]; !ok {
+		t.Error("DeleteOrder: missing default auth/validator")
+	}
+}
+
+// =========================================================================
+// Scenario: Default extraConfig sets qos/ratelimit/router with multiple
+// sub-fields. Per-operation override sets the SAME top-level key but only
+// changes one sub-field. Deep merge preserves the unspecified sub-fields
+// from the default while applying the override's changes.
+// =========================================================================
+
+func TestScenario_OverrideSameExtraConfigKeyDeepMerge(t *testing.T) {
+	defaultTimeout := metav1.Duration{Duration: 20 * time.Second}
+
+	entries := evaluateScenario(t, CUEInput{
+		SpecData:    orderServiceSpec,
+		DefaultHost: "http://order-api.dev.svc:8080",
+		Defaults: &v1alpha1.EndpointDefaults{
+			Timeout:      &defaultTimeout,
+			InputHeaders: []string{"Authorization", "X-MC-Api-Key", "Content-Type"},
+			ExtraConfig: &runtime.RawExtension{
+				Raw: []byte(`{"qos/ratelimit/router":{"every":"1s","max_rate":10,"strategy":"header","key":"Authorization"}}`),
+			},
+		},
+		Overrides: []v1alpha1.OperationOverride{
+			{
+				OperationID: "UploadOrder",
+				Endpoint:    "/api/v1/orders",
+			// Only specifies "every"; deep merge preserves the remaining default sub-fields.
+				ExtraConfig: &runtime.RawExtension{
+					Raw: []byte(`{"qos/ratelimit/router":{"every":"2s"}}`),
+				},
+			},
+		},
+	})
+
+	// UploadOrder: deep merge preserves default sub-fields not in the override.
+	// Only "every" is overwritten; max_rate, strategy, key survive from defaults.
+	upload := entries["UploadOrder"]
+	rl := extraConfigField(t, upload.ExtraConfig, "qos/ratelimit/router")
+	if rl["every"] != "2s" {
+		t.Errorf("UploadOrder: expected every=2s, got %v", rl["every"])
+	}
+	if rl["max_rate"] != float64(10) {
+		t.Errorf("UploadOrder: expected max_rate=10 (preserved from default), got %v", rl["max_rate"])
+	}
+	if rl["strategy"] != "header" {
+		t.Errorf("UploadOrder: expected strategy=header (preserved from default), got %v", rl["strategy"])
+	}
+	if rl["key"] != "Authorization" {
+		t.Errorf("UploadOrder: expected key=Authorization (preserved from default), got %v", rl["key"])
+	}
+
+	// Order: no override, so default sub-fields are all present
+	order := entries["Order"]
+	rl = extraConfigField(t, order.ExtraConfig, "qos/ratelimit/router")
+	if rl["every"] != "1s" {
+		t.Errorf("Order: expected default every=1s, got %v", rl["every"])
+	}
+	if rl["max_rate"] != float64(10) {
+		t.Errorf("Order: expected default max_rate=10, got %v", rl["max_rate"])
+	}
+	if rl["strategy"] != "header" {
+		t.Errorf("Order: expected default strategy=header, got %v", rl["strategy"])
+	}
+	if rl["key"] != "Authorization" {
+		t.Errorf("Order: expected default key=Authorization, got %v", rl["key"])
+	}
+}
