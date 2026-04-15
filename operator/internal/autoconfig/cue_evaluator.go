@@ -37,7 +37,7 @@ type CUEInput struct {
 	SpecFormat   v1alpha1.SpecFormat
 	DefaultDefs  map[string]string
 	CustomDefs   map[string]string
-	Defaults     *v1alpha1.EndpointDefaults
+	Defaults     *v1alpha1.Defaults
 	Overrides    []v1alpha1.OperationOverride
 	URLTransform *v1alpha1.URLTransformSpec
 	Environment  string
@@ -112,7 +112,18 @@ func (e *cueEvaluator) Evaluate(_ context.Context, input CUEInput) (*CUEOutput, 
 		return nil, err
 	}
 
-	applyDefaults(output, input.Defaults)
+	var endpointDefaults *v1alpha1.EndpointDefaults
+	var backendDefaults *v1alpha1.BackendDefaults
+	var defaultPolicyRef *v1alpha1.PolicyRef
+	if input.Defaults != nil {
+		endpointDefaults = input.Defaults.Endpoint
+		backendDefaults = input.Defaults.Backend
+		defaultPolicyRef = input.Defaults.PolicyRef
+	}
+
+	applyDefaults(output, endpointDefaults)
+	applyBackendDefaults(output, backendDefaults)
+	applyDefaultPolicyRef(output, defaultPolicyRef)
 
 	if input.URLTransform != nil {
 		applyURLTransform(output, input.URLTransform)
@@ -244,13 +255,63 @@ func applyDefaults(output *CUEOutput, defaults *v1alpha1.EndpointDefaults) {
 		if defaults.InputQueryStrings != nil {
 			entry.InputQueryStrings = slices.Clone(defaults.InputQueryStrings)
 		}
-		if defaults.PolicyRef != nil {
-			for j := range entry.Backends {
-				entry.Backends[j].PolicyRef = defaults.PolicyRef
-			}
-		}
 		if defaults.ExtraConfig != nil {
 			entry.ExtraConfig = mergeExtraConfig(entry.ExtraConfig, defaults.ExtraConfig)
+		}
+	}
+}
+
+// applyBackendDefaults applies CR-level BackendDefaults to all backends in all
+// entries. Scalar fields (Encoding, SD, SDScheme, DisableHostSanitize) are set
+// only when the backend does not already have a value. Slice fields
+// (InputHeaders, InputQueryStrings) replace the backend value. ExtraConfig is
+// deep-merged into each backend's existing ExtraConfig.
+func applyBackendDefaults(output *CUEOutput, defaults *v1alpha1.BackendDefaults) {
+	if defaults == nil {
+		return
+	}
+	for i := range output.Entries {
+		for j := range output.Entries[i].Backends {
+			backend := &output.Entries[i].Backends[j]
+			if defaults.Encoding != "" && backend.Encoding == "" {
+				backend.Encoding = defaults.Encoding
+			}
+			if defaults.SD != "" && backend.SD == "" {
+				backend.SD = defaults.SD
+			}
+			if defaults.SDScheme != "" && backend.SDScheme == "" {
+				backend.SDScheme = defaults.SDScheme
+			}
+			if defaults.DisableHostSanitize != nil && backend.DisableHostSanitize == nil {
+				val := *defaults.DisableHostSanitize
+				backend.DisableHostSanitize = &val
+			}
+			if defaults.InputHeaders != nil {
+				backend.InputHeaders = slices.Clone(defaults.InputHeaders)
+			}
+			if defaults.InputQueryStrings != nil {
+				backend.InputQueryStrings = slices.Clone(defaults.InputQueryStrings)
+			}
+			if defaults.ExtraConfig != nil {
+				backend.ExtraConfig = mergeExtraConfig(backend.ExtraConfig, defaults.ExtraConfig)
+			}
+		}
+	}
+}
+
+// applyDefaultPolicyRef sets the default KrakenDBackendPolicy on all backends
+// that don't already have one. PolicyRef is an operator-level concept (not a
+// KrakenD schema field) so it lives at spec.defaults.policyRef rather than
+// inside endpoint or backend defaults.
+func applyDefaultPolicyRef(output *CUEOutput, policyRef *v1alpha1.PolicyRef) {
+	if policyRef == nil {
+		return
+	}
+	for i := range output.Entries {
+		for j := range output.Entries[i].Backends {
+			if output.Entries[i].Backends[j].PolicyRef == nil {
+				output.Entries[i].Backends[j].PolicyRef = policyRef
+			}
 		}
 	}
 }

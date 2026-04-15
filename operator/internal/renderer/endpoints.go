@@ -226,11 +226,47 @@ func buildBackendJSON(
 	if backend.Encoding != "" {
 		b["encoding"] = backend.Encoding
 	}
+	if backend.SD != "" {
+		b["sd"] = backend.SD
+	}
+	if backend.SDScheme != "" {
+		b["sd_scheme"] = backend.SDScheme
+	}
+	if backend.DisableHostSanitize != nil {
+		b["disable_host_sanitize"] = *backend.DisableHostSanitize
+	}
+	if len(backend.InputHeaders) > 0 {
+		sorted := make([]string, len(backend.InputHeaders))
+		copy(sorted, backend.InputHeaders)
+		sort.Strings(sorted)
+		b["input_headers"] = sorted
+	}
+	if len(backend.InputQueryStrings) > 0 {
+		sorted := make([]string, len(backend.InputQueryStrings))
+		copy(sorted, backend.InputQueryStrings)
+		sort.Strings(sorted)
+		b["input_query_strings"] = sorted
+	}
 	if len(backend.Allow) > 0 {
 		sorted := make([]string, len(backend.Allow))
 		copy(sorted, backend.Allow)
 		sort.Strings(sorted)
 		b["allow"] = sorted
+	}
+	if len(backend.Deny) > 0 {
+		sorted := make([]string, len(backend.Deny))
+		copy(sorted, backend.Deny)
+		sort.Strings(sorted)
+		b["deny"] = sorted
+	}
+	if backend.Group != "" {
+		b["group"] = backend.Group
+	}
+	if backend.Target != "" {
+		b["target"] = backend.Target
+	}
+	if backend.IsCollection != nil {
+		b["is_collection"] = *backend.IsCollection
 	}
 	if len(backend.Mapping) > 0 {
 		b["mapping"] = backend.Mapping

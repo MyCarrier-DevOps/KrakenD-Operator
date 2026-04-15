@@ -72,6 +72,17 @@ spec:
                             items:
                               type: string
                             type: array
+                          deny:
+                            description: Deny is the denylist of response fields to
+                              remove.
+                            items:
+                              type: string
+                            type: array
+                          disableHostSanitize:
+                            description: |-
+                              DisableHostSanitize skips host protocol validation. Required for non-HTTP
+                              protocols (amqp://, nats://, kafka://) or when using sd=dns.
+                            type: boolean
                           encoding:
                             description: Encoding selects the backend response encoding.
                             type: string
@@ -80,11 +91,31 @@ spec:
                               extra_config JSON.
                             type: object
                             x-kubernetes-preserve-unknown-fields: true
+                          group:
+                            description: Group wraps the backend response under a
+                              named key to avoid collisions.
+                            type: string
                           host:
                             description: Host is the list of backend host URLs.
                             items:
                               type: string
                             type: array
+                          inputHeaders:
+                            description: InputHeaders is the list of headers forwarded
+                              to this backend.
+                            items:
+                              type: string
+                            type: array
+                          inputQueryStrings:
+                            description: InputQueryStrings is the list of query parameters
+                              forwarded to this backend.
+                            items:
+                              type: string
+                            type: array
+                          isCollection:
+                            description: IsCollection marks that the backend returns
+                              an array instead of an object.
+                            type: boolean
                           mapping:
                             additionalProperties:
                               type: string
@@ -107,6 +138,18 @@ spec:
                             required:
                             - name
                             type: object
+                          sd:
+                            description: SD selects the service discovery provider
+                              (e.g. "static", "dns").
+                            type: string
+                          sdScheme:
+                            description: SDScheme sets the service discovery scheme
+                              (e.g. "http", "https").
+                            type: string
+                          target:
+                            description: Target extracts a nested object and returns
+                              only its contents.
+                            type: string
                           urlPattern:
                             description: URLPattern is the backend URL path pattern.
                             type: string
@@ -119,9 +162,11 @@ spec:
                       description: CacheTTL overrides the global cache TTL.
                       type: string
                     concurrentCalls:
-                      description: ConcurrentCalls sets concurrent backend calls for
-                        this endpoint.
+                      description: |-
+                        ConcurrentCalls sets the number of concurrent backend calls for this endpoint.
+                        When specified, it must be a positive integer.
                       format: int32
+                      minimum: 1
                       type: integer
                     endpoint:
                       description: Endpoint is the public path exposed by KrakenD
@@ -150,12 +195,8 @@ spec:
                       - GET
                       - POST
                       - PUT
-                      - DELETE
                       - PATCH
-                      - HEAD
-                      - OPTIONS
-                      - CONNECT
-                      - TRACE
+                      - DELETE
                       type: string
                     outputEncoding:
                       description: OutputEncoding overrides the default response encoding.
