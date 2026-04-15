@@ -17,11 +17,35 @@ limitations under the License.
 package renderer
 
 import (
+	"fmt"
 	"sort"
+	"time"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"k8s.io/apimachinery/pkg/types"
 )
+
+// formatDuration converts a time.Duration to a KrakenD-compatible duration
+// string. KrakenD requires the format ^[0-9]+(ns|ms|us|µs|s|m|h)$ — a single
+// integer followed by a single unit. Go's Duration.String() produces compound
+// formats like "1m30s" which KrakenD rejects. This function selects the
+// largest unit that produces an exact integer value.
+func formatDuration(d time.Duration) string {
+	switch {
+	case d >= time.Hour && d%time.Hour == 0:
+		return fmt.Sprintf("%dh", d/time.Hour)
+	case d >= time.Minute && d%time.Minute == 0:
+		return fmt.Sprintf("%dm", d/time.Minute)
+	case d >= time.Second && d%time.Second == 0:
+		return fmt.Sprintf("%ds", d/time.Second)
+	case d >= time.Millisecond && d%time.Millisecond == 0:
+		return fmt.Sprintf("%dms", d/time.Millisecond)
+	case d >= time.Microsecond && d%time.Microsecond == 0:
+		return fmt.Sprintf("%dµs", d/time.Microsecond)
+	default:
+		return fmt.Sprintf("%dns", d)
+	}
+}
 
 // endpointKey uniquely identifies a KrakenD endpoint by path and method.
 type endpointKey struct {
@@ -137,10 +161,10 @@ func buildEndpointJSON(
 	}
 
 	if entry.Timeout != nil {
-		ep["timeout"] = entry.Timeout.Duration.String()
+		ep["timeout"] = formatDuration(entry.Timeout.Duration)
 	}
 	if entry.CacheTTL != nil {
-		ep["cache_ttl"] = entry.CacheTTL.Duration.String()
+		ep["cache_ttl"] = formatDuration(entry.CacheTTL.Duration)
 	}
 	if entry.OutputEncoding != "" {
 		ep["output_encoding"] = entry.OutputEncoding

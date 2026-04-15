@@ -312,3 +312,44 @@ func TestBuildBackendJSON_WithPolicy(t *testing.T) {
 		t.Error("expected qos/circuit-breaker from policy")
 	}
 }
+
+func TestFormatDuration(t *testing.T) {
+	tests := []struct {
+		input time.Duration
+		want  string
+	}{
+		{3 * time.Second, "3s"},
+		{20 * time.Second, "20s"},
+		{60 * time.Second, "1m"},      // NOT "1m0s"
+		{90 * time.Second, "90s"}, // NOT "1m30s"
+		{120 * time.Second, "2m"}, // exact minutes
+		{time.Hour, "1h"},         // exact hour
+		{2 * time.Hour, "2h"},     // exact hours
+		{500 * time.Millisecond, "500ms"},
+		{100 * time.Microsecond, "100µs"},
+		{50 * time.Nanosecond, "50ns"},
+		{1500 * time.Millisecond, "1500ms"}, // 1.5s → no exact seconds, use ms
+	}
+	for _, tt := range tests {
+		got := formatDuration(tt.input)
+		if got != tt.want {
+			t.Errorf("formatDuration(%v) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestBuildEndpointJSON_60sTimeout(t *testing.T) {
+	dur := metav1.Duration{Duration: 60 * time.Second}
+	entry := v1alpha1.EndpointEntry{
+		Endpoint: "/api/v1/quote/rate",
+		Method:   "POST",
+		Timeout:  &dur,
+		Backends: []v1alpha1.BackendSpec{
+			{Host: []string{"http://quote:8080"}, URLPattern: "/api/v1/rate"},
+		},
+	}
+	result := buildEndpointJSON(entry, nil, "default")
+	if result["timeout"] != "1m" {
+		t.Errorf("expected timeout '1m', got %q", result["timeout"])
+	}
+}
