@@ -130,10 +130,10 @@ spec:
                         description: CacheTTL sets the default endpoint cache TTL.
                         type: string
                       concurrentCalls:
-                        description: ConcurrentCalls sets the default number of concurrent
-                          backend calls.
+                        description: |-
+                          ConcurrentCalls sets the default number of concurrent backend calls.
+                          When specified, it must be a positive integer.
                         format: int32
-                        maximum: 5
                         minimum: 1
                         type: integer
                       extraConfig:

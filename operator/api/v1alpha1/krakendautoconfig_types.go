@@ -164,8 +164,8 @@ type EndpointDefaults struct {
 	OutputEncoding string `json:"outputEncoding,omitempty"`
 
 	// ConcurrentCalls sets the default number of concurrent backend calls.
+	// When specified, it must be a positive integer.
 	// +kubebuilder:validation:Minimum=1
-	// +kubebuilder:validation:Maximum=5
 	ConcurrentCalls *int32 `json:"concurrentCalls,omitempty"`
 
 	// InputHeaders sets the default list of headers forwarded to backends.

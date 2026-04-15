@@ -68,9 +68,9 @@ type EndpointEntry struct {
 	// OutputEncoding overrides the default response encoding.
 	OutputEncoding string `json:"outputEncoding,omitempty"`
 
-	// ConcurrentCalls sets concurrent backend calls for this endpoint.
+	// ConcurrentCalls sets the number of concurrent backend calls for this endpoint.
+	// When specified, it must be a positive integer.
 	// +kubebuilder:validation:Minimum=1
-	// +kubebuilder:validation:Maximum=5
 	ConcurrentCalls *int32 `json:"concurrentCalls,omitempty"`
 
 	// ExtraConfig holds arbitrary endpoint-level extra_config JSON.

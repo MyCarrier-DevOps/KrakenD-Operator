@@ -285,17 +285,26 @@ func TestBuildBackendJSON_AllFields(t *testing.T) {
 	}
 	result := buildBackendJSON(backend, nil, "default")
 	// Hosts should be sorted
-	hosts := result["host"].([]string)
+	hosts, ok := result["host"].([]string)
+	if !ok {
+		t.Fatal("expected host to be []string")
+	}
 	if hosts[0] != "http://a:80" || hosts[1] != "http://b:80" {
 		t.Errorf("expected sorted hosts, got %v", hosts)
 	}
 	// Allow should be sorted
-	allow := result["allow"].([]string)
+	allow, ok := result["allow"].([]string)
+	if !ok {
+		t.Fatal("expected allow to be []string")
+	}
 	if allow[0] != "email" {
 		t.Errorf("expected sorted allow list, got %v", allow)
 	}
 	// Deny should be sorted
-	deny := result["deny"].([]string)
+	deny, ok := result["deny"].([]string)
+	if !ok {
+		t.Fatal("expected deny to be []string")
+	}
 	if deny[0] != "internal_id" || deny[1] != "secret" {
 		t.Errorf("expected sorted deny list, got %v", deny)
 	}
@@ -322,11 +331,17 @@ func TestBuildBackendJSON_AllFields(t *testing.T) {
 		t.Errorf("expected is_collection=true, got %v", result["is_collection"])
 	}
 	// Input headers/query strings should be sorted
-	ih := result["input_headers"].([]string)
+	ih, ok := result["input_headers"].([]string)
+	if !ok {
+		t.Fatal("expected input_headers to be []string")
+	}
 	if ih[0] != "Authorization" || ih[1] != "X-Custom" {
 		t.Errorf("expected sorted input_headers, got %v", ih)
 	}
-	iqs := result["input_query_strings"].([]string)
+	iqs, ok := result["input_query_strings"].([]string)
+	if !ok {
+		t.Fatal("expected input_query_strings to be []string")
+	}
 	if iqs[0] != "limit" || iqs[1] != "page" {
 		t.Errorf("expected sorted input_query_strings, got %v", iqs)
 	}
