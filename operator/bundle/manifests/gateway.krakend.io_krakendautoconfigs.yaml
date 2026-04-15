@@ -255,6 +255,11 @@ spec:
                     cacheTTL:
                       description: CacheTTL overrides the endpoint cache TTL.
                       type: string
+                    concurrentCalls:
+                      description: ConcurrentCalls overrides the number of concurrent
+                        backend calls.
+                      format: int32
+                      type: integer
                     endpoint:
                       description: Endpoint overrides the generated endpoint path.
                       type: string
@@ -262,12 +267,28 @@ spec:
                       description: ExtraConfig overrides the endpoint extra_config.
                       type: object
                       x-kubernetes-preserve-unknown-fields: true
+                    inputHeaders:
+                      description: InputHeaders overrides the list of headers forwarded
+                        to backends.
+                      items:
+                        type: string
+                      type: array
+                    inputQueryStrings:
+                      description: InputQueryStrings overrides the list of query parameters
+                        forwarded to backends.
+                      items:
+                        type: string
+                      type: array
                     method:
                       description: Method overrides the HTTP method.
                       type: string
                     operationId:
                       description: OperationID identifies the OpenAPI operation to
                         override.
+                      type: string
+                    outputEncoding:
+                      description: OutputEncoding overrides the response encoding
+                        (e.g. "no-op", "json").
                       type: string
                     policyRef:
                       description: PolicyRef overrides the backend policy reference.

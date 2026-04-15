@@ -1401,6 +1401,21 @@ func (in *OperationOverride) DeepCopyInto(out *OperationOverride) {
 		*out = new(metav1.Duration)
 		**out = **in
 	}
+	if in.ConcurrentCalls != nil {
+		in, out := &in.ConcurrentCalls, &out.ConcurrentCalls
+		*out = new(int32)
+		**out = **in
+	}
+	if in.InputHeaders != nil {
+		in, out := &in.InputHeaders, &out.InputHeaders
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
+	if in.InputQueryStrings != nil {
+		in, out := &in.InputQueryStrings, &out.InputQueryStrings
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	if in.PolicyRef != nil {
 		in, out := &in.PolicyRef, &out.PolicyRef
 		*out = new(PolicyRef)

@@ -684,3 +684,62 @@ func TestScenario_EmptyQueryStringsOverridesCUE(t *testing.T) {
 		t.Errorf("expected empty inputQueryStrings from defaults, got %v", item.InputQueryStrings)
 	}
 }
+
+// =========================================================================
+// Scenario: Per-operation overrides for OutputEncoding, ConcurrentCalls,
+// InputHeaders, and InputQueryStrings. These fields were missing from
+// OperationOverride causing CRD validation errors. Overrides should
+// replace the default/CUE-generated values for the targeted operation
+// only, leaving other operations unchanged.
+// =========================================================================
+
+func TestScenario_PerOperationFieldOverrides(t *testing.T) {
+	defaultTimeout := metav1.Duration{Duration: 20 * time.Second}
+	concurrentCalls := int32(3)
+
+	entries := evaluateScenario(t, CUEInput{
+		SpecData:    orderServiceSpec,
+		DefaultHost: "http://order-api.dev.svc:8080",
+		Defaults: &v1alpha1.EndpointDefaults{
+			Timeout:      &defaultTimeout,
+			InputHeaders: []string{"Authorization", "X-MC-Api-Key", "Content-Type"},
+		},
+		Overrides: []v1alpha1.OperationOverride{
+			{
+				OperationID:       "UploadOrder",
+				Endpoint:          "/api/v1/orders",
+				OutputEncoding:    "no-op",
+				ConcurrentCalls:   &concurrentCalls,
+				InputHeaders:      []string{"Content-Type", "Environment"},
+				InputQueryStrings: []string{"page", "limit"},
+			},
+		},
+	})
+
+	// UploadOrder: all four new fields overridden
+	upload := entries["UploadOrder"]
+	if upload.OutputEncoding != "no-op" {
+		t.Errorf("UploadOrder: expected outputEncoding no-op, got %q", upload.OutputEncoding)
+	}
+	if upload.ConcurrentCalls == nil || *upload.ConcurrentCalls != 3 {
+		t.Errorf("UploadOrder: expected concurrentCalls 3, got %v", upload.ConcurrentCalls)
+	}
+	if len(upload.InputHeaders) != 2 || upload.InputHeaders[0] != "Content-Type" || upload.InputHeaders[1] != "Environment" {
+		t.Errorf("UploadOrder: expected inputHeaders [Content-Type Environment], got %v", upload.InputHeaders)
+	}
+	if len(upload.InputQueryStrings) != 2 || upload.InputQueryStrings[0] != "page" || upload.InputQueryStrings[1] != "limit" {
+		t.Errorf("UploadOrder: expected inputQueryStrings [page limit], got %v", upload.InputQueryStrings)
+	}
+
+	// Order: should still have default values (no override)
+	order := entries["Order"]
+	if order.OutputEncoding == "no-op" {
+		t.Error("Order: outputEncoding should not be no-op (not overridden)")
+	}
+	if order.ConcurrentCalls != nil {
+		t.Errorf("Order: concurrentCalls should be nil (not overridden), got %v", order.ConcurrentCalls)
+	}
+	if len(order.InputHeaders) != 3 {
+		t.Errorf("Order: expected 3 default inputHeaders, got %v", order.InputHeaders)
+	}
+}
