@@ -140,13 +140,14 @@ type HostMappingEntry struct {
 
 // EndpointDefaults sets default values for generated endpoints.
 type EndpointDefaults struct {
-	Timeout           *metav1.Duration `json:"timeout,omitempty"`
-	CacheTTL          *metav1.Duration `json:"cacheTTL,omitempty"`
-	OutputEncoding    string           `json:"outputEncoding,omitempty"`
-	ConcurrentCalls   *int32           `json:"concurrentCalls,omitempty"`
-	InputHeaders      []string         `json:"inputHeaders,omitempty"`
-	InputQueryStrings []string         `json:"inputQueryStrings,omitempty"`
-	PolicyRef         *PolicyRef       `json:"policyRef,omitempty"`
+	Timeout           *metav1.Duration      `json:"timeout,omitempty"`
+	CacheTTL          *metav1.Duration      `json:"cacheTTL,omitempty"`
+	OutputEncoding    string                `json:"outputEncoding,omitempty"`
+	ConcurrentCalls   *int32                `json:"concurrentCalls,omitempty"`
+	InputHeaders      []string              `json:"inputHeaders,omitempty"`
+	InputQueryStrings []string              `json:"inputQueryStrings,omitempty"`
+	PolicyRef         *PolicyRef            `json:"policyRef,omitempty"`
+	ExtraConfig       *runtime.RawExtension `json:"extraConfig,omitempty"`
 }
 
 // OperationOverride applies per-operation overrides to generated endpoints.

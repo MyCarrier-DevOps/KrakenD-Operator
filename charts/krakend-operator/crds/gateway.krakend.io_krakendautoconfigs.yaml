@@ -85,6 +85,9 @@ spec:
                   concurrentCalls:
                     format: int32
                     type: integer
+                  extraConfig:
+                    type: object
+                    x-kubernetes-preserve-unknown-fields: true
                   inputHeaders:
                     items:
                       type: string

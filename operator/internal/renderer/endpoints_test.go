@@ -320,7 +320,7 @@ func TestFormatDuration(t *testing.T) {
 	}{
 		{3 * time.Second, "3s"},
 		{20 * time.Second, "20s"},
-		{60 * time.Second, "1m"},      // NOT "1m0s"
+		{60 * time.Second, "1m"},  // NOT "1m0s"
 		{90 * time.Second, "90s"}, // NOT "1m30s"
 		{120 * time.Second, "2m"}, // exact minutes
 		{time.Hour, "1h"},         // exact hour
