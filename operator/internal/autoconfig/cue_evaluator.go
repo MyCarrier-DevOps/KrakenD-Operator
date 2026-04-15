@@ -444,6 +444,9 @@ func deepMergeJSON(base, patch json.RawMessage) json.RawMessage {
 	if err := json.Unmarshal(patch, &patchMap); err != nil {
 		return patch
 	}
+	if baseMap == nil || patchMap == nil {
+		return patch
+	}
 
 	for k, v := range patchMap {
 		if orig, ok := baseMap[k]; ok {

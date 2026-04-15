@@ -792,7 +792,7 @@ func TestScenario_DefaultExtraConfig(t *testing.T) {
 		t.Error("Order: documentation/openapi should be preserved from CUE")
 	}
 
-	// UploadOrder: per-operation override replaces the default rate limit key
+	// UploadOrder: per-operation override deep-merges with the default rate limit config
 	upload := entries["UploadOrder"]
 	rl = extraConfigField(t, upload.ExtraConfig, "qos/ratelimit/router")
 	if rl["every"] != "1s" {
@@ -800,6 +800,12 @@ func TestScenario_DefaultExtraConfig(t *testing.T) {
 	}
 	if rl["max_rate"] != float64(25) {
 		t.Errorf("UploadOrder: expected override max_rate=25, got %v", rl["max_rate"])
+	}
+	if rl["strategy"] != "header" {
+		t.Errorf("UploadOrder: expected preserved default strategy=header, got %v", rl["strategy"])
+	}
+	if rl["key"] != "Authorization" {
+		t.Errorf("UploadOrder: expected preserved default key=Authorization, got %v", rl["key"])
 	}
 	// CUE-generated documentation/openapi should still be present
 	ec = extraConfigMap(t, upload.ExtraConfig)
@@ -918,7 +924,7 @@ func TestScenario_OverrideSameExtraConfigKeyDeepMerge(t *testing.T) {
 			{
 				OperationID: "UploadOrder",
 				Endpoint:    "/api/v1/orders",
-				// Only specifies "every" — the rest of the default sub-fields are NOT preserved
+			// Only specifies "every"; deep merge preserves the remaining default sub-fields.
 				ExtraConfig: &runtime.RawExtension{
 					Raw: []byte(`{"qos/ratelimit/router":{"every":"2s"}}`),
 				},
