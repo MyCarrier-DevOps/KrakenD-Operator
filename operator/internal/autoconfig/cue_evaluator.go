@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -238,10 +239,10 @@ func applyDefaults(output *CUEOutput, defaults *v1alpha1.EndpointDefaults) {
 			entry.ConcurrentCalls = defaults.ConcurrentCalls
 		}
 		if defaults.InputHeaders != nil {
-			entry.InputHeaders = defaults.InputHeaders
+			entry.InputHeaders = slices.Clone(defaults.InputHeaders)
 		}
 		if defaults.InputQueryStrings != nil {
-			entry.InputQueryStrings = defaults.InputQueryStrings
+			entry.InputQueryStrings = slices.Clone(defaults.InputQueryStrings)
 		}
 		if defaults.PolicyRef != nil {
 			for j := range entry.Backends {
@@ -351,10 +352,10 @@ func applyFieldOverrides(output *CUEOutput, overrides []v1alpha1.OperationOverri
 			entry.ConcurrentCalls = ov.ConcurrentCalls
 		}
 		if ov.InputHeaders != nil {
-			entry.InputHeaders = ov.InputHeaders
+			entry.InputHeaders = slices.Clone(ov.InputHeaders)
 		}
 		if ov.InputQueryStrings != nil {
-			entry.InputQueryStrings = ov.InputQueryStrings
+			entry.InputQueryStrings = slices.Clone(ov.InputQueryStrings)
 		}
 		if ov.Endpoint != "" {
 			entry.Endpoint = ov.Endpoint
@@ -372,7 +373,9 @@ func applyFieldOverrides(output *CUEOutput, overrides []v1alpha1.OperationOverri
 		}
 		for _, bo := range ov.Backends {
 			if bo.Index >= 0 && bo.Index < len(entry.Backends) && bo.ExtraConfig != nil {
-				entry.Backends[bo.Index].ExtraConfig = bo.ExtraConfig
+				entry.Backends[bo.Index].ExtraConfig = &runtime.RawExtension{
+					Raw: append([]byte(nil), bo.ExtraConfig.Raw...),
+				}
 			}
 		}
 
