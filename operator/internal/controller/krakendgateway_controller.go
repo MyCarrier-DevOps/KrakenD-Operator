@@ -25,6 +25,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -75,6 +76,7 @@ type KrakenDGatewayReconciler struct {
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=autoscaling,resources=horizontalpodautoscalers,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=dragonflydb.io,resources=dragonflies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=external-secrets.io,resources=externalsecrets,verbs=get;list;watch;create;update;patch;delete
@@ -279,6 +281,7 @@ func (r *KrakenDGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.ServiceAccount{}).
 		Owns(&policyv1.PodDisruptionBudget{}).
 		Owns(&autoscalingv2.HorizontalPodAutoscaler{}).
+		Owns(&batchv1.Job{}).
 		Watches(
 			&v1alpha1.KrakenDEndpoint{},
 			handler.EnqueueRequestsFromMapFunc(r.endpointToGateway),
@@ -707,6 +710,13 @@ func (r *KrakenDGatewayReconciler) reconcileOwnedResources(
 		}
 	}
 
+	// Post-restart Job (only if enabled, and only after rollout convergence
+	// for the current config checksum). Jobs are idempotent by name so each
+	// unique config revision produces exactly one Job.
+	if err := r.reconcilePostRestartJob(ctx, gw, output.Checksum); err != nil {
+		return err
+	}
+
 	// Dragonfly (only if enabled AND CRD is installed)
 	if gw.Spec.Dragonfly != nil && gw.Spec.Dragonfly.Enabled {
 		dfGVK := schema.GroupVersionKind{Group: "dragonflydb.io", Version: "v1alpha1", Kind: "Dragonfly"}
@@ -793,6 +803,82 @@ func (r *KrakenDGatewayReconciler) reconcileOwnedResources(
 		}
 	}
 
+	return nil
+}
+
+// reconcilePostRestartJob creates a Job to run the user-provided bash script
+// after the gateway rolls out the current config revision. The Job is named
+// with a short prefix of the config checksum so each revision produces at
+// most one Job. The Job is only created after the Deployment has converged
+// on the current config checksum.
+func (r *KrakenDGatewayReconciler) reconcilePostRestartJob(
+	ctx context.Context,
+	gw *v1alpha1.KrakenDGateway,
+	configChecksum string,
+) error {
+	spec := gw.Spec.PostRestartJob
+	if spec == nil || !spec.Enabled {
+		return nil
+	}
+	if spec.Script == "" {
+		return nil
+	}
+	if configChecksum == "" {
+		return nil
+	}
+
+	log := logf.FromContext(ctx)
+
+	var dep appsv1.Deployment
+	key := types.NamespacedName{Name: gw.Name, Namespace: gw.Namespace}
+	if err := r.Get(ctx, key, &dep); err != nil {
+		if errors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("getting deployment for post-restart check: %w", err)
+	}
+
+	annot := dep.Spec.Template.Annotations[resources.PostRestartJobChecksumAnnotation]
+	if annot != configChecksum {
+		return nil
+	}
+	desired := int32(1)
+	if dep.Spec.Replicas != nil {
+		desired = *dep.Spec.Replicas
+	}
+	if dep.Status.UpdatedReplicas != desired || dep.Status.AvailableReplicas != desired {
+		return nil
+	}
+
+	jobName := resources.PostRestartJobName(gw, configChecksum)
+	existing := &batchv1.Job{}
+	err := r.Get(ctx, types.NamespacedName{Name: jobName, Namespace: gw.Namespace}, existing)
+	if err == nil {
+		return nil
+	}
+	if !errors.IsNotFound(err) {
+		return fmt.Errorf("checking existing post-restart job: %w", err)
+	}
+
+	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{
+		Name:      jobName,
+		Namespace: gw.Namespace,
+	}}
+	resources.BuildPostRestartJob(job, gw, configChecksum)
+	if err := controllerutil.SetControllerReference(gw, job, r.Scheme); err != nil {
+		return fmt.Errorf("setting owner reference on post-restart job: %w", err)
+	}
+	if err := r.Create(ctx, job); err != nil {
+		if errors.IsAlreadyExists(err) {
+			return nil
+		}
+		return fmt.Errorf("creating post-restart job: %w", err)
+	}
+
+	gw.Status.LastPostRestartJobChecksum = configChecksum
+	r.Recorder.Event(gw, "Normal", "PostRestartJobCreated",
+		fmt.Sprintf("Created post-restart Job %s for config checksum %s", jobName, configChecksum))
+	log.Info("created post-restart job", "name", jobName, "checksum", configChecksum)
 	return nil
 }
 
