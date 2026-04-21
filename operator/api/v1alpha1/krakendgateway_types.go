@@ -86,6 +86,90 @@ type KrakenDGatewaySpec struct {
 
 	// Resources defines the compute resource requirements for KrakenD pods.
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// OpenAPI configures OpenAPI spec export and serving via a sidecar.
+	// When enabled, an init container exports the OpenAPI spec from the
+	// rendered KrakenD configuration and a sidecar container serves it
+	// on an additional container port. The port is exposed on the gateway
+	// Service but is NOT added to the Istio VirtualService (local traffic only).
+	OpenAPI *OpenAPIExportSpec `json:"openapi,omitempty"`
+
+	// PostRestartJob configures a Kubernetes Job that runs after every
+	// rolling restart triggered by a configuration change. The Job is
+	// created once per unique config checksum and runs a user-provided
+	// bash script.
+	PostRestartJob *PostRestartJobSpec `json:"postRestartJob,omitempty"`
+}
+
+// OpenAPIExportSpec configures OpenAPI spec export and local serving.
+type OpenAPIExportSpec struct {
+	// Enabled toggles OpenAPI export + local serving.
+	Enabled bool `json:"enabled"`
+
+	// Port is the container port where the sidecar serves the OpenAPI
+	// file. Defaults to 8090. Must not equal Config.Port.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
+	Port int32 `json:"port,omitempty"`
+
+	// Audience filters which endpoints are documented (maps to the
+	// krakend openapi export --audience flag).
+	Audience string `json:"audience,omitempty"`
+
+	// Legacy enables Swagger v2 output (--legacy flag).
+	Legacy bool `json:"legacy,omitempty"`
+
+	// SkipJSONSchema skips including the JSON schema in the output
+	// (--skip-jsonschema flag).
+	SkipJSONSchema bool `json:"skipJsonSchema,omitempty"`
+
+	// SidecarImage overrides the sidecar httpd image. Defaults to
+	// "busybox:latest" which serves via `httpd -f -p PORT -h /openapi`.
+	SidecarImage string `json:"sidecarImage,omitempty"`
+
+	// Resources defines resource requirements for the openapi sidecar
+	// and init container.
+	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
+}
+
+// PostRestartJobSpec configures a Kubernetes Job that runs after every
+// config-triggered rolling restart.
+type PostRestartJobSpec struct {
+	// Enabled toggles post-restart Job creation.
+	Enabled bool `json:"enabled"`
+
+	// Script is the bash script executed by the Job. Required when enabled.
+	Script string `json:"script"`
+
+	// Image is the container image used to execute the script. Must
+	// provide /bin/bash. Defaults to "bash:5".
+	Image string `json:"image,omitempty"`
+
+	// Env injects environment variables into the Job container.
+	Env []corev1.EnvVar `json:"env,omitempty"`
+
+	// EnvFrom imports environment variables from Secrets or ConfigMaps.
+	EnvFrom []corev1.EnvFromSource `json:"envFrom,omitempty"`
+
+	// PodAnnotations adds annotations to the Job pod template.
+	PodAnnotations map[string]string `json:"podAnnotations,omitempty"`
+
+	// ServiceAccountName overrides the ServiceAccount used by the Job.
+	// Defaults to the gateway's ServiceAccount.
+	ServiceAccountName string `json:"serviceAccountName,omitempty"`
+
+	// Resources defines resource requirements for the Job container.
+	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// BackoffLimit is the Job backoff limit. Defaults to 2.
+	BackoffLimit *int32 `json:"backoffLimit,omitempty"`
+
+	// ActiveDeadlineSeconds is the Job active-deadline. Defaults to 600.
+	ActiveDeadlineSeconds *int64 `json:"activeDeadlineSeconds,omitempty"`
+
+	// TTLSecondsAfterFinished controls automatic cleanup after Job
+	// completion. Defaults to 86400 (24h).
+	TTLSecondsAfterFinished *int32 `json:"ttlSecondsAfterFinished,omitempty"`
 }
 
 // GatewayConfig holds KrakenD service-level configuration.
@@ -388,6 +472,9 @@ type KrakenDGatewayStatus struct {
 	ActiveImage        string             `json:"activeImage,omitempty"`
 	EndpointCount      int32              `json:"endpointCount,omitempty"`
 	DragonflyAddress   string             `json:"dragonflyAddress,omitempty"`
+	// LastPostRestartJobChecksum records the config checksum for which the
+	// most recent post-restart Job was successfully created.
+	LastPostRestartJobChecksum string `json:"lastPostRestartJobChecksum,omitempty"`
 }
 
 // +kubebuilder:object:root=true
