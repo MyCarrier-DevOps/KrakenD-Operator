@@ -83,13 +83,20 @@ func BuildDeployment(
 		volumes = append(volumes, *oaVolume)
 	}
 	if oaInit != nil {
-		// The export init container needs the rendered krakend.json mounted too.
-		oaInit.VolumeMounts = append(oaInit.VolumeMounts, corev1.VolumeMount{
-			Name:      "config",
-			MountPath: "/etc/krakend/krakend.json",
-			SubPath:   "krakend.json",
-			ReadOnly:  true,
-		})
+		// The export init container needs the rendered krakend.json and writable /tmp.
+		oaInit.VolumeMounts = append(oaInit.VolumeMounts,
+			corev1.VolumeMount{
+				Name:      "config",
+				MountPath: "/etc/krakend/krakend.json",
+				SubPath:   "krakend.json",
+				ReadOnly:  true,
+			},
+			// krakend openapi export may need a writable /tmp (ReadOnlyRootFilesystem).
+			corev1.VolumeMount{
+				Name:      "tmp",
+				MountPath: "/tmp",
+			},
+		)
 		if oaMountForExport != nil {
 			oaInit.VolumeMounts = append(oaInit.VolumeMounts, *oaMountForExport)
 		}
@@ -512,10 +519,7 @@ func buildOpenAPIPieces(
 	if sidecarImage == "" {
 		sidecarImage = "busybox:latest"
 	}
-	oaPort := int32(8090)
-	if oa.Port > 0 {
-		oaPort = oa.Port
-	}
+	oaPort := OpenAPIPort(gw)
 
 	sidecar = &corev1.Container{
 		Name:  "openapi-serve",
