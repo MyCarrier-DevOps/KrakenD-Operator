@@ -105,6 +105,36 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return r.handleFetchError(ctx, &ac, err)
 	}
 
+	// Resolve external $refs (only possible with HTTP sources). Warnings
+	// from unresolved refs are logged but do not fail reconciliation.
+	if ac.Spec.OpenAPI.URL != "" {
+		resolved, warnings, resolveErr := autoconfig.ResolveExternalRefs(
+			ctx, fetchResult.Data, ac.Spec.OpenAPI.URL, r.Fetcher,
+			autoconfig.FetchSource{
+				Auth:              ac.Spec.OpenAPI.Auth,
+				AllowClusterLocal: ac.Spec.OpenAPI.AllowClusterLocal,
+				Namespace:         ac.Namespace,
+			},
+		)
+		if resolveErr != nil {
+			log.Error(resolveErr, "external $ref resolution failed, using raw spec")
+		} else {
+			fetchResult.Data = resolved
+		}
+		for _, w := range warnings {
+			log.V(1).Info("ref resolver warning", "warning", w)
+		}
+	}
+
+	// Strip upstream `servers` entries: the KrakenD gateway is the
+	// externally-visible server, so upstream URLs must not bleed into
+	// generated documentation or endpoint configuration.
+	if stripped, stripErr := autoconfig.StripServers(fetchResult.Data); stripErr != nil {
+		log.Error(stripErr, "stripping upstream servers failed, using raw spec")
+	} else {
+		fetchResult.Data = stripped
+	}
+
 	meta.SetStatusCondition(&ac.Status.Conditions, metav1.Condition{
 		Type:               v1alpha1.ConditionSpecAvailable,
 		Status:             metav1.ConditionTrue,
