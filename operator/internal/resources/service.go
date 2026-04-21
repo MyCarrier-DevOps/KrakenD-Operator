@@ -28,10 +28,7 @@ func BuildService(svc *corev1.Service, gw *v1alpha1.KrakenDGateway) {
 	svc.Spec.Selector = SelectorLabels(gw)
 	svc.Spec.Type = corev1.ServiceTypeClusterIP
 
-	port := int32(8080)
-	if gw.Spec.Config.Port != 0 {
-		port = gw.Spec.Config.Port
-	}
+	port := GatewayPort(gw)
 
 	ports := []corev1.ServicePort{
 		{
@@ -53,6 +50,14 @@ func BuildService(svc *corev1.Service, gw *v1alpha1.KrakenDGateway) {
 	}
 
 	svc.Spec.Ports = ports
+}
+
+// GatewayPort returns the configured gateway listen port, defaulting to 8080.
+func GatewayPort(gw *v1alpha1.KrakenDGateway) int32 {
+	if gw.Spec.Config.Port != 0 {
+		return gw.Spec.Config.Port
+	}
+	return 8080
 }
 
 // OpenAPIPort returns the configured OpenAPI sidecar port, defaulting to 8090.

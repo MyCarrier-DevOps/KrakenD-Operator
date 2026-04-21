@@ -33,6 +33,7 @@ import (
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/controller"
+	"github.com/mycarrier-devops/krakend-operator/internal/resources"
 )
 
 // GatewayValidator validates KrakenDGateway resources.
@@ -105,14 +106,8 @@ func (v *GatewayValidator) validate(gw *v1alpha1.KrakenDGateway) error {
 	}
 
 	if gw.Spec.OpenAPI != nil && gw.Spec.OpenAPI.Enabled {
-		gwPort := int32(8080)
-		if gw.Spec.Config.Port != 0 {
-			gwPort = gw.Spec.Config.Port
-		}
-		oaPort := int32(8090)
-		if gw.Spec.OpenAPI.Port > 0 {
-			oaPort = gw.Spec.OpenAPI.Port
-		}
+		gwPort := resources.GatewayPort(gw)
+		oaPort := resources.OpenAPIPort(gw)
 		if oaPort == gwPort {
 			errs = append(errs, field.Invalid(
 				field.NewPath("spec", "openapi", "port"),
