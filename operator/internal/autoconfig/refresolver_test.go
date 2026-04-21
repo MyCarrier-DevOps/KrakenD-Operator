@@ -1,0 +1,198 @@
+/*
+Copyright 2026.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package autoconfig
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"testing"
+)
+
+type stubFetcher struct {
+	docs map[string][]byte
+	hits map[string]int
+}
+
+func (s *stubFetcher) Fetch(_ context.Context, source FetchSource) (*FetchResult, error) {
+	if s.hits == nil {
+		s.hits = map[string]int{}
+	}
+	s.hits[source.URL]++
+	body, ok := s.docs[source.URL]
+	if !ok {
+		return nil, fmt.Errorf("not found: %s", source.URL)
+	}
+	return &FetchResult{Data: body, Checksum: fmt.Sprintf("%x", sha256.Sum256(body))}, nil
+}
+
+func TestResolveExternalRefs_InlinesAndRewrites(t *testing.T) {
+	main := []byte(`{
+		"openapi": "3.0.0",
+		"paths": {
+			"/pets": {
+				"get": {
+					"responses": {
+						"200": {
+							"content": {
+								"application/json": {
+									"schema": {"$ref": "https://schemas.example.com/pet.json#/definitions/Pet"}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}`)
+	petDoc := []byte(`{"definitions":{"Pet":{"type":"object","properties":{"name":{"type":"string"}}}}}`)
+
+	fetcher := &stubFetcher{docs: map[string][]byte{
+		"https://schemas.example.com/pet.json": petDoc,
+	}}
+	resolved, warnings, err := ResolveExternalRefs(context.Background(), main,
+		"https://api.example.com/openapi.json", fetcher, FetchSource{})
+	if err != nil {
+		t.Fatalf("resolve failed: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("unexpected warnings: %v", warnings)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(resolved, &out); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+
+	raw := string(resolved)
+	if !strings.Contains(raw, `"$ref":"#/components/schemas/pet_Pet"`) {
+		t.Fatalf("rewritten $ref missing; got: %s", raw)
+	}
+	comps, _ := out["components"].(map[string]any)
+	schemas, _ := comps["schemas"].(map[string]any)
+	if schemas["pet_Pet"] == nil {
+		t.Fatalf("inlined schema missing; schemas=%v", schemas)
+	}
+	if fetcher.hits["https://schemas.example.com/pet.json"] != 1 {
+		t.Fatalf("expected fetch once, got %d", fetcher.hits["https://schemas.example.com/pet.json"])
+	}
+}
+
+func TestResolveExternalRefs_RelativeRef(t *testing.T) {
+	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"$ref":"./fragment.json#/Response"}}}}}}`)
+	frag := []byte(`{"Response":{"description":"ok"}}`)
+
+	fetcher := &stubFetcher{docs: map[string][]byte{
+		"https://api.example.com/v1/fragment.json": frag,
+	}}
+	resolved, _, err := ResolveExternalRefs(context.Background(), main,
+		"https://api.example.com/v1/openapi.json", fetcher, FetchSource{})
+	if err != nil {
+		t.Fatalf("resolve failed: %v", err)
+	}
+	if !strings.Contains(string(resolved), "fragment_Response") {
+		t.Fatalf("relative ref not resolved: %s", resolved)
+	}
+}
+
+func TestResolveExternalRefs_InternalRefsUntouched(t *testing.T) {
+	main := []byte(`{"components":{"schemas":{"X":{"type":"string"}}},"paths":{"/a":{"get":{"responses":{"200":{"$ref":"#/components/schemas/X"}}}}}}`)
+	fetcher := &stubFetcher{docs: map[string][]byte{}}
+	resolved, warnings, err := ResolveExternalRefs(context.Background(), main,
+		"https://api.example.com/openapi.json", fetcher, FetchSource{})
+	if err != nil {
+		t.Fatalf("resolve failed: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("unexpected warnings: %v", warnings)
+	}
+	if !strings.Contains(string(resolved), `"$ref":"#/components/schemas/X"`) {
+		t.Fatalf("internal ref modified: %s", resolved)
+	}
+}
+
+func TestResolveExternalRefs_FetchFailureIsWarning(t *testing.T) {
+	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"$ref":"https://missing.example/x.json#/A"}}}}}}`)
+	fetcher := &stubFetcher{docs: map[string][]byte{}}
+	_, warnings, err := ResolveExternalRefs(context.Background(), main,
+		"https://api.example.com/openapi.json", fetcher, FetchSource{})
+	if err != nil {
+		t.Fatalf("resolve should not hard-fail: %v", err)
+	}
+	if len(warnings) == 0 {
+		t.Fatalf("expected a warning for failed fetch")
+	}
+}
+
+func TestResolveExternalRefs_YAMLInput(t *testing.T) {
+	main := []byte(`openapi: 3.0.0
+paths:
+  /a:
+    get:
+      responses:
+        "200":
+          $ref: "https://schemas.example.com/x.yaml#/R"
+`)
+	other := []byte("R:\n  description: ok\n")
+	fetcher := &stubFetcher{docs: map[string][]byte{
+		"https://schemas.example.com/x.yaml": other,
+	}}
+	resolved, warnings, err := ResolveExternalRefs(context.Background(), main,
+		"https://api.example.com/openapi.yaml", fetcher, FetchSource{})
+	if err != nil {
+		t.Fatalf("resolve failed: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("unexpected warnings: %v", warnings)
+	}
+	if !strings.Contains(string(resolved), "x_R") {
+		t.Fatalf("YAML external ref not inlined: %s", resolved)
+	}
+}
+
+func TestSplitRef(t *testing.T) {
+	cases := []struct {
+		ref, wantURL, wantFrag string
+	}{
+		{"#/components/schemas/X", "", "/components/schemas/X"},
+		{"other.json#/X", "other.json", "/X"},
+		{"other.json", "other.json", ""},
+	}
+	for _, tc := range cases {
+		gotURL, gotFrag := splitRef(tc.ref)
+		if gotURL != tc.wantURL || gotFrag != tc.wantFrag {
+			t.Errorf("splitRef(%q) = (%q,%q), want (%q,%q)",
+				tc.ref, gotURL, gotFrag, tc.wantURL, tc.wantFrag)
+		}
+	}
+}
+
+func TestPointerLookup(t *testing.T) {
+	doc := map[string]any{
+		"a": map[string]any{
+			"b/c": "value",
+		},
+	}
+	got, err := pointerLookup(doc, "/a/b~1c")
+	if err != nil {
+		t.Fatalf("lookup failed: %v", err)
+	}
+	if got != "value" {
+		t.Fatalf("expected value, got %v", got)
+	}
+}
