@@ -33,7 +33,7 @@ func BuildService(svc *corev1.Service, gw *v1alpha1.KrakenDGateway) {
 		port = gw.Spec.Config.Port
 	}
 
-	svc.Spec.Ports = []corev1.ServicePort{
+	ports := []corev1.ServicePort{
 		{
 			Name:       "http",
 			Port:       port,
@@ -41,4 +41,24 @@ func BuildService(svc *corev1.Service, gw *v1alpha1.KrakenDGateway) {
 			Protocol:   corev1.ProtocolTCP,
 		},
 	}
+
+	if gw.Spec.OpenAPI != nil && gw.Spec.OpenAPI.Enabled {
+		oaPort := OpenAPIPort(gw)
+		ports = append(ports, corev1.ServicePort{
+			Name:       "openapi",
+			Port:       oaPort,
+			TargetPort: intstr.FromInt32(oaPort),
+			Protocol:   corev1.ProtocolTCP,
+		})
+	}
+
+	svc.Spec.Ports = ports
+}
+
+// OpenAPIPort returns the configured OpenAPI sidecar port, defaulting to 8090.
+func OpenAPIPort(gw *v1alpha1.KrakenDGateway) int32 {
+	if gw.Spec.OpenAPI != nil && gw.Spec.OpenAPI.Port > 0 {
+		return gw.Spec.OpenAPI.Port
+	}
+	return 8090
 }
