@@ -197,6 +197,36 @@ func TestPointerLookup(t *testing.T) {
 	}
 }
 
+func TestPointerLookup_ArrayIndex(t *testing.T) {
+	doc := map[string]any{
+		"oneOf": []any{
+			map[string]any{"type": "string"},
+			map[string]any{"type": "integer"},
+		},
+	}
+	got, err := pointerLookup(doc, "/oneOf/1")
+	if err != nil {
+		t.Fatalf("lookup failed: %v", err)
+	}
+	m, ok := got.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map, got %T", got)
+	}
+	if m["type"] != "integer" {
+		t.Fatalf("expected integer, got %v", m["type"])
+	}
+}
+
+func TestPointerLookup_ArrayOutOfRange(t *testing.T) {
+	doc := map[string]any{
+		"items": []any{"a"},
+	}
+	_, err := pointerLookup(doc, "/items/5")
+	if err == nil {
+		t.Fatal("expected error for out-of-range index")
+	}
+}
+
 func TestDeepCloneJSON(t *testing.T) {
 	original := map[string]any{
 		"a": map[string]any{

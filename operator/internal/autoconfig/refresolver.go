@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"sigs.k8s.io/yaml"
@@ -219,6 +220,7 @@ func splitRef(ref string) (docURL, fragment string) {
 }
 
 // pointerLookup walks a JSON pointer (RFC 6901) and returns the referenced node.
+// Supports both object keys and numeric array indices.
 func pointerLookup(doc map[string]any, pointer string) (any, error) {
 	if pointer == "" {
 		return doc, nil
@@ -235,7 +237,14 @@ func pointerLookup(doc map[string]any, pointer string) (any, error) {
 			}
 			current = val
 		case []any:
-			return nil, fmt.Errorf("array pointer segments are not supported: %q", decoded)
+			idx, err := strconv.Atoi(decoded)
+			if err != nil {
+				return nil, fmt.Errorf("non-numeric array index %q", decoded)
+			}
+			if idx < 0 || idx >= len(next) {
+				return nil, fmt.Errorf("array index %d out of range (len %d)", idx, len(next))
+			}
+			current = next[idx]
 		default:
 			return nil, fmt.Errorf("pointer segment %q applied to scalar", decoded)
 		}
