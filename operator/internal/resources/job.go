@@ -103,7 +103,7 @@ func BuildPostRestartJob(
 	container := corev1.Container{
 		Name:    "post-restart",
 		Image:   image,
-		Command: []string{"/usr/bin/env", "bash", "-c", spec.Script},
+		Command: []string{"/bin/bash", "-c", spec.Script},
 		Env:     spec.Env,
 		EnvFrom: spec.EnvFrom,
 		SecurityContext: &corev1.SecurityContext{
