@@ -40,8 +40,8 @@ import (
 // The returned JSON is always JSON (regardless of input format). External
 // documents fetched as YAML are converted to JSON before inlining.
 //
-// Cycles and self-references are detected and short-circuited; fetched
-// documents are cached within the call.
+// Fetched documents are cached within the call. Cycle detection prevents
+// unbounded recursion when external documents reference each other.
 func ResolveExternalRefs(
 	ctx context.Context,
 	specData []byte,
@@ -90,13 +90,14 @@ func ResolveExternalRefs(
 }
 
 type refResolver struct {
-	ctx      context.Context
-	baseURL  string
-	fetcher  Fetcher
-	source   FetchSource
-	docs     map[string]map[string]any // cache: absoluteURL -> parsed doc
-	inlined  map[string]any            // sanitized name -> schema body
-	warnings []string
+	ctx       context.Context
+	baseURL   string
+	fetcher   Fetcher
+	source    FetchSource
+	docs      map[string]map[string]any // cache: absoluteURL -> parsed doc
+	inlined   map[string]any            // sanitized name -> schema body
+	resolving map[string]bool           // cycle detection: ref keys currently being resolved
+	warnings  []string
 }
 
 var sanitizeNameRE = regexp.MustCompile(`[^A-Za-z0-9_]+`)
@@ -159,11 +160,32 @@ func (r *refResolver) resolveExternal(ref string) (string, error) {
 		return "", err
 	}
 
-	// Also walk the referenced node so that nested external refs are resolved.
-	// Use a shallow copy to avoid mutating the cached document.
+	name := sanitizeRefName(absolute, fragment)
+
+	// Cycle detection: if we are already resolving this ref, short-circuit.
+	refKey := absolute + "#" + fragment
+	if r.resolving[refKey] {
+		// Already in-flight — return the name so callers get a valid local ref.
+		if r.inlined == nil {
+			r.inlined = map[string]any{}
+		}
+		if _, exists := r.inlined[name]; !exists {
+			r.inlined[name] = target
+		}
+		return name, nil
+	}
+	if r.resolving == nil {
+		r.resolving = map[string]bool{}
+	}
+	r.resolving[refKey] = true
+	defer delete(r.resolving, refKey)
+
+	// Deep-clone the target before walking so the cached document is not mutated.
+	target = deepCloneJSON(target)
+
+	// Walk the cloned node so nested external refs are resolved.
 	r.walk(target, "")
 
-	name := sanitizeRefName(absolute, fragment)
 	if r.inlined == nil {
 		r.inlined = map[string]any{}
 	}
@@ -250,6 +272,26 @@ func sanitizeRefName(absoluteURL, fragment string) string {
 		name = "external_ref"
 	}
 	return sanitizeNameRE.ReplaceAllString(name, "_")
+}
+
+// deepCloneJSON returns a deep copy of a JSON-compatible value (maps, slices, scalars).
+func deepCloneJSON(v any) any {
+	switch val := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(val))
+		for k, child := range val {
+			out[k] = deepCloneJSON(child)
+		}
+		return out
+	case []any:
+		out := make([]any, len(val))
+		for i, child := range val {
+			out[i] = deepCloneJSON(child)
+		}
+		return out
+	default:
+		return val // scalars are immutable
+	}
 }
 
 // decodeSpec accepts a JSON or YAML document and returns it as a generic map.

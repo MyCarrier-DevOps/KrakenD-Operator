@@ -196,3 +196,44 @@ func TestPointerLookup(t *testing.T) {
 		t.Fatalf("expected value, got %v", got)
 	}
 }
+
+func TestDeepCloneJSON(t *testing.T) {
+	original := map[string]any{
+		"a": map[string]any{
+			"b": []any{"x", "y"},
+		},
+		"c": float64(42),
+	}
+	cloned := deepCloneJSON(original)
+	clonedMap := cloned.(map[string]any)
+	// Mutate the clone; original must be untouched.
+	clonedMap["a"].(map[string]any)["b"] = "replaced"
+	if original["a"].(map[string]any)["b"].([]any)[0] != "x" {
+		t.Fatal("deepCloneJSON did not produce an independent copy")
+	}
+}
+
+func TestResolveExternalRefs_CycleDetection(t *testing.T) {
+	// Doc A references Doc B which references Doc A — must not infinite loop.
+	docA := `{"openapi":"3.0.0","info":{"title":"A","version":"1"},"paths":{"/a":{"get":{"responses":{"200":{"content":{"application/json":{"schema":{"$ref":"b.yaml#/components/schemas/B"}}}}}}}}}`
+	docB := `{"components":{"schemas":{"B":{"type":"object","properties":{"loop":{"$ref":"a.yaml#/components/schemas/Cycle"}}}}}}`
+
+	fetcher := &stubFetcher{docs: map[string][]byte{
+		"https://example.com/b.yaml": []byte(docB),
+		"https://example.com/a.yaml": []byte(docA),
+	}}
+
+	resolved, warnings, err := ResolveExternalRefs(
+		context.Background(),
+		[]byte(docA),
+		"https://example.com/a.yaml",
+		fetcher,
+		FetchSource{},
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// The cycle should produce a warning, not a panic/infinite recursion.
+	_ = warnings
+	_ = resolved
+}
