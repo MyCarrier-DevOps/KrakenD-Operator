@@ -104,6 +104,24 @@ func (v *GatewayValidator) validate(gw *v1alpha1.KrakenDGateway) error {
 		))
 	}
 
+	if gw.Spec.OpenAPI != nil && gw.Spec.OpenAPI.Enabled {
+		gwPort := int32(8080)
+		if gw.Spec.Config.Port != 0 {
+			gwPort = gw.Spec.Config.Port
+		}
+		oaPort := int32(8090)
+		if gw.Spec.OpenAPI.Port > 0 {
+			oaPort = gw.Spec.OpenAPI.Port
+		}
+		if oaPort == gwPort {
+			errs = append(errs, field.Invalid(
+				field.NewPath("spec", "openapi", "port"),
+				oaPort,
+				"openapi port must differ from the gateway listen port",
+			))
+		}
+	}
+
 	if gw.Spec.Plugins != nil {
 		pvcCount := 0
 		for _, src := range gw.Spec.Plugins.Sources {

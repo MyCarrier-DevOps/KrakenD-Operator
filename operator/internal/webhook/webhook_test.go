@@ -174,6 +174,56 @@ func TestGatewayValidator_MultiplePVCForbidden(t *testing.T) {
 	}
 }
 
+func TestGatewayValidator_OpenAPIPortConflict(t *testing.T) {
+	// Explicit port collision: openapi port == gateway port
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Config:  v1alpha1.GatewayConfig{Port: 9090},
+			OpenAPI: &v1alpha1.OpenAPIExportSpec{Enabled: true, Port: 9090},
+		},
+	}
+	v := &GatewayValidator{}
+	_, err := v.ValidateCreate(context.Background(), gw)
+	if err == nil {
+		t.Error("expected error when openapi port equals gateway port")
+	}
+}
+
+func TestGatewayValidator_OpenAPIPortDefaultConflict(t *testing.T) {
+	// Default gateway port (8080) set explicitly as openapi port
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Config:  v1alpha1.GatewayConfig{},
+			OpenAPI: &v1alpha1.OpenAPIExportSpec{Enabled: true, Port: 8080},
+		},
+	}
+	v := &GatewayValidator{}
+	_, err := v.ValidateCreate(context.Background(), gw)
+	if err == nil {
+		t.Error("expected error when openapi port collides with default gateway port 8080")
+	}
+}
+
+func TestGatewayValidator_OpenAPIPortValid(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Config:  v1alpha1.GatewayConfig{},
+			OpenAPI: &v1alpha1.OpenAPIExportSpec{Enabled: true, Port: 8090},
+		},
+	}
+	v := &GatewayValidator{}
+	_, err := v.ValidateCreate(context.Background(), gw)
+	if err != nil {
+		t.Errorf("expected no error, got %v", err)
+	}
+}
+
 func TestGatewayValidator_Update(t *testing.T) {
 	old := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
