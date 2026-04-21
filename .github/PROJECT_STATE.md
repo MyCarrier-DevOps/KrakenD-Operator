@@ -1,7 +1,7 @@
 # Project State — KrakenD Operator
 
-> **Last Updated:** 2026-04-13
-> **Status:** All §1-§19 fully wired; OLM bundle, Helm chart, CI pipelines, and operational docs complete; PR #2 merged; telemetry CRD flattened (removed openTelemetry/prometheus wrappers); all unit tests pass; 0 lint issues
+> **Last Updated:** 2026-04-21
+> **Status:** Added OpenAPI export sidecar, post-restart Jobs, AutoConfig external $ref resolver, richer documentation/openapi CUE extraction. All unit tests pass, 0 lint issues.
 
 ## Overview
 
@@ -110,6 +110,14 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 - 28 unit tests, 84.3% webhook package coverage
 
 ## Recent Changes
+
+### 2026-04-21
+- **New gateway feature — OpenAPI export + serve**: `spec.openapi` (KrakenDGateway) runs `krakend openapi export` in an init container and serves `/openapi.json` from a busybox `httpd` sidecar on a configurable port (default 8090). Port is exposed on the gateway Service as named port `openapi` but deliberately NOT added to the Istio VirtualService (local/in-cluster traffic only). Supports `audience`, `legacy`, `skipJsonSchema`, custom sidecar image/resources. New helpers: `buildOpenAPIPieces()` in `internal/resources/deployment.go`, `OpenAPIPort()` in `internal/resources/service.go`.
+- **New gateway feature — Post-restart Jobs**: `spec.postRestartJob` creates a Kubernetes Job that runs a user-provided bash script after every config-triggered rolling restart. Job name embeds a 12-char prefix of the config checksum → one Job per unique config revision (idempotent). Supports env vars, envFrom, pod annotations, custom SA/image/resources, backoffLimit, activeDeadlineSeconds, TTL. Only created once the Deployment has converged on the matching checksum (reads `dep.Spec.Template.Annotations["krakend.io/checksum-config"]` + UpdatedReplicas/AvailableReplicas). New builder: `internal/resources/job.go`. New status field: `status.lastPostRestartJobChecksum`. RBAC marker for `batch/jobs` added.
+- **AutoConfig external $ref resolver** (`internal/autoconfig/refresolver.go`): `ResolveExternalRefs` walks the fetched OpenAPI spec, fetches every external `$ref` (absolute or relative to baseURL) once (cached), inlines referenced fragments under `components/schemas/<sanitized-name>`, and rewrites the $ref to the local form. Accepts JSON or YAML fetched documents. Failures become warnings (not fatal) logged by the controller. Internal `#/...` refs and ConfigMap-sourced specs pass through unchanged.
+- **Richer endpoint-level `documentation/openapi` CUE extraction**: `cue/defaults.cue` now emits `header_definition` (from OpenAPI `parameters` where `in == "header"`), plus `type`/`format`/`enum`/`example`/`examples` on query/param/header definitions, and `description`/`examples` on `request_definition`.
+- **Strip upstream `servers`** (`internal/autoconfig/preprocessor.go`): new `StripServers` removes `servers` from the root document, path-items, and operations before CUE evaluation. The KrakenD gateway is the externally-visible server; upstream URLs must not bleed into generated docs/config. Wired in the AutoConfig controller after `ResolveExternalRefs`. Failures are logged and the raw spec is used as fallback. 4 new unit tests.
+- Regenerated CRDs (operator, Helm chart, OLM bundle) and deepcopy. Added 21 new unit tests (5 resources, 6 controller, 10 autoconfig). Lint clean. `go test -race ./...` passes for all non-e2e packages.
 
 ### 2026-04-09 (continued)
 - **Breaking CRD change: Flattened telemetry config** — removed `openTelemetry` wrapper and standalone `prometheus` from `TelemetryConfig`
