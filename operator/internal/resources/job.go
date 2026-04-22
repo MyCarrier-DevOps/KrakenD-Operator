@@ -42,13 +42,21 @@ const (
 
 // PostRestartJobName returns a deterministic Job name that embeds a short
 // prefix of the config checksum, ensuring each unique config revision maps
-// to exactly one Job.
+// to exactly one Job. The result is capped at 63 characters so it remains
+// valid as a Kubernetes label value (Job controllers mirror the name into
+// pod labels).
 func PostRestartJobName(gw *v1alpha1.KrakenDGateway, configChecksum string) string {
 	short := configChecksum
 	if len(short) > 12 {
 		short = short[:12]
 	}
-	return fmt.Sprintf("%s-postrestart-%s", gw.Name, short)
+	// Fixed suffix: "-postrestart-" (13) + checksum (12) = 25 chars.
+	const maxPrefix = 63 - 13 - 12 // 38
+	prefix := gw.Name
+	if len(prefix) > maxPrefix {
+		prefix = prefix[:maxPrefix]
+	}
+	return fmt.Sprintf("%s-postrestart-%s", prefix, short)
 }
 
 // BuildPostRestartJob mutates job in place with a complete Job definition

@@ -40,6 +40,22 @@ func TestPostRestartJobName_StableAndShort(t *testing.T) {
 	}
 }
 
+func TestPostRestartJobName_LongGatewayName(t *testing.T) {
+	longName := strings.Repeat("a", 80)
+	gw := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: longName}}
+	name := PostRestartJobName(gw, "abcdef0123456789deadbeef")
+	if len(name) > 63 {
+		t.Fatalf("job name exceeds 63 chars: len=%d, name=%s", len(name), name)
+	}
+	if len(name) != 63 {
+		t.Fatalf("expected exactly 63 chars for truncated name, got %d", len(name))
+	}
+	// Must still embed the checksum for uniqueness.
+	if !strings.HasSuffix(name, "-abcdef012345") {
+		t.Fatalf("truncated name lost checksum suffix: %s", name)
+	}
+}
+
 func TestBuildPostRestartJob_Defaults(t *testing.T) {
 	gw := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "ns"},
