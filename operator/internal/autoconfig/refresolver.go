@@ -104,6 +104,7 @@ type refResolver struct {
 	docs      map[string]map[string]any // cache: absoluteURL -> parsed doc
 	inlined   map[string]any            // sanitized name -> schema body
 	resolving map[string]bool           // cycle detection: ref keys currently being resolved
+	resolved  map[string]string         // refKey -> sanitized name for already-resolved refs
 	warnings  []string
 }
 
@@ -142,6 +143,13 @@ func (r *refResolver) resolveExternal(ref string) (string, error) {
 		return "", err
 	}
 
+	// Fast path: if this exact ref was already fully resolved, return the
+	// cached name without re-walking or emitting false collision warnings.
+	refKey := absolute + "#" + fragment
+	if name, ok := r.resolved[refKey]; ok {
+		return name, nil
+	}
+
 	doc, ok := r.docs[absolute]
 	if !ok {
 		if r.fetcher == nil || r.baseURL == "" {
@@ -170,7 +178,6 @@ func (r *refResolver) resolveExternal(ref string) (string, error) {
 	name := sanitizeRefName(absolute, fragment)
 
 	// Cycle detection: if we are already resolving this ref, short-circuit.
-	refKey := absolute + "#" + fragment
 	if r.resolving[refKey] {
 		r.warnings = append(r.warnings, fmt.Sprintf("cycle detected for %s, skipping recursive resolution", refKey))
 		// Already in-flight — return the name so callers get a valid local ref.
@@ -205,6 +212,10 @@ func (r *refResolver) resolveExternal(ref string) (string, error) {
 	} else {
 		r.inlined[name] = target
 	}
+	if r.resolved == nil {
+		r.resolved = map[string]string{}
+	}
+	r.resolved[refKey] = name
 	return name, nil
 }
 

@@ -143,7 +143,7 @@ type PostRestartJobSpec struct {
 	Script string `json:"script,omitempty"`
 
 	// Image is the container image used to execute the script. Must
-	// provide /bin/bash. Defaults to "bash:5".
+	// provide /bin/bash. Defaults to "bash:5.2".
 	Image string `json:"image,omitempty"`
 
 	// Env injects environment variables into the Job container.
