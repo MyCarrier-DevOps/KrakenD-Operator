@@ -294,7 +294,7 @@ func TestSanitizeRefName_NoCollision(t *testing.T) {
 func TestSanitizeRefName_EmptyFragment(t *testing.T) {
 	name := sanitizeRefName("https://example.com/common.yaml", "")
 	if name == "" || name == "external_ref" {
-		// Should at least contain the doc basename.
+		t.Fatalf("expected non-empty sanitized name derived from doc basename, got %q", name)
 	}
 	if !strings.Contains(name, "common") {
 		t.Errorf("expected doc basename in name, got %q", name)

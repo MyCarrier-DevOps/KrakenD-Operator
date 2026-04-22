@@ -133,6 +133,13 @@ func (v *GatewayValidator) validate(gw *v1alpha1.KrakenDGateway) error {
 		}
 	}
 
+	if gw.Spec.PostRestartJob != nil && gw.Spec.PostRestartJob.Enabled && gw.Spec.PostRestartJob.Script == "" {
+		errs = append(errs, field.Required(
+			field.NewPath("spec", "postRestartJob", "script"),
+			"script is required when postRestartJob is enabled",
+		))
+	}
+
 	return errs.ToAggregate()
 }
 

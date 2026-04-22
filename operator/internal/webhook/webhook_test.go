@@ -249,6 +249,28 @@ func TestGatewayValidator_Delete(t *testing.T) {
 	}
 }
 
+func TestGatewayValidator_PostRestartJobEmptyScript(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Config: v1alpha1.GatewayConfig{},
+			PostRestartJob: &v1alpha1.PostRestartJobSpec{
+				Enabled: true,
+				Script:  "",
+			},
+		},
+	}
+	v := &GatewayValidator{}
+	_, err := v.ValidateCreate(context.Background(), gw)
+	if err == nil {
+		t.Fatal("expected error for enabled postRestartJob with empty script")
+	}
+	if !strings.Contains(err.Error(), "script") {
+		t.Errorf("expected error about script, got: %v", err)
+	}
+}
+
 func TestEndpointValidator_Valid(t *testing.T) {
 	gw := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "my-gw", Namespace: "default"},
