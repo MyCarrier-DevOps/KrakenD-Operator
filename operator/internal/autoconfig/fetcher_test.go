@@ -635,9 +635,17 @@ func TestFetcher_RedirectLimit(t *testing.T) {
 		return nil
 	}
 	fetcher := &httpFetcher{
-		client:        fakeClient(),
-		strictClient:  &http.Client{Transport: http.DefaultTransport, Timeout: fetchTimeout, CheckRedirect: checkRedirect},
-		lenientClient: &http.Client{Transport: http.DefaultTransport, Timeout: fetchTimeout, CheckRedirect: checkRedirect},
+		client: fakeClient(),
+		strictClient: &http.Client{
+			Transport:     http.DefaultTransport,
+			Timeout:       fetchTimeout,
+			CheckRedirect: checkRedirect,
+		},
+		lenientClient: &http.Client{
+			Transport:     http.DefaultTransport,
+			Timeout:       fetchTimeout,
+			CheckRedirect: checkRedirect,
+		},
 	}
 	_, err := fetcher.Fetch(context.Background(), FetchSource{URL: ts.URL})
 	if err == nil {

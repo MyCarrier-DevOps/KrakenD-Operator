@@ -47,10 +47,22 @@ func TestConditionsEqual_DifferentLength(t *testing.T) {
 func TestConditionsEqual_SameContent(t *testing.T) {
 	a := []metav1.Condition{
 		{Type: "Ready", Status: metav1.ConditionTrue, Reason: "OK", Message: "all good", ObservedGeneration: 1},
-		{Type: "Available", Status: metav1.ConditionFalse, Reason: "Degraded", Message: "not ready", ObservedGeneration: 2},
+		{
+			Type:               "Available",
+			Status:             metav1.ConditionFalse,
+			Reason:             "Degraded",
+			Message:            "not ready",
+			ObservedGeneration: 2,
+		},
 	}
 	b := []metav1.Condition{
-		{Type: "Available", Status: metav1.ConditionFalse, Reason: "Degraded", Message: "not ready", ObservedGeneration: 2},
+		{
+			Type:               "Available",
+			Status:             metav1.ConditionFalse,
+			Reason:             "Degraded",
+			Message:            "not ready",
+			ObservedGeneration: 2,
+		},
 		{Type: "Ready", Status: metav1.ConditionTrue, Reason: "OK", Message: "all good", ObservedGeneration: 1},
 	}
 	if !conditionsEqual(a, b) {

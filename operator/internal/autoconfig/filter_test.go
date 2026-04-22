@@ -24,11 +24,31 @@ import (
 
 func sampleEntries() []v1alpha1.EndpointEntry {
 	return []v1alpha1.EndpointEntry{
-		{Endpoint: "/api/users", Method: "GET", Backends: []v1alpha1.BackendSpec{{Host: []string{"http://users-svc"}, URLPattern: "/users"}}},
-		{Endpoint: "/api/users", Method: "POST", Backends: []v1alpha1.BackendSpec{{Host: []string{"http://users-svc"}, URLPattern: "/users"}}},
-		{Endpoint: "/api/orders", Method: "GET", Backends: []v1alpha1.BackendSpec{{Host: []string{"http://orders-svc"}, URLPattern: "/orders"}}},
-		{Endpoint: "/internal/health", Method: "GET", Backends: []v1alpha1.BackendSpec{{Host: []string{"http://health-svc"}, URLPattern: "/health"}}},
-		{Endpoint: "/internal/debug/pprof", Method: "GET", Backends: []v1alpha1.BackendSpec{{Host: []string{"http://debug-svc"}, URLPattern: "/pprof"}}},
+		{
+			Endpoint: "/api/users",
+			Method:   "GET",
+			Backends: []v1alpha1.BackendSpec{{Host: []string{"http://users-svc"}, URLPattern: "/users"}},
+		},
+		{
+			Endpoint: "/api/users",
+			Method:   "POST",
+			Backends: []v1alpha1.BackendSpec{{Host: []string{"http://users-svc"}, URLPattern: "/users"}},
+		},
+		{
+			Endpoint: "/api/orders",
+			Method:   "GET",
+			Backends: []v1alpha1.BackendSpec{{Host: []string{"http://orders-svc"}, URLPattern: "/orders"}},
+		},
+		{
+			Endpoint: "/internal/health",
+			Method:   "GET",
+			Backends: []v1alpha1.BackendSpec{{Host: []string{"http://health-svc"}, URLPattern: "/health"}},
+		},
+		{
+			Endpoint: "/internal/debug/pprof",
+			Method:   "GET",
+			Backends: []v1alpha1.BackendSpec{{Host: []string{"http://debug-svc"}, URLPattern: "/pprof"}},
+		},
 	}
 }
 

@@ -30,7 +30,11 @@ func TestGenerator_BasicGeneration(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "my-ac", Namespace: "default"},
 	}
 	entries := []v1alpha1.EndpointEntry{
-		{Endpoint: "/api/users", Method: "GET", Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/users"}}},
+		{
+			Endpoint: "/api/users",
+			Method:   "GET",
+			Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/users"}},
+		},
 	}
 	opIDs := map[string]string{"/api/users:GET": "listUsers"}
 
@@ -71,7 +75,11 @@ func TestGenerator_NameWithoutOperationID(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "ac", Namespace: "default"},
 	}
 	entries := []v1alpha1.EndpointEntry{
-		{Endpoint: "/api/users/{id}", Method: "GET", Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/users"}}},
+		{
+			Endpoint: "/api/users/{id}",
+			Method:   "GET",
+			Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/users"}},
+		},
 	}
 
 	out, err := g.Generate(context.Background(), GenerateInput{
@@ -94,8 +102,16 @@ func TestGenerator_DuplicateOperationID(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "ac", Namespace: "default"},
 	}
 	entries := []v1alpha1.EndpointEntry{
-		{Endpoint: "/v1/users", Method: "GET", Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/users"}}},
-		{Endpoint: "/v2/users", Method: "GET", Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/users"}}},
+		{
+			Endpoint: "/v1/users",
+			Method:   "GET",
+			Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/users"}},
+		},
+		{
+			Endpoint: "/v2/users",
+			Method:   "GET",
+			Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/users"}},
+		},
 	}
 	opIDs := map[string]string{
 		"/v1/users:GET": "listUsers",

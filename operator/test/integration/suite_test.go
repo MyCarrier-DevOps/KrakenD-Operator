@@ -212,28 +212,34 @@ func waitForNodes(ctx context.Context, cfg *rest.Config) error {
 		return fmt.Errorf("creating kubernetes clientset: %w", err)
 	}
 
-	return wait.PollUntilContextTimeout(ctx, 2*time.Second, 60*time.Second, true, func(ctx context.Context) (bool, error) {
-		nodes, err := clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
-		if err != nil {
-			return false, fmt.Errorf("listing nodes: %w", err)
-		}
-		if len(nodes.Items) == 0 {
-			return false, nil
-		}
-		for _, node := range nodes.Items {
-			ready := false
-			for _, c := range node.Status.Conditions {
-				if c.Type == corev1.NodeReady && c.Status == corev1.ConditionTrue {
-					ready = true
-					break
-				}
+	return wait.PollUntilContextTimeout(
+		ctx,
+		2*time.Second,
+		60*time.Second,
+		true,
+		func(ctx context.Context) (bool, error) {
+			nodes, err := clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+			if err != nil {
+				return false, fmt.Errorf("listing nodes: %w", err)
 			}
-			if !ready {
+			if len(nodes.Items) == 0 {
 				return false, nil
 			}
-		}
-		return true, nil
-	})
+			for _, node := range nodes.Items {
+				ready := false
+				for _, c := range node.Status.Conditions {
+					if c.Type == corev1.NodeReady && c.Status == corev1.ConditionTrue {
+						ready = true
+						break
+					}
+				}
+				if !ready {
+					return false, nil
+				}
+			}
+			return true, nil
+		},
+	)
 }
 
 // installCRDs reads CRD YAML files from the given directory and applies them
@@ -271,23 +277,29 @@ func installCRDs(ctx context.Context, cfg *rest.Config, crdDir string) error {
 	}
 
 	// Wait for all CRDs to be established.
-	return wait.PollUntilContextTimeout(ctx, time.Second, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		crdList, err := extClient.ApiextensionsV1().CustomResourceDefinitions().List(ctx, metav1.ListOptions{})
-		if err != nil {
-			return false, fmt.Errorf("listing CRDs: %w", err)
-		}
-		for _, crd := range crdList.Items {
-			established := false
-			for _, c := range crd.Status.Conditions {
-				if c.Type == apiextensionsv1.Established && c.Status == apiextensionsv1.ConditionTrue {
-					established = true
-					break
+	return wait.PollUntilContextTimeout(
+		ctx,
+		time.Second,
+		30*time.Second,
+		true,
+		func(ctx context.Context) (bool, error) {
+			crdList, err := extClient.ApiextensionsV1().CustomResourceDefinitions().List(ctx, metav1.ListOptions{})
+			if err != nil {
+				return false, fmt.Errorf("listing CRDs: %w", err)
+			}
+			for _, crd := range crdList.Items {
+				established := false
+				for _, c := range crd.Status.Conditions {
+					if c.Type == apiextensionsv1.Established && c.Status == apiextensionsv1.ConditionTrue {
+						established = true
+						break
+					}
+				}
+				if !established {
+					return false, nil
 				}
 			}
-			if !established {
-				return false, nil
-			}
-		}
-		return true, nil
-	})
+			return true, nil
+		},
+	)
 }

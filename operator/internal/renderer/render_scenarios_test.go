@@ -231,7 +231,9 @@ func TestRenderScenario_EndpointExtraConfigFlowsToJSON(t *testing.T) {
 		Endpoint: "/api/v1/secure",
 		Method:   "POST",
 		ExtraConfig: &runtime.RawExtension{
-			Raw: []byte(`{"auth/validator":{"alg":"RS256","jwk_url":"https://auth.example.com/.well-known/jwks.json"}}`),
+			Raw: []byte(
+				`{"auth/validator":{"alg":"RS256","jwk_url":"https://auth.example.com/.well-known/jwks.json"}}`,
+			),
 		},
 		Backends: []v1alpha1.BackendSpec{
 			{Host: []string{"http://secure:8080"}, URLPattern: "/secure"},
@@ -802,7 +804,9 @@ func TestRenderScenario_AutoConfigToKrakendJSON(t *testing.T) {
 					Timeout:      &uploadTimeout,
 					InputHeaders: []string{"Authorization", "X-MC-Api-Key", "Content-Type"},
 					ExtraConfig: &runtime.RawExtension{
-						Raw: []byte(`{"qos/ratelimit/router":{"every":"1s","max_rate":10,"strategy":"header","key":"Authorization"},"documentation/openapi":{"summary":"Create or Modify Orders","operationId":"UploadOrder","tags":["Orders"]}}`),
+						Raw: []byte(
+							`{"qos/ratelimit/router":{"every":"1s","max_rate":10,"strategy":"header","key":"Authorization"},"documentation/openapi":{"summary":"Create or Modify Orders","operationId":"UploadOrder","tags":["Orders"]}}`,
+						),
 					},
 					Backends: []v1alpha1.BackendSpec{
 						{
@@ -835,7 +839,9 @@ func TestRenderScenario_AutoConfigToKrakendJSON(t *testing.T) {
 					Timeout:      &timeout,
 					InputHeaders: []string{"Authorization", "X-MC-Api-Key", "Content-Type"},
 					ExtraConfig: &runtime.RawExtension{
-						Raw: []byte(`{"qos/ratelimit/router":{"every":"1s","max_rate":10},"documentation/openapi":{"summary":"Get Order by reference id","operationId":"Order","tags":["Orders"]}}`),
+						Raw: []byte(
+							`{"qos/ratelimit/router":{"every":"1s","max_rate":10},"documentation/openapi":{"summary":"Get Order by reference id","operationId":"Order","tags":["Orders"]}}`,
+						),
 					},
 					Backends: []v1alpha1.BackendSpec{
 						{

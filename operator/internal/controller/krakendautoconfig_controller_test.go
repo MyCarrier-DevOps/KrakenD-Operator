@@ -125,7 +125,11 @@ func defaultMocks() (*mockFetcher, *mockCUEEvaluator, *mockFilter, *mockGenerato
 		&mockCUEEvaluator{
 			output: &autoconfig.CUEOutput{
 				Entries: []v1alpha1.EndpointEntry{
-					{Endpoint: "/api/users", Method: "GET", Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/api/users"}}},
+					{
+						Endpoint: "/api/users",
+						Method:   "GET",
+						Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/api/users"}},
+					},
 				},
 				OperationIDs: map[string]string{"/api/users:GET": "listUsers"},
 				Tags:         map[string][]string{},
@@ -146,11 +150,15 @@ func defaultMocks() (*mockFetcher, *mockCUEEvaluator, *mockFilter, *mockGenerato
 						},
 						Spec: v1alpha1.KrakenDEndpointSpec{
 							GatewayRef: v1alpha1.GatewayRef{Name: "test-gw"},
-							Endpoints: []v1alpha1.EndpointEntry{{
-								Endpoint: "/api/users",
-								Method:   "GET",
-								Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/api/users"}},
-							}},
+							Endpoints: []v1alpha1.EndpointEntry{
+								{
+									Endpoint: "/api/users",
+									Method:   "GET",
+									Backends: []v1alpha1.BackendSpec{
+										{Host: []string{"http://svc"}, URLPattern: "/api/users"},
+									},
+								},
+							},
 						},
 					},
 				},
@@ -215,7 +223,11 @@ func TestAutoConfigReconcile_InitialPhase(t *testing.T) {
 	}
 
 	var updated v1alpha1.KrakenDAutoConfig
-	if err := c.Get(context.Background(), types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace}, &updated); err != nil {
+	if err := c.Get(
+		context.Background(),
+		types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+		&updated,
+	); err != nil {
 		t.Fatalf("getting updated autoconfig: %v", err)
 	}
 	if updated.Status.Phase != v1alpha1.AutoConfigPhasePending {
@@ -243,7 +255,11 @@ func TestAutoConfigReconcile_FetchError(t *testing.T) {
 	}
 
 	var updated v1alpha1.KrakenDAutoConfig
-	if err := c.Get(context.Background(), types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace}, &updated); err != nil {
+	if err := c.Get(
+		context.Background(),
+		types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+		&updated,
+	); err != nil {
 		t.Fatalf("getting updated autoconfig: %v", err)
 	}
 	if updated.Status.Phase != v1alpha1.AutoConfigPhaseError {
@@ -272,7 +288,11 @@ func TestAutoConfigReconcile_CUEError(t *testing.T) {
 	}
 
 	var updated v1alpha1.KrakenDAutoConfig
-	if err := c.Get(context.Background(), types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace}, &updated); err != nil {
+	if err := c.Get(
+		context.Background(),
+		types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+		&updated,
+	); err != nil {
 		t.Fatalf("getting updated autoconfig: %v", err)
 	}
 	if updated.Status.Phase != v1alpha1.AutoConfigPhaseError {
@@ -299,7 +319,11 @@ func TestAutoConfigReconcile_FullPipeline(t *testing.T) {
 	}
 
 	var updated v1alpha1.KrakenDAutoConfig
-	if err := c.Get(context.Background(), types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace}, &updated); err != nil {
+	if err := c.Get(
+		context.Background(),
+		types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+		&updated,
+	); err != nil {
 		t.Fatalf("getting updated autoconfig: %v", err)
 	}
 	if updated.Status.Phase != v1alpha1.AutoConfigPhaseSynced {
@@ -349,7 +373,11 @@ func TestAutoConfigReconcile_NoChangeSkipsReEvaluation(t *testing.T) {
 	}
 
 	var updated v1alpha1.KrakenDAutoConfig
-	if err := c.Get(context.Background(), types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace}, &updated); err != nil {
+	if err := c.Get(
+		context.Background(),
+		types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+		&updated,
+	); err != nil {
 		t.Fatalf("getting updated autoconfig: %v", err)
 	}
 	if updated.Status.Phase != v1alpha1.AutoConfigPhaseSynced {
@@ -386,7 +414,11 @@ func TestAutoConfigReconcile_SpecChangeTriggersReEvaluation(t *testing.T) {
 	}
 
 	var updated v1alpha1.KrakenDAutoConfig
-	if err := c.Get(context.Background(), types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace}, &updated); err != nil {
+	if err := c.Get(
+		context.Background(),
+		types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+		&updated,
+	); err != nil {
 		t.Fatalf("getting updated autoconfig: %v", err)
 	}
 	if updated.Status.Phase != v1alpha1.AutoConfigPhaseSynced {
@@ -486,7 +518,11 @@ func TestAutoConfigReconcile_WithFilter(t *testing.T) {
 	f, ce, fi, g := defaultMocks()
 	// Filter returns a subset
 	fi.result = []v1alpha1.EndpointEntry{
-		{Endpoint: "/api/users", Method: "GET", Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/api/users"}}},
+		{
+			Endpoint: "/api/users",
+			Method:   "GET",
+			Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/api/users"}},
+		},
 	}
 	r := newACReconciler(c, f, ce, fi, g)
 
@@ -498,7 +534,11 @@ func TestAutoConfigReconcile_WithFilter(t *testing.T) {
 	}
 
 	var updated v1alpha1.KrakenDAutoConfig
-	if err := c.Get(context.Background(), types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace}, &updated); err != nil {
+	if err := c.Get(
+		context.Background(),
+		types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+		&updated,
+	); err != nil {
 		t.Fatalf("getting updated autoconfig: %v", err)
 	}
 	if updated.Status.Phase != v1alpha1.AutoConfigPhaseSynced {
@@ -527,7 +567,11 @@ func TestAutoConfigReconcile_GeneratorError(t *testing.T) {
 	}
 
 	var updated v1alpha1.KrakenDAutoConfig
-	if err := c.Get(context.Background(), types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace}, &updated); err != nil {
+	if err := c.Get(
+		context.Background(),
+		types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+		&updated,
+	); err != nil {
 		t.Fatalf("getting updated autoconfig: %v", err)
 	}
 	if updated.Status.Phase != v1alpha1.AutoConfigPhaseError {

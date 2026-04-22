@@ -1252,7 +1252,11 @@ func TestGatewayReconcile_CrossNamespacePolicies(t *testing.T) {
 			GatewayRef: v1alpha1.GatewayRef{Name: "test-gw", Namespace: "default"},
 			Endpoints: []v1alpha1.EndpointEntry{
 				{Endpoint: "/api", Method: "GET", Backends: []v1alpha1.BackendSpec{
-					{Host: []string{"http://svc:8080"}, URLPattern: "/", PolicyRef: &v1alpha1.PolicyRef{Name: "cross-pol"}},
+					{
+						Host:       []string{"http://svc:8080"},
+						URLPattern: "/",
+						PolicyRef:  &v1alpha1.PolicyRef{Name: "cross-pol"},
+					},
 				}},
 			},
 		},

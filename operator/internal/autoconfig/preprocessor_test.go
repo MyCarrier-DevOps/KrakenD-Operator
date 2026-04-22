@@ -90,7 +90,9 @@ func TestStripServers_NoServers(t *testing.T) {
 }
 
 func TestStripServers_YAMLInput(t *testing.T) {
-	input := []byte("openapi: 3.0.0\ninfo:\n  title: t\n  version: '1'\nservers:\n  - url: https://upstream\npaths: {}\n")
+	input := []byte(
+		"openapi: 3.0.0\ninfo:\n  title: t\n  version: '1'\nservers:\n  - url: https://upstream\npaths: {}\n",
+	)
 	out, err := StripServers(input)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

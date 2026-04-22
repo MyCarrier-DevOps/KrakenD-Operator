@@ -105,7 +105,8 @@ func TestBuildDeployment_Minimal(t *testing.T) {
 	if *c.SecurityContext.AllowPrivilegeEscalation {
 		t.Error("expected no privilege escalation")
 	}
-	if c.SecurityContext.Capabilities == nil || len(c.SecurityContext.Capabilities.Drop) != 1 || c.SecurityContext.Capabilities.Drop[0] != "ALL" {
+	if c.SecurityContext.Capabilities == nil || len(c.SecurityContext.Capabilities.Drop) != 1 ||
+		c.SecurityContext.Capabilities.Drop[0] != "ALL" {
 		t.Error("expected capabilities drop ALL")
 	}
 

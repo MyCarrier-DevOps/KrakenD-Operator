@@ -76,7 +76,11 @@ func TestEndpointReconcile_InitialPhase(t *testing.T) {
 	}
 
 	var updated v1alpha1.KrakenDEndpoint
-	if err := c.Get(context.Background(), types.NamespacedName{Name: "ep1", Namespace: "default"}, &updated); err != nil {
+	if err := c.Get(
+		context.Background(),
+		types.NamespacedName{Name: "ep1", Namespace: "default"},
+		&updated,
+	); err != nil {
 		t.Fatalf("failed to get endpoint: %v", err)
 	}
 	if updated.Status.Phase != v1alpha1.EndpointPhaseActive {
@@ -108,7 +112,11 @@ func TestEndpointReconcile_GatewayNotFound(t *testing.T) {
 	}
 
 	var updated v1alpha1.KrakenDEndpoint
-	if err := c.Get(context.Background(), types.NamespacedName{Name: "ep1", Namespace: "default"}, &updated); err != nil {
+	if err := c.Get(
+		context.Background(),
+		types.NamespacedName{Name: "ep1", Namespace: "default"},
+		&updated,
+	); err != nil {
 		t.Fatalf("failed to get: %v", err)
 	}
 	if updated.Status.Phase != v1alpha1.EndpointPhaseDetached {
@@ -159,7 +167,11 @@ func TestEndpointReconcile_PolicyNotFound(t *testing.T) {
 	}
 
 	var updated v1alpha1.KrakenDEndpoint
-	if err := c.Get(context.Background(), types.NamespacedName{Name: "ep1", Namespace: "default"}, &updated); err != nil {
+	if err := c.Get(
+		context.Background(),
+		types.NamespacedName{Name: "ep1", Namespace: "default"},
+		&updated,
+	); err != nil {
 		t.Fatalf("failed to get: %v", err)
 	}
 	if updated.Status.Phase != v1alpha1.EndpointPhaseInvalid {
@@ -216,7 +228,11 @@ func TestEndpointReconcile_Active(t *testing.T) {
 	}
 
 	var updated v1alpha1.KrakenDEndpoint
-	if err := c.Get(context.Background(), types.NamespacedName{Name: "ep1", Namespace: "default"}, &updated); err != nil {
+	if err := c.Get(
+		context.Background(),
+		types.NamespacedName{Name: "ep1", Namespace: "default"},
+		&updated,
+	); err != nil {
 		t.Fatalf("failed to get: %v", err)
 	}
 	if updated.Status.Phase != v1alpha1.EndpointPhaseActive {
@@ -352,7 +368,13 @@ func TestEndpointReconcile_NoOpWhenUnchanged(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "ep1", Namespace: "default", Generation: 1},
 		Spec: v1alpha1.KrakenDEndpointSpec{
 			GatewayRef: v1alpha1.GatewayRef{Name: "gw1"},
-			Endpoints:  []v1alpha1.EndpointEntry{{Endpoint: "/test", Method: "GET", Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc:8080"}, URLPattern: "/"}}}},
+			Endpoints: []v1alpha1.EndpointEntry{
+				{
+					Endpoint: "/test",
+					Method:   "GET",
+					Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc:8080"}, URLPattern: "/"}},
+				},
+			},
 		},
 		Status: v1alpha1.KrakenDEndpointStatus{
 			Phase:              v1alpha1.EndpointPhaseActive,
@@ -360,7 +382,13 @@ func TestEndpointReconcile_NoOpWhenUnchanged(t *testing.T) {
 			EndpointCount:      1,
 			Methods:            "GET",
 			Conditions: []metav1.Condition{
-				{Type: v1alpha1.ConditionAvailable, Status: metav1.ConditionTrue, Reason: "ReferencesValid", Message: "All gateway and policy references are valid", ObservedGeneration: 1},
+				{
+					Type:               v1alpha1.ConditionAvailable,
+					Status:             metav1.ConditionTrue,
+					Reason:             "ReferencesValid",
+					Message:            "All gateway and policy references are valid",
+					ObservedGeneration: 1,
+				},
 			},
 		},
 	}
@@ -391,7 +419,13 @@ func TestEndpointReconcile_DetachedToActive(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "ep1", Namespace: "default"},
 		Spec: v1alpha1.KrakenDEndpointSpec{
 			GatewayRef: v1alpha1.GatewayRef{Name: "gw1"},
-			Endpoints:  []v1alpha1.EndpointEntry{{Endpoint: "/test", Method: "GET", Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc:8080"}, URLPattern: "/"}}}},
+			Endpoints: []v1alpha1.EndpointEntry{
+				{
+					Endpoint: "/test",
+					Method:   "GET",
+					Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc:8080"}, URLPattern: "/"}},
+				},
+			},
 		},
 		Status: v1alpha1.KrakenDEndpointStatus{Phase: v1alpha1.EndpointPhaseDetached},
 	}
