@@ -254,14 +254,22 @@ func pointerLookup(doc map[string]any, pointer string) (any, error) {
 }
 
 // sanitizeRefName produces a deterministic local schema name from an
-// absolute URL + fragment. Uses the final segment of the fragment when
-// available (e.g. #/components/schemas/Pet → "Pet"), prefixed with the
-// basename of the document for disambiguation.
+// absolute URL + fragment. All non-empty segments of the fragment path
+// are joined with underscores (e.g. #/components/schemas/Pet →
+// "components_schemas_Pet"), prefixed with the basename of the document
+// for disambiguation. Using the full path avoids collisions when
+// different fragment paths share the same leaf name.
 func sanitizeRefName(absoluteURL, fragment string) string {
-	var leaf string
+	var fragPart string
 	if fragment != "" {
-		parts := strings.Split(fragment, "/")
-		leaf = parts[len(parts)-1]
+		parts := strings.Split(strings.TrimPrefix(fragment, "/"), "/")
+		var nonEmpty []string
+		for _, p := range parts {
+			if p != "" {
+				nonEmpty = append(nonEmpty, p)
+			}
+		}
+		fragPart = strings.Join(nonEmpty, "_")
 	}
 
 	u, err := url.Parse(absoluteURL)
@@ -277,7 +285,7 @@ func sanitizeRefName(absoluteURL, fragment string) string {
 		}
 	}
 
-	name := strings.Trim(docBase+"_"+leaf, "_")
+	name := strings.Trim(docBase+"_"+fragPart, "_")
 	if name == "" {
 		name = "external_ref"
 	}

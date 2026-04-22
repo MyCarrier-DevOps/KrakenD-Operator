@@ -80,12 +80,12 @@ func TestResolveExternalRefs_InlinesAndRewrites(t *testing.T) {
 	}
 
 	raw := string(resolved)
-	if !strings.Contains(raw, `"$ref":"#/components/schemas/pet_Pet"`) {
+	if !strings.Contains(raw, `"$ref":"#/components/schemas/pet_definitions_Pet"`) {
 		t.Fatalf("rewritten $ref missing; got: %s", raw)
 	}
 	comps, _ := out["components"].(map[string]any)
 	schemas, _ := comps["schemas"].(map[string]any)
-	if schemas["pet_Pet"] == nil {
+	if schemas["pet_definitions_Pet"] == nil {
 		t.Fatalf("inlined schema missing; schemas=%v", schemas)
 	}
 	if fetcher.hits["https://schemas.example.com/pet.json"] != 1 {
@@ -271,5 +271,32 @@ func TestResolveExternalRefs_CycleDetection(t *testing.T) {
 	var parsed map[string]any
 	if err := json.Unmarshal(resolved, &parsed); err != nil {
 		t.Fatalf("resolved document is not valid JSON: %v", err)
+	}
+}
+
+func TestSanitizeRefName_NoCollision(t *testing.T) {
+	// Two refs from the same doc with the same leaf but different paths
+	// must produce distinct names.
+	n1 := sanitizeRefName("https://example.com/doc.yaml", "/definitions/Pet")
+	n2 := sanitizeRefName("https://example.com/doc.yaml", "/components/schemas/Pet")
+	if n1 == n2 {
+		t.Fatalf("expected distinct names, both got %q", n1)
+	}
+	// Verify full fragment path is embedded.
+	if !strings.Contains(n1, "definitions_Pet") {
+		t.Errorf("expected fragment path in name, got %q", n1)
+	}
+	if !strings.Contains(n2, "components_schemas_Pet") {
+		t.Errorf("expected fragment path in name, got %q", n2)
+	}
+}
+
+func TestSanitizeRefName_EmptyFragment(t *testing.T) {
+	name := sanitizeRefName("https://example.com/common.yaml", "")
+	if name == "" || name == "external_ref" {
+		// Should at least contain the doc basename.
+	}
+	if !strings.Contains(name, "common") {
+		t.Errorf("expected doc basename in name, got %q", name)
 	}
 }
