@@ -21,6 +21,9 @@ import (
 	"fmt"
 )
 
+// httpMethods lists the OpenAPI 3.x operation keys within a path-item.
+var httpMethods = []string{"get", "put", "post", "delete", "options", "head", "patch", "trace"}
+
 // StripServers removes the OpenAPI `servers` field from the root document
 // and from any path-item or operation overrides. The KrakenD gateway is
 // the externally-visible server, so upstream service URLs must not leak
@@ -44,7 +47,11 @@ func StripServers(specData []byte) ([]byte, error) {
 				continue
 			}
 			delete(pathItem, "servers")
-			for _, opVal := range pathItem {
+			for _, method := range httpMethods {
+				opVal, ok := pathItem[method]
+				if !ok {
+					continue
+				}
 				op, ok := opVal.(map[string]any)
 				if !ok {
 					continue

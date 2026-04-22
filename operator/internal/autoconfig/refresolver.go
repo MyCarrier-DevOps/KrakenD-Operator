@@ -77,9 +77,15 @@ func ResolveExternalRefs(
 			components["schemas"] = schemas
 		}
 		for name, body := range resolver.inlined {
-			if _, exists := schemas[name]; !exists {
-				schemas[name] = body
+			if _, exists := schemas[name]; exists {
+				msg := fmt.Sprintf(
+					"external ref schema name collision: %q already exists in components/schemas; skipping",
+					name,
+				)
+				resolver.warnings = append(resolver.warnings, msg)
+				continue
 			}
+			schemas[name] = body
 		}
 	}
 
