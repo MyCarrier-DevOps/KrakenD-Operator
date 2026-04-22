@@ -178,7 +178,7 @@ func (r *refResolver) resolveExternal(ref string) (string, error) {
 			r.inlined = map[string]any{}
 		}
 		if _, exists := r.inlined[name]; !exists {
-			r.inlined[name] = target
+			r.inlined[name] = deepCloneJSON(target)
 		}
 		return name, nil
 	}
@@ -197,7 +197,14 @@ func (r *refResolver) resolveExternal(ref string) (string, error) {
 	if r.inlined == nil {
 		r.inlined = map[string]any{}
 	}
-	r.inlined[name] = target
+	if _, exists := r.inlined[name]; exists {
+		r.warnings = append(r.warnings, fmt.Sprintf(
+			"external ref name collision: %q produced by multiple sources; keeping first",
+			name,
+		))
+	} else {
+		r.inlined[name] = target
+	}
 	return name, nil
 }
 

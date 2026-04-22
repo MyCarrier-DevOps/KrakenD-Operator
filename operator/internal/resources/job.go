@@ -29,7 +29,7 @@ import (
 const (
 	// DefaultPostRestartJobImage is the fallback image for the post-restart
 	// Job container when the user does not override it.
-	DefaultPostRestartJobImage = "bash:5"
+	DefaultPostRestartJobImage = "bash:5.2"
 
 	// PostRestartJobChecksumAnnotation records the config checksum that
 	// triggered the Job. Used for idempotent Job naming.
