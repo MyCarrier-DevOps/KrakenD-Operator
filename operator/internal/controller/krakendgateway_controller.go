@@ -854,6 +854,9 @@ func (r *KrakenDGatewayReconciler) reconcilePostRestartJob(
 	existing := &batchv1.Job{}
 	err := r.Get(ctx, types.NamespacedName{Name: jobName, Namespace: gw.Namespace}, existing)
 	if err == nil {
+		// Job already exists — ensure the status records the checksum even
+		// if a previous status update was lost (e.g. conflict).
+		gw.Status.LastPostRestartJobChecksum = configChecksum
 		return nil
 	}
 	if !errors.IsNotFound(err) {
