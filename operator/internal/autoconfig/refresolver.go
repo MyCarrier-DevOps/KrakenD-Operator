@@ -36,7 +36,7 @@ import (
 //
 // baseURL is used to resolve relative references. When the source is a
 // ConfigMap (no URL), external refs are left untouched and a warning is
-// returned via the errors slice.
+// returned via the warnings slice.
 //
 // The returned JSON is always JSON (regardless of input format). External
 // documents fetched as YAML are converted to JSON before inlining.
@@ -166,6 +166,7 @@ func (r *refResolver) resolveExternal(ref string) (string, error) {
 	// Cycle detection: if we are already resolving this ref, short-circuit.
 	refKey := absolute + "#" + fragment
 	if r.resolving[refKey] {
+		r.warnings = append(r.warnings, fmt.Sprintf("cycle detected for %s, skipping recursive resolution", refKey))
 		// Already in-flight — return the name so callers get a valid local ref.
 		if r.inlined == nil {
 			r.inlined = map[string]any{}
@@ -304,15 +305,11 @@ func deepCloneJSON(v any) any {
 }
 
 // decodeSpec accepts a JSON or YAML document and returns it as a generic map.
+// It tries json.Unmarshal first and only falls back to YAML conversion on
+// failure, avoiding an extra string allocation for the common JSON case.
 func decodeSpec(data []byte) (map[string]any, error) {
-	trimmed := strings.TrimLeftFunc(string(data), func(r rune) bool {
-		return r == ' ' || r == '\t' || r == '\n' || r == '\r' || r == '\ufeff'
-	})
-	if strings.HasPrefix(trimmed, "{") {
-		var out map[string]any
-		if err := json.Unmarshal(data, &out); err != nil {
-			return nil, err
-		}
+	var out map[string]any
+	if err := json.Unmarshal(data, &out); err == nil {
 		return out, nil
 	}
 	// Fall back to YAML (also parses JSON).
@@ -320,7 +317,6 @@ func decodeSpec(data []byte) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	var out map[string]any
 	if err := json.Unmarshal(asJSON, &out); err != nil {
 		return nil, err
 	}

@@ -264,6 +264,12 @@ func TestResolveExternalRefs_CycleDetection(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	// The cycle should produce a warning, not a panic/infinite recursion.
-	_ = warnings
-	_ = resolved
+	if len(warnings) == 0 {
+		t.Error("expected at least one cycle-detection warning")
+	}
+	// The returned document must still be valid JSON.
+	var parsed map[string]any
+	if err := json.Unmarshal(resolved, &parsed); err != nil {
+		t.Fatalf("resolved document is not valid JSON: %v", err)
+	}
 }
