@@ -178,15 +178,10 @@ func (r *refResolver) resolveExternal(ref string) (string, error) {
 	name := sanitizeRefName(absolute, fragment)
 
 	// Cycle detection: if we are already resolving this ref, short-circuit.
+	// Do NOT write to r.inlined here — the outer (first) call will store
+	// the properly-walked clone after its r.walk completes.
 	if r.resolving[refKey] {
 		r.warnings = append(r.warnings, fmt.Sprintf("cycle detected for %s, skipping recursive resolution", refKey))
-		// Already in-flight — return the name so callers get a valid local ref.
-		if r.inlined == nil {
-			r.inlined = map[string]any{}
-		}
-		if _, exists := r.inlined[name]; !exists {
-			r.inlined[name] = deepCloneJSON(target)
-		}
 		return name, nil
 	}
 	if r.resolving == nil {

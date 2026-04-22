@@ -111,7 +111,9 @@ func TestResolveExternalRefs_RelativeRef(t *testing.T) {
 }
 
 func TestResolveExternalRefs_InternalRefsUntouched(t *testing.T) {
-	main := []byte(`{"components":{"schemas":{"X":{"type":"string"}}},"paths":{"/a":{"get":{"responses":{"200":{"$ref":"#/components/schemas/X"}}}}}}`)
+	main := []byte(
+		`{"components":{"schemas":{"X":{"type":"string"}}},"paths":{"/a":{"get":{"responses":{"200":{"$ref":"#/components/schemas/X"}}}}}}`,
+	)
 	fetcher := &stubFetcher{docs: map[string][]byte{}}
 	resolved, warnings, err := ResolveExternalRefs(context.Background(), main,
 		"https://api.example.com/openapi.json", fetcher, FetchSource{})
@@ -244,9 +246,10 @@ func TestDeepCloneJSON(t *testing.T) {
 }
 
 func TestResolveExternalRefs_CycleDetection(t *testing.T) {
-	// Doc A references Doc B which references Doc A — must not infinite loop.
-	docA := `{"openapi":"3.0.0","info":{"title":"A","version":"1"},"paths":{"/a":{"get":{"responses":{"200":{"content":{"application/json":{"schema":{"$ref":"b.yaml#/components/schemas/B"}}}}}}}}}`
-	docB := `{"components":{"schemas":{"B":{"type":"object","properties":{"loop":{"$ref":"a.yaml#/components/schemas/Cycle"}}}}}}`
+	// Doc A references Doc B's schema, and Doc B references Doc A's schema
+	// back — a genuine mutual cycle that must not infinite loop.
+	docA := `{"openapi":"3.0.0","info":{"title":"A","version":"1"},"components":{"schemas":{"AType":{"type":"object","properties":{"child":{"$ref":"b.yaml#/components/schemas/BType"}}}}},"paths":{"/a":{"get":{"responses":{"200":{"content":{"application/json":{"schema":{"$ref":"b.yaml#/components/schemas/BType"}}}}}}}}}`
+	docB := `{"components":{"schemas":{"BType":{"type":"object","properties":{"parent":{"$ref":"a.yaml#/components/schemas/AType"}}}}}}`
 
 	fetcher := &stubFetcher{docs: map[string][]byte{
 		"https://example.com/b.yaml": []byte(docB),
@@ -267,10 +270,31 @@ func TestResolveExternalRefs_CycleDetection(t *testing.T) {
 	if len(warnings) == 0 {
 		t.Error("expected at least one cycle-detection warning")
 	}
+	hasCycleWarning := false
+	for _, w := range warnings {
+		if strings.Contains(w, "cycle detected") {
+			hasCycleWarning = true
+			break
+		}
+	}
+	if !hasCycleWarning {
+		t.Errorf("expected a 'cycle detected' warning, got: %v", warnings)
+	}
 	// The returned document must still be valid JSON.
 	var parsed map[string]any
 	if err := json.Unmarshal(resolved, &parsed); err != nil {
 		t.Fatalf("resolved document is not valid JSON: %v", err)
+	}
+	// The inlined BType schema should have its self-ref rewritten to a local ref.
+	schemas, _ := parsed["components"].(map[string]any)["schemas"].(map[string]any)
+	found := false
+	for k := range schemas {
+		if strings.Contains(k, "BType") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected BType inlined into components/schemas, got keys: %v", schemas)
 	}
 }
 
