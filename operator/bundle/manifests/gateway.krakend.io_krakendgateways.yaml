@@ -829,7 +829,7 @@ spec:
                   sidecarImage:
                     description: |-
                       SidecarImage overrides the sidecar httpd image. Defaults to
-                      "busybox:latest" which serves via `httpd -f -p PORT -h /openapi`.
+                      "busybox:1.37" which serves via `httpd -f -p PORT -h /openapi`.
                     type: string
                   skipJsonSchema:
                     description: |-
