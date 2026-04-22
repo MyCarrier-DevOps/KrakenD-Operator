@@ -201,7 +201,11 @@ func TestRender_ConflictDetection(t *testing.T) {
 			Spec: v1alpha1.KrakenDEndpointSpec{
 				GatewayRef: v1alpha1.GatewayRef{Name: "test"},
 				Endpoints: []v1alpha1.EndpointEntry{
-					{Endpoint: "/conflict", Method: "GET", Backends: []v1alpha1.BackendSpec{{Host: []string{"http://a:80"}, URLPattern: "/a"}}},
+					{
+						Endpoint: "/conflict",
+						Method:   "GET",
+						Backends: []v1alpha1.BackendSpec{{Host: []string{"http://a:80"}, URLPattern: "/a"}},
+					},
 				},
 			},
 		},
@@ -214,7 +218,11 @@ func TestRender_ConflictDetection(t *testing.T) {
 			Spec: v1alpha1.KrakenDEndpointSpec{
 				GatewayRef: v1alpha1.GatewayRef{Name: "test"},
 				Endpoints: []v1alpha1.EndpointEntry{
-					{Endpoint: "/conflict", Method: "GET", Backends: []v1alpha1.BackendSpec{{Host: []string{"http://b:80"}, URLPattern: "/b"}}},
+					{
+						Endpoint: "/conflict",
+						Method:   "GET",
+						Backends: []v1alpha1.BackendSpec{{Host: []string{"http://b:80"}, URLPattern: "/b"}},
+					},
 				},
 			},
 		},

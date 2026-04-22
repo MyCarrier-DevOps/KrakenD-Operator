@@ -169,6 +169,23 @@ endpoint: {
 										if _p.required != _|_ {
 											required: _p.required
 										}
+										if _p.schema != _|_ {
+											if _p.schema.type != _|_ {
+												type: _p.schema.type
+											}
+											if _p.schema.format != _|_ {
+												format: _p.schema.format
+											}
+											if _p.schema.enum != _|_ {
+												enum: _p.schema.enum
+											}
+										}
+										if _p.example != _|_ {
+											example: _p.example
+										}
+										if _p.examples != _|_ {
+											examples: _p.examples
+										}
 									}]
 									param_definition: [for _p in _op.parameters if _p["in"] == "path" {
 										if _p.description != _|_ {
@@ -176,12 +193,49 @@ endpoint: {
 										}
 										required: true
 										name:     _p.name
+										if _p.schema != _|_ {
+											if _p.schema.type != _|_ {
+												type: _p.schema.type
+											}
+											if _p.schema.format != _|_ {
+												format: _p.schema.format
+											}
+											if _p.schema.enum != _|_ {
+												enum: _p.schema.enum
+											}
+										}
+										if _p.example != _|_ {
+											example: _p.example
+										}
+										if _p.examples != _|_ {
+											examples: _p.examples
+										}
+									}]
+									header_definition: [for _p in _op.parameters if _p["in"] == "header" {
+										if _p.description != _|_ {
+											description: _p.description
+										}
+										name: _p.name
+										if _p.required != _|_ {
+											required: _p.required
+										}
+										if _p.schema != _|_ {
+											if _p.schema.type != _|_ {
+												type: _p.schema.type
+											}
+											if _p.schema.enum != _|_ {
+												enum: _p.schema.enum
+											}
+										}
 									}]
 								}
 								if _op.requestBody.content != _|_ {
 									request_definition: {
 										[for _ctKey, _ctVal in _op.requestBody.content {
 											content_type: _ctKey
+											if _op.requestBody.description != _|_ {
+												description: _op.requestBody.description
+											}
 											if _ctVal.schema.$ref != _|_ {
 												let _parts = strings.Split(_ctVal.schema.$ref, "/")
 												ref: strings.ToLower(_parts[len(_parts)-1])
@@ -214,6 +268,9 @@ endpoint: {
 											}
 											if _ctVal.example != _|_ {
 												example: _ctVal.example
+											}
+											if _ctVal.examples != _|_ {
+												examples: _ctVal.examples
 											}
 										}]
 									}

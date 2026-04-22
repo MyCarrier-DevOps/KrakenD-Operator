@@ -220,21 +220,27 @@ func TestScenario_PerOperationOverrides(t *testing.T) {
 				Endpoint:    "/api/v1/orders",
 				Timeout:     &uploadTimeout,
 				ExtraConfig: &runtime.RawExtension{
-					Raw: []byte(`{"qos/ratelimit/router":{"every":"1s","max_rate":10,"strategy":"header","key":"Authorization"}}`),
+					Raw: []byte(
+						`{"qos/ratelimit/router":{"every":"1s","max_rate":10,"strategy":"header","key":"Authorization"}}`,
+					),
 				},
 			},
 			{
 				OperationID: "DeleteOrder",
 				Endpoint:    "/api/v1/orders/referenceId/{referenceId}",
 				ExtraConfig: &runtime.RawExtension{
-					Raw: []byte(`{"qos/ratelimit/router":{"every":"1s","max_rate":10,"strategy":"header","key":"Authorization"}}`),
+					Raw: []byte(
+						`{"qos/ratelimit/router":{"every":"1s","max_rate":10,"strategy":"header","key":"Authorization"}}`,
+					),
 				},
 			},
 			{
 				OperationID: "Order",
 				Endpoint:    "/api/v1/orders/referenceId/{referenceId}",
 				ExtraConfig: &runtime.RawExtension{
-					Raw: []byte(`{"qos/ratelimit/router":{"every":"1s","max_rate":10,"strategy":"header","key":"Authorization"}}`),
+					Raw: []byte(
+						`{"qos/ratelimit/router":{"every":"1s","max_rate":10,"strategy":"header","key":"Authorization"}}`,
+					),
 				},
 			},
 		},
@@ -321,7 +327,10 @@ func TestScenario_URLTransformWithOverrides(t *testing.T) {
 	// Order: URL transform applied (no override), strip /api, add /api/v2
 	order := entries["Order"]
 	if order.Endpoint != "/api/v2/Orders/referenceId/{referenceId}" {
-		t.Errorf("Order: expected URL transform result /api/v2/Orders/referenceId/{referenceId}, got %s", order.Endpoint)
+		t.Errorf(
+			"Order: expected URL transform result /api/v2/Orders/referenceId/{referenceId}, got %s",
+			order.Endpoint,
+		)
 	}
 	if order.Backends[0].Host[0] != "http://order-api.dev.svc:8080" {
 		t.Errorf("Order: expected host mapping applied, got %s", order.Backends[0].Host[0])
@@ -724,10 +733,12 @@ func TestScenario_PerOperationFieldOverrides(t *testing.T) {
 	if upload.ConcurrentCalls == nil || *upload.ConcurrentCalls != 3 {
 		t.Errorf("UploadOrder: expected concurrentCalls 3, got %v", upload.ConcurrentCalls)
 	}
-	if len(upload.InputHeaders) != 2 || upload.InputHeaders[0] != "Content-Type" || upload.InputHeaders[1] != "Environment" {
+	if len(upload.InputHeaders) != 2 || upload.InputHeaders[0] != "Content-Type" ||
+		upload.InputHeaders[1] != "Environment" {
 		t.Errorf("UploadOrder: expected inputHeaders [Content-Type Environment], got %v", upload.InputHeaders)
 	}
-	if len(upload.InputQueryStrings) != 2 || upload.InputQueryStrings[0] != "page" || upload.InputQueryStrings[1] != "limit" {
+	if len(upload.InputQueryStrings) != 2 || upload.InputQueryStrings[0] != "page" ||
+		upload.InputQueryStrings[1] != "limit" {
 		t.Errorf("UploadOrder: expected inputQueryStrings [page limit], got %v", upload.InputQueryStrings)
 	}
 
@@ -743,7 +754,10 @@ func TestScenario_PerOperationFieldOverrides(t *testing.T) {
 		order.InputHeaders[0] != "Authorization" ||
 		order.InputHeaders[1] != "X-MC-Api-Key" ||
 		order.InputHeaders[2] != "Content-Type" {
-		t.Errorf("Order: expected default inputHeaders [Authorization X-MC-Api-Key Content-Type], got %v", order.InputHeaders)
+		t.Errorf(
+			"Order: expected default inputHeaders [Authorization X-MC-Api-Key Content-Type], got %v",
+			order.InputHeaders,
+		)
 	}
 	if len(order.InputQueryStrings) != 0 {
 		t.Errorf("Order: expected no inputQueryStrings, got %v", order.InputQueryStrings)
@@ -766,7 +780,9 @@ func TestScenario_DefaultExtraConfig(t *testing.T) {
 			Timeout:      &defaultTimeout,
 			InputHeaders: []string{"Authorization", "X-MC-Api-Key", "Content-Type"},
 			ExtraConfig: &runtime.RawExtension{
-				Raw: []byte(`{"qos/ratelimit/router":{"every":"2s","max_rate":5,"strategy":"header","key":"Authorization"}}`),
+				Raw: []byte(
+					`{"qos/ratelimit/router":{"every":"2s","max_rate":5,"strategy":"header","key":"Authorization"}}`,
+				),
 			},
 		}},
 		Overrides: []v1alpha1.OperationOverride{
@@ -846,7 +862,9 @@ func TestScenario_DefaultAndOverrideDifferentExtraConfigKeys(t *testing.T) {
 				OperationID: "UploadOrder",
 				Endpoint:    "/api/v1/orders",
 				ExtraConfig: &runtime.RawExtension{
-					Raw: []byte(`{"qos/ratelimit/router":{"every":"1s","max_rate":10,"strategy":"header","key":"Authorization"}}`),
+					Raw: []byte(
+						`{"qos/ratelimit/router":{"every":"1s","max_rate":10,"strategy":"header","key":"Authorization"}}`,
+					),
 				},
 			},
 		},
@@ -917,7 +935,9 @@ func TestScenario_OverrideSameExtraConfigKeyDeepMerge(t *testing.T) {
 			Timeout:      &defaultTimeout,
 			InputHeaders: []string{"Authorization", "X-MC-Api-Key", "Content-Type"},
 			ExtraConfig: &runtime.RawExtension{
-				Raw: []byte(`{"qos/ratelimit/router":{"every":"1s","max_rate":10,"strategy":"header","key":"Authorization"}}`),
+				Raw: []byte(
+					`{"qos/ratelimit/router":{"every":"1s","max_rate":10,"strategy":"header","key":"Authorization"}}`,
+				),
 			},
 		}},
 		Overrides: []v1alpha1.OperationOverride{
@@ -1013,7 +1033,12 @@ func TestScenario_BackendDefaultsExtraConfig(t *testing.T) {
 				t.Fatalf("%s backend[%d]: unmarshal backend/http: %v", opID, i, err)
 			}
 			if httpCfg["return_error_code"] != true {
-				t.Errorf("%s backend[%d]: expected return_error_code=true, got %v", opID, i, httpCfg["return_error_code"])
+				t.Errorf(
+					"%s backend[%d]: expected return_error_code=true, got %v",
+					opID,
+					i,
+					httpCfg["return_error_code"],
+				)
 			}
 		}
 
@@ -1040,7 +1065,9 @@ func TestScenario_BackendDefaultsMergeWithOverride(t *testing.T) {
 		Defaults: &v1alpha1.Defaults{
 			Backend: &v1alpha1.BackendDefaults{
 				ExtraConfig: &runtime.RawExtension{
-					Raw: []byte(`{"backend/http":{"return_error_code":true},"qos/ratelimit/proxy":{"max_rate":100,"capacity":100}}`),
+					Raw: []byte(
+						`{"backend/http":{"return_error_code":true},"qos/ratelimit/proxy":{"max_rate":100,"capacity":100}}`,
+					),
 				},
 			},
 		},
@@ -1111,7 +1138,9 @@ func TestScenario_FullDefaultsAndOverridesInteraction(t *testing.T) {
 				Timeout:      &defaultTimeout,
 				InputHeaders: []string{"Authorization", "X-MC-Api-Key", "Content-Type"},
 				ExtraConfig: &runtime.RawExtension{
-					Raw: []byte(`{"qos/ratelimit/router":{"every":"1s","max_rate":10,"strategy":"header","key":"Authorization"}}`),
+					Raw: []byte(
+						`{"qos/ratelimit/router":{"every":"1s","max_rate":10,"strategy":"header","key":"Authorization"}}`,
+					),
 				},
 			},
 			Backend: &v1alpha1.BackendDefaults{

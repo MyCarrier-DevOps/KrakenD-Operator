@@ -39,7 +39,11 @@ func TestFlattenEndpoints_SingleEndpoint(t *testing.T) {
 			Spec: v1alpha1.KrakenDEndpointSpec{
 				GatewayRef: v1alpha1.GatewayRef{Name: "gw"},
 				Endpoints: []v1alpha1.EndpointEntry{
-					{Endpoint: "/api/v1/users", Method: "GET", Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc:80"}, URLPattern: "/users"}}},
+					{
+						Endpoint: "/api/v1/users",
+						Method:   "GET",
+						Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc:80"}, URLPattern: "/users"}},
+					},
 				},
 			},
 		},
@@ -61,7 +65,11 @@ func TestFlattenEndpoints_NoConflictDifferentPaths(t *testing.T) {
 			Spec: v1alpha1.KrakenDEndpointSpec{
 				GatewayRef: v1alpha1.GatewayRef{Name: "gw"},
 				Endpoints: []v1alpha1.EndpointEntry{
-					{Endpoint: "/a", Method: "GET", Backends: []v1alpha1.BackendSpec{{Host: []string{"http://a:80"}, URLPattern: "/a"}}},
+					{
+						Endpoint: "/a",
+						Method:   "GET",
+						Backends: []v1alpha1.BackendSpec{{Host: []string{"http://a:80"}, URLPattern: "/a"}},
+					},
 				},
 			},
 		},
@@ -70,7 +78,11 @@ func TestFlattenEndpoints_NoConflictDifferentPaths(t *testing.T) {
 			Spec: v1alpha1.KrakenDEndpointSpec{
 				GatewayRef: v1alpha1.GatewayRef{Name: "gw"},
 				Endpoints: []v1alpha1.EndpointEntry{
-					{Endpoint: "/b", Method: "GET", Backends: []v1alpha1.BackendSpec{{Host: []string{"http://b:80"}, URLPattern: "/b"}}},
+					{
+						Endpoint: "/b",
+						Method:   "GET",
+						Backends: []v1alpha1.BackendSpec{{Host: []string{"http://b:80"}, URLPattern: "/b"}},
+					},
 				},
 			},
 		},
@@ -92,7 +104,11 @@ func TestFlattenEndpoints_SamePathDifferentMethod(t *testing.T) {
 			Spec: v1alpha1.KrakenDEndpointSpec{
 				GatewayRef: v1alpha1.GatewayRef{Name: "gw"},
 				Endpoints: []v1alpha1.EndpointEntry{
-					{Endpoint: "/api", Method: "GET", Backends: []v1alpha1.BackendSpec{{Host: []string{"http://a:80"}, URLPattern: "/a"}}},
+					{
+						Endpoint: "/api",
+						Method:   "GET",
+						Backends: []v1alpha1.BackendSpec{{Host: []string{"http://a:80"}, URLPattern: "/a"}},
+					},
 				},
 			},
 		},
@@ -101,7 +117,11 @@ func TestFlattenEndpoints_SamePathDifferentMethod(t *testing.T) {
 			Spec: v1alpha1.KrakenDEndpointSpec{
 				GatewayRef: v1alpha1.GatewayRef{Name: "gw"},
 				Endpoints: []v1alpha1.EndpointEntry{
-					{Endpoint: "/api", Method: "POST", Backends: []v1alpha1.BackendSpec{{Host: []string{"http://b:80"}, URLPattern: "/b"}}},
+					{
+						Endpoint: "/api",
+						Method:   "POST",
+						Backends: []v1alpha1.BackendSpec{{Host: []string{"http://b:80"}, URLPattern: "/b"}},
+					},
 				},
 			},
 		},
@@ -124,7 +144,11 @@ func TestFlattenEndpoints_ConflictOldestWins(t *testing.T) {
 			Spec: v1alpha1.KrakenDEndpointSpec{
 				GatewayRef: v1alpha1.GatewayRef{Name: "gw"},
 				Endpoints: []v1alpha1.EndpointEntry{
-					{Endpoint: "/dup", Method: "GET", Backends: []v1alpha1.BackendSpec{{Host: []string{"http://new:80"}, URLPattern: "/new"}}},
+					{
+						Endpoint: "/dup",
+						Method:   "GET",
+						Backends: []v1alpha1.BackendSpec{{Host: []string{"http://new:80"}, URLPattern: "/new"}},
+					},
 				},
 			},
 		},
@@ -133,7 +157,11 @@ func TestFlattenEndpoints_ConflictOldestWins(t *testing.T) {
 			Spec: v1alpha1.KrakenDEndpointSpec{
 				GatewayRef: v1alpha1.GatewayRef{Name: "gw"},
 				Endpoints: []v1alpha1.EndpointEntry{
-					{Endpoint: "/dup", Method: "GET", Backends: []v1alpha1.BackendSpec{{Host: []string{"http://old:80"}, URLPattern: "/old"}}},
+					{
+						Endpoint: "/dup",
+						Method:   "GET",
+						Backends: []v1alpha1.BackendSpec{{Host: []string{"http://old:80"}, URLPattern: "/old"}},
+					},
 				},
 			},
 		},
@@ -159,9 +187,21 @@ func TestFlattenEndpoints_SortedOutput(t *testing.T) {
 			Spec: v1alpha1.KrakenDEndpointSpec{
 				GatewayRef: v1alpha1.GatewayRef{Name: "gw"},
 				Endpoints: []v1alpha1.EndpointEntry{
-					{Endpoint: "/z", Method: "GET", Backends: []v1alpha1.BackendSpec{{Host: []string{"http://z:80"}, URLPattern: "/z"}}},
-					{Endpoint: "/a", Method: "POST", Backends: []v1alpha1.BackendSpec{{Host: []string{"http://a:80"}, URLPattern: "/a"}}},
-					{Endpoint: "/a", Method: "GET", Backends: []v1alpha1.BackendSpec{{Host: []string{"http://a:80"}, URLPattern: "/a"}}},
+					{
+						Endpoint: "/z",
+						Method:   "GET",
+						Backends: []v1alpha1.BackendSpec{{Host: []string{"http://z:80"}, URLPattern: "/z"}},
+					},
+					{
+						Endpoint: "/a",
+						Method:   "POST",
+						Backends: []v1alpha1.BackendSpec{{Host: []string{"http://a:80"}, URLPattern: "/a"}},
+					},
+					{
+						Endpoint: "/a",
+						Method:   "GET",
+						Backends: []v1alpha1.BackendSpec{{Host: []string{"http://a:80"}, URLPattern: "/a"}},
+					},
 				},
 			},
 		},

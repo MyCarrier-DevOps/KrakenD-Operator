@@ -33,6 +33,7 @@ import (
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/controller"
+	"github.com/mycarrier-devops/krakend-operator/internal/resources"
 )
 
 // GatewayValidator validates KrakenDGateway resources.
@@ -104,6 +105,18 @@ func (v *GatewayValidator) validate(gw *v1alpha1.KrakenDGateway) error {
 		))
 	}
 
+	if gw.Spec.OpenAPI != nil && gw.Spec.OpenAPI.Enabled {
+		gwPort := resources.GatewayPort(gw)
+		oaPort := resources.OpenAPIPort(gw)
+		if oaPort == gwPort {
+			errs = append(errs, field.Invalid(
+				field.NewPath("spec", "openapi", "port"),
+				oaPort,
+				"openapi port must differ from the gateway listen port",
+			))
+		}
+	}
+
 	if gw.Spec.Plugins != nil {
 		pvcCount := 0
 		for _, src := range gw.Spec.Plugins.Sources {
@@ -118,6 +131,13 @@ func (v *GatewayValidator) validate(gw *v1alpha1.KrakenDGateway) error {
 				"only one PVC plugin source is supported",
 			))
 		}
+	}
+
+	if gw.Spec.PostRestartJob != nil && gw.Spec.PostRestartJob.Enabled && gw.Spec.PostRestartJob.Script == "" {
+		errs = append(errs, field.Required(
+			field.NewPath("spec", "postRestartJob", "script"),
+			"script is required when postRestartJob is enabled",
+		))
 	}
 
 	return errs.ToAggregate()

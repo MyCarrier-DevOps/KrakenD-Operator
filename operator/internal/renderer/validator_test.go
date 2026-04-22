@@ -196,7 +196,9 @@ func TestPrepareValidationCopy_InvalidJSON(t *testing.T) {
 
 func TestPrepareValidationCopy_StripsEEExtraConfig(t *testing.T) {
 	v := NewValidator(ValidatorOptions{Executor: &mockExecutor{}, BinaryPath: "krakend"})
-	input := []byte(`{"version":3,"extra_config":{"backend/redis":{"host":"dragonfly:6379"},"telemetry/logging":{"level":"DEBUG"}}}`)
+	input := []byte(
+		`{"version":3,"extra_config":{"backend/redis":{"host":"dragonfly:6379"},"telemetry/logging":{"level":"DEBUG"}}}`,
+	)
 	out, err := v.PrepareValidationCopy(input, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -237,7 +239,9 @@ func TestPrepareValidationCopy_StripsEEExtraConfigRemovesEmptyBlock(t *testing.T
 
 func TestPrepareValidationCopy_StripsEEExtraConfigAndWildcard(t *testing.T) {
 	v := NewValidator(ValidatorOptions{Executor: &mockExecutor{}, BinaryPath: "krakend"})
-	input := []byte(`{"version":3,"extra_config":{"backend/redis":{"host":"dragonfly:6379"}},"endpoints":[{"endpoint":"/api","method":"GET"},{"endpoint":"/*","method":"GET"}]}`)
+	input := []byte(
+		`{"version":3,"extra_config":{"backend/redis":{"host":"dragonfly:6379"}},"endpoints":[{"endpoint":"/api","method":"GET"},{"endpoint":"/*","method":"GET"}]}`,
+	)
 	out, err := v.PrepareValidationCopy(input, true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

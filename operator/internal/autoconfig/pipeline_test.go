@@ -403,21 +403,27 @@ func TestEmbeddedCUE_OverridesApplied(t *testing.T) {
 			OperationID: "UploadOrder",
 			Endpoint:    "/api/v1/orders",
 			ExtraConfig: &runtime.RawExtension{
-				Raw: []byte(`{"qos/ratelimit/router":{"every":"1s","max_rate":10,"strategy":"header","key":"Authorization"}}`),
+				Raw: []byte(
+					`{"qos/ratelimit/router":{"every":"1s","max_rate":10,"strategy":"header","key":"Authorization"}}`,
+				),
 			},
 		},
 		{
 			OperationID: "Order",
 			Endpoint:    "/api/v1/orders/referenceId/{referenceId}",
 			ExtraConfig: &runtime.RawExtension{
-				Raw: []byte(`{"qos/ratelimit/router":{"every":"1s","max_rate":10,"strategy":"header","key":"Authorization"}}`),
+				Raw: []byte(
+					`{"qos/ratelimit/router":{"every":"1s","max_rate":10,"strategy":"header","key":"Authorization"}}`,
+				),
 			},
 		},
 		{
 			OperationID: "DeleteOrder",
 			Endpoint:    "/api/v1/orders/referenceId/{referenceId}",
 			ExtraConfig: &runtime.RawExtension{
-				Raw: []byte(`{"qos/ratelimit/router":{"every":"1s","max_rate":10,"strategy":"header","key":"Authorization"}}`),
+				Raw: []byte(
+					`{"qos/ratelimit/router":{"every":"1s","max_rate":10,"strategy":"header","key":"Authorization"}}`,
+				),
 			},
 		},
 	}
@@ -451,7 +457,10 @@ func TestEmbeddedCUE_OverridesApplied(t *testing.T) {
 			}
 		case "DeleteOrder":
 			if entry.Endpoint != "/api/v1/orders/referenceId/{referenceId}" {
-				t.Errorf("DeleteOrder: expected endpoint /api/v1/orders/referenceId/{referenceId}, got %s", entry.Endpoint)
+				t.Errorf(
+					"DeleteOrder: expected endpoint /api/v1/orders/referenceId/{referenceId}, got %s",
+					entry.Endpoint,
+				)
 			}
 		}
 

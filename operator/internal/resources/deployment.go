@@ -77,6 +77,40 @@ func BuildDeployment(
 	// Volumes and volume mounts
 	volumes, volumeMounts, initContainers := buildVolumes(gw)
 
+	// OpenAPI export init container + shared volume (so the sidecar can serve it)
+	oaInit, oaSidecar, oaVolume, oaMountForExport := buildOpenAPIPieces(gw, image)
+	if oaVolume != nil {
+		volumes = append(volumes, *oaVolume)
+	}
+	if oaInit != nil {
+		// The export init container needs the rendered config and writable /tmp.
+		oaInit.VolumeMounts = append(oaInit.VolumeMounts,
+			corev1.VolumeMount{
+				Name:      "config",
+				MountPath: "/etc/krakend/krakend.json",
+				SubPath:   "krakend.json",
+				ReadOnly:  true,
+			},
+			corev1.VolumeMount{
+				Name:      "tmp",
+				MountPath: "/tmp",
+			},
+		)
+		// EE gateways need the license file for krakend to start/export.
+		if gw.Spec.Edition == v1alpha1.EditionEE && gw.Spec.License != nil {
+			oaInit.VolumeMounts = append(oaInit.VolumeMounts, corev1.VolumeMount{
+				Name:      "license",
+				MountPath: "/etc/krakend/LICENSE",
+				SubPath:   "LICENSE",
+				ReadOnly:  true,
+			})
+		}
+		if oaMountForExport != nil {
+			oaInit.VolumeMounts = append(oaInit.VolumeMounts, *oaMountForExport)
+		}
+		initContainers = append(initContainers, *oaInit)
+	}
+
 	// Main container
 	container := corev1.Container{
 		Name:  "krakend",
@@ -143,6 +177,11 @@ func BuildDeployment(
 
 	gracePeriod := int64(60)
 
+	containers := []corev1.Container{container}
+	if oaSidecar != nil {
+		containers = append(containers, *oaSidecar)
+	}
+
 	dep.Spec.Template = corev1.PodTemplateSpec{
 		ObjectMeta: metav1.ObjectMeta{
 			Labels:      labels,
@@ -161,7 +200,7 @@ func BuildDeployment(
 				},
 			},
 			InitContainers: initContainers,
-			Containers:     []corev1.Container{container},
+			Containers:     containers,
 			Volumes:        volumes,
 		},
 	}
@@ -381,7 +420,7 @@ func buildMultiSourcePluginVolumes(
 			// use init container to copy from ConfigMap to shared emptyDir
 			initContainers = append(initContainers, corev1.Container{
 				Name:    fmt.Sprintf("plugin-cm-init-%d", i),
-				Image:   "busybox:latest",
+				Image:   "busybox:1.37",
 				Command: []string{"cp", fmt.Sprintf("/cm/%s", src.ConfigMapRef.Key), "/opt/krakend/plugins/"},
 				VolumeMounts: []corev1.VolumeMount{
 					{Name: name, MountPath: "/cm", ReadOnly: true},
@@ -407,7 +446,7 @@ func buildMultiSourcePluginVolumes(
 			// use init container to copy from PVC to shared emptyDir
 			initContainers = append(initContainers, corev1.Container{
 				Name:    fmt.Sprintf("plugin-pvc-init-%d", i),
-				Image:   "busybox:latest",
+				Image:   "busybox:1.37",
 				Command: []string{"cp", "-r", "/pvc/.", "/opt/krakend/plugins/"},
 				VolumeMounts: []corev1.VolumeMount{
 					{Name: name, MountPath: "/pvc", ReadOnly: true},
@@ -425,4 +464,104 @@ func buildMultiSourcePluginVolumes(
 	}
 
 	return volumes, mounts, initContainers
+}
+
+// buildOpenAPIPieces constructs the init container that exports the OpenAPI
+// spec using the KrakenD binary, the sidecar that serves it, the shared
+// emptyDir volume, and the mount applied to the init container. Returns
+// all nil values when the OpenAPI export feature is disabled.
+func buildOpenAPIPieces(
+	gw *v1alpha1.KrakenDGateway,
+	krakendImage string,
+) (initContainer, sidecar *corev1.Container, volume *corev1.Volume, initMount *corev1.VolumeMount) {
+	if gw.Spec.OpenAPI == nil || !gw.Spec.OpenAPI.Enabled {
+		return nil, nil, nil, nil
+	}
+
+	oa := gw.Spec.OpenAPI
+
+	volume = &corev1.Volume{
+		Name:         "openapi",
+		VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+	}
+
+	exportMount := corev1.VolumeMount{
+		Name:      "openapi",
+		MountPath: "/openapi",
+	}
+	initMount = &exportMount
+
+	exportArgs := []string{
+		"openapi", "export",
+		"-c", "/etc/krakend/krakend.json",
+		"-o", "/openapi/openapi.json",
+	}
+	if oa.Legacy {
+		exportArgs = append(exportArgs, "--legacy")
+	}
+	if oa.SkipJSONSchema {
+		exportArgs = append(exportArgs, "--skip-jsonschema")
+	}
+	if oa.Audience != "" {
+		exportArgs = append(exportArgs, "--audience", oa.Audience)
+	}
+
+	initContainer = &corev1.Container{
+		Name:    "openapi-export",
+		Image:   krakendImage,
+		Command: []string{"/usr/bin/krakend"},
+		Args:    exportArgs,
+		SecurityContext: &corev1.SecurityContext{
+			ReadOnlyRootFilesystem:   ptr.To(true),
+			AllowPrivilegeEscalation: ptr.To(false),
+			Capabilities: &corev1.Capabilities{
+				Drop: []corev1.Capability{"ALL"},
+			},
+		},
+	}
+	if oa.Resources != nil {
+		initContainer.Resources = *oa.Resources
+	}
+
+	sidecarImage := oa.SidecarImage
+	if sidecarImage == "" {
+		sidecarImage = "busybox:1.37"
+	}
+	oaPort := OpenAPIPort(gw)
+
+	sidecar = &corev1.Container{
+		Name:  "openapi-serve",
+		Image: sidecarImage,
+		Command: []string{
+			"httpd", "-f", "-v",
+			"-p", fmt.Sprintf("%d", oaPort),
+			"-h", "/openapi",
+		},
+		Ports: []corev1.ContainerPort{
+			{
+				Name:          "openapi",
+				ContainerPort: oaPort,
+				Protocol:      corev1.ProtocolTCP,
+			},
+		},
+		VolumeMounts: []corev1.VolumeMount{
+			{
+				Name:      "openapi",
+				MountPath: "/openapi",
+				ReadOnly:  true,
+			},
+		},
+		SecurityContext: &corev1.SecurityContext{
+			ReadOnlyRootFilesystem:   ptr.To(true),
+			AllowPrivilegeEscalation: ptr.To(false),
+			Capabilities: &corev1.Capabilities{
+				Drop: []corev1.Capability{"ALL"},
+			},
+		},
+	}
+	if oa.Resources != nil {
+		sidecar.Resources = *oa.Resources
+	}
+
+	return initContainer, sidecar, volume, initMount
 }

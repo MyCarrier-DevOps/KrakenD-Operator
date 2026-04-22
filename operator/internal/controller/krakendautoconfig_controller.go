@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"net/url"
 
@@ -104,6 +105,41 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	if err != nil {
 		return r.handleFetchError(ctx, &ac, err)
 	}
+
+	// Resolve external $refs (only possible with HTTP sources). Warnings
+	// from unresolved refs are logged but do not fail reconciliation.
+	if ac.Spec.OpenAPI.URL != "" {
+		resolved, warnings, resolveErr := autoconfig.ResolveExternalRefs(
+			ctx, fetchResult.Data, ac.Spec.OpenAPI.URL, r.Fetcher,
+			autoconfig.FetchSource{
+				Auth:              ac.Spec.OpenAPI.Auth,
+				AllowClusterLocal: ac.Spec.OpenAPI.AllowClusterLocal,
+				Namespace:         ac.Namespace,
+			},
+		)
+		if resolveErr != nil {
+			log.Error(resolveErr, "external $ref resolution failed, using raw spec")
+		} else {
+			fetchResult.Data = resolved
+		}
+		for _, w := range warnings {
+			log.V(1).Info("ref resolver warning", "warning", w)
+		}
+	}
+
+	// Strip upstream `servers` entries: the KrakenD gateway is the
+	// externally-visible server, so upstream URLs must not bleed into
+	// generated documentation or endpoint configuration.
+	if stripped, stripErr := autoconfig.StripServers(fetchResult.Data); stripErr != nil {
+		log.Error(stripErr, "stripping upstream servers failed, using raw spec")
+	} else {
+		fetchResult.Data = stripped
+	}
+
+	// Recompute checksum from the final (possibly resolved / stripped) data
+	// so changes from external $ref resolution or server stripping are not
+	// silently skipped by the downstream checksum gate.
+	fetchResult.Checksum = fmt.Sprintf("%x", sha256.Sum256(fetchResult.Data))
 
 	meta.SetStatusCondition(&ac.Status.Conditions, metav1.Condition{
 		Type:               v1alpha1.ConditionSpecAvailable,

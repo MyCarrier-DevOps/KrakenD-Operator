@@ -105,7 +105,8 @@ func TestBuildDeployment_Minimal(t *testing.T) {
 	if *c.SecurityContext.AllowPrivilegeEscalation {
 		t.Error("expected no privilege escalation")
 	}
-	if c.SecurityContext.Capabilities == nil || len(c.SecurityContext.Capabilities.Drop) != 1 || c.SecurityContext.Capabilities.Drop[0] != "ALL" {
+	if c.SecurityContext.Capabilities == nil || len(c.SecurityContext.Capabilities.Drop) != 1 ||
+		c.SecurityContext.Capabilities.Drop[0] != "ALL" {
 		t.Error("expected capabilities drop ALL")
 	}
 
@@ -409,8 +410,8 @@ func TestBuildDeployment_MultiSourceOCI(t *testing.T) {
 	if ics[1].Name != "plugin-cm-init-1" {
 		t.Errorf("expected init container plugin-cm-init-1, got %s", ics[1].Name)
 	}
-	if ics[1].Image != "busybox:latest" {
-		t.Errorf("expected busybox for CM copy, got %s", ics[1].Image)
+	if ics[1].Image != "busybox:1.37" {
+		t.Errorf("expected busybox:1.37 for CM copy, got %s", ics[1].Image)
 	}
 }
 

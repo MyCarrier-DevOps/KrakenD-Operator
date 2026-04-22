@@ -627,7 +627,9 @@ endpoint: {
 
 func TestMergeExtraConfig_ShallowMerge(t *testing.T) {
 	existing := &runtime.RawExtension{
-		Raw: []byte(`{"qos/ratelimit/router":{"every":"2s","max_rate":10},"documentation/openapi":{"operation_id":"foo"}}`),
+		Raw: []byte(
+			`{"qos/ratelimit/router":{"every":"2s","max_rate":10},"documentation/openapi":{"operation_id":"foo"}}`,
+		),
 	}
 	override := &runtime.RawExtension{
 		Raw: []byte(`{"qos/ratelimit/router":{"every":"1s","max_rate":20}}`),
@@ -1004,7 +1006,8 @@ func TestApplyDefaults_InputHeaders(t *testing.T) {
 	applyDefaults(out, &v1alpha1.EndpointDefaults{InputHeaders: headers})
 
 	for i, entry := range out.Entries {
-		if len(entry.InputHeaders) != 2 || entry.InputHeaders[0] != "Authorization" || entry.InputHeaders[1] != "X-Custom" {
+		if len(entry.InputHeaders) != 2 || entry.InputHeaders[0] != "Authorization" ||
+			entry.InputHeaders[1] != "X-Custom" {
 			t.Errorf("entry[%d]: expected [Authorization, X-Custom], got %v", i, entry.InputHeaders)
 		}
 	}
@@ -1343,7 +1346,9 @@ func TestDeepMergeJSON_ThreeLevelNesting(t *testing.T) {
 
 func TestMergeExtraConfig_DeepMergePreservesNestedKeys(t *testing.T) {
 	existing := &runtime.RawExtension{
-		Raw: []byte(`{"backend/http":{"return_error_code":true,"return_error_msg":false},"qos/ratelimit/proxy":{"max_rate":100}}`),
+		Raw: []byte(
+			`{"backend/http":{"return_error_code":true,"return_error_msg":false},"qos/ratelimit/proxy":{"max_rate":100}}`,
+		),
 	}
 	override := &runtime.RawExtension{
 		Raw: []byte(`{"backend/http":{"return_error_msg":true}}`),

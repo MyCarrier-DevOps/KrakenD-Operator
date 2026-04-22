@@ -81,7 +81,11 @@ func TestLicenseMonitor_CheckAll_SkipsCE(t *testing.T) {
 
 	ceGateway := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "ce-gw", Namespace: "default"},
-		Spec:       v1alpha1.KrakenDGatewaySpec{Version: "2.13", Edition: v1alpha1.EditionCE, Config: v1alpha1.GatewayConfig{}},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13",
+			Edition: v1alpha1.EditionCE,
+			Config:  v1alpha1.GatewayConfig{},
+		},
 	}
 
 	parser := &mockLicenseParser{
@@ -140,7 +144,11 @@ func TestLicenseMonitor_HealthyLicense(t *testing.T) {
 
 	// Healthy license should only set LicenseSecretUnavailable=False
 	var updated v1alpha1.KrakenDGateway
-	if err := c.Get(context.Background(), types.NamespacedName{Name: "test-gw", Namespace: "default"}, &updated); err != nil {
+	if err := c.Get(
+		context.Background(),
+		types.NamespacedName{Name: "test-gw", Namespace: "default"},
+		&updated,
+	); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	unavailCond := meta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionLicenseSecretUnavailable)
@@ -179,7 +187,11 @@ func TestLicenseMonitor_ExpiredWithFallback(t *testing.T) {
 	monitor.checkAll(context.Background())
 
 	var updated v1alpha1.KrakenDGateway
-	if err := c.Get(context.Background(), types.NamespacedName{Name: "test-gw", Namespace: "default"}, &updated); err != nil {
+	if err := c.Get(
+		context.Background(),
+		types.NamespacedName{Name: "test-gw", Namespace: "default"},
+		&updated,
+	); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -234,7 +246,11 @@ func TestLicenseMonitor_ExpiredNoFallback(t *testing.T) {
 	monitor.checkAll(context.Background())
 
 	var updated v1alpha1.KrakenDGateway
-	if err := c.Get(context.Background(), types.NamespacedName{Name: "test-gw", Namespace: "default"}, &updated); err != nil {
+	if err := c.Get(
+		context.Background(),
+		types.NamespacedName{Name: "test-gw", Namespace: "default"},
+		&updated,
+	); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -274,7 +290,11 @@ func TestLicenseMonitor_WithinSafetyBuffer(t *testing.T) {
 	monitor.checkAll(context.Background())
 
 	var updated v1alpha1.KrakenDGateway
-	if err := c.Get(context.Background(), types.NamespacedName{Name: "test-gw", Namespace: "default"}, &updated); err != nil {
+	if err := c.Get(
+		context.Background(),
+		types.NamespacedName{Name: "test-gw", Namespace: "default"},
+		&updated,
+	); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -410,7 +430,11 @@ func TestLicenseMonitor_SecretMissing(t *testing.T) {
 	monitor.checkAll(context.Background())
 
 	var updated v1alpha1.KrakenDGateway
-	if err := c.Get(context.Background(), types.NamespacedName{Name: "test-gw", Namespace: "default"}, &updated); err != nil {
+	if err := c.Get(
+		context.Background(),
+		types.NamespacedName{Name: "test-gw", Namespace: "default"},
+		&updated,
+	); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -449,7 +473,11 @@ func TestLicenseMonitor_ParseError(t *testing.T) {
 	monitor.checkAll(context.Background())
 
 	var updated v1alpha1.KrakenDGateway
-	if err := c.Get(context.Background(), types.NamespacedName{Name: "test-gw", Namespace: "default"}, &updated); err != nil {
+	if err := c.Get(
+		context.Background(),
+		types.NamespacedName{Name: "test-gw", Namespace: "default"},
+		&updated,
+	); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -504,7 +532,11 @@ func TestLicenseMonitor_Recovery(t *testing.T) {
 	monitor.checkAll(context.Background())
 
 	var updated v1alpha1.KrakenDGateway
-	if err := c.Get(context.Background(), types.NamespacedName{Name: "test-gw", Namespace: "default"}, &updated); err != nil {
+	if err := c.Get(
+		context.Background(),
+		types.NamespacedName{Name: "test-gw", Namespace: "default"},
+		&updated,
+	); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -571,7 +603,11 @@ func TestLicenseMonitor_ExternalSecretConvention(t *testing.T) {
 
 	// Should work fine with external secret convention
 	var updated v1alpha1.KrakenDGateway
-	if err := c.Get(context.Background(), types.NamespacedName{Name: "test-gw", Namespace: "default"}, &updated); err != nil {
+	if err := c.Get(
+		context.Background(),
+		types.NamespacedName{Name: "test-gw", Namespace: "default"},
+		&updated,
+	); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	unavailCond := meta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionLicenseSecretUnavailable)
@@ -607,7 +643,11 @@ func TestLicenseMonitor_NoLicenseConfig(t *testing.T) {
 	monitor.checkAll(context.Background())
 
 	var updated v1alpha1.KrakenDGateway
-	if err := c.Get(context.Background(), types.NamespacedName{Name: "test-gw", Namespace: "default"}, &updated); err != nil {
+	if err := c.Get(
+		context.Background(),
+		types.NamespacedName{Name: "test-gw", Namespace: "default"},
+		&updated,
+	); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
