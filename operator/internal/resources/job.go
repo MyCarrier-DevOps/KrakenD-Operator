@@ -93,12 +93,13 @@ func BuildPostRestartJob(
 		ttl = *spec.TTLSecondsAfterFinished
 	}
 
-	podAnnotations := map[string]string{
-		PostRestartJobChecksumAnnotation: configChecksum,
-	}
+	podAnnotations := make(map[string]string, len(spec.PodAnnotations)+1)
 	for k, v := range spec.PodAnnotations {
 		podAnnotations[k] = v
 	}
+	// Set the reserved checksum annotation last so user-provided
+	// annotations cannot overwrite it.
+	podAnnotations[PostRestartJobChecksumAnnotation] = configChecksum
 
 	container := corev1.Container{
 		Name:    "post-restart",
