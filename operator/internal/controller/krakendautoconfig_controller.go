@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"net/url"
 
@@ -134,6 +135,11 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	} else {
 		fetchResult.Data = stripped
 	}
+
+	// Recompute checksum from the final (possibly resolved / stripped) data
+	// so changes from external $ref resolution or server stripping are not
+	// silently skipped by the downstream checksum gate.
+	fetchResult.Checksum = fmt.Sprintf("%x", sha256.Sum256(fetchResult.Data))
 
 	meta.SetStatusCondition(&ac.Status.Conditions, metav1.Condition{
 		Type:               v1alpha1.ConditionSpecAvailable,
