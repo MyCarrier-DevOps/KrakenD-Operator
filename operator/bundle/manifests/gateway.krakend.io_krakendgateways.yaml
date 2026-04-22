@@ -1186,7 +1186,6 @@ spec:
                     type: integer
                 required:
                 - enabled
-                - script
                 type: object
               redis:
                 description: Redis configures the connection pool to an external Redis/Dragonfly.

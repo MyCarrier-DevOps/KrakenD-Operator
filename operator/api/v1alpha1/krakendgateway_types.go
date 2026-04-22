@@ -139,7 +139,8 @@ type PostRestartJobSpec struct {
 	Enabled bool `json:"enabled"`
 
 	// Script is the bash script executed by the Job. Required when enabled.
-	Script string `json:"script"`
+	// +optional
+	Script string `json:"script,omitempty"`
 
 	// Image is the container image used to execute the script. Must
 	// provide /bin/bash. Defaults to "bash:5".
