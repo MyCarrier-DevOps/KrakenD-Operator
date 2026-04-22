@@ -83,7 +83,7 @@ func BuildDeployment(
 		volumes = append(volumes, *oaVolume)
 	}
 	if oaInit != nil {
-		// The export init container needs the rendered krakend.json and writable /tmp.
+		// The export init container needs the rendered config and writable /tmp.
 		oaInit.VolumeMounts = append(oaInit.VolumeMounts,
 			corev1.VolumeMount{
 				Name:      "config",
@@ -91,12 +91,20 @@ func BuildDeployment(
 				SubPath:   "krakend.json",
 				ReadOnly:  true,
 			},
-			// krakend openapi export may need a writable /tmp (ReadOnlyRootFilesystem).
 			corev1.VolumeMount{
 				Name:      "tmp",
 				MountPath: "/tmp",
 			},
 		)
+		// EE gateways need the license file for krakend to start/export.
+		if gw.Spec.Edition == v1alpha1.EditionEE && gw.Spec.License != nil {
+			oaInit.VolumeMounts = append(oaInit.VolumeMounts, corev1.VolumeMount{
+				Name:      "license",
+				MountPath: "/etc/krakend/LICENSE",
+				SubPath:   "LICENSE",
+				ReadOnly:  true,
+			})
+		}
 		if oaMountForExport != nil {
 			oaInit.VolumeMounts = append(oaInit.VolumeMounts, *oaMountForExport)
 		}

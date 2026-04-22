@@ -216,3 +216,46 @@ func TestBuildDeployment_OpenAPIContainersAndVolume(t *testing.T) {
 		t.Fatalf("openapi volume missing")
 	}
 }
+
+func TestBuildDeployment_OpenAPIEEMountsLicenseAndTmp(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "ns"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Edition: v1alpha1.EditionEE,
+			Version: "2.13",
+			License: &v1alpha1.LicenseConfig{
+				SecretRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: "lic-secret"},
+					Key:                  "LICENSE",
+				},
+			},
+			OpenAPI: &v1alpha1.OpenAPIExportSpec{Enabled: true},
+		},
+	}
+	dep := &appsv1.Deployment{}
+	BuildDeployment(dep, gw, "cksum", "", "krakend-ee:2.13")
+
+	var exportInit *corev1.Container
+	for i := range dep.Spec.Template.Spec.InitContainers {
+		if dep.Spec.Template.Spec.InitContainers[i].Name == "openapi-export" {
+			exportInit = &dep.Spec.Template.Spec.InitContainers[i]
+		}
+	}
+	if exportInit == nil {
+		t.Fatal("openapi-export init container missing")
+	}
+
+	mountNames := map[string]bool{}
+	for _, m := range exportInit.VolumeMounts {
+		mountNames[m.Name] = true
+	}
+	if !mountNames["license"] {
+		t.Error("expected license volume mount on openapi-export init container")
+	}
+	if !mountNames["tmp"] {
+		t.Error("expected tmp volume mount on openapi-export init container")
+	}
+	if !mountNames["config"] {
+		t.Error("expected config volume mount on openapi-export init container")
+	}
+}
