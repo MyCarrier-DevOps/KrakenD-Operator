@@ -412,7 +412,7 @@ func buildMultiSourcePluginVolumes(
 			// use init container to copy from ConfigMap to shared emptyDir
 			initContainers = append(initContainers, corev1.Container{
 				Name:    fmt.Sprintf("plugin-cm-init-%d", i),
-				Image:   "busybox:latest",
+				Image:   "busybox:1.37",
 				Command: []string{"cp", fmt.Sprintf("/cm/%s", src.ConfigMapRef.Key), "/opt/krakend/plugins/"},
 				VolumeMounts: []corev1.VolumeMount{
 					{Name: name, MountPath: "/cm", ReadOnly: true},
@@ -438,7 +438,7 @@ func buildMultiSourcePluginVolumes(
 			// use init container to copy from PVC to shared emptyDir
 			initContainers = append(initContainers, corev1.Container{
 				Name:    fmt.Sprintf("plugin-pvc-init-%d", i),
-				Image:   "busybox:latest",
+				Image:   "busybox:1.37",
 				Command: []string{"cp", "-r", "/pvc/.", "/opt/krakend/plugins/"},
 				VolumeMounts: []corev1.VolumeMount{
 					{Name: name, MountPath: "/pvc", ReadOnly: true},
@@ -517,7 +517,7 @@ func buildOpenAPIPieces(
 
 	sidecarImage := oa.SidecarImage
 	if sidecarImage == "" {
-		sidecarImage = "busybox:latest"
+		sidecarImage = "busybox:1.37"
 	}
 	oaPort := OpenAPIPort(gw)
 

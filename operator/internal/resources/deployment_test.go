@@ -409,8 +409,8 @@ func TestBuildDeployment_MultiSourceOCI(t *testing.T) {
 	if ics[1].Name != "plugin-cm-init-1" {
 		t.Errorf("expected init container plugin-cm-init-1, got %s", ics[1].Name)
 	}
-	if ics[1].Image != "busybox:latest" {
-		t.Errorf("expected busybox for CM copy, got %s", ics[1].Image)
+	if ics[1].Image != "busybox:1.37" {
+		t.Errorf("expected busybox:1.37 for CM copy, got %s", ics[1].Image)
 	}
 }
 
