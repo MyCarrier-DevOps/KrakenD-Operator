@@ -846,6 +846,11 @@ func (r *KrakenDGatewayReconciler) reconcilePostRestartJob(
 	if dep.Spec.Replicas != nil {
 		desired = *dep.Spec.Replicas
 	}
+	if desired == 0 {
+		// Deployment is intentionally scaled to zero — no pods have rolled
+		// so a post-restart Job must not be created.
+		return nil
+	}
 	if dep.Status.UpdatedReplicas != desired || dep.Status.AvailableReplicas != desired {
 		return nil
 	}

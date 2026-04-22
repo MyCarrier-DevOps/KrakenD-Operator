@@ -98,7 +98,9 @@ func TestReconcilePostRestartJob_SkipsWhenNotConverged(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	var jobs batchv1.JobList
-	_ = c.List(context.Background(), &jobs, client.InNamespace("ns"))
+	if err := c.List(context.Background(), &jobs, client.InNamespace("ns")); err != nil {
+		t.Fatalf("listing jobs: %v", err)
+	}
 	if len(jobs.Items) != 0 {
 		t.Fatalf("expected no job created, got %d", len(jobs.Items))
 	}
@@ -114,7 +116,9 @@ func TestReconcilePostRestartJob_SkipsWhenChecksumMismatch(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	var jobs batchv1.JobList
-	_ = c.List(context.Background(), &jobs, client.InNamespace("ns"))
+	if err := c.List(context.Background(), &jobs, client.InNamespace("ns")); err != nil {
+		t.Fatalf("listing jobs: %v", err)
+	}
 	if len(jobs.Items) != 0 {
 		t.Fatalf("expected no job before rollout of new checksum")
 	}
@@ -134,7 +138,9 @@ func TestReconcilePostRestartJob_Idempotent(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	var jobs batchv1.JobList
-	_ = c.List(context.Background(), &jobs, client.InNamespace("ns"))
+	if err := c.List(context.Background(), &jobs, client.InNamespace("ns")); err != nil {
+		t.Fatalf("listing jobs: %v", err)
+	}
 	if len(jobs.Items) != 1 {
 		t.Fatalf("expected exactly one job (idempotent), got %d", len(jobs.Items))
 	}
@@ -153,7 +159,9 @@ func TestReconcilePostRestartJob_DisabledSpec(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	var jobs batchv1.JobList
-	_ = c.List(context.Background(), &jobs, client.InNamespace("ns"))
+	if err := c.List(context.Background(), &jobs, client.InNamespace("ns")); err != nil {
+		t.Fatalf("listing jobs: %v", err)
+	}
 	if len(jobs.Items) != 0 {
 		t.Fatalf("expected no jobs when disabled")
 	}
