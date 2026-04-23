@@ -217,6 +217,54 @@ func TestBuildDeployment_OpenAPIContainersAndVolume(t *testing.T) {
 	}
 }
 
+func TestBuildDeployment_OpenAPINoAudienceStripsConfig(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "ns"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Edition: v1alpha1.EditionCE,
+			Version: "2.13",
+			OpenAPI: &v1alpha1.OpenAPIExportSpec{
+				Enabled:        true,
+				SkipJSONSchema: true,
+			},
+		},
+	}
+	dep := &appsv1.Deployment{}
+	BuildDeployment(dep, gw, "cksum", "", "krakend:2.13")
+
+	var exportInit *corev1.Container
+	for i := range dep.Spec.Template.Spec.InitContainers {
+		if dep.Spec.Template.Spec.InitContainers[i].Name == "openapi-export" {
+			exportInit = &dep.Spec.Template.Spec.InitContainers[i]
+		}
+	}
+	if exportInit == nil {
+		t.Fatal("openapi-export init container missing")
+	}
+
+	// When no audience is configured the container must use a shell
+	// script that strips audience arrays before calling the export.
+	if len(exportInit.Command) < 2 || exportInit.Command[0] != "sh" {
+		t.Fatalf("expected sh -c wrapper, got command=%v", exportInit.Command)
+	}
+	script := exportInit.Command[2]
+	if !strings.Contains(script, "sed") {
+		t.Fatalf("expected sed in script, got: %s", script)
+	}
+	if !strings.Contains(script, "krakend-all.json") {
+		t.Fatalf("expected stripped config path in script, got: %s", script)
+	}
+	if !strings.Contains(script, "--skip-jsonschema") {
+		t.Fatalf("skip-jsonschema flag missing from script: %s", script)
+	}
+	if strings.Contains(script, "--audience") {
+		t.Fatalf("audience flag should NOT be present when unset: %s", script)
+	}
+	if len(exportInit.Args) != 0 {
+		t.Fatalf("expected no args when using sh -c, got %v", exportInit.Args)
+	}
+}
+
 func TestBuildDeployment_OpenAPIEEMountsLicenseAndTmp(t *testing.T) {
 	gw := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "ns"},

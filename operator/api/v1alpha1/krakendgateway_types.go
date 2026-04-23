@@ -113,7 +113,8 @@ type OpenAPIExportSpec struct {
 	Port int32 `json:"port,omitempty"`
 
 	// Audience filters which endpoints are documented (maps to the
-	// krakend openapi export --audience flag).
+	// krakend openapi export --audience flag). When empty (default),
+	// ALL endpoints are exported regardless of audience tags.
 	Audience string `json:"audience,omitempty"`
 
 	// Legacy enables Swagger v2 output (--legacy flag).

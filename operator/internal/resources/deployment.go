@@ -18,6 +18,7 @@ package resources
 
 import (
 	"fmt"
+	"strings"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
@@ -502,15 +503,43 @@ func buildOpenAPIPieces(
 	if oa.SkipJSONSchema {
 		exportArgs = append(exportArgs, "--skip-jsonschema")
 	}
+
+	var command []string
+	var args []string
+
 	if oa.Audience != "" {
+		// User specified an audience filter — pass it directly.
 		exportArgs = append(exportArgs, "--audience", oa.Audience)
+		command = []string{"/usr/bin/krakend"}
+		args = exportArgs
+	} else {
+		// No audience filter — strip audience tags from a temp copy of the
+		// config so krakend openapi export includes ALL endpoints. Without
+		// this the CLI silently excludes every endpoint that declares an
+		// audience array in documentation/openapi.
+		var flags []string
+		if oa.Legacy {
+			flags = append(flags, "--legacy")
+		}
+		if oa.SkipJSONSchema {
+			flags = append(flags, "--skip-jsonschema")
+		}
+		krakendCmd := "/usr/bin/krakend openapi export -c /openapi/krakend-all.json -o /openapi/openapi.json"
+		if len(flags) > 0 {
+			krakendCmd += " " + strings.Join(flags, " ")
+		}
+		script := fmt.Sprintf(
+			`sed -E 's/,?"audience"\s*:\s*\[[^]]*\]//g; s/"audience"\s*:\s*\[[^]]*\]\s*,?//g' /etc/krakend/krakend.json > /openapi/krakend-all.json && %s && rm -f /openapi/krakend-all.json`,
+			krakendCmd,
+		)
+		command = []string{"sh", "-c", script}
 	}
 
 	initContainer = &corev1.Container{
 		Name:    "openapi-export",
 		Image:   krakendImage,
-		Command: []string{"/usr/bin/krakend"},
-		Args:    exportArgs,
+		Command: command,
+		Args:    args,
 		SecurityContext: &corev1.SecurityContext{
 			ReadOnlyRootFilesystem:   ptr.To(true),
 			AllowPrivilegeEscalation: ptr.To(false),
