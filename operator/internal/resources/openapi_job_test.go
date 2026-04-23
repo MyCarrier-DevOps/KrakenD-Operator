@@ -92,6 +92,10 @@ func TestBuildPostRestartJob_Defaults(t *testing.T) {
 	if len(cmd) < 3 || cmd[len(cmd)-1] != "echo hello" {
 		t.Fatalf("script not passed to bash: %v", cmd)
 	}
+	// Default command should be PATH-resolved "bash", not "/bin/bash".
+	if cmd[0] != "bash" || cmd[1] != "-c" {
+		t.Fatalf("expected default command [bash -c ...], got %v", cmd)
+	}
 	if job.Spec.Template.Spec.RestartPolicy != corev1.RestartPolicyOnFailure {
 		t.Fatalf("restart policy not OnFailure")
 	}
@@ -136,6 +140,26 @@ func TestBuildPostRestartJob_CustomFields(t *testing.T) {
 	if *job.Spec.BackoffLimit != 5 || *job.Spec.ActiveDeadlineSeconds != 120 ||
 		*job.Spec.TTLSecondsAfterFinished != 60 {
 		t.Fatalf("custom scheduling fields not applied")
+	}
+}
+
+func TestBuildPostRestartJob_CustomCommand(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "ns"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			PostRestartJob: &v1alpha1.PostRestartJobSpec{
+				Enabled: true,
+				Script:  "echo done",
+				Command: []string{"/bin/sh", "-c"},
+			},
+		},
+	}
+	job := &batchv1.Job{}
+	BuildPostRestartJob(job, gw, "cs")
+
+	cmd := job.Spec.Template.Spec.Containers[0].Command
+	if len(cmd) != 3 || cmd[0] != "/bin/sh" || cmd[1] != "-c" || cmd[2] != "echo done" {
+		t.Fatalf("custom command not applied: %v", cmd)
 	}
 }
 

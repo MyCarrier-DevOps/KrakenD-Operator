@@ -139,12 +139,18 @@ type PostRestartJobSpec struct {
 	// Enabled toggles post-restart Job creation.
 	Enabled bool `json:"enabled"`
 
-	// Script is the bash script executed by the Job. Required when enabled.
+	// Script is the shell script executed by the Job. Required when enabled.
 	// +optional
 	Script string `json:"script,omitempty"`
 
+	// Command overrides the entrypoint used to execute the Script.
+	// The script is appended as the final argument. Defaults to
+	// ["bash", "-c"] (PATH-resolved, works with the default bash:5.2 image
+	// where the binary lives at /usr/local/bin/bash).
+	Command []string `json:"command,omitempty"`
+
 	// Image is the container image used to execute the script. Must
-	// provide /bin/bash. Defaults to "bash:5.2".
+	// include a shell compatible with Command. Defaults to "bash:5.2".
 	Image string `json:"image,omitempty"`
 
 	// Env injects environment variables into the Job container.

@@ -109,10 +109,15 @@ func BuildPostRestartJob(
 	// annotations cannot overwrite it.
 	podAnnotations[PostRestartJobChecksumAnnotation] = configChecksum
 
+	cmd := spec.Command
+	if len(cmd) == 0 {
+		cmd = []string{"bash", "-c"}
+	}
+
 	container := corev1.Container{
 		Name:    "post-restart",
 		Image:   image,
-		Command: []string{"/bin/bash", "-c", spec.Script},
+		Command: append(cmd, spec.Script),
 		Env:     spec.Env,
 		EnvFrom: spec.EnvFrom,
 		SecurityContext: &corev1.SecurityContext{

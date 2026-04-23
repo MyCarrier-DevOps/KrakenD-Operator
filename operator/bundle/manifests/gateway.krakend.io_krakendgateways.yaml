@@ -749,7 +749,8 @@ spec:
                   audience:
                     description: |-
                       Audience filters which endpoints are documented (maps to the
-                      krakend openapi export --audience flag).
+                      krakend openapi export --audience flag). When empty (default),
+                      ALL endpoints are exported regardless of audience tags.
                     type: string
                   enabled:
                     description: Enabled toggles OpenAPI export + local serving.
@@ -929,6 +930,15 @@ spec:
                       2.
                     format: int32
                     type: integer
+                  command:
+                    description: |-
+                      Command overrides the entrypoint used to execute the Script.
+                      The script is appended as the final argument. Defaults to
+                      ["bash", "-c"] (PATH-resolved, works with the default bash:5.2 image
+                      where the binary lives at /usr/local/bin/bash).
+                    items:
+                      type: string
+                    type: array
                   enabled:
                     description: Enabled toggles post-restart Job creation.
                     type: boolean
@@ -1102,7 +1112,7 @@ spec:
                   image:
                     description: |-
                       Image is the container image used to execute the script. Must
-                      provide /bin/bash. Defaults to "bash:5.2".
+                      include a shell compatible with Command. Defaults to "bash:5.2".
                     type: string
                   podAnnotations:
                     additionalProperties:
@@ -1170,7 +1180,7 @@ spec:
                         type: object
                     type: object
                   script:
-                    description: Script is the bash script executed by the Job. Required
+                    description: Script is the shell script executed by the Job. Required
                       when enabled.
                     type: string
                   serviceAccountName:
