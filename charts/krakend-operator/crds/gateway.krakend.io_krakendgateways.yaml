@@ -1119,6 +1119,14 @@ spec:
                       type: string
                     description: PodAnnotations adds annotations to the Job pod template.
                     type: object
+                  podLabels:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      PodLabels adds extra labels to the Job pod template. These are
+                      merged with the operator's standard labels; user-provided labels
+                      take precedence on conflict.
+                    type: object
                   podSecurityContext:
                     description: |-
                       PodSecurityContext sets pod-level security attributes for the Job

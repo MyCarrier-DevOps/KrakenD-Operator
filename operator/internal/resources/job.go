@@ -139,7 +139,7 @@ func BuildPostRestartJob(
 		TTLSecondsAfterFinished: &ttl,
 		Template: corev1.PodTemplateSpec{
 			ObjectMeta: metav1.ObjectMeta{
-				Labels:      labels,
+				Labels:      podLabels(labels, spec),
 				Annotations: podAnnotations,
 			},
 			Spec: corev1.PodSpec{
@@ -150,6 +150,21 @@ func BuildPostRestartJob(
 			},
 		},
 	}
+}
+
+// podLabels merges user-provided pod labels on top of the standard labels.
+func podLabels(base map[string]string, spec *v1alpha1.PostRestartJobSpec) map[string]string {
+	if len(spec.PodLabels) == 0 {
+		return base
+	}
+	merged := make(map[string]string, len(base)+len(spec.PodLabels))
+	for k, v := range base {
+		merged[k] = v
+	}
+	for k, v := range spec.PodLabels {
+		merged[k] = v
+	}
+	return merged
 }
 
 // podSecCtx returns the user-provided PodSecurityContext or a safe default.

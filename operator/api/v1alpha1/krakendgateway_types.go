@@ -159,6 +159,11 @@ type PostRestartJobSpec struct {
 	// EnvFrom imports environment variables from Secrets or ConfigMaps.
 	EnvFrom []corev1.EnvFromSource `json:"envFrom,omitempty"`
 
+	// PodLabels adds extra labels to the Job pod template. These are
+	// merged with the operator's standard labels; user-provided labels
+	// take precedence on conflict.
+	PodLabels map[string]string `json:"podLabels,omitempty"`
+
 	// PodAnnotations adds annotations to the Job pod template.
 	PodAnnotations map[string]string `json:"podAnnotations,omitempty"`
 
