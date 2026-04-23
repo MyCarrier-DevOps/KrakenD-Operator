@@ -238,14 +238,14 @@ endpoint: {
 											}
 											if _ctVal.schema.$ref != _|_ {
 												let _parts = strings.Split(_ctVal.schema.$ref, "/")
-												ref: strings.ToLower(_parts[len(_parts)-1])
+												ref: _parts[len(_parts)-1]
 											}
 											if _ctVal.schema.$ref == _|_ && _ctVal.schema.allOf != _|_ {
 												let _modifiedSchema = {
 													allOf: [for _item in _ctVal.schema.allOf {
 														if _item.$ref != _|_ {
 															let _parts = strings.Split(_item.$ref, "/")
-															$ref: "#/components/schemas/\(strings.ToLower(_parts[len(_parts)-1]))"
+															$ref: "#/components/schemas/\(_parts[len(_parts)-1])"
 														}
 														if _item.$ref == _|_ {
 															_item
@@ -285,14 +285,14 @@ endpoint: {
 													content_type: [for _ct, _ in _response.content {_ct}][0]
 													if _response.content[content_type].schema.$ref != _|_ {
 														let _parts = strings.Split(_response.content[content_type].schema.$ref, "/")
-														ref: strings.ToLower(_parts[len(_parts)-1])
+														ref: _parts[len(_parts)-1]
 													}
 													if _response.content[content_type].schema.$ref == _|_ && _response.content[content_type].schema.allOf != _|_ {
 														let _modifiedSchema = {
 															allOf: [for _item in _response.content[content_type].schema.allOf {
 																if _item.$ref != _|_ {
 																	let _parts = strings.Split(_item.$ref, "/")
-																	$ref: "#/components/schemas/\(strings.ToLower(_parts[len(_parts)-1]))"
+																	$ref: "#/components/schemas/\(_parts[len(_parts)-1])"
 																}
 																if _item.$ref == _|_ {
 																	_item

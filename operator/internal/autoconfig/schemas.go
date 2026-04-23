@@ -18,14 +18,14 @@ package autoconfig
 
 import (
 	"encoding/json"
-	"strings"
 
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // ExtractComponentSchemas parses the OpenAPI spec JSON and returns
-// the components/schemas map with lowercased keys. The keys are
-// lowercased to match the ref values produced by the CUE template.
+// the components/schemas map . Keys are preserved with original case
+// so internal $ref pointers inside schema bodies (which use the
+// upstream spec's casing) resolve correctly.
 // Returns nil when no schemas are present or the data cannot be parsed.
 func ExtractComponentSchemas(specData []byte) map[string]runtime.RawExtension {
 	var spec struct {
@@ -41,7 +41,7 @@ func ExtractComponentSchemas(specData []byte) map[string]runtime.RawExtension {
 	}
 	result := make(map[string]runtime.RawExtension, len(spec.Components.Schemas))
 	for name, raw := range spec.Components.Schemas {
-		result[strings.ToLower(name)] = runtime.RawExtension{Raw: raw}
+		result[name] = runtime.RawExtension{Raw: raw}
 	}
 	return result
 }

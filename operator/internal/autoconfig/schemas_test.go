@@ -36,15 +36,15 @@ func TestExtractComponentSchemas_Valid(t *testing.T) {
 	if len(result) != 2 {
 		t.Fatalf("expected 2 schemas, got %d", len(result))
 	}
-	if _, ok := result["user"]; !ok {
-		t.Error("expected lowercase key 'user'")
+	if _, ok := result["User"]; !ok {
+		t.Error("expected key 'User' (original case preserved)")
 	}
-	if _, ok := result["error"]; !ok {
-		t.Error("expected lowercase key 'error'")
+	if _, ok := result["Error"]; !ok {
+		t.Error("expected key 'Error' (original case preserved)")
 	}
 }
 
-func TestExtractComponentSchemas_LowercasesKeys(t *testing.T) {
+func TestExtractComponentSchemas_PreservesCase(t *testing.T) {
 	spec := []byte(`{
 		"components": {
 			"schemas": {
@@ -57,9 +57,9 @@ func TestExtractComponentSchemas_LowercasesKeys(t *testing.T) {
 	if len(result) != 1 {
 		t.Fatalf("expected 1 schema, got %d", len(result))
 	}
-	key := "mc.address.contracts.models.publiccontracts.apiresponse"
+	key := "MC.Address.Contracts.Models.PublicContracts.ApiResponse"
 	if _, ok := result[key]; !ok {
-		t.Errorf("expected lowercase key %q", key)
+		t.Errorf("expected key %q (original case preserved)", key)
 	}
 }
 
@@ -96,7 +96,7 @@ func TestExtractComponentSchemas_PreservesRawContent(t *testing.T) {
 	}`)
 
 	result := ExtractComponentSchemas(spec)
-	raw := result["pet"]
+	raw := result["Pet"]
 	if raw.Raw == nil {
 		t.Fatal("expected non-nil raw data")
 	}
