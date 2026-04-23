@@ -169,6 +169,17 @@ type PostRestartJobSpec struct {
 	// Resources defines resource requirements for the Job container.
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
 
+	// SecurityContext overrides the container-level security context for
+	// the Job. When nil the operator applies a minimal safe default
+	// (allowPrivilegeEscalation=false). Set this when your image requires
+	// a specific user (e.g. runAsUser: 0 for npm install -g).
+	SecurityContext *corev1.SecurityContext `json:"securityContext,omitempty"`
+
+	// PodSecurityContext sets pod-level security attributes for the Job
+	// (e.g. fsGroup, runAsUser at pod scope). When nil the operator does
+	// not set any pod-level security context.
+	PodSecurityContext *corev1.PodSecurityContext `json:"podSecurityContext,omitempty"`
+
 	// BackoffLimit is the Job backoff limit. Defaults to 2.
 	BackoffLimit *int32 `json:"backoffLimit,omitempty"`
 

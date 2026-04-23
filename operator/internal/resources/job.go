@@ -114,18 +114,20 @@ func BuildPostRestartJob(
 		cmd = []string{"bash", "-c"}
 	}
 
-	container := corev1.Container{
-		Name:    "post-restart",
-		Image:   image,
-		Command: append(cmd, spec.Script),
-		Env:     spec.Env,
-		EnvFrom: spec.EnvFrom,
-		SecurityContext: &corev1.SecurityContext{
+	secCtx := spec.SecurityContext
+	if secCtx == nil {
+		secCtx = &corev1.SecurityContext{
 			AllowPrivilegeEscalation: ptr.To(false),
-			Capabilities: &corev1.Capabilities{
-				Drop: []corev1.Capability{"ALL"},
-			},
-		},
+		}
+	}
+
+	container := corev1.Container{
+		Name:            "post-restart",
+		Image:           image,
+		Command:         append(cmd, spec.Script),
+		Env:             spec.Env,
+		EnvFrom:         spec.EnvFrom,
+		SecurityContext: secCtx,
 	}
 	if spec.Resources != nil {
 		container.Resources = *spec.Resources
@@ -143,16 +145,24 @@ func BuildPostRestartJob(
 			Spec: corev1.PodSpec{
 				RestartPolicy:      corev1.RestartPolicyOnFailure,
 				ServiceAccountName: saName,
-				SecurityContext: &corev1.PodSecurityContext{
-					RunAsNonRoot: ptr.To(true),
-					RunAsUser:    ptr.To(int64(1000)),
-					RunAsGroup:   ptr.To(int64(1000)),
-					SeccompProfile: &corev1.SeccompProfile{
-						Type: corev1.SeccompProfileTypeRuntimeDefault,
-					},
-				},
-				Containers: []corev1.Container{container},
+				SecurityContext:    podSecCtx(spec),
+				Containers:         []corev1.Container{container},
 			},
+		},
+	}
+}
+
+// podSecCtx returns the user-provided PodSecurityContext or a safe default.
+func podSecCtx(spec *v1alpha1.PostRestartJobSpec) *corev1.PodSecurityContext {
+	if spec.PodSecurityContext != nil {
+		return spec.PodSecurityContext
+	}
+	return &corev1.PodSecurityContext{
+		RunAsNonRoot: ptr.To(true),
+		RunAsUser:    ptr.To(int64(1000)),
+		RunAsGroup:   ptr.To(int64(1000)),
+		SeccompProfile: &corev1.SeccompProfile{
+			Type: corev1.SeccompProfileTypeRuntimeDefault,
 		},
 	}
 }

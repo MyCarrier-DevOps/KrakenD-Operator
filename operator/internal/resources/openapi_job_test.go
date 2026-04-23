@@ -163,6 +163,39 @@ func TestBuildPostRestartJob_CustomCommand(t *testing.T) {
 	}
 }
 
+func TestBuildPostRestartJob_CustomSecurityContext(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "ns"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			PostRestartJob: &v1alpha1.PostRestartJobSpec{
+				Enabled: true,
+				Script:  "npm install -g rdme",
+				SecurityContext: &corev1.SecurityContext{
+					RunAsUser: ptr.To(int64(0)),
+				},
+				PodSecurityContext: &corev1.PodSecurityContext{
+					RunAsNonRoot: ptr.To(false),
+					RunAsUser:    ptr.To(int64(0)),
+				},
+			},
+		},
+	}
+	job := &batchv1.Job{}
+	BuildPostRestartJob(job, gw, "cs")
+
+	csc := job.Spec.Template.Spec.Containers[0].SecurityContext
+	if csc.RunAsUser == nil || *csc.RunAsUser != 0 {
+		t.Fatalf("custom container security context not applied: %+v", csc)
+	}
+	psc := job.Spec.Template.Spec.SecurityContext
+	if psc.RunAsNonRoot == nil || *psc.RunAsNonRoot != false {
+		t.Fatalf("custom pod security context not applied: %+v", psc)
+	}
+	if psc.RunAsUser == nil || *psc.RunAsUser != 0 {
+		t.Fatalf("pod runAsUser not applied: %+v", psc)
+	}
+}
+
 func TestBuildService_WithOpenAPIPort(t *testing.T) {
 	gw := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "ns"},
