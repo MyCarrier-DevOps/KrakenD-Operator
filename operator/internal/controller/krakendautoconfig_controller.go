@@ -222,12 +222,17 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		filtered = r.Filter.Apply(cueOutput.Entries, cueOutput.Tags, cueOutput.OperationIDs, *ac.Spec.Filter)
 	}
 
+	// Extract component schemas from the spec before CUE evaluation
+	// so they can be attached to each generated KrakenDEndpoint CR.
+	componentSchemas := autoconfig.ExtractComponentSchemas(fetchResult.Data)
+
 	// Generate endpoint CRs
 	genOutput, err := r.Generator.Generate(ctx, autoconfig.GenerateInput{
-		AutoConfig:   &ac,
-		Entries:      filtered,
-		OperationIDs: cueOutput.OperationIDs,
-		GatewayRef:   ac.Spec.GatewayRef,
+		AutoConfig:       &ac,
+		Entries:          filtered,
+		OperationIDs:     cueOutput.OperationIDs,
+		GatewayRef:       ac.Spec.GatewayRef,
+		ComponentSchemas: componentSchemas,
 	})
 	if err != nil {
 		return r.handleCUEError(ctx, &ac, fmt.Errorf("generating endpoints: %w", err))

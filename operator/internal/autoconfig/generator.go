@@ -23,14 +23,16 @@ import (
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // GenerateInput provides the data needed to generate KrakenDEndpoint CRs.
 type GenerateInput struct {
-	AutoConfig   *v1alpha1.KrakenDAutoConfig
-	Entries      []v1alpha1.EndpointEntry
-	OperationIDs map[string]string
-	GatewayRef   v1alpha1.GatewayRef
+	AutoConfig       *v1alpha1.KrakenDAutoConfig
+	Entries          []v1alpha1.EndpointEntry
+	OperationIDs     map[string]string
+	GatewayRef       v1alpha1.GatewayRef
+	ComponentSchemas map[string]runtime.RawExtension
 }
 
 // GenerateOutput contains the generated endpoint CRs and metadata.
@@ -104,8 +106,9 @@ func (g *endpointGenerator) Generate(
 				},
 			},
 			Spec: v1alpha1.KrakenDEndpointSpec{
-				GatewayRef: input.GatewayRef,
-				Endpoints:  []v1alpha1.EndpointEntry{entry},
+				GatewayRef:       input.GatewayRef,
+				Endpoints:        []v1alpha1.EndpointEntry{entry},
+				ComponentSchemas: input.ComponentSchemas,
 			},
 		}
 		output.Endpoints = append(output.Endpoints, ep)

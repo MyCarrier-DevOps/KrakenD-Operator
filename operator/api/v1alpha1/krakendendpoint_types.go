@@ -39,6 +39,14 @@ type KrakenDEndpointSpec struct {
 
 	// Endpoints is the list of endpoint definitions.
 	Endpoints []EndpointEntry `json:"endpoints"`
+
+	// ComponentSchemas holds OpenAPI component schemas referenced by endpoint
+	// documentation/openapi ref fields. Each key is a lowercase schema name
+	// and each value is the raw JSON Schema object. The renderer aggregates
+	// these into the root-level documentation/openapi.components_schemas so
+	// that each KrakenDEndpoint CR is self-contained.
+	// +optional
+	ComponentSchemas map[string]runtime.RawExtension `json:"componentSchemas,omitempty"`
 }
 
 // EndpointEntry defines a single KrakenD endpoint.

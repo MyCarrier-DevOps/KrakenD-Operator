@@ -57,6 +57,12 @@ func (r *krakendRenderer) Render(input RenderInput) (*RenderOutput, error) {
 
 	// Build gateway-level extra_config
 	gatewayEC := buildGatewayExtraConfig(gw, input.Dragonfly)
+
+	// Aggregate component schemas from all endpoints into root
+	// documentation/openapi.components_schemas so that endpoint-level
+	// ref fields resolve correctly.
+	appendEndpointComponentSchemas(gatewayEC, input.Endpoints)
+
 	if len(gatewayEC) > 0 {
 		config["extra_config"] = gatewayEC
 	}
@@ -420,6 +426,32 @@ func appendDocumentationConfig(ec map[string]any, doc *v1alpha1.DocumentationCon
 	if len(d) > 0 {
 		ec["documentation/openapi"] = d
 	}
+}
+
+// appendEndpointComponentSchemas collects component schemas from all endpoint
+// CRs and merges them into the root documentation/openapi.components_schemas.
+// First-seen wins for duplicate schema names across different CRs.
+func appendEndpointComponentSchemas(ec map[string]any, endpoints []v1alpha1.KrakenDEndpoint) {
+	schemas := make(map[string]any)
+	for i := range endpoints {
+		for name, raw := range endpoints[i].Spec.ComponentSchemas {
+			if _, exists := schemas[name]; !exists {
+				var schema any
+				if err := json.Unmarshal(raw.Raw, &schema); err == nil {
+					schemas[name] = schema
+				}
+			}
+		}
+	}
+	if len(schemas) == 0 {
+		return
+	}
+	docConfig, ok := ec["documentation/openapi"].(map[string]any)
+	if !ok {
+		docConfig = make(map[string]any)
+	}
+	docConfig["components_schemas"] = schemas
+	ec["documentation/openapi"] = docConfig
 }
 
 func appendRedisConfig(ec map[string]any, redis *v1alpha1.RedisSpec, df *DragonflyState) {

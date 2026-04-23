@@ -856,3 +856,122 @@ func TestBuildGatewayExtraConfig_RouterNewFields(t *testing.T) {
 		t.Error("expected disable_redirect_trailing_slash true")
 	}
 }
+
+func TestAppendEndpointComponentSchemas(t *testing.T) {
+	ec := map[string]any{
+		"documentation/openapi": map[string]any{
+			"base_path": "/api",
+			"version":   "v1",
+		},
+	}
+	endpoints := []v1alpha1.KrakenDEndpoint{
+		{
+			Spec: v1alpha1.KrakenDEndpointSpec{
+				ComponentSchemas: map[string]runtime.RawExtension{
+					"user":  {Raw: json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"}}}`)},
+					"error": {Raw: json.RawMessage(`{"type":"object","properties":{"code":{"type":"integer"}}}`)},
+				},
+			},
+		},
+		{
+			Spec: v1alpha1.KrakenDEndpointSpec{
+				ComponentSchemas: map[string]runtime.RawExtension{
+					"order": {Raw: json.RawMessage(`{"type":"object"}`)},
+				},
+			},
+		},
+	}
+
+	appendEndpointComponentSchemas(ec, endpoints)
+
+	docConfig, ok := ec["documentation/openapi"].(map[string]any)
+	if !ok {
+		t.Fatal("expected documentation/openapi map")
+	}
+	schemas, ok := docConfig["components_schemas"].(map[string]any)
+	if !ok {
+		t.Fatal("expected components_schemas map")
+	}
+	if len(schemas) != 3 {
+		t.Errorf("expected 3 schemas, got %d", len(schemas))
+	}
+	if _, ok := schemas["user"]; !ok {
+		t.Error("missing 'user' schema")
+	}
+	if _, ok := schemas["order"]; !ok {
+		t.Error("missing 'order' schema")
+	}
+	// Verify existing doc config is preserved
+	if docConfig["base_path"] != "/api" {
+		t.Error("base_path was overwritten")
+	}
+}
+
+func TestAppendEndpointComponentSchemas_NoSchemas(t *testing.T) {
+	ec := map[string]any{}
+	endpoints := []v1alpha1.KrakenDEndpoint{
+		{Spec: v1alpha1.KrakenDEndpointSpec{}},
+	}
+
+	appendEndpointComponentSchemas(ec, endpoints)
+
+	if _, ok := ec["documentation/openapi"]; ok {
+		t.Error("should not create documentation/openapi when no schemas")
+	}
+}
+
+func TestAppendEndpointComponentSchemas_NoExistingDocConfig(t *testing.T) {
+	ec := map[string]any{}
+	endpoints := []v1alpha1.KrakenDEndpoint{
+		{
+			Spec: v1alpha1.KrakenDEndpointSpec{
+				ComponentSchemas: map[string]runtime.RawExtension{
+					"pet": {Raw: json.RawMessage(`{"type":"object"}`)},
+				},
+			},
+		},
+	}
+
+	appendEndpointComponentSchemas(ec, endpoints)
+
+	docConfig, ok := ec["documentation/openapi"].(map[string]any)
+	if !ok {
+		t.Fatal("expected documentation/openapi map to be created")
+	}
+	schemas, ok := docConfig["components_schemas"].(map[string]any)
+	if !ok {
+		t.Fatal("expected components_schemas")
+	}
+	if len(schemas) != 1 {
+		t.Errorf("expected 1 schema, got %d", len(schemas))
+	}
+}
+
+func TestAppendEndpointComponentSchemas_FirstSeenWins(t *testing.T) {
+	ec := map[string]any{}
+	endpoints := []v1alpha1.KrakenDEndpoint{
+		{
+			Spec: v1alpha1.KrakenDEndpointSpec{
+				ComponentSchemas: map[string]runtime.RawExtension{
+					"user": {Raw: json.RawMessage(`{"type":"object","description":"first"}`)},
+				},
+			},
+		},
+		{
+			Spec: v1alpha1.KrakenDEndpointSpec{
+				ComponentSchemas: map[string]runtime.RawExtension{
+					"user": {Raw: json.RawMessage(`{"type":"object","description":"second"}`)},
+				},
+			},
+		},
+	}
+
+	appendEndpointComponentSchemas(ec, endpoints)
+
+	docConfig := ec["documentation/openapi"].(map[string]any)
+	schemas := docConfig["components_schemas"].(map[string]any)
+	schemaMap := schemas["user"].(map[string]any)
+	if schemaMap["description"] != "first" {
+		t.Errorf("expected first-seen wins, got description=%v", schemaMap["description"])
+	}
+}

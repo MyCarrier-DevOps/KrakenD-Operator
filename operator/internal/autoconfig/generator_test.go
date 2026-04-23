@@ -18,10 +18,12 @@ package autoconfig
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 func TestGenerator_BasicGeneration(t *testing.T) {
@@ -191,5 +193,62 @@ func TestSanitizePath(t *testing.T) {
 		if got := sanitizePath(tt.input); got != tt.expected {
 			t.Errorf("sanitizePath(%q) = %q, want %q", tt.input, got, tt.expected)
 		}
+	}
+}
+
+func TestGenerator_ComponentSchemasAttached(t *testing.T) {
+	g := NewGenerator()
+	ac := &v1alpha1.KrakenDAutoConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "ac", Namespace: "default"},
+	}
+	entries := []v1alpha1.EndpointEntry{
+		{Endpoint: "/api/users", Method: "GET", Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/users"}}},
+		{Endpoint: "/api/orders", Method: "POST", Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/orders"}}},
+	}
+	schemas := map[string]runtime.RawExtension{
+		"user":  {Raw: json.RawMessage(`{"type":"object"}`)},
+		"order": {Raw: json.RawMessage(`{"type":"object"}`)},
+	}
+
+	out, err := g.Generate(context.Background(), GenerateInput{
+		AutoConfig:       ac,
+		Entries:          entries,
+		OperationIDs:     map[string]string{"/api/users:GET": "listUsers", "/api/orders:POST": "createOrder"},
+		GatewayRef:       v1alpha1.GatewayRef{Name: "gw"},
+		ComponentSchemas: schemas,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, ep := range out.Endpoints {
+		if len(ep.Spec.ComponentSchemas) != 2 {
+			t.Errorf("endpoint %s: expected 2 component schemas, got %d", ep.Name, len(ep.Spec.ComponentSchemas))
+		}
+		if _, ok := ep.Spec.ComponentSchemas["user"]; !ok {
+			t.Errorf("endpoint %s: missing 'user' schema", ep.Name)
+		}
+	}
+}
+
+func TestGenerator_NilComponentSchemas(t *testing.T) {
+	g := NewGenerator()
+	ac := &v1alpha1.KrakenDAutoConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "ac", Namespace: "default"},
+	}
+	entries := []v1alpha1.EndpointEntry{
+		{Endpoint: "/api/users", Method: "GET", Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/users"}}},
+	}
+
+	out, err := g.Generate(context.Background(), GenerateInput{
+		AutoConfig:   ac,
+		Entries:      entries,
+		OperationIDs: map[string]string{},
+		GatewayRef:   v1alpha1.GatewayRef{Name: "gw"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out.Endpoints[0].Spec.ComponentSchemas != nil {
+		t.Error("expected nil ComponentSchemas when none provided")
 	}
 }
