@@ -136,6 +136,17 @@ lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
 lint-config: golangci-lint ## Verify golangci-lint linter configuration
 	$(GOLANGCI_LINT) config verify
 
+# Paths for syncing generated CRDs and kubeconform schemas into the Helm chart.
+CHART_DIR ?= ../charts/krakend-operator
+CHART_CRDS_DIR ?= $(CHART_DIR)/crds
+CHART_SCHEMAS_DIR ?= $(CHART_DIR)/schemas
+
+.PHONY: schemas
+schemas: manifests ## Sync CRDs to the Helm chart and regenerate kubeconform JSON schemas.
+	@mkdir -p $(CHART_CRDS_DIR)
+	cp config/crd/bases/*.yaml $(CHART_CRDS_DIR)/
+	python3 $(CHART_SCHEMAS_DIR)/generate.py
+
 ##@ Build
 
 .PHONY: build

@@ -1,0 +1,41 @@
+name: Schemas
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "operator/api/**"
+      - "operator/config/crd/**"
+      - "charts/krakend-operator/crds/**"
+      - "charts/krakend-operator/schemas/**"
+      - ".github/workflows/schemas.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    name: CRD & schema drift check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "^1.26"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+      - name: Install Python dependencies
+        run: pip install pyyaml
+      - name: Regenerate CRDs and schemas
+        working-directory: operator
+        run: make schemas
+      - name: Fail on drift
+        run: |
+          if ! git diff --exit-code -- \
+            operator/config/crd/bases \
+            charts/krakend-operator/crds \
+            charts/krakend-operator/schemas; then
+            echo "::error::Generated CRDs or schemas are out of date. Run 'make schemas' in operator/ and commit the result."
+            exit 1
+          fi
