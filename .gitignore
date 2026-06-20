@@ -30,3 +30,7 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Local brainstorming/design working docs (not committed; final design is folded
+# into architecture/application/application-architecture.md)
+docs/superpowers/
