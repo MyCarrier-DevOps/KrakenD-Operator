@@ -633,7 +633,8 @@ type KrakenDAutoConfigSpec struct {
     Filter              *FilterSpec          `json:"filter,omitempty"`
     Trigger             TriggerType          `json:"trigger"`
     Periodic            *PeriodicSpec        `json:"periodic,omitempty"`
-    AdditionalEndpoints []AdditionalEndpoint `json:"additionalEndpoints,omitempty"`
+    AdditionalEndpoints     []AdditionalEndpoint `json:"additionalEndpoints,omitempty"`
+    AdditionalEndpointsBasePath string            `json:"additionalEndpointsBasePath,omitempty"` // must start with "/"
 }
 
 // AdditionalEndpoint declares an endpoint that is not present in the OpenAPI
@@ -1253,7 +1254,10 @@ flowchart TD
     M2 -->|No| O
     M2 -->|Yes| M3[BuildAdditionalEntries<br/>synthesize AdditionalEndpoint specs]
     M3 --> M4[ApplyURLTransformToEntries<br/>apply same urlTransform as spec-derived]
-    M4 --> M5[MergeAdditional<br/>additional wins on endpoint:method collision]
+    M4 --> MB{Resolve base path:<br/>manual → addPathPrefix → DeriveBasePath}
+    MB -->|indeterminate| ME[Set phase=Error<br/>Emit AdditionalEndpointScopeFailed]
+    MB -->|resolved| MS[ScopeAdditionalEntries<br/>prepend base to public paths]
+    MS --> M5[MergeAdditional<br/>additional wins on endpoint:method collision]
     M5 --> M6[Emit AdditionalEndpointOverride<br/>Warning for each replaced entry]
     M6 --> O[Generate KrakenDEndpoints<br/>via Generator]
     O --> P[Diff against existing generated endpoints]
@@ -1261,7 +1265,7 @@ flowchart TD
     Q --> R[Set phase=Synced<br/>Emit EndpointsGenerated]
 ```
 
-**Additional endpoints pipeline note:** `spec.additionalEndpoints` entries bypass `filter` and `overrides` (they carry no `operationId`), but they DO receive `urlTransform`. `ApplyURLTransformToEntries` is called before `MergeAdditional` so that collision keys (`endpoint:method`) align with the already-transformed spec-derived entries. The backend `urlPattern` is not transformed. On collision, the additional entry wins and the controller emits an `AdditionalEndpointOverride` Warning event.
+**Additional endpoints pipeline note:** `spec.additionalEndpoints` entries bypass `filter` and `overrides` (they carry no `operationId`), but they DO receive `urlTransform`. After applying the URL transform, additional endpoints are scoped under the application's base path — `spec.additionalEndpointsBasePath` if set, else `urlTransform.addPathPrefix` (already applied, so no further scoping), else the common parent directory derived from the generated endpoints (`DeriveBasePath`). If none of these resolves to a non-empty base, the sync fails with `AdditionalEndpointScopeFailed`. Scoping prepends the base to the public path only; backend `urlPattern` is unchanged. `ApplyURLTransformToEntries` is called before scoping and `MergeAdditional` so that collision keys (`endpoint:method`) align with the already-transformed spec-derived entries. On collision, the additional entry wins and the controller emits an `AdditionalEndpointOverride` Warning event.
 
 ### Periodic Trigger
 
@@ -2052,6 +2056,15 @@ func (v *AutoConfigValidator) ValidateCreate(
         }
     }
 
+    // additionalEndpointsBasePath validation
+    if ac.Spec.AdditionalEndpointsBasePath != "" &&
+        !strings.HasPrefix(ac.Spec.AdditionalEndpointsBasePath, "/") {
+        errs = append(errs, field.Invalid(
+            field.NewPath("spec", "additionalEndpointsBasePath"),
+            ac.Spec.AdditionalEndpointsBasePath,
+            "must start with '/'"))
+    }
+
     // additionalEndpoints validation
     seenAdditional := make(map[string]struct{}, len(ac.Spec.AdditionalEndpoints))
     for i, ae := range ac.Spec.AdditionalEndpoints {
@@ -2426,11 +2439,34 @@ func ApplyURLTransformToEntries(
 )
 ```
 
+**Base-path scoping:**
+
+After the URL transform is applied, each additional endpoint's public path is scoped under the application's base path. The controller resolves the base in this order:
+
+1. `spec.additionalEndpointsBasePath` — explicit manual override; skips derivation.
+2. `urlTransform.addPathPrefix` — when set, the URL transform already prepended the prefix, so no further scoping is performed (base is treated as resolved).
+3. `DeriveBasePath(filtered)` — auto-derived from the generated (filtered) entries: compute the segment-level longest common prefix of each entry's parent directory (path minus its last segment). Returns `""` when no common parent exists (e.g. a root-level endpoint `/health`, divergent top-level paths, or an empty entry list).
+
+If none of these resolves to a non-empty string, the controller fails the sync with `AdditionalEndpointScopeFailed`.
+
+```go
+// DeriveBasePath returns the segment-level longest common prefix of each
+// generated endpoint's parent directory. Returns "" when indeterminate.
+func DeriveBasePath(entries []v1alpha1.EndpointEntry) string
+
+// ScopeAdditionalEntries prepends base to each entry's public Endpoint
+// unless it already starts with base. Backend urlPattern is untouched.
+// A "" base is a no-op.
+func ScopeAdditionalEntries(additional []v1alpha1.EndpointEntry, base string)
+```
+
 **Controller injection order:**
 
 ```
 build (BuildAdditionalEntries)
   → URL-transform (ApplyURLTransformToEntries)
+  → resolve base path (manual → addPathPrefix → DeriveBasePath)
+  → scope public paths (ScopeAdditionalEntries)     ← backend urlPattern untouched
   → merge (MergeAdditional)
   → emit AdditionalEndpointOverride Warning for each replaced key
   → generate (Generator)
