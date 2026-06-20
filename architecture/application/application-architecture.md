@@ -624,15 +624,54 @@ type KrakenDBackendPolicyStatus struct {
 
 ```go
 type KrakenDAutoConfigSpec struct {
-    GatewayRef   GatewayRef          `json:"gatewayRef"`
-    OpenAPI      OpenAPISource       `json:"openapi"`
-    CUE          *CUESpec            `json:"cue,omitempty"`
-    URLTransform *URLTransformSpec   `json:"urlTransform,omitempty"`
-    Defaults     *EndpointDefaults   `json:"defaults,omitempty"`
-    Overrides    []OperationOverride `json:"overrides,omitempty"`
-    Filter       *FilterSpec         `json:"filter,omitempty"`
-    Trigger      TriggerType         `json:"trigger"`
-    Periodic     *PeriodicSpec       `json:"periodic,omitempty"`
+    GatewayRef          GatewayRef           `json:"gatewayRef"`
+    OpenAPI             OpenAPISource        `json:"openapi"`
+    CUE                 *CUESpec             `json:"cue,omitempty"`
+    URLTransform        *URLTransformSpec    `json:"urlTransform,omitempty"`
+    Defaults            *Defaults            `json:"defaults,omitempty"`
+    Overrides           []OperationOverride  `json:"overrides,omitempty"`
+    Filter              *FilterSpec          `json:"filter,omitempty"`
+    Trigger             TriggerType          `json:"trigger"`
+    Periodic            *PeriodicSpec        `json:"periodic,omitempty"`
+    AdditionalEndpoints []AdditionalEndpoint `json:"additionalEndpoints,omitempty"`
+}
+
+// AdditionalEndpoint declares an endpoint that is not present in the OpenAPI
+// document (e.g. health/liveness probes). Only Endpoint is required.
+type AdditionalEndpoint struct {
+    // Required. Public path KrakenD exposes (must start with "/").
+    Endpoint string `json:"endpoint"`
+
+    // HTTP method. Defaults to GET.
+    Method string `json:"method,omitempty"`
+
+    // Shorthand: backend host URL. Defaults to host derived from spec.openapi.url.
+    // Ignored when Backends is set.
+    Host string `json:"host,omitempty"`
+
+    // Shorthand: upstream path for the synthesized backend.
+    // Defaults to Endpoint. Ignored when Backends is set.
+    BackendURLPattern string `json:"backendUrlPattern,omitempty"`
+
+    // Shorthand: synthesized backend encoding. "no-op" also sets the endpoint
+    // output encoding to no-op unless OutputEncoding is explicitly set.
+    // Ignored when Backends is set.
+    Encoding string `json:"encoding,omitempty"`
+
+    // Full backends; mutually exclusive with Host/BackendURLPattern/Encoding.
+    Backends []BackendSpec `json:"backends,omitempty"`
+
+    Timeout           *metav1.Duration      `json:"timeout,omitempty"`
+    CacheTTL          *metav1.Duration      `json:"cacheTTL,omitempty"`
+    InputHeaders      []string              `json:"inputHeaders,omitempty"`
+    InputQueryStrings []string              `json:"inputQueryStrings,omitempty"`
+    OutputEncoding    string                `json:"outputEncoding,omitempty"`
+    ConcurrentCalls   *int32                `json:"concurrentCalls,omitempty"`
+    ExtraConfig       *runtime.RawExtension `json:"extraConfig,omitempty"`
+
+    // InheritDefaults applies spec.defaults fill-only (explicit fields win).
+    // Defaults to false so health routes do not inherit e.g. a JWT validator.
+    InheritDefaults *bool `json:"inheritDefaults,omitempty"`
 }
 
 type CUESpec struct {
@@ -1210,11 +1249,19 @@ flowchart TD
     J4 --> J5{CUE evaluation OK?}
     J5 -->|No| J6[Set phase=Error<br/>Emit CUEEvaluationFailed]
     J5 -->|Yes| M[Apply include/exclude filters]
-    M --> O[Generate KrakenDEndpoints<br/>via Generator]
+    M --> M2{additionalEndpoints set?}
+    M2 -->|No| O
+    M2 -->|Yes| M3[BuildAdditionalEntries<br/>synthesize AdditionalEndpoint specs]
+    M3 --> M4[ApplyURLTransformToEntries<br/>apply same urlTransform as spec-derived]
+    M4 --> M5[MergeAdditional<br/>additional wins on endpoint:method collision]
+    M5 --> M6[Emit AdditionalEndpointOverride<br/>Warning for each replaced entry]
+    M6 --> O[Generate KrakenDEndpoints<br/>via Generator]
     O --> P[Diff against existing generated endpoints]
     P --> Q[Create / Update / Delete endpoints]
     Q --> R[Set phase=Synced<br/>Emit EndpointsGenerated]
 ```
+
+**Additional endpoints pipeline note:** `spec.additionalEndpoints` entries bypass `filter` and `overrides` (they carry no `operationId`), but they DO receive `urlTransform`. `ApplyURLTransformToEntries` is called before `MergeAdditional` so that collision keys (`endpoint:method`) align with the already-transformed spec-derived entries. The backend `urlPattern` is not transformed. On collision, the additional entry wins and the controller emits an `AdditionalEndpointOverride` Warning event.
 
 ### Periodic Trigger
 
@@ -2005,6 +2052,38 @@ func (v *AutoConfigValidator) ValidateCreate(
         }
     }
 
+    // additionalEndpoints validation
+    seenAdditional := make(map[string]struct{}, len(ac.Spec.AdditionalEndpoints))
+    for i, ae := range ac.Spec.AdditionalEndpoints {
+        p := field.NewPath("spec", "additionalEndpoints").Index(i)
+
+        // Rule 1: endpoint is required
+        if ae.Endpoint == "" {
+            errs = append(errs, field.Required(p.Child("endpoint"), "endpoint is required"))
+        } else if !strings.HasPrefix(ae.Endpoint, "/") {
+            // Rule 2: endpoint must start with "/"
+            errs = append(errs, field.Invalid(p.Child("endpoint"), ae.Endpoint,
+                "endpoint must start with '/'"))
+        }
+
+        // Rule 3: backends and shorthand fields are mutually exclusive
+        if len(ae.Backends) > 0 && (ae.Host != "" || ae.BackendURLPattern != "" || ae.Encoding != "") {
+            errs = append(errs, field.Invalid(p, "both",
+                "backends and the host/backendUrlPattern/encoding shorthand are mutually exclusive"))
+        }
+
+        // Rule 4: no duplicate (endpoint, method) within the list; method defaults to GET
+        method := ae.Method
+        if method == "" {
+            method = "GET"
+        }
+        key := method + " " + ae.Endpoint
+        if _, dup := seenAdditional[key]; dup {
+            errs = append(errs, field.Duplicate(p, key))
+        }
+        seenAdditional[key] = struct{}{}
+    }
+
     return nil, errs.ToAggregate()
 }
 ```
@@ -2302,6 +2381,62 @@ labels := map[string]string{
     "gateway.krakend.io/autoconfig":     ac.Name,
 }
 ```
+
+### Additional Endpoints
+
+**File:** `internal/autoconfig/additional.go`
+
+`BuildAdditionalEntries` and `MergeAdditional` implement the additional-endpoints pipeline. `ApplyURLTransformToEntries` (exported from `cue_evaluator.go`) applies the same `urlTransform` that spec-derived endpoints receive.
+
+```go
+// BuildAdditionalEntries synthesizes AdditionalEndpoint specs into full
+// EndpointEntry values. defaultHost is derived from spec.openapi.url.
+func BuildAdditionalEntries(
+    specs     []v1alpha1.AdditionalEndpoint,
+    defaults  *v1alpha1.Defaults,
+    defaultHost string,
+) []v1alpha1.EndpointEntry
+
+// MergeAdditional combines spec-derived (base) entries with synthesized
+// additional entries. When an additional entry has the same endpoint+method
+// as a base entry, the additional entry replaces it and its key is returned
+// in `replaced` (callers emit an AdditionalEndpointOverride warning event).
+func MergeAdditional(
+    base, additional []v1alpha1.EndpointEntry,
+) (combined []v1alpha1.EndpointEntry, replaced []string)
+```
+
+**Synthesis rules:**
+
+- `method` defaults to `"GET"` when omitted.
+- When `backends` is empty, a single `BackendSpec` is synthesized from `host` (default: `defaultHost`), `backendUrlPattern` (default: `endpoint`), the backend `method`, and `encoding`.
+- When `encoding: no-op` is set on the shorthand and `outputEncoding` is not explicitly set, the endpoint `outputEncoding` is also set to `"no-op"`.
+- When `inheritDefaults: true`, `spec.defaults` are applied fill-only (the entry's explicit fields win). This flag defaults to `false` so health routes do not inadvertently inherit e.g. a JWT validator.
+
+**URL transform (Option B):**
+
+`ApplyURLTransformToEntries` applies the `urlTransform` spec (host mapping + `stripPathPrefix` / `addPathPrefix`) to each additional entry's endpoint path and backend hosts in the same way spec-derived entries are transformed. The backend `urlPattern` is intentionally left untouched. This function is called BEFORE `MergeAdditional` so collision keys (`endpoint:method`) align with the already-transformed spec-derived entries.
+
+```go
+// ApplyURLTransformToEntries applies a URLTransformSpec to each entry in the
+// slice. A nil transform is a no-op. The backend urlPattern is not transformed.
+func ApplyURLTransformToEntries(
+    entries   []v1alpha1.EndpointEntry,
+    transform *v1alpha1.URLTransformSpec,
+)
+```
+
+**Controller injection order:**
+
+```
+build (BuildAdditionalEntries)
+  → URL-transform (ApplyURLTransformToEntries)
+  → merge (MergeAdditional)
+  → emit AdditionalEndpointOverride Warning for each replaced key
+  → generate (Generator)
+```
+
+Additional endpoints bypass `filter` and `overrides` (they carry no `operationId`).
 
 ---
 
