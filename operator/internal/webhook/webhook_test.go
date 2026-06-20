@@ -1087,3 +1087,25 @@ func TestAutoConfigValidator_AdditionalEndpointValid(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestAutoConfigValidator_BasePathNoLeadingSlash(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "test-gw", Namespace: "default"}}
+	v := &AutoConfigValidator{Client: fakeClient(gw)}
+	ac := newAutoConfigForAdditional([]v1alpha1.AdditionalEndpoint{{Endpoint: "/liveness"}})
+	ac.Spec.AdditionalEndpointsBasePath = "api/v1" // no leading slash
+
+	if _, err := v.ValidateCreate(context.Background(), ac); err == nil {
+		t.Fatal("expected error for base path without leading slash")
+	}
+}
+
+func TestAutoConfigValidator_BasePathValid(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "test-gw", Namespace: "default"}}
+	v := &AutoConfigValidator{Client: fakeClient(gw)}
+	ac := newAutoConfigForAdditional([]v1alpha1.AdditionalEndpoint{{Endpoint: "/liveness"}})
+	ac.Spec.AdditionalEndpointsBasePath = "/api/v1/quote"
+
+	if _, err := v.ValidateCreate(context.Background(), ac); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
