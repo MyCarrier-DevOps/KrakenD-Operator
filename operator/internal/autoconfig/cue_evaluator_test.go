@@ -1533,3 +1533,17 @@ func TestApplyDefaults_OverriddenByFieldOverrides(t *testing.T) {
 		}
 	}
 }
+
+func TestApplyBackendDefaultsToBackend_FillsOnlyUnset(t *testing.T) {
+	b := v1alpha1.BackendSpec{Encoding: "json"} // already set — must be preserved
+	d := &v1alpha1.BackendDefaults{Encoding: "no-op", SD: "dns"}
+
+	applyBackendDefaultsToBackend(&b, d)
+
+	if b.Encoding != "json" {
+		t.Errorf("Encoding overwritten: got %q, want json", b.Encoding)
+	}
+	if b.SD != "dns" {
+		t.Errorf("SD not filled: got %q, want dns", b.SD)
+	}
+}

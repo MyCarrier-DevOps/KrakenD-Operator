@@ -272,30 +272,36 @@ func applyBackendDefaults(output *CUEOutput, defaults *v1alpha1.BackendDefaults)
 	}
 	for i := range output.Entries {
 		for j := range output.Entries[i].Backends {
-			backend := &output.Entries[i].Backends[j]
-			if defaults.Encoding != "" && backend.Encoding == "" {
-				backend.Encoding = defaults.Encoding
-			}
-			if defaults.SD != "" && backend.SD == "" {
-				backend.SD = defaults.SD
-			}
-			if defaults.SDScheme != "" && backend.SDScheme == "" {
-				backend.SDScheme = defaults.SDScheme
-			}
-			if defaults.DisableHostSanitize != nil && backend.DisableHostSanitize == nil {
-				val := *defaults.DisableHostSanitize
-				backend.DisableHostSanitize = &val
-			}
-			if defaults.InputHeaders != nil {
-				backend.InputHeaders = slices.Clone(defaults.InputHeaders)
-			}
-			if defaults.InputQueryStrings != nil {
-				backend.InputQueryStrings = slices.Clone(defaults.InputQueryStrings)
-			}
-			if defaults.ExtraConfig != nil {
-				backend.ExtraConfig = mergeExtraConfig(backend.ExtraConfig, defaults.ExtraConfig)
-			}
+			applyBackendDefaultsToBackend(&output.Entries[i].Backends[j], defaults)
 		}
+	}
+}
+
+// applyBackendDefaultsToBackend fills unset backend fields from defaults.
+// Scalar fields are set only when empty; slice fields replace when the backend
+// has none; ExtraConfig is deep-merged.
+func applyBackendDefaultsToBackend(backend *v1alpha1.BackendSpec, defaults *v1alpha1.BackendDefaults) {
+	if defaults.Encoding != "" && backend.Encoding == "" {
+		backend.Encoding = defaults.Encoding
+	}
+	if defaults.SD != "" && backend.SD == "" {
+		backend.SD = defaults.SD
+	}
+	if defaults.SDScheme != "" && backend.SDScheme == "" {
+		backend.SDScheme = defaults.SDScheme
+	}
+	if defaults.DisableHostSanitize != nil && backend.DisableHostSanitize == nil {
+		val := *defaults.DisableHostSanitize
+		backend.DisableHostSanitize = &val
+	}
+	if defaults.InputHeaders != nil {
+		backend.InputHeaders = slices.Clone(defaults.InputHeaders)
+	}
+	if defaults.InputQueryStrings != nil {
+		backend.InputQueryStrings = slices.Clone(defaults.InputQueryStrings)
+	}
+	if defaults.ExtraConfig != nil {
+		backend.ExtraConfig = mergeExtraConfig(backend.ExtraConfig, defaults.ExtraConfig)
 	}
 }
 
