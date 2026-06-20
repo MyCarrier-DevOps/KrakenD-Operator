@@ -126,3 +126,58 @@ func TestMergeAdditional_AdditionalWinsOnCollision(t *testing.T) {
 		t.Fatalf("want replaced [/api/users:GET], got %v", replaced)
 	}
 }
+
+func TestDeriveBasePath(t *testing.T) {
+	mk := func(paths ...string) []v1alpha1.EndpointEntry {
+		out := make([]v1alpha1.EndpointEntry, 0, len(paths))
+		for _, p := range paths {
+			out = append(out, v1alpha1.EndpointEntry{Endpoint: p, Method: "GET"})
+		}
+		return out
+	}
+	cases := []struct {
+		name string
+		in   []v1alpha1.EndpointEntry
+		want string
+	}{
+		{"single", mk("/api/v1/quote/rate"), "/api/v1/quote"},
+		{"same-parent", mk("/api/v1/quote/rate", "/api/v1/quote/quotes"), "/api/v1/quote"},
+		{"divergent-resource", mk("/api/v1/quote/rate", "/api/v1/billing/inv"), "/api/v1"},
+		{"drops-path-param", mk("/api/v1/quote/rate/{id}"), "/api/v1/quote/rate"},
+		{"root-level-indeterminate", mk("/health"), ""},
+		{"divergent-top-indeterminate", mk("/api/users", "/admin/things"), ""},
+		{"empty-indeterminate", mk(), ""},
+	}
+	for _, c := range cases {
+		if got := DeriveBasePath(c.in); got != c.want {
+			t.Errorf("%s: got %q want %q", c.name, got, c.want)
+		}
+	}
+}
+
+func TestScopeAdditionalEntries(t *testing.T) {
+	entries := []v1alpha1.EndpointEntry{
+		{Endpoint: "/liveness", Method: "GET",
+			Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/liveness"}}},
+		{Endpoint: "/api/v1/quote/ready", Method: "GET"}, // already prefixed → unchanged
+	}
+	ScopeAdditionalEntries(entries, "/api/v1/quote")
+
+	if entries[0].Endpoint != "/api/v1/quote/liveness" {
+		t.Fatalf("bare endpoint not scoped: %q", entries[0].Endpoint)
+	}
+	if entries[0].Backends[0].URLPattern != "/liveness" {
+		t.Fatalf("backend urlPattern must be untouched: %q", entries[0].Backends[0].URLPattern)
+	}
+	if entries[1].Endpoint != "/api/v1/quote/ready" {
+		t.Fatalf("already-prefixed endpoint changed: %q", entries[1].Endpoint)
+	}
+}
+
+func TestScopeAdditionalEntries_EmptyBaseNoop(t *testing.T) {
+	entries := []v1alpha1.EndpointEntry{{Endpoint: "/liveness", Method: "GET"}}
+	ScopeAdditionalEntries(entries, "")
+	if entries[0].Endpoint != "/liveness" {
+		t.Fatalf("empty base must be a no-op, got %q", entries[0].Endpoint)
+	}
+}
