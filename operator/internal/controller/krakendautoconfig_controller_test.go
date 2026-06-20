@@ -689,14 +689,16 @@ func TestAutoConfigReconcile_AdditionalEndpointsReachGenerator(t *testing.T) {
 	if g.gotInput == nil {
 		t.Fatal("generator was not called")
 	}
+	// defaultMocks CUE output yields /api/users → derived base is /api.
+	// Additional endpoint /liveness is scoped to /api/liveness.
 	var found bool
 	for _, e := range g.gotInput.Entries {
-		if e.Endpoint == "/liveness" && e.Method == "GET" {
+		if e.Endpoint == "/api/liveness" && e.Method == "GET" {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("/liveness not passed to generator: %+v", g.gotInput.Entries)
+		t.Fatalf("/api/liveness not passed to generator: %+v", g.gotInput.Entries)
 	}
 }
 
@@ -771,5 +773,121 @@ func TestAutoConfigReconcile_AdditionalEndpointsRespectURLTransform(t *testing.T
 	}
 	if !found {
 		t.Fatalf("urlTransform not applied to additional endpoint: %+v", g.gotInput.Entries)
+	}
+}
+
+func TestAutoConfigReconcile_AdditionalEndpointsScopedToDerivedBase(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	ac.Status.Phase = v1alpha1.AutoConfigPhasePending
+	// defaultMocks CUE output yields /api/users:GET → parent /api → base "/api".
+	ac.Spec.AdditionalEndpoints = []v1alpha1.AdditionalEndpoint{{Endpoint: "/liveness", Encoding: "no-op"}}
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).Build()
+	f, ce, fi, g := defaultMocks()
+	r := newACReconciler(c, f, ce, fi, g)
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+	}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	var ep *v1alpha1.EndpointEntry
+	for i := range g.gotInput.Entries {
+		if g.gotInput.Entries[i].Endpoint == "/api/liveness" {
+			ep = &g.gotInput.Entries[i]
+		}
+	}
+	if ep == nil {
+		t.Fatalf("expected scoped /api/liveness, got %+v", g.gotInput.Entries)
+	}
+	if ep.Backends[0].URLPattern != "/liveness" {
+		t.Fatalf("backend urlPattern must stay /liveness, got %q", ep.Backends[0].URLPattern)
+	}
+}
+
+func TestAutoConfigReconcile_AdditionalEndpointsManualBasePath(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	ac.Status.Phase = v1alpha1.AutoConfigPhasePending
+	ac.Spec.AdditionalEndpointsBasePath = "/custom/base"
+	ac.Spec.AdditionalEndpoints = []v1alpha1.AdditionalEndpoint{{Endpoint: "/liveness"}}
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).Build()
+	f, ce, fi, g := defaultMocks()
+	r := newACReconciler(c, f, ce, fi, g)
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+	}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	var found bool
+	for _, e := range g.gotInput.Entries {
+		if e.Endpoint == "/custom/base/liveness" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("manual base path not applied: %+v", g.gotInput.Entries)
+	}
+}
+
+func TestAutoConfigReconcile_AdditionalEndpointsAddPathPrefixNoDoubleScope(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	ac.Status.Phase = v1alpha1.AutoConfigPhasePending
+	ac.Spec.URLTransform = &v1alpha1.URLTransformSpec{AddPathPrefix: "/api/v1/quote"}
+	ac.Spec.AdditionalEndpoints = []v1alpha1.AdditionalEndpoint{{Endpoint: "/liveness"}}
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).Build()
+	f, ce, fi, g := defaultMocks()
+	r := newACReconciler(c, f, ce, fi, g)
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+	}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	for _, e := range g.gotInput.Entries {
+		if e.Endpoint == "/api/v1/quote/api/v1/quote/liveness" {
+			t.Fatalf("double-prefixed: %q", e.Endpoint)
+		}
+	}
+	var found bool
+	for _, e := range g.gotInput.Entries {
+		if e.Endpoint == "/api/v1/quote/liveness" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("addPathPrefix path missing: %+v", g.gotInput.Entries)
+	}
+}
+
+func TestAutoConfigReconcile_AdditionalEndpointsIndeterminateBaseErrors(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	ac.Status.Phase = v1alpha1.AutoConfigPhasePending
+	ac.Spec.AdditionalEndpoints = []v1alpha1.AdditionalEndpoint{{Endpoint: "/liveness"}}
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).Build()
+	f, ce, fi, g := defaultMocks()
+	// Root-level generated endpoint → no common parent → indeterminate base.
+	ce.output.Entries = []v1alpha1.EndpointEntry{
+		{Endpoint: "/health", Method: "GET",
+			Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/health"}}},
+	}
+	ce.output.OperationIDs = map[string]string{}
+	r := newACReconciler(c, f, ce, fi, g)
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+	})
+	if err == nil {
+		t.Fatal("expected error for indeterminate base path")
+	}
+	var updated v1alpha1.KrakenDAutoConfig
+	if e := c.Get(context.Background(), types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace}, &updated); e != nil {
+		t.Fatalf("get: %v", e)
+	}
+	if updated.Status.Phase != v1alpha1.AutoConfigPhaseError {
+		t.Fatalf("expected phase Error, got %s", updated.Status.Phase)
 	}
 }

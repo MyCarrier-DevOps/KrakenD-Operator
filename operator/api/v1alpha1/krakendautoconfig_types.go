@@ -83,6 +83,13 @@ type KrakenDAutoConfigSpec struct {
 	// endpoints and rendered alongside the spec-derived ones.
 	// +optional
 	AdditionalEndpoints []AdditionalEndpoint `json:"additionalEndpoints,omitempty"`
+
+	// AdditionalEndpointsBasePath overrides the auto-derived base path used to
+	// scope AdditionalEndpoints under the application. When empty, the base is
+	// derived from the generated endpoints' common parent directory. Must start
+	// with "/".
+	// +optional
+	AdditionalEndpointsBasePath string `json:"additionalEndpointsBasePath,omitempty"`
 }
 
 // OpenAPISource defines the location of an OpenAPI spec.

@@ -17,6 +17,7 @@ spec:
       - from: users-service
         to: http://users-service.default.svc.cluster.local:8080
   trigger: OnChange
+  # additionalEndpointsBasePath: /api/v1/quote   # optional; overrides the auto-derived base path used to scope additionalEndpoints
   additionalEndpoints:
     - endpoint: /liveness
       encoding: no-op

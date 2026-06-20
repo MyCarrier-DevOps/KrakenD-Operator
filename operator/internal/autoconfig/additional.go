@@ -2,6 +2,7 @@ package autoconfig
 
 import (
 	"slices"
+	"strings"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 )
@@ -141,4 +142,69 @@ func MergeAdditional(
 		}
 	}
 	return combined, replaced
+}
+
+// DeriveBasePath returns the application's base path: the segment-level longest
+// common prefix of each generated endpoint's PARENT directory (the path minus
+// its last segment). Returns "" when there is no common parent beyond root
+// (e.g. a root-level endpoint, divergent top-level prefixes, or no entries).
+func DeriveBasePath(entries []v1alpha1.EndpointEntry) string {
+	if len(entries) == 0 {
+		return ""
+	}
+	var common []string
+	for i, e := range entries {
+		parent := parentSegments(e.Endpoint)
+		if i == 0 {
+			common = parent
+			continue
+		}
+		common = commonSegmentPrefix(common, parent)
+		if len(common) == 0 {
+			return ""
+		}
+	}
+	if len(common) == 0 {
+		return ""
+	}
+	return "/" + strings.Join(common, "/")
+}
+
+// parentSegments splits a path into non-empty segments and drops the last one
+// (the resource or path parameter), yielding the parent directory's segments.
+func parentSegments(path string) []string {
+	var segs []string
+	for _, s := range strings.Split(path, "/") {
+		if s != "" {
+			segs = append(segs, s)
+		}
+	}
+	if len(segs) == 0 {
+		return nil
+	}
+	return segs[:len(segs)-1]
+}
+
+func commonSegmentPrefix(a, b []string) []string {
+	i := 0
+	for i < len(a) && i < len(b) && a[i] == b[i] {
+		i++
+	}
+	return a[:i]
+}
+
+// ScopeAdditionalEntries prepends base to each entry's public Endpoint unless it
+// already starts with base. The backend urlPattern is intentionally left
+// unchanged. A "" base is a no-op.
+func ScopeAdditionalEntries(additional []v1alpha1.EndpointEntry, base string) {
+	if base == "" {
+		return
+	}
+	for i := range additional {
+		ep := additional[i].Endpoint
+		if ep == base || strings.HasPrefix(ep, base+"/") {
+			continue
+		}
+		additional[i].Endpoint = base + ep
+	}
 }

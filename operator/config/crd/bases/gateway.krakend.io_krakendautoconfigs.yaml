@@ -234,6 +234,13 @@ spec:
                   - endpoint
                   type: object
                 type: array
+              additionalEndpointsBasePath:
+                description: |-
+                  AdditionalEndpointsBasePath overrides the auto-derived base path used to
+                  scope AdditionalEndpoints under the application. When empty, the base is
+                  derived from the generated endpoints' common parent directory. Must start
+                  with "/".
+                type: string
               cue:
                 description: CUE configures optional custom CUE definitions for endpoint
                   generation.
