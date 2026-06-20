@@ -1015,3 +1015,75 @@ func TestEndpointValidator_IntraCRDuplicate(t *testing.T) {
 		t.Errorf("expected Duplicate in error, got: %v", err)
 	}
 }
+
+func newAutoConfigForAdditional(eps []v1alpha1.AdditionalEndpoint) *v1alpha1.KrakenDAutoConfig {
+	return &v1alpha1.KrakenDAutoConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "ac", Namespace: "default"},
+		Spec: v1alpha1.KrakenDAutoConfigSpec{
+			GatewayRef:          v1alpha1.GatewayRef{Name: "test-gw"},
+			OpenAPI:             v1alpha1.OpenAPISource{URL: "http://svc/openapi.json"},
+			Trigger:             v1alpha1.TriggerOnChange,
+			AdditionalEndpoints: eps,
+		},
+	}
+}
+
+func TestAutoConfigValidator_AdditionalEndpointEmptyPath(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "test-gw", Namespace: "default"}}
+	v := &AutoConfigValidator{Client: fakeClient(gw)}
+	ac := newAutoConfigForAdditional([]v1alpha1.AdditionalEndpoint{{Endpoint: ""}})
+
+	if _, err := v.ValidateCreate(context.Background(), ac); err == nil {
+		t.Fatal("expected error for empty endpoint")
+	}
+}
+
+func TestAutoConfigValidator_AdditionalEndpointBackendsAndShorthand(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "test-gw", Namespace: "default"}}
+	v := &AutoConfigValidator{Client: fakeClient(gw)}
+	ac := newAutoConfigForAdditional([]v1alpha1.AdditionalEndpoint{{
+		Endpoint: "/x",
+		Host:     "http://svc",
+		Backends: []v1alpha1.BackendSpec{{Host: []string{"http://y"}, URLPattern: "/x"}},
+	}})
+
+	if _, err := v.ValidateCreate(context.Background(), ac); err == nil {
+		t.Fatal("expected error for backends + shorthand")
+	}
+}
+
+func TestAutoConfigValidator_AdditionalEndpointDuplicate(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "test-gw", Namespace: "default"}}
+	v := &AutoConfigValidator{Client: fakeClient(gw)}
+	ac := newAutoConfigForAdditional([]v1alpha1.AdditionalEndpoint{
+		{Endpoint: "/live"}, {Endpoint: "/live"}, // both default to GET → duplicate
+	})
+
+	if _, err := v.ValidateCreate(context.Background(), ac); err == nil {
+		t.Fatal("expected error for duplicate endpoint/method")
+	}
+}
+
+func TestAutoConfigValidator_AdditionalEndpointNoLeadingSlash(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "test-gw", Namespace: "default"}}
+	v := &AutoConfigValidator{Client: fakeClient(gw)}
+	ac := newAutoConfigForAdditional([]v1alpha1.AdditionalEndpoint{{Endpoint: "liveness"}})
+
+	if _, err := v.ValidateCreate(context.Background(), ac); err == nil {
+		t.Fatal("expected error for endpoint without leading slash")
+	}
+}
+
+func TestAutoConfigValidator_AdditionalEndpointValid(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "test-gw", Namespace: "default"}}
+	v := &AutoConfigValidator{Client: fakeClient(gw)}
+	ac := newAutoConfigForAdditional([]v1alpha1.AdditionalEndpoint{
+		{Endpoint: "/liveness", Encoding: "no-op"},
+		{Endpoint: "/audit", Method: "POST", Backends: []v1alpha1.BackendSpec{
+			{Host: []string{"http://audit"}, URLPattern: "/v2/audit"}}},
+	})
+
+	if _, err := v.ValidateCreate(context.Background(), ac); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

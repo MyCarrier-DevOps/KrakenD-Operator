@@ -17,3 +17,8 @@ spec:
       - from: users-service
         to: http://users-service.default.svc.cluster.local:8080
   trigger: OnChange
+  additionalEndpoints:
+    - endpoint: /liveness
+      encoding: no-op
+    - endpoint: /readiness
+      encoding: no-op

@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -77,11 +78,13 @@ func (m *mockFilter) Apply(
 // --- Mock Generator ---
 
 type mockGenerator struct {
-	output *autoconfig.GenerateOutput
-	err    error
+	output   *autoconfig.GenerateOutput
+	err      error
+	gotInput *autoconfig.GenerateInput
 }
 
-func (m *mockGenerator) Generate(_ context.Context, _ autoconfig.GenerateInput) (*autoconfig.GenerateOutput, error) {
+func (m *mockGenerator) Generate(_ context.Context, in autoconfig.GenerateInput) (*autoconfig.GenerateOutput, error) {
+	m.gotInput = &in
 	return m.output, m.err
 }
 
@@ -663,5 +666,110 @@ func TestAutoConfigReconcile_FallbackToEmbeddedCUE(t *testing.T) {
 	// Verify the CUE evaluator was still called (using embedded defs)
 	if !ce.called {
 		t.Error("expected CUE evaluator to be called with embedded defs")
+	}
+}
+
+func TestAutoConfigReconcile_AdditionalEndpointsReachGenerator(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	ac.Status.Phase = v1alpha1.AutoConfigPhasePending
+	ac.Spec.AdditionalEndpoints = []v1alpha1.AdditionalEndpoint{
+		{Endpoint: "/liveness", Encoding: "no-op"},
+	}
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).Build()
+	f, ce, fi, g := defaultMocks()
+	r := newACReconciler(c, f, ce, fi, g)
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+	}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	if g.gotInput == nil {
+		t.Fatal("generator was not called")
+	}
+	var found bool
+	for _, e := range g.gotInput.Entries {
+		if e.Endpoint == "/liveness" && e.Method == "GET" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("/liveness not passed to generator: %+v", g.gotInput.Entries)
+	}
+}
+
+func TestAutoConfigReconcile_AdditionalEndpointOverrideEmitsWarning(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	ac.Status.Phase = v1alpha1.AutoConfigPhasePending
+	// defaultMocks CUE output yields /api/users:GET — collide with it.
+	ac.Spec.AdditionalEndpoints = []v1alpha1.AdditionalEndpoint{
+		{Endpoint: "/api/users", Method: "GET", Host: "http://override"},
+	}
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).Build()
+	f, ce, fi, g := defaultMocks()
+	rec := fakeRecorder()
+	r := &KrakenDAutoConfigReconciler{
+		Client: c, Scheme: testScheme(), Recorder: rec,
+		Fetcher: f, CUEEvaluator: ce, Filter: fi, Generator: g,
+	}
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+	}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	var sawOverride bool
+	for {
+		select {
+		case ev := <-rec.Events:
+			if strings.Contains(ev, "AdditionalEndpointOverride") {
+				sawOverride = true
+			}
+			continue
+		default:
+		}
+		break
+	}
+	if !sawOverride {
+		t.Fatal("expected AdditionalEndpointOverride warning event")
+	}
+	// And the override won.
+	for _, e := range g.gotInput.Entries {
+		if e.Endpoint == "/api/users" && e.Backends[0].Host[0] != "http://override" {
+			t.Fatalf("override did not win: %+v", e.Backends[0])
+		}
+	}
+}
+
+func TestAutoConfigReconcile_AdditionalEndpointsRespectURLTransform(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	ac.Status.Phase = v1alpha1.AutoConfigPhasePending
+	ac.Spec.URLTransform = &v1alpha1.URLTransformSpec{AddPathPrefix: "/api/v1/quote"}
+	ac.Spec.AdditionalEndpoints = []v1alpha1.AdditionalEndpoint{
+		{Endpoint: "/liveness", Encoding: "no-op"},
+	}
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).Build()
+	f, ce, fi, g := defaultMocks()
+	r := newACReconciler(c, f, ce, fi, g)
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+	}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	var found bool
+	for _, e := range g.gotInput.Entries {
+		if e.Endpoint == "/api/v1/quote/liveness" && e.Method == "GET" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("urlTransform not applied to additional endpoint: %+v", g.gotInput.Entries)
 	}
 }

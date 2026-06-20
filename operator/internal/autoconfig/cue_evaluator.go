@@ -272,30 +272,36 @@ func applyBackendDefaults(output *CUEOutput, defaults *v1alpha1.BackendDefaults)
 	}
 	for i := range output.Entries {
 		for j := range output.Entries[i].Backends {
-			backend := &output.Entries[i].Backends[j]
-			if defaults.Encoding != "" && backend.Encoding == "" {
-				backend.Encoding = defaults.Encoding
-			}
-			if defaults.SD != "" && backend.SD == "" {
-				backend.SD = defaults.SD
-			}
-			if defaults.SDScheme != "" && backend.SDScheme == "" {
-				backend.SDScheme = defaults.SDScheme
-			}
-			if defaults.DisableHostSanitize != nil && backend.DisableHostSanitize == nil {
-				val := *defaults.DisableHostSanitize
-				backend.DisableHostSanitize = &val
-			}
-			if defaults.InputHeaders != nil {
-				backend.InputHeaders = slices.Clone(defaults.InputHeaders)
-			}
-			if defaults.InputQueryStrings != nil {
-				backend.InputQueryStrings = slices.Clone(defaults.InputQueryStrings)
-			}
-			if defaults.ExtraConfig != nil {
-				backend.ExtraConfig = mergeExtraConfig(backend.ExtraConfig, defaults.ExtraConfig)
-			}
+			applyBackendDefaultsToBackend(&output.Entries[i].Backends[j], defaults)
 		}
+	}
+}
+
+// applyBackendDefaultsToBackend fills unset backend fields from defaults.
+// Scalar fields are set only when empty; slice fields replace when the backend
+// has none; ExtraConfig is deep-merged.
+func applyBackendDefaultsToBackend(backend *v1alpha1.BackendSpec, defaults *v1alpha1.BackendDefaults) {
+	if defaults.Encoding != "" && backend.Encoding == "" {
+		backend.Encoding = defaults.Encoding
+	}
+	if defaults.SD != "" && backend.SD == "" {
+		backend.SD = defaults.SD
+	}
+	if defaults.SDScheme != "" && backend.SDScheme == "" {
+		backend.SDScheme = defaults.SDScheme
+	}
+	if defaults.DisableHostSanitize != nil && backend.DisableHostSanitize == nil {
+		val := *defaults.DisableHostSanitize
+		backend.DisableHostSanitize = &val
+	}
+	if defaults.InputHeaders != nil {
+		backend.InputHeaders = slices.Clone(defaults.InputHeaders)
+	}
+	if defaults.InputQueryStrings != nil {
+		backend.InputQueryStrings = slices.Clone(defaults.InputQueryStrings)
+	}
+	if defaults.ExtraConfig != nil {
+		backend.ExtraConfig = mergeExtraConfig(backend.ExtraConfig, defaults.ExtraConfig)
 	}
 }
 
@@ -325,35 +331,10 @@ func applyURLTransform(output *CUEOutput, transform *v1alpha1.URLTransformSpec) 
 	for _, m := range transform.HostMapping {
 		hostMap[m.From] = m.To
 	}
-
 	for i := range output.Entries {
 		entry := &output.Entries[i]
-
-		// Host mapping: replace matching backend hosts
-		for j := range entry.Backends {
-			for k, host := range entry.Backends[j].Host {
-				if to, ok := hostMap[host]; ok {
-					entry.Backends[j].Host[k] = to
-				}
-			}
-		}
-
 		oldKey := entry.Endpoint + ":" + entry.Method
-
-		// Strip path prefix
-		if transform.StripPathPrefix != "" {
-			entry.Endpoint = strings.TrimPrefix(entry.Endpoint, transform.StripPathPrefix)
-			if entry.Endpoint == "" {
-				entry.Endpoint = "/"
-			}
-		}
-
-		// Add path prefix
-		if transform.AddPathPrefix != "" {
-			entry.Endpoint = transform.AddPathPrefix + entry.Endpoint
-		}
-
-		// Update keys in OperationIDs and Tags maps if endpoint changed
+		applyURLTransformToEntry(entry, transform, hostMap)
 		newKey := entry.Endpoint + ":" + entry.Method
 		if newKey != oldKey {
 			if opID, ok := output.OperationIDs[oldKey]; ok {
@@ -365,6 +346,45 @@ func applyURLTransform(output *CUEOutput, transform *v1alpha1.URLTransformSpec) 
 				output.Tags[newKey] = tags
 			}
 		}
+	}
+}
+
+// applyURLTransformToEntry applies host mapping and path strip/add-prefix to a
+// single entry. hostMap is the precomputed From→To map.
+func applyURLTransformToEntry(entry *v1alpha1.EndpointEntry, transform *v1alpha1.URLTransformSpec, hostMap map[string]string) {
+	for j := range entry.Backends {
+		for k, host := range entry.Backends[j].Host {
+			if to, ok := hostMap[host]; ok {
+				entry.Backends[j].Host[k] = to
+			}
+		}
+	}
+	if transform.StripPathPrefix != "" {
+		entry.Endpoint = strings.TrimPrefix(entry.Endpoint, transform.StripPathPrefix)
+		if entry.Endpoint == "" {
+			entry.Endpoint = "/"
+		}
+	}
+	if transform.AddPathPrefix != "" {
+		entry.Endpoint = transform.AddPathPrefix + entry.Endpoint
+	}
+}
+
+// ApplyURLTransformToEntries applies a URLTransformSpec (host mapping + path
+// strip/add-prefix) to each entry in the slice. It is used to transform
+// user-designated additional endpoints the same way spec-derived endpoints are
+// transformed. The backend urlPattern is intentionally left untouched. A nil
+// transform is a no-op.
+func ApplyURLTransformToEntries(entries []v1alpha1.EndpointEntry, transform *v1alpha1.URLTransformSpec) {
+	if transform == nil {
+		return
+	}
+	hostMap := make(map[string]string, len(transform.HostMapping))
+	for _, m := range transform.HostMapping {
+		hostMap[m.From] = m.To
+	}
+	for i := range entries {
+		applyURLTransformToEntry(&entries[i], transform, hostMap)
 	}
 }
 

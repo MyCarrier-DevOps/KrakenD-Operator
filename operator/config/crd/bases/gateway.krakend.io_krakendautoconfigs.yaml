@@ -54,6 +54,186 @@ spec:
           spec:
             description: KrakenDAutoConfigSpec defines the desired state of KrakenDAutoConfig.
             properties:
+              additionalEndpoints:
+                description: |-
+                  AdditionalEndpoints injects endpoints that are not present in the OpenAPI
+                  spec (e.g. health/liveness probes). They are synthesized into full
+                  endpoints and rendered alongside the spec-derived ones.
+                items:
+                  description: |-
+                    AdditionalEndpoint declares an endpoint that is not present in the OpenAPI
+                    document. Only Endpoint is required; everything else is optional and, when
+                    omitted, is synthesized or (when InheritDefaults is true) taken from
+                    spec.defaults.
+                  properties:
+                    backendUrlPattern:
+                      description: |-
+                        BackendURLPattern is the upstream path for the synthesized single backend.
+                        Defaults to Endpoint. Ignored when Backends is set.
+                      type: string
+                    backends:
+                      description: Backends, when set, is used verbatim; Host/BackendURLPattern/Encoding
+                        are ignored.
+                      items:
+                        description: BackendSpec defines a backend service target.
+                        properties:
+                          allow:
+                            description: Allow is the allowlist of response fields
+                              to keep.
+                            items:
+                              type: string
+                            type: array
+                          deny:
+                            description: Deny is the denylist of response fields to
+                              remove.
+                            items:
+                              type: string
+                            type: array
+                          disableHostSanitize:
+                            description: |-
+                              DisableHostSanitize skips host protocol validation. Required for non-HTTP
+                              protocols (amqp://, nats://, kafka://) or when using sd=dns.
+                            type: boolean
+                          encoding:
+                            description: Encoding selects the backend response encoding.
+                            type: string
+                          extraConfig:
+                            description: ExtraConfig holds arbitrary backend-level
+                              extra_config JSON.
+                            type: object
+                            x-kubernetes-preserve-unknown-fields: true
+                          group:
+                            description: Group wraps the backend response under a
+                              named key to avoid collisions.
+                            type: string
+                          host:
+                            description: Host is the list of backend host URLs.
+                            items:
+                              type: string
+                            type: array
+                          inputHeaders:
+                            description: InputHeaders is the list of headers forwarded
+                              to this backend.
+                            items:
+                              type: string
+                            type: array
+                          inputQueryStrings:
+                            description: InputQueryStrings is the list of query parameters
+                              forwarded to this backend.
+                            items:
+                              type: string
+                            type: array
+                          isCollection:
+                            description: IsCollection marks that the backend returns
+                              an array instead of an object.
+                            type: boolean
+                          mapping:
+                            additionalProperties:
+                              type: string
+                            description: Mapping renames response fields.
+                            type: object
+                          method:
+                            description: Method overrides the endpoint method for
+                              this backend.
+                            type: string
+                          policyRef:
+                            description: PolicyRef references a KrakenDBackendPolicy
+                              to apply.
+                            properties:
+                              name:
+                                type: string
+                              namespace:
+                                maxLength: 63
+                                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                                type: string
+                            required:
+                            - name
+                            type: object
+                          sd:
+                            description: SD selects the service discovery provider
+                              (e.g. "static", "dns").
+                            type: string
+                          sdScheme:
+                            description: SDScheme sets the service discovery scheme
+                              (e.g. "http", "https").
+                            type: string
+                          target:
+                            description: Target extracts a nested object and returns
+                              only its contents.
+                            type: string
+                          urlPattern:
+                            description: URLPattern is the backend URL path pattern.
+                            type: string
+                        required:
+                        - host
+                        - urlPattern
+                        type: object
+                      type: array
+                    cacheTTL:
+                      description: CacheTTL overrides the endpoint cache TTL.
+                      type: string
+                    concurrentCalls:
+                      description: ConcurrentCalls sets the number of concurrent backend
+                        calls.
+                      format: int32
+                      minimum: 1
+                      type: integer
+                    encoding:
+                      description: |-
+                        Encoding sets the synthesized backend's encoding. "no-op" also sets the
+                        endpoint output encoding to no-op unless OutputEncoding is set. Ignored when Backends is set.
+                      type: string
+                    endpoint:
+                      description: Endpoint is the public path KrakenD exposes (e.g.
+                        "/liveness").
+                      type: string
+                    extraConfig:
+                      description: ExtraConfig holds endpoint-level extra_config JSON.
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                    host:
+                      description: |-
+                        Host is the backend host URL for the synthesized single backend.
+                        Defaults to the host derived from spec.openapi.url. Ignored when Backends is set.
+                      type: string
+                    inheritDefaults:
+                      description: |-
+                        InheritDefaults applies spec.defaults (fill-only; explicit fields win) to
+                        this endpoint. Defaults to false so a health route does not inherit a
+                        default JWT validator.
+                      type: boolean
+                    inputHeaders:
+                      description: InputHeaders is the list of headers forwarded to
+                        backends.
+                      items:
+                        type: string
+                      type: array
+                    inputQueryStrings:
+                      description: InputQueryStrings is the list of query parameters
+                        forwarded to backends.
+                      items:
+                        type: string
+                      type: array
+                    method:
+                      description: Method is the HTTP method. Defaults to GET.
+                      enum:
+                      - GET
+                      - POST
+                      - PUT
+                      - PATCH
+                      - DELETE
+                      type: string
+                    outputEncoding:
+                      description: OutputEncoding overrides the endpoint response
+                        encoding.
+                      type: string
+                    timeout:
+                      description: Timeout overrides the endpoint timeout.
+                      type: string
+                  required:
+                  - endpoint
+                  type: object
+                type: array
               cue:
                 description: CUE configures optional custom CUE definitions for endpoint
                   generation.

@@ -511,6 +511,33 @@ func (v *AutoConfigValidator) validate(
 		}
 	}
 
+	seenAdditional := make(map[string]struct{}, len(ac.Spec.AdditionalEndpoints))
+	for i, ae := range ac.Spec.AdditionalEndpoints {
+		p := field.NewPath("spec", "additionalEndpoints").Index(i)
+
+		if ae.Endpoint == "" {
+			errs = append(errs, field.Required(p.Child("endpoint"), "endpoint is required"))
+		} else if !strings.HasPrefix(ae.Endpoint, "/") {
+			errs = append(errs, field.Invalid(p.Child("endpoint"), ae.Endpoint,
+				"endpoint must start with '/'"))
+		}
+
+		if len(ae.Backends) > 0 && (ae.Host != "" || ae.BackendURLPattern != "" || ae.Encoding != "") {
+			errs = append(errs, field.Invalid(p, "both",
+				"backends and the host/backendUrlPattern/encoding shorthand are mutually exclusive"))
+		}
+
+		method := ae.Method
+		if method == "" {
+			method = "GET"
+		}
+		key := method + " " + ae.Endpoint
+		if _, dup := seenAdditional[key]; dup {
+			errs = append(errs, field.Duplicate(p, key))
+		}
+		seenAdditional[key] = struct{}{}
+	}
+
 	return errs.ToAggregate()
 }
 

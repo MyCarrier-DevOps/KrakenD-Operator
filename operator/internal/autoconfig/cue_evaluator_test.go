@@ -1533,3 +1533,55 @@ func TestApplyDefaults_OverriddenByFieldOverrides(t *testing.T) {
 		}
 	}
 }
+
+func TestApplyBackendDefaultsToBackend_FillsOnlyUnset(t *testing.T) {
+	b := v1alpha1.BackendSpec{Encoding: "json"} // already set — must be preserved
+	d := &v1alpha1.BackendDefaults{Encoding: "no-op", SD: "dns"}
+
+	applyBackendDefaultsToBackend(&b, d)
+
+	if b.Encoding != "json" {
+		t.Errorf("Encoding overwritten: got %q, want json", b.Encoding)
+	}
+	if b.SD != "dns" {
+		t.Errorf("SD not filled: got %q, want dns", b.SD)
+	}
+}
+
+func TestApplyURLTransformToEntries_AddAndStripPrefix(t *testing.T) {
+	entries := []v1alpha1.EndpointEntry{
+		{Endpoint: "/liveness", Method: "GET",
+			Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/liveness"}}},
+	}
+	ApplyURLTransformToEntries(entries, &v1alpha1.URLTransformSpec{
+		StripPathPrefix: "/api/v1",
+		AddPathPrefix:   "/api/v1/quote",
+	})
+	if entries[0].Endpoint != "/api/v1/quote/liveness" {
+		t.Fatalf("want /api/v1/quote/liveness, got %s", entries[0].Endpoint)
+	}
+	if entries[0].Backends[0].URLPattern != "/liveness" {
+		t.Fatalf("backend urlPattern must be untouched, got %s", entries[0].Backends[0].URLPattern)
+	}
+}
+
+func TestApplyURLTransformToEntries_HostMapping(t *testing.T) {
+	entries := []v1alpha1.EndpointEntry{
+		{Endpoint: "/x", Method: "GET",
+			Backends: []v1alpha1.BackendSpec{{Host: []string{"http://old"}, URLPattern: "/x"}}},
+	}
+	ApplyURLTransformToEntries(entries, &v1alpha1.URLTransformSpec{
+		HostMapping: []v1alpha1.HostMappingEntry{{From: "http://old", To: "http://new"}},
+	})
+	if entries[0].Backends[0].Host[0] != "http://new" {
+		t.Fatalf("host mapping not applied: %s", entries[0].Backends[0].Host[0])
+	}
+}
+
+func TestApplyURLTransformToEntries_NilTransformNoop(t *testing.T) {
+	entries := []v1alpha1.EndpointEntry{{Endpoint: "/x", Method: "GET"}}
+	ApplyURLTransformToEntries(entries, nil)
+	if entries[0].Endpoint != "/x" {
+		t.Fatalf("nil transform must be a no-op, got %s", entries[0].Endpoint)
+	}
+}
