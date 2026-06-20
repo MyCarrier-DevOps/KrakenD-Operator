@@ -77,6 +77,12 @@ type KrakenDAutoConfigSpec struct {
 
 	// Periodic configures the polling interval when trigger is "Periodic".
 	Periodic *PeriodicSpec `json:"periodic,omitempty"`
+
+	// AdditionalEndpoints injects endpoints that are not present in the OpenAPI
+	// spec (e.g. health/liveness probes). They are synthesized into full
+	// endpoints and rendered alongside the spec-derived ones.
+	// +optional
+	AdditionalEndpoints []AdditionalEndpoint `json:"additionalEndpoints,omitempty"`
 }
 
 // OpenAPISource defines the location of an OpenAPI spec.
@@ -262,6 +268,68 @@ type FilterSpec struct {
 	ExcludeOperationIds []string `json:"excludeOperationIds,omitempty"`
 	IncludeTags         []string `json:"includeTags,omitempty"`
 	ExcludeTags         []string `json:"excludeTags,omitempty"`
+}
+
+// AdditionalEndpoint declares an endpoint that is not present in the OpenAPI
+// document. Only Endpoint is required; everything else is optional and, when
+// omitted, is synthesized or (when InheritDefaults is true) taken from
+// spec.defaults.
+type AdditionalEndpoint struct {
+	// Endpoint is the public path KrakenD exposes (e.g. "/liveness").
+	Endpoint string `json:"endpoint"`
+
+	// Method is the HTTP method. Defaults to GET.
+	// +kubebuilder:validation:Enum=GET;POST;PUT;PATCH;DELETE
+	// +optional
+	Method string `json:"method,omitempty"`
+
+	// Host is the backend host URL for the synthesized single backend.
+	// Defaults to the host derived from spec.openapi.url. Ignored when Backends is set.
+	// +optional
+	Host string `json:"host,omitempty"`
+
+	// BackendURLPattern is the upstream path for the synthesized single backend.
+	// Defaults to Endpoint. Ignored when Backends is set.
+	// +optional
+	BackendURLPattern string `json:"backendUrlPattern,omitempty"`
+
+	// Encoding sets the synthesized backend's encoding. "no-op" also sets the
+	// endpoint output encoding to no-op unless OutputEncoding is set. Ignored when Backends is set.
+	// +optional
+	Encoding string `json:"encoding,omitempty"`
+
+	// Backends, when set, is used verbatim; Host/BackendURLPattern/Encoding are ignored.
+	// +optional
+	Backends []BackendSpec `json:"backends,omitempty"`
+
+	// Timeout overrides the endpoint timeout.
+	// +optional
+	Timeout *metav1.Duration `json:"timeout,omitempty"`
+	// CacheTTL overrides the endpoint cache TTL.
+	// +optional
+	CacheTTL *metav1.Duration `json:"cacheTTL,omitempty"`
+	// InputHeaders is the list of headers forwarded to backends.
+	// +optional
+	InputHeaders []string `json:"inputHeaders,omitempty"`
+	// InputQueryStrings is the list of query parameters forwarded to backends.
+	// +optional
+	InputQueryStrings []string `json:"inputQueryStrings,omitempty"`
+	// OutputEncoding overrides the endpoint response encoding.
+	// +optional
+	OutputEncoding string `json:"outputEncoding,omitempty"`
+	// ConcurrentCalls sets the number of concurrent backend calls.
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	ConcurrentCalls *int32 `json:"concurrentCalls,omitempty"`
+	// ExtraConfig holds endpoint-level extra_config JSON.
+	// +optional
+	ExtraConfig *runtime.RawExtension `json:"extraConfig,omitempty"`
+
+	// InheritDefaults applies spec.defaults (fill-only; explicit fields win) to
+	// this endpoint. Defaults to false so a health route does not inherit a
+	// default JWT validator.
+	// +optional
+	InheritDefaults *bool `json:"inheritDefaults,omitempty"`
 }
 
 // PeriodicSpec configures the polling interval for periodic triggers.
