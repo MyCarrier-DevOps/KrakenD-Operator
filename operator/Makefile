@@ -126,15 +126,15 @@ test-e2e: manifests generate fmt vet ## Run the e2e tests in an ephemeral K3s cl
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter
-	$(GOLANGCI_LINT) run
+	$(GOLANGCI_LINT) run --config ../.github/.golangci.yml
 
 .PHONY: lint-fix
 lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
-	$(GOLANGCI_LINT) run --fix
+	$(GOLANGCI_LINT) run --fix --config ../.github/.golangci.yml
 
 .PHONY: lint-config
 lint-config: golangci-lint ## Verify golangci-lint linter configuration
-	$(GOLANGCI_LINT) config verify
+	$(GOLANGCI_LINT) config verify --config ../.github/.golangci.yml
 
 ##@ Build
 
