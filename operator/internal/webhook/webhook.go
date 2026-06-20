@@ -511,6 +511,16 @@ func (v *AutoConfigValidator) validate(
 		}
 	}
 
+	errs = append(errs, validateAdditionalEndpoints(ac)...)
+
+	return errs.ToAggregate()
+}
+
+// validateAdditionalEndpoints validates the additionalEndpoints field and the
+// additionalEndpointsBasePath field of a KrakenDAutoConfig.
+func validateAdditionalEndpoints(ac *v1alpha1.KrakenDAutoConfig) field.ErrorList {
+	var errs field.ErrorList
+
 	if ac.Spec.AdditionalEndpointsBasePath != "" &&
 		!strings.HasPrefix(ac.Spec.AdditionalEndpointsBasePath, "/") {
 		errs = append(errs, field.Invalid(
@@ -554,7 +564,7 @@ func (v *AutoConfigValidator) validate(
 		seenAdditional[key] = struct{}{}
 	}
 
-	return errs.ToAggregate()
+	return errs
 }
 
 // SetupWebhooks registers all validating webhooks with the manager.

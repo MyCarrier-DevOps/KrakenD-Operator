@@ -106,35 +106,7 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return r.handleFetchError(ctx, &ac, err)
 	}
 
-	// Resolve external $refs (only possible with HTTP sources). Warnings
-	// from unresolved refs are logged but do not fail reconciliation.
-	if ac.Spec.OpenAPI.URL != "" {
-		resolved, warnings, resolveErr := autoconfig.ResolveExternalRefs(
-			ctx, fetchResult.Data, ac.Spec.OpenAPI.URL, r.Fetcher,
-			autoconfig.FetchSource{
-				Auth:              ac.Spec.OpenAPI.Auth,
-				AllowClusterLocal: ac.Spec.OpenAPI.AllowClusterLocal,
-				Namespace:         ac.Namespace,
-			},
-		)
-		if resolveErr != nil {
-			log.Error(resolveErr, "external $ref resolution failed, using raw spec")
-		} else {
-			fetchResult.Data = resolved
-		}
-		for _, w := range warnings {
-			log.V(1).Info("ref resolver warning", "warning", w)
-		}
-	}
-
-	// Strip upstream `servers` entries: the KrakenD gateway is the
-	// externally-visible server, so upstream URLs must not bleed into
-	// generated documentation or endpoint configuration.
-	if stripped, stripErr := autoconfig.StripServers(fetchResult.Data); stripErr != nil {
-		log.Error(stripErr, "stripping upstream servers failed, using raw spec")
-	} else {
-		fetchResult.Data = stripped
-	}
+	r.postProcessSpec(ctx, &ac, fetchResult)
 
 	// Recompute checksum from the final (possibly resolved / stripped) data
 	// so changes from external $ref resolution or server stripping are not
@@ -222,36 +194,9 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		filtered = r.Filter.Apply(cueOutput.Entries, cueOutput.Tags, cueOutput.OperationIDs, *ac.Spec.Filter)
 	}
 
-	if len(ac.Spec.AdditionalEndpoints) > 0 {
-		additional := autoconfig.BuildAdditionalEntries(
-			ac.Spec.AdditionalEndpoints, ac.Spec.Defaults, extractHost(ac.Spec.OpenAPI.URL))
-		// Option B: additional endpoints receive the same URL transform as
-		// spec-derived endpoints, applied before scoping/merge.
-		autoconfig.ApplyURLTransformToEntries(additional, ac.Spec.URLTransform)
-
-		// Scope additional endpoints under the application's base path:
-		// manual override → addPathPrefix (already applied above) → derived.
-		base := ac.Spec.AdditionalEndpointsBasePath
-		hasAddPrefix := ac.Spec.URLTransform != nil && ac.Spec.URLTransform.AddPathPrefix != ""
-		if base == "" && !hasAddPrefix {
-			base = autoconfig.DeriveBasePath(filtered)
-			if base == "" {
-				return r.handleScopeError(ctx, &ac, fmt.Errorf(
-					"cannot derive a base path for additionalEndpoints (generated "+
-						"endpoints share no common parent); set "+
-						"spec.additionalEndpointsBasePath or spec.urlTransform.addPathPrefix"))
-			}
-		}
-		if base != "" {
-			autoconfig.ScopeAdditionalEntries(additional, base)
-		}
-
-		var replaced []string
-		filtered, replaced = autoconfig.MergeAdditional(filtered, additional)
-		for _, key := range replaced {
-			r.Recorder.Eventf(&ac, "Warning", v1alpha1.ReasonAdditionalEndpointOverride,
-				"Additional endpoint %q overrides a spec-derived endpoint", key)
-		}
+	filtered, scopeErr := r.applyAdditionalEndpoints(&ac, filtered)
+	if scopeErr != nil {
+		return r.handleScopeError(ctx, &ac, scopeErr)
 	}
 
 	// Extract component schemas from the spec before CUE evaluation
@@ -395,6 +340,89 @@ func (r *KrakenDAutoConfigReconciler) handleScopeError(
 		return r.requeueResult(ac), nil
 	}
 	return ctrl.Result{}, scopeErr
+}
+
+// applyAdditionalEndpoints builds, transforms, scopes, and merges additional
+// endpoints into the filtered set. It returns the combined slice, or a non-nil
+// error when no base path can be determined.
+func (r *KrakenDAutoConfigReconciler) applyAdditionalEndpoints(
+	ac *v1alpha1.KrakenDAutoConfig,
+	filtered []v1alpha1.EndpointEntry,
+) ([]v1alpha1.EndpointEntry, error) {
+	if len(ac.Spec.AdditionalEndpoints) == 0 {
+		return filtered, nil
+	}
+
+	additional := autoconfig.BuildAdditionalEntries(
+		ac.Spec.AdditionalEndpoints, ac.Spec.Defaults, extractHost(ac.Spec.OpenAPI.URL))
+	// Option B: additional endpoints receive the same URL transform as
+	// spec-derived endpoints, applied before scoping/merge.
+	autoconfig.ApplyURLTransformToEntries(additional, ac.Spec.URLTransform)
+
+	// Scope additional endpoints under the application's base path:
+	// manual override → addPathPrefix (already applied above) → derived.
+	base := ac.Spec.AdditionalEndpointsBasePath
+	hasAddPrefix := ac.Spec.URLTransform != nil && ac.Spec.URLTransform.AddPathPrefix != ""
+	if base == "" && !hasAddPrefix {
+		base = autoconfig.DeriveBasePath(filtered)
+		if base == "" {
+			return nil, fmt.Errorf(
+				"cannot derive a base path for additionalEndpoints (generated " +
+					"endpoints share no common parent); set " +
+					"spec.additionalEndpointsBasePath or spec.urlTransform.addPathPrefix")
+		}
+	}
+	if base != "" {
+		autoconfig.ScopeAdditionalEntries(additional, base)
+	}
+
+	var replaced []string
+	filtered, replaced = autoconfig.MergeAdditional(filtered, additional)
+	for _, key := range replaced {
+		r.Recorder.Eventf(ac, "Warning", v1alpha1.ReasonAdditionalEndpointOverride,
+			"Additional endpoint %q overrides a spec-derived endpoint", key)
+	}
+	return filtered, nil
+}
+
+// postProcessSpec resolves external $refs and strips upstream server entries
+// from the fetched spec data, updating fetchResult.Data in place.
+func (r *KrakenDAutoConfigReconciler) postProcessSpec(
+	ctx context.Context,
+	ac *v1alpha1.KrakenDAutoConfig,
+	fetchResult *autoconfig.FetchResult,
+) {
+	log := logf.FromContext(ctx)
+
+	// Resolve external $refs (only possible with HTTP sources). Warnings
+	// from unresolved refs are logged but do not fail reconciliation.
+	if ac.Spec.OpenAPI.URL != "" {
+		resolved, warnings, resolveErr := autoconfig.ResolveExternalRefs(
+			ctx, fetchResult.Data, ac.Spec.OpenAPI.URL, r.Fetcher,
+			autoconfig.FetchSource{
+				Auth:              ac.Spec.OpenAPI.Auth,
+				AllowClusterLocal: ac.Spec.OpenAPI.AllowClusterLocal,
+				Namespace:         ac.Namespace,
+			},
+		)
+		if resolveErr != nil {
+			log.Error(resolveErr, "external $ref resolution failed, using raw spec")
+		} else {
+			fetchResult.Data = resolved
+		}
+		for _, w := range warnings {
+			log.V(1).Info("ref resolver warning", "warning", w)
+		}
+	}
+
+	// Strip upstream `servers` entries: the KrakenD gateway is the
+	// externally-visible server, so upstream URLs must not bleed into
+	// generated documentation or endpoint configuration.
+	if stripped, stripErr := autoconfig.StripServers(fetchResult.Data); stripErr != nil {
+		log.Error(stripErr, "stripping upstream servers failed, using raw spec")
+	} else {
+		fetchResult.Data = stripped
+	}
 }
 
 func (r *KrakenDAutoConfigReconciler) requeueResult(ac *v1alpha1.KrakenDAutoConfig) ctrl.Result {

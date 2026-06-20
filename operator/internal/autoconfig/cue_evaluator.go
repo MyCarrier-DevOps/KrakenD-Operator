@@ -351,7 +351,11 @@ func applyURLTransform(output *CUEOutput, transform *v1alpha1.URLTransformSpec) 
 
 // applyURLTransformToEntry applies host mapping and path strip/add-prefix to a
 // single entry. hostMap is the precomputed From→To map.
-func applyURLTransformToEntry(entry *v1alpha1.EndpointEntry, transform *v1alpha1.URLTransformSpec, hostMap map[string]string) {
+func applyURLTransformToEntry(
+	entry *v1alpha1.EndpointEntry,
+	transform *v1alpha1.URLTransformSpec,
+	hostMap map[string]string,
+) {
 	for j := range entry.Backends {
 		for k, host := range entry.Backends[j].Host {
 			if to, ok := hostMap[host]; ok {
