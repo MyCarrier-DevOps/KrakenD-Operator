@@ -1,6 +1,8 @@
 package autoconfig
 
 import (
+	"slices"
+
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 )
 
@@ -36,7 +38,7 @@ func BuildAdditionalEntries(
 		}
 
 		if len(s.Backends) > 0 {
-			entry.Backends = s.Backends
+			entry.Backends = append([]v1alpha1.BackendSpec(nil), s.Backends...)
 		} else {
 			host := s.Host
 			if host == "" {
@@ -84,10 +86,10 @@ func inheritDefaults(entry *v1alpha1.EndpointEntry, defaults *v1alpha1.Defaults)
 			entry.ConcurrentCalls = e.ConcurrentCalls
 		}
 		if entry.InputHeaders == nil {
-			entry.InputHeaders = e.InputHeaders
+			entry.InputHeaders = slices.Clone(e.InputHeaders)
 		}
 		if entry.InputQueryStrings == nil {
-			entry.InputQueryStrings = e.InputQueryStrings
+			entry.InputQueryStrings = slices.Clone(e.InputQueryStrings)
 		}
 		if e.ExtraConfig != nil {
 			// base = default, override = entry → entry wins on overlap.

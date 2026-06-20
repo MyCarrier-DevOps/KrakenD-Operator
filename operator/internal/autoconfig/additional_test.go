@@ -1,6 +1,7 @@
 package autoconfig
 
 import (
+	"strings"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/runtime"
@@ -58,17 +59,24 @@ func TestBuildAdditionalEntries_ExplicitBackendsUsedVerbatim(t *testing.T) {
 func TestBuildAdditionalEntries_InheritDefaultsFillsOnly(t *testing.T) {
 	tru := true
 	defaults := &v1alpha1.Defaults{Endpoint: &v1alpha1.EndpointDefaults{
-		InputHeaders: []string{"Authorization"},
-		ExtraConfig:  &runtime.RawExtension{Raw: []byte(`{"auth/validator":{"alg":"RS256"}}`)},
+		OutputEncoding: "no-op",                   // must NOT override the explicit "json"
+		InputHeaders:   []string{"Authorization"}, // must fill (entry leaves it unset)
+		ExtraConfig:    &runtime.RawExtension{Raw: []byte(`{"auth/validator":{"alg":"RS256"}}`)},
 	}}
 	out := BuildAdditionalEntries([]v1alpha1.AdditionalEndpoint{{
-		Endpoint: "/audit", InheritDefaults: &tru,
+		Endpoint:        "/audit",
+		OutputEncoding:  "json", // explicit — must survive
+		InheritDefaults: &tru,
 	}}, defaults, "http://svc")
-	if len(out[0].InputHeaders) != 1 || out[0].InputHeaders[0] != "Authorization" {
-		t.Fatalf("defaults not inherited: %+v", out[0].InputHeaders)
+
+	if out[0].OutputEncoding != "json" {
+		t.Fatalf("explicit OutputEncoding overwritten by default: got %q, want json", out[0].OutputEncoding)
 	}
-	if out[0].ExtraConfig == nil {
-		t.Fatalf("expected inherited extraConfig")
+	if len(out[0].InputHeaders) != 1 || out[0].InputHeaders[0] != "Authorization" {
+		t.Fatalf("default InputHeaders not filled: %+v", out[0].InputHeaders)
+	}
+	if out[0].ExtraConfig == nil || !strings.Contains(string(out[0].ExtraConfig.Raw), "auth/validator") {
+		t.Fatalf("inherited extraConfig missing: %+v", out[0].ExtraConfig)
 	}
 }
 
