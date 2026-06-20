@@ -123,8 +123,8 @@ func MergeAdditional(
 	if len(additional) == 0 {
 		return base, nil
 	}
-	combined = make([]v1alpha1.EndpointEntry, len(base))
-	copy(combined, base)
+	combined = make([]v1alpha1.EndpointEntry, 0, len(base)+len(additional))
+	combined = append(combined, base...)
 
 	index := make(map[string]int, len(combined))
 	for i, e := range combined {
