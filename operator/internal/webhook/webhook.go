@@ -519,6 +519,14 @@ func (v *AutoConfigValidator) validate(
 			"must start with '/'"))
 	}
 
+	if ac.Spec.AdditionalEndpointsBasePath != "" &&
+		ac.Spec.URLTransform != nil && ac.Spec.URLTransform.AddPathPrefix != "" {
+		errs = append(errs, field.Invalid(
+			field.NewPath("spec", "additionalEndpointsBasePath"),
+			ac.Spec.AdditionalEndpointsBasePath,
+			"is mutually exclusive with spec.urlTransform.addPathPrefix; set only one"))
+	}
+
 	seenAdditional := make(map[string]struct{}, len(ac.Spec.AdditionalEndpoints))
 	for i, ae := range ac.Spec.AdditionalEndpoints {
 		p := field.NewPath("spec", "additionalEndpoints").Index(i)
