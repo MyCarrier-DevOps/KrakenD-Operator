@@ -109,3 +109,36 @@ func inheritDefaults(entry *v1alpha1.EndpointEntry, defaults *v1alpha1.Defaults)
 		}
 	}
 }
+
+// MergeAdditional combines spec-derived (base) entries with synthesized
+// additional entries. When an additional entry has the same endpoint+method as
+// a base entry, the additional entry replaces it and its key is reported in
+// `replaced` (callers emit a warning). Non-colliding additional entries are
+// appended. Intra-additional duplicates are prevented by the webhook, so this
+// only reconciles additional entries against base.
+func MergeAdditional(
+	base, additional []v1alpha1.EndpointEntry,
+) (combined []v1alpha1.EndpointEntry, replaced []string) {
+	if len(additional) == 0 {
+		return base, nil
+	}
+	combined = make([]v1alpha1.EndpointEntry, len(base))
+	copy(combined, base)
+
+	index := make(map[string]int, len(combined))
+	for i, e := range combined {
+		index[e.Endpoint+":"+e.Method] = i
+	}
+
+	for _, a := range additional {
+		key := a.Endpoint + ":" + a.Method
+		if i, ok := index[key]; ok {
+			combined[i] = a
+			replaced = append(replaced, key)
+		} else {
+			index[key] = len(combined)
+			combined = append(combined, a)
+		}
+	}
+	return combined, replaced
+}

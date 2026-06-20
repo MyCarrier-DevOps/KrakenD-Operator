@@ -89,3 +89,40 @@ func TestBuildAdditionalEntries_NoInheritByDefault(t *testing.T) {
 		t.Fatalf("defaults must NOT be inherited when InheritDefaults is nil: %+v", out[0].InputHeaders)
 	}
 }
+
+func TestMergeAdditional_AppendsNonColliding(t *testing.T) {
+	base := []v1alpha1.EndpointEntry{{Endpoint: "/api/users", Method: "GET"}}
+	add := []v1alpha1.EndpointEntry{{Endpoint: "/liveness", Method: "GET"}}
+
+	combined, replaced := MergeAdditional(base, add)
+
+	if len(combined) != 2 {
+		t.Fatalf("want 2 combined, got %d", len(combined))
+	}
+	if len(replaced) != 0 {
+		t.Fatalf("want no replacements, got %v", replaced)
+	}
+}
+
+func TestMergeAdditional_AdditionalWinsOnCollision(t *testing.T) {
+	base := []v1alpha1.EndpointEntry{{
+		Endpoint: "/api/users", Method: "GET",
+		Backends: []v1alpha1.BackendSpec{{Host: []string{"http://old"}, URLPattern: "/old"}},
+	}}
+	add := []v1alpha1.EndpointEntry{{
+		Endpoint: "/api/users", Method: "GET",
+		Backends: []v1alpha1.BackendSpec{{Host: []string{"http://new"}, URLPattern: "/new"}},
+	}}
+
+	combined, replaced := MergeAdditional(base, add)
+
+	if len(combined) != 1 {
+		t.Fatalf("want 1 combined, got %d", len(combined))
+	}
+	if combined[0].Backends[0].Host[0] != "http://new" {
+		t.Fatalf("additional did not win: %+v", combined[0].Backends[0])
+	}
+	if len(replaced) != 1 || replaced[0] != "/api/users:GET" {
+		t.Fatalf("want replaced [/api/users:GET], got %v", replaced)
+	}
+}
