@@ -103,5 +103,6 @@ const (
 	ReasonMissingOperationId       = "MissingOperationId"
 	ReasonDuplicateOperationId     = "DuplicateOperationId"
 	ReasonRolloutFailed            = "RolloutFailed"
-	ReasonCUEEvaluationFailed      = "CUEEvaluationFailed"
+	ReasonCUEEvaluationFailed            = "CUEEvaluationFailed"
+	ReasonAdditionalEndpointOverride     = "AdditionalEndpointOverride"
 )

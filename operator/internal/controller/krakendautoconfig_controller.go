@@ -222,6 +222,21 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		filtered = r.Filter.Apply(cueOutput.Entries, cueOutput.Tags, cueOutput.OperationIDs, *ac.Spec.Filter)
 	}
 
+	if len(ac.Spec.AdditionalEndpoints) > 0 {
+		additional := autoconfig.BuildAdditionalEntries(
+			ac.Spec.AdditionalEndpoints, ac.Spec.Defaults, extractHost(ac.Spec.OpenAPI.URL))
+		// Option B: additional endpoints receive the same URL transform as
+		// spec-derived endpoints, applied BEFORE the merge so collision keys
+		// align. ApplyURLTransformToEntries is a no-op when URLTransform is nil.
+		autoconfig.ApplyURLTransformToEntries(additional, ac.Spec.URLTransform)
+		var replaced []string
+		filtered, replaced = autoconfig.MergeAdditional(filtered, additional)
+		for _, key := range replaced {
+			r.Recorder.Eventf(&ac, "Warning", v1alpha1.ReasonAdditionalEndpointOverride,
+				"Additional endpoint %q overrides a spec-derived endpoint", key)
+		}
+	}
+
 	// Extract component schemas from the spec before CUE evaluation
 	// so they can be attached to each generated KrakenDEndpoint CR.
 	componentSchemas := autoconfig.ExtractComponentSchemas(fetchResult.Data)
