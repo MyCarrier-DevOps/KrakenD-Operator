@@ -226,9 +226,26 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		additional := autoconfig.BuildAdditionalEntries(
 			ac.Spec.AdditionalEndpoints, ac.Spec.Defaults, extractHost(ac.Spec.OpenAPI.URL))
 		// Option B: additional endpoints receive the same URL transform as
-		// spec-derived endpoints, applied BEFORE the merge so collision keys
-		// align. ApplyURLTransformToEntries is a no-op when URLTransform is nil.
+		// spec-derived endpoints, applied before scoping/merge.
 		autoconfig.ApplyURLTransformToEntries(additional, ac.Spec.URLTransform)
+
+		// Scope additional endpoints under the application's base path:
+		// manual override → addPathPrefix (already applied above) → derived.
+		base := ac.Spec.AdditionalEndpointsBasePath
+		hasAddPrefix := ac.Spec.URLTransform != nil && ac.Spec.URLTransform.AddPathPrefix != ""
+		if base == "" && !hasAddPrefix {
+			base = autoconfig.DeriveBasePath(filtered)
+			if base == "" {
+				return r.handleScopeError(ctx, &ac, fmt.Errorf(
+					"cannot derive a base path for additionalEndpoints (generated "+
+						"endpoints share no common parent); set "+
+						"spec.additionalEndpointsBasePath or spec.urlTransform.addPathPrefix"))
+			}
+		}
+		if base != "" {
+			autoconfig.ScopeAdditionalEntries(additional, base)
+		}
+
 		var replaced []string
 		filtered, replaced = autoconfig.MergeAdditional(filtered, additional)
 		for _, key := range replaced {
@@ -355,6 +372,29 @@ func (r *KrakenDAutoConfigReconciler) handleCUEError(
 		return r.requeueResult(ac), nil
 	}
 	return ctrl.Result{}, cueErr
+}
+
+func (r *KrakenDAutoConfigReconciler) handleScopeError(
+	ctx context.Context,
+	ac *v1alpha1.KrakenDAutoConfig,
+	scopeErr error,
+) (ctrl.Result, error) {
+	ac.Status.Phase = v1alpha1.AutoConfigPhaseError
+	meta.SetStatusCondition(&ac.Status.Conditions, metav1.Condition{
+		Type:               v1alpha1.ConditionSynced,
+		Status:             metav1.ConditionFalse,
+		ObservedGeneration: ac.Generation,
+		Reason:             v1alpha1.ReasonAdditionalEndpointScopeFailed,
+		Message:            scopeErr.Error(),
+	})
+	if err := r.Status().Update(ctx, ac); err != nil {
+		return ctrl.Result{}, fmt.Errorf("updating scope error status: %w", err)
+	}
+	r.Recorder.Event(ac, "Warning", v1alpha1.ReasonAdditionalEndpointScopeFailed, scopeErr.Error())
+	if ac.Spec.Trigger == v1alpha1.TriggerPeriodic {
+		return r.requeueResult(ac), nil
+	}
+	return ctrl.Result{}, scopeErr
 }
 
 func (r *KrakenDAutoConfigReconciler) requeueResult(ac *v1alpha1.KrakenDAutoConfig) ctrl.Result {
