@@ -34,3 +34,6 @@ go.work.sum
 # Local brainstorming/design working docs (not committed; final design is folded
 # into architecture/application/application-architecture.md)
 docs/superpowers/
+
+# Git worktrees
+.worktrees/

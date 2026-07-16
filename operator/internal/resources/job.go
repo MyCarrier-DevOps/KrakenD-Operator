@@ -35,6 +35,13 @@ const (
 	// triggered the Job. Used for idempotent Job naming.
 	PostRestartJobChecksumAnnotation = "krakend.io/checksum-config"
 
+	// PostRestartJobAttemptAnnotation records the retry attempt number for
+	// the post-restart Job. The Job name stays checksum-based (and thus
+	// constant) across retries, so this annotation is what distinguishes a
+	// recreated Job's attempt count after a Failed Job is deleted and
+	// recreated for the same config checksum.
+	PostRestartJobAttemptAnnotation = "krakend.io/postrestart-attempt"
+
 	defaultPostRestartBackoffLimit            = int32(2)
 	defaultPostRestartActiveDeadlineSeconds   = int64(600)
 	defaultPostRestartTTLSecondsAfterFinished = int32(86400)

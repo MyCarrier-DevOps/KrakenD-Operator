@@ -80,6 +80,7 @@ const (
 	ConditionSpecAvailable            = "SpecAvailable"
 	ConditionSynced                   = "Synced"
 	ConditionPolicyValid              = "PolicyValid"
+	ConditionPostRestartJobSucceeded  = "PostRestartJobSucceeded"
 )
 
 // Event reason constants for the EventRecorder.
@@ -106,4 +107,7 @@ const (
 	ReasonCUEEvaluationFailed           = "CUEEvaluationFailed"
 	ReasonAdditionalEndpointOverride    = "AdditionalEndpointOverride"
 	ReasonAdditionalEndpointScopeFailed = "AdditionalEndpointScopeFailed"
+	ReasonPostRestartJobSucceeded       = "PostRestartJobSucceeded"
+	ReasonPostRestartJobRetried         = "PostRestartJobRetried"
+	ReasonPostRestartJobFailed          = "PostRestartJobFailed"
 )

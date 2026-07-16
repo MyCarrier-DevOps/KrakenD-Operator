@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strconv"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -859,20 +860,126 @@ func (r *KrakenDGatewayReconciler) reconcilePostRestartJob(
 	existing := &batchv1.Job{}
 	err := r.Get(ctx, types.NamespacedName{Name: jobName, Namespace: gw.Namespace}, existing)
 	if err == nil {
-		// Job already exists — ensure the status records the checksum even
-		// if a previous status update was lost (e.g. conflict).
-		gw.Status.LastPostRestartJobChecksum = configChecksum
-		return nil
+		return r.handleExistingPostRestartJob(ctx, gw, existing, configChecksum)
 	}
 	if !errors.IsNotFound(err) {
 		return fmt.Errorf("checking existing post-restart job: %w", err)
 	}
 
+	if err := r.createPostRestartJob(ctx, gw, jobName, configChecksum, 1); err != nil {
+		return err
+	}
+	log.Info("created post-restart job", "name", jobName, "checksum", configChecksum)
+	return nil
+}
+
+// postRestartJobMaxAttempts caps how many times a Failed post-restart Job is
+// deleted and recreated for the same config checksum before the failure is
+// surfaced as terminal (Warning event + PostRestartJobSucceeded=False).
+const postRestartJobMaxAttempts = 3
+
+// handleExistingPostRestartJob inspects an existing post-restart Job's
+// terminal status and decides what to do:
+//   - Failed, under the retry cap: delete + recreate with an incremented
+//     attempt annotation (same checksum-based Job name).
+//   - Failed, at the retry cap: leave the Job in place, surface a Warning
+//     event and a PostRestartJobSucceeded=False condition.
+//   - Succeeded: leave the Job in place, record the checksum, and set
+//     PostRestartJobSucceeded=True.
+//   - Still running/unknown: preserve prior idempotent behavior (record the
+//     checksum in case a previous status update was lost, do nothing else).
+func (r *KrakenDGatewayReconciler) handleExistingPostRestartJob(
+	ctx context.Context,
+	gw *v1alpha1.KrakenDGateway,
+	existing *batchv1.Job,
+	configChecksum string,
+) error {
+	log := logf.FromContext(ctx)
+
+	switch {
+	case isPostRestartJobFailed(existing):
+		attempt := postRestartJobAttempt(existing)
+		if attempt < postRestartJobMaxAttempts {
+			return r.retryPostRestartJob(ctx, gw, existing, configChecksum, attempt+1)
+		}
+
+		gw.Status.LastPostRestartJobChecksum = configChecksum
+		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+			Type:               v1alpha1.ConditionPostRestartJobSucceeded,
+			Status:             metav1.ConditionFalse,
+			ObservedGeneration: gw.Generation,
+			Reason:             v1alpha1.ReasonPostRestartJobFailed,
+			Message: fmt.Sprintf(
+				"Post-restart Job %s failed after %d attempts, giving up", existing.Name, attempt),
+		})
+		r.Recorder.Event(gw, "Warning", v1alpha1.ReasonPostRestartJobFailed,
+			fmt.Sprintf("Post-restart Job %s failed after %d attempts, retry cap reached",
+				existing.Name, attempt))
+		log.Info("post-restart job retry cap reached", "name", existing.Name, "attempts", attempt)
+		return nil
+
+	case isPostRestartJobSucceeded(existing):
+		gw.Status.LastPostRestartJobChecksum = configChecksum
+		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+			Type:               v1alpha1.ConditionPostRestartJobSucceeded,
+			Status:             metav1.ConditionTrue,
+			ObservedGeneration: gw.Generation,
+			Reason:             v1alpha1.ReasonPostRestartJobSucceeded,
+			Message:            fmt.Sprintf("Post-restart Job %s completed successfully", existing.Name),
+		})
+		return nil
+
+	default:
+		// Still running (or status not yet observed) — ensure the status
+		// records the checksum even if a previous status update was lost
+		// (e.g. conflict), and wait for the next reconcile.
+		gw.Status.LastPostRestartJobChecksum = configChecksum
+		return nil
+	}
+}
+
+// retryPostRestartJob deletes a Failed post-restart Job and recreates it
+// (same checksum-based name) with an incremented attempt annotation.
+func (r *KrakenDGatewayReconciler) retryPostRestartJob(
+	ctx context.Context,
+	gw *v1alpha1.KrakenDGateway,
+	existing *batchv1.Job,
+	configChecksum string,
+	nextAttempt int,
+) error {
+	log := logf.FromContext(ctx)
+
+	if err := r.Delete(ctx, existing,
+		client.PropagationPolicy(metav1.DeletePropagationBackground)); err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("deleting failed post-restart job for retry: %w", err)
+	}
+
+	if err := r.createPostRestartJob(ctx, gw, existing.Name, configChecksum, nextAttempt); err != nil {
+		return err
+	}
+
+	r.Recorder.Event(gw, "Normal", v1alpha1.ReasonPostRestartJobRetried,
+		fmt.Sprintf("Retrying post-restart Job %s (attempt %d/%d)",
+			existing.Name, nextAttempt, postRestartJobMaxAttempts))
+	log.Info("retried post-restart job", "name", existing.Name, "attempt", nextAttempt)
+	return nil
+}
+
+// createPostRestartJob builds and creates a post-restart Job stamped with
+// the given attempt number, recording the checksum on the gateway status.
+func (r *KrakenDGatewayReconciler) createPostRestartJob(
+	ctx context.Context,
+	gw *v1alpha1.KrakenDGateway,
+	jobName string,
+	configChecksum string,
+	attempt int,
+) error {
 	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{
 		Name:      jobName,
 		Namespace: gw.Namespace,
 	}}
 	resources.BuildPostRestartJob(job, gw, configChecksum)
+	job.Annotations[resources.PostRestartJobAttemptAnnotation] = strconv.Itoa(attempt)
 	if err := controllerutil.SetControllerReference(gw, job, r.Scheme); err != nil {
 		return fmt.Errorf("setting owner reference on post-restart job: %w", err)
 	}
@@ -884,10 +991,50 @@ func (r *KrakenDGatewayReconciler) reconcilePostRestartJob(
 	}
 
 	gw.Status.LastPostRestartJobChecksum = configChecksum
-	r.Recorder.Event(gw, "Normal", "PostRestartJobCreated",
-		fmt.Sprintf("Created post-restart Job %s for config checksum %s", jobName, configChecksum))
-	log.Info("created post-restart job", "name", jobName, "checksum", configChecksum)
+	if attempt == 1 {
+		r.Recorder.Event(gw, "Normal", "PostRestartJobCreated",
+			fmt.Sprintf("Created post-restart Job %s for config checksum %s", jobName, configChecksum))
+	}
 	return nil
+}
+
+// isPostRestartJobFailed reports whether a Job's status carries a Failed
+// condition (e.g. BackoffLimitExceeded).
+func isPostRestartJobFailed(job *batchv1.Job) bool {
+	for _, c := range job.Status.Conditions {
+		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
+			return true
+		}
+	}
+	return false
+}
+
+// isPostRestartJobSucceeded reports whether a Job's status reflects a
+// successful completion.
+func isPostRestartJobSucceeded(job *batchv1.Job) bool {
+	if job.Status.Succeeded > 0 {
+		return true
+	}
+	for _, c := range job.Status.Conditions {
+		if c.Type == batchv1.JobComplete && c.Status == corev1.ConditionTrue {
+			return true
+		}
+	}
+	return false
+}
+
+// postRestartJobAttempt reads the retry attempt annotation off a Job,
+// defaulting to 1 (first attempt) when absent or unparsable.
+func postRestartJobAttempt(job *batchv1.Job) int {
+	raw, ok := job.Annotations[resources.PostRestartJobAttemptAnnotation]
+	if !ok {
+		return 1
+	}
+	attempt, err := strconv.Atoi(raw)
+	if err != nil || attempt < 1 {
+		return 1
+	}
+	return attempt
 }
 
 // endpointToGateway maps a KrakenDEndpoint to its owning gateway.
