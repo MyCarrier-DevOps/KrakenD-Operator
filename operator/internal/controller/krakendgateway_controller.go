@@ -866,10 +866,25 @@ func (r *KrakenDGatewayReconciler) reconcilePostRestartJob(
 		return fmt.Errorf("checking existing post-restart job: %w", err)
 	}
 
-	if err := r.createPostRestartJob(ctx, gw, jobName, configChecksum, 1); err != nil {
+	attempt := 1
+	if gw.Status.LastPostRestartJobChecksum == configChecksum && gw.Status.LastPostRestartJobAttempt > 1 {
+		// The Job for this checksum is missing, but the gateway status
+		// durably recorded a higher in-flight attempt for this exact
+		// checksum — most likely the operator crashed between deleting a
+		// Failed Job and recreating it during a retry (retryPostRestartJob
+		// writes this record before the Delete for exactly this reason).
+		// Resume from the recorded attempt instead of resetting to 1, so
+		// the retry cap survives operator restarts.
+		attempt = int(gw.Status.LastPostRestartJobAttempt)
+		if attempt > postRestartJobMaxAttempts {
+			attempt = postRestartJobMaxAttempts
+		}
+	}
+
+	if err := r.createPostRestartJob(ctx, gw, jobName, configChecksum, attempt); err != nil {
 		return err
 	}
-	log.Info("created post-restart job", "name", jobName, "checksum", configChecksum)
+	log.Info("created post-restart job", "name", jobName, "checksum", configChecksum, "attempt", attempt)
 	return nil
 }
 
@@ -939,6 +954,13 @@ func (r *KrakenDGatewayReconciler) handleExistingPostRestartJob(
 		return nil
 
 	case isPostRestartJobSucceeded(existing):
+		// Clear the in-flight attempt record on success: it only exists to
+		// resume a retry sequence across a crash (see the NotFound/create
+		// path above), and leaving a stale high value here could make a
+		// LATER, unrelated recreate for this same checksum (e.g. after
+		// TTLSecondsAfterFinished garbage-collects this succeeded Job)
+		// wrongly resume at a high attempt instead of starting fresh at 1.
+		gw.Status.LastPostRestartJobAttempt = 0
 		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
 			Type:               v1alpha1.ConditionPostRestartJobSucceeded,
 			Status:             metav1.ConditionTrue,
@@ -965,6 +987,22 @@ func (r *KrakenDGatewayReconciler) retryPostRestartJob(
 	nextAttempt int,
 ) error {
 	log := logf.FromContext(ctx)
+
+	// Durably record the attempt we are about to create BEFORE deleting the
+	// old Job. reconcileOwnedResources (which calls this, via
+	// reconcilePostRestartJob) runs before the single Status().Update at the
+	// end of Reconcile, so without this explicit early write an operator
+	// crash between Delete and Create would lose the in-flight attempt
+	// entirely: the next reconcile's Get would find no Job (NotFound) and,
+	// absent this durable record, would default back to attempt 1 —
+	// silently resetting the retry cap and permitting unbounded retries
+	// across restarts. The NotFound/create path in reconcilePostRestartJob
+	// reads this field back to resume at the correct attempt.
+	gw.Status.LastPostRestartJobChecksum = configChecksum
+	gw.Status.LastPostRestartJobAttempt = int32(nextAttempt)
+	if err := r.Status().Update(ctx, gw); err != nil {
+		return fmt.Errorf("persisting next post-restart job attempt before retry: %w", err)
+	}
 
 	// Identity-precondition the delete on the exact Job instance we just
 	// read and evaluated as Failed. The manager client reads through the
@@ -1053,6 +1091,7 @@ func (r *KrakenDGatewayReconciler) createPostRestartJob(
 	}
 
 	gw.Status.LastPostRestartJobChecksum = configChecksum
+	gw.Status.LastPostRestartJobAttempt = int32(attempt)
 	if attempt == 1 {
 		r.Recorder.Event(gw, "Normal", "PostRestartJobCreated",
 			fmt.Sprintf("Created post-restart Job %s for config checksum %s", jobName, configChecksum))
