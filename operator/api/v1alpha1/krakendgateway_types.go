@@ -499,13 +499,6 @@ type KrakenDGatewayStatus struct {
 	// LastPostRestartJobChecksum records the config checksum for which the
 	// most recent post-restart Job was successfully created.
 	LastPostRestartJobChecksum string `json:"lastPostRestartJobChecksum,omitempty"`
-	// LastPostRestartJobAttempt durably records the retry attempt number
-	// written just before a Failed post-restart Job is deleted and
-	// recreated (see reconcilePostRestartJob / retryPostRestartJob). This
-	// lets an operator crash between the Delete and the recreate resume at
-	// the correct attempt on the next reconcile instead of resetting to 1,
-	// so the retry cap survives operator restarts.
-	LastPostRestartJobAttempt int32 `json:"lastPostRestartJobAttempt,omitempty"`
 }
 
 // +kubebuilder:object:root=true

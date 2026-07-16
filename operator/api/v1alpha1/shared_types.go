@@ -108,6 +108,5 @@ const (
 	ReasonAdditionalEndpointOverride    = "AdditionalEndpointOverride"
 	ReasonAdditionalEndpointScopeFailed = "AdditionalEndpointScopeFailed"
 	ReasonPostRestartJobSucceeded       = "PostRestartJobSucceeded"
-	ReasonPostRestartJobRetried         = "PostRestartJobRetried"
 	ReasonPostRestartJobFailed          = "PostRestartJobFailed"
 )

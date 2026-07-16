@@ -1847,16 +1847,6 @@ spec:
               endpointCount:
                 format: int32
                 type: integer
-              lastPostRestartJobAttempt:
-                description: |-
-                  LastPostRestartJobAttempt durably records the retry attempt number
-                  written just before a Failed post-restart Job is deleted and
-                  recreated (see reconcilePostRestartJob / retryPostRestartJob). This
-                  lets an operator crash between the Delete and the recreate resume at
-                  the correct attempt on the next reconcile instead of resetting to 1,
-                  so the retry cap survives operator restarts.
-                format: int32
-                type: integer
               lastPostRestartJobChecksum:
                 description: |-
                   LastPostRestartJobChecksum records the config checksum for which the

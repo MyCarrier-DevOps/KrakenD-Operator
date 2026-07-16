@@ -18,8 +18,6 @@ package controller
 
 import (
 	"context"
-	"fmt"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -28,15 +26,12 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
 func makeGWWithJob(script string) *v1alpha1.KrakenDGateway {
@@ -176,21 +171,17 @@ func TestReconcilePostRestartJob_DisabledSpec(t *testing.T) {
 }
 
 // makeFailedJob returns a post-restart Job for the given checksum whose
-// status reflects a BackoffLimitExceeded failure, with the given prior
-// attempt number recorded on the annotation (0 means the annotation is
-// absent, exercising the "default to 1" path).
-func makeFailedJob(gw *v1alpha1.KrakenDGateway, checksum string, attempt int) *batchv1.Job {
-	annotations := map[string]string{
-		resources.PostRestartJobChecksumAnnotation: checksum,
-	}
-	if attempt > 0 {
-		annotations[resources.PostRestartJobAttemptAnnotation] = strconv.Itoa(attempt)
-	}
+// status reflects a BackoffLimitExceeded failure. The job script itself
+// (run by the Job's own backoffLimit) is responsible for any retries; the
+// operator only surfaces the terminal Failed status.
+func makeFailedJob(gw *v1alpha1.KrakenDGateway, checksum string) *batchv1.Job {
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        resources.PostRestartJobName(gw, checksum),
-			Namespace:   gw.Namespace,
-			Annotations: annotations,
+			Name:      resources.PostRestartJobName(gw, checksum),
+			Namespace: gw.Namespace,
+			Annotations: map[string]string{
+				resources.PostRestartJobChecksumAnnotation: checksum,
+			},
 		},
 		Status: batchv1.JobStatus{
 			Conditions: []batchv1.JobCondition{
@@ -257,55 +248,16 @@ func countMatching(events []string, substrs ...string) int {
 	return count
 }
 
-func TestReconcilePostRestartJob_FailedJobIsRetried(t *testing.T) {
+func TestReconcilePostRestartJob_FailedJobSetsConditionFalseAndEmitsWarningOnce(t *testing.T) {
 	gw := makeGWWithJob("echo ok")
 	dep := makeConvergedDeployment(gw, "abc123")
-	failed := makeFailedJob(gw, "abc123", 1)
-	c := fakeClientBuilder().WithObjects(gw, dep, failed).WithStatusSubresource(gw).Build()
-	rec := fakeRecorder()
-	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: rec}
-
-	if err := r.reconcilePostRestartJob(context.Background(), gw, "abc123"); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	var jobs batchv1.JobList
-	if err := c.List(context.Background(), &jobs, client.InNamespace("ns")); err != nil {
-		t.Fatalf("listing jobs: %v", err)
-	}
-	if len(jobs.Items) != 1 {
-		t.Fatalf("expected exactly one job after retry (delete+recreate), got %d", len(jobs.Items))
-	}
-	got := jobs.Items[0]
-	if attempt := got.Annotations[resources.PostRestartJobAttemptAnnotation]; attempt != "2" {
-		t.Fatalf("expected recreated job attempt annotation to be %q, got %q", "2", attempt)
-	}
-	if len(got.Status.Conditions) != 0 {
-		t.Fatalf("expected recreated job to have a fresh (empty) status, got %+v", got.Status.Conditions)
-	}
-
-	events := drainEvents(rec)
-	found := false
-	for _, e := range events {
-		if strings.Contains(e, "Normal") && strings.Contains(e, v1alpha1.ReasonPostRestartJobRetried) {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("expected a Normal %s event, got events: %v", v1alpha1.ReasonPostRestartJobRetried, events)
-	}
-}
-
-func TestReconcilePostRestartJob_RetryCapReachedSurfacesFailure(t *testing.T) {
-	gw := makeGWWithJob("echo ok")
-	dep := makeConvergedDeployment(gw, "abc123")
-	failed := makeFailedJob(gw, "abc123", 3)
+	failed := makeFailedJob(gw, "abc123")
 	c := fakeClientBuilder().WithObjects(gw, dep, failed).Build()
 	rec := fakeRecorder()
 	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: rec}
 
 	if err := r.reconcilePostRestartJob(context.Background(), gw, "abc123"); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("unexpected error (1st reconcile): %v", err)
 	}
 
 	var jobs batchv1.JobList
@@ -313,10 +265,8 @@ func TestReconcilePostRestartJob_RetryCapReachedSurfacesFailure(t *testing.T) {
 		t.Fatalf("listing jobs: %v", err)
 	}
 	if len(jobs.Items) != 1 {
-		t.Fatalf("expected the failed job to remain untouched at the retry cap, got %d jobs", len(jobs.Items))
-	}
-	if attempt := jobs.Items[0].Annotations[resources.PostRestartJobAttemptAnnotation]; attempt != "3" {
-		t.Fatalf("expected job to remain at attempt %q, got %q", "3", attempt)
+		t.Fatalf("expected the failed job to remain untouched (no retry/delete/recreate), got %d jobs",
+			len(jobs.Items))
 	}
 
 	cond := meta.FindStatusCondition(gw.Status.Conditions, v1alpha1.ConditionPostRestartJobSucceeded)
@@ -330,15 +280,19 @@ func TestReconcilePostRestartJob_RetryCapReachedSurfacesFailure(t *testing.T) {
 		t.Fatalf("expected condition reason %s, got %s", v1alpha1.ReasonPostRestartJobFailed, cond.Reason)
 	}
 
-	events := drainEvents(rec)
-	found := false
-	for _, e := range events {
-		if strings.Contains(e, "Warning") && strings.Contains(e, v1alpha1.ReasonPostRestartJobFailed) {
-			found = true
-		}
+	firstWarnings := countMatching(drainEvents(rec), "Warning", v1alpha1.ReasonPostRestartJobFailed)
+	if firstWarnings != 1 {
+		t.Fatalf("expected exactly 1 Warning event on first reconcile, got %d", firstWarnings)
 	}
-	if !found {
-		t.Fatalf("expected a Warning %s event, got events: %v", v1alpha1.ReasonPostRestartJobFailed, events)
+
+	// Second reconcile of the same gateway/checksum/Job state: the failure
+	// was already surfaced, so no further Warning event should be emitted.
+	if err := r.reconcilePostRestartJob(context.Background(), gw, "abc123"); err != nil {
+		t.Fatalf("unexpected error (2nd reconcile): %v", err)
+	}
+	secondWarnings := countMatching(drainEvents(rec), "Warning", v1alpha1.ReasonPostRestartJobFailed)
+	if secondWarnings != 0 {
+		t.Fatalf("expected no Warning event on repeated reconcile of an unresolved failure, got %d", secondWarnings)
 	}
 }
 
@@ -388,288 +342,6 @@ func TestReconcilePostRestartJob_SucceededSetsConditionTrue(t *testing.T) {
 	}
 	if cond.Reason != v1alpha1.ReasonPostRestartJobSucceeded {
 		t.Fatalf("expected condition reason %s, got %s", v1alpha1.ReasonPostRestartJobSucceeded, cond.Reason)
-	}
-}
-
-func TestReconcilePostRestartJob_FailedJobAbsentAttemptAnnotationDefaultsToOne(t *testing.T) {
-	gw := makeGWWithJob("echo ok")
-	dep := makeConvergedDeployment(gw, "abc123")
-	failed := makeFailedJob(gw, "abc123", 0) // attempt annotation absent
-	c := fakeClientBuilder().WithObjects(gw, dep, failed).WithStatusSubresource(gw).Build()
-	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
-
-	if err := r.reconcilePostRestartJob(context.Background(), gw, "abc123"); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	var jobs batchv1.JobList
-	if err := c.List(context.Background(), &jobs, client.InNamespace("ns")); err != nil {
-		t.Fatalf("listing jobs: %v", err)
-	}
-	if len(jobs.Items) != 1 {
-		t.Fatalf("expected exactly one job after retry, got %d", len(jobs.Items))
-	}
-	if attempt := jobs.Items[0].Annotations[resources.PostRestartJobAttemptAnnotation]; attempt != "2" {
-		t.Fatalf("expected absent annotation to default to attempt 1, then increment to 2, got %q", attempt)
-	}
-}
-
-func TestReconcilePostRestartJob_FailedJobUnparsableAttemptFailsClosed(t *testing.T) {
-	gw := makeGWWithJob("echo ok")
-	dep := makeConvergedDeployment(gw, "abc123")
-	failed := makeFailedJob(gw, "abc123", 0)
-	failed.Annotations[resources.PostRestartJobAttemptAnnotation] = "not-a-number"
-	c := fakeClientBuilder().WithObjects(gw, dep, failed).Build()
-	rec := fakeRecorder()
-	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: rec}
-
-	if err := r.reconcilePostRestartJob(context.Background(), gw, "abc123"); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	var jobs batchv1.JobList
-	if err := c.List(context.Background(), &jobs, client.InNamespace("ns")); err != nil {
-		t.Fatalf("listing jobs: %v", err)
-	}
-	if len(jobs.Items) != 1 {
-		t.Fatalf("expected the job to remain untouched (fail-closed, no retry), got %d jobs", len(jobs.Items))
-	}
-	if got := jobs.Items[0].Annotations[resources.PostRestartJobAttemptAnnotation]; got != "not-a-number" {
-		t.Fatalf("expected the corrupted annotation to be left as-is (no recreate), got %q", got)
-	}
-
-	cond := meta.FindStatusCondition(gw.Status.Conditions, v1alpha1.ConditionPostRestartJobSucceeded)
-	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != v1alpha1.ReasonPostRestartJobFailed {
-		t.Fatalf("expected a terminal PostRestartJobSucceeded=False condition (fail-closed), got %+v", cond)
-	}
-
-	events := drainEvents(rec)
-	if countMatching(events, "Warning", v1alpha1.ReasonPostRestartJobFailed) != 1 {
-		t.Fatalf("expected a Warning %s event, got events: %v", v1alpha1.ReasonPostRestartJobFailed, events)
-	}
-}
-
-func TestReconcilePostRestartJob_RetryCapReached_EventEmittedOnlyOnce(t *testing.T) {
-	gw := makeGWWithJob("echo ok")
-	dep := makeConvergedDeployment(gw, "abc123")
-	failed := makeFailedJob(gw, "abc123", 3)
-	c := fakeClientBuilder().WithObjects(gw, dep, failed).Build()
-	rec := fakeRecorder()
-	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: rec}
-
-	if err := r.reconcilePostRestartJob(context.Background(), gw, "abc123"); err != nil {
-		t.Fatalf("unexpected error (1st reconcile): %v", err)
-	}
-	firstWarnings := countMatching(drainEvents(rec), "Warning", v1alpha1.ReasonPostRestartJobFailed)
-	if firstWarnings != 1 {
-		t.Fatalf("expected exactly 1 Warning event on first reconcile, got %d", firstWarnings)
-	}
-
-	// Second reconcile of the same gateway/checksum/Job state: the cap was
-	// already surfaced, so no further Warning event should be emitted.
-	if err := r.reconcilePostRestartJob(context.Background(), gw, "abc123"); err != nil {
-		t.Fatalf("unexpected error (2nd reconcile): %v", err)
-	}
-	secondWarnings := countMatching(drainEvents(rec), "Warning", v1alpha1.ReasonPostRestartJobFailed)
-	if secondWarnings != 0 {
-		t.Fatalf("expected no Warning event on repeated reconcile at cap, got %d", secondWarnings)
-	}
-}
-
-func TestReconcilePostRestartJob_RetryDeleteConflict_DoesNotRecreate(t *testing.T) {
-	gw := makeGWWithJob("echo ok")
-	dep := makeConvergedDeployment(gw, "abc123")
-	failed := makeFailedJob(gw, "abc123", 1)
-	c := fakeClientBuilder().
-		WithObjects(gw, dep, failed).
-		WithInterceptorFuncs(interceptor.Funcs{
-			Delete: func(
-				_ context.Context, _ client.WithWatch, obj client.Object, _ ...client.DeleteOption,
-			) error {
-				// Simulate a stale-cache read: the delete's identity
-				// precondition (UID/ResourceVersion) no longer matches the
-				// live object, e.g. because a previous reconcile already
-				// deleted and recreated this Job.
-				return apierrors.NewConflict(schema.GroupResource{Group: "batch", Resource: "jobs"},
-					obj.GetName(), fmt.Errorf("simulated delete precondition mismatch"))
-			},
-		}).
-		WithStatusSubresource(gw).
-		Build()
-	rec := fakeRecorder()
-	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: rec}
-
-	if err := r.reconcilePostRestartJob(context.Background(), gw, "abc123"); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	var jobs batchv1.JobList
-	if err := c.List(context.Background(), &jobs, client.InNamespace("ns")); err != nil {
-		t.Fatalf("listing jobs: %v", err)
-	}
-	if len(jobs.Items) != 1 {
-		t.Fatalf("expected the original job to remain (delete was blocked), got %d jobs", len(jobs.Items))
-	}
-	if attempt := jobs.Items[0].Annotations[resources.PostRestartJobAttemptAnnotation]; attempt != "1" {
-		t.Fatalf("expected the job to remain at its original attempt (no recreate), got %q", attempt)
-	}
-
-	events := drainEvents(rec)
-	if countMatching(events, v1alpha1.ReasonPostRestartJobRetried) != 0 {
-		t.Fatalf("expected no misleading %s event on a blocked delete, got: %v",
-			v1alpha1.ReasonPostRestartJobRetried, events)
-	}
-}
-
-func TestReconcilePostRestartJob_RetryCreateAlreadyExists_AttemptMismatchReturnsError(t *testing.T) {
-	gw := makeGWWithJob("echo ok")
-	dep := makeConvergedDeployment(gw, "abc123")
-	failed := makeFailedJob(gw, "abc123", 1)
-	c := fakeClientBuilder().
-		WithObjects(gw, dep, failed).
-		WithInterceptorFuncs(interceptor.Funcs{
-			Create: func(
-				ctx context.Context, cli client.WithWatch, obj client.Object, opts ...client.CreateOption,
-			) error {
-				job, ok := obj.(*batchv1.Job)
-				if !ok {
-					return cli.Create(ctx, obj, opts...)
-				}
-				// Simulate a racing reconcile that already created this
-				// Job (same checksum-based name) with a DIFFERENT attempt
-				// annotation just before us.
-				racer := job.DeepCopy()
-				racer.Annotations[resources.PostRestartJobAttemptAnnotation] = "99"
-				if err := cli.Create(ctx, racer, opts...); err != nil {
-					return err
-				}
-				return apierrors.NewAlreadyExists(
-					schema.GroupResource{Group: "batch", Resource: "jobs"}, job.Name)
-			},
-		}).
-		WithStatusSubresource(gw).
-		Build()
-	rec := fakeRecorder()
-	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: rec}
-
-	err := r.reconcilePostRestartJob(context.Background(), gw, "abc123")
-	if err == nil {
-		t.Fatalf("expected an error forcing requeue on attempt-mismatch AlreadyExists race, got nil")
-	}
-
-	events := drainEvents(rec)
-	if countMatching(events, v1alpha1.ReasonPostRestartJobRetried) != 0 {
-		t.Fatalf("expected no misleading %s event when race verification failed, got: %v",
-			v1alpha1.ReasonPostRestartJobRetried, events)
-	}
-}
-
-func TestReconcilePostRestartJob_RetryCreateAlreadyExists_AttemptMatchesProceedsAsSuccess(t *testing.T) {
-	gw := makeGWWithJob("echo ok")
-	dep := makeConvergedDeployment(gw, "abc123")
-	failed := makeFailedJob(gw, "abc123", 1)
-	c := fakeClientBuilder().
-		WithObjects(gw, dep, failed).
-		WithInterceptorFuncs(interceptor.Funcs{
-			Create: func(
-				ctx context.Context, cli client.WithWatch, obj client.Object, opts ...client.CreateOption,
-			) error {
-				job, ok := obj.(*batchv1.Job)
-				if !ok {
-					return cli.Create(ctx, obj, opts...)
-				}
-				// Simulate a racing reconcile that already created the
-				// EXACT same Job (same attempt) a moment before us.
-				if err := cli.Create(ctx, job.DeepCopy(), opts...); err != nil {
-					return err
-				}
-				return apierrors.NewAlreadyExists(
-					schema.GroupResource{Group: "batch", Resource: "jobs"}, job.Name)
-			},
-		}).
-		WithStatusSubresource(gw).
-		Build()
-	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
-
-	if err := r.reconcilePostRestartJob(context.Background(), gw, "abc123"); err != nil {
-		t.Fatalf("unexpected error when the racing Job matches our intended attempt: %v", err)
-	}
-
-	var jobs batchv1.JobList
-	if err := c.List(context.Background(), &jobs, client.InNamespace("ns")); err != nil {
-		t.Fatalf("listing jobs: %v", err)
-	}
-	if len(jobs.Items) != 1 {
-		t.Fatalf("expected exactly one job, got %d", len(jobs.Items))
-	}
-	if attempt := jobs.Items[0].Annotations[resources.PostRestartJobAttemptAnnotation]; attempt != "2" {
-		t.Fatalf("expected the verified racing job to carry attempt 2, got %q", attempt)
-	}
-	if gw.Status.LastPostRestartJobChecksum != "abc123" {
-		t.Fatalf("expected LastPostRestartJobChecksum to be recorded on verified success")
-	}
-}
-
-func TestReconcilePostRestartJob_CrashBetweenDeleteAndCreate_ResumesRecordedAttempt(t *testing.T) {
-	gw := makeGWWithJob("echo ok")
-	dep := makeConvergedDeployment(gw, "abc123")
-	// Simulate an operator crash between a previous reconcile's Delete of
-	// the Failed Job and its recreate: no Job exists for this checksum
-	// (Delete already succeeded), but the durable status record — written
-	// before that Delete — shows attempt 2 was in flight for this exact
-	// checksum.
-	gw.Status.LastPostRestartJobChecksum = "abc123"
-	gw.Status.LastPostRestartJobAttempt = 2
-	c := fakeClientBuilder().WithObjects(gw, dep).WithStatusSubresource(gw).Build()
-	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
-
-	if err := r.reconcilePostRestartJob(context.Background(), gw, "abc123"); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	var jobs batchv1.JobList
-	if err := c.List(context.Background(), &jobs, client.InNamespace("ns")); err != nil {
-		t.Fatalf("listing jobs: %v", err)
-	}
-	if len(jobs.Items) != 1 {
-		t.Fatalf("expected exactly one job to be created, got %d", len(jobs.Items))
-	}
-	if attempt := jobs.Items[0].Annotations[resources.PostRestartJobAttemptAnnotation]; attempt != "2" {
-		t.Fatalf(
-			"expected the recreated job to resume at the recorded attempt 2 (not reset to 1), got %q", attempt)
-	}
-
-	// The retry cap must still be enforced across the "crash": failing this
-	// recreated attempt-2 Job should allow exactly one more retry (to
-	// attempt 3), then hit the cap — never an unbounded reset.
-	recreated := jobs.Items[0].DeepCopy()
-	recreated.Status = batchv1.JobStatus{
-		Conditions: []batchv1.JobCondition{
-			{Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Reason: "BackoffLimitExceeded"},
-		},
-	}
-	// batchv1.Job is one of the fake client's hardcoded built-in
-	// status-subresource kinds (regardless of WithStatusSubresource calls),
-	// so the status must be written via Status().Update — a plain Update
-	// would silently discard it and keep the old (empty) status.
-	if err := c.Status().Update(context.Background(), recreated); err != nil {
-		t.Fatalf("marking recreated job failed: %v", err)
-	}
-
-	rec := fakeRecorder()
-	r2 := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: rec}
-	if err := r2.reconcilePostRestartJob(context.Background(), gw, "abc123"); err != nil {
-		t.Fatalf("unexpected error on second reconcile: %v", err)
-	}
-	var jobsAfter batchv1.JobList
-	if err := c.List(context.Background(), &jobsAfter, client.InNamespace("ns")); err != nil {
-		t.Fatalf("listing jobs after second reconcile: %v", err)
-	}
-	if len(jobsAfter.Items) != 1 {
-		t.Fatalf("expected exactly one job after the third attempt, got %d", len(jobsAfter.Items))
-	}
-	if attempt := jobsAfter.Items[0].Annotations[resources.PostRestartJobAttemptAnnotation]; attempt != "3" {
-		t.Fatalf("expected the cap-respecting next attempt to be 3, got %q", attempt)
 	}
 }
 

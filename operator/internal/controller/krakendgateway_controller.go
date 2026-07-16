@@ -21,7 +21,6 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"strconv"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -866,43 +865,37 @@ func (r *KrakenDGatewayReconciler) reconcilePostRestartJob(
 		return fmt.Errorf("checking existing post-restart job: %w", err)
 	}
 
-	attempt := 1
-	if gw.Status.LastPostRestartJobChecksum == configChecksum && gw.Status.LastPostRestartJobAttempt > 1 {
-		// The Job for this checksum is missing, but the gateway status
-		// durably recorded a higher in-flight attempt for this exact
-		// checksum — most likely the operator crashed between deleting a
-		// Failed Job and recreating it during a retry (retryPostRestartJob
-		// writes this record before the Delete for exactly this reason).
-		// Resume from the recorded attempt instead of resetting to 1, so
-		// the retry cap survives operator restarts.
-		attempt = int(gw.Status.LastPostRestartJobAttempt)
-		if attempt > postRestartJobMaxAttempts {
-			attempt = postRestartJobMaxAttempts
+	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{
+		Name:      jobName,
+		Namespace: gw.Namespace,
+	}}
+	resources.BuildPostRestartJob(job, gw, configChecksum)
+	if err := controllerutil.SetControllerReference(gw, job, r.Scheme); err != nil {
+		return fmt.Errorf("setting owner reference on post-restart job: %w", err)
+	}
+	if err := r.Create(ctx, job); err != nil {
+		if errors.IsAlreadyExists(err) {
+			return nil
 		}
+		return fmt.Errorf("creating post-restart job: %w", err)
 	}
 
-	if err := r.createPostRestartJob(ctx, gw, jobName, configChecksum, attempt); err != nil {
-		return err
-	}
-	log.Info("created post-restart job", "name", jobName, "checksum", configChecksum, "attempt", attempt)
+	gw.Status.LastPostRestartJobChecksum = configChecksum
+	r.Recorder.Event(gw, "Normal", "PostRestartJobCreated",
+		fmt.Sprintf("Created post-restart Job %s for config checksum %s", jobName, configChecksum))
+	log.Info("created post-restart job", "name", jobName, "checksum", configChecksum)
 	return nil
 }
 
-// postRestartJobMaxAttempts caps how many times a Failed post-restart Job is
-// deleted and recreated for the same config checksum before the failure is
-// surfaced as terminal (Warning event + PostRestartJobSucceeded=False).
-const postRestartJobMaxAttempts = 3
-
-// handleExistingPostRestartJob inspects an existing post-restart Job's
-// terminal status and decides what to do:
-//   - Failed, under the retry cap: delete + recreate with an incremented
-//     attempt annotation (same checksum-based Job name).
-//   - Failed, at the retry cap: leave the Job in place, surface a Warning
-//     event and a PostRestartJobSucceeded=False condition.
-//   - Succeeded: leave the Job in place, record the checksum, and set
-//     PostRestartJobSucceeded=True.
-//   - Still running/unknown: preserve prior idempotent behavior (record the
-//     checksum in case a previous status update was lost, do nothing else).
+// handleExistingPostRestartJob surfaces the terminal status of an existing
+// post-restart Job onto the gateway (no retry, no delete/recreate — the job
+// script itself is responsible for retrying transient failures, and the
+// Job's own backoffLimit bounds in-Job restarts):
+//   - Failed: set PostRestartJobSucceeded=False and emit a Warning event,
+//     once (guarded on the previously-recorded condition so repeated
+//     reconciles of an unresolved failure don't spam events).
+//   - Succeeded: set PostRestartJobSucceeded=True.
+//   - Still running/unknown: no-op beyond recording the checksum.
 func (r *KrakenDGatewayReconciler) handleExistingPostRestartJob(
 	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
@@ -918,25 +911,17 @@ func (r *KrakenDGatewayReconciler) handleExistingPostRestartJob(
 
 	switch {
 	case isPostRestartJobFailed(existing):
-		attempt := postRestartJobAttempt(ctx, existing)
-		if attempt < postRestartJobMaxAttempts {
-			return r.retryPostRestartJob(ctx, gw, existing, configChecksum, attempt+1)
-		}
-
-		message := fmt.Sprintf(
-			"Post-restart Job %s failed after %d attempts, giving up", existing.Name, attempt)
+		message := fmt.Sprintf("Post-restart Job %s failed", existing.Name)
 		// Every reconcile of this gateway (periodic resync, unrelated
 		// spec/status changes) re-enters this branch as long as the Failed
 		// Job is left in place. Only emit the Warning event / log once per
-		// distinct terminal failure (same Job name + attempt count) instead
-		// of on every pass.
-		alreadySurfaced := false
+		// distinct terminal failure (same Job, same message) instead of on
+		// every pass.
 		prevCond := meta.FindStatusCondition(gw.Status.Conditions, v1alpha1.ConditionPostRestartJobSucceeded)
-		if prevCond != nil {
-			alreadySurfaced = prevCond.Status == metav1.ConditionFalse &&
-				prevCond.Reason == v1alpha1.ReasonPostRestartJobFailed &&
-				prevCond.Message == message
-		}
+		alreadySurfaced := prevCond != nil &&
+			prevCond.Status == metav1.ConditionFalse &&
+			prevCond.Reason == v1alpha1.ReasonPostRestartJobFailed &&
+			prevCond.Message == message
 
 		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
 			Type:               v1alpha1.ConditionPostRestartJobSucceeded,
@@ -946,21 +931,12 @@ func (r *KrakenDGatewayReconciler) handleExistingPostRestartJob(
 			Message:            message,
 		})
 		if !alreadySurfaced {
-			r.Recorder.Event(gw, "Warning", v1alpha1.ReasonPostRestartJobFailed,
-				fmt.Sprintf("Post-restart Job %s failed after %d attempts, retry cap reached",
-					existing.Name, attempt))
-			log.Info("post-restart job retry cap reached", "name", existing.Name, "attempts", attempt)
+			r.Recorder.Event(gw, "Warning", v1alpha1.ReasonPostRestartJobFailed, message)
+			log.Info("post-restart job failed", "name", existing.Name)
 		}
 		return nil
 
 	case isPostRestartJobSucceeded(existing):
-		// Clear the in-flight attempt record on success: it only exists to
-		// resume a retry sequence across a crash (see the NotFound/create
-		// path above), and leaving a stale high value here could make a
-		// LATER, unrelated recreate for this same checksum (e.g. after
-		// TTLSecondsAfterFinished garbage-collects this succeeded Job)
-		// wrongly resume at a high attempt instead of starting fresh at 1.
-		gw.Status.LastPostRestartJobAttempt = 0
 		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
 			Type:               v1alpha1.ConditionPostRestartJobSucceeded,
 			Status:             metav1.ConditionTrue,
@@ -975,128 +951,6 @@ func (r *KrakenDGatewayReconciler) handleExistingPostRestartJob(
 		// reconcile; the checksum was already recorded above.
 		return nil
 	}
-}
-
-// retryPostRestartJob deletes a Failed post-restart Job and recreates it
-// (same checksum-based name) with an incremented attempt annotation.
-func (r *KrakenDGatewayReconciler) retryPostRestartJob(
-	ctx context.Context,
-	gw *v1alpha1.KrakenDGateway,
-	existing *batchv1.Job,
-	configChecksum string,
-	nextAttempt int,
-) error {
-	log := logf.FromContext(ctx)
-
-	// Durably record the attempt we are about to create BEFORE deleting the
-	// old Job. reconcileOwnedResources (which calls this, via
-	// reconcilePostRestartJob) runs before the single Status().Update at the
-	// end of Reconcile, so without this explicit early write an operator
-	// crash between Delete and Create would lose the in-flight attempt
-	// entirely: the next reconcile's Get would find no Job (NotFound) and,
-	// absent this durable record, would default back to attempt 1 —
-	// silently resetting the retry cap and permitting unbounded retries
-	// across restarts. The NotFound/create path in reconcilePostRestartJob
-	// reads this field back to resume at the correct attempt.
-	gw.Status.LastPostRestartJobChecksum = configChecksum
-	gw.Status.LastPostRestartJobAttempt = int32(nextAttempt)
-	if err := r.Status().Update(ctx, gw); err != nil {
-		return fmt.Errorf("persisting next post-restart job attempt before retry: %w", err)
-	}
-
-	// Identity-precondition the delete on the exact Job instance we just
-	// read and evaluated as Failed. The manager client reads through the
-	// informer cache, which is only eventually consistent with the API
-	// server: without a UID/ResourceVersion precondition, a stale cached
-	// read could cause us to delete-and-recreate a Job that a previous
-	// reconcile already deleted and recreated (or that has since
-	// succeeded) — silently discarding progress and corrupting the attempt
-	// count. If the precondition fails (Conflict) or the Job is already
-	// gone (NotFound), another reconcile has already progressed this Job's
-	// state; defer to it and let the next reconcile re-evaluate the live
-	// object rather than blindly recreating here.
-	//
-	// PropagationPolicy is deliberately Background, not Foreground: accepted
-	// risk (not changing). Background deletes the parent Job object
-	// immediately and garbage-collects child Pods asynchronously. For the
-	// common BackoffLimitExceeded failure there are no running Pods left, so
-	// this is safe. For the rarer DeadlineExceeded failure a straggler Pod
-	// can still be mid-termination when the new Job's Pod starts (a brief
-	// possible double-execution of the user's script); Foreground would
-	// avoid that overlap but would instead guarantee an AlreadyExists race
-	// with the immediate recreate below (handled, but adds latency/log
-	// noise on every single retry instead of only this rare edge case).
-	if err := r.Delete(ctx, existing,
-		client.Preconditions{UID: &existing.UID, ResourceVersion: &existing.ResourceVersion},
-		client.PropagationPolicy(metav1.DeletePropagationBackground),
-	); err != nil {
-		if errors.IsNotFound(err) || errors.IsConflict(err) {
-			log.Info("post-restart job delete precondition mismatch or already gone; "+
-				"deferring to next reconcile", "name", existing.Name)
-			return nil
-		}
-		return fmt.Errorf("deleting failed post-restart job for retry: %w", err)
-	}
-
-	if err := r.createPostRestartJob(ctx, gw, existing.Name, configChecksum, nextAttempt); err != nil {
-		return err
-	}
-
-	r.Recorder.Event(gw, "Normal", v1alpha1.ReasonPostRestartJobRetried,
-		fmt.Sprintf("Retrying post-restart Job %s (attempt %d/%d)",
-			existing.Name, nextAttempt, postRestartJobMaxAttempts))
-	log.Info("retried post-restart job", "name", existing.Name, "attempt", nextAttempt)
-	return nil
-}
-
-// createPostRestartJob builds and creates a post-restart Job stamped with
-// the given attempt number, recording the checksum on the gateway status.
-func (r *KrakenDGatewayReconciler) createPostRestartJob(
-	ctx context.Context,
-	gw *v1alpha1.KrakenDGateway,
-	jobName string,
-	configChecksum string,
-	attempt int,
-) error {
-	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{
-		Name:      jobName,
-		Namespace: gw.Namespace,
-	}}
-	resources.BuildPostRestartJob(job, gw, configChecksum)
-	job.Annotations[resources.PostRestartJobAttemptAnnotation] = strconv.Itoa(attempt)
-	if err := controllerutil.SetControllerReference(gw, job, r.Scheme); err != nil {
-		return fmt.Errorf("setting owner reference on post-restart job: %w", err)
-	}
-	if err := r.Create(ctx, job); err != nil {
-		if !errors.IsAlreadyExists(err) {
-			return fmt.Errorf("creating post-restart job: %w", err)
-		}
-		// A racing reconcile (or a delete/recreate that landed between our
-		// Get and Create) may have already created this Job under the same
-		// checksum-based name. Re-Get the live object and verify it carries
-		// the attempt we intended before treating this as success —
-		// otherwise a stale/lower-attempt Job could be silently accepted as
-		// ours, corrupting the retry cap's guarantee and misleadingly
-		// reporting a "retried" event that never actually happened.
-		live := &batchv1.Job{}
-		key := types.NamespacedName{Name: jobName, Namespace: gw.Namespace}
-		if getErr := r.Get(ctx, key, live); getErr != nil {
-			return fmt.Errorf("verifying racing post-restart job after AlreadyExists: %w", getErr)
-		}
-		if postRestartJobAttempt(ctx, live) != attempt {
-			return fmt.Errorf(
-				"post-restart job %s already exists at a different attempt than intended (%d): requeueing",
-				jobName, attempt)
-		}
-	}
-
-	gw.Status.LastPostRestartJobChecksum = configChecksum
-	gw.Status.LastPostRestartJobAttempt = int32(attempt)
-	if attempt == 1 {
-		r.Recorder.Event(gw, "Normal", "PostRestartJobCreated",
-			fmt.Sprintf("Created post-restart Job %s for config checksum %s", jobName, configChecksum))
-	}
-	return nil
 }
 
 // isPostRestartJobFailed reports whether a Job's status carries a Failed
@@ -1122,35 +976,6 @@ func isPostRestartJobSucceeded(job *batchv1.Job) bool {
 		}
 	}
 	return false
-}
-
-// postRestartJobAttempt reads the retry attempt annotation off a Job.
-//
-// An *absent* annotation defaults to 1 (first attempt) — the expected case
-// for a first-generation Job — and is not logged.
-//
-// A *present but corrupted* value (unparsable, or < 1) is treated
-// differently: this annotation is operator-owned, so corruption implies
-// either external tampering or an unexpected bug. Failing open (resetting to
-// 1) would let a corrupted annotation circumvent the retry cap indefinitely
-// by "forgetting" prior failed attempts. We fail closed instead: a corrupted
-// value is treated as already at postRestartJobMaxAttempts, so the operator
-// surfaces a terminal failure/condition rather than granting unbounded
-// retries. This is logged (distinct from the silent "absent" case) since it
-// signals unexpected state.
-func postRestartJobAttempt(ctx context.Context, job *batchv1.Job) int {
-	raw, ok := job.Annotations[resources.PostRestartJobAttemptAnnotation]
-	if !ok {
-		return 1
-	}
-	attempt, err := strconv.Atoi(raw)
-	if err != nil || attempt < 1 {
-		logf.FromContext(ctx).Info(
-			"post-restart job attempt annotation is present but invalid; failing closed to the retry cap",
-			"job", job.Name, "value", raw)
-		return postRestartJobMaxAttempts
-	}
-	return attempt
 }
 
 // endpointToGateway maps a KrakenDEndpoint to its owning gateway.
