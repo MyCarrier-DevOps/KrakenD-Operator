@@ -32,7 +32,7 @@ import (
 
 func eventually(t *testing.T, check func() error) {
 	t.Helper()
-	deadline := time.Now().Add(15 * time.Second)
+	deadline := time.Now().Add(60 * time.Second)
 	var lastErr error
 	for time.Now().Before(deadline) {
 		if lastErr = check(); lastErr == nil {

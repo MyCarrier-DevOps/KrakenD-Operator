@@ -330,7 +330,9 @@ func UncommentCode(filename, target, prefix string) error {
 
 // InstallDragonflyCRD applies the Dragonfly operator CRD to the cluster.
 func InstallDragonflyCRD() error {
-	cmd := exec.Command("kubectl", "apply", "-f", dragonflyCRDURL)
+	// Use server-side apply because some CRDs exceed the 262144-byte annotation limit
+	// imposed by client-side kubectl apply.
+	cmd := exec.Command("kubectl", "apply", "--server-side", "-f", dragonflyCRDURL)
 	_, err := Run(cmd)
 	return err
 }
@@ -352,7 +354,9 @@ func IsDragonflyCRDInstalled() bool {
 
 // InstallIstioCRDs applies the Istio networking CRDs to the cluster.
 func InstallIstioCRDs() error {
-	cmd := exec.Command("kubectl", "apply", "-f", istioCRDURL)
+	// Use server-side apply because some CRDs exceed the 262144-byte annotation limit
+	// imposed by client-side kubectl apply.
+	cmd := exec.Command("kubectl", "apply", "--server-side", "-f", istioCRDURL)
 	_, err := Run(cmd)
 	return err
 }
