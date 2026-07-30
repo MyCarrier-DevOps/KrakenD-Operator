@@ -592,5 +592,21 @@ func buildOpenAPIPieces(
 		sidecar.Resources = *oa.Resources
 	}
 
+	if oa.ReadinessProbe != nil {
+		sidecar.ReadinessProbe = oa.ReadinessProbe
+	} else {
+		sidecar.ReadinessProbe = &corev1.Probe{
+			ProbeHandler: corev1.ProbeHandler{
+				TCPSocket: &corev1.TCPSocketAction{
+					Port: intstr.FromInt32(oaPort),
+				},
+			},
+			InitialDelaySeconds: 2,
+			PeriodSeconds:       10,
+			TimeoutSeconds:      1,
+			FailureThreshold:    3,
+		}
+	}
+
 	return initContainer, sidecar, volume, initMount
 }
