@@ -116,13 +116,13 @@ test: manifests generate fmt vet ## Run unit tests.
 # and run controllers in-process. Requires a container runtime (docker/podman).
 .PHONY: test-integration
 test-integration: manifests generate fmt vet ## Run integration tests in an ephemeral K3s cluster via testcontainers.
-	go test -v -timeout 15m ./test/integration/
+	go test -tags=integration -v -timeout 15m ./test/integration/
 
 # E2E tests use testcontainers-go with an ephemeral K3s cluster.
 # No external cluster setup is required.
 .PHONY: test-e2e
 test-e2e: manifests generate fmt vet ## Run the e2e tests in an ephemeral K3s cluster via testcontainers.
-	go test -v -timeout 30m ./test/e2e/ -ginkgo.v
+	go test -tags=e2e -v -timeout 30m ./test/e2e/ -ginkgo.v
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter
