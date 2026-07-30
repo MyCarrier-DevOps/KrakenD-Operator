@@ -131,6 +131,11 @@ type OpenAPIExportSpec struct {
 	// Resources defines resource requirements for the openapi sidecar
 	// and init container.
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// ReadinessProbe overrides the readiness probe applied to the
+	// openapi-serve sidecar container. When unset, a default shallow
+	// TCP probe against Port is used.
+	ReadinessProbe *corev1.Probe `json:"readinessProbe,omitempty"`
 }
 
 // PostRestartJobSpec configures a Kubernetes Job that runs after every

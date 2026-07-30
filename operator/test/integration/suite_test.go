@@ -14,6 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+//go:build integration
+
 package integration
 
 import (
@@ -190,6 +192,22 @@ func runTests(m *testing.M) int {
 			cancel()
 		}
 	}()
+
+	// Ensure the manager's caches have synced before running any test, so a
+	// test never races a manager that failed to start. Bound the wait so a
+	// stuck informer fails fast and cleanly (allowing the deferred K3s cleanup
+	// to run) instead of hanging until the `go test -timeout` kill, which
+	// panics without unwinding defers and would leak the K3s container.
+	// Note: cache sync is only a startup precondition; the widened eventually()
+	// deadline in the tests is what absorbs K3s cold-start watch-propagation
+	// latency after sync.
+	syncCtx, syncCancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer syncCancel()
+	if !mgr.GetCache().WaitForCacheSync(syncCtx) {
+		fmt.Fprintln(os.Stderr, "failed to sync manager cache before running tests")
+		cancel()
+		return 1
+	}
 
 	return m.Run()
 }

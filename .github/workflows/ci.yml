@@ -69,7 +69,7 @@ jobs:
           go-version: "^1.26"
       - name: Run integration tests
         working-directory: operator
-        run: go test -v -timeout 15m ./test/integration/
+        run: go test -tags=integration -v -timeout 15m ./test/integration/
 
   test-e2e:
     name: E2E Tests
@@ -94,4 +94,4 @@ jobs:
         working-directory: operator
         env:
           SKIP_OPERATOR_BUILD: "true"
-        run: go test -v -timeout 30m ./test/e2e/ -ginkgo.v
+        run: go test -tags=e2e -v -timeout 30m ./test/e2e/ -ginkgo.v
