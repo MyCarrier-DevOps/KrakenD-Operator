@@ -665,6 +665,14 @@ spec:
               istio:
                 description: Istio configures Istio VirtualService integration.
                 properties:
+                  annotations:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      Annotations are added to the generated VirtualService metadata
+                      (e.g. external-dns hints such as
+                      external-dns.alpha.kubernetes.io/cloudflare-proxied).
+                    type: object
                   enabled:
                     type: boolean
                   gateways:

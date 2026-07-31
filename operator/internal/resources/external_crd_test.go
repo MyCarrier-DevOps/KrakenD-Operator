@@ -266,6 +266,55 @@ func TestBuildVirtualService_DefaultPort(t *testing.T) {
 	}
 }
 
+func TestBuildVirtualService_Annotations(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13",
+			Config:  v1alpha1.GatewayConfig{},
+			Istio: &v1alpha1.IstioSpec{
+				Enabled: true,
+				Hosts:   []string{"api.example.com"},
+				Annotations: map[string]string{
+					"external-dns.alpha.kubernetes.io/cloudflare-proxied": "true",
+				},
+			},
+		},
+	}
+
+	vs := &unstructured.Unstructured{Object: map[string]interface{}{}}
+	BuildVirtualService(vs, gw)
+
+	annotations := vs.GetAnnotations()
+	if annotations["external-dns.alpha.kubernetes.io/cloudflare-proxied"] != "true" {
+		t.Errorf("expected cloudflare-proxied annotation, got %v", annotations)
+	}
+}
+
+func TestBuildVirtualService_RemovesStaleAnnotations(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13",
+			Config:  v1alpha1.GatewayConfig{},
+			Istio: &v1alpha1.IstioSpec{
+				Enabled: true,
+				Hosts:   []string{"api.example.com"},
+			},
+		},
+	}
+
+	vs := &unstructured.Unstructured{Object: map[string]interface{}{}}
+	vs.SetAnnotations(map[string]string{
+		"external-dns.alpha.kubernetes.io/cloudflare-proxied": "true",
+	})
+	BuildVirtualService(vs, gw)
+
+	if annotations := vs.GetAnnotations(); len(annotations) != 0 {
+		t.Errorf("expected stale annotations removed, got %v", annotations)
+	}
+}
+
 func TestVirtualServiceGVR(t *testing.T) {
 	gvr := VirtualServiceGVR()
 	if gvr.Group != "networking.istio.io" || gvr.Version != "v1" || gvr.Resource != "virtualservices" {
