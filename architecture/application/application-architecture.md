@@ -346,9 +346,10 @@ type RedisTLSConfig struct {
 }
 
 type IstioSpec struct {
-    Enabled  bool     `json:"enabled"`
-    Hosts    []string `json:"hosts,omitempty"`
-    Gateways []string `json:"gateways,omitempty"`
+    Enabled     bool              `json:"enabled"`
+    Hosts       []string          `json:"hosts,omitempty"`
+    Gateways    []string          `json:"gateways,omitempty"`
+    Annotations map[string]string `json:"annotations,omitempty"` // added to the generated VirtualService metadata
 }
 
 type PluginsSpec struct {

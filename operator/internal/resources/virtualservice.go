@@ -43,6 +43,7 @@ func BuildVirtualService(vs *unstructured.Unstructured, gw *v1alpha1.KrakenDGate
 	vs.SetLabels(StandardLabels(gw))
 
 	istio := gw.Spec.Istio
+	vs.SetAnnotations(istio.Annotations)
 	vsSpec := map[string]interface{}{}
 
 	if len(istio.Hosts) > 0 {

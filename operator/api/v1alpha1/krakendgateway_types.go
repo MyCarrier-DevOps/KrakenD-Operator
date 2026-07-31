@@ -467,6 +467,10 @@ type IstioSpec struct {
 	Enabled  bool     `json:"enabled"`
 	Hosts    []string `json:"hosts,omitempty"`
 	Gateways []string `json:"gateways,omitempty"`
+	// Annotations are added to the generated VirtualService metadata
+	// (e.g. external-dns hints such as
+	// external-dns.alpha.kubernetes.io/cloudflare-proxied).
+	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
 // PluginsSpec configures KrakenD plugin sources.
