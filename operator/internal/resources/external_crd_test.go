@@ -154,6 +154,96 @@ func TestBuildDragonfly_Minimal(t *testing.T) {
 	}
 }
 
+func TestBuildDragonfly_SecurityContextDefaults(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version:   "2.13",
+			Edition:   v1alpha1.EditionEE,
+			Config:    v1alpha1.GatewayConfig{},
+			Dragonfly: &v1alpha1.DragonflySpec{Enabled: true},
+		},
+	}
+
+	df := &unstructured.Unstructured{Object: map[string]interface{}{}}
+	BuildDragonfly(df, gw)
+
+	spec, ok := df.Object["spec"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected spec map")
+	}
+
+	podSecCtx, ok := spec["podSecurityContext"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected podSecurityContext map")
+	}
+	if podSecCtx["runAsNonRoot"] != true {
+		t.Errorf("expected default podSecurityContext.runAsNonRoot=true, got %v", podSecCtx["runAsNonRoot"])
+	}
+	if podSecCtx["runAsUser"] != int64(999) {
+		t.Errorf("expected default podSecurityContext.runAsUser=999, got %v", podSecCtx["runAsUser"])
+	}
+	if podSecCtx["runAsGroup"] != int64(999) {
+		t.Errorf("expected default podSecurityContext.runAsGroup=999, got %v", podSecCtx["runAsGroup"])
+	}
+
+	containerSecCtx, ok := spec["containerSecurityContext"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected containerSecurityContext map")
+	}
+	if containerSecCtx["runAsNonRoot"] != true {
+		t.Errorf("expected default containerSecurityContext.runAsNonRoot=true, got %v", containerSecCtx["runAsNonRoot"])
+	}
+	if containerSecCtx["runAsUser"] != int64(999) {
+		t.Errorf("expected default containerSecurityContext.runAsUser=999, got %v", containerSecCtx["runAsUser"])
+	}
+	if containerSecCtx["runAsGroup"] != int64(999) {
+		t.Errorf("expected default containerSecurityContext.runAsGroup=999, got %v", containerSecCtx["runAsGroup"])
+	}
+}
+
+func TestBuildDragonfly_SecurityContextOverride(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13",
+			Edition: v1alpha1.EditionEE,
+			Config:  v1alpha1.GatewayConfig{},
+			Dragonfly: &v1alpha1.DragonflySpec{
+				Enabled: true,
+				PodSecurityContext: &corev1.PodSecurityContext{
+					RunAsNonRoot: ptr.To(true),
+					RunAsUser:    ptr.To(int64(1234)),
+					RunAsGroup:   ptr.To(int64(1234)),
+				},
+				ContainerSecurityContext: &corev1.SecurityContext{
+					RunAsNonRoot:             ptr.To(true),
+					RunAsUser:                ptr.To(int64(1234)),
+					RunAsGroup:               ptr.To(int64(1234)),
+					AllowPrivilegeEscalation: ptr.To(false),
+				},
+			},
+		},
+	}
+
+	df := &unstructured.Unstructured{Object: map[string]interface{}{}}
+	BuildDragonfly(df, gw)
+
+	spec, _ := df.Object["spec"].(map[string]interface{})
+	podSecCtx, _ := spec["podSecurityContext"].(map[string]interface{})
+	if podSecCtx["runAsUser"] != int64(1234) {
+		t.Errorf("expected overridden podSecurityContext.runAsUser=1234, got %v", podSecCtx["runAsUser"])
+	}
+
+	containerSecCtx, _ := spec["containerSecurityContext"].(map[string]interface{})
+	if containerSecCtx["runAsUser"] != int64(1234) {
+		t.Errorf("expected overridden containerSecurityContext.runAsUser=1234, got %v", containerSecCtx["runAsUser"])
+	}
+	if containerSecCtx["allowPrivilegeEscalation"] != false {
+		t.Errorf("expected overridden containerSecurityContext.allowPrivilegeEscalation=false, got %v", containerSecCtx["allowPrivilegeEscalation"])
+	}
+}
+
 func TestDragonflyName(t *testing.T) {
 	gw := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "my-gw"},
