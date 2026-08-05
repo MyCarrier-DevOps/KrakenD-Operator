@@ -124,6 +124,13 @@ func dragonflyPodSecCtx(spec *v1alpha1.DragonflySpec) *corev1.PodSecurityContext
 		RunAsNonRoot: ptr.To(true),
 		RunAsUser:    ptr.To(int64(999)),
 		RunAsGroup:   ptr.To(int64(999)),
+		// FSGroup replicates the upstream dragonfly-operator's built-in
+		// fsGroup:999 default, which is nil-guarded and only applied when
+		// spec.PodSecurityContext == nil. Since we set a non-nil
+		// PodSecurityContext here, we must set FSGroup explicitly or fresh
+		// PVCs (e.g. root-owned Azure disks) end up group-unwritable and
+		// the uid999 process crashloops on --dir=/dragonfly/snapshots.
+		FSGroup: ptr.To(int64(999)),
 	}
 }
 

@@ -186,6 +186,9 @@ func TestBuildDragonfly_SecurityContextDefaults(t *testing.T) {
 	if podSecCtx["runAsGroup"] != int64(999) {
 		t.Errorf("expected default podSecurityContext.runAsGroup=999, got %v", podSecCtx["runAsGroup"])
 	}
+	if podSecCtx["fsGroup"] != int64(999) {
+		t.Errorf("expected default podSecurityContext.fsGroup=999, got %v", podSecCtx["fsGroup"])
+	}
 
 	containerSecCtx, ok := spec["containerSecurityContext"].(map[string]interface{})
 	if !ok {
