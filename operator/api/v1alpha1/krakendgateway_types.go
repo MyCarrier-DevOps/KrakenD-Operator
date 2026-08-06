@@ -426,6 +426,17 @@ type DragonflySpec struct {
 	Snapshot       *DragonflySnapshotSpec       `json:"snapshot,omitempty"`
 	Args           []string                     `json:"args,omitempty"`
 	Authentication *DragonflyAuthSpec           `json:"authentication,omitempty"`
+
+	// PodSecurityContext sets pod-level security attributes for the
+	// Dragonfly pod. When nil the operator applies a safe non-root
+	// default (runAsNonRoot: true, runAsUser/runAsGroup: 999 — the
+	// built-in "dfly" user shipped in the Dragonfly image).
+	PodSecurityContext *corev1.PodSecurityContext `json:"podSecurityContext,omitempty"`
+
+	// ContainerSecurityContext overrides the container-level security
+	// context for the dragonfly container. When nil the operator
+	// applies a safe non-root default matching PodSecurityContext.
+	ContainerSecurityContext *corev1.SecurityContext `json:"containerSecurityContext,omitempty"`
 }
 
 // DragonflySnapshotSpec configures Dragonfly snapshotting.

@@ -23,6 +23,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/utils/ptr"
 )
 
 // DragonflyGVR returns the GroupVersionResource for the Dragonfly CRD.
@@ -106,7 +107,84 @@ func BuildDragonfly(df *unstructured.Unstructured, gw *v1alpha1.KrakenDGateway) 
 		dfSpec["args"] = args
 	}
 
+	dfSpec["podSecurityContext"] = buildPodSecurityContext(dragonflyPodSecCtx(spec))
+	dfSpec["containerSecurityContext"] = buildSecurityContext(dragonflyContainerSecCtx(spec))
+
 	df.Object["spec"] = dfSpec
+}
+
+// dragonflyPodSecCtx returns the user-provided PodSecurityContext or a safe
+// non-root default. The Dragonfly image ships a built-in "dfly" user at
+// uid/gid 999.
+func dragonflyPodSecCtx(spec *v1alpha1.DragonflySpec) *corev1.PodSecurityContext {
+	if spec.PodSecurityContext != nil {
+		return spec.PodSecurityContext
+	}
+	return &corev1.PodSecurityContext{
+		RunAsNonRoot: ptr.To(true),
+		RunAsUser:    ptr.To(int64(999)),
+		RunAsGroup:   ptr.To(int64(999)),
+		// FSGroup replicates the upstream dragonfly-operator's built-in
+		// fsGroup:999 default, which is nil-guarded and only applied when
+		// spec.PodSecurityContext == nil. Since we set a non-nil
+		// PodSecurityContext here, we must set FSGroup explicitly or fresh
+		// PVCs (e.g. root-owned Azure disks) end up group-unwritable and
+		// the uid999 process crashloops on --dir=/dragonfly/snapshots.
+		FSGroup: ptr.To(int64(999)),
+	}
+}
+
+// dragonflyContainerSecCtx returns the user-provided ContainerSecurityContext
+// or a safe non-root default matching dragonflyPodSecCtx.
+func dragonflyContainerSecCtx(spec *v1alpha1.DragonflySpec) *corev1.SecurityContext {
+	if spec.ContainerSecurityContext != nil {
+		return spec.ContainerSecurityContext
+	}
+	return &corev1.SecurityContext{
+		RunAsNonRoot: ptr.To(true),
+		RunAsUser:    ptr.To(int64(999)),
+		RunAsGroup:   ptr.To(int64(999)),
+	}
+}
+
+// buildPodSecurityContext converts a corev1.PodSecurityContext into the
+// unstructured map shape expected by the Dragonfly CRD's
+// spec.podSecurityContext field.
+func buildPodSecurityContext(sc *corev1.PodSecurityContext) map[string]interface{} {
+	out := map[string]interface{}{}
+	if sc.RunAsNonRoot != nil {
+		out["runAsNonRoot"] = *sc.RunAsNonRoot
+	}
+	if sc.RunAsUser != nil {
+		out["runAsUser"] = *sc.RunAsUser
+	}
+	if sc.RunAsGroup != nil {
+		out["runAsGroup"] = *sc.RunAsGroup
+	}
+	if sc.FSGroup != nil {
+		out["fsGroup"] = *sc.FSGroup
+	}
+	return out
+}
+
+// buildSecurityContext converts a corev1.SecurityContext into the
+// unstructured map shape expected by the Dragonfly CRD's
+// spec.containerSecurityContext field.
+func buildSecurityContext(sc *corev1.SecurityContext) map[string]interface{} {
+	out := map[string]interface{}{}
+	if sc.RunAsNonRoot != nil {
+		out["runAsNonRoot"] = *sc.RunAsNonRoot
+	}
+	if sc.RunAsUser != nil {
+		out["runAsUser"] = *sc.RunAsUser
+	}
+	if sc.RunAsGroup != nil {
+		out["runAsGroup"] = *sc.RunAsGroup
+	}
+	if sc.AllowPrivilegeEscalation != nil {
+		out["allowPrivilegeEscalation"] = *sc.AllowPrivilegeEscalation
+	}
+	return out
 }
 
 func buildResourceRequirements(r *corev1.ResourceRequirements) map[string]interface{} {
