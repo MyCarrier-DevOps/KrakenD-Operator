@@ -145,6 +145,10 @@ func TestBuildPostRestartJob_CustomFields(t *testing.T) {
 		*job.Spec.TTLSecondsAfterFinished != 60 {
 		t.Fatalf("custom scheduling fields not applied")
 	}
+	if job.Spec.Template.Spec.Containers[0].WorkingDir != "/tmp" {
+		t.Fatalf("expected forced WorkingDir /tmp regardless of custom fields, got %q",
+			job.Spec.Template.Spec.Containers[0].WorkingDir)
+	}
 }
 
 func TestBuildPostRestartJob_CustomCommand(t *testing.T) {
