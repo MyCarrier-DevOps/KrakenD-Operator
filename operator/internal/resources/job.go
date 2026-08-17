@@ -35,6 +35,12 @@ const (
 	// triggered the Job. Used for idempotent Job naming.
 	PostRestartJobChecksumAnnotation = "krakend.io/checksum-config"
 
+	// defaultPostRestartWorkingDir is the container CWD for the post-restart
+	// Job. Pods default to runAsUser 1000, and the image root dir "/" is
+	// root-owned; "/tmp" is world-writable in any conformant image (the
+	// default bash:5.2 image has no /home/node).
+	defaultPostRestartWorkingDir = "/tmp"
+
 	defaultPostRestartBackoffLimit            = int32(2)
 	defaultPostRestartActiveDeadlineSeconds   = int64(600)
 	defaultPostRestartTTLSecondsAfterFinished = int32(86400)
@@ -128,6 +134,7 @@ func BuildPostRestartJob(
 		Env:             spec.Env,
 		EnvFrom:         spec.EnvFrom,
 		SecurityContext: secCtx,
+		WorkingDir:      defaultPostRestartWorkingDir,
 	}
 	if spec.Resources != nil {
 		container.Resources = *spec.Resources

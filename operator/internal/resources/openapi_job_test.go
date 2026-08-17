@@ -102,6 +102,10 @@ func TestBuildPostRestartJob_Defaults(t *testing.T) {
 	if job.Spec.Template.Annotations[PostRestartJobChecksumAnnotation] != "checksum1" {
 		t.Fatalf("pod annotation missing")
 	}
+	if job.Spec.Template.Spec.Containers[0].WorkingDir != "/tmp" {
+		t.Fatalf("expected default WorkingDir /tmp, got %q",
+			job.Spec.Template.Spec.Containers[0].WorkingDir)
+	}
 }
 
 func TestBuildPostRestartJob_CustomFields(t *testing.T) {
