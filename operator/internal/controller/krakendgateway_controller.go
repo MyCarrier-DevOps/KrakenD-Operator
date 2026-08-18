@@ -810,16 +810,27 @@ func (r *KrakenDGatewayReconciler) reconcileOwnedResources(
 // after the gateway rolls out the current config revision. The Job is named
 // with a short prefix of the combined checksum (see
 // resources.PostRestartJobChecksum) so each (config, postRestartJob spec)
-// revision pair produces at most one Job — including a spec-only edit, not
-// just a krakend.json change (nhig root cause 2). The Job is only created
-// after the Deployment has converged on the current config checksum.
+// revision pair produces at most one Job, ever — including a spec-only
+// edit, not just a krakend.json change (nhig root cause 2). The Job is only
+// created after the Deployment has converged on the current config
+// checksum.
 //
 // gw.Status.LastPostRestartJobChecksum is checked before touching the API
 // server: it guards against TTLSecondsAfterFinished's cleanup GC'ing a
 // finished Job and the next reconcile silently recreating (and
 // re-executing) it purely because the object disappeared, not because the
 // config or spec changed (nhig root cause 1 — the field was previously
-// written but never read).
+// written but never read). This also means the guard is now a hard,
+// permanent "once per revision" gate: `kubectl delete job` is a no-op (see
+// the ConditionPostRestartJobSkipped condition set below), and a Job that
+// exhausts backoffLimit due to a transient external failure will not be
+// retried automatically — edit the postRestartJob spec (which changes the
+// revision checksum) or clear gw.Status.LastPostRestartJobChecksum via
+// `kubectl patch --subresource=status` to force a re-run. Deliberately NOT
+// gating the status write on Job success: that would reintroduce the TTL
+// bug (a short TTLSecondsAfterFinished GC'ing the Job before the next
+// reconcile observes success) and remove the lost-status safety net at the
+// exists-branch below.
 func (r *KrakenDGatewayReconciler) reconcilePostRestartJob(
 	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
@@ -845,9 +856,23 @@ func (r *KrakenDGatewayReconciler) reconcilePostRestartJob(
 
 	// Already ran (or was recorded as triggered) for this exact revision —
 	// skip even if the Job object itself was since GC'd by
-	// TTLSecondsAfterFinished. TTL only controls object cleanup hygiene, not
-	// re-execution.
+	// TTLSecondsAfterFinished, or manually deleted. TTL only controls
+	// object cleanup hygiene, not re-execution. This branch fires on every
+	// steady-state reconcile once a revision has run, so record a status
+	// Condition (not an Event — an Event here would spam) so `kubectl
+	// describe` explains the no-op instead of looking like nothing ran.
 	if gw.Status.LastPostRestartJobChecksum == jobChecksum {
+		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+			Type:               v1alpha1.ConditionPostRestartJobSkipped,
+			Status:             metav1.ConditionTrue,
+			ObservedGeneration: gw.Generation,
+			Reason:             v1alpha1.ReasonPostRestartJobAlreadyRun,
+			Message: fmt.Sprintf(
+				"post-restart Job already ran for checksum %s; skipping (once per revision — "+
+					"see status.lastPostRestartJobChecksum to force a re-run)",
+				jobChecksum,
+			),
+		})
 		return nil
 	}
 
@@ -894,7 +919,7 @@ func (r *KrakenDGatewayReconciler) reconcilePostRestartJob(
 		Name:      jobName,
 		Namespace: gw.Namespace,
 	}}
-	resources.BuildPostRestartJob(job, gw, jobChecksum)
+	resources.BuildPostRestartJob(job, gw, configChecksum, jobChecksum)
 	if err := controllerutil.SetControllerReference(gw, job, r.Scheme); err != nil {
 		return fmt.Errorf("setting owner reference on post-restart job: %w", err)
 	}

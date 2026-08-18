@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
@@ -180,6 +181,71 @@ func TestReconcilePostRestartJob_SkipsRecreateAfterTTLGC(t *testing.T) {
 	}
 	if len(jobs.Items) != 0 {
 		t.Fatalf("expected no Job recreated after TTL GC for an already-run revision, got %d", len(jobs.Items))
+	}
+
+	found := false
+	for _, c := range gw.Status.Conditions {
+		if c.Type == v1alpha1.ConditionPostRestartJobSkipped {
+			found = true
+			if c.Status != metav1.ConditionTrue {
+				t.Errorf("expected PostRestartJobSkipped condition status True, got %v", c.Status)
+			}
+			if c.Reason != v1alpha1.ReasonPostRestartJobAlreadyRun {
+				t.Errorf("expected reason %q, got %q", v1alpha1.ReasonPostRestartJobAlreadyRun, c.Reason)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected a PostRestartJobSkipped status condition explaining the no-op, got %+v",
+			gw.Status.Conditions)
+	}
+}
+
+// TestReconcilePostRestartJob_StaleOldFormatStatusTriggersRerun covers
+// review id 3804144463 (#10): the actual day-one upgrade state is a
+// non-empty, non-matching gw.Status.LastPostRestartJobChecksum — a bare
+// 64-char config checksum written by <= v0.13.3, before this PR's combined
+// (config + postRestartJob-spec projection) checksum format existed. On the
+// first reconcile after upgrading, that stale value can never match the new
+// combined checksum, so a Job MUST be created and the status rewritten to
+// the new combined value — this is the mass-rerun-at-rollout behavior
+// documented in docs/upgrade-guide.md, turned into an executable fact so a
+// future "harden the guard" change that starts treating any non-empty
+// status as already-satisfied fails loudly here.
+func TestReconcilePostRestartJob_StaleOldFormatStatusTriggersRerun(t *testing.T) {
+	gw := makeGWWithJob("echo ok")
+	dep := makeConvergedDeployment(gw, "abc123")
+
+	// A bare 64-hex-char SHA-256 config checksum, exactly the pre-v0.13.4
+	// format (no postRestartJob-spec projection folded in).
+	staleStatus := strings.Repeat("a", 64)
+	gw.Status.LastPostRestartJobChecksum = staleStatus
+
+	c := fakeClientBuilder().WithObjects(gw, dep).Build()
+	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
+
+	if err := r.reconcilePostRestartJob(context.Background(), gw, "abc123"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	wantChecksum, err := resources.PostRestartJobChecksum(gw.Spec.PostRestartJob, "abc123")
+	if err != nil {
+		t.Fatalf("computing expected checksum: %v", err)
+	}
+	if wantChecksum == staleStatus {
+		t.Fatalf("test setup invalid: stale status must not equal the new combined checksum")
+	}
+
+	var jobs batchv1.JobList
+	if err := c.List(context.Background(), &jobs, client.InNamespace("ns")); err != nil {
+		t.Fatalf("listing jobs: %v", err)
+	}
+	if len(jobs.Items) != 1 {
+		t.Fatalf("expected a Job to be created for the stale pre-upgrade status, got %d", len(jobs.Items))
+	}
+	if gw.Status.LastPostRestartJobChecksum != wantChecksum {
+		t.Fatalf("expected status rewritten to the new combined checksum: got %q want %q",
+			gw.Status.LastPostRestartJobChecksum, wantChecksum)
 	}
 }
 

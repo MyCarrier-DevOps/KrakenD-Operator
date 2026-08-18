@@ -145,3 +145,47 @@ func TestPluginChecksum_OnlyConfigMaps(t *testing.T) {
 		t.Error("PluginChecksum with only ConfigMaps should return a valid hash")
 	}
 }
+
+// TestCombineHex_Deterministic covers review id 3804144478 (#12): the same
+// inputs must always combine to the same digest.
+func TestCombineHex_Deterministic(t *testing.T) {
+	a := CombineHex("abc", "def")
+	b := CombineHex("abc", "def")
+	if a != b {
+		t.Fatalf("expected deterministic output, got %q then %q", a, b)
+	}
+	if a == "" {
+		t.Fatal("expected non-empty digest")
+	}
+}
+
+// TestCombineHex_Unambiguous covers review id 3804144478 (#12): unlike a
+// bare byte concatenation (append([]byte(a), b...)), length-prefixed framing
+// must not collide two distinct input pairs that would otherwise produce
+// the same concatenated byte stream — e.g. ("ab", "cd") vs ("a", "bcd") both
+// concatenate to "abcd", but must combine to different digests here.
+func TestCombineHex_Unambiguous(t *testing.T) {
+	pair1 := CombineHex("ab", "cd")
+	pair2 := CombineHex("a", "bcd")
+	if pair1 == pair2 {
+		t.Fatalf("expected distinct digests for distinct input pairs that "+
+			"share the same naive concatenation %q, got the same digest %q for both", "abcd", pair1)
+	}
+}
+
+// TestCombineHex_VariableLengthInputsSafe covers #12: CombineHex carries no
+// fixed-length precondition on its inputs (unlike the naive concatenation it
+// replaces, which was only safe because every caller happened to pass a
+// fixed 64-char SHA-256 hex digest) — arbitrary-length strings, including
+// the empty string, must combine safely and deterministically.
+func TestCombineHex_VariableLengthInputsSafe(t *testing.T) {
+	short := CombineHex("x", "y")
+	long := CombineHex("a-much-longer-first-digest-than-usual", "y")
+	empty := CombineHex("", "")
+	if short == "" || long == "" || empty == "" {
+		t.Fatal("expected non-empty digests for all variable-length inputs")
+	}
+	if short == long || short == empty || long == empty {
+		t.Fatalf("expected distinct digests: short=%q long=%q empty=%q", short, long, empty)
+	}
+}

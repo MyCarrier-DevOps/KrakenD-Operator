@@ -271,6 +271,93 @@ func TestGatewayValidator_PostRestartJobEmptyScript(t *testing.T) {
 	}
 }
 
+// TestGatewayValidator_WorkingDirOutsideTmpWithROFSWarns covers review id
+// 3804144425 (#4): overriding workingDir outside the /tmp emptyDir mount
+// while readOnlyRootFilesystem is effectively true (the hardened default)
+// must produce an admission warning, not silently pass — the container
+// starts fine and the failure (EROFS) only surfaces when the script runs.
+func TestGatewayValidator_WorkingDirOutsideTmpWithROFSWarns(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Config: v1alpha1.GatewayConfig{},
+			PostRestartJob: &v1alpha1.PostRestartJobSpec{
+				Enabled:    true,
+				Script:     "echo ok",
+				WorkingDir: "/work",
+			},
+		},
+	}
+	v := &GatewayValidator{}
+	warnings, err := v.ValidateCreate(context.Background(), gw)
+	if err != nil {
+		t.Fatalf("expected no error (this is a warning, not a rejection), got: %v", err)
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("expected exactly one warning, got %d: %v", len(warnings), warnings)
+	}
+	if !strings.Contains(warnings[0], "EROFS") {
+		t.Errorf("expected warning to mention EROFS, got: %q", warnings[0])
+	}
+}
+
+// TestGatewayValidator_WorkingDirOutsideTmpWithROFSDisabledNoWarning
+// verifies the escape hatch: explicitly opting out of
+// readOnlyRootFilesystem suppresses the warning, since the workingDir
+// override is then a deliberate, working configuration.
+func TestGatewayValidator_WorkingDirOutsideTmpWithROFSDisabledNoWarning(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Config: v1alpha1.GatewayConfig{},
+			PostRestartJob: &v1alpha1.PostRestartJobSpec{
+				Enabled:    true,
+				Script:     "echo ok",
+				WorkingDir: "/work",
+				SecurityContext: &corev1.SecurityContext{
+					ReadOnlyRootFilesystem: new(false),
+				},
+			},
+		},
+	}
+	v := &GatewayValidator{}
+	warnings, err := v.ValidateCreate(context.Background(), gw)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("expected no warning when readOnlyRootFilesystem is explicitly false, got: %v", warnings)
+	}
+}
+
+// TestGatewayValidator_WorkingDirUnderTmpNoWarning verifies workingDir
+// values still under the /tmp mount (e.g. a subdirectory) don't trigger the
+// warning — only paths genuinely outside the writable mount do.
+func TestGatewayValidator_WorkingDirUnderTmpNoWarning(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Config: v1alpha1.GatewayConfig{},
+			PostRestartJob: &v1alpha1.PostRestartJobSpec{
+				Enabled:    true,
+				Script:     "echo ok",
+				WorkingDir: "/tmp/subdir",
+			},
+		},
+	}
+	v := &GatewayValidator{}
+	warnings, err := v.ValidateCreate(context.Background(), gw)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("expected no warning for a /tmp subdirectory, got: %v", warnings)
+	}
+}
+
 func TestEndpointValidator_Valid(t *testing.T) {
 	gw := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "my-gw", Namespace: "default"},

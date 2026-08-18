@@ -1508,10 +1508,12 @@ spec:
                 type: object
               postRestartJob:
                 description: |-
-                  PostRestartJob configures a Kubernetes Job that runs after every
-                  rolling restart triggered by a configuration change. The Job is
-                  created once per unique config checksum and runs a user-provided
-                  bash script.
+                  PostRestartJob configures a Kubernetes Job that runs a user-provided
+                  bash script. The Job is created once per unique config +
+                  postRestartJob-spec revision (i.e. once per distinct combination of
+                  the rendered krakend.json checksum and this spec's execution-relevant
+                  fields — see internal/resources.PostRestartJobChecksum), not once per
+                  rolling restart.
                 properties:
                   activeDeadlineSeconds:
                     description: ActiveDeadlineSeconds is the Job active-deadline.
@@ -2220,6 +2222,19 @@ spec:
                       ServiceAccountName overrides the ServiceAccount used by the Job.
                       Defaults to the gateway's ServiceAccount.
                     type: string
+                  tmpSizeLimit:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    description: |-
+                      TmpSizeLimit overrides the size limit of the /tmp emptyDir volume
+                      backing the Job's working directory (see WorkingDir). Defaults to
+                      256Mi. Increase this if your script downloads or writes more than
+                      256Mi under /tmp (e.g. a large openapi.json export/upload) — exceeding
+                      the limit gets the pod Evicted mid-run by the kubelet, not a clean
+                      script-level failure.
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
                   ttlSecondsAfterFinished:
                     description: |-
                       TTLSecondsAfterFinished controls automatic cleanup after Job
@@ -2233,7 +2248,16 @@ spec:
                       internal/resources/job.go) so scripts can write there even under
                       readOnlyRootFilesystem. If you override this to a path outside the
                       /tmp emptyDir, ensure your image provides a writable directory at
-                      that path (e.g. it is not root-owned under a non-root runAsUser).
+                      that path (e.g. it is not root-owned under a non-root runAsUser) —
+                      note that under the default readOnlyRootFilesystem: true, a path
+                      outside the /tmp emptyDir mount is NOT writable, so relative-path
+                      writes in your script will fail with EROFS even though the container
+                      starts successfully; use an absolute path under /tmp, or opt out of
+                      readOnlyRootFilesystem deliberately via securityContext.
+                      Must be an absolute path.
+                    maxLength: 4096
+                    minLength: 2
+                    pattern: ^/.+$
                     type: string
                 required:
                 - enabled
@@ -2451,8 +2475,15 @@ spec:
                 type: integer
               lastPostRestartJobChecksum:
                 description: |-
-                  LastPostRestartJobChecksum records the config checksum for which the
-                  most recent post-restart Job was successfully created.
+                  LastPostRestartJobChecksum records the combined (config +
+                  postRestartJob-spec) checksum for which the most recent post-restart
+                  Job was created (see internal/resources.PostRestartJobChecksum). Used
+                  to guard against re-creating (and re-executing) the Job after
+                  TTLSecondsAfterFinished garbage-collects the finished Job object for
+                  the same revision. To force a re-run without a config or spec change,
+                  clear this field: `kubectl patch krakendgateway <name>
+                  --subresource=status --type=merge -p
+                  '{"status":{"lastPostRestartJobChecksum":""}}'`.
                 type: string
               licenseExpiry:
                 format: date-time

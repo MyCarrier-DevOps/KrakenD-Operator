@@ -27,6 +27,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/strategicpatch"
 )
 
 const (
@@ -34,13 +35,23 @@ const (
 	// Job container when the user does not override it.
 	DefaultPostRestartJobImage = "bash:5.2"
 
-	// PostRestartJobChecksumAnnotation records the checksum that triggered
-	// the resource. On the Deployment pod template this is the rendered
-	// krakend.json config checksum; on the post-restart Job's own
-	// annotations this is the combined checksum returned by
-	// PostRestartJobChecksum (config + postRestartJob spec). Used for
-	// idempotent Job naming.
+	// PostRestartJobChecksumAnnotation records the raw rendered krakend.json
+	// config checksum (output.Checksum), unchanged in meaning across both
+	// the Deployment pod template and the post-restart Job: it always
+	// answers "which config revision produced this resource?" and is
+	// therefore invertible/traceable back to a krakend.json revision.
+	// deployment.go must use this const (not the literal string) so the two
+	// call sites can never drift.
 	PostRestartJobChecksumAnnotation = "krakend.io/checksum-config"
+
+	// PostRestartJobCombinedChecksumAnnotation records the combined identity
+	// checksum returned by PostRestartJobChecksum (a projection of the
+	// execution-relevant config + postRestartJob spec fields). This is the
+	// value Job naming/idempotency is keyed on; it is deliberately a
+	// separate annotation from PostRestartJobChecksumAnnotation so the two
+	// meanings ("what config produced this" vs "what identity gates
+	// re-execution") never collide under one key.
+	PostRestartJobCombinedChecksumAnnotation = "krakend.io/checksum-postrestart"
 
 	defaultPostRestartBackoffLimit            = int32(2)
 	defaultPostRestartActiveDeadlineSeconds   = int64(600)
@@ -59,21 +70,30 @@ const (
 	// container can write there under readOnlyRootFilesystem: true.
 	postRestartTmpVolumeName = "tmp"
 
-	// postRestartTmpSizeLimit bounds the /tmp emptyDir so a runaway script
-	// (e.g. a large openapi.json download) cannot exhaust node ephemeral
-	// storage. Mirrors the deployment's /tmp volume (internal/resources/
-	// deployment.go) but adds a limit since the Job's write pattern
-	// (openapi export/upload) is less bounded than the gateway's own use.
-	postRestartTmpSizeLimit = "256Mi"
+	// PostRestartTmpMountPath is the mount path of the /tmp emptyDir volume
+	// backing the post-restart Job's default working directory. Exported
+	// (mirrors postRestartWorkingDir) so GatewayValidator can warn when
+	// spec.postRestartJob.workingDir is overridden to a path outside this
+	// mount while readOnlyRootFilesystem is still effectively true — see
+	// the docs/upgrade-guide.md ROFS/workingDir note.
+	PostRestartTmpMountPath = postRestartWorkingDir
+
+	// defaultPostRestartTmpSizeLimit bounds the /tmp emptyDir so a runaway
+	// script (e.g. a large openapi.json download) cannot exhaust node
+	// ephemeral storage. Mirrors the deployment's /tmp volume (internal/
+	// resources/deployment.go) but adds a limit since the Job's write
+	// pattern (openapi export/upload) is less bounded than the gateway's
+	// own use. Overridable via spec.postRestartJob.tmpSizeLimit.
+	defaultPostRestartTmpSizeLimit = "256Mi"
 )
 
 // PostRestartJobName returns a deterministic Job name that embeds a short
-// prefix of the config checksum, ensuring each unique config revision maps
-// to exactly one Job. The result is capped at 63 characters so it remains
-// valid as a Kubernetes label value (Job controllers mirror the name into
-// pod labels).
-func PostRestartJobName(gw *v1alpha1.KrakenDGateway, configChecksum string) string {
-	short := configChecksum
+// prefix of the Job identity checksum (see PostRestartJobChecksum), ensuring
+// each unique (config, postRestartJob-spec) revision maps to exactly one
+// Job. The result is capped at 63 characters so it remains valid as a
+// Kubernetes label value (Job controllers mirror the name into pod labels).
+func PostRestartJobName(gw *v1alpha1.KrakenDGateway, checksum string) string {
+	short := checksum
 	if len(short) > 12 {
 		short = short[:12]
 	}
@@ -86,34 +106,85 @@ func PostRestartJobName(gw *v1alpha1.KrakenDGateway, configChecksum string) stri
 	return fmt.Sprintf("%s-postrestart-%s", prefix, short)
 }
 
+// postRestartJobProjection is the execution-relevant subset of
+// PostRestartJobSpec hashed by PostRestartJobChecksum. Deliberately NOT the
+// full API type: purely operational/cosmetic fields (PodLabels,
+// PodAnnotations, BackoffLimit, ActiveDeadlineSeconds,
+// TTLSecondsAfterFinished) do not change what the script does when it runs,
+// so editing them must not re-trigger the Job. Encoded via json.Marshal into
+// a dedicated, versioned struct (not the live API type) so a cosmetic field
+// reorder, json-tag rename, or new operational knob on PostRestartJobSpec
+// cannot silently change the projection's hash — only a deliberate edit to
+// this struct can.
+type postRestartJobProjection struct {
+	Script             string                       `json:"script"`
+	Command            []string                     `json:"command"`
+	Image              string                       `json:"image"`
+	WorkingDir         string                       `json:"workingDir"`
+	Env                []corev1.EnvVar              `json:"env"`
+	EnvFrom            []corev1.EnvFromSource       `json:"envFrom"`
+	SecurityContext    *corev1.SecurityContext      `json:"securityContext"`
+	PodSecurityContext *corev1.PodSecurityContext   `json:"podSecurityContext"`
+	ServiceAccountName string                       `json:"serviceAccountName"`
+	Resources          *corev1.ResourceRequirements `json:"resources"`
+}
+
 // PostRestartJobChecksum combines the rendered krakend.json configChecksum
-// with a checksum of the PostRestartJobSpec itself, so the Job's identity
-// (see PostRestartJobName) changes whenever EITHER the gateway config OR the
-// postRestartJob spec (script, securityContext, workingDir, ...) changes.
+// with a checksum of the execution-relevant projection of the
+// PostRestartJobSpec (see postRestartJobProjection), so the Job's identity
+// (see PostRestartJobName) changes whenever EITHER the gateway config OR a
+// field of the postRestartJob spec that actually affects script execution
+// (script, command, image, workingDir, env, both securityContexts,
+// serviceAccountName, resources) changes. Purely operational/cosmetic
+// fields (ttlSecondsAfterFinished, podAnnotations, podLabels,
+// backoffLimit, activeDeadlineSeconds) are excluded on purpose: editing
+// them must not re-run the script.
 //
 // Before this, the Job name/trigger was keyed on configChecksum alone: a
 // spec-only edit (e.g. a script fix) was invisible to the reconciler until
 // the next unrelated config change happened to roll a new checksum (nhig).
+// A later revision keyed on json.Marshal of the entire spec instead, which
+// over-corrected: any cosmetic edit (or operational-knob edit) also
+// re-triggered the Job.
+//
+// The config checksum and the projection checksum are hashed as two
+// separate, length-prefixed digests rather than naively concatenated bytes
+// (see hash.CombineHex) so the combination is unambiguous regardless of the
+// length or content of either input — no caller precondition about a fixed
+// checksum length is required.
 func PostRestartJobChecksum(spec *v1alpha1.PostRestartJobSpec, configChecksum string) (string, error) {
-	specJSON, err := json.Marshal(spec)
-	if err != nil {
-		return "", fmt.Errorf("marshaling postRestartJob spec for checksum: %w", err)
+	projection := postRestartJobProjection{
+		Script:             spec.Script,
+		Command:            spec.Command,
+		Image:              spec.Image,
+		WorkingDir:         spec.WorkingDir,
+		Env:                spec.Env,
+		EnvFrom:            spec.EnvFrom,
+		SecurityContext:    spec.SecurityContext,
+		PodSecurityContext: spec.PodSecurityContext,
+		ServiceAccountName: spec.ServiceAccountName,
+		Resources:          spec.Resources,
 	}
-	combined := append([]byte(configChecksum), specJSON...)
-	return hash.SHA256Hex(combined), nil
+	projectionJSON, err := json.Marshal(projection)
+	if err != nil {
+		return "", fmt.Errorf("marshaling postRestartJob projection for checksum: %w", err)
+	}
+	return hash.CombineHex(configChecksum, hash.SHA256Hex(projectionJSON)), nil
 }
 
 // BuildPostRestartJob mutates job in place with a complete Job definition
 // that runs the user-provided bash script after the gateway has restarted.
-// The checksum parameter is stamped onto the Job annotations so consumers
-// can correlate the Job to a specific revision. Callers should pass the
-// combined checksum from PostRestartJobChecksum (not the bare config
-// checksum) so the Job's own annotation reflects the exact revision that
-// produced it.
+// configChecksum is the raw rendered krakend.json config checksum (stamped
+// under PostRestartJobChecksumAnnotation, invertible/traceable back to a
+// config revision); checksum is the combined Job-identity checksum from
+// PostRestartJobChecksum (stamped under
+// PostRestartJobCombinedChecksumAnnotation, drives naming/idempotency).
+// Callers must pass both — see reconcilePostRestartJob.
 func BuildPostRestartJob(
 	job *batchv1.Job,
 	gw *v1alpha1.KrakenDGateway,
 	configChecksum string,
+	checksum string,
 ) {
 	spec := gw.Spec.PostRestartJob
 	labels := StandardLabels(gw)
@@ -124,6 +195,7 @@ func BuildPostRestartJob(
 		job.Annotations = map[string]string{}
 	}
 	job.Annotations[PostRestartJobChecksumAnnotation] = configChecksum
+	job.Annotations[PostRestartJobCombinedChecksumAnnotation] = checksum
 
 	image := spec.Image
 	if image == "" {
@@ -147,12 +219,17 @@ func BuildPostRestartJob(
 	if spec.TTLSecondsAfterFinished != nil {
 		ttl = *spec.TTLSecondsAfterFinished
 	}
+	tmpSizeLimit := resourcePtr(defaultPostRestartTmpSizeLimit)
+	if spec.TmpSizeLimit != nil {
+		tmpSizeLimit = spec.TmpSizeLimit
+	}
 
-	podAnnotations := make(map[string]string, len(spec.PodAnnotations)+1)
+	podAnnotations := make(map[string]string, len(spec.PodAnnotations)+2)
 	maps.Copy(podAnnotations, spec.PodAnnotations)
-	// Set the reserved checksum annotation last so user-provided
-	// annotations cannot overwrite it.
+	// Set the reserved checksum annotations last so user-provided
+	// annotations cannot overwrite them.
 	podAnnotations[PostRestartJobChecksumAnnotation] = configChecksum
+	podAnnotations[PostRestartJobCombinedChecksumAnnotation] = checksum
 
 	cmd := spec.Command
 	if len(cmd) == 0 {
@@ -202,7 +279,7 @@ func BuildPostRestartJob(
 						Name: postRestartTmpVolumeName,
 						VolumeSource: corev1.VolumeSource{
 							EmptyDir: &corev1.EmptyDirVolumeSource{
-								SizeLimit: resourcePtr(postRestartTmpSizeLimit),
+								SizeLimit: tmpSizeLimit,
 							},
 						},
 					},
@@ -246,55 +323,60 @@ func defaultPostRestartContainerSecurityContext() *corev1.SecurityContext {
 	}
 }
 
+// strategicMergeSecurityContext merges user on top of base using a
+// Kubernetes strategic-merge-patch (k8s.io/apimachinery/pkg/util/
+// strategicpatch), instead of a hand-rolled field-by-field copy. base is
+// marshaled to JSON as the "original"; user is marshaled to JSON (its
+// `omitempty` tags mean an unset field is simply absent from the JSON) and
+// applied as the "patch". A field the user never set stays absent from the
+// patch and therefore keeps base's value; a field the user does set
+// overrides it — matching the previous hand-rolled semantics, but now
+// covering the FULL field set of T automatically. Unlike the previous
+// per-field code, this survives future k8s API additions (new fields on
+// SecurityContext/PodSecurityContext) with zero operator code changes: any
+// field neither hand-picked-out here nor explicitly overridden by the user
+// is preserved from base by construction, not by an exhaustive but
+// hand-maintained if-chain that silently stops being exhaustive on the next
+// k8s API bump.
+//
+// Nested pointer-to-struct fields (e.g. Capabilities) are also merged
+// key-by-key rather than replaced wholesale: setting only
+// `capabilities.add` leaves the base's `capabilities.drop` intact, since
+// strategic-merge-patch recurses into nested objects and only replaces the
+// sub-fields actually present in the patch.
+func strategicMergeSecurityContext[T any](base T, user *T) T {
+	if user == nil {
+		return base
+	}
+	baseJSON, err := json.Marshal(base)
+	if err != nil {
+		panic(fmt.Sprintf("marshaling security context default: %v", err))
+	}
+	userJSON, err := json.Marshal(user)
+	if err != nil {
+		panic(fmt.Sprintf("marshaling user-provided security context: %v", err))
+	}
+	mergedJSON, err := strategicpatch.StrategicMergePatch(baseJSON, userJSON, base)
+	if err != nil {
+		panic(fmt.Sprintf("strategic-merging security context: %v", err))
+	}
+	var merged T
+	if err := json.Unmarshal(mergedJSON, &merged); err != nil {
+		panic(fmt.Sprintf("unmarshaling merged security context: %v", err))
+	}
+	return merged
+}
+
 // mergeContainerSecurityContext merges a user-provided container
-// SecurityContext on top of the hardened defaults, field by field. A field
-// left unset (nil) by the user keeps the hardened default; a field the user
-// explicitly sets overrides it. This replaces the previous verbatim
+// SecurityContext on top of the hardened defaults via
+// strategicMergeSecurityContext. This replaces the previous verbatim
 // replacement semantics, which meant a user setting e.g. runAsUser: 0 (as
 // prod does, for `curl`/`rdme` needing root) silently discarded the
 // hardened drop:ALL/ROFS/no-privilege-escalation defaults (8qln).
 func mergeContainerSecurityContext(user *corev1.SecurityContext) *corev1.SecurityContext {
-	merged := defaultPostRestartContainerSecurityContext()
-	if user == nil {
-		return merged
-	}
-	if user.Capabilities != nil {
-		merged.Capabilities = user.Capabilities
-	}
-	if user.Privileged != nil {
-		merged.Privileged = user.Privileged
-	}
-	if user.SELinuxOptions != nil {
-		merged.SELinuxOptions = user.SELinuxOptions
-	}
-	if user.WindowsOptions != nil {
-		merged.WindowsOptions = user.WindowsOptions
-	}
-	if user.RunAsUser != nil {
-		merged.RunAsUser = user.RunAsUser
-	}
-	if user.RunAsGroup != nil {
-		merged.RunAsGroup = user.RunAsGroup
-	}
-	if user.RunAsNonRoot != nil {
-		merged.RunAsNonRoot = user.RunAsNonRoot
-	}
-	if user.ReadOnlyRootFilesystem != nil {
-		merged.ReadOnlyRootFilesystem = user.ReadOnlyRootFilesystem
-	}
-	if user.AllowPrivilegeEscalation != nil {
-		merged.AllowPrivilegeEscalation = user.AllowPrivilegeEscalation
-	}
-	if user.ProcMount != nil {
-		merged.ProcMount = user.ProcMount
-	}
-	if user.SeccompProfile != nil {
-		merged.SeccompProfile = user.SeccompProfile
-	}
-	if user.AppArmorProfile != nil {
-		merged.AppArmorProfile = user.AppArmorProfile
-	}
-	return merged
+	base := *defaultPostRestartContainerSecurityContext()
+	merged := strategicMergeSecurityContext(base, user)
+	return &merged
 }
 
 // defaultPostRestartPodSecurityContext returns the hardened pod-level
@@ -311,53 +393,30 @@ func defaultPostRestartPodSecurityContext() *corev1.PodSecurityContext {
 }
 
 // mergePodSecurityContext merges a user-provided PodSecurityContext on top
-// of the hardened defaults, field by field (see mergeContainerSecurityContext
-// for rationale — 8qln). A prod override of runAsUser: 0 keeps
-// runAsNonRoot's sibling defaults (runAsGroup, seccompProfile) intact unless
-// the user also overrides them.
+// of the hardened defaults via strategicMergeSecurityContext (see
+// mergeContainerSecurityContext for rationale — 8qln). A prod override of
+// runAsUser: 0 keeps runAsNonRoot's sibling defaults (runAsGroup,
+// seccompProfile) intact unless the user also overrides them.
 func mergePodSecurityContext(user *corev1.PodSecurityContext) *corev1.PodSecurityContext {
-	merged := defaultPostRestartPodSecurityContext()
-	if user == nil {
-		return merged
+	base := *defaultPostRestartPodSecurityContext()
+	merged := strategicMergeSecurityContext(base, user)
+
+	// #1 (review id 3804144382, important/security): an explicit
+	// podSecurityContext.runAsUser: 0 contradicts the inherited
+	// runAsNonRoot:true default. Kubelet validates the pair together at
+	// container start and refuses to start the container
+	// (CreateContainerConfigError) when they conflict — but that failure
+	// mode never fails the pod outright: it sits Waiting/Pending until
+	// activeDeadlineSeconds (600s default) expires, silently. This is a
+	// cross-field consistency rule the k8s API/strategic-merge-patch
+	// cannot express structurally (RunAsUser and RunAsNonRoot are
+	// independent fields), so it must be handled explicitly, after the
+	// merge: if the user set RunAsUser to 0 without also setting
+	// RunAsNonRoot, drop the inherited RunAsNonRoot default so only the
+	// user's own explicit choice (if any) can re-assert it.
+	if user != nil && user.RunAsUser != nil && *user.RunAsUser == 0 && user.RunAsNonRoot == nil {
+		merged.RunAsNonRoot = nil
 	}
-	if user.SELinuxOptions != nil {
-		merged.SELinuxOptions = user.SELinuxOptions
-	}
-	if user.WindowsOptions != nil {
-		merged.WindowsOptions = user.WindowsOptions
-	}
-	if user.RunAsUser != nil {
-		merged.RunAsUser = user.RunAsUser
-	}
-	if user.RunAsGroup != nil {
-		merged.RunAsGroup = user.RunAsGroup
-	}
-	if user.RunAsNonRoot != nil {
-		merged.RunAsNonRoot = user.RunAsNonRoot
-	}
-	if user.SupplementalGroups != nil {
-		merged.SupplementalGroups = user.SupplementalGroups
-	}
-	if user.SupplementalGroupsPolicy != nil {
-		merged.SupplementalGroupsPolicy = user.SupplementalGroupsPolicy
-	}
-	if user.FSGroup != nil {
-		merged.FSGroup = user.FSGroup
-	}
-	if user.Sysctls != nil {
-		merged.Sysctls = user.Sysctls
-	}
-	if user.FSGroupChangePolicy != nil {
-		merged.FSGroupChangePolicy = user.FSGroupChangePolicy
-	}
-	if user.SeccompProfile != nil {
-		merged.SeccompProfile = user.SeccompProfile
-	}
-	if user.AppArmorProfile != nil {
-		merged.AppArmorProfile = user.AppArmorProfile
-	}
-	if user.SELinuxChangePolicy != nil {
-		merged.SELinuxChangePolicy = user.SELinuxChangePolicy
-	}
-	return merged
+
+	return &merged
 }

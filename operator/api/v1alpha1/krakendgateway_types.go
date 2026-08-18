@@ -18,6 +18,7 @@ package v1alpha1
 
 import (
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
@@ -94,10 +95,12 @@ type KrakenDGatewaySpec struct {
 	// Service but is NOT added to the Istio VirtualService (local traffic only).
 	OpenAPI *OpenAPIExportSpec `json:"openapi,omitempty"`
 
-	// PostRestartJob configures a Kubernetes Job that runs after every
-	// rolling restart triggered by a configuration change. The Job is
-	// created once per unique config checksum and runs a user-provided
-	// bash script.
+	// PostRestartJob configures a Kubernetes Job that runs a user-provided
+	// bash script. The Job is created once per unique config +
+	// postRestartJob-spec revision (i.e. once per distinct combination of
+	// the rendered krakend.json checksum and this spec's execution-relevant
+	// fields — see internal/resources.PostRestartJobChecksum), not once per
+	// rolling restart.
 	PostRestartJob *PostRestartJobSpec `json:"postRestartJob,omitempty"`
 }
 
@@ -138,8 +141,9 @@ type OpenAPIExportSpec struct {
 	ReadinessProbe *corev1.Probe `json:"readinessProbe,omitempty"`
 }
 
-// PostRestartJobSpec configures a Kubernetes Job that runs after every
-// config-triggered rolling restart.
+// PostRestartJobSpec configures a Kubernetes Job that runs a user-provided
+// bash script once per unique config + postRestartJob-spec revision (see
+// internal/resources.PostRestartJobChecksum).
 type PostRestartJobSpec struct {
 	// Enabled toggles post-restart Job creation.
 	Enabled bool `json:"enabled"`
@@ -163,8 +167,17 @@ type PostRestartJobSpec struct {
 	// internal/resources/job.go) so scripts can write there even under
 	// readOnlyRootFilesystem. If you override this to a path outside the
 	// /tmp emptyDir, ensure your image provides a writable directory at
-	// that path (e.g. it is not root-owned under a non-root runAsUser).
+	// that path (e.g. it is not root-owned under a non-root runAsUser) —
+	// note that under the default readOnlyRootFilesystem: true, a path
+	// outside the /tmp emptyDir mount is NOT writable, so relative-path
+	// writes in your script will fail with EROFS even though the container
+	// starts successfully; use an absolute path under /tmp, or opt out of
+	// readOnlyRootFilesystem deliberately via securityContext.
+	// Must be an absolute path.
 	// +optional
+	// +kubebuilder:validation:MinLength=2
+	// +kubebuilder:validation:MaxLength=4096
+	// +kubebuilder:validation:Pattern=`^/.+$`
 	WorkingDir string `json:"workingDir,omitempty"`
 
 	// Env injects environment variables into the Job container.
@@ -208,6 +221,15 @@ type PostRestartJobSpec struct {
 	// TTLSecondsAfterFinished controls automatic cleanup after Job
 	// completion. Defaults to 86400 (24h).
 	TTLSecondsAfterFinished *int32 `json:"ttlSecondsAfterFinished,omitempty"`
+
+	// TmpSizeLimit overrides the size limit of the /tmp emptyDir volume
+	// backing the Job's working directory (see WorkingDir). Defaults to
+	// 256Mi. Increase this if your script downloads or writes more than
+	// 256Mi under /tmp (e.g. a large openapi.json export/upload) — exceeding
+	// the limit gets the pod Evicted mid-run by the kubelet, not a clean
+	// script-level failure.
+	// +optional
+	TmpSizeLimit *resource.Quantity `json:"tmpSizeLimit,omitempty"`
 }
 
 // GatewayConfig holds KrakenD service-level configuration.
@@ -525,8 +547,15 @@ type KrakenDGatewayStatus struct {
 	ActiveImage        string             `json:"activeImage,omitempty"`
 	EndpointCount      int32              `json:"endpointCount,omitempty"`
 	DragonflyAddress   string             `json:"dragonflyAddress,omitempty"`
-	// LastPostRestartJobChecksum records the config checksum for which the
-	// most recent post-restart Job was successfully created.
+	// LastPostRestartJobChecksum records the combined (config +
+	// postRestartJob-spec) checksum for which the most recent post-restart
+	// Job was created (see internal/resources.PostRestartJobChecksum). Used
+	// to guard against re-creating (and re-executing) the Job after
+	// TTLSecondsAfterFinished garbage-collects the finished Job object for
+	// the same revision. To force a re-run without a config or spec change,
+	// clear this field: `kubectl patch krakendgateway <name>
+	// --subresource=status --type=merge -p
+	// '{"status":{"lastPostRestartJobChecksum":""}}'`.
 	LastPostRestartJobChecksum string `json:"lastPostRestartJobChecksum,omitempty"`
 }
 

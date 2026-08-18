@@ -50,7 +50,8 @@ func (v *GatewayValidator) ValidateCreate(
 	if !ok {
 		return nil, fmt.Errorf("expected KrakenDGateway, got %T", obj)
 	}
-	return nil, v.validate(gw)
+	warnings, err := v.validate(gw)
+	return warnings, err
 }
 
 // ValidateUpdate validates an updated KrakenDGateway.
@@ -63,7 +64,8 @@ func (v *GatewayValidator) ValidateUpdate(
 	if !ok {
 		return nil, fmt.Errorf("expected KrakenDGateway, got %T", newObj)
 	}
-	return nil, v.validate(gw)
+	warnings, err := v.validate(gw)
+	return warnings, err
 }
 
 // ValidateDelete is a no-op for gateways.
@@ -74,8 +76,9 @@ func (v *GatewayValidator) ValidateDelete(
 	return nil, nil
 }
 
-func (v *GatewayValidator) validate(gw *v1alpha1.KrakenDGateway) error {
+func (v *GatewayValidator) validate(gw *v1alpha1.KrakenDGateway) (admission.Warnings, error) {
 	var errs field.ErrorList
+	var warnings admission.Warnings
 
 	if gw.Spec.Edition == v1alpha1.EditionEE {
 		if gw.Spec.License == nil ||
@@ -133,14 +136,44 @@ func (v *GatewayValidator) validate(gw *v1alpha1.KrakenDGateway) error {
 		}
 	}
 
-	if gw.Spec.PostRestartJob != nil && gw.Spec.PostRestartJob.Enabled && gw.Spec.PostRestartJob.Script == "" {
-		errs = append(errs, field.Required(
-			field.NewPath("spec", "postRestartJob", "script"),
-			"script is required when postRestartJob is enabled",
-		))
+	if gw.Spec.PostRestartJob != nil && gw.Spec.PostRestartJob.Enabled {
+		prj := gw.Spec.PostRestartJob
+		if prj.Script == "" {
+			errs = append(errs, field.Required(
+				field.NewPath("spec", "postRestartJob", "script"),
+				"script is required when postRestartJob is enabled",
+			))
+		}
+
+		// review id 3804144425 (#4): workingDir overridden outside the /tmp
+		// emptyDir mount, combined with an effectively-true
+		// readOnlyRootFilesystem (the hardened default unless the user
+		// explicitly opts out), silently breaks every relative-path write
+		// in the script with EROFS — the container still starts fine, so
+		// this is not otherwise caught until the script runs. A warning
+		// (not a hard error, since it's a legitimate configuration if the
+		// image provides its own writable directory there) nudges the user
+		// toward the documented escape hatch instead.
+		if prj.WorkingDir != "" &&
+			prj.WorkingDir != resources.PostRestartTmpMountPath &&
+			!strings.HasPrefix(prj.WorkingDir, resources.PostRestartTmpMountPath+"/") {
+			effectiveROFS := true
+			if prj.SecurityContext != nil && prj.SecurityContext.ReadOnlyRootFilesystem != nil {
+				effectiveROFS = *prj.SecurityContext.ReadOnlyRootFilesystem
+			}
+			if effectiveROFS {
+				warnings = append(warnings, fmt.Sprintf(
+					"spec.postRestartJob.workingDir %q is outside the writable %s emptyDir mount, "+
+						"and readOnlyRootFilesystem is effectively true — relative-path writes in "+
+						"your script will fail with EROFS. Use an absolute path under %s, or set "+
+						"spec.postRestartJob.securityContext.readOnlyRootFilesystem: false deliberately.",
+					prj.WorkingDir, resources.PostRestartTmpMountPath, resources.PostRestartTmpMountPath,
+				))
+			}
+		}
 	}
 
-	return errs.ToAggregate()
+	return warnings, errs.ToAggregate()
 }
 
 // EndpointValidator validates KrakenDEndpoint resources.

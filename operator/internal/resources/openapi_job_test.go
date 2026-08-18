@@ -17,6 +17,7 @@ limitations under the License.
 package resources
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -66,10 +67,13 @@ func TestBuildPostRestartJob_Defaults(t *testing.T) {
 		},
 	}
 	job := &batchv1.Job{}
-	BuildPostRestartJob(job, gw, "checksum1")
+	BuildPostRestartJob(job, gw, "checksum1", "combined1")
 
 	if job.Annotations[PostRestartJobChecksumAnnotation] != "checksum1" {
-		t.Fatalf("annotation missing")
+		t.Fatalf("config checksum annotation missing")
+	}
+	if job.Annotations[PostRestartJobCombinedChecksumAnnotation] != "combined1" {
+		t.Fatalf("combined checksum annotation missing")
 	}
 	if *job.Spec.BackoffLimit != 2 {
 		t.Fatalf("default backoffLimit not applied: %d", *job.Spec.BackoffLimit)
@@ -99,7 +103,10 @@ func TestBuildPostRestartJob_Defaults(t *testing.T) {
 		t.Fatalf("restart policy not OnFailure")
 	}
 	if job.Spec.Template.Annotations[PostRestartJobChecksumAnnotation] != "checksum1" {
-		t.Fatalf("pod annotation missing")
+		t.Fatalf("pod config checksum annotation missing")
+	}
+	if job.Spec.Template.Annotations[PostRestartJobCombinedChecksumAnnotation] != "combined1" {
+		t.Fatalf("pod combined checksum annotation missing")
 	}
 	if job.Spec.Template.Spec.Containers[0].WorkingDir != "/tmp" {
 		t.Fatalf("expected default WorkingDir /tmp, got %q",
@@ -125,7 +132,7 @@ func TestBuildPostRestartJob_CustomFields(t *testing.T) {
 		},
 	}
 	job := &batchv1.Job{}
-	BuildPostRestartJob(job, gw, "cs")
+	BuildPostRestartJob(job, gw, "cs", "job-cs")
 
 	c := job.Spec.Template.Spec.Containers[0]
 	if c.Image != "custom:1" {
@@ -162,7 +169,7 @@ func TestBuildPostRestartJob_CustomCommand(t *testing.T) {
 		},
 	}
 	job := &batchv1.Job{}
-	BuildPostRestartJob(job, gw, "cs")
+	BuildPostRestartJob(job, gw, "cs", "job-cs")
 
 	cmd := job.Spec.Template.Spec.Containers[0].Command
 	if len(cmd) != 3 || cmd[0] != "/bin/sh" || cmd[1] != "-c" || cmd[2] != "echo done" {
@@ -188,7 +195,7 @@ func TestBuildPostRestartJob_CustomSecurityContext(t *testing.T) {
 		},
 	}
 	job := &batchv1.Job{}
-	BuildPostRestartJob(job, gw, "cs")
+	BuildPostRestartJob(job, gw, "cs", "job-cs")
 
 	csc := job.Spec.Template.Spec.Containers[0].SecurityContext
 	if csc.RunAsUser == nil || *csc.RunAsUser != 0 {
@@ -224,7 +231,7 @@ func TestBuildPostRestartJob_SecurityContextMergesNotReplaces(t *testing.T) {
 		},
 	}
 	job := &batchv1.Job{}
-	BuildPostRestartJob(job, gw, "cs")
+	BuildPostRestartJob(job, gw, "cs", "job-cs")
 
 	csc := job.Spec.Template.Spec.Containers[0].SecurityContext
 	if csc.RunAsUser == nil || *csc.RunAsUser != 0 {
@@ -269,7 +276,7 @@ func TestBuildPostRestartJob_SecurityContextNilUsesHardenedDefaults(t *testing.T
 		},
 	}
 	job := &batchv1.Job{}
-	BuildPostRestartJob(job, gw, "cs")
+	BuildPostRestartJob(job, gw, "cs", "job-cs")
 
 	csc := job.Spec.Template.Spec.Containers[0].SecurityContext
 	if csc.AllowPrivilegeEscalation == nil || *csc.AllowPrivilegeEscalation {
@@ -298,7 +305,7 @@ func TestBuildPostRestartJob_HardenedContainerDefaults(t *testing.T) {
 		},
 	}
 	job := &batchv1.Job{}
-	BuildPostRestartJob(job, gw, "cs")
+	BuildPostRestartJob(job, gw, "cs", "job-cs")
 
 	c := job.Spec.Template.Spec.Containers[0]
 	if c.SecurityContext.ReadOnlyRootFilesystem == nil || !*c.SecurityContext.ReadOnlyRootFilesystem {
@@ -339,6 +346,180 @@ func TestBuildPostRestartJob_HardenedContainerDefaults(t *testing.T) {
 	}
 }
 
+// TestMergeContainerSecurityContext_CapabilitiesAddOnlyPreservesDropAll
+// covers review id 3804144405 (#2): a user who sets only
+// capabilities.add must NOT lose the hardened capabilities.drop:[ALL]
+// baseline, even though Capabilities.Add/Drop are plain slices (no
+// patchMergeKey) and strategic-merge-patch therefore treats each of them,
+// individually, as replace-if-present. Because the user's JSON omits `drop`
+// entirely (omitempty + nil slice), the patch does not touch it and the
+// base's `drop` survives — verified here directly.
+func TestMergeContainerSecurityContext_CapabilitiesAddOnlyPreservesDropAll(t *testing.T) {
+	user := &corev1.SecurityContext{
+		Capabilities: &corev1.Capabilities{
+			Add: []corev1.Capability{"NET_BIND_SERVICE"},
+		},
+	}
+	merged := mergeContainerSecurityContext(user)
+
+	if merged.Capabilities == nil {
+		t.Fatalf("expected non-nil capabilities")
+	}
+	if len(merged.Capabilities.Add) != 1 || merged.Capabilities.Add[0] != "NET_BIND_SERVICE" {
+		t.Fatalf("user-set capabilities.add not applied: %+v", merged.Capabilities.Add)
+	}
+	if len(merged.Capabilities.Drop) != 1 || merged.Capabilities.Drop[0] != "ALL" {
+		t.Fatalf("hardened capabilities.drop:[ALL] baseline lost by add-only override: %+v",
+			merged.Capabilities.Drop)
+	}
+}
+
+// TestMergeContainerSecurityContext_CapabilitiesDropOverride verifies the
+// symmetric case: a user who explicitly sets drop (to something other than
+// ALL) does override the baseline, since that field IS present in the
+// user's patch JSON.
+func TestMergeContainerSecurityContext_CapabilitiesDropOverride(t *testing.T) {
+	user := &corev1.SecurityContext{
+		Capabilities: &corev1.Capabilities{
+			Drop: []corev1.Capability{"NET_RAW"},
+		},
+	}
+	merged := mergeContainerSecurityContext(user)
+
+	if len(merged.Capabilities.Drop) != 1 || merged.Capabilities.Drop[0] != "NET_RAW" {
+		t.Fatalf("user-set capabilities.drop not applied: %+v", merged.Capabilities.Drop)
+	}
+}
+
+// TestMergePodSecurityContext_RootUserDropsInheritedRunAsNonRoot covers
+// review id 3804144382 (#1, important/security): setting only
+// podSecurityContext.runAsUser: 0 (no explicit runAsNonRoot) must not leave
+// the contradictory pair {runAsUser:0, runAsNonRoot:true} — the kubelet
+// rejects that combination at container start
+// (CreateContainerConfigError), and because the pod never reaches phase
+// Failed, backoffLimit is never consumed: the Job simply hangs Pending
+// until activeDeadlineSeconds. strategicpatch cannot catch this on its own
+// since RunAsUser and RunAsNonRoot are independent fields; it is handled as
+// an explicit post-merge fixup in mergePodSecurityContext.
+func TestMergePodSecurityContext_RootUserDropsInheritedRunAsNonRoot(t *testing.T) {
+	user := &corev1.PodSecurityContext{
+		RunAsUser: new(int64(0)),
+	}
+	merged := mergePodSecurityContext(user)
+
+	if merged.RunAsUser == nil || *merged.RunAsUser != 0 {
+		t.Fatalf("user-set runAsUser:0 not applied: %+v", merged.RunAsUser)
+	}
+	if merged.RunAsNonRoot != nil {
+		t.Fatalf("expected inherited runAsNonRoot default to be dropped when "+
+			"runAsUser:0 is set without an explicit runAsNonRoot, got %+v", merged.RunAsNonRoot)
+	}
+}
+
+// TestMergePodSecurityContext_RootUserWithExplicitRunAsNonRootHonored
+// verifies the escape hatch this fixup relies on: a user who sets BOTH
+// runAsUser:0 AND runAsNonRoot explicitly (prod's actual manifest, per the
+// review comment) keeps their explicit value untouched.
+func TestMergePodSecurityContext_RootUserWithExplicitRunAsNonRootHonored(t *testing.T) {
+	user := &corev1.PodSecurityContext{
+		RunAsUser:    new(int64(0)),
+		RunAsNonRoot: new(false),
+	}
+	merged := mergePodSecurityContext(user)
+
+	if merged.RunAsNonRoot == nil || *merged.RunAsNonRoot != false {
+		t.Fatalf("explicit user runAsNonRoot:false not honored: %+v", merged.RunAsNonRoot)
+	}
+}
+
+// fillNonZero recursively sets every settable field reachable from v to a
+// non-zero value: pointers are allocated, structs are recursed into, slices
+// get a single non-zero element, bools become true, strings (including
+// named string kinds like Capability/ProcMountType/SeccompProfileType)
+// become a fixed sentinel, and integers become a fixed non-zero constant.
+// Used by the reflective round-trip merge tests (review id 3804144473,
+// #11) so the test automatically covers any field added to
+// SecurityContext/PodSecurityContext in a future k8s API bump without the
+// test itself needing to be updated.
+func fillNonZero(v reflect.Value) {
+	switch v.Kind() {
+	case reflect.Ptr:
+		if v.IsNil() {
+			v.Set(reflect.New(v.Type().Elem()))
+		}
+		fillNonZero(v.Elem())
+	case reflect.Struct:
+		for i := 0; i < v.NumField(); i++ {
+			f := v.Field(i)
+			if f.CanSet() {
+				fillNonZero(f)
+			}
+		}
+	case reflect.Slice:
+		if v.Len() == 0 {
+			elem := reflect.New(v.Type().Elem()).Elem()
+			fillNonZero(elem)
+			v.Set(reflect.Append(v, elem))
+		}
+	case reflect.Bool:
+		v.SetBool(true)
+	case reflect.String:
+		v.SetString("nonzero-sentinel")
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		v.SetInt(7)
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		v.SetUint(7)
+	}
+}
+
+// TestMergeContainerSecurityContext_ReflectiveRoundTrip covers review id
+// 3804144473 (#11): every field of a fully-populated user SecurityContext
+// must survive the merge unchanged (the user explicitly set every field, so
+// every field must win over the hardened default). Iterating fields via
+// reflection means this test keeps covering the FULL field set even after a
+// future k8s API bump adds new fields, unlike a hand-picked list of
+// assertions.
+func TestMergeContainerSecurityContext_ReflectiveRoundTrip(t *testing.T) {
+	user := &corev1.SecurityContext{}
+	fillNonZero(reflect.ValueOf(user).Elem())
+
+	merged := mergeContainerSecurityContext(user)
+
+	uv := reflect.ValueOf(user).Elem()
+	mv := reflect.ValueOf(merged).Elem()
+	ut := uv.Type()
+	for i := 0; i < uv.NumField(); i++ {
+		name := ut.Field(i).Name
+		if !reflect.DeepEqual(uv.Field(i).Interface(), mv.Field(i).Interface()) {
+			t.Errorf("field %s did not survive the merge: user=%+v merged=%+v",
+				name, uv.Field(i).Interface(), mv.Field(i).Interface())
+		}
+	}
+}
+
+// TestMergePodSecurityContext_ReflectiveRoundTrip is the PodSecurityContext
+// counterpart of TestMergeContainerSecurityContext_ReflectiveRoundTrip (#11).
+// RunAsUser is deliberately filled with a non-zero value (7, via
+// fillNonZero) so the #1 root-uid fixup in mergePodSecurityContext does not
+// interfere with this test's "every field survives" assertion.
+func TestMergePodSecurityContext_ReflectiveRoundTrip(t *testing.T) {
+	user := &corev1.PodSecurityContext{}
+	fillNonZero(reflect.ValueOf(user).Elem())
+
+	merged := mergePodSecurityContext(user)
+
+	uv := reflect.ValueOf(user).Elem()
+	mv := reflect.ValueOf(merged).Elem()
+	ut := uv.Type()
+	for i := 0; i < uv.NumField(); i++ {
+		name := ut.Field(i).Name
+		if !reflect.DeepEqual(uv.Field(i).Interface(), mv.Field(i).Interface()) {
+			t.Errorf("field %s did not survive the merge: user=%+v merged=%+v",
+				name, uv.Field(i).Interface(), mv.Field(i).Interface())
+		}
+	}
+}
+
 // TestBuildPostRestartJob_WorkingDirDefault covers aul3: unset workingDir
 // keeps the previous forced "/tmp" behavior (backward compatible).
 func TestBuildPostRestartJob_WorkingDirDefault(t *testing.T) {
@@ -352,7 +533,7 @@ func TestBuildPostRestartJob_WorkingDirDefault(t *testing.T) {
 		},
 	}
 	job := &batchv1.Job{}
-	BuildPostRestartJob(job, gw, "cs")
+	BuildPostRestartJob(job, gw, "cs", "job-cs")
 
 	if got := job.Spec.Template.Spec.Containers[0].WorkingDir; got != "/tmp" {
 		t.Fatalf("expected default workingDir /tmp, got %q", got)
@@ -373,7 +554,7 @@ func TestBuildPostRestartJob_WorkingDirOverride(t *testing.T) {
 		},
 	}
 	job := &batchv1.Job{}
-	BuildPostRestartJob(job, gw, "cs")
+	BuildPostRestartJob(job, gw, "cs", "job-cs")
 
 	if got := job.Spec.Template.Spec.Containers[0].WorkingDir; got != "/custom-dir" {
 		t.Fatalf("expected overridden workingDir /custom-dir, got %q", got)

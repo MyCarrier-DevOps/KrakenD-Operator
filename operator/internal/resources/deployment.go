@@ -60,7 +60,7 @@ func BuildDeployment(
 
 	// Pod annotations for config change detection
 	annotations := map[string]string{
-		"krakend.io/checksum-config": configChecksum,
+		PostRestartJobChecksumAnnotation: configChecksum,
 	}
 	if pluginChecksum != "" {
 		annotations["krakend.io/checksum-plugins"] = pluginChecksum

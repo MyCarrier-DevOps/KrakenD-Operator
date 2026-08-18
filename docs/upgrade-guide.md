@@ -145,17 +145,75 @@ cluster with `postRestartJob.enabled: true`.
    existing overrides — fields you were implicitly relying on being *unset*
    (e.g. no seccomp profile) will now inherit the operator default.
 3. **The Job now re-triggers on `postRestartJob` spec changes, not just
-   config changes.** The Job's identity checksum now includes the
-   `postRestartJob` spec (script, securityContext, workingDir, ...), so
-   editing the script (for example) now creates a new Job immediately
-   instead of waiting for the next unrelated `krakend.json` change.
+   config changes.** The Job's identity checksum now includes a projection
+   of the execution-relevant `postRestartJob` spec fields (script, command,
+   image, workingDir, env, both securityContexts, serviceAccountName,
+   resources — NOT operational/cosmetic knobs like `ttlSecondsAfterFinished`
+   or `podAnnotations`, which do not re-trigger the Job), so editing the
+   script (for example) now creates a new Job immediately instead of waiting
+   for the next unrelated `krakend.json` change.
+
+   **Upgrade-time side effect:** the checksum *basis* changed, so the value
+   already stored in `status.lastPostRestartJobChecksum` (a bare config
+   checksum written by <= v0.13.3) can never match the new combined
+   checksum. Every gateway with `postRestartJob.enabled: true` therefore
+   runs its script exactly once immediately after the new operator starts,
+   with no config or spec change — fix the prod `npm install -g rdme`
+   script (item 1) *before* rolling the image, not after; this is a hard
+   prerequisite of shipping the image, not a trailing follow-up. Expect the
+   pre-upgrade Job object to linger alongside the new one until its 24h TTL
+   expires — both share the `app.kubernetes.io/component: post-restart-job`
+   label, so dashboards will show duplicates for up to 24h. **Rolling back
+   to v0.13.3 is symmetric:** the stored combined checksum is unmatchable by
+   the old config-only logic, so the script runs once more on rollback.
 4. **The Job no longer silently re-runs on its own periodic ~24h TTL
-   cadence.** `gw.status.lastPostRestartJobChecksum` is now read (previously
+   cadence — this is now a strict "once per revision, ever" gate.**
+   `gw.status.lastPostRestartJobChecksum` is now read (previously
    write-only) to skip recreation when `TTLSecondsAfterFinished` garbage
    collects a finished Job object for a revision that already ran. If any
    workflow was relying on the previous (undocumented, believed-unintended)
    daily re-run cadence, it will need an explicit periodic trigger instead
    (e.g. a CronJob) — see PR description for the by-design determination.
+
+   Two remediation paths people may be used to no longer work the same way:
+   - **`kubectl delete job <name>` is now a no-op.** The delete re-enqueues a
+     reconcile, but the guard returns before creating a new Job — no Job, no
+     Event, just a `PostRestartJobSkipped` status Condition explaining why
+     (`kubectl describe krakendgateway <name>`).
+   - **A Job that exhausts `backoffLimit` due to a transient external
+     failure (npm registry outage, DNS blip, ...) will not retry on its
+     own.** Pre-PR this self-healed within ~24h via TTL GC + recreate;
+     post-PR it does not, since the guard doesn't distinguish "ran and
+     failed" from "ran and succeeded" (deliberately — gating the status
+     write on success would reintroduce the TTL re-run bug).
+
+   **Escape hatch — force a re-run without a config or spec change:**
+   ```bash
+   kubectl patch krakendgateway <name> --subresource=status --type=merge \
+     -p '{"status":{"lastPostRestartJobChecksum":""}}'
+   ```
 5. **New optional `spec.postRestartJob.workingDir`** overrides the
    previously-forced `/tmp` working directory. Unset behaves exactly as
-   before (defaults to `/tmp`).
+   before (defaults to `/tmp`). **If you override it to a path outside the
+   `/tmp` emptyDir, your script's CWD lands on the read-only root
+   filesystem** under the new `readOnlyRootFilesystem: true` default (item
+   1) — the container still starts fine (the directory is created before
+   the read-only remount), but relative-path writes then fail with a bare
+   `EROFS`. Use an absolute path under `/tmp`, or set
+   `spec.postRestartJob.securityContext.readOnlyRootFilesystem: false`
+   deliberately if you need a writable directory elsewhere.
+6. **New optional `spec.postRestartJob.tmpSizeLimit`** overrides the
+   previously-hardcoded 256Mi `/tmp` `emptyDir` size limit. Increase this if
+   your script writes more than 256Mi under `/tmp` — exceeding the limit
+   gets the pod `Evicted` mid-run by the kubelet (not a clean script-level
+   failure), so size this generously if your script's write volume is
+   uncertain.
+7. **The Job now carries two distinct checksum annotations**, not one
+   overloaded key. `krakend.io/checksum-config` keeps its original meaning
+   (the raw, invertible krakend.json config checksum — traceable back to a
+   config revision); a new `krakend.io/checksum-postrestart` carries the
+   combined identity checksum that drives Job naming/idempotency. If any
+   external tooling was reading `krakend.io/checksum-config` off the Job
+   (not the Deployment) expecting the combined value from an earlier
+   pre-release of this change, update it to read
+   `krakend.io/checksum-postrestart` instead.
