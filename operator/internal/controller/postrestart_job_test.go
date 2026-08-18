@@ -82,8 +82,12 @@ func TestReconcilePostRestartJob_CreatesWhenConverged(t *testing.T) {
 	if len(jobs.Items) != 1 {
 		t.Fatalf("expected one job, got %d", len(jobs.Items))
 	}
-	if gw.Status.LastPostRestartJobChecksum != "abc123" {
-		t.Fatalf("status checksum not recorded")
+	wantChecksum, err := resources.PostRestartJobChecksum(gw.Spec.PostRestartJob, "abc123")
+	if err != nil {
+		t.Fatalf("computing expected checksum: %v", err)
+	}
+	if gw.Status.LastPostRestartJobChecksum != wantChecksum {
+		t.Fatalf("status checksum not recorded: got %q want %q", gw.Status.LastPostRestartJobChecksum, wantChecksum)
 	}
 }
 
@@ -127,8 +131,12 @@ func TestReconcilePostRestartJob_SkipsWhenChecksumMismatch(t *testing.T) {
 func TestReconcilePostRestartJob_Idempotent(t *testing.T) {
 	gw := makeGWWithJob("echo ok")
 	dep := makeConvergedDeployment(gw, "abc123")
+	jobChecksum, err := resources.PostRestartJobChecksum(gw.Spec.PostRestartJob, "abc123")
+	if err != nil {
+		t.Fatalf("computing job checksum: %v", err)
+	}
 	existing := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{
-		Name:      resources.PostRestartJobName(gw, "abc123"),
+		Name:      resources.PostRestartJobName(gw, jobChecksum),
 		Namespace: gw.Namespace,
 	}}
 	c := fakeClientBuilder().WithObjects(gw, dep, existing).Build()
@@ -143,6 +151,36 @@ func TestReconcilePostRestartJob_Idempotent(t *testing.T) {
 	}
 	if len(jobs.Items) != 1 {
 		t.Fatalf("expected exactly one job (idempotent), got %d", len(jobs.Items))
+	}
+}
+
+// TestReconcilePostRestartJob_SkipsRecreateAfterTTLGC covers nhig root
+// cause 1: TTLSecondsAfterFinished GC's the finished Job object, but the
+// gateway's status already recorded that this exact (config, spec)
+// revision ran. The reconciler must NOT recreate (and thus not re-execute)
+// the Job purely because the object disappeared.
+func TestReconcilePostRestartJob_SkipsRecreateAfterTTLGC(t *testing.T) {
+	gw := makeGWWithJob("echo ok")
+	dep := makeConvergedDeployment(gw, "abc123")
+	jobChecksum, err := resources.PostRestartJobChecksum(gw.Spec.PostRestartJob, "abc123")
+	if err != nil {
+		t.Fatalf("computing job checksum: %v", err)
+	}
+	// Simulate: the Job already ran and was TTL-GC'd (no Job object exists),
+	// but status still records the checksum from the prior run.
+	gw.Status.LastPostRestartJobChecksum = jobChecksum
+	c := fakeClientBuilder().WithObjects(gw, dep).Build()
+	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
+
+	if err := r.reconcilePostRestartJob(context.Background(), gw, "abc123"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var jobs batchv1.JobList
+	if err := c.List(context.Background(), &jobs, client.InNamespace("ns")); err != nil {
+		t.Fatalf("listing jobs: %v", err)
+	}
+	if len(jobs.Items) != 0 {
+		t.Fatalf("expected no Job recreated after TTL GC for an already-run revision, got %d", len(jobs.Items))
 	}
 }
 

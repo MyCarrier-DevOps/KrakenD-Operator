@@ -808,9 +808,18 @@ func (r *KrakenDGatewayReconciler) reconcileOwnedResources(
 
 // reconcilePostRestartJob creates a Job to run the user-provided bash script
 // after the gateway rolls out the current config revision. The Job is named
-// with a short prefix of the config checksum so each revision produces at
-// most one Job. The Job is only created after the Deployment has converged
-// on the current config checksum.
+// with a short prefix of the combined checksum (see
+// resources.PostRestartJobChecksum) so each (config, postRestartJob spec)
+// revision pair produces at most one Job — including a spec-only edit, not
+// just a krakend.json change (nhig root cause 2). The Job is only created
+// after the Deployment has converged on the current config checksum.
+//
+// gw.Status.LastPostRestartJobChecksum is checked before touching the API
+// server: it guards against TTLSecondsAfterFinished's cleanup GC'ing a
+// finished Job and the next reconcile silently recreating (and
+// re-executing) it purely because the object disappeared, not because the
+// config or spec changed (nhig root cause 1 — the field was previously
+// written but never read).
 func (r *KrakenDGatewayReconciler) reconcilePostRestartJob(
 	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
@@ -828,6 +837,19 @@ func (r *KrakenDGatewayReconciler) reconcilePostRestartJob(
 	}
 
 	log := logf.FromContext(ctx)
+
+	jobChecksum, err := resources.PostRestartJobChecksum(spec, configChecksum)
+	if err != nil {
+		return fmt.Errorf("computing post-restart job checksum: %w", err)
+	}
+
+	// Already ran (or was recorded as triggered) for this exact revision —
+	// skip even if the Job object itself was since GC'd by
+	// TTLSecondsAfterFinished. TTL only controls object cleanup hygiene, not
+	// re-execution.
+	if gw.Status.LastPostRestartJobChecksum == jobChecksum {
+		return nil
+	}
 
 	var dep appsv1.Deployment
 	key := types.NamespacedName{Name: gw.Name, Namespace: gw.Namespace}
@@ -855,13 +877,13 @@ func (r *KrakenDGatewayReconciler) reconcilePostRestartJob(
 		return nil
 	}
 
-	jobName := resources.PostRestartJobName(gw, configChecksum)
+	jobName := resources.PostRestartJobName(gw, jobChecksum)
 	existing := &batchv1.Job{}
-	err := r.Get(ctx, types.NamespacedName{Name: jobName, Namespace: gw.Namespace}, existing)
+	err = r.Get(ctx, types.NamespacedName{Name: jobName, Namespace: gw.Namespace}, existing)
 	if err == nil {
 		// Job already exists — ensure the status records the checksum even
 		// if a previous status update was lost (e.g. conflict).
-		gw.Status.LastPostRestartJobChecksum = configChecksum
+		gw.Status.LastPostRestartJobChecksum = jobChecksum
 		return nil
 	}
 	if !errors.IsNotFound(err) {
@@ -872,7 +894,7 @@ func (r *KrakenDGatewayReconciler) reconcilePostRestartJob(
 		Name:      jobName,
 		Namespace: gw.Namespace,
 	}}
-	resources.BuildPostRestartJob(job, gw, configChecksum)
+	resources.BuildPostRestartJob(job, gw, jobChecksum)
 	if err := controllerutil.SetControllerReference(gw, job, r.Scheme); err != nil {
 		return fmt.Errorf("setting owner reference on post-restart job: %w", err)
 	}
@@ -883,10 +905,10 @@ func (r *KrakenDGatewayReconciler) reconcilePostRestartJob(
 		return fmt.Errorf("creating post-restart job: %w", err)
 	}
 
-	gw.Status.LastPostRestartJobChecksum = configChecksum
+	gw.Status.LastPostRestartJobChecksum = jobChecksum
 	r.Recorder.Event(gw, "Normal", "PostRestartJobCreated",
 		fmt.Sprintf("Created post-restart Job %s for config checksum %s", jobName, configChecksum))
-	log.Info("created post-restart job", "name", jobName, "checksum", configChecksum)
+	log.Info("created post-restart job", "name", jobName, "checksum", jobChecksum)
 	return nil
 }
 

@@ -204,6 +204,224 @@ func TestBuildPostRestartJob_CustomSecurityContext(t *testing.T) {
 	}
 }
 
+// TestBuildPostRestartJob_SecurityContextMergesNotReplaces covers 8qln: a
+// user overriding only runAsUser (e.g. prod's uid0 for `npm install -g`)
+// must NOT discard the hardened defaults for fields they did not set.
+func TestBuildPostRestartJob_SecurityContextMergesNotReplaces(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "ns"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			PostRestartJob: &v1alpha1.PostRestartJobSpec{
+				Enabled: true,
+				Script:  "npm install -g rdme",
+				SecurityContext: &corev1.SecurityContext{
+					RunAsUser: ptr.To(int64(0)),
+				},
+				PodSecurityContext: &corev1.PodSecurityContext{
+					RunAsNonRoot: ptr.To(false),
+					RunAsUser:    ptr.To(int64(0)),
+				},
+			},
+		},
+	}
+	job := &batchv1.Job{}
+	BuildPostRestartJob(job, gw, "cs")
+
+	csc := job.Spec.Template.Spec.Containers[0].SecurityContext
+	if csc.RunAsUser == nil || *csc.RunAsUser != 0 {
+		t.Fatalf("user-set runAsUser:0 not applied: %+v", csc)
+	}
+	if csc.Capabilities == nil || len(csc.Capabilities.Drop) != 1 || csc.Capabilities.Drop[0] != "ALL" {
+		t.Fatalf("hardened drop:ALL discarded by partial user override: %+v", csc)
+	}
+	if csc.ReadOnlyRootFilesystem == nil || !*csc.ReadOnlyRootFilesystem {
+		t.Fatalf("hardened readOnlyRootFilesystem discarded by partial user override: %+v", csc)
+	}
+	if csc.AllowPrivilegeEscalation == nil || *csc.AllowPrivilegeEscalation {
+		t.Fatalf("hardened allowPrivilegeEscalation:false discarded by partial user override: %+v", csc)
+	}
+
+	psc := job.Spec.Template.Spec.SecurityContext
+	if psc.RunAsUser == nil || *psc.RunAsUser != 0 {
+		t.Fatalf("user-set pod runAsUser:0 not applied: %+v", psc)
+	}
+	if psc.RunAsNonRoot == nil || *psc.RunAsNonRoot {
+		t.Fatalf("user-set pod runAsNonRoot:false not applied: %+v", psc)
+	}
+	if psc.SeccompProfile == nil || psc.SeccompProfile.Type != corev1.SeccompProfileTypeRuntimeDefault {
+		t.Fatalf("hardened seccompProfile discarded by partial user override: %+v", psc)
+	}
+	if psc.RunAsGroup == nil || *psc.RunAsGroup != 1000 {
+		t.Fatalf("hardened runAsGroup:1000 discarded by partial user override: %+v", psc)
+	}
+}
+
+// TestBuildPostRestartJob_SecurityContextNilUsesHardenedDefaults covers the
+// nil-spec path for both container and pod securityContext (no user
+// override at all): must equal the same hardened defaults as before.
+func TestBuildPostRestartJob_SecurityContextNilUsesHardenedDefaults(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "ns"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			PostRestartJob: &v1alpha1.PostRestartJobSpec{
+				Enabled: true,
+				Script:  "echo ok",
+			},
+		},
+	}
+	job := &batchv1.Job{}
+	BuildPostRestartJob(job, gw, "cs")
+
+	csc := job.Spec.Template.Spec.Containers[0].SecurityContext
+	if csc.AllowPrivilegeEscalation == nil || *csc.AllowPrivilegeEscalation {
+		t.Fatalf("expected default allowPrivilegeEscalation:false, got %+v", csc)
+	}
+	psc := job.Spec.Template.Spec.SecurityContext
+	if psc.RunAsUser == nil || *psc.RunAsUser != 1000 {
+		t.Fatalf("expected default pod runAsUser:1000, got %+v", psc)
+	}
+	if psc.RunAsNonRoot == nil || !*psc.RunAsNonRoot {
+		t.Fatalf("expected default pod runAsNonRoot:true, got %+v", psc)
+	}
+}
+
+// TestBuildPostRestartJob_HardenedContainerDefaults covers ifc4: the
+// container must default to readOnlyRootFilesystem + drop:ALL, with a /tmp
+// emptyDir (bounded sizeLimit) mounted so WorkingDir stays writable.
+func TestBuildPostRestartJob_HardenedContainerDefaults(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "ns"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			PostRestartJob: &v1alpha1.PostRestartJobSpec{
+				Enabled: true,
+				Script:  "curl -o openapi.json http://example/openapi.json",
+			},
+		},
+	}
+	job := &batchv1.Job{}
+	BuildPostRestartJob(job, gw, "cs")
+
+	c := job.Spec.Template.Spec.Containers[0]
+	if c.SecurityContext.ReadOnlyRootFilesystem == nil || !*c.SecurityContext.ReadOnlyRootFilesystem {
+		t.Fatalf("expected readOnlyRootFilesystem:true by default, got %+v", c.SecurityContext)
+	}
+	if c.SecurityContext.Capabilities == nil || len(c.SecurityContext.Capabilities.Drop) != 1 ||
+		c.SecurityContext.Capabilities.Drop[0] != "ALL" {
+		t.Fatalf("expected capabilities.drop:[ALL] by default, got %+v", c.SecurityContext.Capabilities)
+	}
+
+	var tmpMount *corev1.VolumeMount
+	for i := range c.VolumeMounts {
+		if c.VolumeMounts[i].Name == "tmp" {
+			tmpMount = &c.VolumeMounts[i]
+		}
+	}
+	if tmpMount == nil {
+		t.Fatalf("expected a tmp volume mount, got %+v", c.VolumeMounts)
+	}
+	if tmpMount.MountPath != "/tmp" {
+		t.Fatalf("expected tmp mount path /tmp, got %q", tmpMount.MountPath)
+	}
+
+	var tmpVol *corev1.Volume
+	for i := range job.Spec.Template.Spec.Volumes {
+		if job.Spec.Template.Spec.Volumes[i].Name == "tmp" {
+			tmpVol = &job.Spec.Template.Spec.Volumes[i]
+		}
+	}
+	if tmpVol == nil {
+		t.Fatalf("expected a tmp emptyDir volume, got %+v", job.Spec.Template.Spec.Volumes)
+	}
+	if tmpVol.EmptyDir == nil {
+		t.Fatalf("expected tmp volume to be an emptyDir, got %+v", tmpVol)
+	}
+	if tmpVol.EmptyDir.SizeLimit == nil || tmpVol.EmptyDir.SizeLimit.IsZero() {
+		t.Fatalf("expected tmp emptyDir to have a non-zero sizeLimit, got %+v", tmpVol.EmptyDir.SizeLimit)
+	}
+}
+
+// TestBuildPostRestartJob_WorkingDirDefault covers aul3: unset workingDir
+// keeps the previous forced "/tmp" behavior (backward compatible).
+func TestBuildPostRestartJob_WorkingDirDefault(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "ns"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			PostRestartJob: &v1alpha1.PostRestartJobSpec{
+				Enabled: true,
+				Script:  "echo ok",
+			},
+		},
+	}
+	job := &batchv1.Job{}
+	BuildPostRestartJob(job, gw, "cs")
+
+	if got := job.Spec.Template.Spec.Containers[0].WorkingDir; got != "/tmp" {
+		t.Fatalf("expected default workingDir /tmp, got %q", got)
+	}
+}
+
+// TestBuildPostRestartJob_WorkingDirOverride covers aul3: an explicit
+// workingDir override is honored instead of the forced "/tmp" default.
+func TestBuildPostRestartJob_WorkingDirOverride(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "ns"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			PostRestartJob: &v1alpha1.PostRestartJobSpec{
+				Enabled:    true,
+				Script:     "echo ok",
+				WorkingDir: "/custom-dir",
+			},
+		},
+	}
+	job := &batchv1.Job{}
+	BuildPostRestartJob(job, gw, "cs")
+
+	if got := job.Spec.Template.Spec.Containers[0].WorkingDir; got != "/custom-dir" {
+		t.Fatalf("expected overridden workingDir /custom-dir, got %q", got)
+	}
+}
+
+// TestPostRestartJobChecksum_ChangesWithSpec covers nhig root cause 2: the
+// Job identity checksum must change when the postRestartJob spec changes,
+// even when the rendered krakend.json configChecksum stays the same —
+// previously spec-only edits (script, securityContext, workingDir) were
+// invisible to Job naming/re-trigger logic.
+func TestPostRestartJobChecksum_ChangesWithSpec(t *testing.T) {
+	base := &v1alpha1.PostRestartJobSpec{Enabled: true, Script: "echo v1"}
+	edited := &v1alpha1.PostRestartJobSpec{Enabled: true, Script: "echo v2"}
+
+	baseSum, err := PostRestartJobChecksum(base, "same-config-checksum")
+	if err != nil {
+		t.Fatalf("computing base checksum: %v", err)
+	}
+	editedSum, err := PostRestartJobChecksum(edited, "same-config-checksum")
+	if err != nil {
+		t.Fatalf("computing edited checksum: %v", err)
+	}
+	if baseSum == editedSum {
+		t.Fatalf("expected checksum to change when postRestartJob spec changes, got %q for both", baseSum)
+	}
+
+	// Sanity: an unrelated config checksum change must also still change
+	// the combined checksum (existing behavior preserved).
+	configChangedSum, err := PostRestartJobChecksum(base, "different-config-checksum")
+	if err != nil {
+		t.Fatalf("computing config-changed checksum: %v", err)
+	}
+	if baseSum == configChangedSum {
+		t.Fatalf("expected checksum to change when configChecksum changes, got %q for both", baseSum)
+	}
+
+	// Determinism: same inputs must produce the same checksum.
+	baseSumAgain, err := PostRestartJobChecksum(base, "same-config-checksum")
+	if err != nil {
+		t.Fatalf("computing base checksum again: %v", err)
+	}
+	if baseSum != baseSumAgain {
+		t.Fatalf("expected deterministic checksum, got %q then %q", baseSum, baseSumAgain)
+	}
+}
+
 func TestBuildService_WithOpenAPIPort(t *testing.T) {
 	gw := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "ns"},

@@ -158,6 +158,15 @@ type PostRestartJobSpec struct {
 	// include a shell compatible with Command. Defaults to "bash:5.2".
 	Image string `json:"image,omitempty"`
 
+	// WorkingDir overrides the container's working directory. Defaults to
+	// "/tmp" when unset, which is backed by a writable emptyDir volume (see
+	// internal/resources/job.go) so scripts can write there even under
+	// readOnlyRootFilesystem. If you override this to a path outside the
+	// /tmp emptyDir, ensure your image provides a writable directory at
+	// that path (e.g. it is not root-owned under a non-root runAsUser).
+	// +optional
+	WorkingDir string `json:"workingDir,omitempty"`
+
 	// Env injects environment variables into the Job container.
 	Env []corev1.EnvVar `json:"env,omitempty"`
 

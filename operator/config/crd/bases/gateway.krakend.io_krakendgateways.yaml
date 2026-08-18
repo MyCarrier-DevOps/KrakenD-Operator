@@ -2226,6 +2226,15 @@ spec:
                       completion. Defaults to 86400 (24h).
                     format: int32
                     type: integer
+                  workingDir:
+                    description: |-
+                      WorkingDir overrides the container's working directory. Defaults to
+                      "/tmp" when unset, which is backed by a writable emptyDir volume (see
+                      internal/resources/job.go) so scripts can write there even under
+                      readOnlyRootFilesystem. If you override this to a path outside the
+                      /tmp emptyDir, ensure your image provides a writable directory at
+                      that path (e.g. it is not root-owned under a non-root runAsUser).
+                    type: string
                 required:
                 - enabled
                 type: object
