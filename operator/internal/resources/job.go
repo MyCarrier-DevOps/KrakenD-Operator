@@ -38,6 +38,13 @@ const (
 	defaultPostRestartBackoffLimit            = int32(2)
 	defaultPostRestartActiveDeadlineSeconds   = int64(600)
 	defaultPostRestartTTLSecondsAfterFinished = int32(86400)
+
+	// postRestartWorkingDir is forced (not a guarded default): pods run as
+	// runAsUser 1000, so the root-owned image root "/" needs a writable CWD
+	// for relative-path writes. "/home/node" was rejected since bash:5.2
+	// lacks it (would be created root-owned); /tmp is NOT writable under
+	// readOnlyRootFilesystem without a volume (follow-up).
+	postRestartWorkingDir = "/tmp"
 )
 
 // PostRestartJobName returns a deterministic Job name that embeds a short
@@ -128,6 +135,7 @@ func BuildPostRestartJob(
 		Env:             spec.Env,
 		EnvFrom:         spec.EnvFrom,
 		SecurityContext: secCtx,
+		WorkingDir:      postRestartWorkingDir,
 	}
 	if spec.Resources != nil {
 		container.Resources = *spec.Resources
