@@ -25,7 +25,6 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/utils/ptr"
 )
 
 func TestPostRestartJobName_StableAndShort(t *testing.T) {
@@ -119,9 +118,9 @@ func TestBuildPostRestartJob_CustomFields(t *testing.T) {
 				ServiceAccountName:      "custom-sa",
 				Env:                     []corev1.EnvVar{{Name: "FOO", Value: "bar"}},
 				PodAnnotations:          map[string]string{"team": "payments"},
-				BackoffLimit:            ptr.To(int32(5)),
-				ActiveDeadlineSeconds:   ptr.To(int64(120)),
-				TTLSecondsAfterFinished: ptr.To(int32(60)),
+				BackoffLimit:            new(int32(5)),
+				ActiveDeadlineSeconds:   new(int64(120)),
+				TTLSecondsAfterFinished: new(int32(60)),
 			},
 		},
 	}
@@ -179,11 +178,11 @@ func TestBuildPostRestartJob_CustomSecurityContext(t *testing.T) {
 				Enabled: true,
 				Script:  "npm install -g rdme",
 				SecurityContext: &corev1.SecurityContext{
-					RunAsUser: ptr.To(int64(0)),
+					RunAsUser: new(int64(0)),
 				},
 				PodSecurityContext: &corev1.PodSecurityContext{
-					RunAsNonRoot: ptr.To(false),
-					RunAsUser:    ptr.To(int64(0)),
+					RunAsNonRoot: new(false),
+					RunAsUser:    new(int64(0)),
 				},
 			},
 		},
@@ -215,11 +214,11 @@ func TestBuildPostRestartJob_SecurityContextMergesNotReplaces(t *testing.T) {
 				Enabled: true,
 				Script:  "npm install -g rdme",
 				SecurityContext: &corev1.SecurityContext{
-					RunAsUser: ptr.To(int64(0)),
+					RunAsUser: new(int64(0)),
 				},
 				PodSecurityContext: &corev1.PodSecurityContext{
-					RunAsNonRoot: ptr.To(false),
-					RunAsUser:    ptr.To(int64(0)),
+					RunAsNonRoot: new(false),
+					RunAsUser:    new(int64(0)),
 				},
 			},
 		},

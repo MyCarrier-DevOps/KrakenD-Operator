@@ -19,6 +19,7 @@ package resources
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/util/hash"
@@ -26,7 +27,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/utils/ptr"
 )
 
 const (
@@ -149,9 +149,7 @@ func BuildPostRestartJob(
 	}
 
 	podAnnotations := make(map[string]string, len(spec.PodAnnotations)+1)
-	for k, v := range spec.PodAnnotations {
-		podAnnotations[k] = v
-	}
+	maps.Copy(podAnnotations, spec.PodAnnotations)
 	// Set the reserved checksum annotation last so user-provided
 	// annotations cannot overwrite it.
 	podAnnotations[PostRestartJobChecksumAnnotation] = configChecksum
@@ -228,12 +226,8 @@ func podLabels(base map[string]string, spec *v1alpha1.PostRestartJobSpec) map[st
 		return base
 	}
 	merged := make(map[string]string, len(base)+len(spec.PodLabels))
-	for k, v := range base {
-		merged[k] = v
-	}
-	for k, v := range spec.PodLabels {
-		merged[k] = v
-	}
+	maps.Copy(merged, base)
+	maps.Copy(merged, spec.PodLabels)
 	return merged
 }
 
@@ -244,8 +238,8 @@ func podLabels(base map[string]string, spec *v1alpha1.PostRestartJobSpec) map[st
 // privilege escalation.
 func defaultPostRestartContainerSecurityContext() *corev1.SecurityContext {
 	return &corev1.SecurityContext{
-		AllowPrivilegeEscalation: ptr.To(false),
-		ReadOnlyRootFilesystem:   ptr.To(true),
+		AllowPrivilegeEscalation: new(false),
+		ReadOnlyRootFilesystem:   new(true),
 		Capabilities: &corev1.Capabilities{
 			Drop: []corev1.Capability{"ALL"},
 		},
@@ -307,9 +301,9 @@ func mergeContainerSecurityContext(user *corev1.SecurityContext) *corev1.Securit
 // securityContext defaults applied when the user leaves a field unset.
 func defaultPostRestartPodSecurityContext() *corev1.PodSecurityContext {
 	return &corev1.PodSecurityContext{
-		RunAsNonRoot: ptr.To(true),
-		RunAsUser:    ptr.To(int64(1000)),
-		RunAsGroup:   ptr.To(int64(1000)),
+		RunAsNonRoot: new(true),
+		RunAsUser:    new(int64(1000)),
+		RunAsGroup:   new(int64(1000)),
 		SeccompProfile: &corev1.SeccompProfile{
 			Type: corev1.SeccompProfileTypeRuntimeDefault,
 		},
