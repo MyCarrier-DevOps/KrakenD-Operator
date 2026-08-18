@@ -1,0 +1,14 @@
+================================================================================
+KrakenD Community Edition (/usr/local/bin/krakend)
+================================================================================
+
+The container image redistributes the KrakenD Community Edition binary,
+extracted from the upstream KrakenD image (https://hub.docker.com/_/krakend).
+KrakenD CE is built on the Lura Project framework.
+
+Source: https://github.com/krakend/krakend-ce
+
+Licensed under the Apache License, Version 2.0. A copy of the license is
+distributed alongside this file as LICENSE, and is also available at
+
+    http://www.apache.org/licenses/LICENSE-2.0
