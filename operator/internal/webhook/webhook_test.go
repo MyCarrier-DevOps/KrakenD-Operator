@@ -7,6 +7,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -355,6 +356,117 @@ func TestGatewayValidator_WorkingDirUnderTmpNoWarning(t *testing.T) {
 	}
 	if len(warnings) != 0 {
 		t.Fatalf("expected no warning for a /tmp subdirectory, got: %v", warnings)
+	}
+}
+
+// TestGatewayValidator_ContainerRunAsUserZeroRejected covers review id
+// 3805157408 (#1, ADMISSION REJECT — USER-CHOSEN fork): a container-level
+// securityContext.runAsUser: 0 with no explicit runAsNonRoot escape hatch
+// (at either container or pod scope) must be rejected outright, since the
+// resulting {runAsUser:0, runAsNonRoot:true} pair hangs the Job pod
+// Pending until activeDeadlineSeconds expires instead of failing fast.
+func TestGatewayValidator_ContainerRunAsUserZeroRejected(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Config: v1alpha1.GatewayConfig{},
+			PostRestartJob: &v1alpha1.PostRestartJobSpec{
+				Enabled: true,
+				Script:  "npm install -g rdme",
+				SecurityContext: &corev1.SecurityContext{
+					RunAsUser: new(int64(0)),
+				},
+			},
+		},
+	}
+	v := &GatewayValidator{}
+	_, err := v.ValidateCreate(context.Background(), gw)
+	if err == nil {
+		t.Fatal("expected rejection for container runAsUser:0 with no runAsNonRoot escape hatch")
+	}
+	if !strings.Contains(err.Error(), "runAsNonRoot") {
+		t.Errorf("expected error to mention runAsNonRoot, got: %v", err)
+	}
+}
+
+// TestGatewayValidator_ContainerRunAsUserZeroWithPodRunAsNonRootFalseAllowed
+// verifies the escape hatch: setting podSecurityContext.runAsNonRoot: false
+// alongside the container's runAsUser: 0 is accepted.
+func TestGatewayValidator_ContainerRunAsUserZeroWithPodRunAsNonRootFalseAllowed(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Config: v1alpha1.GatewayConfig{},
+			PostRestartJob: &v1alpha1.PostRestartJobSpec{
+				Enabled: true,
+				Script:  "npm install -g rdme",
+				SecurityContext: &corev1.SecurityContext{
+					RunAsUser: new(int64(0)),
+				},
+				PodSecurityContext: &corev1.PodSecurityContext{
+					RunAsNonRoot: new(false),
+				},
+			},
+		},
+	}
+	v := &GatewayValidator{}
+	_, err := v.ValidateCreate(context.Background(), gw)
+	if err != nil {
+		t.Fatalf("expected no error when podSecurityContext.runAsNonRoot:false is set, got: %v", err)
+	}
+}
+
+// TestGatewayValidator_ContainerRunAsUserZeroWithContainerRunAsNonRootFalseAllowed
+// verifies the other escape hatch: an explicit container-level
+// runAsNonRoot: false alongside runAsUser: 0 is accepted.
+func TestGatewayValidator_ContainerRunAsUserZeroWithContainerRunAsNonRootFalseAllowed(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Config: v1alpha1.GatewayConfig{},
+			PostRestartJob: &v1alpha1.PostRestartJobSpec{
+				Enabled: true,
+				Script:  "npm install -g rdme",
+				SecurityContext: &corev1.SecurityContext{
+					RunAsUser:    new(int64(0)),
+					RunAsNonRoot: new(false),
+				},
+			},
+		},
+	}
+	v := &GatewayValidator{}
+	_, err := v.ValidateCreate(context.Background(), gw)
+	if err != nil {
+		t.Fatalf("expected no error when container securityContext.runAsNonRoot:false is set, got: %v", err)
+	}
+}
+
+// TestGatewayValidator_NegativeTmpSizeLimitRejected covers review id
+// 3805157457 (#5): a negative tmpSizeLimit must be rejected.
+func TestGatewayValidator_NegativeTmpSizeLimitRejected(t *testing.T) {
+	qty := resource.MustParse("-1Gi")
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Config: v1alpha1.GatewayConfig{},
+			PostRestartJob: &v1alpha1.PostRestartJobSpec{
+				Enabled:      true,
+				Script:       "echo ok",
+				TmpSizeLimit: &qty,
+			},
+		},
+	}
+	v := &GatewayValidator{}
+	_, err := v.ValidateCreate(context.Background(), gw)
+	if err == nil {
+		t.Fatal("expected rejection for negative tmpSizeLimit")
+	}
+	if !strings.Contains(err.Error(), "tmpSizeLimit") {
+		t.Errorf("expected error to mention tmpSizeLimit, got: %v", err)
 	}
 }
 

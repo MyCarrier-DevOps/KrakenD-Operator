@@ -25,6 +25,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -341,8 +342,40 @@ func TestBuildPostRestartJob_HardenedContainerDefaults(t *testing.T) {
 	if tmpVol.EmptyDir == nil {
 		t.Fatalf("expected tmp volume to be an emptyDir, got %+v", tmpVol)
 	}
-	if tmpVol.EmptyDir.SizeLimit == nil || tmpVol.EmptyDir.SizeLimit.IsZero() {
-		t.Fatalf("expected tmp emptyDir to have a non-zero sizeLimit, got %+v", tmpVol.EmptyDir.SizeLimit)
+	if tmpVol.EmptyDir.SizeLimit == nil || tmpVol.EmptyDir.SizeLimit.String() != "256Mi" {
+		t.Fatalf("expected tmp emptyDir default sizeLimit 256Mi, got %+v", tmpVol.EmptyDir.SizeLimit)
+	}
+}
+
+// TestBuildPostRestartJob_TmpSizeLimitOverride covers review id 3805157467
+// (#6): spec.postRestartJob.tmpSizeLimit must override the hardcoded 256Mi
+// default on the built /tmp emptyDir volume.
+func TestBuildPostRestartJob_TmpSizeLimitOverride(t *testing.T) {
+	qty := resource.MustParse("2Gi")
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "ns"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			PostRestartJob: &v1alpha1.PostRestartJobSpec{
+				Enabled:      true,
+				Script:       "echo ok",
+				TmpSizeLimit: &qty,
+			},
+		},
+	}
+	job := &batchv1.Job{}
+	BuildPostRestartJob(job, gw, "cs", "job-cs")
+
+	var tmpVol *corev1.Volume
+	for i := range job.Spec.Template.Spec.Volumes {
+		if job.Spec.Template.Spec.Volumes[i].Name == "tmp" {
+			tmpVol = &job.Spec.Template.Spec.Volumes[i]
+		}
+	}
+	if tmpVol == nil || tmpVol.EmptyDir == nil {
+		t.Fatalf("expected a tmp emptyDir volume, got %+v", job.Spec.Template.Spec.Volumes)
+	}
+	if tmpVol.EmptyDir.SizeLimit == nil || tmpVol.EmptyDir.SizeLimit.String() != "2Gi" {
+		t.Fatalf("expected overridden tmp emptyDir sizeLimit 2Gi, got %+v", tmpVol.EmptyDir.SizeLimit)
 	}
 }
 

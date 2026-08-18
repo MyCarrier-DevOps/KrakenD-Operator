@@ -66,9 +66,13 @@ const (
 	// readOnlyRootFilesystem. Overridable via spec.postRestartJob.workingDir.
 	postRestartWorkingDir = "/tmp"
 
-	// postRestartTmpVolumeName is the emptyDir volume backing /tmp so the
-	// container can write there under readOnlyRootFilesystem: true.
-	postRestartTmpVolumeName = "tmp"
+	// PostRestartTmpVolumeName is the emptyDir volume backing /tmp so the
+	// container can write there under readOnlyRootFilesystem: true. Exported
+	// so the controller can locate this volume on a built or existing Job
+	// (e.g. to compare tmpSizeLimit between a desired and an existing failed
+	// Job — see krakendgateway_controller.go's failure-signal re-create
+	// gate).
+	PostRestartTmpVolumeName = "tmp"
 
 	// PostRestartTmpMountPath is the mount path of the /tmp emptyDir volume
 	// backing the post-restart Job's default working directory. Exported
@@ -108,14 +112,27 @@ func PostRestartJobName(gw *v1alpha1.KrakenDGateway, checksum string) string {
 
 // postRestartJobProjection is the execution-relevant subset of
 // PostRestartJobSpec hashed by PostRestartJobChecksum. Deliberately NOT the
-// full API type: purely operational/cosmetic fields (PodLabels,
-// PodAnnotations, BackoffLimit, ActiveDeadlineSeconds,
-// TTLSecondsAfterFinished) do not change what the script does when it runs,
-// so editing them must not re-trigger the Job. Encoded via json.Marshal into
-// a dedicated, versioned struct (not the live API type) so a cosmetic field
-// reorder, json-tag rename, or new operational knob on PostRestartJobSpec
-// cannot silently change the projection's hash — only a deliberate edit to
-// this struct can.
+// full API type: purely cosmetic fields (PodLabels, PodAnnotations,
+// TTLSecondsAfterFinished) never change what the script does when it runs,
+// so editing them must not re-trigger the Job (a new checksum/name).
+//
+// BackoffLimit, ActiveDeadlineSeconds, and TmpSizeLimit are ALSO excluded
+// here — but NOT because they're cosmetic like the fields above. Correction
+// (review id 3805157426, #2): these three DO affect whether the script can
+// actually complete (a too-short ActiveDeadlineSeconds, too-low
+// BackoffLimit, or too-small TmpSizeLimit all produce a failure
+// indistinguishable from a genuine script bug). They're excluded from the
+// checksum/name so a knob-only edit never mints a brand-new Job under a new
+// name for a Job that already SUCCEEDED (that would be the over-trigger
+// this projection design supersedes a naive whole-spec hash to avoid) —
+// but the controller's failure-signal gate (see
+// krakendgateway_controller.go reconcileExistingPostRestartRevision)
+// separately re-creates the SAME-named Job in place when one of these three
+// knobs changes on a Job that FAILED, precisely because they can be the fix
+// for that failure. Encoded via json.Marshal into a dedicated, versioned
+// struct (not the live API type) so a cosmetic field reorder, json-tag
+// rename, or new operational knob on PostRestartJobSpec cannot silently
+// change the projection's hash — only a deliberate edit to this struct can.
 type postRestartJobProjection struct {
 	Script             string                       `json:"script"`
 	Command            []string                     `json:"command"`
@@ -135,10 +152,13 @@ type postRestartJobProjection struct {
 // (see PostRestartJobName) changes whenever EITHER the gateway config OR a
 // field of the postRestartJob spec that actually affects script execution
 // (script, command, image, workingDir, env, both securityContexts,
-// serviceAccountName, resources) changes. Purely operational/cosmetic
-// fields (ttlSecondsAfterFinished, podAnnotations, podLabels,
-// backoffLimit, activeDeadlineSeconds) are excluded on purpose: editing
-// them must not re-run the script.
+// serviceAccountName, resources) changes. Cosmetic fields
+// (ttlSecondsAfterFinished, podAnnotations, podLabels) are excluded on
+// purpose: editing them must never re-run the script. backoffLimit,
+// activeDeadlineSeconds, and tmpSizeLimit are also excluded from this
+// checksum (see postRestartJobProjection) despite being able to affect
+// script completion — the controller's separate failure-signal gate, not
+// this checksum, is what makes an edit to one of them retry a FAILED Job.
 //
 // Before this, the Job name/trigger was keyed on configChecksum alone: a
 // spec-only edit (e.g. a script fix) was invisible to the reconciler until
@@ -251,7 +271,7 @@ func BuildPostRestartJob(
 		WorkingDir:      workingDir,
 		VolumeMounts: []corev1.VolumeMount{
 			{
-				Name:      postRestartTmpVolumeName,
+				Name:      PostRestartTmpVolumeName,
 				MountPath: postRestartWorkingDir,
 			},
 		},
@@ -276,7 +296,7 @@ func BuildPostRestartJob(
 				Containers:         []corev1.Container{container},
 				Volumes: []corev1.Volume{
 					{
-						Name: postRestartTmpVolumeName,
+						Name: PostRestartTmpVolumeName,
 						VolumeSource: corev1.VolumeSource{
 							EmptyDir: &corev1.EmptyDirVolumeSource{
 								SizeLimit: tmpSizeLimit,
@@ -344,7 +364,22 @@ func defaultPostRestartContainerSecurityContext() *corev1.SecurityContext {
 // `capabilities.add` leaves the base's `capabilities.drop` intact, since
 // strategic-merge-patch recurses into nested objects and only replaces the
 // sub-fields actually present in the patch.
-func strategicMergeSecurityContext[T any](base T, user *T) T {
+//
+// Known limitation — unset vs. empty on plain (non-patchMergeKey) list
+// fields: because `user` is marshaled with `omitempty`, an unset list field
+// and a deliberately-emptied list field (e.g.
+// `capabilities: {drop: []}` to explicitly clear a default) are
+// indistinguishable on the wire — both come out as "absent from the patch",
+// so base's value always wins. This is currently safe only because
+// Capabilities.Drop is the sole list field defaultPostRestartContainer
+// SecurityContext/defaultPostRestartPodSecurityContext populate by default;
+// a user cannot clear it via an empty override, but nothing today needs to.
+// If a future hardened default populates another list field (e.g.
+// Capabilities.Add, PodSecurityContext.Sysctls, or
+// PodSecurityContext.SupplementalGroups), this limitation would invert:
+// there would be no way for a caller to explicitly override that default
+// back to empty, since {field: []} and an absent field are the same patch.
+func strategicMergeSecurityContext[T corev1.SecurityContext | corev1.PodSecurityContext](base T, user *T) T {
 	if user == nil {
 		return base
 	}

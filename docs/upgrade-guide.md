@@ -148,10 +148,21 @@ cluster with `postRestartJob.enabled: true`.
    config changes.** The Job's identity checksum now includes a projection
    of the execution-relevant `postRestartJob` spec fields (script, command,
    image, workingDir, env, both securityContexts, serviceAccountName,
-   resources — NOT operational/cosmetic knobs like `ttlSecondsAfterFinished`
-   or `podAnnotations`, which do not re-trigger the Job), so editing the
-   script (for example) now creates a new Job immediately instead of waiting
-   for the next unrelated `krakend.json` change.
+   resources), so editing the script (for example) now creates a new Job
+   immediately instead of waiting for the next unrelated `krakend.json`
+   change. `ttlSecondsAfterFinished` and `podAnnotations`/`podLabels` are
+   excluded from the checksum because they are purely operational/cosmetic —
+   they never affect whether the script itself completes. `activeDeadline
+   Seconds`, `backoffLimit`, and `tmpSizeLimit` are ALSO excluded from the
+   checksum (editing them alone never creates a new Job under a new name),
+   but — unlike the truly-cosmetic fields — they DO affect whether the
+   script can complete: a too-short `activeDeadlineSeconds`, too-low
+   `backoffLimit`, or too-small `tmpSizeLimit` all produce a failure
+   indistinguishable from a genuine script bug. To keep that fixable without
+   reintroducing the pre-PR over-trigger, the reconciler's failure-signal
+   gate (item 4 below) re-runs the CURRENT Job in place — same checksum,
+   same name — when one of those three knobs changes on a Job that FAILED;
+   it never does so for a Job that SUCCEEDED.
 
    **Upgrade-time side effect:** the checksum *basis* changed, so the value
    already stored in `status.lastPostRestartJobChecksum` (a bare config
@@ -177,15 +188,25 @@ cluster with `postRestartJob.enabled: true`.
 
    Two remediation paths people may be used to no longer work the same way:
    - **`kubectl delete job <name>` is now a no-op.** The delete re-enqueues a
-     reconcile, but the guard returns before creating a new Job — no Job, no
-     Event, just a `PostRestartJobSkipped` status Condition explaining why
-     (`kubectl describe krakendgateway <name>`).
+     reconcile, but once the Job object is gone the reconciler can no longer
+     observe whether the deleted Job succeeded or failed, so it always skips
+     — no Job, no Event, just a `PostRestartJobSkipped` status Condition
+     explaining why (`kubectl describe krakendgateway <name>`).
    - **A Job that exhausts `backoffLimit` due to a transient external
      failure (npm registry outage, DNS blip, ...) will not retry on its
-     own.** Pre-PR this self-healed within ~24h via TTL GC + recreate;
-     post-PR it does not, since the guard doesn't distinguish "ran and
-     failed" from "ran and succeeded" (deliberately — gating the status
-     write on success would reintroduce the TTL re-run bug).
+     own** just from the passage of time. Pre-PR this self-healed within
+     ~24h via TTL GC + recreate; post-PR the reconciler DOES distinguish
+     "ran and failed" from "ran and succeeded" for a still-observable Job
+     object (it reads `status.conditions[type=Failed/Complete]`), so a
+     targeted retry is available: bump `activeDeadlineSeconds`,
+     `backoffLimit`, or `tmpSizeLimit` on the gateway (whichever addresses
+     the failure) and the next reconcile deletes and re-creates the FAILED
+     Job under the same name/checksum. A Job that SUCCEEDED is never
+     re-created this way, even if you edit one of those three knobs
+     afterward — that would reintroduce the pre-PR over-trigger. If the Job
+     object has already been TTL-GC'd or manually deleted, this retry path
+     is unavailable (its outcome is no longer observable) — use the escape
+     hatch below instead.
 
    **Escape hatch — force a re-run without a config or spec change:**
    ```bash
@@ -208,7 +229,25 @@ cluster with `postRestartJob.enabled: true`.
    gets the pod `Evicted` mid-run by the kubelet (not a clean script-level
    failure), so size this generously if your script's write volume is
    uncertain.
-7. **The Job now carries two distinct checksum annotations**, not one
+7. **Dragonfly's `securityContext`/`podSecurityContext` REPLACE, they do
+   NOT merge — this is the opposite of the Job's behavior (item 2 above).**
+   `spec.dragonfly.podSecurityContext` / `spec.dragonfly.containerSecurityContext`
+   are still handled by the pre-existing `dragonflyPodSecCtx`/
+   `dragonflyContainerSecCtx` full-replace pattern in
+   `internal/resources/dragonfly.go` — setting ANY field there (even one
+   unrelated to `fsGroup`) discards the ENTIRE hardened default, including
+   `fsGroup: 999`. Losing `fsGroup: 999` on an existing PVC-backed Dragonfly
+   instance is a live ownership hazard: the image's built-in `dfly` uid/gid
+   999 process loses group-write access to `--dir=/dragonfly/snapshots` and
+   crashloops. This PR's broader CRD field-exposure sweep (more
+   `spec.dragonfly.*` security fields are now settable via Helm/OLM values)
+   widens exposure to this pre-existing gap even though the gap itself is
+   not new — review any `spec.dragonfly.podSecurityContext`/
+   `containerSecurityContext` override for a missing `fsGroup: 999` /
+   `runAsUser: 999` / `runAsGroup: 999` before upgrading. Tracked for a
+   proper merge-semantics fix (mirroring the Job's
+   `strategicMergeSecurityContext`) as a follow-up.
+8. **The Job now carries two distinct checksum annotations**, not one
    overloaded key. `krakend.io/checksum-config` keeps its original meaning
    (the raw, invertible krakend.json config checksum — traceable back to a
    config revision); a new `krakend.io/checksum-postrestart` carries the

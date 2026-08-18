@@ -81,6 +81,18 @@ const (
 	ConditionSynced                   = "Synced"
 	ConditionPolicyValid              = "PolicyValid"
 	ConditionPostRestartJobSkipped    = "PostRestartJobSkipped"
+
+	// ConditionPostRestartJobReadOnlyRootFilesystem is an informational
+	// condition (review id 3805157497, #9) set unconditionally whenever a
+	// post-restart Job is created (or re-created), reporting the Job
+	// container's effective readOnlyRootFilesystem posture and which mount
+	// is writable. Unlike the admission-time workingDir warning (which only
+	// fires when workingDir is overridden outside /tmp), this covers the
+	// unconditional/default case too (prod's unset workingDir, script does
+	// e.g. `npm install -g` under ROFS) without needing to analyze the
+	// script — and it lands in `kubectl describe krakendgateway`/Events,
+	// which GitOps appliers (that swallow admission.Warnings) do surface.
+	ConditionPostRestartJobReadOnlyRootFilesystem = "PostRestartJobReadOnlyRootFilesystem"
 )
 
 // Event reason constants for the EventRecorder.
@@ -108,4 +120,7 @@ const (
 	ReasonAdditionalEndpointOverride    = "AdditionalEndpointOverride"
 	ReasonAdditionalEndpointScopeFailed = "AdditionalEndpointScopeFailed"
 	ReasonPostRestartJobAlreadyRun      = "PostRestartJobAlreadyRun"
+	ReasonPostRestartJobCreated         = "PostRestartJobCreated"
+	ReasonPostRestartJobROFSEnabled     = "ReadOnlyRootFilesystemEnabled"
+	ReasonPostRestartJobROFSDisabled    = "ReadOnlyRootFilesystemDisabled"
 )

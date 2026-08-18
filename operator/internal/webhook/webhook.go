@@ -137,43 +137,124 @@ func (v *GatewayValidator) validate(gw *v1alpha1.KrakenDGateway) (admission.Warn
 	}
 
 	if gw.Spec.PostRestartJob != nil && gw.Spec.PostRestartJob.Enabled {
-		prj := gw.Spec.PostRestartJob
-		if prj.Script == "" {
-			errs = append(errs, field.Required(
-				field.NewPath("spec", "postRestartJob", "script"),
-				"script is required when postRestartJob is enabled",
-			))
-		}
-
-		// review id 3804144425 (#4): workingDir overridden outside the /tmp
-		// emptyDir mount, combined with an effectively-true
-		// readOnlyRootFilesystem (the hardened default unless the user
-		// explicitly opts out), silently breaks every relative-path write
-		// in the script with EROFS — the container still starts fine, so
-		// this is not otherwise caught until the script runs. A warning
-		// (not a hard error, since it's a legitimate configuration if the
-		// image provides its own writable directory there) nudges the user
-		// toward the documented escape hatch instead.
-		if prj.WorkingDir != "" &&
-			prj.WorkingDir != resources.PostRestartTmpMountPath &&
-			!strings.HasPrefix(prj.WorkingDir, resources.PostRestartTmpMountPath+"/") {
-			effectiveROFS := true
-			if prj.SecurityContext != nil && prj.SecurityContext.ReadOnlyRootFilesystem != nil {
-				effectiveROFS = *prj.SecurityContext.ReadOnlyRootFilesystem
-			}
-			if effectiveROFS {
-				warnings = append(warnings, fmt.Sprintf(
-					"spec.postRestartJob.workingDir %q is outside the writable %s emptyDir mount, "+
-						"and readOnlyRootFilesystem is effectively true — relative-path writes in "+
-						"your script will fail with EROFS. Use an absolute path under %s, or set "+
-						"spec.postRestartJob.securityContext.readOnlyRootFilesystem: false deliberately.",
-					prj.WorkingDir, resources.PostRestartTmpMountPath, resources.PostRestartTmpMountPath,
-				))
-			}
-		}
+		prjErrs, prjWarnings := validatePostRestartJob(gw.Spec.PostRestartJob)
+		errs = append(errs, prjErrs...)
+		warnings = append(warnings, prjWarnings...)
 	}
 
 	return warnings, errs.ToAggregate()
+}
+
+// validatePostRestartJob validates spec.postRestartJob when enabled. Split
+// out of GatewayValidator.validate to keep that function's cyclomatic
+// complexity in check (gocyclo) as this block grew with round-2 review
+// fixes (ids 3805157408 #1, 3805157457 #5, 3805157497 #9).
+func validatePostRestartJob(prj *v1alpha1.PostRestartJobSpec) (field.ErrorList, admission.Warnings) {
+	var errs field.ErrorList
+	var warnings admission.Warnings
+
+	if prj.Script == "" {
+		errs = append(errs, field.Required(
+			field.NewPath("spec", "postRestartJob", "script"),
+			"script is required when postRestartJob is enabled",
+		))
+	}
+
+	if w := validatePostRestartWorkingDir(prj); w != "" {
+		warnings = append(warnings, w)
+	}
+
+	// review id 3805157408 (#1, ADMISSION REJECT): a container-level
+	// securityContext.runAsUser: 0 with no explicit runAsNonRoot override
+	// (neither at container nor pod scope) leaves the same contradictory
+	// pair the #1 (3804144382) fixup already handles for
+	// podSecurityContext.runAsUser: 0 alone — except here the conflict
+	// originates from the CONTAINER securityContext, which
+	// mergePodSecurityContext's post-merge fixup cannot see (it only
+	// inspects the user's PodSecurityContext). The kubelet rejects
+	// {runAsUser:0, runAsNonRoot:true} at container start
+	// (CreateContainerConfigError) without failing the pod outright, so the
+	// Job hangs Pending until activeDeadlineSeconds (default 600s) expires
+	// — a silent, hard-to-diagnose failure mode worth a hard reject at
+	// admission time rather than a warning.
+	if prj.SecurityContext != nil &&
+		prj.SecurityContext.RunAsUser != nil && *prj.SecurityContext.RunAsUser == 0 {
+		containerOptsOut := prj.SecurityContext.RunAsNonRoot != nil && !*prj.SecurityContext.RunAsNonRoot
+		podOptsOut := prj.PodSecurityContext != nil &&
+			prj.PodSecurityContext.RunAsNonRoot != nil && !*prj.PodSecurityContext.RunAsNonRoot
+		if !containerOptsOut && !podOptsOut {
+			errs = append(errs, field.Invalid(
+				field.NewPath("spec", "postRestartJob", "securityContext", "runAsUser"),
+				int64(0),
+				"runAsUser: 0 conflicts with the hardened runAsNonRoot: true default (kubelet "+
+					"pod-level runAsNonRoot defaults to true and is inherited unless overridden); "+
+					"the Job pod will hang Pending (CreateContainerConfigError) until "+
+					"activeDeadlineSeconds expires. Also set "+
+					"spec.postRestartJob.podSecurityContext.runAsNonRoot: false (or "+
+					"spec.postRestartJob.securityContext.runAsNonRoot: false) to acknowledge "+
+					"running as root.",
+			))
+		}
+	}
+
+	// review id 3805157457 (#5): a negative tmpSizeLimit is nonsensical
+	// (emptyDir SizeLimit is a cap, not a delta) and, more importantly,
+	// silently means "no cap" to the kubelet in a way that looks like the
+	// opposite of the user's intent — reject it outright rather than let it
+	// pass through and surprise the user later.
+	if prj.TmpSizeLimit != nil && prj.TmpSizeLimit.Sign() < 0 {
+		errs = append(errs, field.Invalid(
+			field.NewPath("spec", "postRestartJob", "tmpSizeLimit"),
+			prj.TmpSizeLimit.String(),
+			"must not be negative; use \"0\" for no cap",
+		))
+	}
+
+	return errs, warnings
+}
+
+// validatePostRestartWorkingDir returns a non-empty warning string when
+// spec.postRestartJob.workingDir is overridden outside the writable /tmp
+// emptyDir mount while readOnlyRootFilesystem is effectively true (review
+// id 3804144425 #4) — the container still starts fine, so this is not
+// otherwise caught until the script runs. A warning (not a hard error,
+// since it's a legitimate configuration if the image provides its own
+// writable directory there) nudges the user toward the documented escape
+// hatch instead.
+func validatePostRestartWorkingDir(prj *v1alpha1.PostRestartJobSpec) string {
+	if prj.WorkingDir == "" ||
+		prj.WorkingDir == resources.PostRestartTmpMountPath ||
+		strings.HasPrefix(prj.WorkingDir, resources.PostRestartTmpMountPath+"/") {
+		return ""
+	}
+
+	effectiveROFS := true
+	if prj.SecurityContext != nil && prj.SecurityContext.ReadOnlyRootFilesystem != nil {
+		effectiveROFS = *prj.SecurityContext.ReadOnlyRootFilesystem
+	}
+	if !effectiveROFS {
+		return ""
+	}
+
+	// review id 3805157497 (#9): "use an absolute path under /tmp" is not a
+	// sufficient remedy on its own — readOnlyRootFilesystem applies to the
+	// ENTIRE container filesystem, not just workingDir. Moving the script's
+	// CWD under /tmp only fixes relative-path writes issued from the
+	// working directory; any absolute-path write elsewhere on the rootfs
+	// (e.g. /var, /etc, npm's global prefix) still fails with EROFS
+	// regardless of workingDir.
+	return fmt.Sprintf(
+		"spec.postRestartJob.workingDir %q is outside the writable %s emptyDir mount, "+
+			"and readOnlyRootFilesystem is effectively true — relative-path writes in "+
+			"your script will fail with EROFS. Note readOnlyRootFilesystem applies to the "+
+			"whole container filesystem, not just workingDir: only %s (or a subdirectory "+
+			"of it) is writable, so any absolute-path write elsewhere on the rootfs will "+
+			"still fail even after moving workingDir there. Confine all script writes to "+
+			"%s, or set spec.postRestartJob.securityContext.readOnlyRootFilesystem: false "+
+			"deliberately.",
+		prj.WorkingDir, resources.PostRestartTmpMountPath,
+		resources.PostRestartTmpMountPath, resources.PostRestartTmpMountPath,
+	)
 }
 
 // EndpointValidator validates KrakenDEndpoint resources.

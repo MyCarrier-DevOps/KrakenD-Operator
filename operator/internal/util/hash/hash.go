@@ -35,7 +35,8 @@ func SHA256Hex(data []byte) string {
 // CombineHex deterministically and unambiguously combines two or more
 // already-hex-encoded digests into a single hex-encoded SHA-256 digest.
 // Each input is length-prefixed (as a decimal length + ":" separator,
-// varint-style framing) before hashing, so two distinct digest pairs can
+// netstring-style framing — decimal ASCII length, ":", payload, NUL) before
+// hashing, so two distinct digest pairs can
 // never collide into the same byte stream regardless of the length of
 // either input — unlike a bare byte concatenation (e.g.
 // append([]byte(a), b...)), which is only unambiguous under an unstated

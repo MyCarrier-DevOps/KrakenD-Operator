@@ -89,6 +89,25 @@ func TestReconcilePostRestartJob_CreatesWhenConverged(t *testing.T) {
 	if gw.Status.LastPostRestartJobChecksum != wantChecksum {
 		t.Fatalf("status checksum not recorded: got %q want %q", gw.Status.LastPostRestartJobChecksum, wantChecksum)
 	}
+
+	// review id 3805157450 (#4): the PostRestartJobSkipped condition must
+	// reflect the last decision (False here — a Job WAS created), not only
+	// ever be set to True.
+	found := false
+	for _, cond := range gw.Status.Conditions {
+		if cond.Type == v1alpha1.ConditionPostRestartJobSkipped {
+			found = true
+			if cond.Status != metav1.ConditionFalse {
+				t.Errorf("expected PostRestartJobSkipped=False after a fresh create, got %v", cond.Status)
+			}
+			if cond.Reason != v1alpha1.ReasonPostRestartJobCreated {
+				t.Errorf("expected reason %q, got %q", v1alpha1.ReasonPostRestartJobCreated, cond.Reason)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected a PostRestartJobSkipped condition to be set on create")
+	}
 }
 
 func TestReconcilePostRestartJob_SkipsWhenNotConverged(t *testing.T) {
@@ -267,6 +286,227 @@ func TestReconcilePostRestartJob_DisabledSpec(t *testing.T) {
 	}
 	if len(jobs.Items) != 0 {
 		t.Fatalf("expected no jobs when disabled")
+	}
+}
+
+// setJobCondition appends a batchv1.JobCondition with Status: True to the
+// given Job, used by the tests below to simulate an observed outcome
+// (Complete/Failed) on an existing Job object.
+func setJobCondition(job *batchv1.Job, condType batchv1.JobConditionType) {
+	job.Status.Conditions = append(job.Status.Conditions, batchv1.JobCondition{
+		Type:   condType,
+		Status: corev1.ConditionTrue,
+	})
+}
+
+// TestReconcileExistingPostRestartRevision_SucceededKnobChangeSkips covers
+// review id 3805157426 (#2)'s no-over-trigger property: a SUCCEEDED Job for
+// the current revision must NOT be re-created just because an operator
+// subsequently edits a checksum-excluded knob (backoffLimit here) — that is
+// exactly the over-trigger the projection-hash design was built to avoid.
+func TestReconcileExistingPostRestartRevision_SucceededKnobChangeSkips(t *testing.T) {
+	gw := makeGWWithJob("echo ok")
+	jobChecksum, err := resources.PostRestartJobChecksum(gw.Spec.PostRestartJob, "abc123")
+	if err != nil {
+		t.Fatalf("computing job checksum: %v", err)
+	}
+	jobName := resources.PostRestartJobName(gw, jobChecksum)
+
+	existing := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: jobName, Namespace: gw.Namespace}}
+	resources.BuildPostRestartJob(existing, gw, "abc123", jobChecksum)
+	setJobCondition(existing, batchv1.JobComplete)
+	existing.Status.Succeeded = 1
+
+	gw.Status.LastPostRestartJobChecksum = jobChecksum
+	// Operator edits an excluded knob AFTER success — must not change the
+	// checksum (BackoffLimit is excluded from postRestartJobProjection).
+	gw.Spec.PostRestartJob.BackoffLimit = new(int32(9))
+	recheck, err := resources.PostRestartJobChecksum(gw.Spec.PostRestartJob, "abc123")
+	if err != nil || recheck != jobChecksum {
+		t.Fatalf("test setup invalid: backoffLimit edit must not change the checksum, got %q want %q (err=%v)",
+			recheck, jobChecksum, err)
+	}
+
+	c := fakeClientBuilder().WithObjects(gw, existing).Build()
+	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
+
+	if err := r.reconcilePostRestartJob(context.Background(), gw, "abc123"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var jobs batchv1.JobList
+	if err := c.List(context.Background(), &jobs, client.InNamespace("ns")); err != nil {
+		t.Fatalf("listing jobs: %v", err)
+	}
+	if len(jobs.Items) != 1 {
+		t.Fatalf("expected the succeeded job to be left alone (no re-create), got %d jobs", len(jobs.Items))
+	}
+	if jobs.Items[0].Spec.BackoffLimit == nil || *jobs.Items[0].Spec.BackoffLimit == 9 {
+		t.Fatalf("expected the ORIGINAL succeeded job (backoffLimit != 9) to survive untouched, got %+v",
+			jobs.Items[0].Spec.BackoffLimit)
+	}
+
+	found := false
+	for _, cond := range gw.Status.Conditions {
+		if cond.Type == v1alpha1.ConditionPostRestartJobSkipped {
+			found = true
+			if cond.Status != metav1.ConditionTrue {
+				t.Errorf("expected PostRestartJobSkipped=True, got %v", cond.Status)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected a PostRestartJobSkipped condition")
+	}
+}
+
+// TestReconcileExistingPostRestartRevision_FailedSpecUnchangedSkips covers
+// review id 3805157426 (#2)'s loop-safety property: a persistently-failing
+// Job whose spec is UNCHANGED must NOT be re-created on every reconcile —
+// that would be an unbounded, silent retry loop.
+func TestReconcileExistingPostRestartRevision_FailedSpecUnchangedSkips(t *testing.T) {
+	gw := makeGWWithJob("echo ok")
+	jobChecksum, err := resources.PostRestartJobChecksum(gw.Spec.PostRestartJob, "abc123")
+	if err != nil {
+		t.Fatalf("computing job checksum: %v", err)
+	}
+	jobName := resources.PostRestartJobName(gw, jobChecksum)
+
+	existing := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: jobName, Namespace: gw.Namespace}}
+	resources.BuildPostRestartJob(existing, gw, "abc123", jobChecksum)
+	setJobCondition(existing, batchv1.JobFailed)
+
+	gw.Status.LastPostRestartJobChecksum = jobChecksum
+
+	c := fakeClientBuilder().WithObjects(gw, existing).Build()
+	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
+
+	// Simulate several consecutive reconciles: none must re-create the Job.
+	for i := 0; i < 3; i++ {
+		if err := r.reconcilePostRestartJob(context.Background(), gw, "abc123"); err != nil {
+			t.Fatalf("unexpected error on reconcile %d: %v", i, err)
+		}
+	}
+
+	var jobs batchv1.JobList
+	if err := c.List(context.Background(), &jobs, client.InNamespace("ns")); err != nil {
+		t.Fatalf("listing jobs: %v", err)
+	}
+	if len(jobs.Items) != 1 {
+		t.Fatalf("expected exactly one job (no retry loop), got %d", len(jobs.Items))
+	}
+	if jobs.Items[0].ResourceVersion != existing.ResourceVersion {
+		t.Fatalf("expected the ORIGINAL failed job object to survive untouched (no delete+recreate)")
+	}
+
+	for _, cond := range gw.Status.Conditions {
+		if cond.Type == v1alpha1.ConditionPostRestartJobSkipped && cond.Status != metav1.ConditionTrue {
+			t.Errorf("expected PostRestartJobSkipped=True for an unchanged failed revision, got %v", cond.Status)
+		}
+	}
+}
+
+// TestReconcileExistingPostRestartRevision_FailedSpecChangedRecreates covers
+// review id 3805157426 (#2)'s failure-signal re-create: a FAILED Job for the
+// current revision IS re-created when the operator edits an execution-
+// affecting but checksum-excluded knob (backoffLimit here) — the Job's
+// identity checksum (and name) is unchanged, so this is a delete+re-create
+// under the SAME name, not a new Job.
+func TestReconcileExistingPostRestartRevision_FailedSpecChangedRecreates(t *testing.T) {
+	gw := makeGWWithJob("echo ok")
+	jobChecksum, err := resources.PostRestartJobChecksum(gw.Spec.PostRestartJob, "abc123")
+	if err != nil {
+		t.Fatalf("computing job checksum: %v", err)
+	}
+	jobName := resources.PostRestartJobName(gw, jobChecksum)
+
+	existing := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: jobName, Namespace: gw.Namespace}}
+	resources.BuildPostRestartJob(existing, gw, "abc123", jobChecksum)
+	setJobCondition(existing, batchv1.JobFailed)
+
+	gw.Status.LastPostRestartJobChecksum = jobChecksum
+	// Operator bumps backoffLimit to retry after diagnosing a transient
+	// failure — must not change the checksum.
+	gw.Spec.PostRestartJob.BackoffLimit = new(int32(9))
+	recheck, err := resources.PostRestartJobChecksum(gw.Spec.PostRestartJob, "abc123")
+	if err != nil || recheck != jobChecksum {
+		t.Fatalf("test setup invalid: backoffLimit edit must not change the checksum, got %q want %q (err=%v)",
+			recheck, jobChecksum, err)
+	}
+
+	c := fakeClientBuilder().WithObjects(gw, existing).Build()
+	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
+
+	if err := r.reconcilePostRestartJob(context.Background(), gw, "abc123"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var jobs batchv1.JobList
+	if err := c.List(context.Background(), &jobs, client.InNamespace("ns")); err != nil {
+		t.Fatalf("listing jobs: %v", err)
+	}
+	if len(jobs.Items) != 1 {
+		t.Fatalf("expected exactly one job (re-created under the same name), got %d", len(jobs.Items))
+	}
+	if jobs.Items[0].Name != jobName {
+		t.Fatalf("expected the re-created job to keep the same name %q, got %q", jobName, jobs.Items[0].Name)
+	}
+	if jobs.Items[0].Spec.BackoffLimit == nil || *jobs.Items[0].Spec.BackoffLimit != 9 {
+		t.Fatalf("expected the re-created job to carry the updated backoffLimit 9, got %+v",
+			jobs.Items[0].Spec.BackoffLimit)
+	}
+	if len(jobs.Items[0].Status.Conditions) != 0 {
+		t.Fatalf("expected the re-created job to be a fresh object with no stale Failed condition, got %+v",
+			jobs.Items[0].Status.Conditions)
+	}
+
+	found := false
+	for _, cond := range gw.Status.Conditions {
+		if cond.Type == v1alpha1.ConditionPostRestartJobSkipped {
+			found = true
+			if cond.Status != metav1.ConditionFalse {
+				t.Errorf("expected PostRestartJobSkipped=False after a re-create, got %v", cond.Status)
+			}
+			if cond.Reason != v1alpha1.ReasonPostRestartJobCreated {
+				t.Errorf("expected reason %q, got %q", v1alpha1.ReasonPostRestartJobCreated, cond.Reason)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected a PostRestartJobSkipped condition")
+	}
+}
+
+// TestReconcilePostRestartJob_ROFSConditionSetOnCreate covers review id
+// 3805157497 (#9): the ROFS informational condition must be set
+// unconditionally on Job creation, even when workingDir is left unset (the
+// prod case the admission-time warning misses, since that warning only
+// fires when workingDir is overridden outside /tmp).
+func TestReconcilePostRestartJob_ROFSConditionSetOnCreate(t *testing.T) {
+	gw := makeGWWithJob("npm install -g rdme") // workingDir unset (default /tmp)
+	dep := makeConvergedDeployment(gw, "abc123")
+	c := fakeClientBuilder().WithObjects(gw, dep).Build()
+	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
+
+	if err := r.reconcilePostRestartJob(context.Background(), gw, "abc123"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	found := false
+	for _, cond := range gw.Status.Conditions {
+		if cond.Type == v1alpha1.ConditionPostRestartJobReadOnlyRootFilesystem {
+			found = true
+			if cond.Status != metav1.ConditionTrue {
+				t.Errorf("expected ROFS condition True (hardened default), got %v", cond.Status)
+			}
+			if !strings.Contains(cond.Message, "/tmp") {
+				t.Errorf("expected ROFS message to mention /tmp, got: %q", cond.Message)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected the ROFS condition to be set unconditionally on Job creation, even with " +
+			"workingDir unset")
 	}
 }
 

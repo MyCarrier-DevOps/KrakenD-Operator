@@ -202,14 +202,25 @@ type PostRestartJobSpec struct {
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
 
 	// SecurityContext overrides the container-level security context for
-	// the Job. When nil the operator applies a minimal safe default
-	// (allowPrivilegeEscalation=false). Set this when your image requires
-	// a specific user (e.g. runAsUser: 0 for npm install -g).
+	// the Job. When nil the operator applies a hardened safe default:
+	// allowPrivilegeEscalation=false, readOnlyRootFilesystem=true, and
+	// capabilities.drop=["ALL"]. Fields you set here are merged on top of
+	// that default (unset fields keep the hardened default — see
+	// internal/resources/job.go strategicMergeSecurityContext). Set this
+	// when your image requires a specific user (e.g. runAsUser: 0 for npm
+	// install -g) — if you set container runAsUser: 0, also set
+	// spec.postRestartJob.podSecurityContext.runAsNonRoot: false, or the
+	// pod will hang Pending until activeDeadlineSeconds expires
+	// (CreateContainerConfigError: runAsNonRoot and runAsUser=0 conflict).
 	SecurityContext *corev1.SecurityContext `json:"securityContext,omitempty"`
 
 	// PodSecurityContext sets pod-level security attributes for the Job
-	// (e.g. fsGroup, runAsUser at pod scope). When nil the operator does
-	// not set any pod-level security context.
+	// (e.g. fsGroup, runAsUser at pod scope). When nil the operator applies
+	// a hardened default pod-level security context (runAsNonRoot=true,
+	// runAsUser/runAsGroup=1000, seccompProfile=RuntimeDefault) — it does
+	// NOT leave the pod-level security context unset. Fields you set here
+	// are merged on top of that default (unset fields keep the hardened
+	// default).
 	PodSecurityContext *corev1.PodSecurityContext `json:"podSecurityContext,omitempty"`
 
 	// BackoffLimit is the Job backoff limit. Defaults to 2.
@@ -227,7 +238,10 @@ type PostRestartJobSpec struct {
 	// 256Mi. Increase this if your script downloads or writes more than
 	// 256Mi under /tmp (e.g. a large openapi.json export/upload) — exceeding
 	// the limit gets the pod Evicted mid-run by the kubelet, not a clean
-	// script-level failure.
+	// script-level failure. A value of "0" means no cap (an emptyDir
+	// SizeLimit of zero is treated by the kubelet as unbounded — it only
+	// enforces a limit for positive quantities); a negative value is
+	// rejected by the validating webhook.
 	// +optional
 	TmpSizeLimit *resource.Quantity `json:"tmpSizeLimit,omitempty"`
 }
