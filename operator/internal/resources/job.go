@@ -82,6 +82,16 @@ const (
 	// the docs/upgrade-guide.md ROFS/workingDir note.
 	PostRestartTmpMountPath = postRestartWorkingDir
 
+	// PostRestartContainerName is the name of the post-restart Job's single
+	// container within its pod template. Exported so the controller can
+	// locate this container's effective (post-merge) SecurityContext
+	// directly off a BUILT Job (see krakendgateway_controller.go's
+	// postRestartJobContainerSecurityContext / recordPostRestartJobROFSCondition,
+	// review id 3807285633 #3d) rather than re-deriving it from the raw
+	// user spec, which could drift from what mergeContainerSecurityContext
+	// actually produced.
+	PostRestartContainerName = "post-restart"
+
 	// defaultPostRestartTmpSizeLimit bounds the /tmp emptyDir so a runaway
 	// script (e.g. a large openapi.json download) cannot exhaust node
 	// ephemeral storage. Mirrors the deployment's /tmp volume (internal/
@@ -262,7 +272,7 @@ func BuildPostRestartJob(
 	}
 
 	container := corev1.Container{
-		Name:            "post-restart",
+		Name:            PostRestartContainerName,
 		Image:           image,
 		Command:         append(cmd, spec.Script),
 		Env:             spec.Env,

@@ -45,10 +45,22 @@ jobs:
           config: operator/.testcoverage.yml
           source-dir: ./operator
 
+  manifests:
+    name: Manifests Drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "^1.26"
+      - name: Verify config/crd/bases is up to date
+        working-directory: operator
+        run: make verify-manifests
+
   build:
     name: Build
     runs-on: ubuntu-latest
-    needs: [lint, test]
+    needs: [lint, test, manifests]
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6

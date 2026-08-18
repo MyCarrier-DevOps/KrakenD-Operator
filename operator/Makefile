@@ -100,6 +100,11 @@ manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and Cust
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
 	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./..."
 
+.PHONY: verify-manifests
+verify-manifests: manifests ## Fail if config/crd/bases drifts from source (review id 3807285642, #5's CI drift gate — see docs/upgrade-guide.md note on keeping the 3 CRD copies, bases/charts/bundle, in sync).
+	git diff --exit-code -- config/crd/bases || \
+	  (echo "config/crd/bases is out of date — run 'make manifests' and commit the result" && exit 1)
+
 .PHONY: fmt
 fmt: ## Run go fmt against code.
 	go fmt ./...

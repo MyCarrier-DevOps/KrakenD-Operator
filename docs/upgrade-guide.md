@@ -192,6 +192,18 @@ cluster with `postRestartJob.enabled: true`.
      observe whether the deleted Job succeeded or failed, so it always skips
      — no Job, no Event, just a `PostRestartJobSkipped` status Condition
      explaining why (`kubectl describe krakendgateway <name>`).
+     **Cross-reference with the knob-edit retry path directly below: doing
+     BOTH — deleting the Job AND bumping `activeDeadlineSeconds`/
+     `backoffLimit`/`tmpSizeLimit` — does not retry either.** The knob-edit
+     retry re-creates the Job only by comparing the new knob values against
+     the EXISTING failed Job object (the reconciler Gets the Job by name
+     first, and only reaches the knob comparison if that Get succeeds); once
+     the Job is deleted, that Get returns not-found and the reconciler takes
+     the unobservable-outcome skip branch above instead — it never reaches
+     the knob comparison at all. Combining a manual delete with a knob edit
+     therefore dead-ends the SAME way a bare delete does (permanently
+     skipped for this revision); use the escape hatch below to force a
+     re-run once you've deleted the Job.
    - **A Job that exhausts `backoffLimit` due to a transient external
      failure (npm registry outage, DNS blip, ...) will not retry on its
      own** just from the passage of time. Pre-PR this self-healed within
@@ -256,3 +268,34 @@ cluster with `postRestartJob.enabled: true`.
    (not the Deployment) expecting the combined value from an earlier
    pre-release of this change, update it to read
    `krakend.io/checksum-postrestart` instead.
+9. **The admission webhook now hard-rejects `postRestartJob` specs whose
+   EFFECTIVE `{runAsUser, runAsNonRoot}` pair resolves to `{0, true}`**
+   (container-scope value falling back to pod-scope, exactly as the
+   kubelet resolves it) — this covers both a container-level
+   `securityContext.runAsUser: 0` and a pod-level
+   `podSecurityContext.runAsUser: 0` combined with an explicit
+   `runAsNonRoot: true` at either scope. Set `runAsNonRoot: false`
+   (container or pod scope) to acknowledge running as root and pass
+   validation. **Ratcheted on Update:** a CR that already carried
+   `runAsUser: 0` from before this check existed (accepted by an older
+   operator version) keeps working on unrelated updates as long as the
+   relevant securityContext fields are unchanged from the stored spec;
+   only a Create, or an Update that actually introduces/changes the
+   offending combination, is rejected.
+
+   **This protection exists ONLY in the ValidatingWebhookConfiguration —
+   it is silently bypassed whenever the webhook isn't actively
+   enforcing:** `webhooks.enabled: false` in the Helm chart, cert-manager
+   absent (the webhook's serving certificate never issues, so the webhook
+   pod never becomes Ready), or plain webhook pod downtime. (Note:
+   `make deploy`, the Kustomize path, DOES install the webhook by
+   default — this is not a Kustomize-vs-Helm default gap, only an
+   "is the webhook actually reachable and Ready" gap.) When the webhook
+   isn't enforcing, the ONLY remaining protection against `runAsUser: 0`
+   hanging the Job pod Pending until `activeDeadlineSeconds` expires is
+   the runtime builder fixup in `internal/resources/job.go`
+   (`mergePodSecurityContext`) — and that fixup only self-heals the
+   pod-scope, `runAsNonRoot`-left-entirely-unset case; it does NOT protect
+   the container-scope case or the pod-scope-with-explicit-`runAsNonRoot:
+   true` case. Ensure the webhook is actually installed and Ready before
+   relying on `runAsUser: 0` being caught at admission time.
