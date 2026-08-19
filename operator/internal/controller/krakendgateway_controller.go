@@ -879,7 +879,7 @@ func (r *KrakenDGatewayReconciler) reconcilePostRestartJob(
 
 	log := logf.FromContext(ctx)
 
-	jobChecksum, err := resources.PostRestartJobChecksum(spec, configChecksum)
+	jobChecksum, err := resources.PostRestartJobChecksum(spec, gw, configChecksum)
 	if err != nil {
 		return fmt.Errorf("computing post-restart job checksum: %w", err)
 	}
@@ -927,10 +927,38 @@ func (r *KrakenDGatewayReconciler) reconcilePostRestartJob(
 	if err == nil {
 		// Job already exists under this (new, not-yet-recorded) revision's
 		// name — ensure the status records the checksum even if a previous
-		// status update was lost (e.g. conflict).
+		// status update was lost (e.g. conflict). The checksum restore
+		// itself is correct in every sub-case below (this Job's checksum
+		// DOES match the current revision) — only the reported reason/
+		// message need to distinguish "adopted, this reconcile did not
+		// create anything" from an actual Create (review id 3811443603,
+		// #7; also fixes the pre-existing quirk where every adoption, not
+		// just the interrupted-recreate one, was reported under
+		// ReasonPostRestartJobCreated).
 		gw.Status.LastPostRestartJobChecksum = jobChecksum
-		r.setPostRestartJobSkippedCondition(gw, metav1.ConditionFalse, v1alpha1.ReasonPostRestartJobCreated,
-			fmt.Sprintf("post-restart Job %s already exists for checksum %s", jobName, jobChecksum))
+		reason := v1alpha1.ReasonPostRestartJobAdopted
+		message := fmt.Sprintf("post-restart Job %s already exists for checksum %s", jobName, jobChecksum)
+		if postRestartJobFailed(existing) {
+			// This branch is reached when the checksum wasn't already
+			// recorded as this revision's (e.g. reconcileExistingPostRestart
+			// Revision's recreate path cleared it before a Delete that then
+			// failed transiently — review id 3807285616, #1b — leaving the
+			// OLD failed Job in place under this name; or a prior status
+			// write was lost before it could record a Job that had already
+			// run and failed). Either way, say so plainly instead of
+			// implying a healthy "created"/"exists" outcome for a Job that
+			// has not successfully completed — restoring the checksum here
+			// (above) means the next reconcile re-enters
+			// reconcileExistingPostRestartRevision, where the actual
+			// re-create/retry decision is (re-)evaluated.
+			message = fmt.Sprintf(
+				"post-restart Job %s already exists for checksum %s and is FAILED — adopting it "+
+					"as recorded for this revision; it will be evaluated for re-create on the next "+
+					"reconcile",
+				jobName, jobChecksum,
+			)
+		}
+		r.setPostRestartJobSkippedCondition(gw, metav1.ConditionFalse, reason, message)
 		// review id 3807285633 (#3b): backfill the ROFS posture condition
 		// on this skip/exists path too — not just on create/re-create —
 		// so a gateway whose Job already exists from a prior reconcile
@@ -1078,12 +1106,22 @@ func (r *KrakenDGatewayReconciler) reconcileExistingPostRestartRevision(
 	// already produce a new checksum/name and are handled by the caller's
 	// create path, not here.
 	if !postRestartJobExecutionKnobsChanged(spec, existing) {
+		// Wording note (review id 3811443580, #5): this branch is also
+		// reached when the user REMOVES a previously-set knob override
+		// (spec.BackoffLimit etc. goes from set to nil) rather than only
+		// when the knobs are genuinely identical — postRestartJobExecutionKnobsChanged
+		// is guarded by "spec.X != nil", so a removed override is invisible
+		// to it (see that function's doc, review id 3807285637 #4, for why
+		// this is the accepted trade-off, not a bug). The message must not
+		// claim "unchanged" in that case, since the user did change the
+		// spec; it just wasn't detected as a retry-triggering edit.
 		r.setPostRestartJobSkippedCondition(gw, metav1.ConditionTrue, v1alpha1.ReasonPostRestartJobAlreadyRun,
 			fmt.Sprintf(
-				"post-restart Job already triggered for checksum %s and failed; activeDeadlineSeconds/"+
-					"backoffLimit/tmpSizeLimit unchanged, NOT re-creating (would retry every reconcile) — "+
-					"edit one of those knobs to retry, or edit the script/image/etc. (changes the "+
-					"revision checksum)",
+				"post-restart Job already triggered for checksum %s and failed; no explicitly-set "+
+					"activeDeadlineSeconds/backoffLimit/tmpSizeLimit differs from the existing Job, NOT "+
+					"re-creating (would retry every reconcile) — set one of those knobs to a new explicit "+
+					"value to retry (removing an override is not detected as a change), or edit the "+
+					"script/image/etc. (changes the revision checksum)",
 				jobChecksum,
 			))
 		r.recordPostRestartJobROFSCondition(gw, existing)

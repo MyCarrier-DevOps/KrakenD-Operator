@@ -101,9 +101,51 @@ generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and
 	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./..."
 
 .PHONY: verify-manifests
-verify-manifests: manifests ## Fail if config/crd/bases drifts from source (review id 3807285642, #5's CI drift gate — see docs/upgrade-guide.md note on keeping the 3 CRD copies, bases/charts/bundle, in sync).
-	git diff --exit-code -- config/crd/bases || \
-	  (echo "config/crd/bases is out of date — run 'make manifests' and commit the result" && exit 1)
+# Fail if any generated manifest output drifts from source (review id
+# 3807285642, #5's original CI drift gate; broadened by review id
+# 3811443563, #3). Covers all THREE generated-output locations, not just
+# config/crd/bases:
+#   - config/crd/bases, config/rbac/role.yaml, config/webhook/manifests.yaml
+#     (controller-gen output, via the `manifests` target)
+#   - bundle/manifests/ (operator-sdk bundle output, via the `bundle` target;
+#     drifted twice in this PR before this gate covered it — once as a
+#     missed webhook-service manifest that `git diff` alone never caught
+#     because it was untracked, not modified)
+# and catches NEW untracked files under config/ and bundle/manifests/ as a
+# whole (not just modifications to already-tracked files) — `git diff
+# --exit-code` alone is blind to a newly-generated file that was never
+# committed, which is exactly the historical webhook-service incident above.
+#
+# EXCLUDED on purpose, not an oversight: config/manager/kustomization.yaml
+# and the two *.clusterserviceversion.yaml CSV files (config/manifests/bases
+# and bundle/manifests). All three are mutated by `kustomize edit set image`
+# / `operator-sdk generate bundle` as a function of the IMG this target
+# happens to be invoked with (default :latest here, but e.g. `make deploy
+# IMG=...:e2e` legitimately leaves a different committed value) and, for the
+# CSV pair, hand-tuned prose the generator reformats/reorders on every run —
+# none of that is genuine CRD/RBAC/webhook drift, and gating on it would
+# make this target permanently red for reasons unrelated to source changes.
+#
+# There is a FOURTH RBAC copy this gate does NOT and CANNOT cover:
+# charts/krakend-operator/templates/clusterrole.yaml is hand-maintained —
+# nothing regenerates or diffs it against config/rbac/role.yaml. Keep it in
+# sync with config/rbac/role.yaml (and bundle's cluster role) BY HAND on any
+# RBAC-affecting change; see docs/upgrade-guide.md. Verified as part of this
+# round-4 fix: both config/rbac/role.yaml and charts/krakend-operator/
+# templates/clusterrole.yaml currently grant delete on batch/jobs.
+VERIFY_MANIFESTS_PATHS = config/crd/bases config/rbac/role.yaml config/webhook/manifests.yaml bundle/manifests
+verify-manifests: manifests bundle
+	@untracked=$$(git status --porcelain -- $(VERIFY_MANIFESTS_PATHS) | grep '^??' || true); \
+	if [ -n "$$untracked" ]; then \
+	  echo "generated manifests drifted: new untracked file(s):"; \
+	  echo "$$untracked"; \
+	  echo "run 'make manifests && make bundle' and commit the result"; \
+	  exit 1; \
+	fi
+	git diff --exit-code -- $(VERIFY_MANIFESTS_PATHS) \
+	    ':!bundle/manifests/*.clusterserviceversion.yaml' || \
+	  (echo "generated manifests are out of date — run 'make manifests && make bundle' and commit the result" \
+	    && exit 1)
 
 .PHONY: fmt
 fmt: ## Run go fmt against code.

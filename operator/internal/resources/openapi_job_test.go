@@ -600,14 +600,15 @@ func TestBuildPostRestartJob_WorkingDirOverride(t *testing.T) {
 // previously spec-only edits (script, securityContext, workingDir) were
 // invisible to Job naming/re-trigger logic.
 func TestPostRestartJobChecksum_ChangesWithSpec(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "ns"}}
 	base := &v1alpha1.PostRestartJobSpec{Enabled: true, Script: "echo v1"}
 	edited := &v1alpha1.PostRestartJobSpec{Enabled: true, Script: "echo v2"}
 
-	baseSum, err := PostRestartJobChecksum(base, "same-config-checksum")
+	baseSum, err := PostRestartJobChecksum(base, gw, "same-config-checksum")
 	if err != nil {
 		t.Fatalf("computing base checksum: %v", err)
 	}
-	editedSum, err := PostRestartJobChecksum(edited, "same-config-checksum")
+	editedSum, err := PostRestartJobChecksum(edited, gw, "same-config-checksum")
 	if err != nil {
 		t.Fatalf("computing edited checksum: %v", err)
 	}
@@ -617,7 +618,7 @@ func TestPostRestartJobChecksum_ChangesWithSpec(t *testing.T) {
 
 	// Sanity: an unrelated config checksum change must also still change
 	// the combined checksum (existing behavior preserved).
-	configChangedSum, err := PostRestartJobChecksum(base, "different-config-checksum")
+	configChangedSum, err := PostRestartJobChecksum(base, gw, "different-config-checksum")
 	if err != nil {
 		t.Fatalf("computing config-changed checksum: %v", err)
 	}
@@ -626,7 +627,7 @@ func TestPostRestartJobChecksum_ChangesWithSpec(t *testing.T) {
 	}
 
 	// Determinism: same inputs must produce the same checksum.
-	baseSumAgain, err := PostRestartJobChecksum(base, "same-config-checksum")
+	baseSumAgain, err := PostRestartJobChecksum(base, gw, "same-config-checksum")
 	if err != nil {
 		t.Fatalf("computing base checksum again: %v", err)
 	}
@@ -643,14 +644,15 @@ func TestPostRestartJobChecksum_ChangesWithSpec(t *testing.T) {
 // value, not the raw spec field, so both cases converge on one checksum
 // instead of over-triggering a spurious re-create.
 func TestPostRestartJobChecksum_UnsetVsExplicitDefaultWorkingDirConverge(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "ns"}}
 	unset := &v1alpha1.PostRestartJobSpec{Enabled: true, Script: "echo ok"}
 	explicitDefault := &v1alpha1.PostRestartJobSpec{Enabled: true, Script: "echo ok", WorkingDir: "/tmp"}
 
-	unsetSum, err := PostRestartJobChecksum(unset, "same-config-checksum")
+	unsetSum, err := PostRestartJobChecksum(unset, gw, "same-config-checksum")
 	if err != nil {
 		t.Fatalf("computing unset checksum: %v", err)
 	}
-	explicitSum, err := PostRestartJobChecksum(explicitDefault, "same-config-checksum")
+	explicitSum, err := PostRestartJobChecksum(explicitDefault, gw, "same-config-checksum")
 	if err != nil {
 		t.Fatalf("computing explicit-default checksum: %v", err)
 	}
@@ -661,7 +663,7 @@ func TestPostRestartJobChecksum_UnsetVsExplicitDefaultWorkingDirConverge(t *test
 
 	// Sanity: a genuinely different WorkingDir must still change the checksum.
 	different := &v1alpha1.PostRestartJobSpec{Enabled: true, Script: "echo ok", WorkingDir: "/custom-dir"}
-	differentSum, err := PostRestartJobChecksum(different, "same-config-checksum")
+	differentSum, err := PostRestartJobChecksum(different, gw, "same-config-checksum")
 	if err != nil {
 		t.Fatalf("computing different-workingDir checksum: %v", err)
 	}
@@ -676,16 +678,17 @@ func TestPostRestartJobChecksum_UnsetVsExplicitDefaultWorkingDirConverge(t *test
 // ["bash", "-c"], so a CR that leaves Command unset and a CR that
 // explicitly sets it to ["bash", "-c"] must hash to the same checksum.
 func TestPostRestartJobChecksum_UnsetVsExplicitDefaultCommandConverge(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "ns"}}
 	unset := &v1alpha1.PostRestartJobSpec{Enabled: true, Script: "echo ok"}
 	explicitDefault := &v1alpha1.PostRestartJobSpec{
 		Enabled: true, Script: "echo ok", Command: []string{"bash", "-c"},
 	}
 
-	unsetSum, err := PostRestartJobChecksum(unset, "same-config-checksum")
+	unsetSum, err := PostRestartJobChecksum(unset, gw, "same-config-checksum")
 	if err != nil {
 		t.Fatalf("computing unset checksum: %v", err)
 	}
-	explicitSum, err := PostRestartJobChecksum(explicitDefault, "same-config-checksum")
+	explicitSum, err := PostRestartJobChecksum(explicitDefault, gw, "same-config-checksum")
 	if err != nil {
 		t.Fatalf("computing explicit-default checksum: %v", err)
 	}
@@ -696,12 +699,84 @@ func TestPostRestartJobChecksum_UnsetVsExplicitDefaultCommandConverge(t *testing
 
 	// Sanity: a genuinely different Command must still change the checksum.
 	different := &v1alpha1.PostRestartJobSpec{Enabled: true, Script: "echo ok", Command: []string{"sh", "-c"}}
-	differentSum, err := PostRestartJobChecksum(different, "same-config-checksum")
+	differentSum, err := PostRestartJobChecksum(different, gw, "same-config-checksum")
 	if err != nil {
 		t.Fatalf("computing different-command checksum: %v", err)
 	}
 	if differentSum == unsetSum {
 		t.Fatalf("expected a non-default Command to change the checksum, got %q for both", differentSum)
+	}
+}
+
+// TestPostRestartJobChecksum_UnsetVsExplicitDefaultImageConverge covers
+// review id 3811443558 (#2): BuildPostRestartJob defaults an unset Image to
+// DefaultPostRestartJobImage, so a CR that leaves Image unset and a CR that
+// explicitly sets it to that same default must hash to the same checksum —
+// round-3's fix normalized Command/WorkingDir but missed Image.
+func TestPostRestartJobChecksum_UnsetVsExplicitDefaultImageConverge(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "ns"}}
+	unset := &v1alpha1.PostRestartJobSpec{Enabled: true, Script: "echo ok"}
+	explicitDefault := &v1alpha1.PostRestartJobSpec{
+		Enabled: true, Script: "echo ok", Image: DefaultPostRestartJobImage,
+	}
+
+	unsetSum, err := PostRestartJobChecksum(unset, gw, "same-config-checksum")
+	if err != nil {
+		t.Fatalf("computing unset checksum: %v", err)
+	}
+	explicitSum, err := PostRestartJobChecksum(explicitDefault, gw, "same-config-checksum")
+	if err != nil {
+		t.Fatalf("computing explicit-default checksum: %v", err)
+	}
+	if unsetSum != explicitSum {
+		t.Fatalf("expected Image unset and Image=%s (the default) to produce the same checksum, got %q vs %q",
+			DefaultPostRestartJobImage, unsetSum, explicitSum)
+	}
+
+	// Sanity: a genuinely different Image must still change the checksum.
+	different := &v1alpha1.PostRestartJobSpec{Enabled: true, Script: "echo ok", Image: "curlimages/curl:8.9.1"}
+	differentSum, err := PostRestartJobChecksum(different, gw, "same-config-checksum")
+	if err != nil {
+		t.Fatalf("computing different-image checksum: %v", err)
+	}
+	if differentSum == unsetSum {
+		t.Fatalf("expected a non-default Image to change the checksum, got %q for both", differentSum)
+	}
+}
+
+// TestPostRestartJobChecksum_UnsetVsExplicitDefaultServiceAccountNameConverge
+// covers review id 3811443558 (#2): BuildPostRestartJob defaults an unset
+// ServiceAccountName to gw.Name, so a CR that leaves ServiceAccountName
+// unset and a CR that explicitly sets it to gw.Name must hash to the same
+// checksum — round-3's fix normalized Command/WorkingDir but missed this.
+func TestPostRestartJobChecksum_UnsetVsExplicitDefaultServiceAccountNameConverge(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "ns"}}
+	unset := &v1alpha1.PostRestartJobSpec{Enabled: true, Script: "echo ok"}
+	explicitDefault := &v1alpha1.PostRestartJobSpec{
+		Enabled: true, Script: "echo ok", ServiceAccountName: gw.Name,
+	}
+
+	unsetSum, err := PostRestartJobChecksum(unset, gw, "same-config-checksum")
+	if err != nil {
+		t.Fatalf("computing unset checksum: %v", err)
+	}
+	explicitSum, err := PostRestartJobChecksum(explicitDefault, gw, "same-config-checksum")
+	if err != nil {
+		t.Fatalf("computing explicit-default checksum: %v", err)
+	}
+	if unsetSum != explicitSum {
+		t.Fatalf("expected ServiceAccountName unset and ServiceAccountName=%s (the default) to produce "+
+			"the same checksum, got %q vs %q", gw.Name, unsetSum, explicitSum)
+	}
+
+	// Sanity: a genuinely different ServiceAccountName must still change the checksum.
+	different := &v1alpha1.PostRestartJobSpec{Enabled: true, Script: "echo ok", ServiceAccountName: "other-sa"}
+	differentSum, err := PostRestartJobChecksum(different, gw, "same-config-checksum")
+	if err != nil {
+		t.Fatalf("computing different-serviceAccountName checksum: %v", err)
+	}
+	if differentSum == unsetSum {
+		t.Fatalf("expected a non-default ServiceAccountName to change the checksum, got %q for both", differentSum)
 	}
 }
 

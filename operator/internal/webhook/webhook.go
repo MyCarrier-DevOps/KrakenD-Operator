@@ -152,7 +152,10 @@ func (v *GatewayValidator) validate(gw, old *v1alpha1.KrakenDGateway) (admission
 
 	if gw.Spec.PostRestartJob != nil && gw.Spec.PostRestartJob.Enabled {
 		var oldPRJ *v1alpha1.PostRestartJobSpec
-		if old != nil {
+		// Only a previously-ENABLED spec can have been grandfathered by an
+		// older operator; a disabled one was never validated, so enabling it
+		// must get the full check rather than ratcheting off its stored value.
+		if old != nil && old.Spec.PostRestartJob != nil && old.Spec.PostRestartJob.Enabled {
 			oldPRJ = old.Spec.PostRestartJob
 		}
 		prjErrs, prjWarnings := validatePostRestartJob(gw.Spec.PostRestartJob, oldPRJ)

@@ -87,7 +87,7 @@ func TestReconcilePostRestartJob_CreatesWhenConverged(t *testing.T) {
 	if len(jobs.Items) != 1 {
 		t.Fatalf("expected one job, got %d", len(jobs.Items))
 	}
-	wantChecksum, err := resources.PostRestartJobChecksum(gw.Spec.PostRestartJob, "abc123")
+	wantChecksum, err := resources.PostRestartJobChecksum(gw.Spec.PostRestartJob, gw, "abc123")
 	if err != nil {
 		t.Fatalf("computing expected checksum: %v", err)
 	}
@@ -212,7 +212,7 @@ func TestReconcilePostRestartJob_SkipsWhenChecksumMismatch(t *testing.T) {
 func TestReconcilePostRestartJob_Idempotent(t *testing.T) {
 	gw := makeGWWithJob("echo ok")
 	dep := makeConvergedDeployment(gw, "abc123")
-	jobChecksum, err := resources.PostRestartJobChecksum(gw.Spec.PostRestartJob, "abc123")
+	jobChecksum, err := resources.PostRestartJobChecksum(gw.Spec.PostRestartJob, gw, "abc123")
 	if err != nil {
 		t.Fatalf("computing job checksum: %v", err)
 	}
@@ -233,6 +233,92 @@ func TestReconcilePostRestartJob_Idempotent(t *testing.T) {
 	if len(jobs.Items) != 1 {
 		t.Fatalf("expected exactly one job (idempotent), got %d", len(jobs.Items))
 	}
+
+	// review id 3811443603 (#7): the exists-branch must report
+	// ReasonPostRestartJobAdopted, not ReasonPostRestartJobCreated —
+	// nothing was actually created this reconcile.
+	found := false
+	for _, cond := range gw.Status.Conditions {
+		if cond.Type == v1alpha1.ConditionPostRestartJobSkipped {
+			found = true
+			if cond.Reason != v1alpha1.ReasonPostRestartJobAdopted {
+				t.Errorf("expected reason %q for an adopted (not created) Job, got %q",
+					v1alpha1.ReasonPostRestartJobAdopted, cond.Reason)
+			}
+			if strings.Contains(cond.Message, "FAILED") {
+				t.Errorf("expected a non-failed adoption message, got %q", cond.Message)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected a PostRestartJobSkipped condition to be set on adoption")
+	}
+}
+
+// TestReconcilePostRestartJob_AdoptsExistingFailedJobWithDistinctMessage
+// covers review id 3811443603 (#7): when the exists-branch of
+// reconcilePostRestartJob adopts a Job that is already FAILED — the
+// interrupted-recreate scenario, where reconcileExistingPostRestartRevision
+// cleared gw.Status.LastPostRestartJobChecksum before a Delete that then
+// failed transiently, leaving the old failed Job in place under this
+// revision's name — the condition must say so plainly (reason
+// ReasonPostRestartJobAdopted, message mentioning FAILED) rather than
+// implying a healthy "created"/"already exists" outcome.
+func TestReconcilePostRestartJob_AdoptsExistingFailedJobWithDistinctMessage(t *testing.T) {
+	gw := makeGWWithJob("echo ok")
+	dep := makeConvergedDeployment(gw, "abc123")
+	jobChecksum, err := resources.PostRestartJobChecksum(gw.Spec.PostRestartJob, gw, "abc123")
+	if err != nil {
+		t.Fatalf("computing job checksum: %v", err)
+	}
+	existing := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      resources.PostRestartJobName(gw, jobChecksum),
+			Namespace: gw.Namespace,
+		},
+		Status: batchv1.JobStatus{
+			Conditions: []batchv1.JobCondition{
+				{Type: batchv1.JobFailed, Status: corev1.ConditionTrue},
+			},
+		},
+	}
+	// gw.Status.LastPostRestartJobChecksum deliberately left empty, as it
+	// would be immediately after reconcileExistingPostRestartRevision's
+	// recreate path cleared it but the subsequent Delete failed — this
+	// reconcile re-enters via the top-level exists-branch, not
+	// reconcileExistingPostRestartRevision.
+	c := fakeClientBuilder().WithObjects(gw, dep, existing).Build()
+	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
+
+	if err := r.reconcilePostRestartJob(context.Background(), gw, "abc123"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var jobs batchv1.JobList
+	if err := c.List(context.Background(), &jobs, client.InNamespace("ns")); err != nil {
+		t.Fatalf("listing jobs: %v", err)
+	}
+	if len(jobs.Items) != 1 {
+		t.Fatalf("expected the existing failed job to be adopted, not deleted/re-created, got %d", len(jobs.Items))
+	}
+
+	found := false
+	for _, cond := range gw.Status.Conditions {
+		if cond.Type == v1alpha1.ConditionPostRestartJobSkipped {
+			found = true
+			if cond.Reason != v1alpha1.ReasonPostRestartJobAdopted {
+				t.Errorf("expected reason %q, got %q", v1alpha1.ReasonPostRestartJobAdopted, cond.Reason)
+			}
+			if !strings.Contains(cond.Message, "FAILED") {
+				t.Errorf("expected the message to flag the adopted Job as FAILED, got %q", cond.Message)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected a PostRestartJobSkipped condition to be set on adoption")
+	}
+	if gw.Status.LastPostRestartJobChecksum != jobChecksum {
+		t.Fatalf("expected the checksum to be restored to %q, got %q", jobChecksum, gw.Status.LastPostRestartJobChecksum)
+	}
 }
 
 // TestReconcilePostRestartJob_SkipsRecreateAfterTTLGC covers nhig root
@@ -243,7 +329,7 @@ func TestReconcilePostRestartJob_Idempotent(t *testing.T) {
 func TestReconcilePostRestartJob_SkipsRecreateAfterTTLGC(t *testing.T) {
 	gw := makeGWWithJob("echo ok")
 	dep := makeConvergedDeployment(gw, "abc123")
-	jobChecksum, err := resources.PostRestartJobChecksum(gw.Spec.PostRestartJob, "abc123")
+	jobChecksum, err := resources.PostRestartJobChecksum(gw.Spec.PostRestartJob, gw, "abc123")
 	if err != nil {
 		t.Fatalf("computing job checksum: %v", err)
 	}
@@ -309,7 +395,7 @@ func TestReconcilePostRestartJob_StaleOldFormatStatusTriggersRerun(t *testing.T)
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	wantChecksum, err := resources.PostRestartJobChecksum(gw.Spec.PostRestartJob, "abc123")
+	wantChecksum, err := resources.PostRestartJobChecksum(gw.Spec.PostRestartJob, gw, "abc123")
 	if err != nil {
 		t.Fatalf("computing expected checksum: %v", err)
 	}
@@ -412,7 +498,7 @@ func setJobCondition(job *batchv1.Job, condType batchv1.JobConditionType) {
 // exactly the over-trigger the projection-hash design was built to avoid.
 func TestReconcileExistingPostRestartRevision_SucceededKnobChangeSkips(t *testing.T) {
 	gw := makeGWWithJob("echo ok")
-	jobChecksum, err := resources.PostRestartJobChecksum(gw.Spec.PostRestartJob, "abc123")
+	jobChecksum, err := resources.PostRestartJobChecksum(gw.Spec.PostRestartJob, gw, "abc123")
 	if err != nil {
 		t.Fatalf("computing job checksum: %v", err)
 	}
@@ -427,7 +513,7 @@ func TestReconcileExistingPostRestartRevision_SucceededKnobChangeSkips(t *testin
 	// Operator edits an excluded knob AFTER success — must not change the
 	// checksum (BackoffLimit is excluded from postRestartJobProjection).
 	gw.Spec.PostRestartJob.BackoffLimit = new(int32(9))
-	recheck, err := resources.PostRestartJobChecksum(gw.Spec.PostRestartJob, "abc123")
+	recheck, err := resources.PostRestartJobChecksum(gw.Spec.PostRestartJob, gw, "abc123")
 	if err != nil || recheck != jobChecksum {
 		t.Fatalf("test setup invalid: backoffLimit edit must not change the checksum, got %q want %q (err=%v)",
 			recheck, jobChecksum, err)
@@ -472,7 +558,7 @@ func TestReconcileExistingPostRestartRevision_SucceededKnobChangeSkips(t *testin
 // that would be an unbounded, silent retry loop.
 func TestReconcileExistingPostRestartRevision_FailedSpecUnchangedSkips(t *testing.T) {
 	gw := makeGWWithJob("echo ok")
-	jobChecksum, err := resources.PostRestartJobChecksum(gw.Spec.PostRestartJob, "abc123")
+	jobChecksum, err := resources.PostRestartJobChecksum(gw.Spec.PostRestartJob, gw, "abc123")
 	if err != nil {
 		t.Fatalf("computing job checksum: %v", err)
 	}
@@ -520,7 +606,7 @@ func TestReconcileExistingPostRestartRevision_FailedSpecUnchangedSkips(t *testin
 // under the SAME name, not a new Job.
 func TestReconcileExistingPostRestartRevision_FailedSpecChangedRecreates(t *testing.T) {
 	gw := makeGWWithJob("echo ok")
-	jobChecksum, err := resources.PostRestartJobChecksum(gw.Spec.PostRestartJob, "abc123")
+	jobChecksum, err := resources.PostRestartJobChecksum(gw.Spec.PostRestartJob, gw, "abc123")
 	if err != nil {
 		t.Fatalf("computing job checksum: %v", err)
 	}
@@ -534,7 +620,7 @@ func TestReconcileExistingPostRestartRevision_FailedSpecChangedRecreates(t *test
 	// Operator bumps backoffLimit to retry after diagnosing a transient
 	// failure — must not change the checksum.
 	gw.Spec.PostRestartJob.BackoffLimit = new(int32(9))
-	recheck, err := resources.PostRestartJobChecksum(gw.Spec.PostRestartJob, "abc123")
+	recheck, err := resources.PostRestartJobChecksum(gw.Spec.PostRestartJob, gw, "abc123")
 	if err != nil || recheck != jobChecksum {
 		t.Fatalf("test setup invalid: backoffLimit edit must not change the checksum, got %q want %q (err=%v)",
 			recheck, jobChecksum, err)
@@ -681,7 +767,7 @@ func TestReconcilePostRestartJob_ROFSConditionFalseWhenDisabled(t *testing.T) {
 // ResourceVersion.
 func TestReconcileExistingPostRestartRevision_StillRunningSkipsNoMutation(t *testing.T) {
 	gw := makeGWWithJob("echo ok")
-	jobChecksum, err := resources.PostRestartJobChecksum(gw.Spec.PostRestartJob, "abc123")
+	jobChecksum, err := resources.PostRestartJobChecksum(gw.Spec.PostRestartJob, gw, "abc123")
 	if err != nil {
 		t.Fatalf("computing job checksum: %v", err)
 	}
@@ -756,7 +842,7 @@ func TestPostRestartJobExecutionKnobsChanged_DefaultOnlyDiffDoesNotTrigger(t *te
 // revision.
 func TestReconcileExistingPostRestartRevision_CreateFailsAfterDeleteClearsChecksum(t *testing.T) {
 	gw := makeGWWithJob("echo ok")
-	jobChecksum, err := resources.PostRestartJobChecksum(gw.Spec.PostRestartJob, "abc123")
+	jobChecksum, err := resources.PostRestartJobChecksum(gw.Spec.PostRestartJob, gw, "abc123")
 	if err != nil {
 		t.Fatalf("computing job checksum: %v", err)
 	}
@@ -848,7 +934,7 @@ func TestReconcileExistingPostRestartRevision_CreateFailsAfterDeleteClearsChecks
 // create path's existing AlreadyExists handling.
 func TestReconcileExistingPostRestartRevision_RecreateToleratesAlreadyExists(t *testing.T) {
 	gw := makeGWWithJob("echo ok")
-	jobChecksum, err := resources.PostRestartJobChecksum(gw.Spec.PostRestartJob, "abc123")
+	jobChecksum, err := resources.PostRestartJobChecksum(gw.Spec.PostRestartJob, gw, "abc123")
 	if err != nil {
 		t.Fatalf("computing job checksum: %v", err)
 	}

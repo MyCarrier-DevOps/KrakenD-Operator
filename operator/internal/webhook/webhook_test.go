@@ -507,6 +507,103 @@ func TestGatewayValidator_PodScopeRunAsUserZeroUnsetRunAsNonRootAllowed(t *testi
 	}
 }
 
+// TestGatewayValidator_EffectiveRunAsRootCrossScopePrecedence covers review
+// id 3811443593 (#6): every existing runAsUser:0 test above sets runAsUser
+// at exactly one scope (container-only or pod-only), so none of them
+// discriminates the cross-scope PRECEDENCE effectiveRunAsRoot implements
+// (container wins over pod when container.RunAsUser is set) — the suite
+// would stay green even if that fallback order were silently inverted. Each
+// row below sets runAsUser at BOTH scopes to different values, so the
+// admit/reject outcome flips depending on which scope effectively wins.
+func TestGatewayValidator_EffectiveRunAsRootCrossScopePrecedence(t *testing.T) {
+	tests := []struct {
+		name      string
+		container *corev1.SecurityContext
+		pod       *corev1.PodSecurityContext
+		wantErr   bool
+		reason    string
+	}{
+		{
+			name: "container non-root wins over pod root, runAsNonRoot:true at pod scope",
+			container: &corev1.SecurityContext{
+				RunAsUser: new(int64(1000)),
+			},
+			pod: &corev1.PodSecurityContext{
+				RunAsUser:    new(int64(0)),
+				RunAsNonRoot: new(true),
+			},
+			wantErr: false,
+			reason: "container.runAsUser:1000 must win over pod.runAsUser:0 (effective uid 1000, " +
+				"non-root) — inverted precedence would use the pod's uid0 and reject",
+		},
+		{
+			name: "container non-root wins over pod root, runAsNonRoot:true at container scope",
+			container: &corev1.SecurityContext{
+				RunAsUser:    new(int64(1000)),
+				RunAsNonRoot: new(true),
+			},
+			pod: &corev1.PodSecurityContext{
+				RunAsUser: new(int64(0)),
+			},
+			wantErr: false,
+			reason: "container.runAsUser:1000 must win over pod.runAsUser:0 (effective uid 1000, " +
+				"non-root) — inverted precedence would use the pod's uid0 and reject",
+		},
+		{
+			name: "container root wins over pod non-root — rejected",
+			container: &corev1.SecurityContext{
+				RunAsUser: new(int64(0)),
+			},
+			pod: &corev1.PodSecurityContext{
+				RunAsUser: new(int64(1000)),
+			},
+			wantErr: true,
+			reason: "container.runAsUser:0 must win over pod.runAsUser:1000 (effective uid 0, no " +
+				"escape hatch) — inverted precedence would use the pod's uid 1000 and allow",
+		},
+		{
+			name: "container root wins over pod non-root, container opt-out — allowed",
+			container: &corev1.SecurityContext{
+				RunAsUser:    new(int64(0)),
+				RunAsNonRoot: new(false),
+			},
+			pod: &corev1.PodSecurityContext{
+				RunAsUser: new(int64(1000)),
+			},
+			wantErr: false,
+			reason: "container.runAsUser:0 wins (effective uid 0), but the container's own " +
+				"runAsNonRoot:false opts out — inverted precedence would use the pod's uid 1000 " +
+				"and allow for an unrelated reason",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gw := &v1alpha1.KrakenDGateway{
+				ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+				Spec: v1alpha1.KrakenDGatewaySpec{
+					Version: "2.13", Edition: v1alpha1.EditionCE,
+					Config: v1alpha1.GatewayConfig{},
+					PostRestartJob: &v1alpha1.PostRestartJobSpec{
+						Enabled:            true,
+						Script:             "echo ok",
+						SecurityContext:    tc.container,
+						PodSecurityContext: tc.pod,
+					},
+				},
+			}
+			v := &GatewayValidator{}
+			_, err := v.ValidateCreate(context.Background(), gw)
+			if tc.wantErr && err == nil {
+				t.Fatalf("expected rejection (%s), got no error", tc.reason)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("expected no error (%s), got: %v", tc.reason, err)
+			}
+		})
+	}
+}
+
 // TestGatewayValidator_RunAsUserZeroRatchetUnchangedUpdateAllowed covers
 // review id 3807285627 (#2): a CR already carrying container
 // securityContext.runAsUser:0 with no runAsNonRoot escape hatch — as
@@ -565,6 +662,39 @@ func TestGatewayValidator_RunAsUserZeroRatchetNewlyIntroducedUpdateRejected(t *t
 	_, err := v.ValidateUpdate(context.Background(), old, newGW)
 	if err == nil {
 		t.Fatal("expected rejection: this update newly introduces runAsUser:0 with no escape hatch")
+	}
+	if !strings.Contains(err.Error(), "runAsNonRoot") {
+		t.Errorf("expected error to mention runAsNonRoot, got: %v", err)
+	}
+}
+
+// TestGatewayValidator_RunAsUserZeroRatchetDisabledThenEnabledRejected covers
+// review id 3811443520 (#1): a spec stored with postRestartJob DISABLED
+// (never validated by any operator version, old or new) must not grandfather
+// its runAsUser:0 when the caller flips Enabled to true on the same update —
+// the ratchet only applies to a previously-ENABLED spec.
+func TestGatewayValidator_RunAsUserZeroRatchetDisabledThenEnabledRejected(t *testing.T) {
+	old := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Config: v1alpha1.GatewayConfig{},
+			PostRestartJob: &v1alpha1.PostRestartJobSpec{
+				Enabled: false,
+				Script:  "npm install -g rdme",
+				SecurityContext: &corev1.SecurityContext{
+					RunAsUser: new(int64(0)),
+				},
+			},
+		},
+	}
+	newGW := old.DeepCopy()
+	newGW.Spec.PostRestartJob.Enabled = true
+
+	v := &GatewayValidator{}
+	_, err := v.ValidateUpdate(context.Background(), old, newGW)
+	if err == nil {
+		t.Fatal("expected rejection: enabling a previously-disabled spec must not ratchet off its stored runAsUser:0")
 	}
 	if !strings.Contains(err.Error(), "runAsNonRoot") {
 		t.Errorf("expected error to mention runAsNonRoot, got: %v", err)

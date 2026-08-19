@@ -30,6 +30,20 @@ import (
 	"k8s.io/apimachinery/pkg/util/strategicpatch"
 )
 
+// RULE (review id 3811443573, #4): any default value consumed by an
+// effective* helper (effectivePostRestartCommand, effectivePostRestartImage,
+// effectivePostRestartWorkingDir, effectivePostRestartServiceAccountName) is
+// baked into postRestartJobProjection and therefore part of the post-restart
+// Job's identity checksum (see PostRestartJobChecksum). Changing that default
+// value — not just changing whether a field is defaulted — mints a new
+// checksum for every gateway that left the field unset, i.e. a fleet-wide
+// re-trigger of the post-restart script on the next reconcile. Any PR that
+// changes one of these defaults (DefaultPostRestartJobImage, the ["bash",
+// "-c"] literal in effectivePostRestartCommand, postRestartWorkingDir, or the
+// gw.Name fallback in effectivePostRestartServiceAccountName) MUST add a
+// docs/upgrade-guide.md entry calling this out — see the "v0.13.4 —
+// postRestartJob hardening" section's item 3 for the shape such an entry
+// takes.
 const (
 	// DefaultPostRestartJobImage is the fallback image for the post-restart
 	// Job container when the user does not override it.
@@ -143,17 +157,52 @@ func PostRestartJobName(gw *v1alpha1.KrakenDGateway, checksum string) string {
 // struct (not the live API type) so a cosmetic field reorder, json-tag
 // rename, or new operational knob on PostRestartJobSpec cannot silently
 // change the projection's hash — only a deliberate edit to this struct can.
+//
+// Direction-aware audit (review id 3811443558, #2): every field below is
+// hashed either RAW (verbatim from the user spec) or EFFECTIVE (normalized
+// through the same effectivePostRestart* helper BuildPostRestartJob applies)
+// — the choice is deliberate per field, recorded inline, and RAW is only
+// correct for a field with no builder-applied default (an unset value and a
+// value explicitly set to "the default" are the same effective Job for every
+// EFFECTIVE field; for a RAW field either they genuinely differ, or the
+// field has no default to converge on in the first place).
 type postRestartJobProjection struct {
-	Script             string                       `json:"script"`
-	Command            []string                     `json:"command"`
-	Image              string                       `json:"image"`
-	WorkingDir         string                       `json:"workingDir"`
-	Env                []corev1.EnvVar              `json:"env"`
-	EnvFrom            []corev1.EnvFromSource       `json:"envFrom"`
-	SecurityContext    *corev1.SecurityContext      `json:"securityContext"`
-	PodSecurityContext *corev1.PodSecurityContext   `json:"podSecurityContext"`
-	ServiceAccountName string                       `json:"serviceAccountName"`
-	Resources          *corev1.ResourceRequirements `json:"resources"`
+	// RAW: Script has no builder-applied default — the user always supplies
+	// it (validated non-empty by the webhook).
+	Script string `json:"script"`
+	// EFFECTIVE: BuildPostRestartJob defaults an unset Command to
+	// ["bash", "-c"]; hashing raw would diverge unset vs. explicit-default.
+	Command []string `json:"command"`
+	// EFFECTIVE: BuildPostRestartJob defaults an unset Image to
+	// DefaultPostRestartJobImage; hashing raw would diverge unset vs.
+	// explicit-default (the bug this round-4 fix addresses).
+	Image string `json:"image"`
+	// EFFECTIVE: BuildPostRestartJob defaults an unset WorkingDir to
+	// postRestartWorkingDir; see effectivePostRestartCommand's doc for why.
+	WorkingDir string `json:"workingDir"`
+	// RAW: Env/EnvFrom have no builder-applied default — an unset slice is
+	// rendered as an unset slice, so raw and effective coincide.
+	Env     []corev1.EnvVar        `json:"env"`
+	EnvFrom []corev1.EnvFromSource `json:"envFrom"`
+	// RAW, DELIBERATELY: SecurityContext/PodSecurityContext ARE merged with
+	// hardened defaults by BuildPostRestartJob (mergeContainerSecurityContext
+	// / mergePodSecurityContext), so hashing the raw user override rather
+	// than the post-merge effective value is a conscious choice, not an
+	// oversight — normalizing to the merged value would mean any future
+	// change to the hardened-default baseline itself (e.g. adding a new
+	// dropped capability) mints a new checksum for every existing gateway
+	// fleet-wide, re-running every post-restart script on the next
+	// reconcile. Raw-hashing means only a user's OWN spec edit re-triggers.
+	SecurityContext    *corev1.SecurityContext    `json:"securityContext"`
+	PodSecurityContext *corev1.PodSecurityContext `json:"podSecurityContext"`
+	// EFFECTIVE: BuildPostRestartJob defaults an unset ServiceAccountName to
+	// gw.Name; hashing raw would diverge unset vs. explicit-default (the bug
+	// this round-4 fix addresses — see effectivePostRestartServiceAccountName).
+	ServiceAccountName string `json:"serviceAccountName"`
+	// RAW: Resources has no builder-applied default — BuildPostRestartJob
+	// only sets container.Resources when spec.Resources is non-nil, leaving
+	// it the zero value otherwise; raw and effective coincide.
+	Resources *corev1.ResourceRequirements `json:"resources"`
 }
 
 // effectivePostRestartCommand returns the post-default Command that
@@ -182,6 +231,36 @@ func effectivePostRestartWorkingDir(spec *v1alpha1.PostRestartJobSpec) string {
 	return postRestartWorkingDir
 }
 
+// effectivePostRestartImage returns the post-default Image that
+// BuildPostRestartJob will actually put on the container: the user's
+// spec.Image if set, otherwise the same DefaultPostRestartJobImage default
+// BuildPostRestartJob applies. Shared with PostRestartJobChecksum's
+// projection for the same reason as effectivePostRestartCommand above
+// (review id 3811443558, #2 — an explicit-default Image previously hashed
+// differently from an omitted one, minting a spurious new checksum/Job
+// name for a byte-identical rendered Job).
+func effectivePostRestartImage(spec *v1alpha1.PostRestartJobSpec) string {
+	if spec.Image != "" {
+		return spec.Image
+	}
+	return DefaultPostRestartJobImage
+}
+
+// effectivePostRestartServiceAccountName returns the post-default
+// ServiceAccountName that BuildPostRestartJob will actually put on the pod
+// template: the user's spec.ServiceAccountName if set, otherwise the
+// gateway-derived default (gw.Name) BuildPostRestartJob applies. Shared with
+// PostRestartJobChecksum's projection for the same reason as
+// effectivePostRestartCommand above (review id 3811443558, #2). Unlike the
+// other effective* helpers this one needs gw, since its default is
+// gateway-derived rather than a compile-time constant.
+func effectivePostRestartServiceAccountName(spec *v1alpha1.PostRestartJobSpec, gw *v1alpha1.KrakenDGateway) string {
+	if spec.ServiceAccountName != "" {
+		return spec.ServiceAccountName
+	}
+	return gw.Name
+}
+
 // PostRestartJobChecksum combines the rendered krakend.json configChecksum
 // with a checksum of the execution-relevant projection of the
 // PostRestartJobSpec (see postRestartJobProjection), so the Job's identity
@@ -208,24 +287,29 @@ func effectivePostRestartWorkingDir(spec *v1alpha1.PostRestartJobSpec) string {
 // (see hash.CombineHex) so the combination is unambiguous regardless of the
 // length or content of either input — no caller precondition about a fixed
 // checksum length is required.
-func PostRestartJobChecksum(spec *v1alpha1.PostRestartJobSpec, configChecksum string) (string, error) {
-	// Command and WorkingDir are normalized to their EFFECTIVE post-default
-	// values (via effectivePostRestartCommand/effectivePostRestartWorkingDir
-	// — the SAME default logic BuildPostRestartJob applies), not hashed
-	// verbatim from the raw spec. Otherwise "unset" and "explicitly set to
-	// the default" hash to two different checksums while BuildPostRestartJob
-	// renders a byte-identical Job for both, causing a spurious re-trigger
-	// (robustness finding, round-3 cleanup).
+func PostRestartJobChecksum(
+	spec *v1alpha1.PostRestartJobSpec, gw *v1alpha1.KrakenDGateway, configChecksum string,
+) (string, error) {
+	// Command, WorkingDir, Image, and ServiceAccountName are normalized to
+	// their EFFECTIVE post-default values (via the effectivePostRestart*
+	// helpers — the SAME default logic BuildPostRestartJob applies), not
+	// hashed verbatim from the raw spec. Otherwise "unset" and "explicitly
+	// set to the default" hash to two different checksums while
+	// BuildPostRestartJob renders a byte-identical Job for both, causing a
+	// spurious re-trigger (round-3 cleanup covered Command/WorkingDir;
+	// round-4 review id 3811443558 #2 extended this to Image/
+	// ServiceAccountName, which round-3 missed). See postRestartJobProjection
+	// for the field-by-field raw-vs-effective audit.
 	projection := postRestartJobProjection{
 		Script:             spec.Script,
 		Command:            effectivePostRestartCommand(spec),
-		Image:              spec.Image,
+		Image:              effectivePostRestartImage(spec),
 		WorkingDir:         effectivePostRestartWorkingDir(spec),
 		Env:                spec.Env,
 		EnvFrom:            spec.EnvFrom,
 		SecurityContext:    spec.SecurityContext,
 		PodSecurityContext: spec.PodSecurityContext,
-		ServiceAccountName: spec.ServiceAccountName,
+		ServiceAccountName: effectivePostRestartServiceAccountName(spec, gw),
 		Resources:          spec.Resources,
 	}
 	projectionJSON, err := json.Marshal(projection)
@@ -260,15 +344,12 @@ func BuildPostRestartJob(
 	job.Annotations[PostRestartJobChecksumAnnotation] = configChecksum
 	job.Annotations[PostRestartJobCombinedChecksumAnnotation] = checksum
 
-	image := spec.Image
-	if image == "" {
-		image = DefaultPostRestartJobImage
-	}
-
-	saName := spec.ServiceAccountName
-	if saName == "" {
-		saName = gw.Name
-	}
+	// Image and ServiceAccountName default resolution is delegated to the
+	// same effective* helpers PostRestartJobChecksum's projection uses (see
+	// review id 3811443558, #2), so the built Job and the checksum can never
+	// disagree about what "unset" resolves to.
+	image := effectivePostRestartImage(spec)
+	saName := effectivePostRestartServiceAccountName(spec, gw)
 
 	backoffLimit := defaultPostRestartBackoffLimit
 	if spec.BackoffLimit != nil {

@@ -121,6 +121,18 @@ const (
 	ReasonAdditionalEndpointScopeFailed = "AdditionalEndpointScopeFailed"
 	ReasonPostRestartJobAlreadyRun      = "PostRestartJobAlreadyRun"
 	ReasonPostRestartJobCreated         = "PostRestartJobCreated"
-	ReasonPostRestartJobROFSEnabled     = "ReadOnlyRootFilesystemEnabled"
-	ReasonPostRestartJobROFSDisabled    = "ReadOnlyRootFilesystemDisabled"
+	// ReasonPostRestartJobAdopted covers the "Job for this revision's
+	// checksum already exists" branch of reconcilePostRestartJob — as
+	// opposed to ReasonPostRestartJobCreated, which means this reconcile
+	// actually issued the Create call. Split out (review id 3811443603,
+	// #7) because the exists-branch was previously (mis)reported under
+	// ReasonPostRestartJobCreated for every adoption, including the
+	// interrupted-recreate case where the "adopted" Job is still the
+	// FAILED Job awaiting re-creation (a Delete failure in
+	// reconcileExistingPostRestartRevision's recreate path left it in
+	// place) — the "Created"/"already exists" wording implied a healthy
+	// outcome for a Job that had not, in fact, successfully re-run.
+	ReasonPostRestartJobAdopted      = "PostRestartJobAdopted"
+	ReasonPostRestartJobROFSEnabled  = "ReadOnlyRootFilesystemEnabled"
+	ReasonPostRestartJobROFSDisabled = "ReadOnlyRootFilesystemDisabled"
 )
