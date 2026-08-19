@@ -353,18 +353,41 @@ cluster with `postRestartJob.enabled: true`.
     default (e.g. by a GitOps tool normalizing manifests, or a user being
     explicit) minted a spurious new checksum/Job name and re-ran the script
     even though the rendered Job was byte-identical. This is now fixed the
-    same way `command`/`workingDir` were: no action needed, this is a
-    one-time convergence, not a re-trigger.
+    same way `command`/`workingDir` were.
+
+    **Steady state, once a gateway is already running on this fixed
+    version:** no action needed. Toggling `image`/`serviceAccountName`
+    between unset and "explicitly set to the documented default" is a
+    one-time convergence, not a re-trigger — the checksum is the same
+    either way.
+
+    **Upgrade transition, for a gateway coming from <= v0.13.3 with
+    `image`/`serviceAccountName` left unset:** the claim above does NOT
+    apply unchanged. This fix changes WHICH new checksum gets computed
+    during the mandatory upgrade-time run already described in item 3 above
+    (raw-vs-effective hashing of the unset field feeds a different combined
+    checksum than it would have without this fix). It does not change HOW
+    MANY TIMES the script runs — item 3's "runs its script exactly once
+    immediately after the new operator starts" already accounts for every
+    gateway on this upgrade path, including this one; this fix only changes
+    which checksum that single mandatory run lands on, still exactly once.
 
     **Standing rule going forward:** any default value consumed by one of
     the `effective*` helpers in `internal/resources/job.go`
     (`effectivePostRestartCommand`, `effectivePostRestartImage`,
     `effectivePostRestartWorkingDir`, `effectivePostRestartServiceAccountName`)
-    is part of the Job identity checksum. Changing one of those default
-    values in a future release (not just adding a new field) is a
-    fleet-wide re-trigger for every gateway that left the field unset — any
-    such change must add an upgrade-guide entry here, the same way this
-    entry documents this release's fixes.
+    is part of the Job identity checksum. TWO kinds of change are fleet-wide
+    re-triggers for every gateway that left the field unset, and BOTH must
+    add an upgrade-guide entry here, the same way this entry documents this
+    release's fixes: (1) changing one of those default values in a future
+    release (not just adding a new field); (2) switching a field's hash
+    policy between RAW and EFFECTIVE — i.e. changing whether "unset" and
+    "explicitly set to the default" converge on one checksum — which has the
+    same fleet-wide shape as (1) even though no default value changed, since
+    it changes which checksum an unset field's gateway computes on next
+    reconcile. This item 10 fix is itself an instance of (2), not (1) — see
+    `internal/resources/job.go`'s RULE comment above `DefaultPostRestartJobImage`
+    for the code-side statement of this same scope.
 
 11. **Removing a `postRestartJob` knob override (`activeDeadlineSeconds`,
     `backoffLimit`, `tmpSizeLimit`) is invisible to the retry/re-trigger

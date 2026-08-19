@@ -95,6 +95,16 @@ help: ## Display this help.
 .PHONY: manifests
 manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
 	$(CONTROLLER_GEN) rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
+	# Keep the Helm chart's CRD copy in sync with the generated source (review
+	# id 3812030497, round-5 #1): release.yml's own "Copy CRDs into chart"
+	# step runs AFTER the release tag is already cut and never commits the
+	# result back, so the committed charts/ copy — which both documented
+	# CRD-upgrade paths (raw.githubusercontent.com at a tag, and a charts/
+	# checkout) actually read — would otherwise only be refreshed by hand.
+	# Doing the copy here, gated by verify-manifests below, is what makes a
+	# future `make manifests` run that changes a CRD fail the gate instead of
+	# silently leaving the chart copy stale.
+	cp config/crd/bases/*.yaml ../charts/krakend-operator/crds/
 
 .PHONY: generate
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
@@ -133,8 +143,35 @@ generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and
 # RBAC-affecting change; see docs/upgrade-guide.md. Verified as part of this
 # round-4 fix: both config/rbac/role.yaml and charts/krakend-operator/
 # templates/clusterrole.yaml currently grant delete on batch/jobs.
-VERIFY_MANIFESTS_PATHS = config/crd/bases config/rbac/role.yaml config/webhook/manifests.yaml bundle/manifests
-verify-manifests: manifests bundle
+#
+# ../charts/krakend-operator/crds (review id 3812030497, round-5 #1): the
+# Helm chart's CRD copy, kept in sync by the `manifests` target's own `cp`
+# step above. Gating it here is part (b) of that fix — part (a) alone (the
+# cp with nothing to enforce it) would let the chart copy drift again the
+# next time someone edits a CRD type without running `make manifests`
+# locally before commit.
+VERIFY_MANIFESTS_PATHS = config/crd/bases config/rbac/role.yaml config/webhook/manifests.yaml bundle/manifests ../charts/krakend-operator/crds
+# NOTE: this target mutates config/manager/kustomization.yaml as a side
+# effect of its `bundle` dependency (`kustomize edit set image`), and
+# restores it via `git checkout --` at the end of the recipe below — that
+# file is deliberately excluded from the drift comparison above (see the
+# EXCLUDED-on-purpose block), but leaving it modified in the working tree
+# after a verify-only run is untidy for a target that's meant to be
+# read-only-ish (review id 3812030522, round-5 #5). Safe to reset
+# unconditionally here: `bundle`/`deploy`/`install` are the only targets
+# that touch it, and none of them are meant to be run with review-relevant
+# local edits to that file pending review — if you were mid-edit on it,
+# re-apply your change after running this target.
+#
+# NOTE: the untracked-file check below trips on ANY local, non-gitignored
+# scratch file dropped under one of the gated dirs above — not just
+# operator-generated drift. That's intentional (review id 3812030514,
+# round-5 #4): narrowing the check to only recognize controller-gen/
+# operator-sdk output would reopen the exact gap this gate exists to close
+# (a genuinely new generated file going undetected). CI is never affected,
+# since CI checkouts don't carry local scratch files. If this trips locally,
+# `git clean -n -- $(VERIFY_MANIFESTS_PATHS)` to see what would be removed.
+verify-manifests: manifests bundle ## Verify generated manifests (CRDs/RBAC/webhook/bundle/charts-CRDs) match committed source. Resets config/manager/kustomization.yaml (mutated by the bundle dependency) on exit. May fail on local untracked scratch files under gated dirs (not a bug, CI-safe — see Makefile comment above this target).
 	@untracked=$$(git status --porcelain -- $(VERIFY_MANIFESTS_PATHS) | grep '^??' || true); \
 	if [ -n "$$untracked" ]; then \
 	  echo "generated manifests drifted: new untracked file(s):"; \
@@ -146,6 +183,7 @@ verify-manifests: manifests bundle
 	    ':!bundle/manifests/*.clusterserviceversion.yaml' || \
 	  (echo "generated manifests are out of date — run 'make manifests && make bundle' and commit the result" \
 	    && exit 1)
+	git checkout -- config/manager/kustomization.yaml
 
 .PHONY: fmt
 fmt: ## Run go fmt against code.

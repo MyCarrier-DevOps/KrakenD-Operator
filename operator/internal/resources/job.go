@@ -30,20 +30,32 @@ import (
 	"k8s.io/apimachinery/pkg/util/strategicpatch"
 )
 
-// RULE (review id 3811443573, #4): any default value consumed by an
-// effective* helper (effectivePostRestartCommand, effectivePostRestartImage,
-// effectivePostRestartWorkingDir, effectivePostRestartServiceAccountName) is
-// baked into postRestartJobProjection and therefore part of the post-restart
-// Job's identity checksum (see PostRestartJobChecksum). Changing that default
-// value — not just changing whether a field is defaulted — mints a new
-// checksum for every gateway that left the field unset, i.e. a fleet-wide
-// re-trigger of the post-restart script on the next reconcile. Any PR that
-// changes one of these defaults (DefaultPostRestartJobImage, the ["bash",
-// "-c"] literal in effectivePostRestartCommand, postRestartWorkingDir, or the
-// gw.Name fallback in effectivePostRestartServiceAccountName) MUST add a
-// docs/upgrade-guide.md entry calling this out — see the "v0.13.4 —
-// postRestartJob hardening" section's item 3 for the shape such an entry
-// takes.
+// RULE (review id 3811443573, #4; scope corrected per review id 3812030505,
+// round-5 #2, so its letter matches its spirit): any default value consumed
+// by an effective* helper (effectivePostRestartCommand,
+// effectivePostRestartImage, effectivePostRestartWorkingDir,
+// effectivePostRestartServiceAccountName) is baked into
+// postRestartJobProjection and therefore part of the post-restart Job's
+// identity checksum (see PostRestartJobChecksum). TWO kinds of change mint a
+// new checksum for every gateway that left the field unset — i.e. a
+// fleet-wide re-trigger of the post-restart script on the next reconcile —
+// and BOTH require a docs/upgrade-guide.md entry:
+//  1. Changing the VALUE of an existing default (DefaultPostRestartJobImage,
+//     the ["bash", "-c"] literal in effectivePostRestartCommand,
+//     postRestartWorkingDir, or the gw.Name fallback in
+//     effectivePostRestartServiceAccountName).
+//  2. Switching a field's hash policy between RAW and EFFECTIVE — i.e.
+//     whether "unset" and "explicitly set to the default" converge on one
+//     checksum. This is exactly what the round-4 Image/ServiceAccountName
+//     fix did (see postRestartJobProjection's field comments below and
+//     docs/upgrade-guide.md item 10): no default VALUE changed, but it has
+//     the same fleet-wide shape as #1 because it changes WHICH checksum an
+//     unset field's gateway computes on its next reconcile.
+//
+// Any PR making either kind of change MUST add a docs/upgrade-guide.md entry
+// calling it out — see the "v0.13.4 — postRestartJob hardening" section's
+// item 3 (run-count semantics) and item 10 (a worked #2 example) for the
+// shape such an entry takes.
 const (
 	// DefaultPostRestartJobImage is the fallback image for the post-restart
 	// Job container when the user does not override it.
@@ -158,14 +170,41 @@ func PostRestartJobName(gw *v1alpha1.KrakenDGateway, checksum string) string {
 // rename, or new operational knob on PostRestartJobSpec cannot silently
 // change the projection's hash — only a deliberate edit to this struct can.
 //
-// Direction-aware audit (review id 3811443558, #2): every field below is
-// hashed either RAW (verbatim from the user spec) or EFFECTIVE (normalized
-// through the same effectivePostRestart* helper BuildPostRestartJob applies)
-// — the choice is deliberate per field, recorded inline, and RAW is only
-// correct for a field with no builder-applied default (an unset value and a
-// value explicitly set to "the default" are the same effective Job for every
-// EFFECTIVE field; for a RAW field either they genuinely differ, or the
-// field has no default to converge on in the first place).
+// Direction-aware audit (review id 3811443558, #2; summary corrected per
+// review id 3812030509, round-5 #3): every field below is hashed either RAW
+// (verbatim from the user spec) or EFFECTIVE (normalized through the same
+// effectivePostRestart* helper BuildPostRestartJob applies) — the choice is
+// deliberate per field, recorded inline, and follows TWO distinct policies,
+// not one:
+//
+//   - EFFECTIVE, for scalar fallback fields (Command, Image, WorkingDir,
+//     ServiceAccountName): the builder-applied default is a single fixed
+//     value the field converges TO, so hashing the post-default value makes
+//     "unset" and "explicitly set to the documented default" produce the
+//     same checksum.
+//
+//   - RAW, for merge-baseline (securityContext-shaped) fields
+//     (SecurityContext, PodSecurityContext): these ALSO have a
+//     builder-applied default — the hardened merge baseline applied by
+//     mergeContainerSecurityContext/mergePodSecurityContext — so "RAW only
+//     applies to a field with no builder-applied default" is false for
+//     them. RAW is still the right choice here, for a different reason: the
+//     merge baseline is not a fixed target value but an internal default
+//     that can itself change in a future release (e.g. a new dropped
+//     capability), and hashing the post-merge EFFECTIVE value would mint a
+//     new checksum for every existing gateway fleet-wide when that
+//     baseline changes. RAW-hashing means only the user's OWN spec edit
+//     re-triggers. Accepted residual: a user who spells out exactly the
+//     hardened baseline by hand gets a byte-identical container with a
+//     DIFFERENT checksum than leaving the field unset (RAW sees two
+//     distinct spec values where EFFECTIVE would have seen one).
+//
+// Guidance for placing a NEW field: if it has a fixed scalar default the
+// builder substitutes when unset, hash it EFFECTIVE (scalar-fallback
+// policy). If the builder instead MERGES the user's value with an internal,
+// independently-evolving default rather than substituting a fixed value,
+// hash it RAW (merge-baseline policy) and accept the same
+// explicit-baseline-vs-unset residual documented above.
 type postRestartJobProjection struct {
 	// RAW: Script has no builder-applied default — the user always supplies
 	// it (validated non-empty by the webhook).
