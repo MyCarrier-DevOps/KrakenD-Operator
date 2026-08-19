@@ -30,6 +30,7 @@ import (
 	policyv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -268,6 +269,25 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 // NOT registered with Owns() because they may not be installed in the cluster.
 // The operator still sets ownerReferences on instances it creates so that GC
 // cleans them up when the gateway is deleted.
+//
+// Escape-hatch watch dependency (review id 3805157515, #11): the
+// docs/upgrade-guide.md status-patch escape hatch
+// (`kubectl patch krakendgateway <name> --subresource=status --type=merge
+// -p '{"status":{"lastPostRestartJobChecksum":""}}'`) relies on the
+// primary For(&v1alpha1.KrakenDGateway{}) watch below enqueuing an
+// IMMEDIATE reconcile for that status-only change. This currently works
+// only because the For() watch below carries NO predicate at all — unlike
+// the Watches() calls further down, which deliberately use
+// predicate.GenerationChangedPredicate{} to filter out status-only churn
+// (status/subresource updates do not bump .metadata.generation) for
+// SECONDARY resources. If a future change added a
+// GenerationChangedPredicate to the primary For() watch too (e.g. to cut
+// reconcile volume from the operator's own frequent Status().Update()
+// calls), a status-only escape-hatch patch would stop triggering an
+// immediate reconcile and instead silently degrade to "whenever the next
+// unrelated event happens to fire" — the escape hatch would still
+// eventually work, just not on-demand. Keep this in mind before adding a
+// predicate to the primary watch.
 func (r *KrakenDGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if err := EnsureEndpointIndexes(mgr); err != nil {
 		return err
@@ -808,27 +828,74 @@ func (r *KrakenDGatewayReconciler) reconcileOwnedResources(
 
 // reconcilePostRestartJob creates a Job to run the user-provided bash script
 // after the gateway rolls out the current config revision. The Job is named
-// with a short prefix of the config checksum so each revision produces at
-// most one Job. The Job is only created after the Deployment has converged
-// on the current config checksum.
+// with a short prefix of the combined checksum (see
+// resources.PostRestartJobChecksum) so each (config, postRestartJob spec)
+// revision pair produces at most one Job under that name, ever — including
+// a spec-only edit, not just a krakend.json change (nhig root cause 2). The
+// Job is only created after the Deployment has converged on the current
+// config checksum.
+//
+// gw.Status.LastPostRestartJobChecksum is checked before touching the API
+// server: it guards against TTLSecondsAfterFinished's cleanup GC'ing a
+// finished Job and the next reconcile silently recreating (and
+// re-executing) it purely because the object disappeared, not because the
+// config or spec changed (nhig root cause 1 — the field was previously
+// written but never read). When the checksum matches, the actual decision
+// (skip vs. re-create) is delegated to reconcileExistingPostRestartRevision,
+// which distinguishes "ran and succeeded" from "ran and failed" (review id
+// 3805157426, #2) — see its doc comment for the loop-safety and
+// no-over-trigger properties that distinction preserves.
 func (r *KrakenDGatewayReconciler) reconcilePostRestartJob(
 	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
 	configChecksum string,
 ) error {
 	spec := gw.Spec.PostRestartJob
-	if spec == nil || !spec.Enabled {
-		return nil
-	}
-	if spec.Script == "" {
+	if spec == nil || !spec.Enabled || spec.Script == "" {
+		// review id 3807285652 (#7): postRestartJob is off (unset, disabled,
+		// or misconfigured with an empty script — the webhook rejects the
+		// empty-script case at admission, but this is defense-in-depth for
+		// webhook-bypass paths, see #9). Clear any conditions a PRIOR
+		// reconcile set while it WAS enabled — otherwise `kubectl describe
+		// krakendgateway` keeps showing a stale PostRestartJobSkipped /
+		// PostRestartJobReadOnlyRootFilesystem condition forever after the
+		// user disables the feature, contradicting
+		// setPostRestartJobSkippedCondition's doc (see its comment for the
+		// scope of "every branch").
+		meta.RemoveStatusCondition(&gw.Status.Conditions, v1alpha1.ConditionPostRestartJobSkipped)
+		meta.RemoveStatusCondition(&gw.Status.Conditions, v1alpha1.ConditionPostRestartJobReadOnlyRootFilesystem)
 		return nil
 	}
 	if configChecksum == "" {
+		// Not yet converged: no config has been rendered for this gateway
+		// yet. Deliberately does NOT clear conditions (unlike the
+		// disabled/empty guard above) — this is a transient "nothing to
+		// decide yet" state during a normal reconcile sequence, not a
+		// deliberate disable; clearing here would flicker any existing
+		// conditions away and back on every reconcile while, e.g., a
+		// rollout is merely in progress.
 		return nil
 	}
 
 	log := logf.FromContext(ctx)
 
+	jobChecksum, err := resources.PostRestartJobChecksum(spec, gw, configChecksum)
+	if err != nil {
+		return fmt.Errorf("computing post-restart job checksum: %w", err)
+	}
+	jobName := resources.PostRestartJobName(gw, jobChecksum)
+
+	if gw.Status.LastPostRestartJobChecksum == jobChecksum {
+		return r.reconcileExistingPostRestartRevision(ctx, gw, spec, jobName, jobChecksum, configChecksum)
+	}
+
+	// review id 3807285652 (#7): the Deployment-not-found / not-yet-converged
+	// early returns below (through the desired==0 and replica-mismatch
+	// checks) deliberately do NOT touch PostRestartJobSkipped/ROFS
+	// conditions, unlike the disabled/empty guard above. These describe an
+	// in-progress rollout, not a completed decision about this revision —
+	// clearing conditions here would make them flicker away and back every
+	// reconcile while a rollout is merely underway.
 	var dep appsv1.Deployment
 	key := types.NamespacedName{Name: gw.Name, Namespace: gw.Namespace}
 	if err := r.Get(ctx, key, &dep); err != nil {
@@ -855,13 +922,49 @@ func (r *KrakenDGatewayReconciler) reconcilePostRestartJob(
 		return nil
 	}
 
-	jobName := resources.PostRestartJobName(gw, configChecksum)
 	existing := &batchv1.Job{}
-	err := r.Get(ctx, types.NamespacedName{Name: jobName, Namespace: gw.Namespace}, existing)
+	err = r.Get(ctx, types.NamespacedName{Name: jobName, Namespace: gw.Namespace}, existing)
 	if err == nil {
-		// Job already exists — ensure the status records the checksum even
-		// if a previous status update was lost (e.g. conflict).
-		gw.Status.LastPostRestartJobChecksum = configChecksum
+		// Job already exists under this (new, not-yet-recorded) revision's
+		// name — ensure the status records the checksum even if a previous
+		// status update was lost (e.g. conflict). The checksum restore
+		// itself is correct in every sub-case below (this Job's checksum
+		// DOES match the current revision) — only the reported reason/
+		// message need to distinguish "adopted, this reconcile did not
+		// create anything" from an actual Create (review id 3811443603,
+		// #7; also fixes the pre-existing quirk where every adoption, not
+		// just the interrupted-recreate one, was reported under
+		// ReasonPostRestartJobCreated).
+		gw.Status.LastPostRestartJobChecksum = jobChecksum
+		reason := v1alpha1.ReasonPostRestartJobAdopted
+		message := fmt.Sprintf("post-restart Job %s already exists for checksum %s", jobName, jobChecksum)
+		if postRestartJobFailed(existing) {
+			// This branch is reached when the checksum wasn't already
+			// recorded as this revision's (e.g. reconcileExistingPostRestart
+			// Revision's recreate path cleared it before a Delete that then
+			// failed transiently — review id 3807285616, #1b — leaving the
+			// OLD failed Job in place under this name; or a prior status
+			// write was lost before it could record a Job that had already
+			// run and failed). Either way, say so plainly instead of
+			// implying a healthy "created"/"exists" outcome for a Job that
+			// has not successfully completed — restoring the checksum here
+			// (above) means the next reconcile re-enters
+			// reconcileExistingPostRestartRevision, where the actual
+			// re-create/retry decision is (re-)evaluated.
+			message = fmt.Sprintf(
+				"post-restart Job %s already exists for checksum %s and is FAILED — adopting it "+
+					"as recorded for this revision; it will be evaluated for re-create on the next "+
+					"reconcile",
+				jobName, jobChecksum,
+			)
+		}
+		r.setPostRestartJobSkippedCondition(gw, metav1.ConditionFalse, reason, message)
+		// review id 3807285633 (#3b): backfill the ROFS posture condition
+		// on this skip/exists path too — not just on create/re-create —
+		// so a gateway whose Job already exists from a prior reconcile
+		// (e.g. after a controller restart, before status caught up)
+		// still gets the posture signal.
+		r.recordPostRestartJobROFSCondition(gw, existing)
 		return nil
 	}
 	if !errors.IsNotFound(err) {
@@ -872,7 +975,7 @@ func (r *KrakenDGatewayReconciler) reconcilePostRestartJob(
 		Name:      jobName,
 		Namespace: gw.Namespace,
 	}}
-	resources.BuildPostRestartJob(job, gw, configChecksum)
+	resources.BuildPostRestartJob(job, gw, configChecksum, jobChecksum)
 	if err := controllerutil.SetControllerReference(gw, job, r.Scheme); err != nil {
 		return fmt.Errorf("setting owner reference on post-restart job: %w", err)
 	}
@@ -883,11 +986,424 @@ func (r *KrakenDGatewayReconciler) reconcilePostRestartJob(
 		return fmt.Errorf("creating post-restart job: %w", err)
 	}
 
-	gw.Status.LastPostRestartJobChecksum = configChecksum
-	r.Recorder.Event(gw, "Normal", "PostRestartJobCreated",
+	gw.Status.LastPostRestartJobChecksum = jobChecksum
+	r.setPostRestartJobSkippedCondition(gw, metav1.ConditionFalse, v1alpha1.ReasonPostRestartJobCreated,
+		fmt.Sprintf("post-restart Job %s created for config checksum %s", jobName, configChecksum))
+	r.recordPostRestartJobROFSCondition(gw, job)
+	r.Recorder.Event(gw, "Normal", v1alpha1.ReasonPostRestartJobCreated,
 		fmt.Sprintf("Created post-restart Job %s for config checksum %s", jobName, configChecksum))
-	log.Info("created post-restart job", "name", jobName, "checksum", configChecksum)
+	log.Info("created post-restart job", "name", jobName, "checksum", jobChecksum)
 	return nil
+}
+
+// reconcileExistingPostRestartRevision handles the case where
+// gw.Status.LastPostRestartJobChecksum already matches the current
+// (config, postRestartJob-spec) revision's checksum — i.e. a Job for this
+// exact revision was created at some point. Review id 3805157426 (#2):
+// previously this state always meant "skip, unconditionally" (the guard
+// could not distinguish "ran and succeeded" from "ran and failed"). This
+// now branches on the Job's observable outcome:
+//
+//  1. Job object gone (TTL-GC'd or `kubectl delete job`'d): outcome is
+//     unobservable, so always skip — never guess. This preserves
+//     `kubectl delete job` as a no-op and is itself loop-safe (skip is a
+//     no-op, not a retry).
+//  2. Job succeeded: skip, unconditionally — including when an operator
+//     knob (activeDeadlineSeconds/backoffLimit/tmpSizeLimit) was edited
+//     afterward. This is the no-over-trigger property: a knob edit on a
+//     healthy Job must never re-run it, which is exactly the over-trigger
+//     the projection-hash design (superseding a naive whole-spec hash) was
+//     built to avoid. See TestReconcileExistingPostRestartRevision_
+//     SucceededKnobChangeSkips.
+//  3. Job still running (neither Complete nor Failed): skip — nothing to
+//     re-create.
+//  4. Job failed: only re-create if the USER's spec knobs
+//     (activeDeadlineSeconds/backoffLimit/tmpSizeLimit — see
+//     postRestartJobProjection, which deliberately excludes them from the
+//     checksum/name so purely-cosmetic edits don't re-trigger) that are
+//     explicitly SET differ from the existing failed Job's (review id
+//     3807285637, #4: comparing the freshly-BUILT desired Job — which
+//     always carries the operator's CURRENT defaults for any knob the user
+//     left unset — against the existing Job would make a future default
+//     bump alone (no user spec change at all) look like a knob edit and
+//     mass-recreate every FAILED Job fleet-wide at rollout; comparing the
+//     user's spec pointers directly means an unset knob never triggers a
+//     recreate regardless of what the operator's default happens to be).
+//     This is the loop-safety property: a persistently-failing Job whose
+//     spec is UNCHANGED must NOT be re-created every reconcile — only an
+//     actual operator knob edit does. See
+//     TestReconcileExistingPostRestartRevision_FailedSpecUnchangedSkips,
+//     TestReconcileExistingPostRestartRevision_FailedSpecChangedRecreates,
+//     and TestPostRestartJobExecutionKnobsChanged_DefaultOnlyDiffDoesNotTrigger.
+//     Since the checksum (and therefore the Job name) is unchanged by
+//     definition in this branch, re-creating means delete-then-create under
+//     the same name, not a new name — see review id 3807285616 (#1) on
+//     this function's handling of that Delete-then-Create sequence not
+//     being atomic.
+//
+// Every branch above also backfills the ROFS posture condition (review id
+// 3807285633, #3b) — not just create/re-create — so an already-run
+// gateway that never hits this function's create path again still carries
+// the posture signal.
+func (r *KrakenDGatewayReconciler) reconcileExistingPostRestartRevision(
+	ctx context.Context,
+	gw *v1alpha1.KrakenDGateway,
+	spec *v1alpha1.PostRestartJobSpec,
+	jobName string,
+	jobChecksum string,
+	configChecksum string,
+) error {
+	existing := &batchv1.Job{}
+	err := r.Get(ctx, types.NamespacedName{Name: jobName, Namespace: gw.Namespace}, existing)
+	if errors.IsNotFound(err) {
+		r.setPostRestartJobSkippedCondition(gw, metav1.ConditionTrue, v1alpha1.ReasonPostRestartJobAlreadyRun,
+			fmt.Sprintf(
+				"post-restart Job already triggered for checksum %s (Job object no longer observable — "+
+					"TTL-GC'd or deleted, outcome unknown); skipping (once per revision — see "+
+					"status.lastPostRestartJobChecksum to force a re-run)",
+				jobChecksum,
+			))
+		// review id 3807285633 (#3b): the Job object is gone, but the
+		// steady-state posture signal is still worth reporting — build an
+		// ephemeral (never Created) Job purely to derive what the ROFS
+		// posture WAS for this revision, from the current spec. This is
+		// the "already-run gateway" case the create/re-create-only
+		// backfill missed entirely.
+		synthetic := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: jobName, Namespace: gw.Namespace}}
+		resources.BuildPostRestartJob(synthetic, gw, configChecksum, jobChecksum)
+		r.recordPostRestartJobROFSCondition(gw, synthetic)
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("getting existing post-restart job %s: %w", jobName, err)
+	}
+
+	if postRestartJobSucceeded(existing) {
+		r.setPostRestartJobSkippedCondition(gw, metav1.ConditionTrue, v1alpha1.ReasonPostRestartJobAlreadyRun,
+			fmt.Sprintf(
+				"post-restart Job already triggered for checksum %s and succeeded; skipping "+
+					"(once per revision — see status.lastPostRestartJobChecksum to force a re-run)",
+				jobChecksum,
+			))
+		r.recordPostRestartJobROFSCondition(gw, existing)
+		return nil
+	}
+
+	if !postRestartJobFailed(existing) {
+		r.setPostRestartJobSkippedCondition(gw, metav1.ConditionTrue, v1alpha1.ReasonPostRestartJobAlreadyRun,
+			fmt.Sprintf(
+				"post-restart Job already triggered for checksum %s and is still running; skipping",
+				jobChecksum,
+			))
+		r.recordPostRestartJobROFSCondition(gw, existing)
+		return nil
+	}
+
+	// Failed. Compare the USER's spec knobs (nil-vs-set) against the
+	// existing failed Job — see postRestartJobExecutionKnobsChanged (review
+	// id 3807285637, #4) — and build the desired Job fresh from the current
+	// spec for the actual re-create below. script, image, etc. changes
+	// already produce a new checksum/name and are handled by the caller's
+	// create path, not here.
+	if !postRestartJobExecutionKnobsChanged(spec, existing) {
+		// Wording note (review id 3811443580, #5): this branch is also
+		// reached when the user REMOVES a previously-set knob override
+		// (spec.BackoffLimit etc. goes from set to nil) rather than only
+		// when the knobs are genuinely identical — postRestartJobExecutionKnobsChanged
+		// is guarded by "spec.X != nil", so a removed override is invisible
+		// to it (see that function's doc, review id 3807285637 #4, for why
+		// this is the accepted trade-off, not a bug). The message must not
+		// claim "unchanged" in that case, since the user did change the
+		// spec; it just wasn't detected as a retry-triggering edit.
+		r.setPostRestartJobSkippedCondition(gw, metav1.ConditionTrue, v1alpha1.ReasonPostRestartJobAlreadyRun,
+			fmt.Sprintf(
+				"post-restart Job already triggered for checksum %s and failed; no explicitly-set "+
+					"activeDeadlineSeconds/backoffLimit/tmpSizeLimit differs from the existing Job, NOT "+
+					"re-creating (would retry every reconcile) — set one of those knobs to a new explicit "+
+					"value to retry (removing an override is not detected as a change), or edit the "+
+					"script/image/etc. (changes the revision checksum)",
+				jobChecksum,
+			))
+		r.recordPostRestartJobROFSCondition(gw, existing)
+		return nil
+	}
+
+	desired := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: jobName, Namespace: gw.Namespace}}
+	resources.BuildPostRestartJob(desired, gw, configChecksum, jobChecksum)
+
+	// review id 3807285616 (#1): a Delete-then-Create recreate is not
+	// atomic — a Create failure (transient API error) or a process crash
+	// between the two calls can strand this revision forever: the Job
+	// would be gone, but gw.Status.LastPostRestartJobChecksum (persisted in
+	// etcd) still matches jobChecksum, so every future reconcile re-enters
+	// this function, Gets the (now-deleted) Job, hits NotFound, and treats
+	// the outcome as permanently unobservable — skipping forever (the
+	// TTL-GC branch above) — even though nothing ever actually ran for
+	// this revision.
+	//
+	// Fix: synchronously clear and flush the checksum via Status().Update
+	// BEFORE the Delete (crash variant, #1b — protects against a crash
+	// between Delete and Create: the persisted status no longer claims
+	// this revision already ran). If Create then fails for a transient
+	// reason after a successful Delete (#1a), the checksum is already
+	// cleared and flushed, so no further write is needed before returning
+	// the error — the next reconcile falls through to
+	// reconcilePostRestartJob's top-level create path (Get existing Job by
+	// name -> NotFound -> fresh Create) instead of this function's
+	// now-permanently-skip branch. On success, the checksum is restored
+	// in-memory below and persisted by the caller's final Status().Update
+	// at the end of Reconcile.
+	gw.Status.LastPostRestartJobChecksum = ""
+	if err := r.Status().Update(ctx, gw); err != nil {
+		return fmt.Errorf("clearing post-restart job checksum before re-create: %w", err)
+	}
+
+	if delErr := r.Delete(ctx, existing, client.PropagationPolicy(metav1.DeletePropagationBackground)); delErr != nil &&
+		!errors.IsNotFound(delErr) {
+		return fmt.Errorf("deleting failed post-restart job %s for re-create: %w", jobName, delErr)
+	}
+	if err := controllerutil.SetControllerReference(gw, desired, r.Scheme); err != nil {
+		return fmt.Errorf("setting owner reference on re-created post-restart job: %w", err)
+	}
+	if err := r.Create(ctx, desired); err != nil {
+		if errors.IsAlreadyExists(err) {
+			// review id 3807285616 (#1c): tolerate AlreadyExists —
+			// background-delete propagation race. DeletePropagationBackground
+			// returns as soon as the delete is accepted, not once the object
+			// is actually gone; the just-deleted Job's removal may still be
+			// in flight when this Create lands under the same name.
+			// Symmetric with the create-path handling above (~L941-945):
+			// don't error, don't set status here — the checksum was already
+			// cleared above, so a subsequent reconcile's "Job already
+			// exists" branch (or this branch again) observes the object and
+			// reconciles status/conditions/checksum then.
+			return nil
+		}
+		// #1a: Create failed for a reason other than AlreadyExists, after a
+		// successful Delete. The checksum was already cleared and flushed
+		// above, so the next reconcile retries the create path from
+		// scratch instead of treating this revision as
+		// already-run-but-now-unobservable.
+		return fmt.Errorf("re-creating failed post-restart job %s: %w", jobName, err)
+	}
+
+	gw.Status.LastPostRestartJobChecksum = jobChecksum
+	r.setPostRestartJobSkippedCondition(gw, metav1.ConditionFalse, v1alpha1.ReasonPostRestartJobCreated,
+		fmt.Sprintf(
+			"post-restart Job %s re-created after a failed run and an operator knob change "+
+				"(activeDeadlineSeconds/backoffLimit/tmpSizeLimit)", jobName,
+		))
+	r.recordPostRestartJobROFSCondition(gw, desired)
+	r.Recorder.Event(gw, "Normal", v1alpha1.ReasonPostRestartJobCreated,
+		fmt.Sprintf("Re-created post-restart Job %s after a failed run and an operator knob change", jobName))
+	logf.FromContext(ctx).Info("re-created failed post-restart job after knob change",
+		"name", jobName, "checksum", jobChecksum)
+	return nil
+}
+
+// setPostRestartJobSkippedCondition records the last skip/create decision
+// for the post-restart Job guard. Review id 3805157450 (#4): this is now
+// set on every branch of the guard's DECISION logic (skip AND
+// create/re-create), not only when skipping — previously it was only ever
+// set to True, so `kubectl describe` could show a stale True condition from
+// a prior revision even after a new Job was successfully created for the
+// current one.
+//
+// Correction (review id 3807285652, #7): "every branch" means every branch
+// reachable once postRestartJob is enabled/configured with script and
+// config checksum present AND the Deployment has converged on that
+// checksum — i.e. every branch of reconcileExistingPostRestartRevision plus
+// the create/already-exists branches of reconcilePostRestartJob. It does
+// NOT cover the disabled/unconfigured guard or the not-yet-converged early
+// returns in reconcilePostRestartJob, which precede any revision-specific
+// decision existing at all. The disabled/unconfigured guard instead
+// actively REMOVES this condition (and the ROFS one); the not-yet-converged
+// returns intentionally leave prior conditions untouched (see the comments
+// at each of those call sites).
+func (r *KrakenDGatewayReconciler) setPostRestartJobSkippedCondition(
+	gw *v1alpha1.KrakenDGateway, status metav1.ConditionStatus, reason, message string,
+) {
+	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+		Type:               v1alpha1.ConditionPostRestartJobSkipped,
+		Status:             status,
+		ObservedGeneration: gw.Generation,
+		Reason:             reason,
+		Message:            message,
+	})
+}
+
+// recordPostRestartJobROFSCondition sets an informational status Condition
+// reporting the post-restart Job container's effective
+// readOnlyRootFilesystem posture. Originally set only on Job create/
+// re-create (review id 3805157497, #9); review id 3807285633 (#3b) backfills
+// it onto every skip/exists branch too (see reconcileExistingPostRestartRevision
+// and the "Job already exists" branch of reconcilePostRestartJob) so a
+// steady-state gateway whose Job already ran — and therefore never touches
+// the create/re-create branches again — still carries the posture signal,
+// not only gateways that happen to be creating a Job on this reconcile.
+//
+// Review id 3807285633 (#3d): effectiveROFS is derived from the BUILT Job's
+// container SecurityContext (job.Spec.Template...), not the raw user spec
+// — job already reflects mergeContainerSecurityContext's hardened-default
+// merge (internal/resources/job.go), so reading it here can never drift
+// from what was actually applied to the running container, even if a
+// future change to the merge logic changes what "effective" means for some
+// field combination.
+//
+// The admission-time warning in internal/webhook/webhook.go only fires in
+// the narrower case of workingDir overridden outside /tmp. This condition
+// covers the common prod case too — an unset (default) workingDir with a
+// script that still writes outside /tmp (e.g. `npm install -g`) — without
+// analyzing the script, and — unlike admission.Warnings, which GitOps
+// appliers (ArgoCD, Flux, ...) commonly swallow — is visible via `kubectl
+// describe krakendgateway` and the object's Events.
+func (r *KrakenDGatewayReconciler) recordPostRestartJobROFSCondition(
+	gw *v1alpha1.KrakenDGateway, job *batchv1.Job,
+) {
+	effectiveROFS := true
+	if sc := postRestartJobContainerSecurityContext(job); sc != nil && sc.ReadOnlyRootFilesystem != nil {
+		effectiveROFS = *sc.ReadOnlyRootFilesystem
+	}
+
+	if !effectiveROFS {
+		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+			Type:               v1alpha1.ConditionPostRestartJobReadOnlyRootFilesystem,
+			Status:             metav1.ConditionFalse,
+			ObservedGeneration: gw.Generation,
+			Reason:             v1alpha1.ReasonPostRestartJobROFSDisabled,
+			Message: "post-restart Job container runs with readOnlyRootFilesystem=false " +
+				"(explicit override); the entire container filesystem is writable.",
+		})
+		return
+	}
+
+	// review id 3807285633 (#3a): a tmpSizeLimit of "0" is the emptyDir
+	// convention for "unbounded" (no cap enforced by the kubelet), not a
+	// literal zero-byte limit — route it to the same "unbounded" message
+	// as an entirely-unset limit instead of misleadingly rendering "0".
+	sizeLimit := "unbounded"
+	if limit := postRestartJobTmpSizeLimit(job); limit != nil && !limit.IsZero() {
+		sizeLimit = limit.String()
+	}
+	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+		Type:               v1alpha1.ConditionPostRestartJobReadOnlyRootFilesystem,
+		Status:             metav1.ConditionTrue,
+		ObservedGeneration: gw.Generation,
+		Reason:             v1alpha1.ReasonPostRestartJobROFSEnabled,
+		Message: fmt.Sprintf(
+			"post-restart Job runs with readOnlyRootFilesystem=true; only %s (emptyDir, %s) is writable",
+			resources.PostRestartTmpMountPath, sizeLimit,
+		),
+	})
+}
+
+// postRestartJobContainerSecurityContext locates the post-restart
+// container's effective (post-merge) SecurityContext on a built Job, or nil
+// if the container is absent. Review id 3807285633 (#3d): reading this off
+// the BUILT Job — rather than the raw user spec.SecurityContext — means the
+// ROFS condition can never drift from what mergeContainerSecurityContext
+// (internal/resources/job.go) actually applied.
+func postRestartJobContainerSecurityContext(job *batchv1.Job) *corev1.SecurityContext {
+	for i := range job.Spec.Template.Spec.Containers {
+		c := &job.Spec.Template.Spec.Containers[i]
+		if c.Name == resources.PostRestartContainerName {
+			return c.SecurityContext
+		}
+	}
+	return nil
+}
+
+// postRestartJobSucceeded reports whether the Job's most recent run
+// completed successfully.
+func postRestartJobSucceeded(job *batchv1.Job) bool {
+	if job.Status.Succeeded > 0 {
+		return true
+	}
+	for _, c := range job.Status.Conditions {
+		if c.Type == batchv1.JobComplete && c.Status == corev1.ConditionTrue {
+			return true
+		}
+	}
+	return false
+}
+
+// postRestartJobFailed reports whether the Job's most recent run
+// exhausted its retries and failed (backoffLimit exceeded, or
+// activeDeadlineSeconds exceeded).
+func postRestartJobFailed(job *batchv1.Job) bool {
+	for _, c := range job.Status.Conditions {
+		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
+			return true
+		}
+	}
+	return false
+}
+
+// postRestartJobExecutionKnobsChanged reports whether the USER's spec
+// explicitly sets any of the execution-affecting-but-checksum-excluded
+// knobs (activeDeadlineSeconds, backoffLimit, tmpSizeLimit — see
+// postRestartJobProjection in internal/resources/job.go) to a value that
+// differs from what's on the existing (failed) Job. These three are
+// excluded from the Job identity checksum deliberately (so purely cosmetic
+// edits don't re-trigger the script), but they DO affect whether the
+// script can actually complete — a too-short activeDeadlineSeconds,
+// too-low backoffLimit, or too-small tmpSizeLimit all produce a failure
+// that looks identical to a genuine script bug. This is the only situation
+// review id 3805157426 (#2) allows to re-create a FAILED Job without a
+// checksum (and therefore name) change.
+//
+// Review id 3807285637 (#4): this compares spec (the raw
+// PostRestartJobSpec, nil-vs-set) rather than a freshly-BUILT desired Job.
+// A built Job always carries the operator's CURRENT default for any knob
+// the user left unset (see resources.BuildPostRestartJob) — comparing that
+// against an existing Job built under a POSSIBLY-OLDER default would make
+// a future default bump alone (e.g. bumping defaultPostRestartBackoffLimit
+// from 2 to 3), with no user spec change at all, look identical to a real
+// knob edit and mass-recreate every FAILED Job fleet-wide on the next
+// reconcile after upgrade. Comparing the user's spec pointers directly
+// means a knob the user never touched (nil) never triggers a recreate,
+// regardless of what value the operator's default happens to resolve to on
+// either side. See TestPostRestartJobExecutionKnobsChanged_DefaultOnlyDiffDoesNotTrigger.
+func postRestartJobExecutionKnobsChanged(spec *v1alpha1.PostRestartJobSpec, existing *batchv1.Job) bool {
+	if spec.BackoffLimit != nil && !int32PtrEqual(spec.BackoffLimit, existing.Spec.BackoffLimit) {
+		return true
+	}
+	if spec.ActiveDeadlineSeconds != nil &&
+		!int64PtrEqual(spec.ActiveDeadlineSeconds, existing.Spec.ActiveDeadlineSeconds) {
+		return true
+	}
+	if spec.TmpSizeLimit != nil {
+		existingLimit := postRestartJobTmpSizeLimit(existing)
+		if existingLimit == nil || spec.TmpSizeLimit.Cmp(*existingLimit) != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// postRestartJobTmpSizeLimit locates the /tmp emptyDir volume's SizeLimit on
+// a post-restart Job, or nil if absent.
+func postRestartJobTmpSizeLimit(job *batchv1.Job) *resource.Quantity {
+	for _, v := range job.Spec.Template.Spec.Volumes {
+		if v.Name == resources.PostRestartTmpVolumeName && v.EmptyDir != nil {
+			return v.EmptyDir.SizeLimit
+		}
+	}
+	return nil
+}
+
+func int32PtrEqual(a, b *int32) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+func int64PtrEqual(a, b *int64) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 // endpointToGateway maps a KrakenDEndpoint to its owning gateway.

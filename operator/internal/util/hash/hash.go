@@ -20,6 +20,7 @@ package hash
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"sort"
 
 	corev1 "k8s.io/api/core/v1"
@@ -29,6 +30,30 @@ import (
 func SHA256Hex(data []byte) string {
 	h := sha256.Sum256(data)
 	return hex.EncodeToString(h[:])
+}
+
+// CombineHex deterministically and unambiguously combines two or more
+// already-hex-encoded digests into a single hex-encoded SHA-256 digest.
+// Each input is length-prefixed (as a decimal length + ":" separator,
+// netstring-style framing — decimal ASCII length, ":", payload, NUL) before
+// hashing, so two distinct digest pairs can
+// never collide into the same byte stream regardless of the length of
+// either input — unlike a bare byte concatenation (e.g.
+// append([]byte(a), b...)), which is only unambiguous under an unstated
+// fixed-length precondition on its inputs. Safe to use even if callers'
+// digest formats or lengths change in the future.
+func CombineHex(digests ...string) string {
+	h := sha256.New()
+	for _, d := range digests {
+		// hash.Hash.Write is documented to never return an error; the
+		// check exists only to satisfy errcheck and to fail loudly instead
+		// of silently truncating the digest input if that contract were
+		// ever violated.
+		if _, err := fmt.Fprintf(h, "%d:%s\x00", len(d), d); err != nil {
+			panic(fmt.Sprintf("writing to sha256 hash (should never fail): %v", err))
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // PluginChecksum computes a deterministic checksum from plugin ConfigMap

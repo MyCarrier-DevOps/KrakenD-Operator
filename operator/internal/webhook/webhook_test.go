@@ -7,6 +7,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -268,6 +269,461 @@ func TestGatewayValidator_PostRestartJobEmptyScript(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "script") {
 		t.Errorf("expected error about script, got: %v", err)
+	}
+}
+
+// TestGatewayValidator_WorkingDirOutsideTmpWithROFSWarns covers review id
+// 3804144425 (#4): overriding workingDir outside the /tmp emptyDir mount
+// while readOnlyRootFilesystem is effectively true (the hardened default)
+// must produce an admission warning, not silently pass — the container
+// starts fine and the failure (EROFS) only surfaces when the script runs.
+func TestGatewayValidator_WorkingDirOutsideTmpWithROFSWarns(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Config: v1alpha1.GatewayConfig{},
+			PostRestartJob: &v1alpha1.PostRestartJobSpec{
+				Enabled:    true,
+				Script:     "echo ok",
+				WorkingDir: "/work",
+			},
+		},
+	}
+	v := &GatewayValidator{}
+	warnings, err := v.ValidateCreate(context.Background(), gw)
+	if err != nil {
+		t.Fatalf("expected no error (this is a warning, not a rejection), got: %v", err)
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("expected exactly one warning, got %d: %v", len(warnings), warnings)
+	}
+	if !strings.Contains(warnings[0], "EROFS") {
+		t.Errorf("expected warning to mention EROFS, got: %q", warnings[0])
+	}
+}
+
+// TestGatewayValidator_WorkingDirOutsideTmpWithROFSDisabledNoWarning
+// verifies the escape hatch: explicitly opting out of
+// readOnlyRootFilesystem suppresses the warning, since the workingDir
+// override is then a deliberate, working configuration.
+func TestGatewayValidator_WorkingDirOutsideTmpWithROFSDisabledNoWarning(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Config: v1alpha1.GatewayConfig{},
+			PostRestartJob: &v1alpha1.PostRestartJobSpec{
+				Enabled:    true,
+				Script:     "echo ok",
+				WorkingDir: "/work",
+				SecurityContext: &corev1.SecurityContext{
+					ReadOnlyRootFilesystem: new(false),
+				},
+			},
+		},
+	}
+	v := &GatewayValidator{}
+	warnings, err := v.ValidateCreate(context.Background(), gw)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("expected no warning when readOnlyRootFilesystem is explicitly false, got: %v", warnings)
+	}
+}
+
+// TestGatewayValidator_WorkingDirUnderTmpNoWarning verifies workingDir
+// values still under the /tmp mount (e.g. a subdirectory) don't trigger the
+// warning — only paths genuinely outside the writable mount do.
+func TestGatewayValidator_WorkingDirUnderTmpNoWarning(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Config: v1alpha1.GatewayConfig{},
+			PostRestartJob: &v1alpha1.PostRestartJobSpec{
+				Enabled:    true,
+				Script:     "echo ok",
+				WorkingDir: "/tmp/subdir",
+			},
+		},
+	}
+	v := &GatewayValidator{}
+	warnings, err := v.ValidateCreate(context.Background(), gw)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("expected no warning for a /tmp subdirectory, got: %v", warnings)
+	}
+}
+
+// TestGatewayValidator_ContainerRunAsUserZeroRejected covers review id
+// 3805157408 (#1, ADMISSION REJECT — USER-CHOSEN fork): a container-level
+// securityContext.runAsUser: 0 with no explicit runAsNonRoot escape hatch
+// (at either container or pod scope) must be rejected outright, since the
+// resulting {runAsUser:0, runAsNonRoot:true} pair hangs the Job pod
+// Pending until activeDeadlineSeconds expires instead of failing fast.
+func TestGatewayValidator_ContainerRunAsUserZeroRejected(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Config: v1alpha1.GatewayConfig{},
+			PostRestartJob: &v1alpha1.PostRestartJobSpec{
+				Enabled: true,
+				Script:  "npm install -g rdme",
+				SecurityContext: &corev1.SecurityContext{
+					RunAsUser: new(int64(0)),
+				},
+			},
+		},
+	}
+	v := &GatewayValidator{}
+	_, err := v.ValidateCreate(context.Background(), gw)
+	if err == nil {
+		t.Fatal("expected rejection for container runAsUser:0 with no runAsNonRoot escape hatch")
+	}
+	if !strings.Contains(err.Error(), "runAsNonRoot") {
+		t.Errorf("expected error to mention runAsNonRoot, got: %v", err)
+	}
+}
+
+// TestGatewayValidator_ContainerRunAsUserZeroWithPodRunAsNonRootFalseAllowed
+// verifies the escape hatch: setting podSecurityContext.runAsNonRoot: false
+// alongside the container's runAsUser: 0 is accepted.
+func TestGatewayValidator_ContainerRunAsUserZeroWithPodRunAsNonRootFalseAllowed(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Config: v1alpha1.GatewayConfig{},
+			PostRestartJob: &v1alpha1.PostRestartJobSpec{
+				Enabled: true,
+				Script:  "npm install -g rdme",
+				SecurityContext: &corev1.SecurityContext{
+					RunAsUser: new(int64(0)),
+				},
+				PodSecurityContext: &corev1.PodSecurityContext{
+					RunAsNonRoot: new(false),
+				},
+			},
+		},
+	}
+	v := &GatewayValidator{}
+	_, err := v.ValidateCreate(context.Background(), gw)
+	if err != nil {
+		t.Fatalf("expected no error when podSecurityContext.runAsNonRoot:false is set, got: %v", err)
+	}
+}
+
+// TestGatewayValidator_ContainerRunAsUserZeroWithContainerRunAsNonRootFalseAllowed
+// verifies the other escape hatch: an explicit container-level
+// runAsNonRoot: false alongside runAsUser: 0 is accepted.
+func TestGatewayValidator_ContainerRunAsUserZeroWithContainerRunAsNonRootFalseAllowed(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Config: v1alpha1.GatewayConfig{},
+			PostRestartJob: &v1alpha1.PostRestartJobSpec{
+				Enabled: true,
+				Script:  "npm install -g rdme",
+				SecurityContext: &corev1.SecurityContext{
+					RunAsUser:    new(int64(0)),
+					RunAsNonRoot: new(false),
+				},
+			},
+		},
+	}
+	v := &GatewayValidator{}
+	_, err := v.ValidateCreate(context.Background(), gw)
+	if err != nil {
+		t.Fatalf("expected no error when container securityContext.runAsNonRoot:false is set, got: %v", err)
+	}
+}
+
+// TestGatewayValidator_PodScopeRunAsUserZeroWithExplicitRunAsNonRootTrueRejected
+// covers review id 3807285645 (#6): the pod-scope hole. Unlike a fully
+// unset podSecurityContext.runAsNonRoot (self-healed at build time by
+// job.go's mergePodSecurityContext fixup), an EXPLICIT
+// podSecurityContext.runAsNonRoot: true alongside podSecurityContext.
+// runAsUser: 0 is never self-healed (the fixup only triggers when
+// RunAsNonRoot is unset) and must be rejected at admission, same as the
+// container-scope case.
+func TestGatewayValidator_PodScopeRunAsUserZeroWithExplicitRunAsNonRootTrueRejected(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Config: v1alpha1.GatewayConfig{},
+			PostRestartJob: &v1alpha1.PostRestartJobSpec{
+				Enabled: true,
+				Script:  "npm install -g rdme",
+				PodSecurityContext: &corev1.PodSecurityContext{
+					RunAsUser:    new(int64(0)),
+					RunAsNonRoot: new(true),
+				},
+			},
+		},
+	}
+	v := &GatewayValidator{}
+	_, err := v.ValidateCreate(context.Background(), gw)
+	if err == nil {
+		t.Fatal("expected rejection for pod-scope runAsUser:0 with explicit podSecurityContext.runAsNonRoot:true")
+	}
+	if !strings.Contains(err.Error(), "runAsNonRoot") {
+		t.Errorf("expected error to mention runAsNonRoot, got: %v", err)
+	}
+}
+
+// TestGatewayValidator_PodScopeRunAsUserZeroUnsetRunAsNonRootAllowed verifies
+// outcome 2 from review id 3807285645 (#6) is preserved: pod-scope
+// runAsUser:0 with runAsNonRoot left unset everywhere is NOT rejected at
+// admission — job.go's mergePodSecurityContext fixup self-heals this
+// combination at build time (kept as defense-in-depth for webhook-bypass
+// paths).
+func TestGatewayValidator_PodScopeRunAsUserZeroUnsetRunAsNonRootAllowed(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Config: v1alpha1.GatewayConfig{},
+			PostRestartJob: &v1alpha1.PostRestartJobSpec{
+				Enabled: true,
+				Script:  "npm install -g rdme",
+				PodSecurityContext: &corev1.PodSecurityContext{
+					RunAsUser: new(int64(0)),
+				},
+			},
+		},
+	}
+	v := &GatewayValidator{}
+	_, err := v.ValidateCreate(context.Background(), gw)
+	if err != nil {
+		t.Fatalf("expected no rejection for pod-scope runAsUser:0 with runAsNonRoot unset "+
+			"(self-healed by the builder fixup), got: %v", err)
+	}
+}
+
+// TestGatewayValidator_EffectiveRunAsRootCrossScopePrecedence covers review
+// id 3811443593 (#6): every existing runAsUser:0 test above sets runAsUser
+// at exactly one scope (container-only or pod-only), so none of them
+// discriminates the cross-scope PRECEDENCE effectiveRunAsRoot implements
+// (container wins over pod when container.RunAsUser is set) — the suite
+// would stay green even if that fallback order were silently inverted. Each
+// row below sets runAsUser at BOTH scopes to different values, so the
+// admit/reject outcome flips depending on which scope effectively wins.
+func TestGatewayValidator_EffectiveRunAsRootCrossScopePrecedence(t *testing.T) {
+	tests := []struct {
+		name      string
+		container *corev1.SecurityContext
+		pod       *corev1.PodSecurityContext
+		wantErr   bool
+		reason    string
+	}{
+		{
+			name: "container non-root wins over pod root, runAsNonRoot:true at pod scope",
+			container: &corev1.SecurityContext{
+				RunAsUser: new(int64(1000)),
+			},
+			pod: &corev1.PodSecurityContext{
+				RunAsUser:    new(int64(0)),
+				RunAsNonRoot: new(true),
+			},
+			wantErr: false,
+			reason: "container.runAsUser:1000 must win over pod.runAsUser:0 (effective uid 1000, " +
+				"non-root) — inverted precedence would use the pod's uid0 and reject",
+		},
+		{
+			name: "container non-root wins over pod root, runAsNonRoot:true at container scope",
+			container: &corev1.SecurityContext{
+				RunAsUser:    new(int64(1000)),
+				RunAsNonRoot: new(true),
+			},
+			pod: &corev1.PodSecurityContext{
+				RunAsUser: new(int64(0)),
+			},
+			wantErr: false,
+			reason: "container.runAsUser:1000 must win over pod.runAsUser:0 (effective uid 1000, " +
+				"non-root) — inverted precedence would use the pod's uid0 and reject",
+		},
+		{
+			name: "container root wins over pod non-root — rejected",
+			container: &corev1.SecurityContext{
+				RunAsUser: new(int64(0)),
+			},
+			pod: &corev1.PodSecurityContext{
+				RunAsUser: new(int64(1000)),
+			},
+			wantErr: true,
+			reason: "container.runAsUser:0 must win over pod.runAsUser:1000 (effective uid 0, no " +
+				"escape hatch) — inverted precedence would use the pod's uid 1000 and allow",
+		},
+		{
+			name: "container root wins over pod non-root, container opt-out — allowed",
+			container: &corev1.SecurityContext{
+				RunAsUser:    new(int64(0)),
+				RunAsNonRoot: new(false),
+			},
+			pod: &corev1.PodSecurityContext{
+				RunAsUser: new(int64(1000)),
+			},
+			wantErr: false,
+			reason: "container.runAsUser:0 wins (effective uid 0), but the container's own " +
+				"runAsNonRoot:false opts out — inverted precedence would use the pod's uid 1000 " +
+				"and allow for an unrelated reason",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gw := &v1alpha1.KrakenDGateway{
+				ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+				Spec: v1alpha1.KrakenDGatewaySpec{
+					Version: "2.13", Edition: v1alpha1.EditionCE,
+					Config: v1alpha1.GatewayConfig{},
+					PostRestartJob: &v1alpha1.PostRestartJobSpec{
+						Enabled:            true,
+						Script:             "echo ok",
+						SecurityContext:    tc.container,
+						PodSecurityContext: tc.pod,
+					},
+				},
+			}
+			v := &GatewayValidator{}
+			_, err := v.ValidateCreate(context.Background(), gw)
+			if tc.wantErr && err == nil {
+				t.Fatalf("expected rejection (%s), got no error", tc.reason)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("expected no error (%s), got: %v", tc.reason, err)
+			}
+		})
+	}
+}
+
+// TestGatewayValidator_RunAsUserZeroRatchetUnchangedUpdateAllowed covers
+// review id 3807285627 (#2): a CR already carrying container
+// securityContext.runAsUser:0 with no runAsNonRoot escape hatch — as
+// accepted by an OLDER operator version before this reject existed — must
+// not start failing on an UNRELATED update as long as the relevant
+// securityContext fields are unchanged from the stored spec.
+func TestGatewayValidator_RunAsUserZeroRatchetUnchangedUpdateAllowed(t *testing.T) {
+	old := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Config: v1alpha1.GatewayConfig{},
+			PostRestartJob: &v1alpha1.PostRestartJobSpec{
+				Enabled: true,
+				Script:  "npm install -g rdme",
+				SecurityContext: &corev1.SecurityContext{
+					RunAsUser: new(int64(0)),
+				},
+			},
+		},
+	}
+	newGW := old.DeepCopy()
+	// Unrelated field changes; the securityContext runAsUser/runAsNonRoot
+	// fields stay exactly as they were.
+	newGW.Spec.PostRestartJob.Script = "npm install -g rdme && echo done"
+
+	v := &GatewayValidator{}
+	_, err := v.ValidateUpdate(context.Background(), old, newGW)
+	if err != nil {
+		t.Fatalf("expected the pre-existing runAsUser:0 to be ratcheted (allowed) on an unrelated update, got: %v", err)
+	}
+}
+
+// TestGatewayValidator_RunAsUserZeroRatchetNewlyIntroducedUpdateRejected
+// covers the other half of review id 3807285627 (#2): the ratchet must NOT
+// apply when the update is what actually INTRODUCES the offending
+// combination — that must still be rejected exactly like a Create.
+func TestGatewayValidator_RunAsUserZeroRatchetNewlyIntroducedUpdateRejected(t *testing.T) {
+	old := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Config: v1alpha1.GatewayConfig{},
+			PostRestartJob: &v1alpha1.PostRestartJobSpec{
+				Enabled: true,
+				Script:  "echo ok",
+			},
+		},
+	}
+	newGW := old.DeepCopy()
+	newGW.Spec.PostRestartJob.SecurityContext = &corev1.SecurityContext{
+		RunAsUser: new(int64(0)),
+	}
+
+	v := &GatewayValidator{}
+	_, err := v.ValidateUpdate(context.Background(), old, newGW)
+	if err == nil {
+		t.Fatal("expected rejection: this update newly introduces runAsUser:0 with no escape hatch")
+	}
+	if !strings.Contains(err.Error(), "runAsNonRoot") {
+		t.Errorf("expected error to mention runAsNonRoot, got: %v", err)
+	}
+}
+
+// TestGatewayValidator_RunAsUserZeroRatchetDisabledThenEnabledRejected covers
+// review id 3811443520 (#1): a spec stored with postRestartJob DISABLED
+// (never validated by any operator version, old or new) must not grandfather
+// its runAsUser:0 when the caller flips Enabled to true on the same update —
+// the ratchet only applies to a previously-ENABLED spec.
+func TestGatewayValidator_RunAsUserZeroRatchetDisabledThenEnabledRejected(t *testing.T) {
+	old := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Config: v1alpha1.GatewayConfig{},
+			PostRestartJob: &v1alpha1.PostRestartJobSpec{
+				Enabled: false,
+				Script:  "npm install -g rdme",
+				SecurityContext: &corev1.SecurityContext{
+					RunAsUser: new(int64(0)),
+				},
+			},
+		},
+	}
+	newGW := old.DeepCopy()
+	newGW.Spec.PostRestartJob.Enabled = true
+
+	v := &GatewayValidator{}
+	_, err := v.ValidateUpdate(context.Background(), old, newGW)
+	if err == nil {
+		t.Fatal("expected rejection: enabling a previously-disabled spec must not ratchet off its stored runAsUser:0")
+	}
+	if !strings.Contains(err.Error(), "runAsNonRoot") {
+		t.Errorf("expected error to mention runAsNonRoot, got: %v", err)
+	}
+}
+
+// TestGatewayValidator_NegativeTmpSizeLimitRejected covers review id
+// 3805157457 (#5): a negative tmpSizeLimit must be rejected.
+func TestGatewayValidator_NegativeTmpSizeLimitRejected(t *testing.T) {
+	qty := resource.MustParse("-1Gi")
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Config: v1alpha1.GatewayConfig{},
+			PostRestartJob: &v1alpha1.PostRestartJobSpec{
+				Enabled:      true,
+				Script:       "echo ok",
+				TmpSizeLimit: &qty,
+			},
+		},
+	}
+	v := &GatewayValidator{}
+	_, err := v.ValidateCreate(context.Background(), gw)
+	if err == nil {
+		t.Fatal("expected rejection for negative tmpSizeLimit")
+	}
+	if !strings.Contains(err.Error(), "tmpSizeLimit") {
+		t.Errorf("expected error to mention tmpSizeLimit, got: %v", err)
 	}
 }
 

@@ -95,10 +95,105 @@ help: ## Display this help.
 .PHONY: manifests
 manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
 	$(CONTROLLER_GEN) rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
+	# Keep the Helm chart's CRD copy in sync with the generated source (review
+	# id 3812030497, round-5 #1): release.yml's own "Copy CRDs into chart"
+	# step runs AFTER the release tag is already cut and never commits the
+	# result back, so the committed charts/ copy — which both documented
+	# CRD-upgrade paths (raw.githubusercontent.com at a tag, and a charts/
+	# checkout) actually read — would otherwise only be refreshed by hand.
+	# Doing the copy here, gated by verify-manifests below, is what makes a
+	# future `make manifests` run that changes a CRD fail the gate instead of
+	# silently leaving the chart copy stale.
+	# ../charts/krakend-operator/crds/ is therefore fully generated output —
+	# see the README.md in that directory (review id 3812913995, round-6
+	# #2). The *.yaml glob below only ever touches CRD files, so it leaves
+	# that README.md alone; hand edits to the CRD *.yaml files themselves
+	# are still discarded on the next `make manifests` run.
+	cp config/crd/bases/*.yaml ../charts/krakend-operator/crds/
 
 .PHONY: generate
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
 	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./..."
+
+.PHONY: verify-manifests
+# Fail if any generated manifest output drifts from source (review id
+# 3807285642, #5's original CI drift gate; broadened by review id
+# 3811443563, #3). Covers all THREE generated-output locations, not just
+# config/crd/bases:
+#   - config/crd/bases, config/rbac/role.yaml, config/webhook/manifests.yaml
+#     (controller-gen output, via the `manifests` target)
+#   - bundle/manifests/ (operator-sdk bundle output, via the `bundle` target;
+#     drifted twice in this PR before this gate covered it — once as a
+#     missed webhook-service manifest that `git diff` alone never caught
+#     because it was untracked, not modified)
+# and catches NEW untracked files under config/ and bundle/manifests/ as a
+# whole (not just modifications to already-tracked files) — `git diff
+# --exit-code` alone is blind to a newly-generated file that was never
+# committed, which is exactly the historical webhook-service incident above.
+#
+# EXCLUDED on purpose, not an oversight: config/manager/kustomization.yaml
+# and the two *.clusterserviceversion.yaml CSV files (config/manifests/bases
+# and bundle/manifests). All three are mutated by `kustomize edit set image`
+# / `operator-sdk generate bundle` as a function of the IMG this target
+# happens to be invoked with (default :latest here, but e.g. `make deploy
+# IMG=...:e2e` legitimately leaves a different committed value) and, for the
+# CSV pair, hand-tuned prose the generator reformats/reorders on every run —
+# none of that is genuine CRD/RBAC/webhook drift, and gating on it would
+# make this target permanently red for reasons unrelated to source changes.
+#
+# There is a FOURTH RBAC copy this gate does NOT and CANNOT cover:
+# charts/krakend-operator/templates/clusterrole.yaml is hand-maintained —
+# nothing regenerates or diffs it against config/rbac/role.yaml. Keep it in
+# sync with config/rbac/role.yaml (and bundle's cluster role) BY HAND on any
+# RBAC-affecting change; see docs/upgrade-guide.md. Verified as part of this
+# round-4 fix: both config/rbac/role.yaml and charts/krakend-operator/
+# templates/clusterrole.yaml currently grant delete on batch/jobs.
+#
+# ../charts/krakend-operator/crds (review id 3812030497, round-5 #1): the
+# Helm chart's CRD copy, kept in sync by the `manifests` target's own `cp`
+# step above. Gating it here is part (b) of that fix — part (a) alone (the
+# cp with nothing to enforce it) would let the chart copy drift again the
+# next time someone edits a CRD type without running `make manifests`
+# locally before commit.
+VERIFY_MANIFESTS_PATHS = config/crd/bases config/rbac/role.yaml config/webhook/manifests.yaml bundle/manifests ../charts/krakend-operator/crds
+# NOTE: this target mutates config/manager/kustomization.yaml as a side
+# effect of its `bundle` dependency (`kustomize edit set image`), which
+# runs to completion as a prerequisite before this recipe's own body
+# starts. The recipe restores it via `git checkout --` as its FIRST line
+# (review id 3812913986, round-6 #1) rather than its last: neither check
+# below reads or gates on that file (it's deliberately excluded from the
+# drift comparison — see the EXCLUDED-on-purpose block above, and note
+# it's absent from $(VERIFY_MANIFESTS_PATHS)), so restoring it up front
+# can't hide any real drift, and it means the file is already clean before
+# either check can `exit 1` and abort the recipe. Restoring it only at the
+# end (as before round-6) left it dirty on gate failure — exactly when a
+# developer can least tell a tool-made edit from their own in-progress
+# change. Safe to reset unconditionally here: `bundle`/`deploy`/`install`
+# are the only targets that touch it, and none of them are meant to be run
+# with review-relevant local edits to that file pending review — if you
+# were mid-edit on it, re-apply your change after running this target.
+#
+# NOTE: the untracked-file check below trips on ANY local, non-gitignored
+# scratch file dropped under one of the gated dirs above — not just
+# operator-generated drift. That's intentional (review id 3812030514,
+# round-5 #4): narrowing the check to only recognize controller-gen/
+# operator-sdk output would reopen the exact gap this gate exists to close
+# (a genuinely new generated file going undetected). CI is never affected,
+# since CI checkouts don't carry local scratch files. If this trips locally,
+# `git clean -n -- $(VERIFY_MANIFESTS_PATHS)` to see what would be removed.
+verify-manifests: manifests bundle ## Verify generated manifests (CRDs/RBAC/webhook/bundle/charts-CRDs) match committed source. Resets config/manager/kustomization.yaml (mutated by the bundle dependency) before checking. May fail on local untracked scratch files under gated dirs (not a bug, CI-safe — see Makefile comment above this target).
+	git checkout -- config/manager/kustomization.yaml
+	@untracked=$$(git status --porcelain -- $(VERIFY_MANIFESTS_PATHS) | grep '^??' || true); \
+	if [ -n "$$untracked" ]; then \
+	  echo "generated manifests drifted: new untracked file(s):"; \
+	  echo "$$untracked"; \
+	  echo "run 'make manifests && make bundle' and commit the result"; \
+	  exit 1; \
+	fi
+	git diff --exit-code -- $(VERIFY_MANIFESTS_PATHS) \
+	    ':!bundle/manifests/*.clusterserviceversion.yaml' || \
+	  (echo "generated manifests are out of date — run 'make manifests && make bundle' and commit the result" \
+	    && exit 1)
 
 .PHONY: fmt
 fmt: ## Run go fmt against code.

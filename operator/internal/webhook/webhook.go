@@ -23,6 +23,7 @@ import (
 	"sort"
 	"strings"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -41,7 +42,9 @@ type GatewayValidator struct {
 	client.Client
 }
 
-// ValidateCreate validates a new KrakenDGateway.
+// ValidateCreate validates a new KrakenDGateway. There is no "old" object on
+// Create, so the runAsUser:0 ratchet (review id 3807285627, #2) never
+// applies here — a brand-new CR gets the hard reject unconditionally.
 func (v *GatewayValidator) ValidateCreate(
 	_ context.Context,
 	obj runtime.Object,
@@ -50,20 +53,30 @@ func (v *GatewayValidator) ValidateCreate(
 	if !ok {
 		return nil, fmt.Errorf("expected KrakenDGateway, got %T", obj)
 	}
-	return nil, v.validate(gw)
+	warnings, err := v.validate(gw, nil)
+	return warnings, err
 }
 
-// ValidateUpdate validates an updated KrakenDGateway.
+// ValidateUpdate validates an updated KrakenDGateway. review id 3807285627
+// (#2): the old (stored) object is now threaded through to validate so the
+// runAsUser:0 reject can be RATCHETED — a CR accepted by an older operator
+// version (before the round-2 reject existed) must not start failing every
+// unrelated update just because ValidateUpdate re-validates the whole spec.
 func (v *GatewayValidator) ValidateUpdate(
 	_ context.Context,
-	_ runtime.Object,
+	oldObj runtime.Object,
 	newObj runtime.Object,
 ) (admission.Warnings, error) {
 	gw, ok := newObj.(*v1alpha1.KrakenDGateway)
 	if !ok {
 		return nil, fmt.Errorf("expected KrakenDGateway, got %T", newObj)
 	}
-	return nil, v.validate(gw)
+	old, ok := oldObj.(*v1alpha1.KrakenDGateway)
+	if !ok {
+		return nil, fmt.Errorf("expected KrakenDGateway, got %T", oldObj)
+	}
+	warnings, err := v.validate(gw, old)
+	return warnings, err
 }
 
 // ValidateDelete is a no-op for gateways.
@@ -74,8 +87,12 @@ func (v *GatewayValidator) ValidateDelete(
 	return nil, nil
 }
 
-func (v *GatewayValidator) validate(gw *v1alpha1.KrakenDGateway) error {
+// validate runs all admission checks for gw. old is the previously-stored
+// object on an Update (nil on Create) — see validatePostRestartJob's
+// ratchet handling (review id 3807285627, #2).
+func (v *GatewayValidator) validate(gw, old *v1alpha1.KrakenDGateway) (admission.Warnings, error) {
 	var errs field.ErrorList
+	var warnings admission.Warnings
 
 	if gw.Spec.Edition == v1alpha1.EditionEE {
 		if gw.Spec.License == nil ||
@@ -133,14 +150,271 @@ func (v *GatewayValidator) validate(gw *v1alpha1.KrakenDGateway) error {
 		}
 	}
 
-	if gw.Spec.PostRestartJob != nil && gw.Spec.PostRestartJob.Enabled && gw.Spec.PostRestartJob.Script == "" {
+	if gw.Spec.PostRestartJob != nil && gw.Spec.PostRestartJob.Enabled {
+		var oldPRJ *v1alpha1.PostRestartJobSpec
+		// Only a previously-ENABLED spec can have been grandfathered by an
+		// older operator; a disabled one was never validated, so enabling it
+		// must get the full check rather than ratcheting off its stored value.
+		if old != nil && old.Spec.PostRestartJob != nil && old.Spec.PostRestartJob.Enabled {
+			oldPRJ = old.Spec.PostRestartJob
+		}
+		prjErrs, prjWarnings := validatePostRestartJob(gw.Spec.PostRestartJob, oldPRJ)
+		errs = append(errs, prjErrs...)
+		warnings = append(warnings, prjWarnings...)
+	}
+
+	return warnings, errs.ToAggregate()
+}
+
+// validatePostRestartJob validates spec.postRestartJob when enabled. Split
+// out of GatewayValidator.validate to keep that function's cyclomatic
+// complexity in check (gocyclo) as this block grew with round-2 review
+// fixes (ids 3805157408 #1, 3805157457 #5, 3805157497 #9) and round-3
+// fixes (ids 3807285627 #2, 3807285645 #6). old is the previously-stored
+// spec on an Update (nil on Create).
+func validatePostRestartJob(
+	prj *v1alpha1.PostRestartJobSpec, old *v1alpha1.PostRestartJobSpec,
+) (field.ErrorList, admission.Warnings) {
+	var errs field.ErrorList
+	var warnings admission.Warnings
+
+	if prj.Script == "" {
 		errs = append(errs, field.Required(
 			field.NewPath("spec", "postRestartJob", "script"),
 			"script is required when postRestartJob is enabled",
 		))
 	}
 
-	return errs.ToAggregate()
+	if w := validatePostRestartWorkingDir(prj); w != "" {
+		warnings = append(warnings, w)
+	}
+
+	errs = append(errs, validatePostRestartRunAsRoot(prj, old)...)
+
+	// review id 3805157457 (#5): a negative tmpSizeLimit is nonsensical
+	// (emptyDir SizeLimit is a cap, not a delta) and, more importantly,
+	// silently means "no cap" to the kubelet in a way that looks like the
+	// opposite of the user's intent — reject it outright rather than let it
+	// pass through and surprise the user later.
+	if prj.TmpSizeLimit != nil && prj.TmpSizeLimit.Sign() < 0 {
+		errs = append(errs, field.Invalid(
+			field.NewPath("spec", "postRestartJob", "tmpSizeLimit"),
+			prj.TmpSizeLimit.String(),
+			"must not be negative; use \"0\" for no cap",
+		))
+	}
+
+	return errs, warnings
+}
+
+// validatePostRestartRunAsRoot rejects a postRestartJob spec that will hang
+// the Job pod Pending (CreateContainerConfigError) until
+// activeDeadlineSeconds expires, because the kubelet's EFFECTIVE
+// {runAsUser, runAsNonRoot} pair for the container resolves to {0, true}.
+//
+// Review id 3807285645 (#6): collapses what were three separate outcomes
+// into one rule. Previously:
+//  1. container-scope runAsUser: 0 (with runAsNonRoot unset everywhere) —
+//     rejected at admission (review id 3805157408, round 2 #1).
+//  2. pod-scope runAsUser: 0 (with runAsNonRoot unset everywhere) — not
+//     rejected, but self-healed at build time: job.go's
+//     mergePodSecurityContext drops the inherited runAsNonRoot: true
+//     default specifically when the user's PodSecurityContext sets
+//     RunAsUser: 0 and leaves RunAsNonRoot unset. Kept as-is here — see
+//     "Keep the builder fixup" below.
+//  3. pod-scope runAsUser: 0 WITH an explicit runAsNonRoot: true (container
+//     or pod scope) — the pod-scope hole: neither rejected NOR self-healed
+//     (the builder fixup only triggers when RunAsNonRoot is unset), so the
+//     pod hangs.
+//
+// The EFFECTIVE uid is computed exactly as the kubelet resolves it: the
+// container-level value wins when set, otherwise the pod-level value
+// applies. When that effective uid is 0, we reject:
+//   - unconditionally, when the uid0 came from the CONTAINER scope — the
+//     builder fixup only inspects PodSecurityContext, so a container-level
+//     override is never self-healed, and this preserves outcome 1 exactly
+//     (unset runAsNonRoot is presumed to inherit the hardened true
+//     default, same as before);
+//   - only when runAsNonRoot is EXPLICITLY true somewhere (container or
+//     pod scope), when the uid0 came from the POD scope only — this closes
+//     the outcome-3 hole while leaving outcome 2 (fully unset) alone, since
+//     the builder's own fixup already makes that combination safe at
+//     runtime. "Keep the builder fixup for the pod-unset case as
+//     defense-in-depth" (per review) — it remains the ONLY protection for
+//     that combination on webhook-bypass paths (webhooks.enabled: false,
+//     cert-manager absent, webhook downtime — see docs/upgrade-guide.md).
+//
+// An explicit runAsNonRoot: false, at either scope, is always an
+// acknowledged opt-out and short-circuits the whole check.
+//
+// Review id 3807285627 (#2): the check is skipped entirely (ratcheted) on
+// an Update when none of the four fields it inspects
+// (securityContext.{runAsUser,runAsNonRoot}, podSecurityContext.
+// runAsNonRoot — podSecurityContext.runAsUser is intentionally included
+// too, see securityContextRunAsFieldsUnchanged) changed from the stored
+// spec — a CR accepted by an older operator version (before this reject
+// existed) must not start failing on every unrelated update.
+func validatePostRestartRunAsRoot(prj, old *v1alpha1.PostRestartJobSpec) field.ErrorList {
+	if old != nil && securityContextRunAsFieldsUnchanged(prj, old) {
+		return nil
+	}
+
+	uid0, fromContainer := effectiveRunAsRoot(prj.SecurityContext, prj.PodSecurityContext)
+	if !uid0 {
+		return nil
+	}
+
+	containerOptsOut := prj.SecurityContext != nil &&
+		prj.SecurityContext.RunAsNonRoot != nil && !*prj.SecurityContext.RunAsNonRoot
+	podOptsOut := prj.PodSecurityContext != nil &&
+		prj.PodSecurityContext.RunAsNonRoot != nil && !*prj.PodSecurityContext.RunAsNonRoot
+	if containerOptsOut || podOptsOut {
+		return nil
+	}
+
+	containerAssertsTrue := prj.SecurityContext != nil &&
+		prj.SecurityContext.RunAsNonRoot != nil && *prj.SecurityContext.RunAsNonRoot
+	podAssertsTrue := prj.PodSecurityContext != nil &&
+		prj.PodSecurityContext.RunAsNonRoot != nil && *prj.PodSecurityContext.RunAsNonRoot
+
+	if !fromContainer && !containerAssertsTrue && !podAssertsTrue {
+		// Pod-scope uid0, runAsNonRoot unset everywhere: self-healed by
+		// job.go's mergePodSecurityContext fixup — not rejected here.
+		return nil
+	}
+
+	return field.ErrorList{field.Invalid(
+		field.NewPath("spec", "postRestartJob", "securityContext", "runAsUser"),
+		int64(0),
+		"runAsUser: 0 conflicts with the hardened runAsNonRoot: true default (kubelet "+
+			"pod-level runAsNonRoot defaults to true and is inherited unless overridden); "+
+			"the Job pod will hang Pending (CreateContainerConfigError) until "+
+			"activeDeadlineSeconds expires. Also set "+
+			"spec.postRestartJob.podSecurityContext.runAsNonRoot: false (or "+
+			"spec.postRestartJob.securityContext.runAsNonRoot: false) to acknowledge "+
+			"running as root.",
+	)}
+}
+
+// effectiveRunAsRoot reports whether the kubelet-resolved effective
+// runAsUser for the post-restart container is 0, and whether that value
+// came from the container-scope securityContext (as opposed to falling
+// back to the pod-scope podSecurityContext) — the container value wins
+// when set, exactly as the kubelet resolves per-field inheritance.
+func effectiveRunAsRoot(
+	container *corev1.SecurityContext, pod *corev1.PodSecurityContext,
+) (isRoot, fromContainer bool) {
+	if container != nil && container.RunAsUser != nil {
+		return *container.RunAsUser == 0, true
+	}
+	if pod != nil && pod.RunAsUser != nil {
+		return *pod.RunAsUser == 0, false
+	}
+	return false, false
+}
+
+// securityContextRunAsFieldsUnchanged reports whether the fields
+// validatePostRestartRunAsRoot inspects are identical between the new and
+// old postRestartJob spec — the ratchet condition for review id 3807285627
+// (#2). old may be nil (postRestartJob newly added on this update); new is
+// never nil (validatePostRestartJob is only called when enabled).
+func securityContextRunAsFieldsUnchanged(newPRJ, old *v1alpha1.PostRestartJobSpec) bool {
+	var oldContainer *corev1.SecurityContext
+	var oldPod *corev1.PodSecurityContext
+	if old != nil {
+		oldContainer = old.SecurityContext
+		oldPod = old.PodSecurityContext
+	}
+	return int64PtrEqual(securityContextRunAsUser(newPRJ.SecurityContext), securityContextRunAsUser(oldContainer)) &&
+		boolPtrEqual(securityContextRunAsNonRoot(newPRJ.SecurityContext), securityContextRunAsNonRoot(oldContainer)) &&
+		int64PtrEqual(podSecurityContextRunAsUser(newPRJ.PodSecurityContext), podSecurityContextRunAsUser(oldPod)) &&
+		boolPtrEqual(podSecurityContextRunAsNonRoot(newPRJ.PodSecurityContext), podSecurityContextRunAsNonRoot(oldPod))
+}
+
+func securityContextRunAsUser(sc *corev1.SecurityContext) *int64 {
+	if sc == nil {
+		return nil
+	}
+	return sc.RunAsUser
+}
+
+func securityContextRunAsNonRoot(sc *corev1.SecurityContext) *bool {
+	if sc == nil {
+		return nil
+	}
+	return sc.RunAsNonRoot
+}
+
+func podSecurityContextRunAsUser(psc *corev1.PodSecurityContext) *int64 {
+	if psc == nil {
+		return nil
+	}
+	return psc.RunAsUser
+}
+
+func podSecurityContextRunAsNonRoot(psc *corev1.PodSecurityContext) *bool {
+	if psc == nil {
+		return nil
+	}
+	return psc.RunAsNonRoot
+}
+
+func int64PtrEqual(a, b *int64) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+func boolPtrEqual(a, b *bool) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+// validatePostRestartWorkingDir returns a non-empty warning string when
+// spec.postRestartJob.workingDir is overridden outside the writable /tmp
+// emptyDir mount while readOnlyRootFilesystem is effectively true (review
+// id 3804144425 #4) — the container still starts fine, so this is not
+// otherwise caught until the script runs. A warning (not a hard error,
+// since it's a legitimate configuration if the image provides its own
+// writable directory there) nudges the user toward the documented escape
+// hatch instead.
+func validatePostRestartWorkingDir(prj *v1alpha1.PostRestartJobSpec) string {
+	if prj.WorkingDir == "" ||
+		prj.WorkingDir == resources.PostRestartTmpMountPath ||
+		strings.HasPrefix(prj.WorkingDir, resources.PostRestartTmpMountPath+"/") {
+		return ""
+	}
+
+	effectiveROFS := true
+	if prj.SecurityContext != nil && prj.SecurityContext.ReadOnlyRootFilesystem != nil {
+		effectiveROFS = *prj.SecurityContext.ReadOnlyRootFilesystem
+	}
+	if !effectiveROFS {
+		return ""
+	}
+
+	// review id 3805157497 (#9): "use an absolute path under /tmp" is not a
+	// sufficient remedy on its own — readOnlyRootFilesystem applies to the
+	// ENTIRE container filesystem, not just workingDir. Moving the script's
+	// CWD under /tmp only fixes relative-path writes issued from the
+	// working directory; any absolute-path write elsewhere on the rootfs
+	// (e.g. /var, /etc, npm's global prefix) still fails with EROFS
+	// regardless of workingDir.
+	return fmt.Sprintf(
+		"spec.postRestartJob.workingDir %q is outside the writable %s emptyDir mount, "+
+			"and readOnlyRootFilesystem is effectively true — relative-path writes in "+
+			"your script will fail with EROFS. Note readOnlyRootFilesystem applies to the "+
+			"whole container filesystem, not just workingDir: only %s (or a subdirectory "+
+			"of it) is writable, so any absolute-path write elsewhere on the rootfs will "+
+			"still fail even after moving workingDir there. Confine all script writes to "+
+			"%s, or set spec.postRestartJob.securityContext.readOnlyRootFilesystem: false "+
+			"deliberately.",
+		prj.WorkingDir, resources.PostRestartTmpMountPath,
+		resources.PostRestartTmpMountPath, resources.PostRestartTmpMountPath,
+	)
 }
 
 // EndpointValidator validates KrakenDEndpoint resources.

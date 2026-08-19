@@ -18,6 +18,7 @@ package v1alpha1
 
 import (
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
@@ -94,10 +95,12 @@ type KrakenDGatewaySpec struct {
 	// Service but is NOT added to the Istio VirtualService (local traffic only).
 	OpenAPI *OpenAPIExportSpec `json:"openapi,omitempty"`
 
-	// PostRestartJob configures a Kubernetes Job that runs after every
-	// rolling restart triggered by a configuration change. The Job is
-	// created once per unique config checksum and runs a user-provided
-	// bash script.
+	// PostRestartJob configures a Kubernetes Job that runs a user-provided
+	// bash script. The Job is created once per unique config +
+	// postRestartJob-spec revision (i.e. once per distinct combination of
+	// the rendered krakend.json checksum and this spec's execution-relevant
+	// fields — see internal/resources.PostRestartJobChecksum), not once per
+	// rolling restart.
 	PostRestartJob *PostRestartJobSpec `json:"postRestartJob,omitempty"`
 }
 
@@ -138,8 +141,9 @@ type OpenAPIExportSpec struct {
 	ReadinessProbe *corev1.Probe `json:"readinessProbe,omitempty"`
 }
 
-// PostRestartJobSpec configures a Kubernetes Job that runs after every
-// config-triggered rolling restart.
+// PostRestartJobSpec configures a Kubernetes Job that runs a user-provided
+// bash script once per unique config + postRestartJob-spec revision (see
+// internal/resources.PostRestartJobChecksum).
 type PostRestartJobSpec struct {
 	// Enabled toggles post-restart Job creation.
 	Enabled bool `json:"enabled"`
@@ -157,6 +161,24 @@ type PostRestartJobSpec struct {
 	// Image is the container image used to execute the script. Must
 	// include a shell compatible with Command. Defaults to "bash:5.2".
 	Image string `json:"image,omitempty"`
+
+	// WorkingDir overrides the container's working directory. Defaults to
+	// "/tmp" when unset, which is backed by a writable emptyDir volume (see
+	// internal/resources/job.go) so scripts can write there even under
+	// readOnlyRootFilesystem. If you override this to a path outside the
+	// /tmp emptyDir, ensure your image provides a writable directory at
+	// that path (e.g. it is not root-owned under a non-root runAsUser) —
+	// note that under the default readOnlyRootFilesystem: true, a path
+	// outside the /tmp emptyDir mount is NOT writable, so relative-path
+	// writes in your script will fail with EROFS even though the container
+	// starts successfully; use an absolute path under /tmp, or opt out of
+	// readOnlyRootFilesystem deliberately via securityContext.
+	// Must be an absolute path.
+	// +optional
+	// +kubebuilder:validation:MinLength=2
+	// +kubebuilder:validation:MaxLength=4096
+	// +kubebuilder:validation:Pattern=`^/.+$`
+	WorkingDir string `json:"workingDir,omitempty"`
 
 	// Env injects environment variables into the Job container.
 	Env []corev1.EnvVar `json:"env,omitempty"`
@@ -180,14 +202,25 @@ type PostRestartJobSpec struct {
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
 
 	// SecurityContext overrides the container-level security context for
-	// the Job. When nil the operator applies a minimal safe default
-	// (allowPrivilegeEscalation=false). Set this when your image requires
-	// a specific user (e.g. runAsUser: 0 for npm install -g).
+	// the Job. When nil the operator applies a hardened safe default:
+	// allowPrivilegeEscalation=false, readOnlyRootFilesystem=true, and
+	// capabilities.drop=["ALL"]. Fields you set here are merged on top of
+	// that default (unset fields keep the hardened default — see
+	// internal/resources/job.go strategicMergeSecurityContext). Set this
+	// when your image requires a specific user (e.g. runAsUser: 0 for npm
+	// install -g) — if you set container runAsUser: 0, also set
+	// spec.postRestartJob.podSecurityContext.runAsNonRoot: false, or the
+	// pod will hang Pending until activeDeadlineSeconds expires
+	// (CreateContainerConfigError: runAsNonRoot and runAsUser=0 conflict).
 	SecurityContext *corev1.SecurityContext `json:"securityContext,omitempty"`
 
 	// PodSecurityContext sets pod-level security attributes for the Job
-	// (e.g. fsGroup, runAsUser at pod scope). When nil the operator does
-	// not set any pod-level security context.
+	// (e.g. fsGroup, runAsUser at pod scope). When nil the operator applies
+	// a hardened default pod-level security context (runAsNonRoot=true,
+	// runAsUser/runAsGroup=1000, seccompProfile=RuntimeDefault) — it does
+	// NOT leave the pod-level security context unset. Fields you set here
+	// are merged on top of that default (unset fields keep the hardened
+	// default).
 	PodSecurityContext *corev1.PodSecurityContext `json:"podSecurityContext,omitempty"`
 
 	// BackoffLimit is the Job backoff limit. Defaults to 2.
@@ -199,6 +232,18 @@ type PostRestartJobSpec struct {
 	// TTLSecondsAfterFinished controls automatic cleanup after Job
 	// completion. Defaults to 86400 (24h).
 	TTLSecondsAfterFinished *int32 `json:"ttlSecondsAfterFinished,omitempty"`
+
+	// TmpSizeLimit overrides the size limit of the /tmp emptyDir volume
+	// backing the Job's working directory (see WorkingDir). Defaults to
+	// 256Mi. Increase this if your script downloads or writes more than
+	// 256Mi under /tmp (e.g. a large openapi.json export/upload) — exceeding
+	// the limit gets the pod Evicted mid-run by the kubelet, not a clean
+	// script-level failure. A value of "0" means no cap (an emptyDir
+	// SizeLimit of zero is treated by the kubelet as unbounded — it only
+	// enforces a limit for positive quantities); a negative value is
+	// rejected by the validating webhook.
+	// +optional
+	TmpSizeLimit *resource.Quantity `json:"tmpSizeLimit,omitempty"`
 }
 
 // GatewayConfig holds KrakenD service-level configuration.
@@ -516,8 +561,15 @@ type KrakenDGatewayStatus struct {
 	ActiveImage        string             `json:"activeImage,omitempty"`
 	EndpointCount      int32              `json:"endpointCount,omitempty"`
 	DragonflyAddress   string             `json:"dragonflyAddress,omitempty"`
-	// LastPostRestartJobChecksum records the config checksum for which the
-	// most recent post-restart Job was successfully created.
+	// LastPostRestartJobChecksum records the combined (config +
+	// postRestartJob-spec) checksum for which the most recent post-restart
+	// Job was created (see internal/resources.PostRestartJobChecksum). Used
+	// to guard against re-creating (and re-executing) the Job after
+	// TTLSecondsAfterFinished garbage-collects the finished Job object for
+	// the same revision. To force a re-run without a config or spec change,
+	// clear this field: `kubectl patch krakendgateway <name>
+	// --subresource=status --type=merge -p
+	// '{"status":{"lastPostRestartJobChecksum":""}}'`.
 	LastPostRestartJobChecksum string `json:"lastPostRestartJobChecksum,omitempty"`
 }
 

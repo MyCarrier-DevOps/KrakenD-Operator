@@ -80,6 +80,19 @@ const (
 	ConditionSpecAvailable            = "SpecAvailable"
 	ConditionSynced                   = "Synced"
 	ConditionPolicyValid              = "PolicyValid"
+	ConditionPostRestartJobSkipped    = "PostRestartJobSkipped"
+
+	// ConditionPostRestartJobReadOnlyRootFilesystem is an informational
+	// condition (review id 3805157497, #9) set unconditionally whenever a
+	// post-restart Job is created (or re-created), reporting the Job
+	// container's effective readOnlyRootFilesystem posture and which mount
+	// is writable. Unlike the admission-time workingDir warning (which only
+	// fires when workingDir is overridden outside /tmp), this covers the
+	// unconditional/default case too (prod's unset workingDir, script does
+	// e.g. `npm install -g` under ROFS) without needing to analyze the
+	// script — and it lands in `kubectl describe krakendgateway`/Events,
+	// which GitOps appliers (that swallow admission.Warnings) do surface.
+	ConditionPostRestartJobReadOnlyRootFilesystem = "PostRestartJobReadOnlyRootFilesystem"
 )
 
 // Event reason constants for the EventRecorder.
@@ -106,4 +119,20 @@ const (
 	ReasonCUEEvaluationFailed           = "CUEEvaluationFailed"
 	ReasonAdditionalEndpointOverride    = "AdditionalEndpointOverride"
 	ReasonAdditionalEndpointScopeFailed = "AdditionalEndpointScopeFailed"
+	ReasonPostRestartJobAlreadyRun      = "PostRestartJobAlreadyRun"
+	ReasonPostRestartJobCreated         = "PostRestartJobCreated"
+	// ReasonPostRestartJobAdopted covers the "Job for this revision's
+	// checksum already exists" branch of reconcilePostRestartJob — as
+	// opposed to ReasonPostRestartJobCreated, which means this reconcile
+	// actually issued the Create call. Split out (review id 3811443603,
+	// #7) because the exists-branch was previously (mis)reported under
+	// ReasonPostRestartJobCreated for every adoption, including the
+	// interrupted-recreate case where the "adopted" Job is still the
+	// FAILED Job awaiting re-creation (a Delete failure in
+	// reconcileExistingPostRestartRevision's recreate path left it in
+	// place) — the "Created"/"already exists" wording implied a healthy
+	// outcome for a Job that had not, in fact, successfully re-run.
+	ReasonPostRestartJobAdopted      = "PostRestartJobAdopted"
+	ReasonPostRestartJobROFSEnabled  = "ReadOnlyRootFilesystemEnabled"
+	ReasonPostRestartJobROFSDisabled = "ReadOnlyRootFilesystemDisabled"
 )
