@@ -635,6 +635,76 @@ func TestPostRestartJobChecksum_ChangesWithSpec(t *testing.T) {
 	}
 }
 
+// TestPostRestartJobChecksum_UnsetVsExplicitDefaultWorkingDirConverge covers
+// the round-3 robustness finding: BuildPostRestartJob defaults an unset
+// WorkingDir to "/tmp" (postRestartWorkingDir), so a CR that leaves
+// WorkingDir unset and a CR that explicitly sets it to "/tmp" render a
+// byte-identical Job. The checksum must hash the EFFECTIVE (post-default)
+// value, not the raw spec field, so both cases converge on one checksum
+// instead of over-triggering a spurious re-create.
+func TestPostRestartJobChecksum_UnsetVsExplicitDefaultWorkingDirConverge(t *testing.T) {
+	unset := &v1alpha1.PostRestartJobSpec{Enabled: true, Script: "echo ok"}
+	explicitDefault := &v1alpha1.PostRestartJobSpec{Enabled: true, Script: "echo ok", WorkingDir: "/tmp"}
+
+	unsetSum, err := PostRestartJobChecksum(unset, "same-config-checksum")
+	if err != nil {
+		t.Fatalf("computing unset checksum: %v", err)
+	}
+	explicitSum, err := PostRestartJobChecksum(explicitDefault, "same-config-checksum")
+	if err != nil {
+		t.Fatalf("computing explicit-default checksum: %v", err)
+	}
+	if unsetSum != explicitSum {
+		t.Fatalf("expected WorkingDir unset and WorkingDir=/tmp (the default) to produce the same "+
+			"checksum, got %q vs %q", unsetSum, explicitSum)
+	}
+
+	// Sanity: a genuinely different WorkingDir must still change the checksum.
+	different := &v1alpha1.PostRestartJobSpec{Enabled: true, Script: "echo ok", WorkingDir: "/custom-dir"}
+	differentSum, err := PostRestartJobChecksum(different, "same-config-checksum")
+	if err != nil {
+		t.Fatalf("computing different-workingDir checksum: %v", err)
+	}
+	if differentSum == unsetSum {
+		t.Fatalf("expected a non-default WorkingDir to change the checksum, got %q for both", differentSum)
+	}
+}
+
+// TestPostRestartJobChecksum_UnsetVsExplicitDefaultCommandConverge mirrors
+// TestPostRestartJobChecksum_UnsetVsExplicitDefaultWorkingDirConverge for
+// Command: BuildPostRestartJob defaults an unset/empty Command to
+// ["bash", "-c"], so a CR that leaves Command unset and a CR that
+// explicitly sets it to ["bash", "-c"] must hash to the same checksum.
+func TestPostRestartJobChecksum_UnsetVsExplicitDefaultCommandConverge(t *testing.T) {
+	unset := &v1alpha1.PostRestartJobSpec{Enabled: true, Script: "echo ok"}
+	explicitDefault := &v1alpha1.PostRestartJobSpec{
+		Enabled: true, Script: "echo ok", Command: []string{"bash", "-c"},
+	}
+
+	unsetSum, err := PostRestartJobChecksum(unset, "same-config-checksum")
+	if err != nil {
+		t.Fatalf("computing unset checksum: %v", err)
+	}
+	explicitSum, err := PostRestartJobChecksum(explicitDefault, "same-config-checksum")
+	if err != nil {
+		t.Fatalf("computing explicit-default checksum: %v", err)
+	}
+	if unsetSum != explicitSum {
+		t.Fatalf("expected Command unset and Command=[bash -c] (the default) to produce the same "+
+			"checksum, got %q vs %q", unsetSum, explicitSum)
+	}
+
+	// Sanity: a genuinely different Command must still change the checksum.
+	different := &v1alpha1.PostRestartJobSpec{Enabled: true, Script: "echo ok", Command: []string{"sh", "-c"}}
+	differentSum, err := PostRestartJobChecksum(different, "same-config-checksum")
+	if err != nil {
+		t.Fatalf("computing different-command checksum: %v", err)
+	}
+	if differentSum == unsetSum {
+		t.Fatalf("expected a non-default Command to change the checksum, got %q for both", differentSum)
+	}
+}
+
 func TestBuildService_WithOpenAPIPort(t *testing.T) {
 	gw := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "ns"},

@@ -144,6 +144,15 @@ cluster with `postRestartJob.enabled: true`.
    hardened default. This is strictly safer than before, but review your
    existing overrides — fields you were implicitly relying on being *unset*
    (e.g. no seccomp profile) will now inherit the operator default.
+   **Caveat — `capabilities.drop` is still a wholesale REPLACE, not a
+   union.** The field-by-field merge only applies at the object level
+   (`securityContext`, `capabilities`, etc.); `capabilities.drop` itself is a
+   plain list, and explicitly setting it (e.g.
+   `securityContext.capabilities.drop: ["NET_ADMIN"]`) replaces the hardened
+   `drop: ["ALL"]` baseline entirely rather than adding to it. If you need
+   your own drop list AND want to keep the `ALL` baseline, include `"ALL"`
+   in your own list explicitly (e.g. `drop: ["ALL", "NET_ADMIN"]` is
+   redundant but harmless; omitting `ALL` silently loses the hardening).
 3. **The Job now re-triggers on `postRestartJob` spec changes, not just
    config changes.** The Job's identity checksum now includes a projection
    of the execution-relevant `postRestartJob` spec fields (script, command,

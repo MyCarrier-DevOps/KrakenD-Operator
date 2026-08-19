@@ -134,6 +134,63 @@ func TestReconcilePostRestartJob_SkipsWhenNotConverged(t *testing.T) {
 	}
 }
 
+// TestReconcilePostRestartJob_NotYetConvergedPreservesConditions covers the
+// not-yet-converged early return's documented behavior (see the comment
+// above the Deployment Get in reconcilePostRestartJob, review id 3807285652
+// #7): unlike the disabled/unconfigured guard (which actively REMOVES the
+// PostRestartJobSkipped/ROFS conditions), the not-yet-converged branch must
+// leave conditions set by a prior, already-converged revision untouched —
+// clearing or flipping them here would flicker the conditions away and back
+// on every reconcile while a rollout is merely in progress.
+func TestReconcilePostRestartJob_NotYetConvergedPreservesConditions(t *testing.T) {
+	gw := makeGWWithJob("echo ok")
+	dep := makeConvergedDeployment(gw, "abc123")
+	dep.Status.UpdatedReplicas = 0 // not yet converged
+
+	// Simulate conditions already set by a prior converged revision.
+	priorSkipped := metav1.Condition{
+		Type:               v1alpha1.ConditionPostRestartJobSkipped,
+		Status:             metav1.ConditionFalse,
+		ObservedGeneration: gw.Generation,
+		Reason:             v1alpha1.ReasonPostRestartJobCreated,
+		Message:            "post-restart Job gw-postrestart-abc created for config checksum abc123",
+	}
+	priorROFS := metav1.Condition{
+		Type:               v1alpha1.ConditionPostRestartJobReadOnlyRootFilesystem,
+		Status:             metav1.ConditionTrue,
+		ObservedGeneration: gw.Generation,
+		Reason:             v1alpha1.ReasonPostRestartJobROFSEnabled,
+		Message:            "container filesystem is read-only; script writes must target /tmp",
+	}
+	meta.SetStatusCondition(&gw.Status.Conditions, priorSkipped)
+	meta.SetStatusCondition(&gw.Status.Conditions, priorROFS)
+
+	c := fakeClientBuilder().WithObjects(gw, dep).Build()
+	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
+
+	if err := r.reconcilePostRestartJob(context.Background(), gw, "abc123"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	gotSkipped := meta.FindStatusCondition(gw.Status.Conditions, v1alpha1.ConditionPostRestartJobSkipped)
+	if gotSkipped == nil {
+		t.Fatalf("expected PostRestartJobSkipped condition to survive the not-yet-converged reconcile, got none")
+	}
+	if gotSkipped.Status != priorSkipped.Status || gotSkipped.Reason != priorSkipped.Reason {
+		t.Errorf("expected PostRestartJobSkipped condition unchanged (status=%v reason=%q), got status=%v reason=%q",
+			priorSkipped.Status, priorSkipped.Reason, gotSkipped.Status, gotSkipped.Reason)
+	}
+
+	gotROFS := meta.FindStatusCondition(gw.Status.Conditions, v1alpha1.ConditionPostRestartJobReadOnlyRootFilesystem)
+	if gotROFS == nil {
+		t.Fatalf("expected ROFS condition to survive the not-yet-converged reconcile, got none")
+	}
+	if gotROFS.Status != priorROFS.Status || gotROFS.Reason != priorROFS.Reason {
+		t.Errorf("expected ROFS condition unchanged (status=%v reason=%q), got status=%v reason=%q",
+			priorROFS.Status, priorROFS.Reason, gotROFS.Status, gotROFS.Reason)
+	}
+}
+
 func TestReconcilePostRestartJob_SkipsWhenChecksumMismatch(t *testing.T) {
 	gw := makeGWWithJob("echo ok")
 	dep := makeConvergedDeployment(gw, "old-checksum")

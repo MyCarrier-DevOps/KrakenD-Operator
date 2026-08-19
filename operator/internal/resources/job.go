@@ -156,6 +156,32 @@ type postRestartJobProjection struct {
 	Resources          *corev1.ResourceRequirements `json:"resources"`
 }
 
+// effectivePostRestartCommand returns the post-default Command that
+// BuildPostRestartJob will actually put on the container: the user's
+// spec.Command if set, otherwise the same ["bash", "-c"] default
+// BuildPostRestartJob applies. Shared by BuildPostRestartJob and
+// PostRestartJobChecksum's projection so "Command unset" and "Command set
+// explicitly to the default" can never diverge between what's hashed and
+// what's built (see postRestartJobProjection's WorkingDir/Command fields).
+func effectivePostRestartCommand(spec *v1alpha1.PostRestartJobSpec) []string {
+	if len(spec.Command) == 0 {
+		return []string{"bash", "-c"}
+	}
+	return spec.Command
+}
+
+// effectivePostRestartWorkingDir returns the post-default WorkingDir that
+// BuildPostRestartJob will actually put on the container: the user's
+// spec.WorkingDir if set, otherwise the same postRestartWorkingDir default
+// BuildPostRestartJob applies. Shared with PostRestartJobChecksum's
+// projection for the same reason as effectivePostRestartCommand above.
+func effectivePostRestartWorkingDir(spec *v1alpha1.PostRestartJobSpec) string {
+	if spec.WorkingDir != "" {
+		return spec.WorkingDir
+	}
+	return postRestartWorkingDir
+}
+
 // PostRestartJobChecksum combines the rendered krakend.json configChecksum
 // with a checksum of the execution-relevant projection of the
 // PostRestartJobSpec (see postRestartJobProjection), so the Job's identity
@@ -183,11 +209,18 @@ type postRestartJobProjection struct {
 // length or content of either input — no caller precondition about a fixed
 // checksum length is required.
 func PostRestartJobChecksum(spec *v1alpha1.PostRestartJobSpec, configChecksum string) (string, error) {
+	// Command and WorkingDir are normalized to their EFFECTIVE post-default
+	// values (via effectivePostRestartCommand/effectivePostRestartWorkingDir
+	// — the SAME default logic BuildPostRestartJob applies), not hashed
+	// verbatim from the raw spec. Otherwise "unset" and "explicitly set to
+	// the default" hash to two different checksums while BuildPostRestartJob
+	// renders a byte-identical Job for both, causing a spurious re-trigger
+	// (robustness finding, round-3 cleanup).
 	projection := postRestartJobProjection{
 		Script:             spec.Script,
-		Command:            spec.Command,
+		Command:            effectivePostRestartCommand(spec),
 		Image:              spec.Image,
-		WorkingDir:         spec.WorkingDir,
+		WorkingDir:         effectivePostRestartWorkingDir(spec),
 		Env:                spec.Env,
 		EnvFrom:            spec.EnvFrom,
 		SecurityContext:    spec.SecurityContext,
@@ -261,15 +294,8 @@ func BuildPostRestartJob(
 	podAnnotations[PostRestartJobChecksumAnnotation] = configChecksum
 	podAnnotations[PostRestartJobCombinedChecksumAnnotation] = checksum
 
-	cmd := spec.Command
-	if len(cmd) == 0 {
-		cmd = []string{"bash", "-c"}
-	}
-
-	workingDir := postRestartWorkingDir
-	if spec.WorkingDir != "" {
-		workingDir = spec.WorkingDir
-	}
+	cmd := effectivePostRestartCommand(spec)
+	workingDir := effectivePostRestartWorkingDir(spec)
 
 	container := corev1.Container{
 		Name:            PostRestartContainerName,
@@ -343,6 +369,17 @@ func podLabels(base map[string]string, spec *v1alpha1.PostRestartJobSpec) map[st
 // Mirrors the deployment's krakend container (internal/resources/
 // deployment.go): readOnlyRootFilesystem + drop ALL capabilities + no
 // privilege escalation.
+//
+// WARNING (security footgun, drop-list override): strategicMergeSecurityContext
+// merges nested objects key-by-key, but Capabilities.Drop is itself a plain
+// (non-patchMergeKey) list, so a user who explicitly sets
+// securityContext.capabilities.drop (e.g. ["NET_ADMIN"]) has that list
+// REPLACE this Drop: ["ALL"] baseline wholesale — it does not union with it.
+// The hardened default is silently discarded the moment a user's spec sets
+// any non-empty capabilities.drop of their own. This is intentional,
+// documented behavior (not special-cased/merged — see docs/upgrade-guide.md);
+// a user who wants to keep the ALL baseline while adding their own drops
+// must include "ALL" in their own list.
 func defaultPostRestartContainerSecurityContext() *corev1.SecurityContext {
 	return &corev1.SecurityContext{
 		AllowPrivilegeEscalation: new(false),
