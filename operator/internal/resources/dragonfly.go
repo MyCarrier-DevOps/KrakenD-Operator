@@ -23,7 +23,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/utils/ptr"
 )
 
 // DragonflyGVR returns the GroupVersionResource for the Dragonfly CRD.
@@ -107,44 +106,106 @@ func BuildDragonfly(df *unstructured.Unstructured, gw *v1alpha1.KrakenDGateway) 
 		dfSpec["args"] = args
 	}
 
-	dfSpec["podSecurityContext"] = buildPodSecurityContext(dragonflyPodSecCtx(spec))
-	dfSpec["containerSecurityContext"] = buildSecurityContext(dragonflyContainerSecCtx(spec))
+	podSecCtx := mergeDragonflyPodSecurityContext(spec.PodSecurityContext)
+	containerSecCtx := mergeDragonflyContainerSecurityContext(spec.ContainerSecurityContext)
+	dfSpec["podSecurityContext"] = buildPodSecurityContext(podSecCtx)
+	dfSpec["containerSecurityContext"] = buildSecurityContext(containerSecCtx)
 
 	df.Object["spec"] = dfSpec
 }
 
-// dragonflyPodSecCtx returns the user-provided PodSecurityContext or a safe
-// non-root default. The Dragonfly image ships a built-in "dfly" user at
-// uid/gid 999.
-func dragonflyPodSecCtx(spec *v1alpha1.DragonflySpec) *corev1.PodSecurityContext {
-	if spec.PodSecurityContext != nil {
-		return spec.PodSecurityContext
-	}
+// defaultDragonflyPodSecurityContext returns the hardened pod-level
+// securityContext defaults applied when the user leaves a field unset. The
+// Dragonfly image ships a built-in "dfly" user at uid/gid 999.
+func defaultDragonflyPodSecurityContext() *corev1.PodSecurityContext {
 	return &corev1.PodSecurityContext{
-		RunAsNonRoot: ptr.To(true),
-		RunAsUser:    ptr.To(int64(999)),
-		RunAsGroup:   ptr.To(int64(999)),
+		RunAsNonRoot: new(true),
+		RunAsUser:    new(int64(999)),
+		RunAsGroup:   new(int64(999)),
 		// FSGroup replicates the upstream dragonfly-operator's built-in
 		// fsGroup:999 default, which is nil-guarded and only applied when
 		// spec.PodSecurityContext == nil. Since we set a non-nil
 		// PodSecurityContext here, we must set FSGroup explicitly or fresh
 		// PVCs (e.g. root-owned Azure disks) end up group-unwritable and
 		// the uid999 process crashloops on --dir=/dragonfly/snapshots.
-		FSGroup: ptr.To(int64(999)),
+		FSGroup: new(int64(999)),
 	}
 }
 
-// dragonflyContainerSecCtx returns the user-provided ContainerSecurityContext
-// or a safe non-root default matching dragonflyPodSecCtx.
-func dragonflyContainerSecCtx(spec *v1alpha1.DragonflySpec) *corev1.SecurityContext {
-	if spec.ContainerSecurityContext != nil {
-		return spec.ContainerSecurityContext
-	}
+// defaultDragonflyContainerSecurityContext returns the hardened
+// container-level securityContext defaults applied when the user leaves a
+// field unset, matching defaultDragonflyPodSecurityContext.
+func defaultDragonflyContainerSecurityContext() *corev1.SecurityContext {
 	return &corev1.SecurityContext{
-		RunAsNonRoot: ptr.To(true),
-		RunAsUser:    ptr.To(int64(999)),
-		RunAsGroup:   ptr.To(int64(999)),
+		RunAsNonRoot: new(true),
+		RunAsUser:    new(int64(999)),
+		RunAsGroup:   new(int64(999)),
 	}
+}
+
+// mergeDragonflyPodSecurityContext merges a user-provided PodSecurityContext
+// on top of the hardened defaults via strategicMergeSecurityContext (see
+// job.go's mergeContainerSecurityContext for the general rationale — 8qln,
+// mirrored here for the Dragonfly scope per docs/upgrade-guide.md item 7).
+// Previously spec.dragonfly.podSecurityContext/containerSecurityContext were
+// a full-replace: setting any single field (e.g. runAsUser) silently
+// discarded the entire hardened default, including fsGroup: 999 — a live
+// ownership hazard for PVC-backed instances (the uid/gid 999 "dfly" process
+// loses group-write access to --dir=/dragonfly/snapshots and crashloops).
+//
+// Fix-round review 1 (asymmetry with job.go, see
+// mergeDragonflyContainerSecurityContext's fixup): unlike
+// job.go's defaultPostRestartContainerSecurityContext, which leaves runAs*
+// UNSET at container scope, defaultDragonflyContainerSecurityContext PINS
+// RunAsUser/RunAsGroup/RunAsNonRoot at container scope to match the dfly
+// image's built-in uid. Because container-scope security-context fields
+// always override pod-scope per-field at the kubelet, pod-scope
+// runAsUser/runAsNonRoot NEVER change the Dragonfly container's effective
+// uid — the container default's pin wins regardless. A pod-scope-unset
+// self-heal fixup here therefore has no real capability to preserve (it
+// cannot un-pin the container's uid 999); it only silently changes the
+// identity of any OTHER (non-dragonfly) container/init-container inheriting
+// pod-scope security context, and masks a spec that the validator should
+// instead reject outright (see validateDragonflyRunAsRoot). Removed; see
+// mergeDragonflyContainerSecurityContext for the container-scope fixup this
+// asymmetry actually requires.
+func mergeDragonflyPodSecurityContext(user *corev1.PodSecurityContext) *corev1.PodSecurityContext {
+	base := *defaultDragonflyPodSecurityContext()
+	merged := strategicMergeSecurityContext(base, user)
+	return &merged
+}
+
+// mergeDragonflyContainerSecurityContext merges a user-provided container
+// SecurityContext on top of the hardened Dragonfly defaults via
+// strategicMergeSecurityContext (see mergeDragonflyPodSecurityContext for
+// rationale).
+func mergeDragonflyContainerSecurityContext(user *corev1.SecurityContext) *corev1.SecurityContext {
+	base := *defaultDragonflyContainerSecurityContext()
+	merged := strategicMergeSecurityContext(base, user)
+
+	// Fix-round review 1, BLOCKER: container-scope uid0 fixup. Unlike
+	// job.go's postRestartJob container default (defaultPostRestart
+	// ContainerSecurityContext), which leaves runAsUser/runAsNonRoot UNSET
+	// at container scope (so pod scope governs), defaultDragonflyContainer
+	// SecurityContext deliberately PINS RunAsNonRoot: true at container
+	// scope. Kubelet resolves the EFFECTIVE {runAsUser, runAsNonRoot} pair
+	// per-field, and a container-scope value always wins over pod-scope for
+	// that same field — so an explicit containerSecurityContext.runAsUser: 0
+	// always merges against the inherited container-scope RunAsNonRoot:
+	// true default, no matter what the pod-scope runAsNonRoot says. Without
+	// this fixup that always renders the kubelet-rejected {0, true} pair
+	// (CreateContainerConfigError, pod Pending forever — no
+	// activeDeadlineSeconds unlike the Job), INCLUDING grandfathered
+	// pre-upgrade root specs the webhook ratchet deliberately admits (see
+	// validateDragonflyRunAsRoot). If the user set RunAsUser: 0 without also
+	// setting RunAsNonRoot, drop the inherited RunAsNonRoot default so the
+	// user's pod-scope runAsNonRoot: false (or unset, defaulting to
+	// kubelet's implicit false) governs via normal kubelet inheritance.
+	if user != nil && user.RunAsUser != nil && *user.RunAsUser == 0 && user.RunAsNonRoot == nil {
+		merged.RunAsNonRoot = nil
+	}
+
+	return &merged
 }
 
 // buildPodSecurityContext converts a corev1.PodSecurityContext into the

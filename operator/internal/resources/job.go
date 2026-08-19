@@ -599,6 +599,18 @@ func defaultPostRestartPodSecurityContext() *corev1.PodSecurityContext {
 // mergeContainerSecurityContext for rationale — 8qln). A prod override of
 // runAsUser: 0 keeps runAsNonRoot's sibling defaults (runAsGroup,
 // seccompProfile) intact unless the user also overrides them.
+//
+// Cross-reference (fix-round review 1, change #4): this pod-scope fixup is
+// the RIGHT scope for the postRestartJob Job, because
+// defaultPostRestartContainerSecurityContext leaves runAsUser/runAsNonRoot
+// UNSET at container scope — pod scope genuinely governs the effective uid,
+// so a pod-scope self-heal has a real capability to preserve. Dragonfly's
+// analogous merge helpers (internal/resources/dragonfly.go) are
+// deliberately asymmetric: mergeDragonflyContainerSecurityContext carries
+// the fixup instead, because dragonfly's container default PINS
+// RunAsNonRoot (container scope always wins over pod scope per-field at
+// the kubelet). This function's own runtime behavior is unchanged by that
+// fix-round.
 func mergePodSecurityContext(user *corev1.PodSecurityContext) *corev1.PodSecurityContext {
 	base := *defaultPostRestartPodSecurityContext()
 	merged := strategicMergeSecurityContext(base, user)

@@ -701,6 +701,394 @@ func TestGatewayValidator_RunAsUserZeroRatchetDisabledThenEnabledRejected(t *tes
 	}
 }
 
+// TestGatewayValidator_DragonflyContainerRunAsUserZeroRejected mirrors
+// TestGatewayValidator_ContainerRunAsUserZeroRejected for the Dragonfly
+// scope (spec.dragonfly.containerSecurityContext), now that
+// mergeDragonflyContainerSecurityContext merges instead of replacing.
+func TestGatewayValidator_DragonflyContainerRunAsUserZeroRejected(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Config: v1alpha1.GatewayConfig{},
+			Dragonfly: &v1alpha1.DragonflySpec{
+				Enabled: true,
+				ContainerSecurityContext: &corev1.SecurityContext{
+					RunAsUser: new(int64(0)),
+				},
+			},
+		},
+	}
+	v := &GatewayValidator{}
+	_, err := v.ValidateCreate(context.Background(), gw)
+	if err == nil {
+		t.Fatal("expected rejection for dragonfly container runAsUser:0 with no runAsNonRoot escape hatch")
+	}
+	if !strings.Contains(err.Error(), "runAsNonRoot") {
+		t.Errorf("expected error to mention runAsNonRoot, got: %v", err)
+	}
+}
+
+// TestGatewayValidator_DragonflyContainerRunAsUserZeroWithPodRunAsNonRootFalseAllowed
+// verifies the escape hatch: setting podSecurityContext.runAsNonRoot: false
+// alongside the container's runAsUser: 0 is accepted AT ADMISSION. This is
+// admission-only, though: before fix-round review 1's change #1 (the
+// container-scope uid0 fixup in mergeDragonflyContainerSecurityContext),
+// admission would allow this spec while the BUILDER still rendered the
+// kubelet-rejected {runAsUser:0, runAsNonRoot:true} pair — the escape hatch
+// was a lie. Paired with the build-level assertion that the escape hatch
+// actually renders a startable container: see external_crd_test.go's
+// TestBuildDragonfly_ContainerRootUserWithPodRunAsNonRootFalseStartable.
+func TestGatewayValidator_DragonflyContainerRunAsUserZeroWithPodRunAsNonRootFalseAllowed(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Config: v1alpha1.GatewayConfig{},
+			Dragonfly: &v1alpha1.DragonflySpec{
+				Enabled: true,
+				ContainerSecurityContext: &corev1.SecurityContext{
+					RunAsUser: new(int64(0)),
+				},
+				PodSecurityContext: &corev1.PodSecurityContext{
+					RunAsNonRoot: new(false),
+				},
+			},
+		},
+	}
+	v := &GatewayValidator{}
+	_, err := v.ValidateCreate(context.Background(), gw)
+	if err != nil {
+		t.Fatalf("expected no error when podSecurityContext.runAsNonRoot:false is set, got: %v", err)
+	}
+}
+
+// TestGatewayValidator_DragonflyContainerRunAsUserZeroWithContainerRunAsNonRootFalseAllowed
+// verifies the other escape hatch: an explicit container-level
+// runAsNonRoot: false alongside runAsUser: 0 is accepted.
+func TestGatewayValidator_DragonflyContainerRunAsUserZeroWithContainerRunAsNonRootFalseAllowed(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Config: v1alpha1.GatewayConfig{},
+			Dragonfly: &v1alpha1.DragonflySpec{
+				Enabled: true,
+				ContainerSecurityContext: &corev1.SecurityContext{
+					RunAsUser:    new(int64(0)),
+					RunAsNonRoot: new(false),
+				},
+			},
+		},
+	}
+	v := &GatewayValidator{}
+	_, err := v.ValidateCreate(context.Background(), gw)
+	if err != nil {
+		t.Fatalf("expected no error when container securityContext.runAsNonRoot:false is set, got: %v", err)
+	}
+}
+
+// TestGatewayValidator_DragonflyPodScopeRunAsUserZeroWithExplicitRunAsNonRootTrueRejected
+// covers the EXPLICIT-runAsNonRoot:true variant of the pod-scope hole for
+// Dragonfly: podSecurityContext.runAsUser:0 with an explicit
+// podSecurityContext.runAsNonRoot:true must be rejected at admission, same
+// as the container-scope case. Note there is no self-heal fixup to
+// distinguish this from anymore (fix-round review 1, change #2 removed
+// mergeDragonflyPodSecurityContext's pod-scope fixup): a fully UNSET
+// podSecurityContext.runAsNonRoot alongside runAsUser:0 is now ALSO
+// rejected at admission — see the adjacent
+// TestGatewayValidator_DragonflyPodScopeRunAsUserZeroUnsetRunAsNonRootRejected.
+// This test covers the same reject outcome for the explicit-true variant.
+func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroWithExplicitRunAsNonRootTrueRejected(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Config: v1alpha1.GatewayConfig{},
+			Dragonfly: &v1alpha1.DragonflySpec{
+				Enabled: true,
+				PodSecurityContext: &corev1.PodSecurityContext{
+					RunAsUser:    new(int64(0)),
+					RunAsNonRoot: new(true),
+				},
+			},
+		},
+	}
+	v := &GatewayValidator{}
+	_, err := v.ValidateCreate(context.Background(), gw)
+	if err == nil {
+		t.Fatal("expected rejection for dragonfly pod-scope runAsUser:0 with explicit podSecurityContext.runAsNonRoot:true")
+	}
+	if !strings.Contains(err.Error(), "runAsNonRoot") {
+		t.Errorf("expected error to mention runAsNonRoot, got: %v", err)
+	}
+}
+
+// TestGatewayValidator_DragonflyPodScopeRunAsUserZeroUnsetRunAsNonRootRejected
+// covers fix-round review 1, change #2: unlike postRestartJob, the
+// pod-scope-unset case for Dragonfly is now REJECTED at admission (renamed
+// from ...Allowed). Dragonfly's container-scope default PINS RunAsNonRoot
+// (and RunAsUser/RunAsGroup) regardless of pod scope — container-scope
+// always overrides pod-scope per-field at the kubelet — so a pod-scope
+// runAsUser:0 never changes the Dragonfly container's effective uid; it
+// only silently roots injected sidecars with no legitimate capability
+// gained. There is nothing to self-heal, so
+// mergeDragonflyPodSecurityContext's pod-scope fixup was removed and this
+// combination is now rejected outright instead.
+func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroUnsetRunAsNonRootRejected(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Config: v1alpha1.GatewayConfig{},
+			Dragonfly: &v1alpha1.DragonflySpec{
+				Enabled: true,
+				PodSecurityContext: &corev1.PodSecurityContext{
+					RunAsUser: new(int64(0)),
+				},
+			},
+		},
+	}
+	v := &GatewayValidator{}
+	_, err := v.ValidateCreate(context.Background(), gw)
+	if err == nil {
+		t.Fatal("expected rejection for dragonfly pod-scope runAsUser:0 with runAsNonRoot unset " +
+			"(no longer self-healed — the pod-scope fixup was removed)")
+	}
+	if !strings.Contains(err.Error(), "runAsNonRoot") {
+		t.Errorf("expected error to mention runAsNonRoot, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "spec.dragonfly.podSecurityContext.runAsUser") {
+		t.Errorf("expected the sanctioned error-path fix to point at "+
+			"spec.dragonfly.podSecurityContext.runAsUser (the field the user actually set), got: %v", err)
+	}
+}
+
+// TestGatewayValidator_DragonflyRunAsUserZeroRatchetUnchangedUpdateAllowed
+// covers the Dragonfly ratchet: a CR already carrying container
+// securityContext.runAsUser:0 with no runAsNonRoot escape hatch — as
+// accepted before this reject existed — must not start failing on an
+// UNRELATED update as long as the relevant securityContext fields are
+// unchanged from the stored spec.
+func TestGatewayValidator_DragonflyRunAsUserZeroRatchetUnchangedUpdateAllowed(t *testing.T) {
+	old := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Config: v1alpha1.GatewayConfig{},
+			Dragonfly: &v1alpha1.DragonflySpec{
+				Enabled: true,
+				ContainerSecurityContext: &corev1.SecurityContext{
+					RunAsUser: new(int64(0)),
+				},
+			},
+		},
+	}
+	newGW := old.DeepCopy()
+	// Unrelated field changes; the securityContext runAsUser/runAsNonRoot
+	// fields stay exactly as they were.
+	newGW.Spec.Dragonfly.Image = "docker.dragonflydb.io/dragonflydb/dragonfly:v1.25.2"
+
+	v := &GatewayValidator{}
+	_, err := v.ValidateUpdate(context.Background(), old, newGW)
+	if err != nil {
+		t.Fatalf("expected the pre-existing dragonfly runAsUser:0 to be ratcheted (allowed) on an unrelated update, got: %v", err)
+	}
+}
+
+// TestGatewayValidator_DragonflyPodScopeRunAsUserZeroRatchetUnchangedUpdateAllowed
+// covers item 5c of fix-round review 1: now that pod-scope runAsUser:0 with
+// runAsNonRoot unset is rejected at admission for NEW/changed specs (see
+// TestGatewayValidator_DragonflyPodScopeRunAsUserZeroUnsetRunAsNonRootRejected),
+// a CR that already carries that shape — grandfathered from before this
+// fix-round's admission tightening — must still be ratcheted (allowed) on
+// an update that leaves the relevant fields unchanged.
+func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroRatchetUnchangedUpdateAllowed(t *testing.T) {
+	old := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Config: v1alpha1.GatewayConfig{},
+			Dragonfly: &v1alpha1.DragonflySpec{
+				Enabled: true,
+				PodSecurityContext: &corev1.PodSecurityContext{
+					RunAsUser: new(int64(0)),
+				},
+			},
+		},
+	}
+	newGW := old.DeepCopy()
+	// Unrelated field change; the pod-scope runAsUser/runAsNonRoot fields
+	// stay exactly as they were.
+	newGW.Spec.Dragonfly.Image = "docker.dragonflydb.io/dragonflydb/dragonfly:v1.25.2"
+
+	v := &GatewayValidator{}
+	_, err := v.ValidateUpdate(context.Background(), old, newGW)
+	if err != nil {
+		t.Fatalf("expected the pre-existing grandfathered pod-scope dragonfly runAsUser:0 to be "+
+			"ratcheted (allowed) on an unrelated update, got: %v", err)
+	}
+}
+
+// TestGatewayValidator_DragonflyRunAsUserZeroRatchetNewlyIntroducedUpdateRejected
+// covers the other half of the ratchet: the update must NOT be ratcheted
+// when it actually INTRODUCES the offending combination — that must still
+// be rejected exactly like a Create.
+func TestGatewayValidator_DragonflyRunAsUserZeroRatchetNewlyIntroducedUpdateRejected(t *testing.T) {
+	old := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Config: v1alpha1.GatewayConfig{},
+			Dragonfly: &v1alpha1.DragonflySpec{
+				Enabled: true,
+			},
+		},
+	}
+	newGW := old.DeepCopy()
+	newGW.Spec.Dragonfly.ContainerSecurityContext = &corev1.SecurityContext{
+		RunAsUser: new(int64(0)),
+	}
+
+	v := &GatewayValidator{}
+	_, err := v.ValidateUpdate(context.Background(), old, newGW)
+	if err == nil {
+		t.Fatal("expected rejection: this update newly introduces dragonfly runAsUser:0 with no escape hatch")
+	}
+	if !strings.Contains(err.Error(), "runAsNonRoot") {
+		t.Errorf("expected error to mention runAsNonRoot, got: %v", err)
+	}
+}
+
+// TestGatewayValidator_DragonflyRunAsUserZeroRatchetDisabledThenEnabledRejected
+// covers a spec stored with dragonfly DISABLED (never validated by any
+// operator version, old or new) must not grandfather its runAsUser:0 when
+// the caller flips Enabled to true on the same update — the ratchet only
+// applies to a previously-ENABLED spec.
+func TestGatewayValidator_DragonflyRunAsUserZeroRatchetDisabledThenEnabledRejected(t *testing.T) {
+	old := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Config: v1alpha1.GatewayConfig{},
+			Dragonfly: &v1alpha1.DragonflySpec{
+				Enabled: false,
+				ContainerSecurityContext: &corev1.SecurityContext{
+					RunAsUser: new(int64(0)),
+				},
+			},
+		},
+	}
+	newGW := old.DeepCopy()
+	newGW.Spec.Dragonfly.Enabled = true
+
+	v := &GatewayValidator{}
+	_, err := v.ValidateUpdate(context.Background(), old, newGW)
+	if err == nil {
+		t.Fatal("expected rejection: enabling a previously-disabled dragonfly spec must not ratchet off its stored runAsUser:0")
+	}
+	if !strings.Contains(err.Error(), "runAsNonRoot") {
+		t.Errorf("expected error to mention runAsNonRoot, got: %v", err)
+	}
+}
+
+// TestGatewayValidator_DragonflyEffectiveRunAsRootCrossScopePrecedence
+// mirrors TestGatewayValidator_EffectiveRunAsRootCrossScopePrecedence for
+// the Dragonfly scope: every runAsUser:0 test above sets runAsUser at
+// exactly one scope (container-only or pod-only), so none of them
+// discriminates the cross-scope PRECEDENCE effectiveRunAsRoot implements
+// (container wins over pod when container.RunAsUser is set) — the suite
+// would stay green even if that fallback order were silently inverted. Each
+// row below sets runAsUser at BOTH scopes to different values, so the
+// admit/reject outcome flips depending on which scope effectively wins.
+func TestGatewayValidator_DragonflyEffectiveRunAsRootCrossScopePrecedence(t *testing.T) {
+	tests := []struct {
+		name      string
+		container *corev1.SecurityContext
+		pod       *corev1.PodSecurityContext
+		wantErr   bool
+		reason    string
+	}{
+		{
+			name: "container non-root wins over pod root, runAsNonRoot:true at pod scope",
+			container: &corev1.SecurityContext{
+				RunAsUser: new(int64(999)),
+			},
+			pod: &corev1.PodSecurityContext{
+				RunAsUser:    new(int64(0)),
+				RunAsNonRoot: new(true),
+			},
+			wantErr: false,
+			reason: "container.runAsUser:999 must win over pod.runAsUser:0 (effective uid 999, " +
+				"non-root) — inverted precedence would use the pod's uid0 and reject",
+		},
+		{
+			name: "container non-root wins over pod root, runAsNonRoot:true at container scope",
+			container: &corev1.SecurityContext{
+				RunAsUser:    new(int64(999)),
+				RunAsNonRoot: new(true),
+			},
+			pod: &corev1.PodSecurityContext{
+				RunAsUser: new(int64(0)),
+			},
+			wantErr: false,
+			reason: "container.runAsUser:999 must win over pod.runAsUser:0 (effective uid 999, " +
+				"non-root) — inverted precedence would use the pod's uid0 and reject",
+		},
+		{
+			name: "container root wins over pod non-root — rejected",
+			container: &corev1.SecurityContext{
+				RunAsUser: new(int64(0)),
+			},
+			pod: &corev1.PodSecurityContext{
+				RunAsUser: new(int64(999)),
+			},
+			wantErr: true,
+			reason: "container.runAsUser:0 must win over pod.runAsUser:999 (effective uid 0, no " +
+				"escape hatch) — inverted precedence would use the pod's uid 999 and allow",
+		},
+		{
+			name: "container root wins over pod non-root, container opt-out — allowed",
+			container: &corev1.SecurityContext{
+				RunAsUser:    new(int64(0)),
+				RunAsNonRoot: new(false),
+			},
+			pod: &corev1.PodSecurityContext{
+				RunAsUser: new(int64(999)),
+			},
+			wantErr: false,
+			reason: "container.runAsUser:0 wins (effective uid 0), but the container's own " +
+				"runAsNonRoot:false opts out — inverted precedence would use the pod's uid 999 " +
+				"and allow for an unrelated reason",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gw := &v1alpha1.KrakenDGateway{
+				ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+				Spec: v1alpha1.KrakenDGatewaySpec{
+					Version: "2.13", Edition: v1alpha1.EditionCE,
+					Config: v1alpha1.GatewayConfig{},
+					Dragonfly: &v1alpha1.DragonflySpec{
+						Enabled:                  true,
+						ContainerSecurityContext: tc.container,
+						PodSecurityContext:       tc.pod,
+					},
+				},
+			}
+			v := &GatewayValidator{}
+			_, err := v.ValidateCreate(context.Background(), gw)
+			if tc.wantErr && err == nil {
+				t.Fatalf("expected rejection (%s), got no error", tc.reason)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("expected no error (%s), got: %v", tc.reason, err)
+			}
+		})
+	}
+}
+
 // TestGatewayValidator_NegativeTmpSizeLimitRejected covers review id
 // 3805157457 (#5): a negative tmpSizeLimit must be rejected.
 func TestGatewayValidator_NegativeTmpSizeLimitRejected(t *testing.T) {

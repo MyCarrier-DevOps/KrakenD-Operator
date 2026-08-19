@@ -269,24 +269,123 @@ cluster with `postRestartJob.enabled: true`.
    gets the pod `Evicted` mid-run by the kubelet (not a clean script-level
    failure), so size this generously if your script's write volume is
    uncertain.
-7. **Dragonfly's `securityContext`/`podSecurityContext` REPLACE, they do
-   NOT merge — this is the opposite of the Job's behavior (item 2 above).**
+7. **Dragonfly's `securityContext`/`podSecurityContext` now MERGE instead of
+   REPLACE, matching the Job's behavior (item 2 above).** This closes the
+   follow-up tracked by a previous release of this guide.
    `spec.dragonfly.podSecurityContext` / `spec.dragonfly.containerSecurityContext`
-   are still handled by the pre-existing `dragonflyPodSecCtx`/
-   `dragonflyContainerSecCtx` full-replace pattern in
-   `internal/resources/dragonfly.go` — setting ANY field there (even one
-   unrelated to `fsGroup`) discards the ENTIRE hardened default, including
-   `fsGroup: 999`. Losing `fsGroup: 999` on an existing PVC-backed Dragonfly
-   instance is a live ownership hazard: the image's built-in `dfly` uid/gid
+   are now handled by `mergeDragonflyPodSecurityContext`/
+   `mergeDragonflyContainerSecurityContext` in
+   `internal/resources/dragonfly.go`, which strategic-merge a user override
+   on top of the hardened defaults (`runAsNonRoot: true`, `runAsUser`/
+   `runAsGroup: 999`, and — pod scope only — `fsGroup: 999`) via the same
+   `strategicMergeSecurityContext` helper the Job uses. **Previously,
+   setting ANY field in either securityContext discarded the ENTIRE
+   hardened default, including `fsGroup: 999`** — a live ownership hazard
+   for PVC-backed Dragonfly instances (the image's built-in `dfly` uid/gid
    999 process loses group-write access to `--dir=/dragonfly/snapshots` and
-   crashloops. This PR's broader CRD field-exposure sweep (more
-   `spec.dragonfly.*` security fields are now settable via Helm/OLM values)
-   widens exposure to this pre-existing gap even though the gap itself is
-   not new — review any `spec.dragonfly.podSecurityContext`/
-   `containerSecurityContext` override for a missing `fsGroup: 999` /
-   `runAsUser: 999` / `runAsGroup: 999` before upgrading. Tracked for a
-   proper merge-semantics fix (mirroring the Job's
-   `strategicMergeSecurityContext`) as a follow-up.
+   crashloops). Now only the fields you set are overridden; unset fields
+   keep the hardened default, so a `spec.dragonfly.podSecurityContext`
+   override that sets only `runAsUser` (for example) keeps `fsGroup: 999`
+   automatically. This is strictly safer than before, but review your
+   existing overrides — fields you were implicitly relying on being *unset*
+   will now inherit the operator default instead of being absent. **If your
+   spec was relying on the previous replace-to-clear behavior** (e.g.
+   setting `podSecurityContext: {runAsUser: 1234}` specifically to end up
+   *without* `runAsNonRoot: true`), you must now set that field explicitly
+   (e.g. `runAsNonRoot: false`) to get the old effective result.
+
+   **(Fix-round follow-up, post-initial-release) — the escape hatch now
+   genuinely works, at BOTH scopes.** The initial merge behavior above left
+   a gap: dragonfly's container-level default *pins*
+   `runAsNonRoot`/`runAsUser`/`runAsGroup: 999` (unlike the Job's container
+   default, which leaves `runAsUser`/`runAsNonRoot` unset), and
+   container-scope security-context fields always override the pod-scope
+   value for the SAME field at the kubelet. So setting only
+   `containerSecurityContext.runAsUser: 0` — with no explicit
+   `runAsNonRoot` — always merged against the inherited container-scope
+   `runAsNonRoot: true` default, no matter what `podSecurityContext` said,
+   rendering the kubelet-rejected `{runAsUser: 0, runAsNonRoot: true}` pair.
+   `mergeDragonflyContainerSecurityContext` now carries the same kind of
+   post-merge fixup the Job's pod-scope merge already had (see item 2):
+   if you set `containerSecurityContext.runAsUser: 0` without also setting
+   `containerSecurityContext.runAsNonRoot`, the inherited `runAsNonRoot: true`
+   default is dropped, so `podSecurityContext.runAsNonRoot: false` (or an
+   explicit `containerSecurityContext.runAsNonRoot: false`) now actually
+   takes effect and renders a startable container. Setting
+   `runAsNonRoot: false` at EITHER scope (container or pod) now works as
+   the escape hatch it was always documented to be.
+
+   **Corrected claim — "only the fields you set are overridden" was
+   incomplete; here is the exact projected field set.** The paragraph above
+   is true of the MERGE step, but the merge result is not what reaches the
+   Dragonfly CR verbatim: `BuildDragonfly`'s `buildPodSecurityContext`/
+   `buildSecurityContext` (`internal/resources/dragonfly.go`) project only a
+   FIXED WHITELIST of fields onto the emitted `spec.podSecurityContext` /
+   `spec.containerSecurityContext` maps:
+   - **Pod scope:** `runAsNonRoot`, `runAsUser`, `runAsGroup`, `fsGroup`.
+   - **Container scope:** `runAsNonRoot`, `runAsUser`, `runAsGroup`,
+     `allowPrivilegeEscalation`.
+
+   Any other field you set in `podSecurityContext`/`containerSecurityContext`
+   (e.g. `seccompProfile`, `capabilities`, `sysctls`) is accepted by the CRD
+   schema (the Go API type embeds the full upstream `corev1.SecurityContext`/
+   `PodSecurityContext`) and survives the merge step internally, but is
+   **silently NOT propagated** to the rendered Dragonfly CR — a pre-existing
+   projection gap, not something this fix-round changed; tracked as a
+   follow-up. **This supersedes the previous "plain list fields still
+   REPLACE wholesale, not union" caveat**: `capabilities.drop` specifically
+   is currently discarded entirely for Dragonfly (it is outside the
+   whitelist above), not merely subject to the Job's list-replace caveat —
+   there is no Dragonfly hardened `capabilities.drop` default to replace or
+   union with in the first place.
+
+   **Pod-scope `runAs*` fields do NOT change the Dragonfly container's
+   effective identity — set `containerSecurityContext` instead.** Because
+   the container-scope default pins `runAsUser`/`runAsGroup: 999` and
+   container-scope always wins over pod-scope per-field at the kubelet,
+   `podSecurityContext.runAsUser`/`runAsGroup`/`runAsNonRoot` never change
+   what uid/gid the `dragonfly` container itself actually runs as — only
+   `containerSecurityContext` does. (Pod-scope values still apply normally
+   to any OTHER container/init-container in the pod that doesn't set its
+   own override, and `podSecurityContext.fsGroup` still governs volume
+   ownership regardless of container-scope settings.) A direct consequence:
+   **`spec.dragonfly.podSecurityContext.runAsUser: 0` with `runAsNonRoot`
+   left unset is now REJECTED at admission** (previously it was silently
+   accepted and self-healed at build time — see the removed pod-scope fixup
+   in `mergeDragonflyPodSecurityContext`) — since it can never grant a real
+   capability for the dragonfly container (only for other sidecars,
+   silently), there was no legitimate case to preserve, so the webhook now
+   requires you to acknowledge the choice explicitly (`runAsNonRoot: false`
+   at either scope) rather than masking it. The update-ratchet (see item 9)
+   still grandfathers a pre-existing pod-scope-`runAsUser: 0` CR unchanged
+   on an unrelated update.
+
+   More generally (not just the pod-scope-unset case above): the admission
+   webhook hard-rejects any `spec.dragonfly` whose EFFECTIVE
+   `{runAsUser, runAsNonRoot}` pair resolves to `{0, true}` (container-scope
+   value falling back to pod-scope, mirroring item 9 below) — set
+   `runAsNonRoot: false` (container or pod scope) to acknowledge running as
+   root and pass validation.
+
+   **OnDelete recovery — an upgrade to this fix-round does NOT, by itself,
+   heal an already-crashlooping Dragonfly instance.** If a Dragonfly pod is
+   already crashlooping because it lost `fsGroup: 999` under the pre-item-7
+   full-replace bug (see the ownership hazard described above), upgrading
+   the operator corrects what the CONTROLLER will render for the Dragonfly
+   CR's `spec.podSecurityContext` going forward, but the Dragonfly
+   StatefulSet's `updateStrategy` is `OnDelete` — existing pods are NOT
+   automatically recreated on a spec change. After upgrading, manually
+   recycle the affected pod(s) to pick up the corrected
+   `podSecurityContext`:
+   ```bash
+   kubectl delete pod <dragonfly-pod-name> -n <namespace>
+   ```
+   The StatefulSet controller then recreates it from the now-corrected spec.
+
+   Dragonfly has no config-checksum identity analogous to the Job's (item 3
+   above uses a checksum to decide whether to re-trigger the Job; Dragonfly
+   CRs are reconciled continuously and have no equivalent re-trigger gate),
+   so this change carries no checksum/re-trigger side effect.
 8. **The Job now carries two distinct checksum annotations**, not one
    overloaded key. `krakend.io/checksum-config` keeps its original meaning
    (the raw, invertible krakend.json config checksum — traceable back to a

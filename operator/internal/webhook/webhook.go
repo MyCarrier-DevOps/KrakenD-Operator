@@ -163,6 +163,16 @@ func (v *GatewayValidator) validate(gw, old *v1alpha1.KrakenDGateway) (admission
 		warnings = append(warnings, prjWarnings...)
 	}
 
+	if gw.Spec.Dragonfly != nil && gw.Spec.Dragonfly.Enabled {
+		var oldDF *v1alpha1.DragonflySpec
+		// Mirrors the postRestartJob ratchet above: only a previously-ENABLED
+		// spec can have been grandfathered by an older operator.
+		if old != nil && old.Spec.Dragonfly != nil && old.Spec.Dragonfly.Enabled {
+			oldDF = old.Spec.Dragonfly
+		}
+		errs = append(errs, validateDragonflyRunAsRoot(gw.Spec.Dragonfly, oldDF)...)
+	}
+
 	return warnings, errs.ToAggregate()
 }
 
@@ -251,41 +261,30 @@ func validatePostRestartJob(
 // an Update when none of the four fields it inspects
 // (securityContext.{runAsUser,runAsNonRoot}, podSecurityContext.
 // runAsNonRoot — podSecurityContext.runAsUser is intentionally included
-// too, see securityContextRunAsFieldsUnchanged) changed from the stored
-// spec — a CR accepted by an older operator version (before this reject
-// existed) must not start failing on every unrelated update.
+// too, see runAsFieldsUnchanged) changed from the stored spec — a CR
+// accepted by an older operator version (before this reject existed) must
+// not start failing on every unrelated update.
 func validatePostRestartRunAsRoot(prj, old *v1alpha1.PostRestartJobSpec) field.ErrorList {
-	if old != nil && securityContextRunAsFieldsUnchanged(prj, old) {
-		return nil
+	var oldContainer *corev1.SecurityContext
+	var oldPod *corev1.PodSecurityContext
+	if old != nil {
+		oldContainer = old.SecurityContext
+		oldPod = old.PodSecurityContext
 	}
 
-	uid0, fromContainer := effectiveRunAsRoot(prj.SecurityContext, prj.PodSecurityContext)
-	if !uid0 {
-		return nil
-	}
-
-	containerOptsOut := prj.SecurityContext != nil &&
-		prj.SecurityContext.RunAsNonRoot != nil && !*prj.SecurityContext.RunAsNonRoot
-	podOptsOut := prj.PodSecurityContext != nil &&
-		prj.PodSecurityContext.RunAsNonRoot != nil && !*prj.PodSecurityContext.RunAsNonRoot
-	if containerOptsOut || podOptsOut {
-		return nil
-	}
-
-	containerAssertsTrue := prj.SecurityContext != nil &&
-		prj.SecurityContext.RunAsNonRoot != nil && *prj.SecurityContext.RunAsNonRoot
-	podAssertsTrue := prj.PodSecurityContext != nil &&
-		prj.PodSecurityContext.RunAsNonRoot != nil && *prj.PodSecurityContext.RunAsNonRoot
-
-	if !fromContainer && !containerAssertsTrue && !podAssertsTrue {
-		// Pod-scope uid0, runAsNonRoot unset everywhere: self-healed by
-		// job.go's mergePodSecurityContext fixup — not rejected here.
-		return nil
-	}
-
-	return field.ErrorList{field.Invalid(
+	return validateRunAsRootConflict(
+		prj.SecurityContext, prj.PodSecurityContext,
+		oldContainer, oldPod,
 		field.NewPath("spec", "postRestartJob", "securityContext", "runAsUser"),
-		int64(0),
+		field.NewPath("spec", "postRestartJob", "podSecurityContext", "runAsUser"),
+		// job.go's postRestartJob container default leaves runAs* UNSET at
+		// container scope (pod scope governs), so a pod-scope uid0 with
+		// runAsNonRoot left unset everywhere is a real, self-healable
+		// capability — job.go's mergePodSecurityContext fixup drops the
+		// inherited pod-scope runAsNonRoot default in that case (see
+		// "Keep the builder fixup" in this function's original doc, now
+		// captured by this true argument).
+		true,
 		"runAsUser: 0 conflicts with the hardened runAsNonRoot: true default (kubelet "+
 			"pod-level runAsNonRoot defaults to true and is inherited unless overridden); "+
 			"the Job pod will hang Pending (CreateContainerConfigError) until "+
@@ -293,7 +292,91 @@ func validatePostRestartRunAsRoot(prj, old *v1alpha1.PostRestartJobSpec) field.E
 			"spec.postRestartJob.podSecurityContext.runAsNonRoot: false (or "+
 			"spec.postRestartJob.securityContext.runAsNonRoot: false) to acknowledge "+
 			"running as root.",
-	)}
+	)
+}
+
+// validateRunAsRootConflict is the scope-agnostic core shared by
+// validatePostRestartRunAsRoot and validateDragonflyRunAsRoot (DRY
+// extraction, fix-round review 1, change #3). It rejects a spec whose
+// kubelet-EFFECTIVE {runAsUser, runAsNonRoot} pair for the container
+// resolves to {0, true} — the pair the kubelet rejects at container start
+// (CreateContainerConfigError), hanging the pod Pending.
+//
+// containerPath/podPath are the FULL field.Path to each scope's
+// `runAsUser` field (e.g. spec.postRestartJob.securityContext.runAsUser vs
+// spec.dragonfly.containerSecurityContext.runAsUser) — the two scopes use
+// different JSON field names for the container-level securityContext
+// (`securityContext` vs `containerSecurityContext`), so the caller builds
+// the full path rather than this helper deriving it from a shared base.
+// Sanctioned error-path fix (fix-round review 1): the emitted field.Invalid
+// now uses whichever of the two paths matches WHERE the effective uid0 was
+// resolved from (effectiveRunAsRoot's fromContainer) — a pod-scope
+// rejection now points at podPath instead of always pointing at
+// containerPath, a field the user may never have set. This changes only the
+// postRestartJob pod-scope rejection's error path string; the
+// accept/reject matrix is otherwise byte-identical (verified by the
+// existing webhook test suite, which only asserts on error substrings, not
+// exact paths).
+//
+// allowPodScopeUnsetSelfHeal is the deliberate divergence knob between the
+// two scopes: when uid0 comes from the POD scope alone and runAsNonRoot is
+// unset everywhere (neither scope asserts true or false),
+//   - postRestartJob passes true: job.go's container default leaves runAs*
+//     UNSET at container scope, so pod-scope root is a REAL capability —
+//     job.go's mergePodSecurityContext fixup self-heals this combination at
+//     build time, so admission does not need to reject it (defense in depth
+//     only, for webhook-bypass paths).
+//   - dragonfly passes false: dragonfly's container default PINS
+//     RunAsUser/RunAsGroup/RunAsNonRoot at container scope to match the dfly
+//     image's built-in uid, and container-scope always overrides pod-scope
+//     per-field at the kubelet — so pod-scope uid0 NEVER changes the
+//     dragonfly container's effective uid; it only roots injected sidecars
+//     silently and strips nothing useful. There is no legitimate capability
+//     to preserve, so this combination is now REJECTED at admission instead
+//     of self-healed (see mergeDragonflyPodSecurityContext, whose pod-scope
+//     self-heal fixup was removed for the same reason).
+//
+// The update-ratchet (runAsFieldsUnchanged) still grandfathers an unchanged
+// old spec for both scopes.
+func validateRunAsRootConflict(
+	container *corev1.SecurityContext, pod *corev1.PodSecurityContext,
+	oldContainer *corev1.SecurityContext, oldPod *corev1.PodSecurityContext,
+	containerPath, podPath *field.Path,
+	allowPodScopeUnsetSelfHeal bool,
+	detail string,
+) field.ErrorList {
+	if runAsFieldsUnchanged(container, pod, oldContainer, oldPod) {
+		return nil
+	}
+
+	uid0, fromContainer := effectiveRunAsRoot(container, pod)
+	if !uid0 {
+		return nil
+	}
+
+	containerOptsOut := container != nil &&
+		container.RunAsNonRoot != nil && !*container.RunAsNonRoot
+	podOptsOut := pod != nil &&
+		pod.RunAsNonRoot != nil && !*pod.RunAsNonRoot
+	if containerOptsOut || podOptsOut {
+		return nil
+	}
+
+	containerAssertsTrue := container != nil &&
+		container.RunAsNonRoot != nil && *container.RunAsNonRoot
+	podAssertsTrue := pod != nil &&
+		pod.RunAsNonRoot != nil && *pod.RunAsNonRoot
+
+	if !fromContainer && !containerAssertsTrue && !podAssertsTrue && allowPodScopeUnsetSelfHeal {
+		return nil
+	}
+
+	path := containerPath
+	if !fromContainer {
+		path = podPath
+	}
+
+	return field.ErrorList{field.Invalid(path, int64(0), detail)}
 }
 
 // effectiveRunAsRoot reports whether the kubelet-resolved effective
@@ -313,22 +396,30 @@ func effectiveRunAsRoot(
 	return false, false
 }
 
-// securityContextRunAsFieldsUnchanged reports whether the fields
-// validatePostRestartRunAsRoot inspects are identical between the new and
-// old postRestartJob spec — the ratchet condition for review id 3807285627
-// (#2). old may be nil (postRestartJob newly added on this update); new is
-// never nil (validatePostRestartJob is only called when enabled).
-func securityContextRunAsFieldsUnchanged(newPRJ, old *v1alpha1.PostRestartJobSpec) bool {
-	var oldContainer *corev1.SecurityContext
-	var oldPod *corev1.PodSecurityContext
-	if old != nil {
-		oldContainer = old.SecurityContext
-		oldPod = old.PodSecurityContext
-	}
-	return int64PtrEqual(securityContextRunAsUser(newPRJ.SecurityContext), securityContextRunAsUser(oldContainer)) &&
-		boolPtrEqual(securityContextRunAsNonRoot(newPRJ.SecurityContext), securityContextRunAsNonRoot(oldContainer)) &&
-		int64PtrEqual(podSecurityContextRunAsUser(newPRJ.PodSecurityContext), podSecurityContextRunAsUser(oldPod)) &&
-		boolPtrEqual(podSecurityContextRunAsNonRoot(newPRJ.PodSecurityContext), podSecurityContextRunAsNonRoot(oldPod))
+// runAsFieldsUnchanged reports whether the four fields
+// validateRunAsRootConflict inspects (container runAsUser/runAsNonRoot, pod
+// runAsUser/runAsNonRoot) are identical between the new and old
+// container/pod securityContext pair — the scope-agnostic ratchet condition
+// for review id 3807285627 (#2), replacing the former
+// securityContextRunAsFieldsUnchanged (postRestartJob) and
+// dragonflySecurityContextRunAsFieldsUnchanged (Dragonfly), which duplicated
+// this same field-by-field comparison per scope. old{Container,Pod} may
+// both be nil (no previously-stored spec, or postRestartJob/dragonfly newly
+// added/enabled on this update — see validate's oldPRJ/oldDF gating, which
+// only threads through a previously-ENABLED spec) — in that case an
+// all-nil new pair trivially compares equal (a no-op ratchet), and any
+// non-nil new field compares unequal, falling through to full validation
+// exactly as a Create would. new{Container,Pod} are never both nil when
+// this matters, since validateRunAsRootConflict's own effectiveRunAsRoot
+// check would report "not root" for an all-nil pair regardless.
+func runAsFieldsUnchanged(
+	container *corev1.SecurityContext, pod *corev1.PodSecurityContext,
+	oldContainer *corev1.SecurityContext, oldPod *corev1.PodSecurityContext,
+) bool {
+	return int64PtrEqual(securityContextRunAsUser(container), securityContextRunAsUser(oldContainer)) &&
+		boolPtrEqual(securityContextRunAsNonRoot(container), securityContextRunAsNonRoot(oldContainer)) &&
+		int64PtrEqual(podSecurityContextRunAsUser(pod), podSecurityContextRunAsUser(oldPod)) &&
+		boolPtrEqual(podSecurityContextRunAsNonRoot(pod), podSecurityContextRunAsNonRoot(oldPod))
 }
 
 func securityContextRunAsUser(sc *corev1.SecurityContext) *int64 {
@@ -371,6 +462,52 @@ func boolPtrEqual(a, b *bool) bool {
 		return a == b
 	}
 	return *a == *b
+}
+
+// validateDragonflyRunAsRoot mirrors validatePostRestartRunAsRoot for the
+// Dragonfly scope (spec.dragonfly.podSecurityContext /
+// spec.dragonfly.containerSecurityContext), now that
+// mergeDragonflyPodSecurityContext (internal/resources/dragonfly.go) merges
+// user-provided securityContext fields on top of hardened defaults instead
+// of replacing them wholesale — the same {runAsUser:0, runAsNonRoot:true}
+// admission hole validatePostRestartRunAsRoot closes for postRestartJob now
+// also exists here.
+//
+// Fix-round review 1, change #2: unlike postRestartJob, dragonfly's
+// container-scope default PINS RunAsUser/RunAsGroup/RunAsNonRoot (matching
+// the dfly image's built-in uid), and container-scope security-context
+// fields always override pod-scope per-field at the kubelet — so
+// pod-scope runAsUser:0 NEVER changes the Dragonfly container's effective
+// uid; it only roots injected sidecars silently and strips nothing useful.
+// There is no legitimate capability to preserve, so — unlike
+// postRestartJob's pod-scope-unset case, which stays a self-heal
+// (allowPodScopeUnsetSelfHeal: true, see validatePostRestartRunAsRoot) —
+// the Dragonfly pod-scope-unset case is now REJECTED at admission
+// (allowPodScopeUnsetSelfHeal: false below) instead of silently self-healed
+// by mergeDragonflyPodSecurityContext, whose pod-scope fixup was removed
+// for the same reason (see mergeDragonflyPodSecurityContext's doc). The
+// update-ratchet still grandfathers an unchanged old spec.
+func validateDragonflyRunAsRoot(df, old *v1alpha1.DragonflySpec) field.ErrorList {
+	var oldContainer *corev1.SecurityContext
+	var oldPod *corev1.PodSecurityContext
+	if old != nil {
+		oldContainer = old.ContainerSecurityContext
+		oldPod = old.PodSecurityContext
+	}
+
+	return validateRunAsRootConflict(
+		df.ContainerSecurityContext, df.PodSecurityContext,
+		oldContainer, oldPod,
+		field.NewPath("spec", "dragonfly", "containerSecurityContext", "runAsUser"),
+		field.NewPath("spec", "dragonfly", "podSecurityContext", "runAsUser"),
+		false,
+		"runAsUser: 0 conflicts with the hardened runAsNonRoot: true default (kubelet "+
+			"pod-level runAsNonRoot defaults to true and is inherited unless overridden); "+
+			"the Dragonfly pod will hang Pending (CreateContainerConfigError). Also set "+
+			"spec.dragonfly.podSecurityContext.runAsNonRoot: false (or "+
+			"spec.dragonfly.containerSecurityContext.runAsNonRoot: false) to acknowledge "+
+			"running as root.",
+	)
 }
 
 // validatePostRestartWorkingDir returns a non-empty warning string when

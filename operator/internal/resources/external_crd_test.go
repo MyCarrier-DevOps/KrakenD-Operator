@@ -247,6 +247,182 @@ func TestBuildDragonfly_SecurityContextOverride(t *testing.T) {
 	}
 }
 
+// TestBuildDragonfly_PodOverridePreservesFSGroup is the build-level
+// (BuildDragonfly's EMITTED dfSpec map — the actual CRD contract, not just
+// the merge-helper's return value) counterpart of
+// TestMergeDragonflyPodSecurityContext_FSGroupPreservedOnPartialOverride:
+// overriding ONLY podSecurityContext.runAsUser must still emit
+// fsGroup:999 alongside the user's runAsUser:1234 — the headline regression
+// this fix-round guards, verified all the way through to the rendered CR,
+// not just the merge step.
+func TestBuildDragonfly_PodOverridePreservesFSGroup(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13",
+			Edition: v1alpha1.EditionEE,
+			Config:  v1alpha1.GatewayConfig{},
+			Dragonfly: &v1alpha1.DragonflySpec{
+				Enabled: true,
+				PodSecurityContext: &corev1.PodSecurityContext{
+					RunAsUser: ptr.To(int64(1234)),
+				},
+			},
+		},
+	}
+
+	df := &unstructured.Unstructured{Object: map[string]interface{}{}}
+	BuildDragonfly(df, gw)
+
+	spec, _ := df.Object["spec"].(map[string]interface{})
+	podSecCtx, ok := spec["podSecurityContext"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected podSecurityContext map")
+	}
+	if podSecCtx["fsGroup"] != int64(999) {
+		t.Errorf("expected fsGroup:999 preserved by a partial pod override, got %v", podSecCtx["fsGroup"])
+	}
+	if podSecCtx["runAsUser"] != int64(1234) {
+		t.Errorf("expected overridden runAsUser:1234, got %v", podSecCtx["runAsUser"])
+	}
+}
+
+// TestBuildDragonfly_ContainerRootUserWithPodRunAsNonRootFalseStartable
+// covers the BLOCKER fix (fix-round review 1, change #1) at build level: a
+// container-scope runAsUser:0 combined with a pod-scope runAsNonRoot:false
+// must emit a STARTABLE containerSecurityContext — {runAsGroup:999,
+// runAsUser:0} with NO runAsNonRoot key at all (the container-scope fixup
+// drops the inherited runAsNonRoot:true default, and the user never set
+// their own container-scope runAsNonRoot, so it stays absent) — proving the
+// escape hatch actually renders a container the kubelet will start, not
+// just that the merge helper's Go struct looks right in isolation.
+func TestBuildDragonfly_ContainerRootUserWithPodRunAsNonRootFalseStartable(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13",
+			Edition: v1alpha1.EditionEE,
+			Config:  v1alpha1.GatewayConfig{},
+			Dragonfly: &v1alpha1.DragonflySpec{
+				Enabled: true,
+				ContainerSecurityContext: &corev1.SecurityContext{
+					RunAsUser: ptr.To(int64(0)),
+				},
+				PodSecurityContext: &corev1.PodSecurityContext{
+					RunAsNonRoot: ptr.To(false),
+				},
+			},
+		},
+	}
+
+	df := &unstructured.Unstructured{Object: map[string]interface{}{}}
+	BuildDragonfly(df, gw)
+
+	spec, _ := df.Object["spec"].(map[string]interface{})
+	containerSecCtx, ok := spec["containerSecurityContext"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected containerSecurityContext map")
+	}
+	if _, present := containerSecCtx["runAsNonRoot"]; present {
+		t.Errorf("expected NO runAsNonRoot key in the emitted containerSecurityContext "+
+			"(the fixup must drop the inherited true default), got %v", containerSecCtx["runAsNonRoot"])
+	}
+	if containerSecCtx["runAsUser"] != int64(0) {
+		t.Errorf("expected runAsUser:0, got %v", containerSecCtx["runAsUser"])
+	}
+	if containerSecCtx["runAsGroup"] != int64(999) {
+		t.Errorf("expected hardened runAsGroup:999 preserved, got %v", containerSecCtx["runAsGroup"])
+	}
+}
+
+// TestBuildDragonfly_ContainerRootUserAloneNoRunAsNonRootTrap covers the
+// grandfathered-shape case: a container-scope runAsUser:0 set ALONE (no
+// pod-scope acknowledgment at all — the shape the webhook ratchet
+// deliberately admits for a pre-upgrade CR) must not emit a
+// runAsNonRoot:true trap in the rendered containerSecurityContext.
+func TestBuildDragonfly_ContainerRootUserAloneNoRunAsNonRootTrap(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13",
+			Edition: v1alpha1.EditionEE,
+			Config:  v1alpha1.GatewayConfig{},
+			Dragonfly: &v1alpha1.DragonflySpec{
+				Enabled: true,
+				ContainerSecurityContext: &corev1.SecurityContext{
+					RunAsUser: ptr.To(int64(0)),
+				},
+			},
+		},
+	}
+
+	df := &unstructured.Unstructured{Object: map[string]interface{}{}}
+	BuildDragonfly(df, gw)
+
+	spec, _ := df.Object["spec"].(map[string]interface{})
+	containerSecCtx, ok := spec["containerSecurityContext"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected containerSecurityContext map")
+	}
+	if v, present := containerSecCtx["runAsNonRoot"]; present {
+		t.Errorf("expected no runAsNonRoot:true trap for a grandfathered container-only "+
+			"runAsUser:0 spec, got runAsNonRoot=%v", v)
+	}
+}
+
+// TestBuildDragonfly_DefaultSecurityContextUnchanged is the build-level
+// counterpart of TestBuildDragonfly_SecurityContextDefaults, restated here
+// alongside the new fixup-focused tests as the "nothing regressed for the
+// unmodified default path" control case: nil user securityContext at both
+// scopes must still emit the full hardened default set unchanged.
+func TestBuildDragonfly_DefaultSecurityContextUnchanged(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version:   "2.13",
+			Edition:   v1alpha1.EditionEE,
+			Config:    v1alpha1.GatewayConfig{},
+			Dragonfly: &v1alpha1.DragonflySpec{Enabled: true},
+		},
+	}
+
+	df := &unstructured.Unstructured{Object: map[string]interface{}{}}
+	BuildDragonfly(df, gw)
+
+	spec, _ := df.Object["spec"].(map[string]interface{})
+
+	podSecCtx, ok := spec["podSecurityContext"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected podSecurityContext map")
+	}
+	wantPod := map[string]interface{}{
+		"runAsNonRoot": true,
+		"runAsUser":    int64(999),
+		"runAsGroup":   int64(999),
+		"fsGroup":      int64(999),
+	}
+	for k, want := range wantPod {
+		if podSecCtx[k] != want {
+			t.Errorf("podSecurityContext.%s: expected %v, got %v", k, want, podSecCtx[k])
+		}
+	}
+
+	containerSecCtx, ok := spec["containerSecurityContext"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected containerSecurityContext map")
+	}
+	wantContainer := map[string]interface{}{
+		"runAsNonRoot": true,
+		"runAsUser":    int64(999),
+		"runAsGroup":   int64(999),
+	}
+	for k, want := range wantContainer {
+		if containerSecCtx[k] != want {
+			t.Errorf("containerSecurityContext.%s: expected %v, got %v", k, want, containerSecCtx[k])
+		}
+	}
+}
+
 func TestDragonflyName(t *testing.T) {
 	gw := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "my-gw"},
