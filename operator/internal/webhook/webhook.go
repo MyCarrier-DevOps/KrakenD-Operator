@@ -254,8 +254,12 @@ func validatePostRestartJob(
 //     that combination on webhook-bypass paths (webhooks.enabled: false,
 //     cert-manager absent, webhook downtime — see docs/upgrade-guide.md).
 //
-// An explicit runAsNonRoot: false, at either scope, is always an
-// acknowledged opt-out and short-circuits the whole check.
+// An explicit runAsNonRoot: false at POD scope is always an acknowledged
+// opt-out and short-circuits the whole check, since it inherits down to
+// every container. An explicit runAsNonRoot: false at CONTAINER scope only
+// short-circuits when the effective uid0 came from that same container
+// scope (round-2 review, S1) — see the containerOptsOut/podOptsOut
+// combination below.
 //
 // Review id 3807285627 (#2): the check is skipped entirely (ratcheted) on
 // an Update when none of the four fields it inspects
@@ -358,7 +362,20 @@ func validateRunAsRootConflict(
 		container.RunAsNonRoot != nil && !*container.RunAsNonRoot
 	podOptsOut := pod != nil &&
 		pod.RunAsNonRoot != nil && !*pod.RunAsNonRoot
-	if containerOptsOut || podOptsOut {
+	// Round-2 review, S1: an opt-out is only a valid acknowledgment from the
+	// scope that actually produced the effective root request. Pod-scope
+	// opt-out (podOptsOut) is ALWAYS acceptable regardless of fromContainer,
+	// because pod scope inherits down to every container that doesn't set
+	// its own runAsNonRoot — it covers both a pod-scope root request AND a
+	// container-scope one (the container simply falls back to the pod's
+	// acknowledged false). But a container-scope opt-out (containerOptsOut)
+	// only acknowledges what THAT container asked for — it cannot make a
+	// POD-scope root request's rendered pod-level pair startable for other
+	// containers/sidecars in the pod that set nothing and so inherit the
+	// pod-scope pair directly, bypassing this container's own opt-out
+	// entirely. So containerOptsOut only short-circuits when the uid0 came
+	// from the container scope in the first place (fromContainer).
+	if (fromContainer && containerOptsOut) || podOptsOut {
 		return nil
 	}
 
@@ -479,13 +496,18 @@ func boolPtrEqual(a, b *bool) bool {
 // fields always override pod-scope per-field at the kubelet — so
 // pod-scope runAsUser:0 NEVER changes the Dragonfly container's effective
 // uid; it only roots injected sidecars silently and strips nothing useful.
-// There is no legitimate capability to preserve, so — unlike
-// postRestartJob's pod-scope-unset case, which stays a self-heal
-// (allowPodScopeUnsetSelfHeal: true, see validatePostRestartRunAsRoot) —
-// the Dragonfly pod-scope-unset case is now REJECTED at admission
-// (allowPodScopeUnsetSelfHeal: false below) instead of silently self-healed
-// by mergeDragonflyPodSecurityContext, whose pod-scope fixup was removed
-// for the same reason (see mergeDragonflyPodSecurityContext's doc). The
+// There is no legitimate NEW capability to preserve for admission purposes,
+// so — unlike postRestartJob's pod-scope-unset case, which stays a
+// self-heal (allowPodScopeUnsetSelfHeal: true, see
+// validatePostRestartRunAsRoot) — the Dragonfly pod-scope-unset case is
+// REJECTED at admission for any NEW or CHANGED spec (allowPodScopeUnsetSelfHeal:
+// false below). This is an admission-time decision only: fix-round review 2
+// separately restored a build-time fixup in mergeDragonflyPodSecurityContext
+// (internal/resources/dragonfly.go) — not as an admission self-heal, but to
+// keep GRANDFATHERED specs (ratchet-exempted on Update, or reaching the
+// builder via a bypassed webhook) rendering at the same main-branch parity
+// they always had, rather than newly breaking on this merge-semantics
+// change. See that function's doc for the full rationale. The
 // update-ratchet still grandfathers an unchanged old spec.
 func validateDragonflyRunAsRoot(df, old *v1alpha1.DragonflySpec) field.ErrorList {
 	var oldContainer *corev1.SecurityContext

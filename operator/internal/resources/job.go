@@ -569,6 +569,21 @@ func strategicMergeSecurityContext[T corev1.SecurityContext | corev1.PodSecurity
 	return merged
 }
 
+// userRequestsRootWithoutOptingOut reports whether a scope's own
+// runAsUser/runAsNonRoot pair asks to run as root (runAsUser: 0) without
+// also explicitly setting runAsNonRoot at that same scope — the exact
+// shape every post-merge uid0 fixup in this file and in dragonfly.go
+// inspects before dropping an inherited runAsNonRoot default. Extracted
+// (fix-round review 2, T2 DRY) from mergePodSecurityContext,
+// mergeDragonflyContainerSecurityContext, and mergeDragonflyPodSecurityContext,
+// which each independently reimplemented this identical predicate against a
+// different pair of fields; behavior at every call site is unchanged (see
+// each site's own comment for why this predicate is the right condition
+// there).
+func userRequestsRootWithoutOptingOut(runAsUser *int64, runAsNonRoot *bool) bool {
+	return runAsUser != nil && *runAsUser == 0 && runAsNonRoot == nil
+}
+
 // mergeContainerSecurityContext merges a user-provided container
 // SecurityContext on top of the hardened defaults via
 // strategicMergeSecurityContext. This replaces the previous verbatim
@@ -628,7 +643,7 @@ func mergePodSecurityContext(user *corev1.PodSecurityContext) *corev1.PodSecurit
 	// merge: if the user set RunAsUser to 0 without also setting
 	// RunAsNonRoot, drop the inherited RunAsNonRoot default so only the
 	// user's own explicit choice (if any) can re-assert it.
-	if user != nil && user.RunAsUser != nil && *user.RunAsUser == 0 && user.RunAsNonRoot == nil {
+	if user != nil && userRequestsRootWithoutOptingOut(user.RunAsUser, user.RunAsNonRoot) {
 		merged.RunAsNonRoot = nil
 	}
 

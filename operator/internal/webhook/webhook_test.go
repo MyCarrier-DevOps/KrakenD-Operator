@@ -507,6 +507,47 @@ func TestGatewayValidator_PodScopeRunAsUserZeroUnsetRunAsNonRootAllowed(t *testi
 	}
 }
 
+// TestGatewayValidator_PodScopeRunAsUserZeroContainerOptOutStillAllowedViaSelfHeal
+// pins fix-round review 2's S1 change (the container-scope opt-out no
+// longer unconditionally short-circuits validateRunAsRootConflict) for the
+// postRestartJob (job) lane specifically: a pod-scope runAsUser:0 combined
+// with a CONTAINER-scope runAsNonRoot:false (container runAsUser left
+// unset) must remain ADMITTED — but now via the SAME pod-scope-unset
+// self-heal carve-out (allowPodScopeUnsetSelfHeal: true) that
+// TestGatewayValidator_PodScopeRunAsUserZeroUnsetRunAsNonRootAllowed already
+// covers for a fully-unset runAsNonRoot, not via the old (and, for
+// Dragonfly, unsafe) "any opt-out short-circuits" branch. The
+// container-scope runAsNonRoot:false does not itself trigger
+// containerAssertsTrue/podAssertsTrue (neither is true), so the self-heal
+// condition still evaluates true and the outcome is unchanged from before
+// S1 — see webhook.go's validateRunAsRootConflict doc for the full trace.
+func TestGatewayValidator_PodScopeRunAsUserZeroContainerOptOutStillAllowedViaSelfHeal(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Config: v1alpha1.GatewayConfig{},
+			PostRestartJob: &v1alpha1.PostRestartJobSpec{
+				Enabled: true,
+				Script:  "echo ok",
+				PodSecurityContext: &corev1.PodSecurityContext{
+					RunAsUser: new(int64(0)),
+				},
+				SecurityContext: &corev1.SecurityContext{
+					RunAsNonRoot: new(false),
+				},
+			},
+		},
+	}
+	v := &GatewayValidator{}
+	_, err := v.ValidateCreate(context.Background(), gw)
+	if err != nil {
+		t.Fatalf("expected postRestartJob pod-scope runAsUser:0 with a container-scope "+
+			"runAsNonRoot:false opt-out to remain admitted via the pod-scope-unset self-heal "+
+			"carve-out (S1 must not change job-lane outcomes), got: %v", err)
+	}
+}
+
 // TestGatewayValidator_EffectiveRunAsRootCrossScopePrecedence covers review
 // id 3811443593 (#6): every existing runAsUser:0 test above sets runAsUser
 // at exactly one scope (container-only or pod-only), so none of them
@@ -832,9 +873,15 @@ func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroWithExplicitRunAsNonRoot
 // always overrides pod-scope per-field at the kubelet — so a pod-scope
 // runAsUser:0 never changes the Dragonfly container's effective uid; it
 // only silently roots injected sidecars with no legitimate capability
-// gained. There is nothing to self-heal, so
-// mergeDragonflyPodSecurityContext's pod-scope fixup was removed and this
-// combination is now rejected outright instead.
+// gained. There is nothing to self-heal for admission purposes, so this
+// combination is rejected outright for any NEW or CHANGED spec
+// (allowPodScopeUnsetSelfHeal: false). Note (fix-round review 2 update):
+// mergeDragonflyPodSecurityContext's pod-scope fixup was restored in a
+// LATER fix-round as a build-time-only, cross-scope-aware fixup — but that
+// restoration serves GRANDFATHERED/webhook-bypassed CRs only (main-branch
+// render parity), not this admission path; a brand-new spec with this exact
+// shape is still rejected here regardless of what the builder would later
+// do with it.
 func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroUnsetRunAsNonRootRejected(t *testing.T) {
 	gw := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
@@ -861,6 +908,83 @@ func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroUnsetRunAsNonRootRejecte
 	if !strings.Contains(err.Error(), "spec.dragonfly.podSecurityContext.runAsUser") {
 		t.Errorf("expected the sanctioned error-path fix to point at "+
 			"spec.dragonfly.podSecurityContext.runAsUser (the field the user actually set), got: %v", err)
+	}
+}
+
+// TestGatewayValidator_DragonflyPodScopeRunAsUserZeroContainerOptOutRejected
+// covers fix-round review 2, S1 (security-important): before this fix, a
+// CONTAINER-scope runAsNonRoot:false (with no container-scope runAsUser at
+// all) could mask a POD-scope root request — validateRunAsRootConflict's old
+// `containerOptsOut || podOptsOut` accepted a container-scope opt-out
+// unconditionally, even though the effective uid0 came from the POD scope
+// (fromContainer: false) and the container never asked to run as root
+// itself. An opt-out is only a valid acknowledgment from the scope that
+// actually produced the root request: a bare container-scope
+// runAsNonRoot:false does not (and cannot) acknowledge what OTHER
+// sidecars/extra containers inheriting the pod-scope pair would still
+// silently receive. This must now be REJECTED.
+func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroContainerOptOutRejected(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Config: v1alpha1.GatewayConfig{},
+			Dragonfly: &v1alpha1.DragonflySpec{
+				Enabled: true,
+				PodSecurityContext: &corev1.PodSecurityContext{
+					RunAsUser: new(int64(0)),
+				},
+				ContainerSecurityContext: &corev1.SecurityContext{
+					RunAsNonRoot: new(false),
+				},
+			},
+		},
+	}
+	v := &GatewayValidator{}
+	_, err := v.ValidateCreate(context.Background(), gw)
+	if err == nil {
+		t.Fatal("expected rejection: a container-scope runAsNonRoot:false opt-out must not " +
+			"mask a pod-scope runAsUser:0 root request (S1)")
+	}
+	if !strings.Contains(err.Error(), "runAsNonRoot") {
+		t.Errorf("expected error to mention runAsNonRoot, got: %v", err)
+	}
+}
+
+// TestGatewayValidator_DragonflyPodScopeRunAsUserZeroExplicitTrueContainerOptOutRejected
+// covers the self-contradictory variant of S1: pod scope explicitly asserts
+// runAsNonRoot:true (a hard, explicit acknowledgment that root is NOT
+// wanted) while root is requested via pod-scope runAsUser:0, and a
+// container-scope runAsNonRoot:false tries to opt out on the pod's behalf.
+// Before this fix the container-scope opt-out masked this self-contradiction
+// entirely; it must now be rejected — the container's opt-out cannot
+// override the pod's own explicit, contradictory assertion.
+func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroExplicitTrueContainerOptOutRejected(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Config: v1alpha1.GatewayConfig{},
+			Dragonfly: &v1alpha1.DragonflySpec{
+				Enabled: true,
+				PodSecurityContext: &corev1.PodSecurityContext{
+					RunAsUser:    new(int64(0)),
+					RunAsNonRoot: new(true),
+				},
+				ContainerSecurityContext: &corev1.SecurityContext{
+					RunAsNonRoot: new(false),
+				},
+			},
+		},
+	}
+	v := &GatewayValidator{}
+	_, err := v.ValidateCreate(context.Background(), gw)
+	if err == nil {
+		t.Fatal("expected rejection: a container-scope runAsNonRoot:false opt-out must not " +
+			"mask the pod scope's own explicit, self-contradictory runAsNonRoot:true (S1)")
+	}
+	if !strings.Contains(err.Error(), "runAsNonRoot") {
+		t.Errorf("expected error to mention runAsNonRoot, got: %v", err)
 	}
 }
 

@@ -106,7 +106,7 @@ func BuildDragonfly(df *unstructured.Unstructured, gw *v1alpha1.KrakenDGateway) 
 		dfSpec["args"] = args
 	}
 
-	podSecCtx := mergeDragonflyPodSecurityContext(spec.PodSecurityContext)
+	podSecCtx := mergeDragonflyPodSecurityContext(spec.PodSecurityContext, spec.ContainerSecurityContext)
 	containerSecCtx := mergeDragonflyContainerSecurityContext(spec.ContainerSecurityContext)
 	dfSpec["podSecurityContext"] = buildPodSecurityContext(podSecCtx)
 	dfSpec["containerSecurityContext"] = buildSecurityContext(containerSecCtx)
@@ -161,17 +161,72 @@ func defaultDragonflyContainerSecurityContext() *corev1.SecurityContext {
 // image's built-in uid. Because container-scope security-context fields
 // always override pod-scope per-field at the kubelet, pod-scope
 // runAsUser/runAsNonRoot NEVER change the Dragonfly container's effective
-// uid — the container default's pin wins regardless. A pod-scope-unset
-// self-heal fixup here therefore has no real capability to preserve (it
-// cannot un-pin the container's uid 999); it only silently changes the
-// identity of any OTHER (non-dragonfly) container/init-container inheriting
-// pod-scope security context, and masks a spec that the validator should
-// instead reject outright (see validateDragonflyRunAsRoot). Removed; see
-// mergeDragonflyContainerSecurityContext for the container-scope fixup this
-// asymmetry actually requires.
-func mergeDragonflyPodSecurityContext(user *corev1.PodSecurityContext) *corev1.PodSecurityContext {
+// uid — the container default's pin wins regardless. For that reason
+// review-1 removed this function's pod-scope-unset self-heal fixup
+// entirely: there was no real capability to preserve, only a spec the
+// validator should reject outright (see validateDragonflyRunAsRoot).
+//
+// Fix-round review 2 (T1/R1 — restored, now CROSS-SCOPE AWARE): that
+// removal was too broad. Grandfathered CRs can carry a uid0 request from
+// before this merge-semantics change ever existed, and they reach
+// BuildDragonfly WITHOUT ever passing through validateDragonflyRunAsRoot —
+// either because the webhook's update-ratchet (runAsFieldsUnchanged)
+// deliberately exempts an unchanged spec, or because the webhook is
+// bypassed entirely (disabled, cert-manager absent, downtime — see
+// docs/upgrade-guide.md item 7's webhook-bypass warning). On the PRE-merge
+// main branch, a non-nil user PodSecurityContext fully REPLACED the
+// default wholesale, so a user pod-scope uid0 request was rendered exactly
+// as written — {runAsUser: 0}, no runAsNonRoot key at all — because the
+// default runAsNonRoot: true was never in the picture to begin with. After
+// the merge change, that default now merges in ALONGSIDE the user's uid0
+// and re-introduces the kubelet-invalid {0, true} pair, via two distinct
+// shapes:
+//   - directly, when the USER's own PodSecurityContext sets RunAsUser: 0
+//     (podUid0 below);
+//   - indirectly, when the user's ContainerSecurityContext sets
+//     RunAsUser: 0 with RunAsNonRoot left unset (containerUid0 below): the
+//     container-scope fixup in mergeDragonflyContainerSecurityContext
+//     clears the CONTAINER's own inherited runAsNonRoot default in that
+//     case, and per-field kubelet resolution then falls back to whatever
+//     the POD level renders for runAsNonRoot — which, without this fixup,
+//     would be the newly-merged-in true default, reintroducing the exact
+//     same broken pair one level up.
+//
+// This fixup restores the main-parity render for both of those shapes: it
+// drops the inherited RunAsNonRoot default from the POD-level result too,
+// so the pod-level pair never contradicts a uid0 request the user made at
+// either scope. It is DELIBERATELY NOT applied when the user's own
+// PodSecurityContext is nil (user == nil below): that legacy shape
+// (container-scope uid0 with pod scope entirely unset) already rendered
+// the broken {0, true-from-default} pair on main too — full-replace only
+// protected a NON-nil user PodSecurityContext, since a nil one never
+// participated in the replace and fell through to the hardcoded default
+// either way. Parity there means leaving it exactly as broken as main
+// left it, not silently granting root the fixup was never asked to grant.
+// An explicit user RunAsNonRoot value at EITHER scope (true or false) is
+// never overridden by this fixup — see the user.RunAsNonRoot == nil guard
+// and the containerUid0 helper call (which itself requires the
+// container's own RunAsNonRoot to be nil, not just the pod's).
+func mergeDragonflyPodSecurityContext(
+	user *corev1.PodSecurityContext, userContainer *corev1.SecurityContext,
+) *corev1.PodSecurityContext {
 	base := *defaultDragonflyPodSecurityContext()
 	merged := strategicMergeSecurityContext(base, user)
+
+	if user != nil && user.RunAsNonRoot == nil {
+		var containerRunAsUser *int64
+		var containerRunAsNonRoot *bool
+		if userContainer != nil {
+			containerRunAsUser = userContainer.RunAsUser
+			containerRunAsNonRoot = userContainer.RunAsNonRoot
+		}
+		podUID0 := userRequestsRootWithoutOptingOut(user.RunAsUser, user.RunAsNonRoot)
+		containerUID0 := userRequestsRootWithoutOptingOut(containerRunAsUser, containerRunAsNonRoot)
+		if podUID0 || containerUID0 {
+			merged.RunAsNonRoot = nil
+		}
+	}
+
 	return &merged
 }
 
@@ -201,7 +256,7 @@ func mergeDragonflyContainerSecurityContext(user *corev1.SecurityContext) *corev
 	// setting RunAsNonRoot, drop the inherited RunAsNonRoot default so the
 	// user's pod-scope runAsNonRoot: false (or unset, defaulting to
 	// kubelet's implicit false) governs via normal kubelet inheritance.
-	if user != nil && user.RunAsUser != nil && *user.RunAsUser == 0 && user.RunAsNonRoot == nil {
+	if user != nil && userRequestsRootWithoutOptingOut(user.RunAsUser, user.RunAsNonRoot) {
 		merged.RunAsNonRoot = nil
 	}
 

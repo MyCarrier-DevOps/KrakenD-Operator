@@ -350,22 +350,65 @@ cluster with `postRestartJob.enabled: true`.
    own override, and `podSecurityContext.fsGroup` still governs volume
    ownership regardless of container-scope settings.) A direct consequence:
    **`spec.dragonfly.podSecurityContext.runAsUser: 0` with `runAsNonRoot`
-   left unset is now REJECTED at admission** (previously it was silently
-   accepted and self-healed at build time — see the removed pod-scope fixup
-   in `mergeDragonflyPodSecurityContext`) — since it can never grant a real
-   capability for the dragonfly container (only for other sidecars,
-   silently), there was no legitimate case to preserve, so the webhook now
+   left unset is now REJECTED at admission for any NEW or CHANGED spec.**
+   **Corrected history (round-2 review):** an earlier revision of this
+   entry claimed this shape "was previously silently accepted and
+   self-healed at build time" — that is false; the pre-merge (`main`)
+   builder had no self-heal at all. Before this merge-semantics change,
+   `spec.dragonfly.podSecurityContext` (when non-nil) fully REPLACED the
+   hardened default wholesale, so a pod-scope `runAsUser: 0` request
+   rendered EXACTLY as the user wrote it — `{runAsUser: 0}`, with no
+   `runAsNonRoot` key at all, because the default `runAsNonRoot: true` was
+   never in the picture to merge against in the first place. The real delta
+   introduced by the merge change (item 7 above) is that the default now
+   merges in ALONGSIDE a user's uid0 request and re-introduces the
+   kubelet-invalid `{0, true}` pair — a regression the merge change created,
+   not a pre-existing self-heal it removed. A later fix-round restored a
+   build-time fixup in `mergeDragonflyPodSecurityContext` (now cross-scope
+   aware — see the next paragraph) specifically to keep GRANDFATHERED specs
+   (ones that reach the builder without going through this admission check,
+   via the update-ratchet or a bypassed webhook) rendering at that same
+   `main`-branch parity, rather than newly breaking on the merge change.
+   Since a pod-scope-only root request can never grant a real capability for
+   the dragonfly container itself (only for other sidecars, silently), there
+   was no legitimate NEW case to preserve at admission time, so the webhook
    requires you to acknowledge the choice explicitly (`runAsNonRoot: false`
    at either scope) rather than masking it. The update-ratchet (see item 9)
    still grandfathers a pre-existing pod-scope-`runAsUser: 0` CR unchanged
    on an unrelated update.
+
+   **The build-time fixup restored above is now CROSS-SCOPE AWARE (round-2
+   fix), not just pod-scope-keyed.** `mergeDragonflyPodSecurityContext` also
+   drops the pod-level `runAsNonRoot` default when the user's
+   `containerSecurityContext` alone sets `runAsUser: 0` with its own
+   `runAsNonRoot` left unset — otherwise the container-scope fixup (which
+   clears the CONTAINER-level default) would leave the container falling
+   back to a still-`true` POD-level default, silently reintroducing the same
+   broken pair one level up. This fixup is deliberately NOT applied when the
+   user's own `podSecurityContext` is `nil`: that legacy shape
+   (`containerSecurityContext` uid0 alone, no `podSecurityContext` at all)
+   already rendered the broken `{0, true}` pair on `main` too (full-replace
+   only ever protected a non-nil user `podSecurityContext`), so leaving it
+   broken is the correct parity outcome, not a regression to fix here. An
+   explicit user `runAsNonRoot` value at either scope is never touched by
+   this fixup.
 
    More generally (not just the pod-scope-unset case above): the admission
    webhook hard-rejects any `spec.dragonfly` whose EFFECTIVE
    `{runAsUser, runAsNonRoot}` pair resolves to `{0, true}` (container-scope
    value falling back to pod-scope, mirroring item 9 below) — set
    `runAsNonRoot: false` (container or pod scope) to acknowledge running as
-   root and pass validation.
+   root and pass validation. **Round-2 correction to the opt-out rule:** an
+   opt-out is only a valid acknowledgment from the SCOPE THAT PRODUCED the
+   effective root request, or from pod scope (which always inherits down to
+   every container that sets nothing of its own). A pod-scope
+   `runAsNonRoot: false` opt-out is therefore always accepted, regardless of
+   which scope's `runAsUser: 0` triggered the check — but a CONTAINER-scope
+   `runAsNonRoot: false` opt-out is accepted only when the root request
+   itself came from that same container scope; it can no longer mask a
+   POD-scope `runAsUser: 0` request, since other sidecars/extra containers
+   in the pod that set nothing of their own still silently inherit the
+   pod-scope pair regardless of what this one container opted out of.
 
    **OnDelete recovery — an upgrade to this fix-round does NOT, by itself,
    heal an already-crashlooping Dragonfly instance.** If a Dragonfly pod is
@@ -381,6 +424,42 @@ cluster with `postRestartJob.enabled: true`.
    kubectl delete pod <dragonfly-pod-name> -n <namespace>
    ```
    The StatefulSet controller then recreates it from the now-corrected spec.
+
+   **This admission protection exists ONLY in the ValidatingWebhookConfiguration
+   — it is silently bypassed whenever the webhook isn't actively enforcing**
+   (mirrors item 9's warning for `postRestartJob`): `webhooks.enabled: false`
+   in the Helm chart, cert-manager absent (the webhook's serving certificate
+   never issues, so the webhook pod never becomes Ready), or plain webhook
+   pod downtime. When the webhook isn't enforcing, the ONLY remaining
+   protection against a Dragonfly spec rendering the kubelet-invalid
+   `{runAsUser: 0, runAsNonRoot: true}` pair is the runtime builder fixups in
+   `internal/resources/dragonfly.go`:
+   - `mergeDragonflyContainerSecurityContext`'s container-scope fixup, which
+     always applies when `containerSecurityContext.runAsUser: 0` is set with
+     `runAsNonRoot` left unset — this is unconditional, not
+     grandfathered-only.
+   - `mergeDragonflyPodSecurityContext`'s cross-scope fixup (round-2), which
+     covers a `podSecurityContext.runAsUser: 0` request and a
+     `containerSecurityContext.runAsUser: 0`-with-unset-`runAsNonRoot`
+     request, as long as the user's own `podSecurityContext` is non-nil.
+
+   **What stays unprotected even with these builder fixups in place** (i.e.
+   still renders a kubelet-invalid pair with the webhook bypassed):
+   - **An explicit `runAsNonRoot: true` set alongside a `runAsUser: 0` in the
+     SAME scope** renders exactly as written — neither fixup touches a field
+     the user explicitly set, by design (this is a deliberate,
+     self-contradictory user choice the webhook would normally catch and
+     reject, not something a builder fixup should silently override).
+   - **The legacy `containerSecurityContext` uid0-alone shape with
+     `podSecurityContext` entirely `nil`** stays exactly as kubelet-broken
+     with the webhook bypassed as it was on `main` before this fix-round —
+     see the "Corrected history" note above for why this is intentional
+     parity, not a residual bug.
+
+   Ensure the webhook is actually installed and Ready before relying on a
+   Dragonfly `runAsUser: 0` spec being caught at admission time; the builder
+   fixups above are defense-in-depth for grandfathered/bypassed paths only,
+   not a substitute for admission-time validation on new or changed specs.
 
    Dragonfly has no config-checksum identity analogous to the Job's (item 3
    above uses a checksum to decide whether to re-trigger the Job; Dragonfly
@@ -409,6 +488,23 @@ cluster with `postRestartJob.enabled: true`.
    relevant securityContext fields are unchanged from the stored spec;
    only a Create, or an Update that actually introduces/changes the
    offending combination, is rejected.
+
+   **Round-2 correction to the opt-out rule (shared with Dragonfly's item 7
+   above — both scopes use the same `validateRunAsRootConflict` helper):**
+   a pod-scope `runAsNonRoot: false` opt-out is always accepted, regardless
+   of which scope's `runAsUser: 0` triggered the check (pod scope inherits
+   down to every container that sets nothing of its own). A container-scope
+   `runAsNonRoot: false` opt-out is accepted only when the effective
+   `runAsUser: 0` itself came from that same container scope — it no longer
+   masks a pod-scope-originated root request on its own. In practice this
+   rarely changes an outcome for `postRestartJob` specifically, since the
+   Job has only a single container: the pod-scope-unset self-heal carve-out
+   (`allowPodScopeUnsetSelfHeal: true`, see the builder-fixup paragraph
+   below) already admits the common pod-scope-root-with-unset-`runAsNonRoot`
+   shape through a different path. It matters for the self-contradictory
+   edge case of an EXPLICIT pod-scope `runAsNonRoot: true` alongside a
+   container-scope `runAsNonRoot: false` opt-out — that combination is now
+   rejected instead of silently masked.
 
    **This protection exists ONLY in the ValidatingWebhookConfiguration —
    it is silently bypassed whenever the webhook isn't actively

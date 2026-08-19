@@ -28,7 +28,7 @@ import (
 // hardened defaults (runAsNonRoot:true, runAsUser/runAsGroup:999,
 // fsGroup:999).
 func TestMergeDragonflyPodSecurityContext_NilUserUsesHardenedDefaults(t *testing.T) {
-	merged := mergeDragonflyPodSecurityContext(nil)
+	merged := mergeDragonflyPodSecurityContext(nil, nil)
 
 	want := defaultDragonflyPodSecurityContext()
 	if !reflect.DeepEqual(merged, want) {
@@ -61,7 +61,7 @@ func TestMergeDragonflyPodSecurityContext_FSGroupPreservedOnPartialOverride(t *t
 	user := &corev1.PodSecurityContext{
 		RunAsUser: new(int64(1234)),
 	}
-	merged := mergeDragonflyPodSecurityContext(user)
+	merged := mergeDragonflyPodSecurityContext(user, nil)
 
 	if merged.RunAsUser == nil || *merged.RunAsUser != 1234 {
 		t.Fatalf("user-set runAsUser:1234 not applied: %+v", merged.RunAsUser)
@@ -83,7 +83,7 @@ func TestMergeDragonflyPodSecurityContext_UserOverrideWins(t *testing.T) {
 	user := &corev1.PodSecurityContext{
 		RunAsUser: new(int64(1234)),
 	}
-	merged := mergeDragonflyPodSecurityContext(user)
+	merged := mergeDragonflyPodSecurityContext(user, nil)
 
 	if merged.RunAsUser == nil || *merged.RunAsUser != 1234 {
 		t.Fatalf("expected overridden runAsUser:1234, got %+v", merged.RunAsUser)
@@ -136,35 +136,144 @@ func TestMergeDragonflyContainerSecurityContext_RunAsNonRootFalseSurvivesMerge(t
 	}
 }
 
-// TestMergeDragonflyPodSecurityContext_RootUserNoLongerSelfHeals covers
-// fix-round review 1, change #2: unlike job.go's pod-scope fixup (which
-// self-heals podSecurityContext.runAsUser:0 by dropping the inherited
-// runAsNonRoot default), mergeDragonflyPodSecurityContext no longer inspects
-// runAsUser at all — the pod-scope self-heal fixup was removed because
-// dragonfly's container-scope default PINS RunAsNonRoot:true regardless of
-// what pod scope says (container-scope always wins per-field at the
-// kubelet), so there was never a real capability for the pod-scope fixup to
-// preserve. A bare podSecurityContext.runAsUser:0 with no explicit
-// runAsNonRoot now merges straight through with the inherited
-// runAsNonRoot:true default intact (unchanged) — validateDragonflyRunAsRoot
-// is what now rejects this combination at admission instead (see
-// webhook_test.go's TestGatewayValidator_DragonflyPodScopeRunAsUserZeroUnsetRunAsNonRootRejected).
-func TestMergeDragonflyPodSecurityContext_RootUserNoLongerSelfHeals(t *testing.T) {
+// TestMergeDragonflyPodSecurityContext_PodScopeRootAloneRestoresMainParity
+// covers fix-round review 2 (T1/R1): a user PodSecurityContext setting ONLY
+// runAsUser:0 (podUid0, no ContainerSecurityContext at all) must have the
+// inherited runAsNonRoot:true default DROPPED — restoring the render main
+// produced for this exact shape before the strategic-merge change (full
+// replace meant the default was never in the picture), rather than the
+// kubelet-invalid {0, true} pair the merge change would otherwise
+// introduce. Supersedes the now-removed
+// TestMergeDragonflyPodSecurityContext_RootUserNoLongerSelfHeals, whose
+// premise (no pod-scope fixup exists at all) fix-round review 2 reversed —
+// see mergeDragonflyPodSecurityContext's doc for the full rationale
+// (this fixup exists for GRANDFATHERED/webhook-bypassed CR parity, not as
+// a new admission-time self-heal; validateDragonflyRunAsRoot still rejects
+// this shape for any NEW or CHANGED spec — see webhook_test.go's
+// TestGatewayValidator_DragonflyPodScopeRunAsUserZeroUnsetRunAsNonRootRejected).
+func TestMergeDragonflyPodSecurityContext_PodScopeRootAloneRestoresMainParity(t *testing.T) {
 	user := &corev1.PodSecurityContext{
 		RunAsUser: new(int64(0)),
 	}
-	merged := mergeDragonflyPodSecurityContext(user)
+	merged := mergeDragonflyPodSecurityContext(user, nil)
 
 	if merged.RunAsUser == nil || *merged.RunAsUser != 0 {
 		t.Fatalf("user-set runAsUser:0 not applied: %+v", merged.RunAsUser)
 	}
-	if merged.RunAsNonRoot == nil || !*merged.RunAsNonRoot {
-		t.Fatalf("expected the inherited runAsNonRoot:true default to survive unchanged "+
-			"(the pod-scope self-heal fixup was removed), got %+v", merged.RunAsNonRoot)
+	if merged.RunAsNonRoot != nil {
+		t.Fatalf("expected the inherited runAsNonRoot:true default to be dropped "+
+			"(main-parity fixup), got %+v", merged.RunAsNonRoot)
 	}
 	// fsGroup is unrelated and must survive regardless.
 	if merged.FSGroup == nil || *merged.FSGroup != 999 {
 		t.Fatalf("hardened fsGroup:999 lost: %+v", merged.FSGroup)
+	}
+}
+
+// TestMergeDragonflyPodSecurityContext_ContainerScopeRootAloneTriggersPodFixup
+// covers the INDIRECT (containerUid0) branch: a user ContainerSecurityContext
+// setting runAsUser:0 (with its own RunAsNonRoot left unset — so the
+// container-scope fixup already clears the container-level default) must
+// also clear the POD-level inherited default, given a non-nil (but
+// otherwise unrelated) user PodSecurityContext — otherwise the container's
+// per-field fallback to pod scope would re-introduce the exact {0, true}
+// pair this fix-round set out to avoid one level up.
+func TestMergeDragonflyPodSecurityContext_ContainerScopeRootAloneTriggersPodFixup(t *testing.T) {
+	user := &corev1.PodSecurityContext{
+		RunAsGroup: new(int64(999)), // non-nil pod ctx, unrelated field set
+	}
+	userContainer := &corev1.SecurityContext{
+		RunAsUser: new(int64(0)),
+	}
+	merged := mergeDragonflyPodSecurityContext(user, userContainer)
+
+	if merged.RunAsNonRoot != nil {
+		t.Fatalf("expected the inherited runAsNonRoot:true default to be dropped when the "+
+			"container scope alone requests root, got %+v", merged.RunAsNonRoot)
+	}
+}
+
+// TestMergeDragonflyPodSecurityContext_BothScopesRootTriggersPodFixup covers
+// the combined branch: both scopes independently requesting root (with
+// RunAsNonRoot unset at both) must still drop the pod-level default exactly
+// once (podUid0 and containerUid0 are both true; the fixup is idempotent).
+func TestMergeDragonflyPodSecurityContext_BothScopesRootTriggersPodFixup(t *testing.T) {
+	user := &corev1.PodSecurityContext{
+		RunAsUser: new(int64(0)),
+	}
+	userContainer := &corev1.SecurityContext{
+		RunAsUser: new(int64(0)),
+	}
+	merged := mergeDragonflyPodSecurityContext(user, userContainer)
+
+	if merged.RunAsNonRoot != nil {
+		t.Fatalf("expected the inherited runAsNonRoot:true default to be dropped when both "+
+			"scopes request root, got %+v", merged.RunAsNonRoot)
+	}
+}
+
+// TestMergeDragonflyPodSecurityContext_NeitherScopeRootFixupDoesNotFire
+// verifies the fixup only fires for an actual uid0 request: a non-nil user
+// PodSecurityContext with an unrelated field set, and a non-root
+// ContainerSecurityContext, must leave the inherited runAsNonRoot:true
+// default untouched.
+func TestMergeDragonflyPodSecurityContext_NeitherScopeRootFixupDoesNotFire(t *testing.T) {
+	user := &corev1.PodSecurityContext{
+		RunAsGroup: new(int64(999)),
+	}
+	userContainer := &corev1.SecurityContext{
+		RunAsUser: new(int64(1234)),
+	}
+	merged := mergeDragonflyPodSecurityContext(user, userContainer)
+
+	if merged.RunAsNonRoot == nil || !*merged.RunAsNonRoot {
+		t.Fatalf("expected the inherited runAsNonRoot:true default to survive when neither "+
+			"scope requests root, got %+v", merged.RunAsNonRoot)
+	}
+}
+
+// TestMergeDragonflyPodSecurityContext_ContainerExplicitRunAsNonRootFixupDoesNotFire
+// verifies the containerUid0 branch requires the CONTAINER's own
+// RunAsNonRoot to be nil, not just the pod's: a container that explicitly
+// sets RunAsUser:0 AND RunAsNonRoot (its own explicit, if
+// self-contradictory, choice) must not trigger the pod-level fixup on its
+// behalf.
+func TestMergeDragonflyPodSecurityContext_ContainerExplicitRunAsNonRootFixupDoesNotFire(t *testing.T) {
+	user := &corev1.PodSecurityContext{
+		RunAsGroup: new(int64(999)),
+	}
+	userContainer := &corev1.SecurityContext{
+		RunAsUser:    new(int64(0)),
+		RunAsNonRoot: new(true),
+	}
+	merged := mergeDragonflyPodSecurityContext(user, userContainer)
+
+	if merged.RunAsNonRoot == nil || !*merged.RunAsNonRoot {
+		t.Fatalf("expected the inherited runAsNonRoot:true default to survive when the "+
+			"container scope's own RunAsNonRoot is explicit, got %+v", merged.RunAsNonRoot)
+	}
+}
+
+// TestMergeDragonflyPodSecurityContext_PodNilWithContainerRootLeavesLegacyShapeBroken
+// covers the deliberate exclusion: a nil user PodSecurityContext with a
+// root-requesting ContainerSecurityContext must NOT trigger the fixup — this
+// is the legacy "container-0 + pod-nil" shape, which already rendered the
+// kubelet-broken {0, true} pair on main (full-replace only ever applied to a
+// NON-nil user PodSecurityContext; a nil one always fell through to the
+// hardcoded default). Parity means leaving it exactly as broken as main did,
+// not silently granting root the fixup was never asked to grant. See
+// external_crd_test.go's
+// TestBuildDragonfly_ContainerRootUserPodNilLegacyShapeMainParity for the
+// build-level counterpart.
+func TestMergeDragonflyPodSecurityContext_PodNilWithContainerRootLeavesLegacyShapeBroken(t *testing.T) {
+	userContainer := &corev1.SecurityContext{
+		RunAsUser: new(int64(0)),
+	}
+	merged := mergeDragonflyPodSecurityContext(nil, userContainer)
+
+	if merged.RunAsNonRoot == nil || !*merged.RunAsNonRoot {
+		t.Fatalf("expected the inherited runAsNonRoot:true default to survive unchanged for "+
+			"a nil user PodSecurityContext (deliberately excluded), got %+v", merged.RunAsNonRoot)
 	}
 }
 
@@ -177,7 +286,7 @@ func TestMergeDragonflyPodSecurityContext_RootUserWithExplicitRunAsNonRootHonore
 		RunAsUser:    new(int64(0)),
 		RunAsNonRoot: new(false),
 	}
-	merged := mergeDragonflyPodSecurityContext(user)
+	merged := mergeDragonflyPodSecurityContext(user, nil)
 
 	if merged.RunAsNonRoot == nil || *merged.RunAsNonRoot {
 		t.Fatalf("explicit user runAsNonRoot:false not honored: %+v", merged.RunAsNonRoot)
@@ -303,17 +412,19 @@ func TestMergeDragonflyContainerSecurityContext_ReflectiveRoundTrip(t *testing.T
 
 // TestMergeDragonflyPodSecurityContext_ReflectiveRoundTrip is the
 // PodSecurityContext counterpart. RunAsUser is filled with a non-zero value
-// (7, via fillNonZero) same as every other field — mergeDragonflyPodSecurity
-// Context no longer has ANY runAsUser-keyed fixup at pod scope (fix-round
-// review 1, change #2 removed it), so there is nothing special about
-// RunAsUser here anymore; a zero value would work just as well for this
-// particular test, but 7 keeps the comment consistent with fillNonZero's
-// general int-filling behavior.
+// (7, via fillNonZero) same as every other field. fillNonZero also sets
+// RunAsNonRoot non-nil (true), which alone keeps fix-round review 2's
+// cross-scope pod fixup (mergeDragonflyPodSecurityContext) from firing
+// regardless of RunAsUser's value — the fixup only ever inspects
+// runAsUser:0 requests where RunAsNonRoot is left UNSET, and this test sets
+// every field explicitly. userContainer is passed nil: the containerUid0
+// branch is exercised by the dedicated cross-scope tests above, not this
+// full-field round-trip.
 func TestMergeDragonflyPodSecurityContext_ReflectiveRoundTrip(t *testing.T) {
 	user := &corev1.PodSecurityContext{}
 	fillNonZero(reflect.ValueOf(user).Elem())
 
-	merged := mergeDragonflyPodSecurityContext(user)
+	merged := mergeDragonflyPodSecurityContext(user, nil)
 
 	uv := reflect.ValueOf(user).Elem()
 	mv := reflect.ValueOf(merged).Elem()
@@ -374,15 +485,12 @@ func TestMergeDragonflyContainerSecurityContext_SingleFieldRoundTrip(t *testing.
 // TestMergeDragonflyPodSecurityContext_SingleFieldRoundTrip is the
 // PodSecurityContext counterpart of
 // TestMergeDragonflyContainerSecurityContext_SingleFieldRoundTrip, covering
-// every settable field including RunAsUser. RunAsUser was previously
-// skipped here with the justification "it triggers the runAsUser:0/7 fixup
-// path" — that justification was false even before this fix-round
-// (fillNonZero fills ints with 7, not 0, so the then-existing
-// runAsUser:0-keyed pod fixup never fired for this test), and is doubly
-// moot now that mergeDragonflyPodSecurityContext no longer has ANY
-// runAsUser-keyed fixup at pod scope (fix-round review 1, change #2) — a
-// user-set RunAsUser now merges straight through like any other field, with
-// no special-case interference to guard against.
+// every settable field including RunAsUser. RunAsUser is safe to include
+// unskipped: fillNonZero fills ints with 7, not 0, so fix-round review 2's
+// cross-scope pod fixup (which only inspects runAsUser:0 with RunAsNonRoot
+// unset) never fires when this test isolates the RunAsUser field alone —
+// see the dedicated cross-scope tests above for that branch. userContainer
+// is passed nil throughout, so the containerUid0 branch is inert here too.
 func TestMergeDragonflyPodSecurityContext_SingleFieldRoundTrip(t *testing.T) {
 	base := reflect.TypeOf(corev1.PodSecurityContext{})
 	for i := 0; i < base.NumField(); i++ {
@@ -396,7 +504,7 @@ func TestMergeDragonflyPodSecurityContext_SingleFieldRoundTrip(t *testing.T) {
 			}
 			fillNonZero(f)
 
-			merged := mergeDragonflyPodSecurityContext(user)
+			merged := mergeDragonflyPodSecurityContext(user, nil)
 			mv := reflect.ValueOf(merged).Elem()
 
 			if !reflect.DeepEqual(f.Interface(), mv.Field(i).Interface()) {
