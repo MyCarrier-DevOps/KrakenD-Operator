@@ -34,6 +34,9 @@ COPY --from=krakend /usr/bin/krakend /usr/local/bin/krakend
 # KrakenD binary is dynamically linked against musl; copy the dynamic linker
 # and libc from the Alpine-based krakend image.
 COPY --from=krakend /staging/lib/ /lib/
+# Apache 2.0 requires redistributions to carry the license and notices; this
+# covers the manager binary's Go dependencies, KrakenD CE, and musl.
+COPY LICENSE NOTICE THIRD-PARTY-NOTICES /licenses/
 USER 65532:65532
 
 ENTRYPOINT ["/manager"]
