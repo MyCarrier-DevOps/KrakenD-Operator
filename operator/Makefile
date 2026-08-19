@@ -104,6 +104,11 @@ manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and Cust
 	# Doing the copy here, gated by verify-manifests below, is what makes a
 	# future `make manifests` run that changes a CRD fail the gate instead of
 	# silently leaving the chart copy stale.
+	# ../charts/krakend-operator/crds/ is therefore fully generated output —
+	# see the README.md in that directory (review id 3812913995, round-6
+	# #2). The *.yaml glob below only ever touches CRD files, so it leaves
+	# that README.md alone; hand edits to the CRD *.yaml files themselves
+	# are still discarded on the next `make manifests` run.
 	cp config/crd/bases/*.yaml ../charts/krakend-operator/crds/
 
 .PHONY: generate
@@ -152,16 +157,21 @@ generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and
 # locally before commit.
 VERIFY_MANIFESTS_PATHS = config/crd/bases config/rbac/role.yaml config/webhook/manifests.yaml bundle/manifests ../charts/krakend-operator/crds
 # NOTE: this target mutates config/manager/kustomization.yaml as a side
-# effect of its `bundle` dependency (`kustomize edit set image`), and
-# restores it via `git checkout --` at the end of the recipe below — that
-# file is deliberately excluded from the drift comparison above (see the
-# EXCLUDED-on-purpose block), but leaving it modified in the working tree
-# after a verify-only run is untidy for a target that's meant to be
-# read-only-ish (review id 3812030522, round-5 #5). Safe to reset
-# unconditionally here: `bundle`/`deploy`/`install` are the only targets
-# that touch it, and none of them are meant to be run with review-relevant
-# local edits to that file pending review — if you were mid-edit on it,
-# re-apply your change after running this target.
+# effect of its `bundle` dependency (`kustomize edit set image`), which
+# runs to completion as a prerequisite before this recipe's own body
+# starts. The recipe restores it via `git checkout --` as its FIRST line
+# (review id 3812913986, round-6 #1) rather than its last: neither check
+# below reads or gates on that file (it's deliberately excluded from the
+# drift comparison — see the EXCLUDED-on-purpose block above, and note
+# it's absent from $(VERIFY_MANIFESTS_PATHS)), so restoring it up front
+# can't hide any real drift, and it means the file is already clean before
+# either check can `exit 1` and abort the recipe. Restoring it only at the
+# end (as before round-6) left it dirty on gate failure — exactly when a
+# developer can least tell a tool-made edit from their own in-progress
+# change. Safe to reset unconditionally here: `bundle`/`deploy`/`install`
+# are the only targets that touch it, and none of them are meant to be run
+# with review-relevant local edits to that file pending review — if you
+# were mid-edit on it, re-apply your change after running this target.
 #
 # NOTE: the untracked-file check below trips on ANY local, non-gitignored
 # scratch file dropped under one of the gated dirs above — not just
@@ -171,7 +181,8 @@ VERIFY_MANIFESTS_PATHS = config/crd/bases config/rbac/role.yaml config/webhook/m
 # (a genuinely new generated file going undetected). CI is never affected,
 # since CI checkouts don't carry local scratch files. If this trips locally,
 # `git clean -n -- $(VERIFY_MANIFESTS_PATHS)` to see what would be removed.
-verify-manifests: manifests bundle ## Verify generated manifests (CRDs/RBAC/webhook/bundle/charts-CRDs) match committed source. Resets config/manager/kustomization.yaml (mutated by the bundle dependency) on exit. May fail on local untracked scratch files under gated dirs (not a bug, CI-safe — see Makefile comment above this target).
+verify-manifests: manifests bundle ## Verify generated manifests (CRDs/RBAC/webhook/bundle/charts-CRDs) match committed source. Resets config/manager/kustomization.yaml (mutated by the bundle dependency) before checking. May fail on local untracked scratch files under gated dirs (not a bug, CI-safe — see Makefile comment above this target).
+	git checkout -- config/manager/kustomization.yaml
 	@untracked=$$(git status --porcelain -- $(VERIFY_MANIFESTS_PATHS) | grep '^??' || true); \
 	if [ -n "$$untracked" ]; then \
 	  echo "generated manifests drifted: new untracked file(s):"; \
@@ -183,7 +194,6 @@ verify-manifests: manifests bundle ## Verify generated manifests (CRDs/RBAC/webh
 	    ':!bundle/manifests/*.clusterserviceversion.yaml' || \
 	  (echo "generated manifests are out of date — run 'make manifests && make bundle' and commit the result" \
 	    && exit 1)
-	git checkout -- config/manager/kustomization.yaml
 
 .PHONY: fmt
 fmt: ## Run go fmt against code.
