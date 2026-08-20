@@ -618,6 +618,20 @@ func TestGatewayValidator_PodScopeRunAsUserZeroExplicitTrueContainerOptOutReject
 	if !strings.Contains(err.Error(), "spec.postRestartJob.podSecurityContext.runAsUser") {
 		t.Errorf("expected the rejection to point at spec.postRestartJob.podSecurityContext.runAsUser, got: %v", err)
 	}
+	// Review round 4, D4a: this shape's rejection message is load-bearing —
+	// it is the ONLY message text the user ever sees when the pod scope's
+	// own explicit runAsNonRoot:true blocks a container-scope opt-out that
+	// would otherwise short-circuit the check. Without the "Unless the Job
+	// container carries its own runAsNonRoot: false" qualifier, the message
+	// would read as an unconditional promise that a container-scope opt-out
+	// always works — which S1 (the fix pinned by this very test) made
+	// false for exactly this shape. Asserting the substring here means a
+	// future edit that drops or waters down that qualifier fails this test,
+	// not just a manual doc review.
+	if !strings.Contains(err.Error(), "Unless the Job container carries its own runAsNonRoot: false") {
+		t.Errorf("expected the rejection message to explain the container-scope-opt-out "+
+			"qualifier (\"Unless the Job container carries its own runAsNonRoot: false\"), got: %v", err)
+	}
 }
 
 // TestGatewayValidator_EffectiveRunAsRootCrossScopePrecedence covers review
@@ -1242,6 +1256,11 @@ func TestGatewayValidator_DragonflyEffectiveRunAsRootCrossScopePrecedence(t *tes
 		pod       *corev1.PodSecurityContext
 		wantErr   bool
 		reason    string
+		// wantDetail (review round 4, D4c), when non-empty, asserts the
+		// rejection message contains this substring — an empty wantDetail
+		// skips the check for rows where the message's exact conditional
+		// wording isn't load-bearing to this table's purpose.
+		wantDetail string
 	}{
 		{
 			name: "pod-scope gate rejects unacknowledged pod root even though container's own effective uid is non-root, runAsNonRoot:true at pod scope",
@@ -1282,6 +1301,17 @@ func TestGatewayValidator_DragonflyEffectiveRunAsRootCrossScopePrecedence(t *tes
 			wantErr: true,
 			reason: "container.runAsUser:0 must win over pod.runAsUser:999 (effective uid 0, no " +
 				"escape hatch) — inverted precedence would use the pod's uid 999 and allow",
+			// This shape (container runAsUser:0, runAsNonRoot left unset, no
+			// pod-scope acknowledgment) renders either the kubelet-invalid
+			// {0, true} pair OR a container silently running as root,
+			// depending on the other securityContext fields — the
+			// conditional wording in validateDragonflyRunAsRoot's rejection
+			// message is load-bearing here specifically because this row's
+			// shape is the "silently running as root" branch (the merge
+			// fixup drops the inherited runAsNonRoot default since the
+			// user's own container.RunAsNonRoot is nil), not the
+			// kubelet-invalid-pair branch.
+			wantDetail: "or a container silently running as root",
 		},
 		{
 			name: "container root wins over pod non-root, container opt-out — allowed",
@@ -1320,6 +1350,11 @@ func TestGatewayValidator_DragonflyEffectiveRunAsRootCrossScopePrecedence(t *tes
 			}
 			if !tc.wantErr && err != nil {
 				t.Fatalf("expected no error (%s), got: %v", tc.reason, err)
+			}
+			if tc.wantDetail != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantDetail) {
+					t.Errorf("expected rejection message to contain %q (%s), got: %v", tc.wantDetail, tc.reason, err)
+				}
 			}
 		})
 	}

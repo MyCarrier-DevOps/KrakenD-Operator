@@ -428,6 +428,30 @@ cluster with `postRestartJob.enabled: true`.
    POD-scope `runAsUser: 0` request, since other sidecars/extra containers
    in the pod that set nothing of their own still silently inherit the
    pod-scope pair regardless of what this one container opted out of.
+   **One exception — the documented container-root recipe:** when the
+   container scope carries its OWN `runAsUser: 0`, the whole spec routes
+   through the container-path rules, so the container's
+   `runAsNonRoot: false` acknowledges it and the spec is ADMITTED even when
+   `podSecurityContext` also requests `runAsUser: 0`
+   (`containerSecurityContext: {runAsUser: 0, runAsNonRoot: false}` +
+   `podSecurityContext: {runAsUser: 0}` is equivalent to
+   `podSecurityContext: {runAsUser: 0, runAsNonRoot: false}` alone) —
+   including with an explicit pod-scope `runAsNonRoot: true`, which is then
+   rendered as the kubelet-invalid `{runAsUser: 0, runAsNonRoot: true}`
+   pod-level pair exactly as written (see "What stays unprotected" below).
+   These admitted shapes are still reported by the
+   `DragonflyRunAsRootUnacknowledged` status condition as
+   `RunAsRootUnacknowledged`: the condition is deliberately stricter than
+   admission (a pod-scope root request is only ever acknowledged by a
+   pod-scope `runAsNonRoot: false`), so a `True` condition on an admitted
+   spec is by design, not a bug. Conversely, a pod-scope `runAsUser: 0`
+   alongside a NON-zero container-scope `runAsUser`, or alongside an
+   explicit `runAsNonRoot: true` with no container-scope root request, is
+   now REJECTED on any NEW or CHANGED spec even though the dragonfly
+   container's own effective uid is not 0 — if you carry such a spec, add
+   `podSecurityContext.runAsNonRoot: false` or drop the pod-scope
+   `runAsUser: 0`; stored specs are unaffected until their
+   `securityContext`/`podSecurityContext` fields change (update-ratchet).
 
    **OnDelete recovery — an upgrade to this fix-round does NOT, by itself,
    heal an already-crashlooping Dragonfly instance.** If a Dragonfly pod is
@@ -466,9 +490,18 @@ cluster with `postRestartJob.enabled: true`.
    still renders a kubelet-invalid pair with the webhook bypassed):
    - **An explicit `runAsNonRoot: true` set alongside a `runAsUser: 0` in the
      SAME scope** renders exactly as written — neither fixup touches a field
-     the user explicitly set, by design (this is a deliberate,
-     self-contradictory user choice the webhook would normally catch and
-     reject, not something a builder fixup should silently override).
+     the user explicitly set, by design. On its own (no acknowledgment at the
+     OTHER scope), the webhook rejects this shape outright — it is a
+     deliberate, self-contradictory user choice the admission check would
+     normally catch. But when the OTHER scope's `runAsNonRoot: false`
+     acknowledges the root request and admits the spec through that scope's
+     rules (see the container-root recipe exception above), the same-scope
+     invalid pair is still admitted and rendered exactly as written — both
+     `containerSecurityContext: {runAsUser: 0, runAsNonRoot: false}` +
+     `podSecurityContext: {runAsUser: 0, runAsNonRoot: true}` and
+     `containerSecurityContext: {runAsUser: 0, runAsNonRoot: true}` +
+     `podSecurityContext: {runAsNonRoot: false}` fall into this admitted,
+     invalid-pair-as-written category.
    - **The legacy `containerSecurityContext` uid0-alone shape with
      `podSecurityContext` entirely `nil`** stays exactly as kubelet-broken
      with the webhook bypassed as it was on `main` before this fix-round —

@@ -859,7 +859,8 @@ func TestExternalSecretGVR(t *testing.T) {
 }
 
 // TestDragonflyRunAsRootUnacknowledged covers review round 3, C2: the
-// discriminator behind the DragonflyRunAsRoot status condition, exercised
+// discriminator behind the DragonflyRunAsRootUnacknowledged status
+// condition (renamed review round 4, D5), exercised
 // directly against rendered-map shapes (as unstructured.NestedMap would
 // return them off a built Dragonfly CR) rather than through a full
 // reconcile.

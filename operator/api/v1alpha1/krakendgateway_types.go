@@ -492,9 +492,11 @@ type DragonflySpec struct {
 	// ContainerSecurityContext instead. podSecurityContext.fsGroup is the
 	// exception: it still governs volume ownership regardless of
 	// container-scope settings. A pod-scope runAsUser: 0 with
-	// runAsNonRoot left unset is rejected at admission (it cannot grant
-	// the dragonfly container any real capability, only silently root
-	// other pod containers), so it is not a viable way to run the
+	// runAsNonRoot left unset is rejected at admission (unless the
+	// container scope carries its own runAsUser: 0, which routes the
+	// whole spec through the container-scope rules instead) — it cannot
+	// grant the dragonfly container any real capability, only silently
+	// root other pod containers, so it is not a viable way to run the
 	// dragonfly container as root — use ContainerSecurityContext for that.
 	PodSecurityContext *corev1.PodSecurityContext `json:"podSecurityContext,omitempty"`
 

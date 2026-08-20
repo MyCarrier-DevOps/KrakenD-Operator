@@ -762,6 +762,19 @@ func (r *KrakenDGatewayReconciler) reconcileOwnedResources(
 			}
 			r.recordDragonflyRunAsRootCondition(gw, df)
 		}
+	} else {
+		// Review round 4, D3: Dragonfly is deliberately off (unset or
+		// Enabled: false) — mirrors reconcilePostRestartJob's
+		// disabled/empty guard (see the spec == nil || !spec.Enabled branch
+		// above, ~line 855) so `kubectl describe krakendgateway` does not
+		// keep showing a stale ConditionDragonflyRunAsRootUnacknowledged
+		// forever after the user disables Dragonfly. Deliberately NOT
+		// cleared when Dragonfly is enabled but !dfAvailable (CRD not yet
+		// installed) — that is a transient/environmental state, not a
+		// deliberate disable, mirroring reconcilePostRestartJob's
+		// configChecksum == "" reasoning (~line 870) for not flickering
+		// conditions away during an in-progress/incomplete state.
+		meta.RemoveStatusCondition(&gw.Status.Conditions, v1alpha1.ConditionDragonflyRunAsRootUnacknowledged)
 	}
 
 	// ExternalSecret (only if license.externalSecret is enabled AND CRD is installed)
@@ -1327,7 +1340,7 @@ func (r *KrakenDGatewayReconciler) recordDragonflyRunAsRootCondition(
 
 	if resources.DragonflyRunAsRootUnacknowledged(containerMap, podMap) {
 		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
-			Type:               v1alpha1.ConditionDragonflyRunAsRoot,
+			Type:               v1alpha1.ConditionDragonflyRunAsRootUnacknowledged,
 			Status:             metav1.ConditionTrue,
 			ObservedGeneration: gw.Generation,
 			Reason:             v1alpha1.ReasonDragonflyRunAsRootUnacknowledged,
@@ -1338,12 +1351,29 @@ func (r *KrakenDGatewayReconciler) recordDragonflyRunAsRootCondition(
 		return
 	}
 
+	// Review round 4, D5b: the False state previously overloaded
+	// ReasonDragonflyRunAsRootAcknowledged for both an acknowledged root
+	// request AND the far more common no-root-request-at-all case. Split
+	// into two distinct reasons so a viewer can tell "someone requested
+	// root and explicitly acknowledged it" apart from "this gateway never
+	// requested root".
+	if resources.DragonflyRunAsRootRequested(containerMap, podMap) {
+		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+			Type:               v1alpha1.ConditionDragonflyRunAsRootUnacknowledged,
+			Status:             metav1.ConditionFalse,
+			ObservedGeneration: gw.Generation,
+			Reason:             v1alpha1.ReasonDragonflyRunAsRootAcknowledged,
+			Message:            "the rendered Dragonfly securityContext carries a runAsUser: 0 request that is explicitly acknowledged.",
+		})
+		return
+	}
+
 	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
-		Type:               v1alpha1.ConditionDragonflyRunAsRoot,
+		Type:               v1alpha1.ConditionDragonflyRunAsRootUnacknowledged,
 		Status:             metav1.ConditionFalse,
 		ObservedGeneration: gw.Generation,
-		Reason:             v1alpha1.ReasonDragonflyRunAsRootAcknowledged,
-		Message:            "the rendered Dragonfly securityContext does not carry an unacknowledged root request.",
+		Reason:             v1alpha1.ReasonDragonflyRunAsRootNoRequest,
+		Message:            "the rendered Dragonfly securityContext does not request runAsUser: 0.",
 	})
 }
 

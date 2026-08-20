@@ -156,6 +156,21 @@ func DragonflyRunAsRootUnacknowledged(containerMap, podMap map[string]interface{
 	return false
 }
 
+// DragonflyRunAsRootRequested reports whether either the container map or
+// the pod map carries a runAsUser: 0 request, regardless of whether it is
+// acknowledged — review round 4, D5b. Distinguishing "a root request exists
+// (acknowledged or not)" from "no root request was ever made" lets the
+// caller (recordDragonflyRunAsRootCondition, internal/controller/
+// krakendgateway_controller.go) report a third False-state reason
+// (NoRunAsRootRequest) instead of overloading the acknowledged-root reason
+// for the (far more common) no-root-request-at-all case. Reuses the same
+// mapRunAsUserIsZero helper DragonflyRunAsRootUnacknowledged uses, so the
+// two functions can never disagree on what counts as "a runAsUser: 0
+// request" in the rendered maps.
+func DragonflyRunAsRootRequested(containerMap, podMap map[string]interface{}) bool {
+	return mapRunAsUserIsZero(containerMap) || mapRunAsUserIsZero(podMap)
+}
+
 // mapRunAsUserIsZero reports whether m's "runAsUser" key is present and
 // equal to int64(0) — the type buildPodSecurityContext/buildSecurityContext
 // and, after an unstructured.NestedMap round-trip (runtime.DeepCopyJSON),
