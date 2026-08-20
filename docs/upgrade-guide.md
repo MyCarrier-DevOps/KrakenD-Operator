@@ -154,7 +154,10 @@ cluster with `postRestartJob.enabled: true`.
    runs `npm install -g rdme` with no container `securityContext` override —
    this MUST be updated (either the script or an explicit
    `readOnlyRootFilesystem: false` override) before this operator version is
-   rolled out to prod, or the job will fail on every run.
+   rolled out to prod, or the job will fail on every run. (Since 2026-08 the
+   gateway CRs use the pre-baked `ci/rdme-publisher` image — rdme is no
+   longer installed at runtime; see *ReadMe Publishing (postRestartJob)* in
+   docs/runbook.md.)
 2. **`securityContext`/`podSecurityContext` now MERGE instead of REPLACE.**
    Previously, setting any field in `spec.postRestartJob.securityContext` or
    `podSecurityContext` discarded ALL hardened defaults (e.g. prod's
