@@ -473,14 +473,51 @@ type DragonflySpec struct {
 	Authentication *DragonflyAuthSpec           `json:"authentication,omitempty"`
 
 	// PodSecurityContext sets pod-level security attributes for the
-	// Dragonfly pod. When nil the operator applies a safe non-root
-	// default (runAsNonRoot: true, runAsUser/runAsGroup: 999 — the
-	// built-in "dfly" user shipped in the Dragonfly image).
+	// Dragonfly pod. Any field you set here is merged on top of the
+	// operator's hardened default (runAsNonRoot: true, runAsUser: 999,
+	// runAsGroup: 999, fsGroup: 999 — the built-in "dfly" user/group
+	// shipped in the Dragonfly image); fields you leave unset keep the
+	// default. Only a fixed whitelist of fields is actually propagated to
+	// the rendered Dragonfly CR: runAsNonRoot, runAsUser, runAsGroup,
+	// fsGroup. Any other field (e.g. seccompProfile, capabilities,
+	// sysctls) is accepted by this API's schema but silently dropped when
+	// rendering — it is not projected onto the Dragonfly CR.
+	//
+	// IMPORTANT: pod-scope runAsUser/runAsGroup/runAsNonRoot here do NOT
+	// change the dragonfly container's effective uid/gid — the
+	// container-level default below PINS runAsUser/runAsGroup: 999, and a
+	// container-scope securityContext field always overrides the
+	// pod-scope value for that same field at the kubelet. To change what
+	// uid/gid the dragonfly container itself runs as, set
+	// ContainerSecurityContext instead. podSecurityContext.fsGroup is the
+	// exception: it still governs volume ownership regardless of
+	// container-scope settings. A pod-scope runAsUser: 0 with
+	// runAsNonRoot left unset is rejected at admission (unless the
+	// container scope carries its own runAsUser: 0, which routes the
+	// whole spec through the container-scope rules instead) — it cannot
+	// grant the dragonfly container any real capability, only silently
+	// root other pod containers, so it is not a viable way to run the
+	// dragonfly container as root — use ContainerSecurityContext for that.
 	PodSecurityContext *corev1.PodSecurityContext `json:"podSecurityContext,omitempty"`
 
 	// ContainerSecurityContext overrides the container-level security
-	// context for the dragonfly container. When nil the operator
-	// applies a safe non-root default matching PodSecurityContext.
+	// context for the dragonfly container. Any field you set here is
+	// merged on top of the operator's hardened default (runAsNonRoot:
+	// true, runAsUser: 999, runAsGroup: 999, matching PodSecurityContext's
+	// default); fields you leave unset keep the default. Only a fixed
+	// whitelist of fields is actually propagated to the rendered Dragonfly
+	// CR: runAsNonRoot, runAsUser, runAsGroup, allowPrivilegeEscalation.
+	// Any other field (e.g. capabilities, seccompProfile) is accepted by
+	// this API's schema but silently dropped when rendering.
+	//
+	// To run the dragonfly container as root, set RunAsUser: 0 here
+	// (this is the scope that actually takes effect — see
+	// PodSecurityContext above) together with RunAsNonRoot: false (either
+	// here or on PodSecurityContext) to acknowledge the choice; the
+	// operator drops its own runAsNonRoot: true default when RunAsUser: 0
+	// is set without an explicit RunAsNonRoot, but the admission webhook
+	// still requires an explicit runAsNonRoot: false somewhere to accept
+	// the spec.
 	ContainerSecurityContext *corev1.SecurityContext `json:"containerSecurityContext,omitempty"`
 }
 

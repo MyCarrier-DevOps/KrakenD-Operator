@@ -27,7 +27,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/strategicpatch"
 )
 
 // RULE (review id 3811443573, #4; scope corrected per review id 3812030505,
@@ -510,64 +509,10 @@ func defaultPostRestartContainerSecurityContext() *corev1.SecurityContext {
 	}
 }
 
-// strategicMergeSecurityContext merges user on top of base using a
-// Kubernetes strategic-merge-patch (k8s.io/apimachinery/pkg/util/
-// strategicpatch), instead of a hand-rolled field-by-field copy. base is
-// marshaled to JSON as the "original"; user is marshaled to JSON (its
-// `omitempty` tags mean an unset field is simply absent from the JSON) and
-// applied as the "patch". A field the user never set stays absent from the
-// patch and therefore keeps base's value; a field the user does set
-// overrides it — matching the previous hand-rolled semantics, but now
-// covering the FULL field set of T automatically. Unlike the previous
-// per-field code, this survives future k8s API additions (new fields on
-// SecurityContext/PodSecurityContext) with zero operator code changes: any
-// field neither hand-picked-out here nor explicitly overridden by the user
-// is preserved from base by construction, not by an exhaustive but
-// hand-maintained if-chain that silently stops being exhaustive on the next
-// k8s API bump.
-//
-// Nested pointer-to-struct fields (e.g. Capabilities) are also merged
-// key-by-key rather than replaced wholesale: setting only
-// `capabilities.add` leaves the base's `capabilities.drop` intact, since
-// strategic-merge-patch recurses into nested objects and only replaces the
-// sub-fields actually present in the patch.
-//
-// Known limitation — unset vs. empty on plain (non-patchMergeKey) list
-// fields: because `user` is marshaled with `omitempty`, an unset list field
-// and a deliberately-emptied list field (e.g.
-// `capabilities: {drop: []}` to explicitly clear a default) are
-// indistinguishable on the wire — both come out as "absent from the patch",
-// so base's value always wins. This is currently safe only because
-// Capabilities.Drop is the sole list field defaultPostRestartContainer
-// SecurityContext/defaultPostRestartPodSecurityContext populate by default;
-// a user cannot clear it via an empty override, but nothing today needs to.
-// If a future hardened default populates another list field (e.g.
-// Capabilities.Add, PodSecurityContext.Sysctls, or
-// PodSecurityContext.SupplementalGroups), this limitation would invert:
-// there would be no way for a caller to explicitly override that default
-// back to empty, since {field: []} and an absent field are the same patch.
-func strategicMergeSecurityContext[T corev1.SecurityContext | corev1.PodSecurityContext](base T, user *T) T {
-	if user == nil {
-		return base
-	}
-	baseJSON, err := json.Marshal(base)
-	if err != nil {
-		panic(fmt.Sprintf("marshaling security context default: %v", err))
-	}
-	userJSON, err := json.Marshal(user)
-	if err != nil {
-		panic(fmt.Sprintf("marshaling user-provided security context: %v", err))
-	}
-	mergedJSON, err := strategicpatch.StrategicMergePatch(baseJSON, userJSON, base)
-	if err != nil {
-		panic(fmt.Sprintf("strategic-merging security context: %v", err))
-	}
-	var merged T
-	if err := json.Unmarshal(mergedJSON, &merged); err != nil {
-		panic(fmt.Sprintf("unmarshaling merged security context: %v", err))
-	}
-	return merged
-}
+// strategicMergeSecurityContext and userRequestsRootWithoutOptingOut live in
+// internal/resources/securitycontext.go (shared by this file's
+// mergeContainerSecurityContext/mergePodSecurityContext and dragonfly.go's
+// mergeDragonflyContainerSecurityContext/mergeDragonflyPodSecurityContext).
 
 // mergeContainerSecurityContext merges a user-provided container
 // SecurityContext on top of the hardened defaults via
@@ -599,6 +544,18 @@ func defaultPostRestartPodSecurityContext() *corev1.PodSecurityContext {
 // mergeContainerSecurityContext for rationale — 8qln). A prod override of
 // runAsUser: 0 keeps runAsNonRoot's sibling defaults (runAsGroup,
 // seccompProfile) intact unless the user also overrides them.
+//
+// Cross-reference (fix-round review 1, change #4): this pod-scope fixup is
+// the RIGHT scope for the postRestartJob Job, because
+// defaultPostRestartContainerSecurityContext leaves runAsUser/runAsNonRoot
+// UNSET at container scope — pod scope genuinely governs the effective uid,
+// so a pod-scope self-heal has a real capability to preserve. Dragonfly's
+// analogous merge helpers (internal/resources/dragonfly.go) are
+// deliberately asymmetric: mergeDragonflyContainerSecurityContext carries
+// the fixup instead, because dragonfly's container default PINS
+// RunAsNonRoot (container scope always wins over pod scope per-field at
+// the kubelet). This function's own runtime behavior is unchanged by that
+// fix-round.
 func mergePodSecurityContext(user *corev1.PodSecurityContext) *corev1.PodSecurityContext {
 	base := *defaultPostRestartPodSecurityContext()
 	merged := strategicMergeSecurityContext(base, user)
@@ -616,7 +573,7 @@ func mergePodSecurityContext(user *corev1.PodSecurityContext) *corev1.PodSecurit
 	// merge: if the user set RunAsUser to 0 without also setting
 	// RunAsNonRoot, drop the inherited RunAsNonRoot default so only the
 	// user's own explicit choice (if any) can re-assert it.
-	if user != nil && user.RunAsUser != nil && *user.RunAsUser == 0 && user.RunAsNonRoot == nil {
+	if user != nil && userRequestsRootWithoutOptingOut(user.RunAsUser, user.RunAsNonRoot) {
 		merged.RunAsNonRoot = nil
 	}
 
