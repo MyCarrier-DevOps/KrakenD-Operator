@@ -93,6 +93,20 @@ const (
 	// script — and it lands in `kubectl describe krakendgateway`/Events,
 	// which GitOps appliers (that swallow admission.Warnings) do surface.
 	ConditionPostRestartJobReadOnlyRootFilesystem = "PostRestartJobReadOnlyRootFilesystem"
+
+	// ConditionDragonflyRunAsRoot is an informational condition (review
+	// round 3, C2) set whenever a Dragonfly is reconciled, reporting
+	// whether the BUILT Dragonfly CR's rendered securityContext maps carry
+	// an unacknowledged runAsUser: 0 request (see
+	// resources.DragonflyRunAsRootUnacknowledged). Mirrors
+	// ConditionPostRestartJobReadOnlyRootFilesystem's rationale: the
+	// admission-time check in internal/webhook/webhook.go
+	// (validateDragonflyRunAsRoot) only covers Create/Update through an
+	// actively-enforcing webhook — a grandfathered spec (update-ratchet) or
+	// a webhook-bypass path (disabled, cert-manager absent, downtime) never
+	// hits that check, so this condition is the only signal visible via
+	// `kubectl describe krakendgateway`/Events for those paths.
+	ConditionDragonflyRunAsRoot = "DragonflyRunAsRoot"
 )
 
 // Event reason constants for the EventRecorder.
@@ -135,4 +149,9 @@ const (
 	ReasonPostRestartJobAdopted      = "PostRestartJobAdopted"
 	ReasonPostRestartJobROFSEnabled  = "ReadOnlyRootFilesystemEnabled"
 	ReasonPostRestartJobROFSDisabled = "ReadOnlyRootFilesystemDisabled"
+
+	// ReasonDragonflyRunAsRootUnacknowledged/ReasonDragonflyRunAsRootAcknowledged
+	// back ConditionDragonflyRunAsRoot's True/False states respectively.
+	ReasonDragonflyRunAsRootUnacknowledged = "RunAsRootUnacknowledged"
+	ReasonDragonflyRunAsRootAcknowledged   = "RunAsRootAcknowledged"
 )

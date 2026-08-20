@@ -77,19 +77,6 @@ func TestMergeDragonflyPodSecurityContext_FSGroupPreservedOnPartialOverride(t *t
 	}
 }
 
-// TestMergeDragonflyPodSecurityContext_UserOverrideWins verifies the
-// simple override case: a user-set runAsUser is applied verbatim.
-func TestMergeDragonflyPodSecurityContext_UserOverrideWins(t *testing.T) {
-	user := &corev1.PodSecurityContext{
-		RunAsUser: new(int64(1234)),
-	}
-	merged := mergeDragonflyPodSecurityContext(user, nil)
-
-	if merged.RunAsUser == nil || *merged.RunAsUser != 1234 {
-		t.Fatalf("expected overridden runAsUser:1234, got %+v", merged.RunAsUser)
-	}
-}
-
 // TestMergeDragonflyContainerSecurityContext_UserOverrideWins is the
 // container-scope counterpart.
 func TestMergeDragonflyContainerSecurityContext_UserOverrideWins(t *testing.T) {

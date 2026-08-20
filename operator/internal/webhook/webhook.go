@@ -289,13 +289,23 @@ func validatePostRestartRunAsRoot(prj, old *v1alpha1.PostRestartJobSpec) field.E
 		// "Keep the builder fixup" in this function's original doc, now
 		// captured by this true argument).
 		true,
+		// Review round 3, C3: the previous text unconditionally told the user
+		// a container-scope runAsNonRoot: false "also" acknowledges root,
+		// which is only true when the effective uid0 came from the container
+		// scope in the first place (see validateRunAsRootConflict's
+		// containerOptsOut/podOptsOut asymmetry) — for a pod-scope-originated
+		// rejection it was simply wrong advice. This text is self-qualifying
+		// instead of path-specific, so it stays truthful regardless of
+		// whether it is emitted at containerPath or podPath.
 		"runAsUser: 0 conflicts with the hardened runAsNonRoot: true default (kubelet "+
-			"pod-level runAsNonRoot defaults to true and is inherited unless overridden); "+
-			"the Job pod will hang Pending (CreateContainerConfigError) until "+
-			"activeDeadlineSeconds expires. Also set "+
-			"spec.postRestartJob.podSecurityContext.runAsNonRoot: false (or "+
-			"spec.postRestartJob.securityContext.runAsNonRoot: false) to acknowledge "+
-			"running as root.",
+			"pod-level runAsNonRoot defaults to true and is inherited unless overridden). "+
+			"Set spec.postRestartJob.podSecurityContext.runAsNonRoot: false to acknowledge "+
+			"running as root; a container-scope "+
+			"spec.postRestartJob.securityContext.runAsNonRoot: false only acknowledges a "+
+			"container-scope runAsUser: 0. Unless the Job container carries its own "+
+			"runAsNonRoot: false, the effective {runAsUser: 0, runAsNonRoot: true} pair "+
+			"leaves the pod Pending (CreateContainerConfigError) until activeDeadlineSeconds "+
+			"expires.",
 	)
 }
 
@@ -342,6 +352,18 @@ func validatePostRestartRunAsRoot(prj, old *v1alpha1.PostRestartJobSpec) field.E
 //
 // The update-ratchet (runAsFieldsUnchanged) still grandfathers an unchanged
 // old spec for both scopes.
+//
+// Review round 3, C1: for the Dragonfly lane only (allowPodScopeUnsetSelfHeal
+// == false), a POD-SCOPE root request is independently gated regardless of
+// what effectiveRunAsRoot resolves for the primary container. Before this
+// gate, a non-zero container.RunAsUser (e.g. Dragonfly's own uid:999 pin)
+// made effectiveRunAsRoot report "not root" — correctly, for THAT one
+// container — and the whole function returned early, silently admitting a
+// podSecurityContext.runAsUser: 0 that still renders on the shared pod-level
+// securityContext every OTHER container/sidecar in the pod inherits when it
+// sets nothing of its own. This gate closes that hole without touching
+// effectiveRunAsRoot's own (still correct, for the primary container)
+// precedence rules.
 func validateRunAsRootConflict(
 	container *corev1.SecurityContext, pod *corev1.PodSecurityContext,
 	oldContainer *corev1.SecurityContext, oldPod *corev1.PodSecurityContext,
@@ -351,6 +373,24 @@ func validateRunAsRootConflict(
 ) field.ErrorList {
 	if runAsFieldsUnchanged(container, pod, oldContainer, oldPod) {
 		return nil
+	}
+
+	// A pod-scope root request requires a pod-scope acknowledgment (an
+	// explicit pod-scope runAsNonRoot: false) — unless the container scope
+	// itself carries its own runAsUser: 0, in which case the request routes
+	// through the container-path rules below instead (preserving the
+	// documented container-root recipe, e.g.
+	// container{runAsUser:0,runAsNonRoot:false} + pod{runAsUser:0}, which
+	// stays admitted with no security delta vs. pod{runAsUser:0,
+	// runAsNonRoot:false} alone). Gated to the Dragonfly lane
+	// (!allowPodScopeUnsetSelfHeal): postRestartJob has a single container
+	// and no sidecar-injection surface, so its pod-scope-unset case is
+	// already fully covered by the self-heal carve-out further down.
+	if !allowPodScopeUnsetSelfHeal &&
+		pod != nil && pod.RunAsUser != nil && *pod.RunAsUser == 0 &&
+		(pod.RunAsNonRoot == nil || *pod.RunAsNonRoot) &&
+		(container == nil || container.RunAsUser == nil || *container.RunAsUser != 0) {
+		return field.ErrorList{field.Invalid(podPath, int64(0), detail)}
 	}
 
 	uid0, fromContainer := effectiveRunAsRoot(container, pod)
@@ -523,12 +563,31 @@ func validateDragonflyRunAsRoot(df, old *v1alpha1.DragonflySpec) field.ErrorList
 		field.NewPath("spec", "dragonfly", "containerSecurityContext", "runAsUser"),
 		field.NewPath("spec", "dragonfly", "podSecurityContext", "runAsUser"),
 		false,
-		"runAsUser: 0 conflicts with the hardened runAsNonRoot: true default (kubelet "+
-			"pod-level runAsNonRoot defaults to true and is inherited unless overridden); "+
-			"the Dragonfly pod will hang Pending (CreateContainerConfigError). Also set "+
-			"spec.dragonfly.podSecurityContext.runAsNonRoot: false (or "+
-			"spec.dragonfly.containerSecurityContext.runAsNonRoot: false) to acknowledge "+
-			"running as root.",
+		// Review round 3, C6: the previous text unconditionally claimed "the
+		// Dragonfly pod will hang Pending", which is only true for a
+		// container-scope-originated violation — a pod-scope-only
+		// runAsUser: 0 never changes the dragonfly container's own effective
+		// uid at all (the container-scope 999 pin always wins per-field), so
+		// it silently roots OTHER containers/sidecars instead of hanging.
+		// It also unconditionally offered a container-scope
+		// runAsNonRoot: false as an acknowledgment, which (per the
+		// containerOptsOut/podOptsOut asymmetry) only actually works for a
+		// container-scope-originated violation. This text is rewritten to be
+		// self-qualifying per shape rather than path-specific, so it stays
+		// truthful regardless of whether it is emitted at containerPath or
+		// podPath.
+		"runAsUser: 0 is requested without a runAsNonRoot: false that acknowledges it. An "+
+			"unacknowledged container-scope runAsUser: 0 renders either the kubelet-invalid "+
+			"{runAsUser: 0, runAsNonRoot: true} pair (CreateContainerConfigError) or a "+
+			"container silently running as root, depending on the other securityContext "+
+			"fields; a pod-scope runAsUser: 0 does not change the Dragonfly container's uid "+
+			"at all, because the operator's container default pins runAsUser: 999 unless you "+
+			"override it and a container-scope value always wins per-field. To have this "+
+			"spec accepted, set spec.dragonfly.podSecurityContext.runAsNonRoot: false; or, if "+
+			"the Dragonfly container itself must run as root, set "+
+			"spec.dragonfly.containerSecurityContext.runAsUser: 0 together with a "+
+			"runAsNonRoot: false at either scope (a container-scope runAsNonRoot: false "+
+			"acknowledges only a container-scope runAsUser: 0).",
 	)
 }
 

@@ -286,13 +286,32 @@ cluster with `postRestartJob.enabled: true`.
    crashloops). Now only the fields you set are overridden; unset fields
    keep the hardened default, so a `spec.dragonfly.podSecurityContext`
    override that sets only `runAsUser` (for example) keeps `fsGroup: 999`
-   automatically. This is strictly safer than before, but review your
-   existing overrides — fields you were implicitly relying on being *unset*
-   will now inherit the operator default instead of being absent. **If your
-   spec was relying on the previous replace-to-clear behavior** (e.g.
-   setting `podSecurityContext: {runAsUser: 1234}` specifically to end up
-   *without* `runAsNonRoot: true`), you must now set that field explicitly
-   (e.g. `runAsNonRoot: false`) to get the old effective result.
+   automatically. **This is strictly safer than before for fields the
+   container-scope default does not itself pin (e.g. `fsGroup`, or a
+   `podSecurityContext.runAsUser`/`runAsGroup` override for OTHER
+   containers/sidecars in the pod) — one exception:** setting only
+   `podSecurityContext.runAsUser`/`runAsGroup` and expecting it to change
+   the `dragonfly` container's OWN effective uid/gid is not "safer", it is
+   simply *ineffective*, both before and after this change — see "Pod-scope
+   `runAs*` fields do NOT change the Dragonfly container's effective
+   identity" below for why, and use `containerSecurityContext` instead.
+   Concrete example: `containerSecurityContext: {allowPrivilegeEscalation:
+   false}` (no `runAsUser` set) combined with `podSecurityContext:
+   {runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000}` still renders
+   `containerSecurityContext.runAsUser: 999` / `runAsGroup: 999` on the
+   emitted Dragonfly CR — the container-scope default's `999` pins win
+   regardless of the pod-scope override, because setting *any* field in
+   `containerSecurityContext` does not implicitly carry your pod-scope
+   `runAsUser`/`runAsGroup` values down into it. **If `runAsUser`/
+   `runAsGroup` must differ from `999` for the `dragonfly` container
+   itself, set them explicitly in `spec.dragonfly.containerSecurityContext`**,
+   not (only) in `podSecurityContext`. Otherwise, review your existing
+   overrides — fields you were implicitly relying on being *unset* will now
+   inherit the operator default instead of being absent. **If your spec was
+   relying on the previous replace-to-clear behavior** (e.g. setting
+   `podSecurityContext: {runAsUser: 1234}` specifically to end up *without*
+   `runAsNonRoot: true`), you must now set that field explicitly (e.g.
+   `runAsNonRoot: false`) to get the old effective result.
 
    **(Fix-round follow-up, post-initial-release) — the escape hatch now
    genuinely works, at BOTH scopes.** The initial merge behavior above left
@@ -487,7 +506,12 @@ cluster with `postRestartJob.enabled: true`.
    operator version) keeps working on unrelated updates as long as the
    relevant securityContext fields are unchanged from the stored spec;
    only a Create, or an Update that actually introduces/changes the
-   offending combination, is rejected.
+   offending combination, is rejected. **In practice this means ordinary
+   GitOps reconciliation (ArgoCD/Flux re-applying an unchanged manifest, or
+   editing unrelated fields) is unaffected by the ratchet** — the exposure is
+   confined to a genuine Create (a brand-new CR, or one deleted and
+   recreated) or a deliberate edit to `securityContext`/`podSecurityContext`
+   on a CR carrying this shape.
 
    **Round-2 correction to the opt-out rule (shared with Dragonfly's item 7
    above — both scopes use the same `validateRunAsRootConflict` helper):**

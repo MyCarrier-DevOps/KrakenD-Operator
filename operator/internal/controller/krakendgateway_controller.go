@@ -760,6 +760,7 @@ func (r *KrakenDGatewayReconciler) reconcileOwnedResources(
 			}); err != nil {
 				return fmt.Errorf("reconciling dragonfly: %w", err)
 			}
+			r.recordDragonflyRunAsRootCondition(gw, df)
 		}
 	}
 
@@ -1294,6 +1295,55 @@ func (r *KrakenDGatewayReconciler) recordPostRestartJobROFSCondition(
 			"post-restart Job runs with readOnlyRootFilesystem=true; only %s (emptyDir, %s) is writable",
 			resources.PostRestartTmpMountPath, sizeLimit,
 		),
+	})
+}
+
+// recordDragonflyRunAsRootCondition sets an informational status Condition
+// reporting whether the BUILT Dragonfly CR's rendered securityContext maps
+// carry an unacknowledged runAsUser: 0 request (review round 3, C2). df is
+// the object AFTER resources.BuildDragonfly has already mutated it in the
+// CreateOrUpdate mutate callback, so this reads the actual rendered maps
+// (post-merge-fixup), not the raw v1alpha1.DragonflySpec — mirroring
+// recordPostRestartJobROFSCondition's "read the built object" approach
+// (review id 3807285633, #3d) so this can never drift from what
+// BuildDragonfly actually produced.
+func (r *KrakenDGatewayReconciler) recordDragonflyRunAsRootCondition(
+	gw *v1alpha1.KrakenDGateway, df *unstructured.Unstructured,
+) {
+	// NestedMap's returned bool/error are both ignorable here: a missing or
+	// malformed field simply yields a nil map, and
+	// resources.DragonflyRunAsRootUnacknowledged treats a nil map the same
+	// as an absent field (no runAsUser/runAsNonRoot key), which is the
+	// correct "not root" behavior for a spec.podSecurityContext/
+	// containerSecurityContext that BuildDragonfly always populates anyway.
+	containerMap, _, err := unstructured.NestedMap(df.Object, "spec", "containerSecurityContext")
+	if err != nil {
+		containerMap = nil
+	}
+	podMap, _, err := unstructured.NestedMap(df.Object, "spec", "podSecurityContext")
+	if err != nil {
+		podMap = nil
+	}
+
+	if resources.DragonflyRunAsRootUnacknowledged(containerMap, podMap) {
+		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+			Type:               v1alpha1.ConditionDragonflyRunAsRoot,
+			Status:             metav1.ConditionTrue,
+			ObservedGeneration: gw.Generation,
+			Reason:             v1alpha1.ReasonDragonflyRunAsRootUnacknowledged,
+			Message: "the rendered Dragonfly securityContext carries an unacknowledged " +
+				"runAsUser: 0 request; set runAsNonRoot: false at the scope that requested " +
+				"root to acknowledge it (see docs/upgrade-guide.md item 7).",
+		})
+		return
+	}
+
+	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+		Type:               v1alpha1.ConditionDragonflyRunAsRoot,
+		Status:             metav1.ConditionFalse,
+		ObservedGeneration: gw.Generation,
+		Reason:             v1alpha1.ReasonDragonflyRunAsRootAcknowledged,
+		Message:            "the rendered Dragonfly securityContext does not carry an unacknowledged root request.",
 	})
 }
 

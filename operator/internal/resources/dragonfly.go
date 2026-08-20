@@ -114,6 +114,73 @@ func BuildDragonfly(df *unstructured.Unstructured, gw *v1alpha1.KrakenDGateway) 
 	df.Object["spec"] = dfSpec
 }
 
+// DragonflyRunAsRootUnacknowledged reports whether a BUILT Dragonfly CR's
+// rendered `containerSecurityContext`/`podSecurityContext` maps (as read off
+// the object via unstructured.NestedMap, i.e. AFTER BuildDragonfly's
+// mergeDragonfly{Container,Pod}SecurityContext fixups have already run) carry
+// an unacknowledged root request — review round 3, C2. Reading the BUILT
+// maps rather than the raw v1alpha1.DragonflySpec means this can never drift
+// from what the merge/fixup logic actually produced, the same reasoning
+// recordPostRestartJobROFSCondition applies to the Job (internal/controller/
+// krakendgateway_controller.go).
+//
+// "Unacknowledged" mirrors validateDragonflyRunAsRoot's admission rule but is
+// evaluated on the RENDERED maps, so it also catches specs that bypassed or
+// predate that check (the update-ratchet, or the webhook being disabled/
+// unreachable — see docs/upgrade-guide.md item 7's webhook-bypass warning):
+//   - the container map's runAsUser is 0 and neither the container map nor
+//     the pod map carries an explicit runAsNonRoot: false (a pod-scope
+//     runAsNonRoot: false inherits down and acknowledges a container-scope
+//     request too; the reverse is not true — see validateRunAsRootConflict's
+//     containerOptsOut/podOptsOut asymmetry in internal/webhook/webhook.go);
+//   - OR the pod map's runAsUser is 0 and the pod map itself carries no
+//     explicit runAsNonRoot: false. This still fires even when the merge
+//     fixup already dropped runAsNonRoot from the pod map for self-heal
+//     purposes (main-branch render parity, see mergeDragonflyPodSecurityContext) —
+//     that fixup only keeps the DRAGONFLY container itself startable; it
+//     does not acknowledge the pod-scope root request, which is still
+//     silently inherited by any OTHER container/sidecar in the pod that sets
+//     nothing of its own.
+//
+// An explicit runAsNonRoot: true alongside a uid0 request counts as
+// unacknowledged (it is not an opt-out) — it simply fails both checks above,
+// since only an explicit false counts as acknowledgment.
+func DragonflyRunAsRootUnacknowledged(containerMap, podMap map[string]interface{}) bool {
+	if mapRunAsUserIsZero(containerMap) &&
+		!mapRunAsNonRootIsFalse(containerMap) && !mapRunAsNonRootIsFalse(podMap) {
+		return true
+	}
+	if mapRunAsUserIsZero(podMap) && !mapRunAsNonRootIsFalse(podMap) {
+		return true
+	}
+	return false
+}
+
+// mapRunAsUserIsZero reports whether m's "runAsUser" key is present and
+// equal to int64(0) — the type buildPodSecurityContext/buildSecurityContext
+// and, after an unstructured.NestedMap round-trip (runtime.DeepCopyJSON),
+// still put there. A nil or field-less map safely reports false.
+func mapRunAsUserIsZero(m map[string]interface{}) bool {
+	v, ok := m["runAsUser"]
+	if !ok {
+		return false
+	}
+	i, ok := v.(int64)
+	return ok && i == 0
+}
+
+// mapRunAsNonRootIsFalse reports whether m's "runAsNonRoot" key is present
+// and explicitly false. A nil map, a field-less map, or an explicit true
+// all report false (not acknowledged).
+func mapRunAsNonRootIsFalse(m map[string]interface{}) bool {
+	v, ok := m["runAsNonRoot"]
+	if !ok {
+		return false
+	}
+	b, ok := v.(bool)
+	return ok && !b
+}
+
 // defaultDragonflyPodSecurityContext returns the hardened pod-level
 // securityContext defaults applied when the user leaves a field unset. The
 // Dragonfly image ships a built-in "dfly" user at uid/gid 999.
@@ -145,7 +212,8 @@ func defaultDragonflyContainerSecurityContext() *corev1.SecurityContext {
 
 // mergeDragonflyPodSecurityContext merges a user-provided PodSecurityContext
 // on top of the hardened defaults via strategicMergeSecurityContext (see
-// job.go's mergeContainerSecurityContext for the general rationale — 8qln,
+// mergeContainerSecurityContext in securitycontext.go for the general
+// rationale — the fsGroup:999/PVC-ownership incident (bd mycarrier-8qln),
 // mirrored here for the Dragonfly scope per docs/upgrade-guide.md item 7).
 // Previously spec.dragonfly.podSecurityContext/containerSecurityContext were
 // a full-replace: setting any single field (e.g. runAsUser) silently
@@ -153,34 +221,28 @@ func defaultDragonflyContainerSecurityContext() *corev1.SecurityContext {
 // ownership hazard for PVC-backed instances (the uid/gid 999 "dfly" process
 // loses group-write access to --dir=/dragonfly/snapshots and crashloops).
 //
-// Fix-round review 1 (asymmetry with job.go, see
-// mergeDragonflyContainerSecurityContext's fixup): unlike
-// job.go's defaultPostRestartContainerSecurityContext, which leaves runAs*
-// UNSET at container scope, defaultDragonflyContainerSecurityContext PINS
-// RunAsUser/RunAsGroup/RunAsNonRoot at container scope to match the dfly
-// image's built-in uid. Because container-scope security-context fields
-// always override pod-scope per-field at the kubelet, pod-scope
+// Unlike job.go's defaultPostRestartContainerSecurityContext, which leaves
+// runAs* UNSET at container scope, defaultDragonflyContainerSecurityContext
+// PINS RunAsUser/RunAsGroup/RunAsNonRoot at container scope to match the
+// dfly image's built-in uid. Because container-scope security-context
+// fields always override pod-scope per-field at the kubelet, pod-scope
 // runAsUser/runAsNonRoot NEVER change the Dragonfly container's effective
-// uid — the container default's pin wins regardless. For that reason
-// review-1 removed this function's pod-scope-unset self-heal fixup
-// entirely: there was no real capability to preserve, only a spec the
-// validator should reject outright (see validateDragonflyRunAsRoot).
+// uid — the container default's pin wins regardless.
 //
-// Fix-round review 2 (T1/R1 — restored, now CROSS-SCOPE AWARE): that
-// removal was too broad. Grandfathered CRs can carry a uid0 request from
-// before this merge-semantics change ever existed, and they reach
-// BuildDragonfly WITHOUT ever passing through validateDragonflyRunAsRoot —
-// either because the webhook's update-ratchet (runAsFieldsUnchanged)
-// deliberately exempts an unchanged spec, or because the webhook is
-// bypassed entirely (disabled, cert-manager absent, downtime — see
-// docs/upgrade-guide.md item 7's webhook-bypass warning). On the PRE-merge
-// main branch, a non-nil user PodSecurityContext fully REPLACED the
-// default wholesale, so a user pod-scope uid0 request was rendered exactly
-// as written — {runAsUser: 0}, no runAsNonRoot key at all — because the
-// default runAsNonRoot: true was never in the picture to begin with. After
-// the merge change, that default now merges in ALONGSIDE the user's uid0
-// and re-introduces the kubelet-invalid {0, true} pair, via two distinct
-// shapes:
+// This function's cross-scope-aware fixup exists because grandfathered CRs
+// can carry a uid0 request from before this merge-semantics change ever
+// existed, and they reach BuildDragonfly WITHOUT ever passing through
+// validateDragonflyRunAsRoot — either because the webhook's update-ratchet
+// (runAsFieldsUnchanged) deliberately exempts an unchanged spec, or because
+// the webhook is bypassed entirely (disabled, cert-manager absent, downtime
+// — see docs/upgrade-guide.md item 7's webhook-bypass warning). On the
+// PRE-merge main branch, a non-nil user PodSecurityContext fully REPLACED
+// the default wholesale, so a user pod-scope uid0 request was rendered
+// exactly as written — {runAsUser: 0}, no runAsNonRoot key at all — because
+// the default runAsNonRoot: true was never in the picture to begin with.
+// After the merge change, that default now merges in ALONGSIDE the user's
+// uid0 and re-introduces the kubelet-invalid {0, true} pair, via two
+// distinct shapes:
 //   - directly, when the USER's own PodSecurityContext sets RunAsUser: 0
 //     (podUid0 below);
 //   - indirectly, when the user's ContainerSecurityContext sets
@@ -238,7 +300,7 @@ func mergeDragonflyContainerSecurityContext(user *corev1.SecurityContext) *corev
 	base := *defaultDragonflyContainerSecurityContext()
 	merged := strategicMergeSecurityContext(base, user)
 
-	// Fix-round review 1, BLOCKER: container-scope uid0 fixup. Unlike
+	// Container-scope uid0 fixup. Unlike
 	// job.go's postRestartJob container default (defaultPostRestart
 	// ContainerSecurityContext), which leaves runAsUser/runAsNonRoot UNSET
 	// at container scope (so pod scope governs), defaultDragonflyContainer
