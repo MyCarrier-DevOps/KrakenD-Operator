@@ -110,6 +110,70 @@ Metrics are exposed on port **8443** (HTTPS). Key metrics:
 
 ---
 
+## ReadMe Publishing (postRestartJob)
+
+The three gateway CRs in `AppCluster-Infrastructure` (dev, preprod, and prod
+`api-gateway`) use `spec.postRestartJob` to publish the gateway's OpenAPI
+spec to ReadMe after every restart, keeping the hosted API reference in sync
+with what's actually deployed.
+
+| Component | Value |
+|---|---|
+| Image | `mycarrieracr.azurecr.io/ci/rdme-publisher:<yy>.<ww>.<sha>` |
+| Source | `ITM.Docker.Images` — `ci/rdme-publisher/` |
+| Baked entrypoint | `/usr/local/bin/publish-openapi.sh` |
+| CR `script` | 2-line stub: `exec /usr/local/bin/publish-openapi.sh` |
+
+### Environment contract
+
+| Variable | Purpose |
+|---|---|
+| `GATEWAY_NAME` | Gateway Service name — with `GATEWAY_NAMESPACE` and `OPENAPI_PORT` it forms the in-cluster fetch URL `http://$GATEWAY_NAME.$GATEWAY_NAMESPACE.svc.cluster.local:$OPENAPI_PORT/openapi.json` |
+| `GATEWAY_NAMESPACE` | Namespace the gateway runs in |
+| `OPENAPI_PORT` | Port the gateway serves its OpenAPI spec on |
+| `RDME_BRANCH` | Target ReadMe version (see mapping table below) |
+| `RDME_KEY` | ReadMe API key, injected via the banzaicloud Vault webhook annotations — never set as a plain env value |
+
+**Slug is the upsert identity key.** Uploading with the same `--slug` value
+UPDATES the existing ReadMe definition; a different slug — including one
+that changes only because it was omitted — creates a NEW, duplicate
+definition silently. With `--slug` omitted, `rdme` derives the slug from the
+file argument, so uploading `/tmp/openapi.json` yields the slug
+`tmpopenapi.json`. This happened once and left a stray duplicate definition
+in the ReadMe `v0` branch. The upload MUST always pin `--slug=openapi.json`
+explicitly. **Health signal:** the job log line "successfully **updated**"
+means the publish landed correctly; "successfully **created**" means the
+slug drifted and a new duplicate definition was just created — investigate
+immediately.
+
+### ReadMe mapping
+
+| ReadMe branch | Gateway environment |
+|---|---|
+| `v0` | dev |
+| `v0.2` | preprod |
+| `v1.0` | prod |
+
+ReadMe project id: `676076b78e57b80044fa3114`. Definitions are managed at
+dash.readme.com → version switcher → **Settings** → **API Definitions**. The
+published definition powers the docs site's top-nav **API Reference**
+button.
+
+### Forcing a re-publish
+
+A change to the Job's image, command, script, or env mints a new job
+checksum, which triggers exactly one re-fire per gateway. To force a re-run
+without any spec change, clear the stored checksum:
+
+```bash
+kubectl patch krakendgateway <name> -n <ns> --subresource=status --type=merge -p '{"status":{"lastPostRestartJobChecksum":""}}'
+```
+
+See docs/upgrade-guide.md `v0.13.4 — postRestartJob hardening` for the
+checksum mechanics this relies on.
+
+---
+
 ## Troubleshooting
 
 ### Gateway stuck in `Deploying`
