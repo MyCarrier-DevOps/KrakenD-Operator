@@ -139,6 +139,12 @@ type OpenAPIExportSpec struct {
 	// openapi-serve sidecar container. When unset, a default shallow
 	// TCP probe against Port is used.
 	ReadinessProbe *corev1.Probe `json:"readinessProbe,omitempty"`
+
+	// LivenessProbe overrides the liveness probe applied to the
+	// openapi-serve sidecar container. When unset, a default shallow
+	// TCP probe against Port is used, deliberately slacker than the
+	// readiness default so readiness always reacts first.
+	LivenessProbe *corev1.Probe `json:"livenessProbe,omitempty"`
 }
 
 // PostRestartJobSpec configures a Kubernetes Job that runs a user-provided

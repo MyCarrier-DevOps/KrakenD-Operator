@@ -27,6 +27,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
 func TestPostRestartJobName_StableAndShort(t *testing.T) {
@@ -855,6 +856,92 @@ func TestBuildDeployment_OpenAPIContainersAndVolume(t *testing.T) {
 	}
 	if !sawVolume {
 		t.Fatalf("openapi volume missing")
+	}
+}
+
+func TestBuildDeployment_OpenAPISidecarProbeDefaults(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "ns"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Edition: v1alpha1.EditionCE,
+			Version: "2.13",
+			OpenAPI: &v1alpha1.OpenAPIExportSpec{Enabled: true, Port: 8090},
+		},
+	}
+	dep := &appsv1.Deployment{}
+	BuildDeployment(dep, gw, "cksum", "", "krakend:2.13")
+
+	var sidecar *corev1.Container
+	for i := range dep.Spec.Template.Spec.Containers {
+		if dep.Spec.Template.Spec.Containers[i].Name == "openapi-serve" {
+			sidecar = &dep.Spec.Template.Spec.Containers[i]
+		}
+	}
+	if sidecar == nil {
+		t.Fatal("openapi-serve sidecar missing")
+	}
+
+	if sidecar.ReadinessProbe == nil || sidecar.ReadinessProbe.TCPSocket == nil {
+		t.Fatal("expected default TCP readiness probe on the openapi sidecar")
+	}
+	if sidecar.LivenessProbe == nil || sidecar.LivenessProbe.TCPSocket == nil {
+		t.Fatal("expected default TCP liveness probe on the openapi sidecar")
+	}
+	if got := sidecar.LivenessProbe.TCPSocket.Port.IntValue(); got != 8090 {
+		t.Errorf("expected liveness probe on port 8090, got %d", got)
+	}
+	lp := sidecar.LivenessProbe
+	if lp.InitialDelaySeconds != 15 || lp.PeriodSeconds != 20 || lp.TimeoutSeconds != 2 || lp.FailureThreshold != 6 {
+		t.Errorf("unexpected liveness defaults: %d/%d/%d/%d",
+			lp.InitialDelaySeconds, lp.PeriodSeconds, lp.TimeoutSeconds, lp.FailureThreshold)
+	}
+
+	// Readiness must always react before liveness restarts the container.
+	rp := sidecar.ReadinessProbe
+	readyAfter := rp.InitialDelaySeconds + rp.PeriodSeconds*rp.FailureThreshold
+	restartAfter := lp.InitialDelaySeconds + lp.PeriodSeconds*lp.FailureThreshold
+	if restartAfter <= readyAfter {
+		t.Errorf("liveness (%ds) must be slacker than readiness (%ds) so readiness acts first",
+			restartAfter, readyAfter)
+	}
+}
+
+func TestBuildDeployment_OpenAPISidecarProbeOverride(t *testing.T) {
+	custom := &corev1.Probe{
+		ProbeHandler: corev1.ProbeHandler{
+			HTTPGet: &corev1.HTTPGetAction{Path: "/openapi.json", Port: intstr.FromInt32(8090)},
+		},
+		InitialDelaySeconds: 1,
+		PeriodSeconds:       2,
+	}
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "ns"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Edition: v1alpha1.EditionCE,
+			Version: "2.13",
+			OpenAPI: &v1alpha1.OpenAPIExportSpec{Enabled: true, Port: 8090, LivenessProbe: custom},
+		},
+	}
+	dep := &appsv1.Deployment{}
+	BuildDeployment(dep, gw, "cksum", "", "krakend:2.13")
+
+	var sidecar *corev1.Container
+	for i := range dep.Spec.Template.Spec.Containers {
+		if dep.Spec.Template.Spec.Containers[i].Name == "openapi-serve" {
+			sidecar = &dep.Spec.Template.Spec.Containers[i]
+		}
+	}
+	if sidecar == nil {
+		t.Fatal("openapi-serve sidecar missing")
+	}
+	if sidecar.LivenessProbe == nil || sidecar.LivenessProbe.HTTPGet == nil {
+		t.Fatal("expected the user-supplied liveness probe to be used verbatim")
+	}
+	if sidecar.LivenessProbe.HTTPGet.Path != "/openapi.json" {
+		t.Errorf("expected override path /openapi.json, got %s", sidecar.LivenessProbe.HTTPGet.Path)
+	}
+	if sidecar.LivenessProbe.InitialDelaySeconds != 1 {
+		t.Errorf("override not applied: initialDelaySeconds=%d", sidecar.LivenessProbe.InitialDelaySeconds)
 	}
 }
 

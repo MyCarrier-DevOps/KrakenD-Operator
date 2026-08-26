@@ -608,5 +608,26 @@ func buildOpenAPIPieces(
 		}
 	}
 
+	// The liveness default is deliberately ~4x slacker than the readiness
+	// default above (~135s to restart vs ~32s to mark unready) so readiness
+	// always reacts first. The sidecar is a busybox httpd serving one static
+	// file with no dependencies and no warm-up, so the only realistic failure
+	// is a wedged accept-loop -- which readiness alone can miss.
+	if oa.LivenessProbe != nil {
+		sidecar.LivenessProbe = oa.LivenessProbe
+	} else {
+		sidecar.LivenessProbe = &corev1.Probe{
+			ProbeHandler: corev1.ProbeHandler{
+				TCPSocket: &corev1.TCPSocketAction{
+					Port: intstr.FromInt32(oaPort),
+				},
+			},
+			InitialDelaySeconds: 15,
+			PeriodSeconds:       20,
+			TimeoutSeconds:      2,
+			FailureThreshold:    6,
+		}
+	}
+
 	return initContainer, sidecar, volume, initMount
 }
