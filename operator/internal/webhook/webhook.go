@@ -147,7 +147,8 @@ func (v *GatewayValidator) validate(gw, old *v1alpha1.KrakenDGateway) (admission
 		// whereas an API-server-invalid probe has no working stored state to
 		// protect. The check reads only the new object, so the correcting update
 		// always passes.
-		defaultSidecar := resources.EffectiveOpenAPISidecarImage(gw.Spec.OpenAPI) == resources.DefaultOpenAPISidecarImage
+		effectiveImage := resources.EffectiveOpenAPISidecarImage(gw.Spec.OpenAPI)
+		defaultSidecar := effectiveImage == resources.DefaultOpenAPISidecarImage
 		oaPath := field.NewPath("spec", "openapi")
 		errs = append(errs, validateSidecarProbe(
 			oaPath.Child("livenessProbe"), gw.Spec.OpenAPI.LivenessProbe, probeKindLiveness, defaultSidecar)...)
@@ -380,8 +381,11 @@ func validateSidecarProbe(
 	// genuinely speaks these protocols.
 	if defaultSidecarImage {
 		if probe.GRPC != nil {
-			errs = append(errs, field.Invalid(p.Child("grpc"), probe.GRPC,
-				"the default busybox sidecar serves plaintext HTTP/1.1; a grpc handler can never succeed -- set spec.openapi.sidecarImage if your image speaks gRPC"))
+			errs = append(errs, field.Invalid(
+				p.Child("grpc"),
+				probe.GRPC,
+				"the default busybox sidecar serves plaintext HTTP/1.1; a grpc handler can never succeed -- set spec.openapi.sidecarImage if your image speaks gRPC",
+			))
 		}
 		if probe.HTTPGet != nil && probe.HTTPGet.Scheme == corev1.URISchemeHTTPS {
 			errs = append(errs, field.Invalid(p.Child("httpGet", "scheme"), probe.HTTPGet.Scheme,
