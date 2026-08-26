@@ -608,11 +608,25 @@ func buildOpenAPIPieces(
 		}
 	}
 
-	// The liveness default is deliberately ~4x slacker than the readiness
-	// default above (~135s to restart vs ~32s to mark unready) so readiness
-	// always reacts first. The sidecar is a busybox httpd serving one static
-	// file with no dependencies and no warm-up, so the only realistic failure
-	// is a wedged accept-loop -- which readiness alone can miss.
+	// Why a liveness probe here at all, given the handler is identical to the
+	// readiness handler above and every threshold is slacker: it adds no
+	// DETECTION -- anything failing this probe already failed readiness ~100s
+	// earlier -- it adds the RECOVERY ACTION readiness structurally cannot.
+	// That matters because openapi-serve is a plain entry in Containers, not a
+	// native sidecar, so pod readiness ANDs across containers: a wedged
+	// openapi-serve keeps the MAIN krakend container out of Service endpoints
+	// indefinitely, with no path back. Liveness restarts it. It also satisfies
+	// the require-liveness-probes ClusterPolicy, which is Enforce on some
+	// clusters with no carve-out for this workload.
+	//
+	// Note this is a TCP connect, so it does NOT detect a process wedged in
+	// userspace: the kernel completes the handshake from the listen backlog
+	// whether or not httpd ever calls accept(). It catches a lost listener.
+	//
+	// The timings are ~4x slacker than the readiness DEFAULT (~135s to restart
+	// vs ~32s to mark unready) so readiness reacts first. That ordering is only
+	// guaranteed while readiness is also left at its default -- a user-supplied
+	// spec.openapi.readinessProbe slacker than ~135s is pre-empted by this.
 	if oa.LivenessProbe != nil {
 		sidecar.LivenessProbe = oa.LivenessProbe
 	} else {

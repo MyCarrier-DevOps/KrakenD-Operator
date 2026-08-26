@@ -865,7 +865,9 @@ func TestBuildDeployment_OpenAPISidecarProbeDefaults(t *testing.T) {
 		Spec: v1alpha1.KrakenDGatewaySpec{
 			Edition: v1alpha1.EditionCE,
 			Version: "2.13",
-			OpenAPI: &v1alpha1.OpenAPIExportSpec{Enabled: true, Port: 8090},
+			// Deliberately NOT 8090: that is also the OpenAPIPort fallback, so a
+			// default port would let a hardcoded literal pass this test.
+			OpenAPI: &v1alpha1.OpenAPIExportSpec{Enabled: true, Port: 9095},
 		},
 	}
 	dep := &appsv1.Deployment{}
@@ -887,8 +889,11 @@ func TestBuildDeployment_OpenAPISidecarProbeDefaults(t *testing.T) {
 	if sidecar.LivenessProbe == nil || sidecar.LivenessProbe.TCPSocket == nil {
 		t.Fatal("expected default TCP liveness probe on the openapi sidecar")
 	}
-	if got := sidecar.LivenessProbe.TCPSocket.Port.IntValue(); got != 8090 {
-		t.Errorf("expected liveness probe on port 8090, got %d", got)
+	// Assert against the rendered containerPort rather than a literal: 8090 is
+	// also the OpenAPIPort fallback, so a literal would still pass if the port
+	// were hardcoded or the probe built before oaPort is computed.
+	if got, want := sidecar.LivenessProbe.TCPSocket.Port.IntValue(), int(sidecar.Ports[0].ContainerPort); got != want {
+		t.Errorf("liveness probe port %d does not match the sidecar containerPort %d", got, want)
 	}
 	lp := sidecar.LivenessProbe
 	if lp.InitialDelaySeconds != 15 || lp.PeriodSeconds != 20 || lp.TimeoutSeconds != 2 || lp.FailureThreshold != 6 {
@@ -933,6 +938,11 @@ func TestBuildDeployment_OpenAPISidecarProbeOverride(t *testing.T) {
 	}
 	if sidecar == nil {
 		t.Fatal("openapi-serve sidecar missing")
+	}
+	// The two render blocks are adjacent and structurally identical, which is
+	// exactly the shape that invites a bad copy-paste edit clobbering readiness.
+	if sidecar.ReadinessProbe == nil || sidecar.ReadinessProbe.TCPSocket == nil {
+		t.Fatal("overriding only the liveness probe must leave the readiness default intact")
 	}
 	if sidecar.LivenessProbe == nil || sidecar.LivenessProbe.HTTPGet == nil {
 		t.Fatal("expected the user-supplied liveness probe to be used verbatim")

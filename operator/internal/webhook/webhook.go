@@ -132,6 +132,19 @@ func (v *GatewayValidator) validate(gw, old *v1alpha1.KrakenDGateway) (admission
 				"openapi port must differ from the gateway listen port",
 			))
 		}
+		// Kubernetes requires successThreshold == 1 on a liveness probe. Without
+		// this check the CR is accepted, the Deployment Update is rejected by the
+		// API server, and the gateway's reconcile fails on backoff -- freezing the
+		// Deployment, HPA and post-restart Job while the ConfigMap keeps advancing
+		// and Status is never written, so the CR still reports its last-good phase.
+		// Rejecting it here fails fast with a field path instead.
+		if lp := gw.Spec.OpenAPI.LivenessProbe; lp != nil && lp.SuccessThreshold != 0 && lp.SuccessThreshold != 1 {
+			errs = append(errs, field.Invalid(
+				field.NewPath("spec", "openapi", "livenessProbe", "successThreshold"),
+				lp.SuccessThreshold,
+				"must be 1 for a liveness probe",
+			))
+		}
 	}
 
 	if gw.Spec.Plugins != nil {

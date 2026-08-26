@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -238,6 +239,62 @@ func TestGatewayValidator_OpenAPIPortValid(t *testing.T) {
 	_, err := v.ValidateCreate(context.Background(), gw)
 	if err != nil {
 		t.Errorf("expected no error, got %v", err)
+	}
+}
+
+func TestGatewayValidator_OpenAPILivenessSuccessThresholdRejected(t *testing.T) {
+	// Kubernetes requires successThreshold == 1 on a liveness probe. Without this
+	// guard the CR is accepted and the Deployment Update is rejected later, wedging
+	// the reconcile on backoff.
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Config: v1alpha1.GatewayConfig{},
+			OpenAPI: &v1alpha1.OpenAPIExportSpec{
+				Enabled: true, Port: 8090,
+				LivenessProbe: &corev1.Probe{
+					ProbeHandler:     corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(8090)}},
+					SuccessThreshold: 2,
+				},
+			},
+		},
+	}
+	v := &GatewayValidator{}
+	_, err := v.ValidateCreate(context.Background(), gw)
+	if err == nil {
+		t.Fatal("expected error when openapi livenessProbe successThreshold != 1")
+	}
+	if !strings.Contains(err.Error(), "successThreshold") {
+		t.Errorf("expected the error to name successThreshold, got %v", err)
+	}
+}
+
+func TestGatewayValidator_OpenAPILivenessSuccessThresholdValid(t *testing.T) {
+	// Unset (0) and 1 are both acceptable; readinessProbe is unconstrained.
+	for _, st := range []int32{0, 1} {
+		gw := &v1alpha1.KrakenDGateway{
+			ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
+			Spec: v1alpha1.KrakenDGatewaySpec{
+				Version: "2.13", Edition: v1alpha1.EditionCE,
+				Config: v1alpha1.GatewayConfig{},
+				OpenAPI: &v1alpha1.OpenAPIExportSpec{
+					Enabled: true, Port: 8090,
+					LivenessProbe: &corev1.Probe{
+						ProbeHandler:     corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(8090)}},
+						SuccessThreshold: st,
+					},
+					ReadinessProbe: &corev1.Probe{
+						ProbeHandler:     corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(8090)}},
+						SuccessThreshold: 3,
+					},
+				},
+			},
+		}
+		v := &GatewayValidator{}
+		if _, err := v.ValidateCreate(context.Background(), gw); err != nil {
+			t.Errorf("successThreshold=%d: expected no error, got %v", st, err)
+		}
 	}
 }
 
