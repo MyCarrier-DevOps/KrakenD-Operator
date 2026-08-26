@@ -146,6 +146,31 @@ means the publish landed correctly; "successfully **created**" means the
 slug drifted and a new duplicate definition was just created — investigate
 immediately.
 
+### openapi-serve sidecar restarts
+
+The sidecar serving `/openapi.json` has a liveness probe (a TCP check on the
+openapi port), so a wedged listener is restarted rather than left unready.
+`RESTARTS` climbing on `openapi-serve`, or `CrashLoopBackOff`, means the probe
+is failing repeatedly:
+
+```bash
+kubectl describe pod -l app.kubernetes.io/instance=<name> | grep -A5 openapi-serve
+kubectl logs <pod> -c openapi-serve --previous
+```
+
+`kubectl describe pod` prints the probe's own failure text, which is usually
+enough on its own. Note the pod leaves the Service endpoints while the sidecar
+is unready — pod readiness is the AND across containers — so a sidecar in
+backoff also stops the main gateway serving traffic. If the publish job cannot
+fetch the spec, check this before looking at ReadMe.
+
+A custom `spec.openapi.livenessProbe` that can never succeed produces exactly
+this shape. The webhook rejects the structurally impossible cases (a `grpc` or
+HTTPS handler against the default busybox sidecar, an off-pod `host`, no
+handler), but it cannot validate an `exec` handler — the sidecar has a
+read-only root filesystem and only busybox binaries, so an exec probe that
+writes to disk or calls a missing binary will fail every check.
+
 ### ReadMe mapping
 
 | ReadMe branch | Gateway environment |
@@ -190,7 +215,10 @@ kubectl describe deploy <name>-krakend
 **Common causes:**
 - Image pull failure (check image name, pull secrets)
 - Resource limits too low (OOMKilled)
-- Liveness probe failing (check `/healthz` endpoint)
+- Liveness probe failing. The pod carries two, with different handlers — the
+  `krakend` container's HTTP probe on `/healthz`, and (when
+  `spec.openapi.enabled: true`) the `openapi-serve` sidecar's TCP probe on the
+  openapi port. `kubectl describe pod` names the container that failed.
 - `ProgressDeadlineExceeded` — sets phase to `Error` with `RolloutFailed` event
 
 ### Gateway stuck in `Error`

@@ -132,19 +132,27 @@ func (v *GatewayValidator) validate(gw, old *v1alpha1.KrakenDGateway) (admission
 				"openapi port must differ from the gateway listen port",
 			))
 		}
-		// Kubernetes requires successThreshold == 1 on a liveness probe. Without
-		// this check the CR is accepted, the Deployment Update is rejected by the
-		// API server, and the gateway's reconcile fails on backoff -- freezing the
-		// Deployment, HPA and post-restart Job while the ConfigMap keeps advancing
-		// and Status is never written, so the CR still reports its last-good phase.
-		// Rejecting it here fails fast with a field path instead.
-		if lp := gw.Spec.OpenAPI.LivenessProbe; lp != nil && lp.SuccessThreshold != 0 && lp.SuccessThreshold != 1 {
-			errs = append(errs, field.Invalid(
-				field.NewPath("spec", "openapi", "livenessProbe", "successThreshold"),
-				lp.SuccessThreshold,
-				"must be 1 for a liveness probe",
-			))
-		}
+		// Probe validation. Everything rejected here is already broken today: the
+		// CR is accepted, the rendered Deployment is rejected by the API server,
+		// and the reconcile then fails on backoff. That failure is SILENT -- a
+		// probe-only edit does not change the config checksum, so the phase-writing
+		// block is skipped, and reconcileOwnedResources returns before
+		// inspectDeploymentStatus, so PhaseError is never reached. The CR keeps its
+		// last-good phase with no condition and no event while the Deployment, HPA
+		// and post-restart Job freeze. Rejecting the input up front is the only
+		// place the user gets told.
+		//
+		// Fail-closed with no update ratchet, unlike the postRestartJob and
+		// dragonfly ratchets: those grandfather stored values that still WORK,
+		// whereas an API-server-invalid probe has no working stored state to
+		// protect. The check reads only the new object, so the correcting update
+		// always passes.
+		defaultSidecar := resources.EffectiveOpenAPISidecarImage(gw.Spec.OpenAPI) == resources.DefaultOpenAPISidecarImage
+		oaPath := field.NewPath("spec", "openapi")
+		errs = append(errs, validateSidecarProbe(
+			oaPath.Child("livenessProbe"), gw.Spec.OpenAPI.LivenessProbe, probeKindLiveness, defaultSidecar)...)
+		errs = append(errs, validateSidecarProbe(
+			oaPath.Child("readinessProbe"), gw.Spec.OpenAPI.ReadinessProbe, probeKindReadiness, defaultSidecar)...)
 	}
 
 	if gw.Spec.Plugins != nil {
@@ -281,6 +289,109 @@ func validatePostRestartJob(
 // too, see runAsFieldsUnchanged) changed from the stored spec — a CR
 // accepted by an older operator version (before this reject existed) must
 // not start failing on every unrelated update.
+// probeKind distinguishes the two sidecar probes. Kubernetes validates them
+// differently, so a kind-blind validator would itself reintroduce a wedge:
+// terminationGracePeriodSeconds is FORBIDDEN outright on a readiness probe but
+// must be > 0 when set on a liveness probe.
+type probeKind int
+
+const (
+	probeKindLiveness probeKind = iota
+	probeKindReadiness
+)
+
+// validateSidecarProbe rejects the openapi sidecar probe states that the CRD
+// schema accepts but the API server refuses on the rendered Deployment, plus
+// the two that are structurally impossible against the operator's default
+// sidecar image.
+//
+// defaultSidecarImage must be computed from resources.EffectiveOpenAPISidecarImage,
+// never from a raw `SidecarImage == ""` test.
+func validateSidecarProbe(
+	p *field.Path, probe *corev1.Probe, kind probeKind, defaultSidecarImage bool,
+) field.ErrorList {
+	var errs field.ErrorList
+	if probe == nil {
+		return errs
+	}
+
+	handlers := 0
+	for _, set := range []bool{probe.Exec != nil, probe.HTTPGet != nil, probe.TCPSocket != nil, probe.GRPC != nil} {
+		if set {
+			handlers++
+		}
+	}
+	if handlers != 1 {
+		errs = append(errs, field.Invalid(p, handlers,
+			"exactly one probe handler (exec, httpGet, tcpSocket or grpc) must be specified"))
+	}
+
+	if kind == probeKindLiveness && probe.SuccessThreshold != 0 && probe.SuccessThreshold != 1 {
+		errs = append(errs, field.Invalid(p.Child("successThreshold"), probe.SuccessThreshold,
+			"must be 1 for a liveness probe"))
+	}
+
+	// Sorted so the error order is deterministic across runs.
+	for _, f := range []struct {
+		name string
+		v    int32
+	}{
+		{"failureThreshold", probe.FailureThreshold},
+		{"initialDelaySeconds", probe.InitialDelaySeconds},
+		{"periodSeconds", probe.PeriodSeconds},
+		{"timeoutSeconds", probe.TimeoutSeconds},
+	} {
+		if f.v < 0 {
+			errs = append(errs, field.Invalid(p.Child(f.name), f.v, "must be non-negative"))
+		}
+	}
+
+	if tgps := probe.TerminationGracePeriodSeconds; tgps != nil {
+		switch {
+		case kind == probeKindReadiness:
+			errs = append(errs, field.Forbidden(p.Child("terminationGracePeriodSeconds"),
+				"must not be set on a readiness probe"))
+		case *tgps <= 0:
+			errs = append(errs, field.Invalid(p.Child("terminationGracePeriodSeconds"), *tgps,
+				"must be greater than 0"))
+		}
+	}
+
+	// Probes are dialed by the kubelet from the NODE network namespace, so an
+	// off-pod host bypasses pod-scoped egress NetworkPolicies. No live gateway
+	// sets either probe today, so this rejects nothing that currently works.
+	if probe.HTTPGet != nil && probe.HTTPGet.Host != "" {
+		errs = append(errs, field.Forbidden(p.Child("httpGet", "host"),
+			"probe host must be the pod IP (leave unset)"))
+	}
+	if probe.TCPSocket != nil && probe.TCPSocket.Host != "" {
+		errs = append(errs, field.Forbidden(p.Child("tcpSocket", "host"),
+			"probe host must be the pod IP (leave unset)"))
+	}
+
+	// Ordered AFTER the checks above on purpose: a lowercase "https" scheme is
+	// rejected by the API server itself (field.NotSupported), which is a
+	// reconcile wedge rather than a restart loop, and must not collect the
+	// "use scheme HTTP" advice.
+	//
+	// Equality on the EFFECTIVE image is deliberate. busybox:1.36, a digest pin
+	// or a distroless image are equally incapable and are accepted false
+	// negatives; anything broader would false-positive on a custom image that
+	// genuinely speaks these protocols.
+	if defaultSidecarImage {
+		if probe.GRPC != nil {
+			errs = append(errs, field.Invalid(p.Child("grpc"), probe.GRPC,
+				"the default busybox sidecar serves plaintext HTTP/1.1; a grpc handler can never succeed -- set spec.openapi.sidecarImage if your image speaks gRPC"))
+		}
+		if probe.HTTPGet != nil && probe.HTTPGet.Scheme == corev1.URISchemeHTTPS {
+			errs = append(errs, field.Invalid(p.Child("httpGet", "scheme"), probe.HTTPGet.Scheme,
+				"the default busybox sidecar serves plaintext HTTP; use scheme HTTP or set spec.openapi.sidecarImage"))
+		}
+	}
+
+	return errs
+}
+
 func validatePostRestartRunAsRoot(prj, old *v1alpha1.PostRestartJobSpec) field.ErrorList {
 	var oldContainer *corev1.SecurityContext
 	var oldPod *corev1.PodSecurityContext

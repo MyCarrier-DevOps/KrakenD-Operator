@@ -132,6 +132,49 @@ make deploy IMG=ghcr.io/mycarrier-devops/krakend-operator:<previous-version>
 
 ---
 
+## Unreleased — openapi-serve liveness probe (one-time rollout)
+
+The `openapi-serve` sidecar now renders with a liveness probe. It previously
+had only a readiness probe, so a wedged sidecar could sit unready forever with
+no way to recover; because pod readiness is the AND across containers, that
+also held the main `krakend` container out of the Service endpoints
+indefinitely. The new probe restarts the sidecar instead.
+
+Two things to know before rolling this out.
+
+1. **Every gateway with `spec.openapi.enabled: true` performs a one-time
+   rollout on the first reconcile after the upgrade, with no CR change.**
+   Adding a probe changes the PodTemplateSpec, which changes the
+   pod-template-hash and produces a new ReplicaSet. It is zero-downtime by
+   construction (`MaxSurge: 1 / MaxUnavailable: 0`), but it is unannounced, so
+   schedule it like any other production rollout. Affected today: the dev,
+   preprod and prod `api-gateway` gateways.
+
+   It does **not** re-fire the post-restart Job. The pod-template annotation is
+   the config checksum, and Job identity is the config checksum plus the
+   postRestartJob-spec projection — a probe change touches neither.
+
+2. **The sidecar can now be killed and restarted by the kubelet.** A container
+   that could previously only sit wedged will now show `RESTARTS` and, if the
+   failure persists, `CrashLoopBackOff`. See *ReadMe Publishing
+   (postRestartJob)* in `docs/runbook.md` for what that looks like and how to
+   triage it.
+
+The default probe is a shallow TCP check on the openapi port
+(`initialDelaySeconds: 15`, `periodSeconds: 20`, `timeoutSeconds: 2`,
+`failureThreshold: 6` — about 135s to restart), deliberately slacker than the
+readiness default (about 32s to mark unready) so readiness reacts first. That
+ordering only holds while `spec.openapi.readinessProbe` is also left unset; if
+you override readiness to be slower than ~135s, the liveness default will
+pre-empt it.
+
+Override it with `spec.openapi.livenessProbe`. There is no way to disable it —
+unset means "use the default", and `livenessProbe: {}` specifies no handler and
+is now rejected at admission. Both probe fields are validated by the gateway
+webhook; see the field documentation via
+`kubectl explain krakendgateway.spec.openapi.livenessProbe`.
+
+---
 ## v0.13.4 — postRestartJob hardening (breaking behavior change)
 
 This release changes the post-restart Job (`spec.postRestartJob`) in ways

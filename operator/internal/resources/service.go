@@ -67,3 +67,26 @@ func OpenAPIPort(gw *v1alpha1.KrakenDGateway) int32 {
 	}
 	return 8090
 }
+
+// DefaultOpenAPISidecarImage is the image the operator runs for the
+// openapi-serve sidecar when spec.openapi.sidecarImage is unset: busybox httpd,
+// which serves plaintext HTTP/1.1 only -- no h2c and no TLS. The webhook keys
+// its grpc/HTTPS probe rejection off this value.
+//
+// The identical string appears on the plugin-init containers in deployment.go.
+// That is a different concept that happens to share an image; do not fold the
+// two together.
+const DefaultOpenAPISidecarImage = "busybox:1.37"
+
+// EffectiveOpenAPISidecarImage returns the image the sidecar will actually run.
+//
+// Callers must gate on this rather than on `SidecarImage == ""`: writing
+// `sidecarImage: "busybox:1.37"` out explicitly renders a byte-identical
+// container, and a raw-emptiness test would let it skip checks that apply to
+// the default image.
+func EffectiveOpenAPISidecarImage(oa *v1alpha1.OpenAPIExportSpec) string {
+	if oa != nil && oa.SidecarImage != "" {
+		return oa.SidecarImage
+	}
+	return DefaultOpenAPISidecarImage
+}

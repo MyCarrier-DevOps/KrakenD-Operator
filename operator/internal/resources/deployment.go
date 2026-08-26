@@ -467,6 +467,28 @@ func buildMultiSourcePluginVolumes(
 	return volumes, mounts, initContainers
 }
 
+// probeTimings names the four knobs of a shallow probe. Named fields, not
+// positional int32 params: transposing period and timeout would compile
+// silently.
+type probeTimings struct {
+	initialDelay, period, timeout, failures int32
+}
+
+// sidecarTCPProbe builds the operator's shallow TCP probe against the sidecar
+// port. Both sidecar defaults share the handler wiring and differ only in
+// timings, which stay visible at the call sites.
+func sidecarTCPProbe(port int32, t probeTimings) *corev1.Probe {
+	return &corev1.Probe{
+		ProbeHandler: corev1.ProbeHandler{
+			TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(port)},
+		},
+		InitialDelaySeconds: t.initialDelay,
+		PeriodSeconds:       t.period,
+		TimeoutSeconds:      t.timeout,
+		FailureThreshold:    t.failures,
+	}
+}
+
 // buildOpenAPIPieces constructs the init container that exports the OpenAPI
 // spec using the KrakenD binary, the sidecar that serves it, the shared
 // emptyDir volume, and the mount applied to the init container. Returns
@@ -552,10 +574,7 @@ func buildOpenAPIPieces(
 		initContainer.Resources = *oa.Resources
 	}
 
-	sidecarImage := oa.SidecarImage
-	if sidecarImage == "" {
-		sidecarImage = "busybox:1.37"
-	}
+	sidecarImage := EffectiveOpenAPISidecarImage(oa)
 	oaPort := OpenAPIPort(gw)
 
 	sidecar = &corev1.Container{
@@ -592,20 +611,16 @@ func buildOpenAPIPieces(
 		sidecar.Resources = *oa.Resources
 	}
 
+	// DeepCopy, not the caller's pointer: the typed client decodes the API
+	// server's response back into the object it submitted, and encoding/json
+	// reuses non-nil pointer fields, so an aliased probe would have the server's
+	// defaults written into gw.Spec in memory on every reconcile.
 	if oa.ReadinessProbe != nil {
-		sidecar.ReadinessProbe = oa.ReadinessProbe
+		sidecar.ReadinessProbe = oa.ReadinessProbe.DeepCopy()
 	} else {
-		sidecar.ReadinessProbe = &corev1.Probe{
-			ProbeHandler: corev1.ProbeHandler{
-				TCPSocket: &corev1.TCPSocketAction{
-					Port: intstr.FromInt32(oaPort),
-				},
-			},
-			InitialDelaySeconds: 2,
-			PeriodSeconds:       10,
-			TimeoutSeconds:      1,
-			FailureThreshold:    3,
-		}
+		sidecar.ReadinessProbe = sidecarTCPProbe(oaPort, probeTimings{
+			initialDelay: 2, period: 10, timeout: 1, failures: 3,
+		})
 	}
 
 	// Why a liveness probe here at all, given the handler is identical to the
@@ -628,19 +643,11 @@ func buildOpenAPIPieces(
 	// guaranteed while readiness is also left at its default -- a user-supplied
 	// spec.openapi.readinessProbe slacker than ~135s is pre-empted by this.
 	if oa.LivenessProbe != nil {
-		sidecar.LivenessProbe = oa.LivenessProbe
+		sidecar.LivenessProbe = oa.LivenessProbe.DeepCopy()
 	} else {
-		sidecar.LivenessProbe = &corev1.Probe{
-			ProbeHandler: corev1.ProbeHandler{
-				TCPSocket: &corev1.TCPSocketAction{
-					Port: intstr.FromInt32(oaPort),
-				},
-			},
-			InitialDelaySeconds: 15,
-			PeriodSeconds:       20,
-			TimeoutSeconds:      2,
-			FailureThreshold:    6,
-		}
+		sidecar.LivenessProbe = sidecarTCPProbe(oaPort, probeTimings{
+			initialDelay: 15, period: 20, timeout: 2, failures: 6,
+		})
 	}
 
 	return initContainer, sidecar, volume, initMount
