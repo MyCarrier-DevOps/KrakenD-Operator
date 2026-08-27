@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -238,6 +239,142 @@ func TestGatewayValidator_OpenAPIPortValid(t *testing.T) {
 	_, err := v.ValidateCreate(context.Background(), gw)
 	if err != nil {
 		t.Errorf("expected no error, got %v", err)
+	}
+}
+
+func gwWithProbes(liveness, readiness *corev1.Probe, sidecarImage string) *v1alpha1.KrakenDGateway {
+	return &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Config: v1alpha1.GatewayConfig{},
+			OpenAPI: &v1alpha1.OpenAPIExportSpec{
+				Enabled: true, Port: 8090, SidecarImage: sidecarImage,
+				LivenessProbe: liveness, ReadinessProbe: readiness,
+			},
+		},
+	}
+}
+
+func tcpHandler() corev1.ProbeHandler {
+	return corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(8090)}}
+}
+
+// Every state here is accepted by the CRD schema and refused by the API server
+// on the rendered Deployment, where the failure is silent -- or is structurally
+// impossible against the default busybox sidecar.
+func TestGatewayValidator_OpenAPIProbeRejected(t *testing.T) {
+	tgpsZero := int64(0)
+	tgpsOK := int64(30)
+	cases := []struct {
+		name      string
+		liveness  *corev1.Probe
+		readiness *corev1.Probe
+		image     string
+		wantField string
+	}{
+		{"no handler", &corev1.Probe{}, nil, "", "livenessProbe"},
+		{"two handlers", &corev1.Probe{ProbeHandler: corev1.ProbeHandler{
+			TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(8090)},
+			Exec:      &corev1.ExecAction{Command: []string{"true"}},
+		}}, nil, "", "livenessProbe"},
+		{"successThreshold 2", &corev1.Probe{ProbeHandler: tcpHandler(), SuccessThreshold: 2}, nil, "", "successThreshold"},
+		{"negative period", &corev1.Probe{ProbeHandler: tcpHandler(), PeriodSeconds: -5}, nil, "", "periodSeconds"},
+		{"tgps zero on liveness", &corev1.Probe{ProbeHandler: tcpHandler(), TerminationGracePeriodSeconds: &tgpsZero}, nil, "", "terminationGracePeriodSeconds"},
+		{"tgps set on readiness", nil, &corev1.Probe{ProbeHandler: tcpHandler(), TerminationGracePeriodSeconds: &tgpsOK}, "", "terminationGracePeriodSeconds"},
+		{"tcpSocket host", &corev1.Probe{ProbeHandler: corev1.ProbeHandler{
+			TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(8090), Host: "169.254.169.254"},
+		}}, nil, "", "host"},
+		{"httpGet host", &corev1.Probe{ProbeHandler: corev1.ProbeHandler{
+			HTTPGet: &corev1.HTTPGetAction{Port: intstr.FromInt32(8090), Host: "example.com"},
+		}}, nil, "", "host"},
+		{"grpc on default image", &corev1.Probe{ProbeHandler: corev1.ProbeHandler{
+			GRPC: &corev1.GRPCAction{Port: 8090},
+		}}, nil, "", "grpc"},
+		{"https on default image", &corev1.Probe{ProbeHandler: corev1.ProbeHandler{
+			HTTPGet: &corev1.HTTPGetAction{Port: intstr.FromInt32(8090), Scheme: corev1.URISchemeHTTPS},
+		}}, nil, "", "scheme"},
+		// The default image written out explicitly must NOT escape the gate.
+		{"grpc, default image set explicitly", &corev1.Probe{ProbeHandler: corev1.ProbeHandler{
+			GRPC: &corev1.GRPCAction{Port: 8090},
+		}}, nil, "busybox:1.37", "grpc"},
+		// successThreshold on READINESS: the !=0 && !=1 branch is liveness-only,
+		// so without it in the non-negative loop this was the parity hole.
+		{"negative successThreshold on readiness", nil,
+			&corev1.Probe{ProbeHandler: tcpHandler(), SuccessThreshold: -3}, "", "successThreshold"},
+		{"negative successThreshold on liveness",
+			&corev1.Probe{ProbeHandler: tcpHandler(), SuccessThreshold: -3}, nil, "", "successThreshold"},
+		// Lowercase scheme is the most plausible hand-written-YAML typo.
+		{"lowercase https scheme", &corev1.Probe{ProbeHandler: corev1.ProbeHandler{
+			HTTPGet: &corev1.HTTPGetAction{Port: intstr.FromInt32(8090), Scheme: corev1.URIScheme("https")},
+		}}, nil, "", "scheme"},
+		// Port bounds. Custom image, so the grpc/HTTPS image gate is not what fires.
+		{"tcpSocket port out of range", &corev1.Probe{ProbeHandler: corev1.ProbeHandler{
+			TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(70000)},
+		}}, nil, "ghcr.io/example/custom:1.0", "port"},
+		{"httpGet port zero", &corev1.Probe{ProbeHandler: corev1.ProbeHandler{
+			HTTPGet: &corev1.HTTPGetAction{Port: intstr.FromInt32(0)},
+		}}, nil, "ghcr.io/example/custom:1.0", "port"},
+		{"grpc port out of range", &corev1.Probe{ProbeHandler: corev1.ProbeHandler{
+			GRPC: &corev1.GRPCAction{Port: 70000},
+		}}, nil, "ghcr.io/example/custom:1.0", "port"},
+		{"invalid string port name", &corev1.Probe{ProbeHandler: corev1.ProbeHandler{
+			TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromString("Not_A_Port")},
+		}}, nil, "ghcr.io/example/custom:1.0", "port"},
+		// readinessProbe is validated on the same terms.
+		{"readiness no handler", nil, &corev1.Probe{}, "", "readinessProbe"},
+	}
+	v := &GatewayValidator{}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := v.ValidateCreate(context.Background(), gwWithProbes(tc.liveness, tc.readiness, tc.image))
+			if err == nil {
+				t.Fatalf("expected rejection for %q", tc.name)
+			}
+			if !strings.Contains(err.Error(), tc.wantField) {
+				t.Errorf("expected the error to name %q, got %v", tc.wantField, err)
+			}
+		})
+	}
+}
+
+func TestGatewayValidator_OpenAPIProbeAccepted(t *testing.T) {
+	tgpsOK := int64(30)
+	cases := []struct {
+		name      string
+		liveness  *corev1.Probe
+		readiness *corev1.Probe
+		image     string
+	}{
+		{"both unset", nil, nil, ""},
+		{"successThreshold unset", &corev1.Probe{ProbeHandler: tcpHandler()}, nil, ""},
+		{"successThreshold 1", &corev1.Probe{ProbeHandler: tcpHandler(), SuccessThreshold: 1}, nil, ""},
+		{"readiness successThreshold 3 is legal", nil, &corev1.Probe{ProbeHandler: tcpHandler(), SuccessThreshold: 3}, ""},
+		{"tgps positive on liveness", &corev1.Probe{ProbeHandler: tcpHandler(), TerminationGracePeriodSeconds: &tgpsOK}, nil, ""},
+		{"httpGet without scheme or host", &corev1.Probe{ProbeHandler: corev1.ProbeHandler{
+			HTTPGet: &corev1.HTTPGetAction{Path: "/openapi.json", Port: intstr.FromInt32(8090)},
+		}}, nil, ""},
+		{"explicit uppercase HTTP scheme", &corev1.Probe{ProbeHandler: corev1.ProbeHandler{
+			HTTPGet: &corev1.HTTPGetAction{Port: intstr.FromInt32(8090), Scheme: corev1.URISchemeHTTP},
+		}}, nil, ""},
+		{"valid string port name", &corev1.Probe{ProbeHandler: corev1.ProbeHandler{
+			TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromString("openapi")},
+		}}, nil, ""},
+		{"boundary ports 1 and 65535", &corev1.Probe{ProbeHandler: corev1.ProbeHandler{
+			TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(65535)},
+		}}, nil, ""},
+		// A custom image may genuinely speak gRPC -- the gate is image-scoped.
+		{"grpc on a custom image", &corev1.Probe{ProbeHandler: corev1.ProbeHandler{
+			GRPC: &corev1.GRPCAction{Port: 8090},
+		}}, nil, "ghcr.io/example/grpc-server:1.0"},
+	}
+	v := &GatewayValidator{}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := v.ValidateCreate(context.Background(), gwWithProbes(tc.liveness, tc.readiness, tc.image)); err != nil {
+				t.Errorf("expected no error for %q, got %v", tc.name, err)
+			}
+		})
 	}
 }
 

@@ -127,8 +127,10 @@ type OpenAPIExportSpec struct {
 	// (--skip-jsonschema flag).
 	SkipJSONSchema bool `json:"skipJsonSchema,omitempty"`
 
-	// SidecarImage overrides the sidecar httpd image. Defaults to
-	// "busybox:1.37" which serves via `httpd -f -p PORT -h /openapi`.
+	// SidecarImage overrides the sidecar httpd image. Defaults to the
+	// operator's built-in busybox image (resources.DefaultOpenAPISidecarImage),
+	// which serves via `httpd -f -p PORT -h /openapi`. The exact tag is not
+	// repeated here so this text cannot drift from the constant.
 	SidecarImage string `json:"sidecarImage,omitempty"`
 
 	// Resources defines resource requirements for the openapi sidecar
@@ -138,7 +140,39 @@ type OpenAPIExportSpec struct {
 	// ReadinessProbe overrides the readiness probe applied to the
 	// openapi-serve sidecar container. When unset, a default shallow
 	// TCP probe against Port is used.
+	//
+	// A supplied probe is validated at admission on the same terms as
+	// LivenessProbe below, except that successThreshold is unconstrained and
+	// terminationGracePeriodSeconds must not be set at all.
 	ReadinessProbe *corev1.Probe `json:"readinessProbe,omitempty"`
+
+	// LivenessProbe overrides the liveness probe applied to the
+	// openapi-serve sidecar container. When unset, a default shallow TCP
+	// probe against Port is used, slacker than the readiness DEFAULT so
+	// readiness reacts first -- an ordering that holds only while
+	// readinessProbe is also left unset.
+	//
+	// There is deliberately no way to disable the probe: unset means "use the
+	// default", because require-liveness-probes is enforced on some clusters.
+	// An empty object is not an off switch -- `livenessProbe: {}` specifies no
+	// handler and is rejected at admission.
+	//
+	// A supplied probe must satisfy the sidecar's constraints. Some are checked
+	// at admission and your kubectl apply fails: exactly one handler must be
+	// set; successThreshold must be unset or 1, because Kubernetes rejects any
+	// other value on a liveness probe; timings must be non-negative;
+	// terminationGracePeriodSeconds, when set, must be greater than 0; the
+	// handler's host must be unset so the probe targets this pod rather than
+	// being dialed from the node's network namespace; and grpc or HTTPS
+	// handlers are rejected while sidecarImage is left at the operator default,
+	// because that image serves plaintext HTTP/1.1 only.
+	//
+	// The rest cannot be checked and remain yours: the container has a
+	// read-only root filesystem with no writable path, all capabilities
+	// dropped, and only busybox binaries, so an exec handler must not write to
+	// disk (use `wget -q -O -`) and must not invoke a binary the image does not
+	// ship -- the operator cannot verify either.
+	LivenessProbe *corev1.Probe `json:"livenessProbe,omitempty"`
 }
 
 // PostRestartJobSpec configures a Kubernetes Job that runs a user-provided
