@@ -27,6 +27,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -290,6 +292,47 @@ func validatePostRestartJob(
 // too, see runAsFieldsUnchanged) changed from the stored spec — a CR
 // accepted by an older operator version (before this reject existed) must
 // not start failing on every unrelated update.
+func validatePostRestartRunAsRoot(prj, old *v1alpha1.PostRestartJobSpec) field.ErrorList {
+	var oldContainer *corev1.SecurityContext
+	var oldPod *corev1.PodSecurityContext
+	if old != nil {
+		oldContainer = old.SecurityContext
+		oldPod = old.PodSecurityContext
+	}
+
+	return validateRunAsRootConflict(
+		prj.SecurityContext, prj.PodSecurityContext,
+		oldContainer, oldPod,
+		field.NewPath("spec", "postRestartJob", "securityContext", "runAsUser"),
+		field.NewPath("spec", "postRestartJob", "podSecurityContext", "runAsUser"),
+		// job.go's postRestartJob container default leaves runAs* UNSET at
+		// container scope (pod scope governs), so a pod-scope uid0 with
+		// runAsNonRoot left unset everywhere is a real, self-healable
+		// capability — job.go's mergePodSecurityContext fixup drops the
+		// inherited pod-scope runAsNonRoot default in that case (see
+		// "Keep the builder fixup" in this function's original doc, now
+		// captured by this true argument).
+		true,
+		// Review round 3, C3: the previous text unconditionally told the user
+		// a container-scope runAsNonRoot: false "also" acknowledges root,
+		// which is only true when the effective uid0 came from the container
+		// scope in the first place (see validateRunAsRootConflict's
+		// containerOptsOut/podOptsOut asymmetry) — for a pod-scope-originated
+		// rejection it was simply wrong advice. This text is self-qualifying
+		// instead of path-specific, so it stays truthful regardless of
+		// whether it is emitted at containerPath or podPath.
+		"runAsUser: 0 conflicts with the hardened runAsNonRoot: true default (kubelet "+
+			"pod-level runAsNonRoot defaults to true and is inherited unless overridden). "+
+			"Set spec.postRestartJob.podSecurityContext.runAsNonRoot: false to acknowledge "+
+			"running as root; a container-scope "+
+			"spec.postRestartJob.securityContext.runAsNonRoot: false only acknowledges a "+
+			"container-scope runAsUser: 0. Unless the Job container carries its own "+
+			"runAsNonRoot: false, the effective {runAsUser: 0, runAsNonRoot: true} pair "+
+			"leaves the pod Pending (CreateContainerConfigError) until activeDeadlineSeconds "+
+			"expires.",
+	)
+}
+
 // probeKind distinguishes the two sidecar probes. Kubernetes validates them
 // differently, so a kind-blind validator would itself reintroduce a wedge:
 // terminationGracePeriodSeconds is FORBIDDEN outright on a readiness probe but
@@ -340,6 +383,7 @@ func validateSidecarProbe(
 		{"failureThreshold", probe.FailureThreshold},
 		{"initialDelaySeconds", probe.InitialDelaySeconds},
 		{"periodSeconds", probe.PeriodSeconds},
+		{"successThreshold", probe.SuccessThreshold},
 		{"timeoutSeconds", probe.TimeoutSeconds},
 	} {
 		if f.v < 0 {
@@ -358,9 +402,44 @@ func validateSidecarProbe(
 		}
 	}
 
+	// Kubernetes accepts only the exact strings HTTP and HTTPS; anything else,
+	// including a lowercase "https", is field.NotSupported on the Deployment.
+	// Unset is fine -- SetDefaults_HTTPGetAction fills in HTTP.
+	if probe.HTTPGet != nil && probe.HTTPGet.Scheme != "" &&
+		probe.HTTPGet.Scheme != corev1.URISchemeHTTP && probe.HTTPGet.Scheme != corev1.URISchemeHTTPS {
+		errs = append(errs, field.NotSupported(p.Child("httpGet", "scheme"), probe.HTTPGet.Scheme,
+			[]string{string(corev1.URISchemeHTTP), string(corev1.URISchemeHTTPS)}))
+	}
+
+	// ValidatePortNumOrName bounds numeric ports to 1-65535 and requires string
+	// ports to be valid IANA_SVC_NAMEs. The CRD bounds neither -- the constraint
+	// lives only in description prose.
+	checkPort := func(path *field.Path, port intstr.IntOrString) {
+		switch port.Type {
+		case intstr.Int:
+			if port.IntValue() < 1 || port.IntValue() > 65535 {
+				errs = append(errs, field.Invalid(path, port.IntValue(), "must be between 1 and 65535"))
+			}
+		case intstr.String:
+			for _, msg := range validation.IsValidPortName(port.StrVal) {
+				errs = append(errs, field.Invalid(path, port.StrVal, msg))
+			}
+		}
+	}
+	if probe.HTTPGet != nil {
+		checkPort(p.Child("httpGet", "port"), probe.HTTPGet.Port)
+	}
+	if probe.TCPSocket != nil {
+		checkPort(p.Child("tcpSocket", "port"), probe.TCPSocket.Port)
+	}
+	if probe.GRPC != nil && (probe.GRPC.Port < 1 || probe.GRPC.Port > 65535) {
+		errs = append(errs, field.Invalid(p.Child("grpc", "port"), probe.GRPC.Port, "must be between 1 and 65535"))
+	}
+
 	// Probes are dialed by the kubelet from the NODE network namespace, so an
-	// off-pod host bypasses pod-scoped egress NetworkPolicies. No live gateway
-	// sets either probe today, so this rejects nothing that currently works.
+	// off-pod host bypasses pod-scoped egress NetworkPolicies. As of the
+	// 2026-08 fleet audit (PR #29) no live gateway set either probe, so this
+	// rejected nothing that was working at the time it landed.
 	if probe.HTTPGet != nil && probe.HTTPGet.Host != "" {
 		errs = append(errs, field.Forbidden(p.Child("httpGet", "host"),
 			"probe host must be the pod IP (leave unset)"))
@@ -394,47 +473,6 @@ func validateSidecarProbe(
 	}
 
 	return errs
-}
-
-func validatePostRestartRunAsRoot(prj, old *v1alpha1.PostRestartJobSpec) field.ErrorList {
-	var oldContainer *corev1.SecurityContext
-	var oldPod *corev1.PodSecurityContext
-	if old != nil {
-		oldContainer = old.SecurityContext
-		oldPod = old.PodSecurityContext
-	}
-
-	return validateRunAsRootConflict(
-		prj.SecurityContext, prj.PodSecurityContext,
-		oldContainer, oldPod,
-		field.NewPath("spec", "postRestartJob", "securityContext", "runAsUser"),
-		field.NewPath("spec", "postRestartJob", "podSecurityContext", "runAsUser"),
-		// job.go's postRestartJob container default leaves runAs* UNSET at
-		// container scope (pod scope governs), so a pod-scope uid0 with
-		// runAsNonRoot left unset everywhere is a real, self-healable
-		// capability — job.go's mergePodSecurityContext fixup drops the
-		// inherited pod-scope runAsNonRoot default in that case (see
-		// "Keep the builder fixup" in this function's original doc, now
-		// captured by this true argument).
-		true,
-		// Review round 3, C3: the previous text unconditionally told the user
-		// a container-scope runAsNonRoot: false "also" acknowledges root,
-		// which is only true when the effective uid0 came from the container
-		// scope in the first place (see validateRunAsRootConflict's
-		// containerOptsOut/podOptsOut asymmetry) — for a pod-scope-originated
-		// rejection it was simply wrong advice. This text is self-qualifying
-		// instead of path-specific, so it stays truthful regardless of
-		// whether it is emitted at containerPath or podPath.
-		"runAsUser: 0 conflicts with the hardened runAsNonRoot: true default (kubelet "+
-			"pod-level runAsNonRoot defaults to true and is inherited unless overridden). "+
-			"Set spec.postRestartJob.podSecurityContext.runAsNonRoot: false to acknowledge "+
-			"running as root; a container-scope "+
-			"spec.postRestartJob.securityContext.runAsNonRoot: false only acknowledges a "+
-			"container-scope runAsUser: 0. Unless the Job container carries its own "+
-			"runAsNonRoot: false, the effective {runAsUser: 0, runAsNonRoot: true} pair "+
-			"leaves the pod Pending (CreateContainerConfigError) until activeDeadlineSeconds "+
-			"expires.",
-	)
 }
 
 // validateRunAsRootConflict is the scope-agnostic core shared by

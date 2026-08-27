@@ -638,8 +638,10 @@ func buildOpenAPIPieces(
 	// userspace: the kernel completes the handshake from the listen backlog
 	// whether or not httpd ever calls accept(). It catches a lost listener.
 	//
-	// The timings are ~4x slacker than the readiness DEFAULT (~135s to restart
-	// vs ~32s to mark unready) so readiness reacts first. That ordering is only
+	// The timings are ~5x slacker than the readiness DEFAULT. The kubelet acts on
+	// the Nth CONSECUTIVE failure, so time-to-action is
+	// initialDelay + (failureThreshold-1)*period + timeout: ~117s to restart here
+	// vs ~23s to mark unready. That ordering is only
 	// guaranteed while readiness is also left at its default -- a user-supplied
 	// spec.openapi.readinessProbe slacker than ~135s is pre-empted by this.
 	if oa.LivenessProbe != nil {

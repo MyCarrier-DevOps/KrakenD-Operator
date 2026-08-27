@@ -127,8 +127,10 @@ type OpenAPIExportSpec struct {
 	// (--skip-jsonschema flag).
 	SkipJSONSchema bool `json:"skipJsonSchema,omitempty"`
 
-	// SidecarImage overrides the sidecar httpd image. Defaults to
-	// "busybox:1.37" which serves via `httpd -f -p PORT -h /openapi`.
+	// SidecarImage overrides the sidecar httpd image. Defaults to the
+	// operator's built-in busybox image (resources.DefaultOpenAPISidecarImage),
+	// which serves via `httpd -f -p PORT -h /openapi`. The exact tag is not
+	// repeated here so this text cannot drift from the constant.
 	SidecarImage string `json:"sidecarImage,omitempty"`
 
 	// Resources defines resource requirements for the openapi sidecar

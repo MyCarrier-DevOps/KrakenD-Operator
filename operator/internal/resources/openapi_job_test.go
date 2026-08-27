@@ -902,9 +902,12 @@ func TestBuildDeployment_OpenAPISidecarProbeDefaults(t *testing.T) {
 	}
 
 	// Readiness must always react before liveness restarts the container.
+	// The kubelet acts on the Nth CONSECUTIVE failure, so time-to-action is
+	// initialDelay + (failureThreshold-1)*period + timeout -- not
+	// initialDelay + failureThreshold*period, which overstates both by one period.
 	rp := sidecar.ReadinessProbe
-	readyAfter := rp.InitialDelaySeconds + rp.PeriodSeconds*rp.FailureThreshold
-	restartAfter := lp.InitialDelaySeconds + lp.PeriodSeconds*lp.FailureThreshold
+	readyAfter := rp.InitialDelaySeconds + (rp.FailureThreshold-1)*rp.PeriodSeconds + rp.TimeoutSeconds
+	restartAfter := lp.InitialDelaySeconds + (lp.FailureThreshold-1)*lp.PeriodSeconds + lp.TimeoutSeconds
 	if restartAfter <= readyAfter {
 		t.Errorf("liveness (%ds) must be slacker than readiness (%ds) so readiness acts first",
 			restartAfter, readyAfter)

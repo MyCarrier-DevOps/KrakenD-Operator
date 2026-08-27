@@ -298,6 +298,29 @@ func TestGatewayValidator_OpenAPIProbeRejected(t *testing.T) {
 		{"grpc, default image set explicitly", &corev1.Probe{ProbeHandler: corev1.ProbeHandler{
 			GRPC: &corev1.GRPCAction{Port: 8090},
 		}}, nil, "busybox:1.37", "grpc"},
+		// successThreshold on READINESS: the !=0 && !=1 branch is liveness-only,
+		// so without it in the non-negative loop this was the parity hole.
+		{"negative successThreshold on readiness", nil,
+			&corev1.Probe{ProbeHandler: tcpHandler(), SuccessThreshold: -3}, "", "successThreshold"},
+		{"negative successThreshold on liveness",
+			&corev1.Probe{ProbeHandler: tcpHandler(), SuccessThreshold: -3}, nil, "", "successThreshold"},
+		// Lowercase scheme is the most plausible hand-written-YAML typo.
+		{"lowercase https scheme", &corev1.Probe{ProbeHandler: corev1.ProbeHandler{
+			HTTPGet: &corev1.HTTPGetAction{Port: intstr.FromInt32(8090), Scheme: corev1.URIScheme("https")},
+		}}, nil, "", "scheme"},
+		// Port bounds. Custom image, so the grpc/HTTPS image gate is not what fires.
+		{"tcpSocket port out of range", &corev1.Probe{ProbeHandler: corev1.ProbeHandler{
+			TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(70000)},
+		}}, nil, "ghcr.io/example/custom:1.0", "port"},
+		{"httpGet port zero", &corev1.Probe{ProbeHandler: corev1.ProbeHandler{
+			HTTPGet: &corev1.HTTPGetAction{Port: intstr.FromInt32(0)},
+		}}, nil, "ghcr.io/example/custom:1.0", "port"},
+		{"grpc port out of range", &corev1.Probe{ProbeHandler: corev1.ProbeHandler{
+			GRPC: &corev1.GRPCAction{Port: 70000},
+		}}, nil, "ghcr.io/example/custom:1.0", "port"},
+		{"invalid string port name", &corev1.Probe{ProbeHandler: corev1.ProbeHandler{
+			TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromString("Not_A_Port")},
+		}}, nil, "ghcr.io/example/custom:1.0", "port"},
 		// readinessProbe is validated on the same terms.
 		{"readiness no handler", nil, &corev1.Probe{}, "", "readinessProbe"},
 	}
@@ -330,6 +353,15 @@ func TestGatewayValidator_OpenAPIProbeAccepted(t *testing.T) {
 		{"tgps positive on liveness", &corev1.Probe{ProbeHandler: tcpHandler(), TerminationGracePeriodSeconds: &tgpsOK}, nil, ""},
 		{"httpGet without scheme or host", &corev1.Probe{ProbeHandler: corev1.ProbeHandler{
 			HTTPGet: &corev1.HTTPGetAction{Path: "/openapi.json", Port: intstr.FromInt32(8090)},
+		}}, nil, ""},
+		{"explicit uppercase HTTP scheme", &corev1.Probe{ProbeHandler: corev1.ProbeHandler{
+			HTTPGet: &corev1.HTTPGetAction{Port: intstr.FromInt32(8090), Scheme: corev1.URISchemeHTTP},
+		}}, nil, ""},
+		{"valid string port name", &corev1.Probe{ProbeHandler: corev1.ProbeHandler{
+			TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromString("openapi")},
+		}}, nil, ""},
+		{"boundary ports 1 and 65535", &corev1.Probe{ProbeHandler: corev1.ProbeHandler{
+			TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(65535)},
 		}}, nil, ""},
 		// A custom image may genuinely speak gRPC -- the gate is image-scoped.
 		{"grpc on a custom image", &corev1.Probe{ProbeHandler: corev1.ProbeHandler{

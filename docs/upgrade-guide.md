@@ -162,11 +162,16 @@ Two things to know before rolling this out.
 
 The default probe is a shallow TCP check on the openapi port
 (`initialDelaySeconds: 15`, `periodSeconds: 20`, `timeoutSeconds: 2`,
-`failureThreshold: 6` — about 135s to restart), deliberately slacker than the
-readiness default (about 32s to mark unready) so readiness reacts first. That
-ordering only holds while `spec.openapi.readinessProbe` is also left unset; if
-you override readiness to be slower than ~135s, the liveness default will
-pre-empt it.
+`failureThreshold: 6`), deliberately slacker than the readiness default so
+readiness reacts first.
+
+The kubelet acts on the Nth *consecutive* failure, so time-to-action is
+`initialDelay + (failureThreshold - 1) x period + timeout`: about **117s** to
+restart for the liveness default, against about **23s** to mark unready for the
+readiness default. That ordering only holds while
+`spec.openapi.readinessProbe` is also left unset — if you override readiness
+with a budget slower than ~117s, the liveness default will pre-empt it and
+restart the sidecar before readiness has pulled it out of the endpoints.
 
 Override it with `spec.openapi.livenessProbe`. There is no way to disable it —
 unset means "use the default", and `livenessProbe: {}` specifies no handler and
