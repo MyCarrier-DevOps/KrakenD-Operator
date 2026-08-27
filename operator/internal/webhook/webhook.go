@@ -349,6 +349,10 @@ const (
 // the two that are structurally impossible against the operator's default
 // sidecar image.
 //
+// Split into three helpers to keep this function's cyclomatic complexity in
+// check (gocyclo), mirroring validatePostRestartJob above: the checks grew from
+// one to eight across review rounds (ids 3865173791, 3870072741).
+//
 // defaultSidecarImage must be computed from resources.EffectiveOpenAPISidecarImage,
 // never from a raw `SidecarImage == ""` test.
 func validateSidecarProbe(
@@ -358,6 +362,16 @@ func validateSidecarProbe(
 	if probe == nil {
 		return errs
 	}
+	errs = append(errs, validateProbeSchedule(p, probe, kind)...)
+	errs = append(errs, validateProbePorts(p, probe)...)
+	errs = append(errs, validateProbeReachability(p, probe, defaultSidecarImage)...)
+	return errs
+}
+
+// validateProbeSchedule covers the handler count and the timing/threshold
+// fields -- the shape of the probe, independent of which handler it uses.
+func validateProbeSchedule(p *field.Path, probe *corev1.Probe, kind probeKind) field.ErrorList {
+	var errs field.ErrorList
 
 	handlers := 0
 	for _, set := range []bool{probe.Exec != nil, probe.HTTPGet != nil, probe.TCPSocket != nil, probe.GRPC != nil} {
@@ -375,7 +389,9 @@ func validateSidecarProbe(
 			"must be 1 for a liveness probe"))
 	}
 
-	// Sorted so the error order is deterministic across runs.
+	// Sorted so the error order is deterministic across runs. successThreshold is
+	// here as well as in the liveness branch above: that branch is liveness-only,
+	// so without this entry a negative value on a READINESS probe slips through.
 	for _, f := range []struct {
 		name string
 		v    int32
@@ -402,18 +418,16 @@ func validateSidecarProbe(
 		}
 	}
 
-	// Kubernetes accepts only the exact strings HTTP and HTTPS; anything else,
-	// including a lowercase "https", is field.NotSupported on the Deployment.
-	// Unset is fine -- SetDefaults_HTTPGetAction fills in HTTP.
-	if probe.HTTPGet != nil && probe.HTTPGet.Scheme != "" &&
-		probe.HTTPGet.Scheme != corev1.URISchemeHTTP && probe.HTTPGet.Scheme != corev1.URISchemeHTTPS {
-		errs = append(errs, field.NotSupported(p.Child("httpGet", "scheme"), probe.HTTPGet.Scheme,
-			[]string{string(corev1.URISchemeHTTP), string(corev1.URISchemeHTTPS)}))
-	}
+	return errs
+}
 
-	// ValidatePortNumOrName bounds numeric ports to 1-65535 and requires string
-	// ports to be valid IANA_SVC_NAMEs. The CRD bounds neither -- the constraint
-	// lives only in description prose.
+// validateProbePorts bounds the port on whichever handler is set.
+// ValidatePortNumOrName bounds numeric ports to 1-65535 and requires string
+// ports to be valid IANA_SVC_NAMEs; the CRD bounds neither -- the constraint
+// lives only in description prose.
+func validateProbePorts(p *field.Path, probe *corev1.Probe) field.ErrorList {
+	var errs field.ErrorList
+
 	checkPort := func(path *field.Path, port intstr.IntOrString) {
 		switch port.Type {
 		case intstr.Int:
@@ -426,6 +440,7 @@ func validateSidecarProbe(
 			}
 		}
 	}
+
 	if probe.HTTPGet != nil {
 		checkPort(p.Child("httpGet", "port"), probe.HTTPGet.Port)
 	}
@@ -434,6 +449,26 @@ func validateSidecarProbe(
 	}
 	if probe.GRPC != nil && (probe.GRPC.Port < 1 || probe.GRPC.Port > 65535) {
 		errs = append(errs, field.Invalid(p.Child("grpc", "port"), probe.GRPC.Port, "must be between 1 and 65535"))
+	}
+
+	return errs
+}
+
+// validateProbeReachability covers whether the probe can reach the sidecar at
+// all: a scheme Kubernetes will not accept, a host outside this pod, and the
+// two handlers the operator's default image cannot serve.
+func validateProbeReachability(p *field.Path, probe *corev1.Probe, defaultSidecarImage bool) field.ErrorList {
+	var errs field.ErrorList
+
+	// Kubernetes accepts only the exact strings HTTP and HTTPS; anything else,
+	// including a lowercase "https", is field.NotSupported on the Deployment.
+	// Unset is fine -- SetDefaults_HTTPGetAction fills in HTTP. This runs BEFORE
+	// the default-image gate below so a lowercase "https" gets NotSupported
+	// rather than the "use scheme HTTP" advice, which would be wrong for it.
+	if probe.HTTPGet != nil && probe.HTTPGet.Scheme != "" &&
+		probe.HTTPGet.Scheme != corev1.URISchemeHTTP && probe.HTTPGet.Scheme != corev1.URISchemeHTTPS {
+		errs = append(errs, field.NotSupported(p.Child("httpGet", "scheme"), probe.HTTPGet.Scheme,
+			[]string{string(corev1.URISchemeHTTP), string(corev1.URISchemeHTTPS)}))
 	}
 
 	// Probes are dialed by the kubelet from the NODE network namespace, so an
@@ -449,27 +484,23 @@ func validateSidecarProbe(
 			"probe host must be the pod IP (leave unset)"))
 	}
 
-	// Ordered AFTER the checks above on purpose: a lowercase "https" scheme is
-	// rejected by the API server itself (field.NotSupported), which is a
-	// reconcile wedge rather than a restart loop, and must not collect the
-	// "use scheme HTTP" advice.
-	//
 	// Equality on the EFFECTIVE image is deliberate. busybox:1.36, a digest pin
 	// or a distroless image are equally incapable and are accepted false
 	// negatives; anything broader would false-positive on a custom image that
 	// genuinely speaks these protocols.
-	if defaultSidecarImage {
-		if probe.GRPC != nil {
-			errs = append(errs, field.Invalid(
-				p.Child("grpc"),
-				probe.GRPC,
-				"the default busybox sidecar serves plaintext HTTP/1.1; a grpc handler can never succeed -- set spec.openapi.sidecarImage if your image speaks gRPC",
-			))
-		}
-		if probe.HTTPGet != nil && probe.HTTPGet.Scheme == corev1.URISchemeHTTPS {
-			errs = append(errs, field.Invalid(p.Child("httpGet", "scheme"), probe.HTTPGet.Scheme,
-				"the default busybox sidecar serves plaintext HTTP; use scheme HTTP or set spec.openapi.sidecarImage"))
-		}
+	if !defaultSidecarImage {
+		return errs
+	}
+	if probe.GRPC != nil {
+		errs = append(errs, field.Invalid(
+			p.Child("grpc"),
+			probe.GRPC,
+			"the default busybox sidecar serves plaintext HTTP/1.1; a grpc handler can never succeed -- set spec.openapi.sidecarImage if your image speaks gRPC",
+		))
+	}
+	if probe.HTTPGet != nil && probe.HTTPGet.Scheme == corev1.URISchemeHTTPS {
+		errs = append(errs, field.Invalid(p.Child("httpGet", "scheme"), probe.HTTPGet.Scheme,
+			"the default busybox sidecar serves plaintext HTTP; use scheme HTTP or set spec.openapi.sidecarImage"))
 	}
 
 	return errs
