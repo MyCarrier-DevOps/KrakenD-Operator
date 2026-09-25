@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -30,6 +31,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -187,6 +189,19 @@ func newACReconciler(
 		CUEEvaluator: cueEval,
 		Filter:       filter,
 		Generator:    gen,
+	}
+}
+
+// drainEvents returns every event recorded so far, without blocking.
+func drainEvents(rec *record.FakeRecorder) []string {
+	var events []string
+	for {
+		select {
+		case ev := <-rec.Events:
+			events = append(events, ev)
+		default:
+			return events
+		}
 	}
 }
 
@@ -682,20 +697,9 @@ func TestAutoConfigReconcile_UnmatchedOverrideFailsSync(t *testing.T) {
 		t.Errorf("expected SpecChecksum unchanged, got %q", updated.Status.SpecChecksum)
 	}
 
-	var sawEvent bool
-	for {
-		select {
-		case ev := <-rec.Events:
-			if strings.Contains(ev, "UnmatchedOverride") {
-				sawEvent = true
-			}
-			continue
-		default:
-		}
-		break
-	}
-	if !sawEvent {
-		t.Fatal("expected UnmatchedOverride warning event")
+	wantEvent := "Warning UnmatchedOverride " + wantMsg
+	if events := drainEvents(rec); !slices.Contains(events, wantEvent) {
+		t.Fatalf("expected event %q, got %v", wantEvent, events)
 	}
 
 	if g.gotInput != nil {
@@ -790,6 +794,103 @@ func TestAutoConfigReconcile_UnmatchedOverridePeriodicRequeues(t *testing.T) {
 	}
 }
 
+func TestAutoConfigReconcile_UnmatchedOverrideRecoversWhenResolved(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	ac.Status.Phase = v1alpha1.AutoConfigPhasePending
+	c := fakeClientBuilder().
+		WithObjects(ac, cm).
+		WithStatusSubresource(ac).
+		Build()
+	f, ce, fi, g := defaultMocks()
+	ce.output.UnmatchedOverrides = []string{"WebhookStatus"}
+	r := newACReconciler(c, f, ce, fi, g)
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace}}
+
+	if _, err := r.Reconcile(context.Background(), req); err == nil {
+		t.Fatal("expected error while the override is unmatched, got nil")
+	}
+	var failed v1alpha1.KrakenDAutoConfig
+	if err := c.Get(context.Background(), req.NamespacedName, &failed); err != nil {
+		t.Fatalf("getting failed autoconfig: %v", err)
+	}
+	if failed.Status.Phase != v1alpha1.AutoConfigPhaseError {
+		t.Fatalf("expected phase Error while unmatched, got %s", failed.Status.Phase)
+	}
+
+	// The override is fixed: every override now matches. The failed sync
+	// never wrote the checksum, so the next reconcile re-evaluates.
+	ce.output.UnmatchedOverrides = nil
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("reconcile after fix: %v", err)
+	}
+
+	var recovered v1alpha1.KrakenDAutoConfig
+	if err := c.Get(context.Background(), req.NamespacedName, &recovered); err != nil {
+		t.Fatalf("getting recovered autoconfig: %v", err)
+	}
+	if recovered.Status.Phase != v1alpha1.AutoConfigPhaseSynced {
+		t.Errorf("expected phase Synced after fix, got %s", recovered.Status.Phase)
+	}
+	cond := meta.FindStatusCondition(recovered.Status.Conditions, v1alpha1.ConditionSynced)
+	if cond == nil || cond.Status != metav1.ConditionTrue {
+		t.Errorf("expected Synced condition True after fix, got %+v", cond)
+	}
+}
+
+func TestAutoConfigReconcile_OverrideOnFilteredOutOperationDoesNotFailSync(t *testing.T) {
+	// Overrides are matched against every operation the spec declares before
+	// spec.filter runs, so an override on an operation the filter excludes
+	// matches and must not fail the sync. Real evaluator, filter and
+	// generator; no CUE definitions ConfigMap, so the embedded ones are used.
+	ac := testAutoConfig()
+	ac.Status.Phase = v1alpha1.AutoConfigPhasePending
+	timeout := metav1.Duration{Duration: 30 * time.Second}
+	ac.Spec.Overrides = []v1alpha1.OperationOverride{{OperationID: "WebhookStatus", Timeout: &timeout}}
+	ac.Spec.Filter = &v1alpha1.FilterSpec{ExcludeOperationIds: []string{"WebhookStatus"}}
+	c := fakeClientBuilder().
+		WithObjects(ac).
+		WithStatusSubresource(ac).
+		Build()
+	spec := []byte(`{"paths": {
+		"/api/users": {"get": {"operationId": "listUsers", "responses": {"200": {"description": "OK"}}}},
+		"/api/webhooks/status": {"post": {"operationId": "WebhookStatus", "responses": {"202": {"description": "OK"}}}}
+	}}`)
+	r := &KrakenDAutoConfigReconciler{
+		Client: c, Scheme: testScheme(), Recorder: fakeRecorder(),
+		Fetcher:      &mockFetcher{result: &autoconfig.FetchResult{Data: spec}},
+		CUEEvaluator: autoconfig.NewCUEEvaluator(),
+		Filter:       autoconfig.NewFilter(),
+		Generator:    autoconfig.NewGenerator(),
+	}
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+	}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	var updated v1alpha1.KrakenDAutoConfig
+	if err := c.Get(
+		context.Background(),
+		types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+		&updated,
+	); err != nil {
+		t.Fatalf("getting updated autoconfig: %v", err)
+	}
+	if updated.Status.Phase != v1alpha1.AutoConfigPhaseSynced {
+		t.Errorf("expected phase Synced, got %s", updated.Status.Phase)
+	}
+	cond := meta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionSynced)
+	if cond == nil || cond.Status != metav1.ConditionTrue {
+		t.Errorf("expected Synced condition True, got %+v", cond)
+	}
+	if updated.Status.GeneratedEndpoints != 1 {
+		t.Errorf("expected 1 generated endpoint (WebhookStatus filtered out), got %d",
+			updated.Status.GeneratedEndpoints)
+	}
+}
+
 func TestAutoConfigReconcile_SyncedFailureStatusUpdateErrorNamesReason(t *testing.T) {
 	cm := testCUEDefinitionsCM()
 	ac := testAutoConfig()
@@ -862,20 +963,8 @@ func TestAutoConfigReconcile_EvaluatorWarningsEmitEvents(t *testing.T) {
 	}
 
 	wantEvent := "Warning CUEEvaluationWarning skipping /x:GET: boom"
-	var sawWarning bool
-	for {
-		select {
-		case ev := <-rec.Events:
-			if ev == wantEvent {
-				sawWarning = true
-			}
-			continue
-		default:
-		}
-		break
-	}
-	if !sawWarning {
-		t.Fatalf("expected event %q", wantEvent)
+	if events := drainEvents(rec); !slices.Contains(events, wantEvent) {
+		t.Fatalf("expected event %q, got %v", wantEvent, events)
 	}
 }
 
@@ -903,26 +992,19 @@ func TestAutoConfigReconcile_EvaluatorWarningsEmittedBeforeUnmatchedFailure(t *t
 	}
 
 	wantWarningEvent := "Warning CUEEvaluationWarning skipping /x:GET: boom"
-	var sawWarning, sawUnmatched bool
-	for {
-		select {
-		case ev := <-rec.Events:
-			if ev == wantWarningEvent {
-				sawWarning = true
-			}
-			if strings.Contains(ev, "UnmatchedOverride") {
-				sawUnmatched = true
-			}
-			continue
-		default:
-		}
-		break
+	wantUnmatchedEvent := "Warning UnmatchedOverride " +
+		"spec.overrides reference operationIds not present in the OpenAPI spec: WebhookStatus"
+	events := drainEvents(rec)
+	warningIdx := slices.Index(events, wantWarningEvent)
+	unmatchedIdx := slices.Index(events, wantUnmatchedEvent)
+	if warningIdx < 0 {
+		t.Errorf("expected event %q, got %v", wantWarningEvent, events)
 	}
-	if !sawWarning {
-		t.Errorf("expected event %q", wantWarningEvent)
+	if unmatchedIdx < 0 {
+		t.Errorf("expected event %q, got %v", wantUnmatchedEvent, events)
 	}
-	if !sawUnmatched {
-		t.Error("expected UnmatchedOverride warning event")
+	if warningIdx > unmatchedIdx {
+		t.Errorf("expected %q before %q, got %v", wantWarningEvent, wantUnmatchedEvent, events)
 	}
 }
 
@@ -1068,20 +1150,11 @@ func TestAutoConfigReconcile_AdditionalEndpointOverrideEmitsWarning(t *testing.T
 		t.Fatalf("reconcile: %v", err)
 	}
 
-	var sawOverride bool
-	for {
-		select {
-		case ev := <-rec.Events:
-			if strings.Contains(ev, "AdditionalEndpointOverride") {
-				sawOverride = true
-			}
-			continue
-		default:
-		}
-		break
-	}
-	if !sawOverride {
-		t.Fatal("expected AdditionalEndpointOverride warning event")
+	events := drainEvents(rec)
+	if !slices.ContainsFunc(events, func(ev string) bool {
+		return strings.Contains(ev, "AdditionalEndpointOverride")
+	}) {
+		t.Fatalf("expected AdditionalEndpointOverride warning event, got %v", events)
 	}
 	// And the override won.
 	for _, e := range g.gotInput.Entries {
