@@ -207,7 +207,7 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		unmatchedErr := fmt.Errorf(
 			"spec.overrides reference operationIds not present in the OpenAPI spec: %s",
 			strings.Join(cueOutput.UnmatchedOverrides, ", "))
-		return r.handleUnmatchedOverrideError(ctx, &ac, unmatchedErr)
+		return r.handleSyncedFailure(ctx, &ac, v1alpha1.ReasonUnmatchedOverride, unmatchedErr)
 	}
 
 	// Apply filters
@@ -218,7 +218,7 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	filtered, scopeErr := r.applyAdditionalEndpoints(&ac, filtered)
 	if scopeErr != nil {
-		return r.handleScopeError(ctx, &ac, scopeErr)
+		return r.handleSyncedFailure(ctx, &ac, v1alpha1.ReasonAdditionalEndpointScopeFailed, scopeErr)
 	}
 
 	// Extract component schemas from the spec before CUE evaluation
@@ -336,7 +336,7 @@ func (r *KrakenDAutoConfigReconciler) handleSyncedFailure(
 		Message:            syncErr.Error(),
 	})
 	if err := r.Status().Update(ctx, ac); err != nil {
-		return ctrl.Result{}, fmt.Errorf("updating synced failure status: %w", err)
+		return ctrl.Result{}, fmt.Errorf("updating %s status: %w", reason, err)
 	}
 	r.Recorder.Event(ac, "Warning", reason, syncErr.Error())
 	if ac.Spec.Trigger == v1alpha1.TriggerPeriodic {
@@ -351,22 +351,6 @@ func (r *KrakenDAutoConfigReconciler) handleCUEError(
 	cueErr error,
 ) (ctrl.Result, error) {
 	return r.handleSyncedFailure(ctx, ac, v1alpha1.ReasonCUEEvaluationFailed, cueErr)
-}
-
-func (r *KrakenDAutoConfigReconciler) handleScopeError(
-	ctx context.Context,
-	ac *v1alpha1.KrakenDAutoConfig,
-	scopeErr error,
-) (ctrl.Result, error) {
-	return r.handleSyncedFailure(ctx, ac, v1alpha1.ReasonAdditionalEndpointScopeFailed, scopeErr)
-}
-
-func (r *KrakenDAutoConfigReconciler) handleUnmatchedOverrideError(
-	ctx context.Context,
-	ac *v1alpha1.KrakenDAutoConfig,
-	unmatchedErr error,
-) (ctrl.Result, error) {
-	return r.handleSyncedFailure(ctx, ac, v1alpha1.ReasonUnmatchedOverride, unmatchedErr)
 }
 
 // applyAdditionalEndpoints builds, transforms, scopes, and merges additional
