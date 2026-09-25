@@ -917,6 +917,28 @@ func TestAutoConfigSpecChecksum_IsSpecCUEDefinitionsAndGeneration(t *testing.T) 
 	}
 }
 
+func TestAutoConfigReconcile_OnChangeRequeuesAfterResyncInterval(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	ac.Status.Phase = v1alpha1.AutoConfigPhasePending
+	c := fakeClientBuilder().
+		WithObjects(ac, cm).
+		WithStatusSubresource(ac).
+		Build()
+	f, ce, fi, g := defaultMocks()
+	r := newACReconciler(c, f, ce, fi, g)
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.RequeueAfter != defaultResyncInterval {
+		t.Errorf("expected %v requeue, got %v", defaultResyncInterval, result.RequeueAfter)
+	}
+}
+
 func TestAutoConfigReconcile_PeriodicRequeue(t *testing.T) {
 	cm := testCUEDefinitionsCM()
 	ac := testAutoConfig()
