@@ -258,6 +258,28 @@ kubectl get events --field-selector involvedObject.name=<name>
 - OpenAPI spec fetch failure (check URL, auth credentials)
 - CUE evaluation error (check embedded/custom CUE definitions)
 - Filter excludes all operations
+- An override's `operationId` doesn't match any operation in the spec — see *AutoConfig sync fails with `UnmatchedOverride`* below
+
+### AutoConfig sync fails with `UnmatchedOverride`
+
+**Diagnosis:**
+```bash
+kubectl describe krakendautoconfig <name>
+```
+The `Synced` condition is `False` with reason `UnmatchedOverride` and message
+`spec.overrides reference operationIds not present in the OpenAPI spec: <ids,
+comma-separated>`. A matching `Warning` event is also emitted.
+
+**Common causes:**
+- A `spec.overrides[].operationId` doesn't match any operationId in the fetched OpenAPI spec (e.g. the service doesn't declare an operationId for that operation at all)
+
+**Fix:** Correct the override's `operationId` to match the spec, or remove
+the override if it's no longer needed. If the target operation has no
+`operationId` at all, move the config into `spec.defaults` (applies to every
+generated operation) instead of an override, or add an `operationId` to the
+service's OpenAPI spec. Existing `KrakenDEndpoints` keep their last-good
+state — nothing regenerates — until the override is fixed and the resource
+re-syncs.
 
 ### License expiry warnings
 
