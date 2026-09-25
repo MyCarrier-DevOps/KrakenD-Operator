@@ -19,8 +19,11 @@ package controller
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
+	"maps"
 	"net/url"
+	"reflect"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -577,8 +580,12 @@ func (r *KrakenDAutoConfigReconciler) reconcileEndpoints(
 			Namespace: ep.Namespace,
 		}}
 		op, err := controllerutil.CreateOrUpdate(ctx, r.Client, existing, func() error {
-			existing.Labels = ep.Labels
-			existing.Spec = ep.Spec
+			if !maps.Equal(existing.Labels, ep.Labels) {
+				existing.Labels = ep.Labels
+			}
+			if !endpointSpecEqual(existing.Spec, ep.Spec) {
+				existing.Spec = ep.Spec
+			}
 			return controllerutil.SetControllerReference(ac, existing, r.Scheme)
 		})
 		if err != nil {
@@ -598,6 +605,25 @@ func (r *KrakenDAutoConfigReconciler) reconcileEndpoints(
 	}
 
 	return changes, nil
+}
+
+// endpointSpecEqual reports whether a and b serialize to the same JSON value.
+// Embedded raw JSON (extraConfig, componentSchemas) is compared by value, so
+// key order, whitespace, escaping and number formatting do not count: the API
+// server re-encodes it differently from how the generator emits it, and a
+// byte comparison would update every generated endpoint on every reconcile.
+func endpointSpecEqual(a, b v1alpha1.KrakenDEndpointSpec) bool {
+	var values [2]any
+	for i, spec := range []v1alpha1.KrakenDEndpointSpec{a, b} {
+		raw, err := json.Marshal(spec)
+		if err != nil {
+			return false
+		}
+		if err := json.Unmarshal(raw, &values[i]); err != nil {
+			return false
+		}
+	}
+	return reflect.DeepEqual(values[0], values[1])
 }
 
 func (r *KrakenDAutoConfigReconciler) configMapToAutoConfigs(

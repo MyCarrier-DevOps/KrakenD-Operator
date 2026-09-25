@@ -32,6 +32,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -728,6 +729,130 @@ func TestAutoConfigReconcile_DeletesStrayEndpointWhenInputsUnchanged(t *testing.
 	wantEvent := "Normal EndpointsGenerated Generated 1 endpoints (0 created, 0 updated, 1 deleted, 0 skipped)"
 	if events := drainEvents(rec); !slices.Contains(events, wantEvent) {
 		t.Errorf("expected event %q, got %v", wantEvent, events)
+	}
+}
+
+func TestAutoConfigReconcile_ReorderedExtraConfigKeysWriteNoEndpoint(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	ac.UID = "test-ac-uid"
+	f, ce, fi, g := defaultMocks()
+	// The generator emits extraConfig keys in CUE declaration order; the API
+	// server stores the same JSON re-encoded (sorted keys, other formatting).
+	desired := g.output.Endpoints[0]
+	desired.Spec.Endpoints[0].ExtraConfig = &runtime.RawExtension{
+		Raw: []byte(`{"qos/ratelimit/router":{"max_rate":10,"every":"2s"},"documentation/openapi":{"summary":"<b>"}}`),
+	}
+	stored := ownedCopy(t, ac, desired)
+	stored.Spec.Endpoints[0].ExtraConfig = &runtime.RawExtension{
+		Raw: []byte(`{"documentation/openapi": {"summary": "<b>"}, ` +
+			`"qos/ratelimit/router": {"every": "2s", "max_rate": 10.0}}`),
+	}
+	var writes writeCounts
+	c := fakeClientBuilder().
+		WithObjects(ac, cm, stored).
+		WithStatusSubresource(ac).
+		WithInterceptorFuncs(countWrites(&writes)).
+		Build()
+	rec := fakeRecorder()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Recorder = rec
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+	}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	if writes.updates != 0 {
+		t.Errorf("expected no endpoint updates for semantically identical extraConfig, got %d", writes.updates)
+	}
+	events := drainEvents(rec)
+	if slices.ContainsFunc(events, func(ev string) bool {
+		return strings.Contains(ev, v1alpha1.ReasonEndpointsGenerated)
+	}) {
+		t.Errorf("expected no %s event, got %v", v1alpha1.ReasonEndpointsGenerated, events)
+	}
+}
+
+// rawJSONSpec returns an endpoint spec whose endpoint extraConfig, backend
+// extraConfig and component schema carry the given raw JSON.
+func rawJSONSpec(endpointExtra, backendExtra, schema string) v1alpha1.KrakenDEndpointSpec {
+	return v1alpha1.KrakenDEndpointSpec{
+		GatewayRef:       v1alpha1.GatewayRef{Name: "test-gw"},
+		ComponentSchemas: map[string]runtime.RawExtension{"User": {Raw: []byte(schema)}},
+		Endpoints: []v1alpha1.EndpointEntry{{
+			Endpoint:    "/api/users",
+			Method:      "GET",
+			ExtraConfig: &runtime.RawExtension{Raw: []byte(endpointExtra)},
+			Backends: []v1alpha1.BackendSpec{{
+				Host:        []string{"http://svc"},
+				URLPattern:  "/api/users",
+				ExtraConfig: &runtime.RawExtension{Raw: []byte(backendExtra)},
+			}},
+		}},
+	}
+}
+
+func TestEndpointSpecEqual_IgnoresRawJSONFormatting(t *testing.T) {
+	a := rawJSONSpec(
+		`{"b":{"y":1,"x":"<b>"},"a":[1,2]}`,
+		`{"z":true,"m":null}`,
+		`{"type":"object","properties":{"name":{"type":"string"}}}`,
+	)
+	b := rawJSONSpec(
+		`{ "a": [1.0, 2], "b": { "x": "<b>", "y": 1 } }`,
+		`{"m": null, "z": true}`,
+		`{"properties": {"name": {"type": "string"}}, "type": "object"}`,
+	)
+	if !endpointSpecEqual(a, b) {
+		t.Error("expected specs differing only in raw JSON key order, whitespace, escaping and " +
+			"number format to be equal")
+	}
+}
+
+func TestEndpointSpecEqual_DetectsValueChanges(t *testing.T) {
+	base := func() v1alpha1.KrakenDEndpointSpec {
+		return rawJSONSpec(`{"a":1}`, `{"b":2}`, `{"type":"object"}`)
+	}
+	tests := []struct {
+		name   string
+		mutate func(spec *v1alpha1.KrakenDEndpointSpec)
+	}{
+		{
+			name: "endpoint extraConfig value",
+			mutate: func(spec *v1alpha1.KrakenDEndpointSpec) {
+				spec.Endpoints[0].ExtraConfig.Raw = []byte(`{"a":2}`)
+			},
+		},
+		{
+			name: "backend extraConfig value",
+			mutate: func(spec *v1alpha1.KrakenDEndpointSpec) {
+				spec.Endpoints[0].Backends[0].ExtraConfig.Raw = []byte(`{"b":3}`)
+			},
+		},
+		{
+			name: "component schema value",
+			mutate: func(spec *v1alpha1.KrakenDEndpointSpec) {
+				spec.ComponentSchemas["User"] = runtime.RawExtension{Raw: []byte(`{"type":"array"}`)}
+			},
+		},
+		{
+			name: "typed field",
+			mutate: func(spec *v1alpha1.KrakenDEndpointSpec) {
+				timeout := metav1.Duration{Duration: 5 * time.Second}
+				spec.Endpoints[0].Timeout = &timeout
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			changed := base()
+			tt.mutate(&changed)
+			if endpointSpecEqual(base(), changed) {
+				t.Errorf("expected specs to be unequal after changing the %s", tt.name)
+			}
+		})
 	}
 }
 
