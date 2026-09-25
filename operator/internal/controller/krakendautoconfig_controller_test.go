@@ -232,6 +232,41 @@ func ownedCopy(t *testing.T, ac *v1alpha1.KrakenDAutoConfig, ep *v1alpha1.Kraken
 	return owned
 }
 
+// writeCounts tallies the writes a fake client built with countWrites
+// receives, by verb.
+type writeCounts struct {
+	creates, updates, deletes, statusUpdates int
+}
+
+// countWrites returns interceptor funcs that tally every create, update,
+// delete and status update in counts, then pass it through to the fake client.
+func countWrites(counts *writeCounts) interceptor.Funcs {
+	return interceptor.Funcs{
+		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			counts.creates++
+			return c.Create(ctx, obj, opts...)
+		},
+		Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			counts.updates++
+			return c.Update(ctx, obj, opts...)
+		},
+		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			counts.deletes++
+			return c.Delete(ctx, obj, opts...)
+		},
+		SubResourceUpdate: func(
+			ctx context.Context,
+			c client.Client,
+			subResource string,
+			obj client.Object,
+			opts ...client.SubResourceUpdateOption,
+		) error {
+			counts.statusUpdates++
+			return c.SubResource(subResource).Update(ctx, obj, opts...)
+		},
+	}
+}
+
 // --- Tests ---
 
 func TestAutoConfigReconcile_NotFound(t *testing.T) {
@@ -395,6 +430,96 @@ func TestAutoConfigReconcile_FullPipeline(t *testing.T) {
 	}
 	if len(ep.Spec.Endpoints) == 0 || ep.Spec.Endpoints[0].Endpoint != "/api/users" {
 		t.Errorf("expected endpoint /api/users, got %v", ep.Spec.Endpoints)
+	}
+}
+
+func TestAutoConfigReconcile_SteadyStateWritesNothing(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	ac.Status.Phase = v1alpha1.AutoConfigPhasePending
+	var writes writeCounts
+	c := fakeClientBuilder().
+		WithObjects(ac, cm).
+		WithStatusSubresource(ac).
+		WithInterceptorFuncs(countWrites(&writes)).
+		Build()
+	f, ce, fi, g := defaultMocks()
+	rec := fakeRecorder()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Recorder = rec
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace}}
+
+	// Converge first, so the generated endpoint is present exactly as
+	// reconcileEndpoints writes it and status records that sync.
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("converging reconcile: %v", err)
+	}
+	writes = writeCounts{}
+	ce.called = false
+	drainEvents(rec)
+
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("steady-state reconcile: %v", err)
+	}
+
+	if !ce.called {
+		t.Error("expected CUE evaluator to be called on every reconcile")
+	}
+	if writes.statusUpdates != 0 {
+		t.Errorf("expected no status writes, got %d", writes.statusUpdates)
+	}
+	if writes.creates+writes.updates+writes.deletes != 0 {
+		t.Errorf("expected no endpoint writes, got %d creates, %d updates, %d deletes",
+			writes.creates, writes.updates, writes.deletes)
+	}
+	events := drainEvents(rec)
+	if slices.ContainsFunc(events, func(ev string) bool {
+		return strings.Contains(ev, v1alpha1.ReasonEndpointsGenerated)
+	}) {
+		t.Errorf("expected no %s event, got %v", v1alpha1.ReasonEndpointsGenerated, events)
+	}
+}
+
+func TestAutoConfigReconcile_ChangedInputsWriteStatusOnce(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	// A spec edit since the last sync bumped the generation.
+	ac.Generation = 1
+	var writes writeCounts
+	c := fakeClientBuilder().
+		WithObjects(ac, cm).
+		WithStatusSubresource(ac).
+		WithInterceptorFuncs(countWrites(&writes)).
+		Build()
+	f, ce, fi, g := defaultMocks()
+	r := newACReconciler(c, f, ce, fi, g)
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+	}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	if writes.statusUpdates != 1 {
+		t.Errorf("expected exactly one status write, got %d", writes.statusUpdates)
+	}
+	var updated v1alpha1.KrakenDAutoConfig
+	if err := c.Get(
+		context.Background(),
+		types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+		&updated,
+	); err != nil {
+		t.Fatalf("getting updated autoconfig: %v", err)
+	}
+	if updated.Status.Phase != v1alpha1.AutoConfigPhaseSynced {
+		t.Errorf("expected phase Synced, got %s", updated.Status.Phase)
+	}
+	fetchChecksum := fmt.Sprintf("%x", sha256.Sum256([]byte(`{"paths":{}}`)))
+	if want := autoConfigSpecChecksum(fetchChecksum, cm.ResourceVersion, 1); updated.Status.SpecChecksum != want {
+		t.Errorf("expected checksum %q, got %q", want, updated.Status.SpecChecksum)
+	}
+	if updated.Status.LastSyncTime == nil {
+		t.Error("expected lastSyncTime to be set")
 	}
 }
 
@@ -603,6 +728,61 @@ func TestAutoConfigReconcile_DeletesStrayEndpointWhenInputsUnchanged(t *testing.
 	wantEvent := "Normal EndpointsGenerated Generated 1 endpoints (0 created, 0 updated, 1 deleted, 0 skipped)"
 	if events := drainEvents(rec); !slices.Contains(events, wantEvent) {
 		t.Errorf("expected event %q, got %v", wantEvent, events)
+	}
+}
+
+func TestAutoConfigReconcile_RecoveryWithUnchangedInputsWritesStatusWithoutEvent(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	ac.UID = "test-ac-uid"
+	// A transient failure (e.g. loading CUE definitions) failed the last
+	// reconcile after an earlier sync; inputs and endpoints are unchanged.
+	ac.Status.Phase = v1alpha1.AutoConfigPhaseError
+	ac.Status.Conditions = []metav1.Condition{{
+		Type:               v1alpha1.ConditionSynced,
+		Status:             metav1.ConditionFalse,
+		Reason:             v1alpha1.ReasonCUEEvaluationFailed,
+		Message:            "transient",
+		LastTransitionTime: metav1.Now(),
+	}}
+	f, ce, fi, g := defaultMocks()
+	c := fakeClientBuilder().
+		WithObjects(ac, cm, ownedCopy(t, ac, g.output.Endpoints[0])).
+		WithStatusSubresource(ac).
+		Build()
+	rec := fakeRecorder()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Recorder = rec
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+	}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	var updated v1alpha1.KrakenDAutoConfig
+	if err := c.Get(
+		context.Background(),
+		types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+		&updated,
+	); err != nil {
+		t.Fatalf("getting updated autoconfig: %v", err)
+	}
+	if updated.Status.Phase != v1alpha1.AutoConfigPhaseSynced {
+		t.Errorf("expected phase Synced, got %s", updated.Status.Phase)
+	}
+	cond := meta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionSynced)
+	if cond == nil || cond.Status != metav1.ConditionTrue {
+		t.Errorf("expected Synced condition True, got %+v", cond)
+	}
+	if updated.Status.LastSyncTime != nil {
+		t.Errorf("expected lastSyncTime untouched, got %v", updated.Status.LastSyncTime)
+	}
+	events := drainEvents(rec)
+	if slices.ContainsFunc(events, func(ev string) bool {
+		return strings.Contains(ev, v1alpha1.ReasonEndpointsGenerated)
+	}) {
+		t.Errorf("expected no %s event, got %v", v1alpha1.ReasonEndpointsGenerated, events)
 	}
 }
 
