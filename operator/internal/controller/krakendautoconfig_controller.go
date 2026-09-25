@@ -69,8 +69,9 @@ type KrakenDAutoConfigReconciler struct {
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 // Reconcile implements the autoconfig pipeline: fetch → CUE evaluate → filter
-// → generate → diff/create/update/delete endpoints. Every reconcile runs the
-// whole pipeline, so owned endpoints always converge to the desired state.
+// → generate → diff/create/update/delete endpoints → status. Every reconcile
+// runs the whole pipeline, so owned endpoints always converge to the desired
+// state; a successful reconcile that finds nothing to change writes nothing.
 func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
@@ -89,15 +90,7 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		}
 		return ctrl.Result{Requeue: true}, nil
 	}
-
-	// Phase: Fetching — only update if phase actually changed to avoid
-	// triggering unnecessary Watch events that cause reconciliation loops.
-	if ac.Status.Phase != v1alpha1.AutoConfigPhaseFetching {
-		ac.Status.Phase = v1alpha1.AutoConfigPhaseFetching
-		if err := r.Status().Update(ctx, &ac); err != nil {
-			return ctrl.Result{}, fmt.Errorf("setting phase Fetching: %w", err)
-		}
-	}
+	origStatus := ac.Status.DeepCopy()
 
 	fetchResult, err := r.Fetcher.Fetch(ctx, autoconfig.FetchSource{
 		URL:               ac.Spec.OpenAPI.URL,
@@ -127,14 +120,6 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	cueDefsRV := r.getCUEDefsResourceVersion(ctx, &ac)
 	combinedChecksum := autoConfigSpecChecksum(fetchResult.Checksum, cueDefsRV, ac.Generation)
-
-	// Phase: Rendering
-	if ac.Status.Phase != v1alpha1.AutoConfigPhaseRendering {
-		ac.Status.Phase = v1alpha1.AutoConfigPhaseRendering
-		if err := r.Status().Update(ctx, &ac); err != nil {
-			return ctrl.Result{}, fmt.Errorf("setting phase Rendering: %w", err)
-		}
-	}
 
 	// Load CUE definitions: prefer ConfigMap, fall back to embedded defaults
 	defaultDefs, err := r.loadCUEDefinitions(ctx, ac.Namespace, defaultCUEDefinitionsConfigMap)
@@ -234,27 +219,9 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, fmt.Errorf("reconciling endpoints: %w", err)
 	}
 
-	// Update status
-	now := metav1.Now()
-	ac.Status.Phase = v1alpha1.AutoConfigPhaseSynced
-	ac.Status.SpecChecksum = combinedChecksum
-	ac.Status.LastSyncTime = &now
-	ac.Status.GeneratedEndpoints = len(genOutput.Endpoints)
-	ac.Status.SkippedOperations = genOutput.SkippedOperations
-	meta.SetStatusCondition(&ac.Status.Conditions, metav1.Condition{
-		Type:               v1alpha1.ConditionSynced,
-		Status:             metav1.ConditionTrue,
-		ObservedGeneration: ac.Generation,
-		Reason:             "Synced",
-		Message:            fmt.Sprintf("Generated %d endpoints", len(genOutput.Endpoints)),
-	})
-	if err := r.Status().Update(ctx, &ac); err != nil {
-		return ctrl.Result{}, fmt.Errorf("updating final status: %w", err)
+	if err := r.recordSync(ctx, &ac, origStatus, combinedChecksum, genOutput, changes); err != nil {
+		return ctrl.Result{}, err
 	}
-
-	r.Recorder.Eventf(&ac, "Normal", v1alpha1.ReasonEndpointsGenerated,
-		"Generated %d endpoints (%d created, %d updated, %d deleted, %d skipped)",
-		len(genOutput.Endpoints), changes.created, changes.updated, changes.deleted, genOutput.SkippedOperations)
 
 	log.V(1).Info("autoconfig reconciled",
 		"phase", ac.Status.Phase,
@@ -449,7 +416,8 @@ func (r *KrakenDAutoConfigReconciler) postProcessSpec(
 // the generation so spec-only changes (overrides, defaults, urlTransform,
 // filter) register as new inputs even when the OpenAPI spec and CUE
 // definitions are unchanged. It does not gate evaluation — every reconcile
-// evaluates.
+// evaluates — it only decides whether a sync updates LastSyncTime and records
+// an EndpointsGenerated event.
 func autoConfigSpecChecksum(fetchChecksum, cueDefsRV string, generation int64) string {
 	return fmt.Sprintf("%s:%s:%d", fetchChecksum, cueDefsRV, generation)
 }
@@ -503,6 +471,66 @@ func (r *KrakenDAutoConfigReconciler) loadCUEDefinitions(
 // endpointChanges counts the endpoint writes one reconcileEndpoints call issued.
 type endpointChanges struct {
 	created, updated, deleted int
+}
+
+func (c endpointChanges) total() int {
+	return c.created + c.updated + c.deleted
+}
+
+// recordSync records a successful sync: phase Synced, the Synced condition,
+// the combined checksum, and the endpoint counts. LastSyncTime and the
+// EndpointsGenerated event mark a sync that changed something — new inputs (a
+// different combined checksum) or endpoint writes — so a steady-state
+// reconcile leaves both alone. Status is written only when it differs from
+// orig, the status read at the start of the reconcile.
+func (r *KrakenDAutoConfigReconciler) recordSync(
+	ctx context.Context,
+	ac *v1alpha1.KrakenDAutoConfig,
+	orig *v1alpha1.KrakenDAutoConfigStatus,
+	combinedChecksum string,
+	genOutput *autoconfig.GenerateOutput,
+	changes endpointChanges,
+) error {
+	changed := combinedChecksum != orig.SpecChecksum || changes.total() > 0
+	ac.Status.Phase = v1alpha1.AutoConfigPhaseSynced
+	ac.Status.SpecChecksum = combinedChecksum
+	if changed {
+		now := metav1.Now()
+		ac.Status.LastSyncTime = &now
+	}
+	ac.Status.GeneratedEndpoints = len(genOutput.Endpoints)
+	ac.Status.SkippedOperations = genOutput.SkippedOperations
+	meta.SetStatusCondition(&ac.Status.Conditions, metav1.Condition{
+		Type:               v1alpha1.ConditionSynced,
+		Status:             metav1.ConditionTrue,
+		ObservedGeneration: ac.Generation,
+		Reason:             "Synced",
+		Message:            fmt.Sprintf("Generated %d endpoints", len(genOutput.Endpoints)),
+	})
+	if autoConfigStatusChanged(orig, &ac.Status) {
+		if err := r.Status().Update(ctx, ac); err != nil {
+			return fmt.Errorf("updating final status: %w", err)
+		}
+	}
+
+	if changed {
+		r.Recorder.Eventf(ac, "Normal", v1alpha1.ReasonEndpointsGenerated,
+			"Generated %d endpoints (%d created, %d updated, %d deleted, %d skipped)",
+			len(genOutput.Endpoints), changes.created, changes.updated, changes.deleted, genOutput.SkippedOperations)
+	}
+	return nil
+}
+
+// autoConfigStatusChanged reports whether cur differs semantically from orig.
+// Conditions are compared with conditionsEqual, which ignores
+// LastTransitionTime.
+func autoConfigStatusChanged(orig, cur *v1alpha1.KrakenDAutoConfigStatus) bool {
+	return orig.Phase != cur.Phase ||
+		orig.SpecChecksum != cur.SpecChecksum ||
+		orig.GeneratedEndpoints != cur.GeneratedEndpoints ||
+		orig.SkippedOperations != cur.SkippedOperations ||
+		!orig.LastSyncTime.Equal(cur.LastSyncTime) ||
+		!conditionsEqual(orig.Conditions, cur.Conditions)
 }
 
 func (r *KrakenDAutoConfigReconciler) reconcileEndpoints(
