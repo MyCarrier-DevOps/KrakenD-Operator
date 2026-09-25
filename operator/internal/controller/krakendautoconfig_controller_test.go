@@ -32,6 +32,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
 // --- Mock Fetcher ---
@@ -786,6 +787,43 @@ func TestAutoConfigReconcile_UnmatchedOverridePeriodicRequeues(t *testing.T) {
 	}
 	if updated.Status.Phase != v1alpha1.AutoConfigPhaseError {
 		t.Errorf("expected phase Error, got %s", updated.Status.Phase)
+	}
+}
+
+func TestAutoConfigReconcile_SyncedFailureStatusUpdateErrorNamesReason(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	ac.Status.Phase = v1alpha1.AutoConfigPhasePending
+	// Fail only the status write that records the Synced failure.
+	failErrorStatus := interceptor.Funcs{
+		SubResourceUpdate: func(
+			ctx context.Context,
+			c client.Client,
+			subResource string,
+			obj client.Object,
+			opts ...client.SubResourceUpdateOption,
+		) error {
+			if a, ok := obj.(*v1alpha1.KrakenDAutoConfig); ok && a.Status.Phase == v1alpha1.AutoConfigPhaseError {
+				return fmt.Errorf("simulated conflict")
+			}
+			return c.SubResource(subResource).Update(ctx, obj, opts...)
+		},
+	}
+	c := fakeClientBuilder().
+		WithObjects(ac, cm).
+		WithStatusSubresource(ac).
+		WithInterceptorFuncs(failErrorStatus).
+		Build()
+	f, ce, fi, g := defaultMocks()
+	ce.output.UnmatchedOverrides = []string{"WebhookStatus"}
+	r := newACReconciler(c, f, ce, fi, g)
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+	})
+	want := "updating UnmatchedOverride status: simulated conflict"
+	if err == nil || err.Error() != want {
+		t.Errorf("expected error %q, got %v", want, err)
 	}
 }
 
