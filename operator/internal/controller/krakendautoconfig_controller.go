@@ -130,6 +130,13 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	cueDefsRV := r.getCUEDefsResourceVersion(ctx, &ac)
 	combinedChecksum := autoConfigSpecChecksum(fetchResult.Checksum, cueDefsRV, ac.Generation)
+	// inputsChanged gates warning events that would otherwise repeat on every
+	// resync (CUEEvaluationWarning, DuplicateOperationId,
+	// AdditionalEndpointOverride): they fire only when this reconcile's
+	// combined checksum differs from the checksum the last sync recorded.
+	// Failure paths leave status.SpecChecksum unchanged, so the warnings keep
+	// repeating while an AutoConfig is failing.
+	inputsChanged := combinedChecksum != origStatus.SpecChecksum
 
 	// Load CUE definitions: prefer ConfigMap, fall back to embedded defaults
 	defaultDefs, err := r.loadCUEDefinitions(ctx, ac.Namespace, defaultCUEDefinitionsConfigMap)
@@ -176,8 +183,10 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// Surface entries the evaluator skipped (e.g. failed to marshal) as
 	// events before the unmatched-override check below, so they remain
 	// visible even when that check then fails the sync.
-	for _, warning := range cueOutput.Warnings {
-		r.Recorder.Event(&ac, "Warning", v1alpha1.ReasonCUEEvaluationWarning, warning)
+	if inputsChanged {
+		for _, warning := range cueOutput.Warnings {
+			r.Recorder.Event(&ac, "Warning", v1alpha1.ReasonCUEEvaluationWarning, warning)
+		}
 	}
 
 	// An override whose operationId matched no generated entry must fail
@@ -196,7 +205,7 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		filtered = r.Filter.Apply(cueOutput.Entries, cueOutput.Tags, cueOutput.OperationIDs, *ac.Spec.Filter)
 	}
 
-	filtered, scopeErr := r.applyAdditionalEndpoints(&ac, filtered)
+	filtered, scopeErr := r.applyAdditionalEndpoints(&ac, filtered, inputsChanged)
 	if scopeErr != nil {
 		return r.handleSyncedFailure(ctx, &ac, v1alpha1.ReasonAdditionalEndpointScopeFailed, scopeErr)
 	}
@@ -218,9 +227,11 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	// Emit events for duplicate operations
-	for _, dup := range genOutput.Duplicates {
-		r.Recorder.Eventf(&ac, "Warning", v1alpha1.ReasonDuplicateOperationId,
-			"Duplicate operation %q skipped", dup)
+	if inputsChanged {
+		for _, dup := range genOutput.Duplicates {
+			r.Recorder.Eventf(&ac, "Warning", v1alpha1.ReasonDuplicateOperationId,
+				"Duplicate operation %q skipped", dup)
+		}
 	}
 
 	// Diff and reconcile endpoints
@@ -344,6 +355,7 @@ func (r *KrakenDAutoConfigReconciler) handleCUEError(
 func (r *KrakenDAutoConfigReconciler) applyAdditionalEndpoints(
 	ac *v1alpha1.KrakenDAutoConfig,
 	filtered []v1alpha1.EndpointEntry,
+	inputsChanged bool,
 ) ([]v1alpha1.EndpointEntry, error) {
 	if len(ac.Spec.AdditionalEndpoints) == 0 {
 		return filtered, nil
@@ -374,9 +386,11 @@ func (r *KrakenDAutoConfigReconciler) applyAdditionalEndpoints(
 
 	var replaced []string
 	filtered, replaced = autoconfig.MergeAdditional(filtered, additional)
-	for _, key := range replaced {
-		r.Recorder.Eventf(ac, "Warning", v1alpha1.ReasonAdditionalEndpointOverride,
-			"Additional endpoint %q overrides a spec-derived endpoint", key)
+	if inputsChanged {
+		for _, key := range replaced {
+			r.Recorder.Eventf(ac, "Warning", v1alpha1.ReasonAdditionalEndpointOverride,
+				"Additional endpoint %q overrides a spec-derived endpoint", key)
+		}
 	}
 	return filtered, nil
 }

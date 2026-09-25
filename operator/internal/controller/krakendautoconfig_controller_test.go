@@ -1454,6 +1454,84 @@ func TestAutoConfigReconcile_EvaluatorWarningsEmittedBeforeUnmatchedFailure(t *t
 	}
 }
 
+func TestAutoConfigReconcile_SteadyStateSuppressesInputWarningEvents(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	// Collide with the generated /api/users:GET entry so an override would
+	// fire AdditionalEndpointOverride if inputs were (wrongly) treated as
+	// changed.
+	ac.Spec.AdditionalEndpoints = []v1alpha1.AdditionalEndpoint{
+		{Endpoint: "/api/users", Method: "GET", Host: "http://override"},
+	}
+	c := fakeClientBuilder().
+		WithObjects(ac, cm).
+		WithStatusSubresource(ac).
+		Build()
+	f, ce, fi, g := defaultMocks()
+	ce.output.Warnings = []string{"skipping /x:GET: boom"}
+	g.output.Duplicates = []string{"listUsers"}
+	rec := fakeRecorder()
+	r := &KrakenDAutoConfigReconciler{
+		Client: c, Scheme: testScheme(), Recorder: rec,
+		Fetcher: f, CUEEvaluator: ce, Filter: fi, Generator: g,
+	}
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+	}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	events := drainEvents(rec)
+	for _, reason := range []string{
+		v1alpha1.ReasonCUEEvaluationWarning,
+		v1alpha1.ReasonDuplicateOperationId,
+		v1alpha1.ReasonAdditionalEndpointOverride,
+	} {
+		if slices.ContainsFunc(events, func(ev string) bool { return strings.Contains(ev, reason) }) {
+			t.Errorf("expected no %s event when inputs are unchanged, got %v", reason, events)
+		}
+	}
+}
+
+func TestAutoConfigReconcile_ChangedInputsEmitsInputWarningEvents(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	ac.Status.Phase = v1alpha1.AutoConfigPhasePending
+	ac.Spec.AdditionalEndpoints = []v1alpha1.AdditionalEndpoint{
+		{Endpoint: "/api/users", Method: "GET", Host: "http://override"},
+	}
+	c := fakeClientBuilder().
+		WithObjects(ac, cm).
+		WithStatusSubresource(ac).
+		Build()
+	f, ce, fi, g := defaultMocks()
+	ce.output.Warnings = []string{"skipping /x:GET: boom"}
+	g.output.Duplicates = []string{"listUsers"}
+	rec := fakeRecorder()
+	r := &KrakenDAutoConfigReconciler{
+		Client: c, Scheme: testScheme(), Recorder: rec,
+		Fetcher: f, CUEEvaluator: ce, Filter: fi, Generator: g,
+	}
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+	}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	events := drainEvents(rec)
+	for _, reason := range []string{
+		v1alpha1.ReasonCUEEvaluationWarning,
+		v1alpha1.ReasonDuplicateOperationId,
+		v1alpha1.ReasonAdditionalEndpointOverride,
+	} {
+		if !slices.ContainsFunc(events, func(ev string) bool { return strings.Contains(ev, reason) }) {
+			t.Errorf("expected %s event when inputs changed, got %v", reason, events)
+		}
+	}
+}
+
 func TestAutoConfigPredicate_IgnoresStatusOnlyUpdate(t *testing.T) {
 	old := &v1alpha1.KrakenDAutoConfig{
 		ObjectMeta: metav1.ObjectMeta{
