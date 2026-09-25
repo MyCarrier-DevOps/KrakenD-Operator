@@ -51,6 +51,9 @@ type CUEOutput struct {
 	OperationIDs map[string]string
 	Tags         map[string][]string
 	Warnings     []string
+	// UnmatchedOverrides holds the operationIds from spec.overrides that
+	// matched no generated entry, in override order.
+	UnmatchedOverrides []string
 }
 
 // CUEEvaluator evaluates CUE definitions against OpenAPI spec data.
@@ -419,6 +422,7 @@ func applyFieldOverrides(output *CUEOutput, overrides []v1alpha1.OperationOverri
 	for _, ov := range overrides {
 		idx, ok := opIDIndex[ov.OperationID]
 		if !ok {
+			output.UnmatchedOverrides = append(output.UnmatchedOverrides, ov.OperationID)
 			continue
 		}
 		entry := &output.Entries[idx]
