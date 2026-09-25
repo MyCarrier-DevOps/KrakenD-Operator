@@ -1062,11 +1062,11 @@ func TestEvaluate_OverrideOnOperationWithoutOperationIdIsReported(t *testing.T) 
 	if err := json.Unmarshal(out.Entries[0].ExtraConfig.Raw, &ec); err != nil {
 		t.Fatalf("unmarshal extraConfig: %v", err)
 	}
-	var doc map[string]interface{}
+	var doc map[string]any
 	if err := json.Unmarshal(ec["documentation/openapi"], &doc); err != nil {
 		t.Fatalf("unmarshal documentation/openapi: %v", err)
 	}
-	audience, ok := doc["audience"].([]interface{})
+	audience, ok := doc["audience"].([]any)
 	if !ok || len(audience) != 1 || audience[0] != "public" {
 		t.Errorf("expected audience [public] (override not applied), got %v", doc["audience"])
 	}
