@@ -189,6 +189,13 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return r.handleCUEError(ctx, &ac, err)
 	}
 
+	// Surface entries the evaluator skipped (e.g. failed to marshal) as
+	// events before the unmatched-override check below, so they remain
+	// visible even when that check then fails the sync.
+	for _, warning := range cueOutput.Warnings {
+		r.Recorder.Event(&ac, "Warning", v1alpha1.ReasonCUEEvaluationWarning, warning)
+	}
+
 	// An override whose operationId matched no generated entry must fail
 	// closed rather than be silently dropped: overrides can carry
 	// security-relevant config (e.g. auth/validator).
