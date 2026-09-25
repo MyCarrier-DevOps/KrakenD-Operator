@@ -305,29 +305,41 @@ func (r *KrakenDAutoConfigReconciler) handleFetchError(
 	return ctrl.Result{}, fetchErr
 }
 
-func (r *KrakenDAutoConfigReconciler) handleCUEError(
+// handleSyncedFailure fails the sync with the given reason and error: it sets
+// phase Error, the Synced condition to False, records a Warning event, and
+// returns the requeue/error semantics shared by every Synced-failure path —
+// requeue via interval for periodic triggers, otherwise the error itself so
+// controller-runtime retries with exponential backoff.
+func (r *KrakenDAutoConfigReconciler) handleSyncedFailure(
 	ctx context.Context,
 	ac *v1alpha1.KrakenDAutoConfig,
-	cueErr error,
+	reason string,
+	syncErr error,
 ) (ctrl.Result, error) {
 	ac.Status.Phase = v1alpha1.AutoConfigPhaseError
 	meta.SetStatusCondition(&ac.Status.Conditions, metav1.Condition{
 		Type:               v1alpha1.ConditionSynced,
 		Status:             metav1.ConditionFalse,
 		ObservedGeneration: ac.Generation,
-		Reason:             v1alpha1.ReasonCUEEvaluationFailed,
-		Message:            cueErr.Error(),
+		Reason:             reason,
+		Message:            syncErr.Error(),
 	})
 	if err := r.Status().Update(ctx, ac); err != nil {
-		return ctrl.Result{}, fmt.Errorf("updating CUE error status: %w", err)
+		return ctrl.Result{}, fmt.Errorf("updating synced failure status: %w", err)
 	}
-	r.Recorder.Event(ac, "Warning", v1alpha1.ReasonCUEEvaluationFailed, cueErr.Error())
-	// For periodic triggers, requeue via interval; for OnChange, return error
-	// so controller-runtime retries with exponential backoff.
+	r.Recorder.Event(ac, "Warning", reason, syncErr.Error())
 	if ac.Spec.Trigger == v1alpha1.TriggerPeriodic {
 		return r.requeueResult(ac), nil
 	}
-	return ctrl.Result{}, cueErr
+	return ctrl.Result{}, syncErr
+}
+
+func (r *KrakenDAutoConfigReconciler) handleCUEError(
+	ctx context.Context,
+	ac *v1alpha1.KrakenDAutoConfig,
+	cueErr error,
+) (ctrl.Result, error) {
+	return r.handleSyncedFailure(ctx, ac, v1alpha1.ReasonCUEEvaluationFailed, cueErr)
 }
 
 func (r *KrakenDAutoConfigReconciler) handleScopeError(
@@ -335,22 +347,7 @@ func (r *KrakenDAutoConfigReconciler) handleScopeError(
 	ac *v1alpha1.KrakenDAutoConfig,
 	scopeErr error,
 ) (ctrl.Result, error) {
-	ac.Status.Phase = v1alpha1.AutoConfigPhaseError
-	meta.SetStatusCondition(&ac.Status.Conditions, metav1.Condition{
-		Type:               v1alpha1.ConditionSynced,
-		Status:             metav1.ConditionFalse,
-		ObservedGeneration: ac.Generation,
-		Reason:             v1alpha1.ReasonAdditionalEndpointScopeFailed,
-		Message:            scopeErr.Error(),
-	})
-	if err := r.Status().Update(ctx, ac); err != nil {
-		return ctrl.Result{}, fmt.Errorf("updating scope error status: %w", err)
-	}
-	r.Recorder.Event(ac, "Warning", v1alpha1.ReasonAdditionalEndpointScopeFailed, scopeErr.Error())
-	if ac.Spec.Trigger == v1alpha1.TriggerPeriodic {
-		return r.requeueResult(ac), nil
-	}
-	return ctrl.Result{}, scopeErr
+	return r.handleSyncedFailure(ctx, ac, v1alpha1.ReasonAdditionalEndpointScopeFailed, scopeErr)
 }
 
 func (r *KrakenDAutoConfigReconciler) handleUnmatchedOverrideError(
@@ -358,22 +355,7 @@ func (r *KrakenDAutoConfigReconciler) handleUnmatchedOverrideError(
 	ac *v1alpha1.KrakenDAutoConfig,
 	unmatchedErr error,
 ) (ctrl.Result, error) {
-	ac.Status.Phase = v1alpha1.AutoConfigPhaseError
-	meta.SetStatusCondition(&ac.Status.Conditions, metav1.Condition{
-		Type:               v1alpha1.ConditionSynced,
-		Status:             metav1.ConditionFalse,
-		ObservedGeneration: ac.Generation,
-		Reason:             v1alpha1.ReasonUnmatchedOverride,
-		Message:            unmatchedErr.Error(),
-	})
-	if err := r.Status().Update(ctx, ac); err != nil {
-		return ctrl.Result{}, fmt.Errorf("updating unmatched override status: %w", err)
-	}
-	r.Recorder.Event(ac, "Warning", v1alpha1.ReasonUnmatchedOverride, unmatchedErr.Error())
-	if ac.Spec.Trigger == v1alpha1.TriggerPeriodic {
-		return r.requeueResult(ac), nil
-	}
-	return ctrl.Result{}, unmatchedErr
+	return r.handleSyncedFailure(ctx, ac, v1alpha1.ReasonUnmatchedOverride, unmatchedErr)
 }
 
 // applyAdditionalEndpoints builds, transforms, scopes, and merges additional
