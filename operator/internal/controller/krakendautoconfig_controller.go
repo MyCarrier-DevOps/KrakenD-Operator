@@ -44,6 +44,13 @@ import (
 
 const defaultCUEDefinitionsConfigMap = "krakend-cue-definitions"
 
+// autoConfigEvalVersion is part of every AutoConfig's combined spec checksum.
+// Bump it whenever a change to the evaluation/generation pipeline must
+// re-evaluate every AutoConfig once after upgrade, since the checksum gate
+// otherwise skips resources whose spec, CUE definitions, and generation are
+// unchanged. Version 2: unmatched overrides fail the sync.
+const autoConfigEvalVersion = "2"
+
 // KrakenDAutoConfigReconciler reconciles a KrakenDAutoConfig object.
 // It orchestrates the OpenAPI-to-endpoint pipeline: fetch spec,
 // evaluate CUE, filter, generate, and diff/create/update/delete endpoints.
@@ -124,10 +131,7 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	// Check if spec or CUE defs changed
 	cueDefsRV := r.getCUEDefsResourceVersion(ctx, &ac)
-	// Include generation so spec-only changes (overrides, defaults,
-	// urlTransform, filter) also trigger re-evaluation even when the
-	// OpenAPI spec and CUE definitions are unchanged.
-	combinedChecksum := fmt.Sprintf("%s:%s:%d", fetchResult.Checksum, cueDefsRV, ac.Generation)
+	combinedChecksum := autoConfigSpecChecksum(fetchResult.Checksum, cueDefsRV, ac.Generation)
 	if combinedChecksum == ac.Status.SpecChecksum {
 		if ac.Status.Phase != v1alpha1.AutoConfigPhaseSynced {
 			ac.Status.Phase = v1alpha1.AutoConfigPhaseSynced
@@ -446,6 +450,16 @@ func (r *KrakenDAutoConfigReconciler) postProcessSpec(
 	} else {
 		fetchResult.Data = stripped
 	}
+}
+
+// autoConfigSpecChecksum builds the checksum the controller stores in
+// status.specChecksum to skip re-evaluation when nothing has changed. It
+// includes the generation so spec-only changes (overrides, defaults,
+// urlTransform, filter) also trigger re-evaluation even when the OpenAPI spec
+// and CUE definitions are unchanged, and autoConfigEvalVersion so a pipeline
+// change can force one re-evaluation of every AutoConfig.
+func autoConfigSpecChecksum(fetchChecksum, cueDefsRV string, generation int64) string {
+	return fmt.Sprintf("%s:%s:%d:%s", fetchChecksum, cueDefsRV, generation, autoConfigEvalVersion)
 }
 
 func (r *KrakenDAutoConfigReconciler) requeueResult(ac *v1alpha1.KrakenDAutoConfig) ctrl.Result {
