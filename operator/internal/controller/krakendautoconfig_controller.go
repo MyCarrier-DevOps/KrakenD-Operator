@@ -46,13 +46,6 @@ import (
 
 const defaultCUEDefinitionsConfigMap = "krakend-cue-definitions"
 
-// autoConfigEvalVersion is part of every AutoConfig's combined spec checksum.
-// Bump it whenever a change to the evaluation/generation pipeline must
-// re-evaluate every AutoConfig once after upgrade, since the checksum gate
-// otherwise skips resources whose spec, CUE definitions, and generation are
-// unchanged. Version 2: unmatched overrides fail the sync.
-const autoConfigEvalVersion = "2"
-
 // KrakenDAutoConfigReconciler reconciles a KrakenDAutoConfig object.
 // It orchestrates the OpenAPI-to-endpoint pipeline: fetch spec,
 // evaluate CUE, filter, generate, and diff/create/update/delete endpoints.
@@ -75,8 +68,9 @@ type KrakenDAutoConfigReconciler struct {
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
-// Reconcile implements the autoconfig pipeline: fetch → checksum → CUE evaluate
-// → filter → generate → diff/create/update/delete endpoints.
+// Reconcile implements the autoconfig pipeline: fetch → CUE evaluate → filter
+// → generate → diff/create/update/delete endpoints. Every reconcile runs the
+// whole pipeline, so owned endpoints always converge to the desired state.
 func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
@@ -119,8 +113,8 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	r.postProcessSpec(ctx, &ac, fetchResult)
 
 	// Recompute checksum from the final (possibly resolved / stripped) data
-	// so changes from external $ref resolution or server stripping are not
-	// silently skipped by the downstream checksum gate.
+	// so status.specChecksum also changes with external $ref resolution or
+	// server stripping.
 	fetchResult.Checksum = fmt.Sprintf("%x", sha256.Sum256(fetchResult.Data))
 
 	meta.SetStatusCondition(&ac.Status.Conditions, metav1.Condition{
@@ -131,19 +125,8 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		Message:            "OpenAPI spec fetched successfully",
 	})
 
-	// Check if spec or CUE defs changed
 	cueDefsRV := r.getCUEDefsResourceVersion(ctx, &ac)
 	combinedChecksum := autoConfigSpecChecksum(fetchResult.Checksum, cueDefsRV, ac.Generation)
-	if combinedChecksum == ac.Status.SpecChecksum {
-		if ac.Status.Phase != v1alpha1.AutoConfigPhaseSynced {
-			ac.Status.Phase = v1alpha1.AutoConfigPhaseSynced
-			if err := r.Status().Update(ctx, &ac); err != nil {
-				return ctrl.Result{}, fmt.Errorf("updating synced status: %w", err)
-			}
-		}
-		log.V(1).Info("spec unchanged, skipping re-evaluation")
-		return r.requeueResult(&ac), nil
-	}
 
 	// Phase: Rendering
 	if ac.Status.Phase != v1alpha1.AutoConfigPhaseRendering {
@@ -246,7 +229,8 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	// Diff and reconcile endpoints
-	if err := r.reconcileEndpoints(ctx, &ac, genOutput.Endpoints); err != nil {
+	changes, err := r.reconcileEndpoints(ctx, &ac, genOutput.Endpoints)
+	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("reconciling endpoints: %w", err)
 	}
 
@@ -269,7 +253,8 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	r.Recorder.Eventf(&ac, "Normal", v1alpha1.ReasonEndpointsGenerated,
-		"Generated %d endpoints (%d skipped)", len(genOutput.Endpoints), genOutput.SkippedOperations)
+		"Generated %d endpoints (%d created, %d updated, %d deleted, %d skipped)",
+		len(genOutput.Endpoints), changes.created, changes.updated, changes.deleted, genOutput.SkippedOperations)
 
 	log.V(1).Info("autoconfig reconciled",
 		"phase", ac.Status.Phase,
@@ -460,13 +445,13 @@ func (r *KrakenDAutoConfigReconciler) postProcessSpec(
 }
 
 // autoConfigSpecChecksum builds the checksum the controller stores in
-// status.specChecksum to skip re-evaluation when nothing has changed. It
-// includes the generation so spec-only changes (overrides, defaults,
-// urlTransform, filter) also trigger re-evaluation even when the OpenAPI spec
-// and CUE definitions are unchanged, and autoConfigEvalVersion so a pipeline
-// change can force one re-evaluation of every AutoConfig.
+// status.specChecksum to record which inputs the last sync used. It includes
+// the generation so spec-only changes (overrides, defaults, urlTransform,
+// filter) register as new inputs even when the OpenAPI spec and CUE
+// definitions are unchanged. It does not gate evaluation — every reconcile
+// evaluates.
 func autoConfigSpecChecksum(fetchChecksum, cueDefsRV string, generation int64) string {
-	return fmt.Sprintf("%s:%s:%d:%s", fetchChecksum, cueDefsRV, generation, autoConfigEvalVersion)
+	return fmt.Sprintf("%s:%s:%d", fetchChecksum, cueDefsRV, generation)
 }
 
 func (r *KrakenDAutoConfigReconciler) requeueResult(ac *v1alpha1.KrakenDAutoConfig) ctrl.Result {
@@ -515,11 +500,18 @@ func (r *KrakenDAutoConfigReconciler) loadCUEDefinitions(
 	return cm.Data, nil
 }
 
+// endpointChanges counts the endpoint writes one reconcileEndpoints call issued.
+type endpointChanges struct {
+	created, updated, deleted int
+}
+
 func (r *KrakenDAutoConfigReconciler) reconcileEndpoints(
 	ctx context.Context,
 	ac *v1alpha1.KrakenDAutoConfig,
 	desired []*v1alpha1.KrakenDEndpoint,
-) error {
+) (endpointChanges, error) {
+	var changes endpointChanges
+
 	// Build set of desired endpoint names
 	desiredNames := map[string]struct{}{}
 	for _, ep := range desired {
@@ -532,16 +524,22 @@ func (r *KrakenDAutoConfigReconciler) reconcileEndpoints(
 		client.InNamespace(ac.Namespace),
 		client.MatchingLabels{"gateway.krakend.io/autoconfig": ac.Name},
 	); err != nil {
-		return fmt.Errorf("listing existing endpoints: %w", err)
+		return changes, fmt.Errorf("listing existing endpoints: %w", err)
 	}
 
 	// Delete endpoints that are no longer desired
 	for i := range existing.Items {
-		if _, ok := desiredNames[existing.Items[i].Name]; !ok {
-			if err := r.Delete(ctx, &existing.Items[i]); err != nil && !errors.IsNotFound(err) {
-				return fmt.Errorf("deleting endpoint %s: %w", existing.Items[i].Name, err)
-			}
+		if _, ok := desiredNames[existing.Items[i].Name]; ok {
+			continue
 		}
+		err := r.Delete(ctx, &existing.Items[i])
+		if errors.IsNotFound(err) {
+			continue
+		}
+		if err != nil {
+			return changes, fmt.Errorf("deleting endpoint %s: %w", existing.Items[i].Name, err)
+		}
+		changes.deleted++
 	}
 
 	// Create or update desired endpoints
@@ -550,16 +548,28 @@ func (r *KrakenDAutoConfigReconciler) reconcileEndpoints(
 			Name:      ep.Name,
 			Namespace: ep.Namespace,
 		}}
-		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, existing, func() error {
+		op, err := controllerutil.CreateOrUpdate(ctx, r.Client, existing, func() error {
 			existing.Labels = ep.Labels
 			existing.Spec = ep.Spec
 			return controllerutil.SetControllerReference(ac, existing, r.Scheme)
-		}); err != nil {
-			return fmt.Errorf("upserting endpoint %s: %w", ep.Name, err)
+		})
+		if err != nil {
+			return changes, fmt.Errorf("upserting endpoint %s: %w", ep.Name, err)
+		}
+		switch op {
+		case controllerutil.OperationResultCreated:
+			changes.created++
+		case controllerutil.OperationResultUpdated:
+			changes.updated++
+		case controllerutil.OperationResultNone,
+			controllerutil.OperationResultUpdatedStatus,
+			controllerutil.OperationResultUpdatedStatusOnly:
+			// None: already in the desired state. The status results come
+			// only from CreateOrPatch, never from CreateOrUpdate.
 		}
 	}
 
-	return nil
+	return changes, nil
 }
 
 func (r *KrakenDAutoConfigReconciler) configMapToAutoConfigs(

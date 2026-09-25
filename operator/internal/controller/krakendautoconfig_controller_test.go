@@ -28,6 +28,8 @@ import (
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/autoconfig"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -35,6 +37,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 )
 
@@ -206,6 +209,29 @@ func drainEvents(rec *record.FakeRecorder) []string {
 	}
 }
 
+// syncedAutoConfig returns testAutoConfig already Synced at exactly the
+// combined checksum a reconcile against defaultMocks and cm computes: its
+// OpenAPI spec, CUE definitions and generation are unchanged since the last
+// sync.
+func syncedAutoConfig(cm *corev1.ConfigMap) *v1alpha1.KrakenDAutoConfig {
+	ac := testAutoConfig()
+	ac.Status.Phase = v1alpha1.AutoConfigPhaseSynced
+	fetchChecksum := fmt.Sprintf("%x", sha256.Sum256([]byte(`{"paths":{}}`)))
+	ac.Status.SpecChecksum = autoConfigSpecChecksum(fetchChecksum, cm.ResourceVersion, ac.Generation)
+	return ac
+}
+
+// ownedCopy returns a copy of the generated endpoint ep as
+// reconcileEndpoints persists it: controlled by ac.
+func ownedCopy(t *testing.T, ac *v1alpha1.KrakenDAutoConfig, ep *v1alpha1.KrakenDEndpoint) *v1alpha1.KrakenDEndpoint {
+	t.Helper()
+	owned := ep.DeepCopy()
+	if err := controllerutil.SetControllerReference(ac, owned, testScheme()); err != nil {
+		t.Fatalf("setting owner reference: %v", err)
+	}
+	return owned
+}
+
 // --- Tests ---
 
 func TestAutoConfigReconcile_NotFound(t *testing.T) {
@@ -372,42 +398,6 @@ func TestAutoConfigReconcile_FullPipeline(t *testing.T) {
 	}
 }
 
-func TestAutoConfigReconcile_NoChangeSkipsReEvaluation(t *testing.T) {
-	cm := testCUEDefinitionsCM()
-	ac := testAutoConfig()
-	ac.Status.Phase = v1alpha1.AutoConfigPhaseSynced
-	fetchChecksum := fmt.Sprintf("%x", sha256.Sum256([]byte(`{"paths":{}}`)))
-	ac.Status.SpecChecksum = autoConfigSpecChecksum(fetchChecksum, cm.ResourceVersion, 0)
-	c := fakeClientBuilder().
-		WithObjects(ac, cm).
-		WithStatusSubresource(ac).
-		Build()
-	f, ce, fi, g := defaultMocks()
-	r := newACReconciler(c, f, ce, fi, g)
-
-	_, err := r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if ce.called {
-		t.Error("expected CUE evaluator not to be called when the checksum is unchanged")
-	}
-
-	var updated v1alpha1.KrakenDAutoConfig
-	if err := c.Get(
-		context.Background(),
-		types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
-		&updated,
-	); err != nil {
-		t.Fatalf("getting updated autoconfig: %v", err)
-	}
-	if updated.Status.Phase != v1alpha1.AutoConfigPhaseSynced {
-		t.Errorf("expected phase Synced (no change), got %s", updated.Status.Phase)
-	}
-}
-
 func TestAutoConfigReconcile_SpecChangeTriggersReEvaluation(t *testing.T) {
 	cm := testCUEDefinitionsCM()
 	ac := testAutoConfig()
@@ -453,14 +443,15 @@ func TestAutoConfigReconcile_SpecChangeTriggersReEvaluation(t *testing.T) {
 	}
 }
 
-func TestAutoConfigReconcile_PreviousOperatorChecksumForcesReEvaluation(t *testing.T) {
+func TestAutoConfigReconcile_UnchangedChecksumStillFailsUnmatchedOverride(t *testing.T) {
 	cm := testCUEDefinitionsCM()
 	ac := testAutoConfig()
 	ac.Status.Phase = v1alpha1.AutoConfigPhaseSynced
-	// Checksum exactly as the previous operator wrote it for this spec, CUE
-	// definitions and generation (fetchChecksum:cueDefsRV:generation). That
-	// operator silently dropped unmatched overrides, so the resource must be
-	// re-evaluated once rather than skipped by the checksum gate.
+	// Checksum exactly as a previous operator wrote it for this spec, CUE
+	// definitions and generation (fetchChecksum:cueDefsRV:generation) — the
+	// same value this reconcile computes. That operator silently dropped
+	// unmatched overrides; an unchanged checksum must not skip evaluation, so
+	// the unmatched override now fails the sync.
 	fetchChecksum := fmt.Sprintf("%x", sha256.Sum256([]byte(`{"paths":{}}`)))
 	ac.Status.SpecChecksum = fmt.Sprintf("%s:%s:%d", fetchChecksum, cm.ResourceVersion, ac.Generation)
 	c := fakeClientBuilder().
@@ -491,6 +482,133 @@ func TestAutoConfigReconcile_PreviousOperatorChecksumForcesReEvaluation(t *testi
 	cond := meta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionSynced)
 	if cond == nil || cond.Reason != v1alpha1.ReasonUnmatchedOverride {
 		t.Errorf("expected Synced condition with reason %s, got %+v", v1alpha1.ReasonUnmatchedOverride, cond)
+	}
+}
+
+func TestAutoConfigReconcile_RecreatesDeletedEndpointWhenInputsUnchanged(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	// The generated endpoint was deleted out of band, so it is not seeded.
+	c := fakeClientBuilder().
+		WithObjects(ac, cm).
+		WithStatusSubresource(ac).
+		Build()
+	f, ce, fi, g := defaultMocks()
+	rec := fakeRecorder()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Recorder = rec
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+	}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	var ep v1alpha1.KrakenDEndpoint
+	if err := c.Get(context.Background(), types.NamespacedName{
+		Name: "test-ac-listusers", Namespace: "default",
+	}, &ep); err != nil {
+		t.Fatalf("expected deleted endpoint to be recreated: %v", err)
+	}
+	wantEvent := "Normal EndpointsGenerated Generated 1 endpoints (1 created, 0 updated, 0 deleted, 0 skipped)"
+	if events := drainEvents(rec); !slices.Contains(events, wantEvent) {
+		t.Errorf("expected event %q, got %v", wantEvent, events)
+	}
+}
+
+func TestAutoConfigReconcile_RevertsModifiedEndpointWhenInputsUnchanged(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	ac.UID = "test-ac-uid"
+	f, ce, fi, g := defaultMocks()
+	// The generated endpoint was edited out of band: everything matches what
+	// the generator produces except its timeout.
+	want := g.output.Endpoints[0]
+	modified := ownedCopy(t, ac, want)
+	editedTimeout := metav1.Duration{Duration: 99 * time.Second}
+	modified.Spec.Endpoints[0].Timeout = &editedTimeout
+	c := fakeClientBuilder().
+		WithObjects(ac, cm, modified).
+		WithStatusSubresource(ac).
+		Build()
+	rec := fakeRecorder()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Recorder = rec
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+	}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	var ep v1alpha1.KrakenDEndpoint
+	if err := c.Get(context.Background(), types.NamespacedName{
+		Name: want.Name, Namespace: want.Namespace,
+	}, &ep); err != nil {
+		t.Fatalf("getting endpoint: %v", err)
+	}
+	if !equality.Semantic.DeepEqual(ep.Spec, want.Spec) {
+		t.Errorf("expected endpoint spec restored to %+v, got %+v", want.Spec, ep.Spec)
+	}
+	wantEvent := "Normal EndpointsGenerated Generated 1 endpoints (0 created, 1 updated, 0 deleted, 0 skipped)"
+	if events := drainEvents(rec); !slices.Contains(events, wantEvent) {
+		t.Errorf("expected event %q, got %v", wantEvent, events)
+	}
+}
+
+func TestAutoConfigReconcile_DeletesStrayEndpointWhenInputsUnchanged(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	ac.UID = "test-ac-uid"
+	f, ce, fi, g := defaultMocks()
+	// The generated endpoint is present exactly as the generator produces it.
+	current := ownedCopy(t, ac, g.output.Endpoints[0])
+	// An endpoint carrying this AutoConfig's label that the generator no
+	// longer produces (e.g. recreated from an old manifest) must be removed.
+	stray := &v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-ac-stray",
+			Namespace: "default",
+			Labels:    map[string]string{"gateway.krakend.io/autoconfig": "test-ac"},
+		},
+		Spec: v1alpha1.KrakenDEndpointSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: "test-gw"},
+			Endpoints: []v1alpha1.EndpointEntry{{
+				Endpoint: "/api/stray",
+				Method:   "GET",
+				Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/stray"}},
+			}},
+		},
+	}
+	c := fakeClientBuilder().
+		WithObjects(ac, cm, current, stray).
+		WithStatusSubresource(ac).
+		Build()
+	rec := fakeRecorder()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Recorder = rec
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+	}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	var ep v1alpha1.KrakenDEndpoint
+	if err := c.Get(context.Background(), types.NamespacedName{
+		Name: stray.Name, Namespace: stray.Namespace,
+	}, &ep); !apierrors.IsNotFound(err) {
+		t.Errorf("expected stray endpoint to be deleted, got err %v", err)
+	}
+	wantEvent := "Normal EndpointsGenerated Generated 1 endpoints (0 created, 0 updated, 1 deleted, 0 skipped)"
+	if events := drainEvents(rec); !slices.Contains(events, wantEvent) {
+		t.Errorf("expected event %q, got %v", wantEvent, events)
+	}
+}
+
+func TestAutoConfigSpecChecksum_IsSpecCUEDefinitionsAndGeneration(t *testing.T) {
+	if got, want := autoConfigSpecChecksum("abc123", "7:9", 3), "abc123:7:9:3"; got != want {
+		t.Errorf("expected checksum %q, got %q", want, got)
 	}
 }
 
@@ -819,8 +937,8 @@ func TestAutoConfigReconcile_UnmatchedOverrideRecoversWhenResolved(t *testing.T)
 		t.Fatalf("expected phase Error while unmatched, got %s", failed.Status.Phase)
 	}
 
-	// The override is fixed: every override now matches. The failed sync
-	// never wrote the checksum, so the next reconcile re-evaluates.
+	// The override is fixed: every override now matches. Every reconcile
+	// re-evaluates, so the next one picks up the fix.
 	ce.output.UnmatchedOverrides = nil
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
 		t.Fatalf("reconcile after fix: %v", err)
