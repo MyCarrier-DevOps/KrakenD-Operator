@@ -359,9 +359,8 @@ func TestAutoConfigReconcile_NoChangeSkipsReEvaluation(t *testing.T) {
 	cm := testCUEDefinitionsCM()
 	ac := testAutoConfig()
 	ac.Status.Phase = v1alpha1.AutoConfigPhaseSynced
-	// Checksum format: fetchChecksum:cueDefsRV:generation
-	expectedChecksum := fmt.Sprintf("%x", sha256.Sum256([]byte(`{"paths":{}}`)))
-	ac.Status.SpecChecksum = expectedChecksum + ":" + cm.ResourceVersion + ":0"
+	fetchChecksum := fmt.Sprintf("%x", sha256.Sum256([]byte(`{"paths":{}}`)))
+	ac.Status.SpecChecksum = autoConfigSpecChecksum(fetchChecksum, cm.ResourceVersion, 0)
 	c := fakeClientBuilder().
 		WithObjects(ac, cm).
 		WithStatusSubresource(ac).
@@ -374,6 +373,9 @@ func TestAutoConfigReconcile_NoChangeSkipsReEvaluation(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if ce.called {
+		t.Error("expected CUE evaluator not to be called when the checksum is unchanged")
 	}
 
 	var updated v1alpha1.KrakenDAutoConfig
@@ -396,8 +398,8 @@ func TestAutoConfigReconcile_SpecChangeTriggersReEvaluation(t *testing.T) {
 	// Stale checksum from generation 0; AC is now at generation 1
 	// (simulating a spec edit like adding an override).
 	ac.ObjectMeta.Generation = 1
-	expectedChecksum := fmt.Sprintf("%x", sha256.Sum256([]byte(`{"paths":{}}`)))
-	ac.Status.SpecChecksum = expectedChecksum + ":" + cm.ResourceVersion + ":0"
+	fetchChecksum := fmt.Sprintf("%x", sha256.Sum256([]byte(`{"paths":{}}`)))
+	ac.Status.SpecChecksum = autoConfigSpecChecksum(fetchChecksum, cm.ResourceVersion, 0)
 	c := fakeClientBuilder().
 		WithObjects(ac, cm).
 		WithStatusSubresource(ac).
@@ -429,8 +431,49 @@ func TestAutoConfigReconcile_SpecChangeTriggersReEvaluation(t *testing.T) {
 		t.Errorf("expected phase Synced after re-evaluation, got %s", updated.Status.Phase)
 	}
 	// Checksum should now include the new generation
-	if updated.Status.SpecChecksum != expectedChecksum+":"+cm.ResourceVersion+":1" {
+	if updated.Status.SpecChecksum != autoConfigSpecChecksum(fetchChecksum, cm.ResourceVersion, 1) {
 		t.Errorf("expected checksum with generation 1, got %q", updated.Status.SpecChecksum)
+	}
+}
+
+func TestAutoConfigReconcile_PreviousOperatorChecksumForcesReEvaluation(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	ac.Status.Phase = v1alpha1.AutoConfigPhaseSynced
+	// Checksum exactly as the previous operator wrote it for this spec, CUE
+	// definitions and generation (fetchChecksum:cueDefsRV:generation). That
+	// operator silently dropped unmatched overrides, so the resource must be
+	// re-evaluated once rather than skipped by the checksum gate.
+	fetchChecksum := fmt.Sprintf("%x", sha256.Sum256([]byte(`{"paths":{}}`)))
+	ac.Status.SpecChecksum = fmt.Sprintf("%s:%s:%d", fetchChecksum, cm.ResourceVersion, ac.Generation)
+	c := fakeClientBuilder().
+		WithObjects(ac, cm).
+		WithStatusSubresource(ac).
+		Build()
+	f, ce, fi, g := defaultMocks()
+	ce.output.UnmatchedOverrides = []string{"WebhookStatus"}
+	r := newACReconciler(c, f, ce, fi, g)
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+	}); err == nil {
+		t.Error("expected error for OnChange trigger, got nil")
+	}
+
+	var updated v1alpha1.KrakenDAutoConfig
+	if err := c.Get(
+		context.Background(),
+		types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+		&updated,
+	); err != nil {
+		t.Fatalf("getting updated autoconfig: %v", err)
+	}
+	if updated.Status.Phase != v1alpha1.AutoConfigPhaseError {
+		t.Errorf("expected phase Error, got %s", updated.Status.Phase)
+	}
+	cond := meta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionSynced)
+	if cond == nil || cond.Reason != v1alpha1.ReasonUnmatchedOverride {
+		t.Errorf("expected Synced condition with reason %s, got %+v", v1alpha1.ReasonUnmatchedOverride, cond)
 	}
 }
 
