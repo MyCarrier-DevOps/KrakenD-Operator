@@ -25,6 +25,7 @@ import (
 	"net/url"
 	"reflect"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -48,6 +49,12 @@ import (
 )
 
 const defaultCUEDefinitionsConfigMap = "krakend-cue-definitions"
+
+// defaultResyncInterval is how often OnChange AutoConfigs are re-polled.
+// OnChange AutoConfigs react to watch events immediately and are also
+// re-polled on this interval so upstream spec changes and out-of-band
+// endpoint changes are always converged.
+const defaultResyncInterval = 5 * time.Minute
 
 // KrakenDAutoConfigReconciler reconciles a KrakenDAutoConfig object.
 // It orchestrates the OpenAPI-to-endpoint pipeline: fetch spec,
@@ -429,7 +436,7 @@ func (r *KrakenDAutoConfigReconciler) requeueResult(ac *v1alpha1.KrakenDAutoConf
 	if ac.Spec.Trigger == v1alpha1.TriggerPeriodic && ac.Spec.Periodic != nil {
 		return ctrl.Result{RequeueAfter: ac.Spec.Periodic.Interval.Duration}
 	}
-	return ctrl.Result{}
+	return ctrl.Result{RequeueAfter: defaultResyncInterval}
 }
 
 func (r *KrakenDAutoConfigReconciler) getCUEDefsResourceVersion(
