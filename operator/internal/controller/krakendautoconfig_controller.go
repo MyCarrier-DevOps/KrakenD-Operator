@@ -21,6 +21,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"net/url"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -188,6 +189,16 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return r.handleCUEError(ctx, &ac, err)
 	}
 
+	// An override whose operationId matched no generated entry must fail
+	// closed rather than be silently dropped: overrides can carry
+	// security-relevant config (e.g. auth/validator).
+	if len(cueOutput.UnmatchedOverrides) > 0 {
+		unmatchedErr := fmt.Errorf(
+			"spec.overrides reference operationIds not present in the OpenAPI spec: %s",
+			strings.Join(cueOutput.UnmatchedOverrides, ", "))
+		return r.handleUnmatchedOverrideError(ctx, &ac, unmatchedErr)
+	}
+
 	// Apply filters
 	filtered := cueOutput.Entries
 	if ac.Spec.Filter != nil {
@@ -340,6 +351,29 @@ func (r *KrakenDAutoConfigReconciler) handleScopeError(
 		return r.requeueResult(ac), nil
 	}
 	return ctrl.Result{}, scopeErr
+}
+
+func (r *KrakenDAutoConfigReconciler) handleUnmatchedOverrideError(
+	ctx context.Context,
+	ac *v1alpha1.KrakenDAutoConfig,
+	unmatchedErr error,
+) (ctrl.Result, error) {
+	ac.Status.Phase = v1alpha1.AutoConfigPhaseError
+	meta.SetStatusCondition(&ac.Status.Conditions, metav1.Condition{
+		Type:               v1alpha1.ConditionSynced,
+		Status:             metav1.ConditionFalse,
+		ObservedGeneration: ac.Generation,
+		Reason:             v1alpha1.ReasonUnmatchedOverride,
+		Message:            unmatchedErr.Error(),
+	})
+	if err := r.Status().Update(ctx, ac); err != nil {
+		return ctrl.Result{}, fmt.Errorf("updating unmatched override status: %w", err)
+	}
+	r.Recorder.Event(ac, "Warning", v1alpha1.ReasonUnmatchedOverride, unmatchedErr.Error())
+	if ac.Spec.Trigger == v1alpha1.TriggerPeriodic {
+		return r.requeueResult(ac), nil
+	}
+	return ctrl.Result{}, unmatchedErr
 }
 
 // applyAdditionalEndpoints builds, transforms, scopes, and merges additional

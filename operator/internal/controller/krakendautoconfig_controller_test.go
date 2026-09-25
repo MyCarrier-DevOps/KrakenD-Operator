@@ -27,6 +27,7 @@ import (
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/autoconfig"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -576,6 +577,169 @@ func TestAutoConfigReconcile_GeneratorError(t *testing.T) {
 		&updated,
 	); err != nil {
 		t.Fatalf("getting updated autoconfig: %v", err)
+	}
+	if updated.Status.Phase != v1alpha1.AutoConfigPhaseError {
+		t.Errorf("expected phase Error, got %s", updated.Status.Phase)
+	}
+}
+
+func TestAutoConfigReconcile_UnmatchedOverrideFailsSync(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	ac.Status.Phase = v1alpha1.AutoConfigPhasePending
+	ac.Status.SpecChecksum = "stale-checksum"
+	c := fakeClientBuilder().
+		WithObjects(ac, cm).
+		WithStatusSubresource(ac).
+		Build()
+	f, ce, fi, g := defaultMocks()
+	ce.output.UnmatchedOverrides = []string{"WebhookStatus", "WebhookDocuments"}
+	rec := fakeRecorder()
+	r := &KrakenDAutoConfigReconciler{
+		Client: c, Scheme: testScheme(), Recorder: rec,
+		Fetcher: f, CUEEvaluator: ce, Filter: fi, Generator: g,
+	}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+	})
+	if err == nil {
+		t.Fatal("expected error for OnChange trigger, got nil")
+	}
+
+	var updated v1alpha1.KrakenDAutoConfig
+	if e := c.Get(
+		context.Background(),
+		types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+		&updated,
+	); e != nil {
+		t.Fatalf("getting updated autoconfig: %v", e)
+	}
+	if updated.Status.Phase != v1alpha1.AutoConfigPhaseError {
+		t.Errorf("expected phase Error, got %s", updated.Status.Phase)
+	}
+
+	cond := meta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionSynced)
+	if cond == nil {
+		t.Fatal("expected Synced condition to be set")
+	}
+	if cond.Status != metav1.ConditionFalse {
+		t.Errorf("expected Synced condition False, got %s", cond.Status)
+	}
+	if cond.Reason != v1alpha1.ReasonUnmatchedOverride {
+		t.Errorf("expected reason %s, got %s", v1alpha1.ReasonUnmatchedOverride, cond.Reason)
+	}
+	wantMsg := "spec.overrides reference operationIds not present in the OpenAPI spec: WebhookStatus, WebhookDocuments"
+	if cond.Message != wantMsg {
+		t.Errorf("expected message %q, got %q", wantMsg, cond.Message)
+	}
+
+	if updated.Status.SpecChecksum != "stale-checksum" {
+		t.Errorf("expected SpecChecksum unchanged, got %q", updated.Status.SpecChecksum)
+	}
+
+	var sawEvent bool
+	for {
+		select {
+		case ev := <-rec.Events:
+			if strings.Contains(ev, "UnmatchedOverride") {
+				sawEvent = true
+			}
+			continue
+		default:
+		}
+		break
+	}
+	if !sawEvent {
+		t.Fatal("expected UnmatchedOverride warning event")
+	}
+
+	if g.gotInput != nil {
+		t.Errorf("expected generator not to be called, got input %+v", g.gotInput)
+	}
+}
+
+func TestAutoConfigReconcile_UnmatchedOverrideKeepsExistingEndpoints(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	ac.Status.Phase = v1alpha1.AutoConfigPhasePending
+
+	// Pre-existing endpoint that would be considered stale (and deleted) if
+	// the pipeline reached reconcileEndpoints — it must not.
+	staleEP := &v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-ac-old-endpoint",
+			Namespace: "default",
+			Labels: map[string]string{
+				"gateway.krakend.io/autoconfig": "test-ac",
+			},
+		},
+		Spec: v1alpha1.KrakenDEndpointSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: "test-gw"},
+			Endpoints: []v1alpha1.EndpointEntry{{
+				Endpoint: "/api/old",
+				Method:   "GET",
+				Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/old"}},
+			}},
+		},
+	}
+
+	c := fakeClientBuilder().
+		WithObjects(ac, cm, staleEP).
+		WithStatusSubresource(ac).
+		Build()
+	f, ce, fi, g := defaultMocks()
+	ce.output.UnmatchedOverrides = []string{"WebhookStatus"}
+	r := newACReconciler(c, f, ce, fi, g)
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+	})
+	if err == nil {
+		t.Fatal("expected error for OnChange trigger, got nil")
+	}
+
+	var ep v1alpha1.KrakenDEndpoint
+	if err := c.Get(context.Background(), types.NamespacedName{
+		Name: "test-ac-old-endpoint", Namespace: "default",
+	}, &ep); err != nil {
+		t.Fatalf("expected existing endpoint to be kept: %v", err)
+	}
+}
+
+func TestAutoConfigReconcile_UnmatchedOverridePeriodicRequeues(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	ac.Spec.Trigger = v1alpha1.TriggerPeriodic
+	ac.Spec.Periodic = &v1alpha1.PeriodicSpec{
+		Interval: metav1.Duration{Duration: 5 * time.Minute},
+	}
+	ac.Status.Phase = v1alpha1.AutoConfigPhasePending
+	c := fakeClientBuilder().
+		WithObjects(ac, cm).
+		WithStatusSubresource(ac).
+		Build()
+	f, ce, fi, g := defaultMocks()
+	ce.output.UnmatchedOverrides = []string{"WebhookStatus"}
+	r := newACReconciler(c, f, ce, fi, g)
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.RequeueAfter != 5*time.Minute {
+		t.Errorf("expected 5m requeue, got %v", result.RequeueAfter)
+	}
+
+	var updated v1alpha1.KrakenDAutoConfig
+	if e := c.Get(
+		context.Background(),
+		types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+		&updated,
+	); e != nil {
+		t.Fatalf("getting updated autoconfig: %v", e)
 	}
 	if updated.Status.Phase != v1alpha1.AutoConfigPhaseError {
 		t.Errorf("expected phase Error, got %s", updated.Status.Phase)

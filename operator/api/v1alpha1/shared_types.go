@@ -136,6 +136,7 @@ const (
 	ReasonCUEEvaluationFailed           = "CUEEvaluationFailed"
 	ReasonAdditionalEndpointOverride    = "AdditionalEndpointOverride"
 	ReasonAdditionalEndpointScopeFailed = "AdditionalEndpointScopeFailed"
+	ReasonUnmatchedOverride             = "UnmatchedOverride"
 	ReasonPostRestartJobAlreadyRun      = "PostRestartJobAlreadyRun"
 	ReasonPostRestartJobCreated         = "PostRestartJobCreated"
 	// ReasonPostRestartJobAdopted covers the "Job for this revision's
