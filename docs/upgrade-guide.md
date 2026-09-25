@@ -180,6 +180,39 @@ webhook; see the field documentation via
 `kubectl explain krakendgateway.spec.openapi.livenessProbe`.
 
 ---
+
+## Unreleased — AutoConfig fails sync on unmatched overrides
+
+Previously, a `spec.overrides[]` entry whose `operationId` matched no
+generated operation was silently ignored — the sync still reported
+`Synced: True` even though the override never took effect. This is now a
+fail-closed error.
+
+If any override's `operationId` is not present in the fetched OpenAPI spec,
+the AutoConfig sync now fails: `status.phase` becomes `Error`, the `Synced`
+condition goes `False` with reason `UnmatchedOverride`, and a matching
+`Warning` event is emitted. The generator does not run, so existing
+`KrakenDEndpoints` are left as they were (last-good) until the override is
+corrected or removed and the resource re-syncs (`OnChange`: retried with
+backoff; `Periodic`: at the next interval).
+
+Find affected resources cluster-wide:
+
+```bash
+kubectl get krakendautoconfigs -A -o json | jq -r '.items[] | select(any(.status.conditions[]?; .reason=="UnmatchedOverride")) | "\(.metadata.namespace)/\(.metadata.name)"'
+```
+
+Fix by correcting the override's `operationId`, removing the override, or —
+if the target operation has no `operationId` at all — moving the config into
+`spec.defaults` (applies to every generated operation) or adding an
+`operationId` to the service's OpenAPI spec.
+
+Separately, the evaluator's per-operation warnings (e.g. an operation skipped
+because it failed to convert) are now surfaced as `CUEEvaluationWarning`
+events on the `KrakenDAutoConfig` resource instead of being silently
+dropped; these do not change `status.phase` or conditions.
+
+---
 ## v0.13.4 — postRestartJob hardening (breaking behavior change)
 
 This release changes the post-restart Job (`spec.postRestartJob`) in ways

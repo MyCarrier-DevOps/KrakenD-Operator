@@ -1764,6 +1764,8 @@ The operator emits events on KrakenDGateway resources:
 | OpenAPI spec fetched successfully | Normal | `SpecFetched` |
 | OpenAPI spec fetch failed | Warning | `SpecFetchFailed` |
 | CUE evaluation failed | Warning | `CUEEvaluationFailed` |
+| Override operationId not present in the OpenAPI spec (sync fails, last-good endpoints kept) | Warning | `UnmatchedOverride` |
+| CUE evaluation warning (e.g. an operation skipped) | Warning | `CUEEvaluationWarning` |
 | Endpoints generated/updated from OpenAPI spec | Normal | `EndpointsGenerated` |
 | OpenAPI operation skipped (filtered) | Normal | `OperationFiltered` |
 | OpenAPI operation missing operationId | Warning | `MissingOperationId` |
@@ -1906,6 +1908,12 @@ spec:
       name: standard-backend-policy    # applied to every backend in the generated endpoint's backends[] array (see §3.2)
 
   # Per-operation overrides (keyed by OpenAPI operationId)
+  # An override whose operationId is not declared by any operation in the fetched
+  # spec fails the sync (status.phase: Error, Synced=False, reason UnmatchedOverride)
+  # instead of being silently dropped; existing KrakenDEndpoints are left as they were
+  # (last-good) until the override is fixed. For operations with no operationId, use
+  # spec.defaults instead (applies to every generated operation), or add operationIds
+  # to the service's OpenAPI spec.
   overrides:
     - operationId: getUserById
       timeout: "800ms"
@@ -2116,6 +2124,8 @@ If an OpenAPI spec contains duplicate `operationId` values (technically invalid 
 | OpenAPI spec fetched successfully | Normal | `SpecFetched` |
 | OpenAPI spec fetch failed | Warning | `SpecFetchFailed` |
 | CUE evaluation failed | Warning | `CUEEvaluationFailed` |
+| Override operationId not present in the OpenAPI spec (sync fails, last-good endpoints kept) | Warning | `UnmatchedOverride` |
+| CUE evaluation warning (e.g. an operation skipped) | Warning | `CUEEvaluationWarning` |
 | Endpoints generated/updated | Normal | `EndpointsGenerated` |
 | Operation skipped (filtered) | Normal | `OperationFiltered` |
 | Operation has no operationId | Warning | `MissingOperationId` |
