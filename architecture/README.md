@@ -1911,9 +1911,11 @@ spec:
   # An override whose operationId is not declared by any operation in the fetched
   # spec fails the sync (status.phase: Error, Synced=False, reason UnmatchedOverride)
   # instead of being silently dropped; existing KrakenDEndpoints are left as they were
-  # (last-good) until the override is fixed. For operations with no operationId, use
-  # spec.defaults instead (applies to every generated operation), or add operationIds
-  # to the service's OpenAPI spec.
+  # (last-good) until the override is fixed. For operations with no operationId:
+  # spec.defaults applies to every generated operation; for a single operation, add an
+  # operationId to the service's OpenAPI spec, replace it with an additionalEndpoints
+  # entry (same endpoint+method replaces the spec-derived one), or use a custom CUE
+  # definitions ConfigMap (spec.cue.definitionsConfigMapRef).
   overrides:
     - operationId: getUserById
       timeout: "800ms"

@@ -132,7 +132,55 @@ make deploy IMG=ghcr.io/mycarrier-devops/krakend-operator:<previous-version>
 
 ---
 
-## Unreleased — openapi-serve liveness probe (one-time rollout)
+## Unreleased — AutoConfig fails sync on unmatched overrides
+
+Previously, a `spec.overrides[]` entry whose `operationId` matched no
+generated operation was silently ignored — the sync still reported
+`Synced: True` even though the override never took effect. This is now a
+fail-closed error.
+
+If any override's `operationId` is not present in the fetched OpenAPI spec,
+the AutoConfig sync now fails: `status.phase` becomes `Error`, the `Synced`
+condition goes `False` with reason `UnmatchedOverride`, and a matching
+`Warning` event is emitted. The generator does not run, so existing
+`KrakenDEndpoints` are left as they were (last-good) until the override is
+corrected or removed; the resource is re-evaluated on subsequent reconciles
+until then.
+
+Every `KrakenDAutoConfig` is re-evaluated once when the new operator starts,
+even if its OpenAPI spec, CUE definitions and `spec` are unchanged, so the
+detection query below is meaningful shortly after the upgrade. Healthy
+resources regenerate identical endpoints, so their `KrakenDEndpoints` are not
+modified — no endpoint churn. The one exception is an override on an
+`operationId` the spec declares more than once: it now lands on the endpoint
+that is actually published instead of on a skipped duplicate.
+
+Find affected resources cluster-wide:
+
+```bash
+kubectl get krakendautoconfigs -A -o json | jq -r '.items[] | select(any(.status.conditions[]?; .reason=="UnmatchedOverride")) | "\(.metadata.namespace)/\(.metadata.name)"'
+```
+
+Fix by correcting the override's `operationId` or removing the override. If
+the target operation has no `operationId` at all: `spec.defaults` applies to
+every generated operation; for that single operation, add an `operationId` to
+the service's OpenAPI spec, replace the operation with an
+`additionalEndpoints` entry (the same endpoint and method replaces the
+spec-derived one), or use a custom CUE definitions ConfigMap
+(`spec.cue.definitionsConfigMapRef`).
+
+Custom CUE definitions that read `_overrides` under a key that doesn't
+correspond to an operationId the spec declares will now fail the sync, because
+overrides are matched on the operationId contract.
+
+Separately, the evaluator's per-operation warnings (e.g. an operation skipped
+because it failed to convert) are now surfaced as `CUEEvaluationWarning`
+events on the `KrakenDAutoConfig` resource instead of being silently
+dropped; these do not change `status.phase` or conditions.
+
+---
+
+## v0.14.0 — openapi-serve liveness probe (one-time rollout)
 
 The `openapi-serve` sidecar now renders with a liveness probe. It previously
 had only a readiness probe, so a wedged sidecar could sit unready forever with
@@ -178,39 +226,6 @@ unset means "use the default", and `livenessProbe: {}` specifies no handler and
 is now rejected at admission. Both probe fields are validated by the gateway
 webhook; see the field documentation via
 `kubectl explain krakendgateway.spec.openapi.livenessProbe`.
-
----
-
-## Unreleased — AutoConfig fails sync on unmatched overrides
-
-Previously, a `spec.overrides[]` entry whose `operationId` matched no
-generated operation was silently ignored — the sync still reported
-`Synced: True` even though the override never took effect. This is now a
-fail-closed error.
-
-If any override's `operationId` is not present in the fetched OpenAPI spec,
-the AutoConfig sync now fails: `status.phase` becomes `Error`, the `Synced`
-condition goes `False` with reason `UnmatchedOverride`, and a matching
-`Warning` event is emitted. The generator does not run, so existing
-`KrakenDEndpoints` are left as they were (last-good) until the override is
-corrected or removed and the resource re-syncs (`OnChange`: retried with
-backoff; `Periodic`: at the next interval).
-
-Find affected resources cluster-wide:
-
-```bash
-kubectl get krakendautoconfigs -A -o json | jq -r '.items[] | select(any(.status.conditions[]?; .reason=="UnmatchedOverride")) | "\(.metadata.namespace)/\(.metadata.name)"'
-```
-
-Fix by correcting the override's `operationId`, removing the override, or —
-if the target operation has no `operationId` at all — moving the config into
-`spec.defaults` (applies to every generated operation) or adding an
-`operationId` to the service's OpenAPI spec.
-
-Separately, the evaluator's per-operation warnings (e.g. an operation skipped
-because it failed to convert) are now surfaced as `CUEEvaluationWarning`
-events on the `KrakenDAutoConfig` resource instead of being silently
-dropped; these do not change `status.phase` or conditions.
 
 ---
 ## v0.13.4 — postRestartJob hardening (breaking behavior change)
