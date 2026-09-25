@@ -32,10 +32,12 @@ import (
 	"k8s.io/client-go/tools/record"
 	utilclock "k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
@@ -281,14 +283,35 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 // SetupWithManager sets up the controller with the Manager.
 func (r *KrakenDAutoConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&v1alpha1.KrakenDAutoConfig{}).
-		Owns(&v1alpha1.KrakenDEndpoint{}).
+		For(&v1alpha1.KrakenDAutoConfig{}, builder.WithPredicates(autoConfigPredicate())).
+		Owns(&v1alpha1.KrakenDEndpoint{}, builder.WithPredicates(ownedEndpointPredicate())).
 		Watches(
 			&corev1.ConfigMap{},
-			handler.EnqueueRequestsFromMapFunc(r.cueConfigMapToAutoConfig),
+			handler.EnqueueRequestsFromMapFunc(r.configMapToAutoConfigs),
 		).
 		Named("krakendautoconfig").
 		Complete(r)
+}
+
+// autoConfigPredicate gates the primary KrakenDAutoConfig watch. Status-only
+// updates (the phase transitions Reconcile writes itself) must not
+// re-enqueue the object — that is what caused the status-write loop.
+// Generation covers spec changes; labels are included because application
+// deploys relabel the AutoConfig; annotations are included so `kubectl
+// annotate` can force an immediate reconcile.
+func autoConfigPredicate() predicate.Predicate {
+	return predicate.Or(
+		predicate.GenerationChangedPredicate{},
+		predicate.LabelChangedPredicate{},
+		predicate.AnnotationChangedPredicate{},
+	)
+}
+
+// ownedEndpointPredicate gates the Owns(KrakenDEndpoint) watch: endpoint
+// status updates alone must not re-enqueue the owning AutoConfig, only spec
+// changes (generation bumps) and deletes (e.g. drift from an external actor).
+func ownedEndpointPredicate() predicate.Predicate {
+	return predicate.GenerationChangedPredicate{}
 }
 
 func (r *KrakenDAutoConfigReconciler) handleFetchError(
@@ -539,7 +562,7 @@ func (r *KrakenDAutoConfigReconciler) reconcileEndpoints(
 	return nil
 }
 
-func (r *KrakenDAutoConfigReconciler) cueConfigMapToAutoConfig(
+func (r *KrakenDAutoConfigReconciler) configMapToAutoConfigs(
 	ctx context.Context,
 	obj client.Object,
 ) []reconcile.Request {
@@ -556,20 +579,33 @@ func (r *KrakenDAutoConfigReconciler) cueConfigMapToAutoConfig(
 	var requests []reconcile.Request
 	for i := range acList.Items {
 		ac := &acList.Items[i]
-		if cm.Name == defaultCUEDefinitionsConfigMap {
-			requests = append(requests, reconcile.Request{
-				NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
-			})
+		if !autoConfigReferencesConfigMap(ac, cm.Name) {
 			continue
 		}
-		if ac.Spec.CUE != nil && ac.Spec.CUE.DefinitionsConfigMapRef != nil &&
-			ac.Spec.CUE.DefinitionsConfigMapRef.Name == cm.Name {
-			requests = append(requests, reconcile.Request{
-				NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
-			})
-		}
+		requests = append(requests, reconcile.Request{
+			NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+		})
 	}
 	return requests
+}
+
+// autoConfigReferencesConfigMap reports whether cmName is a ConfigMap the
+// given AutoConfig depends on: the default CUE definitions, its custom CUE
+// definitions, or its OpenAPI spec source. A single bool per condition keeps
+// configMapToAutoConfigs from enqueuing the same AutoConfig twice when more
+// than one of these happens to point at the same ConfigMap.
+func autoConfigReferencesConfigMap(ac *v1alpha1.KrakenDAutoConfig, cmName string) bool {
+	if cmName == defaultCUEDefinitionsConfigMap {
+		return true
+	}
+	if ac.Spec.CUE != nil && ac.Spec.CUE.DefinitionsConfigMapRef != nil &&
+		ac.Spec.CUE.DefinitionsConfigMapRef.Name == cmName {
+		return true
+	}
+	if ac.Spec.OpenAPI.ConfigMapRef != nil && ac.Spec.OpenAPI.ConfigMapRef.Name == cmName {
+		return true
+	}
+	return false
 }
 
 // extractHost returns the scheme, host, and optional port from an absolute URL string.

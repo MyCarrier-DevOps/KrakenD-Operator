@@ -35,6 +35,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 )
 
 // --- Mock Fetcher ---
@@ -1008,6 +1009,92 @@ func TestAutoConfigReconcile_EvaluatorWarningsEmittedBeforeUnmatchedFailure(t *t
 	}
 }
 
+func TestAutoConfigPredicate_IgnoresStatusOnlyUpdate(t *testing.T) {
+	old := &v1alpha1.KrakenDAutoConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "test-ac",
+			Namespace:   "default",
+			Generation:  1,
+			Labels:      map[string]string{"team": "payments"},
+			Annotations: map[string]string{"gateway.krakend.io/reconcile": "1"},
+		},
+		Status: v1alpha1.KrakenDAutoConfigStatus{Phase: v1alpha1.AutoConfigPhaseFetching},
+	}
+	newObj := old.DeepCopy()
+	newObj.Status.Phase = v1alpha1.AutoConfigPhaseSynced
+
+	if autoConfigPredicate().Update(event.UpdateEvent{ObjectOld: old, ObjectNew: newObj}) {
+		t.Error("expected status-only update to be ignored")
+	}
+}
+
+func TestAutoConfigPredicate_AcceptsGenerationLabelAndAnnotationChanges(t *testing.T) {
+	base := func() *v1alpha1.KrakenDAutoConfig {
+		return &v1alpha1.KrakenDAutoConfig{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        "test-ac",
+				Namespace:   "default",
+				Generation:  1,
+				Labels:      map[string]string{"team": "payments"},
+				Annotations: map[string]string{"gateway.krakend.io/reconcile": "1"},
+			},
+		}
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(ac *v1alpha1.KrakenDAutoConfig)
+	}{
+		{
+			name:   "generation bump",
+			mutate: func(ac *v1alpha1.KrakenDAutoConfig) { ac.Generation = 2 },
+		},
+		{
+			name:   "label change",
+			mutate: func(ac *v1alpha1.KrakenDAutoConfig) { ac.Labels["team"] = "platform" },
+		},
+		{
+			name:   "annotation change",
+			mutate: func(ac *v1alpha1.KrakenDAutoConfig) { ac.Annotations["gateway.krakend.io/reconcile"] = "2" },
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			old := base()
+			newObj := old.DeepCopy()
+			tt.mutate(newObj)
+
+			if !autoConfigPredicate().Update(event.UpdateEvent{ObjectOld: old, ObjectNew: newObj}) {
+				t.Errorf("expected %s to trigger reconcile", tt.name)
+			}
+		})
+	}
+}
+
+func TestOwnedEndpointPredicate_IgnoresStatusOnlyUpdateAcceptsSpecAndDelete(t *testing.T) {
+	old := &v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-ac-listusers", Namespace: "default", Generation: 1},
+		Status:     v1alpha1.KrakenDEndpointStatus{Phase: v1alpha1.EndpointPhasePending},
+	}
+
+	statusOnly := old.DeepCopy()
+	statusOnly.Status.Phase = v1alpha1.EndpointPhaseActive
+	if ownedEndpointPredicate().Update(event.UpdateEvent{ObjectOld: old, ObjectNew: statusOnly}) {
+		t.Error("expected status-only endpoint update to be ignored")
+	}
+
+	specChange := old.DeepCopy()
+	specChange.Generation = 2
+	if !ownedEndpointPredicate().Update(event.UpdateEvent{ObjectOld: old, ObjectNew: specChange}) {
+		t.Error("expected generation change to trigger reconcile")
+	}
+
+	if !ownedEndpointPredicate().Delete(event.DeleteEvent{Object: old}) {
+		t.Error("expected delete to trigger reconcile")
+	}
+}
+
 func TestCueConfigMapToAutoConfig_DefaultCM(t *testing.T) {
 	ac := testAutoConfig()
 	c := fakeClientBuilder().WithObjects(ac).Build()
@@ -1021,7 +1108,7 @@ func TestCueConfigMapToAutoConfig_DefaultCM(t *testing.T) {
 		},
 	}
 
-	requests := r.cueConfigMapToAutoConfig(context.Background(), cm)
+	requests := r.configMapToAutoConfigs(context.Background(), cm)
 	if len(requests) != 1 {
 		t.Fatalf("expected 1 request, got %d", len(requests))
 	}
@@ -1046,7 +1133,7 @@ func TestCueConfigMapToAutoConfig_CustomCM(t *testing.T) {
 		},
 	}
 
-	requests := r.cueConfigMapToAutoConfig(context.Background(), cm)
+	requests := r.configMapToAutoConfigs(context.Background(), cm)
 	if len(requests) != 1 {
 		t.Fatalf("expected 1 request, got %d", len(requests))
 	}
@@ -1065,9 +1152,48 @@ func TestCueConfigMapToAutoConfig_UnrelatedCM(t *testing.T) {
 		},
 	}
 
-	requests := r.cueConfigMapToAutoConfig(context.Background(), cm)
+	requests := r.configMapToAutoConfigs(context.Background(), cm)
 	if len(requests) != 0 {
 		t.Errorf("expected 0 requests for unrelated ConfigMap, got %d", len(requests))
+	}
+}
+
+func TestConfigMapToAutoConfigs_SpecConfigMap(t *testing.T) {
+	ac := testAutoConfig()
+	ac.Name = "users-ac"
+	ac.Spec.OpenAPI = v1alpha1.OpenAPISource{
+		ConfigMapRef: &v1alpha1.ConfigMapKeyRef{Name: "users-spec"},
+	}
+	c := fakeClientBuilder().WithObjects(ac).Build()
+	f, ce, fi, g := defaultMocks()
+	r := newACReconciler(c, f, ce, fi, g)
+
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "users-spec",
+			Namespace: "default",
+		},
+	}
+
+	requests := r.configMapToAutoConfigs(context.Background(), cm)
+	if len(requests) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(requests))
+	}
+	if requests[0].Name != "users-ac" || requests[0].Namespace != "default" {
+		t.Errorf("expected request for default/users-ac, got %s/%s", requests[0].Namespace, requests[0].Name)
+	}
+
+	// Same-named ConfigMap in another namespace must not match the
+	// default-namespace AutoConfig.
+	otherNsCM := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "users-spec",
+			Namespace: "other",
+		},
+	}
+	requests = r.configMapToAutoConfigs(context.Background(), otherNsCM)
+	if len(requests) != 0 {
+		t.Errorf("expected 0 requests for cross-namespace ConfigMap, got %d", len(requests))
 	}
 }
 
