@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
-	"sort"
 	"strings"
 
 	"cuelang.org/go/cue"
@@ -406,15 +405,15 @@ func applyFieldOverrides(output *CUEOutput, overrides []v1alpha1.OperationOverri
 		return
 	}
 
-	// Build operationID → entry index lookup
+	// Build operationID → entry index lookup in Entries order, first
+	// occurrence wins: the generator publishes only the first entry for a
+	// duplicate operationId, so the override must land on that one.
 	opIDIndex := make(map[string]int, len(output.Entries))
-	for _, key := range sortedKeys(output.OperationIDs) {
-		opID := output.OperationIDs[key]
-		for i := range output.Entries {
-			entryKey := output.Entries[i].Endpoint + ":" + output.Entries[i].Method
-			if entryKey == key {
+	for i := range output.Entries {
+		key := output.Entries[i].Endpoint + ":" + output.Entries[i].Method
+		if opID, ok := output.OperationIDs[key]; ok {
+			if _, seen := opIDIndex[opID]; !seen {
 				opIDIndex[opID] = i
-				break
 			}
 		}
 	}
@@ -550,14 +549,4 @@ func deepMergeJSON(base, patch json.RawMessage) json.RawMessage {
 		return patch
 	}
 	return merged
-}
-
-// sortedKeys returns the keys of a map in stable order for deterministic processing.
-func sortedKeys(m map[string]string) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
 }

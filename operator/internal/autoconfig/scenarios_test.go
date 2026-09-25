@@ -1285,3 +1285,67 @@ func TestScenario_BackendDefaultsScalarFieldsSurviveOverride(t *testing.T) {
 		t.Errorf("Order backend[0]: expected encoding=safejson, got %s", order.Backends[0].Encoding)
 	}
 }
+
+// =========================================================================
+// Scenario: Two operations share an operationId (invalid, but seen in real
+// specs) and the user overrides that operationId.
+// Expected: The generator publishes only the first entry for a duplicate
+// operationId, so the override must land on that published endpoint — not
+// on the duplicate the generator skips, which would drop it silently.
+// =========================================================================
+
+func TestScenario_DuplicateOperationIdOverrideAppliedToPublishedEndpoint(t *testing.T) {
+	defs, err := EmbeddedCUEDefinitions()
+	if err != nil {
+		t.Fatalf("loading defs: %v", err)
+	}
+
+	specJSON := []byte(`{
+		"paths": {
+			"/z": {"get": {"operationId": "dup", "responses": {"200": {"description": "OK"}}}},
+			"/a": {"get": {"operationId": "dup", "responses": {"200": {"description": "OK"}}}}
+		}
+	}`)
+	overrideTimeout := metav1.Duration{Duration: 42 * time.Second}
+
+	eval := NewCUEEvaluator()
+	out, err := eval.Evaluate(context.Background(), CUEInput{
+		SpecData:    specJSON,
+		SpecFormat:  v1alpha1.SpecFormatJSON,
+		DefaultDefs: defs,
+		ServiceName: "_spec",
+		DefaultHost: "http://dup-svc.dev.svc:8080",
+		Overrides: []v1alpha1.OperationOverride{
+			{OperationID: "dup", Timeout: &overrideTimeout},
+		},
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if len(out.UnmatchedOverrides) != 0 {
+		t.Errorf("expected no UnmatchedOverrides, got %v", out.UnmatchedOverrides)
+	}
+
+	ac := &v1alpha1.KrakenDAutoConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "dup-svc", Namespace: "default"},
+		Spec:       v1alpha1.KrakenDAutoConfigSpec{GatewayRef: v1alpha1.GatewayRef{Name: "gw"}},
+	}
+	genOut, err := NewGenerator().Generate(context.Background(), GenerateInput{
+		AutoConfig:   ac,
+		Entries:      out.Entries,
+		OperationIDs: out.OperationIDs,
+		GatewayRef:   ac.Spec.GatewayRef,
+	})
+	if err != nil {
+		t.Fatalf("generator: %v", err)
+	}
+	if len(genOut.Endpoints) != 1 {
+		t.Fatalf("expected 1 generated endpoint (duplicate skipped), got %d", len(genOut.Endpoints))
+	}
+
+	published := genOut.Endpoints[0].Spec.Endpoints[0]
+	if published.Timeout == nil || published.Timeout.Duration != 42*time.Second {
+		t.Errorf("published endpoint %s: timeout = %v, want 42s from the override",
+			published.Endpoint, published.Timeout)
+	}
+}
