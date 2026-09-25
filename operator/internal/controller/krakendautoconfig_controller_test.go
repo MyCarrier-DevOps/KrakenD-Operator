@@ -746,6 +746,105 @@ func TestAutoConfigReconcile_UnmatchedOverridePeriodicRequeues(t *testing.T) {
 	}
 }
 
+func TestAutoConfigReconcile_EvaluatorWarningsEmitEvents(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	ac.Status.Phase = v1alpha1.AutoConfigPhasePending
+	c := fakeClientBuilder().
+		WithObjects(ac, cm).
+		WithStatusSubresource(ac).
+		Build()
+	f, ce, fi, g := defaultMocks()
+	ce.output.Warnings = []string{"skipping /x:GET: boom"}
+	rec := fakeRecorder()
+	r := &KrakenDAutoConfigReconciler{
+		Client: c, Scheme: testScheme(), Recorder: rec,
+		Fetcher: f, CUEEvaluator: ce, Filter: fi, Generator: g,
+	}
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+	}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	var updated v1alpha1.KrakenDAutoConfig
+	if err := c.Get(
+		context.Background(),
+		types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+		&updated,
+	); err != nil {
+		t.Fatalf("getting updated autoconfig: %v", err)
+	}
+	if updated.Status.Phase != v1alpha1.AutoConfigPhaseSynced {
+		t.Errorf("expected phase Synced, got %s", updated.Status.Phase)
+	}
+
+	wantEvent := "Warning CUEEvaluationWarning skipping /x:GET: boom"
+	var sawWarning bool
+	for {
+		select {
+		case ev := <-rec.Events:
+			if ev == wantEvent {
+				sawWarning = true
+			}
+			continue
+		default:
+		}
+		break
+	}
+	if !sawWarning {
+		t.Fatalf("expected event %q", wantEvent)
+	}
+}
+
+func TestAutoConfigReconcile_EvaluatorWarningsEmittedBeforeUnmatchedFailure(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	ac.Status.Phase = v1alpha1.AutoConfigPhasePending
+	c := fakeClientBuilder().
+		WithObjects(ac, cm).
+		WithStatusSubresource(ac).
+		Build()
+	f, ce, fi, g := defaultMocks()
+	ce.output.Warnings = []string{"skipping /x:GET: boom"}
+	ce.output.UnmatchedOverrides = []string{"WebhookStatus"}
+	rec := fakeRecorder()
+	r := &KrakenDAutoConfigReconciler{
+		Client: c, Scheme: testScheme(), Recorder: rec,
+		Fetcher: f, CUEEvaluator: ce, Filter: fi, Generator: g,
+	}
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+	}); err == nil {
+		t.Fatal("expected error for OnChange trigger, got nil")
+	}
+
+	wantWarningEvent := "Warning CUEEvaluationWarning skipping /x:GET: boom"
+	var sawWarning, sawUnmatched bool
+	for {
+		select {
+		case ev := <-rec.Events:
+			if ev == wantWarningEvent {
+				sawWarning = true
+			}
+			if strings.Contains(ev, "UnmatchedOverride") {
+				sawUnmatched = true
+			}
+			continue
+		default:
+		}
+		break
+	}
+	if !sawWarning {
+		t.Errorf("expected event %q", wantWarningEvent)
+	}
+	if !sawUnmatched {
+		t.Error("expected UnmatchedOverride warning event")
+	}
+}
+
 func TestCueConfigMapToAutoConfig_DefaultCM(t *testing.T) {
 	ac := testAutoConfig()
 	c := fakeClientBuilder().WithObjects(ac).Build()

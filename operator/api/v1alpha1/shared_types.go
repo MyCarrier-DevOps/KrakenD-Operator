@@ -134,6 +134,7 @@ const (
 	ReasonDuplicateOperationId          = "DuplicateOperationId"
 	ReasonRolloutFailed                 = "RolloutFailed"
 	ReasonCUEEvaluationFailed           = "CUEEvaluationFailed"
+	ReasonCUEEvaluationWarning          = "CUEEvaluationWarning"
 	ReasonAdditionalEndpointOverride    = "AdditionalEndpointOverride"
 	ReasonAdditionalEndpointScopeFailed = "AdditionalEndpointScopeFailed"
 	ReasonUnmatchedOverride             = "UnmatchedOverride"
