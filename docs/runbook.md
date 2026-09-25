@@ -272,14 +272,17 @@ comma-separated>`. A matching `Warning` event is also emitted.
 
 **Common causes:**
 - A `spec.overrides[].operationId` doesn't match any operationId in the fetched OpenAPI spec (e.g. the service doesn't declare an operationId for that operation at all)
+- If the operationId *is* in the spec, check the AutoConfig's `CUEEvaluationWarning` events — the operation may have been skipped during evaluation
 
-**Fix:** Correct the override's `operationId` to match the spec, or remove
-the override if it's no longer needed. If the target operation has no
-`operationId` at all, move the config into `spec.defaults` (applies to every
-generated operation) instead of an override, or add an `operationId` to the
-service's OpenAPI spec. Existing `KrakenDEndpoints` keep their last-good
-state — nothing regenerates — until the override is fixed and the resource
-re-syncs.
+**Resolution:** Correct the override's `operationId` to match the spec, or
+remove the override if it's no longer needed. If the target operation has no
+`operationId` at all: `spec.defaults` applies to every generated operation;
+for that single operation, add an `operationId` to the service's OpenAPI spec,
+replace the operation with an `additionalEndpoints` entry (the same endpoint
+and method replaces the spec-derived one), or use a custom CUE definitions
+ConfigMap (`spec.cue.definitionsConfigMapRef`). Existing `KrakenDEndpoints`
+keep their last-good state — nothing regenerates — until the override is fixed
+and the resource re-syncs.
 
 ### License expiry warnings
 
