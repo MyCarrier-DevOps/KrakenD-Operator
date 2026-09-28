@@ -229,13 +229,20 @@ func drainEvents(rec *record.FakeRecorder) []string {
 	}
 }
 
-// hasEventReason reports whether any of the drained events has the given
-// reason. FakeRecorder formats each event as "<type> <reason> <message>".
-func hasEventReason(events []string, reason string) bool {
-	return slices.ContainsFunc(events, func(ev string) bool {
+// eventReasonIndex returns the index of the first drained event with the
+// given reason, or -1. FakeRecorder formats each event as
+// "<type> <reason> <message>".
+func eventReasonIndex(events []string, reason string) int {
+	return slices.IndexFunc(events, func(ev string) bool {
 		fields := strings.SplitN(ev, " ", 3)
 		return len(fields) > 1 && fields[1] == reason
 	})
+}
+
+// hasEventReason reports whether any of the drained events has the given
+// reason.
+func hasEventReason(events []string, reason string) bool {
+	return eventReasonIndex(events, reason) >= 0
 }
 
 // inputWarningReasons are the warning events emitted only when a reconcile's
@@ -1681,12 +1688,19 @@ func TestAutoConfigReconcile_SyncStatusConflictRequeuesQuietly(t *testing.T) {
 	cm := testCUEDefinitionsCM()
 	ac := testAutoConfig()
 	ac.Status.Phase = v1alpha1.AutoConfigPhasePending
+	// Inputs changed, and each input warning applies: none may be recorded
+	// by a reconcile whose status write then conflicts.
+	ac.Spec.AdditionalEndpoints = []v1alpha1.AdditionalEndpoint{
+		{Endpoint: "/api/users", Method: "GET", Host: "http://override"},
+	}
 	c := fakeClientBuilder().
 		WithObjects(ac, cm).
 		WithStatusSubresource(ac).
 		WithInterceptorFuncs(conflictStatusWrites()).
 		Build()
 	f, ce, fi, g := defaultMocks()
+	ce.output.Warnings = []string{"skipping /x:GET: boom"}
+	g.output.Duplicates = []string{"listUsers"}
 	rec := fakeRecorder()
 	r := newACReconciler(c, f, ce, fi, g)
 	r.Recorder = rec
@@ -1766,6 +1780,9 @@ func TestAutoConfigReconcile_SyncedFailureStatusConflictRequeuesQuietly(t *testi
 		WithInterceptorFuncs(conflictStatusWrites()).
 		Build()
 	f, ce, fi, g := defaultMocks()
+	// Inputs changed and the evaluator warns: the warning must not be
+	// recorded by a reconcile whose status write then conflicts.
+	ce.output.Warnings = []string{"skipping /x:GET: boom"}
 	ce.output.UnmatchedOverrides = []string{"WebhookStatus"}
 	rec := fakeRecorder()
 	r := newACReconciler(c, f, ce, fi, g)
@@ -1923,6 +1940,45 @@ func TestAutoConfigReconcile_ChangedInputsEmitsInputWarningEvents(t *testing.T) 
 	for _, reason := range inputWarningReasons {
 		if !hasEventReason(events, reason) {
 			t.Errorf("expected %s event when inputs changed, got %v", reason, events)
+		}
+	}
+}
+
+func TestAutoConfigReconcile_InputWarningEventsPrecedeEndpointsGenerated(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	ac.Status.Phase = v1alpha1.AutoConfigPhasePending
+	ac.Spec.AdditionalEndpoints = []v1alpha1.AdditionalEndpoint{
+		{Endpoint: "/api/users", Method: "GET", Host: "http://override"},
+	}
+	c := fakeClientBuilder().
+		WithObjects(ac, cm).
+		WithStatusSubresource(ac).
+		Build()
+	f, ce, fi, g := defaultMocks()
+	ce.output.Warnings = []string{"skipping /x:GET: boom"}
+	g.output.Duplicates = []string{"listUsers"}
+	rec := fakeRecorder()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Recorder = rec
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+	}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	events := drainEvents(rec)
+	generatedIdx := eventReasonIndex(events, v1alpha1.ReasonEndpointsGenerated)
+	if generatedIdx < 0 {
+		t.Fatalf("expected %s event, got %v", v1alpha1.ReasonEndpointsGenerated, events)
+	}
+	for _, reason := range inputWarningReasons {
+		idx := eventReasonIndex(events, reason)
+		if idx < 0 {
+			t.Errorf("expected %s event, got %v", reason, events)
+		} else if idx > generatedIdx {
+			t.Errorf("expected %s before %s, got %v", reason, v1alpha1.ReasonEndpointsGenerated, events)
 		}
 	}
 }
