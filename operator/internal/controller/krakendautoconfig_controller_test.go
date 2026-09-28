@@ -1584,7 +1584,7 @@ func TestAutoConfigReconcile_SyncedFailureStatusUpdateErrorNamesReason(t *testin
 			opts ...client.SubResourceUpdateOption,
 		) error {
 			if a, ok := obj.(*v1alpha1.KrakenDAutoConfig); ok && a.Status.Phase == v1alpha1.AutoConfigPhaseError {
-				return fmt.Errorf("simulated conflict")
+				return fmt.Errorf("simulated server error")
 			}
 			return c.SubResource(subResource).Update(ctx, obj, opts...)
 		},
@@ -1601,7 +1601,7 @@ func TestAutoConfigReconcile_SyncedFailureStatusUpdateErrorNamesReason(t *testin
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
 	})
-	want := "updating UnmatchedOverride status: simulated conflict"
+	want := "updating UnmatchedOverride status: simulated server error"
 	if err == nil || err.Error() != want {
 		t.Errorf("expected error %q, got %v", want, err)
 	}
