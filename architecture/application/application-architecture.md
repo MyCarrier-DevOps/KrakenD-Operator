@@ -1260,7 +1260,7 @@ flowchart TD
     B1 -->|Yes| B2[Set phase=Pending<br/>return requeue]
     B1 -->|No| D[Fetch OpenAPI spec<br/>via Fetcher]
     D --> E{Fetch OK?}
-    E -->|No| F[Set SpecAvailable=False<br/>phase=Error<br/>Emit SpecFetchFailed]
+    E -->|No| F[Set SpecAvailable=False<br/>Fail sync:<br/>SpecFetchFailed]
     E -->|Yes| G[Resolve external $refs, strip servers<br/>Set SpecAvailable=True]
     G --> H[Combined checksum: spec checksum +<br/>CUE definitions resourceVersion + generation<br/>inputsChanged = differs from status.specChecksum]
     H --> J1[Load default CUE definitions<br/>from krakend-cue-definitions ConfigMap<br/>or the embedded defaults]
@@ -1302,7 +1302,7 @@ flowchart TD
     R5 --> R6[RequeueAfter periodic.interval<br/>or 5m for OnChange]
 ```
 
-Every reconcile runs the whole pipeline — there is no checksum gate — so owned endpoints converge to the desired state whatever woke the controller. **Fail sync** is `handleSyncedFailure`: `phase=Error`, the `Synced` condition `False` with that reason, and a Warning event with the same reason; `OnChange` returns the error so controller-runtime retries with exponential backoff, `Periodic` requeues at `spec.periodic.interval`. A fetch failure (`SpecFetchFailed`) takes the same retry path but sets `SpecAvailable=False` instead of `Synced`. A failed sync leaves `status.specChecksum` at the last successful sync's value, and drift repair stops at the failure until a sync succeeds: every other failure stops the pipeline before any endpoint is touched, and an endpoint write failure stops convergence at that endpoint. `phase` never passes through `Fetching` or `Rendering`; the controller sets only `Pending`, `Synced`, and `Error`.
+Every reconcile runs the whole pipeline — there is no checksum gate — so owned endpoints converge to the desired state whatever woke the controller. **Fail sync** is `handleSyncedFailure`: `phase=Error`, the `Synced` condition `False` with that reason, and a Warning event with the same reason; `OnChange` returns the error so controller-runtime retries with exponential backoff, `Periodic` requeues at `spec.periodic.interval`. A fetch failure (`SpecFetchFailed`), including an external `$ref` document that can't be fetched or decoded, fails the sync the same way and also sets `SpecAvailable=False`. If the failure's status write conflicts, the reconcile still returns the failure's result (not the quiet one-second requeue, which would reset the backoff) and records no event. A failed sync leaves `status.specChecksum` at the last successful sync's value, and drift repair stops at the failure until a sync succeeds: every other failure stops the pipeline before any endpoint is touched, and an endpoint write failure stops convergence at that endpoint. `phase` never passes through `Fetching` or `Rendering`; the controller sets only `Pending`, `Synced`, and `Error`.
 
 A terminating AutoConfig (`deletionTimestamp` set) is not reconciled. Under foreground deletion it lingers while garbage collection deletes its endpoints, each delete re-enqueues it through the `Owns` watch, and converging would recreate the endpoint just collected.
 
@@ -2668,7 +2668,7 @@ client := fake.NewClientBuilder().
 | Programming errors | Panic (should never reach production) | Nil pointer on required field that passed webhook validation |
 | AutoConfig spec/CUE/unmatched-override/scope failures | `Periodic`: `RequeueAfter: spec.periodic.interval`; `OnChange`: return `error` for backoff | `SpecFetchFailed`, `CUEEvaluationFailed`, `UnmatchedOverride`, `AdditionalEndpointScopeFailed` — includes a failed external `$ref` fetch/decode, which fails closed as `SpecFetchFailed` instead of falling back to the raw spec |
 | AutoConfig endpoint write failures | Return `error` for backoff regardless of trigger (a `Periodic` AutoConfig does not wait for `spec.periodic.interval`) | `EndpointReconcileFailed` |
-| AutoConfig status/endpoint write conflicts | Quiet `RequeueAfter: 1s` — no error log, no event, no status change | Stale-cache `Conflict` on a status write, or `Conflict`/`AlreadyExists` on an endpoint write |
+| AutoConfig status/endpoint write conflicts | Quiet `RequeueAfter: 1s` — no error log, no event, no status change | Stale-cache `Conflict` on the initial-phase or a successful sync's status write, or `Conflict`/`AlreadyExists` on an endpoint write; a failed sync whose status write conflicts keeps its failure row's handling, with no event |
 
 ### Error Wrapping Convention
 
