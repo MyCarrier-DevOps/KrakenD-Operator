@@ -394,6 +394,44 @@ func TestAutoConfigReconcile_FetchError(t *testing.T) {
 	}
 }
 
+func TestAutoConfigReconcile_FetchErrorMarksSyncedFalse(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	ac.Status.Phase = v1alpha1.AutoConfigPhasePending
+	c := fakeClientBuilder().
+		WithObjects(ac, cm).
+		WithStatusSubresource(ac).
+		Build()
+	f, ce, fi, g := defaultMocks()
+	r := newACReconciler(c, f, ce, fi, g)
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace}}
+
+	// First reconcile succeeds: Synced=True.
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	// Second reconcile fails to fetch the spec: the Synced condition must
+	// agree with the phase and the gauge instead of keeping the last
+	// successful sync's True.
+	f.result = nil
+	f.err = fmt.Errorf("connection refused")
+	if _, err := r.Reconcile(context.Background(), req); err == nil {
+		t.Fatal("expected error for OnChange trigger, got nil")
+	}
+
+	var updated v1alpha1.KrakenDAutoConfig
+	if err := c.Get(context.Background(), req.NamespacedName, &updated); err != nil {
+		t.Fatalf("getting updated autoconfig: %v", err)
+	}
+	cond := meta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionSynced)
+	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != v1alpha1.ReasonSpecFetchFailed ||
+		cond.Message != "connection refused" {
+		t.Errorf("expected Synced False with reason %s and the fetch error as message, got %+v",
+			v1alpha1.ReasonSpecFetchFailed, cond)
+	}
+}
+
 func TestAutoConfigReconcile_ExternalRefFetchFailureFailsClosed(t *testing.T) {
 	cm := testCUEDefinitionsCM()
 	ac := testAutoConfig()
