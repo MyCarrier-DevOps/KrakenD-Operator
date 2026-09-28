@@ -21,6 +21,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"strings"
 	"testing"
 )
@@ -110,6 +111,38 @@ func TestResolveExternalRefs_RelativeRef(t *testing.T) {
 	}
 }
 
+func TestResolveExternalRefs_NestedRelativeRefResolvesAgainstContainingDocument(t *testing.T) {
+	// A relative ref inside a fetched document is relative to that
+	// document, not to the main spec.
+	main := []byte(`{"paths":{"/pets":{"get":{"responses":{"200":{"content":{"application/json":{` +
+		`"schema":{"$ref":"schemas/pet.json#/Pet"}}}}}}}}}`)
+	pet := []byte(`{"Pet":{"type":"object","properties":{"category":{"$ref":"category.json#/Category"}}}}`)
+	category := []byte(`{"Category":{"type":"string"}}`)
+
+	fetcher := &stubFetcher{docs: map[string][]byte{
+		"https://api.example.com/v1/schemas/pet.json":      pet,
+		"https://api.example.com/v1/schemas/category.json": category,
+	}}
+	resolved, warnings, err := ResolveExternalRefs(context.Background(), main,
+		"https://api.example.com/v1/openapi.json", fetcher, FetchSource{})
+	if err != nil {
+		t.Fatalf("resolve failed: %v (fetches: %v)", err, fetcher.hits)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("unexpected warnings: %v", warnings)
+	}
+	wantHits := map[string]int{
+		"https://api.example.com/v1/schemas/pet.json":      1,
+		"https://api.example.com/v1/schemas/category.json": 1,
+	}
+	if !maps.Equal(fetcher.hits, wantHits) {
+		t.Errorf("expected fetches %v, got %v", wantHits, fetcher.hits)
+	}
+	if !strings.Contains(string(resolved), `"$ref":"#/components/schemas/category_Category"`) {
+		t.Errorf("nested ref not rewritten to the inlined category schema: %s", resolved)
+	}
+}
+
 func TestResolveExternalRefs_InternalRefsUntouched(t *testing.T) {
 	main := []byte(
 		`{"components":{"schemas":{"X":{"type":"string"}}},"paths":{"/a":{"get":{"responses":{"200":{"$ref":"#/components/schemas/X"}}}}}}`,
@@ -186,6 +219,38 @@ func TestResolveExternalRefs_FetchFailureStopsFurtherResolution(t *testing.T) {
 	}
 	if fetcher.hits["https://schemas.example.com/two.json"] != 0 {
 		t.Fatalf("expected the second document not to be fetched after the first failure, got %v", fetcher.hits)
+	}
+}
+
+func TestResolveExternalRefs_NestedFetchFailureIsFatalAndStopsFurtherResolution(t *testing.T) {
+	// The first document fetches fine, but a ref inside it cannot be
+	// fetched: that failure is the resolve's fatal error, and nothing after
+	// it is fetched — neither the fetched document's next ref nor the main
+	// spec's next ref.
+	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"content":{"application/json":{"schema":{` +
+		`"anyOf":[{"$ref":"schemas/pet.json#/Pet"},{"$ref":"https://schemas.example.com/two.json#/B"}]` +
+		`}}}}}}}}}`)
+	pet := []byte(`{"Pet":{"anyOf":[{"$ref":"missing.json#/M"},{"$ref":"tag.json#/Tag"}]}}`)
+
+	fetcher := &stubFetcher{docs: map[string][]byte{
+		"https://api.example.com/v1/schemas/pet.json": pet,
+		"https://api.example.com/v1/schemas/tag.json": []byte(`{"Tag":{"type":"string"}}`),
+		"https://schemas.example.com/two.json":        []byte(`{"B":{"type":"string"}}`),
+	}}
+	_, _, err := ResolveExternalRefs(context.Background(), main,
+		"https://api.example.com/v1/openapi.json", fetcher, FetchSource{})
+	if err == nil {
+		t.Fatal("expected a fatal error for the failed nested $ref fetch")
+	}
+	if !strings.Contains(err.Error(), "https://api.example.com/v1/schemas/missing.json") {
+		t.Fatalf("expected error to mention the failing nested URL, got: %v", err)
+	}
+	wantHits := map[string]int{
+		"https://api.example.com/v1/schemas/pet.json":     1,
+		"https://api.example.com/v1/schemas/missing.json": 1,
+	}
+	if !maps.Equal(fetcher.hits, wantHits) {
+		t.Errorf("expected fetches %v, got %v", wantHits, fetcher.hits)
 	}
 }
 
