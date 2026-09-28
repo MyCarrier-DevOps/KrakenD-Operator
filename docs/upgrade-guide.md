@@ -168,18 +168,42 @@ idle.
   inputs, so they repeat on each retry of a failing sync whose inputs
   changed; a spec fetch failure emits `SpecFetchFailed` instead.
 - Endpoint write failures fail the sync: when a generated endpoint can't be
-  created, updated, or deleted (e.g. an admission webhook rejects it, or a
-  `KrakenDEndpoint` of that name is controlled by another owner), the
-  AutoConfig goes to `status.phase: Error` with `Synced=False`, reason
-  `EndpointReconcileFailed`, and a matching `Warning` event.
+  created, updated, or deleted for a reason other than a write conflict (e.g.
+  an admission webhook rejects it, or a `KrakenDEndpoint` of that name is
+  controlled by another owner), the AutoConfig goes to `status.phase: Error`
+  with `Synced=False`, reason `EndpointReconcileFailed`, and a matching
+  `Warning` event. This always retries with backoff, on both `OnChange` and
+  `Periodic` AutoConfigs — a `Periodic` AutoConfig no longer waits a whole
+  `spec.periodic.interval` to retry what's usually a transient write error.
+- Write conflicts retry quietly, not as a failure: a stale-cache `Conflict` on
+  a status write, or a `Conflict`/`AlreadyExists` on an endpoint write (this
+  reconcile raced another and lost), requeues one second later with no error
+  log, no event, and no status change — it does not set
+  `EndpointReconcileFailed` and does not touch `status.phase`. The
+  `CUEEvaluationWarning`/`DuplicateOperationId`/`AdditionalEndpointOverride`
+  warning events above are recorded only once the reconcile's own status
+  write succeeds, so a reconcile that loses to a conflict doesn't re-emit
+  them on its retry.
+- External `$ref` fetch/decode failures now fail closed: previously, a failed
+  fetch or decode of an externally-`$ref`'d document was only a warning, and
+  the raw `$ref` was left in the generated config — a transient failure could
+  silently change the rendered endpoints. It now fails the sync the same way
+  as an OpenAPI spec fetch failure: `status.phase: Error`,
+  `SpecAvailable=False`, reason `SpecFetchFailed`, message prefixed
+  `resolving external $refs: `; existing `KrakenDEndpoints` are left as they
+  were (last-good) until the reference is reachable again. A pointer not
+  found, a resolution cycle, or a schema-name collision between two `$ref`s
+  remain warnings, not failures.
 - Deletion: a terminating AutoConfig is not reconciled, so under foreground
   deletion (`kubectl delete --cascade=foreground`) the controller doesn't
   recreate generated endpoints while garbage collection deletes them.
 - `status.phase` no longer transitions through `Fetching`/`Rendering` — those
   enum values remain for compatibility, but the controller now only sets
   `Pending`, `Synced`, or `Error`.
-- Errors retry via controller-runtime's exponential backoff (`OnChange`) or
-  at the configured interval (`Periodic`), same as before.
+- Spec fetch, CUE, unmatched-override, and additional-endpoint scope failures
+  retry via controller-runtime's exponential backoff (`OnChange`) or at
+  `spec.periodic.interval` (`Periodic`), same as before; endpoint write
+  failures and write conflicts follow the different rules described above.
 
 To force an immediate reconcile — for example right after fixing an upstream
 spec — change any annotation on the resource:
@@ -231,9 +255,9 @@ the service's OpenAPI spec, replace the operation with an
 `additionalEndpoints` entry (the same endpoint and method replaces the
 spec-derived one), use a custom CUE definitions ConfigMap
 (`spec.cue.definitionsConfigMapRef`), or have the service declare `audience`
-directly on the operation — the default CUE definitions read it (`audience:
-*_op.audience | ["public"]` in `cue/defaults.cue`), avoiding an override
-entirely.
+directly on the operation as a list of strings — the default CUE definitions
+default it to `["public"]` when absent and require a list of strings when
+present (`cue/defaults.cue`), avoiding an override entirely.
 
 Custom CUE definitions that read `_overrides` under a key that doesn't
 correspond to an operationId the spec declares will now fail the sync, because
@@ -243,6 +267,18 @@ Separately, the evaluator's per-operation warnings (e.g. an operation skipped
 because it failed to convert) are now surfaced as `CUEEvaluationWarning`
 events on the `KrakenDAutoConfig` resource instead of being silently
 dropped; these do not change `status.phase` or conditions.
+
+`documentation/openapi.audience` must now be a list of strings wherever it's
+set: inside `extraConfig` on `spec.overrides[]`, `spec.defaults.endpoint`, or
+`spec.additionalEndpoints[]` (AutoConfig), on a `KrakenDEndpoint`'s
+`spec.endpoints[].extraConfig`, or declared directly on an OpenAPI operation.
+The admission webhook now rejects a non-list `extraConfig` value at `kubectl
+apply` time (`must be a list of strings, e.g. ["internal"]`); a value
+declared on the operation itself is caught by the default CUE definitions
+instead and fails the sync with reason `CUEEvaluationFailed`. Previously a
+malformed value (e.g. a YAML mapping) passed both checks unchanged and only
+surfaced as a `krakend check -tlc` failure, which blocks config updates for
+every service on that gateway — not just the one with the bad value.
 
 ---
 

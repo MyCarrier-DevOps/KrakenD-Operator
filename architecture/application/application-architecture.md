@@ -115,7 +115,7 @@ gatewayCtrl := &controller.GatewayReconciler{
     Clock:     clock,
 }
 
-autoconfigCtrl := &controller.AutoConfigReconciler{
+autoconfigCtrl := &controller.KrakenDAutoConfigReconciler{
     Client:       mgr.GetClient(),
     Scheme:       mgr.GetScheme(),
     Recorder:     recorder,
@@ -554,29 +554,48 @@ const (
 
 ### Event Reason Constants
 
+This is the set of reasons the controllers actually emit — `internal/webhook`
+validation errors are reported through the admission response, not events, so
+they carry no reason constant.
+
 ```go
 const (
-    ReasonConfigDeployed          = "ConfigDeployed"
-    ReasonConfigValidationFailed  = "ConfigValidationFailed"
-    ReasonLicenseExpiringSoon     = "LicenseExpiringSoon"
-    ReasonLicenseFallbackCE       = "LicenseFallbackCE"
-    ReasonLicenseExpiredNoFallback = "LicenseExpiredNoFallback"
-    ReasonLicenseRestored         = "LicenseRestored"
-    ReasonDragonflyNotReady       = "DragonflyNotReady"
-    ReasonIstioVSCreated          = "IstioVirtualServiceCreated"
-    ReasonEndpointConflict        = "EndpointConflict"
-    ReasonLicenseSecretSyncFailed = "LicenseSecretSyncFailed"
-    ReasonLicenseSecretMissing    = "LicenseSecretMissing"
-    ReasonSpecFetched             = "SpecFetched"
-    ReasonSpecFetchFailed         = "SpecFetchFailed"
-    ReasonEndpointsGenerated      = "EndpointsGenerated"
-    ReasonOperationFiltered       = "OperationFiltered"
-    ReasonMissingOperationId      = "MissingOperationId"
-    ReasonDuplicateOperationId    = "DuplicateOperationId"
-    ReasonRolloutFailed           = "RolloutFailed"
-    ReasonCUEEvaluationFailed     = "CUEEvaluationFailed"
+    ReasonConfigDeployed                = "ConfigDeployed"
+    ReasonConfigValidationFailed        = "ConfigValidationFailed"
+    ReasonLicenseExpiringSoon           = "LicenseExpiringSoon"
+    ReasonLicenseFallbackCE             = "LicenseFallbackCE"
+    ReasonLicenseExpiredNoFallback      = "LicenseExpiredNoFallback"
+    ReasonLicenseRestored               = "LicenseRestored"
+    ReasonDragonflyNotReady             = "DragonflyNotReady"
+    ReasonIstioVSCreated                = "IstioVirtualServiceCreated"
+    ReasonEndpointConflict              = "EndpointConflict"
+    ReasonEndpointInvalid               = "EndpointInvalid"
+    ReasonLicenseSecretMissing          = "LicenseSecretMissing"
+    ReasonSpecFetched                   = "SpecFetched"
+    ReasonSpecFetchFailed               = "SpecFetchFailed"
+    ReasonEndpointsGenerated            = "EndpointsGenerated"
+    ReasonDuplicateOperationId          = "DuplicateOperationId"
+    ReasonRolloutFailed                 = "RolloutFailed"
+    ReasonCUEEvaluationFailed           = "CUEEvaluationFailed"
+    ReasonCUEEvaluationWarning          = "CUEEvaluationWarning"
+    ReasonAdditionalEndpointOverride    = "AdditionalEndpointOverride"
+    ReasonAdditionalEndpointScopeFailed = "AdditionalEndpointScopeFailed"
+    ReasonUnmatchedOverride             = "UnmatchedOverride"
+    ReasonEndpointReconcileFailed       = "EndpointReconcileFailed"
+    ReasonPostRestartJobAlreadyRun      = "PostRestartJobAlreadyRun"
+    ReasonPostRestartJobCreated         = "PostRestartJobCreated"
+    ReasonPostRestartJobAdopted         = "PostRestartJobAdopted"
+    ReasonPostRestartJobROFSEnabled     = "ReadOnlyRootFilesystemEnabled"
+    ReasonPostRestartJobROFSDisabled    = "ReadOnlyRootFilesystemDisabled"
+    ReasonDragonflyRunAsRootUnacknowledged = "RunAsRootUnacknowledged"
+    ReasonDragonflyRunAsRootAcknowledged   = "RunAsRootAcknowledged"
+    ReasonDragonflyRunAsRootNoRequest      = "NoRunAsRootRequest"
 )
 ```
+
+`ReasonLicenseSecretSyncFailed`, `ReasonOperationFiltered`, and
+`ReasonMissingOperationId` are declared in `shared_types.go` but never
+emitted by any controller, so they are left out of this list.
 
 ### KrakenDEndpoint Type
 
@@ -798,7 +817,7 @@ graph TB
         GC[GatewayReconciler]
         EC[EndpointReconciler]
         PC[PolicyReconciler]
-        ACC[AutoConfigReconciler]
+        ACC[KrakenDAutoConfigReconciler]
         LM[LicenseMonitor]
     end
 
@@ -1210,14 +1229,14 @@ func (r *PolicyReconciler) endpointToReferencedPolicies(
 
 ## 8. AutoConfig Controller
 
-**File:** `internal/controller/autoconfig_controller.go`
+**File:** `internal/controller/krakendautoconfig_controller.go`
 
 The autoconfig controller watches `KrakenDAutoConfig` resources and orchestrates the OpenAPI-to-endpoint pipeline described in operator architecture §16. The controller uses CUE as its transformation engine: OpenAPI spec data is unified with CUE definitions to produce `KrakenDEndpointSpec` objects.
 
 ### Reconciler Struct
 
 ```go
-type AutoConfigReconciler struct {
+type KrakenDAutoConfigReconciler struct {
     client.Client
     Scheme       *runtime.Scheme
     Recorder     record.EventRecorder
@@ -1298,7 +1317,7 @@ A successful reconcile returns `ctrl.Result{RequeueAfter: interval}`: `spec.peri
 ### SetupWithManager
 
 ```go
-func (r *AutoConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *KrakenDAutoConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
     return ctrl.NewControllerManagedBy(mgr).
         For(&v1alpha1.KrakenDAutoConfig{}, builder.WithPredicates(predicate.Or(
             predicate.GenerationChangedPredicate{},
@@ -2647,6 +2666,9 @@ client := fake.NewClientBuilder().
 | Permanent validation errors | Set status condition, emit event, return `nil` (no retry) | Config fails `krakend check -tlc` |
 | Missing prerequisites | Set status condition, return `nil` with `RequeueAfter` | License Secret not yet synced |
 | Programming errors | Panic (should never reach production) | Nil pointer on required field that passed webhook validation |
+| AutoConfig spec/CUE/unmatched-override/scope failures | `Periodic`: `RequeueAfter: spec.periodic.interval`; `OnChange`: return `error` for backoff | `SpecFetchFailed`, `CUEEvaluationFailed`, `UnmatchedOverride`, `AdditionalEndpointScopeFailed` — includes a failed external `$ref` fetch/decode, which fails closed as `SpecFetchFailed` instead of falling back to the raw spec |
+| AutoConfig endpoint write failures | Return `error` for backoff regardless of trigger (a `Periodic` AutoConfig does not wait for `spec.periodic.interval`) | `EndpointReconcileFailed` |
+| AutoConfig status/endpoint write conflicts | Quiet `RequeueAfter: 1s` — no error log, no event, no status change | Stale-cache `Conflict` on a status write, or `Conflict`/`AlreadyExists` on an endpoint write |
 
 ### Error Wrapping Convention
 
