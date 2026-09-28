@@ -56,6 +56,13 @@ const defaultCUEDefinitionsConfigMap = "krakend-cue-definitions"
 // endpoint changes are converged by the next successful sync.
 const defaultResyncInterval = 5 * time.Minute
 
+// conflictRequeueDelay is how soon a reconcile that lost a write race is
+// retried: one whose status or endpoint write was rejected with a Conflict
+// (or an AlreadyExists, for an endpoint create) because it acted on a stale
+// cached copy. Such a reconcile requeues quietly, with no error, event or
+// status change.
+const conflictRequeueDelay = time.Second
+
 // KrakenDAutoConfigReconciler reconciles a KrakenDAutoConfig object.
 // It orchestrates the OpenAPI-to-endpoint pipeline: fetch spec,
 // evaluate CUE, filter, generate, and diff/create/update/delete endpoints.
@@ -106,7 +113,7 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	if ac.Status.Phase == "" {
 		ac.Status.Phase = v1alpha1.AutoConfigPhasePending
 		if err := r.Status().Update(ctx, &ac); err != nil {
-			return ctrl.Result{}, fmt.Errorf("setting initial phase: %w", err)
+			return statusWriteFailure(fmt.Errorf("setting initial phase: %w", err))
 		}
 		return ctrl.Result{Requeue: true}, nil
 	}
@@ -249,12 +256,11 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// Diff and reconcile endpoints
 	changes, err := r.reconcileEndpoints(ctx, &ac, genOutput.Endpoints)
 	if err != nil {
-		return r.handleSyncedFailure(ctx, &ac, v1alpha1.ReasonEndpointReconcileFailed,
-			fmt.Errorf("reconciling endpoints: %w", err))
+		return r.handleEndpointError(ctx, &ac, err)
 	}
 
 	if err := r.recordSync(ctx, &ac, origStatus, combinedChecksum, genOutput, changes); err != nil {
-		return ctrl.Result{}, err
+		return statusWriteFailure(err)
 	}
 
 	log.V(1).Info("autoconfig reconciled",
@@ -314,7 +320,7 @@ func (r *KrakenDAutoConfigReconciler) handleFetchError(
 		Message:            fetchErr.Error(),
 	})
 	if err := r.Status().Update(ctx, ac); err != nil {
-		return ctrl.Result{}, fmt.Errorf("updating fetch error status: %w", err)
+		return statusWriteFailure(fmt.Errorf("updating fetch error status: %w", err))
 	}
 	r.Recorder.Event(ac, "Warning", v1alpha1.ReasonSpecFetchFailed, fetchErr.Error())
 	// For periodic triggers, requeue via interval; for OnChange, return error
@@ -345,13 +351,41 @@ func (r *KrakenDAutoConfigReconciler) handleSyncedFailure(
 		Message:            syncErr.Error(),
 	})
 	if err := r.Status().Update(ctx, ac); err != nil {
-		return ctrl.Result{}, fmt.Errorf("updating %s status: %w", reason, err)
+		return statusWriteFailure(fmt.Errorf("updating %s status: %w", reason, err))
 	}
 	r.Recorder.Event(ac, "Warning", reason, syncErr.Error())
 	if ac.Spec.Trigger == v1alpha1.TriggerPeriodic {
 		return r.requeueResult(ac), nil
 	}
 	return ctrl.Result{}, syncErr
+}
+
+// handleEndpointError handles a failed endpoint write. One rejected with a
+// Conflict or an AlreadyExists lost a race with a newer copy of the endpoint
+// than this reconcile read; it requeues quietly after conflictRequeueDelay.
+// Any other error fails the sync with EndpointReconcileFailed.
+func (r *KrakenDAutoConfigReconciler) handleEndpointError(
+	ctx context.Context,
+	ac *v1alpha1.KrakenDAutoConfig,
+	endpointErr error,
+) (ctrl.Result, error) {
+	if errors.IsConflict(endpointErr) || errors.IsAlreadyExists(endpointErr) {
+		return ctrl.Result{RequeueAfter: conflictRequeueDelay}, nil
+	}
+	return r.handleSyncedFailure(ctx, ac, v1alpha1.ReasonEndpointReconcileFailed,
+		fmt.Errorf("reconciling endpoints: %w", endpointErr))
+}
+
+// statusWriteFailure returns the reconcile result for a failed AutoConfig
+// status write. A Conflict means this reconcile read a stale copy of the
+// AutoConfig: it requeues quietly after conflictRequeueDelay, so the retry
+// reads the current copy, instead of surfacing a reconciler error. Any other
+// error is returned for controller-runtime to retry with backoff.
+func statusWriteFailure(err error) (ctrl.Result, error) {
+	if errors.IsConflict(err) {
+		return ctrl.Result{RequeueAfter: conflictRequeueDelay}, nil
+	}
+	return ctrl.Result{}, err
 }
 
 func (r *KrakenDAutoConfigReconciler) handleCUEError(

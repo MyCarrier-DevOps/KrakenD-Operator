@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -34,6 +35,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -1595,6 +1597,184 @@ func TestAutoConfigReconcile_SyncedFailureStatusUpdateErrorNamesReason(t *testin
 	if err == nil || err.Error() != want {
 		t.Errorf("expected error %q, got %v", want, err)
 	}
+}
+
+// conflictError returns the Conflict the API server answers a write with
+// when the writer's copy of the object is stale.
+func conflictError(resource, name string) error {
+	return apierrors.NewConflict(
+		schema.GroupResource{Group: v1alpha1.GroupVersion.Group, Resource: resource},
+		name, errors.New("the object has been modified; please apply your changes to the latest version"))
+}
+
+// conflictStatusWrites returns interceptor funcs that reject every status
+// write with a Conflict, as for a reconcile that read a stale cached copy.
+func conflictStatusWrites() interceptor.Funcs {
+	return interceptor.Funcs{
+		SubResourceUpdate: func(
+			_ context.Context,
+			_ client.Client,
+			_ string,
+			obj client.Object,
+			_ ...client.SubResourceUpdateOption,
+		) error {
+			return conflictError("krakendautoconfigs", obj.GetName())
+		},
+	}
+}
+
+// assertQuietRequeue checks that a reconcile which lost a write race
+// requeued after conflictRequeueDelay with no error and no event.
+func assertQuietRequeue(t *testing.T, result ctrl.Result, err error, rec *record.FakeRecorder) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("expected no error for a lost write race, got %v", err)
+	}
+	if result.RequeueAfter != conflictRequeueDelay {
+		t.Errorf("expected requeue after %v, got %v", conflictRequeueDelay, result.RequeueAfter)
+	}
+	if events := drainEvents(rec); len(events) != 0 {
+		t.Errorf("expected no events, got %v", events)
+	}
+}
+
+func TestAutoConfigReconcile_InitialPhaseStatusConflictRequeuesQuietly(t *testing.T) {
+	ac := testAutoConfig()
+	c := fakeClientBuilder().
+		WithObjects(ac).
+		WithStatusSubresource(ac).
+		WithInterceptorFuncs(conflictStatusWrites()).
+		Build()
+	f, ce, fi, g := defaultMocks()
+	rec := fakeRecorder()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Recorder = rec
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+	})
+	assertQuietRequeue(t, result, err, rec)
+}
+
+func TestAutoConfigReconcile_FetchErrorStatusConflictRequeuesQuietly(t *testing.T) {
+	ac := testAutoConfig()
+	ac.Status.Phase = v1alpha1.AutoConfigPhasePending
+	c := fakeClientBuilder().
+		WithObjects(ac).
+		WithStatusSubresource(ac).
+		WithInterceptorFuncs(conflictStatusWrites()).
+		Build()
+	f, ce, fi, g := defaultMocks()
+	f.result = nil
+	f.err = fmt.Errorf("connection refused")
+	rec := fakeRecorder()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Recorder = rec
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+	})
+	assertQuietRequeue(t, result, err, rec)
+}
+
+func TestAutoConfigReconcile_SyncStatusConflictRequeuesQuietly(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	ac.Status.Phase = v1alpha1.AutoConfigPhasePending
+	c := fakeClientBuilder().
+		WithObjects(ac, cm).
+		WithStatusSubresource(ac).
+		WithInterceptorFuncs(conflictStatusWrites()).
+		Build()
+	f, ce, fi, g := defaultMocks()
+	rec := fakeRecorder()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Recorder = rec
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+	})
+	assertQuietRequeue(t, result, err, rec)
+}
+
+func TestAutoConfigReconcile_EndpointWriteRaceRequeuesQuietly(t *testing.T) {
+	tests := []struct {
+		name string
+		err  func(endpointName string) error
+	}{
+		{
+			name: "conflict",
+			err: func(endpointName string) error {
+				return conflictError("krakendendpoints", endpointName)
+			},
+		},
+		{
+			// The cache had not seen an endpoint that already exists.
+			name: "already exists",
+			err: func(endpointName string) error {
+				return apierrors.NewAlreadyExists(
+					schema.GroupResource{Group: v1alpha1.GroupVersion.Group, Resource: "krakendendpoints"},
+					endpointName)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cm := testCUEDefinitionsCM()
+			ac := syncedAutoConfig(cm)
+			rejectEndpointCreate := interceptor.Funcs{
+				Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+					if _, ok := obj.(*v1alpha1.KrakenDEndpoint); ok {
+						return tt.err(obj.GetName())
+					}
+					return c.Create(ctx, obj, opts...)
+				},
+			}
+			c := fakeClientBuilder().
+				WithObjects(ac, cm).
+				WithStatusSubresource(ac).
+				WithInterceptorFuncs(rejectEndpointCreate).
+				Build()
+			f, ce, fi, g := defaultMocks()
+			rec := fakeRecorder()
+			r := newACReconciler(c, f, ce, fi, g)
+			r.Recorder = rec
+
+			result, err := r.Reconcile(context.Background(), ctrl.Request{
+				NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+			})
+			assertQuietRequeue(t, result, err, rec)
+			var updated v1alpha1.KrakenDAutoConfig
+			if e := c.Get(context.Background(), types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+				&updated); e != nil {
+				t.Fatalf("getting updated autoconfig: %v", e)
+			}
+			if updated.Status.Phase != v1alpha1.AutoConfigPhaseSynced {
+				t.Errorf("expected phase to stay Synced, got %s", updated.Status.Phase)
+			}
+		})
+	}
+}
+
+func TestAutoConfigReconcile_SyncedFailureStatusConflictRequeuesQuietly(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	ac.Status.Phase = v1alpha1.AutoConfigPhasePending
+	c := fakeClientBuilder().
+		WithObjects(ac, cm).
+		WithStatusSubresource(ac).
+		WithInterceptorFuncs(conflictStatusWrites()).
+		Build()
+	f, ce, fi, g := defaultMocks()
+	ce.output.UnmatchedOverrides = []string{"WebhookStatus"}
+	rec := fakeRecorder()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Recorder = rec
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+	})
+	assertQuietRequeue(t, result, err, rec)
 }
 
 func TestAutoConfigReconcile_EvaluatorWarningsEmitEvents(t *testing.T) {
