@@ -27,6 +27,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -2460,4 +2461,178 @@ func TestAutoConfigValidator_BasePathAndAddPathPrefixMutuallyExclusive(t *testin
 	if _, err := v.ValidateCreate(context.Background(), ac); err == nil {
 		t.Fatal("expected error when both additionalEndpointsBasePath and urlTransform.addPathPrefix are set")
 	}
+}
+
+func TestAutoConfigValidator_OverrideAudienceMustBeList(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "test-gw", Namespace: "default"}}
+	v := &AutoConfigValidator{Client: fakeClient(gw)}
+	ac := newAutoConfigForAdditional(nil)
+	ac.Spec.Overrides = []v1alpha1.OperationOverride{{
+		OperationID: "listUsers",
+		ExtraConfig: &runtime.RawExtension{
+			Raw: []byte(`{"documentation/openapi":{"audience":{"internal":null}}}`),
+		},
+	}}
+
+	_, err := v.ValidateCreate(context.Background(), ac)
+	if err == nil {
+		t.Fatal("expected error for non-list override audience")
+	}
+	wantPath := `spec.overrides[0].extraConfig["documentation/openapi"].audience`
+	if !strings.Contains(err.Error(), wantPath) {
+		t.Errorf("expected error path %q, got %q", wantPath, err.Error())
+	}
+}
+
+func TestAutoConfigValidator_DefaultsEndpointAudienceMustBeList(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "test-gw", Namespace: "default"}}
+	v := &AutoConfigValidator{Client: fakeClient(gw)}
+	ac := newAutoConfigForAdditional(nil)
+	ac.Spec.Defaults = &v1alpha1.Defaults{
+		Endpoint: &v1alpha1.EndpointDefaults{
+			ExtraConfig: &runtime.RawExtension{
+				Raw: []byte(`{"documentation/openapi":{"audience":"internal"}}`),
+			},
+		},
+	}
+
+	_, err := v.ValidateCreate(context.Background(), ac)
+	if err == nil {
+		t.Fatal("expected error for non-list defaults.endpoint audience")
+	}
+	wantPath := `spec.defaults.endpoint.extraConfig["documentation/openapi"].audience`
+	if !strings.Contains(err.Error(), wantPath) {
+		t.Errorf("expected error path %q, got %q", wantPath, err.Error())
+	}
+}
+
+func TestAutoConfigValidator_AdditionalEndpointAudienceMustBeList(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "test-gw", Namespace: "default"}}
+	v := &AutoConfigValidator{Client: fakeClient(gw)}
+	ac := newAutoConfigForAdditional([]v1alpha1.AdditionalEndpoint{{
+		Endpoint: "/liveness",
+		ExtraConfig: &runtime.RawExtension{
+			Raw: []byte(`{"documentation/openapi":{"audience":[1]}}`),
+		},
+	}})
+
+	_, err := v.ValidateCreate(context.Background(), ac)
+	if err == nil {
+		t.Fatal("expected error for non-list additionalEndpoints audience")
+	}
+	wantPath := `spec.additionalEndpoints[0].extraConfig["documentation/openapi"].audience`
+	if !strings.Contains(err.Error(), wantPath) {
+		t.Errorf("expected error path %q, got %q", wantPath, err.Error())
+	}
+}
+
+func TestEndpointValidator_EndpointAudienceMustBeList(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "my-gw", Namespace: "default"}}
+	ep := &v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "ep1", Namespace: "default"},
+		Spec: v1alpha1.KrakenDEndpointSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: "my-gw"},
+			Endpoints: []v1alpha1.EndpointEntry{
+				{
+					Endpoint: "/api", Method: "GET",
+					Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/"}},
+					ExtraConfig: &runtime.RawExtension{
+						Raw: []byte(`{"documentation/openapi":{"audience":"internal"}}`),
+					},
+				},
+			},
+		},
+	}
+	v := &EndpointValidator{Client: fakeClient(gw)}
+	_, err := v.ValidateCreate(context.Background(), ep)
+	if err == nil {
+		t.Fatal("expected error for non-list endpoint audience")
+	}
+	wantPath := `spec.endpoints[0].extraConfig["documentation/openapi"].audience`
+	if !strings.Contains(err.Error(), wantPath) {
+		t.Errorf("expected error path %q, got %q", wantPath, err.Error())
+	}
+}
+
+func TestValidateExtraConfigAudience(t *testing.T) {
+	p := field.NewPath("spec", "overrides").Index(0).Child("extraConfig")
+
+	tests := map[string]struct {
+		raw       string
+		wantError bool
+	}{
+		"list of strings": {
+			raw: `{"documentation/openapi":{"audience":["internal"]}}`,
+		},
+		"map instead of list": {
+			raw:       `{"documentation/openapi":{"audience":{"internal":null}}}`,
+			wantError: true,
+		},
+		"string instead of list": {
+			raw:       `{"documentation/openapi":{"audience":"internal"}}`,
+			wantError: true,
+		},
+		"list of non-strings": {
+			raw:       `{"documentation/openapi":{"audience":[1]}}`,
+			wantError: true,
+		},
+		"empty list": {
+			raw: `{"documentation/openapi":{"audience":[]}}`,
+		},
+		"null instead of list": {
+			raw:       `{"documentation/openapi":{"audience":null}}`,
+			wantError: true,
+		},
+		"list of null": {
+			raw:       `{"documentation/openapi":{"audience":[null]}}`,
+			wantError: true,
+		},
+		"list with a null item": {
+			raw:       `{"documentation/openapi":{"audience":["internal",null]}}`,
+			wantError: true,
+		},
+		"documentation/openapi block absent": {
+			raw: `{"qos/ratelimit/router":{"every":"2s"}}`,
+		},
+		"audience key absent": {
+			raw: `{"documentation/openapi":{"operation_id":"foo"}}`,
+		},
+		"empty object": {
+			raw: `{}`,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			ec := &runtime.RawExtension{Raw: []byte(tc.raw)}
+			errs := validateExtraConfigAudience(p, ec)
+			if tc.wantError && len(errs) == 0 {
+				t.Fatalf("expected an error, got none")
+			}
+			if !tc.wantError && len(errs) != 0 {
+				t.Fatalf("expected no error, got %v", errs)
+			}
+			if tc.wantError {
+				wantPath := `spec.overrides[0].extraConfig["documentation/openapi"].audience`
+				if !strings.Contains(errs[0].Error(), wantPath) {
+					t.Errorf("expected error path %q, got %q", wantPath, errs[0].Error())
+				}
+				if !strings.Contains(errs[0].Error(), `must be a list of strings, e.g. ["internal"]`) {
+					t.Errorf("expected message about list of strings, got %q", errs[0].Error())
+				}
+			}
+		})
+	}
+
+	t.Run("nil RawExtension", func(t *testing.T) {
+		if errs := validateExtraConfigAudience(p, nil); len(errs) != 0 {
+			t.Fatalf("expected no error for nil RawExtension, got %v", errs)
+		}
+	})
+
+	t.Run("empty raw", func(t *testing.T) {
+		if errs := validateExtraConfigAudience(p, &runtime.RawExtension{}); len(errs) != 0 {
+			t.Fatalf("expected no error for empty Raw, got %v", errs)
+		}
+	})
 }

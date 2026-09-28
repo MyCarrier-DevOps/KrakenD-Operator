@@ -115,7 +115,7 @@ gatewayCtrl := &controller.GatewayReconciler{
     Clock:     clock,
 }
 
-autoconfigCtrl := &controller.AutoConfigReconciler{
+autoconfigCtrl := &controller.KrakenDAutoConfigReconciler{
     Client:       mgr.GetClient(),
     Scheme:       mgr.GetScheme(),
     Recorder:     recorder,
@@ -523,6 +523,8 @@ const (
 // +kubebuilder:validation:Enum=Pending;Fetching;Rendering;Synced;Error
 type AutoConfigPhase string
 
+// The controller sets only Pending, Synced, and Error; Fetching and
+// Rendering remain in the enum for compatibility.
 const (
     AutoConfigPhasePending   AutoConfigPhase = "Pending"
     AutoConfigPhaseFetching  AutoConfigPhase = "Fetching"
@@ -552,29 +554,48 @@ const (
 
 ### Event Reason Constants
 
+This is the set of reasons the controllers actually emit — `internal/webhook`
+validation errors are reported through the admission response, not events, so
+they carry no reason constant.
+
 ```go
 const (
-    ReasonConfigDeployed          = "ConfigDeployed"
-    ReasonConfigValidationFailed  = "ConfigValidationFailed"
-    ReasonLicenseExpiringSoon     = "LicenseExpiringSoon"
-    ReasonLicenseFallbackCE       = "LicenseFallbackCE"
-    ReasonLicenseExpiredNoFallback = "LicenseExpiredNoFallback"
-    ReasonLicenseRestored         = "LicenseRestored"
-    ReasonDragonflyNotReady       = "DragonflyNotReady"
-    ReasonIstioVSCreated          = "IstioVirtualServiceCreated"
-    ReasonEndpointConflict        = "EndpointConflict"
-    ReasonLicenseSecretSyncFailed = "LicenseSecretSyncFailed"
-    ReasonLicenseSecretMissing    = "LicenseSecretMissing"
-    ReasonSpecFetched             = "SpecFetched"
-    ReasonSpecFetchFailed         = "SpecFetchFailed"
-    ReasonEndpointsGenerated      = "EndpointsGenerated"
-    ReasonOperationFiltered       = "OperationFiltered"
-    ReasonMissingOperationId      = "MissingOperationId"
-    ReasonDuplicateOperationId    = "DuplicateOperationId"
-    ReasonRolloutFailed           = "RolloutFailed"
-    ReasonCUEEvaluationFailed     = "CUEEvaluationFailed"
+    ReasonConfigDeployed                = "ConfigDeployed"
+    ReasonConfigValidationFailed        = "ConfigValidationFailed"
+    ReasonLicenseExpiringSoon           = "LicenseExpiringSoon"
+    ReasonLicenseFallbackCE             = "LicenseFallbackCE"
+    ReasonLicenseExpiredNoFallback      = "LicenseExpiredNoFallback"
+    ReasonLicenseRestored               = "LicenseRestored"
+    ReasonDragonflyNotReady             = "DragonflyNotReady"
+    ReasonIstioVSCreated                = "IstioVirtualServiceCreated"
+    ReasonEndpointConflict              = "EndpointConflict"
+    ReasonEndpointInvalid               = "EndpointInvalid"
+    ReasonLicenseSecretMissing          = "LicenseSecretMissing"
+    ReasonSpecFetched                   = "SpecFetched"
+    ReasonSpecFetchFailed               = "SpecFetchFailed"
+    ReasonEndpointsGenerated            = "EndpointsGenerated"
+    ReasonDuplicateOperationId          = "DuplicateOperationId"
+    ReasonRolloutFailed                 = "RolloutFailed"
+    ReasonCUEEvaluationFailed           = "CUEEvaluationFailed"
+    ReasonCUEEvaluationWarning          = "CUEEvaluationWarning"
+    ReasonAdditionalEndpointOverride    = "AdditionalEndpointOverride"
+    ReasonAdditionalEndpointScopeFailed = "AdditionalEndpointScopeFailed"
+    ReasonUnmatchedOverride             = "UnmatchedOverride"
+    ReasonEndpointReconcileFailed       = "EndpointReconcileFailed"
+    ReasonPostRestartJobAlreadyRun      = "PostRestartJobAlreadyRun"
+    ReasonPostRestartJobCreated         = "PostRestartJobCreated"
+    ReasonPostRestartJobAdopted         = "PostRestartJobAdopted"
+    ReasonPostRestartJobROFSEnabled     = "ReadOnlyRootFilesystemEnabled"
+    ReasonPostRestartJobROFSDisabled    = "ReadOnlyRootFilesystemDisabled"
+    ReasonDragonflyRunAsRootUnacknowledged = "RunAsRootUnacknowledged"
+    ReasonDragonflyRunAsRootAcknowledged   = "RunAsRootAcknowledged"
+    ReasonDragonflyRunAsRootNoRequest      = "NoRunAsRootRequest"
 )
 ```
+
+`ReasonLicenseSecretSyncFailed`, `ReasonOperationFiltered`, and
+`ReasonMissingOperationId` are declared in `shared_types.go` but never
+emitted by any controller, so they are left out of this list.
 
 ### KrakenDEndpoint Type
 
@@ -796,7 +817,7 @@ graph TB
         GC[GatewayReconciler]
         EC[EndpointReconciler]
         PC[PolicyReconciler]
-        ACC[AutoConfigReconciler]
+        ACC[KrakenDAutoConfigReconciler]
         LM[LicenseMonitor]
     end
 
@@ -1208,14 +1229,14 @@ func (r *PolicyReconciler) endpointToReferencedPolicies(
 
 ## 8. AutoConfig Controller
 
-**File:** `internal/controller/autoconfig_controller.go`
+**File:** `internal/controller/krakendautoconfig_controller.go`
 
 The autoconfig controller watches `KrakenDAutoConfig` resources and orchestrates the OpenAPI-to-endpoint pipeline described in operator architecture §16. The controller uses CUE as its transformation engine: OpenAPI spec data is unified with CUE definitions to produce `KrakenDEndpointSpec` objects.
 
 ### Reconciler Struct
 
 ```go
-type AutoConfigReconciler struct {
+type KrakenDAutoConfigReconciler struct {
     client.Client
     Scheme       *runtime.Scheme
     Recorder     record.EventRecorder
@@ -1233,61 +1254,87 @@ type AutoConfigReconciler struct {
 flowchart TD
     A[Fetch KrakenDAutoConfig] --> B{Found?}
     B -->|No| Z[Return]
-    B -->|Yes| B1{phase == empty?}
+    B -->|Yes| BD{deletionTimestamp set?}
+    BD -->|Yes| Z
+    BD -->|No| B1{phase == empty?}
     B1 -->|Yes| B2[Set phase=Pending<br/>return requeue]
-    B1 -->|No| C[Set phase=Fetching]
-    C --> D[Fetch OpenAPI spec<br/>via Fetcher]
+    B1 -->|No| D[Fetch OpenAPI spec<br/>via Fetcher]
     D --> E{Fetch OK?}
-    E -->|No| F[Set SpecAvailable=False<br/>phase=Error<br/>Emit SpecFetchFailed]
-    E -->|Yes| G[Compute spec checksum +<br/>CUE definitions resourceVersion]
-    G --> H{Checksum or CUE defs changed?}
-    H -->|No| I[No-op: set phase=Synced]
-    H -->|Yes| J[Set phase=Rendering]
-    J --> J1[Load default CUE definitions<br/>from krakend-cue-definitions ConfigMap]
+    E -->|No| F[Set SpecAvailable=False<br/>Fail sync:<br/>SpecFetchFailed]
+    E -->|Yes| G[Resolve external $refs, strip servers<br/>Set SpecAvailable=True]
+    G --> H[Combined checksum: spec checksum +<br/>CUE definitions resourceVersion + generation<br/>inputsChanged = differs from status.specChecksum]
+    H --> J1[Load default CUE definitions<br/>from krakend-cue-definitions ConfigMap<br/>or the embedded defaults]
     J1 --> J2{Custom CUE ConfigMap<br/>referenced?}
     J2 -->|Yes| J3[Load custom CUE definitions]
     J2 -->|No| J4[CUE Evaluator: unify<br/>spec + defaults + CR overrides]
     J3 --> J4
     J4 --> J5{CUE evaluation OK?}
-    J5 -->|No| J6[Set phase=Error<br/>Emit CUEEvaluationFailed]
-    J5 -->|Yes| M[Apply include/exclude filters]
+    J5 -->|No| J6[Fail sync:<br/>CUEEvaluationFailed]
+    J5 -->|Yes| J7[Emit CUEEvaluationWarning per<br/>evaluator warning if inputsChanged]
+    J7 --> J8{Every override<br/>matched an operationId?}
+    J8 -->|No| J9[Fail sync:<br/>UnmatchedOverride]
+    J8 -->|Yes| M[Apply include/exclude filters]
     M --> M2{additionalEndpoints set?}
     M2 -->|No| O
     M2 -->|Yes| M3[BuildAdditionalEntries<br/>synthesize AdditionalEndpoint specs]
     M3 --> M4[ApplyURLTransformToEntries<br/>apply same urlTransform as spec-derived]
     M4 --> MB{Resolve base path:<br/>manual → addPathPrefix → DeriveBasePath}
-    MB -->|indeterminate| ME[Set phase=Error<br/>Emit AdditionalEndpointScopeFailed]
+    MB -->|indeterminate| ME[Fail sync:<br/>AdditionalEndpointScopeFailed]
     MB -->|resolved| MS[ScopeAdditionalEntries<br/>prepend base to public paths]
     MS --> M5[MergeAdditional<br/>additional wins on endpoint:method collision]
-    M5 --> M6[Emit AdditionalEndpointOverride<br/>Warning for each replaced entry]
+    M5 --> M6[Emit AdditionalEndpointOverride Warning<br/>per replaced entry if inputsChanged]
     M6 --> O[Generate KrakenDEndpoints<br/>via Generator]
-    O --> P[Diff against existing generated endpoints]
-    P --> Q[Create / Update / Delete endpoints]
-    Q --> R[Set phase=Synced<br/>Emit EndpointsGenerated]
+    O --> O1{Generate OK?}
+    O1 -->|No| O2[Fail sync:<br/>CUEEvaluationFailed]
+    O1 -->|Yes| O3[Emit DuplicateOperationId per<br/>duplicate if inputsChanged]
+    O3 --> P[Diff against the endpoints labeled<br/>gateway.krakend.io/autoconfig=name]
+    P --> Q[Delete undesired endpoints<br/>CreateOrUpdate desired: labels, spec<br/>by JSON value, controller reference]
+    Q --> Q1{Every write OK?}
+    Q1 -->|No| Q2[Fail sync:<br/>EndpointReconcileFailed]
+    Q1 -->|Yes| R[Set phase=Synced, Synced=True,<br/>specChecksum, endpoint counts]
+    R --> R1{inputsChanged or<br/>any endpoint write?}
+    R1 -->|Yes| R2[Set lastSyncTime]
+    R1 -->|No| R3
+    R2 --> R3{Status differs from the<br/>status read at the start?}
+    R3 -->|Yes| R4[Write status]
+    R3 -->|No| R5
+    R4 --> R5[Emit EndpointsGenerated if inputsChanged<br/>or any endpoint write]
+    R5 --> R6[RequeueAfter periodic.interval<br/>or 5m for OnChange]
 ```
 
-**Additional endpoints pipeline note:** `spec.additionalEndpoints` entries bypass `filter` and `overrides` (they carry no `operationId`), but they DO receive `urlTransform`. After applying the URL transform, additional endpoints are scoped under the application's base path — `spec.additionalEndpointsBasePath` if set, else `urlTransform.addPathPrefix` (already applied, so no further scoping), else the common parent directory derived from the generated endpoints (`DeriveBasePath`). If none of these resolves to a non-empty base, the sync fails with `AdditionalEndpointScopeFailed`. Scoping prepends the base to the public path only; backend `urlPattern` is unchanged. `ApplyURLTransformToEntries` is called before scoping and `MergeAdditional` so that collision keys (`endpoint:method`) align with the already-transformed spec-derived entries. On collision, the additional entry wins and the controller emits an `AdditionalEndpointOverride` Warning event.
+Every reconcile runs the whole pipeline — there is no checksum gate — so owned endpoints converge to the desired state whatever woke the controller. **Fail sync** is `handleSyncedFailure`: `phase=Error`, the `Synced` condition `False` with that reason, and a Warning event with the same reason; `OnChange` returns the error so controller-runtime retries with exponential backoff, `Periodic` requeues at `spec.periodic.interval`. A fetch failure (`SpecFetchFailed`), including an external `$ref` document that can't be fetched or decoded, fails the sync the same way and also sets `SpecAvailable=False`. If the failure's status write conflicts, the reconcile still returns the failure's result (not the quiet one-second requeue, which would reset the backoff) and records no event. A failed sync leaves `status.specChecksum` at the last successful sync's value, and drift repair stops at the failure until a sync succeeds: every other failure stops the pipeline before any endpoint is touched, and an endpoint write failure stops convergence at that endpoint. `phase` never passes through `Fetching` or `Rendering`; the controller sets only `Pending`, `Synced`, and `Error`.
 
-### Periodic Trigger
+A terminating AutoConfig (`deletionTimestamp` set) is not reconciled. Under foreground deletion it lingers while garbage collection deletes its endpoints, each delete re-enqueues it through the `Owns` watch, and converging would recreate the endpoint just collected.
 
-When `trigger: Periodic`, the controller returns `ctrl.Result{RequeueAfter: interval}` from `Reconcile`, causing controller-runtime to re-enqueue the resource after the specified interval. The spec checksum check prevents unnecessary endpoint churn when the spec hasn't changed.
+**Additional endpoints pipeline note:** `spec.additionalEndpoints` entries bypass `filter` and `overrides` (they carry no `operationId`), but they DO receive `urlTransform`. After applying the URL transform, additional endpoints are scoped under the application's base path — `spec.additionalEndpointsBasePath` if set, else `urlTransform.addPathPrefix` (already applied, so no further scoping), else the common parent directory derived from the generated endpoints (`DeriveBasePath`). If none of these resolves to a non-empty base, the sync fails with `AdditionalEndpointScopeFailed`. Scoping prepends the base to the public path only; backend `urlPattern` is unchanged. `ApplyURLTransformToEntries` is called before scoping and `MergeAdditional` so that collision keys (`endpoint:method`) align with the already-transformed spec-derived entries. On collision, the additional entry wins and, when the inputs changed since the last successful sync, the controller emits an `AdditionalEndpointOverride` Warning event.
+
+### Periodic Trigger and Resync
+
+A successful reconcile returns `ctrl.Result{RequeueAfter: interval}`: `spec.periodic.interval` for `trigger: Periodic`, otherwise `defaultResyncInterval` (5 minutes), so `OnChange` AutoConfigs are also re-polled without a watch event and upstream spec changes are picked up. A resync runs the same full pipeline as a watch-triggered reconcile.
+
+`status.specChecksum` records which inputs the last successful sync used; it does not gate evaluation. A sync whose combined checksum differs from it, or that wrote an endpoint, sets `lastSyncTime` and emits `EndpointsGenerated`; the `CUEEvaluationWarning`, `DuplicateOperationId`, and `AdditionalEndpointOverride` warnings are emitted only when the checksum differs. Churn is avoided by comparison instead: endpoint labels are compared with `maps.Equal` and specs by decoded JSON value (`endpointSpecEqual`, so the API server's re-encoding of raw `extraConfig` doesn't count as a change), `CreateOrUpdate` writes nothing for an endpoint already in the desired state, and status is written only when it differs semantically from the status read at the start of the reconcile. A steady-state reconcile writes nothing and emits no event.
 
 ### SetupWithManager
 
 ```go
-func (r *AutoConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *KrakenDAutoConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
     return ctrl.NewControllerManagedBy(mgr).
-        For(&v1alpha1.KrakenDAutoConfig{}).
-        Owns(&v1alpha1.KrakenDEndpoint{}).
+        For(&v1alpha1.KrakenDAutoConfig{}, builder.WithPredicates(predicate.Or(
+            predicate.GenerationChangedPredicate{},
+            predicate.LabelChangedPredicate{},
+            predicate.AnnotationChangedPredicate{},
+        ))).
+        Owns(&v1alpha1.KrakenDEndpoint{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
         Watches(
             &corev1.ConfigMap{},
-            handler.EnqueueRequestsFromMapFunc(r.cueConfigMapToAutoConfig),
+            handler.EnqueueRequestsFromMapFunc(r.configMapToAutoConfigs),
         ).
+        Named("krakendautoconfig").
         Complete(r)
 }
 ```
 
-The `Owns(&v1alpha1.KrakenDEndpoint{})` watch ensures that if a generated endpoint is manually deleted, the autoconfig controller re-reconciles and recreates it. The `Watches(&corev1.ConfigMap{})` watch detects changes to CUE definition ConfigMaps (both the default `krakend-cue-definitions` and any custom ConfigMap referenced by `cue.definitionsConfigMapRef`), triggering re-evaluation when definitions change.
+The `For` predicate ignores status-only updates, so the reconciler's own status writes never re-enqueue the AutoConfig. Generation covers spec edits, labels are included because application deploys relabel the AutoConfig, and annotations let `kubectl annotate` force an immediate reconcile. The `Owns(&v1alpha1.KrakenDEndpoint{})` watch re-enqueues the owning AutoConfig when a generated endpoint is deleted or its spec changes (a generation bump) — endpoint status updates alone are ignored — so a hand-edited or deleted endpoint is restored. The `Watches(&corev1.ConfigMap{})` watch maps a changed ConfigMap to every AutoConfig in its namespace that depends on it: the default `krakend-cue-definitions` ConfigMap, a custom CUE ConfigMap referenced by `cue.definitionsConfigMapRef`, or an OpenAPI spec ConfigMap referenced by `openapi.configMapRef`.
 
 ---
 
@@ -2350,11 +2397,11 @@ type GenerateOutput struct {
 }
 ```
 
-The generator wraps each `EndpointEntry` (produced by CUE evaluation and filtering) in a `KrakenDEndpoint` CR with metadata, labels, and owner references. It groups entries by a configurable strategy (default: one CR per entry) and handles naming, duplicate detection, and diff logic.
+The generator wraps each `EndpointEntry` (produced by CUE evaluation and filtering) in a `KrakenDEndpoint` CR with metadata, labels, and owner references. It groups entries by a configurable strategy (default: one CR per entry) and handles naming and duplicate detection; the controller diffs the output against the endpoints it already owns.
 
 **Duplicate operationId detection:**
 
-The generator tracks seen operationIds during the naming step. When the same operationId appears on multiple entries, the first occurrence is used for naming (and included in the output), subsequent duplicates are skipped, their operationId is added to `GenerateOutput.DuplicateIDs`, and `SkippedOperations` is incremented. The autoconfig controller emits a `DuplicateOperationId` Warning event for each duplicate and records the count in `status.skippedOperations`.
+The generator tracks seen operationIds during the naming step. When the same operationId appears on multiple entries, the first occurrence is used for naming (and included in the output), subsequent duplicates are skipped, their operationId is added to `GenerateOutput.DuplicateIDs`, and `SkippedOperations` is incremented. The autoconfig controller records the count in `status.skippedOperations` and, when the inputs changed since the last successful sync, emits a `DuplicateOperationId` Warning event for each duplicate.
 
 ```go
 func (g *endpointGenerator) Generate(ctx context.Context, input GenerateInput) (*GenerateOutput, error) {
@@ -2478,7 +2525,7 @@ build (BuildAdditionalEntries)
   → resolve base path (manual → addPathPrefix → DeriveBasePath)
   → scope public paths (ScopeAdditionalEntries)     ← backend urlPattern untouched
   → merge (MergeAdditional)
-  → emit AdditionalEndpointOverride Warning for each replaced key
+  → emit AdditionalEndpointOverride Warning for each replaced key (only when inputs changed)
   → generate (Generator)
 ```
 
@@ -2619,6 +2666,9 @@ client := fake.NewClientBuilder().
 | Permanent validation errors | Set status condition, emit event, return `nil` (no retry) | Config fails `krakend check -tlc` |
 | Missing prerequisites | Set status condition, return `nil` with `RequeueAfter` | License Secret not yet synced |
 | Programming errors | Panic (should never reach production) | Nil pointer on required field that passed webhook validation |
+| AutoConfig spec/CUE/unmatched-override/scope failures | `Periodic`: `RequeueAfter: spec.periodic.interval`; `OnChange`: return `error` for backoff | `SpecFetchFailed`, `CUEEvaluationFailed`, `UnmatchedOverride`, `AdditionalEndpointScopeFailed` — includes a failed external `$ref` fetch/decode, which fails closed as `SpecFetchFailed` instead of falling back to the raw spec |
+| AutoConfig endpoint write failures | Return `error` for backoff regardless of trigger (a `Periodic` AutoConfig does not wait for `spec.periodic.interval`) | `EndpointReconcileFailed` |
+| AutoConfig status/endpoint write conflicts | Quiet `RequeueAfter: 1s` — no error log, no event, no status change | Stale-cache `Conflict` on the initial-phase or a successful sync's status write, or `Conflict`/`AlreadyExists` on an endpoint write; a failed sync whose status write conflicts keeps its failure row's handling, with no event |
 
 ### Error Wrapping Convention
 

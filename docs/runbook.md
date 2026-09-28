@@ -46,6 +46,7 @@ Metrics are exposed on port **8443** (HTTPS). Key metrics:
 | `dragonfly_ready` | Gauge | Dragonfly readiness (1/0 per gateway) |
 | `reconcile_duration_seconds` | Histogram | Reconcile loop duration |
 | `gateway_info` | Gauge | Gateway metadata labels |
+| `autoconfig_synced` | Gauge | 1 after an AutoConfig's last sync succeeded, 0 while it's failing (per AutoConfig); removed when the AutoConfig is deleted |
 
 ### Recommended Alerts
 
@@ -77,6 +78,15 @@ Metrics are exposed on port **8443** (HTTPS). Key metrics:
   for: 15m
   labels:
     severity: warning
+
+# AutoConfig hasn't synced — its endpoints are frozen at the last good state
+- alert: KrakenDAutoConfigNotSynced
+  expr: krakend_operator_autoconfig_synced == 0
+  for: 15m
+  labels:
+    severity: warning
+  annotations:
+    summary: "AutoConfig {{ $labels.namespace }}/{{ $labels.name }} has not synced for 15 minutes; its endpoints are frozen at the last good state"
 ```
 
 ---
@@ -256,8 +266,80 @@ kubectl get events --field-selector involvedObject.name=<name>
 
 **Common causes:**
 - OpenAPI spec fetch failure (check URL, auth credentials)
-- CUE evaluation error (check embedded/custom CUE definitions)
+- A failure to fetch or decode an externally-`$ref`'d document: the
+  `SpecAvailable` and `Synced` conditions are `False` with reason
+  `SpecFetchFailed` and a message prefixed `resolving external $refs: `, and
+  existing endpoints are left at their last-good state. A relative `$ref`
+  resolves against the URL of the document that contains it. A pointer not found, a resolution cycle, or
+  a schema-name collision between two `$ref`s are only logged as warnings and
+  don't block the sync.
+- CUE evaluation error (check embedded/custom CUE definitions) — including a
+  `documentation/openapi.audience` declared directly on an operation that
+  isn't a list of strings
 - Filter excludes all operations
+- An override's `operationId` doesn't match any operation in the spec — see *AutoConfig sync fails with `UnmatchedOverride`* below
+- Generated endpoints can't be written: the `Synced` condition is `False` with reason `EndpointReconcileFailed` and the message names the endpoint and the API error (e.g. an admission webhook rejected it, or a `KrakenDEndpoint` with that name is controlled by another owner). This retries with backoff regardless of `trigger`. A `Conflict` or `AlreadyExists` from a stale cache is *not* this failure — it requeues quietly a second later with no error or event, so if the AutoConfig converges a moment later with nothing in between, that's this path working as intended, not a bug.
+
+### AutoConfig sync fails with `UnmatchedOverride`
+
+**Diagnosis:**
+```bash
+kubectl describe krakendautoconfig <name>
+```
+The `Synced` condition is `False` with reason `UnmatchedOverride` and message
+`spec.overrides reference operationIds not present in the OpenAPI spec: <ids,
+comma-separated>`. A matching `Warning` event is also emitted.
+
+**Common causes:**
+- A `spec.overrides[].operationId` doesn't match any operationId in the fetched OpenAPI spec (e.g. the service doesn't declare an operationId for that operation at all)
+- If the operationId *is* in the spec, check the AutoConfig's `CUEEvaluationWarning` events — the operation may have been skipped during evaluation
+
+**Resolution:** Correct the override's `operationId` to match the spec, or
+remove the override if it's no longer needed. If the target operation has no
+`operationId` at all: `spec.defaults` applies to every generated operation;
+for that single operation, add an `operationId` to the service's OpenAPI spec,
+replace the operation with an `additionalEndpoints` entry (the same endpoint
+and method replaces the spec-derived one), use a custom CUE definitions
+ConfigMap (`spec.cue.definitionsConfigMapRef`), or have the service declare
+`audience` directly on the operation as a list of strings — the default CUE
+definitions default it to `["public"]` when absent and require a list of
+strings when present (`cue/defaults.cue`), which avoids needing an override
+at all. Existing `KrakenDEndpoints` keep their last-good state — nothing
+regenerates — until the override is fixed and the resource re-syncs.
+
+### `kubectl apply` rejected: `audience` must be a list of strings
+
+**Symptom:** `kubectl apply` (or a CI check running admission) rejects a
+`KrakenDAutoConfig` or `KrakenDEndpoint` with `documentation/openapi.audience
+must be a list of strings, e.g. ["internal"]`.
+
+**Cause:** `extraConfig`'s `documentation/openapi.audience` — on an
+AutoConfig's `spec.overrides[]`, `spec.defaults.endpoint`, or
+`spec.additionalEndpoints[]`, or on a `KrakenDEndpoint`'s
+`spec.endpoints[]` — was set to something other than a list of strings (a
+YAML mapping is the usual mistake). Left unchecked, this would pass CRD and
+CUE validation unchanged but fail `krakend check -tlc`, blocking config
+updates for every service on that gateway, not just the one with the bad
+value.
+
+**Resolution:** Set `audience` to a list, e.g. `["internal"]` or `["public",
+"partner"]`. If `audience` is instead declared directly on the OpenAPI
+operation (not via `extraConfig`), the same list-of-strings requirement is
+enforced by the default CUE definitions at sync time, surfacing as
+`CUEEvaluationFailed` instead of an admission rejection.
+
+### Forcing an immediate AutoConfig reconcile
+
+`trigger: OnChange` AutoConfigs are re-polled every 5 minutes even with no
+watch event; `trigger: Periodic` AutoConfigs resync at `spec.periodic.interval`.
+To converge sooner — after fixing an upstream spec, correcting an override, or
+restoring a hand-edited generated endpoint — change any annotation to trigger
+an immediate reconcile (the watch predicate reacts to any annotation change,
+not a specific key):
+
+```bash
+kubectl annotate krakendautoconfig <name> -n <ns> krakend.io/resync="$(date +%s)" --overwrite
+```
 
 ### License expiry warnings
 

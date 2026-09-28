@@ -132,7 +132,208 @@ make deploy IMG=ghcr.io/mycarrier-devops/krakend-operator:<previous-version>
 
 ---
 
-## Unreleased — openapi-serve liveness probe (one-time rollout)
+## Unreleased — AutoConfig continuous reconciliation, drift repair and resync
+
+The AutoConfig controller is now watch-driven with a resync backstop, and
+every reconcile runs the full pipeline (fetch, evaluate, filter, generate,
+converge), instead of reacting once per spec change and otherwise sitting
+idle.
+
+**Reconciliation contract:**
+
+- Watched: the `KrakenDAutoConfig`'s own spec (generation), label, and
+  annotation changes (status-only updates — the phase/condition writes the
+  controller makes to itself — are ignored); an owned `KrakenDEndpoint`'s
+  spec changes and deletions; the OpenAPI spec ConfigMap
+  (`spec.openapi.configMapRef`), which is now watched alongside the CUE
+  definition ConfigMaps.
+- Resync: `trigger: OnChange` AutoConfigs are additionally re-polled every 5
+  minutes even with no watch event; `trigger: Periodic` AutoConfigs continue
+  to resync at `spec.periodic.interval`. Expect an HTTP fetch of the OpenAPI
+  spec roughly every 5 minutes per `OnChange` AutoConfig going forward —
+  previously it fetched only on a watched change.
+- Drift repair: every reconcile converges owned endpoints to the desired
+  state while the AutoConfig syncs successfully, so a generated
+  `KrakenDEndpoint` that was deleted or hand-edited out of band is restored on
+  the next reconcile or resync. While the AutoConfig is in `Error`, existing
+  endpoints are left as they are until a sync succeeds (an endpoint write
+  failure stops convergence at the endpoint that failed).
+- Steady state writes nothing: a reconcile that finds no change writes no
+  status and emits no event. `status.lastSyncTime` and the
+  `EndpointsGenerated` event update only when the spec/CUE-definitions/
+  generation inputs or the generated endpoints changed; the
+  `CUEEvaluationWarning`, `DuplicateOperationId`, and
+  `AdditionalEndpointOverride` warning events fire only when those inputs
+  differ from the last successful sync's. A failed sync doesn't record its
+  inputs, so they repeat on each retry of a failing sync whose inputs
+  changed; a spec fetch failure emits `SpecFetchFailed` instead.
+- Endpoint write failures fail the sync: when a generated endpoint can't be
+  created, updated, or deleted for a reason other than a write conflict (e.g.
+  an admission webhook rejects it, or a `KrakenDEndpoint` of that name is
+  controlled by another owner), the AutoConfig goes to `status.phase: Error`
+  with `Synced=False`, reason `EndpointReconcileFailed`, and a matching
+  `Warning` event. This always retries with backoff, on both `OnChange` and
+  `Periodic` AutoConfigs — a `Periodic` AutoConfig no longer waits a whole
+  `spec.periodic.interval` to retry what's usually a transient write error.
+- Write conflicts retry quietly, not as a failure: a stale-cache `Conflict` on
+  a status write, or a `Conflict`/`AlreadyExists` on an endpoint write (this
+  reconcile raced another and lost), requeues one second later with no error
+  log, no event, and no status change — it does not set
+  `EndpointReconcileFailed` and does not touch `status.phase`. The
+  `CUEEvaluationWarning`/`DuplicateOperationId`/`AdditionalEndpointOverride`
+  warning events above are recorded only once the reconcile's own status
+  write succeeds, so a reconcile that loses to a conflict doesn't re-emit
+  them on its retry. The exception is a failed sync whose own status write
+  conflicts: the sync still failed, so it keeps the failure's retry (backoff,
+  or `spec.periodic.interval` where that applies) with no event from that
+  attempt — a one-second requeue would reset the backoff.
+- External `$ref` fetch/decode failures now fail closed: previously, a failed
+  fetch or decode of an externally-`$ref`'d document was only a warning, and
+  the raw `$ref` was left in the generated config — a transient failure could
+  silently change the rendered endpoints. It now fails the sync the same way
+  as an OpenAPI spec fetch failure: `status.phase: Error`, `SpecAvailable=False`
+  and `Synced=False`, both with reason `SpecFetchFailed` and a message
+  prefixed `resolving external $refs: `; existing `KrakenDEndpoints` are left
+  as they were (last-good) until the reference is reachable again. A relative
+  `$ref` inside an external document now resolves against that document's
+  URL, not the main spec's (a `schemas/pet.json` that refers to
+  `category.json` fetches `schemas/category.json`). A pointer not found, a
+  resolution cycle, or a schema-name collision between two `$ref`s remain
+  warnings, not failures. See *Before upgrading* below.
+- A spec fetch failure now also sets `Synced=False` (reason
+  `SpecFetchFailed`) alongside `SpecAvailable=False`, instead of leaving the
+  last successful sync's `Synced=True`, so health checks that read
+  conditions see the failure.
+- New metric `krakend_operator_autoconfig_synced` (gauge, labels `namespace`,
+  `name`): 1 after a successful sync, 0 while the AutoConfig is failing; the
+  series is removed when the AutoConfig is deleted.
+- Deletion: a terminating AutoConfig is not reconciled, so under foreground
+  deletion (`kubectl delete --cascade=foreground`) the controller doesn't
+  recreate generated endpoints while garbage collection deletes them.
+- `status.phase` no longer transitions through `Fetching`/`Rendering` — those
+  enum values remain for compatibility, but the controller now only sets
+  `Pending`, `Synced`, or `Error`.
+- Spec fetch, CUE, unmatched-override, and additional-endpoint scope failures
+  retry via controller-runtime's exponential backoff (`OnChange`) or at
+  `spec.periodic.interval` (`Periodic`), same as before; endpoint write
+  failures and write conflicts follow the different rules described above.
+
+**Before upgrading — external `$ref`s.** A URL-sourced AutoConfig whose spec
+has an external `$ref` the operator can't fetch goes to `Error` after the
+upgrade (endpoints kept at their last-good state) instead of syncing with the
+raw `$ref`. List the URL-sourced AutoConfigs and their spec URLs:
+
+```bash
+kubectl get krakendautoconfigs -A -o json | jq -r '.items[] | select(.spec.openapi.url) | "\(.metadata.namespace)/\(.metadata.name)\t\(.spec.openapi.url)"'
+```
+
+Then list each spec's external (non-`#`) `$ref`s, fetching it from somewhere
+that can reach the URL, with the same credentials as `spec.openapi.auth` (for
+a YAML spec, convert it with `yq -o=json` first):
+
+```bash
+curl -s <spec-url> | jq '[.. | objects | select(has("$ref")) | .["$ref"] | select(type == "string") | select(startswith("#") | not)] | unique'
+```
+
+`[]` means no external refs. Otherwise check that each referenced document —
+resolved against the URL of the document containing the ref — is reachable
+from the operator, and repeat for those documents' own external refs.
+
+To force an immediate reconcile — for example right after fixing an upstream
+spec — change any annotation on the resource:
+
+```bash
+kubectl annotate krakendautoconfig <name> -n <ns> krakend.io/resync="$(date +%s)" --overwrite
+```
+
+No CRD or API changes; this is a controller-behavior-only change.
+
+---
+
+## Unreleased — AutoConfig fails sync on unmatched overrides
+
+Previously, a `spec.overrides[]` entry whose `operationId` matched no
+generated operation was silently ignored — the sync still reported
+`Synced: True` even though the override never took effect. This is now a
+fail-closed error.
+
+If any override's `operationId` is not present in the fetched OpenAPI spec,
+the AutoConfig sync now fails: `status.phase` becomes `Error`, the `Synced`
+condition goes `False` with reason `UnmatchedOverride`, and a matching
+`Warning` event is emitted. The generator does not run, so existing
+`KrakenDEndpoints` are left as they were (last-good) until the override is
+corrected or removed; the resource is re-evaluated on subsequent reconciles
+until then.
+
+Every `KrakenDAutoConfig` is re-evaluated once on the operator's first
+reconcile after the upgrade, even if its OpenAPI spec, CUE definitions and
+`spec` are unchanged — every reconcile now evaluates regardless of checksum
+(see *Unreleased — AutoConfig continuous reconciliation, drift repair and
+resync* above), so the detection query below is meaningful shortly after the
+upgrade. Healthy resources regenerate identical endpoints, so their
+`KrakenDEndpoints` are not modified — no endpoint churn. The one exception is
+an override on an `operationId` the spec declares more than once: it now
+lands on the endpoint that is actually published instead of on a skipped
+duplicate.
+
+Find affected resources cluster-wide:
+
+```bash
+kubectl get krakendautoconfigs -A -o json | jq -r '.items[] | select(any(.status.conditions[]?; .reason=="UnmatchedOverride")) | "\(.metadata.namespace)/\(.metadata.name)"'
+```
+
+Fix by correcting the override's `operationId` or removing the override. If
+the target operation has no `operationId` at all: `spec.defaults` applies to
+every generated operation; for that single operation, add an `operationId` to
+the service's OpenAPI spec, replace the operation with an
+`additionalEndpoints` entry (the same endpoint and method replaces the
+spec-derived one), use a custom CUE definitions ConfigMap
+(`spec.cue.definitionsConfigMapRef`), or have the service declare `audience`
+directly on the operation as a list of strings — the default CUE definitions
+default it to `["public"]` when absent and require a list of strings when
+present (`cue/defaults.cue`), avoiding an override entirely.
+
+Custom CUE definitions that read `_overrides` under a key that doesn't
+correspond to an operationId the spec declares will now fail the sync, because
+overrides are matched on the operationId contract.
+
+Separately, the evaluator's per-operation warnings (e.g. an operation skipped
+because it failed to convert) are now surfaced as `CUEEvaluationWarning`
+events on the `KrakenDAutoConfig` resource instead of being silently
+dropped; these do not change `status.phase` or conditions.
+
+`documentation/openapi.audience` must now be a list of strings wherever it's
+set: inside `extraConfig` on `spec.overrides[]`, `spec.defaults.endpoint`, or
+`spec.additionalEndpoints[]` (AutoConfig), on a `KrakenDEndpoint`'s
+`spec.endpoints[].extraConfig`, or declared directly on an OpenAPI operation.
+`null` (e.g. an `audience:` key with no value in YAML) and `null` items are
+rejected too.
+The admission webhook now rejects a non-list `extraConfig` value at `kubectl
+apply` time (`must be a list of strings, e.g. ["internal"]`); a value
+declared on the operation itself is caught by the default CUE definitions
+instead and fails the sync with reason `CUEEvaluationFailed`. Previously a
+malformed value (e.g. a YAML mapping) passed both checks unchanged and only
+surfaced as a `krakend check -tlc` failure, which blocks config updates for
+every service on that gateway — not just the one with the bad value.
+
+The admission check runs on `UPDATE` as well as `CREATE` and validates the
+whole object, so an AutoConfig or `KrakenDEndpoint` already stored with a
+non-list or `null` audience can't be updated at all — not even a
+metadata-only change such as a label or the `krakend.io/resync` annotation —
+until the same update fixes the value.
+
+The operation-level CUE rule lives in the embedded default CUE definitions. A
+namespace's `krakend-cue-definitions` ConfigMap replaces those defaults, so it
+doesn't get the rule unless it's updated from the new `cue/defaults.cue`;
+definitions from `spec.cue.definitionsConfigMapRef` are unified on top of
+whichever defaults apply, so they keep the rule only where the embedded
+defaults are in use. Without the rule, the `KrakenDEndpoint` admission check
+is the backstop (when the webhooks are enabled): the generated endpoint is
+rejected and the sync fails with `EndpointReconcileFailed`.
+
+---
+
+## v0.14.0 — openapi-serve liveness probe (one-time rollout)
 
 The `openapi-serve` sidecar now renders with a liveness probe. It previously
 had only a readiness probe, so a wedged sidecar could sit unready forever with

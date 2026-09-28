@@ -134,8 +134,11 @@ const (
 	ReasonDuplicateOperationId          = "DuplicateOperationId"
 	ReasonRolloutFailed                 = "RolloutFailed"
 	ReasonCUEEvaluationFailed           = "CUEEvaluationFailed"
+	ReasonCUEEvaluationWarning          = "CUEEvaluationWarning"
 	ReasonAdditionalEndpointOverride    = "AdditionalEndpointOverride"
 	ReasonAdditionalEndpointScopeFailed = "AdditionalEndpointScopeFailed"
+	ReasonUnmatchedOverride             = "UnmatchedOverride"
+	ReasonEndpointReconcileFailed       = "EndpointReconcileFailed"
 	ReasonPostRestartJobAlreadyRun      = "PostRestartJobAlreadyRun"
 	ReasonPostRestartJobCreated         = "PostRestartJobCreated"
 	// ReasonPostRestartJobAdopted covers the "Job for this revision's

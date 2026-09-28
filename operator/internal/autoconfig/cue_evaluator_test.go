@@ -19,6 +19,7 @@ package autoconfig
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -854,6 +855,37 @@ func TestApplyFieldOverrides_NonExistentOperationID(t *testing.T) {
 	if out.Entries[0].Timeout != nil {
 		t.Error("timeout should remain nil for unmatched operationID")
 	}
+	if len(out.UnmatchedOverrides) != 1 || out.UnmatchedOverrides[0] != "nonExistent" {
+		t.Errorf("expected UnmatchedOverrides [nonExistent], got %v", out.UnmatchedOverrides)
+	}
+}
+
+func TestApplyFieldOverrides_MatchedOverrideNotReported(t *testing.T) {
+	out := testOutputWithEntries()
+	applyFieldOverrides(out, []v1alpha1.OperationOverride{
+		{OperationID: "listUsers"},
+	})
+
+	if len(out.UnmatchedOverrides) != 0 {
+		t.Errorf("expected no UnmatchedOverrides for a matched operationID, got %v", out.UnmatchedOverrides)
+	}
+}
+
+func TestApplyFieldOverrides_ReportsOnlyUnmatchedInOrder(t *testing.T) {
+	out := testOutputWithEntries()
+	timeout := metav1.Duration{Duration: 30 * time.Second}
+	applyFieldOverrides(out, []v1alpha1.OperationOverride{
+		{OperationID: "listUsers", Timeout: &timeout},
+		{OperationID: "ghostA"},
+		{OperationID: "ghostB"},
+	})
+
+	if len(out.UnmatchedOverrides) != 2 || out.UnmatchedOverrides[0] != "ghostA" || out.UnmatchedOverrides[1] != "ghostB" {
+		t.Errorf("expected UnmatchedOverrides [ghostA ghostB], got %v", out.UnmatchedOverrides)
+	}
+	if out.Entries[0].Timeout == nil || out.Entries[0].Timeout.Duration != 30*time.Second {
+		t.Errorf("expected listUsers timeout 30s applied, got %v", out.Entries[0].Timeout)
+	}
 }
 
 func TestApplyFieldOverrides_CombinedOverrides(t *testing.T) {
@@ -983,6 +1015,203 @@ func TestApplyFieldOverrides_ExtraConfigMergeWithEmbeddedCUE(t *testing.T) {
 	// Documentation should be preserved from CUE
 	if _, ok := ec["documentation/openapi"]; !ok {
 		t.Error("documentation/openapi should be preserved from CUE evaluation")
+	}
+}
+
+func TestEvaluate_OverrideOnOperationWithoutOperationIdIsReported(t *testing.T) {
+	// Regression: an operation with no operationId in the OpenAPI spec has no
+	// _operationId in the CUE output, so an override targeting it can never
+	// match. It must be reported as unmatched rather than silently dropped.
+	defs, err := EmbeddedCUEDefinitions()
+	if err != nil {
+		t.Fatalf("loading defs: %v", err)
+	}
+
+	specJSON := []byte(`{
+		"paths": {
+			"/api/v1/webhook-receiver/status": {
+				"post": {
+					"responses": {"202": {"description": "Accepted"}}
+				}
+			}
+		}
+	}`)
+
+	eval := NewCUEEvaluator()
+	out, err := eval.Evaluate(context.Background(), CUEInput{
+		SpecData:    specJSON,
+		SpecFormat:  v1alpha1.SpecFormatJSON,
+		DefaultDefs: defs,
+		Overrides: []v1alpha1.OperationOverride{
+			{
+				OperationID: "WebhookStatus",
+				ExtraConfig: &runtime.RawExtension{
+					Raw: []byte(`{"documentation/openapi":{"audience":["internal"]}}`),
+				},
+			},
+		},
+		ServiceName: "_spec",
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if len(out.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(out.Entries))
+	}
+
+	var ec map[string]json.RawMessage
+	if err := json.Unmarshal(out.Entries[0].ExtraConfig.Raw, &ec); err != nil {
+		t.Fatalf("unmarshal extraConfig: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(ec["documentation/openapi"], &doc); err != nil {
+		t.Fatalf("unmarshal documentation/openapi: %v", err)
+	}
+	audience, ok := doc["audience"].([]any)
+	if !ok || len(audience) != 1 || audience[0] != "public" {
+		t.Errorf("expected audience [public] (override not applied), got %v", doc["audience"])
+	}
+
+	if len(out.UnmatchedOverrides) != 1 || out.UnmatchedOverrides[0] != "WebhookStatus" {
+		t.Errorf("expected UnmatchedOverrides [WebhookStatus], got %v", out.UnmatchedOverrides)
+	}
+}
+
+func TestEvaluate_OperationAudienceMustBeListOfStrings(t *testing.T) {
+	// A YAML mapping coerced to a JSON object (e.g. `audience: {internal}`),
+	// or a null in place of the list or one of its items, must fail CUE
+	// evaluation rather than reach the gateway, where it fails `krakend check
+	// -tlc` and blocks config updates for the whole gateway.
+	defs, err := EmbeddedCUEDefinitions()
+	if err != nil {
+		t.Fatalf("loading defs: %v", err)
+	}
+
+	tests := map[string]string{
+		"map instead of list":   `{"internal": null}`,
+		"null instead of list":  `null`,
+		"list with a null item": `["internal", null]`,
+	}
+
+	for name, audience := range tests {
+		t.Run(name, func(t *testing.T) {
+			specJSON := []byte(`{
+				"paths": {
+					"/api/v1/users": {
+						"get": {
+							"operationId": "listUsers",
+							"audience": ` + audience + `,
+							"responses": {"200": {"description": "OK"}}
+						}
+					}
+				}
+			}`)
+
+			eval := NewCUEEvaluator()
+			_, err := eval.Evaluate(context.Background(), CUEInput{
+				SpecData:    specJSON,
+				SpecFormat:  v1alpha1.SpecFormatJSON,
+				DefaultDefs: defs,
+				ServiceName: "_spec",
+			})
+			if err == nil {
+				t.Fatal("expected an error for a non-list audience declared on the operation")
+			}
+			if !strings.Contains(err.Error(), "audience") {
+				t.Errorf("expected the error to name the audience field, got: %v", err)
+			}
+		})
+	}
+}
+
+func TestEvaluate_OperationAudienceListOfStringsPassesThrough(t *testing.T) {
+	defs, err := EmbeddedCUEDefinitions()
+	if err != nil {
+		t.Fatalf("loading defs: %v", err)
+	}
+
+	specJSON := []byte(`{
+		"paths": {
+			"/api/v1/users": {
+				"get": {
+					"operationId": "listUsers",
+					"audience": ["internal"],
+					"responses": {"200": {"description": "OK"}}
+				}
+			}
+		}
+	}`)
+
+	eval := NewCUEEvaluator()
+	out, err := eval.Evaluate(context.Background(), CUEInput{
+		SpecData:    specJSON,
+		SpecFormat:  v1alpha1.SpecFormatJSON,
+		DefaultDefs: defs,
+		ServiceName: "_spec",
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if len(out.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(out.Entries))
+	}
+
+	var ec map[string]json.RawMessage
+	if err := json.Unmarshal(out.Entries[0].ExtraConfig.Raw, &ec); err != nil {
+		t.Fatalf("unmarshal extraConfig: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(ec["documentation/openapi"], &doc); err != nil {
+		t.Fatalf("unmarshal documentation/openapi: %v", err)
+	}
+	audience, ok := doc["audience"].([]any)
+	if !ok || len(audience) != 1 || audience[0] != "internal" {
+		t.Errorf("expected audience [internal], got %v", doc["audience"])
+	}
+}
+
+func TestEvaluate_OperationNoAudienceDefaultsToPublic(t *testing.T) {
+	defs, err := EmbeddedCUEDefinitions()
+	if err != nil {
+		t.Fatalf("loading defs: %v", err)
+	}
+
+	specJSON := []byte(`{
+		"paths": {
+			"/api/v1/users": {
+				"get": {
+					"operationId": "listUsers",
+					"responses": {"200": {"description": "OK"}}
+				}
+			}
+		}
+	}`)
+
+	eval := NewCUEEvaluator()
+	out, err := eval.Evaluate(context.Background(), CUEInput{
+		SpecData:    specJSON,
+		SpecFormat:  v1alpha1.SpecFormatJSON,
+		DefaultDefs: defs,
+		ServiceName: "_spec",
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if len(out.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(out.Entries))
+	}
+
+	var ec map[string]json.RawMessage
+	if err := json.Unmarshal(out.Entries[0].ExtraConfig.Raw, &ec); err != nil {
+		t.Fatalf("unmarshal extraConfig: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(ec["documentation/openapi"], &doc); err != nil {
+		t.Fatalf("unmarshal documentation/openapi: %v", err)
+	}
+	audience, ok := doc["audience"].([]any)
+	if !ok || len(audience) != 1 || audience[0] != "public" {
+		t.Errorf("expected audience [public], got %v", doc["audience"])
 	}
 }
 
