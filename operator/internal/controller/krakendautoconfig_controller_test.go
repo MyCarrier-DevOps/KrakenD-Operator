@@ -47,9 +47,11 @@ import (
 type mockFetcher struct {
 	result *autoconfig.FetchResult
 	err    error
+	called bool
 }
 
 func (m *mockFetcher) Fetch(_ context.Context, _ autoconfig.FetchSource) (*autoconfig.FetchResult, error) {
+	m.called = true
 	return m.result, m.err
 }
 
@@ -639,6 +641,44 @@ func TestAutoConfigReconcile_RecreatesDeletedEndpointWhenInputsUnchanged(t *test
 	wantEvent := "Normal EndpointsGenerated Generated 1 endpoints (1 created, 0 updated, 0 deleted, 0 skipped)"
 	if events := drainEvents(rec); !slices.Contains(events, wantEvent) {
 		t.Errorf("expected event %q, got %v", wantEvent, events)
+	}
+}
+
+func TestAutoConfigReconcile_TerminatingAutoConfigDoesNotRecreateEndpoints(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	// Foreground deletion: the AutoConfig lingers with a deletionTimestamp
+	// (the fake client needs a finalizer to accept one) while garbage
+	// collection deletes its endpoints, so the generated endpoint is absent.
+	now := metav1.Now()
+	ac.DeletionTimestamp = &now
+	ac.Finalizers = []string{"test.krakend.io/hold"}
+	var writes writeCounts
+	c := fakeClientBuilder().
+		WithObjects(ac, cm).
+		WithStatusSubresource(ac).
+		WithInterceptorFuncs(countWrites(&writes)).
+		Build()
+	f, ce, fi, g := defaultMocks()
+	r := newACReconciler(c, f, ce, fi, g)
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+	}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	var ep v1alpha1.KrakenDEndpoint
+	if err := c.Get(context.Background(), types.NamespacedName{
+		Name: "test-ac-listusers", Namespace: "default",
+	}, &ep); !apierrors.IsNotFound(err) {
+		t.Errorf("expected no endpoint for a terminating AutoConfig, got err %v", err)
+	}
+	if f.called || ce.called {
+		t.Errorf("expected no fetch or CUE evaluation, got fetch=%t evaluate=%t", f.called, ce.called)
+	}
+	if writes.statusUpdates != 0 {
+		t.Errorf("expected no status writes, got %d", writes.statusUpdates)
 	}
 }
 

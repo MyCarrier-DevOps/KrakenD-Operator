@@ -93,6 +93,13 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, fmt.Errorf("getting autoconfig %s: %w", req.NamespacedName, err)
 	}
 
+	// A terminating AutoConfig is left alone: under foreground deletion it
+	// lingers while garbage collection deletes its endpoints, and converging
+	// would recreate each one as it goes.
+	if !ac.DeletionTimestamp.IsZero() {
+		return ctrl.Result{}, nil
+	}
+
 	if ac.Status.Phase == "" {
 		ac.Status.Phase = v1alpha1.AutoConfigPhasePending
 		if err := r.Status().Update(ctx, &ac); err != nil {
