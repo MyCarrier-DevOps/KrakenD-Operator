@@ -49,10 +49,24 @@ type mockFetcher struct {
 	result *autoconfig.FetchResult
 	err    error
 	called bool
+	// byURL, when non-nil, overrides result/err for a Fetch call whose
+	// source.URL matches a key. Used to make a second (external $ref) fetch
+	// behave differently than the main spec fetch.
+	byURL map[string]mockFetchOutcome
 }
 
-func (m *mockFetcher) Fetch(_ context.Context, _ autoconfig.FetchSource) (*autoconfig.FetchResult, error) {
+// mockFetchOutcome is one byURL entry: what mockFetcher.Fetch returns for a
+// specific source URL.
+type mockFetchOutcome struct {
+	result *autoconfig.FetchResult
+	err    error
+}
+
+func (m *mockFetcher) Fetch(_ context.Context, source autoconfig.FetchSource) (*autoconfig.FetchResult, error) {
 	m.called = true
+	if outcome, ok := m.byURL[source.URL]; ok {
+		return outcome.result, outcome.err
+	}
 	return m.result, m.err
 }
 
@@ -367,6 +381,91 @@ func TestAutoConfigReconcile_FetchError(t *testing.T) {
 	}
 	if updated.Status.Phase != v1alpha1.AutoConfigPhaseError {
 		t.Errorf("expected phase Error, got %s", updated.Status.Phase)
+	}
+}
+
+func TestAutoConfigReconcile_ExternalRefFetchFailureFailsClosed(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	ac.Status.Phase = v1alpha1.AutoConfigPhasePending
+
+	// Pre-existing endpoint that must be left untouched: the sync must fail
+	// before reconcileEndpoints ever runs.
+	existingEP := &v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-ac-old-endpoint",
+			Namespace: "default",
+			Labels: map[string]string{
+				"gateway.krakend.io/autoconfig": "test-ac",
+			},
+		},
+		Spec: v1alpha1.KrakenDEndpointSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: "test-gw"},
+			Endpoints: []v1alpha1.EndpointEntry{{
+				Endpoint: "/api/old",
+				Method:   "GET",
+				Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/old"}},
+			}},
+		},
+	}
+
+	c := fakeClientBuilder().
+		WithObjects(ac, cm, existingEP).
+		WithStatusSubresource(ac).
+		Build()
+	f, ce, fi, g := defaultMocks()
+	f.result.Data = []byte(
+		`{"paths":{"/a":{"get":{"responses":{"200":{"$ref":"https://schemas.example.com/frag.json#/A"}}}}}}`,
+	)
+	f.byURL = map[string]mockFetchOutcome{
+		"https://schemas.example.com/frag.json": {err: fmt.Errorf("connection refused")},
+	}
+	rec := fakeRecorder()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Recorder = rec
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+	})
+	if err == nil {
+		t.Fatal("expected error for OnChange trigger, got nil")
+	}
+
+	var updated v1alpha1.KrakenDAutoConfig
+	if e := c.Get(
+		context.Background(),
+		types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+		&updated,
+	); e != nil {
+		t.Fatalf("getting updated autoconfig: %v", e)
+	}
+	if updated.Status.Phase != v1alpha1.AutoConfigPhaseError {
+		t.Errorf("expected phase Error, got %s", updated.Status.Phase)
+	}
+
+	cond := meta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionSpecAvailable)
+	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != v1alpha1.ReasonSpecFetchFailed {
+		t.Fatalf("expected SpecAvailable False with reason %s, got %+v", v1alpha1.ReasonSpecFetchFailed, cond)
+	}
+	wantPrefix := "resolving external $refs: "
+	if !strings.HasPrefix(cond.Message, wantPrefix) {
+		t.Errorf("expected message to start with %q, got %q", wantPrefix, cond.Message)
+	}
+
+	events := drainEvents(rec)
+	if !hasEventReason(events, v1alpha1.ReasonSpecFetchFailed) {
+		t.Errorf("expected a Warning %s event, got %v", v1alpha1.ReasonSpecFetchFailed, events)
+	}
+
+	if g.gotInput != nil {
+		t.Errorf("expected generator not to be called, got input %+v", g.gotInput)
+	}
+
+	var ep v1alpha1.KrakenDEndpoint
+	if e := c.Get(context.Background(), types.NamespacedName{
+		Name: "test-ac-old-endpoint", Namespace: "default",
+	}, &ep); e != nil {
+		t.Fatalf("expected existing endpoint to be kept: %v", e)
 	}
 }
 
