@@ -244,7 +244,8 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// Diff and reconcile endpoints
 	changes, err := r.reconcileEndpoints(ctx, &ac, genOutput.Endpoints)
 	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("reconciling endpoints: %w", err)
+		return r.handleSyncedFailure(ctx, &ac, v1alpha1.ReasonEndpointReconcileFailed,
+			fmt.Errorf("reconciling endpoints: %w", err))
 	}
 
 	if err := r.recordSync(ctx, &ac, origStatus, combinedChecksum, genOutput, changes); err != nil {

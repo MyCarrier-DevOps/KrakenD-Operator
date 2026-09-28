@@ -1128,6 +1128,66 @@ func TestAutoConfigReconcile_GeneratorError(t *testing.T) {
 	}
 }
 
+func TestAutoConfigReconcile_EndpointReconcileFailureFailsSync(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	ac.Status.Conditions = []metav1.Condition{{
+		Type:               v1alpha1.ConditionSynced,
+		Status:             metav1.ConditionTrue,
+		Reason:             "Synced",
+		Message:            "Generated 1 endpoints",
+		LastTransitionTime: metav1.Now(),
+	}}
+	// The generated endpoint is missing and the API server rejects the
+	// create (e.g. an admission webhook).
+	rejectEndpointCreate := interceptor.Funcs{
+		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if _, ok := obj.(*v1alpha1.KrakenDEndpoint); ok {
+				return fmt.Errorf("simulated webhook rejection")
+			}
+			return c.Create(ctx, obj, opts...)
+		},
+	}
+	c := fakeClientBuilder().
+		WithObjects(ac, cm).
+		WithStatusSubresource(ac).
+		WithInterceptorFuncs(rejectEndpointCreate).
+		Build()
+	f, ce, fi, g := defaultMocks()
+	rec := fakeRecorder()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Recorder = rec
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+	}); err == nil {
+		t.Error("expected error for OnChange trigger, got nil")
+	}
+
+	var updated v1alpha1.KrakenDAutoConfig
+	if err := c.Get(
+		context.Background(),
+		types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+		&updated,
+	); err != nil {
+		t.Fatalf("getting updated autoconfig: %v", err)
+	}
+	if updated.Status.Phase != v1alpha1.AutoConfigPhaseError {
+		t.Errorf("expected phase Error, got %s", updated.Status.Phase)
+	}
+	wantMsg := "reconciling endpoints: upserting endpoint test-ac-listusers: simulated webhook rejection"
+	cond := meta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionSynced)
+	if cond == nil || cond.Status != metav1.ConditionFalse ||
+		cond.Reason != v1alpha1.ReasonEndpointReconcileFailed || cond.Message != wantMsg {
+		t.Errorf("expected Synced condition False with reason %s and message %q, got %+v",
+			v1alpha1.ReasonEndpointReconcileFailed, wantMsg, cond)
+	}
+	wantEvent := "Warning " + v1alpha1.ReasonEndpointReconcileFailed + " " + wantMsg
+	if events := drainEvents(rec); !slices.Contains(events, wantEvent) {
+		t.Errorf("expected event %q, got %v", wantEvent, events)
+	}
+}
+
 func TestAutoConfigReconcile_UnmatchedOverrideFailsSync(t *testing.T) {
 	cm := testCUEDefinitionsCM()
 	ac := testAutoConfig()

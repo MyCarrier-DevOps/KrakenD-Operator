@@ -138,6 +138,7 @@ const (
 	ReasonAdditionalEndpointOverride    = "AdditionalEndpointOverride"
 	ReasonAdditionalEndpointScopeFailed = "AdditionalEndpointScopeFailed"
 	ReasonUnmatchedOverride             = "UnmatchedOverride"
+	ReasonEndpointReconcileFailed       = "EndpointReconcileFailed"
 	ReasonPostRestartJobAlreadyRun      = "PostRestartJobAlreadyRun"
 	ReasonPostRestartJobCreated         = "PostRestartJobCreated"
 	// ReasonPostRestartJobAdopted covers the "Job for this revision's

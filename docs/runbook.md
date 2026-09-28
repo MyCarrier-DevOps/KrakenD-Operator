@@ -259,6 +259,7 @@ kubectl get events --field-selector involvedObject.name=<name>
 - CUE evaluation error (check embedded/custom CUE definitions)
 - Filter excludes all operations
 - An override's `operationId` doesn't match any operation in the spec — see *AutoConfig sync fails with `UnmatchedOverride`* below
+- Generated endpoints can't be written: the `Synced` condition is `False` with reason `EndpointReconcileFailed` and the message names the endpoint and the API error (e.g. an admission webhook rejected it, or a `KrakenDEndpoint` with that name is controlled by another owner)
 
 ### AutoConfig sync fails with `UnmatchedOverride`
 
