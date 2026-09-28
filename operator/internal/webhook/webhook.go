@@ -19,6 +19,7 @@ package webhook
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -903,6 +904,11 @@ func (v *EndpointValidator) validate(
 	}
 
 	for i, entry := range ep.Spec.Endpoints {
+		errs = append(errs, validateExtraConfigAudience(
+			field.NewPath("spec", "endpoints").Index(i).Child("extraConfig"),
+			entry.ExtraConfig,
+		)...)
+
 		for j, be := range entry.Backends {
 			if be.PolicyRef != nil {
 				policy := &v1alpha1.KrakenDBackendPolicy{}
@@ -1200,6 +1206,20 @@ func (v *AutoConfigValidator) validate(
 		}
 	}
 
+	for i, ov := range ac.Spec.Overrides {
+		errs = append(errs, validateExtraConfigAudience(
+			field.NewPath("spec", "overrides").Index(i).Child("extraConfig"),
+			ov.ExtraConfig,
+		)...)
+	}
+
+	if ac.Spec.Defaults != nil && ac.Spec.Defaults.Endpoint != nil {
+		errs = append(errs, validateExtraConfigAudience(
+			field.NewPath("spec", "defaults", "endpoint", "extraConfig"),
+			ac.Spec.Defaults.Endpoint.ExtraConfig,
+		)...)
+	}
+
 	errs = append(errs, validateAdditionalEndpoints(ac)...)
 
 	return errs.ToAggregate()
@@ -1251,6 +1271,55 @@ func validateAdditionalEndpoints(ac *v1alpha1.KrakenDAutoConfig) field.ErrorList
 			errs = append(errs, field.Duplicate(p, key))
 		}
 		seenAdditional[key] = struct{}{}
+
+		errs = append(errs, validateExtraConfigAudience(p.Child("extraConfig"), ae.ExtraConfig)...)
+	}
+
+	return errs
+}
+
+// validateExtraConfigAudience validates the shape of a
+// documentation/openapi.audience value inside an ExtraConfig RawExtension.
+// KrakenD's OpenAPI documentation plugin requires audience to be a list of
+// strings; a malformed value (e.g. a YAML mapping coerced to a JSON object)
+// passes CRD and CUE validation unchanged but fails `krakend check -tlc`,
+// which blocks config updates for every service on the gateway. Invalid JSON
+// and an absent documentation/openapi block or audience key are not this
+// helper's concern.
+func validateExtraConfigAudience(p *field.Path, ec *runtime.RawExtension) field.ErrorList {
+	var errs field.ErrorList
+
+	if ec == nil || len(ec.Raw) == 0 {
+		return errs
+	}
+
+	var blocks map[string]json.RawMessage
+	if err := json.Unmarshal(ec.Raw, &blocks); err != nil {
+		return errs
+	}
+
+	openapiRaw, ok := blocks["documentation/openapi"]
+	if !ok {
+		return errs
+	}
+
+	var openapi map[string]json.RawMessage
+	if err := json.Unmarshal(openapiRaw, &openapi); err != nil {
+		return errs
+	}
+
+	audienceRaw, ok := openapi["audience"]
+	if !ok {
+		return errs
+	}
+
+	var audience []string
+	if err := json.Unmarshal(audienceRaw, &audience); err != nil {
+		errs = append(errs, field.Invalid(
+			p.Key(`"documentation/openapi"`).Child("audience"),
+			string(audienceRaw),
+			`must be a list of strings, e.g. ["internal"]`,
+		))
 	}
 
 	return errs
