@@ -1682,27 +1682,6 @@ func TestAutoConfigReconcile_InitialPhaseStatusConflictRequeuesQuietly(t *testin
 	assertQuietRequeue(t, result, err, rec)
 }
 
-func TestAutoConfigReconcile_FetchErrorStatusConflictRequeuesQuietly(t *testing.T) {
-	ac := testAutoConfig()
-	ac.Status.Phase = v1alpha1.AutoConfigPhasePending
-	c := fakeClientBuilder().
-		WithObjects(ac).
-		WithStatusSubresource(ac).
-		WithInterceptorFuncs(conflictStatusWrites()).
-		Build()
-	f, ce, fi, g := defaultMocks()
-	f.result = nil
-	f.err = fmt.Errorf("connection refused")
-	rec := fakeRecorder()
-	r := newACReconciler(c, f, ce, fi, g)
-	r.Recorder = rec
-
-	result, err := r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
-	})
-	assertQuietRequeue(t, result, err, rec)
-}
-
 func TestAutoConfigReconcile_SyncStatusConflictRequeuesQuietly(t *testing.T) {
 	cm := testCUEDefinitionsCM()
 	ac := testAutoConfig()
@@ -1826,28 +1805,87 @@ func TestAutoConfigReconcile_PeriodicEndpointReconcileFailureRetriesWithBackoff(
 	}
 }
 
-func TestAutoConfigReconcile_SyncedFailureStatusConflictRequeuesQuietly(t *testing.T) {
-	cm := testCUEDefinitionsCM()
-	ac := testAutoConfig()
-	ac.Status.Phase = v1alpha1.AutoConfigPhasePending
-	c := fakeClientBuilder().
-		WithObjects(ac, cm).
-		WithStatusSubresource(ac).
-		WithInterceptorFuncs(conflictStatusWrites()).
-		Build()
-	f, ce, fi, g := defaultMocks()
-	// Inputs changed and the evaluator warns: the warning must not be
-	// recorded by a reconcile whose status write then conflicts.
-	ce.output.Warnings = []string{"skipping /x:GET: boom"}
-	ce.output.UnmatchedOverrides = []string{"WebhookStatus"}
-	rec := fakeRecorder()
-	r := newACReconciler(c, f, ce, fi, g)
-	r.Recorder = rec
+func TestAutoConfigReconcile_FailureStatusConflictKeepsFailureResult(t *testing.T) {
+	// A failed sync whose status write then conflicts still failed: it must
+	// return the failure's own result, not the quiet conflict requeue. A
+	// RequeueAfter result makes controller-runtime forget the item and reset
+	// its exponential backoff, so a stale cache would turn the backoff of a
+	// persistent failure into a conflictRequeueDelay loop.
+	periodic := func(ac *v1alpha1.KrakenDAutoConfig) {
+		ac.Spec.Trigger = v1alpha1.TriggerPeriodic
+		ac.Spec.Periodic = &v1alpha1.PeriodicSpec{Interval: metav1.Duration{Duration: 5 * time.Minute}}
+	}
+	failFetch := func(f *mockFetcher, _ *mockCUEEvaluator) {
+		f.result = nil
+		f.err = fmt.Errorf("connection refused")
+	}
+	failSync := func(_ *mockFetcher, ce *mockCUEEvaluator) {
+		ce.output.UnmatchedOverrides = []string{"WebhookStatus"}
+	}
+	tests := []struct {
+		name          string
+		trigger       func(ac *v1alpha1.KrakenDAutoConfig)
+		fail          func(f *mockFetcher, ce *mockCUEEvaluator)
+		failEndpoints bool
+		wantErr       string        // substring; "" means no error
+		wantRequeue   time.Duration // result.RequeueAfter
+	}{
+		{name: "OnChange fetch failure", fail: failFetch, wantErr: "connection refused"},
+		{name: "OnChange synced failure", fail: failSync, wantErr: "spec.overrides reference operationIds"},
+		{name: "OnChange endpoint write failure", failEndpoints: true, wantErr: "reconciling endpoints"},
+		{name: "Periodic fetch failure", trigger: periodic, fail: failFetch, wantRequeue: 5 * time.Minute},
+		{name: "Periodic synced failure", trigger: periodic, fail: failSync, wantRequeue: 5 * time.Minute},
+		{
+			name: "Periodic endpoint write failure", trigger: periodic, failEndpoints: true,
+			wantErr: "reconciling endpoints",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cm := testCUEDefinitionsCM()
+			ac := syncedAutoConfig(cm)
+			if tt.trigger != nil {
+				tt.trigger(ac)
+			}
+			funcs := conflictStatusWrites()
+			if tt.failEndpoints {
+				funcs.Create = failEndpointCreates(func(string) error {
+					return fmt.Errorf("simulated webhook rejection")
+				}).Create
+			}
+			c := fakeClientBuilder().
+				WithObjects(ac, cm).
+				WithStatusSubresource(ac).
+				WithInterceptorFuncs(funcs).
+				Build()
+			f, ce, fi, g := defaultMocks()
+			// The evaluator warns: the warning must not be recorded by a
+			// reconcile whose status write then conflicts.
+			ce.output.Warnings = []string{"skipping /x:GET: boom"}
+			if tt.fail != nil {
+				tt.fail(f, ce)
+			}
+			rec := fakeRecorder()
+			r := newACReconciler(c, f, ce, fi, g)
+			r.Recorder = rec
 
-	result, err := r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
-	})
-	assertQuietRequeue(t, result, err, rec)
+			result, err := r.Reconcile(context.Background(), ctrl.Request{
+				NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+			})
+			switch {
+			case tt.wantErr == "" && err != nil:
+				t.Fatalf("expected no error, got %v", err)
+			case tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)):
+				t.Fatalf("expected the sync error containing %q, got %v", tt.wantErr, err)
+			}
+			if result.RequeueAfter != tt.wantRequeue {
+				t.Errorf("expected requeue after %v, got %v", tt.wantRequeue, result.RequeueAfter)
+			}
+			if events := drainEvents(rec); len(events) != 0 {
+				t.Errorf("expected no events, got %v", events)
+			}
+		})
+	}
 }
 
 func TestAutoConfigReconcile_EvaluatorWarningsEmitEvents(t *testing.T) {
