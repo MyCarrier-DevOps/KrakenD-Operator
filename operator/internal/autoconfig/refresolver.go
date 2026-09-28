@@ -35,9 +35,11 @@ import (
 // into `components.schemas` of the main spec under a sanitized key. The
 // original $ref is rewritten to `#/components/schemas/<sanitized-name>`.
 //
-// baseURL is used to resolve relative references. When the source is a
-// ConfigMap (no URL), external refs are left untouched and a warning is
-// returned via the warnings slice.
+// baseURL is the main spec's URL. A relative reference resolves against the
+// URL of the document that contains it: baseURL for a ref in the main spec,
+// the fetched document's URL for a ref inside an external document. When the
+// source is a ConfigMap (no URL), external refs are left untouched and a
+// warning is returned via the warnings slice.
 //
 // The returned JSON is always JSON (regardless of input format). External
 // documents fetched as YAML are converted to JSON before inlining.
@@ -63,7 +65,7 @@ func ResolveExternalRefs(
 		source:  source,
 		docs:    map[string]map[string]any{},
 	}
-	resolver.walk(root, "")
+	resolver.walk(root, baseURL)
 	if resolver.fatalErr != nil {
 		return nil, resolver.warnings, resolver.fatalErr
 	}
@@ -126,18 +128,18 @@ type fatalRefError struct {
 func (e *fatalRefError) Error() string { return e.err.Error() }
 func (e *fatalRefError) Unwrap() error { return e.err }
 
-// walk recursively scans m, replacing every external $ref with a local one.
-// Once a fatal error (a failed fetch or decode of an external document) has
-// been recorded, walk stops descending so no further refs are resolved and no
-// further documents are fetched.
-func (r *refResolver) walk(node any, pointer string) {
+// walk recursively scans node, part of the document at base, replacing every
+// external $ref with a local one. Once a fatal error (a failed fetch or decode
+// of an external document) has been recorded, walk stops descending so no
+// further refs are resolved and no further documents are fetched.
+func (r *refResolver) walk(node any, base string) {
 	if r.fatalErr != nil {
 		return
 	}
 	switch v := node.(type) {
 	case map[string]any:
 		if ref, ok := v["$ref"].(string); ok && ref != "" && !strings.HasPrefix(ref, "#") {
-			if localName, err := r.resolveExternal(ref); err == nil {
+			if localName, err := r.resolveExternal(ref, base); err == nil {
 				v["$ref"] = "#/components/schemas/" + localName
 			} else {
 				var fatal *fatalRefError
@@ -150,15 +152,15 @@ func (r *refResolver) walk(node any, pointer string) {
 			}
 			return
 		}
-		for k, child := range v {
-			r.walk(child, pointer+"/"+k)
+		for _, child := range v {
+			r.walk(child, base)
 			if r.fatalErr != nil {
 				return
 			}
 		}
 	case []any:
 		for _, child := range v {
-			r.walk(child, pointer)
+			r.walk(child, base)
 			if r.fatalErr != nil {
 				return
 			}
@@ -166,12 +168,13 @@ func (r *refResolver) walk(node any, pointer string) {
 	}
 }
 
-// resolveExternal fetches the referenced document (caching), extracts the
-// referenced fragment, inlines it into the components/schemas map of the
-// root doc, and returns the sanitized local name used for the new $ref.
-func (r *refResolver) resolveExternal(ref string) (string, error) {
+// resolveExternal fetches the document ref (found in the document at base)
+// points to (caching), extracts the referenced fragment, inlines it into the
+// components/schemas map of the root doc, and returns the sanitized local
+// name used for the new $ref.
+func (r *refResolver) resolveExternal(ref, base string) (string, error) {
 	docURL, fragment := splitRef(ref)
-	absolute, err := r.absolutize(docURL)
+	absolute, err := absolutize(docURL, base)
 	if err != nil {
 		return "", err
 	}
@@ -226,8 +229,9 @@ func (r *refResolver) resolveExternal(ref string) (string, error) {
 	// Deep-clone the target before walking so the cached document is not mutated.
 	target = deepCloneJSON(target)
 
-	// Walk the cloned node so nested external refs are resolved.
-	r.walk(target, "")
+	// Walk the cloned node so nested external refs are resolved, relative to
+	// the document they appear in.
+	r.walk(target, absolute)
 
 	if r.inlined == nil {
 		r.inlined = map[string]any{}
@@ -247,19 +251,21 @@ func (r *refResolver) resolveExternal(ref string) (string, error) {
 	return name, nil
 }
 
-func (r *refResolver) absolutize(docURL string) (string, error) {
+// absolutize resolves docURL against base, the URL of the document the
+// reference appears in.
+func absolutize(docURL, base string) (string, error) {
 	if docURL == "" {
-		return r.baseURL, nil
+		return base, nil
 	}
-	base, err := url.Parse(r.baseURL)
+	baseURL, err := url.Parse(base)
 	if err != nil {
-		return "", fmt.Errorf("parsing baseURL: %w", err)
+		return "", fmt.Errorf("parsing base URL %q: %w", base, err)
 	}
 	ref, err := url.Parse(docURL)
 	if err != nil {
 		return "", fmt.Errorf("parsing ref url %q: %w", docURL, err)
 	}
-	return base.ResolveReference(ref).String(), nil
+	return baseURL.ResolveReference(ref).String(), nil
 }
 
 // splitRef splits a $ref into its URI portion (possibly empty) and its
