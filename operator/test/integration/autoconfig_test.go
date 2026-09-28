@@ -342,7 +342,11 @@ func TestAutoConfig_ForcedReconcileInSteadyStateWritesNothing(t *testing.T) {
 	}
 
 	// The forced reconcile must change nothing, so there is nothing to wait
-	// for; keep checking while it runs.
+	// for; keep checking while it runs. That also means the test cannot
+	// observe whether the forced reconcile ran at all. It does discriminate:
+	// with the semantic endpoint comparison removed (the desired spec always
+	// assigned in reconcileEndpoints), it fails on a spurious
+	// EndpointsGenerated event reporting updated endpoints.
 	consistently(t, 5*time.Second, func() error {
 		var cur v1alpha1.KrakenDAutoConfig
 		if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(ac), &cur); err != nil {
