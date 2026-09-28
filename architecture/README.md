@@ -1767,6 +1767,7 @@ The operator emits events on KrakenDGateway resources:
 | OpenAPI spec fetch failed | Warning | `SpecFetchFailed` |
 | CUE evaluation failed | Warning | `CUEEvaluationFailed` |
 | Override operationId not present in the OpenAPI spec (sync fails, last-good endpoints kept) | Warning | `UnmatchedOverride` |
+| Generated endpoints could not be created, updated or deleted (sync fails) | Warning | `EndpointReconcileFailed` |
 | CUE evaluation warning (e.g. an operation skipped) | Warning | `CUEEvaluationWarning` |
 | Endpoints generated/updated from OpenAPI spec | Normal | `EndpointsGenerated` |
 | OpenAPI operation skipped (filtered) | Normal | `OperationFiltered` |
@@ -2139,6 +2140,7 @@ If an OpenAPI spec contains duplicate `operationId` values (technically invalid 
 | OpenAPI spec fetch failed | Warning | `SpecFetchFailed` |
 | CUE evaluation failed | Warning | `CUEEvaluationFailed` |
 | Override operationId not present in the OpenAPI spec (sync fails, last-good endpoints kept) | Warning | `UnmatchedOverride` |
+| Generated endpoints could not be created, updated or deleted (sync fails) | Warning | `EndpointReconcileFailed` |
 | CUE evaluation warning (e.g. an operation skipped) | Warning | `CUEEvaluationWarning` |
 | Endpoints generated/updated | Normal | `EndpointsGenerated` |
 | Operation skipped (filtered) | Normal | `OperationFiltered` |
