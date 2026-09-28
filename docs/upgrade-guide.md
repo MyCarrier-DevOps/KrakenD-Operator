@@ -167,6 +167,14 @@ idle.
   differ from the last successful sync's. A failed sync doesn't record its
   inputs, so they repeat on each retry of a failing sync whose inputs
   changed; a spec fetch failure emits `SpecFetchFailed` instead.
+- Endpoint write failures fail the sync: when a generated endpoint can't be
+  created, updated, or deleted (e.g. an admission webhook rejects it, or a
+  `KrakenDEndpoint` of that name is controlled by another owner), the
+  AutoConfig goes to `status.phase: Error` with `Synced=False`, reason
+  `EndpointReconcileFailed`, and a matching `Warning` event.
+- Deletion: a terminating AutoConfig is not reconciled, so under foreground
+  deletion (`kubectl delete --cascade=foreground`) the controller doesn't
+  recreate generated endpoints while garbage collection deletes them.
 - `status.phase` no longer transitions through `Fetching`/`Rendering` — those
   enum values remain for compatibility, but the controller now only sets
   `Pending`, `Synced`, or `Error`.
