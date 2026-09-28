@@ -62,6 +62,11 @@ var (
 		Name: "krakend_operator_gateway_info",
 		Help: "Gateway metadata labels",
 	}, []string{"namespace", "name", "edition", "version"})
+
+	autoConfigSynced = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "krakend_operator_autoconfig_synced",
+		Help: "1 if the KrakenDAutoConfig's last reconcile synced successfully, 0 if it is failing",
+	}, []string{"namespace", "name"})
 )
 
 func init() { //nolint:gochecknoinits // required by prometheus metric registration
@@ -74,5 +79,6 @@ func init() { //nolint:gochecknoinits // required by prometheus metric registrat
 		reconcileDuration,
 		dragonflyReady,
 		gatewayInfo,
+		autoConfigSynced,
 	)
 }

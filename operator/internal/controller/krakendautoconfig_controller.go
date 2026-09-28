@@ -98,6 +98,7 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	var ac v1alpha1.KrakenDAutoConfig
 	if err := r.Get(ctx, req.NamespacedName, &ac); err != nil {
 		if errors.IsNotFound(err) {
+			autoConfigSynced.DeleteLabelValues(req.Namespace, req.Name)
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("getting autoconfig %s: %w", req.NamespacedName, err)
@@ -107,6 +108,7 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// lingers while garbage collection deletes its endpoints, and converging
 	// would recreate each one as it goes.
 	if !ac.DeletionTimestamp.IsZero() {
+		autoConfigSynced.DeleteLabelValues(ac.Namespace, ac.Name)
 		return ctrl.Result{}, nil
 	}
 
@@ -317,6 +319,7 @@ func (r *KrakenDAutoConfigReconciler) handleFetchError(
 	if err := r.Status().Update(ctx, ac); err != nil {
 		return statusWriteFailure(fmt.Errorf("updating fetch error status: %w", err))
 	}
+	autoConfigSynced.WithLabelValues(ac.Namespace, ac.Name).Set(0)
 	r.Recorder.Event(ac, "Warning", v1alpha1.ReasonSpecFetchFailed, fetchErr.Error())
 	// For periodic triggers, requeue via interval; for OnChange, return error
 	// so controller-runtime retries with exponential backoff.
@@ -392,6 +395,7 @@ func (r *KrakenDAutoConfigReconciler) recordSyncedFailure(
 	if err := r.Status().Update(ctx, ac); err != nil {
 		return fmt.Errorf("updating %s status: %w", reason, err)
 	}
+	autoConfigSynced.WithLabelValues(ac.Namespace, ac.Name).Set(0)
 	warnings.emit(r.Recorder, ac)
 	r.Recorder.Event(ac, "Warning", reason, syncErr.Error())
 	return nil
@@ -640,6 +644,7 @@ func (r *KrakenDAutoConfigReconciler) recordSync(
 			return fmt.Errorf("updating final status: %w", err)
 		}
 	}
+	autoConfigSynced.WithLabelValues(ac.Namespace, ac.Name).Set(1)
 
 	warnings.emit(r.Recorder, ac)
 	if changed {
