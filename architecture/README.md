@@ -744,7 +744,7 @@ sequenceDiagram
 | KrakenDAutoConfig created, or spec generation/label/annotation changed | AutoConfig controller | Fetch OpenAPI spec from configured source, parse operations, apply URL transforms and filters, and converge owned KrakenDEndpoint resources to the desired state (create/update/delete). A status-only update (the phase/condition writes the reconciler itself makes) does not re-trigger this — only generation, label, and annotation changes do. Generated endpoints trigger the endpoint controller watch → gateway reconciler. |
 | KrakenDAutoConfig deleted | Kubernetes GC | All owned KrakenDEndpoints are garbage-collected via ownerReference. The AutoConfig controller doesn't reconcile a terminating AutoConfig, so under foreground deletion it doesn't recreate endpoints as they are collected. |
 | Owned KrakenDEndpoint spec changed or deleted, or the `openapi.configMapRef`/CUE definitions ConfigMap changed | AutoConfig controller | Re-run the full pipeline. A generated endpoint that was hand-edited or deleted out of band is restored to the desired spec (endpoint specs are compared by decoded JSON value, so re-encoding/formatting differences alone don't cause a write). |
-| AutoConfig resync timer | AutoConfig controller | `trigger: OnChange` AutoConfigs are additionally re-polled every 5 minutes (`defaultResyncInterval`); `trigger: Periodic` AutoConfigs at `spec.periodic.interval`. Every reconcile — resync or watch-triggered — runs the full pipeline; a reconcile that changes nothing writes no status and emits no event. Errors retry via controller-runtime's exponential backoff (`OnChange`) or at the configured interval (`Periodic`). |
+| AutoConfig resync timer | AutoConfig controller | `trigger: OnChange` AutoConfigs are additionally re-polled every 5 minutes (`defaultResyncInterval`); `trigger: Periodic` AutoConfigs at `spec.periodic.interval`. Every reconcile — resync or watch-triggered — runs the full pipeline; a reconcile that changes nothing writes no status and emits no event. A spec/CUE/unmatched-override/scope failure — including a failed external `$ref` fetch/decode, which now fails closed the same way instead of falling back to the raw spec — retries at `spec.periodic.interval` (`Periodic`) or via exponential backoff (`OnChange`); an endpoint write failure (`EndpointReconcileFailed`) always retries with backoff, on either trigger; a status or endpoint write `Conflict` (this reconcile read a stale cache) requeues quietly a second later with no error, event, or status change. |
 | KrakenDGateway deleted | Endpoint controller | Orphaned KrakenDEndpoints (no ownerReference) are set to `Detached` phase. They remain in the cluster but are excluded from all rendering. Re-attachment occurs automatically if a new KrakenDGateway with the same name is created. |
 | Secret (LICENSE) created or updated | Gateway controller | Re-parse X.509 `notAfter` from new Secret; run license validation state machine (`ValidateLicense` → `EERunning`/`EEWarning`/`PreExpiry`/`LicenseExpired`); trigger rolling restart if the license has not expired and the parsed `notAfter` has changed from the last observed value. Also trigger EE recovery (rolling restart) if `expiry > now+1h` AND the gateway is currently in Degraded or Error state (license-caused only) |
 | Dragonfly CR status updated | Gateway controller | Reflect `DragonflyReady` condition on KrakenDGateway; emit `DragonflyNotReady` Warning event if phase regresses |
@@ -1745,6 +1745,7 @@ rules:
 | `krakend_operator_endpoint_count` | Gauge | Number of KrakenDEndpoints per gateway |
 | `krakend_operator_reconcile_duration_seconds` | Histogram | Reconciliation loop latency |
 | `krakend_operator_dragonfly_ready` | Gauge | 1 if Dragonfly is ready, 0 otherwise |
+| `krakend_operator_autoconfig_synced` | Gauge | 1 after a `KrakenDAutoConfig`'s last reconcile synced successfully, 0 while it is failing (labels: `namespace`, `name`); the series is removed when the AutoConfig is deleted |
 
 ### Kubernetes Events
 
@@ -1764,14 +1765,14 @@ The operator emits events on KrakenDGateway resources:
 | Referenced license Secret missing (`secretRef` path) | Warning | `LicenseSecretMissing` |
 | License renewed, EE restored | Normal | `LicenseRestored` |
 | OpenAPI spec fetched successfully | Normal | `SpecFetched` |
-| OpenAPI spec fetch failed | Warning | `SpecFetchFailed` |
+| OpenAPI spec fetch failed, including a failed external `$ref` fetch/decode | Warning | `SpecFetchFailed` |
 | CUE evaluation failed | Warning | `CUEEvaluationFailed` |
 | Override operationId not present in the OpenAPI spec (sync fails, last-good endpoints kept) | Warning | `UnmatchedOverride` |
+| No base path could be derived for `additionalEndpoints` (sync fails) | Warning | `AdditionalEndpointScopeFailed` |
 | Generated endpoints could not be created, updated or deleted (sync fails) | Warning | `EndpointReconcileFailed` |
 | CUE evaluation warning (e.g. an operation skipped) | Warning | `CUEEvaluationWarning` |
+| An `additionalEndpoints` entry replaced a spec-derived endpoint | Warning | `AdditionalEndpointOverride` |
 | Endpoints generated/updated from OpenAPI spec | Normal | `EndpointsGenerated` |
-| OpenAPI operation skipped (filtered) | Normal | `OperationFiltered` |
-| OpenAPI operation missing operationId | Warning | `MissingOperationId` |
 | Duplicate operationId in OpenAPI spec | Warning | `DuplicateOperationId` |
 | Deployment rollout exceeded progress deadline | Warning | `RolloutFailed` |
 
@@ -1795,6 +1796,7 @@ The operator should deploy a `ValidatingAdmissionWebhook` with `failurePolicy: F
 - **KrakenDAutoConfig** — reject if `openapi.configMapRef` is used and `urlTransform.hostMapping` is not provided (no URL to infer backend host from)
 - **KrakenDAutoConfig** — reject if `trigger: Periodic` but `periodic.interval` is absent
 - **KrakenDAutoConfig** — reject if both `auth.bearerTokenSecret` and `auth.basicAuthSecret` are set (mutually exclusive)
+- **KrakenDAutoConfig** / **KrakenDEndpoint** — reject a non-list `documentation/openapi.audience` value inside `extraConfig` (`spec.overrides[].extraConfig`, `spec.defaults.endpoint.extraConfig`, and `spec.additionalEndpoints[].extraConfig` on KrakenDAutoConfig; `spec.endpoints[].extraConfig` on KrakenDEndpoint) — KrakenD's OpenAPI documentation plugin requires a list of strings, and a malformed value would otherwise pass validation here but fail `krakend check -tlc`, blocking config updates for every service on that gateway
 - **KrakenDGateway** — reject if multiple `plugins.sources[]` entries use `persistentVolumeClaimRef` (only one PVC source supported)
 
 This provides fast feedback to users at `kubectl apply` time rather than waiting for reconciliation.
@@ -1919,8 +1921,11 @@ spec:
   # operationId to the service's OpenAPI spec, replace it with an additionalEndpoints
   # entry (same endpoint+method replaces the spec-derived one), use a custom CUE
   # definitions ConfigMap (spec.cue.definitionsConfigMapRef), or have the service
-  # declare `audience` on the operation itself — the default CUE reads it
-  # (cue/defaults.cue: audience: *_op.audience | ["public"]) and needs no override.
+  # declare `audience` on the operation itself as a list of strings — the
+  # default CUE definitions default it to ["public"] when absent and require
+  # a list of strings when present (cue/defaults.cue); a non-list value fails
+  # the sync (CUEEvaluationFailed) instead of silently defaulting, and needs
+  # no override.
   overrides:
     - operationId: getUserById
       timeout: "800ms"
@@ -2024,7 +2029,7 @@ graph TB
 
 ### Execution Model
 
-The autoconfig controller is **watch-driven with a resync backstop**, and every reconcile runs the whole pipeline (fetch → evaluate → filter → generate → converge), so owned endpoints converge to the desired state while the AutoConfig syncs successfully. While it is in `Error`, drift repair stops at the failure until a sync succeeds: a spec fetch, CUE, unmatched-override, or base-path failure stops the pipeline before any endpoint is touched, and an endpoint write failure stops convergence at that endpoint.
+The autoconfig controller is **watch-driven with a resync backstop**, and every reconcile runs the whole pipeline (fetch → evaluate → filter → generate → converge), so owned endpoints converge to the desired state while the AutoConfig syncs successfully. While it is in `Error`, drift repair stops at the failure until a sync succeeds: a spec fetch failure (including a failed external `$ref` fetch/decode), CUE, unmatched-override, or base-path failure stops the pipeline before any endpoint is touched, and an endpoint write failure stops convergence at that endpoint.
 
 1. **On `KrakenDAutoConfig` creation, or a spec (generation), label, or annotation change** — fetch the OpenAPI spec, load CUE definitions, evaluate CUE, filter, generate, and create/update/delete owned `KrakenDEndpoint` resources to match. Status-only updates (the phase/condition writes the reconciler itself makes) are ignored by the primary watch's predicate, so they cannot re-trigger a reconcile.
 2. **On an owned `KrakenDEndpoint` spec change or delete** — the same full pipeline runs, which restores a generated endpoint that was hand-edited or deleted out of band. Endpoint specs are compared by decoded JSON value, not bytes, so formatting/re-encoding differences alone don't produce a write.
@@ -2032,7 +2037,9 @@ The autoconfig controller is **watch-driven with a resync backstop**, and every 
 4. **On an `openapi.configMapRef` or CUE definitions ConfigMap update** — the controller watches the referenced ConfigMap(s) and re-runs the pipeline.
 5. **On a resync** — `trigger: OnChange` AutoConfigs are re-polled every 5 minutes (`defaultResyncInterval`) even with no watch event, so upstream spec changes and out-of-band endpoint drift are converged by the next successful sync; `trigger: Periodic` AutoConfigs resync at `spec.periodic.interval` instead.
 
-A reconcile that finds nothing to change — the common steady-state case — writes no status and emits no event. When something does change, `status.lastSyncTime` and an `EndpointsGenerated` event (`"Generated N endpoints (C created, U updated, D deleted, S skipped)"`) are recorded; `CUEEvaluationWarning`, `DuplicateOperationId`, and `AdditionalEndpointOverride` warning events fire only when the spec/CUE-definitions/generation inputs differ from the last successful sync's, so they don't spam on every resync. A failed sync doesn't record its inputs, so they do repeat on each retry of a failing sync whose inputs changed; a spec fetch failure emits `SpecFetchFailed` instead. `status.phase` no longer transitions through `Fetching`/`Rendering`; those enum values remain for compatibility, but the controller now only sets `Pending`, `Synced`, or `Error`. Errors retry via controller-runtime's exponential backoff (`OnChange`) or at the configured interval (`Periodic`).
+A reconcile that finds nothing to change — the common steady-state case — writes no status and emits no event. When something does change, `status.lastSyncTime` and an `EndpointsGenerated` event (`"Generated N endpoints (C created, U updated, D deleted, S skipped)"`) are recorded; `CUEEvaluationWarning`, `DuplicateOperationId`, and `AdditionalEndpointOverride` warning events fire only when the spec/CUE-definitions/generation inputs differ from the last successful sync's, so they don't spam on every resync. A failed sync doesn't record its inputs, so they do repeat on each retry of a failing sync whose inputs changed; a spec fetch failure emits `SpecFetchFailed` instead. `status.phase` no longer transitions through `Fetching`/`Rendering`; those enum values remain for compatibility, but the controller now only sets `Pending`, `Synced`, or `Error`.
+
+Retry cadence differs by failure kind. A spec fetch, CUE, unmatched-override, or scope failure — including a failure to fetch or decode an external `$ref` document, which fails the sync closed the same way instead of falling back to the raw spec — retries at `spec.periodic.interval` for `Periodic` or via controller-runtime's exponential backoff for `OnChange`. An endpoint write failure (`EndpointReconcileFailed`) does not follow that split: it always retries with backoff, on either trigger, since it's usually transient and a `Periodic` AutoConfig would otherwise wait a whole interval to recover. A `Conflict` on a status write, or a `Conflict`/`AlreadyExists` on an endpoint write, means this reconcile acted on a stale cached copy — it is not a failure: it requeues quietly one second later with no error log, no event, and no status change, and its input warning events (`CUEEvaluationWarning`, `DuplicateOperationId`, `AdditionalEndpointOverride`) are held back and recorded only once the reconcile's own status write succeeds, so a retry after a lost conflict doesn't re-emit them.
 
 To force an immediate reconcile outside the resync interval, change any annotation on the resource — the watch predicate doesn't inspect which one:
 
@@ -2137,14 +2144,14 @@ If an OpenAPI spec contains duplicate `operationId` values (technically invalid 
 | Event | Type | Reason |
 |---|---|---|
 | OpenAPI spec fetched successfully | Normal | `SpecFetched` |
-| OpenAPI spec fetch failed | Warning | `SpecFetchFailed` |
+| OpenAPI spec fetch failed, including a failed external `$ref` fetch/decode | Warning | `SpecFetchFailed` |
 | CUE evaluation failed | Warning | `CUEEvaluationFailed` |
 | Override operationId not present in the OpenAPI spec (sync fails, last-good endpoints kept) | Warning | `UnmatchedOverride` |
+| No base path could be derived for `additionalEndpoints` (sync fails) | Warning | `AdditionalEndpointScopeFailed` |
 | Generated endpoints could not be created, updated or deleted (sync fails) | Warning | `EndpointReconcileFailed` |
 | CUE evaluation warning (e.g. an operation skipped) | Warning | `CUEEvaluationWarning` |
+| An `additionalEndpoints` entry replaced a spec-derived endpoint | Warning | `AdditionalEndpointOverride` |
 | Endpoints generated/updated | Normal | `EndpointsGenerated` |
-| Operation skipped (filtered) | Normal | `OperationFiltered` |
-| Operation has no operationId | Warning | `MissingOperationId` |
 | Duplicate operationId in OpenAPI spec | Warning | `DuplicateOperationId` |
 
 | Condition | Meaning |
