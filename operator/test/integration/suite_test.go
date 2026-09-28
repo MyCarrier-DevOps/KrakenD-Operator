@@ -28,6 +28,7 @@ import (
 	"time"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/autoconfig"
 	"github.com/mycarrier-devops/krakend-operator/internal/controller"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 	"github.com/testcontainers/testcontainers-go"
@@ -43,6 +44,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -183,6 +185,22 @@ func runTests(m *testing.M) int {
 		Recorder: mgr.GetEventRecorderFor("krakendbackendpolicy-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to setup policy controller: %v\n", err)
+		return 1
+	}
+
+	// Wire up the AutoConfig controller with the real fetcher, embedded CUE
+	// evaluator, filter and generator.
+	if err := (&controller.KrakenDAutoConfigReconciler{
+		Client:       mgr.GetClient(),
+		Scheme:       scheme,
+		Recorder:     mgr.GetEventRecorderFor("krakendautoconfig-controller"),
+		Fetcher:      autoconfig.NewFetcher(mgr.GetClient()),
+		CUEEvaluator: autoconfig.NewCUEEvaluator(),
+		Filter:       autoconfig.NewFilter(),
+		Generator:    autoconfig.NewGenerator(),
+		Clock:        clock.RealClock{},
+	}).SetupWithManager(mgr); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to setup autoconfig controller: %v\n", err)
 		return 1
 	}
 
