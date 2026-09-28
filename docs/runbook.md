@@ -267,9 +267,10 @@ kubectl get events --field-selector involvedObject.name=<name>
 **Common causes:**
 - OpenAPI spec fetch failure (check URL, auth credentials)
 - A failure to fetch or decode an externally-`$ref`'d document: the
-  `SpecAvailable` condition is `False` with reason `SpecFetchFailed` and a
-  message prefixed `resolving external $refs: `, and existing endpoints are
-  left at their last-good state. A pointer not found, a resolution cycle, or
+  `SpecAvailable` and `Synced` conditions are `False` with reason
+  `SpecFetchFailed` and a message prefixed `resolving external $refs: `, and
+  existing endpoints are left at their last-good state. A relative `$ref`
+  resolves against the URL of the document that contains it. A pointer not found, a resolution cycle, or
   a schema-name collision between two `$ref`s are only logged as warnings and
   don't block the sync.
 - CUE evaluation error (check embedded/custom CUE definitions) — including a
