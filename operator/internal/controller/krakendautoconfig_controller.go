@@ -304,12 +304,15 @@ func ownedEndpointPredicate() predicate.Predicate {
 	return predicate.GenerationChangedPredicate{}
 }
 
+// handleFetchError fails the sync on a spec fetch failure (including an
+// external $ref that cannot be fetched): SpecAvailable False and, through
+// handleSyncedFailure, Synced False, both with reason SpecFetchFailed, so the
+// conditions agree with the phase, the synced gauge and the event.
 func (r *KrakenDAutoConfigReconciler) handleFetchError(
 	ctx context.Context,
 	ac *v1alpha1.KrakenDAutoConfig,
 	fetchErr error,
 ) (ctrl.Result, error) {
-	ac.Status.Phase = v1alpha1.AutoConfigPhaseError
 	meta.SetStatusCondition(&ac.Status.Conditions, metav1.Condition{
 		Type:               v1alpha1.ConditionSpecAvailable,
 		Status:             metav1.ConditionFalse,
@@ -317,22 +320,8 @@ func (r *KrakenDAutoConfigReconciler) handleFetchError(
 		Reason:             v1alpha1.ReasonSpecFetchFailed,
 		Message:            fetchErr.Error(),
 	})
-	// The sync has failed whether or not its status write succeeds.
-	autoConfigSynced.WithLabelValues(ac.Namespace, ac.Name).Set(0)
-	// A Conflict falls through to the failure's own result, with no event;
-	// see recordSyncedFailure.
-	switch err := r.Status().Update(ctx, ac); {
-	case err == nil:
-		r.Recorder.Event(ac, "Warning", v1alpha1.ReasonSpecFetchFailed, fetchErr.Error())
-	case !errors.IsConflict(err):
-		return ctrl.Result{}, fmt.Errorf("updating fetch error status: %w", err)
-	}
-	// For periodic triggers, requeue via interval; for OnChange, return error
-	// so controller-runtime retries with exponential backoff.
-	if ac.Spec.Trigger == v1alpha1.TriggerPeriodic {
-		return r.requeueResult(ac), nil
-	}
-	return ctrl.Result{}, fetchErr
+	// The pipeline stopped before anything that buffers input warnings ran.
+	return r.handleSyncedFailure(ctx, ac, v1alpha1.ReasonSpecFetchFailed, fetchErr, &inputWarnings{})
 }
 
 // handleSyncedFailure fails the sync with the given reason and error (see
