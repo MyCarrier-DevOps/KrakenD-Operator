@@ -149,23 +149,23 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	cueDefsRV := r.getCUEDefsResourceVersion(ctx, &ac)
 	combinedChecksum := autoConfigSpecChecksum(fetchResult.Checksum, cueDefsRV, ac.Generation)
-	// inputsChanged gates warning events that would otherwise repeat on every
-	// resync (CUEEvaluationWarning, DuplicateOperationId,
-	// AdditionalEndpointOverride): they fire only when this reconcile's
-	// combined checksum differs from the checksum the last successful sync
-	// recorded. Failure paths leave status.SpecChecksum unchanged, so each
-	// retry of a failing sync whose inputs changed emits them again.
-	inputsChanged := combinedChecksum != origStatus.SpecChecksum
+	// warnings holds the input warning events until the terminal status write
+	// succeeds. They would otherwise repeat on every resync, so they are
+	// collected only when this reconcile's combined checksum differs from the
+	// checksum the last successful sync recorded. Failure paths leave
+	// status.SpecChecksum unchanged, so each retry of a failing sync whose
+	// inputs changed emits them again.
+	warnings := &inputWarnings{inputsChanged: combinedChecksum != origStatus.SpecChecksum}
 
 	// Load CUE definitions: prefer ConfigMap, fall back to embedded defaults
 	defaultDefs, err := r.loadCUEDefinitions(ctx, ac.Namespace, defaultCUEDefinitionsConfigMap)
 	if err != nil {
 		if !errors.IsNotFound(err) {
-			return r.handleCUEError(ctx, &ac, fmt.Errorf("loading default CUE definitions: %w", err))
+			return r.handleCUEError(ctx, &ac, fmt.Errorf("loading default CUE definitions: %w", err), warnings)
 		}
 		defaultDefs, err = autoconfig.EmbeddedCUEDefinitions()
 		if err != nil {
-			return r.handleCUEError(ctx, &ac, fmt.Errorf("loading embedded CUE definitions: %w", err))
+			return r.handleCUEError(ctx, &ac, fmt.Errorf("loading embedded CUE definitions: %w", err), warnings)
 		}
 	}
 
@@ -173,7 +173,7 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	if ac.Spec.CUE != nil && ac.Spec.CUE.DefinitionsConfigMapRef != nil {
 		customDefs, err = r.loadCUEDefinitions(ctx, ac.Namespace, ac.Spec.CUE.DefinitionsConfigMapRef.Name)
 		if err != nil {
-			return r.handleCUEError(ctx, &ac, fmt.Errorf("loading custom CUE definitions: %w", err))
+			return r.handleCUEError(ctx, &ac, fmt.Errorf("loading custom CUE definitions: %w", err), warnings)
 		}
 	}
 
@@ -196,16 +196,14 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		DefaultHost:  extractHost(ac.Spec.OpenAPI.URL),
 	})
 	if err != nil {
-		return r.handleCUEError(ctx, &ac, err)
+		return r.handleCUEError(ctx, &ac, err, warnings)
 	}
 
-	// Surface entries the evaluator skipped (e.g. failed to marshal) as
-	// events before the unmatched-override check below, so they remain
-	// visible even when that check then fails the sync.
-	if inputsChanged {
-		for _, warning := range cueOutput.Warnings {
-			r.Recorder.Event(&ac, "Warning", v1alpha1.ReasonCUEEvaluationWarning, warning)
-		}
+	// Collect entries the evaluator skipped (e.g. failed to marshal) before
+	// the unmatched-override check below, so they remain visible even when
+	// that check then fails the sync.
+	for _, warning := range cueOutput.Warnings {
+		warnings.add(v1alpha1.ReasonCUEEvaluationWarning, warning)
 	}
 
 	// An override whose operationId matched no generated entry must fail
@@ -215,7 +213,7 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		unmatchedErr := fmt.Errorf(
 			"spec.overrides reference operationIds not present in the OpenAPI spec: %s",
 			strings.Join(cueOutput.UnmatchedOverrides, ", "))
-		return r.handleSyncedFailure(ctx, &ac, v1alpha1.ReasonUnmatchedOverride, unmatchedErr)
+		return r.handleSyncedFailure(ctx, &ac, v1alpha1.ReasonUnmatchedOverride, unmatchedErr, warnings)
 	}
 
 	// Apply filters
@@ -224,9 +222,9 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		filtered = r.Filter.Apply(cueOutput.Entries, cueOutput.Tags, cueOutput.OperationIDs, *ac.Spec.Filter)
 	}
 
-	filtered, scopeErr := r.applyAdditionalEndpoints(&ac, filtered, inputsChanged)
+	filtered, scopeErr := applyAdditionalEndpoints(&ac, filtered, warnings)
 	if scopeErr != nil {
-		return r.handleSyncedFailure(ctx, &ac, v1alpha1.ReasonAdditionalEndpointScopeFailed, scopeErr)
+		return r.handleSyncedFailure(ctx, &ac, v1alpha1.ReasonAdditionalEndpointScopeFailed, scopeErr, warnings)
 	}
 
 	// Extract component schemas from the spec before CUE evaluation
@@ -242,24 +240,21 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		ComponentSchemas: componentSchemas,
 	})
 	if err != nil {
-		return r.handleCUEError(ctx, &ac, fmt.Errorf("generating endpoints: %w", err))
+		return r.handleCUEError(ctx, &ac, fmt.Errorf("generating endpoints: %w", err), warnings)
 	}
 
-	// Emit events for duplicate operations
-	if inputsChanged {
-		for _, dup := range genOutput.Duplicates {
-			r.Recorder.Eventf(&ac, "Warning", v1alpha1.ReasonDuplicateOperationId,
-				"Duplicate operation %q skipped", dup)
-		}
+	// Warn about duplicate operations the generator skipped
+	for _, dup := range genOutput.Duplicates {
+		warnings.add(v1alpha1.ReasonDuplicateOperationId, fmt.Sprintf("Duplicate operation %q skipped", dup))
 	}
 
 	// Diff and reconcile endpoints
 	changes, err := r.reconcileEndpoints(ctx, &ac, genOutput.Endpoints)
 	if err != nil {
-		return r.handleEndpointError(ctx, &ac, err)
+		return r.handleEndpointError(ctx, &ac, err, warnings)
 	}
 
-	if err := r.recordSync(ctx, &ac, origStatus, combinedChecksum, genOutput, changes); err != nil {
+	if err := r.recordSync(ctx, &ac, origStatus, combinedChecksum, genOutput, changes, warnings); err != nil {
 		return statusWriteFailure(err)
 	}
 
@@ -332,15 +327,17 @@ func (r *KrakenDAutoConfigReconciler) handleFetchError(
 }
 
 // handleSyncedFailure fails the sync with the given reason and error: it sets
-// phase Error, the Synced condition to False, records a Warning event, and
-// returns the requeue/error semantics shared by every Synced-failure path —
-// requeue via interval for periodic triggers, otherwise the error itself so
+// phase Error, the Synced condition to False, records the buffered input
+// warnings and then a Warning event for syncErr, and returns the
+// requeue/error semantics shared by every Synced-failure path — requeue via
+// interval for periodic triggers, otherwise the error itself so
 // controller-runtime retries with exponential backoff.
 func (r *KrakenDAutoConfigReconciler) handleSyncedFailure(
 	ctx context.Context,
 	ac *v1alpha1.KrakenDAutoConfig,
 	reason string,
 	syncErr error,
+	warnings *inputWarnings,
 ) (ctrl.Result, error) {
 	ac.Status.Phase = v1alpha1.AutoConfigPhaseError
 	meta.SetStatusCondition(&ac.Status.Conditions, metav1.Condition{
@@ -353,6 +350,7 @@ func (r *KrakenDAutoConfigReconciler) handleSyncedFailure(
 	if err := r.Status().Update(ctx, ac); err != nil {
 		return statusWriteFailure(fmt.Errorf("updating %s status: %w", reason, err))
 	}
+	warnings.emit(r.Recorder, ac)
 	r.Recorder.Event(ac, "Warning", reason, syncErr.Error())
 	if ac.Spec.Trigger == v1alpha1.TriggerPeriodic {
 		return r.requeueResult(ac), nil
@@ -368,12 +366,13 @@ func (r *KrakenDAutoConfigReconciler) handleEndpointError(
 	ctx context.Context,
 	ac *v1alpha1.KrakenDAutoConfig,
 	endpointErr error,
+	warnings *inputWarnings,
 ) (ctrl.Result, error) {
 	if errors.IsConflict(endpointErr) || errors.IsAlreadyExists(endpointErr) {
 		return ctrl.Result{RequeueAfter: conflictRequeueDelay}, nil
 	}
 	return r.handleSyncedFailure(ctx, ac, v1alpha1.ReasonEndpointReconcileFailed,
-		fmt.Errorf("reconciling endpoints: %w", endpointErr))
+		fmt.Errorf("reconciling endpoints: %w", endpointErr), warnings)
 }
 
 // statusWriteFailure returns the reconcile result for a failed AutoConfig
@@ -392,17 +391,19 @@ func (r *KrakenDAutoConfigReconciler) handleCUEError(
 	ctx context.Context,
 	ac *v1alpha1.KrakenDAutoConfig,
 	cueErr error,
+	warnings *inputWarnings,
 ) (ctrl.Result, error) {
-	return r.handleSyncedFailure(ctx, ac, v1alpha1.ReasonCUEEvaluationFailed, cueErr)
+	return r.handleSyncedFailure(ctx, ac, v1alpha1.ReasonCUEEvaluationFailed, cueErr, warnings)
 }
 
 // applyAdditionalEndpoints builds, transforms, scopes, and merges additional
-// endpoints into the filtered set. It returns the combined slice, or a non-nil
-// error when no base path can be determined.
-func (r *KrakenDAutoConfigReconciler) applyAdditionalEndpoints(
+// endpoints into the filtered set, adding an AdditionalEndpointOverride
+// warning to warnings for each spec-derived endpoint one replaces. It returns
+// the combined slice, or a non-nil error when no base path can be determined.
+func applyAdditionalEndpoints(
 	ac *v1alpha1.KrakenDAutoConfig,
 	filtered []v1alpha1.EndpointEntry,
-	inputsChanged bool,
+	warnings *inputWarnings,
 ) ([]v1alpha1.EndpointEntry, error) {
 	if len(ac.Spec.AdditionalEndpoints) == 0 {
 		return filtered, nil
@@ -433,11 +434,9 @@ func (r *KrakenDAutoConfigReconciler) applyAdditionalEndpoints(
 
 	var replaced []string
 	filtered, replaced = autoconfig.MergeAdditional(filtered, additional)
-	if inputsChanged {
-		for _, key := range replaced {
-			r.Recorder.Eventf(ac, "Warning", v1alpha1.ReasonAdditionalEndpointOverride,
-				"Additional endpoint %q overrides a spec-derived endpoint", key)
-		}
+	for _, key := range replaced {
+		warnings.add(v1alpha1.ReasonAdditionalEndpointOverride,
+			fmt.Sprintf("Additional endpoint %q overrides a spec-derived endpoint", key))
 	}
 	return filtered, nil
 }
@@ -542,6 +541,37 @@ func (r *KrakenDAutoConfigReconciler) loadCUEDefinitions(
 	return cm.Data, nil
 }
 
+// inputWarnings collects the Warning events about one reconcile's inputs —
+// CUEEvaluationWarning, DuplicateOperationId and AdditionalEndpointOverride —
+// and holds them until the reconcile's terminal status write succeeds. A
+// reconcile that read a stale AutoConfig and then loses that write to a
+// conflict records none of them; its retry records them if they still
+// apply. Warnings are collected only when inputsChanged.
+type inputWarnings struct {
+	inputsChanged bool
+	pending       []inputWarning
+}
+
+// inputWarning is one buffered Warning event.
+type inputWarning struct {
+	reason, message string
+}
+
+// add buffers a Warning event with the given reason and message, if the
+// reconcile's inputs changed.
+func (w *inputWarnings) add(reason, message string) {
+	if w.inputsChanged {
+		w.pending = append(w.pending, inputWarning{reason: reason, message: message})
+	}
+}
+
+// emit records the buffered events on ac.
+func (w *inputWarnings) emit(recorder record.EventRecorder, ac *v1alpha1.KrakenDAutoConfig) {
+	for _, ev := range w.pending {
+		recorder.Event(ac, "Warning", ev.reason, ev.message)
+	}
+}
+
 // endpointChanges counts the endpoint writes one reconcileEndpoints call issued.
 type endpointChanges struct {
 	created, updated, deleted int
@@ -556,7 +586,8 @@ func (c endpointChanges) total() int {
 // EndpointsGenerated event mark a sync that changed something — new inputs (a
 // different combined checksum) or endpoint writes — so a steady-state
 // reconcile leaves both alone. Status is written only when it differs from
-// orig, the status read at the start of the reconcile.
+// orig, the status read at the start of the reconcile. The buffered input
+// warnings are recorded once that write succeeds, before EndpointsGenerated.
 func (r *KrakenDAutoConfigReconciler) recordSync(
 	ctx context.Context,
 	ac *v1alpha1.KrakenDAutoConfig,
@@ -564,6 +595,7 @@ func (r *KrakenDAutoConfigReconciler) recordSync(
 	combinedChecksum string,
 	genOutput *autoconfig.GenerateOutput,
 	changes endpointChanges,
+	warnings *inputWarnings,
 ) error {
 	changed := combinedChecksum != orig.SpecChecksum || changes.total() > 0
 	ac.Status.Phase = v1alpha1.AutoConfigPhaseSynced
@@ -587,6 +619,7 @@ func (r *KrakenDAutoConfigReconciler) recordSync(
 		}
 	}
 
+	warnings.emit(r.Recorder, ac)
 	if changed {
 		r.Recorder.Eventf(ac, "Normal", v1alpha1.ReasonEndpointsGenerated,
 			"Generated %d endpoints (%d created, %d updated, %d deleted, %d skipped)",
