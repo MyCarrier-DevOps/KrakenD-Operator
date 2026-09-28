@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -1313,8 +1314,11 @@ func validateExtraConfigAudience(p *field.Path, ec *runtime.RawExtension) field.
 		return errs
 	}
 
-	var audience []string
-	if err := json.Unmarshal(audienceRaw, &audience); err != nil {
+	// Decode into pointers so JSON null — the whole value or an item —
+	// is caught: KrakenD rejects both, but json.Unmarshal would turn them
+	// into a nil slice and "" respectively.
+	var audience []*string
+	if err := json.Unmarshal(audienceRaw, &audience); err != nil || audience == nil || slices.Contains(audience, nil) {
 		errs = append(errs, field.Invalid(
 			p.Key(`"documentation/openapi"`).Child("audience"),
 			string(audienceRaw),

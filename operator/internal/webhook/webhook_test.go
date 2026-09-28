@@ -2576,6 +2576,21 @@ func TestValidateExtraConfigAudience(t *testing.T) {
 			raw:       `{"documentation/openapi":{"audience":[1]}}`,
 			wantError: true,
 		},
+		"empty list": {
+			raw: `{"documentation/openapi":{"audience":[]}}`,
+		},
+		"null instead of list": {
+			raw:       `{"documentation/openapi":{"audience":null}}`,
+			wantError: true,
+		},
+		"list of null": {
+			raw:       `{"documentation/openapi":{"audience":[null]}}`,
+			wantError: true,
+		},
+		"list with a null item": {
+			raw:       `{"documentation/openapi":{"audience":["internal",null]}}`,
+			wantError: true,
+		},
 		"documentation/openapi block absent": {
 			raw: `{"qos/ratelimit/router":{"every":"2s"}}`,
 		},
