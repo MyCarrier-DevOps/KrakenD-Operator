@@ -183,17 +183,30 @@ idle.
   `CUEEvaluationWarning`/`DuplicateOperationId`/`AdditionalEndpointOverride`
   warning events above are recorded only once the reconcile's own status
   write succeeds, so a reconcile that loses to a conflict doesn't re-emit
-  them on its retry.
+  them on its retry. The exception is a failed sync whose own status write
+  conflicts: the sync still failed, so it keeps the failure's retry (backoff,
+  or `spec.periodic.interval` where that applies) with no event from that
+  attempt — a one-second requeue would reset the backoff.
 - External `$ref` fetch/decode failures now fail closed: previously, a failed
   fetch or decode of an externally-`$ref`'d document was only a warning, and
   the raw `$ref` was left in the generated config — a transient failure could
   silently change the rendered endpoints. It now fails the sync the same way
-  as an OpenAPI spec fetch failure: `status.phase: Error`,
-  `SpecAvailable=False`, reason `SpecFetchFailed`, message prefixed
-  `resolving external $refs: `; existing `KrakenDEndpoints` are left as they
-  were (last-good) until the reference is reachable again. A pointer not
-  found, a resolution cycle, or a schema-name collision between two `$ref`s
-  remain warnings, not failures.
+  as an OpenAPI spec fetch failure: `status.phase: Error`, `SpecAvailable=False`
+  and `Synced=False`, both with reason `SpecFetchFailed` and a message
+  prefixed `resolving external $refs: `; existing `KrakenDEndpoints` are left
+  as they were (last-good) until the reference is reachable again. A relative
+  `$ref` inside an external document now resolves against that document's
+  URL, not the main spec's (a `schemas/pet.json` that refers to
+  `category.json` fetches `schemas/category.json`). A pointer not found, a
+  resolution cycle, or a schema-name collision between two `$ref`s remain
+  warnings, not failures. See *Before upgrading* below.
+- A spec fetch failure now also sets `Synced=False` (reason
+  `SpecFetchFailed`) alongside `SpecAvailable=False`, instead of leaving the
+  last successful sync's `Synced=True`, so health checks that read
+  conditions see the failure.
+- New metric `krakend_operator_autoconfig_synced` (gauge, labels `namespace`,
+  `name`): 1 after a successful sync, 0 while the AutoConfig is failing; the
+  series is removed when the AutoConfig is deleted.
 - Deletion: a terminating AutoConfig is not reconciled, so under foreground
   deletion (`kubectl delete --cascade=foreground`) the controller doesn't
   recreate generated endpoints while garbage collection deletes them.
@@ -204,6 +217,27 @@ idle.
   retry via controller-runtime's exponential backoff (`OnChange`) or at
   `spec.periodic.interval` (`Periodic`), same as before; endpoint write
   failures and write conflicts follow the different rules described above.
+
+**Before upgrading — external `$ref`s.** A URL-sourced AutoConfig whose spec
+has an external `$ref` the operator can't fetch goes to `Error` after the
+upgrade (endpoints kept at their last-good state) instead of syncing with the
+raw `$ref`. List the URL-sourced AutoConfigs and their spec URLs:
+
+```bash
+kubectl get krakendautoconfigs -A -o json | jq -r '.items[] | select(.spec.openapi.url) | "\(.metadata.namespace)/\(.metadata.name)\t\(.spec.openapi.url)"'
+```
+
+Then list each spec's external (non-`#`) `$ref`s, fetching it from somewhere
+that can reach the URL, with the same credentials as `spec.openapi.auth` (for
+a YAML spec, convert it with `yq -o=json` first):
+
+```bash
+curl -s <spec-url> | jq '[.. | objects | select(has("$ref")) | .["$ref"] | select(type == "string") | select(startswith("#") | not)] | unique'
+```
+
+`[]` means no external refs. Otherwise check that each referenced document —
+resolved against the URL of the document containing the ref — is reachable
+from the operator, and repeat for those documents' own external refs.
 
 To force an immediate reconcile — for example right after fixing an upstream
 spec — change any annotation on the resource:
@@ -272,6 +306,8 @@ dropped; these do not change `status.phase` or conditions.
 set: inside `extraConfig` on `spec.overrides[]`, `spec.defaults.endpoint`, or
 `spec.additionalEndpoints[]` (AutoConfig), on a `KrakenDEndpoint`'s
 `spec.endpoints[].extraConfig`, or declared directly on an OpenAPI operation.
+`null` (e.g. an `audience:` key with no value in YAML) and `null` items are
+rejected too.
 The admission webhook now rejects a non-list `extraConfig` value at `kubectl
 apply` time (`must be a list of strings, e.g. ["internal"]`); a value
 declared on the operation itself is caught by the default CUE definitions
@@ -279,6 +315,21 @@ instead and fails the sync with reason `CUEEvaluationFailed`. Previously a
 malformed value (e.g. a YAML mapping) passed both checks unchanged and only
 surfaced as a `krakend check -tlc` failure, which blocks config updates for
 every service on that gateway — not just the one with the bad value.
+
+The admission check runs on `UPDATE` as well as `CREATE` and validates the
+whole object, so an AutoConfig or `KrakenDEndpoint` already stored with a
+non-list or `null` audience can't be updated at all — not even a
+metadata-only change such as a label or the `krakend.io/resync` annotation —
+until the same update fixes the value.
+
+The operation-level CUE rule lives in the embedded default CUE definitions. A
+namespace's `krakend-cue-definitions` ConfigMap replaces those defaults, so it
+doesn't get the rule unless it's updated from the new `cue/defaults.cue`;
+definitions from `spec.cue.definitionsConfigMapRef` are unified on top of
+whichever defaults apply, so they keep the rule only where the embedded
+defaults are in use. Without the rule, the `KrakenDEndpoint` admission check
+is the backstop (when the webhooks are enabled): the generated endpoint is
+rejected and the sync fails with `EndpointReconcileFailed`.
 
 ---
 
