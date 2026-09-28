@@ -32,7 +32,14 @@ import (
 
 func eventually(t *testing.T, check func() error) {
 	t.Helper()
-	deadline := time.Now().Add(60 * time.Second)
+	eventuallyWithin(t, 60*time.Second, check)
+}
+
+// eventuallyWithin polls check until it returns nil, failing the test if it
+// has not done so within timeout.
+func eventuallyWithin(t *testing.T, timeout time.Duration, check func() error) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
 	var lastErr error
 	for time.Now().Before(deadline) {
 		if lastErr = check(); lastErr == nil {
