@@ -60,7 +60,8 @@ const defaultResyncInterval = 5 * time.Minute
 // retried: one whose status or endpoint write was rejected with a Conflict
 // (or an AlreadyExists, for an endpoint create) because it acted on a stale
 // cached copy. Such a reconcile requeues quietly, with no error, event or
-// status change.
+// status change. The exception is a failed sync whose failure-status write
+// conflicts: it keeps the failure's own result (see recordSyncedFailure).
 const conflictRequeueDelay = time.Second
 
 // KrakenDAutoConfigReconciler reconciles a KrakenDAutoConfig object.
@@ -115,7 +116,7 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	if ac.Status.Phase == "" {
 		ac.Status.Phase = v1alpha1.AutoConfigPhasePending
 		if err := r.Status().Update(ctx, &ac); err != nil {
-			return statusWriteFailure(fmt.Errorf("setting initial phase: %w", err))
+			return statusWriteFailure(ctx, fmt.Errorf("setting initial phase: %w", err))
 		}
 		return ctrl.Result{Requeue: true}, nil
 	}
@@ -257,7 +258,7 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	if err := r.recordSync(ctx, &ac, origStatus, combinedChecksum, genOutput, changes, warnings); err != nil {
-		return statusWriteFailure(err)
+		return statusWriteFailure(ctx, err)
 	}
 
 	log.V(1).Info("autoconfig reconciled",
@@ -318,10 +319,14 @@ func (r *KrakenDAutoConfigReconciler) handleFetchError(
 	})
 	// The sync has failed whether or not its status write succeeds.
 	autoConfigSynced.WithLabelValues(ac.Namespace, ac.Name).Set(0)
-	if err := r.Status().Update(ctx, ac); err != nil {
-		return statusWriteFailure(fmt.Errorf("updating fetch error status: %w", err))
+	// A Conflict falls through to the failure's own result, with no event;
+	// see recordSyncedFailure.
+	switch err := r.Status().Update(ctx, ac); {
+	case err == nil:
+		r.Recorder.Event(ac, "Warning", v1alpha1.ReasonSpecFetchFailed, fetchErr.Error())
+	case !errors.IsConflict(err):
+		return ctrl.Result{}, fmt.Errorf("updating fetch error status: %w", err)
 	}
-	r.Recorder.Event(ac, "Warning", v1alpha1.ReasonSpecFetchFailed, fetchErr.Error())
 	// For periodic triggers, requeue via interval; for OnChange, return error
 	// so controller-runtime retries with exponential backoff.
 	if ac.Spec.Trigger == v1alpha1.TriggerPeriodic {
@@ -343,7 +348,7 @@ func (r *KrakenDAutoConfigReconciler) handleSyncedFailure(
 	warnings *inputWarnings,
 ) (ctrl.Result, error) {
 	if err := r.recordSyncedFailure(ctx, ac, reason, syncErr, warnings); err != nil {
-		return statusWriteFailure(err)
+		return ctrl.Result{}, err
 	}
 	if ac.Spec.Trigger == v1alpha1.TriggerPeriodic {
 		return r.requeueResult(ac), nil
@@ -365,11 +370,11 @@ func (r *KrakenDAutoConfigReconciler) handleEndpointError(
 	warnings *inputWarnings,
 ) (ctrl.Result, error) {
 	if errors.IsConflict(endpointErr) || errors.IsAlreadyExists(endpointErr) {
-		return ctrl.Result{RequeueAfter: conflictRequeueDelay}, nil
+		return lostWriteRace(ctx, endpointErr)
 	}
 	syncErr := fmt.Errorf("reconciling endpoints: %w", endpointErr)
 	if err := r.recordSyncedFailure(ctx, ac, v1alpha1.ReasonEndpointReconcileFailed, syncErr, warnings); err != nil {
-		return statusWriteFailure(err)
+		return ctrl.Result{}, err
 	}
 	return ctrl.Result{}, syncErr
 }
@@ -377,7 +382,13 @@ func (r *KrakenDAutoConfigReconciler) handleEndpointError(
 // recordSyncedFailure records a failed sync: the synced gauge 0, phase Error
 // and the Synced condition False with the given reason and error, then, once
 // that status write succeeds, the buffered input warnings followed by a
-// Warning event for syncErr. It returns the status write's error, if any.
+// Warning event for syncErr. It returns the status write's error, if any,
+// other than a Conflict: a reconcile whose failure-status write conflicts read
+// a stale copy of the AutoConfig, but its sync failed all the same, so it
+// records no events and its caller returns the failure's own result. The
+// quiet conflictRequeueDelay requeue would make controller-runtime forget the
+// item and reset its exponential backoff, turning a persistent failure's
+// retries into a conflictRequeueDelay loop while the cache stays stale.
 func (r *KrakenDAutoConfigReconciler) recordSyncedFailure(
 	ctx context.Context,
 	ac *v1alpha1.KrakenDAutoConfig,
@@ -396,6 +407,9 @@ func (r *KrakenDAutoConfigReconciler) recordSyncedFailure(
 	// The sync has failed whether or not its status write succeeds.
 	autoConfigSynced.WithLabelValues(ac.Namespace, ac.Name).Set(0)
 	if err := r.Status().Update(ctx, ac); err != nil {
+		if errors.IsConflict(err) {
+			return nil
+		}
 		return fmt.Errorf("updating %s status: %w", reason, err)
 	}
 	warnings.emit(r.Recorder, ac)
@@ -404,15 +418,23 @@ func (r *KrakenDAutoConfigReconciler) recordSyncedFailure(
 }
 
 // statusWriteFailure returns the reconcile result for a failed AutoConfig
-// status write. A Conflict means this reconcile read a stale copy of the
+// status write that records no failure: the initial Pending phase or a
+// successful sync. A Conflict means this reconcile read a stale copy of the
 // AutoConfig: it requeues quietly after conflictRequeueDelay, so the retry
 // reads the current copy, instead of surfacing a reconciler error. Any other
 // error is returned for controller-runtime to retry with backoff.
-func statusWriteFailure(err error) (ctrl.Result, error) {
+func statusWriteFailure(ctx context.Context, err error) (ctrl.Result, error) {
 	if errors.IsConflict(err) {
-		return ctrl.Result{RequeueAfter: conflictRequeueDelay}, nil
+		return lostWriteRace(ctx, err)
 	}
 	return ctrl.Result{}, err
+}
+
+// lostWriteRace returns the quiet requeue for a reconcile whose write lost a
+// race with a newer copy of the object than it read, logging it only at V(1).
+func lostWriteRace(ctx context.Context, err error) (ctrl.Result, error) {
+	logf.FromContext(ctx).V(1).Info("write lost a race; requeueing", "error", err)
+	return ctrl.Result{RequeueAfter: conflictRequeueDelay}, nil
 }
 
 func (r *KrakenDAutoConfigReconciler) handleCUEError(
