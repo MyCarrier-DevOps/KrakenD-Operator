@@ -144,7 +144,15 @@ endpoint: {
 								}
 							}
 							"documentation/openapi": {
-								audience: *_op.audience | ["public"]
+								// audience must be a list of strings if the operation
+								// declares one; a wrong-shaped value (e.g. a mapping)
+								// fails evaluation instead of silently defaulting.
+								if _op.audience == _|_ {
+									audience: ["public"]
+								}
+								if _op.audience != _|_ {
+									audience: [...string] & _op.audience
+								}
 								if _op.description != _|_ {
 									description: *_op.description | ""
 								}

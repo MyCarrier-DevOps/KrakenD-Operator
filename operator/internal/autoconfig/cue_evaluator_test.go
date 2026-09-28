@@ -1076,6 +1076,130 @@ func TestEvaluate_OverrideOnOperationWithoutOperationIdIsReported(t *testing.T) 
 	}
 }
 
+func TestEvaluate_OperationAudienceMustBeListOfStrings(t *testing.T) {
+	// A YAML mapping coerced to a JSON object (e.g. `audience: {internal}`)
+	// must fail CUE evaluation rather than reach the gateway, where it fails
+	// `krakend check -tlc` and blocks config updates for the whole gateway.
+	defs, err := EmbeddedCUEDefinitions()
+	if err != nil {
+		t.Fatalf("loading defs: %v", err)
+	}
+
+	specJSON := []byte(`{
+		"paths": {
+			"/api/v1/users": {
+				"get": {
+					"operationId": "listUsers",
+					"audience": {"internal": null},
+					"responses": {"200": {"description": "OK"}}
+				}
+			}
+		}
+	}`)
+
+	eval := NewCUEEvaluator()
+	_, err = eval.Evaluate(context.Background(), CUEInput{
+		SpecData:    specJSON,
+		SpecFormat:  v1alpha1.SpecFormatJSON,
+		DefaultDefs: defs,
+		ServiceName: "_spec",
+	})
+	if err == nil {
+		t.Fatal("expected an error for a non-list audience declared on the operation")
+	}
+}
+
+func TestEvaluate_OperationAudienceListOfStringsPassesThrough(t *testing.T) {
+	defs, err := EmbeddedCUEDefinitions()
+	if err != nil {
+		t.Fatalf("loading defs: %v", err)
+	}
+
+	specJSON := []byte(`{
+		"paths": {
+			"/api/v1/users": {
+				"get": {
+					"operationId": "listUsers",
+					"audience": ["internal"],
+					"responses": {"200": {"description": "OK"}}
+				}
+			}
+		}
+	}`)
+
+	eval := NewCUEEvaluator()
+	out, err := eval.Evaluate(context.Background(), CUEInput{
+		SpecData:    specJSON,
+		SpecFormat:  v1alpha1.SpecFormatJSON,
+		DefaultDefs: defs,
+		ServiceName: "_spec",
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if len(out.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(out.Entries))
+	}
+
+	var ec map[string]json.RawMessage
+	if err := json.Unmarshal(out.Entries[0].ExtraConfig.Raw, &ec); err != nil {
+		t.Fatalf("unmarshal extraConfig: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(ec["documentation/openapi"], &doc); err != nil {
+		t.Fatalf("unmarshal documentation/openapi: %v", err)
+	}
+	audience, ok := doc["audience"].([]any)
+	if !ok || len(audience) != 1 || audience[0] != "internal" {
+		t.Errorf("expected audience [internal], got %v", doc["audience"])
+	}
+}
+
+func TestEvaluate_OperationNoAudienceDefaultsToPublic(t *testing.T) {
+	defs, err := EmbeddedCUEDefinitions()
+	if err != nil {
+		t.Fatalf("loading defs: %v", err)
+	}
+
+	specJSON := []byte(`{
+		"paths": {
+			"/api/v1/users": {
+				"get": {
+					"operationId": "listUsers",
+					"responses": {"200": {"description": "OK"}}
+				}
+			}
+		}
+	}`)
+
+	eval := NewCUEEvaluator()
+	out, err := eval.Evaluate(context.Background(), CUEInput{
+		SpecData:    specJSON,
+		SpecFormat:  v1alpha1.SpecFormatJSON,
+		DefaultDefs: defs,
+		ServiceName: "_spec",
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if len(out.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(out.Entries))
+	}
+
+	var ec map[string]json.RawMessage
+	if err := json.Unmarshal(out.Entries[0].ExtraConfig.Raw, &ec); err != nil {
+		t.Fatalf("unmarshal extraConfig: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(ec["documentation/openapi"], &doc); err != nil {
+		t.Fatalf("unmarshal documentation/openapi: %v", err)
+	}
+	audience, ok := doc["audience"].([]any)
+	if !ok || len(audience) != 1 || audience[0] != "public" {
+		t.Errorf("expected audience [public], got %v", doc["audience"])
+	}
+}
+
 // --- applyDefaults tests ---
 
 func TestApplyDefaults_Timeout(t *testing.T) {
