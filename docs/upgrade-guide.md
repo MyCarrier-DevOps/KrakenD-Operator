@@ -153,15 +153,20 @@ idle.
   spec roughly every 5 minutes per `OnChange` AutoConfig going forward —
   previously it fetched only on a watched change.
 - Drift repair: every reconcile converges owned endpoints to the desired
-  state, so a generated `KrakenDEndpoint` that was deleted or hand-edited out
-  of band is restored on the next reconcile or resync.
+  state while the AutoConfig syncs successfully, so a generated
+  `KrakenDEndpoint` that was deleted or hand-edited out of band is restored on
+  the next reconcile or resync. While the AutoConfig is in `Error`, existing
+  endpoints are left as they are until a sync succeeds (an endpoint write
+  failure stops convergence at the endpoint that failed).
 - Steady state writes nothing: a reconcile that finds no change writes no
   status and emits no event. `status.lastSyncTime` and the
   `EndpointsGenerated` event update only when the spec/CUE-definitions/
   generation inputs or the generated endpoints changed; the
   `CUEEvaluationWarning`, `DuplicateOperationId`, and
   `AdditionalEndpointOverride` warning events fire only when those inputs
-  changed, but keep repeating on every reconcile while a sync is failing.
+  differ from the last successful sync's. A failed sync doesn't record its
+  inputs, so they repeat on each retry of a failing sync whose inputs
+  changed; a spec fetch failure emits `SpecFetchFailed` instead.
 - `status.phase` no longer transitions through `Fetching`/`Rendering` — those
   enum values remain for compatibility, but the controller now only sets
   `Pending`, `Synced`, or `Error`.

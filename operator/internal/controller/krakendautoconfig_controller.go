@@ -53,7 +53,7 @@ const defaultCUEDefinitionsConfigMap = "krakend-cue-definitions"
 // defaultResyncInterval is how often OnChange AutoConfigs are re-polled.
 // OnChange AutoConfigs react to watch events immediately and are also
 // re-polled on this interval so upstream spec changes and out-of-band
-// endpoint changes are always converged.
+// endpoint changes are converged by the next successful sync.
 const defaultResyncInterval = 5 * time.Minute
 
 // KrakenDAutoConfigReconciler reconciles a KrakenDAutoConfig object.
@@ -80,8 +80,11 @@ type KrakenDAutoConfigReconciler struct {
 
 // Reconcile implements the autoconfig pipeline: fetch → CUE evaluate → filter
 // → generate → diff/create/update/delete endpoints → status. Every reconcile
-// runs the whole pipeline, so owned endpoints always converge to the desired
-// state; a successful reconcile that finds nothing to change writes nothing.
+// runs the whole pipeline, so owned endpoints converge to the desired state
+// while the AutoConfig syncs successfully. While it is in Error, existing
+// endpoints are left as they are: a failed sync stops before touching them,
+// or, for an endpoint write, at that endpoint. A successful reconcile that
+// finds nothing to change writes nothing.
 func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
@@ -140,9 +143,9 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// inputsChanged gates warning events that would otherwise repeat on every
 	// resync (CUEEvaluationWarning, DuplicateOperationId,
 	// AdditionalEndpointOverride): they fire only when this reconcile's
-	// combined checksum differs from the checksum the last sync recorded.
-	// Failure paths leave status.SpecChecksum unchanged, so the warnings keep
-	// repeating while an AutoConfig is failing.
+	// combined checksum differs from the checksum the last successful sync
+	// recorded. Failure paths leave status.SpecChecksum unchanged, so each
+	// retry of a failing sync whose inputs changed emits them again.
 	inputsChanged := combinedChecksum != origStatus.SpecChecksum
 
 	// Load CUE definitions: prefer ConfigMap, fall back to embedded defaults
