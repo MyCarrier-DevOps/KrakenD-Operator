@@ -1574,8 +1574,29 @@ func TestAutoConfigReconcile_SyncedFailureStatusUpdateErrorNamesReason(t *testin
 	cm := testCUEDefinitionsCM()
 	ac := testAutoConfig()
 	ac.Status.Phase = v1alpha1.AutoConfigPhasePending
-	// Fail only the status write that records the Synced failure.
-	failErrorStatus := interceptor.Funcs{
+	c := fakeClientBuilder().
+		WithObjects(ac, cm).
+		WithStatusSubresource(ac).
+		WithInterceptorFuncs(failFailureStatusWrites()).
+		Build()
+	f, ce, fi, g := defaultMocks()
+	ce.output.UnmatchedOverrides = []string{"WebhookStatus"}
+	r := newACReconciler(c, f, ce, fi, g)
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+	})
+	want := "updating UnmatchedOverride status: simulated server error"
+	if err == nil || err.Error() != want {
+		t.Errorf("expected error %q, got %v", want, err)
+	}
+}
+
+// failFailureStatusWrites returns interceptor funcs that fail, with a plain
+// (non-conflict) server error, every status write recording a failed sync
+// (phase Error), and pass every other status write through.
+func failFailureStatusWrites() interceptor.Funcs {
+	return interceptor.Funcs{
 		SubResourceUpdate: func(
 			ctx context.Context,
 			c client.Client,
@@ -1588,22 +1609,6 @@ func TestAutoConfigReconcile_SyncedFailureStatusUpdateErrorNamesReason(t *testin
 			}
 			return c.SubResource(subResource).Update(ctx, obj, opts...)
 		},
-	}
-	c := fakeClientBuilder().
-		WithObjects(ac, cm).
-		WithStatusSubresource(ac).
-		WithInterceptorFuncs(failErrorStatus).
-		Build()
-	f, ce, fi, g := defaultMocks()
-	ce.output.UnmatchedOverrides = []string{"WebhookStatus"}
-	r := newACReconciler(c, f, ce, fi, g)
-
-	_, err := r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
-	})
-	want := "updating UnmatchedOverride status: simulated server error"
-	if err == nil || err.Error() != want {
-		t.Errorf("expected error %q, got %v", want, err)
 	}
 }
 
@@ -2544,6 +2549,65 @@ func TestAutoConfigReconcile_SyncedGaugeZeroOnFetchError(t *testing.T) {
 
 	if got := testutil.ToFloat64(autoConfigSynced.WithLabelValues(ac.Namespace, ac.Name)); got != 0 {
 		t.Errorf("expected synced gauge 0 after a fetch failure, got %v", got)
+	}
+}
+
+func TestAutoConfigReconcile_SyncedGaugeZeroWhenFailureStatusWriteFails(t *testing.T) {
+	// The failure is certain before its status write is attempted, so a
+	// failed write (other than a Conflict) must not leave the gauge at the
+	// last successful sync's 1.
+	tests := []struct {
+		name string
+		fail func(f *mockFetcher, ce *mockCUEEvaluator)
+	}{
+		{
+			name: "fetch failure",
+			fail: func(f *mockFetcher, _ *mockCUEEvaluator) {
+				f.result = nil
+				f.err = fmt.Errorf("connection refused")
+			},
+		},
+		{
+			name: "synced failure",
+			fail: func(_ *mockFetcher, ce *mockCUEEvaluator) {
+				ce.output.UnmatchedOverrides = []string{"WebhookStatus"}
+			},
+		},
+	}
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cm := testCUEDefinitionsCM()
+			ac := testAutoConfig()
+			ac.Name = fmt.Sprintf("metrics-failurewrite-%d-ac", i)
+			ac.Status.Phase = v1alpha1.AutoConfigPhasePending
+			c := fakeClientBuilder().
+				WithObjects(ac, cm).
+				WithStatusSubresource(ac).
+				WithInterceptorFuncs(failFailureStatusWrites()).
+				Build()
+			f, ce, fi, g := defaultMocks()
+			r := newACReconciler(c, f, ce, fi, g)
+			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace}}
+
+			// First reconcile succeeds, so the gauge starts at 1.
+			if _, err := r.Reconcile(context.Background(), req); err != nil {
+				t.Fatalf("reconcile: %v", err)
+			}
+			if got := testutil.ToFloat64(autoConfigSynced.WithLabelValues(ac.Namespace, ac.Name)); got != 1 {
+				t.Fatalf("expected synced gauge 1 after success, got %v", got)
+			}
+
+			// Second reconcile fails, and so does its failure-status write.
+			tt.fail(f, ce)
+			if _, err := r.Reconcile(context.Background(), req); err == nil ||
+				!strings.Contains(err.Error(), "simulated server error") {
+				t.Fatalf("expected the failure-status write error, got %v", err)
+			}
+
+			if got := testutil.ToFloat64(autoConfigSynced.WithLabelValues(ac.Namespace, ac.Name)); got != 0 {
+				t.Errorf("expected synced gauge 0 after a failed sync whose status write failed, got %v", got)
+			}
+		})
 	}
 }
 

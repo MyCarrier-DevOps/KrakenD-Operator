@@ -316,10 +316,11 @@ func (r *KrakenDAutoConfigReconciler) handleFetchError(
 		Reason:             v1alpha1.ReasonSpecFetchFailed,
 		Message:            fetchErr.Error(),
 	})
+	// The sync has failed whether or not its status write succeeds.
+	autoConfigSynced.WithLabelValues(ac.Namespace, ac.Name).Set(0)
 	if err := r.Status().Update(ctx, ac); err != nil {
 		return statusWriteFailure(fmt.Errorf("updating fetch error status: %w", err))
 	}
-	autoConfigSynced.WithLabelValues(ac.Namespace, ac.Name).Set(0)
 	r.Recorder.Event(ac, "Warning", v1alpha1.ReasonSpecFetchFailed, fetchErr.Error())
 	// For periodic triggers, requeue via interval; for OnChange, return error
 	// so controller-runtime retries with exponential backoff.
@@ -373,10 +374,10 @@ func (r *KrakenDAutoConfigReconciler) handleEndpointError(
 	return ctrl.Result{}, syncErr
 }
 
-// recordSyncedFailure records a failed sync: phase Error and the Synced
-// condition False with the given reason and error, then, once that status
-// write succeeds, the buffered input warnings followed by a Warning event for
-// syncErr. It returns the status write's error, if any.
+// recordSyncedFailure records a failed sync: the synced gauge 0, phase Error
+// and the Synced condition False with the given reason and error, then, once
+// that status write succeeds, the buffered input warnings followed by a
+// Warning event for syncErr. It returns the status write's error, if any.
 func (r *KrakenDAutoConfigReconciler) recordSyncedFailure(
 	ctx context.Context,
 	ac *v1alpha1.KrakenDAutoConfig,
@@ -392,10 +393,11 @@ func (r *KrakenDAutoConfigReconciler) recordSyncedFailure(
 		Reason:             reason,
 		Message:            syncErr.Error(),
 	})
+	// The sync has failed whether or not its status write succeeds.
+	autoConfigSynced.WithLabelValues(ac.Namespace, ac.Name).Set(0)
 	if err := r.Status().Update(ctx, ac); err != nil {
 		return fmt.Errorf("updating %s status: %w", reason, err)
 	}
-	autoConfigSynced.WithLabelValues(ac.Namespace, ac.Name).Set(0)
 	warnings.emit(r.Recorder, ac)
 	r.Recorder.Event(ac, "Warning", reason, syncErr.Error())
 	return nil
