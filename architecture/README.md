@@ -1761,7 +1761,7 @@ The operator emits events on KrakenDGateway resources:
 | Dragonfly not ready | Warning | `DragonflyNotReady` |
 | VirtualService created | Normal | `IstioVirtualServiceCreated` |
 | Endpoint path+method conflict | Warning | `EndpointConflict` |
-| ESO sync failure | Warning | `LicenseSecretSyncFailed` |
+| Endpoint backend references a missing `KrakenDBackendPolicy` (endpoint excluded) | Warning | `EndpointInvalid` |
 | Referenced license Secret missing (`secretRef` path) | Warning | `LicenseSecretMissing` |
 | License renewed, EE restored | Normal | `LicenseRestored` |
 | OpenAPI spec fetched successfully | Normal | `SpecFetched` |
