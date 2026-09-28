@@ -225,6 +225,29 @@ func TestResolveExternalRefs_FetchFailureStopsFurtherResolution(t *testing.T) {
 	}
 }
 
+func TestResolveExternalRefs_FirstFailingRefIsDeterministic(t *testing.T) {
+	// Failing refs under sibling map keys: the walk visits keys in sorted
+	// order, so the fatal error always names the sorted-first key's URL
+	// rather than whichever Go's map iteration happens to reach first.
+	main := []byte(`{"components":{"schemas":{` +
+		`"Hotel":{"$ref":"https://h.example/h.json#/X"},` +
+		`"Alpha":{"$ref":"https://a.example/a.json#/X"},` +
+		`"Golf":{"$ref":"https://g.example/g.json#/X"},` +
+		`"Bravo":{"$ref":"https://b.example/b.json#/X"},` +
+		`"Foxtrot":{"$ref":"https://f.example/f.json#/X"},` +
+		`"Charlie":{"$ref":"https://c.example/c.json#/X"},` +
+		`"Echo":{"$ref":"https://e.example/e.json#/X"},` +
+		`"Delta":{"$ref":"https://d.example/d.json#/X"}` +
+		`}}}`)
+	for range 20 {
+		_, _, err := ResolveExternalRefs(context.Background(), main,
+			"https://api.example.com/openapi.json", &stubFetcher{}, FetchSource{})
+		if err == nil || !strings.Contains(err.Error(), "https://a.example/a.json") {
+			t.Fatalf("expected the error to name the sorted-first ref's URL https://a.example/a.json, got: %v", err)
+		}
+	}
+}
+
 func TestResolveExternalRefs_NestedFetchFailureIsFatalAndStopsFurtherResolution(t *testing.T) {
 	// The first document fetches fine, but a ref inside it cannot be
 	// fetched: that failure is the resolve's fatal error, and nothing after

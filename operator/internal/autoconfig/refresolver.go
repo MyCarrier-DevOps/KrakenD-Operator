@@ -21,8 +21,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -156,8 +158,10 @@ func (r *refResolver) walk(node any, base string) {
 			}
 			return
 		}
-		for _, child := range v {
-			r.walk(child, base)
+		// Sorted keys make the walk order, and so the first failing ref
+		// and its error, deterministic.
+		for _, k := range slices.Sorted(maps.Keys(v)) {
+			r.walk(v[k], base)
 			if r.fatalErr != nil {
 				return
 			}
