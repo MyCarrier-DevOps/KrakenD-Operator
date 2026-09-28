@@ -134,7 +134,7 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	if postErr := r.postProcessSpec(ctx, &ac, fetchResult); postErr != nil {
-		return r.handleFetchError(ctx, &ac, fmt.Errorf("resolving external $refs: %w", postErr))
+		return r.handleFetchError(ctx, &ac, postErr)
 	}
 
 	// Recompute checksum from the final (possibly resolved / stripped) data
@@ -482,9 +482,10 @@ func applyAdditionalEndpoints(
 
 // postProcessSpec resolves external $refs and strips upstream server entries
 // from the fetched spec data, updating fetchResult.Data in place. A failure
-// to fetch or decode an external $ref document is fatal and returned to the
-// caller, which fails the sync closed; deterministic ref issues (pointer not
-// found, cycles, name collisions) are only logged as warnings.
+// to fetch or decode an external $ref document, or to decode the spec itself,
+// is fatal and returned to the caller, which fails the sync closed;
+// deterministic ref issues (pointer not found, cycles, name collisions) are
+// only logged as warnings.
 // StripServers failures are logged and left as a no-op, keeping the raw spec.
 func (r *KrakenDAutoConfigReconciler) postProcessSpec(
 	ctx context.Context,
