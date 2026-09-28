@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -52,6 +53,8 @@ import (
 	"k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
@@ -285,8 +288,10 @@ func runTests(m *testing.M) int {
 
 // warmUpControllers creates a throwaway namespace and a minimal
 // KrakenDGateway, then polls until the gateway controller has reconciled it
-// (status.phase set), or fails with a clear message if that does not happen
-// within 3 minutes. The namespace uses a distinct prefix from the "test-"
+// (status.phase set), or fails with a clear message, naming the last Get
+// error if the final Get failed, if that does not happen within 3 minutes. A
+// failed Get (the gateway not yet cached, or a transient API error) does not
+// end the poll. The namespace uses a distinct prefix from the "test-"
 // namespaces the suite's tests create, and is deleted without waiting for
 // the deletion to finish (best effort; the whole K3s cluster is torn down
 // at suite exit regardless).
@@ -315,24 +320,91 @@ func warmUpControllers(ctx context.Context, c client.Client) error {
 		return fmt.Errorf("creating warm-up gateway: %w", err)
 	}
 
+	// lastGetErr is the error of the most recent Get, if it failed, for the
+	// timeout message.
+	var lastGetErr error
 	err := wait.PollUntilContextTimeout(ctx, 500*time.Millisecond, 3*time.Minute, true,
 		func(ctx context.Context) (bool, error) {
 			var cur v1alpha1.KrakenDGateway
-			if err := c.Get(ctx, client.ObjectKeyFromObject(gw), &cur); err != nil {
-				if apierrors.IsNotFound(err) {
-					return false, nil
-				}
-				return false, err
+			lastGetErr = c.Get(ctx, client.ObjectKeyFromObject(gw), &cur)
+			if lastGetErr != nil {
+				// Not yet in the cache, or a transient API error: keep polling.
+				return false, nil
 			}
 			return cur.Status.Phase != "", nil
 		},
 	)
 	if err != nil {
+		if lastGetErr != nil {
+			err = fmt.Errorf("%w (last Get error: %v)", err, lastGetErr)
+		}
 		return fmt.Errorf(
 			"controllers did not reconcile a warm-up KrakenDGateway within 3m: %w", err,
 		)
 	}
 	return nil
+}
+
+// warmUpClient returns a fake client for warmUpControllers whose
+// KrakenDGateway Gets return getErr(n) for the nth Get (1-based) when it is
+// non-nil, and otherwise the stored gateway as reconciled (status.phase set).
+func warmUpClient(getErr func(n int) error) client.Client {
+	scheme := runtime.NewScheme()
+	_ = clientgoscheme.AddToScheme(scheme)
+	_ = v1alpha1.AddToScheme(scheme)
+	var gets int
+	return fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(
+				ctx context.Context,
+				c client.WithWatch,
+				key client.ObjectKey,
+				obj client.Object,
+				opts ...client.GetOption,
+			) error {
+				gw, ok := obj.(*v1alpha1.KrakenDGateway)
+				if !ok {
+					return c.Get(ctx, key, obj, opts...)
+				}
+				gets++
+				if err := getErr(gets); err != nil {
+					return err
+				}
+				if err := c.Get(ctx, key, obj, opts...); err != nil {
+					return err
+				}
+				gw.Status.Phase = v1alpha1.PhasePending
+				return nil
+			},
+		}).
+		Build()
+}
+
+func TestWarmUpControllers_TimeoutNamesLastGetError(t *testing.T) {
+	c := warmUpClient(func(int) error {
+		return apierrors.NewNotFound(v1alpha1.GroupVersion.WithResource("krakendgateways").GroupResource(), "warmup-gw")
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	err := warmUpControllers(ctx, c)
+	if err == nil || !strings.Contains(err.Error(), `krakendgateways.gateway.krakend.io "warmup-gw" not found`) {
+		t.Fatalf("expected the timeout error to name the last Get error, got: %v", err)
+	}
+}
+
+func TestWarmUpControllers_KeepsPollingThroughTransientGetErrors(t *testing.T) {
+	c := warmUpClient(func(n int) error {
+		if n <= 2 {
+			return apierrors.NewServiceUnavailable("etcdserver: leader changed")
+		}
+		return nil
+	})
+
+	if err := warmUpControllers(context.Background(), c); err != nil {
+		t.Fatalf("expected warm-up to ride out transient Get errors, got: %v", err)
+	}
 }
 
 // noopValidator performs no validation (CE binary not available in integration tests).
