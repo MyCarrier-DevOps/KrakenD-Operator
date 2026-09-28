@@ -1917,7 +1917,10 @@ func TestAutoConfigReconcile_FailureStatusConflictKeepsFailureResult(t *testing.
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cm := testCUEDefinitionsCM()
-			ac := syncedAutoConfig(cm)
+			// Never synced, so the inputs differ from the (empty) recorded
+			// checksum and the input warnings below are buffered.
+			ac := testAutoConfig()
+			ac.Status.Phase = v1alpha1.AutoConfigPhasePending
 			if tt.trigger != nil {
 				tt.trigger(ac)
 			}
@@ -1933,8 +1936,9 @@ func TestAutoConfigReconcile_FailureStatusConflictKeepsFailureResult(t *testing.
 				WithInterceptorFuncs(funcs).
 				Build()
 			f, ce, fi, g := defaultMocks()
-			// The evaluator warns: the warning must not be recorded by a
-			// reconcile whose status write then conflicts.
+			// The evaluator warns and the inputs changed: the warning must
+			// not be recorded by a reconcile whose status write then
+			// conflicts.
 			ce.output.Warnings = []string{"skipping /x:GET: boom"}
 			if tt.fail != nil {
 				tt.fail(f, ce)
