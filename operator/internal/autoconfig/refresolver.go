@@ -46,6 +46,10 @@ import (
 //
 // Fetched documents are cached within the call. Cycle detection prevents
 // unbounded recursion when external documents reference each other.
+//
+// A failed fetch or decode of an external document aborts the resolution;
+// its error is prefixed "resolving external $refs: ". An error decoding or
+// marshaling the main spec itself is returned without that prefix.
 func ResolveExternalRefs(
 	ctx context.Context,
 	specData []byte,
@@ -67,7 +71,7 @@ func ResolveExternalRefs(
 	}
 	resolver.walk(root, baseURL)
 	if resolver.fatalErr != nil {
-		return nil, resolver.warnings, resolver.fatalErr
+		return nil, resolver.warnings, fmt.Errorf("resolving external $refs: %w", resolver.fatalErr)
 	}
 
 	// Inline collected external schemas under components/schemas.

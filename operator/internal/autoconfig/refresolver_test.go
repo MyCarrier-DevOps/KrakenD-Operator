@@ -169,6 +169,9 @@ func TestResolveExternalRefs_FetchFailureIsFatal(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected a fatal error for failed external $ref fetch")
 	}
+	if !strings.HasPrefix(err.Error(), "resolving external $refs: ") {
+		t.Errorf("expected the error to be marked as an external $ref failure, got: %v", err)
+	}
 	if !strings.Contains(err.Error(), "https://missing.example/x.json") {
 		t.Fatalf("expected error to mention the failing URL, got: %v", err)
 	}

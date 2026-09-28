@@ -517,6 +517,42 @@ func TestAutoConfigReconcile_ExternalRefFetchFailureFailsClosed(t *testing.T) {
 	}
 }
 
+func TestAutoConfigReconcile_UndecodableSpecFailsWithoutRefPrefix(t *testing.T) {
+	// A URL spec that is not a JSON object or YAML map fails before any
+	// external $ref is looked at: the error is the spec's own, not an
+	// external $ref failure.
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	ac.Status.Phase = v1alpha1.AutoConfigPhasePending
+	c := fakeClientBuilder().
+		WithObjects(ac, cm).
+		WithStatusSubresource(ac).
+		Build()
+	f, ce, fi, g := defaultMocks()
+	f.result.Data = []byte(`[1,2,3]`)
+	r := newACReconciler(c, f, ce, fi, g)
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+	})
+	if err == nil {
+		t.Fatal("expected error for OnChange trigger, got nil")
+	}
+
+	var updated v1alpha1.KrakenDAutoConfig
+	if e := c.Get(context.Background(), types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+		&updated); e != nil {
+		t.Fatalf("getting updated autoconfig: %v", e)
+	}
+	cond := meta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionSpecAvailable)
+	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != v1alpha1.ReasonSpecFetchFailed {
+		t.Fatalf("expected SpecAvailable False with reason %s, got %+v", v1alpha1.ReasonSpecFetchFailed, cond)
+	}
+	if strings.Contains(cond.Message, "$ref") || !strings.HasPrefix(cond.Message, "decoding spec: ") {
+		t.Errorf("expected the spec's own decode error without the $ref prefix, got %q", cond.Message)
+	}
+}
+
 func TestAutoConfigReconcile_CUEError(t *testing.T) {
 	ac := testAutoConfig()
 	ac.Status.Phase = v1alpha1.AutoConfigPhasePending
