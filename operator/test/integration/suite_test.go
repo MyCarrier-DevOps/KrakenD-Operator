@@ -33,9 +33,14 @@ import (
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/k3s"
+	appsv1 "k8s.io/api/apps/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apiextclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -211,11 +216,45 @@ func runTests(m *testing.M) int {
 		}
 	}()
 
+	// controller-runtime's WaitForCacheSync only reports on informers that
+	// already exist at the time it is called. Controller sources (For/Owns/
+	// Watches) lazily create their informers when each controller's Start()
+	// runs in the background, which races the call below. Pre-create an
+	// informer for every type any registered controller watches so the gate
+	// that follows actually covers them, matching what its comment claims.
+	watchedTypes := []client.Object{
+		&v1alpha1.KrakenDGateway{},
+		&v1alpha1.KrakenDEndpoint{},
+		&v1alpha1.KrakenDBackendPolicy{},
+		&v1alpha1.KrakenDAutoConfig{},
+		&corev1.ConfigMap{},
+		&corev1.Secret{},
+		&appsv1.Deployment{},
+		&corev1.Service{},
+		&corev1.ServiceAccount{},
+		&policyv1.PodDisruptionBudget{},
+		&autoscalingv2.HorizontalPodAutoscaler{},
+		&batchv1.Job{},
+	}
+	informerCtx, informerCancel := context.WithTimeout(ctx, 30*time.Second)
+	for _, obj := range watchedTypes {
+		if _, err := mgr.GetCache().GetInformer(informerCtx, obj); err != nil {
+			informerCancel()
+			fmt.Fprintf(os.Stderr, "failed to pre-create informer for %T: %v\n", obj, err)
+			cancel()
+			return 1
+		}
+	}
+	informerCancel()
+
 	// Ensure the manager's caches have synced before running any test, so a
-	// test never races a manager that failed to start. Bound the wait so a
-	// stuck informer fails fast and cleanly (allowing the deferred K3s cleanup
-	// to run) instead of hanging until the `go test -timeout` kill, which
-	// panics without unwinding defers and would leak the K3s container.
+	// test never races a manager that failed to start. Every type any
+	// registered controller watches has its informer pre-created above, so
+	// this genuinely waits for all of them, not just whichever controller
+	// sources happened to start first. Bound the wait so a stuck informer
+	// fails fast and cleanly (allowing the deferred K3s cleanup to run)
+	// instead of hanging until the `go test -timeout` kill, which panics
+	// without unwinding defers and would leak the K3s container.
 	// Note: cache sync is only a startup precondition; the widened eventually()
 	// deadline in the tests is what absorbs K3s cold-start watch-propagation
 	// latency after sync.
@@ -227,7 +266,73 @@ func runTests(m *testing.M) int {
 		return 1
 	}
 
+	// Warm up the reconcile path once before any real test runs. Caches
+	// synced above only proves informers have their initial list; it does
+	// not prove K3s will actually deliver a subsequent watch event, and
+	// roughly 1 in 9 local runs a watch-delivery stall left the first test's
+	// KrakenDGateway create event undelivered for 60s+. Absorbing that stall
+	// here turns it into a clear setup failure instead of a flaky first test.
+	warmUpStart := time.Now()
+	if err := warmUpControllers(ctx, k8sClient); err != nil {
+		fmt.Fprintf(os.Stderr, "warm-up failed after %s: %v\n", time.Since(warmUpStart), err)
+		cancel()
+		return 1
+	}
+	fmt.Fprintf(os.Stderr, "warm-up reconciled in %s\n", time.Since(warmUpStart))
+
 	return m.Run()
+}
+
+// warmUpControllers creates a throwaway namespace and a minimal
+// KrakenDGateway, then polls until the gateway controller has reconciled it
+// (status.phase set), or fails with a clear message if that does not happen
+// within 3 minutes. The namespace uses a distinct prefix from the "test-"
+// namespaces the suite's tests create, and is deleted without waiting for
+// the deletion to finish (best effort; the whole K3s cluster is torn down
+// at suite exit regardless).
+func warmUpControllers(ctx context.Context, c client.Client) error {
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{GenerateName: "warmup-"},
+	}
+	if err := c.Create(ctx, ns); err != nil {
+		return fmt.Errorf("creating warm-up namespace: %w", err)
+	}
+	defer func() {
+		deleteCtx, deleteCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer deleteCancel()
+		_ = c.Delete(deleteCtx, ns)
+	}()
+
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "warmup-gw", Namespace: ns.Name},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.9",
+			Edition: v1alpha1.EditionCE,
+			Config:  v1alpha1.GatewayConfig{},
+		},
+	}
+	if err := c.Create(ctx, gw); err != nil {
+		return fmt.Errorf("creating warm-up gateway: %w", err)
+	}
+
+	err := wait.PollUntilContextTimeout(ctx, 500*time.Millisecond, 3*time.Minute, true,
+		func(ctx context.Context) (bool, error) {
+			var cur v1alpha1.KrakenDGateway
+			if err := c.Get(ctx, client.ObjectKeyFromObject(gw), &cur); err != nil {
+				if apierrors.IsNotFound(err) {
+					return false, nil
+				}
+				return false, err
+			}
+			return cur.Status.Phase != "", nil
+		},
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"controllers did not reconcile a warm-up KrakenDGateway within 3m: %w", err,
+		)
+	}
+	return nil
 }
 
 // noopValidator performs no validation (CE binary not available in integration tests).
