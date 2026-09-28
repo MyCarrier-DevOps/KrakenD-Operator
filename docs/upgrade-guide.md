@@ -132,6 +132,53 @@ make deploy IMG=ghcr.io/mycarrier-devops/krakend-operator:<previous-version>
 
 ---
 
+## Unreleased — AutoConfig continuous reconciliation, drift repair and resync
+
+The AutoConfig controller is now watch-driven with a resync backstop, and
+every reconcile runs the full pipeline (fetch, evaluate, filter, generate,
+converge), instead of reacting once per spec change and otherwise sitting
+idle.
+
+**Reconciliation contract:**
+
+- Watched: the `KrakenDAutoConfig`'s own spec (generation), label, and
+  annotation changes (status-only updates — the phase/condition writes the
+  controller makes to itself — are ignored); an owned `KrakenDEndpoint`'s
+  spec changes and deletions; the OpenAPI spec ConfigMap
+  (`spec.openapi.configMapRef`), which is now watched alongside the CUE
+  definition ConfigMaps.
+- Resync: `trigger: OnChange` AutoConfigs are additionally re-polled every 5
+  minutes even with no watch event; `trigger: Periodic` AutoConfigs continue
+  to resync at `spec.periodic.interval`. Expect an HTTP fetch of the OpenAPI
+  spec roughly every 5 minutes per `OnChange` AutoConfig going forward —
+  previously it fetched only on a watched change.
+- Drift repair: every reconcile converges owned endpoints to the desired
+  state, so a generated `KrakenDEndpoint` that was deleted or hand-edited out
+  of band is restored on the next reconcile or resync.
+- Steady state writes nothing: a reconcile that finds no change writes no
+  status and emits no event. `status.lastSyncTime` and the
+  `EndpointsGenerated` event update only when the spec/CUE-definitions/
+  generation inputs or the generated endpoints changed; the
+  `CUEEvaluationWarning`, `DuplicateOperationId`, and
+  `AdditionalEndpointOverride` warning events fire only when those inputs
+  changed, but keep repeating on every reconcile while a sync is failing.
+- `status.phase` no longer transitions through `Fetching`/`Rendering` — those
+  enum values remain for compatibility, but the controller now only sets
+  `Pending`, `Synced`, or `Error`.
+- Errors retry via controller-runtime's exponential backoff (`OnChange`) or
+  at the configured interval (`Periodic`), same as before.
+
+To force an immediate reconcile — for example right after fixing an upstream
+spec — change any annotation on the resource:
+
+```bash
+kubectl annotate krakendautoconfig <name> -n <ns> krakend.io/resync="$(date +%s)" --overwrite
+```
+
+No CRD or API changes; this is a controller-behavior-only change.
+
+---
+
 ## Unreleased — AutoConfig fails sync on unmatched overrides
 
 Previously, a `spec.overrides[]` entry whose `operationId` matched no
@@ -147,13 +194,16 @@ condition goes `False` with reason `UnmatchedOverride`, and a matching
 corrected or removed; the resource is re-evaluated on subsequent reconciles
 until then.
 
-Every `KrakenDAutoConfig` is re-evaluated once when the new operator starts,
-even if its OpenAPI spec, CUE definitions and `spec` are unchanged, so the
-detection query below is meaningful shortly after the upgrade. Healthy
-resources regenerate identical endpoints, so their `KrakenDEndpoints` are not
-modified — no endpoint churn. The one exception is an override on an
-`operationId` the spec declares more than once: it now lands on the endpoint
-that is actually published instead of on a skipped duplicate.
+Every `KrakenDAutoConfig` is re-evaluated once on the operator's first
+reconcile after the upgrade, even if its OpenAPI spec, CUE definitions and
+`spec` are unchanged — every reconcile now evaluates regardless of checksum
+(see *Unreleased — AutoConfig continuous reconciliation, drift repair and
+resync* above), so the detection query below is meaningful shortly after the
+upgrade. Healthy resources regenerate identical endpoints, so their
+`KrakenDEndpoints` are not modified — no endpoint churn. The one exception is
+an override on an `operationId` the spec declares more than once: it now
+lands on the endpoint that is actually published instead of on a skipped
+duplicate.
 
 Find affected resources cluster-wide:
 
@@ -166,8 +216,11 @@ the target operation has no `operationId` at all: `spec.defaults` applies to
 every generated operation; for that single operation, add an `operationId` to
 the service's OpenAPI spec, replace the operation with an
 `additionalEndpoints` entry (the same endpoint and method replaces the
-spec-derived one), or use a custom CUE definitions ConfigMap
-(`spec.cue.definitionsConfigMapRef`).
+spec-derived one), use a custom CUE definitions ConfigMap
+(`spec.cue.definitionsConfigMapRef`), or have the service declare `audience`
+directly on the operation — the default CUE definitions read it (`audience:
+*_op.audience | ["public"]` in `cue/defaults.cue`), avoiding an override
+entirely.
 
 Custom CUE definitions that read `_overrides` under a key that doesn't
 correspond to an operationId the spec declares will now fail the sync, because

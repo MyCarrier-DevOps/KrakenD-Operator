@@ -741,8 +741,9 @@ sequenceDiagram
 | KrakenDGateway deleted | Kubernetes GC | ownerReference cascade deletes all child resources |
 | KrakenDEndpoint created/updated/deleted | Endpoint controller | Set initial phase to `Pending` on creation. Re-render config for the target gateway, validate, rolling restart. Conflict detection re-evaluates all endpoints; previously `Conflicted` endpoints may be promoted to `Active` if the conflict is resolved. |
 | KrakenDBackendPolicy created/updated/deleted | Policy controller | Re-render config for all gateways with endpoints referencing this policy. If deleted while referenced, affected endpoints are marked `Invalid` (defense-in-depth: the admission webhook rejects such deletions, but this path handles cases where the webhook is in `failurePolicy: Ignore` mode, is temporarily unavailable, or is not deployed). |
-| KrakenDAutoConfig created/updated/deleted | AutoConfig controller | Fetch OpenAPI spec from configured source, parse operations, apply URL transforms and filters, generate/update/delete owned KrakenDEndpoint resources. Generated endpoints trigger the endpoint controller watch → gateway reconciler. On deletion, all owned KrakenDEndpoints are garbage-collected via ownerReference. |
-| AutoConfig periodic timer | AutoConfig controller | When `trigger: Periodic`, re-fetch the OpenAPI spec on the configured `periodic.interval`. Compare spec checksum against `status.specChecksum`; if unchanged, no-op. If changed, regenerate endpoints as in the create/update path. |
+| KrakenDAutoConfig created, or spec generation/label/annotation changed | AutoConfig controller | Fetch OpenAPI spec from configured source, parse operations, apply URL transforms and filters, and converge owned KrakenDEndpoint resources to the desired state (create/update/delete). A status-only update (the phase/condition writes the reconciler itself makes) does not re-trigger this — only generation, label, and annotation changes do. Generated endpoints trigger the endpoint controller watch → gateway reconciler. On deletion, all owned KrakenDEndpoints are garbage-collected via ownerReference. |
+| Owned KrakenDEndpoint spec changed or deleted, or the `openapi.configMapRef`/CUE definitions ConfigMap changed | AutoConfig controller | Re-run the full pipeline. A generated endpoint that was hand-edited or deleted out of band is restored to the desired spec (endpoint specs are compared by decoded JSON value, so re-encoding/formatting differences alone don't cause a write). |
+| AutoConfig resync timer | AutoConfig controller | `trigger: OnChange` AutoConfigs are additionally re-polled every 5 minutes (`defaultResyncInterval`); `trigger: Periodic` AutoConfigs at `spec.periodic.interval`. Every reconcile — resync or watch-triggered — runs the full pipeline; a reconcile that changes nothing writes no status and emits no event. Errors retry via controller-runtime's exponential backoff (`OnChange`) or at the configured interval (`Periodic`). |
 | KrakenDGateway deleted | Endpoint controller | Orphaned KrakenDEndpoints (no ownerReference) are set to `Detached` phase. They remain in the cluster but are excluded from all rendering. Re-attachment occurs automatically if a new KrakenDGateway with the same name is created. |
 | Secret (LICENSE) created or updated | Gateway controller | Re-parse X.509 `notAfter` from new Secret; run license validation state machine (`ValidateLicense` → `EERunning`/`EEWarning`/`PreExpiry`/`LicenseExpired`); trigger rolling restart if the license has not expired and the parsed `notAfter` has changed from the last observed value. Also trigger EE recovery (rolling restart) if `expiry > now+1h` AND the gateway is currently in Degraded or Error state (license-caused only) |
 | Dragonfly CR status updated | Gateway controller | Reflect `DragonflyReady` condition on KrakenDGateway; emit `DragonflyNotReady` Warning event if phase regresses |
@@ -1914,8 +1915,10 @@ spec:
   # (last-good) until the override is fixed. For operations with no operationId:
   # spec.defaults applies to every generated operation; for a single operation, add an
   # operationId to the service's OpenAPI spec, replace it with an additionalEndpoints
-  # entry (same endpoint+method replaces the spec-derived one), or use a custom CUE
-  # definitions ConfigMap (spec.cue.definitionsConfigMapRef).
+  # entry (same endpoint+method replaces the spec-derived one), use a custom CUE
+  # definitions ConfigMap (spec.cue.definitionsConfigMapRef), or have the service
+  # declare `audience` on the operation itself — the default CUE reads it
+  # (cue/defaults.cue: audience: *_op.audience | ["public"]) and needs no override.
   overrides:
     - operationId: getUserById
       timeout: "800ms"
@@ -1945,12 +1948,13 @@ spec:
       - deprecated
 
   # Execution policy
-  trigger: OnChange                   # OnChange (run once on create, re-run on spec update) or Periodic
+  trigger: OnChange                   # OnChange (react to spec/label/annotation changes; also resynced every 5m) or Periodic
   # periodic:
   #   interval: "1h"                   # re-fetch spec on this interval (only when trigger=Periodic)
 
 status:
-  phase: Synced                        # Pending, Fetching, Rendering, Synced, Error
+  phase: Synced                        # Pending, Synced, Error (Fetching/Rendering are kept in the
+                                        # API for compatibility; the controller no longer sets them)
   lastSyncTime: "2026-04-03T10:00:00Z"
   specChecksum: "sha256:def456..."
   generatedEndpoints: 15
@@ -2018,14 +2022,21 @@ graph TB
 
 ### Execution Model
 
-The autoconfig controller runs **exactly once per change** (when `trigger: OnChange`):
+The autoconfig controller is **watch-driven with a resync backstop**, and every reconcile runs the whole pipeline (fetch → evaluate → filter → generate → converge), so owned endpoints always converge to the desired state:
 
-1. **On `KrakenDAutoConfig` creation** — fetch the OpenAPI spec, load CUE definitions, evaluate CUE to generate endpoints, set status to `Synced`
-2. **On `KrakenDAutoConfig` update** — re-fetch the spec, re-evaluate CUE, diff against existing generated endpoints, create/update/delete as needed
-3. **On `KrakenDAutoConfig` deletion** — all generated `KrakenDEndpoint` resources are garbage-collected via `ownerReference`
-4. **On CUE definitions ConfigMap update** — the controller watches the referenced ConfigMap(s) and re-evaluates when definitions change
+1. **On `KrakenDAutoConfig` creation, or a spec (generation), label, or annotation change** — fetch the OpenAPI spec, load CUE definitions, evaluate CUE, filter, generate, and create/update/delete owned `KrakenDEndpoint` resources to match. Status-only updates (the phase/condition writes the reconciler itself makes) are ignored by the primary watch's predicate, so they cannot re-trigger a reconcile.
+2. **On an owned `KrakenDEndpoint` spec change or delete** — the same full pipeline runs, which restores a generated endpoint that was hand-edited or deleted out of band. Endpoint specs are compared by decoded JSON value, not bytes, so formatting/re-encoding differences alone don't produce a write.
+3. **On `KrakenDAutoConfig` deletion** — all generated `KrakenDEndpoint` resources are garbage-collected via `ownerReference`.
+4. **On an `openapi.configMapRef` or CUE definitions ConfigMap update** — the controller watches the referenced ConfigMap(s) and re-runs the pipeline.
+5. **On a resync** — `trigger: OnChange` AutoConfigs are re-polled every 5 minutes (`defaultResyncInterval`) even with no watch event, so upstream spec changes and out-of-band endpoint drift are always eventually converged; `trigger: Periodic` AutoConfigs resync at `spec.periodic.interval` instead.
 
-When `trigger: Periodic`, the controller additionally re-fetches the spec on the configured interval and reconciles changes. The spec checksum (`status.specChecksum`) prevents unnecessary endpoint churn when the spec hasn't changed. A CUE definitions change (detected via ConfigMap resourceVersion) triggers re-evaluation even when the spec checksum is unchanged.
+A reconcile that finds nothing to change — the common steady-state case — writes no status and emits no event. When something does change, `status.lastSyncTime` and an `EndpointsGenerated` event (`"Generated N endpoints (C created, U updated, D deleted, S skipped)"`) are recorded; `CUEEvaluationWarning`, `DuplicateOperationId`, and `AdditionalEndpointOverride` warning events fire only when the spec/CUE-definitions/generation inputs changed since the last sync, so they don't spam on every resync — but they do keep repeating on every reconcile while a sync is failing. `status.phase` no longer transitions through `Fetching`/`Rendering`; those enum values remain for compatibility, but the controller now only sets `Pending`, `Synced`, or `Error`. Errors retry via controller-runtime's exponential backoff (`OnChange`) or at the configured interval (`Periodic`).
+
+To force an immediate reconcile outside the resync interval, change any annotation on the resource — the watch predicate doesn't inspect which one:
+
+```bash
+kubectl annotate krakendautoconfig <name> -n <ns> krakend.io/resync="$(date +%s)" --overwrite
+```
 
 ### CUE Evaluation Detail
 

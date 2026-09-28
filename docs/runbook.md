@@ -279,10 +279,26 @@ remove the override if it's no longer needed. If the target operation has no
 `operationId` at all: `spec.defaults` applies to every generated operation;
 for that single operation, add an `operationId` to the service's OpenAPI spec,
 replace the operation with an `additionalEndpoints` entry (the same endpoint
-and method replaces the spec-derived one), or use a custom CUE definitions
-ConfigMap (`spec.cue.definitionsConfigMapRef`). Existing `KrakenDEndpoints`
-keep their last-good state — nothing regenerates — until the override is fixed
-and the resource re-syncs.
+and method replaces the spec-derived one), use a custom CUE definitions
+ConfigMap (`spec.cue.definitionsConfigMapRef`), or have the service declare
+`audience` directly on the operation — the default CUE definitions read it
+(`audience: *_op.audience | ["public"]` in `cue/defaults.cue`), which avoids
+needing an override at all. Existing `KrakenDEndpoints` keep their last-good
+state — nothing regenerates — until the override is fixed and the resource
+re-syncs.
+
+### Forcing an immediate AutoConfig reconcile
+
+`trigger: OnChange` AutoConfigs are re-polled every 5 minutes even with no
+watch event; `trigger: Periodic` AutoConfigs resync at `spec.periodic.interval`.
+To converge sooner — after fixing an upstream spec, correcting an override, or
+restoring a hand-edited generated endpoint — change any annotation to trigger
+an immediate reconcile (the watch predicate reacts to any annotation change,
+not a specific key):
+
+```bash
+kubectl annotate krakendautoconfig <name> -n <ns> krakend.io/resync="$(date +%s)" --overwrite
+```
 
 ### License expiry warnings
 
