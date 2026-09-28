@@ -1630,6 +1630,19 @@ func conflictStatusWrites() interceptor.Funcs {
 	}
 }
 
+// failEndpointCreates returns interceptor funcs that fail every
+// KrakenDEndpoint create with the error errFor returns for its name.
+func failEndpointCreates(errFor func(endpointName string) error) interceptor.Funcs {
+	return interceptor.Funcs{
+		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if _, ok := obj.(*v1alpha1.KrakenDEndpoint); ok {
+				return errFor(obj.GetName())
+			}
+			return c.Create(ctx, obj, opts...)
+		},
+	}
+}
+
 // assertQuietRequeue checks that a reconcile which lost a write race
 // requeued after conflictRequeueDelay with no error and no event.
 func assertQuietRequeue(t *testing.T, result ctrl.Result, err error, rec *record.FakeRecorder) {
@@ -1736,18 +1749,10 @@ func TestAutoConfigReconcile_EndpointWriteRaceRequeuesQuietly(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cm := testCUEDefinitionsCM()
 			ac := syncedAutoConfig(cm)
-			rejectEndpointCreate := interceptor.Funcs{
-				Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
-					if _, ok := obj.(*v1alpha1.KrakenDEndpoint); ok {
-						return tt.err(obj.GetName())
-					}
-					return c.Create(ctx, obj, opts...)
-				},
-			}
 			c := fakeClientBuilder().
 				WithObjects(ac, cm).
 				WithStatusSubresource(ac).
-				WithInterceptorFuncs(rejectEndpointCreate).
+				WithInterceptorFuncs(failEndpointCreates(tt.err)).
 				Build()
 			f, ce, fi, g := defaultMocks()
 			rec := fakeRecorder()
@@ -1767,6 +1772,51 @@ func TestAutoConfigReconcile_EndpointWriteRaceRequeuesQuietly(t *testing.T) {
 				t.Errorf("expected phase to stay Synced, got %s", updated.Status.Phase)
 			}
 		})
+	}
+}
+
+func TestAutoConfigReconcile_PeriodicEndpointReconcileFailureRetriesWithBackoff(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	ac.Spec.Trigger = v1alpha1.TriggerPeriodic
+	ac.Spec.Periodic = &v1alpha1.PeriodicSpec{Interval: metav1.Duration{Duration: 5 * time.Minute}}
+	c := fakeClientBuilder().
+		WithObjects(ac, cm).
+		WithStatusSubresource(ac).
+		WithInterceptorFuncs(failEndpointCreates(func(string) error {
+			return fmt.Errorf("simulated webhook rejection")
+		})).
+		Build()
+	f, ce, fi, g := defaultMocks()
+	rec := fakeRecorder()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Recorder = rec
+
+	// An error, not the interval requeue, so controller-runtime retries the
+	// endpoint write with backoff; it ignores the result alongside an error.
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+	})
+	if err == nil {
+		t.Fatalf("expected an error for the endpoint write failure, got nil with result %+v", result)
+	}
+	if result != (ctrl.Result{}) {
+		t.Errorf("expected an empty result alongside the error, got %+v", result)
+	}
+
+	var updated v1alpha1.KrakenDAutoConfig
+	if e := c.Get(context.Background(), types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+		&updated); e != nil {
+		t.Fatalf("getting updated autoconfig: %v", e)
+	}
+	cond := meta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionSynced)
+	if updated.Status.Phase != v1alpha1.AutoConfigPhaseError || cond == nil ||
+		cond.Status != metav1.ConditionFalse || cond.Reason != v1alpha1.ReasonEndpointReconcileFailed {
+		t.Errorf("expected phase Error and Synced False with reason %s, got phase %s and condition %+v",
+			v1alpha1.ReasonEndpointReconcileFailed, updated.Status.Phase, cond)
+	}
+	if events := drainEvents(rec); !hasEventReason(events, v1alpha1.ReasonEndpointReconcileFailed) {
+		t.Errorf("expected a Warning %s event, got %v", v1alpha1.ReasonEndpointReconcileFailed, events)
 	}
 }
 

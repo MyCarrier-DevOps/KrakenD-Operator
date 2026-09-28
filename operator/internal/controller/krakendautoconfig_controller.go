@@ -326,12 +326,11 @@ func (r *KrakenDAutoConfigReconciler) handleFetchError(
 	return ctrl.Result{}, fetchErr
 }
 
-// handleSyncedFailure fails the sync with the given reason and error: it sets
-// phase Error, the Synced condition to False, records the buffered input
-// warnings and then a Warning event for syncErr, and returns the
-// requeue/error semantics shared by every Synced-failure path — requeue via
-// interval for periodic triggers, otherwise the error itself so
-// controller-runtime retries with exponential backoff.
+// handleSyncedFailure fails the sync with the given reason and error (see
+// recordSyncedFailure) and returns the requeue/error semantics shared by the
+// Synced-failure paths other than endpoint writes — requeue via interval for
+// periodic triggers, otherwise the error itself so controller-runtime retries
+// with exponential backoff.
 func (r *KrakenDAutoConfigReconciler) handleSyncedFailure(
 	ctx context.Context,
 	ac *v1alpha1.KrakenDAutoConfig,
@@ -339,19 +338,9 @@ func (r *KrakenDAutoConfigReconciler) handleSyncedFailure(
 	syncErr error,
 	warnings *inputWarnings,
 ) (ctrl.Result, error) {
-	ac.Status.Phase = v1alpha1.AutoConfigPhaseError
-	meta.SetStatusCondition(&ac.Status.Conditions, metav1.Condition{
-		Type:               v1alpha1.ConditionSynced,
-		Status:             metav1.ConditionFalse,
-		ObservedGeneration: ac.Generation,
-		Reason:             reason,
-		Message:            syncErr.Error(),
-	})
-	if err := r.Status().Update(ctx, ac); err != nil {
-		return statusWriteFailure(fmt.Errorf("updating %s status: %w", reason, err))
+	if err := r.recordSyncedFailure(ctx, ac, reason, syncErr, warnings); err != nil {
+		return statusWriteFailure(err)
 	}
-	warnings.emit(r.Recorder, ac)
-	r.Recorder.Event(ac, "Warning", reason, syncErr.Error())
 	if ac.Spec.Trigger == v1alpha1.TriggerPeriodic {
 		return r.requeueResult(ac), nil
 	}
@@ -361,7 +350,10 @@ func (r *KrakenDAutoConfigReconciler) handleSyncedFailure(
 // handleEndpointError handles a failed endpoint write. One rejected with a
 // Conflict or an AlreadyExists lost a race with a newer copy of the endpoint
 // than this reconcile read; it requeues quietly after conflictRequeueDelay.
-// Any other error fails the sync with EndpointReconcileFailed.
+// Any other error fails the sync with EndpointReconcileFailed and is returned
+// for every trigger, so controller-runtime retries it with exponential
+// backoff: endpoint write failures are usually transient, and a periodic
+// trigger would otherwise wait a whole interval.
 func (r *KrakenDAutoConfigReconciler) handleEndpointError(
 	ctx context.Context,
 	ac *v1alpha1.KrakenDAutoConfig,
@@ -371,8 +363,38 @@ func (r *KrakenDAutoConfigReconciler) handleEndpointError(
 	if errors.IsConflict(endpointErr) || errors.IsAlreadyExists(endpointErr) {
 		return ctrl.Result{RequeueAfter: conflictRequeueDelay}, nil
 	}
-	return r.handleSyncedFailure(ctx, ac, v1alpha1.ReasonEndpointReconcileFailed,
-		fmt.Errorf("reconciling endpoints: %w", endpointErr), warnings)
+	syncErr := fmt.Errorf("reconciling endpoints: %w", endpointErr)
+	if err := r.recordSyncedFailure(ctx, ac, v1alpha1.ReasonEndpointReconcileFailed, syncErr, warnings); err != nil {
+		return statusWriteFailure(err)
+	}
+	return ctrl.Result{}, syncErr
+}
+
+// recordSyncedFailure records a failed sync: phase Error and the Synced
+// condition False with the given reason and error, then, once that status
+// write succeeds, the buffered input warnings followed by a Warning event for
+// syncErr. It returns the status write's error, if any.
+func (r *KrakenDAutoConfigReconciler) recordSyncedFailure(
+	ctx context.Context,
+	ac *v1alpha1.KrakenDAutoConfig,
+	reason string,
+	syncErr error,
+	warnings *inputWarnings,
+) error {
+	ac.Status.Phase = v1alpha1.AutoConfigPhaseError
+	meta.SetStatusCondition(&ac.Status.Conditions, metav1.Condition{
+		Type:               v1alpha1.ConditionSynced,
+		Status:             metav1.ConditionFalse,
+		ObservedGeneration: ac.Generation,
+		Reason:             reason,
+		Message:            syncErr.Error(),
+	})
+	if err := r.Status().Update(ctx, ac); err != nil {
+		return fmt.Errorf("updating %s status: %w", reason, err)
+	}
+	warnings.emit(r.Recorder, ac)
+	r.Recorder.Event(ac, "Warning", reason, syncErr.Error())
+	return nil
 }
 
 // statusWriteFailure returns the reconcile result for a failed AutoConfig
