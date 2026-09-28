@@ -81,7 +81,7 @@ Metrics are exposed on port **8443** (HTTPS). Key metrics:
 
 # AutoConfig hasn't synced — its endpoints are frozen at the last good state
 - alert: KrakenDAutoConfigNotSynced
-  expr: min_over_time(krakend_operator_autoconfig_synced[15m]) == 0
+  expr: krakend_operator_autoconfig_synced == 0
   for: 15m
   labels:
     severity: warning
