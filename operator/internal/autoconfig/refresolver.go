@@ -19,6 +19,7 @@ package autoconfig
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -63,6 +64,9 @@ func ResolveExternalRefs(
 		docs:    map[string]map[string]any{},
 	}
 	resolver.walk(root, "")
+	if resolver.fatalErr != nil {
+		return nil, resolver.warnings, resolver.fatalErr
+	}
 
 	// Inline collected external schemas under components/schemas.
 	if len(resolver.inlined) > 0 {
@@ -106,29 +110,58 @@ type refResolver struct {
 	resolving map[string]bool           // cycle detection: ref keys currently being resolved
 	resolved  map[string]string         // refKey -> sanitized name for already-resolved refs
 	warnings  []string
+	fatalErr  error // first fetch/decode failure; halts all further resolution
 }
 
 var sanitizeNameRE = regexp.MustCompile(`[^A-Za-z0-9_]+`)
 
+// fatalRefError marks a resolveExternal error that must abort the whole
+// resolution: a failed fetch or decode of an external document. Deterministic
+// per-ref issues (pointer not found, cycles, name collisions) are returned as
+// plain errors and are recorded as warnings instead, without aborting.
+type fatalRefError struct {
+	err error
+}
+
+func (e *fatalRefError) Error() string { return e.err.Error() }
+func (e *fatalRefError) Unwrap() error { return e.err }
+
 // walk recursively scans m, replacing every external $ref with a local one.
+// Once a fatal error (a failed fetch or decode of an external document) has
+// been recorded, walk stops descending so no further refs are resolved and no
+// further documents are fetched.
 func (r *refResolver) walk(node any, pointer string) {
+	if r.fatalErr != nil {
+		return
+	}
 	switch v := node.(type) {
 	case map[string]any:
 		if ref, ok := v["$ref"].(string); ok && ref != "" && !strings.HasPrefix(ref, "#") {
 			if localName, err := r.resolveExternal(ref); err == nil {
 				v["$ref"] = "#/components/schemas/" + localName
 			} else {
-				r.warnings = append(r.warnings,
-					fmt.Sprintf("failed to resolve external $ref %q: %v", ref, err))
+				var fatal *fatalRefError
+				if errors.As(err, &fatal) {
+					r.fatalErr = fatal.err
+				} else {
+					r.warnings = append(r.warnings,
+						fmt.Sprintf("failed to resolve external $ref %q: %v", ref, err))
+				}
 			}
 			return
 		}
 		for k, child := range v {
 			r.walk(child, pointer+"/"+k)
+			if r.fatalErr != nil {
+				return
+			}
 		}
 	case []any:
 		for _, child := range v {
 			r.walk(child, pointer)
+			if r.fatalErr != nil {
+				return
+			}
 		}
 	}
 }
@@ -160,11 +193,11 @@ func (r *refResolver) resolveExternal(ref string) (string, error) {
 		child.ConfigMapRef = nil
 		fetched, err := r.fetcher.Fetch(r.ctx, child)
 		if err != nil {
-			return "", fmt.Errorf("fetching %s: %w", absolute, err)
+			return "", &fatalRefError{fmt.Errorf("fetching %s: %w", absolute, err)}
 		}
 		parsed, err := decodeSpec(fetched.Data)
 		if err != nil {
-			return "", fmt.Errorf("decoding %s: %w", absolute, err)
+			return "", &fatalRefError{fmt.Errorf("decoding %s: %w", absolute, err)}
 		}
 		doc = parsed
 		r.docs[absolute] = doc

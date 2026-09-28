@@ -123,7 +123,9 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return r.handleFetchError(ctx, &ac, err)
 	}
 
-	r.postProcessSpec(ctx, &ac, fetchResult)
+	if postErr := r.postProcessSpec(ctx, &ac, fetchResult); postErr != nil {
+		return r.handleFetchError(ctx, &ac, fmt.Errorf("resolving external $refs: %w", postErr))
+	}
 
 	// Recompute checksum from the final (possibly resolved / stripped) data
 	// so status.specChecksum also changes with external $ref resolution or
@@ -407,16 +409,19 @@ func (r *KrakenDAutoConfigReconciler) applyAdditionalEndpoints(
 }
 
 // postProcessSpec resolves external $refs and strips upstream server entries
-// from the fetched spec data, updating fetchResult.Data in place.
+// from the fetched spec data, updating fetchResult.Data in place. A failure
+// to fetch or decode an external $ref document is fatal and returned to the
+// caller, which fails the sync closed; deterministic ref issues (pointer not
+// found, cycles, name collisions) are only logged as warnings.
+// StripServers failures are logged and left as a no-op, keeping the raw spec.
 func (r *KrakenDAutoConfigReconciler) postProcessSpec(
 	ctx context.Context,
 	ac *v1alpha1.KrakenDAutoConfig,
 	fetchResult *autoconfig.FetchResult,
-) {
+) error {
 	log := logf.FromContext(ctx)
 
-	// Resolve external $refs (only possible with HTTP sources). Warnings
-	// from unresolved refs are logged but do not fail reconciliation.
+	// Resolve external $refs (only possible with HTTP sources).
 	if ac.Spec.OpenAPI.URL != "" {
 		resolved, warnings, resolveErr := autoconfig.ResolveExternalRefs(
 			ctx, fetchResult.Data, ac.Spec.OpenAPI.URL, r.Fetcher,
@@ -427,10 +432,9 @@ func (r *KrakenDAutoConfigReconciler) postProcessSpec(
 			},
 		)
 		if resolveErr != nil {
-			log.Error(resolveErr, "external $ref resolution failed, using raw spec")
-		} else {
-			fetchResult.Data = resolved
+			return resolveErr
 		}
+		fetchResult.Data = resolved
 		for _, w := range warnings {
 			log.V(1).Info("ref resolver warning", "warning", w)
 		}
@@ -444,6 +448,7 @@ func (r *KrakenDAutoConfigReconciler) postProcessSpec(
 	} else {
 		fetchResult.Data = stripped
 	}
+	return nil
 }
 
 // autoConfigSpecChecksum builds the checksum the controller stores in
