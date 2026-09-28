@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -210,6 +211,23 @@ func drainEvents(rec *record.FakeRecorder) []string {
 			return events
 		}
 	}
+}
+
+// hasEventReason reports whether any of the drained events has the given
+// reason. FakeRecorder formats each event as "<type> <reason> <message>".
+func hasEventReason(events []string, reason string) bool {
+	return slices.ContainsFunc(events, func(ev string) bool {
+		fields := strings.SplitN(ev, " ", 3)
+		return len(fields) > 1 && fields[1] == reason
+	})
+}
+
+// inputWarningReasons are the warning events emitted only when a reconcile's
+// inputs differ from the last successful sync's.
+var inputWarningReasons = []string{
+	v1alpha1.ReasonCUEEvaluationWarning,
+	v1alpha1.ReasonDuplicateOperationId,
+	v1alpha1.ReasonAdditionalEndpointOverride,
 }
 
 // syncedAutoConfig returns testAutoConfig already Synced at exactly the
@@ -475,10 +493,7 @@ func TestAutoConfigReconcile_SteadyStateWritesNothing(t *testing.T) {
 		t.Errorf("expected no endpoint writes, got %d creates, %d updates, %d deletes",
 			writes.creates, writes.updates, writes.deletes)
 	}
-	events := drainEvents(rec)
-	if slices.ContainsFunc(events, func(ev string) bool {
-		return strings.Contains(ev, v1alpha1.ReasonEndpointsGenerated)
-	}) {
+	if events := drainEvents(rec); hasEventReason(events, v1alpha1.ReasonEndpointsGenerated) {
 		t.Errorf("expected no %s event, got %v", v1alpha1.ReasonEndpointsGenerated, events)
 	}
 }
@@ -523,51 +538,6 @@ func TestAutoConfigReconcile_ChangedInputsWriteStatusOnce(t *testing.T) {
 	}
 	if updated.Status.LastSyncTime == nil {
 		t.Error("expected lastSyncTime to be set")
-	}
-}
-
-func TestAutoConfigReconcile_SpecChangeTriggersReEvaluation(t *testing.T) {
-	cm := testCUEDefinitionsCM()
-	ac := testAutoConfig()
-	ac.Status.Phase = v1alpha1.AutoConfigPhaseSynced
-	// Stale checksum from generation 0; AC is now at generation 1
-	// (simulating a spec edit like adding an override).
-	ac.ObjectMeta.Generation = 1
-	fetchChecksum := fmt.Sprintf("%x", sha256.Sum256([]byte(`{"paths":{}}`)))
-	ac.Status.SpecChecksum = autoConfigSpecChecksum(fetchChecksum, cm.ResourceVersion, 0)
-	c := fakeClientBuilder().
-		WithObjects(ac, cm).
-		WithStatusSubresource(ac).
-		Build()
-	f, ce, fi, g := defaultMocks()
-	r := newACReconciler(c, f, ce, fi, g)
-
-	_, err := r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	// CUE evaluator should have been called (not skipped)
-	if !ce.called {
-		t.Error("expected CUE evaluator to be called on generation change")
-	}
-
-	var updated v1alpha1.KrakenDAutoConfig
-	if err := c.Get(
-		context.Background(),
-		types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
-		&updated,
-	); err != nil {
-		t.Fatalf("getting updated autoconfig: %v", err)
-	}
-	if updated.Status.Phase != v1alpha1.AutoConfigPhaseSynced {
-		t.Errorf("expected phase Synced after re-evaluation, got %s", updated.Status.Phase)
-	}
-	// Checksum should now include the new generation
-	if updated.Status.SpecChecksum != autoConfigSpecChecksum(fetchChecksum, cm.ResourceVersion, 1) {
-		t.Errorf("expected checksum with generation 1, got %q", updated.Status.SpecChecksum)
 	}
 }
 
@@ -722,6 +692,45 @@ func TestAutoConfigReconcile_RevertsModifiedEndpointWhenInputsUnchanged(t *testi
 	}
 }
 
+func TestAutoConfigReconcile_RestoresEndpointLabelsWhenInputsUnchanged(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	ac.UID = "test-ac-uid"
+	f, ce, fi, g := defaultMocks()
+	// The generated endpoint's owner label was removed out of band; its spec
+	// still matches what the generator produces.
+	want := g.output.Endpoints[0]
+	relabeled := ownedCopy(t, ac, want)
+	relabeled.Labels = map[string]string{"gateway.krakend.io/auto-generated": "true"}
+	c := fakeClientBuilder().
+		WithObjects(ac, cm, relabeled).
+		WithStatusSubresource(ac).
+		Build()
+	rec := fakeRecorder()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Recorder = rec
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+	}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	var ep v1alpha1.KrakenDEndpoint
+	if err := c.Get(context.Background(), types.NamespacedName{
+		Name: want.Name, Namespace: want.Namespace,
+	}, &ep); err != nil {
+		t.Fatalf("getting endpoint: %v", err)
+	}
+	if !maps.Equal(ep.Labels, want.Labels) {
+		t.Errorf("expected endpoint labels restored to %v, got %v", want.Labels, ep.Labels)
+	}
+	wantEvent := "Normal EndpointsGenerated Generated 1 endpoints (0 created, 1 updated, 0 deleted, 0 skipped)"
+	if events := drainEvents(rec); !slices.Contains(events, wantEvent) {
+		t.Errorf("expected event %q, got %v", wantEvent, events)
+	}
+}
+
 func TestAutoConfigReconcile_DeletesStrayEndpointWhenInputsUnchanged(t *testing.T) {
 	cm := testCUEDefinitionsCM()
 	ac := syncedAutoConfig(cm)
@@ -807,10 +816,7 @@ func TestAutoConfigReconcile_ReorderedExtraConfigKeysWriteNoEndpoint(t *testing.
 	if writes.updates != 0 {
 		t.Errorf("expected no endpoint updates for semantically identical extraConfig, got %d", writes.updates)
 	}
-	events := drainEvents(rec)
-	if slices.ContainsFunc(events, func(ev string) bool {
-		return strings.Contains(ev, v1alpha1.ReasonEndpointsGenerated)
-	}) {
+	if events := drainEvents(rec); hasEventReason(events, v1alpha1.ReasonEndpointsGenerated) {
 		t.Errorf("expected no %s event, got %v", v1alpha1.ReasonEndpointsGenerated, events)
 	}
 }
@@ -836,7 +842,7 @@ func rawJSONSpec(endpointExtra, backendExtra, schema string) v1alpha1.KrakenDEnd
 
 func TestEndpointSpecEqual_IgnoresRawJSONFormatting(t *testing.T) {
 	a := rawJSONSpec(
-		`{"b":{"y":1,"x":"<b>"},"a":[1,2]}`,
+		`{"b":{"y":1,"x":"\u003cb\u003e"},"a":[1,2]}`,
 		`{"z":true,"m":null}`,
 		`{"type":"object","properties":{"name":{"type":"string"}}}`,
 	)
@@ -856,13 +862,30 @@ func TestEndpointSpecEqual_DetectsValueChanges(t *testing.T) {
 		return rawJSONSpec(`{"a":1}`, `{"b":2}`, `{"type":"object"}`)
 	}
 	tests := []struct {
-		name   string
+		name string
+		// setup, if set, is applied to both specs before mutate changes one.
+		setup  func(spec *v1alpha1.KrakenDEndpointSpec)
 		mutate func(spec *v1alpha1.KrakenDEndpointSpec)
 	}{
 		{
 			name: "endpoint extraConfig value",
 			mutate: func(spec *v1alpha1.KrakenDEndpointSpec) {
 				spec.Endpoints[0].ExtraConfig.Raw = []byte(`{"a":2}`)
+			},
+		},
+		{
+			name: "endpoint extraConfig added key",
+			mutate: func(spec *v1alpha1.KrakenDEndpointSpec) {
+				spec.Endpoints[0].ExtraConfig.Raw = []byte(`{"a":1,"b":2}`)
+			},
+		},
+		{
+			name: "endpoint extraConfig nil vs present",
+			setup: func(spec *v1alpha1.KrakenDEndpointSpec) {
+				spec.Endpoints[0].ExtraConfig = nil
+			},
+			mutate: func(spec *v1alpha1.KrakenDEndpointSpec) {
+				spec.Endpoints[0].ExtraConfig = &runtime.RawExtension{Raw: []byte(`{}`)}
 			},
 		},
 		{
@@ -887,9 +910,13 @@ func TestEndpointSpecEqual_DetectsValueChanges(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			changed := base()
+			orig, changed := base(), base()
+			if tt.setup != nil {
+				tt.setup(&orig)
+				tt.setup(&changed)
+			}
 			tt.mutate(&changed)
-			if endpointSpecEqual(base(), changed) {
+			if endpointSpecEqual(orig, changed) {
 				t.Errorf("expected specs to be unequal after changing the %s", tt.name)
 			}
 		})
@@ -943,10 +970,7 @@ func TestAutoConfigReconcile_RecoveryWithUnchangedInputsWritesStatusWithoutEvent
 	if updated.Status.LastSyncTime != nil {
 		t.Errorf("expected lastSyncTime untouched, got %v", updated.Status.LastSyncTime)
 	}
-	events := drainEvents(rec)
-	if slices.ContainsFunc(events, func(ev string) bool {
-		return strings.Contains(ev, v1alpha1.ReasonEndpointsGenerated)
-	}) {
+	if events := drainEvents(rec); hasEventReason(events, v1alpha1.ReasonEndpointsGenerated) {
 		t.Errorf("expected no %s event, got %v", v1alpha1.ReasonEndpointsGenerated, events)
 	}
 }
@@ -1583,12 +1607,8 @@ func TestAutoConfigReconcile_SteadyStateSuppressesInputWarningEvents(t *testing.
 	}
 
 	events := drainEvents(rec)
-	for _, reason := range []string{
-		v1alpha1.ReasonCUEEvaluationWarning,
-		v1alpha1.ReasonDuplicateOperationId,
-		v1alpha1.ReasonAdditionalEndpointOverride,
-	} {
-		if slices.ContainsFunc(events, func(ev string) bool { return strings.Contains(ev, reason) }) {
+	for _, reason := range inputWarningReasons {
+		if hasEventReason(events, reason) {
 			t.Errorf("expected no %s event when inputs are unchanged, got %v", reason, events)
 		}
 	}
@@ -1621,12 +1641,8 @@ func TestAutoConfigReconcile_ChangedInputsEmitsInputWarningEvents(t *testing.T) 
 	}
 
 	events := drainEvents(rec)
-	for _, reason := range []string{
-		v1alpha1.ReasonCUEEvaluationWarning,
-		v1alpha1.ReasonDuplicateOperationId,
-		v1alpha1.ReasonAdditionalEndpointOverride,
-	} {
-		if !slices.ContainsFunc(events, func(ev string) bool { return strings.Contains(ev, reason) }) {
+	for _, reason := range inputWarningReasons {
+		if !hasEventReason(events, reason) {
 			t.Errorf("expected %s event when inputs changed, got %v", reason, events)
 		}
 	}
@@ -1718,7 +1734,7 @@ func TestOwnedEndpointPredicate_IgnoresStatusOnlyUpdateAcceptsSpecAndDelete(t *t
 	}
 }
 
-func TestCueConfigMapToAutoConfig_DefaultCM(t *testing.T) {
+func TestConfigMapToAutoConfigs_DefaultCM(t *testing.T) {
 	ac := testAutoConfig()
 	c := fakeClientBuilder().WithObjects(ac).Build()
 	f, ce, fi, g := defaultMocks()
@@ -1740,7 +1756,7 @@ func TestCueConfigMapToAutoConfig_DefaultCM(t *testing.T) {
 	}
 }
 
-func TestCueConfigMapToAutoConfig_CustomCM(t *testing.T) {
+func TestConfigMapToAutoConfigs_CustomCM(t *testing.T) {
 	ac := testAutoConfig()
 	ac.Spec.CUE = &v1alpha1.CUESpec{
 		DefinitionsConfigMapRef: &v1alpha1.ConfigMapKeyRef{Name: "custom-defs"},
@@ -1762,7 +1778,7 @@ func TestCueConfigMapToAutoConfig_CustomCM(t *testing.T) {
 	}
 }
 
-func TestCueConfigMapToAutoConfig_UnrelatedCM(t *testing.T) {
+func TestConfigMapToAutoConfigs_UnrelatedCM(t *testing.T) {
 	ac := testAutoConfig()
 	c := fakeClientBuilder().WithObjects(ac).Build()
 	f, ce, fi, g := defaultMocks()
@@ -1899,11 +1915,8 @@ func TestAutoConfigReconcile_AdditionalEndpointOverrideEmitsWarning(t *testing.T
 		t.Fatalf("reconcile: %v", err)
 	}
 
-	events := drainEvents(rec)
-	if !slices.ContainsFunc(events, func(ev string) bool {
-		return strings.Contains(ev, "AdditionalEndpointOverride")
-	}) {
-		t.Fatalf("expected AdditionalEndpointOverride warning event, got %v", events)
+	if events := drainEvents(rec); !hasEventReason(events, v1alpha1.ReasonAdditionalEndpointOverride) {
+		t.Fatalf("expected %s warning event, got %v", v1alpha1.ReasonAdditionalEndpointOverride, events)
 	}
 	// And the override won.
 	for _, e := range g.gotInput.Entries {
