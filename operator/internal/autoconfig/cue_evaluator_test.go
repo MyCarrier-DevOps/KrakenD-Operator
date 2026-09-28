@@ -19,6 +19,7 @@ package autoconfig
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -1077,35 +1078,49 @@ func TestEvaluate_OverrideOnOperationWithoutOperationIdIsReported(t *testing.T) 
 }
 
 func TestEvaluate_OperationAudienceMustBeListOfStrings(t *testing.T) {
-	// A YAML mapping coerced to a JSON object (e.g. `audience: {internal}`)
-	// must fail CUE evaluation rather than reach the gateway, where it fails
-	// `krakend check -tlc` and blocks config updates for the whole gateway.
+	// A YAML mapping coerced to a JSON object (e.g. `audience: {internal}`),
+	// or a null in place of the list or one of its items, must fail CUE
+	// evaluation rather than reach the gateway, where it fails `krakend check
+	// -tlc` and blocks config updates for the whole gateway.
 	defs, err := EmbeddedCUEDefinitions()
 	if err != nil {
 		t.Fatalf("loading defs: %v", err)
 	}
 
-	specJSON := []byte(`{
-		"paths": {
-			"/api/v1/users": {
-				"get": {
-					"operationId": "listUsers",
-					"audience": {"internal": null},
-					"responses": {"200": {"description": "OK"}}
-				}
-			}
-		}
-	}`)
+	tests := map[string]string{
+		"map instead of list":   `{"internal": null}`,
+		"null instead of list":  `null`,
+		"list with a null item": `["internal", null]`,
+	}
 
-	eval := NewCUEEvaluator()
-	_, err = eval.Evaluate(context.Background(), CUEInput{
-		SpecData:    specJSON,
-		SpecFormat:  v1alpha1.SpecFormatJSON,
-		DefaultDefs: defs,
-		ServiceName: "_spec",
-	})
-	if err == nil {
-		t.Fatal("expected an error for a non-list audience declared on the operation")
+	for name, audience := range tests {
+		t.Run(name, func(t *testing.T) {
+			specJSON := []byte(`{
+				"paths": {
+					"/api/v1/users": {
+						"get": {
+							"operationId": "listUsers",
+							"audience": ` + audience + `,
+							"responses": {"200": {"description": "OK"}}
+						}
+					}
+				}
+			}`)
+
+			eval := NewCUEEvaluator()
+			_, err := eval.Evaluate(context.Background(), CUEInput{
+				SpecData:    specJSON,
+				SpecFormat:  v1alpha1.SpecFormatJSON,
+				DefaultDefs: defs,
+				ServiceName: "_spec",
+			})
+			if err == nil {
+				t.Fatal("expected an error for a non-list audience declared on the operation")
+			}
+			if !strings.Contains(err.Error(), "audience") {
+				t.Errorf("expected the error to name the audience field, got: %v", err)
+			}
+		})
 	}
 }
 
