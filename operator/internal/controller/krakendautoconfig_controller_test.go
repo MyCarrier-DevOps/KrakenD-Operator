@@ -2873,3 +2873,25 @@ func TestAutoConfigReconcile_SyncedGaugeDeletedOnTerminating(t *testing.T) {
 		t.Errorf("expected the synced gauge series to be deleted, got %d series", n)
 	}
 }
+
+func TestAutoConfigReadiness(t *testing.T) {
+	tests := []struct {
+		name       string
+		conds      []metav1.Condition
+		wantStatus metav1.ConditionStatus
+		wantReason string
+		wantPhase  v1alpha1.AutoConfigPhase
+	}{
+		{"not synced yet", nil, metav1.ConditionUnknown, "Pending", v1alpha1.AutoConfigPhasePending},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			status, reason, _ := autoConfigReady(tt.conds)
+			if phase := autoConfigPhase(tt.conds); status != tt.wantStatus || reason != tt.wantReason ||
+				phase != tt.wantPhase {
+				t.Errorf("got %s/%s phase %s, want %s/%s phase %s",
+					status, reason, phase, tt.wantStatus, tt.wantReason, tt.wantPhase)
+			}
+		})
+	}
+}

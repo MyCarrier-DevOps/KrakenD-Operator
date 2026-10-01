@@ -828,3 +828,9 @@ func extractHost(rawURL string) string {
 	}
 	return u.Scheme + "://" + u.Host
 }
+
+func autoConfigReady(conds []metav1.Condition) (status metav1.ConditionStatus, reason, message string) {
+	return "", "", ""
+}
+
+func autoConfigPhase(conds []metav1.Condition) v1alpha1.AutoConfigPhase { return "" }
