@@ -1041,3 +1041,26 @@ func TestPublishConfig_FailsWhenTheConfigMapAVanishedCreateRaceLeftIsGone(t *tes
 		t.Error("publishConfig = nil, want an error so the pass retries; the ConfigMap is not there")
 	}
 }
+
+func TestCollectConfigMaps_KeepsWhatAScaledDownReplicaSetStillRunsPodsFor(t *testing.T) {
+	gw := reconciledGateway()
+	gw.UID = "gw-uid"
+	at := func(h int) time.Time { return testNow.Add(time.Duration(h) * time.Hour) }
+	draining := gatewayReplicaSet(gw, "test-gw-draining", "test-gw-config-r1", 0)
+	draining.Status.Replicas = 1 // scaled to zero, its pod is still terminating
+	c := fakeClientBuilder().WithObjects(gw,
+		ownedConfigMap(gw, "test-gw-config-r1", at(1), true),
+		ownedConfigMap(gw, "test-gw-config-r2", at(2), true),
+		ownedConfigMap(gw, "test-gw-config-r3", at(3), true),
+		ownedConfigMap(gw, "test-gw-config-r4", at(4), true),
+		draining,
+	).Build()
+	r := newTestGatewayReconciler(c, &mockRenderer{}, &mockValidator{})
+
+	if err := r.collectConfigMaps(context.Background(), gw, "test-gw-config-r4"); err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	if got := remainingConfigMaps(t, c, gw); !slices.Contains(got, "test-gw-config-r1") {
+		t.Errorf("remaining ConfigMaps = %v, want test-gw-config-r1 kept while a pod of its ReplicaSet runs", got)
+	}
+}
