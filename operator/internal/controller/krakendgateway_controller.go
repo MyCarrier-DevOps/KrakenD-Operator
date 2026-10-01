@@ -558,7 +558,8 @@ func (r *KrakenDGatewayReconciler) inspectDeploymentStatus(
 	if dep.Spec.Replicas != nil {
 		desired = *dep.Spec.Replicas
 	}
-	if dep.Status.ObservedGeneration >= dep.Generation &&
+	if dep.Spec.Template.Annotations[resources.PostRestartJobChecksumAnnotation] == gw.Status.ConfigChecksum &&
+		dep.Status.ObservedGeneration >= dep.Generation &&
 		dep.Status.UpdatedReplicas == desired &&
 		dep.Status.AvailableReplicas == desired {
 		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
