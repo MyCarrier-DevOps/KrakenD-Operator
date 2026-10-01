@@ -284,10 +284,11 @@ func TestGatewayReconcile_ValidationFailure(t *testing.T) {
 	}
 
 	r := &KrakenDGatewayReconciler{
-		Client:   c,
-		Scheme:   testScheme(),
-		Recorder: fakeRecorder(),
-		Renderer: mockRend,
+		Client:    c,
+		APIReader: c,
+		Scheme:    testScheme(),
+		Recorder:  fakeRecorder(),
+		Renderer:  mockRend,
 		Validator: &mockValidator{
 			validateErr: &renderer.ValidationError{
 				Output: "invalid config line 5",
