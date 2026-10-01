@@ -96,10 +96,12 @@ func TestGatewayReconcile_InitialPhase(t *testing.T) {
 		WithStatusSubresource(gw).
 		Build()
 	r := &KrakenDGatewayReconciler{
-		Client:    c,
-		Scheme:    testScheme(),
-		Recorder:  fakeRecorder(),
-		Renderer:  &mockRenderer{},
+		Client:   c,
+		Scheme:   testScheme(),
+		Recorder: fakeRecorder(),
+		Renderer: &mockRenderer{output: &renderer.RenderOutput{
+			JSON: []byte(`{"version":3}`), Checksum: "cs", DesiredImage: "img:v1",
+		}},
 		Validator: &mockValidator{},
 	}
 
@@ -109,16 +111,16 @@ func TestGatewayReconcile_InitialPhase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !result.Requeue {
-		t.Error("expected requeue after initial phase")
+	if result != (ctrl.Result{}) {
+		t.Errorf("result = %+v, want no requeue: the first reconcile runs the whole pipeline", result)
 	}
 
 	var updated v1alpha1.KrakenDGateway
 	if err := c.Get(context.Background(), client.ObjectKeyFromObject(gw), &updated); err != nil {
 		t.Fatal(err)
 	}
-	if updated.Status.Phase != v1alpha1.PhasePending {
-		t.Errorf("expected Pending, got %s", updated.Status.Phase)
+	if updated.Status.Phase != v1alpha1.PhaseDeploying {
+		t.Errorf("expected Deploying after the first reconcile, got %s", updated.Status.Phase)
 	}
 }
 
