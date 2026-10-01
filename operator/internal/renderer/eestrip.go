@@ -116,3 +116,16 @@ func stripEndpointEEFeatures(ep map[string]any, fe flatEndpoint) []StrippedEEFea
 	}
 	return out
 }
+
+// NamespaceLevel is where in a KrakenD config an extra_config namespace appears.
+type NamespaceLevel string
+
+// The levels EEOnlyNamespaces knows.
+const (
+	LevelService  NamespaceLevel = "service"
+	LevelEndpoint NamespaceLevel = "endpoint"
+	LevelBackend  NamespaceLevel = "backend"
+)
+
+// EEOnlyNamespaces is a stub until the lists are exported.
+func EEOnlyNamespaces(level NamespaceLevel) []string { return nil }

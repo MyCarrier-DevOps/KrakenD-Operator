@@ -19,6 +19,7 @@ package renderer
 import (
 	"encoding/json"
 	"reflect"
+	"slices"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -110,5 +111,34 @@ func TestRender_WithoutFallbackKeepsEEFeatures(t *testing.T) {
 	if len(out.StrippedEEFeatures) != 0 || len(out.Sources) != 2 {
 		t.Errorf("stripped %v with %d sources, want nothing stripped and both entries rendered",
 			out.StrippedEEFeatures, len(out.Sources))
+	}
+}
+
+func TestEEOnlyNamespaces(t *testing.T) {
+	for _, tc := range []struct {
+		level       NamespaceLevel
+		has, hasNot string
+	}{
+		{LevelService, "auth/api-keys", "security/cors"},
+		{LevelEndpoint, "auth/api-keys", "qos/ratelimit/router"},
+		{LevelBackend, "backend/http/client", "qos/circuit-breaker"},
+	} {
+		got := EEOnlyNamespaces(tc.level)
+		if !slices.Contains(got, tc.has) || slices.Contains(got, tc.hasNot) {
+			t.Errorf("%s: %v, want it to contain %q and not %q", tc.level, got, tc.has, tc.hasNot)
+		}
+		if !slices.IsSorted(got) {
+			t.Errorf("%s: %v is not sorted", tc.level, got)
+		}
+		if len(got) == 0 {
+			continue
+		}
+		got[0] = "mutated"
+		if EEOnlyNamespaces(tc.level)[0] == "mutated" {
+			t.Errorf("%s: the returned slice aliases the renderer's list", tc.level)
+		}
+	}
+	if got := EEOnlyNamespaces("gateway"); got != nil {
+		t.Errorf("unknown level: %v, want nil", got)
 	}
 }
