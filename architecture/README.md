@@ -1808,6 +1808,12 @@ Per-gateway series (`namespace`, `name` labels) are removed when the gateway is 
 ### Kubernetes Events
 
 The operator emits events on the resource a condition or action concerns. Events on a KrakenDEndpoint are `EndpointConflict`, `Accepted` (emitted by the gateway controller), and `GatewayNotFound`, `PolicyNotFound` and `RefsResolved` (emitted by the endpoint controller). Events on a KrakenDBackendPolicy are `InvalidCircuitBreaker`, `InvalidRateLimit` and `Ready`. Events on a KrakenDAutoConfig are the AutoConfig rows (`SpecFetched` through `DuplicateOperationId`). All other rows are emitted on the KrakenDGateway. Condition-transition events (endpoint `ResolvedRefs`, policy `Ready`) fire on the transition only: a Warning when the condition becomes `False` or changes reason, and a Normal event when it recovers.
+A gateway event backed by a condition (`RolloutFailed`,
+`IstioVirtualServiceCreated`, `DragonflyNotReady`, the license events and
+`CRDNotInstalled`) is recorded only when that condition changes status or
+reason. A steady state emits no events. `ConfigValidationFailed` and
+`ValidatorUnavailable` fire when the recorded verdict changes.
+
 
 | Event | Type | Reason |
 |---|---|---|
