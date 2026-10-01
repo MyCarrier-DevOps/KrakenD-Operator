@@ -115,7 +115,8 @@ func (v *GatewayValidator) ValidateUpdate(
 	return warnings, err
 }
 
-// ValidateDelete is a no-op for gateways.
+// ValidateDelete is required by admission.CustomValidator. The gateway webhook
+// is not registered for DELETE, so it is never called.
 func (v *GatewayValidator) ValidateDelete(
 	_ context.Context,
 	_ runtime.Object,
