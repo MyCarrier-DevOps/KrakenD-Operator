@@ -74,13 +74,20 @@ type CacheSpec struct {
 
 // KrakenDBackendPolicyStatus defines the observed state of KrakenDBackendPolicy.
 type KrakenDBackendPolicyStatus struct {
-	ReferencedBy int                `json:"referencedBy,omitempty"`
-	Conditions   []metav1.Condition `json:"conditions,omitempty"`
+	// ObservedGeneration is the metadata.generation this status was computed for.
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+	ReferencedBy       int   `json:"referencedBy,omitempty"`
+	// Conditions are keyed by type. Ready is the summary condition.
+	// +listType=map
+	// +listMapKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:shortName=kbp
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
+// +kubebuilder:printcolumn:name="Reason",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].reason`
 // +kubebuilder:printcolumn:name="ReferencedBy",type=integer,JSONPath=`.status.referencedBy`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
