@@ -488,3 +488,14 @@ func TestBuildDeployment_AutoscalingKeepsLiveReplicas(t *testing.T) {
 		t.Errorf("replicas = %d, want the HPA's 7 kept", got)
 	}
 }
+
+func TestBuildDeployment_AutoscalingStartsAtMinReplicas(t *testing.T) {
+	gw := testGateway()
+	gw.Spec.Replicas = ptr.To(int32(5))
+	gw.Spec.Autoscaling = &v1alpha1.AutoscalingSpec{MinReplicas: ptr.To(int32(2)), MaxReplicas: 10}
+	dep := &appsv1.Deployment{}
+	BuildDeployment(dep, gw, "abc123", "", "krakend/krakend-ce:2.7.0")
+	if got := ptr.Deref(dep.Spec.Replicas, -1); got != 2 {
+		t.Errorf("replicas = %d, want minReplicas 2 for a new Deployment", got)
+	}
+}
