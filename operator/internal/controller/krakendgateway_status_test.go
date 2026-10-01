@@ -365,3 +365,19 @@ func TestGatewayReconcile_TerminatingGatewayIsLeftAlone(t *testing.T) {
 		t.Errorf("%d metric series left for a terminating gateway, want 0", n)
 	}
 }
+
+func TestGatewayReconcile_DeletedGatewayDropsItsMetrics(t *testing.T) {
+	setGatewaySeries("deleted", "gone-gw")
+	r := &KrakenDGatewayReconciler{
+		Client: fakeClientBuilder().Build(), Scheme: testScheme(), Recorder: fakeRecorder(),
+		Renderer: &mockRenderer{}, Validator: &mockValidator{},
+	}
+	gone := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "gone-gw", Namespace: "deleted"}}
+
+	if err := reconcileGateway(t, r, gone); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if n := remainingGatewaySeries("deleted", "gone-gw"); n != 0 {
+		t.Errorf("%d metric series left for a deleted gateway, want 0", n)
+	}
+}
