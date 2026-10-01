@@ -175,6 +175,16 @@ func TestGateway_ConfigIsContentAddressedAndImmutable(t *testing.T) {
 	if err := k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: firstName}, &cm); err != nil {
 		t.Fatalf("the previous config revision must survive the rollout: %v", err)
 	}
+	// With GC active, the previous revision survives only because its
+	// ReplicaSet is still live (the K3s pods never become ready, so the
+	// rollout never completes) or because it is inside the history.
+	var rsList appsv1.ReplicaSetList
+	if err := k8sClient.List(ctx, &rsList, client.InNamespace(ns)); err != nil {
+		t.Fatal(err)
+	}
+	if len(rsList.Items) == 0 {
+		t.Fatal("the Deployment controller created no ReplicaSet; the GC path is untested")
+	}
 }
 
 func TestGateway_EndpointTriggersReReconcile(t *testing.T) {
