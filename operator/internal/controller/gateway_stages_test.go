@@ -1860,3 +1860,42 @@ func TestGatewayReconcile_StatusWithoutEditionAdoptsTheCurrentOne(t *testing.T) 
 		t.Errorf("status.configEdition = %q, want the CE gateway's edition recorded", got)
 	}
 }
+
+func TestGatewayReconcile_RejectedCEFallbackKeepsEEImage(t *testing.T) {
+	gw, secret, parser := licensedEEGateway(testNow.Add(-time.Minute), true)
+	const config = `{"version":3,"name":"ee-only-until-stripped"}`
+	gw.Status.ConfigChecksum = hash.SHA256Hex([]byte(config))
+	gw.Status.ConfigEdition = v1alpha1.EditionEE
+	// The applied config's ConfigMap exists (seeded from the pre-upgrade one),
+	// so the Deployment is reconciled rather than held.
+	c := fakeClientBuilder().WithObjects(gw, secret, legacyConfigMap(gw, config)).WithStatusSubresource(gw).Build()
+	val := &recordingValidator{err: rejectedBy("ERROR testing the configuration file:\twildcards must be named")}
+	r := newTestGatewayReconciler(c, renderOf(config), val)
+	r.LicenseParser = parser
+
+	image := func() string {
+		var dep appsv1.Deployment
+		if err := c.Get(context.Background(), client.ObjectKeyFromObject(gw), &dep); err != nil {
+			t.Fatal(err)
+		}
+		return dep.Spec.Template.Spec.Containers[0].Image
+	}
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	eeImage := renderer.ResolveImage(gw, false)
+	if got := image(); got != eeImage {
+		t.Fatalf("image = %q while the CE render is rejected, want the EE image %q: "+
+			"CE pods must never load a config validated only as EE", got, eeImage)
+	}
+
+	// The rejection is remembered for this render; fixing the input changes it.
+	val.err = nil
+	r.Renderer = renderOf(`{"version":3,"name":"ce-safe"}`)
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if got, ceImage := image(), renderer.ResolveImage(gw, true); got != ceImage {
+		t.Errorf("image = %q after the CE render was applied, want the CE image %q", got, ceImage)
+	}
+}
