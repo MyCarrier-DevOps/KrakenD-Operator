@@ -405,6 +405,16 @@ reported as an invalid config and not retried.
 check. Failures to prepare the validation copy and other errors that are not
 verdicts, such as an unavailable validator, do not increment it.
 
+### Validation messages are capped at 4 KiB
+
+The `ConfigValid` condition message and the `ConfigValidationFailed` event
+now carry at most 4 KiB of krakend check output: the leading lines that fit,
+followed by `(output truncated, N more lines)`. The full output is logged by
+the operator as `krakend check rejected the rendered config`. Previously an
+output over the CRD's 32768-character limit (for example one bad key in a
+policy used by many backends) made the status write fail, so the rejection
+was never recorded.
+
 ## v0.14.0 — openapi-serve liveness probe (one-time rollout)
 
 The `openapi-serve` sidecar now renders with a liveness probe. It previously
