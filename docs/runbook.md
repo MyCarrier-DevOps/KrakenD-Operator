@@ -95,19 +95,26 @@ Metrics are exposed on port **8443** (HTTPS). Key metrics:
 
 ### Phases
 
-| Phase | Meaning |
-|---|---|
-| `Pending` | A new gateway before its first config is accepted or rejected, including while the validator is unavailable (`ConfigValid` is `Unknown`). It is persisted by the first status write, so a gateway that has not been reconciled yet has no phase |
-| `Rendering`, `Validating` | No longer written; kept in the API for compatibility |
-| `Deploying` | Deployment is rolling out |
-| `Running` | Deployment converged, all replicas ready |
-| `Degraded` | EE license expired — fell back to CE edition |
-| `Error` | Fatal error (validation failure, rollout timeout, license missing) |
+`status.phase` is derived from the `Ready` condition on every reconcile and
+kept for compatibility; alert and gate on `Ready` instead.
+
+| Phase | Ready | Meaning |
+|---|---|---|
+| `Pending` | `Unknown` | No configuration has been validated yet |
+| any serving phase | `Unknown`, reason `ValidatorUnavailable` | The validator could not run; the last applied configuration keeps serving and validation is retried with backoff |
+| `Deploying` | `False` | A rollout is in progress, or the Deployment has not reported available replicas yet |
+| `Running` | `True` | Configuration applied, all replicas available |
+| `Degraded` | `False` | EE license expired or in the pre-expiry window; running on CE (`LicenseDegraded=True`) |
+| `Error` | `False` | Configuration rejected (`ConfigValid=False`), rollout failed (`Available=False`), or license expired without CE fallback |
+
+`Rendering` and `Validating` stay in the CRD enum only so stored objects keep
+validating; the operator does not write them.
 
 ### Common Conditions
 
 | Condition | Meaning |
 |---|---|
+| `Ready` | Summary: the applied configuration is served on all replicas; its reason names the blocking condition |
 | `ConfigValid` | `True`: the rendered config passed `krakend check`. `False` (`ConfigValidationFailed`): rejected; the last applied config keeps serving. `Unknown` (`ValidatorUnavailable`): krakend check could not run; retried with backoff |
 | `Available` | Deployment has ready replicas |
 | `Progressing` | Deployment rollout in progress |
@@ -246,7 +253,7 @@ kubectl describe deploy <name>-krakend
   `krakend` container's HTTP probe on `/healthz`, and (when
   `spec.openapi.enabled: true`) the `openapi-serve` sidecar's TCP probe on the
   openapi port. `kubectl describe pod` names the container that failed.
-- `ProgressDeadlineExceeded` — sets phase to `Error` with `RolloutFailed` event
+- `ProgressDeadlineExceeded` — sets `Available=False`/`RolloutFailed` (phase `Error`) with a `RolloutFailed` event; the gateway returns to `Running` once the rollout recovers
 
 ### Gateway stuck in `Error`
 
@@ -267,7 +274,7 @@ kubectl get events --field-selector involvedObject.name=<name> --sort-by='.lastT
 
 **Diagnosis:** the condition message carries the cause. `no such file or directory` means the operator image lacks `/usr/local/bin/krakend`; `context deadline exceeded` means a run exceeded 30 seconds (check the operator pod's CPU throttling and memory); `signal: killed` without `context deadline exceeded` means the process was killed, usually by memory pressure on the operator container (a timeout's message also ends in `signal: killed`); `creating temp file` or `writing config to temp file` means the operator's temp directory is unwritable or full; `preparing validation copy` means the validation copy of the rendered config could not be built.
 
-**Resolution:** fix the environment; the operator retries with exponential backoff and the gateway recovers on its own. Backoff grows up to about 16–17 minutes, so recovery can lag that long after the cause is fixed. Editing the gateway, or restarting the operator, retries at once.
+**Resolution:** fix the environment; the operator retries with exponential backoff and the gateway recovers on its own. Backoff grows up to about 16–17 minutes, so recovery can lag that long after the cause is fixed. Editing the gateway, or restarting the operator, retries at once. Reverting the change that could not be validated also clears the condition: once the render equals the applied configuration again, `ConfigValid` returns to `True`.
 
 ### Endpoint shows `Invalid`
 
