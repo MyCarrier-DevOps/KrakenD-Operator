@@ -138,9 +138,10 @@ validating; the operator does not write them.
   gateway has not accepted this generation. Check the gateway:
   `kubectl get krakendgateway <gw> -n <ns> -o jsonpath='{.status.conditions[?(@.type=="ConfigValid")]}'`.
   A rejected configuration keeps every changed endpoint `Pending`.
-- **`Accepted=False`, reason `EndpointConflict`:** an older KrakenDEndpoint
-  owns one of this endpoint's (path, method) pairs; those entries are not
-  served. Rename the route or remove the duplicate.
+- **`Accepted=False`, reason `EndpointConflict`:** older KrakenDEndpoints
+  serve every one of this endpoint's (path, method) pairs, so none is served
+  (when only some are lost the reason is `PartiallyAccepted`, below). Rename
+  the route or remove the duplicate.
 - **`ResolvedRefs=False`:** create the named gateway or policy; the endpoint
   recovers on its own.
 
@@ -313,6 +314,13 @@ named. The condition is removed as soon as no finding names the endpoint,
 and cleared by a config that passes validation. A gateway that has never
 applied a config leaves no `Accepted` on endpoints it has not accepted, so
 they read `Pending` until one is applied.
+
+### Endpoint shows `Accepted` reason `PartiallyAccepted`
+
+Some of this endpoint's entries are served; the ones in `status.conflicts`
+are not, because an older KrakenDEndpoint (`winner`) serves the same path and
+method. Remove the duplicate entry from one of the two, or move it to the
+KrakenDEndpoint that should own it.
 
 ### AutoConfig not generating endpoints
 
