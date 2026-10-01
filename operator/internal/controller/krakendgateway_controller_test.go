@@ -36,6 +36,7 @@ import (
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
 // mockRenderer implements renderer.Renderer for testing.
@@ -1508,5 +1509,66 @@ func TestGatewayReconcile_AcceptedRecordsRenderedGeneration(t *testing.T) {
 	}
 	if got := storedAccepted(t, c, key); got == nil || got.ObservedGeneration != 1 {
 		t.Errorf("Accepted = %+v, want observedGeneration 1: generation 2 was never rendered", got)
+	}
+}
+
+func TestGatewayReconcile_AcceptedRetriesAfterConflictWithoutClobbering(t *testing.T) {
+	gw := reconciledGateway()
+	ep := gatewayEndpoint("ep-a", 1)
+	endpointGets, patches := 0, 0
+	c := fakeClientBuilder().
+		WithObjects(gw, ep).
+		WithStatusSubresource(gw, ep).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, cl client.WithWatch, k client.ObjectKey, obj client.Object,
+				opts ...client.GetOption) error {
+				if err := cl.Get(ctx, k, obj, opts...); err != nil {
+					return err
+				}
+				stored, ok := obj.(*v1alpha1.KrakenDEndpoint)
+				if !ok {
+					return nil
+				}
+				endpointGets++
+				if endpointGets > 1 {
+					return nil
+				}
+				// The endpoint controller writes ResolvedRefs after the gateway's read.
+				fresh := stored.DeepCopy()
+				meta.SetStatusCondition(&fresh.Status.Conditions, metav1.Condition{
+					Type: v1alpha1.ConditionResolvedRefs, Status: metav1.ConditionTrue,
+					Reason: v1alpha1.ReasonRefsResolved, Message: "resolved", ObservedGeneration: 1,
+				})
+				return cl.Status().Update(ctx, fresh)
+			},
+			SubResourcePatch: func(ctx context.Context, cl client.Client, sub string, obj client.Object,
+				patch client.Patch, opts ...client.SubResourcePatchOption) error {
+				if _, ok := obj.(*v1alpha1.KrakenDEndpoint); ok {
+					patches++
+				}
+				return cl.SubResource(sub).Patch(ctx, obj, patch, opts...)
+			},
+		}).
+		Build()
+	r := acceptanceReconciler(c, fakeRecorder(), &renderer.RenderOutput{
+		JSON: []byte(`{"version":3}`), Checksum: "cs1", DesiredImage: "img:v1",
+	})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if patches != 2 {
+		t.Errorf("endpoint status patches = %d, want 2: one rejected as stale, one retried", patches)
+	}
+	var stored v1alpha1.KrakenDEndpoint
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(ep), &stored); err != nil {
+		t.Fatal(err)
+	}
+	if meta.FindStatusCondition(stored.Status.Conditions, v1alpha1.ConditionResolvedRefs) == nil {
+		t.Error("the gateway's write removed the endpoint controller's ResolvedRefs")
+	}
+	if a := meta.FindStatusCondition(stored.Status.Conditions, v1alpha1.ConditionAccepted); a == nil ||
+		a.Status != metav1.ConditionTrue {
+		t.Errorf("Accepted = %+v, want True after the retry", a)
 	}
 }
