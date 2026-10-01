@@ -279,6 +279,15 @@ kubectl get events --field-selector involvedObject.name=<name> --sort-by='.lastT
 
 **Resolution:** fix the environment; the operator retries with exponential backoff and the gateway recovers on its own. Backoff grows up to about 16–17 minutes, so recovery can lag that long after the cause is fixed. Editing the gateway, or restarting the operator, retries at once. Reverting the change that could not be validated also clears the condition: once the render equals the applied configuration again, `ConfigValid` returns to `True`.
 
+### Gateway Deployment not updated: "no ConfigMap holds the applied config"
+
+The operator logs this when the ConfigMap for `status.configChecksum`
+(`<gateway>-config-<hash>`) was deleted while a newer render is being
+rejected. The Deployment is left as it is: running pods keep their config,
+but a deleted Deployment cannot be recreated. Fix the rejected input
+(`kubectl describe krakendgateway <name>`, condition `ConfigValid`). The next
+config that passes validation is published and rolled out.
+
 ### Endpoint shows `Invalid`
 
 **Diagnosis:**
