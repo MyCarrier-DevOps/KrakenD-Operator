@@ -907,7 +907,9 @@ func (r *KrakenDGatewayReconciler) writeEndpointAccepted(
 		} else {
 			meta.SetStatusCondition(&ep.Status.Conditions, *a.condition)
 		}
-		ep.Status.Conflicts = a.conflicts
+		if !a.keepConflicts {
+			ep.Status.Conflicts = a.conflicts
+		}
 		if conditionsEqual(base.Status.Conditions, ep.Status.Conditions) &&
 			equality.Semantic.DeepEqual(base.Status.Conflicts, ep.Status.Conflicts) {
 			return nil
