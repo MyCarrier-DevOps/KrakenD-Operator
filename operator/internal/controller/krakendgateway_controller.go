@@ -488,7 +488,7 @@ func (r *KrakenDGatewayReconciler) inspectDeploymentStatus(
 			c.Reason != "ProgressDeadlineExceeded" {
 			continue
 		}
-		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+		r.setConditionWithEvent(gw, metav1.Condition{
 			Type:               v1alpha1.ConditionProgressing,
 			Status:             metav1.ConditionFalse,
 			ObservedGeneration: gw.Generation,
@@ -502,8 +502,6 @@ func (r *KrakenDGatewayReconciler) inspectDeploymentStatus(
 			Reason:             v1alpha1.ReasonRolloutFailed,
 			Message:            "Deployment exceeded its progress deadline",
 		})
-		r.Recorder.Event(gw, "Warning", v1alpha1.ReasonRolloutFailed,
-			"Deployment exceeded its progress deadline")
 		return
 	}
 
