@@ -845,9 +845,15 @@ func autoConfigReady(conds []metav1.Condition) (status metav1.ConditionStatus, r
 	return metav1.ConditionTrue, v1alpha1.ReasonReady, "OpenAPI spec fetched and endpoints in sync"
 }
 
+// autoConfigPhase derives the compatibility phase from the Synced condition.
 func autoConfigPhase(conds []metav1.Condition) v1alpha1.AutoConfigPhase {
-	if synced := meta.FindStatusCondition(conds, v1alpha1.ConditionSynced); synced != nil {
+	synced := meta.FindStatusCondition(conds, v1alpha1.ConditionSynced)
+	switch {
+	case synced == nil:
+		return v1alpha1.AutoConfigPhasePending
+	case synced.Status == metav1.ConditionTrue:
+		return v1alpha1.AutoConfigPhaseSynced
+	default:
 		return v1alpha1.AutoConfigPhaseError
 	}
-	return v1alpha1.AutoConfigPhasePending
 }
