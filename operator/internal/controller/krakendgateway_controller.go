@@ -627,7 +627,8 @@ func (r *KrakenDGatewayReconciler) handleValidationError(
 }
 
 // handleValidatorUnavailable records that the rendered config could not be
-// judged because krakend check did not run to completion. The applied
+// judged: krakend check did not run to completion, or the validation copy
+// could not be prepared. The applied
 // config and the phase are left as they are, ConfigValid goes Unknown with
 // reason ValidatorUnavailable, and the error is returned so the reconcile is
 // retried with backoff.
