@@ -1453,3 +1453,22 @@ func TestGatewayReconcile_StaleListCannotRemoveALiveAccepted(t *testing.T) {
 		t.Errorf("Accepted = %+v; a stale list must not remove the live True", cond)
 	}
 }
+
+func TestGatewayReconcile_StaleEmptyChecksumKeepsAnAcceptedEndpoint(t *testing.T) {
+	cached := reconciledGateway() // the cache has not seen the first apply
+	liveGW := servingGateway("applied", "img:v1")
+	ep := withAccepted(testEndpoint("x", "/a"), metav1.ConditionTrue, v1alpha1.ReasonAccepted)
+	bad := testEndpoint("bad", "/b")
+	c := fakeClientBuilder().WithObjects(cached, ep, bad).WithStatusSubresource(cached, ep, bad).Build()
+	live := fakeClientBuilder().WithObjects(liveGW).WithStatusSubresource(liveGW).Build()
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}),
+		&countingValidator{err: rejectedBy(badNamespaceVerdict)})
+	r.APIReader = live
+
+	if err := reconcileGateway(t, r, cached); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if cond := storedAccepted(t, c, client.ObjectKeyFromObject(ep)); cond == nil || cond.Status != metav1.ConditionTrue {
+		t.Errorf("Accepted = %+v; a stale empty checksum must not strip an accepted endpoint", cond)
+	}
+}
