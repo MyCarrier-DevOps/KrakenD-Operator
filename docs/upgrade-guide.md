@@ -724,6 +724,27 @@ revision's ConfigMap may already be gone.
 **RBAC:** the operator's ClusterRole gains `list` on `apps/replicasets`. The
 Helm chart ships it. If you maintain your own copy of the role, add it.
 
+### A rejected config names the endpoints at fault
+
+When `krakend check` rejects the rendered config, the gateway keeps serving
+the last applied config (endpoints are not quarantined). It now also tells
+you *which* KrakenDEndpoint to fix:
+
+- The gateway's `ConfigValid=False` message starts with the KrakenDEndpoints
+  the findings name, for example `Rejected by krakend check; findings name
+  KrakenDEndpoint(s) team-a/orders.`, followed by the bounded `krakend check`
+  output.
+- Each named endpoint gets `Accepted=False` with reason
+  `GatewayConfigRejected` and the findings that name it. Findings are mapped
+  from `/endpoints/<i>/…` pointers and from `METHOD /path` or `path '…'` in
+  router errors. A route conflict names both endpoints involved.
+- Endpoints no finding names keep the verdict of the last applied config. On
+  a gateway that has never applied a config, that is whatever an earlier
+  gateway of the same name left on them.
+- Findings about gateway-level settings or plugins name no endpoint. The
+  gateway message says how many there are.
+- The blame clears as soon as a config passes validation.
+
 ---
 
 ## v0.14.0 — openapi-serve liveness probe (one-time rollout)
