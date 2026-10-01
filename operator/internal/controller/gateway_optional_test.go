@@ -423,3 +423,47 @@ func TestGatewayReconcile_MissingDragonflyCRDZeroesTheReadyGauge(t *testing.T) {
 		t.Errorf("dragonfly_ready = %v, want 0 while the CRD is missing", got)
 	}
 }
+
+func TestGatewayReconcile_DragonflyBecomingReadyRecordsARecoveryEvent(t *testing.T) {
+	gw := reconciledGateway()
+	gw.UID = "gw-uid"
+	gw.Status.ConfigChecksum = "applied"
+	gw.Spec.Dragonfly = &v1alpha1.DragonflySpec{Enabled: true}
+	df := controlledChild(gw, dragonflyGVK, resources.DragonflyName(gw))
+	c := fakeClientBuilder().WithRESTMapper(optionalCRDMapper(dragonflyGVK)).
+		WithObjects(gw, df).WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderOutput("applied"), &mockValidator{})
+	t.Cleanup(func() { dragonflyReady.DeleteLabelValues(gw.Namespace, gw.Name) })
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile while not ready: %v", err)
+	}
+	stored := &unstructured.Unstructured{}
+	stored.SetGroupVersionKind(dragonflyGVK)
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(df), stored); err != nil {
+		t.Fatalf("get Dragonfly: %v", err)
+	}
+	if err := unstructured.SetNestedField(stored.Object, "ready", "status", "phase"); err != nil {
+		t.Fatalf("set phase: %v", err)
+	}
+	if err := c.Update(context.Background(), stored); err != nil {
+		t.Fatalf("update Dragonfly: %v", err)
+	}
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile once ready: %v", err)
+	}
+
+	cond := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionDragonflyReady)
+	if cond == nil || cond.Status != metav1.ConditionTrue {
+		t.Fatalf("DragonflyReady = %+v, want True", cond)
+	}
+	var recoveries int
+	for _, e := range drainEvents(r.Recorder.(*record.FakeRecorder)) {
+		if strings.HasPrefix(e, "Normal ") && strings.Contains(e, " DragonflyReady ") {
+			recoveries++
+		}
+	}
+	if recoveries != 1 {
+		t.Errorf("Normal DragonflyReady events = %d, want 1", recoveries)
+	}
+}
