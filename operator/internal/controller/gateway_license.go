@@ -121,7 +121,7 @@ func (r *KrakenDGatewayReconciler) reconcileUnreadableLicense(
 	licenseExpirySeconds.WithLabelValues(gw.Namespace, gw.Name).Set(known.Sub(now).Seconds())
 	verdict.requeueAfter = nextLicenseCheck(window, known, now)
 	if stage := window.StageAt(known, now); stage == license.StagePreExpiry || stage == license.StageExpired {
-		verdict.ceFallback = r.applyLicenseStage(gw, stage, known) || verdict.ceFallback
+		verdict.ceFallback = r.applyLicenseStage(gw, stage, known)
 	} else {
 		r.setLicenseValidUnknown(gw, readErr)
 	}
