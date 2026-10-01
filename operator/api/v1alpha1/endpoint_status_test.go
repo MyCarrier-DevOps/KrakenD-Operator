@@ -68,6 +68,19 @@ func TestEndpointReady(t *testing.T) {
 			metav1.ConditionUnknown, "Pending", "generation 2",
 		},
 		{
+			"accepted for a newer generation",
+			[]metav1.Condition{refsOK, testCondition("Accepted", metav1.ConditionTrue, "Accepted", 3)},
+			metav1.ConditionUnknown, "Pending", "generation 2",
+		},
+		{
+			"refs unknown",
+			[]metav1.Condition{
+				testCondition("ResolvedRefs", metav1.ConditionUnknown, "Pending", 2),
+				testCondition("Accepted", metav1.ConditionTrue, "Accepted", 2),
+			},
+			metav1.ConditionFalse, "Pending", "Pending message",
+		},
+		{
 			"accepted",
 			[]metav1.Condition{refsOK, testCondition("Accepted", metav1.ConditionTrue, "Accepted", 2)},
 			metav1.ConditionTrue, "Ready", "",
