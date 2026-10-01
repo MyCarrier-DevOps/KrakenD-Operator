@@ -476,3 +476,15 @@ func TestBuildDeployment_CENoLicenseVolume(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildDeployment_AutoscalingKeepsLiveReplicas(t *testing.T) {
+	gw := testGateway()
+	gw.Spec.Replicas = ptr.To(int32(3))
+	gw.Spec.Autoscaling = &v1alpha1.AutoscalingSpec{MinReplicas: ptr.To(int32(2)), MaxReplicas: 10}
+	dep := &appsv1.Deployment{}
+	dep.Spec.Replicas = ptr.To(int32(7)) // scaled by the HPA
+	BuildDeployment(dep, gw, "abc123", "", "krakend/krakend-ce:2.7.0")
+	if got := ptr.Deref(dep.Spec.Replicas, -1); got != 7 {
+		t.Errorf("replicas = %d, want the HPA's 7 kept", got)
+	}
+}
