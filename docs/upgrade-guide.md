@@ -489,20 +489,29 @@ Helm does not upgrade CRDs (see *CRD Upgrades* above), and this release
 changes all four:
 
 - `status.conditions` is a map keyed by `type` (`x-kubernetes-list-type: map`),
-  so the API server rejects a status write that carries two conditions of
-  the same type.
+  so the API server rejects a status write that introduces two conditions of
+  the same type. An object that already holds duplicate types is ratcheted:
+  the API server does not reject it while the duplicates are left as they are.
 - `KrakenDAutoConfig` and `KrakenDBackendPolicy` gain `status.observedGeneration`.
   With the old CRDs, the API server drops the field the new operator writes,
   and those objects' status is rewritten on every reconcile.
 - `kubectl get` shows `Ready` and `Reason` columns; `Phase` moves to
   `kubectl get -o wide`.
 
-Before upgrading, check that no object already carries a duplicate condition
+As hygiene, check whether any object already carries a duplicate condition
 type (no output expected):
 
 ```bash
 kubectl get krakendgateways,krakendendpoints,krakendautoconfigs,krakendbackendpolicies -A -o json \
   | jq -r '.items[] | select(((.status.conditions // []) | map(.type) | length) != ((.status.conditions // []) | map(.type) | unique | length)) | "\(.kind) \(.metadata.namespace)/\(.metadata.name)"'
+```
+
+To remove a duplicate, delete the extra entry from the object's status by its
+index in `status.conditions`:
+
+```bash
+kubectl patch <kind>/<name> --subresource=status --type=json \
+  -p '[{"op":"remove","path":"/status/conditions/<index>"}]'
 ```
 
 ### KrakenDEndpoint: `Accepted` (gateway controller)
@@ -546,7 +555,8 @@ kubectl get krakendgateways,krakendendpoints,krakendautoconfigs,krakendbackendpo
   is normal for a moment after every change; it persists while the gateway's
   rendered configuration fails validation (check the gateway's `ConfigValid`).
   Right after the upgrade, endpoints can show `Pending` until their gateway's
-  first reconcile.
+  first reconcile. Endpoints of a gateway whose current render is already
+  rejected stay `Pending` until the gateway accepts a configuration.
 - When the referenced gateway is deleted, `Accepted` keeps that gateway's
   last verdict; `Ready` reports `GatewayNotFound` and the phase is `Detached`.
 
@@ -570,6 +580,10 @@ kubectl get krakendgateways,krakendendpoints,krakendautoconfigs,krakendbackendpo
   `ConfigValid=True` and `Running`, and a rollout that recovers after
   `ProgressDeadlineExceeded` returns to `Running`.
 - `ConfigValid=True` now has reason `ConfigApplied` (was `ConfigValid`).
+- `Ready` now stays `False` for the whole of a config rollout, until the
+  Deployment has observed the change and every replica is updated and
+  available, and goes `False` (phase `Error`) when the Deployment loses
+  availability after a rollout finished, e.g. all replicas crash-looping.
 - `status.observedGeneration` advances on every reconcile that evaluated the
   spec, including a rejected configuration.
 - The license monitor no longer writes `phase`; it writes only the
@@ -582,15 +596,18 @@ kubectl get krakendgateways,krakendendpoints,krakendautoconfigs,krakendbackendpo
   `True`, otherwise `False` with the first failing condition's reason (e.g.
   `SpecFetchFailed`, `UnmatchedOverride`, `EndpointReconcileFailed`).
 - New `status.observedGeneration`, set on every status write.
-- `phase` is derived from `Synced` (`Synced`, `Error`; `Pending` only before
-  the first sync). A new AutoConfig no longer gets a separate `Pending`
+- `phase` is derived from `Synced` (`Synced`, `Error`) and is empty before
+  the first sync. A new AutoConfig no longer gets a separate `Pending`
   status write and an extra reconcile.
 - `lastSyncTime` is documented on the field: it is the last sync that
   changed something, not a heartbeat.
-- A failing AutoConfig now retries at least every 5 minutes (the exponential
-  backoff used to grow to about 16.7 minutes), so it recovers within one
-  resync interval once a missing gateway, policy or auth Secret appears or
-  its spec source comes back.
+- An AutoConfig whose reconcile fails with an error, which is every
+  `OnChange` failure and `EndpointReconcileFailed` for either trigger, now
+  retries at least every 5 minutes (the exponential backoff used to grow to
+  about 16.7 minutes), so it recovers within one resync interval once a
+  missing gateway, policy or auth Secret appears or its spec source comes
+  back. A `Periodic` AutoConfig with any other failure is requeued at
+  `spec.periodic.interval`.
 
 ### KrakenDBackendPolicy
 
@@ -609,7 +626,10 @@ kubectl get krakendgateways,krakendendpoints,krakendautoconfigs,krakendbackendpo
   or deleted only (not to their status updates), and to changes of its own
   spec or of its `Accepted` condition.
 - AutoConfig retry backoff is capped at the 5-minute resync interval.
-- The policy controller recounts references only when an endpoint is created, deleted, or has its spec changed, not on endpoint status writes.
+- The policy controller recounts references only when an endpoint is created,
+  deleted, or has its spec changed, not on endpoint status writes.
+
+---
 
 ## v0.14.0 — openapi-serve liveness probe (one-time rollout)
 
