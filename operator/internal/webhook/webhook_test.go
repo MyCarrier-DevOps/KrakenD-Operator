@@ -32,6 +32,7 @@ import (
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/controller"
@@ -2667,5 +2668,61 @@ func TestGatewayValidator_NoReplicasWarningWithoutAutoscaling(t *testing.T) {
 	warnings, err := (&GatewayValidator{}).ValidateCreate(context.Background(), gw)
 	if err != nil || len(warnings) != 0 {
 		t.Errorf("warnings = %q, err = %v; want neither", warnings, err)
+	}
+}
+
+// terminating marks obj as being deleted, the state in which the API server
+// sends finalizer-removal UPDATEs.
+func terminating[T metav1.Object](obj T) T {
+	obj.SetDeletionTimestamp(&metav1.Time{Time: time.Now()})
+	obj.SetFinalizers([]string{"foregroundDeletion"})
+	return obj
+}
+
+func TestValidators_AdmitUpdatesToTerminatingObjects(t *testing.T) {
+	ctx := context.Background()
+	gw := terminating(&v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionEE, Config: v1alpha1.GatewayConfig{}, // EE without a license
+		},
+	})
+	ep := terminating(&v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "ep", Namespace: "default"},
+		Spec:       v1alpha1.KrakenDEndpointSpec{GatewayRef: v1alpha1.GatewayRef{Name: "deleted-gw"}},
+	})
+	policy := terminating(&v1alpha1.KrakenDBackendPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "default"},
+		Spec:       v1alpha1.KrakenDBackendPolicySpec{RateLimit: &v1alpha1.RateLimitSpec{MaxRate: -1}},
+	})
+	ac := terminating(&v1alpha1.KrakenDAutoConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "ac", Namespace: "default"},
+		Spec: v1alpha1.KrakenDAutoConfigSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: "deleted-gw"},
+			OpenAPI:    v1alpha1.OpenAPISource{URL: "https://example.com/api"},
+			Trigger:    v1alpha1.TriggerOnChange,
+		},
+	})
+	cases := []struct {
+		name     string
+		validate func() (admission.Warnings, error)
+	}{
+		{"gateway", func() (admission.Warnings, error) { return (&GatewayValidator{}).ValidateUpdate(ctx, gw, gw) }},
+		{"endpoint", func() (admission.Warnings, error) {
+			return (&EndpointValidator{Client: fakeClient()}).ValidateUpdate(ctx, ep, ep)
+		}},
+		{"policy", func() (admission.Warnings, error) { return (&PolicyValidator{}).ValidateUpdate(ctx, policy, policy) }},
+		{"autoconfig", func() (admission.Warnings, error) {
+			return (&AutoConfigValidator{Client: fakeClient()}).ValidateUpdate(ctx, ac, ac)
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			warnings, err := tc.validate()
+			if err != nil || len(warnings) != 0 {
+				t.Errorf("update of a terminating %s: warnings = %q, err = %v; want it admitted silently",
+					tc.name, warnings, err)
+			}
+		})
 	}
 }
