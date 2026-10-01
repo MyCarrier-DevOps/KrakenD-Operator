@@ -115,6 +115,10 @@ func TestEndpointPhaseFromReady(t *testing.T) {
 		{metav1.ConditionFalse, "GatewayNotFound", "Detached"},
 		{metav1.ConditionFalse, "EndpointConflict", "Conflicted"},
 		{metav1.ConditionFalse, "PartiallyAccepted", "Conflicted"},
+		{metav1.ConditionTrue, "SchemaNameConflict", "Active"},
+		{metav1.ConditionFalse, "PolicyNotFound", "Invalid"},
+		{metav1.ConditionFalse, "GatewayConfigRejected", "Invalid"},
+		{metav1.ConditionFalse, "EEFeaturesStripped", "Invalid"},
 	}
 	for _, tt := range tests {
 		if got := EndpointPhaseFromReady(tt.status, tt.reason); got != tt.want {
