@@ -17,6 +17,8 @@ limitations under the License.
 package controller
 
 import (
+	"fmt"
+
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -31,6 +33,22 @@ var (
 	optionalOwnedGVKs = []schema.GroupVersionKind{dragonflyGVK, externalSecretGVK, virtualServiceGVK}
 )
 
+// installedOptionalKinds splits the optional kinds into those whose CRDs the
+// mapper knows now, and those it does not. It is evaluated once, at
+// startup: a CRD installed later is watched only after an operator
+// restart. Any lookup error other than "no such kind" is returned, so that
+// the operator never starts without a watch it should have.
 func installedOptionalKinds(mapper meta.RESTMapper) (installed, missing []schema.GroupVersionKind, err error) {
-	return nil, nil, nil
+	for _, gvk := range optionalOwnedGVKs {
+		_, mapErr := mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
+		switch {
+		case mapErr == nil:
+			installed = append(installed, gvk)
+		case meta.IsNoMatchError(mapErr):
+			missing = append(missing, gvk)
+		default:
+			return nil, nil, fmt.Errorf("checking whether the %s CRD is installed: %w", gvk.GroupKind(), mapErr)
+		}
+	}
+	return installed, missing, nil
 }
