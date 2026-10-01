@@ -97,9 +97,8 @@ Metrics are exposed on port **8443** (HTTPS). Key metrics:
 
 | Phase | Meaning |
 |---|---|
-| `Pending` | Initial state, awaiting first reconcile |
-| `Rendering` | Config is being rendered from endpoints |
-| `Validating` | Config is being validated via KrakenD CLI |
+| `Pending` | Not reconciled yet, or the new config could not be validated yet (see `ConfigValid`) |
+| `Rendering`, `Validating` | No longer written; kept in the API for compatibility |
 | `Deploying` | Deployment is rolling out |
 | `Running` | Deployment converged, all replicas ready |
 | `Degraded` | EE license expired — fell back to CE edition |
