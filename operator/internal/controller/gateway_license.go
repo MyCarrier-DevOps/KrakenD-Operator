@@ -71,23 +71,12 @@ func (r *KrakenDGatewayReconciler) reconcileLicense(ctx context.Context, gw *v1a
 		forgetLicense(gw)
 		return licenseVerdict{}
 	}
+	window := license.Window{Warning: expiryWarning(gw), SafetyBuffer: licenseSafetyBuffer}
+	now := r.Clock.Now()
 	notAfter, err := r.readLicense(ctx, gw)
 	if err != nil {
-		r.setProblemCondition(gw, metav1.Condition{
-			Type:               v1alpha1.ConditionLicenseSecretUnavailable,
-			Status:             metav1.ConditionTrue,
-			ObservedGeneration: gw.Generation,
-			Reason:             v1alpha1.ReasonLicenseSecretMissing,
-			Message:            err.Error(),
-		})
-		r.setLicenseValid(gw, metav1.ConditionUnknown, v1alpha1.ReasonLicenseSecretMissing, err.Error())
-		// The license is unknown: keep the fallback decision recorded last.
-		return licenseVerdict{
-			ceFallback:   meta.IsStatusConditionTrue(gw.Status.Conditions, v1alpha1.ConditionLicenseDegraded),
-			requeueAfter: licenseRecheckInterval,
-		}
+		return r.reconcileUnreadableLicense(gw, err, window, now)
 	}
-	now := r.Clock.Now()
 	gw.Status.LicenseExpiry = &metav1.Time{Time: notAfter}
 	licenseExpirySeconds.WithLabelValues(gw.Namespace, gw.Name).Set(notAfter.Sub(now).Seconds())
 	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
@@ -97,11 +86,43 @@ func (r *KrakenDGatewayReconciler) reconcileLicense(ctx context.Context, gw *v1a
 		Reason:             "SecretAvailable",
 		Message:            "license secret is available",
 	})
-	window := license.Window{Warning: expiryWarning(gw), SafetyBuffer: licenseSafetyBuffer}
 	return licenseVerdict{
 		ceFallback:   r.applyLicenseStage(gw, window.StageAt(notAfter, now), notAfter),
 		requeueAfter: nextLicenseCheck(window, notAfter, now),
 	}
+}
+
+// reconcileUnreadableLicense handles a license that cannot be read or parsed.
+// LicenseValid becomes Unknown. The stage is judged from the last known
+// expiry (status.licenseExpiry), so the CE fallback still happens when that
+// expiry comes inside the safety buffer; otherwise the fallback decision
+// recorded last is kept.
+func (r *KrakenDGatewayReconciler) reconcileUnreadableLicense(
+	gw *v1alpha1.KrakenDGateway, readErr error, window license.Window, now time.Time,
+) licenseVerdict {
+	r.setProblemCondition(gw, metav1.Condition{
+		Type:               v1alpha1.ConditionLicenseSecretUnavailable,
+		Status:             metav1.ConditionTrue,
+		ObservedGeneration: gw.Generation,
+		Reason:             v1alpha1.ReasonLicenseSecretMissing,
+		Message:            readErr.Error(),
+	})
+	r.setLicenseValid(gw, metav1.ConditionUnknown, v1alpha1.ReasonLicenseSecretMissing, readErr.Error())
+	verdict := licenseVerdict{
+		ceFallback:   meta.IsStatusConditionTrue(gw.Status.Conditions, v1alpha1.ConditionLicenseDegraded),
+		requeueAfter: licenseRecheckInterval,
+	}
+	if gw.Status.LicenseExpiry == nil {
+		licenseExpirySeconds.DeleteLabelValues(gw.Namespace, gw.Name)
+		return verdict
+	}
+	known := gw.Status.LicenseExpiry.Time
+	licenseExpirySeconds.WithLabelValues(gw.Namespace, gw.Name).Set(known.Sub(now).Seconds())
+	verdict.requeueAfter = nextLicenseCheck(window, known, now)
+	if stage := window.StageAt(known, now); stage == license.StagePreExpiry || stage == license.StageExpired {
+		verdict.ceFallback = r.applyLicenseStage(gw, stage, known) || verdict.ceFallback
+	}
+	return verdict
 }
 
 // forgetLicense drops the license state of a gateway that is not EE (for
