@@ -31,3 +31,9 @@ func registerWebhooks(mgr ctrl.Manager, enabled bool, setup func(ctrl.Manager) e
 	}
 	return setup(mgr)
 }
+
+// webhookCertWatchNeeded reports whether the webhook certificate watcher
+// should be created.
+func webhookCertWatchNeeded(_ bool, certPath string) bool {
+	return certPath != ""
+}

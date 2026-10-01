@@ -58,3 +58,24 @@ func TestRegisterWebhooks_EnabledRunsSetup(t *testing.T) {
 		t.Error("setup did not receive the manager")
 	}
 }
+
+func TestWebhookCertWatchNeeded(t *testing.T) {
+	tests := []struct {
+		name     string
+		enabled  bool
+		certPath string
+		want     bool
+	}{
+		{"enabled with cert path", true, "/certs", true},
+		{"enabled without cert path", true, "", false},
+		{"disabled with cert path", false, "/certs", false},
+		{"disabled without cert path", false, "", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := webhookCertWatchNeeded(tc.enabled, tc.certPath); got != tc.want {
+				t.Errorf("webhookCertWatchNeeded(%v, %q) = %v, want %v", tc.enabled, tc.certPath, got, tc.want)
+			}
+		})
+	}
+}
