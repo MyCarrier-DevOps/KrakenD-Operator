@@ -95,38 +95,35 @@ func TestGatewayReconcile_NotFound(t *testing.T) {
 	}
 }
 
-func TestGatewayReconcile_InitialPhase(t *testing.T) {
+func TestGatewayReconcile_FirstReconcileWritesOnlyTheDerivedStatus(t *testing.T) {
 	gw := testGateway()
+	gw.Generation = 1
+	writes := 0
 	c := fakeClientBuilder().
 		WithObjects(gw).
 		WithStatusSubresource(gw).
+		WithInterceptorFuncs(countStatusWrites[*v1alpha1.KrakenDGateway](&writes)).
 		Build()
-	r := &KrakenDGatewayReconciler{
-		Client:   c,
-		Scheme:   testScheme(),
-		Recorder: fakeRecorder(),
-		Renderer: &mockRenderer{output: &renderer.RenderOutput{
-			JSON: []byte(`{"version":3}`), Checksum: "cs", DesiredImage: "img:v1",
-		}},
-		Validator: &mockValidator{},
-	}
-
-	result, err := r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: client.ObjectKeyFromObject(gw),
+	r := acceptanceReconciler(c, fakeRecorder(), &renderer.RenderOutput{
+		JSON: []byte(`{"version":3}`), Checksum: "cs1", DesiredImage: "img:v1",
 	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result != (ctrl.Result{}) {
-		t.Errorf("result = %+v, want no requeue: the first reconcile runs the whole pipeline", result)
-	}
 
-	var updated v1alpha1.KrakenDGateway
-	if err := c.Get(context.Background(), client.ObjectKeyFromObject(gw), &updated); err != nil {
+	result, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(gw)})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.Status.Phase != v1alpha1.PhaseDeploying {
-		t.Errorf("expected Deploying after the first reconcile, got %s", updated.Status.Phase)
+	if result != (ctrl.Result{}) {
+		t.Errorf("result = %+v, want none: the first reconcile runs the whole pipeline", result)
+	}
+	if writes != 1 {
+		t.Errorf("gateway status writes = %d, want 1 (no separate Pending write)", writes)
+	}
+	stored := getGateway(t, c, gw)
+	ready := meta.FindStatusCondition(stored.Status.Conditions, v1alpha1.ConditionReady)
+	if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != "ConfigDeployed" ||
+		stored.Status.Phase != v1alpha1.PhaseDeploying || stored.Status.ObservedGeneration != 1 {
+		t.Errorf("Ready = %+v, phase %q, observedGeneration %d; want False/ConfigDeployed, Deploying, 1",
+			ready, stored.Status.Phase, stored.Status.ObservedGeneration)
 	}
 }
 
