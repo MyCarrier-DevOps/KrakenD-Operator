@@ -570,6 +570,7 @@ const (
     ReasonDragonflyNotReady             = "DragonflyNotReady"
     ReasonIstioVSCreated                = "IstioVirtualServiceCreated"
     ReasonEndpointConflict              = "EndpointConflict"
+    ReasonPartiallyAccepted             = "PartiallyAccepted"
     ReasonLicenseSecretMissing          = "LicenseSecretMissing"
     ReasonSpecFetched                   = "SpecFetched"
     ReasonSpecFetchFailed               = "SpecFetchFailed"
@@ -914,7 +915,7 @@ flowchart TD
 
 ### Key Implementation Details
 
-**Endpoint conflict detection** — The renderer (§10) iterates all `KrakenDEndpoint` resources for the gateway and flattens their `spec.endpoints[]` arrays. It groups entries by `(endpoint, method)` tuples across all CRs. When multiple entries from different `KrakenDEndpoint` resources share the same path and method, the conflicting entries of all `KrakenDEndpoint` resources except the oldest (by `creationTimestamp`) are excluded from the rendered config. The renderer returns `ConflictedEndpoints` and `InvalidEndpoints` in `RenderOutput`. The gateway controller then writes its `Accepted` condition on each endpoint of the render, but only for a render that is the gateway's applied configuration (validated now, or unchanged since) and only when the verdict changes: `True` (`Accepted`) for an included endpoint, `False` (`EndpointConflict`) for one that lost a path and method pair, and no `Accepted` condition for one excluded by a missing policy. Only the conflicting entries are dropped; the losing endpoint's other entries are still rendered. A `Warning` event with reason `EndpointConflict` is emitted on the transition, and a `Normal` `Accepted` event when a conflict clears.
+**Endpoint conflict detection** — The renderer (§10) iterates all `KrakenDEndpoint` resources for the gateway and flattens their `spec.endpoints[]` arrays. It groups entries by `(endpoint, method)` tuples across all CRs. When multiple entries from different `KrakenDEndpoint` resources share the same path and method, the conflicting entries of all `KrakenDEndpoint` resources except the oldest (by `creationTimestamp`) are excluded from the rendered config. The renderer returns `ConflictedEndpoints` and `InvalidEndpoints` in `RenderOutput`. The gateway controller then writes its `Accepted` condition on each endpoint of the render, but only for a render that is the gateway's applied configuration (validated now, or unchanged since) and only when the verdict changes: `True` (`Accepted`) for an included endpoint, `True` (`PartiallyAccepted`) for one that lost some but not all of its path and method pairs, `False` (`EndpointConflict`) for one that lost all of them, and no `Accepted` condition for one excluded by a missing policy. `RenderOutput.EntryConflicts` names each lost entry and the `KrakenDEndpoint` that serves it, and the gateway controller writes them to `status.conflicts` in the same optimistic-lock patch as `Accepted`. Only the conflicting entries are dropped; the losing endpoint's other entries are still rendered. A `Warning` event with reason `EndpointConflict` is emitted when an endpoint becomes fully conflicted, and a `Normal` `Accepted` event when it is served again.
 
 **Policy resolution** — The controller fetches all referenced `KrakenDBackendPolicy` resources before calling `Renderer.Render`, populating `RenderInput.Policies`. The renderer itself has no Kubernetes client dependency — all inputs are passed as parameters. If a policy referenced by a `policyRef` does not exist in the map, the renderer reports the owning endpoint in `InvalidEndpoints` and excludes it from the rendered config; the endpoint controller reports the cause through `ResolvedRefs`.
 
@@ -2895,7 +2896,7 @@ func TestGatewayReconciler_CreatesOwnedResources(t *testing.T) {
 |---|---|
 | Gateway create → Deployment + Service + ConfigMap + SA + PDB created | Resource builder correctness, owner references |
 | Endpoint create → gateway re-reconciles → ConfigMap updated | Endpoint watch, config rendering |
-| Endpoint conflict → oldest wins, the others get Accepted=False (EndpointConflict) | Conflict detection logic across endpoints[] entries |
+| Endpoint conflict → oldest wins; a loser of every entry gets Accepted=False (EndpointConflict), a loser of some gets Accepted=True (PartiallyAccepted); status.conflicts names the lost entries | Conflict detection logic across endpoints[] entries |
 | Policy update → all gateways with referencing endpoints re-queued → ConfigMap updated | `policyToGateways` mapper, namespace-scoped list, re-render |
 | Policy delete blocked by referencing endpoint | Webhook DELETE validation |
 | Policy create/update with invalid field ranges rejected | Webhook CREATE/UPDATE validation |
