@@ -18,14 +18,21 @@ spec:
     - jsonPath: .spec.gatewayRef.name
       name: Gateway
       type: string
-    - jsonPath: .status.phase
-      name: Phase
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Ready")].reason
+      name: Reason
       type: string
     - jsonPath: .status.endpointCount
       name: Endpoints
       type: integer
     - jsonPath: .status.methods
       name: Methods
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      priority: 1
       type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
@@ -242,6 +249,9 @@ spec:
             description: KrakenDEndpointStatus defines the observed state of KrakenDEndpoint.
             properties:
               conditions:
+                description: |-
+                  Conditions are keyed by type. The endpoint controller writes
+                  ResolvedRefs and Ready; the gateway controller writes Accepted.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -297,6 +307,9 @@ spec:
                   - type
                   type: object
                 type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
               endpointCount:
                 format: int32
                 type: integer
@@ -306,6 +319,9 @@ spec:
                 format: int64
                 type: integer
               phase:
+                description: |-
+                  Phase is derived from the Ready condition and kept for compatibility;
+                  read the Ready condition instead.
                 enum:
                 - Pending
                 - Active
