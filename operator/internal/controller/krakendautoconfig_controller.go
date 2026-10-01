@@ -27,7 +27,6 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/time/rate"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -620,13 +619,13 @@ func (c endpointChanges) total() int {
 }
 
 // recordSync records a successful sync: the Synced condition and the Ready,
-// phase and observedGeneration derived from it, the combined checksum, and the
-// endpoint counts. LastSyncTime and the
-// EndpointsGenerated event mark a sync that changed something — new inputs (a
-// different combined checksum) or endpoint writes — so a steady-state
-// reconcile leaves both alone. Status is written only when it differs from
-// orig, the status read at the start of the reconcile. The buffered input
-// warnings are recorded once that write succeeds, before EndpointsGenerated.
+// phase and observedGeneration derived from it, the combined checksum, and
+// the endpoint counts. LastSyncTime and the EndpointsGenerated event mark a
+// sync that changed something — new inputs (a different combined checksum)
+// or endpoint writes — so a steady-state reconcile leaves both alone. Status
+// is written only when it differs from orig, the status read at the start of
+// the reconcile. The buffered input warnings are recorded once that write
+// succeeds, before EndpointsGenerated.
 func (r *KrakenDAutoConfigReconciler) recordSync(
 	ctx context.Context,
 	ac *v1alpha1.KrakenDAutoConfig,
@@ -869,14 +868,12 @@ func setAutoConfigReadiness(ac *v1alpha1.KrakenDAutoConfig) {
 }
 
 // newAutoConfigRateLimiter is controller-runtime's default rate limiter with
-// the per-item backoff capped at defaultResyncInterval instead of 1000s. A
-// failing AutoConfig therefore retries at least as often as a healthy
-// OnChange one resyncs, including once a missing gateway, policy or auth
-// Secret appears, or an unreachable spec source recovers.
+// the per-item backoff capped at defaultResyncInterval instead of 1000s. An
+// AutoConfig whose reconcile returns an error, or that is requeued for an
+// OnChange failure or EndpointReconcileFailed, therefore retries at least as
+// often as a healthy OnChange one resyncs, including once a missing gateway,
+// policy or auth Secret appears, or an unreachable spec source recovers.
 func newAutoConfigRateLimiter() workqueue.TypedRateLimiter[reconcile.Request] {
-	return workqueue.NewTypedMaxOfRateLimiter(
-		workqueue.NewTypedItemExponentialFailureRateLimiter[reconcile.Request](
-			5*time.Millisecond, defaultResyncInterval),
-		&workqueue.TypedBucketRateLimiter[reconcile.Request]{Limiter: rate.NewLimiter(rate.Limit(10), 100)},
-	)
+	return workqueue.NewTypedWithMaxWaitRateLimiter(
+		workqueue.DefaultTypedControllerRateLimiter[reconcile.Request](), defaultResyncInterval)
 }
