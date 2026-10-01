@@ -58,6 +58,12 @@ func TestAttribute_MapsKrakendCheckOutputToSources(t *testing.T) {
 			output:    "ERROR testing the configuration file:\t':name' in new path '/a/:name' conflicts with existing wildcard ':id' in existing prefix '/a/:id'\n",
 			wantIndex: []int{0, 1},
 		},
+		{
+			name:      "not attributable",
+			rendered:  `{"endpoints":[{"endpoint":"/ok","method":"GET"}]}`,
+			output:    "ERROR parsing the configuration file:\t'/tmp/k.json': decoding failed due to the following error(s):\n\n'timeout' time: unknown unit\n",
+			wantIndex: []int{-1, -1},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
