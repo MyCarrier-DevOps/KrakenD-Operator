@@ -415,3 +415,59 @@ func TestValidate_VerdictOutputDoesNotCarryTheTempPath(t *testing.T) {
 		t.Errorf("verdict text changes between runs:\n%q\n%q", first, second)
 	}
 }
+
+// capturingExecutor records every document krakend check was asked to
+// validate, and reports it valid.
+type capturingExecutor struct {
+	checked [][]byte
+}
+
+func (e *capturingExecutor) Execute(_ context.Context, _ string, args ...string) ([]byte, error) {
+	for i, a := range args {
+		if a == "-c" && i+1 < len(args) {
+			data, err := os.ReadFile(args[i+1])
+			if err != nil {
+				return nil, err
+			}
+			e.checked = append(e.checked, data)
+		}
+	}
+	return []byte("Syntax OK!"), nil
+}
+
+// endpointPaths lists the "endpoint" of every entry of a rendered document, in order.
+func endpointPaths(t *testing.T, doc []byte) []string {
+	t.Helper()
+	var cfg struct {
+		Endpoints []struct {
+			Endpoint string `json:"endpoint"`
+		} `json:"endpoints"`
+	}
+	if err := json.Unmarshal(doc, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	paths := make([]string, 0, len(cfg.Endpoints))
+	for _, ep := range cfg.Endpoints {
+		paths = append(paths, ep.Endpoint)
+	}
+	return paths
+}
+
+func TestValidate_EEWildcardIsCheckedAsAParameterRoute(t *testing.T) {
+	exec := &capturingExecutor{}
+	v := NewValidator(ValidatorOptions{Executor: exec, BinaryPath: "krakend"})
+	rendered := []byte(`{"version":3,"endpoints":[` +
+		`{"endpoint":"/*","method":"GET"},{"endpoint":"/a/{id}/*","method":"GET"},{"endpoint":"/v1/*","method":"GET"}]}`)
+
+	if err := v.Validate(context.Background(), rendered, v1alpha1.EditionEE); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if len(exec.checked) != 1 {
+		t.Fatalf("krakend check ran %d times, want 1", len(exec.checked))
+	}
+	want := []string{"/*", "/a/{id}/{Wildcard}", "/v1/{Wildcard}"}
+	if got := endpointPaths(t, exec.checked[0]); !slices.Equal(got, want) {
+		t.Errorf("checked endpoints = %v, want %v (index-aligned; /* is left for krakend check to reject, as EE does)",
+			got, want)
+	}
+}
