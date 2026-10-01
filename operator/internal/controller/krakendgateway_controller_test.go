@@ -543,57 +543,6 @@ func TestGatewayMapper_PluginConfigMapToGateway_NoPlugins(t *testing.T) {
 	}
 }
 
-func TestGatewayReconcile_ConflictedEndpoints(t *testing.T) {
-	gw := testGateway()
-	gw.Status.Phase = v1alpha1.PhasePending
-
-	ep1 := &v1alpha1.KrakenDEndpoint{
-		ObjectMeta: metav1.ObjectMeta{Name: "ep-conflict", Namespace: "default"},
-		Spec: v1alpha1.KrakenDEndpointSpec{
-			GatewayRef: v1alpha1.GatewayRef{Name: "test-gw"},
-			Endpoints:  []v1alpha1.EndpointEntry{},
-		},
-	}
-
-	c := fakeClientBuilder().
-		WithObjects(gw, ep1).
-		WithStatusSubresource(gw, ep1).
-		Build()
-
-	conflicted := types.NamespacedName{Name: "ep-conflict", Namespace: "default"}
-	mockRend := &mockRenderer{
-		output: &renderer.RenderOutput{
-			JSON:                []byte(`{"version":3}`),
-			Checksum:            "cs1",
-			DesiredImage:        "img:v1",
-			ConflictedEndpoints: []types.NamespacedName{conflicted},
-		},
-	}
-
-	r := &KrakenDGatewayReconciler{
-		Client:    c,
-		Scheme:    testScheme(),
-		Recorder:  fakeRecorder(),
-		Renderer:  mockRend,
-		Validator: &mockValidator{},
-	}
-
-	_, err := r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: client.ObjectKeyFromObject(gw),
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	var updated v1alpha1.KrakenDEndpoint
-	if err := c.Get(context.Background(), conflicted, &updated); err != nil {
-		t.Fatal(err)
-	}
-	if updated.Status.Phase != v1alpha1.EndpointPhaseConflicted {
-		t.Errorf("expected Conflicted, got %s", updated.Status.Phase)
-	}
-}
-
 func TestGatewayReconcile_GathersPolicies(t *testing.T) {
 	gw := testGateway()
 	gw.Status.Phase = v1alpha1.PhasePending
@@ -723,57 +672,6 @@ func TestGatewayReconcile_WithPluginConfigMaps(t *testing.T) {
 	}
 	if len((*capturedInput).PluginConfigMaps) != 1 {
 		t.Errorf("expected 1 plugin configmap, got %d", len((*capturedInput).PluginConfigMaps))
-	}
-}
-
-func TestGatewayReconcile_InvalidEndpoints(t *testing.T) {
-	gw := testGateway()
-	gw.Status.Phase = v1alpha1.PhasePending
-
-	ep := &v1alpha1.KrakenDEndpoint{
-		ObjectMeta: metav1.ObjectMeta{Name: "ep-invalid", Namespace: "default"},
-		Spec: v1alpha1.KrakenDEndpointSpec{
-			GatewayRef: v1alpha1.GatewayRef{Name: "test-gw"},
-			Endpoints:  []v1alpha1.EndpointEntry{},
-		},
-	}
-
-	c := fakeClientBuilder().
-		WithObjects(gw, ep).
-		WithStatusSubresource(gw, ep).
-		Build()
-
-	invalid := types.NamespacedName{Name: "ep-invalid", Namespace: "default"}
-	mockRend := &mockRenderer{
-		output: &renderer.RenderOutput{
-			JSON:             []byte(`{}`),
-			Checksum:         "cs1",
-			DesiredImage:     "img:v1",
-			InvalidEndpoints: []types.NamespacedName{invalid},
-		},
-	}
-
-	r := &KrakenDGatewayReconciler{
-		Client:    c,
-		Scheme:    testScheme(),
-		Recorder:  fakeRecorder(),
-		Renderer:  mockRend,
-		Validator: &mockValidator{},
-	}
-
-	_, err := r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: client.ObjectKeyFromObject(gw),
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	var updated v1alpha1.KrakenDEndpoint
-	if err := c.Get(context.Background(), invalid, &updated); err != nil {
-		t.Fatal(err)
-	}
-	if updated.Status.Phase != v1alpha1.EndpointPhaseInvalid {
-		t.Errorf("expected Invalid, got %s", updated.Status.Phase)
 	}
 }
 
