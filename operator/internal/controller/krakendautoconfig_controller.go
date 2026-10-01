@@ -34,6 +34,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/workqueue"
 	utilclock "k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -862,4 +863,8 @@ func setAutoConfigReadiness(ac *v1alpha1.KrakenDAutoConfig) {
 	setReadyCondition(&ac.Status.Conditions, ac.Generation, status, reason, message)
 	ac.Status.Phase = autoConfigPhase(ac.Status.Conditions)
 	ac.Status.ObservedGeneration = ac.Generation
+}
+
+func newAutoConfigRateLimiter() workqueue.TypedRateLimiter[reconcile.Request] {
+	return workqueue.DefaultTypedControllerRateLimiter[reconcile.Request]()
 }

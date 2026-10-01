@@ -44,6 +44,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 // --- Mock Fetcher ---
@@ -2920,5 +2921,17 @@ func TestAutoConfigReconcile_FailedSyncReportsReadyFalse(t *testing.T) {
 		ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != v1alpha1.ReasonSpecFetchFailed {
 		t.Errorf("phase %q, observedGeneration %d, Ready %+v; want Error, 2, False/SpecFetchFailed",
 			stored.Status.Phase, stored.Status.ObservedGeneration, ready)
+	}
+}
+
+func TestNewAutoConfigRateLimiter_CapsBackoffAtResyncInterval(t *testing.T) {
+	limiter := newAutoConfigRateLimiter()
+	req := reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: "test-ac"}}
+	var delay time.Duration
+	for range 30 {
+		delay = limiter.When(req)
+	}
+	if delay != defaultResyncInterval {
+		t.Fatalf("delay after 30 failures = %v, want the %v cap", delay, defaultResyncInterval)
 	}
 }
