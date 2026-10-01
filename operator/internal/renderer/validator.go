@@ -62,7 +62,9 @@ func (e *KrakenDExecutor) Execute(
 	return cmd.CombinedOutput()
 }
 
-// Validate writes jsonData to a temp file and runs krakend check -tlc.
+// Validate writes jsonData to a temp file and runs `krakend check -t -n -c`
+// on it: -t tests the router and -n lints against the JSON schema built into
+// the binary, so validation never needs network access.
 func (v *KrakenDValidator) Validate(ctx context.Context, jsonData []byte) (retErr error) {
 	tmpFile, err := os.CreateTemp("", "krakend-config-*.json")
 	if err != nil {
@@ -85,7 +87,7 @@ func (v *KrakenDValidator) Validate(ctx context.Context, jsonData []byte) (retEr
 		return fmt.Errorf("closing temp file: %w", err)
 	}
 
-	output, err := v.Executor.Execute(ctx, v.BinaryPath, "check", "-t", "-l", "-c", tmpName)
+	output, err := v.Executor.Execute(ctx, v.BinaryPath, "check", "-t", "-n", "-c", tmpName)
 	if err != nil {
 		return &ValidationError{
 			Output: string(output),
