@@ -35,6 +35,12 @@ const (
 	// PluginChecksumAnnotation records the plugin set a pod template was
 	// built with; it is absent when the gateway has no plugins.
 	PluginChecksumAnnotation = "krakend.io/checksum-plugins"
+
+	// ImageAnnotation records the image the operator set on the gateway
+	// container. The container's own image can be rewritten after admission
+	// (digest pinning, registry mirrors), so rollout checks compare this
+	// annotation instead.
+	ImageAnnotation = "krakend.io/image"
 )
 
 // desiredReplicas returns the replica count BuildDeployment writes. With

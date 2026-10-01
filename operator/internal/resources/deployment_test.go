@@ -183,6 +183,15 @@ func TestBuildDeployment_PluginChecksum(t *testing.T) {
 	}
 }
 
+func TestBuildDeployment_RecordsTheImageItSet(t *testing.T) {
+	dep := &appsv1.Deployment{}
+	BuildDeployment(dep, testGateway(), "abc", "", "img:latest")
+
+	if got := dep.Spec.Template.Annotations[ImageAnnotation]; got != "img:latest" {
+		t.Errorf("image annotation = %q, want %q", got, "img:latest")
+	}
+}
+
 func TestBuildDeployment_CustomPortAndHealthPath(t *testing.T) {
 	gw := testGateway()
 	gw.Spec.Config.Port = 9090
