@@ -22,12 +22,15 @@ import (
 	stderrors "errors"
 	"fmt"
 	"slices"
+	"sort"
+	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -46,6 +49,9 @@ type configResult struct {
 	// heldBecause says why appliedConfigMap is "": nil means no ConfigMap
 	// exists, otherwise the ConfigMap that does failed verification.
 	heldBecause error
+	// rejections are the endpoints krakend check blamed for the current
+	// render, with their findings.
+	rejections map[types.NamespacedName]string
 }
 
 // publishApplied republishes the applied config. Publishing is idempotent,
@@ -289,4 +295,76 @@ func (r *KrakenDGatewayReconciler) liveReplicaSetConfigMaps(
 		}
 	}
 	return mounted, nil
+}
+
+// rejectionsByEndpoint groups krakend check findings by the KrakenDEndpoint
+// they name. Findings that name no endpoint are reported on the gateway only.
+func rejectionsByEndpoint(atts []renderer.Attribution) map[types.NamespacedName]string {
+	lines := map[types.NamespacedName][]string{}
+	for _, a := range atts {
+		if a.Endpoint != (types.NamespacedName{}) {
+			lines[a.Endpoint] = append(lines[a.Endpoint], a.Message)
+		}
+	}
+	out := make(map[types.NamespacedName]string, len(lines))
+	for nn, l := range lines {
+		out[nn] = truncateMessage("The gateway's newest config was rejected by krakend check and not applied; "+
+			"findings naming this endpoint: "+strings.Join(l, "; "), maxConditionMessageBytes)
+	}
+	return out
+}
+
+// rejectionSummary is the first line of ConfigValid's message on rejection. It
+// names the KrakenDEndpoints krakend check blamed.
+func rejectionSummary(atts []renderer.Attribution) string {
+	seen := map[types.NamespacedName]bool{}
+	var names []string
+	unattributed := 0
+	for _, a := range atts {
+		switch {
+		case a.Endpoint == (types.NamespacedName{}):
+			unattributed++
+		case !seen[a.Endpoint]:
+			seen[a.Endpoint] = true
+			names = append(names, a.Endpoint.String())
+		}
+	}
+	sort.Strings(names)
+	switch {
+	case len(names) == 0:
+		return "Rejected by krakend check; no finding names a KrakenDEndpoint (gateway settings, plugins or policies)."
+	case unattributed == 0:
+		return fmt.Sprintf("Rejected by krakend check; findings name KrakenDEndpoint(s) %s.", strings.Join(names, ", "))
+	default:
+		return fmt.Sprintf("Rejected by krakend check; findings name KrakenDEndpoint(s) %s; %d finding(s) name no endpoint.",
+			strings.Join(names, ", "), unattributed)
+	}
+}
+
+// recordRejections sets Accepted=False/GatewayConfigRejected on each endpoint
+// that krakend check blamed for the current, rejected render. Every other
+// endpoint keeps the verdict of the applied render. writeEndpointAccepted
+// writes only on change, so a remembered rejection writes nothing.
+func (r *KrakenDGatewayReconciler) recordRejections(
+	ctx context.Context, endpoints []v1alpha1.KrakenDEndpoint, rejections map[types.NamespacedName]string,
+) error {
+	var errs []error
+	for i := range endpoints {
+		ep := &endpoints[i]
+		msg, ok := rejections[client.ObjectKeyFromObject(ep)]
+		if !ok {
+			continue
+		}
+		want := &metav1.Condition{
+			Type:               v1alpha1.ConditionAccepted,
+			Status:             metav1.ConditionFalse,
+			ObservedGeneration: ep.Generation,
+			Reason:             v1alpha1.ReasonGatewayConfigRejected,
+			Message:            msg,
+		}
+		if err := r.writeEndpointAccepted(ctx, ep, want); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return utilerrors.NewAggregate(errs)
 }
