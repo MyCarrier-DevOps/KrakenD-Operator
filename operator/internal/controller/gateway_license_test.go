@@ -686,3 +686,34 @@ func TestGatewayReconcile_UnchangedLicenseBytesRollNothing(t *testing.T) {
 		t.Errorf("rollingRestarts rose from %v to %v", restartsBefore, got)
 	}
 }
+
+func TestGatewayReconcile_UnreadableLicenseKeepsTheDeployedChecksum(t *testing.T) {
+	s := settleLicensedGateway(t)
+	deployed := s.deployment(t)
+	want := deployed.Spec.Template.Annotations[resources.LicenseChecksumAnnotation]
+	if want == "" {
+		t.Fatal("the settled Deployment carries no license checksum")
+	}
+	if err := s.c.Delete(context.Background(), s.secret); err != nil {
+		t.Fatal(err)
+	}
+
+	s.reconcileWhileCacheLags(t)
+
+	after := s.deployment(t)
+	if got := after.Spec.Template.Annotations[resources.LicenseChecksumAnnotation]; got != want {
+		t.Errorf("license annotation = %q, want the deployed %q kept", got, want)
+	}
+	if after.ResourceVersion != deployed.ResourceVersion {
+		t.Error("an unreadable license must not touch the Deployment")
+	}
+	stored := getGateway(t, s.c, s.gw)
+	if cond := meta.FindStatusCondition(stored.Status.Conditions, v1alpha1.ConditionLicenseValid); cond == nil ||
+		cond.Status != metav1.ConditionUnknown {
+		t.Errorf("LicenseValid = %+v, want Unknown", cond)
+	}
+	if progressing := meta.FindStatusCondition(stored.Status.Conditions, v1alpha1.ConditionProgressing); progressing == nil ||
+		progressing.Reason == "DeploymentUpdated" {
+		t.Errorf("Progressing = %+v, want no DeploymentUpdated", progressing)
+	}
+}
