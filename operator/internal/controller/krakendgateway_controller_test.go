@@ -222,6 +222,15 @@ func TestGatewayReconcile_ChecksumUnchanged(t *testing.T) {
 	gw.Status.Phase = v1alpha1.PhaseRunning
 	gw.Status.ConfigChecksum = "samechecksum"
 	gw.Status.ActiveImage = "krakend/krakend-ce:2.7.0"
+	now := metav1.Now()
+	gw.Status.Conditions = []metav1.Condition{
+		{Type: "ConfigValid", Status: metav1.ConditionTrue, Reason: "ConfigApplied",
+			Message: "Configuration passed validation and is applied", LastTransitionTime: now},
+		{Type: "Available", Status: metav1.ConditionTrue, Reason: "DeploymentAvailable",
+			Message: "All replicas are available", LastTransitionTime: now},
+		{Type: "Progressing", Status: metav1.ConditionFalse, Reason: "RolloutComplete",
+			Message: "Deployment rollout completed successfully", LastTransitionTime: now},
+	}
 
 	c := fakeClientBuilder().
 		WithObjects(gw).
@@ -995,8 +1004,9 @@ func TestInspectDeploymentStatus_ProgressDeadlineExceeded(t *testing.T) {
 
 	r.inspectDeploymentStatus(context.Background(), gw)
 
-	if gw.Status.Phase != v1alpha1.PhaseError {
-		t.Errorf("expected phase Error, got %s", gw.Status.Phase)
+	if a := meta.FindStatusCondition(gw.Status.Conditions, v1alpha1.ConditionAvailable); a == nil ||
+		a.Status != metav1.ConditionFalse || a.Reason != v1alpha1.ReasonRolloutFailed {
+		t.Errorf("Available = %+v, want False/RolloutFailed", a)
 	}
 	if gw.Status.Replicas != 3 {
 		t.Errorf("expected Replicas=3, got %d", gw.Status.Replicas)
