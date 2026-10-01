@@ -71,13 +71,13 @@ Operator image
 {{/*
 Webhook CA bundle for clientConfig.caBundle when cert-manager does not inject
 one. Accepts the PEM bundle itself or its base64 encoding and always emits the
-base64 encoding of the PEM, which is what the API server expects.
+base64 encoding of the PEM on one line, which is what the API server expects.
 */}}
 {{- define "krakend-operator.webhookCABundle" -}}
 {{- $ca := .Values.webhooks.caBundle | default "" | trim -}}
 {{- if contains "-----BEGIN" $ca -}}
 {{- $ca | b64enc -}}
 {{- else -}}
-{{- $ca -}}
+{{- $ca | nospace -}}
 {{- end -}}
 {{- end }}
