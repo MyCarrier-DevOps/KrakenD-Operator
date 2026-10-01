@@ -43,7 +43,7 @@ import (
 	"github.com/mycarrier-devops/krakend-operator/internal/resources"
 )
 
-// isTerminating reports whether obj is being deleted.
+// isTerminating reports whether obj is being deleted (has a deletionTimestamp).
 func isTerminating(obj runtime.Object) bool {
 	o, ok := obj.(metav1.Object)
 	return ok && !o.GetDeletionTimestamp().IsZero()
