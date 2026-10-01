@@ -110,6 +110,18 @@ const (
 	// hits that check, so this condition is the only signal visible via
 	// `kubectl describe krakendgateway`/Events for those paths.
 	ConditionDragonflyRunAsRootUnacknowledged = "DragonflyRunAsRootUnacknowledged"
+
+	// ConditionReady is every kind's summary condition. Each kind's own
+	// controller is its only writer.
+	ConditionReady = "Ready"
+
+	// ConditionResolvedRefs reports whether a KrakenDEndpoint's gateway and
+	// every policy it references exist. Only the endpoint controller writes it.
+	ConditionResolvedRefs = "ResolvedRefs"
+
+	// ConditionAccepted reports whether a KrakenDEndpoint is part of its
+	// gateway's validated configuration. Only the gateway controller writes it.
+	ConditionAccepted = "Accepted"
 )
 
 // Event reason constants for the EventRecorder.
@@ -175,4 +187,29 @@ const (
 	// The applied config is unchanged and the reconcile is retried with
 	// backoff.
 	ReasonValidatorUnavailable = "ValidatorUnavailable"
+
+	// ResolvedRefs reasons.
+	ReasonRefsResolved    = "RefsResolved"
+	ReasonGatewayNotFound = "GatewayNotFound"
+	ReasonPolicyNotFound  = "PolicyNotFound"
+
+	// Accepted reasons. ReasonEndpointConflict above is also one.
+	ReasonAccepted              = "Accepted"
+	ReasonPartiallyAccepted     = "PartiallyAccepted"
+	ReasonGatewayConfigRejected = "GatewayConfigRejected"
+	ReasonSchemaNameConflict    = "SchemaNameConflict"
+	ReasonEEFeaturesStripped    = "EEFeaturesStripped"
+
+	// Ready reasons shared by every kind. A False Ready carries the reason of
+	// the condition that keeps the object from being ready.
+	ReasonReady   = "Ready"
+	ReasonPending = "Pending"
+
+	// ReasonConfigApplied is the reason of a gateway's ConfigValid=True: the
+	// rendered configuration passed validation and is the applied one.
+	ReasonConfigApplied = "ConfigApplied"
+
+	// ReasonAwaitingAvailability is the reason of a gateway's Ready=False
+	// while its Deployment has not reported available replicas.
+	ReasonAwaitingAvailability = "AwaitingAvailability"
 )
