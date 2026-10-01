@@ -21,6 +21,7 @@ import (
 	"errors"
 	"slices"
 	"testing"
+	"time"
 
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -246,13 +247,9 @@ func TestGatewayReconcile_DisablingDragonflyDropsItsMetricSeries(t *testing.T) {
 }
 
 func TestGatewayReconcile_CEFallbackKeepsTheLicenseExternalSecretAndDragonfly(t *testing.T) {
-	gw := reconciledGateway()
+	gw, secret, parser := licensedEEGateway(testNow.Add(-time.Minute), true)
 	gw.UID = "gw-uid"
-	gw.Spec.Edition = v1alpha1.EditionEE
-	gw.Spec.License = &v1alpha1.LicenseConfig{
-		FallbackToCE:   true,
-		ExternalSecret: v1alpha1.ExternalSecretLicenseConfig{Enabled: true},
-	}
+	gw.Spec.License.ExternalSecret = v1alpha1.ExternalSecretLicenseConfig{Enabled: true}
 	gw.Spec.Dragonfly = &v1alpha1.DragonflySpec{Enabled: true}
 	gw.Status.ConfigChecksum = "applied"
 	children := []*unstructured.Unstructured{
@@ -260,12 +257,17 @@ func TestGatewayReconcile_CEFallbackKeepsTheLicenseExternalSecretAndDragonfly(t 
 		controlledChild(gw, externalSecretGVK, resources.ExternalSecretName(gw)),
 	}
 	c := fakeClientBuilder().WithRESTMapper(optionalCRDMapper(optionalOwnedGVKs...)).
-		WithObjects(gw, children[0], children[1]).WithStatusSubresource(gw).Build()
+		WithObjects(gw, secret, children[0], children[1]).WithStatusSubresource(gw).Build()
 	r := newTestGatewayReconciler(c, renderOutput("applied"), &mockValidator{})
+	r.LicenseParser = parser
 
-	// The license cannot be read, so the gateway falls back to CE; the
-	// error, if any, is not what is under test.
-	_ = reconcileGateway(t, r, gw)
+	// The license has lapsed and fallbackToCE is set, so the gateway serves CE.
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if !meta.IsStatusConditionTrue(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionCEFallbackApplied) {
+		t.Fatal("precondition: the gateway must be on the CE fallback")
+	}
 
 	for _, ch := range children {
 		u := &unstructured.Unstructured{}
