@@ -199,12 +199,13 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 
 	// Infrastructure stage: always runs, and deploys the applied config.
-	infraErr := r.reconcileInfrastructure(ctx, &gw, infraInputs{
+	infra := infraInputs{
 		appliedChecksum: gw.Status.ConfigChecksum,
 		pluginChecksum:  output.PluginChecksum,
 		image:           output.DesiredImage,
-	})
-	r.inspectDeploymentStatus(ctx, &gw)
+	}
+	infraErr := r.reconcileInfrastructure(ctx, &gw, infra)
+	r.inspectDeploymentStatus(ctx, &gw, infra)
 
 	// Update final status
 	gw.Status.EndpointCount = int32(len(endpoints))
@@ -458,10 +459,12 @@ func (r *KrakenDGatewayReconciler) detectDragonflyState(
 
 // inspectDeploymentStatus reads the owned Deployment's status and updates
 // the gateway's replica counts, Available and Progressing conditions based on
-// rollout health; the phase is derived from them.
+// rollout health; the phase is derived from them. want is what the
+// infrastructure stage just deployed.
 func (r *KrakenDGatewayReconciler) inspectDeploymentStatus(
 	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
+	want infraInputs,
 ) {
 	log := logf.FromContext(ctx)
 	var dep appsv1.Deployment
@@ -504,20 +507,7 @@ func (r *KrakenDGatewayReconciler) inspectDeploymentStatus(
 		return
 	}
 
-	// Detect rollout convergence: the Deployment has observed its latest
-	// spec, runs the applied config, and every replica is updated and
-	// available. The cache can still hold the Deployment from before an
-	// update, or one whose status describes the previous ReplicaSet, so the
-	// counts alone are not proof.
-	desired := int32(1)
-	if dep.Spec.Replicas != nil {
-		desired = *dep.Spec.Replicas
-	}
-	converged := dep.Spec.Template.Annotations[resources.PostRestartJobChecksumAnnotation] == gw.Status.ConfigChecksum &&
-		dep.Status.ObservedGeneration >= dep.Generation &&
-		dep.Status.Replicas == desired &&
-		dep.Status.UpdatedReplicas == desired &&
-		dep.Status.AvailableReplicas == desired
+	converged := deploymentConverged(&dep, want)
 	if converged {
 		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
 			Type:               v1alpha1.ConditionProgressing,
@@ -551,6 +541,40 @@ func (r *KrakenDGatewayReconciler) inspectDeploymentStatus(
 			Message:            "All replicas are available",
 		})
 	}
+}
+
+// deploymentConverged reports whether dep has finished rolling out want: its
+// pod template carries the applied config, image and plugins, it has observed
+// its latest spec, and every replica is updated and available. The cache can
+// still hold the Deployment from before an update, or one whose status
+// describes the previous ReplicaSet, so the replica counts alone are not
+// proof.
+func deploymentConverged(dep *appsv1.Deployment, want infraInputs) bool {
+	tmpl := dep.Spec.Template
+	if tmpl.Annotations[resources.PostRestartJobChecksumAnnotation] != want.appliedChecksum {
+		return false
+	}
+	if !runsImage(tmpl.Spec.Containers, want.image) {
+		return false
+	}
+	desired := int32(1)
+	if dep.Spec.Replicas != nil {
+		desired = *dep.Spec.Replicas
+	}
+	return dep.Status.ObservedGeneration >= dep.Generation &&
+		dep.Status.Replicas == desired &&
+		dep.Status.UpdatedReplicas == desired &&
+		dep.Status.AvailableReplicas == desired
+}
+
+// runsImage reports whether the gateway container runs image.
+func runsImage(containers []corev1.Container, image string) bool {
+	for _, c := range containers {
+		if c.Name == resources.GatewayContainerName {
+			return c.Image == image
+		}
+	}
+	return false
 }
 
 // findDeploymentCondition returns the Deployment's condition of the given
