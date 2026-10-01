@@ -907,7 +907,7 @@ flowchart TD
     G -->|Yes| G3[Set phase=Rendering]
     G3 --> G6[Set phase=Validating]
     G6 --> J0[PrepareValidationCopy:<br/>strip wildcards if EE<br/>and CE fallback not active]
-    J0 --> J[Validate via krakend check -tlc]
+    J0 --> J[Validate via krakend check -t -n -c]
     J --> K{Valid?}
     K -->|No| L[Set ConfigValid=False, phase=Error, emit event, return]
     K -->|Yes| M[Update ConfigMap, set ConfigValid=True,<br/>phase=Deploying, Progressing=True]
@@ -939,7 +939,7 @@ flowchart TD
 |---|---|
 | `Pending` | Initial state after CR creation, before first reconcile |
 | `Rendering` | Config checksum changed — entering rendering pipeline |
-| `Validating` | Running `krakend check -tlc` on the rendered config |
+| `Validating` | Running `krakend check -t -n -c` on the rendered config |
 | `Deploying` | ConfigMap updated or Deployment patched — rolling update in progress |
 | `Running` | Deployment is fully rolled out (all replicas ready) and not in Degraded/Error |
 | `Degraded` | CE fallback is active (`LicenseDegraded=True`) |
@@ -1508,7 +1508,7 @@ type Validator interface {
 | `endpoints.go` | Builds the `endpoints` array by flattening all `KrakenDEndpoint.spec.endpoints[]` entries, sorts by path then method |
 | `extra_config.go` | Merges `extra_config` namespaces from gateway spec, policies, and endpoint overrides |
 | `plugins.go` | Builds the `plugin` root key when plugins are configured. Computes plugin checksum from ConfigMap data hashes and OCI image tags |
-| `validator.go` | Wraps `krakend check -tlc` execution via the `CommandExecutor` interface |
+| `validator.go` | Wraps `krakend check -t -n -c` execution via the `CommandExecutor` interface |
 
 ### Deterministic Serialization
 
@@ -1554,7 +1554,7 @@ type KrakenDValidator struct {
 }
 ```
 
-The validator writes the rendered JSON to a temporary file, runs `krakend check -tlc -c <path>`, and returns the result:
+The validator writes the rendered JSON to a temporary file, runs `krakend check -t -n -c <path>`, and returns the result:
 
 ```go
 func (v *KrakenDValidator) Validate(ctx context.Context, jsonData []byte) error {
@@ -1573,16 +1573,15 @@ func (v *KrakenDValidator) Validate(ctx context.Context, jsonData []byte) error 
         return fmt.Errorf("closing temp file: %w", err)
     }
 
-    output, err := v.Executor.Execute(ctx, v.BinaryPath, "check", "-tlc", "-c", tmpName)
+    output, err := v.Executor.Execute(ctx, v.BinaryPath, "check", "-t", "-n", "-c", tmpName)
     if err != nil {
-        return &ValidationError{
-            Output: string(output),
-            Err:    err,
-        }
+        return classifyCheckError(ctx, output, err)
     }
     return nil
 }
 ```
+
+`classifyCheckError` returns a `*ValidationError` only when the process exited with a status above zero before the 30-second deadline. A missing binary, a deadline overrun or a signal kill comes back as a plain wrapped error: the config was not judged and the caller retries.
 
 ### EE Wildcard Handling
 
@@ -2618,7 +2617,7 @@ All external dependencies are abstracted behind interfaces, injected via struct 
 | Interface | Package | Purpose | Production Implementation |
 |---|---|---|---|
 | `Renderer` | `internal/renderer` | Build `krakend.json` from CRD state | `renderer.configRenderer` |
-| `Validator` | `internal/renderer` | Validate rendered config via `krakend check -tlc` | `renderer.KrakenDValidator` |
+| `Validator` | `internal/renderer` | Validate rendered config via `krakend check -t -n -c` | `renderer.KrakenDValidator` |
 | `CommandExecutor` | `internal/renderer` | Execute shell commands (krakend check) | `renderer.KrakenDExecutor` |
 | `Fetcher` | `internal/autoconfig` | Fetch OpenAPI specs (HTTP + ConfigMap) | `autoconfig.httpFetcher` |
 | `CUEEvaluator` | `internal/autoconfig` | Evaluate CUE definitions + OpenAPI spec → `EndpointEntry` objects | `autoconfig.cueEvaluator` |
@@ -2663,7 +2662,7 @@ client := fake.NewClientBuilder().
 | Category | Handling | Example |
 |---|---|---|
 | Transient API errors | Return `error` from `Reconcile` — controller-runtime retries with backoff | Network timeout reading Secret |
-| Permanent validation errors | Set status condition, emit event, return `nil` (no retry) | Config fails `krakend check -tlc` |
+| Permanent validation errors | Set status condition, emit event, return `nil` (no retry) | Config fails `krakend check -t -n -c` |
 | Missing prerequisites | Set status condition, return `nil` with `RequeueAfter` | License Secret not yet synced |
 | Programming errors | Panic (should never reach production) | Nil pointer on required field that passed webhook validation |
 | AutoConfig spec/CUE/unmatched-override/scope failures | `Periodic`: `RequeueAfter: spec.periodic.interval`; `OnChange`: return `error` for backoff | `SpecFetchFailed`, `CUEEvaluationFailed`, `UnmatchedOverride`, `AdditionalEndpointScopeFailed` — includes a failed external `$ref` fetch/decode, which fails closed as `SpecFetchFailed` instead of falling back to the raw spec |
