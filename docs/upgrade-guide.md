@@ -558,7 +558,9 @@ kubectl get krakendgateways,krakendendpoints,krakendautoconfigs,krakendbackendpo
   CE fallback (`LicenseFallbackCE`), no configuration validated yet
   (`Unknown`/`Pending`), a configuration that could not be validated
   because the validator was unavailable (`Unknown`/`ValidatorUnavailable`;
-  the phase stays at the serving phase), a rollout in progress (the
+  the phase stays at the serving phase: `Pending` before any rollout,
+  `Deploying` while a rollout is in progress or the Deployment is not
+  available, `Running` otherwise), a rollout in progress (the
   `Progressing` reason, `ConfigDeployed` or `DeploymentUpdated`), and a
   Deployment not yet available (`AwaitingAvailability`). Otherwise it is
   `True`/`Ready`.
