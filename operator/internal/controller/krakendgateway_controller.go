@@ -421,8 +421,7 @@ func (r *KrakenDGatewayReconciler) detectDragonflyState(
 	}
 
 	log := logf.FromContext(ctx)
-	dfGVK := schema.GroupVersionKind{Group: "dragonflydb.io", Version: "v1alpha1", Kind: "Dragonfly"}
-	available, err := r.crdAvailable(dfGVK)
+	available, err := r.crdAvailable(dragonflyGVK)
 	if err != nil {
 		log.Error(err, "failed to check Dragonfly CRD availability")
 		return nil
@@ -434,7 +433,7 @@ func (r *KrakenDGatewayReconciler) detectDragonflyState(
 
 	dfName := resources.DragonflyName(gw)
 	df := &unstructured.Unstructured{}
-	df.SetGroupVersionKind(dfGVK)
+	df.SetGroupVersionKind(dragonflyGVK)
 
 	key := types.NamespacedName{Name: dfName, Namespace: gw.Namespace}
 	if err := r.Get(ctx, key, df); err != nil {
@@ -1146,8 +1145,7 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 
 	// Dragonfly (only if enabled AND CRD is installed)
 	if gw.Spec.Dragonfly != nil && gw.Spec.Dragonfly.Enabled {
-		dfGVK := schema.GroupVersionKind{Group: "dragonflydb.io", Version: "v1alpha1", Kind: "Dragonfly"}
-		dfAvailable, dfErr := r.crdAvailable(dfGVK)
+		dfAvailable, dfErr := r.crdAvailable(dragonflyGVK)
 		if dfErr != nil {
 			return fmt.Errorf("checking Dragonfly CRD: %w", dfErr)
 		}
@@ -1158,7 +1156,7 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 				"Dragonfly is enabled but the dragonflydb.io CRD is not installed in the cluster")
 		} else {
 			df := &unstructured.Unstructured{}
-			df.SetGroupVersionKind(dfGVK)
+			df.SetGroupVersionKind(dragonflyGVK)
 			df.SetName(resources.DragonflyName(gw))
 			df.SetNamespace(gw.Namespace)
 			if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, df, func() error {
@@ -1186,8 +1184,7 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 
 	// ExternalSecret (only if license.externalSecret is enabled AND CRD is installed)
 	if gw.Spec.License != nil && gw.Spec.License.ExternalSecret.Enabled {
-		esGVK := schema.GroupVersionKind{Group: "external-secrets.io", Version: "v1", Kind: "ExternalSecret"}
-		esAvailable, esErr := r.crdAvailable(esGVK)
+		esAvailable, esErr := r.crdAvailable(externalSecretGVK)
 		if esErr != nil {
 			return fmt.Errorf("checking ExternalSecret CRD: %w", esErr)
 		}
@@ -1198,7 +1195,7 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 				"ExternalSecret is enabled but the external-secrets.io CRD is not installed in the cluster")
 		} else {
 			es := &unstructured.Unstructured{}
-			es.SetGroupVersionKind(esGVK)
+			es.SetGroupVersionKind(externalSecretGVK)
 			es.SetName(resources.ExternalSecretName(gw))
 			es.SetNamespace(gw.Namespace)
 			if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, es, func() error {
@@ -1212,8 +1209,7 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 
 	// VirtualService (only if Istio is enabled AND CRD is installed)
 	if gw.Spec.Istio != nil && gw.Spec.Istio.Enabled {
-		vsGVK := schema.GroupVersionKind{Group: "networking.istio.io", Version: "v1", Kind: "VirtualService"}
-		vsAvailable, vsErr := r.crdAvailable(vsGVK)
+		vsAvailable, vsErr := r.crdAvailable(virtualServiceGVK)
 		if vsErr != nil {
 			return fmt.Errorf("checking VirtualService CRD: %w", vsErr)
 		}
@@ -1224,7 +1220,7 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 				"Istio is enabled but the networking.istio.io VirtualService CRD is not installed in the cluster")
 		} else {
 			vs := &unstructured.Unstructured{}
-			vs.SetGroupVersionKind(vsGVK)
+			vs.SetGroupVersionKind(virtualServiceGVK)
 			vs.SetName(gw.Name)
 			vs.SetNamespace(gw.Namespace)
 			if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, vs, func() error {
