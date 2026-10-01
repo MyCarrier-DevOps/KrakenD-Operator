@@ -234,6 +234,7 @@ func TestGatewayReconcile_ValidatorUnavailableIsRetried(t *testing.T) {
 	gw := testGateway()
 	gw.Status.Phase = v1alpha1.PhaseRunning
 	gw.Status.ConfigChecksum = "applied"
+	gw.Status.ActiveImage = "img:v1"
 	now := metav1.Now()
 	gw.Status.Conditions = []metav1.Condition{
 		{Type: "Available", Status: metav1.ConditionTrue, Reason: "DeploymentAvailable",
@@ -241,7 +242,7 @@ func TestGatewayReconcile_ValidatorUnavailableIsRetried(t *testing.T) {
 		{Type: "Progressing", Status: metav1.ConditionFalse, Reason: "RolloutComplete",
 			Message: "Deployment rollout completed successfully", LastTransitionTime: now},
 	}
-	c, writes := gatewayStatusWrites(gw)
+	c, writes := gatewayStatusWrites(gw, makeConvergedDeployment(gw, "applied"))
 	validator := &countingValidator{err: fmt.Errorf("running krakend check: %w", fs.ErrNotExist)}
 	r := &KrakenDGatewayReconciler{
 		Client: c, Scheme: testScheme(), Recorder: fakeRecorder(),
