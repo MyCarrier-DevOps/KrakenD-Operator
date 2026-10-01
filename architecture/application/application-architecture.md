@@ -880,10 +880,9 @@ flowchart TD
     G5 --> I[Patch pod annotation]
     G1 -->|Yes| G4[Progressing=True<br/>reason DeploymentUpdated]
     G4 --> I
-    G -->|Yes| J0[EE render: apply the wildcard route rule,<br/>rewrite /p/* to /p/{Wildcard}]
-    J0 --> J1{Same render and edition<br/>already rejected?}
+    G -->|Yes| J1{Same render and edition<br/>already rejected?}
     J1 -->|Yes| L[Re-apply the remembered rejection:<br/>ConfigValid=False,<br/>Warning event only if the verdict changed, return]
-    J1 -->|No| J[Validate via krakend check -t -n -c]
+    J1 -->|No| J[Validate as the render's edition:<br/>EE wildcard rule in Go, then<br/>krakend check -t -n -c on the copy]
     J --> K{Verdict?}
     K -->|Rejected| L
     K -->|Unavailable| L2[Set ConfigValid=Unknown<br/>reason ValidatorUnavailable,<br/>Ready Unknown, keep applied config,<br/>one Warning event,<br/>return error: retry with backoff]
@@ -1453,8 +1452,9 @@ func NewKrakenDExecutor(binaryPath string) *KrakenDExecutor {
 
 ```go
 type Validator interface {
-    Validate(ctx context.Context, jsonData []byte) error
-    PrepareValidationCopy(jsonData []byte, eeWithoutFallback bool) ([]byte, error)
+    // Validate checks jsonData the way KrakenD of the given edition would load
+    // it, using the embedded CE binary.
+    Validate(ctx context.Context, jsonData []byte, edition v1alpha1.Edition) error
 }
 ```
 
@@ -1513,10 +1513,21 @@ type KrakenDValidator struct {
 }
 ```
 
-The validator writes the rendered JSON to a temporary file, runs `krakend check -t -n -c <path>`, and returns the result:
+`Validate` prepares the validation copy for the edition (see EE Wildcard Handling), then `check` writes it to a temporary file, runs `krakend check -t -n -c <path>`, and returns the result:
 
 ```go
-func (v *KrakenDValidator) Validate(ctx context.Context, jsonData []byte) error {
+func (v *KrakenDValidator) Validate(ctx context.Context, jsonData []byte, edition v1alpha1.Edition) error {
+    doc, findings, err := validationCopy(jsonData, edition)
+    if err != nil {
+        return fmt.Errorf("preparing validation copy: %w", err)
+    }
+    if len(findings) > 0 {
+        return &ValidationError{Output: strings.Join(findings, "\n"), Err: errEEWildcardConflict}
+    }
+    return v.check(ctx, doc)
+}
+
+func (v *KrakenDValidator) check(ctx context.Context, jsonData []byte) error {
     ctx, cancel := context.WithTimeout(ctx, v.timeout())
     defer cancel()
 
