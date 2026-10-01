@@ -262,11 +262,12 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	return ctrl.Result{RequeueAfter: lic.requeueAfter}, nil
 }
 
-// SetupWithManager sets up the controller with the Manager.
-// Optional third-party CRDs (Dragonfly, ExternalSecret, VirtualService) are
-// NOT registered with Owns() because they may not be installed in the cluster.
-// The operator still sets ownerReferences on instances it creates so that GC
-// cleans them up when the gateway is deleted.
+// SetupWithManager sets up the controller with the Manager. The optional
+// third-party kinds (Dragonfly, ExternalSecret, VirtualService) are
+// registered with Owns() when their CRDs exist at startup. A CRD installed
+// later is watched only after an operator restart; until then its objects
+// are still reconciled on every gateway event, and garbage collected through
+// their owner references.
 //
 // Escape-hatch watch dependency (review id 3805157515, #11): the
 // docs/upgrade-guide.md status-patch escape hatch
@@ -292,7 +293,7 @@ func (r *KrakenDGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.KrakenDGateway{}).
 		Owns(&appsv1.Deployment{}).
 		Owns(&corev1.Service{}).
@@ -320,8 +321,24 @@ func (r *KrakenDGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			handler.EnqueueRequestsFromMapFunc(r.pluginConfigMapToGateway),
 		).
 		WithOptions(crcontroller.Options{RateLimiter: newGatewayRateLimiter()}).
-		Named("krakendgateway").
-		Complete(r)
+		Named("krakendgateway")
+
+	installed, missing, err := installedOptionalKinds(mgr.GetRESTMapper())
+	if err != nil {
+		return err
+	}
+	log := mgr.GetLogger().WithName("krakendgateway")
+	for _, gvk := range installed {
+		u := &unstructured.Unstructured{}
+		u.SetGroupVersionKind(gvk)
+		b = b.Owns(u)
+		log.Info("watching optional kind", "kind", gvk.String())
+	}
+	for _, gvk := range missing {
+		log.Info("optional CRD not installed at startup; restart the operator after installing it to watch it",
+			"kind", gvk.String())
+	}
+	return b.Complete(r)
 }
 
 // forgetGateway drops what the controller keeps per gateway once the gateway
