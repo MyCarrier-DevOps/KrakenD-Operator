@@ -26,6 +26,8 @@ See [values.yaml](values.yaml) for the full list of configurable parameters.
 | `image.tag` | Operator image tag (defaults to chart appVersion) | `""` |
 | `leaderElection.enabled` | Enable leader election | `true` |
 | `metrics.enabled` | Expose Prometheus metrics | `true` |
+| `webhooks.enabled` | Serve the validating admission webhooks. `false` runs the operator without a webhook server; only render-time validation then protects gateways | `true` |
+| `webhooks.caBundle` | CA bundle (PEM or base64-encoded PEM) for the webhook, used when `webhooks.certManager.enabled` is `false` | `""` |
 | `resources` | CPU/memory requests and limits | See values.yaml |
 
 ## Uninstall
