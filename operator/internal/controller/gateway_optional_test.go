@@ -136,3 +136,41 @@ func TestGatewayReconcile_NeverDeletesWhatItDoesNotControl(t *testing.T) {
 		t.Errorf("a VirtualService the gateway does not control must survive: %v", err)
 	}
 }
+
+func TestGatewayReconcile_KeepsChildrenAnotherControllerOwns(t *testing.T) {
+	gw := reconciledGateway()
+	gw.UID = "gw-uid"
+	gw.Status.ConfigChecksum = "applied"
+	other := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "other-gw", Namespace: gw.Namespace, UID: "other-uid"}}
+	owner := []metav1.OwnerReference{*metav1.NewControllerRef(other, v1alpha1.GroupVersion.WithKind("KrakenDGateway"))}
+	hpa := &autoscalingv2.HorizontalPodAutoscaler{ObjectMeta: metav1.ObjectMeta{
+		Name: gw.Name, Namespace: gw.Namespace, OwnerReferences: owner,
+	}}
+	children := []*unstructured.Unstructured{
+		controlledChild(gw, dragonflyGVK, resources.DragonflyName(gw)),
+		controlledChild(gw, externalSecretGVK, resources.ExternalSecretName(gw)),
+		controlledChild(gw, virtualServiceGVK, gw.Name),
+	}
+	objs := []client.Object{gw, hpa}
+	for _, ch := range children {
+		ch.SetOwnerReferences(owner)
+		objs = append(objs, ch)
+	}
+	c := fakeClientBuilder().WithRESTMapper(optionalCRDMapper(optionalOwnedGVKs...)).
+		WithObjects(objs...).WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderOutput("applied"), &mockValidator{})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(hpa), &autoscalingv2.HorizontalPodAutoscaler{}); err != nil {
+		t.Errorf("an HPA another gateway controls must survive: %v", err)
+	}
+	for _, ch := range children {
+		u := &unstructured.Unstructured{}
+		u.SetGroupVersionKind(ch.GroupVersionKind())
+		if err := c.Get(context.Background(), client.ObjectKeyFromObject(ch), u); err != nil {
+			t.Errorf("a %s another gateway controls must survive: %v", ch.GetKind(), err)
+		}
+	}
+}
