@@ -1057,6 +1057,17 @@ done
 kubectl get krakendgateways -A -o json | jq -r '.items[] | "\(.metadata.namespace)/\(.metadata.name)\tautoscaling=\(.spec.autoscaling != null)\tdragonfly=\(.spec.dragonfly.enabled // false)\texternalSecret=\(.spec.license.externalSecret.enabled // false)\tistio=\(.spec.istio.enabled // false)"'
 ```
 
+### A missing optional CRD is reported in status
+
+A feature enabled without its CRD installed now shows as a condition with
+reason `CRDNotInstalled`:
+- `DragonflyReady=False` for Dragonfly;
+- `IstioConfigured=False` for Istio;
+- `LicenseSecretUnavailable=True` for the license ExternalSecret.
+
+It is no longer a `CRDNotInstalled` Warning event on every reconcile. The
+event fires once, when the condition is first set.
+
 ---
 
 ## v0.14.0 — openapi-serve liveness probe (one-time rollout)
