@@ -405,6 +405,10 @@ func TestGatewayReconcile_RevertAfterUnavailableValidatorClearsRetrying(t *testi
 	if err := reconcileGateway(t, r, gw); err == nil {
 		t.Fatal("expected an error, so the reconcile is retried with backoff")
 	}
+	if cond := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionConfigValid); cond == nil ||
+		cond.Status != metav1.ConditionUnknown || cond.Reason != v1alpha1.ReasonValidatorUnavailable {
+		t.Fatalf("ConfigValid = %+v, want Unknown/ValidatorUnavailable before the revert", cond)
+	}
 
 	// The input is reverted: the render equals the applied configuration again.
 	r.Renderer = renderOutput("applied")
@@ -416,5 +420,9 @@ func TestGatewayReconcile_RevertAfterUnavailableValidatorClearsRetrying(t *testi
 	cond := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionConfigValid)
 	if cond == nil || cond.Status != metav1.ConditionTrue || cond.Reason != v1alpha1.ReasonConfigApplied {
 		t.Errorf("ConfigValid = %+v, want True/ConfigApplied once the render is the applied config again", cond)
+	}
+	if ready := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionReady); ready == nil ||
+		ready.Reason == v1alpha1.ReasonValidatorUnavailable {
+		t.Errorf("Ready = %+v, want it no longer ValidatorUnavailable after the revert", ready)
 	}
 }
