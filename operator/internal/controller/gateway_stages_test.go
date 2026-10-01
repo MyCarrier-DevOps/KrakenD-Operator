@@ -2156,3 +2156,33 @@ func TestGatewayReconcile_CEEditionDeploymentRunsWithoutTheOpenAPIExport(t *test
 		}
 	}
 }
+
+func TestGatewayReconcile_RejectedCEFallbackKeepsTheOpenAPIPieces(t *testing.T) {
+	gw, secret, parser := licensedEEGateway(testNow.Add(-time.Minute), true)
+	gw.Spec.OpenAPI = &v1alpha1.OpenAPIExportSpec{Enabled: true}
+	const config = `{"version":3,"name":"ee-only-until-stripped"}`
+	gw.Status.ConfigChecksum = hash.SHA256Hex([]byte(config))
+	gw.Status.ConfigEdition = v1alpha1.EditionEE
+	c := fakeClientBuilder().WithObjects(gw, secret, legacyConfigMap(gw, config)).WithStatusSubresource(gw).Build()
+	val := &recordingValidator{err: rejectedBy("ERROR testing the configuration file:\twildcards must be named")}
+	r := newTestGatewayReconciler(c, renderOf(config), val)
+	r.LicenseParser = parser
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	var dep appsv1.Deployment
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(gw), &dep); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(dep.Spec.Template.Spec.InitContainers, func(c corev1.Container) bool {
+		return c.Name == "openapi-export"
+	}) {
+		t.Error("the Deployment lost the OpenAPI export while the CE fallback render is rejected; " +
+			"the EE pods keep serving, so the pod template must not change")
+	}
+	if cond := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions,
+		v1alpha1.ConditionCEFallbackApplied); cond != nil {
+		t.Errorf("CEFallbackApplied = %+v, want none: the applied config is still the EE one", cond)
+	}
+}
