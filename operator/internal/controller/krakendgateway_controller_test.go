@@ -1420,3 +1420,33 @@ func TestGatewayReconcile_AcceptedEventWhenConflictResolves(t *testing.T) {
 		t.Errorf("events = %q, want %q", events, want)
 	}
 }
+
+func TestGatewayReconcile_AcceptedNotWrittenWhenValidationFails(t *testing.T) {
+	gw := reconciledGateway()
+	conflicted := gatewayEndpoint("ep-conflicted", 1)
+	writes := 0
+	c := fakeClientBuilder().
+		WithObjects(gw, conflicted).
+		WithStatusSubresource(gw, conflicted).
+		WithInterceptorFuncs(countStatusWrites[*v1alpha1.KrakenDEndpoint](&writes)).
+		Build()
+	r := acceptanceReconciler(c, fakeRecorder(), &renderer.RenderOutput{
+		JSON: []byte(`{"version":3}`), Checksum: "cs-rejected", DesiredImage: "img:v1",
+		ConflictedEndpoints: []types.NamespacedName{client.ObjectKeyFromObject(conflicted)},
+	})
+	// Build the failing validator the same way TestGatewayReconcile_ValidationFailure
+	// does: a *renderer.ValidationError is an "invalid config" verdict.
+	r.Validator = &mockValidator{validateErr: &renderer.ValidationError{
+		Output: "invalid config line 5", Err: fmt.Errorf("exit code 1"),
+	}}
+
+	// Other tests cover the gateway's own status on a rejection; only the endpoint side is checked here.
+	_ = reconcileGateway(t, r, gw)
+
+	if writes != 0 {
+		t.Errorf("endpoint status writes after a rejected render = %d, want 0", writes)
+	}
+	if got := storedAccepted(t, c, client.ObjectKeyFromObject(conflicted)); got != nil {
+		t.Errorf("Accepted = %+v after a rejected render, want none", got)
+	}
+}
