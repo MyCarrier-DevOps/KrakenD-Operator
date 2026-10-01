@@ -113,7 +113,7 @@ func TestGatewayReconcile_SteadyStateWritesNoStatus(t *testing.T) {
 	gw := testGateway()
 	c, phases := gatewayStatusWrites(gw)
 	r := &KrakenDGatewayReconciler{
-		Client: c, Scheme: testScheme(), Recorder: fakeRecorder(),
+		Client: c, APIReader: c, Scheme: testScheme(), Recorder: fakeRecorder(),
 		Renderer: renderOutput("good"), Validator: &mockValidator{},
 	}
 
@@ -141,7 +141,7 @@ func TestGatewayReconcile_RejectedRenderIsNotRevalidated(t *testing.T) {
 	recorder := fakeRecorder()
 	validator := &countingValidator{err: rejectedBy("bad endpoint")}
 	r := &KrakenDGatewayReconciler{
-		Client: c, Scheme: testScheme(), Recorder: recorder,
+		Client: c, APIReader: c, Scheme: testScheme(), Recorder: recorder,
 		Renderer: renderOutput("bad"), Validator: validator,
 	}
 
@@ -168,7 +168,7 @@ func TestGatewayReconcile_EditionModeFlipRevalidatesSameRender(t *testing.T) {
 	c, _ := gatewayStatusWrites(gw)
 	validator := &countingValidator{err: rejectedBy("wildcards must be named")}
 	r := &KrakenDGatewayReconciler{
-		Client: c, Scheme: testScheme(), Recorder: fakeRecorder(),
+		Client: c, APIReader: c, Scheme: testScheme(), Recorder: fakeRecorder(),
 		Renderer: renderOutput("same"), Validator: validator,
 	}
 	if err := reconcileGateway(t, r, gw); err != nil {
@@ -199,7 +199,7 @@ func TestGatewayReconcile_RememberedRejectionRestoresOverwrittenStatus(t *testin
 	c, _ := gatewayStatusWrites(gw)
 	validator := &countingValidator{err: rejectedBy("bad endpoint")}
 	r := &KrakenDGatewayReconciler{
-		Client: c, Scheme: testScheme(), Recorder: fakeRecorder(),
+		Client: c, APIReader: c, Scheme: testScheme(), Recorder: fakeRecorder(),
 		Renderer: renderOutput("bad"), Validator: validator,
 	}
 	if err := reconcileGateway(t, r, gw); err != nil {
@@ -245,7 +245,7 @@ func TestGatewayReconcile_ValidatorUnavailableIsRetried(t *testing.T) {
 	c, writes := gatewayStatusWrites(gw, makeConvergedDeployment(gw, "applied"))
 	validator := &countingValidator{err: fmt.Errorf("running krakend check: %w", fs.ErrNotExist)}
 	r := &KrakenDGatewayReconciler{
-		Client: c, Scheme: testScheme(), Recorder: fakeRecorder(),
+		Client: c, APIReader: c, Scheme: testScheme(), Recorder: fakeRecorder(),
 		Renderer: renderOutput("new"), Validator: validator,
 	}
 
@@ -285,7 +285,7 @@ func TestGatewayReconcile_ValidationMessageIsBounded(t *testing.T) {
 	line := "ERROR at '/endpoints/0/backend/0/extra_config/qos~1circuit-breaker/interval': got string, want integer"
 	huge := strings.Repeat(line+"\n", 1000)
 	r := &KrakenDGatewayReconciler{
-		Client: c, Scheme: testScheme(), Recorder: recorder,
+		APIReader: c, Client: c, Scheme: testScheme(), Recorder: recorder,
 		Renderer: renderOutput("bad"), Validator: &countingValidator{err: rejectedBy(huge)},
 	}
 	if err := reconcileGateway(t, r, gw); err != nil {
@@ -315,7 +315,7 @@ func TestGatewayReconcile_OversizedRejectionWarnsOnce(t *testing.T) {
 	recorder := fakeRecorder()
 	huge := strings.Repeat("ERROR at '/endpoints/0': additional properties not allowed\n", 1000)
 	r := &KrakenDGatewayReconciler{
-		Client: c, Scheme: testScheme(), Recorder: recorder,
+		APIReader: c, Client: c, Scheme: testScheme(), Recorder: recorder,
 		Renderer: renderOutput("bad"), Validator: &countingValidator{err: rejectedBy(huge)},
 	}
 	for range 2 {
@@ -357,7 +357,7 @@ func TestGatewayReconcile_TerminatingGatewayIsLeftAlone(t *testing.T) {
 	c, phases := gatewayStatusWrites(gw)
 	setGatewaySeries(gw.Namespace, gw.Name)
 	r := &KrakenDGatewayReconciler{
-		Client: c, Scheme: testScheme(), Recorder: fakeRecorder(),
+		Client: c, APIReader: c, Scheme: testScheme(), Recorder: fakeRecorder(),
 		Renderer:  &mockRenderer{err: fmt.Errorf("a terminating gateway must not be rendered")},
 		Validator: &mockValidator{},
 	}
@@ -400,7 +400,7 @@ func TestGatewayReconcile_RevertAfterUnavailableValidatorClearsRetrying(t *testi
 	c, _ := gatewayStatusWrites(gw)
 	validator := &countingValidator{err: fmt.Errorf("running krakend check: %w", fs.ErrNotExist)}
 	r := &KrakenDGatewayReconciler{
-		Client: c, Scheme: testScheme(), Recorder: fakeRecorder(),
+		Client: c, APIReader: c, Scheme: testScheme(), Recorder: fakeRecorder(),
 		Renderer: renderOutput("new"), Validator: validator,
 	}
 	if err := reconcileGateway(t, r, gw); err == nil {
