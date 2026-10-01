@@ -81,6 +81,11 @@ const (
 	ConditionSynced                   = "Synced"
 	ConditionPostRestartJobSkipped    = "PostRestartJobSkipped"
 
+	// ConditionCEFallbackApplied is True while an EE gateway serves its
+	// CE-fallback render; its message lists the Enterprise-only features that
+	// render removed. Only the gateway controller writes it.
+	ConditionCEFallbackApplied = "CEFallbackApplied"
+
 	// ConditionPostRestartJobReadOnlyRootFilesystem is an informational
 	// condition (review id 3805157497, #9) set unconditionally whenever a
 	// post-restart Job is created (or re-created), reporting the Job
