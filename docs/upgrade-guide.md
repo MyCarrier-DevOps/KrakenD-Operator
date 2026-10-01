@@ -389,6 +389,21 @@ pass, continuously, until the input was fixed. Now:
 Tooling that waits for `Rendering` or `Validating` should wait on the
 `ConfigValid` condition instead.
 
+### An unavailable validator is retried, not reported as a broken config
+
+Only a completed krakend check run that rejects the config marks it invalid
+(`ConfigValid=False`, reason `ConfigValidationFailed`, phase `Error`). When
+the check cannot run to completion (the binary is missing, the 30-second
+limit is hit, or the process is killed), the gateway now reports
+`ConfigValid=Unknown` with reason `ValidatorUnavailable`, emits one
+`ValidatorUnavailable` Warning event, keeps its phase and its applied
+config, and retries with exponential backoff. Previously such failures were
+reported as an invalid config and not retried.
+
+`config_validation_failures_total` counts only a fresh verdict from krakend
+check. Failures to prepare the validation copy and other errors that are not
+verdicts, such as an unavailable validator, do not increment it.
+
 ## v0.14.0 — openapi-serve liveness probe (one-time rollout)
 
 The `openapi-serve` sidecar now renders with a liveness probe. It previously
