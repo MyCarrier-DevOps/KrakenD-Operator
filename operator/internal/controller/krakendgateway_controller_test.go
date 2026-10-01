@@ -28,8 +28,10 @@ import (
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -1355,5 +1357,97 @@ func TestGatewayReconcile_AutoscaledReplicasAreNotReset(t *testing.T) {
 	}
 	if got := ptr.Deref(dep.Spec.Replicas, -1); got != 7 {
 		t.Errorf("replicas = %d, want the HPA's 7 kept", got)
+	}
+}
+
+// reconciledGateway is testGateway as stored after an earlier reconcile.
+// These tests do not rely on an initial Pending write, which the controller
+// no longer makes: the stored phase only guards against that write if it
+// were still there.
+func reconciledGateway() *v1alpha1.KrakenDGateway {
+	gw := testGateway()
+	gw.Status.Phase = v1alpha1.PhasePending
+	return gw
+}
+
+// gatewayEndpoint returns an empty endpoint of test-gw with the given name
+// and generation.
+func gatewayEndpoint(name string, generation int64) *v1alpha1.KrakenDEndpoint {
+	return &v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", Generation: generation},
+		Spec: v1alpha1.KrakenDEndpointSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: "test-gw"},
+			Endpoints:  []v1alpha1.EndpointEntry{},
+		},
+	}
+}
+
+// acceptanceReconciler returns a gateway reconciler whose renderer returns
+// output and whose validator passes.
+func acceptanceReconciler(
+	c client.Client, rec record.EventRecorder, output *renderer.RenderOutput,
+) *KrakenDGatewayReconciler {
+	return &KrakenDGatewayReconciler{
+		Client: c, Scheme: testScheme(), Recorder: rec,
+		Renderer: &mockRenderer{output: output}, Validator: &mockValidator{},
+	}
+}
+
+// storedAccepted returns the Accepted condition of the stored endpoint key.
+func storedAccepted(t *testing.T, c client.Client, key types.NamespacedName) *metav1.Condition {
+	t.Helper()
+	var ep v1alpha1.KrakenDEndpoint
+	if err := c.Get(context.Background(), key, &ep); err != nil {
+		t.Fatalf("getting endpoint %s: %v", key, err)
+	}
+	return meta.FindStatusCondition(ep.Status.Conditions, v1alpha1.ConditionAccepted)
+}
+
+func TestGatewayReconcile_WritesAcceptedOnEveryEndpoint(t *testing.T) {
+	gw := reconciledGateway()
+	included := gatewayEndpoint("ep-included", 3)
+	conflicted := gatewayEndpoint("ep-conflicted", 2)
+	unresolved := gatewayEndpoint("ep-unresolved", 1)
+	// An earlier render accepted ep-unresolved; its policy has since been deleted.
+	unresolved.Status.Conditions = []metav1.Condition{{
+		Type: v1alpha1.ConditionAccepted, Status: metav1.ConditionTrue, Reason: v1alpha1.ReasonAccepted,
+		Message: "Included in the configuration of gateway default/test-gw", ObservedGeneration: 1,
+		LastTransitionTime: metav1.Now(),
+	}}
+	c := fakeClientBuilder().
+		WithObjects(gw, included, conflicted, unresolved).
+		WithStatusSubresource(gw, included, conflicted, unresolved).
+		Build()
+	r := acceptanceReconciler(c, fakeRecorder(), &renderer.RenderOutput{
+		JSON: []byte(`{"version":3}`), Checksum: "cs1", DesiredImage: "img:v1",
+		ConflictedEndpoints: []types.NamespacedName{client.ObjectKeyFromObject(conflicted)},
+		InvalidEndpoints:    []types.NamespacedName{client.ObjectKeyFromObject(unresolved)},
+	})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := storedAccepted(t, c, client.ObjectKeyFromObject(included))
+	if got == nil || got.Status != metav1.ConditionTrue || got.Reason != "Accepted" || got.ObservedGeneration != 3 {
+		t.Errorf("included endpoint: Accepted = %+v, want True/Accepted at generation 3", got)
+	}
+	got = storedAccepted(t, c, client.ObjectKeyFromObject(conflicted))
+	if got == nil || got.Status != metav1.ConditionFalse || got.Reason != "EndpointConflict" || got.ObservedGeneration != 2 {
+		t.Errorf("conflicted endpoint: Accepted = %+v, want False/EndpointConflict at generation 2", got)
+	}
+	if got = storedAccepted(t, c, client.ObjectKeyFromObject(unresolved)); got != nil {
+		t.Errorf("endpoint with a missing policy: Accepted = %+v, want no Accepted condition", got)
+	}
+	for _, ep := range []*v1alpha1.KrakenDEndpoint{included, conflicted, unresolved} {
+		var stored v1alpha1.KrakenDEndpoint
+		if err := c.Get(context.Background(), client.ObjectKeyFromObject(ep), &stored); err != nil {
+			t.Fatal(err)
+		}
+		if stored.Status.Phase != "" ||
+			meta.FindStatusCondition(stored.Status.Conditions, v1alpha1.ConditionAvailable) != nil {
+			t.Errorf("%s: the gateway wrote phase %q or Available; both belong to the endpoint controller",
+				ep.Name, stored.Status.Phase)
+		}
 	}
 }
