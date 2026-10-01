@@ -411,3 +411,31 @@ func TestEndpoint_ReattachesWhenGatewayCreatedLater(t *testing.T) {
 			v1alpha1.EndpointPhaseActive)
 	})
 }
+
+func TestEndpoint_DetachedWhenGatewayDeleted(t *testing.T) {
+	ns := testNamespace(t)
+	gw := createGateway(t, ns, "gw-going")
+	ep := createEndpoint(t, ns, "ep-staying", gw.Name, "/stay")
+	eventually(t, func() error {
+		return expectEndpointStatus(ep, metav1.ConditionTrue, metav1.ConditionTrue, "Accepted", "Ready",
+			v1alpha1.EndpointPhaseActive)
+	})
+	if err := k8sClient.Delete(ctx, &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, func() error {
+		cur, err := getEndpoint(ep)
+		if err != nil {
+			return err
+		}
+		if err := expectCondition(cur, "Ready", metav1.ConditionFalse, "GatewayNotFound"); err != nil {
+			return err
+		}
+		if cur.Status.Phase != v1alpha1.EndpointPhaseDetached {
+			return fmt.Errorf("phase %q, want Detached", cur.Status.Phase)
+		}
+		return nil
+	})
+}
