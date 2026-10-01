@@ -1271,3 +1271,54 @@ func TestGatewayReconcile_RejectionNamingNobodyLiftsAnOldBlame(t *testing.T) {
 		t.Errorf("Accepted = %+v; a rejection naming no endpoint must lift the old blame", cond)
 	}
 }
+
+func TestGatewayReconcile_RememberedRejectionAfterALiftedBlameWritesNothing(t *testing.T) {
+	gw := servingGateway("applied", "img:v1")
+	good := withAccepted(testEndpoint("good", "/a"), metav1.ConditionFalse, v1alpha1.ReasonGatewayConfigRejected)
+	bad := testEndpoint("bad", "/b")
+	writes := 0
+	c := fakeClientBuilder().WithObjects(gw, good, bad).WithStatusSubresource(gw, good, bad).
+		WithInterceptorFuncs(countStatusWrites[*v1alpha1.KrakenDEndpoint](&writes)).Build()
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}),
+		&countingValidator{err: rejectedBy(badNamespaceVerdict)})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+	after := writes
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+	if n := writes - after; n != 0 {
+		t.Errorf("endpoint status writes on the remembered pass = %d, want 0", n)
+	}
+}
+
+func TestGatewayReconcile_NeverAppliedGatewayRemovesAStaleAccepted(t *testing.T) {
+	gw := reconciledGateway() // recreated: no config has ever been applied
+	stale := withAccepted(testEndpoint("stale", "/a"), metav1.ConditionTrue, v1alpha1.ReasonAccepted)
+	bad := testEndpoint("bad", "/b")
+	c := fakeClientBuilder().WithObjects(gw, stale, bad).WithStatusSubresource(gw, stale, bad).Build()
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}),
+		&countingValidator{err: rejectedBy(badNamespaceVerdict)})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	assertNotAccepted(t, c, stale)
+}
+
+// assertNotAccepted fails when ep still carries an Accepted condition or reads Ready.
+func assertNotAccepted(t *testing.T, c client.Client, ep *v1alpha1.KrakenDEndpoint) {
+	t.Helper()
+	var stored v1alpha1.KrakenDEndpoint
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(ep), &stored); err != nil {
+		t.Fatal(err)
+	}
+	if cond := meta.FindStatusCondition(stored.Status.Conditions, v1alpha1.ConditionAccepted); cond != nil {
+		t.Errorf("endpoint %s Accepted = %+v; no config has been applied, so none may be claimed", ep.Name, cond)
+	}
+	if status, _, _ := v1alpha1.EndpointReady(stored.Status.Conditions); status == metav1.ConditionTrue {
+		t.Errorf("endpoint %s is Ready although no config has been applied", ep.Name)
+	}
+}
