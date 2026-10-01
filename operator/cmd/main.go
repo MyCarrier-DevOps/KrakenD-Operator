@@ -118,7 +118,7 @@ func main() {
 	// Initial webhook TLS options
 	webhookTLSOpts := tlsOpts
 
-	if webhookCertPath != "" {
+	if webhookCertWatchNeeded(enableWebhooks, webhookCertPath) {
 		setupLog.Info("Initializing webhook certificate watcher using provided certificates",
 			"webhook-cert-path", webhookCertPath,
 			"webhook-cert-name", webhookCertName,
