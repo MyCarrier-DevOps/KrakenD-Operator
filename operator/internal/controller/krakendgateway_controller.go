@@ -1788,4 +1788,7 @@ type gatewayReadiness struct {
 	phase   v1alpha1.GatewayPhase
 }
 
-func gatewayReadinessFor(conds []metav1.Condition) gatewayReadiness { return gatewayReadiness{} }
+func gatewayReadinessFor(conds []metav1.Condition) gatewayReadiness {
+	return gatewayReadiness{status: metav1.ConditionUnknown, reason: v1alpha1.ReasonPending,
+		message: "Waiting for the first configuration to be validated", phase: v1alpha1.PhasePending}
+}
