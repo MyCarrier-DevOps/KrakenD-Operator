@@ -227,3 +227,20 @@ func TestGatewayReconcile_NoCRDNeverReadsLive(t *testing.T) {
 		t.Fatalf("reconcile: %v", err)
 	}
 }
+
+func TestGatewayReconcile_DisablingDragonflyDropsItsMetricSeries(t *testing.T) {
+	gw := reconciledGateway()
+	gw.UID = "gw-uid"
+	gw.Status.ConfigChecksum = "applied"
+	dragonflyReady.WithLabelValues(gw.Namespace, gw.Name).Set(1)
+	c := fakeClientBuilder().WithRESTMapper(optionalCRDMapper(optionalOwnedGVKs...)).
+		WithObjects(gw).WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderOutput("applied"), &mockValidator{})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if dragonflyReady.DeleteLabelValues(gw.Namespace, gw.Name) {
+		t.Error("the dragonfly_ready series is still reported after Dragonfly was disabled")
+	}
+}
