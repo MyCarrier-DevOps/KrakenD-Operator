@@ -148,8 +148,10 @@ func TestGatewayReconcile_RenewedLicenseRestoresEE(t *testing.T) {
 		&capturingRenderer{delegate: renderOutput("cs"), captured: &captured}, &mockValidator{})
 	r.LicenseParser = parser
 
-	if err := reconcileGateway(t, r, gw); err != nil {
-		t.Fatalf("reconcile: %v", err)
+	for range 2 {
+		if err := reconcileGateway(t, r, gw); err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
 	}
 	if captured.CEFallback {
 		t.Error("a renewed license must render EE again") // pinned by StageValid returning false
@@ -159,7 +161,7 @@ func TestGatewayReconcile_RenewedLicenseRestoresEE(t *testing.T) {
 		t.Errorf("LicenseDegraded = %+v, want False/%s", cond, v1alpha1.ReasonLicenseRestored) // pinned by recoverLicense
 	}
 	if n := eventsWithReason(r.Recorder.(*record.FakeRecorder), v1alpha1.ReasonLicenseRestored); n != 1 {
-		t.Errorf("LicenseRestored events = %d, want 1", n)
+		t.Errorf("LicenseRestored events over two reconciles = %d, want 1", n)
 	}
 }
 
