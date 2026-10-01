@@ -38,6 +38,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/retry"
 	utilclock "k8s.io/utils/clock"
@@ -245,12 +246,12 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	// Record each endpoint's Accepted verdict, but only for a render that is
 	// the gateway's applied configuration: validated just now, or unchanged
-	// since it was. A rejected render never reaches this point, and would
-	// fail the check if a later change let it: every verdict stays as it was.
+	// since it was. A failed endpoint status write does not stop the owned
+	// resources or the gateway status from converging; it is returned after
+	// them so the reconcile is retried.
+	var acceptanceErr error
 	if output.Checksum == gw.Status.ConfigChecksum {
-		if err := r.reconcileEndpointAcceptance(ctx, &gw, endpoints, output); err != nil {
-			return ctrl.Result{}, err
-		}
+		acceptanceErr = r.reconcileEndpointAcceptance(ctx, &gw, endpoints, output)
 	}
 
 	// Reconcile owned resources
@@ -278,6 +279,9 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	if err := r.updateStatusIfChanged(ctx, &gw, before); err != nil {
 		return ctrl.Result{}, fmt.Errorf("updating gateway status: %w", err)
+	}
+	if acceptanceErr != nil {
+		return ctrl.Result{}, acceptanceErr
 	}
 
 	log.V(1).Info("gateway reconciled",
@@ -759,7 +763,8 @@ func namespacedNameSet(names []types.NamespacedName) map[types.NamespacedName]st
 
 // reconcileEndpointAcceptance writes the gateway's Accepted verdict on every
 // endpoint of this render. It is called only when the render is the gateway's
-// applied configuration.
+// applied configuration. Every endpoint is attempted, and the errors are
+// returned together.
 func (r *KrakenDGatewayReconciler) reconcileEndpointAcceptance(
 	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
@@ -768,13 +773,14 @@ func (r *KrakenDGatewayReconciler) reconcileEndpointAcceptance(
 ) error {
 	conflicted := namespacedNameSet(output.ConflictedEndpoints)
 	unresolved := namespacedNameSet(output.InvalidEndpoints)
+	var errs []error
 	for i := range endpoints {
 		want := endpointAccepted(gw, &endpoints[i], conflicted, unresolved)
 		if err := r.writeEndpointAccepted(ctx, &endpoints[i], want); err != nil {
-			return err
+			errs = append(errs, err)
 		}
 	}
-	return nil
+	return utilerrors.NewAggregate(errs)
 }
 
 // writeEndpointAccepted sets the Accepted condition want on the endpoint the
