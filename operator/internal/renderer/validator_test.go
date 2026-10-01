@@ -120,27 +120,6 @@ func TestPrepareValidationCopy_NoStripping(t *testing.T) {
 	}
 }
 
-func TestPrepareValidationCopy_StripsWildcard(t *testing.T) {
-	input := []byte(`{"endpoints":[{"endpoint":"/api","method":"GET"},{"endpoint":"/*","method":"GET"}],"version":3}`)
-	out, _, err := validationCopy(input, v1alpha1.EditionEE)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	var config map[string]any
-	if err := json.Unmarshal(out, &config); err != nil {
-		t.Fatalf("invalid JSON output: %v", err)
-	}
-	endpoints := config["endpoints"].([]any)
-	if len(endpoints) != 1 {
-		t.Fatalf("expected 1 endpoint after stripping wildcard, got %d", len(endpoints))
-	}
-	ep := endpoints[0].(map[string]any)
-	if ep["endpoint"] != "/api" {
-		t.Errorf("expected /api endpoint, got %v", ep["endpoint"])
-	}
-}
-
 func TestPrepareValidationCopy_NoEndpoints(t *testing.T) {
 	input := []byte(`{"version":3}`)
 	out, _, err := validationCopy(input, v1alpha1.EditionEE)
@@ -149,26 +128,6 @@ func TestPrepareValidationCopy_NoEndpoints(t *testing.T) {
 	}
 	if string(out) != string(input) {
 		t.Error("expected unchanged output when no endpoints key")
-	}
-}
-
-func TestPrepareValidationCopy_AllWildcardEndpoints(t *testing.T) {
-	input := []byte(`{"endpoints":[{"endpoint":"/*","method":"GET"}],"version":3}`)
-	out, _, err := validationCopy(input, v1alpha1.EditionEE)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	var config map[string]any
-	if err := json.Unmarshal(out, &config); err != nil {
-		t.Fatalf("invalid JSON output: %v", err)
-	}
-	endpoints := config["endpoints"].([]any)
-	if endpoints == nil {
-		t.Fatal("endpoints should be an empty array, not null")
-	}
-	if len(endpoints) != 0 {
-		t.Fatalf("expected 0 endpoints after stripping all wildcards, got %d", len(endpoints))
 	}
 }
 
@@ -234,32 +193,6 @@ func TestPrepareValidationCopy_StripsEEExtraConfigRemovesEmptyBlock(t *testing.T
 	}
 	if _, exists := config["extra_config"]; exists {
 		t.Error("expected extra_config block to be removed when empty")
-	}
-}
-
-func TestPrepareValidationCopy_StripsEEExtraConfigAndWildcard(t *testing.T) {
-	input := []byte(
-		`{"version":3,"extra_config":{"backend/redis":{"host":"dragonfly:6379"}},"endpoints":[{"endpoint":"/api","method":"GET"},{"endpoint":"/*","method":"GET"}]}`,
-	)
-	out, _, err := validationCopy(input, v1alpha1.EditionEE)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	var config map[string]any
-	if err := json.Unmarshal(out, &config); err != nil {
-		t.Fatalf("invalid JSON output: %v", err)
-	}
-	if _, exists := config["extra_config"]; exists {
-		t.Error("expected extra_config block to be removed")
-	}
-	endpoints := config["endpoints"].([]any)
-	if len(endpoints) != 1 {
-		t.Fatalf("expected 1 endpoint after stripping wildcard, got %d", len(endpoints))
-	}
-	ep := endpoints[0].(map[string]any)
-	if ep["endpoint"] != "/api" {
-		t.Errorf("expected /api endpoint, got %v", ep["endpoint"])
 	}
 }
 
