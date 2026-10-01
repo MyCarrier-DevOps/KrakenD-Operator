@@ -126,11 +126,17 @@ const (
 	// ConditionAccepted reports whether a KrakenDEndpoint is part of its
 	// gateway's validated configuration. Only the gateway controller writes it.
 	ConditionAccepted = "Accepted"
+
+	// ConditionPluginsResolved reports whether every plugin ConfigMap the
+	// gateway mounts exists. Only the gateway controller writes it.
+	ConditionPluginsResolved = "PluginsResolved"
 )
 
 // Event reason constants for the EventRecorder.
 const (
 	ReasonConfigDeployed                = "ConfigDeployed"
+	ReasonConfigMapsFound               = "ConfigMapsFound"
+	ReasonConfigMapNotFound             = "ConfigMapNotFound"
 	ReasonConfigValidationFailed        = "ConfigValidationFailed"
 	ReasonLicenseExpiringSoon           = "LicenseExpiringSoon"
 	ReasonLicenseFallbackCE             = "LicenseFallbackCE"
