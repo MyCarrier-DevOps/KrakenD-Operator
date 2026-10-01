@@ -73,7 +73,7 @@ func truncateMessage(msg string, maxBytes int) string {
 		return msg
 	}
 	budget := maxBytes - truncationReserve
-	lines := strings.Split(msg, "\n")
+	lines := strings.Split(strings.TrimSuffix(msg, "\n"), "\n")
 	var b strings.Builder
 	kept := 0
 	for _, line := range lines {
