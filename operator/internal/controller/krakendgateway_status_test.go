@@ -381,3 +381,29 @@ func TestGatewayReconcile_DeletedGatewayDropsItsMetrics(t *testing.T) {
 		t.Errorf("%d metric series left for a deleted gateway, want 0", n)
 	}
 }
+
+func TestGatewayReconcile_RevertAfterUnavailableValidatorClearsRetrying(t *testing.T) {
+	gw := testGateway()
+	gw.Status.ConfigChecksum = "applied"
+	c, _ := gatewayStatusWrites(gw)
+	validator := &countingValidator{err: fmt.Errorf("running krakend check: %w", fs.ErrNotExist)}
+	r := &KrakenDGatewayReconciler{
+		Client: c, Scheme: testScheme(), Recorder: fakeRecorder(),
+		Renderer: renderOutput("new"), Validator: validator,
+	}
+	if err := reconcileGateway(t, r, gw); err == nil {
+		t.Fatal("expected an error, so the reconcile is retried with backoff")
+	}
+
+	// The input is reverted: the render equals the applied configuration again.
+	r.Renderer = renderOutput("applied")
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+
+	got := getGateway(t, c, gw)
+	cond := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionConfigValid)
+	if cond == nil || cond.Status != metav1.ConditionTrue || cond.Reason != v1alpha1.ReasonConfigApplied {
+		t.Errorf("ConfigValid = %+v, want True/ConfigApplied once the render is the applied config again", cond)
+	}
+}
