@@ -658,6 +658,22 @@ While the validator cannot run (`ConfigValid=Unknown/ValidatorUnavailable`),
 a gateway that is otherwise healthy reports `Ready=Unknown` with the same
 reason. It keeps serving its applied config.
 
+### Ready follows image and plugin rollouts
+
+Gateway `Ready` now stays not True until the Deployment has finished rolling
+out an image or plugin change, as it already did for a config change.
+Previously a version bump, an EE recovery or a plugin change could report
+`Ready=True` while the old pods were still being replaced.
+
+The post-restart Job applies the same test. It runs, and re-runs after a
+failure, only once the Deployment has observed its latest generation and
+every replica runs the applied config, image and plugins.
+
+**One-time rollout on upgrade.** The pod template gains a `krakend.io/image`
+annotation, which records the image the operator set (the operator compares
+it rather than the container image, which admission webhooks may rewrite).
+Existing gateways roll their pods once when the operator is upgraded.
+
 ---
 
 ## v0.14.0 — openapi-serve liveness probe (one-time rollout)
