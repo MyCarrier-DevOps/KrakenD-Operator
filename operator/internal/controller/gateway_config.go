@@ -416,6 +416,7 @@ type renderVerdicts struct {
 	conflicted map[types.NamespacedName]struct{}
 	lost       map[types.NamespacedName][]renderer.EntryConflict
 	unresolved map[types.NamespacedName]struct{}
+	stripped   map[types.NamespacedName][]renderer.StrippedEEFeature
 }
 
 // newRenderVerdicts indexes output for per-endpoint lookups.
@@ -424,7 +425,29 @@ func newRenderVerdicts(output *renderer.RenderOutput) renderVerdicts {
 		conflicted: namespacedNameSet(output.ConflictedEndpoints),
 		lost:       output.EntryConflicts,
 		unresolved: namespacedNameSet(output.InvalidEndpoints),
+		stripped:   strippedByEndpoint(output.StrippedEEFeatures),
 	}
+}
+
+// strippedByEndpoint groups a CE-fallback render's removed features by the
+// KrakenDEndpoint they came from. Gateway-level features are left out.
+func strippedByEndpoint(features []renderer.StrippedEEFeature) map[types.NamespacedName][]renderer.StrippedEEFeature {
+	out := map[types.NamespacedName][]renderer.StrippedEEFeature{}
+	for _, f := range features {
+		if f.Source != (types.NamespacedName{}) {
+			out[f.Source] = append(out[f.Source], f)
+		}
+	}
+	return out
+}
+
+// strippedList renders removed features for a condition message.
+func strippedList(features []renderer.StrippedEEFeature) string {
+	parts := make([]string, 0, len(features))
+	for _, f := range features {
+		parts = append(parts, f.String())
+	}
+	return strings.Join(parts, "; ")
 }
 
 // acceptance is the gateway's verdict on one endpoint: its Accepted condition
