@@ -200,7 +200,7 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// returned only after the infrastructure stage and the status write.
 	appliedBefore := appliedKey(&gw, edition)
 	cfg, configErr := r.reconcileConfig(ctx, &gw, before, output, edition)
-	image := renderer.ResolveImage(&gw, appliedFallback(&gw, edition))
+	image := appliedImage(&gw, edition)
 	// A held Deployment (no ConfigMap holds the applied config) starts no
 	// rollout, so none is reported.
 	if appliedKey(&gw, edition) == appliedBefore && cfg.appliedConfigMap != "" {
