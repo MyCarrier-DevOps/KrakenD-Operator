@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -275,5 +276,26 @@ func TestGatewayReconcile_CEFallbackKeepsTheLicenseExternalSecretAndDragonfly(t 
 		if err := c.Get(context.Background(), client.ObjectKeyFromObject(ch), u); err != nil {
 			t.Errorf("%s must survive a CE fallback, it is still enabled in the spec: %v", ch.GetKind(), err)
 		}
+	}
+}
+
+// mapperClient serves mapper as its RESTMapper.
+type mapperClient struct {
+	client.Client
+	mapper meta.RESTMapper
+}
+
+func (m mapperClient) RESTMapper() meta.RESTMapper { return m.mapper }
+
+func TestDeleteOptionalIfControlled_CRDCheckErrorNamesTheKind(t *testing.T) {
+	gw := reconciledGateway()
+	r := newTestGatewayReconciler(
+		mapperClient{Client: fakeClientBuilder().Build(), mapper: discoveryDownMapper{}},
+		renderOutput("applied"), &mockValidator{})
+
+	err := r.deleteOptionalIfControlled(context.Background(), gw, virtualServiceGVK, gw.Name)
+
+	if err == nil || !strings.Contains(err.Error(), "checking VirtualService CRD") {
+		t.Errorf("error = %v, want it to read \"checking VirtualService CRD\"", err)
 	}
 }
