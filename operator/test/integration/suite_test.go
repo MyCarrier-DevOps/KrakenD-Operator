@@ -176,6 +176,7 @@ func runTests(m *testing.M) int {
 		Recorder:  mgr.GetEventRecorderFor("krakendgateway-controller"),
 		Renderer:  renderer.New(renderer.Options{}),
 		Validator: suiteValidator,
+		APIReader: mgr.GetAPIReader(),
 	}).SetupWithManager(mgr); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to setup gateway controller: %v\n", err)
 		return 1
