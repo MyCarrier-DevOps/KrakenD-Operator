@@ -2713,6 +2713,15 @@ spec:
                 x-kubernetes-list-type: map
               configChecksum:
                 type: string
+              configEdition:
+                description: |-
+                  ConfigEdition is the edition configChecksum was validated for and is
+                  deployed with: EE, or CE for a CE gateway or an EE gateway in license
+                  fallback. The Deployment's image follows it.
+                enum:
+                - CE
+                - EE
+                type: string
               dragonflyAddress:
                 type: string
               endpointCount:
