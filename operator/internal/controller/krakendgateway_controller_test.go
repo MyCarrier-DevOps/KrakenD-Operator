@@ -1578,13 +1578,14 @@ func TestGatewayReconcile_EndpointStatusFailureDoesNotBlockOwnedResources(t *tes
 	gw := reconciledGateway()
 	epA := gatewayEndpoint("ep-a", 1)
 	epB := gatewayEndpoint("ep-b", 1)
+	failing := true
 	c := fakeClientBuilder().
 		WithObjects(gw, epA, epB).
 		WithStatusSubresource(gw, epA, epB).
 		WithInterceptorFuncs(interceptor.Funcs{
 			SubResourcePatch: func(ctx context.Context, cl client.Client, sub string, obj client.Object,
 				patch client.Patch, opts ...client.SubResourcePatchOption) error {
-				if _, ok := obj.(*v1alpha1.KrakenDEndpoint); ok && obj.GetName() == "ep-a" {
+				if _, ok := obj.(*v1alpha1.KrakenDEndpoint); ok && failing && obj.GetName() == "ep-a" {
 					return apierrors.NewInternalError(fmt.Errorf("etcd timeout"))
 				}
 				return cl.SubResource(sub).Patch(ctx, obj, patch, opts...)
@@ -1609,5 +1610,42 @@ func TestGatewayReconcile_EndpointStatusFailureDoesNotBlockOwnedResources(t *tes
 	if got := getGateway(t, c, gw); got.Status.ConfigChecksum != "cs1" {
 		t.Errorf("gateway status.configChecksum = %q, want cs1 (the gateway status write must still happen)",
 			got.Status.ConfigChecksum)
+	}
+
+	// The retry finds the config already applied and still writes the verdict.
+	failing = false
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("retry after the failure cleared: %v", err)
+	}
+	if got := storedAccepted(t, c, client.ObjectKeyFromObject(epA)); got == nil || got.Status != metav1.ConditionTrue {
+		t.Errorf("ep-a after the retry: Accepted = %+v, want True", got)
+	}
+}
+
+func TestGatewayReconcile_AcceptedWrittenWhenConfigUnchangedSinceApplied(t *testing.T) {
+	gw := reconciledGateway()
+	gw.Status.ConfigChecksum = "cs1"
+	// An endpoint written by an earlier release: a phase and Available, no Accepted.
+	ep := gatewayEndpoint("ep-a", 4)
+	ep.Status.Phase = v1alpha1.EndpointPhaseActive
+	ep.Status.Conditions = []metav1.Condition{{
+		Type: v1alpha1.ConditionAvailable, Status: metav1.ConditionTrue, Reason: "ReferencesValid",
+		Message: "ok", ObservedGeneration: 4, LastTransitionTime: metav1.Now(),
+	}}
+	c := fakeClientBuilder().WithObjects(gw, ep).WithStatusSubresource(gw, ep).Build()
+	rec := fakeRecorder()
+	r := acceptanceReconciler(c, rec, &renderer.RenderOutput{
+		JSON: []byte(`{"version":3}`), Checksum: "cs1", DesiredImage: "img:v1",
+	})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+	got := storedAccepted(t, c, client.ObjectKeyFromObject(ep))
+	if got == nil || got.Status != metav1.ConditionTrue || got.ObservedGeneration != 4 {
+		t.Errorf("Accepted = %+v, want True at generation 4 for a config unchanged since it was applied", got)
+	}
+	if events := drainEvents(rec); hasEventReason(events, v1alpha1.ReasonConfigDeployed) {
+		t.Errorf("events = %q, want no ConfigDeployed: the config did not change", events)
 	}
 }
