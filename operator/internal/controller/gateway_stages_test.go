@@ -874,3 +874,26 @@ func TestCollectConfigMaps_DeletesWhatNothingCanMount(t *testing.T) {
 		t.Errorf("remaining ConfigMaps = %v, want %v", got, want)
 	}
 }
+
+func TestCollectConfigMaps_KeepsInUseEvenWhenOldest(t *testing.T) {
+	gw := reconciledGateway()
+	gw.UID = "gw-uid"
+	at := func(h int) time.Time { return testNow.Add(time.Duration(h) * time.Hour) }
+	c := fakeClientBuilder().WithObjects(gw,
+		ownedConfigMap(gw, "test-gw-config-r1", at(1), true), // reverted to: oldest, no ReplicaSet yet
+		ownedConfigMap(gw, "test-gw-config-r2", at(2), true),
+		ownedConfigMap(gw, "test-gw-config-r3", at(3), true),
+		ownedConfigMap(gw, "test-gw-config-r4", at(4), true),
+		ownedConfigMap(gw, "test-gw-config-r5", at(5), true),
+	).Build()
+	r := newTestGatewayReconciler(c, &mockRenderer{}, &mockValidator{})
+
+	if err := r.collectConfigMaps(context.Background(), gw, "test-gw-config-r1"); err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	want := []string{"test-gw-config-r1", "test-gw-config-r4", "test-gw-config-r5"}
+	if got := remainingConfigMaps(t, c, gw); !slices.Equal(got, want) {
+		t.Errorf("remaining ConfigMaps = %v, want %v (in use is kept however old, inside a history of %d)",
+			got, want, configMapHistoryLimit)
+	}
+}
