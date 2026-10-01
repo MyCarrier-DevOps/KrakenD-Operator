@@ -360,6 +360,11 @@ func TestDeploymentConverged(t *testing.T) {
 			wantOK: false,
 		},
 		{
+			name:   "license checksum differs",
+			want:   func(in *infraInputs) { in.licenseChecksum = "license-new" },
+			wantOK: false,
+		},
+		{
 			name: "spec not yet observed",
 			mutate: func(dep *appsv1.Deployment) {
 				dep.Generation = 2
