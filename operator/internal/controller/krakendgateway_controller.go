@@ -2094,8 +2094,8 @@ func newGatewayRateLimiter() workqueue.TypedRateLimiter[reconcile.Request] {
 }
 
 // cappedRateLimiter is controller-runtime's default rate limiter with the
-// per-item backoff capped at max.
-func cappedRateLimiter(max time.Duration) workqueue.TypedRateLimiter[reconcile.Request] {
+// per-item backoff capped at maxWait.
+func cappedRateLimiter(maxWait time.Duration) workqueue.TypedRateLimiter[reconcile.Request] {
 	return workqueue.NewTypedWithMaxWaitRateLimiter(
-		workqueue.DefaultTypedControllerRateLimiter[reconcile.Request](), max)
+		workqueue.DefaultTypedControllerRateLimiter[reconcile.Request](), maxWait)
 }
