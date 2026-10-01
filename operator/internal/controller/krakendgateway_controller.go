@@ -193,15 +193,15 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 
 	// Accepted: the applied render sets every endpoint's verdict; a rejected
-	// render sets GatewayConfigRejected on the endpoints its findings name,
-	// and nothing else. A failed endpoint status write does not stop the
+	// render sets GatewayConfigRejected on the endpoints its findings name and
+	// lifts it from those it no longer names. A failed endpoint status write does not stop the
 	// infrastructure stage or the gateway status; it is returned after them
 	// so the reconcile is retried.
 	var acceptanceErr error
 	switch {
 	case output.Checksum == gw.Status.ConfigChecksum:
 		acceptanceErr = r.reconcileEndpointAcceptance(ctx, &gw, endpoints, output)
-	case len(cfg.rejections) > 0:
+	default:
 		acceptanceErr = r.recordRejections(ctx, endpoints, cfg.rejections)
 	}
 
