@@ -19,8 +19,10 @@ limitations under the License.
 package integration
 
 import (
+	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -31,6 +33,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -297,6 +300,7 @@ func expectEndpointStatus(key client.ObjectKey, accepted, ready metav1.Condition
 
 func TestEndpointStatus_ConflictedEndpointReportsBothWriters(t *testing.T) {
 	ns := testNamespace(t)
+	lossWatch := watchConditionLoss(t, ns)
 	gw := createGateway(t, ns, "gw-both")
 	older := createEndpoint(t, ns, "ep-a-older", gw.Name, "/users")
 	olderReady := func() error {
@@ -311,17 +315,22 @@ func TestEndpointStatus_ConflictedEndpointReportsBothWriters(t *testing.T) {
 	}
 	eventually(t, newerConflicted)
 
-	// Drive both writers at once: spec changes on the older endpoint re-run
-	// the endpoint and gateway controllers together, and gateway annotations
+	// Drive both writers at once: spec changes on both endpoints re-run the
+	// endpoint and gateway controllers together, and gateway annotations
 	// re-run the gateway controller.
 	for i := 1; i <= 3; i++ {
 		if err := setTimeout(older, time.Duration(i)*time.Second); err != nil {
 			t.Fatal(err)
 		}
+		if err := setTimeout(newer, time.Duration(i)*time.Second); err != nil {
+			t.Fatal(err)
+		}
 		touchGateway(t, gw, strconv.Itoa(i))
 	}
 	eventually(t, olderReady)
+	eventually(t, newerConflicted)
 	consistently(t, 5*time.Second, newerConflicted)
+	lossWatch.requireNoLoss(t)
 
 	// Steady state: further gateway reconciles write nothing to the endpoint.
 	before, err := getEndpoint(newer)
@@ -345,6 +354,7 @@ func TestEndpointStatus_ConflictedEndpointReportsBothWriters(t *testing.T) {
 
 func TestEndpointStatus_ConcurrentSpecChangesConverge(t *testing.T) {
 	ns := testNamespace(t)
+	lossWatch := watchConditionLoss(t, ns)
 	gw := createGateway(t, ns, "gw-race")
 	// ep-a and ep-b share GET /x; ep-a is older and sorts first, so it wins.
 	keys := []client.ObjectKey{
@@ -387,6 +397,7 @@ func TestEndpointStatus_ConcurrentSpecChangesConverge(t *testing.T) {
 		}
 		return nil
 	})
+	lossWatch.requireNoLoss(t)
 }
 
 func TestEndpoint_ReattachesWhenGatewayCreatedLater(t *testing.T) {
@@ -438,4 +449,88 @@ func TestEndpoint_DetachedWhenGatewayDeleted(t *testing.T) {
 		}
 		return nil
 	})
+}
+
+// conditionLossWatch observes every version of the endpoints in a namespace
+// and records a violation when a condition one version carried is missing
+// from a later version. Only the endpoint-status tests use it: they reference
+// no policy, so no controller may legitimately remove ResolvedRefs, Accepted
+// or Ready once it has written them. A status write built from a stale read
+// would drop the other writer's condition, which a final-state check can miss
+// because the next reconcile writes the condition back.
+type conditionLossWatch struct {
+	stop       context.CancelFunc
+	done       chan struct{}
+	mu         sync.Mutex
+	violations []string
+}
+
+// watchConditionLoss starts watching endpoints in ns. The watch is open
+// before it returns, so callers start it before creating the endpoints.
+func watchConditionLoss(t *testing.T, ns string) *conditionLossWatch {
+	t.Helper()
+	wc, err := client.NewWithWatch(restConfig, client.Options{Scheme: k8sClient.Scheme()})
+	if err != nil {
+		t.Fatalf("creating watch client: %v", err)
+	}
+	wctx, stop := context.WithCancel(ctx)
+	w, err := wc.Watch(wctx, &v1alpha1.KrakenDEndpointList{}, client.InNamespace(ns))
+	if err != nil {
+		stop()
+		t.Fatalf("watching endpoints: %v", err)
+	}
+	cw := &conditionLossWatch{stop: stop, done: make(chan struct{})}
+	go cw.run(wctx, w)
+	t.Cleanup(stop)
+	return cw
+}
+
+func (cw *conditionLossWatch) run(wctx context.Context, w watch.Interface) {
+	defer close(cw.done)
+	defer w.Stop()
+	seen := map[string]map[string]bool{}
+	for {
+		select {
+		case <-wctx.Done():
+			return
+		case ev, ok := <-w.ResultChan():
+			if !ok {
+				return
+			}
+			ep, isEp := ev.Object.(*v1alpha1.KrakenDEndpoint)
+			if !isEp || (ev.Type != watch.Added && ev.Type != watch.Modified) {
+				continue
+			}
+			if seen[ep.Name] == nil {
+				seen[ep.Name] = map[string]bool{}
+			}
+			for _, typ := range []string{"ResolvedRefs", "Accepted", "Ready"} {
+				present := meta.FindStatusCondition(ep.Status.Conditions, typ) != nil
+				switch {
+				case present:
+					seen[ep.Name][typ] = true
+				case seen[ep.Name][typ]:
+					cw.record(fmt.Sprintf("%s: %s disappeared in resourceVersion %s", ep.Name, typ, ep.ResourceVersion))
+				}
+			}
+		}
+	}
+}
+
+func (cw *conditionLossWatch) record(v string) {
+	cw.mu.Lock()
+	defer cw.mu.Unlock()
+	cw.violations = append(cw.violations, v)
+}
+
+// requireNoLoss stops the watch and fails the test if any condition was lost.
+func (cw *conditionLossWatch) requireNoLoss(t *testing.T) {
+	t.Helper()
+	cw.stop()
+	<-cw.done
+	cw.mu.Lock()
+	defer cw.mu.Unlock()
+	if len(cw.violations) > 0 {
+		t.Fatalf("a status write dropped another writer's condition:\n  %s", strings.Join(cw.violations, "\n  "))
+	}
 }
