@@ -84,6 +84,9 @@ func (r *KrakenDEndpointReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}
 	if err := r.Status().Patch(ctx, &ep,
 		client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil {
+		if errors.IsConflict(err) {
+			return lostWriteRace(ctx, err)
+		}
 		return ctrl.Result{}, fmt.Errorf("patching endpoint status: %w", err)
 	}
 
