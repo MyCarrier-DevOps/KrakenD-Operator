@@ -28,6 +28,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -101,13 +102,13 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, fmt.Errorf("getting gateway %s: %w", req.NamespacedName, err)
 	}
 
-	// Initialize phase
+	// Status as read, so each write below happens only when it changes.
+	before := gw.Status.DeepCopy()
+
+	// Initialize phase in memory; the first status write that is needed
+	// anyway persists it.
 	if gw.Status.Phase == "" {
 		gw.Status.Phase = v1alpha1.PhasePending
-		if err := r.Status().Update(ctx, &gw); err != nil {
-			return ctrl.Result{}, fmt.Errorf("setting initial phase: %w", err)
-		}
-		return ctrl.Result{Requeue: true}, nil
 	}
 
 	// Gather endpoints via field index
@@ -171,20 +172,11 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	pluginChanged := output.PluginChecksum != "" && output.PluginChecksum != gw.Status.PluginChecksum
 
 	if configChanged {
-		// Rendering pipeline: validate and update ConfigMap
-		gw.Status.Phase = v1alpha1.PhaseRendering
-		if err := r.Status().Update(ctx, &gw); err != nil {
-			return ctrl.Result{}, fmt.Errorf("setting phase Rendering: %w", err)
-		}
-
-		gw.Status.Phase = v1alpha1.PhaseValidating
-		if err := r.Status().Update(ctx, &gw); err != nil {
-			return ctrl.Result{}, fmt.Errorf("setting phase Validating: %w", err)
-		}
-
+		// Validate, then update the ConfigMap. No phase is written for the
+		// steps in between: each write would re-enqueue the gateway.
 		if err := r.validateConfig(ctx, &gw, output.JSON, ceFallback); err != nil {
 			configValidationFailures.Inc()
-			return ctrl.Result{}, r.handleValidationError(ctx, &gw, err)
+			return ctrl.Result{}, r.handleValidationError(ctx, &gw, before, err)
 		}
 
 		// Update ConfigMap
@@ -253,7 +245,7 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 	}
 
-	if err := r.Status().Update(ctx, &gw); err != nil {
+	if err := r.updateStatusIfChanged(ctx, &gw, before); err != nil {
 		return ctrl.Result{}, fmt.Errorf("updating gateway status: %w", err)
 	}
 
@@ -281,9 +273,10 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 // predicate.GenerationChangedPredicate{} to filter out status-only churn
 // (status/subresource updates do not bump .metadata.generation) for
 // SECONDARY resources. If a future change added a
-// GenerationChangedPredicate to the primary For() watch too (e.g. to cut
-// reconcile volume from the operator's own frequent Status().Update()
-// calls), a status-only escape-hatch patch would stop triggering an
+// GenerationChangedPredicate to the primary For() watch too (for example
+// to cut reconcile volume from the operator's own status writes, which
+// updateStatusIfChanged already limits to real changes), a status-only
+// escape-hatch patch would stop triggering an
 // immediate reconcile and instead silently degrade to "whenever the next
 // unrelated event happens to fire" — the escape hatch would still
 // eventually work, just not on-demand. Keep this in mind before adding a
@@ -578,11 +571,14 @@ func (r *KrakenDGatewayReconciler) validateConfig(
 	return r.Validator.Validate(ctx, validationJSON)
 }
 
-// handleValidationError sets the appropriate status conditions when config
-// validation fails.
+// handleValidationError records a rejected configuration: ConfigValid=False
+// with the validator's output, and phase Error. It returns nil: the
+// rejection is persistent, and a change to any input re-enqueues the
+// gateway.
 func (r *KrakenDGatewayReconciler) handleValidationError(
 	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
+	before *v1alpha1.KrakenDGatewayStatus,
 	validationErr error,
 ) error {
 	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
@@ -594,10 +590,38 @@ func (r *KrakenDGatewayReconciler) handleValidationError(
 	})
 	gw.Status.Phase = v1alpha1.PhaseError
 	r.Recorder.Event(gw, "Warning", v1alpha1.ReasonConfigValidationFailed, validationErr.Error())
-	if err := r.Status().Update(ctx, gw); err != nil {
+	if err := r.updateStatusIfChanged(ctx, gw, before); err != nil {
 		return fmt.Errorf("updating status after validation failure: %w", err)
 	}
 	return nil
+}
+
+// updateStatusIfChanged writes gw's status only when it differs from
+// before, the status read at the start of the reconcile. The primary watch
+// has no predicate (the status-patch escape hatch depends on it), so every
+// write re-enqueues the gateway; skipping unchanged writes is what lets a
+// reconcile settle.
+func (r *KrakenDGatewayReconciler) updateStatusIfChanged(
+	ctx context.Context,
+	gw *v1alpha1.KrakenDGateway,
+	before *v1alpha1.KrakenDGatewayStatus,
+) error {
+	if !gatewayStatusChanged(before, &gw.Status) {
+		return nil
+	}
+	return r.Status().Update(ctx, gw)
+}
+
+// gatewayStatusChanged reports whether after differs from before.
+// Conditions are compared with conditionsEqual, which ignores
+// LastTransitionTime.
+func gatewayStatusChanged(before, after *v1alpha1.KrakenDGatewayStatus) bool {
+	if !conditionsEqual(before.Conditions, after.Conditions) {
+		return true
+	}
+	b, a := *before, *after
+	b.Conditions, a.Conditions = nil, nil
+	return !equality.Semantic.DeepEqual(b, a)
 }
 
 // updateEndpointStatuses marks conflicted and invalid endpoints.
