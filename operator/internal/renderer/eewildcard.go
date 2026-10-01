@@ -93,7 +93,41 @@ func eeWildcardFindings(endpoints []any) []string {
 					o.index, o.method, o.path, w.method, w.path, w.index))
 		}
 	}
+	findings = append(findings, eeWildcardParamFindings(endpoints)...)
 	sort.Strings(findings)
+	return findings
+}
+
+// eeWildcardParamFindings rejects a backend url_pattern that references
+// {Wildcard} on an EE wildcard endpoint. The copy the CE binary checks
+// declares that parameter, but the EE router does not, so EE refuses such a
+// config with "undefined output param".
+func eeWildcardParamFindings(endpoints []any) []string {
+	var findings []string
+	for i, ep := range endpoints {
+		m, ok := ep.(map[string]any)
+		if !ok || !IsEEWildcard(stringField(m, "endpoint")) {
+			continue
+		}
+		method := stringField(m, "method")
+		if method == "" {
+			method = "GET"
+		}
+		backends, ok := m["backend"].([]any)
+		if !ok {
+			continue
+		}
+		for j, b := range backends {
+			bm, ok := b.(map[string]any)
+			if !ok || !strings.Contains(stringField(bm, "url_pattern"), eeWildcardParam) {
+				continue
+			}
+			findings = append(findings, fmt.Sprintf(
+				"- at '/endpoints/%d/backend/%d/url_pattern': undefined output param 'Wildcard'! "+
+					"endpoint: %s %s, backend: %d. input: [], output: [Wildcard]",
+				i, j, method, stringField(m, "endpoint"), j))
+		}
+	}
 	return findings
 }
 
