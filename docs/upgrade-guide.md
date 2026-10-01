@@ -379,11 +379,12 @@ pass, continuously, until the input was fixed. Now:
 - `ConfigValidationFailed` fires when the verdict or its message changes,
   not on every reconcile.
 - `config_validation_failures_total` counts each rejected input once, not
-  once per reconcile. A rejection that lasts no longer keeps the counter
-  rising, so an alert on `rate(config_validation_failures_total[5m]) > 0`
-  fires when a new rejection occurs and then resolves, instead of staying
-  firing while the gateway stays rejected. Use the `ConfigValid` condition
-  to find gateways that are currently rejected.
+  once per reconcile. A lasting rejection no longer keeps the counter rising.
+  The runbook's `KrakenDConfigValidationFailures` alert
+  (`rate(config_validation_failures_total[5m]) > 0` for 10 minutes)
+  therefore no longer fires for a single lasting rejection. To find the
+  gateways that are rejected right now, use the `ConfigValid` query under
+  "Config validation runs offline" above.
 
 Tooling that waits for `Rendering` or `Validating` should wait on the
 `ConfigValid` condition instead.
