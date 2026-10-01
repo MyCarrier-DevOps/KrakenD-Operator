@@ -250,7 +250,11 @@ func TestGatewayReconcile_DisablingDragonflyDropsItsMetricSeries(t *testing.T) {
 func TestGatewayReconcile_CEFallbackKeepsTheLicenseExternalSecretAndDragonfly(t *testing.T) {
 	gw, secret, parser := licensedEEGateway(testNow.Add(-time.Minute), true)
 	gw.UID = "gw-uid"
+	// The license is read through the ExternalSecret path: secretRef and
+	// externalSecret are mutually exclusive.
+	gw.Spec.License.SecretRef = nil
 	gw.Spec.License.ExternalSecret = v1alpha1.ExternalSecretLicenseConfig{Enabled: true}
+	secret.Name = resources.ExternalSecretName(gw)
 	gw.Spec.Dragonfly = &v1alpha1.DragonflySpec{Enabled: true}
 	gw.Status.ConfigChecksum = "applied"
 	children := []*unstructured.Unstructured{
