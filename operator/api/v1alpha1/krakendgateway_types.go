@@ -31,6 +31,8 @@ const (
 	EditionEE Edition = "EE"
 )
 
+// GatewayPhase is derived from the Ready condition. Rendering and Validating are no
+// longer written; they stay in the enum so previously stored values keep validating.
 // +kubebuilder:validation:Enum=Pending;Rendering;Validating;Deploying;Running;Degraded;Error
 type GatewayPhase string
 
@@ -621,17 +623,22 @@ type OCIImageRef struct {
 
 // KrakenDGatewayStatus defines the observed state of KrakenDGateway.
 type KrakenDGatewayStatus struct {
-	Phase              GatewayPhase       `json:"phase,omitempty"`
-	ConfigChecksum     string             `json:"configChecksum,omitempty"`
-	PluginChecksum     string             `json:"pluginChecksum,omitempty"`
-	ObservedGeneration int64              `json:"observedGeneration,omitempty"`
-	Conditions         []metav1.Condition `json:"conditions,omitempty"`
-	Replicas           int32              `json:"replicas,omitempty"`
-	ReadyReplicas      int32              `json:"readyReplicas,omitempty"`
-	LicenseExpiry      *metav1.Time       `json:"licenseExpiry,omitempty"`
-	ActiveImage        string             `json:"activeImage,omitempty"`
-	EndpointCount      int32              `json:"endpointCount,omitempty"`
-	DragonflyAddress   string             `json:"dragonflyAddress,omitempty"`
+	// Phase is derived from the Ready condition on every reconcile and kept
+	// for compatibility; read the Ready condition instead.
+	Phase              GatewayPhase `json:"phase,omitempty"`
+	ConfigChecksum     string       `json:"configChecksum,omitempty"`
+	PluginChecksum     string       `json:"pluginChecksum,omitempty"`
+	ObservedGeneration int64        `json:"observedGeneration,omitempty"`
+	// Conditions are keyed by type. Ready is the summary condition.
+	// +listType=map
+	// +listMapKey=type
+	Conditions       []metav1.Condition `json:"conditions,omitempty"`
+	Replicas         int32              `json:"replicas,omitempty"`
+	ReadyReplicas    int32              `json:"readyReplicas,omitempty"`
+	LicenseExpiry    *metav1.Time       `json:"licenseExpiry,omitempty"`
+	ActiveImage      string             `json:"activeImage,omitempty"`
+	EndpointCount    int32              `json:"endpointCount,omitempty"`
+	DragonflyAddress string             `json:"dragonflyAddress,omitempty"`
 	// LastPostRestartJobChecksum records the combined (config +
 	// postRestartJob-spec) checksum for which the most recent post-restart
 	// Job was created (see internal/resources.PostRestartJobChecksum). Used
@@ -649,7 +656,9 @@ type KrakenDGatewayStatus struct {
 // +kubebuilder:resource:shortName=kgw
 // +kubebuilder:printcolumn:name="Edition",type=string,JSONPath=`.spec.edition`
 // +kubebuilder:printcolumn:name="Version",type=string,JSONPath=`.spec.version`
-// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
+// +kubebuilder:printcolumn:name="Reason",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].reason`
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // KrakenDGateway is the Schema for the krakendgateways API.
