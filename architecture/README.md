@@ -1218,7 +1218,17 @@ This is a conscious design choice: the operator provides maximum observability (
 
 When falling back from EE to CE:
 
-1. **Strip structural EE features** — remove wildcard endpoints (`/*`) which CE's router rejects
+1. **Strip every Enterprise-only feature and list it.** The CE
+   render drops EE wildcard endpoints (`/prefix/*`) and every Enterprise-only
+   `extra_config` namespace at service, endpoint and backend level. The list
+   is taken from the KrakenD 2.13 Enterprise documentation, because the CE
+   and EE 2.13 binaries embed the same schema and CE lint accepts them all.
+   The gateway reports `CEFallbackApplied=True/EEFeaturesStripped` listing
+   each removal, and each affected endpoint reports `Accepted` reason
+   `EEFeaturesStripped`; docs-only namespaces are dropped without being listed
+   on the endpoints, so they never make an endpoint not Ready. On every CE
+   render (CE edition or CE fallback) the OpenAPI export init container and
+   sidecar are omitted, because the CE binary has no `openapi` command.
 2. **Switch container image — only once the CE render is applied.** The CE
    render is validated as CE: verdicts are keyed on (checksum, edition), and
    `status.configEdition` records the edition of the applied config. The
@@ -1229,11 +1239,10 @@ When falling back from EE to CE:
    applied edition differs from the current one (a CE fallback whose render is
    rejected), version and custom-image changes wait too, and take effect once a
    render is validated for the new edition.
-3. **Keep EE `extra_config` namespaces** — CE silently ignores unknown namespaces like `security/policies`, `auth/api-keys`, etc.
-4. **Disable Dragonfly-dependent features** — cluster rate limiting, quota, and token revocation won't function without the EE binary, even with Redis available
-5. **Set `LicenseValid=False` and `LicenseExpired=True`** — reason `LicensePreExpiry` if entering from the PreExpiry path; reason `LicenseExpired` if entering from the LicenseExpired path
-6. **Set status condition** — `LicenseDegraded=True` (reason: `LicenseFallbackCE`) with message explaining the degradation
-7. **Emit Kubernetes event** — `Warning` event on the KrakenDGateway for alerting
+3. **Disable Dragonfly-dependent features** — cluster rate limiting, quota, and token revocation won't function without the EE binary, even with Redis available
+4. **Set `LicenseValid=False` and `LicenseExpired=True`** — reason `LicensePreExpiry` if entering from the PreExpiry path; reason `LicenseExpired` if entering from the LicenseExpired path
+5. **Set status condition** — `LicenseDegraded=True` (reason: `LicenseFallbackCE`) with message explaining the degradation
+6. **Emit Kubernetes event** — `Warning` event on the KrakenDGateway for alerting
 
 ### EE Recovery (from Degraded or Error back to EE)
 
@@ -1815,11 +1824,12 @@ conditions and shown with `-o wide`.
 
 | Condition | Meaning |
 |---|---|
-| `Ready` | Summary condition written only by the gateway controller, derived from ConfigValid, Available, Progressing, LicenseExpired and LicenseDegraded (`Unknown` while the validator is unavailable); phase is derived from the same rules |
+| `Ready` | Summary condition written only by the gateway controller, derived from ConfigValid, Available, Progressing, LicenseExpired, LicenseDegraded and CEFallbackApplied (`Unknown` while the validator is unavailable); phase is derived from the same rules |
 | `ConfigValid` | Last rendered krakend.json passed `krakend check -t -n -c` (`Unknown` with reason `ValidatorUnavailable` while krakend check cannot run) |
 | `Available` | The Deployment is available: it mirrors the Deployment's `Available` condition once a rollout is not in flight, and is `False` with reason `RolloutFailed` when the Deployment exceeds its progress deadline |
 | `LicenseValid` | EE license state: `True`/`LicenseOK`, `True`/`LicenseExpiringSoon` inside the warning window, `False`/`LicensePreExpiry` or `False`/`LicenseExpired`, and `Unknown`/`LicenseSecretMissing` while the license cannot be read or parsed. While unreadable, the stage is judged from the last known expiry (`status.licenseExpiry`): once that is inside the safety buffer or past, the stage verdict (`False`) replaces `Unknown` |
 | `LicenseDegraded` | Gateway is actively running in CE mode as a fallback because the EE license expired or entered the pre-expiry safety window (**True** when the fallback decision is made, before the CE rollout has finished, and only when `fallbackToCE=true`; `False` with reason `LicenseRestored` after recovery, or `False` with reason `LicenseExpiredNoFallback` when the license expired and `fallbackToCE` is off while the condition was already present; absent otherwise) |
+| `CEFallbackApplied` | The applied config is the CE-fallback render (reason `EEFeaturesStripped`); the message lists the Enterprise-only features it removed. Absent otherwise |
 | `DragonflyReady` | Dragonfly CR status reports `ready` phase (watched from Dragonfly Operator) |
 | `IstioConfigured` | VirtualService was successfully created/updated |
 | `LicenseSecretUnavailable` | `True` while the license cannot be read: the ExternalSecret failed to sync, the referenced Secret (`secretRef`) or its key does not exist, or the certificate does not parse. `LicenseValid` is `Unknown` meanwhile, unless the last known expiry (`status.licenseExpiry`) is already inside the safety buffer or past, in which case the stage verdict applies. `False` with reason `SecretAvailable` once it can be read |
@@ -1831,7 +1841,7 @@ conditions and shown with `-o wide`.
 | Condition | Writer | Meaning |
 |---|---|---|
 | `ResolvedRefs` | endpoint controller | The gateway and every referenced policy exist (`RefsResolved`, `GatewayNotFound`, `PolicyNotFound`) |
-| `Accepted` | gateway controller | Part of the gateway's validated configuration (`Accepted`), `PartiallyAccepted` (True; `status.conflicts` lists the lost entries) when a conflict cost it some entries, or `EndpointConflict` (False) when it cost it all of them; removed while a referenced policy is missing |
+| `Accepted` | gateway controller | Part of the gateway's validated configuration (`Accepted`), `PartiallyAccepted` (True; `status.conflicts` lists the lost entries) when a conflict cost it some entries, or `EndpointConflict` (False) when it cost it all of them; removed while a referenced policy is missing; `EEFeaturesStripped` when a CE-fallback render removed Enterprise-only features from it (True while some entry is still served, False when every entry was an EE wildcard; the message lists them) |
 | `Ready` | endpoint controller | Derived by `api/v1alpha1.EndpointReady`: `Unknown`/`Pending` until the gateway accepts the current generation. A docs-only `SchemaNameConflict` on `Accepted` keeps `Ready=True`, with that reason: schema defects never affect whether a route renders or serves |
 
 Both writers patch status with an optimistic lock (`MergeFromWithOptimisticLock`),
