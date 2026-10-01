@@ -103,9 +103,9 @@ kept for compatibility; alert and gate on `Ready` instead.
 | `Pending` | `Unknown` | No configuration has been validated yet |
 | the serving phase (`Pending` before any rollout, `Deploying` while a rollout is in progress or the Deployment is not available, `Running` otherwise) | `Unknown`, reason `ValidatorUnavailable` | The validator could not run; the last applied configuration keeps serving and validation is retried with backoff |
 | `Deploying` | `False` | A rollout is in progress, or the Deployment has not reported available replicas yet |
-| `Running` | `True` | Configuration applied, all replicas available |
+| `Running` | `True` | Configuration applied, the Deployment is available and the applied config is rolled out to all replicas |
 | `Degraded` | `False` | EE license expired or in the pre-expiry window; running on CE (`LicenseDegraded=True`) |
-| `Error` | `False` | Configuration rejected (`ConfigValid=False`), rollout failed (`Available=False`), or license expired without CE fallback |
+| `Error` | `False` | Configuration rejected (`ConfigValid=False`), rollout failed or the Deployment lost availability (`Available=False`), or license expired without CE fallback |
 
 `Rendering` and `Validating` stay in the CRD enum only so stored objects keep
 validating; the operator does not write them.
@@ -114,10 +114,10 @@ validating; the operator does not write them.
 
 | Condition | Meaning |
 |---|---|
-| `Ready` | Summary: the applied configuration is served on all replicas; its reason names the blocking condition |
+| `Ready` | Summary: the Deployment is available and the applied config is rolled out to all replicas; its reason names the blocking condition |
 | `ConfigValid` | `True`: the rendered config passed `krakend check`. `False` (`ConfigValidationFailed`): rejected; the last applied config keeps serving. `Unknown` (`ValidatorUnavailable`): krakend check could not run; retried with backoff |
-| `Available` | Deployment has ready replicas |
-| `Progressing` | Deployment rollout in progress |
+| `Available` | The Deployment is available; `False` when it loses its minimum replicas (for example all pods crash-looping) or its rollout fails |
+| `Progressing` | Config rollout in progress; stays `True` until the Deployment has observed the change and every replica is updated and available |
 | `DragonflyReady` | DragonflyDB instance is operational |
 | `IstioConfigured` | VirtualService has been reconciled |
 | `LicenseValid` | License secret is present and not expired |
