@@ -17,7 +17,9 @@ limitations under the License.
 package renderer
 
 import (
+	"cmp"
 	"fmt"
+	"slices"
 	"sort"
 	"time"
 
@@ -67,8 +69,8 @@ type flatEndpoint struct {
 func flattenEndpoints(
 	endpoints []v1alpha1.KrakenDEndpoint,
 	policies map[string]*v1alpha1.KrakenDBackendPolicy,
-) (flat []flatEndpoint, conflicted, invalid map[types.NamespacedName]struct{}) {
-	conflicted = make(map[types.NamespacedName]struct{})
+) (flat []flatEndpoint, conflicted map[types.NamespacedName][]EntryConflict, invalid map[types.NamespacedName]struct{}) {
+	conflicted = make(map[types.NamespacedName][]EntryConflict)
 	invalid = make(map[types.NamespacedName]struct{})
 
 	// Group entries by (endpoint, method) to detect conflicts
@@ -134,8 +136,23 @@ func flattenEndpoints(
 		// Keep the winner (oldest), mark the rest as conflicted
 		flat = append(flat, group.entries[0])
 		for _, loser := range group.entries[1:] {
-			conflicted[loser.Source] = struct{}{}
+			conflicted[loser.Source] = append(conflicted[loser.Source], EntryConflict{
+				Endpoint: loser.Entry.Endpoint,
+				Method:   loser.Entry.Method,
+				Winner:   group.entries[0].Source,
+			})
 		}
+	}
+
+	// Groups come from a map: sort each loser's list so the output is
+	// deterministic.
+	for nn := range conflicted {
+		slices.SortFunc(conflicted[nn], func(a, b EntryConflict) int {
+			if c := cmp.Compare(a.Endpoint, b.Endpoint); c != 0 {
+				return c
+			}
+			return cmp.Compare(a.Method, b.Method)
+		})
 	}
 
 	// Sort result by endpoint path then method for deterministic output
