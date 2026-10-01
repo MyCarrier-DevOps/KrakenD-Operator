@@ -148,8 +148,8 @@ func matchRouterError(line string, routes []renderedRoute) []int {
 	return indices
 }
 
-// methodsHolding returns the methods with at least min entries of the shape.
-func methodsHolding(routes []renderedRoute, shape string, min int) map[string]bool {
+// methodsHolding returns the methods with at least atLeast entries of the shape.
+func methodsHolding(routes []renderedRoute, shape string, atLeast int) map[string]bool {
 	counts := map[string]int{}
 	for _, r := range routes {
 		if r.shape == shape {
@@ -158,7 +158,7 @@ func methodsHolding(routes []renderedRoute, shape string, min int) map[string]bo
 	}
 	methods := map[string]bool{}
 	for method, n := range counts {
-		if n >= min {
+		if n >= atLeast {
 			methods[method] = true
 		}
 	}
