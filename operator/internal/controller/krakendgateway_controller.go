@@ -482,7 +482,7 @@ func (r *KrakenDGatewayReconciler) detectDragonflyState(
 	isReady := phase == "ready"
 
 	if isReady {
-		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+		r.setConditionWithEvent(gw, metav1.Condition{
 			Type:               v1alpha1.ConditionDragonflyReady,
 			Status:             metav1.ConditionTrue,
 			ObservedGeneration: gw.Generation,
