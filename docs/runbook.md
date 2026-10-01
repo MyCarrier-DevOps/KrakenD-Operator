@@ -120,10 +120,10 @@ validating; the operator does not write them.
 | `Progressing` | Config rollout in progress; stays `True` until the Deployment has observed the change and every replica is updated and available |
 | `DragonflyReady` | DragonflyDB instance is operational |
 | `IstioConfigured` | VirtualService has been reconciled |
-| `LicenseValid` | EE license state: `True` (`LicenseOK`), `True` (`LicenseExpiringSoon`) inside the warning window, or `False` (`LicensePreExpiry`, `LicenseExpired`) |
+| `LicenseValid` | EE license state: `True` (`LicenseOK`), `True` (`LicenseExpiringSoon`) inside the warning window, `False` (`LicensePreExpiry`, `LicenseExpired`), or `Unknown` (`LicenseSecretMissing`) while the license cannot be read, unless the last known expiry is already inside the safety buffer or past |
 | `LicenseExpired` | `True` once the license is expired or inside the 1 h safety buffer; without `fallbackToCE` the gateway reports phase `Error` |
 | `LicenseDegraded` | `True` (`LicenseFallbackCE`) while the gateway runs CE because its license expired or entered the 1 h safety buffer |
-| `LicenseSecretUnavailable` | License secret could not be read or parsed; `LicenseValid` is `Unknown` meanwhile. The stage is still judged from the last known expiry (`status.licenseExpiry`), so a `fallbackToCE` gateway falls back to CE when that expiry enters the 1 h safety buffer |
+| `LicenseSecretUnavailable` | License secret could not be read or parsed; `LicenseValid` is `Unknown` meanwhile. The stage is still judged from the last known expiry (`status.licenseExpiry`), so a `fallbackToCE` gateway falls back to CE when that expiry enters the 1 h safety buffer. Once that expiry is inside the buffer or past, `LicenseValid` shows the stage (`False`, reason `LicensePreExpiry` or `LicenseExpired`) instead of `Unknown` |
 
 ---
 
@@ -420,7 +420,12 @@ window (`spec.license.expiryWarningDays`, default 30):
 
 **Resolution:** renew the license and update the Kubernetes Secret. The
 gateway reconciles on the Secret change and sets `LicenseValid` back to
-`LicenseOK`.
+`LicenseOK`. The pods roll automatically when the license in the Secret
+changes (the pod template's `krakend.io/checksum-license` annotation), so
+every pod starts with the new license; no manual restart is needed. Until the
+new pods are available the gateway shows `Progressing=True` (reason
+`DeploymentUpdated`) and is not `Ready`. If the Secret cannot be read, nothing
+rolls.
 
 If the license reaches its safety buffer (1 h before expiry) or expires and
 `fallbackToCE` is enabled, the gateway falls back to CE: `LicenseDegraded` is
