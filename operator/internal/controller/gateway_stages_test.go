@@ -1997,3 +1997,25 @@ func TestGatewayReconcile_RejectedRenderKeepsTheAppliedPlugins(t *testing.T) {
 		t.Errorf("Progressing = %+v, want no rollout reported for a render that was not applied", progressing)
 	}
 }
+
+func TestGatewayReconcile_AdoptedEditionSurvivesARejectedFirstRender(t *testing.T) {
+	gw, secret, parser := licensedEEGateway(testNow.Add(time.Hour), true) // valid license
+	const config = `{"version":3,"name":"applied-before-the-upgrade"}`
+	gw.Status.ConfigChecksum = hash.SHA256Hex([]byte(config)) // no configEdition: written by the previous operator
+	c := fakeClientBuilder().WithObjects(gw, secret, legacyConfigMap(gw, config)).WithStatusSubresource(gw).Build()
+	val := &recordingValidator{err: rejectedBy("ERROR testing the configuration file:\tbad")}
+	r := newTestGatewayReconciler(c, renderOf(`{"version":3,"name":"first-render-after-upgrade"}`), val)
+	r.LicenseParser = parser
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	// The license expires and the CE fallback render is rejected too.
+	parser.info.NotAfter = testNow.Add(-time.Minute)
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if got, want := deployedImage(t, c, gw), renderer.ResolveImage(gw, false); got != want {
+		t.Errorf("image = %q, want the EE image %q the applied config was running", got, want)
+	}
+}
