@@ -89,7 +89,12 @@ func (r *KrakenDGatewayReconciler) deleteIfControlled(
 	uid := obj.GetUID()
 	err := client.IgnoreNotFound(r.Delete(ctx, obj, client.Preconditions{UID: &uid}))
 	if err != nil {
-		return fmt.Errorf("deleting %s %s: %w", kindOf(obj), key, err)
+		// An unstructured object names its kind; a typed one its Go type.
+		kind := obj.GetObjectKind().GroupVersionKind().Kind
+		if kind == "" {
+			kind = fmt.Sprintf("%T", obj)
+		}
+		return fmt.Errorf("deleting %s %s: %w", kind, key, err)
 	}
 	return nil
 }
@@ -111,13 +116,4 @@ func (r *KrakenDGatewayReconciler) deleteOptionalIfControlled(
 	u.SetName(name)
 	u.SetNamespace(gw.Namespace)
 	return r.deleteIfControlled(ctx, gw, u)
-}
-
-// kindOf names obj's kind: its GVK Kind when set (unstructured objects),
-// else its Go type.
-func kindOf(obj client.Object) string {
-	if kind := obj.GetObjectKind().GroupVersionKind().Kind; kind != "" {
-		return kind
-	}
-	return fmt.Sprintf("%T", obj)
 }
