@@ -1729,6 +1729,17 @@ rules:
 
 ## 15. Status and Observability
 
+### Summary condition and columns
+
+Every kind has a `Ready` condition written only by its own controller, a
+top-level `status.observedGeneration`, and `status.conditions` keyed by
+`type` (`+listType=map`). `kubectl get` shows `Ready` and `Reason` (the
+reason of `Ready`); `Phase`, where the kind has one, is derived from the
+conditions and shown with `-o wide`.
+
+| Kind | `Ready` is True when |
+|---|---|
+
 ### Gateway Status Conditions
 
 | Condition | Meaning |
