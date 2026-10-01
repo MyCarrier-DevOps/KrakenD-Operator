@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"context"
 	"testing"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
@@ -25,6 +26,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
 func TestControllers(t *testing.T) {
@@ -78,4 +80,28 @@ func fakeClientBuilder() *fake.ClientBuilder {
 
 func fakeRecorder() *record.FakeRecorder {
 	return record.NewFakeRecorder(100)
+}
+
+// countStatusWrites returns interceptor funcs that count every status update
+// and status patch of an object of type T in n, then pass it through.
+func countStatusWrites[T client.Object](n *int) interceptor.Funcs {
+	return interceptor.Funcs{
+		SubResourceUpdate: func(
+			ctx context.Context, c client.Client, sub string, obj client.Object, opts ...client.SubResourceUpdateOption,
+		) error {
+			if _, ok := obj.(T); ok {
+				*n++
+			}
+			return c.SubResource(sub).Update(ctx, obj, opts...)
+		},
+		SubResourcePatch: func(
+			ctx context.Context, c client.Client, sub string, obj client.Object, patch client.Patch,
+			opts ...client.SubResourcePatchOption,
+		) error {
+			if _, ok := obj.(T); ok {
+				*n++
+			}
+			return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
+		},
+	}
 }
