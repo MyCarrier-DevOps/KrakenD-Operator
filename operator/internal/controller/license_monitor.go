@@ -267,8 +267,6 @@ func (m *LicenseMonitor) handleExpired(ctx context.Context, gw *v1alpha1.KrakenD
 			Message:            "license expired, falling back to CE edition",
 			ObservedGeneration: gw.Generation,
 		})
-	} else {
-		gw.Status.Phase = v1alpha1.PhaseError
 	}
 
 	if err := m.Status().Patch(ctx, gw, patch); err != nil {
