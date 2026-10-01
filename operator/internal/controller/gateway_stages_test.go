@@ -293,7 +293,7 @@ func TestGatewayReconcile_PluginChangeIsNotReadyUntilTheDeploymentRunsIt(t *test
 	c := fakeClientBuilder().WithObjects(gw, stale).WithStatusSubresource(gw).
 		WithInterceptorFuncs(staleDeploymentReads(stale)).Build()
 	rend := &mockRenderer{output: &renderer.RenderOutput{
-		JSON: []byte(`{"version":3}`), Checksum: "applied", DesiredImage: "img:v1", PluginChecksum: "plugins-new",
+		JSON: []byte(`{"version":3}`), Checksum: "applied", PluginChecksum: "plugins-new",
 	}}
 	r := newTestGatewayReconciler(c, rend, &mockValidator{})
 
@@ -520,7 +520,7 @@ func TestGatewayReconcile_EventsOnlyOnConditionTransitions(t *testing.T) {
 // renderOf is a renderer that renders config, with its real checksum.
 func renderOf(config string) *mockRenderer {
 	return &mockRenderer{output: &renderer.RenderOutput{
-		JSON: []byte(config), Checksum: hash.SHA256Hex([]byte(config)), DesiredImage: "krakend:2.7.0",
+		JSON: []byte(config), Checksum: hash.SHA256Hex([]byte(config)),
 	}}
 }
 
