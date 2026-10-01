@@ -17,6 +17,8 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"fmt"
+
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -38,6 +40,11 @@ func EndpointReady(conds []metav1.Condition) (status metav1.ConditionStatus, rea
 	}
 	if refs.Status != metav1.ConditionTrue {
 		return metav1.ConditionFalse, refs.Reason, refs.Message
+	}
+	accepted := meta.FindStatusCondition(conds, ConditionAccepted)
+	if accepted == nil || accepted.ObservedGeneration != refs.ObservedGeneration {
+		return metav1.ConditionUnknown, ReasonPending,
+			fmt.Sprintf("Waiting for the gateway to accept generation %d", refs.ObservedGeneration)
 	}
 	return "", "", ""
 }
