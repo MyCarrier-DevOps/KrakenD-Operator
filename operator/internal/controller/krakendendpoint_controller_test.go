@@ -693,6 +693,10 @@ func TestEndpointReconcile_ReadyDerivedFromBothWriters(t *testing.T) {
 	legacyActive.Status.Phase = v1alpha1.EndpointPhaseActive
 	legacyConflicted := endpointOnGW1(1, legacyAvailable(metav1.ConditionFalse, "EndpointConflict"), conflict)
 	legacyConflicted.Status.Phase = v1alpha1.EndpointPhaseConflicted
+	// What the previous release actually wrote for a conflict: Available and
+	// the phase, with no Accepted condition.
+	legacyConflictedNoAccepted := endpointOnGW1(1, legacyAvailable(metav1.ConditionFalse, "EndpointConflict"))
+	legacyConflictedNoAccepted.Status.Phase = v1alpha1.EndpointPhaseConflicted
 
 	tests := []struct {
 		name       string
@@ -709,6 +713,8 @@ func TestEndpointReconcile_ReadyDerivedFromBothWriters(t *testing.T) {
 			metav1.ConditionUnknown, "Pending", v1alpha1.EndpointPhasePending},
 		{"conflicted endpoint with the old status", legacyConflicted,
 			metav1.ConditionFalse, "EndpointConflict", v1alpha1.EndpointPhaseConflicted},
+		{"conflicted endpoint the old release wrote, with no Accepted", legacyConflictedNoAccepted,
+			metav1.ConditionUnknown, "Pending", v1alpha1.EndpointPhasePending},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
