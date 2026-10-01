@@ -84,6 +84,9 @@ b64_commented=$(base64 <"$workdir/ca-commented.pem" | tr -d '\n')
 want_commented="$b64_commented $b64_commented $b64_commented $b64_commented "
 expect_equal "a PEM with leading text is base64-encoded once" "$want_commented" \
 	"$(ca_bundles "${no_cert_manager[@]}" --set-file webhooks.caBundle="$workdir/ca-commented.pem")"
+printf '%s' "$pem" | base64 -w 20 >"$workdir/ca-wrapped.b64"
+expect_equal "a wrapped base64 caBundle is rendered unwrapped" "$want" \
+	"$(ca_bundles "${no_cert_manager[@]}" --set-file webhooks.caBundle="$workdir/ca-wrapped.b64")"
 
 if [ "$failures" -gt 0 ]; then
 	printf '%d chart render test(s) failed\n' "$failures"
