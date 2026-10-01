@@ -113,6 +113,8 @@ func TestEndpointPhaseFromReady(t *testing.T) {
 		{metav1.ConditionTrue, "Ready", "Active"},
 		{metav1.ConditionUnknown, "Pending", "Pending"},
 		{metav1.ConditionFalse, "GatewayNotFound", "Detached"},
+		{metav1.ConditionFalse, "EndpointConflict", "Conflicted"},
+		{metav1.ConditionFalse, "PartiallyAccepted", "Conflicted"},
 	}
 	for _, tt := range tests {
 		if got := EndpointPhaseFromReady(tt.status, tt.reason); got != tt.want {
