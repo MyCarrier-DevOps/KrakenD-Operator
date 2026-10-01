@@ -961,3 +961,34 @@ func TestGatewayReconcile_CollectsTheLegacyConfigMapOnceNoLiveReplicaSetMountsIt
 		t.Errorf("remaining ConfigMaps = %v; the legacy ConfigMap must be collected once the rollout finished", got)
 	}
 }
+
+func TestPublishConfig_VerifiesTheConfigMapALostCreateRaceLeftBehind(t *testing.T) {
+	gw := reconciledGateway()
+	gw.UID = "gw-uid"
+	const config = `{"version":3,"name":"raced"}`
+	checksum := hash.SHA256Hex([]byte(config))
+	foreign := ownedConfigMap(gw, resources.ConfigMapName(gw, checksum), testNow, true)
+	foreign.OwnerReferences = nil
+	live := fakeClientBuilder().WithObjects(gw, foreign).Build()
+	// The cache has not seen the ConfigMap yet, so the Get misses and the
+	// Create loses to what the API server already holds.
+	stale := interceptor.NewClient(live, interceptor.Funcs{
+		Get: func(
+			ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object,
+			opts ...client.GetOption,
+		) error {
+			if _, ok := obj.(*corev1.ConfigMap); ok {
+				return apierrors.NewNotFound(corev1.Resource("configmaps"), key.Name)
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	})
+	r := newTestGatewayReconciler(stale, &mockRenderer{}, &mockValidator{})
+	r.APIReader = live
+
+	err := r.publishConfig(context.Background(), gw, []byte(config), checksum)
+
+	if err == nil || !strings.Contains(err.Error(), "not controlled by gateway") {
+		t.Errorf("publishConfig = %v, want the lost create race's ConfigMap rejected as not the gateway's own", err)
+	}
+}
