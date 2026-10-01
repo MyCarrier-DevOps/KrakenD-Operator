@@ -232,3 +232,21 @@ func TestGatewayReconcile_ExpiredLicenseWithoutFallbackSaysSoOnce(t *testing.T) 
 		t.Errorf("LicenseExpiredNoFallback events over two reconciles = %d, want 1", n)
 	}
 }
+
+func TestGatewayReconcile_TerminatingLicensedGatewayGetsNoLicenseSeries(t *testing.T) {
+	gw, secret, parser := licensedEEGateway(testNow.Add(90*24*time.Hour), true)
+	gw.Namespace = "terminating-licensed"
+	secret.Namespace = gw.Namespace
+	gw.Finalizers = []string{"test.krakend.io/hold"}
+	gw.DeletionTimestamp = &metav1.Time{Time: time.Now()}
+	c := fakeClientBuilder().WithObjects(gw, secret).WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderOutput("cs"), &mockValidator{})
+	r.LicenseParser = parser
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if n := remainingGatewaySeries(gw.Namespace, gw.Name); n != 0 {
+		t.Errorf("%d metric series for a terminating licensed gateway, want 0", n)
+	}
+}
