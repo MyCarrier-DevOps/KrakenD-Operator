@@ -113,13 +113,6 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, nil
 	}
 
-	if ac.Status.Phase == "" {
-		ac.Status.Phase = v1alpha1.AutoConfigPhasePending
-		if err := r.Status().Update(ctx, &ac); err != nil {
-			return statusWriteFailure(ctx, fmt.Errorf("setting initial phase: %w", err))
-		}
-		return ctrl.Result{Requeue: true}, nil
-	}
 	origStatus := ac.Status.DeepCopy()
 
 	fetchResult, err := r.Fetcher.Fetch(ctx, autoconfig.FetchSource{
@@ -407,11 +400,11 @@ func (r *KrakenDAutoConfigReconciler) recordSyncedFailure(
 }
 
 // statusWriteFailure returns the reconcile result for a failed AutoConfig
-// status write that records no failure: the initial Pending phase or a
-// successful sync. A Conflict means this reconcile read a stale copy of the
-// AutoConfig: it requeues quietly after conflictRequeueDelay, so the retry
-// reads the current copy, instead of surfacing a reconciler error. Any other
-// error is returned for controller-runtime to retry with backoff.
+// status write that records no failure: a successful sync. A Conflict means
+// this reconcile read a stale copy of the AutoConfig: it requeues quietly after
+// conflictRequeueDelay, so the retry reads the current copy, instead of
+// surfacing a reconciler error. Any other error is returned for
+// controller-runtime to retry with backoff.
 func statusWriteFailure(ctx context.Context, err error) (ctrl.Result, error) {
 	if errors.IsConflict(err) {
 		return lostWriteRace(ctx, err)
@@ -621,8 +614,9 @@ func (c endpointChanges) total() int {
 	return c.created + c.updated + c.deleted
 }
 
-// recordSync records a successful sync: phase Synced, the Synced condition,
-// the combined checksum, and the endpoint counts. LastSyncTime and the
+// recordSync records a successful sync: the Synced condition and the Ready,
+// phase and observedGeneration derived from it, the combined checksum, and the
+// endpoint counts. LastSyncTime and the
 // EndpointsGenerated event mark a sync that changed something — new inputs (a
 // different combined checksum) or endpoint writes — so a steady-state
 // reconcile leaves both alone. Status is written only when it differs from
@@ -638,7 +632,6 @@ func (r *KrakenDAutoConfigReconciler) recordSync(
 	warnings *inputWarnings,
 ) error {
 	changed := combinedChecksum != orig.SpecChecksum || changes.total() > 0
-	ac.Status.Phase = v1alpha1.AutoConfigPhaseSynced
 	ac.Status.SpecChecksum = combinedChecksum
 	if changed {
 		now := metav1.Now()
@@ -653,6 +646,7 @@ func (r *KrakenDAutoConfigReconciler) recordSync(
 		Reason:             "Synced",
 		Message:            fmt.Sprintf("Generated %d endpoints", len(genOutput.Endpoints)),
 	})
+	setAutoConfigReadiness(ac)
 	if autoConfigStatusChanged(orig, &ac.Status) {
 		if err := r.Status().Update(ctx, ac); err != nil {
 			return fmt.Errorf("updating final status: %w", err)
@@ -674,6 +668,7 @@ func (r *KrakenDAutoConfigReconciler) recordSync(
 // LastTransitionTime.
 func autoConfigStatusChanged(orig, cur *v1alpha1.KrakenDAutoConfigStatus) bool {
 	return orig.Phase != cur.Phase ||
+		orig.ObservedGeneration != cur.ObservedGeneration ||
 		orig.SpecChecksum != cur.SpecChecksum ||
 		orig.GeneratedEndpoints != cur.GeneratedEndpoints ||
 		orig.SkippedOperations != cur.SkippedOperations ||
@@ -856,4 +851,14 @@ func autoConfigPhase(conds []metav1.Condition) v1alpha1.AutoConfigPhase {
 	default:
 		return v1alpha1.AutoConfigPhaseError
 	}
+}
+
+// setAutoConfigReadiness writes the derived Ready condition, phase and
+// observedGeneration into ac's in-memory status. Call it immediately before
+// every AutoConfig status write.
+func setAutoConfigReadiness(ac *v1alpha1.KrakenDAutoConfig) {
+	status, reason, message := autoConfigReady(ac.Status.Conditions)
+	setReadyCondition(&ac.Status.Conditions, ac.Generation, status, reason, message)
+	ac.Status.Phase = autoConfigPhase(ac.Status.Conditions)
+	ac.Status.ObservedGeneration = ac.Generation
 }
