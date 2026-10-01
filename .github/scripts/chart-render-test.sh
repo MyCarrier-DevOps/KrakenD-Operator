@@ -46,6 +46,12 @@ expect_equal() {
 	if [ "$2" = "$3" ]; then pass "$1"; else fail "$1 (want '$2', got '$3')"; fi
 }
 
+# ca_bundles [helm args...]: the distinct caBundle values, space-separated.
+ca_bundles() {
+	render --show-only templates/validating-webhook-configuration.yaml "$@" |
+		awk '$1 == "caBundle:" { print $2 }' | sort -u | tr '\n' ' '
+}
+
 # --- webhooks.enabled drives --enable-webhooks ---------------------------
 expect_absent "enabled webhooks pass no flag (older images keep working)" "--enable-webhooks"
 expect_contains "webhooks.enabled=false disables them in the operator" \
@@ -60,6 +66,16 @@ expect_contains "enabled webhooks pass the serving certificate path" \
 	"--webhook-cert-path=/tmp/k8s-webhook-server/serving-certs"
 expect_contains "enabled webhooks mount the serving certificate" \
 	"secretName: t-krakend-operator-webhook-server-cert"
+
+# --- caBundle is base64 of the PEM, never double-encoded ------------------
+pem=$'-----BEGIN CERTIFICATE-----\nZmFrZS1jZXJ0aWZpY2F0ZQ==\n-----END CERTIFICATE-----'
+printf '%s' "$pem" >"$workdir/ca.pem"
+b64=$(printf '%s' "$pem" | base64 | tr -d '\n')
+no_cert_manager=(--set webhooks.certManager.enabled=false)
+expect_equal "a PEM caBundle is base64-encoded once" "$b64 " \
+	"$(ca_bundles "${no_cert_manager[@]}" --set-file webhooks.caBundle="$workdir/ca.pem")"
+expect_equal "a base64 caBundle is passed through" "$b64 " \
+	"$(ca_bundles "${no_cert_manager[@]}" --set webhooks.caBundle="$b64")"
 
 if [ "$failures" -gt 0 ]; then
 	printf '%d chart render test(s) failed\n' "$failures"
