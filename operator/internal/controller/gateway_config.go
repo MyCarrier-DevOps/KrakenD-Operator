@@ -84,7 +84,7 @@ func (r *KrakenDGatewayReconciler) appliedConfigMapName(
 	name := resources.ConfigMapName(gw, applied)
 	// A ConfigMap that is not this gateway's copy is not served: the
 	// Deployment is held instead.
-	found, err := r.verifyExistingConfigMap(ctx, gw, applied)
+	found, err := r.verifyExistingConfigMap(ctx, r.Client, gw, applied)
 	if err != nil {
 		return "", err
 	}
@@ -126,7 +126,7 @@ func (r *KrakenDGatewayReconciler) publishConfig(
 	ctx context.Context, gw *v1alpha1.KrakenDGateway, jsonData []byte, checksum string,
 ) error {
 	name := resources.ConfigMapName(gw, checksum)
-	if found, err := r.verifyExistingConfigMap(ctx, gw, checksum); found || err != nil {
+	if found, err := r.verifyExistingConfigMap(ctx, r.Client, gw, checksum); found || err != nil {
 		return err
 	}
 	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: gw.Namespace}}
@@ -134,23 +134,30 @@ func (r *KrakenDGatewayReconciler) publishConfig(
 	if err := controllerutil.SetControllerReference(gw, cm, r.Scheme); err != nil {
 		return fmt.Errorf("setting owner on configmap %s: %w", name, err)
 	}
-	// AlreadyExists is a cache that has not seen this controller's own
-	// earlier create; the next pass verifies what is there.
-	if err := r.Create(ctx, cm); err != nil && !errors.IsAlreadyExists(err) {
+	err := r.Create(ctx, cm)
+	switch {
+	case err == nil:
+		return nil
+	case errors.IsAlreadyExists(err):
+		// The cache has not seen the ConfigMap that is already there: it may
+		// be this controller's own earlier create or someone else's. Verify
+		// it live rather than trust it.
+		_, err := r.verifyExistingConfigMap(ctx, r.APIReader, gw, checksum)
+		return err
+	default:
 		return fmt.Errorf("creating configmap %s: %w", name, err)
 	}
-	return nil
 }
 
-// verifyExistingConfigMap looks up the config ConfigMap for checksum. found
-// says whether one exists; when it does, err says whether it is this
-// gateway's copy of that config.
+// verifyExistingConfigMap looks up the config ConfigMap for checksum through
+// reader. found says whether one exists; when it does, err says whether it is
+// this gateway's copy of that config.
 func (r *KrakenDGatewayReconciler) verifyExistingConfigMap(
-	ctx context.Context, gw *v1alpha1.KrakenDGateway, checksum string,
+	ctx context.Context, reader client.Reader, gw *v1alpha1.KrakenDGateway, checksum string,
 ) (found bool, err error) {
 	name := resources.ConfigMapName(gw, checksum)
 	var cm corev1.ConfigMap
-	if err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: gw.Namespace}, &cm); err != nil {
+	if err := reader.Get(ctx, types.NamespacedName{Name: name, Namespace: gw.Namespace}, &cm); err != nil {
 		if errors.IsNotFound(err) {
 			return false, nil
 		}
