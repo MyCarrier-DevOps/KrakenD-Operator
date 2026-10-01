@@ -310,6 +310,33 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              conflicts:
+                description: |-
+                  Conflicts lists this endpoint's entries that its gateway does not serve
+                  because an older KrakenDEndpoint serves the same endpoint and method.
+                  The gateway controller writes it together with the Accepted condition.
+                items:
+                  description: |-
+                    EndpointConflict is one entry of a KrakenDEndpoint that its gateway does not
+                    serve, because an older KrakenDEndpoint serves the same endpoint and method.
+                  properties:
+                    endpoint:
+                      description: Endpoint is the entry's path.
+                      type: string
+                    method:
+                      description: Method is the entry's HTTP method.
+                      type: string
+                    winner:
+                      description: Winner is the namespace/name of the KrakenDEndpoint
+                        whose entry is served.
+                      type: string
+                  required:
+                  - endpoint
+                  - method
+                  - winner
+                  type: object
+                type: array
+                x-kubernetes-list-type: atomic
               endpointCount:
                 format: int32
                 type: integer
