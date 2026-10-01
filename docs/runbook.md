@@ -101,7 +101,7 @@ kept for compatibility; alert and gate on `Ready` instead.
 | Phase | Ready | Meaning |
 |---|---|---|
 | `Pending` | `Unknown` | No configuration has been validated yet |
-| any serving phase | `Unknown`, reason `ValidatorUnavailable` | The validator could not run; the last applied configuration keeps serving and validation is retried with backoff |
+| the serving phase (`Pending` before any rollout, `Deploying` while a rollout is in progress or the Deployment is not available, `Running` otherwise) | `Unknown`, reason `ValidatorUnavailable` | The validator could not run; the last applied configuration keeps serving and validation is retried with backoff |
 | `Deploying` | `False` | A rollout is in progress, or the Deployment has not reported available replicas yet |
 | `Running` | `True` | Configuration applied, all replicas available |
 | `Degraded` | `False` | EE license expired or in the pre-expiry window; running on CE (`LicenseDegraded=True`) |
@@ -265,7 +265,7 @@ kubectl get events --field-selector involvedObject.name=<name> --sort-by='.lastT
 
 **Common causes:**
 - Config validation failure — check the `ConfigValid` condition message. It carries at most 4 KiB of krakend check output; the full output is in the operator log, message `krakend check rejected the rendered config`.
-- License missing for EE gateway — provide license secret
+- License expired without CE fallback (`LicenseExpired=True`, `Ready` reason `LicenseExpiredNoFallback`) — renew the license or set `fallbackToCE: true`. A missing license Secret (`LicenseSecretUnavailable=True`) does not change `Ready` or the phase
 - Rollout timeout — check Deployment events
 
 ### Gateway reports `ValidatorUnavailable`
