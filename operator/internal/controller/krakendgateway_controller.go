@@ -553,16 +553,21 @@ func (r *KrakenDGatewayReconciler) inspectDeploymentStatus(
 		return
 	}
 
-	// Detect rollout convergence: all replicas updated and available.
+	// Detect rollout convergence: the Deployment has observed its latest
+	// spec, runs the applied config, and every replica is updated and
+	// available. The cache can still hold the Deployment from before an
+	// update, or one whose status describes the previous ReplicaSet, so the
+	// counts alone are not proof.
 	desired := int32(1)
 	if dep.Spec.Replicas != nil {
 		desired = *dep.Spec.Replicas
 	}
-	if dep.Spec.Template.Annotations[resources.PostRestartJobChecksumAnnotation] == gw.Status.ConfigChecksum &&
+	converged := dep.Spec.Template.Annotations[resources.PostRestartJobChecksumAnnotation] == gw.Status.ConfigChecksum &&
 		dep.Status.ObservedGeneration >= dep.Generation &&
 		dep.Status.Replicas == desired &&
 		dep.Status.UpdatedReplicas == desired &&
-		dep.Status.AvailableReplicas == desired {
+		dep.Status.AvailableReplicas == desired
+	if converged {
 		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
 			Type:               v1alpha1.ConditionProgressing,
 			Status:             metav1.ConditionFalse,
@@ -570,6 +575,23 @@ func (r *KrakenDGatewayReconciler) inspectDeploymentStatus(
 			Reason:             "RolloutComplete",
 			Message:            "Deployment rollout completed successfully",
 		})
+	}
+
+	// Mirror a lost Deployment availability, but not while a rollout is
+	// still in flight: a new Deployment is unavailable until its pods start.
+	if depAvailable := findDeploymentCondition(&dep, appsv1.DeploymentAvailable); depAvailable != nil &&
+		depAvailable.Status == corev1.ConditionFalse &&
+		(converged || !condTrue(meta.FindStatusCondition(gw.Status.Conditions, v1alpha1.ConditionProgressing))) {
+		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+			Type:               v1alpha1.ConditionAvailable,
+			Status:             metav1.ConditionFalse,
+			ObservedGeneration: gw.Generation,
+			Reason:             depAvailable.Reason,
+			Message:            depAvailable.Message,
+		})
+		return
+	}
+	if converged {
 		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
 			Type:               v1alpha1.ConditionAvailable,
 			Status:             metav1.ConditionTrue,
@@ -578,6 +600,20 @@ func (r *KrakenDGatewayReconciler) inspectDeploymentStatus(
 			Message:            "All replicas are available",
 		})
 	}
+}
+
+// findDeploymentCondition returns the Deployment's condition of the given
+// type, or nil when it reports none.
+func findDeploymentCondition(
+	dep *appsv1.Deployment,
+	condType appsv1.DeploymentConditionType,
+) *appsv1.DeploymentCondition {
+	for i := range dep.Status.Conditions {
+		if dep.Status.Conditions[i].Type == condType {
+			return &dep.Status.Conditions[i]
+		}
+	}
+	return nil
 }
 
 // validateConfig runs krakend check on the validation copy of jsonData.
