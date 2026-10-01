@@ -744,8 +744,9 @@ you *which* KrakenDEndpoint to fix:
   derived afresh). This also holds when the validator is unavailable.
 - A gateway that has never applied a config has no verdict to keep. On a
   rejected or unjudged render the operator removes `Accepted` from every
-  endpoint that still carries it, for example one left by an earlier gateway
-  of the same name, so no endpoint reads `Ready` while nothing serves it.
+  endpoint that no finding names and that still carries it, for example one
+  left by an earlier gateway of the same name, so no endpoint reads `Ready`
+  while nothing serves it.
 - Findings about gateway-level settings or plugins name no endpoint. When
   some findings name an endpoint and others do not, the gateway message says
   how many name none; when none names an endpoint, it says so.
