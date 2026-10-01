@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,6 +28,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/tools/record"
 	clocktesting "k8s.io/utils/clock/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -383,5 +386,73 @@ func TestGatewayReconcile_ImageRolloutCompletesWhenTheDeploymentRunsIt(t *testin
 	ready := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionReady)
 	if ready == nil || ready.Status != metav1.ConditionTrue {
 		t.Errorf("Ready = %+v, want True once the Deployment runs img:v2", ready)
+	}
+}
+
+// virtualServiceTestGVK is the Istio VirtualService kind the gateway creates.
+var virtualServiceTestGVK = schema.GroupVersionKind{Group: "networking.istio.io", Version: "v1", Kind: "VirtualService"}
+
+// eventsWithReason drains rec and counts the recorded events with reason.
+func eventsWithReason(rec *record.FakeRecorder, reason string) int {
+	n := 0
+	for _, e := range drainEvents(rec) {
+		if strings.Contains(e, " "+reason+" ") {
+			n++
+		}
+	}
+	return n
+}
+
+// optionalCRDMapper is a RESTMapper that knows the scheme's kinds plus gvks.
+// It stands in for a cluster where those optional CRDs are installed.
+func optionalCRDMapper(gvks ...schema.GroupVersionKind) meta.RESTMapper {
+	m := meta.NewDefaultRESTMapper(nil)
+	for gvk := range testScheme().AllKnownTypes() {
+		m.Add(gvk, meta.RESTScopeNamespace)
+	}
+	for _, gvk := range gvks {
+		m.Add(gvk, meta.RESTScopeNamespace)
+	}
+	return m
+}
+
+func TestGatewayReconcile_EventsOnlyOnConditionTransitions(t *testing.T) {
+	cases := []struct {
+		name   string
+		reason string
+		setup  func(gw *v1alpha1.KrakenDGateway) []client.Object
+	}{
+		{
+			name:   "VirtualService reconciled after its CRD appeared",
+			reason: v1alpha1.ReasonIstioVSCreated,
+			setup: func(gw *v1alpha1.KrakenDGateway) []client.Object {
+				gw.Spec.Istio = &v1alpha1.IstioSpec{
+					Enabled: true, Hosts: []string{"api.example.com"}, Gateways: []string{"istio-system/gw"},
+				}
+				meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+					Type: v1alpha1.ConditionIstioConfigured, Status: metav1.ConditionFalse, Reason: "CRDNotInstalled",
+				})
+				return nil
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gw := reconciledGateway()
+			gw.Status.ConfigChecksum = "applied"
+			objs := append([]client.Object{gw}, tc.setup(gw)...)
+			c := fakeClientBuilder().WithRESTMapper(optionalCRDMapper(virtualServiceTestGVK)).
+				WithObjects(objs...).WithStatusSubresource(gw).Build()
+			r := newTestGatewayReconciler(c, renderOutput("applied"), &mockValidator{})
+
+			for range 3 {
+				if err := reconcileGateway(t, r, gw); err != nil {
+					t.Fatalf("reconcile: %v", err)
+				}
+			}
+			if got := eventsWithReason(r.Recorder.(*record.FakeRecorder), tc.reason); got != 1 {
+				t.Errorf("%s events over three reconciles = %d, want 1 (only the transition)", tc.reason, got)
+			}
+		})
 	}
 }
