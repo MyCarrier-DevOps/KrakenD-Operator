@@ -22,7 +22,7 @@ This document describes the Go application architecture for the KrakenD Operator
 6. [Endpoint Controller](#6-endpoint-controller)
 7. [Policy Controller](#7-policy-controller)
 8. [AutoConfig Controller](#8-autoconfig-controller)
-9. [License Monitor](#9-license-monitor)
+9. [License Evaluation](#9-license-evaluation)
 10. [Configuration Rendering Pipeline](#10-configuration-rendering-pipeline)
 11. [Resource Builders](#11-resource-builders)
 12. [Webhook Validation](#12-webhook-validation)
@@ -68,9 +68,8 @@ flowchart TD
     E --> G[Register Endpoint Controller]
     E --> H[Register Policy Controller]
     E --> I[Register AutoConfig Controller]
-    E --> J[Register License Monitor]
     E --> K[Register Webhooks]
-    F & G & H & I & J & K --> L[manager.Start context]
+    F & G & H & I & K --> L[manager.Start context]
 ```
 
 ### Manager Configuration
@@ -138,14 +137,6 @@ endpointCtrl := &controller.EndpointReconciler{
     Recorder: recorder,
 }
 
-licenseMonitor := &controller.LicenseMonitor{
-    Client:        mgr.GetClient(),
-    Recorder:      recorder,
-    LicenseParser: util.NewX509LicenseParser(),
-    Clock:         clock,
-    CheckInterval: 5 * time.Minute,  // operator architecture §9
-    SafetyBuffer:  1 * time.Hour,    // pre-expiry safety window
-}
 // Register all controllers
 for _, ctrl := range []interface{ SetupWithManager(ctrl.Manager) error }{
     gatewayCtrl, endpointCtrl, policyCtrl, autoconfigCtrl,
@@ -154,11 +145,6 @@ for _, ctrl := range []interface{ SetupWithManager(ctrl.Manager) error }{
         setupLog.Error(err, "unable to create controller")
         os.Exit(1)
     }
-}
-// Register license monitor as a Runnable (not a standard controller)
-if err := mgr.Add(licenseMonitor); err != nil {
-    setupLog.Error(err, "unable to register license monitor")
-    os.Exit(1)
 }
 ```
 
@@ -819,7 +805,6 @@ graph TB
         EC[EndpointReconciler]
         PC[PolicyReconciler]
         ACC[KrakenDAutoConfigReconciler]
-        LM[LicenseMonitor]
     end
 
     subgraph "Shared Dependencies"
@@ -843,8 +828,6 @@ graph TB
     GC --> RB
     GC --> CL
     GC --> REC
-    LM --> CL
-    LM --> REC
     ACC --> FE
     ACC --> CUE_E
     ACC --> FI
@@ -927,7 +910,7 @@ flowchart TD
 
 **Plugin checksum** — Computed from ConfigMap data hashes and OCI image tags. Changes trigger a rolling restart via pod annotation patch, independent of config checksum.
 
-**Phase transitions** — The controller does not latch `status.phase` at points in the pipeline. At the end of each reconcile it derives `Ready` and the phase from the gateway's conditions (`ConfigValid`, `Progressing`, `Available`, `LicenseExpired`, `LicenseDegraded`) with `gatewayReadinessFor`, and writes status only when something changed. The license monitor writes only the `License*` conditions; the gateway reconcile turns them into `Ready` and the phase. The phase is the compatibility view of `Ready`:
+**Phase transitions** — The controller does not latch `status.phase` at points in the pipeline. At the end of each reconcile it derives `Ready` and the phase from the gateway's conditions (`ConfigValid`, `Progressing`, `Available`, `LicenseExpired`, `LicenseDegraded`) with `gatewayReadinessFor`, and writes status only when something changed. The gateway reconcile evaluates the license itself, writes the `License*` conditions, and turns them into `Ready` and the phase. The phase is the compatibility view of `Ready`:
 
 | Phase | Derived When |
 |---|---|
@@ -955,7 +938,7 @@ A configuration that could not be validated because the validator was unavailabl
 | Owned VirtualService | Update | Reconcile to correct drift |
 | KrakenDEndpoint (via mapper) | Create/Update/Delete | Enqueue owning gateway — re-render config |
 | KrakenDBackendPolicy (via mapper) | Update/Delete | Enqueue all gateways whose endpoints reference this policy |
-| License Secret (via mapper) | Update | Enqueue gateway — license monitor may trigger CE fallback/recovery |
+| License Secret (via mapper) | Update | Enqueue gateway — the license is re-evaluated in the reconcile and may trigger CE fallback/recovery |
 
 ### Mapper Functions
 
@@ -1353,94 +1336,48 @@ The `For` predicate ignores status-only updates, so the reconciler's own status 
 
 ---
 
-## 9. License Monitor
+## 9. License Evaluation
 
-**File:** `internal/controller/license_monitor.go`
+**File:** `internal/controller/gateway_license.go`
 
-The license monitor runs as a periodic reconciler independent of the main gateway reconciliation loop, implementing the state machine described in operator architecture §9.
+The gateway reconcile evaluates an EE gateway's license before it renders, because the result decides whether the render is CE. There is no separate license goroutine: gateway status has a single writer, and the reconcile writes nothing to the user's KrakenDGateway object.
 
 ### Design
 
-The license monitor is NOT implemented as a standard controller-runtime reconciler. Instead, it runs as a goroutine started via `manager.Add(runnable)` with a 5-minute tick interval:
+`reconcileLicense(ctx, gw)` returns a `licenseVerdict`:
 
 ```go
-type LicenseMonitor struct {
-    client.Client
-    Recorder        record.EventRecorder
-    Clock           clock.Clock
-    LicenseParser   util.LicenseParser
-    CheckInterval   time.Duration
-    SafetyBuffer    time.Duration // default: 1 hour
-
-    mu              sync.Mutex
-    lastWarningSent map[types.NamespacedName]time.Time // rate-limit LicenseExpiringSoon to once per 24h
-}
-
-// Start implements manager.Runnable
-func (m *LicenseMonitor) Start(ctx context.Context) error {
-    ticker := m.Clock.NewTicker(m.CheckInterval)
-    defer ticker.Stop()
-    for {
-        select {
-        case <-ctx.Done():
-            return nil
-        case <-ticker.C():
-            m.checkAll(ctx)
-        }
-    }
+type licenseVerdict struct {
+    ceFallback   bool          // render and run CE instead of EE
+    requeueAfter time.Duration // when to look at the license again
 }
 ```
 
-`checkAll` lists all EE KrakenDGateways and calls `checkGateway` for each one. `checkGateway(ctx, gw)` implements the per-gateway license state machine below, reading `gw.Spec.License.ExpiryWarningDays` to determine the warning threshold for each gateway individually.
+The stage comes from `license.Window{Warning, SafetyBuffer}.StageAt(notAfter, now)`: `StageValid`, `StageExpiringSoon`, `StagePreExpiry` or `StageExpired`. `Warning` is `spec.license.expiryWarningDays` (default 30 days) and must stay longer than `SafetyBuffer` (1 hour); a compile-time constant check enforces this. The reconcile requeues at the next stage boundary (`Window.NextChange`), and at least every 5 minutes (`licenseRecheckInterval`). A Secret change enqueues the gateway through the Secret watch. CE gateways return an empty verdict.
 
 ### License Check Logic
 
 ```mermaid
 flowchart TD
-    A[List all KrakenDGateways<br/>with edition=EE] --> B[For each gateway:<br/>call checkGateway]
-    B --> C[Read license Secret]
-    C --> D{Secret exists?}
-    D -->|No| E[Set LicenseSecretUnavailable=True]
-    D -->|Yes| F[Parse X.509 certificate<br/>extract notAfter]
-    F --> F1[Read gw.Spec.License.<br/>ExpiryWarningDays]
-    F1 --> G{expiry ≤ now?}
-    G -->|Yes| H[LicenseExpired path]
-    G -->|No| I{expiry ≤ now + safetyBuffer?}
-    I -->|Yes| J[PreExpiry path]
-    I -->|No| K{expiry ≤ now + warningDays?}
-    K -->|Yes| L[EEWarning: emit LicenseExpiringSoon<br/>rate-limited 24h]
-    L --> L1{Currently Degraded<br/>or Error<br/>license-caused?}
-    L1 -->|Yes| L2[Trigger EE recovery<br/>emit LicenseRestored]
-    L1 -->|No| DONE[Done]
-    K -->|No| M[EERunning: license healthy]
-    M --> M1{Currently Degraded<br/>or Error<br/>license-caused?}
-    M1 -->|Yes| M2[Trigger EE recovery<br/>emit LicenseRestored]
-    M1 -->|No| DONE
+    A[Gateway reconcile, edition=EE] --> C[Read license Secret]
+    C --> D{Secret readable<br/>and parseable?}
+    D -->|No| E[Set LicenseSecretUnavailable=True,<br/>emit LicenseSecretMissing once;<br/>keep the last fallback decision;<br/>requeue in 5 minutes]
+    D -->|Yes| F[Set licenseExpiry and the<br/>license_expiry_seconds metric]
+    F --> G{Stage}
+    G -->|Valid| M[LicenseValid=True LicenseOK]
+    G -->|ExpiringSoon| L[LicenseValid=True LicenseExpiringSoon,<br/>emit LicenseExpiringSoon on entering]
+    M --> R{LicenseExpired or<br/>LicenseDegraded True?}
+    L --> R
+    R -->|Yes| R1[Both False LicenseRestored,<br/>emit LicenseRestored]
+    G -->|PreExpiry or Expired| H[LicenseValid=False and LicenseExpired=True]
     H --> N{fallbackToCE?}
-    J --> N
-    N -->|Yes| O[Trigger CE fallback<br/>via gateway reconcile]
-    N -->|No| P[Set LicenseExpired=True without LicenseDegraded,<br/>emit LicenseExpiredNoFallback;<br/>the gateway derives Ready=False and phase=Error]
+    N -->|Yes| O[LicenseDegraded=True LicenseFallbackCE,<br/>emit LicenseFallbackCE,<br/>render CE]
+    N -->|No| P[emit LicenseExpiredNoFallback;<br/>the gateway derives Ready=False and phase=Error]
 ```
 
-### Triggering Gateway Reconciliation
+### Events on Transitions
 
-The license monitor does not directly modify Deployments or ConfigMaps. The `checkGateway` method first patches the gateway's **status conditions** (e.g., setting `LicenseDegraded=True`, `LicenseValid=False`, `LicenseExpired=True`) using a status subresource patch. After conditions are set, it calls `triggerReconcile` to patch an annotation on the gateway resource. This annotation update triggers the gateway controller's watch, which re-enqueues the gateway for reconciliation. The gateway controller's reconcile loop then reads the current status conditions (already set by `checkGateway`) and acts accordingly (e.g., reading `LicenseDegraded=True` to determine `CEFallback`). The monitor writes only the `License*` conditions and `licenseExpiry`; it never writes `Ready` or the phase. The gateway controller derives both from the license conditions together with the rest of the gateway's conditions.
-
-```go
-func (m *LicenseMonitor) triggerReconcile(ctx context.Context, gw *v1alpha1.KrakenDGateway) error {
-    // Patch annotation to trigger the gateway controller's watch
-    patch := client.MergeFrom(gw.DeepCopy())
-    if gw.Annotations == nil {
-        gw.Annotations = map[string]string{}
-    }
-    gw.Annotations["gateway.krakend.io/license-check"] = m.Clock.Now().Format(time.RFC3339)
-    return m.Patch(ctx, gw, patch)
-}
-```
-
-### Event Rate Limiting
-
-The `LicenseExpiringSoon` Warning event is rate-limited to once per 24 hours per gateway. The monitor tracks the last emission time in an in-memory map (keyed by gateway namespace/name). This map is not persisted — on operator restart, the event may fire once more. This is acceptable: duplicate Warning events are harmless and provide an additional signal after restarts.
+Every license event goes through a transition-only path (`setProblemCondition` for `LicenseSecretUnavailable` and `LicenseDegraded`, a previous-reason check for `LicenseExpiringSoon`, a previous-status check for `LicenseExpiredNoFallback` and `LicenseRestored`), so a steady state emits nothing on repeated reconciles. `LicenseExpiringSoon` fires once when the license enters the warning window.
 
 ---
 
@@ -2783,7 +2720,7 @@ var (
 | `config_renders_total` | `GatewayReconciler.Reconcile` | After calling `Renderer.Render` |
 | `config_validation_failures_total` | `GatewayReconciler.Reconcile` | When `Validator.Validate` returns `ValidationError` |
 | `rolling_restarts_total` | `GatewayReconciler.Reconcile` | After patching Deployment pod template |
-| `license_expiry_days` | `LicenseMonitor.checkGateway` | After parsing license certificate |
+| `license_expiry_seconds` | `GatewayReconciler.reconcileLicense` | After parsing license certificate; the series is removed with the gateway |
 | `endpoint_count` | `GatewayReconciler.Reconcile` | After listing endpoints for gateway |
 | `reconcile_duration_seconds` | `GatewayReconciler.Reconcile` | `defer` at top of Reconcile, observing total duration |
 | `dragonfly_ready` | `GatewayReconciler.Reconcile` | After checking Dragonfly CR status |
@@ -2901,7 +2838,7 @@ func TestGatewayReconciler_CreatesOwnedResources(t *testing.T) {
 | Policy delete blocked by referencing endpoint | Webhook DELETE validation |
 | Policy create/update with invalid field ranges rejected | Webhook CREATE/UPDATE validation |
 | Config validation failure → Error phase, no Deployment update | Validation pipeline, error handling |
-| License expiry → CE fallback (image + config change) | License monitor integration with gateway controller |
+| License expiry → CE fallback (image + config change) | License evaluation inside the gateway reconcile |
 | EE recovery → restored image + full config | License restoration flow |
 | Gateway deletion → orphaned endpoints marked Detached | Endpoint controller gateway watch, Detached phase |
 | AutoConfig create → generated endpoints | AutoConfig pipeline end-to-end |
