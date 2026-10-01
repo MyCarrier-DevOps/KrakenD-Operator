@@ -171,6 +171,11 @@ func TestGatewayReconcile_NoDeploymentBeforeAnyConfigPasses(t *testing.T) {
 	if !apierrors.IsNotFound(err) {
 		t.Fatalf("no Deployment may exist before any config passes validation; Get returned %v", err)
 	}
+	ready := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionReady)
+	if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != v1alpha1.ReasonConfigValidationFailed {
+		t.Errorf("Ready = %+v, want False/%s: nothing is running and the config was rejected",
+			ready, v1alpha1.ReasonConfigValidationFailed)
+	}
 }
 
 func TestGatewayReconcile_UnavailableValidatorIsNotReady(t *testing.T) {
