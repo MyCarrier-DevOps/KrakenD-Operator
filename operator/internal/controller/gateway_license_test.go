@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -36,6 +37,8 @@ import (
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
+	"github.com/mycarrier-devops/krakend-operator/internal/resources"
+	"github.com/mycarrier-devops/krakend-operator/internal/util/hash"
 	"github.com/mycarrier-devops/krakend-operator/internal/util/license"
 )
 
@@ -563,5 +566,76 @@ func TestGatewayReconcile_UnreadableLicenseWithoutKnownExpiryDropsTheGauge(t *te
 	}
 	if licenseExpirySeconds.DeleteLabelValues(gw.Namespace, gw.Name) {
 		t.Error("a license that was never read must leave no license_expiry_seconds series")
+	}
+}
+
+// settledLicensedGateway is an EE gateway with a valid license, reconciled
+// until its Deployment carries the license in the Secret and has finished
+// rolling out, together with the pieces a test needs to change the license.
+type settledLicensedGateway struct {
+	c      client.Client
+	r      *KrakenDGatewayReconciler
+	gw     *v1alpha1.KrakenDGateway
+	secret *corev1.Secret
+}
+
+func settleLicensedGateway(t *testing.T) *settledLicensedGateway {
+	t.Helper()
+	gw, secret, parser := licensedEEGateway(testNow.Add(90*24*time.Hour), false)
+	c := fakeClientBuilder().WithObjects(gw, secret).WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderOutput("cs"), &mockValidator{})
+	r.LicenseParser = parser
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	var dep appsv1.Deployment
+	getObject(t, c, gw, gw.Name, &dep)
+	dep.Status = appsv1.DeploymentStatus{Replicas: 1, UpdatedReplicas: 1, AvailableReplicas: 1}
+	if err := c.Status().Update(context.Background(), &dep); err != nil {
+		t.Fatal(err)
+	}
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	return &settledLicensedGateway{c: c, r: r, gw: gw, secret: secret}
+}
+
+// setLicenseBytes replaces the license in the Secret.
+func (s *settledLicensedGateway) setLicenseBytes(t *testing.T, data string) {
+	t.Helper()
+	var stored corev1.Secret
+	getObject(t, s.c, s.gw, s.secret.Name, &stored)
+	stored.Data["LICENSE"] = []byte(data)
+	if err := s.c.Update(context.Background(), &stored); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// deployment returns the gateway Deployment as stored.
+func (s *settledLicensedGateway) deployment(t *testing.T) *appsv1.Deployment {
+	t.Helper()
+	var dep appsv1.Deployment
+	getObject(t, s.c, s.gw, s.gw.Name, &dep)
+	return &dep
+}
+
+func TestGatewayReconcile_RenewedLicenseBytesRollTheDeployment(t *testing.T) {
+	s := settleLicensedGateway(t)
+	s.setLicenseBytes(t, "renewed certificate")
+
+	if err := reconcileGateway(t, s.r, s.gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	want := hash.SHA256Hex([]byte("renewed certificate"))
+	if got := s.deployment(t).Spec.Template.Annotations[resources.LicenseChecksumAnnotation]; got != want {
+		t.Errorf("license annotation = %q, want %q", got, want)
+	}
+	stored := getGateway(t, s.c, s.gw)
+	progressing := meta.FindStatusCondition(stored.Status.Conditions, v1alpha1.ConditionProgressing)
+	if progressing == nil || progressing.Status != metav1.ConditionTrue || progressing.Reason != "DeploymentUpdated" {
+		t.Errorf("Progressing = %+v, want True/DeploymentUpdated", progressing)
+	}
+	if meta.IsStatusConditionTrue(stored.Status.Conditions, v1alpha1.ConditionReady) {
+		t.Error("Ready must not be True while the pods roll to the renewed license")
 	}
 }
