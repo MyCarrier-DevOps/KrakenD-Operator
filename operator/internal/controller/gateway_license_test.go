@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -526,5 +527,26 @@ func TestGatewayReconcile_UnreadableExpiredLicenseHonoursDisabledFallback(t *tes
 	cond := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionLicenseDegraded)
 	if cond == nil || cond.Status != metav1.ConditionFalse {
 		t.Errorf("LicenseDegraded = %+v, want False", cond)
+	}
+}
+
+func TestGatewayReconcile_UnreadableLicenseWatchesTheKnownExpiry(t *testing.T) {
+	gw, _, parser := licensedEEGateway(testNow, true) // the Secret is not created
+	known := testNow.Add(licenseSafetyBuffer + 2*time.Minute)
+	gw.Status.LicenseExpiry = &metav1.Time{Time: known}
+	c := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderOutput("cs"), &mockValidator{})
+	r.LicenseParser = parser
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(gw)})
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if res.RequeueAfter != 2*time.Minute {
+		t.Errorf("RequeueAfter = %s, want the 2m until the known expiry enters the safety buffer", res.RequeueAfter)
+	}
+	got := testutil.ToFloat64(licenseExpirySeconds.WithLabelValues(gw.Namespace, gw.Name))
+	if want := known.Sub(testNow).Seconds(); got != want {
+		t.Errorf("license_expiry_seconds = %v, want %v from the known expiry", got, want)
 	}
 }
