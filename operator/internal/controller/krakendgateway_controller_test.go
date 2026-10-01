@@ -1683,6 +1683,8 @@ func TestGatewayReadinessFor(t *testing.T) {
 			metav1.ConditionFalse, "LicenseFallbackCE", v1alpha1.PhaseDegraded},
 		{"rolling out", []metav1.Condition{valid, available, c("Progressing", metav1.ConditionTrue, "ConfigDeployed")},
 			metav1.ConditionFalse, "ConfigDeployed", v1alpha1.PhaseDeploying},
+		{"deployment not available yet", []metav1.Condition{valid, settled},
+			metav1.ConditionFalse, "AwaitingAvailability", v1alpha1.PhaseDeploying},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
