@@ -47,11 +47,12 @@ func (r *krakendRenderer) Render(input RenderInput) (*RenderOutput, error) {
 	// Build the root config object
 	config := buildRootConfig(gw)
 
-	// Build endpoints array
+	// Build endpoints array, recording each entry's source in the same order.
 	endpointsJSON := make([]any, 0, len(flat))
+	sources := make([]types.NamespacedName, 0, len(flat))
 	for _, fe := range flat {
-		ep := buildEndpointJSON(fe.Entry, input.Policies, fe.Source.Namespace)
-		endpointsJSON = append(endpointsJSON, ep)
+		endpointsJSON = append(endpointsJSON, buildEndpointJSON(fe.Entry, input.Policies, fe.Source.Namespace))
+		sources = append(sources, fe.Source)
 	}
 	config["endpoints"] = endpointsJSON
 
@@ -99,6 +100,7 @@ func (r *krakendRenderer) Render(input RenderInput) (*RenderOutput, error) {
 		PluginChecksum:      pluginChecksum,
 		ConflictedEndpoints: conflictedSlice,
 		InvalidEndpoints:    invalidSlice,
+		Sources:             sources,
 	}, nil
 }
 
