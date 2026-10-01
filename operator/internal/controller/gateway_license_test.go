@@ -113,6 +113,8 @@ func TestGatewayReconcile_RequeuesAtTheNextLicenseBoundary(t *testing.T) {
 		want     time.Duration
 	}{
 		{"boundary before the recheck interval", testNow.Add(time.Hour + 2*time.Minute), 2 * time.Minute},
+		{"boundary after the recheck interval", testNow.Add(40 * 24 * time.Hour), licenseRecheckInterval},
+		{"already expired", testNow.Add(-time.Hour), licenseRecheckInterval},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
