@@ -1789,6 +1789,8 @@ The operator should deploy a `ValidatingAdmissionWebhook` with `failurePolicy: F
 
 > **Operational note:** `failurePolicy: Fail` means webhook pod outages will block CRD mutations cluster-wide. The operator Deployment should run with `replicas >= 2` and a PDB to minimize webhook downtime. For less strict environments, `failurePolicy: Ignore` allows bypass during outages at the cost of deferred validation.
 
+> **Deletion:** updates to an object that is being deleted (it has a `deletionTimestamp`) are admitted when they don't change its spec (for example, removing a finalizer); a spec change is still validated. Rejecting a finalizer removal would leave the object stuck in `Terminating`.
+
 - **KrakenDEndpoint** — reject if `gatewayRef` references a non-existent KrakenDGateway
 - **KrakenDEndpoint** — reject if `policyRef` references a non-existent KrakenDBackendPolicy
 - **KrakenDEndpoint** — warn (but allow) if an endpoint path+method already exists on the target gateway (conflict detection)
