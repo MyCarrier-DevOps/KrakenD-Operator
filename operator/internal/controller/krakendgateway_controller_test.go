@@ -1895,3 +1895,23 @@ func TestInspectDeploymentStatus_StalePodTemplateIsNotConverged(t *testing.T) {
 		t.Errorf("Progressing = %+v, want True: the Deployment still runs the previous config", progressing)
 	}
 }
+
+func TestInspectDeploymentStatus_SurplusOldReplicasAreNotConverged(t *testing.T) {
+	gw := convergedGatewayAt("cs1")
+	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+		Type: v1alpha1.ConditionProgressing, Status: metav1.ConditionTrue, Reason: v1alpha1.ReasonConfigDeployed,
+		Message: "rolling out",
+	})
+	// Every new replica is available, but an old one has not terminated yet.
+	dep := makeConvergedDeployment(gw, "cs1")
+	dep.Status.Replicas = 2
+	c := fakeClientBuilder().WithObjects(gw, dep).Build()
+	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
+
+	r.inspectDeploymentStatus(context.Background(), gw)
+
+	progressing := meta.FindStatusCondition(gw.Status.Conditions, v1alpha1.ConditionProgressing)
+	if progressing == nil || progressing.Status != metav1.ConditionTrue {
+		t.Errorf("Progressing = %+v, want True while an old replica is still running", progressing)
+	}
+}
