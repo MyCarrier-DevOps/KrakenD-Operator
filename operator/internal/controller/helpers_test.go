@@ -18,8 +18,10 @@ package controller
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
+	"unicode/utf8"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -372,3 +374,14 @@ type stubManager struct {
 }
 
 func (m *stubManager) GetFieldIndexer() client.FieldIndexer { return m.indexer }
+
+func TestTruncateMessage(t *testing.T) {
+	if got := truncateMessage("short", 4096); got != "short" {
+		t.Errorf("a message within the bound must be unchanged, got %q", got)
+	}
+	long := "x" + strings.Repeat("é", 5000) // one line; rune starts fall on odd offsets
+	got := truncateMessage(long, 4096)
+	if len(got) > 4096 || !utf8.ValidString(got) {
+		t.Errorf("got %d bytes, valid UTF-8 = %v; want at most 4096 valid bytes", len(got), utf8.ValidString(got))
+	}
+}
