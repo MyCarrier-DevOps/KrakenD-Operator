@@ -108,6 +108,8 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	var gw v1alpha1.KrakenDGateway
 	if err := r.Get(ctx, req.NamespacedName, &gw); err != nil {
 		if errors.IsNotFound(err) {
+			recordDuration = false
+			r.forgetGateway(req.NamespacedName)
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("getting gateway %s: %w", req.NamespacedName, err)
