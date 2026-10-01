@@ -677,6 +677,19 @@ func storedEP1(t *testing.T, c client.Client) *v1alpha1.KrakenDEndpoint {
 }
 
 func TestEndpointReconcile_ReadyDerivedFromBothWriters(t *testing.T) {
+	conflict := metav1.Condition{
+		Type: v1alpha1.ConditionAccepted, Status: metav1.ConditionFalse, Reason: v1alpha1.ReasonEndpointConflict,
+		Message: "conflict", ObservedGeneration: 1, LastTransitionTime: transitionTime,
+	}
+	legacyAvailable := func(status metav1.ConditionStatus, reason string) metav1.Condition {
+		return metav1.Condition{Type: "Available", Status: status, Reason: reason, Message: "legacy",
+			ObservedGeneration: 1, LastTransitionTime: transitionTime}
+	}
+	legacyActive := endpointOnGW1(1, legacyAvailable(metav1.ConditionTrue, "ReferencesValid"))
+	legacyActive.Status.Phase = v1alpha1.EndpointPhaseActive
+	legacyConflicted := endpointOnGW1(1, legacyAvailable(metav1.ConditionFalse, "EndpointConflict"), conflict)
+	legacyConflicted.Status.Phase = v1alpha1.EndpointPhaseConflicted
+
 	tests := []struct {
 		name       string
 		ep         *v1alpha1.KrakenDEndpoint
@@ -685,6 +698,13 @@ func TestEndpointReconcile_ReadyDerivedFromBothWriters(t *testing.T) {
 		wantPhase  v1alpha1.EndpointPhase
 	}{
 		{"no gateway verdict yet", endpointOnGW1(1), metav1.ConditionUnknown, "Pending", v1alpha1.EndpointPhasePending},
+		{"accepted", endpointOnGW1(1, acceptedAt(1)), metav1.ConditionTrue, "Ready", v1alpha1.EndpointPhaseActive},
+		{"verdict for an older generation", endpointOnGW1(2, acceptedAt(1)),
+			metav1.ConditionUnknown, "Pending", v1alpha1.EndpointPhasePending},
+		{"healthy endpoint with the old status", legacyActive,
+			metav1.ConditionUnknown, "Pending", v1alpha1.EndpointPhasePending},
+		{"conflicted endpoint with the old status", legacyConflicted,
+			metav1.ConditionFalse, "EndpointConflict", v1alpha1.EndpointPhaseConflicted},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
