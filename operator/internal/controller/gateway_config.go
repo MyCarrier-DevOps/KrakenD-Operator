@@ -343,6 +343,23 @@ func rejectionSummary(atts []renderer.Attribution) string {
 	}
 }
 
+// neverApplied reports whether no config has ever been applied to gw. The
+// cached gateway's empty checksum may predate the first apply, so an empty one
+// is confirmed with an uncached read. When that read fails it reports false,
+// the safe answer, with the error.
+func (r *KrakenDGatewayReconciler) neverApplied(
+	ctx context.Context, gw *v1alpha1.KrakenDGateway,
+) (bool, error) {
+	if gw.Status.ConfigChecksum != "" {
+		return false, nil
+	}
+	var live v1alpha1.KrakenDGateway
+	if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(gw), &live); err != nil {
+		return false, fmt.Errorf("confirming gateway %s has no applied config: %w", client.ObjectKeyFromObject(gw), err)
+	}
+	return live.Status.ConfigChecksum == "", nil
+}
+
 // isConfigRejected reports whether cond is a GatewayConfigRejected verdict.
 func isConfigRejected(cond *metav1.Condition) bool {
 	return cond != nil && cond.Reason == v1alpha1.ReasonGatewayConfigRejected
@@ -355,8 +372,10 @@ func isConfigRejected(cond *metav1.Condition) bool {
 // its Ready is derived afresh. Every other endpoint keeps the verdict of the
 // applied render, unless no config has ever been applied (neverApplied): then
 // there is no applied render to keep, and any Accepted left by an earlier
-// gateway of the same name is removed. writeEndpointAccepted writes only on change, so a
-// remembered rejection writes nothing.
+// gateway of the same name is removed. A removal is checked against the live
+// condition, so a stale endpoint list cannot remove a verdict it did not see.
+// writeEndpointAccepted writes only on change, so a remembered rejection
+// writes nothing.
 func (r *KrakenDGatewayReconciler) recordRejections(
 	ctx context.Context,
 	endpoints []v1alpha1.KrakenDEndpoint,
