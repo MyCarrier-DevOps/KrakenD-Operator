@@ -1064,3 +1064,48 @@ func TestCollectConfigMaps_KeepsWhatAScaledDownReplicaSetStillRunsPodsFor(t *tes
 		t.Errorf("remaining ConfigMaps = %v, want test-gw-config-r1 kept while a pod of its ReplicaSet runs", got)
 	}
 }
+
+// testEndpoint is a KrakenDEndpoint on the test gateway serving GET path.
+func testEndpoint(name, path string) *v1alpha1.KrakenDEndpoint {
+	return &v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", Generation: 1},
+		Spec: v1alpha1.KrakenDEndpointSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: "test-gw"},
+			Endpoints: []v1alpha1.EndpointEntry{{
+				Endpoint: path, Method: "GET",
+				Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc:8080"}, URLPattern: "/x"}},
+			}},
+		},
+	}
+}
+
+// badNamespaceVerdict is krakend check's lint output for an unknown
+// extra_config key on rendered entry 1, which is GET /b, owned by default/bad
+// when the gateway serves /a (default/good) and /b.
+const badNamespaceVerdict = "- at '/endpoints/1/extra_config': additional properties 'bad/ns' not allowed"
+
+func TestGatewayReconcile_RejectedConfigNamesTheEndpointAtFault(t *testing.T) {
+	gw := reconciledGateway()
+	good, bad := testEndpoint("good", "/a"), testEndpoint("bad", "/b")
+	c := fakeClientBuilder().WithObjects(gw, good, bad).WithStatusSubresource(gw, good, bad).Build()
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}),
+		&countingValidator{err: rejectedBy(badNamespaceVerdict)})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if cond := storedAccepted(t, c, client.ObjectKeyFromObject(bad)); cond == nil ||
+		cond.Status != metav1.ConditionFalse || cond.Reason != v1alpha1.ReasonGatewayConfigRejected ||
+		!strings.Contains(cond.Message, "bad/ns") {
+		t.Errorf("bad endpoint Accepted = %+v, want False/%s naming the finding",
+			cond, v1alpha1.ReasonGatewayConfigRejected)
+	}
+	if cond := storedAccepted(t, c, client.ObjectKeyFromObject(good)); cond != nil {
+		t.Errorf("good endpoint Accepted = %+v; an endpoint no finding names keeps the applied render's verdict (none yet)",
+			cond)
+	}
+	cv := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionConfigValid)
+	if cv == nil || !strings.Contains(cv.Message, "default/bad") {
+		t.Errorf("ConfigValid = %+v, want its message to name default/bad", cv)
+	}
+}
