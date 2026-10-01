@@ -50,8 +50,11 @@ func EndpointReady(conds []metav1.Condition) (status metav1.ConditionStatus, rea
 		return metav1.ConditionFalse, accepted.Reason, accepted.Message
 	}
 	switch accepted.Reason {
+	case ReasonAccepted:
+		return metav1.ConditionTrue, ReasonReady, "References resolved and accepted by the gateway"
 	case ReasonSchemaNameConflict:
 		return metav1.ConditionTrue, ReasonSchemaNameConflict, accepted.Message
+	default:
+		return metav1.ConditionFalse, accepted.Reason, accepted.Message
 	}
-	return metav1.ConditionTrue, ReasonReady, "References resolved and accepted by the gateway"
 }
