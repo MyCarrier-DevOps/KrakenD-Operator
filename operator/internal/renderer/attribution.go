@@ -190,8 +190,12 @@ func underPrefix(shape, prefix string) bool {
 }
 
 // routeShape spells a route the way krakend's router errors do: {param} is
-// written :param.
+// written :param, and an EE wildcard's trailing "*" is written as the
+// ":Wildcard" parameter it is rewritten to for the CE binary (eeWildcardParam).
 func routeShape(path string) string {
+	if IsEEWildcard(path) {
+		path = strings.TrimSuffix(path, "*") + eeWildcardParam
+	}
 	return braceParamRe.ReplaceAllString(path, ":$1")
 }
 
