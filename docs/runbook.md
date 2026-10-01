@@ -267,6 +267,9 @@ kubectl get events --field-selector involvedObject.name=<name> --sort-by='.lastT
 - Config validation failure — check the `ConfigValid` condition message. It carries at most 4 KiB of krakend check output; the full output is in the operator log, message `krakend check rejected the rendered config`.
 - License expired without CE fallback (`LicenseExpired=True`, `Ready` reason `LicenseExpiredNoFallback`) — renew the license or set `fallbackToCE: true`. A missing license Secret (`LicenseSecretUnavailable=True`) does not change `Ready` or the phase
 - Rollout timeout — check Deployment events
+- Config validation failure — the gateway keeps serving the last applied
+  config (`status.configChecksum`), and its Deployment, Service and other
+  resources are still reconciled. Only the rejected render waits for a fix.
 
 ### Gateway reports `ValidatorUnavailable`
 
