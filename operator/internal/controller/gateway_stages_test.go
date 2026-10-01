@@ -1022,3 +1022,22 @@ func TestGatewayReconcile_ACollectionFailureDoesNotStallTheRestOfTheInfrastructu
 	var hpa autoscalingv2.HorizontalPodAutoscaler
 	getObject(t, c, gw, gw.Name, &hpa)
 }
+
+func TestPublishConfig_FailsWhenTheConfigMapAVanishedCreateRaceLeftIsGone(t *testing.T) {
+	gw := reconciledGateway()
+	gw.UID = "gw-uid"
+	const config = `{"version":3,"name":"raced"}`
+	// The Create loses to a ConfigMap that is deleted before the live read.
+	c := interceptor.NewClient(fakeClientBuilder().WithObjects(gw).Build(), interceptor.Funcs{
+		Create: func(_ context.Context, _ client.WithWatch, obj client.Object, _ ...client.CreateOption) error {
+			return apierrors.NewAlreadyExists(corev1.Resource("configmaps"), obj.GetName())
+		},
+	})
+	r := newTestGatewayReconciler(c, &mockRenderer{}, &mockValidator{})
+
+	err := r.publishConfig(context.Background(), gw, []byte(config), hash.SHA256Hex([]byte(config)))
+
+	if err == nil {
+		t.Error("publishConfig = nil, want an error so the pass retries; the ConfigMap is not there")
+	}
+}
