@@ -87,6 +87,11 @@ func TestEndpointReady(t *testing.T) {
 			[]metav1.Condition{refsOK, testCondition("Accepted", metav1.ConditionTrue, "SchemaNameConflict", 2)},
 			metav1.ConditionTrue, "SchemaNameConflict", "SchemaNameConflict message",
 		},
+		{
+			"accepted with a partial reason",
+			[]metav1.Condition{refsOK, testCondition("Accepted", metav1.ConditionTrue, "PartiallyAccepted", 2)},
+			metav1.ConditionFalse, "PartiallyAccepted", "PartiallyAccepted message",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
