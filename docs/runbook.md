@@ -120,8 +120,9 @@ validating; the operator does not write them.
 | `Progressing` | Config rollout in progress; stays `True` until the Deployment has observed the change and every replica is updated and available |
 | `DragonflyReady` | DragonflyDB instance is operational |
 | `IstioConfigured` | VirtualService has been reconciled |
-| `LicenseValid` | License secret is present and not expired |
-| `LicenseExpiringSoon` | License will expire within the safety buffer |
+| `LicenseValid` | EE license state: `True` (`LicenseOK`), `True` (`LicenseExpiringSoon`) inside the warning window, or `False` (`LicensePreExpiry`, `LicenseExpired`) |
+| `LicenseExpired` | `True` once the license is expired or inside the 1 h safety buffer; without `fallbackToCE` the gateway reports phase `Error` |
+| `LicenseDegraded` | `True` (`LicenseFallbackCE`) while the gateway runs CE because its license expired |
 | `LicenseSecretUnavailable` | License secret could not be read |
 
 ---
@@ -409,18 +410,23 @@ kubectl annotate krakendautoconfig <name> -n <ns> krakend.io/resync="$(date +%s)
 
 ### License expiry warnings
 
-The license monitor checks EE gateway licenses periodically. When a license is expiring soon:
+EE gateway licenses are checked on every gateway reconcile, at each expiry
+boundary, and at least every 5 minutes. When a license enters its warning
+window (`spec.license.expiryWarningDays`, default 30):
 
-1. The `LicenseExpiringSoon` condition is set on the gateway
-2. A warning event is emitted (rate-limited to once per 24h per gateway)
-3. The `license_expiry_seconds` metric decreases
+1. `LicenseValid` stays `True` with reason `LicenseExpiringSoon`
+2. One `LicenseExpiringSoon` warning event is emitted
+3. The `license_expiry_seconds` metric keeps decreasing
 
-**Resolution:** Renew the license and update the Kubernetes Secret. The monitor will detect the change and clear the condition.
+**Resolution:** renew the license and update the Kubernetes Secret. The
+gateway reconciles on the Secret change and sets `LicenseValid` back to
+`LicenseOK`.
 
-If the license expires and `fallbackToCE` is enabled:
-- Gateway transitions to `Degraded` phase
-- EE-only features are disabled
-- Gateway continues operating with CE feature set
+If the license reaches its safety buffer (1 h before expiry) or expires and
+`fallbackToCE` is enabled, the gateway falls back to CE: `LicenseDegraded` is
+`True` (reason `LicenseFallbackCE`), EE-only features are disabled, and the
+gateway keeps operating with the CE feature set. Without `fallbackToCE`,
+`LicenseExpired` is `True` and the gateway reports phase `Error`.
 
 ---
 
