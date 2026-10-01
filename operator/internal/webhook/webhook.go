@@ -27,6 +27,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -40,6 +41,12 @@ import (
 	"github.com/mycarrier-devops/krakend-operator/internal/controller"
 	"github.com/mycarrier-devops/krakend-operator/internal/resources"
 )
+
+// isTerminating reports whether obj is being deleted.
+func isTerminating(obj runtime.Object) bool {
+	o, ok := obj.(metav1.Object)
+	return ok && !o.GetDeletionTimestamp().IsZero()
+}
 
 // GatewayValidator validates KrakenDGateway resources.
 type GatewayValidator struct {
@@ -71,6 +78,9 @@ func (v *GatewayValidator) ValidateUpdate(
 	oldObj runtime.Object,
 	newObj runtime.Object,
 ) (admission.Warnings, error) {
+	if isTerminating(newObj) {
+		return nil, nil
+	}
 	gw, ok := newObj.(*v1alpha1.KrakenDGateway)
 	if !ok {
 		return nil, fmt.Errorf("expected KrakenDGateway, got %T", newObj)
@@ -874,6 +884,9 @@ func (v *EndpointValidator) ValidateUpdate(
 	_ runtime.Object,
 	newObj runtime.Object,
 ) (admission.Warnings, error) {
+	if isTerminating(newObj) {
+		return nil, nil
+	}
 	ep, ok := newObj.(*v1alpha1.KrakenDEndpoint)
 	if !ok {
 		return nil, fmt.Errorf("expected KrakenDEndpoint, got %T", newObj)
@@ -1029,6 +1042,9 @@ func (v *PolicyValidator) ValidateUpdate(
 	_ runtime.Object,
 	newObj runtime.Object,
 ) (admission.Warnings, error) {
+	if isTerminating(newObj) {
+		return nil, nil
+	}
 	policy, ok := newObj.(*v1alpha1.KrakenDBackendPolicy)
 	if !ok {
 		return nil, fmt.Errorf("expected KrakenDBackendPolicy, got %T", newObj)
@@ -1135,6 +1151,9 @@ func (v *AutoConfigValidator) ValidateUpdate(
 	_ runtime.Object,
 	newObj runtime.Object,
 ) (admission.Warnings, error) {
+	if isTerminating(newObj) {
+		return nil, nil
+	}
 	ac, ok := newObj.(*v1alpha1.KrakenDAutoConfig)
 	if !ok {
 		return nil, fmt.Errorf("expected KrakenDAutoConfig, got %T", newObj)
