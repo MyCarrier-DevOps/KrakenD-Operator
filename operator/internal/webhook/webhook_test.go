@@ -2788,3 +2788,29 @@ func TestAutoConfigValidator_RejectsSpecChangeOnTerminatingObject(t *testing.T) 
 		t.Fatal("a spec change to an invalid value on a terminating autoconfig was admitted; want it rejected")
 	}
 }
+
+func TestTerminatingWithUnchangedSpec(t *testing.T) {
+	base := &v1alpha1.KrakenDBackendPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "default"},
+		Spec:       v1alpha1.KrakenDBackendPolicySpec{RateLimit: &v1alpha1.RateLimitSpec{MaxRate: 10}},
+	}
+	changed := base.DeepCopy()
+	changed.Spec.RateLimit.MaxRate = 20
+
+	cases := []struct {
+		name         string
+		oldObj, newObj runtime.Object
+		want         bool
+	}{
+		{"terminating with the same spec", terminating(base.DeepCopy()), terminating(base.DeepCopy()), true},
+		{"not terminating", base.DeepCopy(), base.DeepCopy(), false},
+		{"terminating with a changed spec", terminating(base.DeepCopy()), terminating(changed), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := terminatingWithUnchangedSpec(tc.oldObj, tc.newObj); got != tc.want {
+				t.Errorf("terminatingWithUnchangedSpec = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
