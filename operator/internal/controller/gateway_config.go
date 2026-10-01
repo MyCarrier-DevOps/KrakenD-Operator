@@ -558,6 +558,11 @@ func appliedImage(gw *v1alpha1.KrakenDGateway, current v1alpha1.Edition) string 
 	return renderer.ResolveImage(gw, appliedFallback(gw, current))
 }
 
+// openAPIFallbackNote is the CEFallbackApplied entry for spec.openapi: the CE
+// binary has no openapi command, so a fallback Deployment runs without the
+// OpenAPI export init container and the openapi-serve sidecar.
+const openAPIFallbackNote = "gateway: spec.openapi export and the openapi-serve sidecar (until EE returns)"
+
 // reconcileCEFallbackCondition reports the CE-fallback render the gateway
 // serves and what it removed. It describes the applied config: while a newer
 // render is not applied it is left as it was, and it is removed when the
