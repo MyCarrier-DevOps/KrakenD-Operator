@@ -341,17 +341,22 @@ spec:
     fallbackToCE: true                 # switch to CE image on license expiry
 
 status:
-  phase: Running                       # Pending, Deploying, Running, Degraded, Error (Rendering and Validating are no longer written)
+  phase: Running                       # derived from Ready: Pending, Deploying, Running, Degraded, Error
   configChecksum: "sha256:abc123..."
   observedGeneration: 5
   replicas: 3
   readyReplicas: 3
   conditions:
+    - type: Ready
+      status: "True"
+      lastTransitionTime: "2026-04-03T10:00:15Z"
+      reason: Ready
+      message: "Configuration applied and all replicas available"
     - type: ConfigValid
       status: "True"
       lastTransitionTime: "2026-04-03T10:00:00Z"
-      reason: ValidationPassed
-      message: "krakend check -t -n -c passed"
+      reason: ConfigApplied
+      message: "Configuration passed validation and is applied"
     - type: Available
       status: "True"
       lastTransitionTime: "2026-04-03T10:00:05Z"
@@ -685,21 +690,17 @@ sequenceDiagram
 
     alt Checksum unchanged
         alt Desired image ≠ current Deployment image
-            Op->>K8s: Update KrakenDGateway phase → Deploying
-            Op->>K8s: Set Progressing=True on KrakenDGateway
+            Op->>K8s: Set Progressing=True (phase Deploying is derived)
             Op->>Dep: Patch Deployment container image + checksum/plugins if changed
             Note over Op: Image-only change (e.g., CE↔EE transition<br/>with no config diff). Triggers rolling update.
         else Image unchanged
             alt Plugin checksum changed
-                Op->>K8s: Update KrakenDGateway phase → Deploying
-                Op->>K8s: Set Progressing=True on KrakenDGateway
+                Op->>K8s: Set Progressing=True (phase Deploying is derived)
                 Op->>Dep: Patch pod annotation: checksum/plugins
                 Note over Op: Plugin-only change. Triggers rolling update.
             else No drift detected
                 Note over Op: No-op — config, image, and plugins<br/>all identical to current state.
-                opt Phase at start of reconcile was not Degraded, Error, or Deploying
-                    Op->>K8s: Update KrakenDGateway phase → Running
-                end
+                Op->>K8s: Set ConfigValid=True (ConfigApplied); derive Ready and phase
             end
         end
     else Checksum changed
@@ -707,17 +708,16 @@ sequenceDiagram
 
         alt Validation fails
             Op->>K8s: Update KrakenDGateway condition → ConfigValid=False
-            Op->>K8s: Update KrakenDGateway phase → Error
+            Op->>K8s: Set Ready=False (ConfigValidationFailed), phase Error
             Op->>K8s: Emit Warning Event (when the verdict changes)
             Note over Op: STOP — do not deploy invalid config
         else Validator unavailable (binary missing, timeout, killed, I/O error)
             Op->>K8s: Update KrakenDGateway condition → ConfigValid=Unknown<br/>(reason ValidatorUnavailable)
             Op->>K8s: Emit one Warning Event (ValidatorUnavailable)
-            Note over Op: Phase and applied config kept — return the error,<br/>controller-runtime retries with backoff
+            Note over Op: Ready=Unknown, serving phase and applied config kept — return the error,<br/>controller-runtime retries with backoff
         else Validation passes
-            Op->>K8s: Update KrakenDGateway condition → ConfigValid=True
-            Op->>K8s: Update KrakenDGateway phase → Deploying
-            Op->>K8s: Set Progressing=True on KrakenDGateway
+            Op->>K8s: Update KrakenDGateway condition → ConfigValid=True (ConfigApplied)
+            Op->>K8s: Set Progressing=True (phase Deploying is derived)
             Op->>CM: Update ConfigMap with new krakend.json
             Op->>K8s: Write status.configChecksum = newChecksum
             Op->>Dep: Patch Deployment: pod annotations<br/>checksum/config + checksum/plugins,<br/>container image (all to desired state)
@@ -728,10 +728,10 @@ sequenceDiagram
             Note over Op: Deployment status watch triggers:
 
             alt Rollout converges
-                Op->>K8s: Update replicas/readyReplicas,<br/>set Progressing=False, Available=True
-                Op->>K8s: Update KrakenDGateway phase → Running
+                Op->>K8s: Update replicas/readyReplicas
+                Op->>K8s: Set Progressing=False, Available=True (Ready=True, phase Running)
             else ProgressDeadlineExceeded
-                Op->>K8s: Set phase=Error, Progressing=False, Available=False (reason: ProgressDeadlineExceeded)
+                Op->>K8s: Set Progressing=False, Available=False (reason: RolloutFailed); Ready=False, phase Error
                 Op->>K8s: Emit Warning Event (RolloutFailed)
                 Note over Op: ConfigValid remains True (config passed validation).<br/>Leave existing pods running.<br/>Requeue for user correction.
             end
@@ -744,7 +744,7 @@ sequenceDiagram
 
 | Event | Controller | Action |
 |---|---|---|
-| KrakenDGateway created | Gateway controller | The phase is not written up front; the first status write the reconcile needs persists it (`Pending` until a config is accepted or rejected, including while the validator is unavailable). Create Deployment, Service, ConfigMap, SA; optionally Dragonfly CR, VS, ExternalSecret. Trigger config render. The endpoint controller's gateway watch re-resolves the references of endpoints with a matching `gatewayRef`, which re-attaches `Detached` endpoints. |
+| KrakenDGateway created | Gateway controller | The first reconcile writes one status with the derived phase (no separate `Pending` write). Create Deployment, Service, ConfigMap, SA; optionally Dragonfly CR, VS, ExternalSecret. Trigger config render. The endpoint controller's gateway watch re-resolves the references of endpoints with a matching `gatewayRef`, which re-attaches `Detached` endpoints. |
 | KrakenDGateway updated | Gateway controller | Re-render config, update child resources, rolling restart |
 | KrakenDGateway deleted | Kubernetes GC | ownerReference cascade deletes all child resources. A KrakenDGateway with a deletionTimestamp is not reconciled: garbage collection removes its children, and the operator does not recreate them. |
 | KrakenDEndpoint created, spec changed, or its `Accepted` changed | Endpoint controller | Resolve gateway and policy references into `ResolvedRefs`; derive `Ready` and `phase` from `ResolvedRefs` and `Accepted`; patch status (optimistic lock) only when it changed. The gateway controller re-renders the target gateway on spec changes and records `Accepted` on every endpoint of an applied render. A resolved conflict flips `Accepted` back to `True`. |
@@ -756,8 +756,8 @@ sequenceDiagram
 | KrakenDGateway or KrakenDBackendPolicy created or deleted | Endpoint controller | Re-resolve references of the endpoints that reference it (`ResolvedRefs` `GatewayNotFound`/`PolicyNotFound` → phase `Detached`/`Invalid`). Gateway and policy updates are ignored: only their existence matters. Re-attachment occurs automatically when the gateway is created again. |
 | Secret (LICENSE) created or updated | Gateway controller | Re-parse X.509 `notAfter` from new Secret; run license validation state machine (`ValidateLicense` → `EERunning`/`EEWarning`/`PreExpiry`/`LicenseExpired`); trigger rolling restart if the license has not expired and the parsed `notAfter` has changed from the last observed value. Also trigger EE recovery (rolling restart) if `expiry > now+1h` AND the gateway is currently in Degraded or Error state (license-caused only) |
 | Dragonfly CR status updated | Gateway controller | Reflect `DragonflyReady` condition on KrakenDGateway; emit `DragonflyNotReady` Warning event if phase regresses |
-| Deployment status updated | Gateway controller | Update `status.replicas`, `status.readyReplicas`, `Available` and `Progressing` conditions on KrakenDGateway. When rollout converges (`updatedReplicas == status.replicas AND availableReplicas == status.replicas`), set `Progressing=False` and transition gateway phase from `Deploying` to `Running`. If the Deployment reports `ProgressDeadlineExceeded`, set `phase=Error`, `Progressing=False`, `Available=False` (reason: `ProgressDeadlineExceeded`), and emit `RolloutFailed` Warning event. `ConfigValid` remains `True` (config passed validation). Existing pods are left running to preserve availability. |
-| License approaching expiry | License monitor (periodic) | Emit warning events; if within the expiry warning window (`now+1h < expiry ≤ now+warningDays`), set `LicenseValid=False` (reason: `ExpiringSoon`) and emit `LicenseExpiringSoon` Warning event (rate-limited to once per 24h). If `expiry > now+1h` AND currently Degraded or Error (license-caused only), trigger EE recovery (even within the warning window). If PreExpiry (`now < expiry ≤ now+1h`) AND `fallbackToCE=true`, switch to CE image. If expired AND `fallbackToCE=true`, switch to CE image. If PreExpiry AND `fallbackToCE=false`, set `phase=Error`, `LicenseValid=False` (reason: `LicensePreExpiry`), and emit `LicenseExpiredNoFallback` Warning event; leave Deployment running. If expired AND `fallbackToCE=false`, set `phase=Error`, `LicenseValid=False` (reason: `LicenseExpired`), `LicenseExpired=True`, and emit `LicenseExpiredNoFallback` Warning event; leave Deployment running. If license is healthy (`expiry > now+warningDays`), set `LicenseValid=True`; if currently Degraded or Error (license-caused only), trigger EE recovery. |
+| Deployment status updated | Gateway controller | Update `status.replicas`, `status.readyReplicas`, `Available` and `Progressing` conditions on KrakenDGateway. When rollout converges (`updatedReplicas == status.replicas AND availableReplicas == status.replicas`), set `Progressing=False` and the derived phase becomes `Running`. If the Deployment reports `ProgressDeadlineExceeded`, set `Progressing=False`, `Available=False` (reason: `RolloutFailed`), and emit `RolloutFailed` Warning event. `ConfigValid` remains `True` (config passed validation). Existing pods are left running to preserve availability. |
+| License approaching expiry | License monitor (periodic) | Emit warning events; if within the expiry warning window (`now+1h < expiry ≤ now+warningDays`), set `LicenseValid=False` (reason: `ExpiringSoon`) and emit `LicenseExpiringSoon` Warning event (rate-limited to once per 24h). If `expiry > now+1h` AND currently Degraded or Error (license-caused only), trigger EE recovery (even within the warning window). If PreExpiry (`now < expiry ≤ now+1h`) AND `fallbackToCE=true`, switch to CE image. If expired AND `fallbackToCE=true`, switch to CE image. If PreExpiry AND `fallbackToCE=false`, set `LicenseValid=False` (reason: `LicensePreExpiry`; the gateway controller derives phase `Error`), and emit `LicenseExpiredNoFallback` Warning event; leave Deployment running. If expired AND `fallbackToCE=false`, set `LicenseValid=False` (reason: `LicenseExpired`), `LicenseExpired=True` (the gateway controller derives phase `Error`), and emit `LicenseExpiredNoFallback` Warning event; leave Deployment running. If license is healthy (`expiry > now+warningDays`), set `LicenseValid=True`; if currently Degraded or Error (license-caused only), trigger EE recovery. |
 
 ### Reconciliation Queueing
 
@@ -936,16 +936,16 @@ sequenceDiagram
             Op->>K8s: Create Deployment with<br/>Secret volume mount at /etc/krakend/LICENSE<br/>using CE image (ceImage or krakend/krakend:version)
             Op->>K8s: Set condition LicenseValid=False (reason per entry path: LicensePreExpiry or LicenseExpired)
             Op->>K8s: Set condition LicenseDegraded=True (reason per entry path: LicensePreExpiry or LicenseExpired)
-            Op->>K8s: Update KrakenDGateway phase → Degraded
+            Op->>K8s: Set LicenseDegraded=True (the gateway controller derives phase Degraded)
             Op->>K8s: Emit LicenseFallbackCE Warning Event
             Note over Op: CE fallback on cold start —<br/>no intermediate EE Deployment created.
         else PreExpiry AND fallbackToCE=false
-            Op->>K8s: Set phase=Error, LicenseValid=False (reason=LicensePreExpiry)
+            Op->>K8s: Set LicenseValid=False (reason=LicensePreExpiry) (the gateway controller derives phase Error)
             Op->>K8s: Emit LicenseExpiredNoFallback Warning Event
             Note over Op: STOP — license within pre-expiry safety window,<br/>no fallback configured.
         else Expired AND fallbackToCE=false
             Op->>K8s: Set condition LicenseValid=False (reason=LicenseExpired)
-            Op->>K8s: Set phase=Error, LicenseExpired=True
+            Op->>K8s: Set LicenseExpired=True (the gateway controller derives phase Error)
             Op->>K8s: Emit LicenseExpiredNoFallback Warning Event
             Note over Op: STOP — license expired, no fallback configured.
         end
@@ -962,7 +962,7 @@ sequenceDiagram
         Op->>K8s: Set condition LicenseDegraded=True (reason=LicensePreExpiry)
         Op->>K8s: Emit LicenseFallbackCE Warning Event
     else now < expiry ≤ now+1h (PreExpiry) AND fallbackToCE=false
-        Op->>K8s: Set phase=Error, LicenseValid=False (reason=LicensePreExpiry)
+        Op->>K8s: Set LicenseValid=False (reason=LicensePreExpiry) (the gateway controller derives phase Error)
         Op->>K8s: Emit LicenseExpiredNoFallback Warning Event
     else now+1h < expiry AND expiry ≤ now+warningDays (EEWarning)
         Op->>K8s: Set condition LicenseValid=False (reason=ExpiringSoon)
@@ -980,7 +980,7 @@ sequenceDiagram
         Op->>K8s: Emit LicenseFallbackCE Warning Event
     else expiry ≤ now AND fallbackToCE=false
         Op->>K8s: Set condition LicenseValid=False (reason=LicenseExpired)
-        Op->>K8s: Set phase=Error, LicenseExpired=True
+        Op->>K8s: Set LicenseExpired=True (the gateway controller derives phase Error)
         Op->>K8s: Emit LicenseExpiredNoFallback Warning Event
     else expiry > now+warningDays (EERunning — license healthy)
         Op->>K8s: Set condition LicenseValid=True, reason=LicenseOK
@@ -1221,7 +1221,7 @@ stateDiagram-v2
 
 ### License Check Frequency and Safety Buffer
 
-The license monitor runs on a **5-minute period** independent of the main reconciliation loop. Because KrakenD EE processes terminate immediately upon license expiry, the operator triggers the CE fallback **1 hour before the actual expiry time** (not at T-0). This safety buffer ensures the rolling deployment to CE completes well before any EE pod would self-terminate.
+The license monitor runs on a **5-minute period** independent of the main reconciliation loop. Because KrakenD EE processes terminate immediately upon license expiry, the operator triggers the CE fallback **1 hour before the actual expiry time** (not at T-0). The license monitor writes only the License* conditions and licenseExpiry; the gateway controller derives phase and Ready from them.This safety buffer ensures the rolling deployment to CE completes well before any EE pod would self-terminate.
 
 > **Note:** In steady-state operation, `PreExpiry` fires first (1 hour before T-0). The `LicenseExpired` state is most commonly reached on cold-start (e.g., the operator is deployed into a cluster where the license has already expired), but is also reachable via the `Error → CheckLicense → WaitForSecret → ValidateLicense` recheck path if the monitor was in `Error` state when T-0 passed.
 
@@ -1229,7 +1229,7 @@ The license monitor runs on a **5-minute period** independent of the main reconc
 
 When `fallbackToCE=false` and the license is expired or approaching expiry, the operator transitions to the `Error` state:
 
-1. **Set KrakenDGateway phase to `Error`** — set `LicenseValid=False`; if `expiry ≤ now`, also set `LicenseExpired=True` (reason: `LicenseExpired`); otherwise (PreExpiry path) set reason `LicensePreExpiry`. Emit `LicenseExpiredNoFallback` Warning event
+1. **Record the failed license** — set `LicenseValid=False`; if `expiry ≤ now`, also set `LicenseExpired=True` (reason: `LicenseExpired`); otherwise (PreExpiry path) set reason `LicensePreExpiry`. Emit `LicenseExpiredNoFallback` Warning event. The gateway controller derives phase `Error` from these conditions
 2. **Leave the existing Deployment running** — the operator does not scale down or delete the Deployment. EE pods will self-terminate at the actual license expiry time (T-0), entering `CrashLoopBackOff` as KrakenD refuses to start without a valid license
 3. **Continuously re-check** — the license monitor continues its 5-minute periodic recheck. If a renewed license becomes available, the operator transitions through `CheckLicense` back to `ValidateLicense` and recovers normally
 
@@ -1303,10 +1303,10 @@ flowchart TD
 
     N -->|No| N1{Desired image ≠<br/>current Deployment image?}
     N1 -->|No| N3{checksum/plugins<br/>changed?}
-    N3 -->|No| O[No-op: skip deployment<br/>Set phase=Running if phase<br/>at start of reconcile was not<br/>Degraded, Error, or Deploying]
-    N3 -->|Yes| N4[Set phase=Deploying<br/>Set Progressing=True<br/>Patch pod annotation: checksum/plugins]
+    N3 -->|No| O[No-op: skip deployment<br/>Set ConfigValid=True<br/>Derive Ready and phase]
+    N3 -->|Yes| N4[Set Progressing=True<br/>Patch pod annotation: checksum/plugins]
     N4 --> U
-    N1 -->|Yes| N2[Set phase=Deploying<br/>Set Progressing=True<br/>Patch Deployment container image +<br/>checksum/plugins if changed]
+    N1 -->|Yes| N2[Set Progressing=True<br/>Patch Deployment container image +<br/>checksum/plugins if changed]
     N2 --> U
     N -->|Yes| PW[Create validation copy:<br/>strip wildcard endpoints<br/>if edition=EE AND CE fallback not active]
     PW --> RJ{Same validation copy<br/>already rejected?}
@@ -1314,9 +1314,9 @@ flowchart TD
     RJ -->|No| P[Run krakend check -t -n -c<br/>on validation copy]
 
     P --> Q{Verdict?}
-    Q -->|Yes| R[Set ConfigValid=True<br/>Set phase=Deploying<br/>Set Progressing=True<br/>Update ConfigMap<br/>Write status.configChecksum]
-    Q -->|No| S[Set ConfigValid=False<br/>Set phase=Error<br/>Warning Event if the verdict changed<br/>Remember the rejected copy<br/>STOP]
-    Q -->|Unavailable| V[Set ConfigValid=Unknown<br/>reason ValidatorUnavailable<br/>Keep phase and applied config<br/>One Warning Event<br/>Return error: retry with backoff]
+    Q -->|Yes| R[Set ConfigValid=True<br/>Set Progressing=True<br/>Update ConfigMap<br/>Write status.configChecksum]
+    Q -->|No| S[Set ConfigValid=False<br/>Derive Ready=False, phase Error<br/>Warning Event if the verdict changed<br/>Remember the rejected copy<br/>STOP]
+    Q -->|Unavailable| V[Set ConfigValid=Unknown<br/>reason ValidatorUnavailable<br/>Ready=Unknown, keep the serving phase and applied config<br/>One Warning Event<br/>Return error: retry with backoff]
 
     R --> T[Patch Deployment<br/>pod annotation: checksum/config +<br/>checksum/plugins + container image]
     T --> U[Kubernetes Rolling Update]
@@ -1745,12 +1745,14 @@ conditions and shown with `-o wide`.
 
 | Kind | `Ready` is True when |
 |---|---|
+| KrakenDGateway | the configuration is validated and applied, the Deployment is available and not rolling out, and the EE license (if any) is valid |
 | KrakenDEndpoint | `ResolvedRefs` and `Accepted` are True, `Accepted` for the current generation |
 
 ### Gateway Status Conditions
 
 | Condition | Meaning |
 |---|---|
+| `Ready` | Summary condition written only by the gateway controller, derived from ConfigValid, Available, Progressing, LicenseExpired and LicenseDegraded (`Unknown` while the validator is unavailable); phase is derived from the same rules |
 | `ConfigValid` | Last rendered krakend.json passed `krakend check -t -n -c` (`Unknown` with reason `ValidatorUnavailable` while krakend check cannot run) |
 | `Available` | Desired number of KrakenD pods are ready and serving traffic |
 | `LicenseValid` | EE license exists and is not within the expiry warning window |
