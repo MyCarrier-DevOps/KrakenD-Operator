@@ -47,6 +47,33 @@ type DragonflyState struct {
 	ServiceDNS string
 }
 
+// FeatureWildcardEndpoint is the StrippedEEFeature.Feature of an EE wildcard
+// entry, which a CE-fallback render removes whole.
+const FeatureWildcardEndpoint = "wildcard endpoint"
+
+// StrippedEEFeature is one Enterprise-only feature removed from a CE-fallback
+// render.
+type StrippedEEFeature struct {
+	// Source is the KrakenDEndpoint the feature came from; zero for a
+	// gateway-level feature.
+	Source types.NamespacedName
+	// Method and Endpoint name the entry; both are empty for a gateway-level
+	// feature.
+	Method   string
+	Endpoint string
+	// Feature is "wildcard endpoint", "extra_config <namespace>" or
+	// "backend[<i>] extra_config <namespace>".
+	Feature string
+}
+
+// String renders f for status messages.
+func (f StrippedEEFeature) String() string {
+	if f.Source == (types.NamespacedName{}) {
+		return "gateway: " + f.Feature
+	}
+	return fmt.Sprintf("%s %s %s: %s", f.Source, f.Method, f.Endpoint, f.Feature)
+}
+
 // RenderOutput holds the results of a rendering pass.
 type RenderOutput struct {
 	JSON                []byte
@@ -62,6 +89,11 @@ type RenderOutput struct {
 	// Sources[i] is the KrakenDEndpoint that produced endpoints[i]. It is the
 	// only way back from a krakend check finding to the CR at fault.
 	Sources []types.NamespacedName
+	// StrippedEEFeatures lists what a CE-fallback render (RenderInput.CEFallback)
+	// removed because only KrakenD Enterprise supports it: EE wildcard entries
+	// and EE-only extra_config namespaces. It lists rendered entries in order,
+	// then the gateway level.
+	StrippedEEFeatures []StrippedEEFeature
 }
 
 // Options configures the renderer (reserved for future use).
