@@ -1369,6 +1369,16 @@ Each run is limited to 30 seconds. Only a run that completes and exits non-zero 
 
 A rejection's krakend check output can be far larger than a condition allows (one bad policy used by many backends), so the `ConfigValid` condition message and the `ConfigValidationFailed` event carry at most 4 KiB of it: the leading whole lines that fit, then `(output truncated, N more lines)`. The operator logs the full output once per rejected input, as `krakend check rejected the rendered config`.
 
+When validation fails, the rendered config is not applied and the gateway
+keeps serving the last applied one; there is no per-endpoint quarantine.
+`RenderOutput.Sources` is index-aligned with the rendered `endpoints` array,
+so each `krakend check` finding (a `/endpoints/<i>` pointer, or a
+`METHOD /path` or `path '…'` in router errors) maps back to its
+KrakenDEndpoint. Those endpoints get `Accepted=False/GatewayConfigRejected`,
+and every other endpoint keeps the verdict of the applied config. A later
+pass that renders the same rejected config reuses the remembered verdict
+and writes nothing.
+
 ---
 
 ## 11. Plugin Management
