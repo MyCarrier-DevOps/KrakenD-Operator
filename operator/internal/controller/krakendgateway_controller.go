@@ -1137,7 +1137,8 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 		gcErr = r.collectConfigMaps(ctx, gw, in.configMapName)
 	}
 
-	// HPA (only if autoscaling is configured)
+	// HPA (only if autoscaling is configured; otherwise one the gateway
+	// controls is deleted)
 	if gw.Spec.Autoscaling != nil {
 		hpa := &autoscalingv2.HorizontalPodAutoscaler{ObjectMeta: metav1.ObjectMeta{
 			Name: gw.Name, Namespace: gw.Namespace,
@@ -1148,6 +1149,10 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 		}); err != nil {
 			return fmt.Errorf("reconciling hpa: %w", err)
 		}
+	} else if err := r.deleteIfControlled(ctx, gw, &autoscalingv2.HorizontalPodAutoscaler{
+		ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace},
+	}); err != nil {
+		return err
 	}
 
 	// Post-restart Job (only if enabled, and only after the Deployment has
@@ -1194,6 +1199,12 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 		// configChecksum == "" reasoning (~line 870) for not flickering
 		// conditions away during an in-progress/incomplete state.
 		meta.RemoveStatusCondition(&gw.Status.Conditions, v1alpha1.ConditionDragonflyRunAsRootUnacknowledged)
+		if err := r.deleteOptionalIfControlled(ctx, gw, dragonflyGVK, resources.DragonflyName(gw)); err != nil {
+			return err
+		}
+		meta.RemoveStatusCondition(&gw.Status.Conditions, v1alpha1.ConditionDragonflyReady)
+		gw.Status.DragonflyAddress = ""
+		dragonflyReady.DeleteLabelValues(gw.Namespace, gw.Name)
 	}
 
 	// ExternalSecret (only if license.externalSecret is enabled AND CRD is installed)
@@ -1219,6 +1230,8 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 				return fmt.Errorf("reconciling externalsecret: %w", err)
 			}
 		}
+	} else if err := r.deleteOptionalIfControlled(ctx, gw, externalSecretGVK, resources.ExternalSecretName(gw)); err != nil {
+		return err
 	}
 
 	// VirtualService (only if Istio is enabled AND CRD is installed)
@@ -1251,6 +1264,11 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 				Message:            "Istio VirtualService reconciled",
 			})
 		}
+	} else {
+		if err := r.deleteOptionalIfControlled(ctx, gw, virtualServiceGVK, gw.Name); err != nil {
+			return err
+		}
+		meta.RemoveStatusCondition(&gw.Status.Conditions, v1alpha1.ConditionIstioConfigured)
 	}
 
 	return gcErr
