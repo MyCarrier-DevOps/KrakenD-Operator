@@ -206,6 +206,7 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		pluginChecksum:  output.PluginChecksum,
 		image:           output.DesiredImage,
 		configMapName:   cfg.appliedConfigMap,
+		heldBecause:     cfg.heldBecause,
 	}
 	infraErr := r.reconcileInfrastructure(ctx, &gw, infra)
 	r.inspectDeploymentStatus(ctx, &gw, infra)
@@ -913,6 +914,8 @@ type infraInputs struct {
 	// configMapName is the ConfigMap holding the applied config; "" means
 	// none does.
 	configMapName string
+	// heldBecause is why configMapName is "": nil when none exists.
+	heldBecause error
 }
 
 // reconcileInfrastructure is the infrastructure stage. It creates or updates
@@ -968,8 +971,11 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 		// The applied config's ConfigMap is gone (deleted out of band while
 		// a newer render is rejected). Leave the Deployment exactly as it
 		// is rather than point it at a config that does not exist.
-		log.Error(errAppliedConfigMissing, "holding the Deployment as it is",
-			"checksum", in.appliedChecksum)
+		reason := in.heldBecause
+		if reason == nil {
+			reason = errAppliedConfigMissing
+		}
+		log.Error(reason, "holding the Deployment as it is", "checksum", in.appliedChecksum)
 	default:
 		if err := r.reconcileDeployment(ctx, gw, in); err != nil {
 			return err
