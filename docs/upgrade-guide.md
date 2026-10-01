@@ -631,6 +631,35 @@ kubectl patch <kind>/<name> --subresource=status --type=json \
 
 ---
 
+## Unreleased — Gateway reconcile correctness
+
+The KrakenDGateway controller now keeps every resource it owns converged
+whatever the verdict on the newest rendered config, and it never lets a
+config the running binary cannot load reach a pod.
+
+### A rejected config no longer freezes the gateway
+
+Previously, a config that failed `krakend check`, or could not be checked,
+stopped the whole reconcile. The Deployment, Service, PDB, HPA, post-restart
+Job and optional resources were not reconciled until the input was fixed,
+so a deleted Deployment stayed deleted. Reconciliation now has two stages:
+
+- **Config stage:** render, validate, publish. Only a config that passed
+  validation becomes the applied config (`status.configChecksum`).
+- **Infrastructure stage:** always runs and deploys the applied config. A
+  rejected or unjudged render changes nothing the pods see. Every other spec
+  change (replicas, image, resources, probes) and drift correction proceed
+  as usual.
+
+Until a first config has passed validation, the Deployment is not created.
+The ServiceAccount, Service and PDB are.
+
+While the validator cannot run (`ConfigValid=Unknown/ValidatorUnavailable`),
+a gateway that is otherwise healthy reports `Ready=Unknown` with the same
+reason. It keeps serving its applied config.
+
+---
+
 ## v0.14.0 — openapi-serve liveness probe (one-time rollout)
 
 The `openapi-serve` sidecar now renders with a liveness probe. It previously
