@@ -661,18 +661,14 @@ sequenceDiagram
     Op->>Op: 1. Detect endpoint path+method conflicts
 
     opt Conflicts found
-        Op->>K8s: Update newer conflicting KrakenDEndpoint status → Conflicted
-        Op->>K8s: Emit Warning Event with conflict details
-        Note over Op: Conflicted endpoints excluded from render.<br/>Older endpoint (by creationTimestamp) wins.<br/>Equal timestamps: lower lexicographic name wins.<br/>When a conflict is detected, the entire<br/>KrakenDEndpoint resource is marked Conflicted<br/>and all its endpoints[] entries are excluded.
+        Note over Op: Conflicting entries are excluded from render.<br/>Older endpoint (by creationTimestamp) wins.<br/>Equal timestamps: lower lexicographic name wins.<br/>The losing KrakenDEndpoint's other entries are still rendered.
     end
 
     Op->>Op: 2. Merge gateway config + non-conflicted endpoints
     Op->>Op: 3. Resolve backend policy references
 
     opt Missing policyRef
-        Op->>K8s: Update affected KrakenDEndpoint status → Invalid
-        Op->>K8s: Emit Warning Event (missing BackendPolicy)
-        Note over Op: Invalid endpoints excluded from render.
+        Note over Op: The endpoint is excluded from render.<br/>The endpoint controller reports ResolvedRefs=False (PolicyNotFound).
     end
 
     Op->>Op: 4. Build krakend.json via template engine
@@ -716,7 +712,7 @@ sequenceDiagram
             Op->>CM: Update ConfigMap with new krakend.json
             Op->>K8s: Write status.configChecksum = newChecksum
             Op->>Dep: Patch Deployment: pod annotations<br/>checksum/config + checksum/plugins,<br/>container image (all to desired state)
-            Op->>K8s: Update KrakenDEndpoint status:<br/>phase=Active, Accepted=True, Valid=True
+            Op->>K8s: Patch Accepted on each endpoint of the render, only on change:<br/>True (Accepted), False (EndpointConflict), or removed (missing policy)
             Note over Op: Requeue: wait for Deployment rollout
             Dep->>Pod: Rolling update (new pods with new config)
             Pod->>Pod: KrakenD starts, loads config
@@ -732,6 +728,7 @@ sequenceDiagram
             end
         end
     end
+    Note over Op: Accepted is written whenever the render equals the applied configuration (validated now, or unchanged since); never after a failed validation.
 ```
 
 ### Reconciliation Triggers
@@ -1784,8 +1781,8 @@ The operator emits events on KrakenDGateway resources:
 | License expired or entering pre-expiry safety window, CE fallback not configured | Warning | `LicenseExpiredNoFallback` |
 | Dragonfly not ready | Warning | `DragonflyNotReady` |
 | VirtualService created | Normal | `IstioVirtualServiceCreated` |
-| Endpoint path+method conflict | Warning | `EndpointConflict` |
-| Endpoint backend references a missing `KrakenDBackendPolicy` (endpoint excluded) | Warning | `EndpointInvalid` |
+| Endpoint newly excluded by a path+method conflict (on the transition only) | Warning | `EndpointConflict` |
+| Previously conflicted endpoint included again | Normal | `Accepted` |
 | Referenced license Secret missing (`secretRef` path) | Warning | `LicenseSecretMissing` |
 | License renewed, EE restored | Normal | `LicenseRestored` |
 | OpenAPI spec fetched successfully | Normal | `SpecFetched` |
