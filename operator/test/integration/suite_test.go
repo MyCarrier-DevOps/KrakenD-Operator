@@ -153,6 +153,17 @@ func runTests(m *testing.M) int {
 		return 1
 	}
 
+	// Optional third-party CRDs the operator watches when present at startup.
+	testCRDDir, err := filepath.Abs(filepath.Join("testdata", "crds"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to resolve test CRD directory path: %v\n", err)
+		return 1
+	}
+	if err := installCRDs(ctx, cfg, testCRDDir); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to install test CRDs: %v\n", err)
+		return 1
+	}
+
 	restConfig = cfg
 	k8sClient, err = client.New(cfg, client.Options{Scheme: scheme})
 	if err != nil {
