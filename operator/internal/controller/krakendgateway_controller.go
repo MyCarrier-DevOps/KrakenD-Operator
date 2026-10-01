@@ -95,9 +95,14 @@ type KrakenDGatewayReconciler struct {
 func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 	start := time.Now()
+	// A gateway that is gone or terminating has its series deleted below;
+	// observing the duration afterwards would recreate one.
+	recordDuration := true
 	defer func() {
-		reconcileDuration.WithLabelValues("gateway", req.Namespace, req.Name).
-			Observe(time.Since(start).Seconds())
+		if recordDuration {
+			reconcileDuration.WithLabelValues("gateway", req.Namespace, req.Name).
+				Observe(time.Since(start).Seconds())
+		}
 	}()
 
 	var gw v1alpha1.KrakenDGateway
@@ -106,6 +111,15 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("getting gateway %s: %w", req.NamespacedName, err)
+	}
+
+	// A terminating gateway is left alone: under foreground deletion it
+	// lingers while garbage collection removes its children, and converging
+	// would recreate each one as it goes.
+	if !gw.DeletionTimestamp.IsZero() {
+		recordDuration = false
+		r.forgetGateway(req.NamespacedName)
+		return ctrl.Result{}, nil
 	}
 
 	// Status as read, so each write below happens only when it changes.
@@ -324,6 +338,13 @@ func (r *KrakenDGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		).
 		Named("krakendgateway").
 		Complete(r)
+}
+
+// forgetGateway drops what the controller keeps per gateway once the gateway
+// is gone or terminating: its metric series and its remembered rejection.
+func (r *KrakenDGatewayReconciler) forgetGateway(key types.NamespacedName) {
+	deleteGatewayMetrics(key.Namespace, key.Name)
+	r.rejections.forget(key)
 }
 
 // crdAvailable checks whether the given GVK is registered in the cluster's
