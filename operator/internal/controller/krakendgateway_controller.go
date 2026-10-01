@@ -206,13 +206,7 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			return ctrl.Result{}, fmt.Errorf("reconciling configmap: %w", err)
 		}
 
-		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
-			Type:               v1alpha1.ConditionConfigValid,
-			Status:             metav1.ConditionTrue,
-			ObservedGeneration: gw.Generation,
-			Reason:             "ConfigValid",
-			Message:            "Configuration passed validation",
-		})
+		setConfigApplied(&gw)
 		gw.Status.ConfigChecksum = output.Checksum
 		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
 			Type:               v1alpha1.ConditionProgressing,
@@ -225,15 +219,20 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		r.Recorder.Event(&gw, "Normal", v1alpha1.ReasonConfigDeployed,
 			fmt.Sprintf("Configuration updated, checksum: %s", output.Checksum))
 		rollingRestarts.Inc()
-	} else if imageChanged || pluginChanged {
-		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
-			Type:               v1alpha1.ConditionProgressing,
-			Status:             metav1.ConditionTrue,
-			ObservedGeneration: gw.Generation,
-			Reason:             "DeploymentUpdated",
-			Message:            "Deployment updated for image or plugin change",
-		})
-		rollingRestarts.Inc()
+	} else {
+		// The rendered configuration is the applied one, which passed
+		// validation when it was applied, so a revert to it clears a rejection.
+		setConfigApplied(&gw)
+		if imageChanged || pluginChanged {
+			meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+				Type:               v1alpha1.ConditionProgressing,
+				Status:             metav1.ConditionTrue,
+				ObservedGeneration: gw.Generation,
+				Reason:             "DeploymentUpdated",
+				Message:            "Deployment updated for image or plugin change",
+			})
+			rollingRestarts.Inc()
+		}
 	}
 
 	// Record each endpoint's Accepted verdict, but only for a render that is
@@ -1824,6 +1823,18 @@ func setGatewayReadiness(gw *v1alpha1.KrakenDGateway) {
 	})
 	gw.Status.Phase = rd.phase
 	gw.Status.ObservedGeneration = gw.Generation
+}
+
+// setConfigApplied records that the rendered configuration passed
+// validation and is the gateway's applied configuration.
+func setConfigApplied(gw *v1alpha1.KrakenDGateway) {
+	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+		Type:               v1alpha1.ConditionConfigValid,
+		Status:             metav1.ConditionTrue,
+		ObservedGeneration: gw.Generation,
+		Reason:             v1alpha1.ReasonConfigApplied,
+		Message:            "Configuration passed validation and is applied",
+	})
 }
 
 // notReady is a False Ready that carries cause's reason and message.
