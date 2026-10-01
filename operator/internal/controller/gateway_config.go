@@ -441,13 +441,14 @@ func strippedByEndpoint(features []renderer.StrippedEEFeature) map[types.Namespa
 	return out
 }
 
-// strippedList renders removed features for a condition message.
+// strippedList renders removed features for a condition message, one per
+// line, so a truncated message keeps whole entries and counts the rest.
 func strippedList(features []renderer.StrippedEEFeature) string {
 	parts := make([]string, 0, len(features))
 	for _, f := range features {
 		parts = append(parts, f.String())
 	}
-	return strings.Join(parts, "; ")
+	return strings.Join(parts, "\n")
 }
 
 // acceptance is the gateway's verdict on one endpoint: its Accepted condition
@@ -576,11 +577,12 @@ func (r *KrakenDGatewayReconciler) reconcileCEFallbackCondition(
 	case isApplied(gw, output, edition):
 		list, n := strippedList(output.StrippedEEFeatures), len(output.StrippedEEFeatures)
 		if gw.Spec.OpenAPI != nil && gw.Spec.OpenAPI.Enabled {
-			list, n = strings.TrimPrefix(list+"; "+openAPIFallbackNote, "; "), n+1
+			// First, so truncation never cuts it.
+			list, n = strings.TrimSuffix(openAPIFallbackNote+"\n"+list, "\n"), n+1
 		}
 		msg := "Running KrakenD CE in license fallback; the config uses no Enterprise-only features"
 		if n > 0 {
-			msg = fmt.Sprintf("Running KrakenD CE in license fallback; removed %d Enterprise-only feature(s): %s",
+			msg = fmt.Sprintf("Running KrakenD CE in license fallback; removed %d Enterprise-only feature(s):\n%s",
 				n, list)
 		}
 		r.setProblemCondition(gw, metav1.Condition{
