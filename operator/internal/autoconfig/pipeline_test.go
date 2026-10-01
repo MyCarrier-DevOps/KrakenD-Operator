@@ -211,7 +211,7 @@ func TestEmbeddedCUE_FullPipeline(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "main-gateway", Namespace: "default"},
 		Spec: v1alpha1.KrakenDGatewaySpec{
 			Version: "2.7.0",
-			Edition: v1alpha1.EditionCE,
+			Edition: v1alpha1.EditionEE,
 			Config:  v1alpha1.GatewayConfig{},
 		},
 	}
