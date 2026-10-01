@@ -611,10 +611,10 @@ func (r *KrakenDGatewayReconciler) validateConfig(
 
 // handleValidationError records a rejected configuration: ConfigValid=False
 // with the validator's output (bounded by truncateMessage to 4 KiB; the full
-// output is in the log), and phase Error. The Warning event fires only
-// when the recorded verdict changes, so a gateway that keeps rendering the
-// same rejected config stays quiet. It returns nil: the rejection is
-// persistent, and a change to any input re-enqueues the gateway.
+// output is in the log), and the derived Ready and phase (Error). The Warning
+// event fires only when the recorded verdict changes, so a gateway that keeps
+// rendering the same rejected config stays quiet. It returns nil: the
+// rejection is persistent, and a change to any input re-enqueues the gateway.
 func (r *KrakenDGatewayReconciler) handleValidationError(
 	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
@@ -630,7 +630,7 @@ func (r *KrakenDGatewayReconciler) handleValidationError(
 		Reason:             v1alpha1.ReasonConfigValidationFailed,
 		Message:            message,
 	})
-	gw.Status.Phase = v1alpha1.PhaseError
+	setGatewayReadiness(gw)
 	if prev == nil || prev.Status != metav1.ConditionFalse || prev.Message != message {
 		r.Recorder.Event(gw, "Warning", v1alpha1.ReasonConfigValidationFailed, message)
 	}
