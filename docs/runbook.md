@@ -432,7 +432,7 @@ If the license reaches its safety buffer (1 h before expiry) or expires and
 
 - `LicenseDegraded` is `True` (reason `LicenseFallbackCE`) and the gateway
   transitions to `Degraded` phase, with `CEFallbackApplied=True`
-- The condition's message lists every Enterprise-only feature removed from
+- The `CEFallbackApplied` message lists every Enterprise-only feature removed from
   the config (wildcard endpoints, namespaces such as `auth/api-keys`); each
   affected KrakenDEndpoint shows the same list under `Accepted` reason
   `EEFeaturesStripped`. **Check it: removed authentication means those
