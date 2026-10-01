@@ -40,15 +40,29 @@ var (
 // the operator never starts without a watch it should have.
 func installedOptionalKinds(mapper meta.RESTMapper) (installed, missing []schema.GroupVersionKind, err error) {
 	for _, gvk := range optionalOwnedGVKs {
-		_, mapErr := mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
-		switch {
-		case mapErr == nil:
+		ok, err := kindInstalled(mapper, gvk)
+		if err != nil {
+			return nil, nil, fmt.Errorf("checking whether the %s CRD is installed: %w", gvk.GroupKind(), err)
+		}
+		if ok {
 			installed = append(installed, gvk)
-		case meta.IsNoMatchError(mapErr):
+		} else {
 			missing = append(missing, gvk)
-		default:
-			return nil, nil, fmt.Errorf("checking whether the %s CRD is installed: %w", gvk.GroupKind(), mapErr)
 		}
 	}
 	return installed, missing, nil
+}
+
+// kindInstalled reports whether the mapper knows gvk. A kind the mapper has
+// no match for is (false, nil); any other lookup error is returned.
+func kindInstalled(mapper meta.RESTMapper, gvk schema.GroupVersionKind) (bool, error) {
+	_, err := mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
+	switch {
+	case err == nil:
+		return true, nil
+	case meta.IsNoMatchError(err):
+		return false, nil
+	default:
+		return false, err
+	}
 }
