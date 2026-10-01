@@ -502,13 +502,14 @@ func appliedFallback(gw *v1alpha1.KrakenDGateway, current v1alpha1.Edition) bool
 	return gw.Spec.Edition == v1alpha1.EditionEE && appliedKey(gw, current).edition == v1alpha1.EditionCE
 }
 
-// appliedImage is the image the gateway runs: the one of the applied config's
-// edition, whatever edition spec.edition asks for now.
+// appliedImage is the image the gateway runs. While spec.edition asks for a
+// different edition than the applied config was validated for, that is the
+// image deployed with the applied config (spec.image is read before the
+// edition, so the spec cannot say which one it was). Otherwise it follows
+// the spec.
 func appliedImage(gw *v1alpha1.KrakenDGateway, current v1alpha1.Edition) string {
-	if appliedKey(gw, current).edition == v1alpha1.EditionEE {
-		ee := *gw
-		ee.Spec.Edition = v1alpha1.EditionEE
-		return renderer.ResolveImage(&ee, false)
+	if gw.Status.ActiveImage != "" && appliedKey(gw, current).edition != current {
+		return gw.Status.ActiveImage
 	}
 	return renderer.ResolveImage(gw, appliedFallback(gw, current))
 }
