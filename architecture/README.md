@@ -1343,6 +1343,8 @@ The embedded-binary approach is preferred for latency and simplicity.
 
 Each run is limited to 30 seconds. Only a run that completes and exits non-zero is a verdict ("the config is invalid"); a missing binary, a timeout or a killed process means the config was not judged, and the controller retries.
 
+A rejection's krakend check output can be far larger than a condition allows (one bad policy used by many backends), so the `ConfigValid` condition message and the `ConfigValidationFailed` event carry at most 4 KiB of it: the leading whole lines that fit, then `(output truncated, N more lines)`. The operator logs the full output once per rejected input, as `krakend check rejected the rendered config`.
+
 ---
 
 ## 11. Plugin Management
