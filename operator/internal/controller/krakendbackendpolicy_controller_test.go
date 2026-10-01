@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -188,7 +189,7 @@ func TestPolicyReconcile_InvalidCircuitBreaker(t *testing.T) {
 
 	found := false
 	for _, c := range updated.Status.Conditions {
-		if c.Type == "PolicyValid" && c.Status == metav1.ConditionFalse {
+		if c.Type == "Ready" && c.Status == metav1.ConditionFalse {
 			found = true
 		}
 	}
@@ -223,7 +224,7 @@ func TestPolicyReconcile_InvalidRateLimit(t *testing.T) {
 	}
 	found := false
 	for _, c := range updated.Status.Conditions {
-		if c.Type == "PolicyValid" && c.Status == metav1.ConditionFalse {
+		if c.Type == "Ready" && c.Status == metav1.ConditionFalse {
 			found = true
 		}
 	}
@@ -259,7 +260,7 @@ func TestPolicyReconcile_ValidCondition(t *testing.T) {
 	}
 	found := false
 	for _, c := range updated.Status.Conditions {
-		if c.Type == "PolicyValid" && c.Status == metav1.ConditionTrue {
+		if c.Type == "Ready" && c.Status == metav1.ConditionTrue {
 			found = true
 		}
 	}
@@ -386,7 +387,7 @@ func TestPolicyReconcile_InvalidCircuitBreakerInterval(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, cond := range updated.Status.Conditions {
-		if cond.Type == v1alpha1.ConditionPolicyValid && cond.Status == metav1.ConditionFalse {
+		if cond.Type == v1alpha1.ConditionReady && cond.Status == metav1.ConditionFalse {
 			if cond.Reason != "InvalidCircuitBreaker" {
 				t.Errorf("expected InvalidCircuitBreaker reason, got %s", cond.Reason)
 			}
@@ -423,7 +424,7 @@ func TestPolicyReconcile_InvalidCircuitBreakerTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, cond := range updated.Status.Conditions {
-		if cond.Type == v1alpha1.ConditionPolicyValid && cond.Status == metav1.ConditionFalse {
+		if cond.Type == v1alpha1.ConditionReady && cond.Status == metav1.ConditionFalse {
 			if cond.Reason != "InvalidCircuitBreaker" {
 				t.Errorf("expected InvalidCircuitBreaker reason, got %s", cond.Reason)
 			}
@@ -442,7 +443,7 @@ func TestPolicyReconcile_InvalidToValid(t *testing.T) {
 		},
 		Status: v1alpha1.KrakenDBackendPolicyStatus{
 			Conditions: []metav1.Condition{
-				{Type: v1alpha1.ConditionPolicyValid, Status: metav1.ConditionFalse, Reason: "InvalidRateLimit"},
+				{Type: v1alpha1.ConditionReady, Status: metav1.ConditionFalse, Reason: "InvalidRateLimit"},
 			},
 		},
 	}
@@ -462,7 +463,7 @@ func TestPolicyReconcile_InvalidToValid(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, cond := range updated.Status.Conditions {
-		if cond.Type == v1alpha1.ConditionPolicyValid && cond.Status == metav1.ConditionTrue {
+		if cond.Type == v1alpha1.ConditionReady && cond.Status == metav1.ConditionTrue {
 			return
 		}
 	}
@@ -477,5 +478,35 @@ func TestValidatePolicy_NilSpecs(t *testing.T) {
 	reason, msg := validatePolicy(policy)
 	if reason != "" || msg != "" {
 		t.Errorf("expected valid for nil specs, got reason=%q msg=%q", reason, msg)
+	}
+}
+
+func TestPolicyReconcile_ReadyReplacesPolicyValid(t *testing.T) {
+	policy := &v1alpha1.KrakenDBackendPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "pol1", Namespace: "default", Generation: 2},
+		Spec:       v1alpha1.KrakenDBackendPolicySpec{RateLimit: &v1alpha1.RateLimitSpec{MaxRate: 100}},
+		Status: v1alpha1.KrakenDBackendPolicyStatus{Conditions: []metav1.Condition{{
+			Type: "PolicyValid", Status: metav1.ConditionTrue, Reason: "Valid",
+			Message: "Policy configuration is valid", ObservedGeneration: 1, LastTransitionTime: metav1.Now(),
+		}}},
+	}
+	c := fakeClientBuilder().WithObjects(policy).WithStatusSubresource(policy).Build()
+	r := &KrakenDBackendPolicyReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(policy)}); err != nil {
+		t.Fatal(err)
+	}
+	var stored v1alpha1.KrakenDBackendPolicy
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(policy), &stored); err != nil {
+		t.Fatal(err)
+	}
+	if meta.FindStatusCondition(stored.Status.Conditions, "PolicyValid") != nil {
+		t.Error("the legacy PolicyValid condition was not removed")
+	}
+	ready := meta.FindStatusCondition(stored.Status.Conditions, "Ready")
+	if ready == nil || ready.Status != metav1.ConditionTrue || ready.Reason != "Ready" || ready.ObservedGeneration != 2 ||
+		stored.Status.ObservedGeneration != 2 {
+		t.Errorf("Ready = %+v, observedGeneration %d; want True/Ready at generation 2",
+			ready, stored.Status.ObservedGeneration)
 	}
 }
