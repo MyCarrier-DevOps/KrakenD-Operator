@@ -16,7 +16,13 @@ limitations under the License.
 
 package renderer
 
-import "k8s.io/apimachinery/pkg/types"
+import (
+	"regexp"
+	"strconv"
+	"strings"
+
+	"k8s.io/apimachinery/pkg/types"
+)
 
 // Attribution ties one krakend check finding to the rendered endpoint entry
 // it names. Index is the entry's position in the rendered "endpoints" array,
@@ -29,6 +35,52 @@ type Attribution struct {
 	Message  string
 }
 
+var lintPointerRe = regexp.MustCompile(`^- at '/endpoints/(\d+)[/']`)
+
 // Attribute maps krakend check output back to the KrakenDEndpoints that
-// produced the entries it names.
-func Attribute(_ []byte, _ []types.NamespacedName, _ string) []Attribution { return nil }
+// produced the entries it names. renderedJSON is the rendered config, whose
+// endpoints array is index-aligned with sources (RenderOutput.Sources). Each
+// attributable output line yields one Attribution per entry it names; a line
+// that names none yields one with Index -1.
+func Attribute(_ []byte, sources []types.NamespacedName, checkOutput string) []Attribution {
+	var out []Attribution
+	for _, raw := range strings.Split(checkOutput, "\n") {
+		line := strings.TrimSpace(raw)
+		if skipCheckLine(line) {
+			continue
+		}
+		indices := matchLine(line)
+		if len(indices) == 0 {
+			out = append(out, Attribution{Index: -1, Message: line})
+			continue
+		}
+		for _, i := range indices {
+			a := Attribution{Index: i, Message: line}
+			if i < len(sources) {
+				a.Endpoint = sources[i]
+			}
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// skipCheckLine reports lines that carry no finding.
+func skipCheckLine(line string) bool {
+	return line == "" || line == "Syntax OK!" ||
+		strings.HasPrefix(line, "Parsing configuration file") ||
+		strings.HasPrefix(line, "ERROR linting the configuration file")
+}
+
+// matchLine returns the indices of the rendered entries line names: a lint
+// pointer's index.
+func matchLine(line string) []int {
+	if m := lintPointerRe.FindStringSubmatch(line); m != nil {
+		i, err := strconv.Atoi(m[1])
+		if err != nil {
+			return nil
+		}
+		return []int{i}
+	}
+	return nil
+}
