@@ -142,19 +142,27 @@ type BackendSpec struct {
 
 // KrakenDEndpointStatus defines the observed state of KrakenDEndpoint.
 type KrakenDEndpointStatus struct {
-	Phase              EndpointPhase      `json:"phase,omitempty"`
-	ObservedGeneration int64              `json:"observedGeneration,omitempty"`
-	EndpointCount      int32              `json:"endpointCount,omitempty"`
-	Methods            string             `json:"methods,omitempty"`
-	Conditions         []metav1.Condition `json:"conditions,omitempty"`
+	// Phase is derived from the Ready condition and kept for compatibility;
+	// read the Ready condition instead.
+	Phase              EndpointPhase `json:"phase,omitempty"`
+	ObservedGeneration int64         `json:"observedGeneration,omitempty"`
+	EndpointCount      int32         `json:"endpointCount,omitempty"`
+	Methods            string        `json:"methods,omitempty"`
+	// Conditions are keyed by type. The endpoint controller writes
+	// ResolvedRefs and Ready; the gateway controller writes Accepted.
+	// +listType=map
+	// +listMapKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Gateway",type=string,JSONPath=`.spec.gatewayRef.name`
-// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
+// +kubebuilder:printcolumn:name="Reason",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].reason`
 // +kubebuilder:printcolumn:name="Endpoints",type=integer,JSONPath=`.status.endpointCount`
 // +kubebuilder:printcolumn:name="Methods",type=string,JSONPath=`.status.methods`,priority=0
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // KrakenDEndpoint is the Schema for the krakendendpoints API.
