@@ -189,6 +189,9 @@ func validationCopy(jsonData []byte, edition v1alpha1.Edition) ([]byte, []string
 
 	if edition == v1alpha1.EditionEE {
 		endpoints, _ := config["endpoints"].([]any)
+		if findings := eeWildcardFindings(endpoints); len(findings) > 0 {
+			return nil, findings, nil
+		}
 		if rewriteEEWildcards(endpoints) {
 			modified = true
 		}
