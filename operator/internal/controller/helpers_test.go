@@ -431,12 +431,17 @@ func TestRecordConditionTransition(t *testing.T) {
 }
 
 func TestSameCondition(t *testing.T) {
+	base := metav1.Condition{Type: "Accepted", Status: metav1.ConditionTrue, Reason: "Accepted", Message: "m",
+		ObservedGeneration: 1}
+	later := base
+	later.LastTransitionTime = metav1.Now()
 	tests := []struct {
 		name string
 		a, b *metav1.Condition
 		want bool
 	}{
 		{"both absent", nil, nil, true},
+		{"only lastTransitionTime differs", &base, &later, true},
 	}
 	for _, tt := range tests {
 		if got := sameCondition(tt.a, tt.b); got != tt.want {
