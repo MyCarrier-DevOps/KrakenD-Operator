@@ -496,6 +496,12 @@ func TestBuildGatewayExtraConfig_RedisUsesTheDocumentedNamespace(t *testing.T) {
 				"name": "default", "address": "redis:6379", "pool_size": 10, "min_idle_conns": 2, "dial_timeout": "5s",
 			}},
 		}},
+		{"several addresses are a cluster", pool("r1:6379", "r2:6379"), nil, map[string]any{
+			"clusters": []any{map[string]any{
+				"name": "default", "addresses": []string{"r1:6379", "r2:6379"},
+				"pool_size": 10, "min_idle_conns": 2, "dial_timeout": "5s",
+			}},
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
