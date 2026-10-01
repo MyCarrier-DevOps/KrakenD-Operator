@@ -21,10 +21,12 @@ package integration
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -164,13 +166,14 @@ func runTests(m *testing.M) int {
 		return 1
 	}
 
-	// Wire up the Gateway controller with a real renderer and no-op validator.
+	// Wire up the Gateway controller with a real renderer and the marker
+	// validator (the krakend binary is not available here).
 	if err := (&controller.KrakenDGatewayReconciler{
 		Client:    mgr.GetClient(),
 		Scheme:    scheme,
 		Recorder:  mgr.GetEventRecorderFor("krakendgateway-controller"),
 		Renderer:  renderer.New(renderer.Options{}),
-		Validator: &noopValidator{},
+		Validator: suiteValidator,
 	}).SetupWithManager(mgr); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to setup gateway controller: %v\n", err)
 		return 1
@@ -407,14 +410,33 @@ func TestWarmUpControllers_KeepsPollingThroughTransientGetErrors(t *testing.T) {
 	}
 }
 
-// noopValidator performs no validation (CE binary not available in integration tests).
-type noopValidator struct{}
+// rejectMarker is an endpoint path the suite's validator rejects. Any config
+// without it passes: the krakend binary is not available in integration
+// tests.
+const rejectMarker = "/integration-reject"
 
-func (n *noopValidator) Validate(_ context.Context, _ []byte) error {
-	return nil
+// markerValidator rejects a config containing rejectMarker the way krakend
+// check does, with a *renderer.ValidationError, and counts the rejections so
+// tests can tell how often the controller re-validated.
+type markerValidator struct {
+	rejections atomic.Int64
 }
 
-func (n *noopValidator) PrepareValidationCopy(jsonData []byte, _ bool) ([]byte, error) {
+// suiteValidator is the validator the suite's gateway controller uses.
+var suiteValidator = &markerValidator{}
+
+func (v *markerValidator) Validate(_ context.Context, jsonData []byte) error {
+	if !bytes.Contains(jsonData, []byte(rejectMarker)) {
+		return nil
+	}
+	v.rejections.Add(1)
+	return &renderer.ValidationError{
+		Output: "ERROR: rejected by the integration test validator",
+		Err:    errors.New("exit status 1"),
+	}
+}
+
+func (v *markerValidator) PrepareValidationCopy(jsonData []byte, _ bool) ([]byte, error) {
 	return jsonData, nil
 }
 
