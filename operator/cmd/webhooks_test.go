@@ -17,6 +17,7 @@ limitations under the License.
 package main
 
 import (
+	"errors"
 	"testing"
 
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -39,5 +40,21 @@ func TestRegisterWebhooks_DisabledLeavesManagerUntouched(t *testing.T) {
 	}
 	if setupRan {
 		t.Error("webhook setup ran with webhooks disabled")
+	}
+}
+
+func TestRegisterWebhooks_EnabledRunsSetup(t *testing.T) {
+	boom := errors.New("setup failed")
+	var got ctrl.Manager
+	mgr := untouchableManager{}
+	err := registerWebhooks(mgr, true, func(m ctrl.Manager) error {
+		got = m
+		return boom
+	})
+	if !errors.Is(err, boom) {
+		t.Errorf("err = %v, want the setup error", err)
+	}
+	if got != mgr {
+		t.Error("setup did not receive the manager")
 	}
 }
