@@ -1801,6 +1801,8 @@ func gatewayReadinessFor(conds []metav1.Condition) gatewayReadiness {
 			message: expired.Message, phase: v1alpha1.PhaseError}
 	case condFalse(available):
 		return notReady(available, v1alpha1.PhaseError)
+	case condTrue(degraded):
+		return notReady(degraded, v1alpha1.PhaseDegraded)
 	case configValid == nil:
 		return gatewayReadiness{status: metav1.ConditionUnknown, reason: v1alpha1.ReasonPending,
 			message: "Waiting for the first configuration to be validated", phase: v1alpha1.PhasePending}
