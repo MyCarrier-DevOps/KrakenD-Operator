@@ -2861,7 +2861,7 @@ func TestTerminatingWithUnchangedSpec(t *testing.T) {
 }
 
 func TestGatewayValidator_WarnsAboutRedisSettingsWithNoEffect(t *testing.T) {
-	// spec.redis configures an Enterprise feature, which admission refuses on CE gateways.
+	// KrakenD CE never uses the Redis pool, so the gateway is an EE one.
 	gw := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
 		Spec: v1alpha1.KrakenDGatewaySpec{
@@ -2891,16 +2891,17 @@ func TestGatewayValidator_WarnsAboutRedisSettingsWithNoEffect(t *testing.T) {
 		}
 	}
 
-	// A Dragonfly password has no effect on KrakenD's pool on EE, where the
-	// pool is rendered; a CE gateway renders none to begin with.
+	// Dragonfly requires its password, which is not rendered into KrakenD's
+	// pool on EE; KrakenD CE never uses the pool.
 	ee := &v1alpha1.KrakenDGateway{Spec: v1alpha1.KrakenDGatewaySpec{Edition: v1alpha1.EditionEE,
 		Dragonfly: &v1alpha1.DragonflySpec{Enabled: true, Authentication: &v1alpha1.DragonflyAuthSpec{
 			PasswordFromSecret: &corev1.SecretKeySelector{Key: "p"},
 		}},
 	}}
 	const dfPassword = "spec.dragonfly.authentication.passwordFromSecret"
-	if w := redisPoolWarnings(ee); len(w) != 1 || !strings.Contains(w[0], dfPassword) {
-		t.Errorf("EE Dragonfly password warnings = %q, want one naming %s", w, dfPassword)
+	if w := redisPoolWarnings(ee); len(w) != 1 || !strings.Contains(w[0], dfPassword) ||
+		!strings.Contains(w[0], "Dragonfly requires this password") || !strings.Contains(w[0], "refused") {
+		t.Errorf("EE Dragonfly password warnings = %q, want one naming %s and the refused connections", w, dfPassword)
 	}
 	ce := ee.DeepCopy()
 	ce.Spec.Edition = v1alpha1.EditionCE
