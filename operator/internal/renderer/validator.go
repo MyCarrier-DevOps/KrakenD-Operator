@@ -75,7 +75,16 @@ func (e *KrakenDExecutor) Execute(
 // Validate writes jsonData to a temp file and runs `krakend check -t -n -c`
 // on it: -t tests the router and -n lints against the JSON schema built into
 // the binary, so validation never needs network access.
+//
+// It returns a *ValidationError only when krakend check ran to completion and
+// rejected the config (a non-zero exit status before the deadline): that is a
+// verdict on the config. Every other failure (binary missing, temp-file I/O,
+// deadline exceeded, process killed by a signal) comes back as a plain error:
+// the config was not judged and the caller should retry.
 func (v *KrakenDValidator) Validate(ctx context.Context, jsonData []byte) (retErr error) {
+	ctx, cancel := context.WithTimeout(ctx, v.timeout())
+	defer cancel()
+
 	tmpFile, err := os.CreateTemp("", "krakend-config-*.json")
 	if err != nil {
 		return fmt.Errorf("creating temp file: %w", err)
@@ -105,8 +114,12 @@ func (v *KrakenDValidator) Validate(ctx context.Context, jsonData []byte) (retEr
 }
 
 // classifyCheckError separates a verdict from a validator that could not
-// run.
-func classifyCheckError(_ context.Context, output []byte, err error) error {
+// run. A process killed because ctx ended also surfaces as an
+// *exec.ExitError (exit code -1), so the context is checked first.
+func classifyCheckError(ctx context.Context, output []byte, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return fmt.Errorf("krakend check did not finish: %w: %w", ctxErr, err)
+	}
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) && exitErr.ExitCode() > 0 {
 		return &ValidationError{Output: string(output), Err: err}
