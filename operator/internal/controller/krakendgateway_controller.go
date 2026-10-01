@@ -1244,10 +1244,13 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 			return fmt.Errorf("checking VirtualService CRD: %w", vsErr)
 		}
 		if !vsAvailable {
-			log.Error(errCRDMissing,
-				"VirtualService requested but networking.istio.io CRD is not available")
-			r.Recorder.Event(gw, "Warning", "CRDNotInstalled",
-				"Istio is enabled but the networking.istio.io VirtualService CRD is not installed in the cluster")
+			r.setConditionWithEvent(gw, metav1.Condition{
+				Type:               v1alpha1.ConditionIstioConfigured,
+				Status:             metav1.ConditionFalse,
+				ObservedGeneration: gw.Generation,
+				Reason:             v1alpha1.ReasonCRDNotInstalled,
+				Message:            "Istio is enabled but the networking.istio.io VirtualService CRD is not installed in the cluster",
+			})
 		} else {
 			vs := &unstructured.Unstructured{}
 			vs.SetGroupVersionKind(virtualServiceGVK)
