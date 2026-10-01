@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"strings"
@@ -29,6 +30,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	clocktesting "k8s.io/utils/clock/testing"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -170,12 +172,13 @@ func TestGatewayReconcile_EditionModeFlipRevalidatesSameRender(t *testing.T) {
 	r := &KrakenDGatewayReconciler{
 		Client: c, APIReader: c, Scheme: testScheme(), Recorder: fakeRecorder(),
 		Renderer: renderOutput("same"), Validator: validator,
+		Clock: clocktesting.NewFakeClock(testNow), LicenseParser: &mockLicenseParser{err: errors.New("no license in this test")},
 	}
 	if err := reconcileGateway(t, r, gw); err != nil {
 		t.Fatal(err)
 	}
 
-	// The license monitor switches the gateway to CE fallback: the render
+	// The gateway switches to CE fallback: the render
 	// is unchanged, but the validation input is not.
 	degraded := getGateway(t, c, gw)
 	meta.SetStatusCondition(&degraded.Status.Conditions, metav1.Condition{
