@@ -21,6 +21,7 @@ package integration
 import (
 	"fmt"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -337,6 +338,52 @@ func TestEndpointStatus_ConflictedEndpointReportsBothWriters(t *testing.T) {
 		if cur.ResourceVersion != before.ResourceVersion {
 			return fmt.Errorf("ep-b-newer rewritten in steady state: resourceVersion %s -> %s",
 				before.ResourceVersion, cur.ResourceVersion)
+		}
+		return nil
+	})
+}
+
+func TestEndpointStatus_ConcurrentSpecChangesConverge(t *testing.T) {
+	ns := testNamespace(t)
+	gw := createGateway(t, ns, "gw-race")
+	// ep-a and ep-b share GET /x; ep-a is older and sorts first, so it wins.
+	keys := []client.ObjectKey{
+		createEndpoint(t, ns, "ep-a", gw.Name, "/x"),
+		createEndpoint(t, ns, "ep-b", gw.Name, "/x"),
+		createEndpoint(t, ns, "ep-c", gw.Name, "/y"),
+		createEndpoint(t, ns, "ep-d", gw.Name, "/z"),
+	}
+	for round := 1; round <= 5; round++ {
+		var wg sync.WaitGroup
+		errs := make(chan error, len(keys))
+		for _, key := range keys {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				errs <- setTimeout(key, time.Duration(round)*time.Second)
+			}()
+		}
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			if err != nil {
+				t.Fatalf("round %d: %v", round, err)
+			}
+		}
+	}
+	eventuallyWithin(t, 90*time.Second, func() error {
+		for _, key := range keys {
+			var err error
+			if key.Name == "ep-b" {
+				err = expectEndpointStatus(key, metav1.ConditionFalse, metav1.ConditionFalse,
+					"EndpointConflict", "EndpointConflict", v1alpha1.EndpointPhaseConflicted)
+			} else {
+				err = expectEndpointStatus(key, metav1.ConditionTrue, metav1.ConditionTrue,
+					"Accepted", "Ready", v1alpha1.EndpointPhaseActive)
+			}
+			if err != nil {
+				return err
+			}
 		}
 		return nil
 	})
