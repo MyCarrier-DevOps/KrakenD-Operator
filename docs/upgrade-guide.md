@@ -446,6 +446,20 @@ stuck in `Terminating`. A spec change on a terminating object is still
 validated, because the gateway keeps rendering terminating endpoints and
 policies until they are gone.
 
+### Helm chart: `webhooks.enabled: false` and `webhooks.caBundle`
+
+- `webhooks.enabled: false` no longer crash-loops the operator. The chart
+  passes `--enable-webhooks=false` and leaves out the serving certificate
+  path, volume and mount; the operator then does not start its webhook server
+  or read serving certificates, and only render-time validation protects
+  gateways. That flag needs an operator image from this release or later;
+  installs that keep webhooks enabled pass no new flag.
+- `webhooks.caBundle` (used when `webhooks.certManager.enabled: false`)
+  accepts the PEM CA bundle or its base64 encoding. A base64 value, which
+  the chart's comment asked for, used to be encoded a second time, so the
+  API server could not verify the webhook's certificate and every write to
+  the four CRDs failed.
+
 ## v0.14.0 — openapi-serve liveness probe (one-time rollout)
 
 The `openapi-serve` sidecar now renders with a liveness probe. It previously
