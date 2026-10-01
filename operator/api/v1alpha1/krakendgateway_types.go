@@ -95,6 +95,9 @@ type KrakenDGatewaySpec struct {
 	// rendered KrakenD configuration and a sidecar container serves it
 	// on an additional container port. The port is exposed on the gateway
 	// Service but is NOT added to the Istio VirtualService (local traffic only).
+	// The export needs the Enterprise binary: no export, sidecar or Service
+	// port is created for a CE gateway, or while an EE gateway serves its CE
+	// fallback.
 	OpenAPI *OpenAPIExportSpec `json:"openapi,omitempty"`
 
 	// PostRestartJob configures a Kubernetes Job that runs a user-provided
