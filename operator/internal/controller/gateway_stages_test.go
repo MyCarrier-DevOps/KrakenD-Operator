@@ -2201,9 +2201,9 @@ func TestReconcileCEFallbackCondition_NamesTheOpenAPIExport(t *testing.T) {
 		{"OpenAPI export disabled", &v1alpha1.OpenAPIExportSpec{Enabled: false}, nil,
 			[]string{"the config uses no Enterprise-only features"}, "OpenAPI"},
 		{"only the OpenAPI export", &v1alpha1.OpenAPIExportSpec{Enabled: true}, nil,
-			[]string{"removed 1 Enterprise-only feature(s): " + openAPIFallbackNote}, "uses no Enterprise-only features"},
+			[]string{"removed 1 Enterprise-only feature(s):\n" + openAPIFallbackNote}, "uses no Enterprise-only features"},
 		{"features and the OpenAPI export", &v1alpha1.OpenAPIExportSpec{Enabled: true}, stripped,
-			[]string{"removed 2 Enterprise-only feature(s): gateway: extra_config auth/api-keys; " + openAPIFallbackNote}, ""},
+			[]string{"removed 2 Enterprise-only feature(s):\n" + openAPIFallbackNote + "\ngateway: extra_config auth/api-keys"}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			gw, _, _ := licensedEEGateway(testNow.Add(-time.Minute), true)
@@ -2296,7 +2296,7 @@ func TestEndpointAccepted_ConflictKeepsItsReasonAndNamesTheRemovedFeatures(t *te
 			cond := endpointAccepted(gw, ep, rv).condition
 
 			if cond.Status != tc.wantStatus || cond.Reason != tc.wantReason ||
-				!strings.Contains(cond.Message, "CE fallback also removed: default/ep GET /users: extra_config auth/api-keys") {
+				!strings.Contains(cond.Message, "CE fallback also removed:\ndefault/ep GET /users: extra_config auth/api-keys") {
 				t.Errorf("Accepted = %+v, want %s/%s naming the removed feature", cond, tc.wantStatus, tc.wantReason)
 			}
 		})
