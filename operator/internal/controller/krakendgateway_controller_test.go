@@ -1296,7 +1296,7 @@ func acceptanceReconciler(
 ) *KrakenDGatewayReconciler {
 	return &KrakenDGatewayReconciler{
 		Client: c, Scheme: testScheme(), Recorder: rec,
-		Renderer: &mockRenderer{output: output}, Validator: &mockValidator{},
+		Renderer: &mockRenderer{output: output}, Validator: &mockValidator{}, APIReader: c,
 	}
 }
 
