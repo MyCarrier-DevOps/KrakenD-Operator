@@ -1284,10 +1284,9 @@ flowchart TD
     N4 --> U
     N1 -->|Yes| N2[Set Progressing=True<br/>Patch Deployment container image +<br/>checksum/plugins if changed]
     N2 --> U
-    N -->|Yes| PW[EE render: apply the EE wildcard route rule,<br/>rewrite /p/* to /p/{Wildcard} in the copy]
-    PW --> RJ{Same render and edition<br/>already rejected?}
+    N -->|Yes| RJ{Same render and edition<br/>already rejected?}
     RJ -->|Yes| S
-    RJ -->|No| P[Run krakend check -t -n -c<br/>on validation copy]
+    RJ -->|No| P[Validate as the render's edition:<br/>EE wildcard rule in Go, then<br/>krakend check -t -n -c on the copy]
 
     P --> Q{Verdict?}
     Q -->|Yes| R[Set ConfigValid=True<br/>Set Progressing=True<br/>Update ConfigMap<br/>Write status.configChecksum]
@@ -1332,7 +1331,7 @@ To ensure consistent JSON output (and avoid unnecessary rolling restarts from no
 - Sorts backend `host` arrays alphabetically
 - Uses canonical JSON serialization (no trailing commas, consistent indentation)
 
-Status is written only when it changes, so a reconcile with nothing to do makes no API write, and a gateway whose config stays rejected settles instead of re-validating on every event. The operator remembers, in memory and per gateway, the render checksum and edition krakend check last rejected; it validates again when either changes (any input, or a switch to or from CE fallback) and once after an operator restart.
+Status is written only when it changes, so a reconcile with nothing to do makes no API write, and a gateway whose config stays rejected settles instead of re-validating on every event. The operator remembers, in memory and per gateway, the render checksum and edition the validator last rejected; it validates again when either changes (any input, or a switch to or from CE fallback) and once after an operator restart.
 
 ### Validation Strategy
 
@@ -1346,7 +1345,9 @@ The operator runs `krakend check -t -n -c` against the rendered configuration be
 > 1. It applies that rule in Go. A conflict is reported as two
 >    `/endpoints/<i>` findings, one per endpoint.
 > 2. It checks, with the CE binary, a copy in which each wildcard's trailing
->    `*` is rewritten to the path parameter `{Wildcard}`.
+>    `*` is rewritten to the path parameter `{Wildcard}`. This only models the
+>    route: EE has no such parameter, so a backend `url_pattern` that
+>    references `{Wildcard}` on a wildcard endpoint is rejected.
 >
 > The copy keeps every endpoint at its index, so findings attribute back to
 > CRs. `/*` is left as is and rejected, as EE does. No EE license is needed
