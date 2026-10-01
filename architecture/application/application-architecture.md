@@ -881,10 +881,10 @@ The `Reconcile` method follows the pipeline described in operator architecture �
 
 ```mermaid
 flowchart TD
-    A[Fetch KrakenDGateway] --> B{Found?}
-    B -->|No| Z[Return — deleted via ownerRef GC]
+    A[Fetch KrakenDGateway] --> B{Found and<br/>not terminating?}
+    B -->|No| Z[Forget the gateway<br/>metrics and rejection memo<br/>Return]
     B -->|Yes| B1{phase == empty?}
-    B1 -->|Yes| B2[Set phase=Pending]
+    B1 -->|Yes| B2[Set phase=Pending in memory;<br/>the first needed status write persists it]
     B2 --> C
     B1 -->|No| C[List KrakenDEndpoints by gatewayRef]
     C --> C1[Fetch referenced KrakenDBackendPolicies]
@@ -904,13 +904,14 @@ flowchart TD
     G5 --> I[Patch pod annotation]
     G1 -->|Yes| G4[Set phase=Deploying,<br/>Progressing=True]
     G4 --> I
-    G -->|Yes| G3[Set phase=Rendering]
-    G3 --> G6[Set phase=Validating]
-    G6 --> J0[PrepareValidationCopy:<br/>strip wildcards if EE<br/>and CE fallback not active]
-    J0 --> J[Validate via krakend check -t -n -c]
-    J --> K{Valid?}
-    K -->|No| L[Set ConfigValid=False, phase=Error, emit event, return]
-    K -->|Yes| M[Update ConfigMap, set ConfigValid=True,<br/>phase=Deploying, Progressing=True]
+    G -->|Yes| J0[PrepareValidationCopy:<br/>strip wildcards if EE<br/>and CE fallback not active]
+    J0 --> J1{Same copy already<br/>rejected?}
+    J1 -->|Yes| L[Re-apply the remembered rejection:<br/>ConfigValid=False, phase=Error,<br/>Warning event only if the verdict changed, return]
+    J1 -->|No| J[Validate via krakend check -t -n -c]
+    J --> K{Verdict?}
+    K -->|Rejected| L
+    K -->|Unavailable| L2[Set ConfigValid=Unknown<br/>reason ValidatorUnavailable,<br/>keep phase and applied config,<br/>one Warning event,<br/>return error: retry with backoff]
+    K -->|Valid| M[Update ConfigMap, set ConfigValid=True,<br/>phase=Deploying, Progressing=True]
     M --> I
     I --> N[Reconcile Deployment, Service, SA, PDB, HPA]
     N --> O[Reconcile Dragonfly CR if enabled]
@@ -938,8 +939,8 @@ flowchart TD
 | Phase | Set When |
 |---|---|
 | `Pending` | Initial state after CR creation, before first reconcile |
-| `Rendering` | Config checksum changed — entering rendering pipeline |
-| `Validating` | Running `krakend check -t -n -c` on the rendered config |
+| `Rendering` | No longer written by the operator; kept only for status values persisted by older versions |
+| `Validating` | No longer written by the operator; kept only for status values persisted by older versions |
 | `Deploying` | ConfigMap updated or Deployment patched — rolling update in progress |
 | `Running` | Deployment is fully rolled out (all replicas ready) and not in Degraded/Error |
 | `Degraded` | CE fallback is active (`LicenseDegraded=True`) |
@@ -1477,12 +1478,14 @@ func New(opts Options) *krakendRenderer {
 type ValidatorOptions struct {
     Executor   CommandExecutor
     BinaryPath string
+    Timeout    time.Duration // zero means the 30-second default
 }
 
 func NewValidator(opts ValidatorOptions) *KrakenDValidator {
     return &KrakenDValidator{
         Executor:   opts.Executor,
         BinaryPath: opts.BinaryPath,
+        Timeout:    opts.Timeout,
     }
 }
 
@@ -1551,6 +1554,7 @@ func (e *KrakenDExecutor) Execute(
 type KrakenDValidator struct {
     Executor   CommandExecutor
     BinaryPath string
+    Timeout    time.Duration // zero means the 30-second default
 }
 ```
 
@@ -1558,6 +1562,9 @@ The validator writes the rendered JSON to a temporary file, runs `krakend check 
 
 ```go
 func (v *KrakenDValidator) Validate(ctx context.Context, jsonData []byte) error {
+    ctx, cancel := context.WithTimeout(ctx, v.timeout())
+    defer cancel()
+
     tmpFile, err := os.CreateTemp("", "krakend-config-*.json")
     if err != nil {
         return fmt.Errorf("creating temp file: %w", err)
@@ -1581,7 +1588,7 @@ func (v *KrakenDValidator) Validate(ctx context.Context, jsonData []byte) error 
 }
 ```
 
-`classifyCheckError` returns a `*ValidationError` only when the process exited with a status above zero before the 30-second deadline. A missing binary, a deadline overrun or a signal kill comes back as a plain wrapped error: the config was not judged and the caller retries.
+`classifyCheckError` returns a `*ValidationError` only when the process exited with a status above zero before the timeout (30 seconds by default). A missing binary, a deadline overrun or a signal kill comes back as a plain wrapped error: the config was not judged and the caller retries.
 
 ### EE Wildcard Handling
 
@@ -2665,6 +2672,7 @@ client := fake.NewClientBuilder().
 | Permanent validation errors | Set status condition, emit event, return `nil` (no retry) | Config fails `krakend check -t -n -c` |
 | Missing prerequisites | Set status condition, return `nil` with `RequeueAfter` | License Secret not yet synced |
 | Programming errors | Panic (should never reach production) | Nil pointer on required field that passed webhook validation |
+| Validator unavailable (binary missing, timeout, killed, temp-file I/O, validation copy not prepared) | Set `ConfigValid=Unknown` with reason `ValidatorUnavailable`, emit one Warning event, keep the phase and the applied config, return `error` — controller-runtime retries with backoff | `krakend check -t -n -c` hits its deadline or `/usr/local/bin/krakend` is missing |
 | AutoConfig spec/CUE/unmatched-override/scope failures | `Periodic`: `RequeueAfter: spec.periodic.interval`; `OnChange`: return `error` for backoff | `SpecFetchFailed`, `CUEEvaluationFailed`, `UnmatchedOverride`, `AdditionalEndpointScopeFailed` — includes a failed external `$ref` fetch/decode, which fails closed as `SpecFetchFailed` instead of falling back to the raw spec |
 | AutoConfig endpoint write failures | Return `error` for backoff regardless of trigger (a `Periodic` AutoConfig does not wait for `spec.periodic.interval`) | `EndpointReconcileFailed` |
 | AutoConfig status/endpoint write conflicts | Quiet `RequeueAfter: 1s` — no error log, no event, no status change | Stale-cache `Conflict` on the initial-phase or a successful sync's status write, or `Conflict`/`AlreadyExists` on an endpoint write; a failed sync whose status write conflicts keeps its failure row's handling, with no event |
