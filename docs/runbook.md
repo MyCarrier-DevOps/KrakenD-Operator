@@ -273,6 +273,14 @@ kubectl get events --field-selector involvedObject.name=<name> --sort-by='.lastT
   config (`status.configChecksum`), and its Deployment, Service and other
   resources are still reconciled. Only the rejected render waits for a fix.
 
+### Installed Istio, External Secrets or Dragonfly after the operator
+
+The operator decides at startup which optional kinds to watch. Restart it
+after installing one of these CRDs; until then the objects are created and
+corrected only when their gateway reconciles for another reason. The
+operator log lists the kinds it did not watch (`optional CRD not installed
+at startup`).
+
 ### Gateway reports `ValidatorUnavailable`
 
 **Symptom:** `ConfigValid` is `Unknown` with reason `ValidatorUnavailable`; the gateway keeps serving its last applied config and new changes are not rolled out.
