@@ -50,6 +50,16 @@ expect_equal() {
 expect_absent "enabled webhooks pass no flag (older images keep working)" "--enable-webhooks"
 expect_contains "webhooks.enabled=false disables them in the operator" \
 	"--enable-webhooks=false" --set webhooks.enabled=false
+expect_absent "webhooks.enabled=false passes no serving certificate path" \
+	"--webhook-cert-path" --set webhooks.enabled=false
+expect_absent "webhooks.enabled=false mounts no serving certificate" \
+	"webhook-server-cert" --set webhooks.enabled=false
+expect_absent "webhooks.enabled=false declares no serving certificate volume" \
+	"serving-certs" --set webhooks.enabled=false
+expect_contains "enabled webhooks pass the serving certificate path" \
+	"--webhook-cert-path=/tmp/k8s-webhook-server/serving-certs"
+expect_contains "enabled webhooks mount the serving certificate" \
+	"secretName: t-krakend-operator-webhook-server-cert"
 
 if [ "$failures" -gt 0 ]; then
 	printf '%d chart render test(s) failed\n' "$failures"
