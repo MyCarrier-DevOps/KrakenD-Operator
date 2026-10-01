@@ -1010,6 +1010,23 @@ every gateway reconcile, just not on their own changes. Restart the operator
 (`kubectl rollout restart deployment -n <operator-namespace> <operator-deployment>`)
 after installing Istio, External Secrets Operator or the Dragonfly Operator.
 
+### Disabling a feature deletes what it created
+
+When a feature is turned off, the operator now deletes the resource it
+created for it, but only a resource the gateway controls:
+
+| Turned off | Deleted |
+|---|---|
+| `spec.autoscaling` removed | the HPA `<gateway>` |
+| `spec.dragonfly.enabled: false` or removed | the Dragonfly `<gateway>-dragonfly`, plus `DragonflyReady`, the `dragonfly_ready` series and `status.dragonflyAddress` |
+| `spec.license.externalSecret.enabled: false` or removed | the ExternalSecret `<gateway>-license` |
+| `spec.istio.enabled: false` or removed | the VirtualService `<gateway>`, plus `IstioConfigured` |
+
+Previously these stayed behind. An orphaned HPA kept scaling the Deployment,
+and an orphaned VirtualService kept claiming its hosts. **Check before
+upgrading** that nothing else relies on such a leftover object. After the
+HPA is deleted the Deployment returns to `spec.replicas`.
+
 ---
 
 ## v0.14.0 — openapi-serve liveness probe (one-time rollout)
