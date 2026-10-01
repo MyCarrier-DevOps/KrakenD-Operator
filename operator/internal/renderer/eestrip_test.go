@@ -142,3 +142,71 @@ func TestEEOnlyNamespaces(t *testing.T) {
 		t.Errorf("unknown level: %v, want nil", got)
 	}
 }
+
+func TestRender_CEEditionDropsEndpointDocumentation(t *testing.T) {
+	ep := v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "a", Namespace: "ns"},
+		Spec: v1alpha1.KrakenDEndpointSpec{
+			ComponentSchemas: map[string]runtime.RawExtension{"User": {Raw: []byte(`{"type":"object"}`)}},
+			Endpoints: []v1alpha1.EndpointEntry{{
+				Endpoint: "/users", Method: "GET",
+				ExtraConfig: &runtime.RawExtension{Raw: []byte(
+					`{"documentation/openapi":{"summary":"List users"},"qos/ratelimit/router":{"max_rate":10}}`)},
+				Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/users"}},
+			}},
+		},
+	}
+	for _, tc := range []struct {
+		name       string
+		edition    v1alpha1.Edition
+		ceFallback bool
+		wantDocs   bool
+		wantListed bool
+	}{
+		{"CE edition drops it and lists nothing", v1alpha1.EditionCE, false, false, false},
+		{"EE keeps it", v1alpha1.EditionEE, false, true, false},
+		{"CE fallback strips it; the gateway level lists it", v1alpha1.EditionEE, true, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gw := &v1alpha1.KrakenDGateway{
+				ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "ns"},
+				Spec:       v1alpha1.KrakenDGatewaySpec{Edition: tc.edition, Version: "2.13"},
+			}
+			out, err := New(Options{}).Render(RenderInput{
+				Gateway: gw, Endpoints: []v1alpha1.KrakenDEndpoint{ep}, CEFallback: tc.ceFallback,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var doc struct {
+				Endpoints []struct {
+					ExtraConfig map[string]any `json:"extra_config"`
+				} `json:"endpoints"`
+				ExtraConfig map[string]any `json:"extra_config"`
+			}
+			if err := json.Unmarshal(out.JSON, &doc); err != nil {
+				t.Fatal(err)
+			}
+			_, entryDocs := doc.Endpoints[0].ExtraConfig["documentation/openapi"]
+			_, rootDocs := doc.ExtraConfig["documentation/openapi"]
+			if entryDocs != tc.wantDocs || rootDocs != tc.wantDocs {
+				t.Errorf("documentation/openapi on the entry %v, at the root %v; want both %v",
+					entryDocs, rootDocs, tc.wantDocs)
+			}
+			if _, ok := doc.Endpoints[0].ExtraConfig["qos/ratelimit/router"]; !ok {
+				t.Error("a CE namespace next to the dropped one must stay")
+			}
+			listed := slices.ContainsFunc(out.StrippedEEFeatures, func(f StrippedEEFeature) bool {
+				return f.Feature == "extra_config documentation/openapi"
+			})
+			if listed != tc.wantListed {
+				t.Errorf("StrippedEEFeatures = %+v: documentation/openapi listed %v, want %v",
+					out.StrippedEEFeatures, listed, tc.wantListed)
+			}
+		})
+	}
+	if slices.Contains(EEOnlyNamespaces(LevelEndpoint), "documentation/openapi") {
+		t.Error("EEOnlyNamespaces(LevelEndpoint) lists documentation/openapi, which a CE render drops: " +
+			"admission would refuse every AutoConfig endpoint of a CE gateway")
+	}
+}
