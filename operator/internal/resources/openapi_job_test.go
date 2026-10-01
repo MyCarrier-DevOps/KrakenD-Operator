@@ -789,7 +789,7 @@ func TestBuildService_WithOpenAPIPort(t *testing.T) {
 		},
 	}
 	svc := &corev1.Service{}
-	BuildService(svc, gw)
+	BuildService(svc, gw, false)
 
 	var names []string
 	for _, p := range svc.Spec.Ports {
@@ -807,7 +807,7 @@ func TestBuildService_OpenAPIDisabled(t *testing.T) {
 		Spec:       v1alpha1.KrakenDGatewaySpec{},
 	}
 	svc := &corev1.Service{}
-	BuildService(svc, gw)
+	BuildService(svc, gw, false)
 	if len(svc.Spec.Ports) != 1 {
 		t.Fatalf("expected single http port, got %d", len(svc.Spec.Ports))
 	}

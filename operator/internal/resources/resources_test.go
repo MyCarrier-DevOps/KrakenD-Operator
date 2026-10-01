@@ -70,7 +70,7 @@ func TestBuildServiceAccount(t *testing.T) {
 func TestBuildService_DefaultPort(t *testing.T) {
 	gw := testGateway()
 	svc := &corev1.Service{}
-	BuildService(svc, gw)
+	BuildService(svc, gw, false)
 
 	if svc.Spec.Type != corev1.ServiceTypeClusterIP {
 		t.Errorf("expected ClusterIP, got %s", svc.Spec.Type)
@@ -90,7 +90,7 @@ func TestBuildService_CustomPort(t *testing.T) {
 	gw := testGateway()
 	gw.Spec.Config.Port = 9090
 	svc := &corev1.Service{}
-	BuildService(svc, gw)
+	BuildService(svc, gw, false)
 	if svc.Spec.Ports[0].Port != 9090 {
 		t.Errorf("expected port 9090, got %d", svc.Spec.Ports[0].Port)
 	}

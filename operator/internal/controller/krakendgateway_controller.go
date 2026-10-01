@@ -1084,7 +1084,7 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 		Name: gw.Name, Namespace: gw.Namespace,
 	}}
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, svc, func() error {
-		resources.BuildService(svc, gw)
+		resources.BuildService(svc, gw, in.ceRender)
 		return controllerutil.SetControllerReference(gw, svc, r.Scheme)
 	}); err != nil {
 		return fmt.Errorf("reconciling service: %w", err)
