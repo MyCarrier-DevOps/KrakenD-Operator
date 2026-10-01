@@ -1479,6 +1479,11 @@ rollout therefore changes which ConfigMap new pods mount and never rewrites
 the one old pods mount, so a stalled rollout cannot take down pods that
 restart on the previous ReplicaSet.
 
+A config ConfigMap is garbage-collected once nothing can mount it. The
+operator keeps the applied one, the three most recently created revisions,
+and any revision a live ReplicaSet (one with or wanting pods) still mounts.
+ReplicaSets are read uncached, and only when there is something to collect.
+
 ### Deployment Configuration
 
 The operator configures the Deployment's rolling update strategy:
@@ -1678,6 +1683,9 @@ rules:
   - apiGroups: ["apps"]
     resources: ["deployments"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["list"]                    # config ConfigMap GC: a live ReplicaSet keeps its ConfigMap; read uncached
   - apiGroups: [""]
     resources: ["services", "configmaps", "serviceaccounts"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
