@@ -228,7 +228,7 @@ func TestGatewayReconcile_ValidatorUnavailableIsRetried(t *testing.T) {
 	gw := testGateway()
 	gw.Status.Phase = v1alpha1.PhaseRunning
 	gw.Status.ConfigChecksum = "applied"
-	gw.Status.ActiveImage = "img:v1"
+	gw.Status.ActiveImage = convergedImage
 	now := metav1.Now()
 	gw.Status.Conditions = []metav1.Condition{
 		{Type: "Available", Status: metav1.ConditionTrue, Reason: "DeploymentAvailable",

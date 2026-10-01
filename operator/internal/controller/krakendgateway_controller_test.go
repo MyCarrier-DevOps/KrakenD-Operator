@@ -180,8 +180,8 @@ func TestGatewayReconcile_FullPipeline(t *testing.T) {
 	if updated.Status.ConfigChecksum != "newchecksum" {
 		t.Errorf("expected checksum newchecksum, got %s", updated.Status.ConfigChecksum)
 	}
-	if updated.Status.ActiveImage != "krakend/krakend-ce:2.7.0" {
-		t.Errorf("expected active image, got %s", updated.Status.ActiveImage)
+	if want := renderer.ResolveImage(gw, false); updated.Status.ActiveImage != want {
+		t.Errorf("active image = %s, want %s", updated.Status.ActiveImage, want)
 	}
 	if updated.Status.EndpointCount != 1 {
 		t.Errorf("expected endpoint count 1, got %d", updated.Status.EndpointCount)
@@ -215,7 +215,7 @@ func TestGatewayReconcile_ChecksumUnchanged(t *testing.T) {
 	gw := testGateway()
 	gw.Status.Phase = v1alpha1.PhaseRunning
 	gw.Status.ConfigChecksum = "samechecksum"
-	gw.Status.ActiveImage = "krakend/krakend-ce:2.7.0"
+	gw.Status.ActiveImage = renderer.ResolveImage(gw, false)
 	now := metav1.Now()
 	gw.Status.Conditions = []metav1.Condition{
 		{Type: "ConfigValid", Status: metav1.ConditionTrue, Reason: "ConfigApplied",
@@ -1732,7 +1732,7 @@ func TestGatewayReconcile_RecoveredRolloutClearsError(t *testing.T) {
 	gw.Generation = 1
 	now := metav1.Now()
 	gw.Status = v1alpha1.KrakenDGatewayStatus{
-		Phase: v1alpha1.PhaseError, ConfigChecksum: "cs1", ActiveImage: "img:v1",
+		Phase: v1alpha1.PhaseError, ConfigChecksum: "cs1", ActiveImage: convergedImage,
 		Conditions: []metav1.Condition{
 			{Type: "ConfigValid", Status: metav1.ConditionTrue, Reason: "ConfigApplied",
 				Message: "Configuration passed validation and is applied", ObservedGeneration: 1, LastTransitionTime: now},
@@ -1766,7 +1766,7 @@ func TestGatewayReconcile_RevertToAppliedConfigClearsRejection(t *testing.T) {
 	gw.Generation = 3
 	now := metav1.Now()
 	gw.Status = v1alpha1.KrakenDGatewayStatus{
-		Phase: v1alpha1.PhaseError, ConfigChecksum: "good", ActiveImage: "img:v1", ObservedGeneration: 2,
+		Phase: v1alpha1.PhaseError, ConfigChecksum: "good", ActiveImage: convergedImage, ObservedGeneration: 2,
 		Conditions: []metav1.Condition{
 			{Type: "ConfigValid", Status: metav1.ConditionFalse, Reason: "ConfigValidationFailed",
 				Message: "bad config", ObservedGeneration: 2, LastTransitionTime: now},
@@ -1801,7 +1801,7 @@ func TestGatewayReconcile_ValidationFailureAdvancesObservedGeneration(t *testing
 	gw.Generation = 4
 	now := metav1.Now()
 	gw.Status = v1alpha1.KrakenDGatewayStatus{
-		Phase: v1alpha1.PhaseRunning, ConfigChecksum: "old", ActiveImage: "img:v1", ObservedGeneration: 3,
+		Phase: v1alpha1.PhaseRunning, ConfigChecksum: "old", ActiveImage: convergedImage, ObservedGeneration: 3,
 		Conditions: []metav1.Condition{
 			{Type: "ConfigValid", Status: metav1.ConditionTrue, Reason: "ConfigApplied", Message: "applied",
 				ObservedGeneration: 3, LastTransitionTime: now},
@@ -1837,7 +1837,7 @@ func convergedGatewayAt(checksum string) *v1alpha1.KrakenDGateway {
 	gw.Generation = 1
 	now := metav1.Now()
 	gw.Status = v1alpha1.KrakenDGatewayStatus{
-		Phase: v1alpha1.PhaseRunning, ConfigChecksum: checksum, ActiveImage: "img:v1", ObservedGeneration: 1,
+		Phase: v1alpha1.PhaseRunning, ConfigChecksum: checksum, ActiveImage: convergedImage, ObservedGeneration: 1,
 		Conditions: []metav1.Condition{
 			{Type: "ConfigValid", Status: metav1.ConditionTrue, Reason: "ConfigApplied",
 				Message: "applied", ObservedGeneration: 1, LastTransitionTime: now},

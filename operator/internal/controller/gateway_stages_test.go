@@ -198,7 +198,7 @@ func TestGatewayReconcile_NoDeploymentBeforeAnyConfigPasses(t *testing.T) {
 }
 
 func TestGatewayReconcile_UnavailableValidatorIsNotReady(t *testing.T) {
-	gw := servingGateway("applied", "img:v1")
+	gw := servingGateway("applied", convergedImage)
 	c := fakeClientBuilder().WithObjects(gw, makeConvergedDeployment(gw, "applied")).
 		WithStatusSubresource(gw).Build()
 	reconcileWithUnavailableValidator(t, c, gw)
@@ -210,7 +210,7 @@ func TestGatewayReconcile_UnavailableValidatorIsNotReady(t *testing.T) {
 }
 
 func TestGatewayReconcile_UnavailableValidatorStillRefreshesRolloutConditions(t *testing.T) {
-	gw := rollingGateway("applied", "img:v1")
+	gw := rollingGateway("applied", convergedImage)
 	c := fakeClientBuilder().WithObjects(gw, makeConvergedDeployment(gw, "applied")).
 		WithStatusSubresource(gw).Build()
 	reconcileWithUnavailableValidator(t, c, gw)
@@ -226,7 +226,7 @@ func TestGatewayReconcile_UnavailableValidatorStillRefreshesRolloutConditions(t 
 }
 
 func TestGatewayReconcile_UnavailableValidatorStillReportsFailedRollout(t *testing.T) {
-	gw := rollingGateway("applied", "img:v1")
+	gw := rollingGateway("applied", convergedImage)
 	dep := makeConvergedDeployment(gw, "applied")
 	dep.Status.Conditions = []appsv1.DeploymentCondition{{
 		Type: appsv1.DeploymentProgressing, Status: corev1.ConditionFalse, Reason: "ProgressDeadlineExceeded",
@@ -241,7 +241,7 @@ func TestGatewayReconcile_UnavailableValidatorStillReportsFailedRollout(t *testi
 }
 
 func TestGatewayReconcile_UnavailableDeploymentDuringRolloutIsDeployingNotError(t *testing.T) {
-	gw := rollingGateway("applied", "img:v1")
+	gw := rollingGateway("applied", convergedImage)
 	dep := makeConvergedDeployment(gw, "applied")
 	dep.Status = appsv1.DeploymentStatus{
 		Conditions: []appsv1.DeploymentCondition{{
@@ -261,12 +261,13 @@ func TestGatewayReconcile_UnavailableDeploymentDuringRolloutIsDeployingNotError(
 }
 
 func TestGatewayReconcile_ImageChangeIsNotReadyUntilTheDeploymentRunsIt(t *testing.T) {
-	gw := servingGateway("applied", "img:v1")
+	gw := servingGateway("applied", convergedImage)
 	stale := makeConvergedDeployment(gw, "applied")
+	gw.Spec.Image = "img:v2"
 	c := fakeClientBuilder().WithObjects(gw, stale).WithStatusSubresource(gw).
 		WithInterceptorFuncs(staleDeploymentReads(stale)).Build()
 	rend := &mockRenderer{output: &renderer.RenderOutput{
-		JSON: []byte(`{"version":3}`), Checksum: "applied", DesiredImage: "img:v2",
+		JSON: []byte(`{"version":3}`), Checksum: "applied",
 	}}
 	r := newTestGatewayReconciler(c, rend, &mockValidator{})
 
@@ -276,7 +277,7 @@ func TestGatewayReconcile_ImageChangeIsNotReadyUntilTheDeploymentRunsIt(t *testi
 	got := getGateway(t, c, gw)
 	progressing := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionProgressing)
 	if progressing == nil || progressing.Status != metav1.ConditionTrue || progressing.Reason != "DeploymentUpdated" {
-		t.Errorf("Progressing = %+v, want True/DeploymentUpdated while the Deployment still runs img:v1", progressing)
+		t.Errorf("Progressing = %+v, want True/DeploymentUpdated while the Deployment still runs the old image", progressing)
 	}
 	ready := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionReady)
 	if ready != nil && ready.Status == metav1.ConditionTrue {
@@ -285,7 +286,7 @@ func TestGatewayReconcile_ImageChangeIsNotReadyUntilTheDeploymentRunsIt(t *testi
 }
 
 func TestGatewayReconcile_PluginChangeIsNotReadyUntilTheDeploymentRunsIt(t *testing.T) {
-	gw := servingGateway("applied", "img:v1")
+	gw := servingGateway("applied", convergedImage)
 	gw.Status.PluginChecksum = "plugins-old"
 	stale := makeConvergedDeployment(gw, "applied")
 	stale.Spec.Template.Annotations[resources.PluginChecksumAnnotation] = "plugins-old"
@@ -312,7 +313,7 @@ func TestGatewayReconcile_PluginChangeIsNotReadyUntilTheDeploymentRunsIt(t *test
 }
 
 func TestGatewayReconcile_RejectedRenderWithADeploymentWritesStatusOnce(t *testing.T) {
-	gw := servingGateway("applied", "img:v1")
+	gw := servingGateway("applied", convergedImage)
 	c, phases := gatewayStatusWrites(gw, makeConvergedDeployment(gw, "applied"))
 	r := newTestGatewayReconciler(c, renderOutput("new"),
 		&countingValidator{err: rejectedBy("- at '/endpoints/0/endpoint': bad")})
@@ -345,6 +346,13 @@ func TestDeploymentConverged(t *testing.T) {
 		{
 			name:   "image annotation differs",
 			want:   func(in *infraInputs) { in.image = "img:v2" },
+			wantOK: false,
+		},
+		{
+			name: "image annotation missing on a Deployment from before the operator set it",
+			mutate: func(dep *appsv1.Deployment) {
+				delete(dep.Spec.Template.Annotations, resources.ImageAnnotation)
+			},
 			wantOK: false,
 		},
 		{
@@ -398,13 +406,17 @@ func TestDeploymentConverged(t *testing.T) {
 }
 
 func TestGatewayReconcile_ImageRolloutCompletesWhenTheDeploymentRunsIt(t *testing.T) {
-	gw := rollingGateway("applied", "img:v1")
+	gw := rollingGateway("applied", convergedImage)
+	gw.Spec.Image = "img:v2"
 	dep := makeConvergedDeployment(gw, "applied")
 	dep.Spec.Template.Annotations[resources.ImageAnnotation] = "img:v2"
 	dep.Spec.Template.Spec.Containers[0].Image = "img:v2"
-	c := fakeClientBuilder().WithObjects(gw, dep).WithStatusSubresource(gw).Build()
+	// The fake client returns the Deployment as CreateOrUpdate wrote it, so
+	// the seed would be overwritten; reads return it as the cache holds it.
+	c := fakeClientBuilder().WithObjects(gw, dep).WithStatusSubresource(gw).
+		WithInterceptorFuncs(staleDeploymentReads(dep)).Build()
 	rend := &mockRenderer{output: &renderer.RenderOutput{
-		JSON: []byte(`{"version":3}`), Checksum: "applied", DesiredImage: "img:v2",
+		JSON: []byte(`{"version":3}`), Checksum: "applied",
 	}}
 	r := newTestGatewayReconciler(c, rend, &mockValidator{})
 
@@ -763,7 +775,7 @@ func TestGatewayReconcile_HoldsTheDeploymentWhenTheAppliedConfigMapIsNotTheGatew
 }
 
 func TestGatewayReconcile_HeldDeploymentReportsNoRollout(t *testing.T) {
-	gw := servingGateway(hash.SHA256Hex([]byte(`{"version":3,"name":"gone"}`)), "img:v1")
+	gw := servingGateway(hash.SHA256Hex([]byte(`{"version":3,"name":"gone"}`)), convergedImage)
 	c := fakeClientBuilder().WithObjects(gw, legacyDeployment(gw)).WithStatusSubresource(gw).Build()
 	// The render names another image, but the Deployment is held, so no
 	// rollout starts.
@@ -1268,7 +1280,7 @@ func withAccepted(ep *v1alpha1.KrakenDEndpoint, status metav1.ConditionStatus, r
 }
 
 func TestGatewayReconcile_RejectionLiftsABlameThatMovedAway(t *testing.T) {
-	gw := servingGateway("applied", "img:v1")
+	gw := servingGateway("applied", convergedImage)
 	// An earlier rejection blamed good; the findings now name bad.
 	good := withAccepted(testEndpoint("good", "/a"), metav1.ConditionFalse, v1alpha1.ReasonGatewayConfigRejected)
 	bad := testEndpoint("bad", "/b")
@@ -1289,7 +1301,7 @@ func TestGatewayReconcile_RejectionLiftsABlameThatMovedAway(t *testing.T) {
 }
 
 func TestGatewayReconcile_RejectionNamingNobodyLiftsAnOldBlame(t *testing.T) {
-	gw := servingGateway("applied", "img:v1")
+	gw := servingGateway("applied", convergedImage)
 	ep := withAccepted(testEndpoint("ep", "/a"), metav1.ConditionFalse, v1alpha1.ReasonGatewayConfigRejected)
 	c := fakeClientBuilder().WithObjects(gw, ep).WithStatusSubresource(gw, ep).Build()
 	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}),
@@ -1304,7 +1316,7 @@ func TestGatewayReconcile_RejectionNamingNobodyLiftsAnOldBlame(t *testing.T) {
 }
 
 func TestGatewayReconcile_RememberedRejectionAfterALiftedBlameWritesNothing(t *testing.T) {
-	gw := servingGateway("applied", "img:v1")
+	gw := servingGateway("applied", convergedImage)
 	good := withAccepted(testEndpoint("good", "/a"), metav1.ConditionFalse, v1alpha1.ReasonGatewayConfigRejected)
 	bad := testEndpoint("bad", "/b")
 	writes := 0
@@ -1368,7 +1380,7 @@ func TestGatewayReconcile_UnavailableValidatorOnANeverAppliedGatewayRemovesAStal
 }
 
 func TestGatewayReconcile_UnavailableValidatorLiftsAnOldBlame(t *testing.T) {
-	gw := servingGateway("applied", "img:v1")
+	gw := servingGateway("applied", convergedImage)
 	ep := withAccepted(testEndpoint("ep", "/a"), metav1.ConditionFalse, v1alpha1.ReasonGatewayConfigRejected)
 	c := fakeClientBuilder().WithObjects(gw, ep).WithStatusSubresource(gw, ep).Build()
 	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}),
@@ -1411,7 +1423,7 @@ func TestRejectionsByEndpoint_ListsEachFindingOncePerEndpoint(t *testing.T) {
 }
 
 func TestGatewayReconcile_ServingGatewayKeepsAnUnblamedVerdict(t *testing.T) {
-	gw := servingGateway("applied", "img:v1")
+	gw := servingGateway("applied", convergedImage)
 	good := withAccepted(testEndpoint("good", "/a"), metav1.ConditionTrue, v1alpha1.ReasonAccepted)
 	bad := testEndpoint("bad", "/b")
 	c := fakeClientBuilder().WithObjects(gw, good, bad).WithStatusSubresource(gw, good, bad).Build()
@@ -1426,7 +1438,7 @@ func TestGatewayReconcile_ServingGatewayKeepsAnUnblamedVerdict(t *testing.T) {
 }
 
 func TestGatewayReconcile_ServingGatewayKeepsAVerdictWhileTheValidatorIsUnavailable(t *testing.T) {
-	gw := servingGateway("applied", "img:v1")
+	gw := servingGateway("applied", convergedImage)
 	good := withAccepted(testEndpoint("good", "/a"), metav1.ConditionTrue, v1alpha1.ReasonAccepted)
 	c := fakeClientBuilder().WithObjects(gw, good).WithStatusSubresource(gw, good).Build()
 	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}),
@@ -1440,7 +1452,7 @@ func TestGatewayReconcile_ServingGatewayKeepsAVerdictWhileTheValidatorIsUnavaila
 }
 
 func TestGatewayReconcile_StaleListCannotRemoveALiveAccepted(t *testing.T) {
-	gw := servingGateway("applied", "img:v1")
+	gw := servingGateway("applied", convergedImage)
 	// The endpoint was blamed before; the live object has since been accepted.
 	live := withAccepted(testEndpoint("x", "/a"), metav1.ConditionTrue, v1alpha1.ReasonAccepted)
 	staleList := interceptor.Funcs{
@@ -1471,7 +1483,7 @@ func TestGatewayReconcile_StaleListCannotRemoveALiveAccepted(t *testing.T) {
 
 func TestGatewayReconcile_StaleEmptyChecksumKeepsAnAcceptedEndpoint(t *testing.T) {
 	cached := reconciledGateway() // the cache has not seen the first apply
-	liveGW := servingGateway("applied", "img:v1")
+	liveGW := servingGateway("applied", convergedImage)
 	ep := withAccepted(testEndpoint("x", "/a"), metav1.ConditionTrue, v1alpha1.ReasonAccepted)
 	bad := testEndpoint("bad", "/b")
 	c := fakeClientBuilder().WithObjects(cached, ep, bad).WithStatusSubresource(cached, ep, bad).Build()
@@ -1574,7 +1586,7 @@ func TestGatewayReconcile_PartlyConflictedEndpointIsNotRewrittenOnTheNextPass(t 
 }
 
 func TestGatewayReconcile_RejectedPassKeepsTheLiveConflicts(t *testing.T) {
-	gw := servingGateway("applied", "img:v1")
+	gw := servingGateway("applied", convergedImage)
 	good := testEndpoint("good", "/a")
 	bad := testEndpoint("bad", "/b")
 	fresh := []v1alpha1.EndpointConflict{{Endpoint: "/b", Method: "GET", Winner: "default/fresh"}}

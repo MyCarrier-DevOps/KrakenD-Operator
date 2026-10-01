@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 	"github.com/mycarrier-devops/krakend-operator/internal/resources"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
@@ -51,7 +52,7 @@ func makeGWWithJob(script string) *v1alpha1.KrakenDGateway {
 }
 
 // convergedImage is the image makeConvergedDeployment runs.
-const convergedImage = "img:v1"
+var convergedImage = renderer.ResolveImage(testGateway(), false)
 
 func makeConvergedDeployment(gw *v1alpha1.KrakenDGateway, checksum string) *appsv1.Deployment {
 	return &appsv1.Deployment{
