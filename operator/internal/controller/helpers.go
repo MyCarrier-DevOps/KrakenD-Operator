@@ -57,7 +57,15 @@ func conditionsEqual(a, b []metav1.Condition) bool {
 	return true
 }
 
-func sameCondition(a, b *metav1.Condition) bool { return false }
+// sameCondition reports whether a and b are both absent, or carry the same
+// status, reason, message and observedGeneration. LastTransitionTime is
+// ignored.
+func sameCondition(a, b *metav1.Condition) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return false
+}
 
 // maxConditionMessageBytes bounds validator output copied into a condition
 // message or an event. The CRDs cap condition messages at 32768 characters,
