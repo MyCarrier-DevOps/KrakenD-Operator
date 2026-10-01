@@ -1809,6 +1809,9 @@ func gatewayReadinessFor(conds []metav1.Condition) gatewayReadiness {
 			message: "Waiting for the first configuration to be validated", phase: v1alpha1.PhasePending}
 	case condTrue(progressing):
 		return notReady(progressing, v1alpha1.PhaseDeploying)
+	case !condTrue(available):
+		return gatewayReadiness{status: metav1.ConditionFalse, reason: v1alpha1.ReasonAwaitingAvailability,
+			message: "Waiting for the Deployment to report available replicas", phase: v1alpha1.PhaseDeploying}
 	default:
 		return gatewayReadiness{status: metav1.ConditionTrue, reason: v1alpha1.ReasonReady,
 			message: "Configuration applied and all replicas available", phase: v1alpha1.PhaseRunning}
