@@ -736,7 +736,7 @@ sequenceDiagram
 |---|---|---|
 | KrakenDGateway created | Gateway controller | The phase is not written up front; the first status write the reconcile needs persists it (`Pending` until a config is accepted or rejected, including while the validator is unavailable). Create Deployment, Service, ConfigMap, SA; optionally Dragonfly CR, VS, ExternalSecret. Re-attach any KrakenDEndpoints in `Detached` phase with matching `gatewayRef`; trigger config render. |
 | KrakenDGateway updated | Gateway controller | Re-render config, update child resources, rolling restart |
-| KrakenDGateway deleted | Kubernetes GC | ownerReference cascade deletes all child resources |
+| KrakenDGateway deleted | Kubernetes GC | ownerReference cascade deletes all child resources. A KrakenDGateway with a deletionTimestamp is not reconciled: garbage collection removes its children, and the operator does not recreate them. |
 | KrakenDEndpoint created/updated/deleted | Endpoint controller | Set initial phase to `Pending` on creation. Re-render config for the target gateway, validate, rolling restart. Conflict detection re-evaluates all endpoints; previously `Conflicted` endpoints may be promoted to `Active` if the conflict is resolved. |
 | KrakenDBackendPolicy created/updated/deleted | Policy controller | Re-render config for all gateways with endpoints referencing this policy. If deleted while referenced, affected endpoints are marked `Invalid` (defense-in-depth: the admission webhook rejects such deletions, but this path handles cases where the webhook is in `failurePolicy: Ignore` mode, is temporarily unavailable, or is not deployed). |
 | KrakenDAutoConfig created, or spec generation/label/annotation changed | AutoConfig controller | Fetch OpenAPI spec from configured source, parse operations, apply URL transforms and filters, and converge owned KrakenDEndpoint resources to the desired state (create/update/delete). A status-only update (the phase/condition writes the reconciler itself makes) does not re-trigger this — only generation, label, and annotation changes do. Generated endpoints trigger the endpoint controller watch → gateway reconciler. |
@@ -1750,6 +1750,8 @@ rules:
 | `krakend_operator_reconcile_duration_seconds` | Histogram | Reconciliation loop latency |
 | `krakend_operator_dragonfly_ready` | Gauge | 1 if Dragonfly is ready, 0 otherwise |
 | `krakend_operator_autoconfig_synced` | Gauge | 1 after a `KrakenDAutoConfig`'s last reconcile synced successfully, 0 while it is failing (labels: `namespace`, `name`); the series is removed when the AutoConfig is deleted |
+
+Per-gateway series (`namespace`, `name` labels) are removed when the gateway is deleted or starts terminating.
 
 ### Kubernetes Events
 
