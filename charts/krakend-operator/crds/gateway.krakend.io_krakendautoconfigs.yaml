@@ -20,12 +20,19 @@ spec:
     - jsonPath: .spec.gatewayRef.name
       name: Gateway
       type: string
-    - jsonPath: .status.phase
-      name: Phase
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Ready")].reason
+      name: Reason
       type: string
     - jsonPath: .status.generatedEndpoints
       name: Generated
       type: integer
+    - jsonPath: .status.phase
+      name: Phase
+      priority: 1
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -605,6 +612,7 @@ spec:
             description: KrakenDAutoConfigStatus defines the observed state of KrakenDAutoConfig.
             properties:
               conditions:
+                description: Conditions are keyed by type. Ready is the summary condition.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -660,12 +668,30 @@ spec:
                   - type
                   type: object
                 type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
               generatedEndpoints:
                 type: integer
               lastSyncTime:
+                description: |-
+                  LastSyncTime is when a sync last changed something: new inputs (a
+                  different OpenAPI spec, CUE definitions or spec generation) or an
+                  endpoint create, update or delete. A resync that changes nothing leaves
+                  it alone, so an old value does not mean the AutoConfig is stale; use
+                  the Ready condition or the krakend_operator_autoconfig_synced metric
+                  for freshness.
                 format: date-time
                 type: string
+              observedGeneration:
+                description: ObservedGeneration is the metadata.generation this status
+                  was computed for.
+                format: int64
+                type: integer
               phase:
+                description: |-
+                  Phase is derived from the Synced condition and kept for compatibility;
+                  read the Ready condition instead.
                 enum:
                 - Pending
                 - Fetching
