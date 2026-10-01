@@ -1459,7 +1459,7 @@ sequenceDiagram
     participant RS2 as New ReplicaSet
     participant SVC as Service
 
-    Op->>Dep: Patch pod template<br/>(checksum annotation)
+    Op->>Dep: Point pod template at the new<br/>immutable ConfigMap <gw>-config-<hash>
     Dep->>RS2: Create new ReplicaSet<br/>(maxSurge: 1)
     RS2->>RS2: Start new Pod
     RS2->>RS2: KrakenD starts, loads new config
@@ -1470,6 +1470,14 @@ sequenceDiagram
 
     Note over SVC: Zero downtime: at least<br/>N replicas always serving
 ```
+
+Each applied config revision is an immutable ConfigMap,
+`<gw>-config-<first 10 hex of the checksum>`, and the pod template mounts it
+by name. The template's `krakend.io/checksum-config` annotation still
+carries the full checksum, and the post-restart Job gate keys on it. A
+rollout therefore changes which ConfigMap new pods mount and never rewrites
+the one old pods mount, so a stalled rollout cannot take down pods that
+restart on the previous ReplicaSet.
 
 ### Deployment Configuration
 
