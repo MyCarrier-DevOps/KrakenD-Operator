@@ -88,8 +88,9 @@ type DeploymentInputs struct {
 
 // BuildDeployment mutates dep in place with a complete Deployment for the
 // KrakenD gateway. in.Image is the container image the infrastructure
-// stage deploys, that of the applied config's edition. in.ConfigChecksum and in.PluginChecksum are
-// injected as pod annotations to trigger rolling restarts on config changes.
+// stage deploys, that of the applied config's edition. in.ConfigChecksum and
+// in.PluginChecksum are injected as pod annotations to trigger rolling
+// restarts on config changes.
 func BuildDeployment(dep *appsv1.Deployment, gw *v1alpha1.KrakenDGateway, in DeploymentInputs) {
 	labels := StandardLabels(gw)
 	selectorLabels := SelectorLabels(gw)
