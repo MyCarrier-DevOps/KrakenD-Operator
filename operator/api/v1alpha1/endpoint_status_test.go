@@ -72,6 +72,16 @@ func TestEndpointReady(t *testing.T) {
 			[]metav1.Condition{refsOK, testCondition("Accepted", metav1.ConditionTrue, "Accepted", 2)},
 			metav1.ConditionTrue, "Ready", "",
 		},
+		{
+			"conflict",
+			[]metav1.Condition{refsOK, testCondition("Accepted", metav1.ConditionFalse, "EndpointConflict", 2)},
+			metav1.ConditionFalse, "EndpointConflict", "EndpointConflict message",
+		},
+		{
+			"configuration rejected",
+			[]metav1.Condition{refsOK, testCondition("Accepted", metav1.ConditionFalse, "GatewayConfigRejected", 2)},
+			metav1.ConditionFalse, "GatewayConfigRejected", "GatewayConfigRejected message",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
