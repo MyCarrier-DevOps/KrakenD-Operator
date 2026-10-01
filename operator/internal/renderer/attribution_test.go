@@ -76,6 +76,12 @@ func TestAttribute_MapsKrakendCheckOutputToSources(t *testing.T) {
 			output:    "ERROR testing the configuration file:\\twildcards must be named with a non-empty name in path '/w/*'\\n",
 			wantIndex: []int{0},
 		},
+		{
+			name:      "non-endpoint lint pointer",
+			rendered:  `{"endpoints":[{"endpoint":"/ok","method":"GET"}]}`,
+			output:    "- at '/extra_config/router/return_error_msg': got string, want boolean\\n",
+			wantIndex: []int{-1},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
