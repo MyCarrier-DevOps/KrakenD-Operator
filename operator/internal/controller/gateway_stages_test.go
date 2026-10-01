@@ -25,9 +25,12 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clocktesting "k8s.io/utils/clock/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 	"github.com/mycarrier-devops/krakend-operator/internal/resources"
 )
@@ -102,5 +105,31 @@ func TestGatewayReconcile_NoDeploymentBeforeAnyConfigPasses(t *testing.T) {
 	err := c.Get(context.Background(), client.ObjectKeyFromObject(gw), &dep)
 	if !apierrors.IsNotFound(err) {
 		t.Fatalf("no Deployment may exist before any config passes validation; Get returned %v", err)
+	}
+}
+
+func TestGatewayReconcile_UnavailableValidatorIsNotReady(t *testing.T) {
+	gw := reconciledGateway()
+	gw.Status.ConfigChecksum = "applied"
+	gw.Status.ActiveImage = "img:v1"
+	for _, cond := range []metav1.Condition{
+		{Type: v1alpha1.ConditionConfigValid, Status: metav1.ConditionTrue, Reason: v1alpha1.ReasonConfigApplied},
+		{Type: v1alpha1.ConditionAvailable, Status: metav1.ConditionTrue, Reason: "DeploymentAvailable"},
+		{Type: v1alpha1.ConditionProgressing, Status: metav1.ConditionFalse, Reason: "RolloutComplete"},
+	} {
+		meta.SetStatusCondition(&gw.Status.Conditions, cond)
+	}
+	c := fakeClientBuilder().WithObjects(gw, makeConvergedDeployment(gw, "applied")).
+		WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderOutput("new"),
+		&countingValidator{err: errors.New("fork/exec /usr/local/bin/krakend: no such file or directory")})
+
+	if err := reconcileGateway(t, r, gw); err == nil {
+		t.Fatal("an unavailable validator must fail the reconcile so it is retried")
+	}
+	ready := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionReady)
+	if ready == nil || ready.Status != metav1.ConditionUnknown || ready.Reason != v1alpha1.ReasonValidatorUnavailable {
+		t.Errorf("Ready = %+v, want Unknown/%s: the newest render has not been judged",
+			ready, v1alpha1.ReasonValidatorUnavailable)
 	}
 }
