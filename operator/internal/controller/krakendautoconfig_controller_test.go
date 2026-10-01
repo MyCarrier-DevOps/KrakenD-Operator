@@ -2896,3 +2896,29 @@ func TestAutoConfigReadiness(t *testing.T) {
 		})
 	}
 }
+
+func TestAutoConfigReconcile_FailedSyncReportsReadyFalse(t *testing.T) {
+	ac := testAutoConfig()
+	ac.Generation = 2
+	c := fakeClientBuilder().WithObjects(ac).WithStatusSubresource(ac).Build()
+	f, ce, fi, g := defaultMocks()
+	f.result = nil
+	f.err = fmt.Errorf("connection refused")
+	r := newACReconciler(c, f, ce, fi, g)
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
+	}); err == nil {
+		t.Fatal("expected the fetch error for an OnChange trigger")
+	}
+	var stored v1alpha1.KrakenDAutoConfig
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(ac), &stored); err != nil {
+		t.Fatal(err)
+	}
+	ready := meta.FindStatusCondition(stored.Status.Conditions, v1alpha1.ConditionReady)
+	if stored.Status.Phase != v1alpha1.AutoConfigPhaseError || stored.Status.ObservedGeneration != 2 ||
+		ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != v1alpha1.ReasonSpecFetchFailed {
+		t.Errorf("phase %q, observedGeneration %d, Ready %+v; want Error, 2, False/SpecFetchFailed",
+			stored.Status.Phase, stored.Status.ObservedGeneration, ready)
+	}
+}
