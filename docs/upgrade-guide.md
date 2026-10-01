@@ -951,8 +951,9 @@ which is not a KrakenD namespace, and removed that key before validation.
 KrakenD ignored it, so the previous key had no effect: `spec.redis` and
 Dragonfly configured no connection pool at all, and shared Redis state such
 as cluster-wide rate limits never applied. The operator now renders the
-documented Enterprise service-level namespace `redis`, so that state now
-actually applies:
+documented Enterprise service-level namespace `redis`. The pool does nothing
+by itself: Enterprise components that reference `connection_name: "default"`
+now reach Redis and start enforcing shared state. The operator renders:
 
 - one `connection_pools` entry named `default` for a single address (or
   the Dragonfly Service);
@@ -971,16 +972,28 @@ dropped.
   config. It is validated and rolled out once, and its post-restart Job runs
   for the new config revision.
 - `spec.redis.connectionPool.password` and `.tls` are still not rendered, and
-  neither is `dragonfly.authentication.passwordFromSecret` into KrakenD's pool:
-  KrakenD connects without them. The gateway webhook warns when they are set.
+  neither is `dragonfly.authentication.passwordFromSecret` into KrakenD's pool.
+  The pool connects without them. A Dragonfly that requires a password (the
+  operator sets it from `dragonfly.authentication.passwordFromSecret`) refuses
+  the now-active pool with `NOAUTH`, and an unreachable pool only logs at
+  startup without affecting health. The gateway webhook warns when these are set.
+- A raw `backend/redis` key in `spec.config.extraConfig` is no longer stripped
+  before validation, so it now fails with `additional properties
+  'backend/redis' not allowed`. Remove it and use `spec.redis` or Dragonfly.
+- With no address (`spec.redis.connectionPool.addresses` empty and no
+  Dragonfly), no pool is rendered, and the other pool settings are dropped.
 
 ### `spec.config.dnsCacheTTL` renders the documented root field
 
 `spec.config.dnsCacheTTL` was rendered as `extra_config["qos/dns"]`, which
 KrakenD 2.13 rejects ("additional properties 'qos/dns' not allowed"). It now
-renders the root `dns_cache_ttl` field, in the same duration-string format
-(for example `"30s"`). No gateway could have set it successfully before, so
-there is no upgrade impact beyond this note.
+renders the root `dns_cache_ttl` field. The value must be a single unit with
+an integer value, `^[0-9]+(ns|ms|us|µs|s|m|h)$`, for example `30s`; values
+like `1h30m` or `1.5s` are rejected by KrakenD.
+
+A gateway that sets it was failing validation and held at its last-known-good
+config, so on upgrade it applies all of its pending changes at once. No live
+gateway is known to set it.
 
 ---
 
