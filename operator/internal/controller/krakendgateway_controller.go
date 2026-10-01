@@ -634,7 +634,7 @@ func (r *KrakenDGatewayReconciler) validateAndApply(
 		return nil, err
 	}
 	r.markConfigApplied(gw, output.Checksum)
-	return nil, nil
+	return map[types.NamespacedName]string{}, nil
 }
 
 // markConfigApplied makes checksum the applied config and reports the rollout
