@@ -51,12 +51,18 @@ func rewriteEEWildcards(endpoints []any) bool {
 	return changed
 }
 
-// eeWildcardFindings applies the EE router's rule for wildcard endpoints,
-// which the CE binary cannot test. EE registers "/p/*" as the catch-all
-// "/p/*Wildcard" in its method's route tree, so no other route of that
-// method may start with "/p/" (measured with krakend-ee 2.13). Each conflict
-// yields two krakend-style lint-pointer lines, one per endpoint, so Attribute
-// maps them like any other finding.
+// eeWildcardFindings applies the rules EE enforces for wildcard endpoints and
+// the CE binary cannot test (measured with krakend-ee 2.13):
+//   - Route conflicts. EE registers "/p/*" as the catch-all "/p/*Wildcard" in
+//     its method's route tree, so no other route of that method may start
+//     with "/p/". Each conflict yields two krakend-style lint-pointer lines,
+//     one per endpoint.
+//   - Parameters. The {Wildcard} parameter of the CE copy does not exist in
+//     EE (eeWildcardParamFindings).
+//   - Backends. A wildcard endpoint has exactly one backend
+//     (eeWildcardBackendFindings).
+//
+// Every finding is a lint-pointer line, so Attribute maps it like any other.
 func eeWildcardFindings(endpoints []any) []string {
 	type route struct {
 		index        int
@@ -68,11 +74,7 @@ func eeWildcardFindings(endpoints []any) []string {
 		if !ok {
 			continue
 		}
-		path, method := stringField(m, "endpoint"), stringField(m, "method")
-		if method == "" {
-			method = "GET"
-		}
-		routes = append(routes, route{index: i, method: method, path: path})
+		routes = append(routes, route{index: i, method: endpointMethod(m), path: stringField(m, "endpoint")})
 	}
 	var findings []string
 	for _, w := range routes {
@@ -94,6 +96,7 @@ func eeWildcardFindings(endpoints []any) []string {
 		}
 	}
 	findings = append(findings, eeWildcardParamFindings(endpoints)...)
+	findings = append(findings, eeWildcardBackendFindings(endpoints)...)
 	sort.Strings(findings)
 	return findings
 }
@@ -109,10 +112,6 @@ func eeWildcardParamFindings(endpoints []any) []string {
 		if !ok || !IsEEWildcard(stringField(m, "endpoint")) {
 			continue
 		}
-		method := stringField(m, "method")
-		if method == "" {
-			method = "GET"
-		}
 		backends, ok := m["backend"].([]any)
 		if !ok {
 			continue
@@ -125,10 +124,37 @@ func eeWildcardParamFindings(endpoints []any) []string {
 			findings = append(findings, fmt.Sprintf(
 				"- at '/endpoints/%d/backend/%d/url_pattern': undefined output param 'Wildcard'! "+
 					"endpoint: %s %s, backend: %d. input: [], output: [Wildcard]",
-				i, j, method, stringField(m, "endpoint"), j))
+				i, j, endpointMethod(m), stringField(m, "endpoint"), j))
 		}
 	}
 	return findings
+}
+
+// eeWildcardBackendFindings rejects an EE wildcard endpoint with more than one
+// backend, which the EE binary refuses with "wildcard endpoint can only have
+// 1 backend" while the CE copy of the endpoint is accepted.
+func eeWildcardBackendFindings(endpoints []any) []string {
+	var findings []string
+	for i, ep := range endpoints {
+		m, ok := ep.(map[string]any)
+		if !ok || !IsEEWildcard(stringField(m, "endpoint")) {
+			continue
+		}
+		if backends, ok := m["backend"].([]any); ok && len(backends) > 1 {
+			findings = append(findings, fmt.Sprintf(
+				"- at '/endpoints/%d/endpoint': %s %s: wildcard endpoint can only have 1 backend",
+				i, endpointMethod(m), stringField(m, "endpoint")))
+		}
+	}
+	return findings
+}
+
+// endpointMethod is the endpoint's method, GET when the config leaves it out.
+func endpointMethod(m map[string]any) string {
+	if method := stringField(m, "method"); method != "" {
+		return method
+	}
+	return "GET"
 }
 
 // stringField returns m[key] when it is a string, and "" otherwise.
