@@ -21,6 +21,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"testing"
 )
 
@@ -65,7 +68,7 @@ func TestValidate_Success(t *testing.T) {
 
 func TestValidate_Failure(t *testing.T) {
 	v := NewValidator(ValidatorOptions{
-		Executor:   &mockExecutor{output: []byte("ERROR: invalid config"), err: fmt.Errorf("exit status 1")},
+		Executor:   &mockExecutor{output: []byte("ERROR: invalid config"), err: exitError(t, 1)},
 		BinaryPath: "krakend",
 	})
 	err := v.Validate(context.Background(), []byte(`{"version":3}`))
@@ -262,4 +265,38 @@ func TestPrepareValidationCopy_StripsEEExtraConfigAndWildcard(t *testing.T) {
 	if ep["endpoint"] != "/api" {
 		t.Errorf("expected /api endpoint, got %v", ep["endpoint"])
 	}
+}
+
+// recordingExecutor records the command it was asked to run and succeeds.
+type recordingExecutor struct {
+	name string
+	args []string
+}
+
+func (r *recordingExecutor) Execute(_ context.Context, name string, args ...string) ([]byte, error) {
+	r.name, r.args = name, args
+	return nil, nil
+}
+
+// exitError returns the *exec.ExitError a real process exiting with code
+// produces.
+func exitError(t *testing.T, code int) error {
+	t.Helper()
+	err := exec.Command("sh", "-c", fmt.Sprintf("exit %d", code)).Run()
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("sh exit %d: expected *exec.ExitError, got %v", code, err)
+	}
+	return err
+}
+
+// fakeKrakenD writes an executable shell script standing in for the krakend
+// binary and returns its path.
+func fakeKrakenD(t *testing.T, script string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "krakend")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+script+"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
