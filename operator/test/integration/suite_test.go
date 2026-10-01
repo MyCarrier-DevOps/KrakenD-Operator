@@ -64,6 +64,7 @@ import (
 var (
 	k3sContainer *k3s.K3sContainer
 	k8sClient    client.Client
+	restConfig   *rest.Config
 	ctx          context.Context
 	cancel       context.CancelFunc
 )
@@ -151,6 +152,7 @@ func runTests(m *testing.M) int {
 		return 1
 	}
 
+	restConfig = cfg
 	k8sClient, err = client.New(cfg, client.Options{Scheme: scheme})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to create client: %v\n", err)
