@@ -402,10 +402,8 @@ func (r *KrakenDGatewayReconciler) recordRejections(
 			(!neverApplied && !isConfigRejected(cur)) {
 			continue
 		}
-		a := acceptance{condition: want, conflicts: ep.Status.Conflicts}
-		if neverApplied {
-			a.conflicts = nil
-		}
+		// Without an applied render there are no served conflicts to keep.
+		a := acceptance{condition: want, keepConflicts: !neverApplied}
 		if err := r.writeEndpointAccepted(ctx, ep, a, removable); err != nil {
 			errs = append(errs, err)
 		}
@@ -434,6 +432,9 @@ func newRenderVerdicts(output *renderer.RenderOutput) renderVerdicts {
 type acceptance struct {
 	condition *metav1.Condition
 	conflicts []v1alpha1.EndpointConflict
+	// keepConflicts leaves the live status.conflicts as it is and ignores
+	// conflicts: a pass whose render is not the applied one has no verdict on them.
+	keepConflicts bool
 }
 
 // entryCount is the number of distinct (endpoint, method) entries of ep.
