@@ -71,8 +71,8 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 - `dragonfly_ready` (gauge per gateway, 1 if ready, 0 otherwise)
 - `reconcile_duration_seconds` (histogram), `gateway_info` (metadata labels)
 - `autoconfig_synced` (gauge per AutoConfig namespace+name: 1 after a successful sync, 0 while failing; removed on delete)
-- Instrumented in gateway controller Reconcile (including Dragonfly state), license monitor checkGateway, and the AutoConfig controller
-- `cmd/main.go` — Wires Renderer, Validator, Recorder, Clock into all controller setups; adds LicenseMonitor as manager.Runnable with RealClock and X509LicenseParser; wires AutoConfig controller with Fetcher, CUEEvaluator, Filter, Generator; calls `webhook.SetupWebhooks(mgr)` for admission webhook registration; `LeaderElectionID` set to `krakend-operator-leader`
+- Instrumented in gateway controller Reconcile (including Dragonfly state), gateway controller license evaluation (`reconcileLicense`), and the AutoConfig controller
+- `cmd/main.go` — Wires Renderer, Validator, Recorder, Clock into all controller setups; gives the gateway reconciler a RealClock and the X509LicenseParser; wires AutoConfig controller with Fetcher, CUEEvaluator, Filter, Generator; calls `webhook.SetupWebhooks(mgr)` for admission webhook registration; `LeaderElectionID` set to `krakend-operator-leader`
 
 ### External CRD Builders (`internal/resources/`)
 - `dragonfly.go` — BuildDragonfly as `unstructured.Unstructured`, DragonflyGVR, DragonflyName, DragonflyServiceDNS, buildResourceRequirements helper
@@ -92,14 +92,12 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 - Uses `cuelang.org/go` v0.16.0
 - 60 tests across 5 test files, ~94% coverage, 0 lint issues
 
-### License Monitor (`internal/controller/license_monitor.go`)
-- `LicenseMonitor` — manager.Runnable goroutine with periodic ticker-based checking
-- Checks all EE gateways' license secrets, parses X.509 certificates
-- Handles expiry (with/without fallback-to-CE), safety buffer evaluation
-- Rate-limited expiring-soon warnings (24h per gateway via in-memory map)
-- Recovery detection: clears degraded/expired conditions, triggers reconcile via annotation patch
+### License Evaluation (`internal/controller/gateway_license.go`)
+- `reconcileLicense` — runs inside the gateway reconcile for EE gateways; the only writer of the `License*` conditions, `status.licenseExpiry` and the license expiry metric; writes nothing to the user's gateway object
+- Stage comes from `license.Window` (valid, expiring soon, pre-expiry, expired); requeues at the next stage boundary and at least every 5 minutes
+- Handles expiry (with/without fallback-to-CE) and the 1 h safety buffer; events fire on condition transitions only
+- Recovery detection: clears degraded/expired conditions and emits `LicenseRestored`
 - `readLicenseSecret` — supports both SecretRef and ExternalSecret convention (`{name}-license`)
-- 13 unit tests, 82% controller package coverage
 
 ### Webhook Validators (`internal/webhook/`)
 - `GatewayValidator` — EE requires license, CE forbids license, mutually exclusive sources, max 1 PVC
