@@ -341,6 +341,14 @@ func TestGatewayReconcile_MissingOptionalCRDIsACondition(t *testing.T) {
 				Enabled: true, Hosts: []string{"api.example.com"}, Gateways: []string{"istio-system/gw"},
 			}
 		}, v1alpha1.ConditionIstioConfigured, metav1.ConditionFalse},
+		{"license ExternalSecret", func(gw *v1alpha1.KrakenDGateway) {
+			gw.Spec.Edition = v1alpha1.EditionEE
+			gw.Spec.License = &v1alpha1.LicenseConfig{ExternalSecret: v1alpha1.ExternalSecretLicenseConfig{
+				Enabled:        true,
+				SecretStoreRef: v1alpha1.SecretStoreRef{Name: "vault", Kind: "ClusterSecretStore"},
+				RemoteRef:      v1alpha1.ExternalRemoteRef{Key: "krakend/license"},
+			}}
+		}, v1alpha1.ConditionLicenseSecretUnavailable, metav1.ConditionTrue},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
