@@ -1061,10 +1061,10 @@ func (v *PolicyValidator) ValidateCreate(
 // ValidateUpdate validates an updated KrakenDBackendPolicy.
 func (v *PolicyValidator) ValidateUpdate(
 	_ context.Context,
-	_ runtime.Object,
+	oldObj runtime.Object,
 	newObj runtime.Object,
 ) (admission.Warnings, error) {
-	if isTerminating(newObj) {
+	if terminatingWithUnchangedSpec(oldObj, newObj) {
 		return nil, nil
 	}
 	policy, ok := newObj.(*v1alpha1.KrakenDBackendPolicy)
