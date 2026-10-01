@@ -670,7 +670,11 @@ func TestGatewayReconcile_RestoresADeletedAppliedConfigMapFromTheAppliedConfigNo
 	gw := reconciledGateway()
 	const lastGood = `{"version":3,"name":"last-good"}`
 	const rejected = `{"version":3,"name":"rejected"}`
-	c := fakeClientBuilder().WithObjects(gw, legacyConfigMap(gw, lastGood)).WithStatusSubresource(gw).Build()
+	// A ReplicaSet still mounts the legacy ConfigMap, so garbage collection
+	// keeps it as the only copy the restore can come from.
+	c := fakeClientBuilder().
+		WithObjects(gw, legacyConfigMap(gw, lastGood), gatewayReplicaSet(gw, "test-gw-old", gw.Name, 1)).
+		WithStatusSubresource(gw).Build()
 	rend := renderOf(lastGood)
 	val := &countingValidator{}
 	r := newTestGatewayReconciler(c, rend, val)
