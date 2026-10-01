@@ -64,7 +64,10 @@ func sameCondition(a, b *metav1.Condition) bool {
 	if a == nil || b == nil {
 		return a == b
 	}
-	return false
+	return a.Status == b.Status &&
+		a.Reason == b.Reason &&
+		a.Message == b.Message &&
+		a.ObservedGeneration == b.ObservedGeneration
 }
 
 // maxConditionMessageBytes bounds validator output copied into a condition
