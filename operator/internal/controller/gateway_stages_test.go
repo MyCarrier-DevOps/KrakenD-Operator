@@ -1256,3 +1256,18 @@ func TestGatewayReconcile_RejectionLiftsABlameThatMovedAway(t *testing.T) {
 		t.Errorf("bad endpoint Accepted = %+v, want %s", cond, v1alpha1.ReasonGatewayConfigRejected)
 	}
 }
+
+func TestGatewayReconcile_RejectionNamingNobodyLiftsAnOldBlame(t *testing.T) {
+	gw := servingGateway("applied", "img:v1")
+	ep := withAccepted(testEndpoint("ep", "/a"), metav1.ConditionFalse, v1alpha1.ReasonGatewayConfigRejected)
+	c := fakeClientBuilder().WithObjects(gw, ep).WithStatusSubresource(gw, ep).Build()
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}),
+		&countingValidator{err: rejectedBy("- at '/extra_config': additional properties 'bad/ns' not allowed")})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if cond := storedAccepted(t, c, client.ObjectKeyFromObject(ep)); cond != nil {
+		t.Errorf("Accepted = %+v; a rejection naming no endpoint must lift the old blame", cond)
+	}
+}
