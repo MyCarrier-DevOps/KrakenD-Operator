@@ -939,8 +939,9 @@ type infraInputs struct {
 }
 
 // reconcileInfrastructure is the infrastructure stage. It creates or updates
-// all Kubernetes resources owned by the gateway using the create-or-update
-// pattern, deploying the applied config.
+// the Kubernetes resources owned by the gateway, except the gateway ConfigMap,
+// using the create-or-update pattern, deploying the applied config. The
+// ConfigMap holds the config itself, which only the config stage writes.
 func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
