@@ -928,9 +928,27 @@ func (r *KrakenDGatewayReconciler) writeEndpointAccepted(
 		return fmt.Errorf("writing Accepted on endpoint %s: %w", key, err)
 	}
 	if wrote && a.condition != nil {
-		recordConditionTransition(r.Recorder, &ep, prev, *a.condition)
+		recordAcceptedTransition(r.Recorder, &ep, prev, *a.condition)
 	}
 	return nil
+}
+
+// recordAcceptedTransition emits the event for a change of an endpoint's
+// Accepted condition. PartiallyAccepted is True but loses entries, so a
+// transition into it is a Warning, and the way back to Accepted is Normal.
+// Every other transition follows recordConditionTransition.
+func recordAcceptedTransition(recorder record.EventRecorder, ep *v1alpha1.KrakenDEndpoint, prev *metav1.Condition,
+	next metav1.Condition,
+) {
+	wasPartial := prev != nil && prev.Reason == v1alpha1.ReasonPartiallyAccepted
+	switch {
+	case next.Reason == v1alpha1.ReasonPartiallyAccepted && !wasPartial:
+		recorder.Event(ep, corev1.EventTypeWarning, next.Reason, next.Message)
+	case next.Reason == v1alpha1.ReasonAccepted && wasPartial:
+		recorder.Event(ep, corev1.EventTypeNormal, next.Reason, next.Message)
+	default:
+		recordConditionTransition(recorder, ep, prev, next)
+	}
 }
 
 // infraInputs is what the infrastructure stage deploys. It names the applied
