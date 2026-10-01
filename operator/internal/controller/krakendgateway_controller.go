@@ -2041,7 +2041,7 @@ type gatewayReadiness struct {
 // gatewayReadinessFor derives a gateway's Ready condition and phase from the
 // conditions the gateway controller and the license monitor maintain. The
 // first rule that applies wins: a rejected configuration, an expired license
-// without CE fallback, a failed rollout, CE fallback, no validated
+// without CE fallback, a failed rollout, CE fallback (the removed features first), no validated
 // configuration yet, a configuration that could not be validated, a rollout
 // in progress, and a Deployment not yet available. The gateway is Ready only
 // when none applies. A configuration that could not be validated (the
@@ -2053,6 +2053,7 @@ func gatewayReadinessFor(conds []metav1.Condition) gatewayReadiness {
 	progressing := meta.FindStatusCondition(conds, v1alpha1.ConditionProgressing)
 	degraded := meta.FindStatusCondition(conds, v1alpha1.ConditionLicenseDegraded)
 	expired := meta.FindStatusCondition(conds, v1alpha1.ConditionLicenseExpired)
+	ceFallback := meta.FindStatusCondition(conds, v1alpha1.ConditionCEFallbackApplied)
 	switch {
 	case condFalse(configValid):
 		return notReady(configValid, v1alpha1.PhaseError)
@@ -2061,6 +2062,10 @@ func gatewayReadinessFor(conds []metav1.Condition) gatewayReadiness {
 			message: expired.Message, phase: v1alpha1.PhaseError}
 	case condFalse(available):
 		return notReady(available, v1alpha1.PhaseError)
+	case condTrue(ceFallback):
+		// Serving the CE-fallback render: not as specified, and the message
+		// lists what was removed.
+		return notReady(ceFallback, v1alpha1.PhaseDegraded)
 	case condTrue(degraded):
 		return notReady(degraded, v1alpha1.PhaseDegraded)
 	case configValid == nil:
