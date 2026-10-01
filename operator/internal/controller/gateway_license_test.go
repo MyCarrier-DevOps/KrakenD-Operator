@@ -207,3 +207,28 @@ func TestGatewayReconcile_ExpiringSoonWarnsOnceWhenEnteringTheWindow(t *testing.
 		t.Errorf("LicenseExpiringSoon events over three reconciles = %d, want 1", n)
 	}
 }
+
+func TestGatewayReconcile_ExpiredLicenseWithoutFallbackSaysSoOnce(t *testing.T) {
+	gw, secret, parser := licensedEEGateway(testNow.Add(-time.Minute), false)
+	c := fakeClientBuilder().WithObjects(gw, secret).WithStatusSubresource(gw).Build()
+	var captured *renderer.RenderInput
+	r := newTestGatewayReconciler(c,
+		&capturingRenderer{delegate: renderOutput("cs"), captured: &captured}, &mockValidator{})
+	r.LicenseParser = parser
+
+	for range 2 {
+		if err := reconcileGateway(t, r, gw); err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+	}
+	if captured.CEFallback {
+		t.Error("without fallbackToCE the gateway must keep rendering EE")
+	}
+	got := getGateway(t, c, gw)
+	if !meta.IsStatusConditionTrue(got.Status.Conditions, v1alpha1.ConditionLicenseExpired) {
+		t.Error("LicenseExpired must be True")
+	}
+	if n := eventsWithReason(r.Recorder.(*record.FakeRecorder), v1alpha1.ReasonLicenseExpiredNoFallback); n != 1 {
+		t.Errorf("LicenseExpiredNoFallback events over two reconciles = %d, want 1", n)
+	}
+}
