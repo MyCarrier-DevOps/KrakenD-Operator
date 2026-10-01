@@ -78,18 +78,14 @@ func (r *KrakenDGatewayReconciler) appliedConfigMapName(
 		return "", nil
 	}
 	name := resources.ConfigMapName(gw, applied)
-	var cm corev1.ConfigMap
-	err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: gw.Namespace}, &cm)
-	if err == nil {
-		// A ConfigMap that is not this gateway's copy is not served: the
-		// Deployment is held instead.
-		if err := verifyConfigMap(&cm, gw, applied); err != nil {
-			return "", err
-		}
-		return name, nil
+	// A ConfigMap that is not this gateway's copy is not served: the
+	// Deployment is held instead.
+	found, err := r.verifyExistingConfigMap(ctx, gw, applied)
+	if err != nil {
+		return "", err
 	}
-	if !errors.IsNotFound(err) {
-		return "", fmt.Errorf("getting configmap %s: %w", name, err)
+	if found {
+		return name, nil
 	}
 	legacy, err := r.legacyConfig(ctx, gw)
 	if err != nil || legacy == nil || hash.SHA256Hex(legacy) != applied {
@@ -126,13 +122,8 @@ func (r *KrakenDGatewayReconciler) publishConfig(
 	ctx context.Context, gw *v1alpha1.KrakenDGateway, jsonData []byte, checksum string,
 ) error {
 	name := resources.ConfigMapName(gw, checksum)
-	var existing corev1.ConfigMap
-	err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: gw.Namespace}, &existing)
-	if err == nil {
-		return verifyConfigMap(&existing, gw, checksum)
-	}
-	if !errors.IsNotFound(err) {
-		return fmt.Errorf("getting configmap %s: %w", name, err)
+	if found, err := r.verifyExistingConfigMap(ctx, gw, checksum); found || err != nil {
+		return err
 	}
 	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: gw.Namespace}}
 	resources.BuildConfigMap(cm, gw, jsonData, checksum)
@@ -145,6 +136,23 @@ func (r *KrakenDGatewayReconciler) publishConfig(
 		return fmt.Errorf("creating configmap %s: %w", name, err)
 	}
 	return nil
+}
+
+// verifyExistingConfigMap looks up the config ConfigMap for checksum. found
+// says whether one exists; when it does, err says whether it is this
+// gateway's copy of that config.
+func (r *KrakenDGatewayReconciler) verifyExistingConfigMap(
+	ctx context.Context, gw *v1alpha1.KrakenDGateway, checksum string,
+) (found bool, err error) {
+	name := resources.ConfigMapName(gw, checksum)
+	var cm corev1.ConfigMap
+	if err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: gw.Namespace}, &cm); err != nil {
+		if errors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("getting configmap %s: %w", name, err)
+	}
+	return true, verifyConfigMap(&cm, gw, checksum)
 }
 
 // verifyConfigMap rejects a ConfigMap that has the content-addressed name for
