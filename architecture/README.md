@@ -382,16 +382,6 @@ status:
       lastTransitionTime: "2026-04-03T10:00:15Z"
       reason: DeploymentComplete
       message: "Rolling update completed"
-    - type: LicenseDegraded
-      status: "False"
-      lastTransitionTime: "2026-04-03T10:00:00Z"
-      reason: EEActive
-      message: "Running with EE license"
-    - type: LicenseExpired
-      status: "False"
-      lastTransitionTime: "2026-04-03T10:00:00Z"
-      reason: EEActive
-      message: "License is not expired"
     - type: LicenseSecretUnavailable
       status: "False"
       lastTransitionTime: "2026-04-03T09:59:55Z"
@@ -756,9 +746,9 @@ sequenceDiagram
 | Owned KrakenDEndpoint spec changed or deleted, or the `openapi.configMapRef`/CUE definitions ConfigMap changed | AutoConfig controller | Re-run the full pipeline. A generated endpoint that was hand-edited or deleted out of band is restored to the desired spec (endpoint specs are compared by decoded JSON value, so re-encoding/formatting differences alone don't cause a write). |
 | AutoConfig resync timer | AutoConfig controller | `trigger: OnChange` AutoConfigs are additionally re-polled every 5 minutes (`defaultResyncInterval`); `trigger: Periodic` AutoConfigs at `spec.periodic.interval`. Every reconcile — resync or watch-triggered — runs the full pipeline; a reconcile that changes nothing writes no status and emits no event. A spec/CUE/unmatched-override/scope failure — including a failed external `$ref` fetch/decode, which now fails closed the same way instead of falling back to the raw spec — retries at `spec.periodic.interval` (`Periodic`) or via exponential backoff capped at 5 minutes (`OnChange`); an endpoint write failure (`EndpointReconcileFailed`) always retries with backoff, on either trigger; a status or endpoint write `Conflict` (this reconcile read a stale cache) requeues quietly a second later with no error, event, or status change. |
 | KrakenDGateway or KrakenDBackendPolicy created or deleted | Endpoint controller | Re-resolve references of the endpoints that reference it (`ResolvedRefs` `GatewayNotFound`/`PolicyNotFound` → phase `Detached`/`Invalid`). Gateway and policy updates are ignored: only their existence matters. Re-attachment occurs automatically when the gateway is created again. |
-| Secret (LICENSE) created or updated | Gateway controller | Re-evaluate the license inside the reconcile: re-parse X.509 `notAfter` from the Secret and set the `License*` conditions for its stage (below). A renewed license that clears `LicenseExpired`/`LicenseDegraded` re-renders EE and rolls the Deployment back to the EE image; a changed `notAfter` alone does not restart pods. |
+| Secret (LICENSE) created or updated | Gateway controller | Re-evaluate the license inside the reconcile: re-parse X.509 `notAfter` from the Secret and set the `License*` conditions for its stage (below). A renewed license that clears `LicenseExpired`/`LicenseDegraded` re-renders EE and rolls the Deployment back to the EE image; a changed license (any change to the bytes in the Secret, whether or not `notAfter` moves) also changes the pod template's `krakend.io/checksum-license` annotation, so the Deployment rolls and every pod starts with the new license file; an unchanged license rolls nothing. |
 | Dragonfly CR status updated | Gateway controller | Reflect `DragonflyReady` condition on KrakenDGateway; emit `DragonflyNotReady` Warning event if phase regresses |
-| Deployment status updated | Gateway controller | Update `status.replicas`, `status.readyReplicas`, `Available` and `Progressing` conditions on KrakenDGateway. The rollout counts as converged only when the Deployment has observed its latest generation (`observedGeneration >= generation`), its pod template carries the applied config checksum, and `replicas == updatedReplicas == availableReplicas ==` the desired count; then `Progressing=False`, `Available=True`, and the derived phase becomes `Running`. Until then `Ready` stays `False`, because the cached Deployment can still describe the previous ReplicaSet. If the Deployment reports `Available=False` (for example `MinimumReplicasUnavailable`) and no rollout is in flight, that condition is mirrored into the gateway's `Available`, so `Ready` goes `False` with phase `Error`. If the Deployment reports `ProgressDeadlineExceeded`, set `Progressing=False`, `Available=False` (reason: `RolloutFailed`), and emit `RolloutFailed` Warning event. `ConfigValid` remains `True` (config passed validation). Existing pods are left running to preserve availability. |
+| Deployment status updated | Gateway controller | Update `status.replicas`, `status.readyReplicas`, `Available` and `Progressing` conditions on KrakenDGateway. The rollout counts as converged only when the Deployment has observed its latest generation (`observedGeneration >= generation`), its pod template carries the applied config checksum, image, plugin checksum and license checksum, and `replicas == updatedReplicas == availableReplicas ==` the desired count; then `Progressing=False`, `Available=True`, and the derived phase becomes `Running`. Until then `Ready` stays `False`, because the cached Deployment can still describe the previous ReplicaSet. If the Deployment reports `Available=False` (for example `MinimumReplicasUnavailable`) and no rollout is in flight, that condition is mirrored into the gateway's `Available`, so `Ready` goes `False` with phase `Error`. If the Deployment reports `ProgressDeadlineExceeded`, set `Progressing=False`, `Available=False` (reason: `RolloutFailed`), and emit `RolloutFailed` Warning event. `ConfigValid` remains `True` (config passed validation). Existing pods are left running to preserve availability. |
 | License stage boundary | Gateway controller (requeue) | The reconcile evaluates the license on every run and requeues itself at the next stage boundary (start of the warning window, start of the 1 h safety buffer, expiry), and at least every 5 minutes. Stage `LicenseExpiringSoon` (`now+1h < expiry ≤ now+warningDays`): `LicenseValid=True` (reason: `LicenseExpiringSoon`) and one `LicenseExpiringSoon` Warning event on entering the window. Stage `LicensePreExpiry` (`now < expiry ≤ now+1h`) or expired: `LicenseValid=False` and `LicenseExpired=True` (reason: `LicensePreExpiry` or `LicenseExpired`). With `fallbackToCE=true` it also sets `LicenseDegraded=True` (reason: `LicenseFallbackCE`), renders CE and emits one `LicenseFallbackCE` Warning event; the gateway controller derives phase `Degraded`. With `fallbackToCE=false` it emits one `LicenseExpiredNoFallback` Warning event and leaves the Deployment running; the gateway controller derives phase `Error` from `LicenseExpired=True` without `LicenseDegraded`. Healthy (`expiry > now+warningDays`): `LicenseValid=True` (reason: `LicenseOK`). Back in a healthy or warning stage while `LicenseExpired` or `LicenseDegraded` is True, both become `False` (reason: `LicenseRestored`) and one `LicenseRestored` event is emitted. Events fire on condition transitions only, so a steady state repeats nothing. |
 
 ### Reconciliation Queueing
@@ -1014,7 +1004,7 @@ spec:
 
 ### Alternative: Pre-Existing Secret
 
-When `license.secretRef` is used instead of `externalSecret`, the operator skips ExternalSecret creation and directly mounts the referenced Secret. The user is responsible for managing rotation. If the referenced Secret does not exist, the operator sets `LicenseSecretUnavailable=True`, emits a `LicenseSecretMissing` Warning event, sets the gateway phase to `Error`, and requeues the reconciliation. The operator resumes normal license processing once the Secret becomes available.
+When `license.secretRef` is used instead of `externalSecret`, the operator skips ExternalSecret creation and directly mounts the referenced Secret. The user is responsible for managing rotation. If the referenced Secret does not exist, the operator sets `LicenseSecretUnavailable=True`, emits a `LicenseSecretMissing` Warning event (once), sets `LicenseValid=Unknown` and requeues within 5 minutes. The gateway phase is not set to `Error` for this: the Deployment and its last fallback decision are kept, and the pods keep the license checksum they already carry, so a missing Secret never rolls them. If the last known expiry (`status.licenseExpiry`) is already inside the 1 h safety buffer or past, the stage verdict applies instead of `Unknown` (`LicenseValid=False`, reason `LicensePreExpiry` or `LicenseExpired`, and the CE fallback when `fallbackToCE` is set). The operator resumes normal license processing once the Secret becomes available.
 
 ---
 
@@ -1304,7 +1294,7 @@ flowchart TD
     Q -->|No| S[Set ConfigValid=False<br/>Keep the applied config<br/>Emit Warning Event<br/>Continue with the infrastructure stage]
     Q -->|Unavailable| V[Set ConfigValid=Unknown<br/>reason ValidatorUnavailable<br/>Ready=Unknown, keep the serving phase and applied config<br/>One Warning Event<br/>Return error: retry with backoff]
 
-    R --> T[Patch Deployment<br/>pod annotation: checksum/config +<br/>checksum/plugins + container image]
+    R --> T[Patch Deployment<br/>pod annotation: checksum/config +<br/>checksum/plugins + checksum/license + container image]
     T --> U[Kubernetes Rolling Update]
 
     style S fill:#f66,stroke:#333
@@ -1486,6 +1476,17 @@ carries the full checksum, and the post-restart Job gate keys on it. A
 rollout therefore changes which ConfigMap new pods mount and never rewrites
 the one old pods mount, so a stalled rollout cannot take down pods that
 restart on the previous ReplicaSet.
+
+The license is mounted with `subPath`, which never receives Secret updates,
+and KrakenD reads its license at startup. The pod template therefore also
+carries `krakend.io/checksum-license`, the SHA-256 of the license bytes the
+operator read, set only for an EE gateway that is not falling back to CE.
+Changing the license in the Secret changes the annotation, rolls the
+Deployment (`Progressing=True`, reason `DeploymentUpdated`) and holds `Ready`
+until the new pods are available. When the Secret cannot be read, the
+annotation the Deployment already carries is kept, so nothing rolls. The
+post-restart Job's identity does not include the license, so a renewal does
+not re-run it.
 
 A config ConfigMap is garbage-collected once nothing can mount it. The
 operator keeps the three most recently created revisions, the applied one
@@ -1794,11 +1795,11 @@ conditions and shown with `-o wide`.
 | `Ready` | Summary condition written only by the gateway controller, derived from ConfigValid, Available, Progressing, LicenseExpired and LicenseDegraded (`Unknown` while the validator is unavailable); phase is derived from the same rules |
 | `ConfigValid` | Last rendered krakend.json passed `krakend check -t -n -c` (`Unknown` with reason `ValidatorUnavailable` while krakend check cannot run) |
 | `Available` | The Deployment is available: it mirrors the Deployment's `Available` condition once a rollout is not in flight, and is `False` with reason `RolloutFailed` when the Deployment exceeds its progress deadline |
-| `LicenseValid` | EE license state: `True`/`LicenseOK`, `True`/`LicenseExpiringSoon` inside the warning window, `False`/`LicensePreExpiry` or `False`/`LicenseExpired` |
-| `LicenseDegraded` | Gateway is actively running in CE mode as a fallback because the EE license expired or entered the pre-expiry safety window (only **True** when `fallbackToCE=true` and CE image is deployed; `False` with reason `LicenseRestored` after recovery, and absent otherwise) |
+| `LicenseValid` | EE license state: `True`/`LicenseOK`, `True`/`LicenseExpiringSoon` inside the warning window, `False`/`LicensePreExpiry` or `False`/`LicenseExpired`, and `Unknown`/`LicenseSecretMissing` while the license cannot be read or parsed. While unreadable, the stage is judged from the last known expiry (`status.licenseExpiry`): once that is inside the safety buffer or past, the stage verdict (`False`) replaces `Unknown` |
+| `LicenseDegraded` | Gateway is actively running in CE mode as a fallback because the EE license expired or entered the pre-expiry safety window (**True** when the fallback decision is made, before the CE rollout has finished, and only when `fallbackToCE=true`; `False` with reason `LicenseRestored` after recovery, or `False` with reason `LicenseExpiredNoFallback` when the license expired and `fallbackToCE` is off while the condition was already present; absent otherwise) |
 | `DragonflyReady` | Dragonfly CR status reports `ready` phase (watched from Dragonfly Operator) |
 | `IstioConfigured` | VirtualService was successfully created/updated |
-| `LicenseSecretUnavailable` | License Secret is not available — either the ExternalSecret failed to sync or the referenced Secret (`secretRef`) does not exist |
+| `LicenseSecretUnavailable` | `True` while the license cannot be read: the ExternalSecret failed to sync, the referenced Secret (`secretRef`) or its key does not exist, or the certificate does not parse. `LicenseValid` is `Unknown` meanwhile, unless the last known expiry (`status.licenseExpiry`) is already inside the safety buffer or past, in which case the stage verdict applies. `False` with reason `SecretAvailable` once it can be read |
 | `LicenseExpired` | License has expired or is inside the 1 h safety buffer (reason `LicenseExpired` or `LicensePreExpiry`), whether or not `fallbackToCE` is set; without `fallbackToCE` (no `LicenseDegraded`) the gateway reports phase `Error`, and its pods self-terminate at T-0. `False` with reason `LicenseRestored` after recovery, and absent otherwise |
 | `Progressing` | A rolling deployment is in progress; it ends (`RolloutComplete`) only when the Deployment has observed the change, its pods carry the applied config checksum, and every replica is updated and available |
 
