@@ -535,7 +535,8 @@ kubectl patch <kind>/<name> --subresource=status --type=json \
   validation, no verdict changes.
 - The `EndpointConflict` Warning event fires once per transition instead of
   on every gateway reconcile. A `Normal` `Accepted` event marks a conflict
-  that cleared. The `EndpointInvalid` event is gone.
+  that cleared. A `PartiallyAccepted` endpoint gets its own Warning
+  (`PartiallyAccepted`) when it becomes partly conflicted. The `EndpointInvalid` event is gone.
 
 ### KrakenDEndpoint: `ResolvedRefs`, `Ready` and `phase` (endpoint controller)
 
@@ -753,6 +754,21 @@ you *which* KrakenDEndpoint to fix:
   some findings name an endpoint and others do not, the gateway message says
   how many name none; when none names an endpoint, it says so.
 - The blame clears as soon as a config passes validation.
+
+### Partly conflicting endpoints report exactly what is not served
+
+When two KrakenDEndpoints on a gateway declare the same path and method, the
+older one's entry is served. The newer one's other entries are still
+served. The newer KrakenDEndpoint now reports:
+
+- `Accepted=True` with reason `PartiallyAccepted` when some of its entries
+  are served. It is `Accepted=False/EndpointConflict` only when none are.
+- `status.conflicts`, a list of `{endpoint, method, winner}`, one item per
+  entry that is not served, naming the KrakenDEndpoint that serves it.
+
+A `PartiallyAccepted` endpoint is not `Ready`, and its phase is
+`Conflicted`. Becoming `PartiallyAccepted` emits a `Warning` event with that
+reason, and returning to fully `Accepted` emits a `Normal` `Accepted` event.
 
 ---
 
@@ -1330,17 +1346,3 @@ cluster with `postRestartJob.enabled: true`.
     to a new explicit value rather than removing an existing override** —
     that is unambiguous and always observable to the reconciler. Removing
     an override is not detected as a change in and of itself.
-
-### Partly conflicting endpoints report exactly what is not served
-
-When two KrakenDEndpoints on a gateway declare the same path and method, the
-older one's entry is served. The newer one's other entries are still
-served. The newer KrakenDEndpoint now reports:
-
-- `Accepted=True` with reason `PartiallyAccepted` when some of its entries
-  are served. It is `Accepted=False/EndpointConflict` only when none are.
-- `status.conflicts`, a list of `{endpoint, method, winner}`, one item per
-  entry that is not served, naming the KrakenDEndpoint that serves it.
-
-A `PartiallyAccepted` endpoint is not `Ready`, and its phase is
-`Conflicted`.
