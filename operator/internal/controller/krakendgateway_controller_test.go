@@ -1673,6 +1673,10 @@ func TestGatewayReadinessFor(t *testing.T) {
 			metav1.ConditionFalse, "ConfigValidationFailed", v1alpha1.PhaseError},
 		{"license expired without fallback", []metav1.Condition{valid, available, settled, expired},
 			metav1.ConditionFalse, "LicenseExpiredNoFallback", v1alpha1.PhaseError},
+		{"rollout failed",
+			[]metav1.Condition{valid, c("Available", metav1.ConditionFalse, "RolloutFailed"),
+				c("Progressing", metav1.ConditionFalse, "RolloutFailed")},
+			metav1.ConditionFalse, "RolloutFailed", v1alpha1.PhaseError},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
