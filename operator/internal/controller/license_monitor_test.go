@@ -162,6 +162,7 @@ func TestLicenseMonitor_ExpiredWithFallback(t *testing.T) {
 	expiry := now.Add(-24 * time.Hour) // Expired yesterday
 
 	gw := newEEGateway("test-gw", "default")
+	gw.Status.Phase = v1alpha1.PhaseRunning
 	secret := newLicenseSecret("my-license", "default")
 	parser := &mockLicenseParser{
 		info: &license.LicenseInfo{NotAfter: expiry, Subject: "test"},
@@ -195,8 +196,8 @@ func TestLicenseMonitor_ExpiredWithFallback(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if updated.Status.Phase != v1alpha1.PhaseDegraded {
-		t.Errorf("expected phase Degraded, got %s", updated.Status.Phase)
+	if updated.Status.Phase != v1alpha1.PhaseRunning {
+		t.Errorf("phase = %s, want Running: only the gateway controller derives the phase", updated.Status.Phase)
 	}
 
 	degraded := meta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionLicenseDegraded)
