@@ -879,13 +879,17 @@ and its edition match:
   edition the license asks for next. While a CE-fallback render is rejected,
   the pods keep the EE image with the EE-validated config. They switch to the
   CE image only once a CE-validated config is applied.
-- **Plugins.** The plugin checksum deployed with the pods also comes from the
-  applied render. A newer render that was rejected, or could not be checked,
-  does not change it.
+- **Plugins.** Plugins follow the spec like the image version does: the
+  plugin sources, the plugin checksum and `DeploymentUpdated` are not held
+  back by a rejected render.
 
 On upgrade, a status without `configEdition` is read as validated for the
 edition the gateway renders for now, which is the image it already runs.
-The field is filled in on the first reconcile, without a rollout.
+The field is saved on the first reconcile, whatever the verdict on that
+render, and causes no rollout. The adoption assumes the license evaluation
+in that reconcile reaches the same fallback decision the previous version
+was running. A gateway upgraded exactly at a license expiry boundary may be
+adopted with the edition it was running.
 
 ---
 
