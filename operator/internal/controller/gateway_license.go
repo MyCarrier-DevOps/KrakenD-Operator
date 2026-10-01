@@ -165,6 +165,7 @@ func (r *KrakenDGatewayReconciler) setLicenseValid(
 // fallback when fallback is set.
 func (r *KrakenDGatewayReconciler) expireLicense(gw *v1alpha1.KrakenDGateway, reason, message string, fallback bool) {
 	wasExpired := meta.IsStatusConditionTrue(gw.Status.Conditions, v1alpha1.ConditionLicenseExpired)
+	wasFallingBack := meta.IsStatusConditionTrue(gw.Status.Conditions, v1alpha1.ConditionLicenseDegraded)
 	r.setLicenseValid(gw, metav1.ConditionFalse, reason, message)
 	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
 		Type: v1alpha1.ConditionLicenseExpired, Status: metav1.ConditionTrue, ObservedGeneration: gw.Generation,
@@ -176,7 +177,7 @@ func (r *KrakenDGatewayReconciler) expireLicense(gw *v1alpha1.KrakenDGateway, re
 			Type: v1alpha1.ConditionLicenseDegraded, Status: metav1.ConditionTrue, ObservedGeneration: gw.Generation,
 			Reason: v1alpha1.ReasonLicenseFallbackCE, Message: "license expired, falling back to CE edition",
 		})
-	case !wasExpired:
+	case !wasExpired || wasFallingBack:
 		r.Recorder.Event(gw, corev1.EventTypeWarning, v1alpha1.ReasonLicenseExpiredNoFallback,
 			"license expired and fallbackToCE is not enabled")
 	}
