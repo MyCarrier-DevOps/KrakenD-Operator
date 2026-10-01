@@ -1712,3 +1712,84 @@ func TestGatewayReconcile_PartiallyAcceptedEventsFireOnTransitionsOnly(t *testin
 		t.Errorf("Normal Accepted events after recovery = %d, want 1", n)
 	}
 }
+
+// countEndpointStatusPatches wraps c so that n counts the KrakenDEndpoint
+// status patches it receives.
+func countEndpointStatusPatches(c client.WithWatch, n *int) client.WithWatch {
+	return interceptor.NewClient(c, interceptor.Funcs{
+		SubResourcePatch: func(
+			ctx context.Context, c client.Client, sub string, obj client.Object,
+			patch client.Patch, opts ...client.SubResourcePatchOption,
+		) error {
+			if _, ok := obj.(*v1alpha1.KrakenDEndpoint); ok {
+				*n++
+			}
+			return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
+		},
+	})
+}
+
+func TestGatewayReconcile_ResolvedConflictClearsStatusWithOneWrite(t *testing.T) {
+	gw := reconciledGateway()
+	older, newer := partlyConflictedPair()
+	base := fakeClientBuilder().WithObjects(gw, older, newer).WithStatusSubresource(gw, older, newer).Build()
+	var writes int
+	c := countEndpointStatusPatches(base, &writes)
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}), &mockValidator{})
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+	if err := c.Delete(context.Background(), older); err != nil {
+		t.Fatal(err)
+	}
+	writes = 0
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile after delete: %v", err)
+	}
+	var got v1alpha1.KrakenDEndpoint
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(newer), &got); err != nil {
+		t.Fatal(err)
+	}
+	cond := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionAccepted)
+	if cond == nil || cond.Status != metav1.ConditionTrue || cond.Reason != v1alpha1.ReasonAccepted {
+		t.Errorf("Accepted = %+v, want True/Accepted", cond)
+	}
+	if len(got.Status.Conflicts) != 0 {
+		t.Errorf("status.conflicts = %+v, want nil", got.Status.Conflicts)
+	}
+	if writes != 1 {
+		t.Errorf("endpoint status writes = %d, want exactly 1", writes)
+	}
+}
+
+func TestGatewayReconcile_LoserFollowsTheNewWinnerWhenTheOldestIsDeleted(t *testing.T) {
+	gw := reconciledGateway()
+	oldest := testEndpoint("oldest", "/shared")
+	oldest.CreationTimestamp = metav1.NewTime(testNow)
+	middle := testEndpoint("middle", "/shared")
+	middle.CreationTimestamp = metav1.NewTime(testNow.Add(time.Minute))
+	newest := testEndpoint("newest", "/shared")
+	newest.CreationTimestamp = metav1.NewTime(testNow.Add(2 * time.Minute))
+	c := fakeClientBuilder().WithObjects(gw, oldest, middle, newest).
+		WithStatusSubresource(gw, oldest, middle, newest).Build()
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}), &mockValidator{})
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+	if err := c.Delete(context.Background(), oldest); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile after delete: %v", err)
+	}
+	var got v1alpha1.KrakenDEndpoint
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(newest), &got); err != nil {
+		t.Fatal(err)
+	}
+	want := []v1alpha1.EndpointConflict{{Endpoint: "/shared", Method: "GET", Winner: "default/middle"}}
+	if !reflect.DeepEqual(got.Status.Conflicts, want) {
+		t.Errorf("status.conflicts = %+v, want %+v", got.Status.Conflicts, want)
+	}
+}
