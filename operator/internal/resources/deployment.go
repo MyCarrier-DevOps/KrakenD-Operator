@@ -32,10 +32,13 @@ import (
 // autoscaling configured the HorizontalPodAutoscaler owns spec.replicas, so
 // an existing Deployment keeps its live value.
 func desiredReplicas(dep *appsv1.Deployment, gw *v1alpha1.KrakenDGateway) *int32 {
-	if gw.Spec.Autoscaling != nil && dep.Spec.Replicas != nil {
+	if gw.Spec.Autoscaling == nil {
+		return gw.Spec.Replicas
+	}
+	if dep.Spec.Replicas != nil {
 		return dep.Spec.Replicas
 	}
-	return gw.Spec.Replicas
+	return gw.Spec.Autoscaling.MinReplicas
 }
 
 // BuildDeployment mutates dep in place with a complete Deployment for the
