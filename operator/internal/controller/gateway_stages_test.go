@@ -2403,3 +2403,74 @@ func TestEndpointAccepted_StrippedWildcardsAreNotCountedAsServed(t *testing.T) {
 		})
 	}
 }
+
+func TestReconcileCEFallbackCondition_DescribesTheAppliedConfig(t *testing.T) {
+	applied := func() *v1alpha1.KrakenDGateway {
+		gw, _, _ := licensedEEGateway(testNow.Add(-time.Minute), true)
+		gw.Status.ConfigChecksum, gw.Status.ConfigEdition = "fallback", v1alpha1.EditionCE
+		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+			Type: v1alpha1.ConditionCEFallbackApplied, Status: metav1.ConditionTrue,
+			Reason: v1alpha1.ReasonEEFeaturesStripped, Message: "what the applied render removed",
+		})
+		return gw
+	}
+	r := newTestGatewayReconciler(fakeClientBuilder().Build(), &mockRenderer{}, &mockValidator{})
+
+	t.Run("kept while a newer render is pending", func(t *testing.T) {
+		gw := applied()
+		r.reconcileCEFallbackCondition(gw, &renderer.RenderOutput{Checksum: "newer"}, v1alpha1.EditionCE)
+		cond := meta.FindStatusCondition(gw.Status.Conditions, v1alpha1.ConditionCEFallbackApplied)
+		if cond == nil || cond.Message != "what the applied render removed" {
+			t.Errorf("CEFallbackApplied = %+v, want it untouched: the applied config is still the fallback", cond)
+		}
+	})
+	t.Run("removed once the applied config is not a fallback render", func(t *testing.T) {
+		gw := applied()
+		gw.Status.ConfigChecksum, gw.Status.ConfigEdition = "ee", v1alpha1.EditionEE
+		r.reconcileCEFallbackCondition(gw, &renderer.RenderOutput{Checksum: "ee"}, v1alpha1.EditionEE)
+		if cond := meta.FindStatusCondition(gw.Status.Conditions, v1alpha1.ConditionCEFallbackApplied); cond != nil {
+			t.Errorf("CEFallbackApplied = %+v, want it removed", cond)
+		}
+	})
+}
+
+func TestGatewayReconcile_OpenAPIPiecesFollowTheAppliedRender(t *testing.T) {
+	gw, secret, parser := licensedEEGateway(testNow.Add(-time.Minute), true)
+	gw.Spec.OpenAPI = &v1alpha1.OpenAPIExportSpec{Enabled: true}
+	wildcardOnly, _ := fallbackEndpoints() // makes the EE and CE renders differ
+	c := fakeClientBuilder().WithObjects(gw, secret, wildcardOnly).
+		WithStatusSubresource(gw, wildcardOnly).Build()
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}), &mockValidator{})
+	r.LicenseParser = parser
+	pieces := func() (export, serve bool) {
+		var dep appsv1.Deployment
+		if err := c.Get(context.Background(), client.ObjectKeyFromObject(gw), &dep); err != nil {
+			t.Fatal(err)
+		}
+		spec := dep.Spec.Template.Spec
+		return slices.ContainsFunc(spec.InitContainers, func(c corev1.Container) bool { return c.Name == "openapi-export" }),
+			slices.ContainsFunc(spec.Containers, func(c corev1.Container) bool { return c.Name == "openapi-serve" })
+	}
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if export, serve := pieces(); export || serve {
+		t.Errorf("applied CE fallback: openapi-export %v, openapi-serve %v; want neither", export, serve)
+	}
+	if meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionCEFallbackApplied) == nil {
+		t.Error("CEFallbackApplied is not set on the applied fallback render")
+	}
+
+	parser.info.NotAfter = testNow.Add(90 * 24 * time.Hour) // a renewed license
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if export, serve := pieces(); !export || !serve {
+		t.Errorf("applied EE render: openapi-export %v, openapi-serve %v; want both", export, serve)
+	}
+	if cond := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions,
+		v1alpha1.ConditionCEFallbackApplied); cond != nil {
+		t.Errorf("CEFallbackApplied = %+v, want it removed once the EE render is applied", cond)
+	}
+}
