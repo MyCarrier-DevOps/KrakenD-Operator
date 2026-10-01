@@ -434,6 +434,10 @@ The operator is fully declarative. Restoring CRD resources triggers reconciliati
 kubectl apply -f krakend-backup.yaml
 ```
 
+Roll a gateway back by reverting its CRs, not with `kubectl rollout undo`.
+The operator owns the Deployment's pod template and restores it, and a
+reverted-to ReplicaSet's config ConfigMap may already have been collected.
+
 ---
 
 ## Log Analysis
