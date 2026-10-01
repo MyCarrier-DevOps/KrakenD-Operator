@@ -773,7 +773,8 @@ func (r *KrakenDGatewayReconciler) reconcileEndpointAcceptance(
 // writeEndpointAccepted sets the Accepted condition want on the endpoint the
 // render saw as rendered, or removes it when want is nil. It patches status
 // with an optimistic lock, so it never replaces conditions written after its
-// read.
+// read. It writes only when the condition changes, and emits an event only on
+// a transition.
 func (r *KrakenDGatewayReconciler) writeEndpointAccepted(
 	ctx context.Context,
 	rendered *v1alpha1.KrakenDEndpoint,
@@ -788,14 +789,21 @@ func (r *KrakenDGatewayReconciler) writeEndpointAccepted(
 		return fmt.Errorf("getting endpoint %s: %w", key, err)
 	}
 	base := ep.DeepCopy()
+	prev := meta.FindStatusCondition(base.Status.Conditions, v1alpha1.ConditionAccepted)
 	if want == nil {
 		meta.RemoveStatusCondition(&ep.Status.Conditions, v1alpha1.ConditionAccepted)
 	} else {
 		meta.SetStatusCondition(&ep.Status.Conditions, *want)
 	}
+	if conditionsEqual(base.Status.Conditions, ep.Status.Conditions) {
+		return nil
+	}
 	if err := r.Status().Patch(ctx, &ep,
 		client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil {
 		return fmt.Errorf("writing Accepted on endpoint %s: %w", key, err)
+	}
+	if want != nil {
+		recordConditionTransition(r.Recorder, &ep, prev, *want)
 	}
 	return nil
 }
