@@ -175,8 +175,8 @@ spec:
   image: ""                            # Override: full image reference (ignores edition/version for image selection only; `edition` still controls config rendering)
   ceImage: ""                          # CE fallback image override (default: krakend/krakend:{version}); used when fallbackToCE=true and the operator switches from EE to CE
   replicas: 3                          # ignored when autoscaling is set; a new Deployment starts at minReplicas and the HPA owns the count
+  # Omit the autoscaling block to disable autoscaling (there is no `enabled` field).
   autoscaling:
-    enabled: false
     minReplicas: 2
     maxReplicas: 10
     targetCPUUtilizationPercentage: 70
@@ -705,6 +705,10 @@ sequenceDiagram
             Op->>K8s: Update KrakenDGateway phase → Error
             Op->>K8s: Emit Warning Event (when the verdict changes)
             Note over Op: STOP — do not deploy invalid config
+        else Validator unavailable (binary missing, timeout, killed, I/O error)
+            Op->>K8s: Update KrakenDGateway condition → ConfigValid=Unknown<br/>(reason ValidatorUnavailable)
+            Op->>K8s: Emit one Warning Event (ValidatorUnavailable)
+            Note over Op: Phase and applied config kept — return the error,<br/>controller-runtime retries with backoff
         else Validation passes
             Op->>K8s: Update KrakenDGateway condition → ConfigValid=True
             Op->>K8s: Update KrakenDGateway phase → Deploying
@@ -1303,14 +1307,16 @@ flowchart TD
     RJ -->|Yes| S
     RJ -->|No| P[Run krakend check -t -n -c<br/>on validation copy]
 
-    P --> Q{Valid?}
+    P --> Q{Verdict?}
     Q -->|Yes| R[Set ConfigValid=True<br/>Set phase=Deploying<br/>Set Progressing=True<br/>Update ConfigMap<br/>Write status.configChecksum]
     Q -->|No| S[Set ConfigValid=False<br/>Set phase=Error<br/>Warning Event if the verdict changed<br/>Remember the rejected copy<br/>STOP]
+    Q -->|Unavailable| V[Set ConfigValid=Unknown<br/>reason ValidatorUnavailable<br/>Keep phase and applied config<br/>One Warning Event<br/>Return error: retry with backoff]
 
     R --> T[Patch Deployment<br/>pod annotation: checksum/config +<br/>checksum/plugins + container image]
     T --> U[Kubernetes Rolling Update]
 
     style S fill:#f66,stroke:#333
+    style V fill:#fc6,stroke:#333
     style U fill:#6f6,stroke:#333
     style BC fill:#ff6,stroke:#333
 ```
