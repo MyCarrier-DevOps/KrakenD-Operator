@@ -1081,7 +1081,7 @@ func TestEvaluate_OperationAudienceMustBeListOfStrings(t *testing.T) {
 	// A YAML mapping coerced to a JSON object (e.g. `audience: {internal}`),
 	// or a null in place of the list or one of its items, must fail CUE
 	// evaluation rather than reach the gateway, where it fails `krakend check
-	// -tlc` and blocks config updates for the whole gateway.
+	// -t -n -c` and blocks config updates for the whole gateway.
 	defs, err := EmbeddedCUEDefinitions()
 	if err != nil {
 		t.Fatalf("loading defs: %v", err)
