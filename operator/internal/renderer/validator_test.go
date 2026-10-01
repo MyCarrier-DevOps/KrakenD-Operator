@@ -370,3 +370,16 @@ func TestValidate_DeadlineIsTransient(t *testing.T) {
 		t.Errorf("expected the error to wrap context.DeadlineExceeded, got %v", err)
 	}
 }
+
+func TestValidate_RejectionIsAVerdict(t *testing.T) {
+	bin := fakeKrakenD(t, `echo "ERROR: bad endpoint"; exit 1`)
+	v := NewValidator(ValidatorOptions{Executor: NewKrakenDExecutor(bin), BinaryPath: bin})
+	err := v.Validate(context.Background(), []byte(`{"version":3}`))
+	var valErr *ValidationError
+	if !errors.As(err, &valErr) {
+		t.Fatalf("expected *ValidationError for a non-zero exit, got %v", err)
+	}
+	if valErr.Output != "ERROR: bad endpoint\n" {
+		t.Errorf("output = %q", valErr.Output)
+	}
+}
