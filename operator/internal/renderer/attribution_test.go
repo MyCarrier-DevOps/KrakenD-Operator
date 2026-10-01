@@ -98,3 +98,34 @@ func TestAttribute_IndexBeyondSourcesIsUnnamed(t *testing.T) {
 		t.Errorf("Attribute = %+v, want one finding at index 0 with no source", got)
 	}
 }
+
+func TestAttribute_RouterErrorsRespectMethods(t *testing.T) {
+	cases := []struct {
+		name      string
+		rendered  string
+		output    string
+		wantIndex []int
+	}{
+		{
+			name: "conflict ignores another method on the same path",
+			rendered: `{"endpoints":[{"endpoint":"/users/{id}","method":"GET"},` +
+				`{"endpoint":"/users/{id}","method":"PUT"},{"endpoint":"/users/{userId}","method":"GET"}]}`,
+			output: "ERROR testing the configuration file:\t':userId' in new path '/users/:userId' " +
+				"conflicts with existing wildcard ':id' in existing prefix '/users/:id'\n",
+			wantIndex: []int{0, 2},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sources := []types.NamespacedName{{Name: "a"}, {Name: "b"}, {Name: "c"}}
+			var indices []int
+			for _, a := range Attribute([]byte(tc.rendered), sources, tc.output) {
+				indices = append(indices, a.Index)
+			}
+			slices.Sort(indices)
+			if !slices.Equal(indices, tc.wantIndex) {
+				t.Errorf("blamed indices = %v, want %v", indices, tc.wantIndex)
+			}
+		})
+	}
+}
