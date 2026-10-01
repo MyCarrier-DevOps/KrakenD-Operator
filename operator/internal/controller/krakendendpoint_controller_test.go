@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"testing"
+	"time"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -212,7 +213,10 @@ func TestEndpointReconcile_Active(t *testing.T) {
 				},
 			},
 		},
-		Status: v1alpha1.KrakenDEndpointStatus{Phase: v1alpha1.EndpointPhasePending},
+		Status: v1alpha1.KrakenDEndpointStatus{
+			Phase:      v1alpha1.EndpointPhasePending,
+			Conditions: []metav1.Condition{acceptedAt(0)},
+		},
 	}
 	c := fakeClientBuilder().
 		WithObjects(gw, policy, ep).
@@ -297,7 +301,10 @@ func TestEndpointReconcile_ActiveNoPolicyRef(t *testing.T) {
 				},
 			},
 		},
-		Status: v1alpha1.KrakenDEndpointStatus{Phase: v1alpha1.EndpointPhasePending},
+		Status: v1alpha1.KrakenDEndpointStatus{
+			Phase:      v1alpha1.EndpointPhasePending,
+			Conditions: []metav1.Condition{acceptedAt(0)},
+		},
 	}
 	c := fakeClientBuilder().
 		WithObjects(gw, ep).
@@ -428,7 +435,10 @@ func TestEndpointReconcile_DetachedToActive(t *testing.T) {
 				},
 			},
 		},
-		Status: v1alpha1.KrakenDEndpointStatus{Phase: v1alpha1.EndpointPhaseDetached},
+		Status: v1alpha1.KrakenDEndpointStatus{
+			Phase:      v1alpha1.EndpointPhaseDetached,
+			Conditions: []metav1.Condition{acceptedAt(0)},
+		},
 	}
 	c := fakeClientBuilder().
 		WithObjects(gw, ep).
@@ -472,7 +482,10 @@ func TestEndpointReconcile_MultiplePoliciesDedup(t *testing.T) {
 				}},
 			},
 		},
-		Status: v1alpha1.KrakenDEndpointStatus{Phase: v1alpha1.EndpointPhasePending},
+		Status: v1alpha1.KrakenDEndpointStatus{
+			Phase:      v1alpha1.EndpointPhasePending,
+			Conditions: []metav1.Condition{acceptedAt(0)},
+		},
 	}
 	c := fakeClientBuilder().
 		WithObjects(gw, policy, ep).
@@ -509,7 +522,10 @@ func TestEndpointReconcile_CrossNamespaceGatewayRef(t *testing.T) {
 				}},
 			},
 		},
-		Status: v1alpha1.KrakenDEndpointStatus{Phase: v1alpha1.EndpointPhasePending},
+		Status: v1alpha1.KrakenDEndpointStatus{
+			Phase:      v1alpha1.EndpointPhasePending,
+			Conditions: []metav1.Condition{acceptedAt(0)},
+		},
 	}
 	c := fakeClientBuilder().
 		WithObjects(gw, ep).
@@ -637,6 +653,18 @@ func endpointOnGW1(generation int64, conds ...metav1.Condition) *v1alpha1.Kraken
 			}},
 		},
 		Status: v1alpha1.KrakenDEndpointStatus{Conditions: conds},
+	}
+}
+
+// transitionTime is a fixed lastTransitionTime for seeded conditions.
+var transitionTime = metav1.NewTime(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+
+// acceptedAt is the gateway's Accepted=True for an included endpoint.
+func acceptedAt(generation int64) metav1.Condition {
+	return metav1.Condition{
+		Type: v1alpha1.ConditionAccepted, Status: metav1.ConditionTrue, Reason: v1alpha1.ReasonAccepted,
+		Message: "Included in the configuration of gateway default/gw1", ObservedGeneration: generation,
+		LastTransitionTime: transitionTime,
 	}
 }
 
