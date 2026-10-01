@@ -81,7 +81,9 @@ func (r *KrakenDBackendPolicyReconciler) Reconcile(ctx context.Context, req ctrl
 	policy.Status.ReferencedBy = refCount
 
 	// Ready summarizes the policy's own fields; it replaces PolicyValid.
-	meta.SetStatusCondition(&policy.Status.Conditions, policyReadyCondition(&policy))
+	prevReady := meta.FindStatusCondition(origConditions, v1alpha1.ConditionReady)
+	ready := policyReadyCondition(&policy)
+	meta.SetStatusCondition(&policy.Status.Conditions, ready)
 	meta.RemoveStatusCondition(&policy.Status.Conditions, legacyConditionPolicyValid)
 	policy.Status.ObservedGeneration = policy.Generation
 
@@ -92,6 +94,7 @@ func (r *KrakenDBackendPolicyReconciler) Reconcile(ctx context.Context, req ctrl
 		if err := r.Status().Update(ctx, &policy); err != nil {
 			return ctrl.Result{}, fmt.Errorf("updating policy status: %w", err)
 		}
+		recordConditionTransition(r.Recorder, &policy, prevReady, ready)
 	}
 
 	log.V(1).Info("policy reconciled", "referencedBy", refCount)
