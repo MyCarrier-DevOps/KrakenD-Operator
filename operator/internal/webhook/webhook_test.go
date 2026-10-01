@@ -2755,3 +2755,17 @@ func TestEndpointValidator_RejectsSpecChangeOnTerminatingObject(t *testing.T) {
 		t.Fatal("a spec change to an invalid value on a terminating endpoint was admitted; want it rejected")
 	}
 }
+
+func TestPolicyValidator_RejectsSpecChangeOnTerminatingObject(t *testing.T) {
+	oldPolicy := terminating(&v1alpha1.KrakenDBackendPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "default"},
+		Spec:       v1alpha1.KrakenDBackendPolicySpec{RateLimit: &v1alpha1.RateLimitSpec{MaxRate: 10}},
+	})
+	newPolicy := oldPolicy.DeepCopy()
+	newPolicy.Spec.RateLimit.MaxRate = -1
+
+	_, err := (&PolicyValidator{}).ValidateUpdate(context.Background(), oldPolicy, newPolicy)
+	if err == nil {
+		t.Fatal("a spec change to an invalid value on a terminating policy was admitted; want it rejected")
+	}
+}
