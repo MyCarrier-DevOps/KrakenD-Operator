@@ -140,6 +140,17 @@ type BackendSpec struct {
 	ExtraConfig *runtime.RawExtension `json:"extraConfig,omitempty"`
 }
 
+// EndpointConflict is one entry of a KrakenDEndpoint that its gateway does not
+// serve, because an older KrakenDEndpoint serves the same endpoint and method.
+type EndpointConflict struct {
+	// Endpoint is the entry's path.
+	Endpoint string `json:"endpoint"`
+	// Method is the entry's HTTP method.
+	Method string `json:"method"`
+	// Winner is the namespace/name of the KrakenDEndpoint whose entry is served.
+	Winner string `json:"winner"`
+}
+
 // KrakenDEndpointStatus defines the observed state of KrakenDEndpoint.
 type KrakenDEndpointStatus struct {
 	// Phase is derived from the Ready condition and kept for compatibility;
@@ -153,6 +164,12 @@ type KrakenDEndpointStatus struct {
 	// +listType=map
 	// +listMapKey=type
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+	// Conflicts lists this endpoint's entries that its gateway does not serve
+	// because an older KrakenDEndpoint serves the same endpoint and method.
+	// The gateway controller writes it together with the Accepted condition.
+	// +listType=atomic
+	// +optional
+	Conflicts []EndpointConflict `json:"conflicts,omitempty"`
 }
 
 // +kubebuilder:object:root=true
