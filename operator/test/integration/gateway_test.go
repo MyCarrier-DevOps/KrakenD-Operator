@@ -27,8 +27,10 @@ import (
 	"github.com/mycarrier-devops/krakend-operator/internal/resources"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -109,14 +111,70 @@ func TestGateway_CreatesOwnedResources(t *testing.T) {
 		t.Error("service should be controlled by gateway")
 	}
 
-	// Wait for ConfigMap (krakend config) to be created.
+	// Wait for the content-addressed ConfigMap (krakend config).
+	applied := waitForAppliedChecksum(t, client.ObjectKeyFromObject(gw))
 	cm := &corev1.ConfigMap{}
 	eventually(t, func() error {
-		if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(gw), cm); err != nil {
-			return fmt.Errorf("waiting for configmap: %w", err)
-		}
-		return nil
+		return k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: resources.ConfigMapName(gw, applied)}, cm)
 	})
+}
+
+func TestGateway_ConfigIsContentAddressedAndImmutable(t *testing.T) {
+	ns := testNamespace(t)
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "immutable-gw", Namespace: ns},
+		Spec:       v1alpha1.KrakenDGatewaySpec{Version: "2.9", Edition: v1alpha1.EditionCE},
+	}
+	if err := k8sClient.Create(ctx, gw); err != nil {
+		t.Fatalf("create gateway: %v", err)
+	}
+	first := waitForAppliedChecksum(t, client.ObjectKeyFromObject(gw))
+	firstName := resources.ConfigMapName(gw, first)
+	var cm corev1.ConfigMap
+	eventually(t, func() error {
+		return k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: firstName}, &cm)
+	})
+	cm.Data[resources.ConfigKey] = `{"version":3,"tampered":true}`
+	if err := k8sClient.Update(ctx, &cm); !apierrors.IsInvalid(err) {
+		t.Fatalf("updating a config revision's data must be refused by the API server, got %v", err)
+	}
+
+	ep := &v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "items", Namespace: ns},
+		Spec: v1alpha1.KrakenDEndpointSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: gw.Name},
+			Endpoints: []v1alpha1.EndpointEntry{{
+				Endpoint: "/items", Method: "GET",
+				Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc:8080"}, URLPattern: "/items"}},
+			}},
+		},
+	}
+	if err := k8sClient.Create(ctx, ep); err != nil {
+		t.Fatalf("create endpoint: %v", err)
+	}
+	eventually(t, func() error {
+		var got v1alpha1.KrakenDGateway
+		if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(gw), &got); err != nil {
+			return err
+		}
+		if got.Status.ConfigChecksum == first {
+			return fmt.Errorf("the new config is not applied yet")
+		}
+		var dep appsv1.Deployment
+		if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(gw), &dep); err != nil {
+			return err
+		}
+		want := resources.ConfigMapName(gw, got.Status.ConfigChecksum)
+		for _, v := range dep.Spec.Template.Spec.Volumes {
+			if v.Name == "config" && v.ConfigMap != nil && v.ConfigMap.Name == want {
+				return nil
+			}
+		}
+		return fmt.Errorf("the Deployment does not mount %s yet", want)
+	})
+	if err := k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: firstName}, &cm); err != nil {
+		t.Fatalf("the previous config revision must survive the rollout: %v", err)
+	}
 }
 
 func TestGateway_EndpointTriggersReReconcile(t *testing.T) {
@@ -401,8 +459,12 @@ func TestGateway_DeletedDeploymentRecreatedWhileConfigRejected(t *testing.T) {
 	ns := testNamespace(t)
 	gw := createGateway(t, ns, "drift-gw")
 	applied := waitForAppliedChecksum(t, gw)
+	cmKey := types.NamespacedName{
+		Namespace: ns,
+		Name:      resources.ConfigMapName(&v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: gw.Name}}, applied),
+	}
 	var appliedCM corev1.ConfigMap
-	if err := k8sClient.Get(ctx, gw, &appliedCM); err != nil {
+	if err := k8sClient.Get(ctx, cmKey, &appliedCM); err != nil {
 		t.Fatalf("get the applied ConfigMap: %v", err)
 	}
 
@@ -438,10 +500,10 @@ func TestGateway_DeletedDeploymentRecreatedWhileConfigRejected(t *testing.T) {
 	})
 
 	var cm corev1.ConfigMap
-	if err := k8sClient.Get(ctx, gw, &cm); err != nil {
+	if err := k8sClient.Get(ctx, cmKey, &cm); err != nil {
 		t.Fatalf("get the ConfigMap: %v", err)
 	}
-	if cm.Data["krakend.json"] != appliedCM.Data["krakend.json"] {
-		t.Errorf("the rejected config reached the ConfigMap:\n%s", cm.Data["krakend.json"])
+	if cm.Data[resources.ConfigKey] != appliedCM.Data[resources.ConfigKey] {
+		t.Errorf("the rejected config reached the ConfigMap:\n%s", cm.Data[resources.ConfigKey])
 	}
 }
