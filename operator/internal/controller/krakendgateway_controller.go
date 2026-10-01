@@ -182,7 +182,7 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// Config stage: decide and publish the applied config. Its error is
 	// returned only after the infrastructure stage and the status write.
 	appliedBefore := gw.Status.ConfigChecksum
-	configErr := r.reconcileConfig(ctx, &gw, before, output, ceFallback)
+	cfg, configErr := r.reconcileConfig(ctx, &gw, before, output, ceFallback)
 	if gw.Status.ConfigChecksum == appliedBefore {
 		r.markDeploymentUpdate(&gw, output.DesiredImage, output.PluginChecksum)
 	}
@@ -203,6 +203,7 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		appliedChecksum: gw.Status.ConfigChecksum,
 		pluginChecksum:  output.PluginChecksum,
 		image:           output.DesiredImage,
+		configMapName:   cfg.appliedConfigMap,
 	}
 	infraErr := r.reconcileInfrastructure(ctx, &gw, infra)
 	r.inspectDeploymentStatus(ctx, &gw, infra)
@@ -582,20 +583,24 @@ func (r *KrakenDGatewayReconciler) reconcileConfig(
 	before *v1alpha1.KrakenDGatewayStatus,
 	output *renderer.RenderOutput,
 	ceFallback bool,
-) error {
+) (configResult, error) {
 	if output.Checksum == gw.Status.ConfigChecksum {
 		// The applied config passed validation when it was applied, so a
-		// revert to it clears a rejection. Rewriting it reverts an
-		// out-of-band edit.
+		// revert to it clears a rejection.
 		setConfigApplied(gw)
-		return r.writeConfigMap(ctx, gw, output.JSON, output.Checksum)
+		return r.publishApplied(ctx, gw, output)
 	}
-	return r.validateAndApply(ctx, gw, before, output, ceFallback)
+	err := r.validateAndApply(ctx, gw, before, output, ceFallback)
+	if output.Checksum == gw.Status.ConfigChecksum {
+		return configResult{appliedConfigMap: resources.ConfigMapName(gw, output.Checksum)}, nil
+	}
+	return r.keepApplied(ctx, gw, err)
 }
 
 // validateAndApply validates a render that is not the applied config and,
-// when it passes, makes it the applied config. validateConfig answers from
-// the rejection memo when this exact input was already rejected.
+// when it passes, publishes it and makes it the applied config.
+// validateConfig answers from the rejection memo when this exact input was
+// already rejected.
 func (r *KrakenDGatewayReconciler) validateAndApply(
 	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
@@ -612,24 +617,12 @@ func (r *KrakenDGatewayReconciler) validateAndApply(
 	case err != nil:
 		return r.handleValidatorUnavailable(gw, before, err)
 	}
-	if err := r.writeConfigMap(ctx, gw, output.JSON, output.Checksum); err != nil {
+	// Publish before recording the checksum as applied: status must never
+	// name a config that no ConfigMap holds.
+	if err := r.publishConfig(ctx, gw, output.JSON, output.Checksum); err != nil {
 		return err
 	}
 	r.markConfigApplied(gw, output.Checksum)
-	return nil
-}
-
-// writeConfigMap writes the config the gateway serves into its ConfigMap.
-func (r *KrakenDGatewayReconciler) writeConfigMap(
-	ctx context.Context, gw *v1alpha1.KrakenDGateway, jsonData []byte, checksum string,
-) error {
-	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace}}
-	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, cm, func() error {
-		resources.BuildConfigMap(cm, gw, jsonData, checksum)
-		return controllerutil.SetControllerReference(gw, cm, r.Scheme)
-	}); err != nil {
-		return fmt.Errorf("reconciling configmap: %w", err)
-	}
 	return nil
 }
 
@@ -915,6 +908,9 @@ type infraInputs struct {
 	appliedChecksum string
 	pluginChecksum  string
 	image           string
+	// configMapName is the ConfigMap holding the applied config; "" means
+	// none does.
+	configMapName string
 }
 
 // reconcileInfrastructure is the infrastructure stage. It creates or updates
@@ -1100,7 +1096,10 @@ func (r *KrakenDGatewayReconciler) reconcileDeployment(
 	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace}}
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, dep, func() error {
 		resources.BuildDeployment(dep, gw, resources.DeploymentInputs{
-			ConfigChecksum: in.appliedChecksum, PluginChecksum: in.pluginChecksum, Image: in.image,
+			ConfigMapName:  in.configMapName,
+			ConfigChecksum: in.appliedChecksum,
+			PluginChecksum: in.pluginChecksum,
+			Image:          in.image,
 		})
 		return controllerutil.SetControllerReference(gw, dep, r.Scheme)
 	}); err != nil {
