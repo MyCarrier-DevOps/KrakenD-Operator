@@ -16,7 +16,11 @@ limitations under the License.
 
 package renderer
 
-import "strings"
+import (
+	"fmt"
+	"sort"
+	"strings"
+)
 
 // eeWildcardParam is the path parameter an EE wildcard's trailing "*" becomes
 // in the copy the CE binary checks. The name mirrors the "*Wildcard"
@@ -45,4 +49,51 @@ func rewriteEEWildcards(endpoints []any) bool {
 		}
 	}
 	return changed
+}
+
+// eeWildcardFindings applies the EE router's rule for wildcard endpoints,
+// which the CE binary cannot test. EE registers "/p/*" as the catch-all
+// "/p/*Wildcard" in its method's route tree, so no other route of that
+// method may start with "/p/" (measured with krakend-ee 2.13). Each conflict
+// yields two krakend-style lint-pointer lines, one per endpoint, so Attribute
+// maps them like any other finding.
+func eeWildcardFindings(endpoints []any) []string {
+	type route struct {
+		index        int
+		method, path string
+	}
+	routes := make([]route, 0, len(endpoints))
+	for i, ep := range endpoints {
+		m, ok := ep.(map[string]any)
+		if !ok {
+			continue
+		}
+		path, _ := m["endpoint"].(string)
+		method, _ := m["method"].(string)
+		if method == "" {
+			method = "GET"
+		}
+		routes = append(routes, route{index: i, method: method, path: path})
+	}
+	var findings []string
+	for _, w := range routes {
+		if !IsEEWildcard(w.path) {
+			continue
+		}
+		prefix := strings.TrimSuffix(w.path, "*")
+		for _, o := range routes {
+			if o.index == w.index || o.method != w.method ||
+				!strings.HasPrefix(routeShape(o.path), routeShape(prefix)) {
+				continue
+			}
+			findings = append(findings,
+				fmt.Sprintf("- at '/endpoints/%d/endpoint': EE wildcard '%s %s' conflicts with '%s %s' "+
+					"(endpoints/%d): the EE router accepts no other %s route under %s",
+					w.index, w.method, w.path, o.method, o.path, o.index, w.method, prefix),
+				fmt.Sprintf("- at '/endpoints/%d/endpoint': '%s %s' conflicts with EE wildcard '%s %s' (endpoints/%d)",
+					o.index, o.method, o.path, w.method, w.path, w.index))
+		}
+	}
+	sort.Strings(findings)
+	return findings
 }
