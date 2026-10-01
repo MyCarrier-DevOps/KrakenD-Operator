@@ -67,6 +67,8 @@ func EndpointPhaseFromReady(status metav1.ConditionStatus, reason string) Endpoi
 		return EndpointPhaseActive
 	case status == metav1.ConditionUnknown:
 		return EndpointPhasePending
+	case reason == ReasonGatewayNotFound:
+		return EndpointPhaseDetached
 	}
 	return ""
 }
