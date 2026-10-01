@@ -343,6 +343,11 @@ func rejectionSummary(atts []renderer.Attribution) string {
 	}
 }
 
+// isConfigRejected reports whether cond is a GatewayConfigRejected verdict.
+func isConfigRejected(cond *metav1.Condition) bool {
+	return cond != nil && cond.Reason == v1alpha1.ReasonGatewayConfigRejected
+}
+
 // recordRejections settles the endpoints' Accepted verdicts on a pass whose
 // render is not the applied config. An endpoint the current findings name gets
 // Accepted=False/GatewayConfigRejected. An endpoint carrying
@@ -358,6 +363,10 @@ func (r *KrakenDGatewayReconciler) recordRejections(
 	rejections map[types.NamespacedName]string,
 	neverApplied bool,
 ) error {
+	removable := isConfigRejected
+	if neverApplied {
+		removable = nil
+	}
 	var errs []error
 	for i := range endpoints {
 		ep := &endpoints[i]
@@ -371,10 +380,10 @@ func (r *KrakenDGatewayReconciler) recordRejections(
 				Message:            msg,
 			}
 		} else if cur := meta.FindStatusCondition(ep.Status.Conditions, v1alpha1.ConditionAccepted); cur == nil ||
-			(!neverApplied && cur.Reason != v1alpha1.ReasonGatewayConfigRejected) {
+			(!neverApplied && !isConfigRejected(cur)) {
 			continue
 		}
-		if err := r.writeEndpointAccepted(ctx, ep, want); err != nil {
+		if err := r.writeEndpointAccepted(ctx, ep, want, removable); err != nil {
 			errs = append(errs, err)
 		}
 	}

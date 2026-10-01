@@ -848,7 +848,7 @@ func (r *KrakenDGatewayReconciler) reconcileEndpointAcceptance(
 	var errs []error
 	for i := range endpoints {
 		want := endpointAccepted(gw, &endpoints[i], conflicted, unresolved)
-		if err := r.writeEndpointAccepted(ctx, &endpoints[i], want); err != nil {
+		if err := r.writeEndpointAccepted(ctx, &endpoints[i], want, nil); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -860,12 +860,15 @@ func (r *KrakenDGatewayReconciler) reconcileEndpointAcceptance(
 // endpoint again and patches its status with an optimistic lock, so a write
 // never replaces conditions the endpoint controller set after the read; a
 // Conflict is retried against a new read. It writes only when the condition
-// changes, and emits an event only on a transition. An endpoint deleted, or
+// changes, and emits an event only on a transition. When want is nil, an
+// Accepted condition is removed only if removable (nil: always) accepts the
+// live one, so a stale caller cannot remove a verdict it did not see. An endpoint deleted, or
 // deleted and created again, since the render is skipped.
 func (r *KrakenDGatewayReconciler) writeEndpointAccepted(
 	ctx context.Context,
 	rendered *v1alpha1.KrakenDEndpoint,
 	want *metav1.Condition,
+	removable func(live *metav1.Condition) bool,
 ) error {
 	key := client.ObjectKeyFromObject(rendered)
 	var (
@@ -884,6 +887,9 @@ func (r *KrakenDGatewayReconciler) writeEndpointAccepted(
 		base := ep.DeepCopy()
 		prev = meta.FindStatusCondition(base.Status.Conditions, v1alpha1.ConditionAccepted)
 		if want == nil {
+			if removable != nil && !removable(prev) {
+				return nil
+			}
 			meta.RemoveStatusCondition(&ep.Status.Conditions, v1alpha1.ConditionAccepted)
 		} else {
 			meta.SetStatusCondition(&ep.Status.Conditions, *want)
