@@ -1192,7 +1192,7 @@ func (r *KrakenDGatewayReconciler) reconcilePostRestartJob(
 	jobName := resources.PostRestartJobName(gw, jobChecksum)
 
 	if gw.Status.LastPostRestartJobChecksum == jobChecksum {
-		return r.reconcileExistingPostRestartRevision(ctx, gw, spec, jobName, jobChecksum, configChecksum)
+		return r.reconcileExistingPostRestartRevision(ctx, gw, spec, jobName, jobChecksum, in)
 	}
 
 	// review id 3807285652 (#7): the Deployment-not-found / not-yet-converged
@@ -1202,21 +1202,11 @@ func (r *KrakenDGatewayReconciler) reconcilePostRestartJob(
 	// in-progress rollout, not a completed decision about this revision —
 	// clearing conditions here would make them flicker away and back every
 	// reconcile while a rollout is merely underway.
-	var dep appsv1.Deployment
-	key := types.NamespacedName{Name: gw.Name, Namespace: gw.Namespace}
-	if err := r.Get(ctx, key, &dep); err != nil {
-		if errors.IsNotFound(err) {
-			return nil
-		}
-		return fmt.Errorf("getting deployment for post-restart check: %w", err)
+	rolledOut, err := r.postRestartRolloutDone(ctx, gw, in)
+	if err != nil {
+		return err
 	}
-
-	if !deploymentConverged(&dep, in) {
-		return nil
-	}
-	if dep.Spec.Replicas != nil && *dep.Spec.Replicas == 0 {
-		// Deployment is intentionally scaled to zero — no pods have rolled
-		// so a post-restart Job must not be created.
+	if !rolledOut {
 		return nil
 	}
 
@@ -1349,8 +1339,9 @@ func (r *KrakenDGatewayReconciler) reconcileExistingPostRestartRevision(
 	spec *v1alpha1.PostRestartJobSpec,
 	jobName string,
 	jobChecksum string,
-	configChecksum string,
+	in infraInputs,
 ) error {
+	configChecksum := in.appliedChecksum
 	existing := &batchv1.Job{}
 	err := r.Get(ctx, types.NamespacedName{Name: jobName, Namespace: gw.Namespace}, existing)
 	if errors.IsNotFound(err) {
@@ -1426,6 +1417,17 @@ func (r *KrakenDGatewayReconciler) reconcileExistingPostRestartRevision(
 		return nil
 	}
 
+	// A re-create runs the script again, so it waits for the rollout like a
+	// first run does. Like the not-yet-converged returns in
+	// reconcilePostRestartJob, this leaves the conditions untouched.
+	rolledOut, err := r.postRestartRolloutDone(ctx, gw, in)
+	if err != nil {
+		return err
+	}
+	if !rolledOut {
+		return nil
+	}
+
 	desired := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: jobName, Namespace: gw.Namespace}}
 	resources.BuildPostRestartJob(desired, gw, configChecksum, jobChecksum)
 
@@ -1498,6 +1500,29 @@ func (r *KrakenDGatewayReconciler) reconcileExistingPostRestartRevision(
 	logf.FromContext(ctx).Info("re-created failed post-restart job after knob change",
 		"name", jobName, "checksum", jobChecksum)
 	return nil
+}
+
+// postRestartRolloutDone reports whether the gateway Deployment has finished
+// rolling out in, so that a post-restart Job runs against the pods that carry
+// it. A missing Deployment, or one scaled to zero, has no pods to run
+// against.
+func (r *KrakenDGatewayReconciler) postRestartRolloutDone(
+	ctx context.Context, gw *v1alpha1.KrakenDGateway, in infraInputs,
+) (bool, error) {
+	var dep appsv1.Deployment
+	key := types.NamespacedName{Name: gw.Name, Namespace: gw.Namespace}
+	if err := r.Get(ctx, key, &dep); err != nil {
+		if errors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("getting deployment for post-restart check: %w", err)
+	}
+	if dep.Spec.Replicas != nil && *dep.Spec.Replicas == 0 {
+		// Intentionally scaled to zero: no pods have rolled, so a
+		// post-restart Job must not run.
+		return false, nil
+	}
+	return deploymentConverged(&dep, in), nil
 }
 
 // setPostRestartJobSkippedCondition records the last skip/create decision
