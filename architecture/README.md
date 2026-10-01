@@ -1480,8 +1480,9 @@ the one old pods mount, so a stalled rollout cannot take down pods that
 restart on the previous ReplicaSet.
 
 A config ConfigMap is garbage-collected once nothing can mount it. The
-operator keeps the applied one, the three most recently created revisions,
-and any revision a live ReplicaSet (one with or wanting pods) still mounts.
+operator keeps the three most recently created revisions, the applied one
+included (revisions created in the same second are ordered by name), and any
+revision a live ReplicaSet (one with or wanting pods) still mounts.
 ReplicaSets are read uncached, and only when there is something to collect.
 
 ### Deployment Configuration
