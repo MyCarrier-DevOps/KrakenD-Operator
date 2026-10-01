@@ -17,6 +17,7 @@ limitations under the License.
 package resources
 
 import (
+	"slices"
 	"testing"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
@@ -557,4 +558,37 @@ func TestBuildDeployment_MountsTheNamedConfigMap(t *testing.T) {
 		}
 	}
 	t.Fatal("no config volume")
+}
+
+func TestBuildDeployment_CERenderRunsWithoutTheOpenAPIPieces(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		edition  v1alpha1.Edition
+		ceRender bool
+		want     bool
+	}{
+		{"EE render", v1alpha1.EditionEE, false, true},
+		{"EE gateway in CE fallback", v1alpha1.EditionEE, true, false},
+		{"CE-edition gateway", v1alpha1.EditionCE, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gw := testGateway()
+			gw.Spec.Edition = tc.edition
+			gw.Spec.OpenAPI = &v1alpha1.OpenAPIExportSpec{Enabled: true}
+			dep := &appsv1.Deployment{}
+			BuildDeployment(dep, gw,
+				DeploymentInputs{ConfigMapName: "cm", ConfigChecksum: "cs", Image: "img", CERender: tc.ceRender})
+			spec := dep.Spec.Template.Spec
+			hasExport := slices.ContainsFunc(spec.InitContainers, func(c corev1.Container) bool {
+				return c.Name == "openapi-export"
+			})
+			hasServe := slices.ContainsFunc(spec.Containers, func(c corev1.Container) bool {
+				return c.Name == "openapi-serve"
+			})
+			if hasExport != tc.want || hasServe != tc.want {
+				t.Errorf("openapi-export %v, openapi-serve %v; want both %v (the CE binary has no openapi command)",
+					hasExport, hasServe, tc.want)
+			}
+		})
+	}
 }
