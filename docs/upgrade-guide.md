@@ -526,6 +526,36 @@ kubectl get krakendgateways,krakendendpoints,krakendautoconfigs,krakendbackendpo
   on every gateway reconcile. A `Normal` `Accepted` event marks a conflict
   that cleared. The `EndpointInvalid` event is gone.
 
+### KrakenDEndpoint: `ResolvedRefs`, `Ready` and `phase` (endpoint controller)
+
+| Condition | Written by | True when | Reasons |
+|---|---|---|---|
+| `ResolvedRefs` | endpoint controller | the gateway and every referenced policy exist | `RefsResolved`, `GatewayNotFound`, `PolicyNotFound` |
+| `Accepted` | gateway controller | the endpoint is in the gateway's validated configuration | `Accepted`, `EndpointConflict` |
+| `Ready` | endpoint controller | both are True, `Accepted` for the current generation | `Ready`, `Pending`, or the failing condition's reason; `SchemaNameConflict` (docs only) keeps it True |
+
+- The `Available` condition is removed. On its first reconcile after the
+  upgrade, the endpoint controller drops it and writes `ResolvedRefs` and
+  `Ready`. Replace alerts or health checks on `Available` with `Ready`.
+- `phase` is derived from `Ready`: `True` → `Active`; `Unknown` → `Pending`;
+  `GatewayNotFound` → `Detached`; `EndpointConflict` → `Conflicted`; any
+  other `False` reason → `Invalid`. This ends the flip-flop in which a
+  conflicted endpoint alternated between `Conflicted` and `Active`.
+- `Ready=Unknown` with reason `Pending` ("Waiting for the gateway to accept
+  generation N") means the gateway has not yet accepted this generation. That
+  is normal for a moment after every change; it persists while the gateway's
+  rendered configuration fails validation (check the gateway's `ConfigValid`).
+  Right after the upgrade, endpoints can show `Pending` until their gateway's
+  first reconcile.
+- When the referenced gateway is deleted, `Accepted` keeps that gateway's
+  last verdict; `Ready` reports `GatewayNotFound` and the phase is `Detached`.
+
+### Watch scope
+
+- The endpoint controller now reacts to gateways and policies being created
+  or deleted only (not to their status updates), and to changes of its own
+  spec or of its `Accepted` condition.
+
 ## v0.14.0 — openapi-serve liveness probe (one-time rollout)
 
 The `openapi-serve` sidecar now renders with a liveness probe. It previously
