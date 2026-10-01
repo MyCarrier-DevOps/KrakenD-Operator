@@ -166,26 +166,18 @@ func classifyCheckError(ctx context.Context, output []byte, err error) error {
 	return fmt.Errorf("running krakend check: %w", err)
 }
 
-// ceUnsupportedExtraConfig lists root extra_config keys that are not
-// recognised by the KrakenD CE JSON-schema linter. The operator's embedded
-// KrakenD binary is always CE, so these keys must be stripped before
-// validation to avoid false-positive lint failures.
-var ceUnsupportedExtraConfig = []string{
-	"backend/redis",
-}
-
 // validationCopy creates the document the embedded CE krakend binary checks
-// for a render of the given edition. It strips the EE-only extra_config keys
-// that the CE linter rejects and, for an EE render, rewrites each wildcard
-// endpoint to a parameter route. Every endpoint stays at its index. Non-nil
-// findings are a verdict reached without running krakend check.
+// for a render of the given edition. The CE and EE 2.13 binaries embed the same
+// schemas, so nothing is stripped: for an EE render, each wildcard endpoint is
+// rewritten to a parameter route and every endpoint stays at its index.
+// Non-nil findings are a verdict reached without running krakend check.
 func validationCopy(jsonData []byte, edition v1alpha1.Edition) (doc []byte, findings []string, err error) {
 	var config map[string]any
 	if err := json.Unmarshal(jsonData, &config); err != nil {
 		return nil, nil, fmt.Errorf("unmarshaling config for validation copy: %w", err)
 	}
 
-	modified := stripCEUnsupportedExtraConfig(config)
+	modified := false
 
 	if endpoints, ok := config["endpoints"].([]any); ok && edition == v1alpha1.EditionEE {
 		if findings = eeWildcardFindings(endpoints); len(findings) > 0 {
@@ -201,28 +193,6 @@ func validationCopy(jsonData []byte, edition v1alpha1.Edition) (doc []byte, find
 	}
 	doc, err = serializeJSON(config)
 	return doc, nil, err
-}
-
-// stripCEUnsupportedExtraConfig removes, in place, the root extra_config keys
-// the CE linter rejects, and the block itself when that empties it. It
-// reports whether config changed.
-func stripCEUnsupportedExtraConfig(config map[string]any) bool {
-	ec, ok := config["extra_config"].(map[string]any)
-	if !ok {
-		return false
-	}
-	modified := false
-	for _, key := range ceUnsupportedExtraConfig {
-		if _, exists := ec[key]; exists {
-			delete(ec, key)
-			modified = true
-		}
-	}
-	if len(ec) == 0 {
-		delete(config, "extra_config")
-		modified = true
-	}
-	return modified
 }
 
 func (v *KrakenDValidator) timeout() time.Duration {
