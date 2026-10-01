@@ -708,6 +708,23 @@ last-known-good config.
 - The old `<gateway>` ConfigMap is deleted once no running ReplicaSet mounts
   it.
 
+**Garbage collection.** A config ConfigMap is deleted once nothing can
+mount it. The operator keeps:
+
+- the applied one;
+- the three most recently created revisions (including the applied one);
+- any revision mounted by a ReplicaSet of the gateway's Deployment that
+  still has or wants pods.
+
+The old `<gateway>` ConfigMap is deleted on the same terms, which normally
+means right after the migration rollout completes. Rolling a gateway back
+means reverting its CRs. `kubectl rollout undo` to an old ReplicaSet is not
+supported: the operator restores its own pod template, and the undone
+revision's ConfigMap may already be gone.
+
+**RBAC:** the operator's ClusterRole gains `list` on `apps/replicasets`. The
+Helm chart ships it. If you maintain your own copy of the role, add it.
+
 ---
 
 ## v0.14.0 — openapi-serve liveness probe (one-time rollout)
