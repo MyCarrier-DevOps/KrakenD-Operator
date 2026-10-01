@@ -1947,7 +1947,7 @@ func TestGatewayReconcile_RejectedEditionFlipToEEKeepsTheCEImage(t *testing.T) {
 	gw.Status.ConfigEdition = v1alpha1.EditionCE
 	gw.Spec.Image = "ee-custom:1"
 	gw.Spec.CEImage = "ce-custom:1"
-	gw.Status.ActiveImage = "ce-custom:1"
+	gw.Status.ActiveImage = "deployed-ce:1" // differs from spec.ceImage, so only the deployed image can answer
 	c := fakeClientBuilder().WithObjects(gw, secret, legacyConfigMap(gw, config)).WithStatusSubresource(gw).Build()
 	val := &recordingValidator{err: rejectedBy("ERROR testing the configuration file:\tnot an EE config")}
 	r := newTestGatewayReconciler(c, renderOf(`{"version":3,"name":"rendered-as-ee"}`), val)
@@ -1956,7 +1956,7 @@ func TestGatewayReconcile_RejectedEditionFlipToEEKeepsTheCEImage(t *testing.T) {
 	if err := reconcileGateway(t, r, gw); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if got, want := deployedImage(t, c, gw), "ce-custom:1"; got != want {
+	if got, want := deployedImage(t, c, gw), "deployed-ce:1"; got != want {
 		t.Errorf("image = %q while the EE render is rejected, want the applied edition's image %q", got, want)
 	}
 }
