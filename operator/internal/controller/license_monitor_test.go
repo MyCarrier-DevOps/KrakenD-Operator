@@ -565,6 +565,10 @@ func TestLicenseMonitor_Recovery(t *testing.T) {
 		t.Error("expected LicenseValid=True after recovery")
 	}
 
+	if updated.Status.Phase != v1alpha1.PhaseDegraded {
+		t.Errorf("phase = %s, want Degraded left for the gateway controller to re-derive", updated.Status.Phase)
+	}
+
 	// Should have the reconcile annotation to trigger gateway controller
 	if updated.Annotations == nil || updated.Annotations[licenseCheckAnnotationKey] == "" {
 		t.Error("expected license-check annotation after recovery")
