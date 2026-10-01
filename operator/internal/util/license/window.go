@@ -42,11 +42,25 @@ type Window struct {
 
 // StageAt returns the stage, at now, of a license that expires at notAfter.
 func (w Window) StageAt(notAfter, now time.Time) Stage {
-	return StageValid
+	switch {
+	case !notAfter.After(now):
+		return StageExpired
+	case !notAfter.After(now.Add(w.SafetyBuffer)):
+		return StagePreExpiry
+	case !notAfter.After(now.Add(w.Warning)):
+		return StageExpiringSoon
+	default:
+		return StageValid
+	}
 }
 
 // NextChange returns how long after now StageAt next returns a different
 // stage, or 0 once the license has expired.
 func (w Window) NextChange(notAfter, now time.Time) time.Duration {
+	for _, boundary := range []time.Time{notAfter.Add(-w.Warning), notAfter.Add(-w.SafetyBuffer), notAfter} {
+		if boundary.After(now) {
+			return boundary.Sub(now)
+		}
+	}
 	return 0
 }
