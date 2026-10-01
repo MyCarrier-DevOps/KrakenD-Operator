@@ -41,6 +41,7 @@ import (
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/retry"
+	"k8s.io/client-go/util/workqueue"
 	utilclock "k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -2050,4 +2051,10 @@ func servingPhase(progressing, available *metav1.Condition) v1alpha1.GatewayPhas
 	default:
 		return v1alpha1.PhaseRunning
 	}
+}
+
+// newGatewayRateLimiter is controller-runtime's default rate limiter, which
+// this stub does not yet cap.
+func newGatewayRateLimiter() workqueue.TypedRateLimiter[reconcile.Request] {
+	return workqueue.DefaultTypedControllerRateLimiter[reconcile.Request]()
 }

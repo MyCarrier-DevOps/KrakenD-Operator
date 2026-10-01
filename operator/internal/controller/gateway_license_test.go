@@ -24,10 +24,12 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
@@ -248,5 +250,20 @@ func TestGatewayReconcile_TerminatingLicensedGatewayGetsNoLicenseSeries(t *testi
 	}
 	if n := remainingGatewaySeries(gw.Namespace, gw.Name); n != 0 {
 		t.Errorf("%d metric series for a terminating licensed gateway, want 0", n)
+	}
+}
+
+func TestNewGatewayRateLimiter_CapsBackoffAtTheLicenseRecheckInterval(t *testing.T) {
+	limiter := newGatewayRateLimiter()
+	req := reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: "test-gw"}}
+	if first := limiter.When(req); first != 5*time.Millisecond {
+		t.Fatalf("first delay = %v, want 5ms", first)
+	}
+	var delay time.Duration
+	for range 30 {
+		delay = limiter.When(req)
+	}
+	if delay != licenseRecheckInterval {
+		t.Fatalf("delay after 30 failures = %v, want the %v cap", delay, licenseRecheckInterval)
 	}
 }
