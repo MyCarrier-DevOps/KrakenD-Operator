@@ -736,7 +736,7 @@ func (r *KrakenDGatewayReconciler) validateConfig(
 	case stderrors.As(err, &rejected):
 		configValidationFailures.Inc()
 		r.rejections.remember(key, input, rejected)
-		logf.FromContext(ctx).Error(err, "krakend check rejected the rendered config")
+		logf.FromContext(ctx).Error(err, "validation rejected the rendered config")
 	}
 	return err
 }
