@@ -705,20 +705,19 @@ last-known-good config.
   operator then copies the applied config out of the old `<gateway>`
   ConfigMap, but only when that content hashes to `status.configChecksum`,
   and keeps serving it.
-- The old `<gateway>` ConfigMap is deleted once no running ReplicaSet mounts
-  it.
+- The old `<gateway>` ConfigMap is deleted once nothing can mount it (see
+  below), which normally means right after the migration rollout completes.
 
 **Garbage collection.** A config ConfigMap is deleted once nothing can
 mount it. The operator keeps:
 
-- the applied one;
-- the three most recently created revisions (including the applied one);
+- the three most recently created revisions, the applied one included
+  (revisions created in the same second are ordered by name);
 - any revision mounted by a ReplicaSet of the gateway's Deployment that
   still has or wants pods.
 
-The old `<gateway>` ConfigMap is deleted on the same terms, which normally
-means right after the migration rollout completes. Rolling a gateway back
-means reverting its CRs. `kubectl rollout undo` to an old ReplicaSet is not
+The old `<gateway>` ConfigMap never counts toward the three. Rolling a
+gateway back means reverting its CRs. `kubectl rollout undo` to an old ReplicaSet is not
 supported: the operator restores its own pod template, and the undone
 revision's ConfigMap may already be gone.
 
