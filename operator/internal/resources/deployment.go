@@ -28,6 +28,15 @@ import (
 	"k8s.io/utils/ptr"
 )
 
+const (
+	// GatewayContainerName names the KrakenD container in the gateway pod.
+	GatewayContainerName = "krakend"
+
+	// PluginChecksumAnnotation records the plugin set a pod template was
+	// built with; it is absent when the gateway has no plugins.
+	PluginChecksumAnnotation = "krakend.io/checksum-plugins"
+)
+
 // desiredReplicas returns the replica count BuildDeployment writes. With
 // autoscaling configured the HorizontalPodAutoscaler owns spec.replicas: an
 // existing Deployment keeps its live value, and a new one starts at the
@@ -77,7 +86,7 @@ func BuildDeployment(
 		PostRestartJobChecksumAnnotation: configChecksum,
 	}
 	if pluginChecksum != "" {
-		annotations["krakend.io/checksum-plugins"] = pluginChecksum
+		annotations[PluginChecksumAnnotation] = pluginChecksum
 	}
 
 	port := int32(8080)
@@ -128,7 +137,7 @@ func BuildDeployment(
 
 	// Main container
 	container := corev1.Container{
-		Name:  "krakend",
+		Name:  GatewayContainerName,
 		Image: image,
 		Command: []string{
 			"/usr/bin/krakend",
