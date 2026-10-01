@@ -415,6 +415,10 @@ func TestWarmUpControllers_KeepsPollingThroughTransientGetErrors(t *testing.T) {
 // tests.
 const rejectMarker = "/integration-reject"
 
+// rejectHugeMarker is a rejectMarker path for which the validator also
+// prints an oversized error report.
+const rejectHugeMarker = rejectMarker + "-huge"
+
 // markerValidator rejects a config containing rejectMarker the way krakend
 // check does, with a *renderer.ValidationError, and counts the rejections so
 // tests can tell how often the controller re-validated.
@@ -430,10 +434,14 @@ func (v *markerValidator) Validate(_ context.Context, jsonData []byte) error {
 		return nil
 	}
 	v.rejections.Add(1)
-	return &renderer.ValidationError{
-		Output: "ERROR: rejected by the integration test validator",
-		Err:    errors.New("exit status 1"),
+	output := "ERROR: rejected by the integration test validator"
+	if bytes.Contains(jsonData, []byte(rejectHugeMarker)) {
+		// Far past the CRDs' 32768-character condition message limit, like
+		// one bad policy referenced by a thousand backends.
+		output = strings.Repeat(
+			"ERROR at '/endpoints/0/backend/0/extra_config': additional properties not allowed\n", 1500)
 	}
+	return &renderer.ValidationError{Output: output, Err: errors.New("exit status 1")}
 }
 
 func (v *markerValidator) PrepareValidationCopy(jsonData []byte, _ bool) ([]byte, error) {
