@@ -373,8 +373,8 @@ pass, continuously, until the input was fixed. Now:
   The values remain in the API for compatibility. A value persisted by an
   older operator version stays until the gateway's next verdict replaces it.
 - Gateway status is written only when it changes.
-- The operator remembers the exact input krakend check rejected and does not
-  run the check again for it. It validates again as soon as any input
+- The operator remembers the exact input the validator rejected and does not
+  run the validation again for it. It validates again as soon as any input
   changes, including a switch to or from CE fallback, and once after an
   operator restart.
 - `ConfigValidationFailed` fires when the verdict or its message changes,
@@ -402,8 +402,8 @@ full, or the validation copy cannot be prepared), the gateway now reports
 config, and retries with exponential backoff. Previously such failures were
 reported as an invalid config (and re-run in a status-write loop).
 
-`config_validation_failures_total` counts only a fresh verdict from krakend
-check. Failures to prepare the validation copy and other errors that are not
+`config_validation_failures_total` counts only a fresh verdict from the
+validator (`krakend check`, or the EE wildcard rules applied before it). Failures to prepare the validation copy and other errors that are not
 verdicts, such as an unavailable validator, do not increment it.
 
 ### Validation messages are capped at 4 KiB
@@ -411,7 +411,7 @@ verdicts, such as an unavailable validator, do not increment it.
 The `ConfigValid` condition message and the `ConfigValidationFailed` event
 now carry at most 4 KiB of krakend check output: the leading lines that fit,
 followed by `(output truncated, N more lines)`. The full output is logged by
-the operator as `krakend check rejected the rendered config`. Previously an
+the operator as `validation rejected the rendered config`. Previously an
 output over the CRD's 32768-character limit (for example one bad key in a
 policy used by many backends) made the status write fail, so the rejection
 was never recorded.
@@ -854,7 +854,8 @@ refuses unnamed wildcards. Validation of an EE config now works like this:
   whose path starts with `/prefix/`, for example `GET /v1/*` next to
   `GET /v1/users`. The EE router refuses to start in that case. Both
   endpoints are named in the gateway's `ConfigValid` message and get
-  `Accepted=False/GatewayConfigRejected`.
+  `Accepted=False/GatewayConfigRejected`. A wildcard endpoint with more
+  than one backend is rejected the same way, because EE allows only one.
 - **Everything else is checked by `krakend check`.** For the check only,
   each wildcard is modelled as a path parameter, so the wildcard endpoints'
   backends and `extra_config` are linted and parsed too. That parameter does
