@@ -478,3 +478,29 @@ func TestGatewayReconcile_UnreadableLicenseStillFallsBackAtTheSafetyBuffer(t *te
 		t.Error("LicenseDegraded must be True while falling back")
 	}
 }
+
+func TestGatewayReconcile_UnreadableLicenseInsideTheBufferDoesNotFlipLicenseValid(t *testing.T) {
+	gw, _, parser := licensedEEGateway(testNow, true) // the Secret is not created
+	gw.Status.LicenseExpiry = &metav1.Time{Time: testNow.Add(30 * time.Minute)}
+	seeded := metav1.NewTime(testNow.Add(-time.Hour))
+	gw.Status.Conditions = []metav1.Condition{{
+		Type: v1alpha1.ConditionLicenseValid, Status: metav1.ConditionFalse,
+		Reason: v1alpha1.ReasonLicensePreExpiry, LastTransitionTime: seeded,
+	}}
+	c := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderOutput("cs"), &mockValidator{})
+	r.LicenseParser = parser
+
+	for range 2 {
+		if err := reconcileGateway(t, r, gw); err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+	}
+	cond := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionLicenseValid)
+	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != v1alpha1.ReasonLicensePreExpiry {
+		t.Fatalf("LicenseValid = %+v, want False/%s", cond, v1alpha1.ReasonLicensePreExpiry)
+	}
+	if !cond.LastTransitionTime.Time.Equal(seeded.Time) {
+		t.Errorf("LastTransitionTime = %v, want it unchanged at %v", cond.LastTransitionTime, seeded)
+	}
+}
