@@ -827,7 +827,7 @@ func TestBuildDeployment_OpenAPIContainersAndVolume(t *testing.T) {
 		},
 	}
 	dep := &appsv1.Deployment{}
-	BuildDeployment(dep, gw, "cksum", "", "krakend:2.13")
+	BuildDeployment(dep, gw, DeploymentInputs{ConfigChecksum: "cksum", PluginChecksum: "", Image: "krakend:2.13"})
 
 	if len(dep.Spec.Template.Spec.Containers) != 2 {
 		t.Fatalf("expected krakend + openapi sidecar, got %d", len(dep.Spec.Template.Spec.Containers))
@@ -871,7 +871,7 @@ func TestBuildDeployment_OpenAPISidecarProbeDefaults(t *testing.T) {
 		},
 	}
 	dep := &appsv1.Deployment{}
-	BuildDeployment(dep, gw, "cksum", "", "krakend:2.13")
+	BuildDeployment(dep, gw, DeploymentInputs{ConfigChecksum: "cksum", PluginChecksum: "", Image: "krakend:2.13"})
 
 	var sidecar *corev1.Container
 	for i := range dep.Spec.Template.Spec.Containers {
@@ -931,7 +931,7 @@ func TestBuildDeployment_OpenAPISidecarProbeOverride(t *testing.T) {
 		},
 	}
 	dep := &appsv1.Deployment{}
-	BuildDeployment(dep, gw, "cksum", "", "krakend:2.13")
+	BuildDeployment(dep, gw, DeploymentInputs{ConfigChecksum: "cksum", PluginChecksum: "", Image: "krakend:2.13"})
 
 	var sidecar *corev1.Container
 	for i := range dep.Spec.Template.Spec.Containers {
@@ -971,7 +971,7 @@ func TestBuildDeployment_OpenAPINoAudienceStripsConfig(t *testing.T) {
 		},
 	}
 	dep := &appsv1.Deployment{}
-	BuildDeployment(dep, gw, "cksum", "", "krakend:2.13")
+	BuildDeployment(dep, gw, DeploymentInputs{ConfigChecksum: "cksum", PluginChecksum: "", Image: "krakend:2.13"})
 
 	var exportInit *corev1.Container
 	for i := range dep.Spec.Template.Spec.InitContainers {
@@ -1022,7 +1022,7 @@ func TestBuildDeployment_OpenAPIEEMountsLicenseAndTmp(t *testing.T) {
 		},
 	}
 	dep := &appsv1.Deployment{}
-	BuildDeployment(dep, gw, "cksum", "", "krakend-ee:2.13")
+	BuildDeployment(dep, gw, DeploymentInputs{ConfigChecksum: "cksum", PluginChecksum: "", Image: "krakend-ee:2.13"})
 
 	var exportInit *corev1.Container
 	for i := range dep.Spec.Template.Spec.InitContainers {

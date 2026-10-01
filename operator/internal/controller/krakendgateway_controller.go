@@ -1099,7 +1099,9 @@ func (r *KrakenDGatewayReconciler) reconcileDeployment(
 ) error {
 	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace}}
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, dep, func() error {
-		resources.BuildDeployment(dep, gw, in.appliedChecksum, in.pluginChecksum, in.image)
+		resources.BuildDeployment(dep, gw, resources.DeploymentInputs{
+			ConfigChecksum: in.appliedChecksum, PluginChecksum: in.pluginChecksum, Image: in.image,
+		})
 		return controllerutil.SetControllerReference(gw, dep, r.Scheme)
 	}); err != nil {
 		return fmt.Errorf("reconciling deployment: %w", err)

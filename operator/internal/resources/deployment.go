@@ -57,17 +57,26 @@ func desiredReplicas(dep *appsv1.Deployment, gw *v1alpha1.KrakenDGateway) *int32
 	return ptr.To(ptr.Deref(gw.Spec.Autoscaling.MinReplicas, 1))
 }
 
+// DeploymentInputs is what BuildDeployment needs besides the gateway spec.
+// Named fields, not positional strings: four strings transposed would
+// compile silently.
+type DeploymentInputs struct {
+	// ConfigMapName is the content-addressed ConfigMap holding the applied
+	// config (see ConfigMapName).
+	ConfigMapName string
+	// ConfigChecksum is the applied config's checksum. The pod template
+	// records it in PostRestartJobChecksumAnnotation for the post-restart
+	// Job gate.
+	ConfigChecksum string
+	PluginChecksum string
+	Image          string
+}
+
 // BuildDeployment mutates dep in place with a complete Deployment for the
-// KrakenD gateway. The image parameter is the resolved container image
-// (from renderer.ResolveImage). configChecksum and pluginChecksum are
+// KrakenD gateway. in.Image is the resolved container image (from
+// renderer.ResolveImage). in.ConfigChecksum and in.PluginChecksum are
 // injected as pod annotations to trigger rolling restarts on config changes.
-func BuildDeployment(
-	dep *appsv1.Deployment,
-	gw *v1alpha1.KrakenDGateway,
-	configChecksum string,
-	pluginChecksum string,
-	image string,
-) {
+func BuildDeployment(dep *appsv1.Deployment, gw *v1alpha1.KrakenDGateway, in DeploymentInputs) {
 	labels := StandardLabels(gw)
 	selectorLabels := SelectorLabels(gw)
 
@@ -89,11 +98,11 @@ func BuildDeployment(
 
 	// Pod annotations for config change detection
 	annotations := map[string]string{
-		PostRestartJobChecksumAnnotation: configChecksum,
-		ImageAnnotation:                  image,
+		PostRestartJobChecksumAnnotation: in.ConfigChecksum,
+		ImageAnnotation:                  in.Image,
 	}
-	if pluginChecksum != "" {
-		annotations[PluginChecksumAnnotation] = pluginChecksum
+	if in.PluginChecksum != "" {
+		annotations[PluginChecksumAnnotation] = in.PluginChecksum
 	}
 
 	port := int32(8080)
@@ -109,7 +118,7 @@ func BuildDeployment(
 	volumes, volumeMounts, initContainers := buildVolumes(gw)
 
 	// OpenAPI export init container + shared volume (so the sidecar can serve it)
-	oaInit, oaSidecar, oaVolume, oaMountForExport := buildOpenAPIPieces(gw, image)
+	oaInit, oaSidecar, oaVolume, oaMountForExport := buildOpenAPIPieces(gw, in.Image)
 	if oaVolume != nil {
 		volumes = append(volumes, *oaVolume)
 	}
@@ -145,7 +154,7 @@ func BuildDeployment(
 	// Main container
 	container := corev1.Container{
 		Name:  GatewayContainerName,
-		Image: image,
+		Image: in.Image,
 		Command: []string{
 			"/usr/bin/krakend",
 			"run",
