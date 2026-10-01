@@ -440,3 +440,21 @@ func TestGatewayReconcile_DisablingFallbackOnAnExpiredLicenseSaysSoOnce(t *testi
 		t.Errorf("LicenseExpiredNoFallback events after disabling the fallback = %d, want 1", n)
 	}
 }
+
+func TestGatewayReconcile_UnreadableLicenseMakesLicenseValidUnknown(t *testing.T) {
+	gw, _, parser := licensedEEGateway(testNow, false) // the Secret is not created
+	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+		Type: v1alpha1.ConditionLicenseValid, Status: metav1.ConditionTrue, Reason: v1alpha1.ReasonLicenseOK,
+	})
+	c := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderOutput("cs"), &mockValidator{})
+	r.LicenseParser = parser
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	cond := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionLicenseValid)
+	if cond == nil || cond.Status != metav1.ConditionUnknown || cond.Reason != v1alpha1.ReasonLicenseSecretMissing {
+		t.Errorf("LicenseValid = %+v, want Unknown/%s", cond, v1alpha1.ReasonLicenseSecretMissing)
+	}
+}
