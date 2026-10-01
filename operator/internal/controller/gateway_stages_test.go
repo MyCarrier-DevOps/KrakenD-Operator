@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-logr/logr/funcr"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
@@ -34,8 +35,10 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	clocktesting "k8s.io/utils/clock/testing"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
@@ -754,5 +757,28 @@ func TestGatewayReconcile_HeldDeploymentReportsNoRollout(t *testing.T) {
 	}
 	if got := testutil.ToFloat64(rollingRestarts); got != restartsBefore {
 		t.Errorf("rollingRestarts rose from %v to %v for a rollout that never started", restartsBefore, got)
+	}
+}
+
+func TestGatewayReconcile_HoldLogSaysWhyTheDeploymentIsHeld(t *testing.T) {
+	const applied = `{"version":3,"name":"applied"}`
+	gw := reconciledGateway()
+	gw.Status.ConfigChecksum = hash.SHA256Hex([]byte(applied))
+	squatter := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
+		Name: resources.ConfigMapName(gw, gw.Status.ConfigChecksum), Namespace: gw.Namespace,
+	}}
+	c := fakeClientBuilder().WithObjects(gw, squatter, legacyDeployment(gw)).WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderOf(`{"version":3,"name":"rejected"}`),
+		&countingValidator{err: rejectedBy("- at '/endpoints/0/endpoint': bad")})
+	var logged strings.Builder
+	ctx := logf.IntoContext(context.Background(), funcr.New(func(prefix, args string) {
+		logged.WriteString(prefix + args + "\n")
+	}, funcr.Options{}))
+
+	_, _ = r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(gw)})
+
+	if !strings.Contains(logged.String(), "holding the Deployment as it is") ||
+		!strings.Contains(logged.String(), "not controlled by gateway") {
+		t.Errorf("the hold log must say the ConfigMap failed verification, got:\n%s", logged.String())
 	}
 }
