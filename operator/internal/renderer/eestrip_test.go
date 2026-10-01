@@ -282,3 +282,49 @@ func TestRender_CEFallbackDropsEntryDocsWithoutListingThem(t *testing.T) {
 		t.Errorf("the fallback render still carries documentation/openapi: %s", out.JSON)
 	}
 }
+
+func TestRender_CEFallbackKeepsSourcesAlignedAcrossCRs(t *testing.T) {
+	backend := []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/x"}}
+	in := eeFeatureInput(true)
+	// "a" sorts first and serves only an EE wildcard; "b" serves two entries.
+	in.Endpoints = []v1alpha1.KrakenDEndpoint{
+		{ObjectMeta: metav1.ObjectMeta{Name: "a", Namespace: "ns"}, Spec: v1alpha1.KrakenDEndpointSpec{
+			Endpoints: []v1alpha1.EndpointEntry{{Endpoint: "/files/*", Method: "GET", Backends: backend}},
+		}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "b", Namespace: "ns"}, Spec: v1alpha1.KrakenDEndpointSpec{
+			Endpoints: []v1alpha1.EndpointEntry{
+				{Endpoint: "/z", Method: "GET", Backends: backend},
+				{Endpoint: "/m", Method: "GET", Backends: backend},
+			},
+		}},
+	}
+
+	out, err := New(Options{}).Render(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Endpoints []struct {
+			Endpoint string `json:"endpoint"`
+		} `json:"endpoints"`
+	}
+	if err := json.Unmarshal(out.JSON, &doc); err != nil {
+		t.Fatal(err)
+	}
+	b := types.NamespacedName{Namespace: "ns", Name: "b"}
+	if wantSources := []types.NamespacedName{b, b}; !slices.Equal(out.Sources, wantSources) {
+		t.Errorf("Sources = %v, want %v: the stripped wildcard of ns/a is not rendered", out.Sources, wantSources)
+	}
+	if len(doc.Endpoints) != 2 || doc.Endpoints[0].Endpoint != "/m" || doc.Endpoints[1].Endpoint != "/z" {
+		t.Errorf("rendered endpoints = %+v, want /m then /z, aligned with Sources", doc.Endpoints)
+	}
+	wantStripped := []StrippedEEFeature{
+		{Source: types.NamespacedName{Namespace: "ns", Name: "a"}, Method: "GET", Endpoint: "/files/*",
+			Feature: FeatureWildcardEndpoint},
+		{Feature: "extra_config auth/api-keys"},
+		{Feature: "extra_config redis"},
+	}
+	if !slices.Equal(out.StrippedEEFeatures, wantStripped) {
+		t.Errorf("StrippedEEFeatures = %+v, want %+v", out.StrippedEEFeatures, wantStripped)
+	}
+}
