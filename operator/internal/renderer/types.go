@@ -92,7 +92,8 @@ type RenderOutput struct {
 	// StrippedEEFeatures lists what a CE-fallback render (RenderInput.CEFallback)
 	// removed because only KrakenD Enterprise supports it: EE wildcard entries
 	// and EE-only extra_config namespaces. It lists rendered entries in order,
-	// then the gateway level.
+	// then the gateway level. The entries' docs-only namespaces
+	// (documentation/openapi) are dropped without being listed.
 	StrippedEEFeatures []StrippedEEFeature
 }
 
