@@ -2136,3 +2136,23 @@ func TestGatewayReconcile_CEFallbackAppliedListsTheRemovedFeatures(t *testing.T)
 		t.Errorf("Ready = %+v, phase %s; want False/%s, Degraded", ready, got.Status.Phase, v1alpha1.ReasonEEFeaturesStripped)
 	}
 }
+
+func TestGatewayReconcile_CEEditionDeploymentRunsWithoutTheOpenAPIExport(t *testing.T) {
+	gw := reconciledGateway() // CE
+	gw.Spec.OpenAPI = &v1alpha1.OpenAPIExportSpec{Enabled: true}
+	c := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}), &mockValidator{})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	var dep appsv1.Deployment
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(gw), &dep); err != nil {
+		t.Fatalf("getting the Deployment: %v", err)
+	}
+	for _, ic := range dep.Spec.Template.Spec.InitContainers {
+		if ic.Name == "openapi-export" {
+			t.Fatal("a CE-edition gateway's Deployment runs the OpenAPI export, which the CE binary cannot run")
+		}
+	}
+}
