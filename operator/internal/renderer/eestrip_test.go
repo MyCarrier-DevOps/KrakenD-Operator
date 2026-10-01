@@ -117,6 +117,12 @@ func TestRender_WithoutFallbackKeepsEEFeatures(t *testing.T) {
 		t.Errorf("stripped %v with %d sources, want nothing stripped and both entries rendered",
 			out.StrippedEEFeatures, len(out.Sources))
 	}
+	for _, kept := range []string{`"/v1/*"`, `"auth/api-keys"`, `"redis"`, `"modifier/jmespath"`,
+		`"auth/gcp"`, `"backend/http/client"`} {
+		if !strings.Contains(string(out.JSON), kept) {
+			t.Errorf("the render lacks %s, which only a CE fallback removes", kept)
+		}
+	}
 }
 
 func TestEEOnlyNamespaces(t *testing.T) {
