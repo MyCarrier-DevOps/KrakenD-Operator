@@ -1794,3 +1794,35 @@ func TestGatewayReconcile_RevertToAppliedConfigClearsRejection(t *testing.T) {
 		t.Errorf("phase = %q, want Running", stored.Status.Phase)
 	}
 }
+
+func TestGatewayReconcile_ValidationFailureAdvancesObservedGeneration(t *testing.T) {
+	gw := testGateway()
+	gw.Generation = 4
+	now := metav1.Now()
+	gw.Status = v1alpha1.KrakenDGatewayStatus{
+		Phase: v1alpha1.PhaseRunning, ConfigChecksum: "old", ActiveImage: "img:v1", ObservedGeneration: 3,
+		Conditions: []metav1.Condition{
+			{Type: "ConfigValid", Status: metav1.ConditionTrue, Reason: "ConfigApplied", Message: "applied",
+				ObservedGeneration: 3, LastTransitionTime: now},
+			{Type: "Available", Status: metav1.ConditionTrue, Reason: "DeploymentAvailable", Message: "ok",
+				ObservedGeneration: 3, LastTransitionTime: now},
+		},
+	}
+	c := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).Build()
+	r := acceptanceReconciler(c, fakeRecorder(), &renderer.RenderOutput{
+		JSON: []byte(`{"version":3}`), Checksum: "new", DesiredImage: "img:v1",
+	})
+	r.Validator = &mockValidator{validateErr: &renderer.ValidationError{
+		Output: "invalid config line 5", Err: fmt.Errorf("exit code 1"),
+	}}
+
+	_ = reconcileGateway(t, r, gw)
+
+	stored := getGateway(t, c, gw)
+	ready := meta.FindStatusCondition(stored.Status.Conditions, v1alpha1.ConditionReady)
+	if stored.Status.ObservedGeneration != 4 || ready == nil || ready.Status != metav1.ConditionFalse ||
+		ready.Reason != "ConfigValidationFailed" || stored.Status.Phase != v1alpha1.PhaseError {
+		t.Errorf("observedGeneration %d, Ready %+v, phase %q; want 4, False/ConfigValidationFailed, Error",
+			stored.Status.ObservedGeneration, ready, stored.Status.Phase)
+	}
+}
