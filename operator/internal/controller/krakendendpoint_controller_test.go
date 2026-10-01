@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -740,5 +741,42 @@ func TestEndpointReconcile_ReadyDerivedFromBothWriters(t *testing.T) {
 				t.Errorf("Accepted = %+v, want it untouched (%+v): the gateway owns it", got, seeded)
 			}
 		})
+	}
+}
+
+func TestEndpointReconcile_ResolvedRefsEventsOnTransitionOnly(t *testing.T) {
+	ep := endpointOnGW1(1)
+	c := fakeClientBuilder().WithObjects(ep).WithStatusSubresource(ep).Build()
+	rec := fakeRecorder()
+	r := &KrakenDEndpointReconciler{Client: c, Scheme: testScheme(), Recorder: rec}
+
+	if _, err := r.Reconcile(context.Background(), ep1Request); err != nil {
+		t.Fatal(err)
+	}
+	stored := storedEP1(t, c)
+	if stored.Status.Phase != v1alpha1.EndpointPhaseDetached {
+		t.Errorf("phase = %q, want Detached", stored.Status.Phase)
+	}
+	want := []string{"Warning GatewayNotFound gateway default/gw1 not found"}
+	if got := drainEvents(rec); !slices.Equal(got, want) {
+		t.Errorf("first reconcile events = %q, want %q", got, want)
+	}
+
+	if _, err := r.Reconcile(context.Background(), ep1Request); err != nil {
+		t.Fatal(err)
+	}
+	if got := drainEvents(rec); len(got) != 0 {
+		t.Errorf("unchanged ResolvedRefs: events = %q, want none", got)
+	}
+
+	if err := c.Create(context.Background(), testGW1()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Reconcile(context.Background(), ep1Request); err != nil {
+		t.Fatal(err)
+	}
+	want = []string{"Normal RefsResolved Gateway and all policy references resolved"}
+	if got := drainEvents(rec); !slices.Equal(got, want) {
+		t.Errorf("after the gateway appears: events = %q, want %q", got, want)
 	}
 }
