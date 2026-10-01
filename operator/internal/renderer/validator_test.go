@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -299,4 +300,21 @@ func fakeKrakenD(t *testing.T, script string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func TestValidate_LintsOffline(t *testing.T) {
+	rec := &recordingExecutor{}
+	v := NewValidator(ValidatorOptions{Executor: rec, BinaryPath: "/usr/local/bin/krakend"})
+	if err := v.Validate(context.Background(), []byte(`{"version":3}`)); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rec.name != "/usr/local/bin/krakend" {
+		t.Errorf("ran %q, want the configured binary", rec.name)
+	}
+	if len(rec.args) != 5 || !slices.Equal(rec.args[:4], []string{"check", "-t", "-n", "-c"}) {
+		t.Fatalf("args = %q, want [check -t -n -c <file>]", rec.args)
+	}
+	if slices.Contains(rec.args, "-l") {
+		t.Errorf("args %q include -l, which lints against the online schema", rec.args)
+	}
 }
