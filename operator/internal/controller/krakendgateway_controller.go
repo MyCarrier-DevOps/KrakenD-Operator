@@ -1816,13 +1816,7 @@ func gatewayReadinessFor(conds []metav1.Condition) gatewayReadiness {
 // every gateway status write that ends a reconcile.
 func setGatewayReadiness(gw *v1alpha1.KrakenDGateway) {
 	rd := gatewayReadinessFor(gw.Status.Conditions)
-	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
-		Type:               v1alpha1.ConditionReady,
-		Status:             rd.status,
-		ObservedGeneration: gw.Generation,
-		Reason:             rd.reason,
-		Message:            rd.message,
-	})
+	setReadyCondition(&gw.Status.Conditions, gw.Generation, rd.status, rd.reason, rd.message)
 	gw.Status.Phase = rd.phase
 	gw.Status.ObservedGeneration = gw.Generation
 }
