@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -2635,4 +2636,36 @@ func TestValidateExtraConfigAudience(t *testing.T) {
 			t.Fatalf("expected no error for empty Raw, got %v", errs)
 		}
 	})
+}
+
+func TestGatewayValidator_WarnsWhenReplicasSetWithAutoscaling(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE, Config: v1alpha1.GatewayConfig{},
+			Replicas:    ptr.To(int32(3)),
+			Autoscaling: &v1alpha1.AutoscalingSpec{MaxReplicas: 5},
+		},
+	}
+	warnings, err := (&GatewayValidator{}).ValidateCreate(context.Background(), gw)
+	if err != nil {
+		t.Fatalf("expected the combination to be admitted, got %v", err)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "spec.replicas is ignored") {
+		t.Errorf("warnings = %q, want one saying spec.replicas is ignored", warnings)
+	}
+}
+
+func TestGatewayValidator_NoReplicasWarningWithoutAutoscaling(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE, Config: v1alpha1.GatewayConfig{},
+			Replicas: ptr.To(int32(3)),
+		},
+	}
+	warnings, err := (&GatewayValidator{}).ValidateCreate(context.Background(), gw)
+	if err != nil || len(warnings) != 0 {
+		t.Errorf("warnings = %q, err = %v; want neither", warnings, err)
+	}
 }
