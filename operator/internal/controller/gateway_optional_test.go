@@ -244,3 +244,34 @@ func TestGatewayReconcile_DisablingDragonflyDropsItsMetricSeries(t *testing.T) {
 		t.Error("the dragonfly_ready series is still reported after Dragonfly was disabled")
 	}
 }
+
+func TestGatewayReconcile_CEFallbackKeepsTheLicenseExternalSecretAndDragonfly(t *testing.T) {
+	gw := reconciledGateway()
+	gw.UID = "gw-uid"
+	gw.Spec.Edition = v1alpha1.EditionEE
+	gw.Spec.License = &v1alpha1.LicenseConfig{
+		FallbackToCE:   true,
+		ExternalSecret: v1alpha1.ExternalSecretLicenseConfig{Enabled: true},
+	}
+	gw.Spec.Dragonfly = &v1alpha1.DragonflySpec{Enabled: true}
+	gw.Status.ConfigChecksum = "applied"
+	children := []*unstructured.Unstructured{
+		controlledChild(gw, dragonflyGVK, resources.DragonflyName(gw)),
+		controlledChild(gw, externalSecretGVK, resources.ExternalSecretName(gw)),
+	}
+	c := fakeClientBuilder().WithRESTMapper(optionalCRDMapper(optionalOwnedGVKs...)).
+		WithObjects(gw, children[0], children[1]).WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderOutput("applied"), &mockValidator{})
+
+	// The license cannot be read, so the gateway falls back to CE; the
+	// error, if any, is not what is under test.
+	_ = reconcileGateway(t, r, gw)
+
+	for _, ch := range children {
+		u := &unstructured.Unstructured{}
+		u.SetGroupVersionKind(ch.GroupVersionKind())
+		if err := c.Get(context.Background(), client.ObjectKeyFromObject(ch), u); err != nil {
+			t.Errorf("%s must survive a CE fallback, it is still enabled in the spec: %v", ch.GetKind(), err)
+		}
+	}
+}
