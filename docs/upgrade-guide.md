@@ -592,12 +592,24 @@ kubectl get krakendgateways,krakendendpoints,krakendautoconfigs,krakendbackendpo
   resync interval once a missing gateway, policy or auth Secret appears or
   its spec source comes back.
 
+### KrakenDBackendPolicy
+
+- `Ready` replaces `PolicyValid`: `True` when the policy's fields are in
+  range, `False` with reason `InvalidCircuitBreaker` or `InvalidRateLimit`
+  otherwise. The first reconcile after the upgrade removes `PolicyValid`;
+  replace any check on it with `Ready`.
+- New `status.observedGeneration`.
+- The Warning event for an invalid policy now uses the condition's reason
+  (`InvalidCircuitBreaker`, `InvalidRateLimit`) instead of `PolicyInvalid`,
+  and fires only when the verdict changes.
+
 ### Watch scope
 
 - The endpoint controller now reacts to gateways and policies being created
   or deleted only (not to their status updates), and to changes of its own
   spec or of its `Accepted` condition.
 - AutoConfig retry backoff is capped at the 5-minute resync interval.
+- The policy controller recounts references only when an endpoint is created, deleted, or has its spec changed, not on endpoint status writes.
 
 ## v0.14.0 — openapi-serve liveness probe (one-time rollout)
 
