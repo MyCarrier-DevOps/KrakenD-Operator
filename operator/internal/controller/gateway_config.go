@@ -78,6 +78,11 @@ func (r *KrakenDGatewayReconciler) appliedConfigMapName(
 	var cm corev1.ConfigMap
 	err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: gw.Namespace}, &cm)
 	if err == nil {
+		// A ConfigMap that is not this gateway's copy is not served: the
+		// Deployment is held instead.
+		if err := verifyConfigMap(&cm, gw, applied); err != nil {
+			return "", err
+		}
 		return name, nil
 	}
 	if !errors.IsNotFound(err) {
@@ -121,7 +126,7 @@ func (r *KrakenDGatewayReconciler) publishConfig(
 	var existing corev1.ConfigMap
 	err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: gw.Namespace}, &existing)
 	if err == nil {
-		return nil
+		return verifyConfigMap(&existing, gw, checksum)
 	}
 	if !errors.IsNotFound(err) {
 		return fmt.Errorf("getting configmap %s: %w", name, err)
@@ -135,6 +140,18 @@ func (r *KrakenDGatewayReconciler) publishConfig(
 	// earlier create; the next pass verifies what is there.
 	if err := r.Create(ctx, cm); err != nil && !errors.IsAlreadyExists(err) {
 		return fmt.Errorf("creating configmap %s: %w", name, err)
+	}
+	return nil
+}
+
+// verifyConfigMap rejects a ConfigMap that has the content-addressed name for
+// checksum but is not this gateway's copy of that config.
+func verifyConfigMap(cm *corev1.ConfigMap, gw *v1alpha1.KrakenDGateway, checksum string) error {
+	if !metav1.IsControlledBy(cm, gw) {
+		return fmt.Errorf("configmap %s/%s exists but is not controlled by gateway %s", cm.Namespace, cm.Name, gw.Name)
+	}
+	if got := cm.Annotations[resources.PostRestartJobChecksumAnnotation]; got != checksum {
+		return fmt.Errorf("configmap %s/%s holds config %s, not %s", cm.Namespace, cm.Name, got, checksum)
 	}
 	return nil
 }
