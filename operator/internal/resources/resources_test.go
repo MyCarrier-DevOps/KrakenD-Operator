@@ -17,6 +17,7 @@ limitations under the License.
 package resources
 
 import (
+	"slices"
 	"testing"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
@@ -153,5 +154,30 @@ func TestBuildHPA_NoCPUTarget(t *testing.T) {
 
 	if len(hpa.Spec.Metrics) != 0 {
 		t.Errorf("expected no metrics when TargetCPU is nil, got %d", len(hpa.Spec.Metrics))
+	}
+}
+
+func TestBuildService_CERenderDoesNotPublishTheOpenAPIPort(t *testing.T) {
+	gw := testGateway()
+	gw.Spec.OpenAPI = &v1alpha1.OpenAPIExportSpec{Enabled: true}
+	for _, tc := range []struct {
+		name     string
+		ceRender bool
+		want     []string
+	}{
+		{"EE render", false, []string{"http", "openapi"}},
+		{"CE render", true, []string{"http"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &corev1.Service{}
+			BuildService(svc, gw, tc.ceRender)
+			var names []string
+			for _, p := range svc.Spec.Ports {
+				names = append(names, p.Name)
+			}
+			if !slices.Equal(names, tc.want) {
+				t.Errorf("ports = %v, want %v: no openapi-serve sidecar listens on a CE render", names, tc.want)
+			}
+		})
 	}
 }
