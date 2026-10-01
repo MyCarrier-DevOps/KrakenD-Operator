@@ -1961,7 +1961,7 @@ func TestGatewayReconcile_RejectedEditionFlipToEEKeepsTheCEImage(t *testing.T) {
 	}
 }
 
-func TestGatewayReconcile_RejectedRenderKeepsTheAppliedPlugins(t *testing.T) {
+func TestGatewayReconcile_RejectedRenderStillRollsAPluginChange(t *testing.T) {
 	gw := reconciledGateway()
 	const applied = `{"version":3,"name":"applied-with-old-plugins"}`
 	c := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).Build()
@@ -1978,7 +1978,7 @@ func TestGatewayReconcile_RejectedRenderKeepsTheAppliedPlugins(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// A newer render that changes the plugins is rejected.
+	// Plugins follow the spec, like the image: a rejected render does not hold them back.
 	val.err = rejectedBy("- at '/endpoints/0/endpoint': bad")
 	const rejected = `{"version":3,"name":"rejected-with-new-plugins"}`
 	r.Renderer = &mockRenderer{output: &renderer.RenderOutput{
@@ -1990,16 +1990,16 @@ func TestGatewayReconcile_RejectedRenderKeepsTheAppliedPlugins(t *testing.T) {
 
 	var dep appsv1.Deployment
 	getObject(t, c, gw, gw.Name, &dep)
-	if got := dep.Spec.Template.Annotations[resources.PluginChecksumAnnotation]; got != "plugins-old" {
-		t.Errorf("plugin annotation = %q, want the applied render's plugins-old", got)
+	if got := dep.Spec.Template.Annotations[resources.PluginChecksumAnnotation]; got != "plugins-new" {
+		t.Errorf("plugin annotation = %q, want plugins-new: the pods mount the spec's plugins", got)
 	}
 	got := getGateway(t, c, gw)
-	if got.Status.PluginChecksum != "plugins-old" {
-		t.Errorf("status.pluginChecksum = %q, want the applied render's plugins-old", got.Status.PluginChecksum)
+	if got.Status.PluginChecksum != "plugins-new" {
+		t.Errorf("status.pluginChecksum = %q, want plugins-new", got.Status.PluginChecksum)
 	}
 	progressing := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionProgressing)
-	if progressing != nil && progressing.Reason == "DeploymentUpdated" {
-		t.Errorf("Progressing = %+v, want no rollout reported for a render that was not applied", progressing)
+	if progressing == nil || progressing.Reason != "DeploymentUpdated" {
+		t.Errorf("Progressing = %+v, want DeploymentUpdated for the plugin rollout", progressing)
 	}
 }
 
