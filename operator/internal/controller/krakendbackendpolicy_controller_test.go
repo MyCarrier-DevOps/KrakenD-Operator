@@ -344,9 +344,11 @@ func TestPolicyReconcile_StatusNoOpWhenUnchanged(t *testing.T) {
 			RateLimit: &v1alpha1.RateLimitSpec{MaxRate: 100},
 		},
 	}
+	writes := 0
 	c := fakeClientBuilder().
 		WithObjects(policy).
 		WithStatusSubresource(policy).
+		WithInterceptorFuncs(countStatusWrites[*v1alpha1.KrakenDBackendPolicy](&writes)).
 		Build()
 	r := &KrakenDBackendPolicyReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
 
@@ -355,10 +357,16 @@ func TestPolicyReconcile_StatusNoOpWhenUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	if writes != 1 {
+		t.Fatalf("status writes after the first reconcile = %d, want 1", writes)
+	}
 	// Second reconcile should detect no change
 	_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(policy)})
 	if err != nil {
 		t.Fatalf("unexpected error on second reconcile: %v", err)
+	}
+	if writes != 1 {
+		t.Errorf("status writes after the second reconcile = %d, want none beyond the first", writes)
 	}
 }
 
