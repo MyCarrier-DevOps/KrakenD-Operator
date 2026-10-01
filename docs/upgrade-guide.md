@@ -426,6 +426,15 @@ terminating, its `krakend_operator_endpoints`,
 `krakend_operator_reconcile_duration_seconds{controller="gateway"}` series
 are removed, so alerts on a deleted gateway stop firing.
 
+### Autoscaled gateways keep the HPA's replica count
+
+With `spec.autoscaling` set, the operator no longer writes
+`Deployment.spec.replicas` on every reconcile. That write reset the count
+the HorizontalPodAutoscaler had chosen and made replicas flap. A new
+Deployment starts at `spec.autoscaling.minReplicas` (1 when unset); after
+that the HPA alone owns the count. `spec.replicas` is ignored while
+autoscaling is set, and the gateway webhook now warns when both are set.
+
 ## v0.14.0 — openapi-serve liveness probe (one-time rollout)
 
 The `openapi-serve` sidecar now renders with a liveness probe. It previously
