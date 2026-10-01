@@ -902,7 +902,7 @@ flowchart TD
 
 **Policy resolution** — The controller fetches all referenced `KrakenDBackendPolicy` resources before calling `Renderer.Render`, populating `RenderInput.Policies`. The renderer itself has no Kubernetes client dependency — all inputs are passed as parameters. If a policy referenced by a `policyRef` does not exist in the map, the renderer reports the owning endpoint in `InvalidEndpoints` and excludes it from the rendered config; the endpoint controller reports the cause through `ResolvedRefs`.
 
-**CE fallback determination** — Before calling `Renderer.Render`, the controller reads `gw.Status.Conditions` to determine whether `LicenseDegraded=True`. This value is passed as `RenderInput.CEFallback`, controlling image selection and wildcard endpoint stripping.
+**CE fallback determination** — Before calling `Renderer.Render`, the controller calls `reconcileLicense`, which evaluates the license stage and returns the `ceFallback` verdict (the stage decision, or the last recorded decision while the license is unreadable). The verdict is passed as `RenderInput.CEFallback`, controlling image selection and wildcard endpoint stripping.
 
 **Checksum comparison** — After rendering, the controller compares the new SHA-256 checksum against `status.configChecksum`. If unchanged, it skips ConfigMap update and validation. It still reconciles owned resources (Deployment, Service, etc.) to handle drift.
 
@@ -1353,7 +1353,7 @@ type licenseVerdict struct {
 }
 ```
 
-The stage comes from `license.Window{Warning, SafetyBuffer}.StageAt(notAfter, now)`: `StageValid`, `StageExpiringSoon`, `StagePreExpiry` or `StageExpired`. `Warning` is `spec.license.expiryWarningDays` (default 30 days) and must stay longer than `SafetyBuffer` (1 hour); a compile-time constant check enforces this. The reconcile requeues at the next stage boundary (`Window.NextChange`), and at least every 5 minutes (`licenseRecheckInterval`). A Secret change enqueues the gateway through the Secret watch. CE gateways return an empty verdict.
+The stage comes from `license.Window{Warning, SafetyBuffer}.StageAt(notAfter, now)`: `StageValid`, `StageExpiringSoon`, `StagePreExpiry` or `StageExpired`. `Warning` is `spec.license.expiryWarningDays` (default 30 days) and must stay longer than `SafetyBuffer` (1 hour); a compile-time constant check enforces this. The reconcile requeues at the next stage boundary (`Window.NextChange`), and at least every 5 minutes (`licenseRecheckInterval`). A Secret change enqueues the gateway through the Secret watch. If the license cannot be read, `LicenseValid` is `Unknown` and the stage is judged from the last known expiry in `status.licenseExpiry`. The gateway controller's retry backoff is capped at the same 5 minutes (`newGatewayRateLimiter`). CE gateways return an empty verdict.
 
 ### License Check Logic
 
