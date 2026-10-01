@@ -1450,3 +1450,36 @@ func TestGatewayReconcile_AcceptedNotWrittenWhenValidationFails(t *testing.T) {
 		t.Errorf("Accepted = %+v after a rejected render, want none", got)
 	}
 }
+
+// renderFunc adapts a function to renderer.Renderer.
+type renderFunc func(renderer.RenderInput) (*renderer.RenderOutput, error)
+
+func (f renderFunc) Render(in renderer.RenderInput) (*renderer.RenderOutput, error) { return f(in) }
+
+func TestGatewayReconcile_AcceptedSkipsEndpointReplacedSinceRender(t *testing.T) {
+	gw := reconciledGateway()
+	ep := gatewayEndpoint("ep-a", 1)
+	ep.UID = "old-uid"
+	c := fakeClientBuilder().WithObjects(gw, ep).WithStatusSubresource(gw, ep).Build()
+	key := client.ObjectKeyFromObject(ep)
+	r := acceptanceReconciler(c, fakeRecorder(), nil)
+	// While the gateway renders, the endpoint is deleted and created again.
+	r.Renderer = renderFunc(func(renderer.RenderInput) (*renderer.RenderOutput, error) {
+		if err := c.Delete(context.Background(), ep.DeepCopy()); err != nil {
+			return nil, err
+		}
+		replacement := gatewayEndpoint("ep-a", 1)
+		replacement.UID = "new-uid"
+		if err := c.Create(context.Background(), replacement); err != nil {
+			return nil, err
+		}
+		return &renderer.RenderOutput{JSON: []byte(`{"version":3}`), Checksum: "cs1", DesiredImage: "img:v1"}, nil
+	})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+	if got := storedAccepted(t, c, key); got != nil {
+		t.Errorf("replacement endpoint: Accepted = %+v, want none (the render saw the object it replaced)", got)
+	}
+}
