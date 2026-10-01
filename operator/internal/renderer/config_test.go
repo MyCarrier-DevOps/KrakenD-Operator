@@ -512,6 +512,7 @@ func TestBuildGatewayExtraConfig_RedisUsesTheDocumentedNamespace(t *testing.T) {
 		{"Dragonfly without spec.redis", nil, dragonfly, map[string]any{
 			"connection_pools": []any{map[string]any{"name": "default", "address": "gw-dragonfly.ns.svc.cluster.local:6379"}},
 		}},
+		{"no address renders no pool", pool(), nil, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -520,6 +521,12 @@ func TestBuildGatewayExtraConfig_RedisUsesTheDocumentedNamespace(t *testing.T) {
 			ec := buildGatewayExtraConfig(gw, tc.df)
 			if _, ok := ec["backend/redis"]; ok {
 				t.Error("backend/redis is not a KrakenD namespace and must not be rendered")
+			}
+			if tc.want == nil {
+				if _, ok := ec["redis"]; ok {
+					t.Errorf("redis = %#v, want none without an address", ec["redis"])
+				}
+				return
 			}
 			if !reflect.DeepEqual(ec["redis"], tc.want) {
 				t.Errorf("redis = %#v, want %#v", ec["redis"], tc.want)
