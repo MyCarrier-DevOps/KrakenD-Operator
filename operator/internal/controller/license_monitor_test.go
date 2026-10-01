@@ -275,6 +275,7 @@ func TestLicenseMonitor_WithinSafetyBuffer(t *testing.T) {
 	expiry := now.Add(30 * time.Minute)
 
 	gw := newEEGateway("test-gw", "default")
+	gw.Status.Phase = v1alpha1.PhaseRunning
 	secret := newLicenseSecret("my-license", "default")
 	parser := &mockLicenseParser{
 		info: &license.LicenseInfo{NotAfter: expiry, Subject: "test"},
@@ -309,8 +310,12 @@ func TestLicenseMonitor_WithinSafetyBuffer(t *testing.T) {
 	}
 
 	// Within safety buffer = expired path
-	if updated.Status.Phase != v1alpha1.PhaseDegraded {
-		t.Errorf("expected phase Degraded (safety buffer), got %s", updated.Status.Phase)
+	if updated.Status.Phase != v1alpha1.PhaseRunning {
+		t.Errorf("phase = %s, want Running: only the gateway controller derives the phase", updated.Status.Phase)
+	}
+	degraded := meta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionLicenseDegraded)
+	if degraded == nil || degraded.Status != metav1.ConditionTrue {
+		t.Error("expected LicenseDegraded=True")
 	}
 }
 
