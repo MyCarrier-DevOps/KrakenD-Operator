@@ -105,7 +105,7 @@ kept for compatibility; alert and gate on `Ready` instead.
 | `Deploying` | `False` | A rollout is in progress, or the Deployment has not reported available replicas yet |
 | `Running` | `True` | Configuration applied, the Deployment is available and the applied config is rolled out to all replicas |
 | `Degraded` | `False` | EE license expired or in the pre-expiry window; running on CE (`LicenseDegraded=True`) |
-| `Error` | `False` | Configuration rejected (`ConfigValid=False`), rollout failed or the Deployment lost availability (`Available=False`), or license expired without CE fallback |
+| `Error` | `False` | Configuration rejected (`ConfigValid=False`), a plugin ConfigMap missing (`PluginsResolved=False`), rollout failed or the Deployment lost availability (`Available=False`), or license expired without CE fallback |
 
 `Rendering` and `Validating` stay in the CRD enum only so stored objects keep
 validating; the operator does not write them.
@@ -116,6 +116,7 @@ validating; the operator does not write them.
 |---|---|
 | `Ready` | Summary: the Deployment is available and the applied config is rolled out to all replicas; its reason names the blocking condition |
 | `ConfigValid` | `True`: the rendered config passed `krakend check`. `False` (`ConfigValidationFailed`): rejected; the last applied config keeps serving. `Unknown` (`ValidatorUnavailable`): krakend check could not run; retried with backoff |
+| `PluginsResolved` | `True` (`ConfigMapsFound`) when every plugin ConfigMap exists; `False` (`ConfigMapNotFound`) naming the missing ones while the Deployment is held. Absent without ConfigMap plugin sources |
 | `Available` | The Deployment is available; `False` when it loses its minimum replicas (for example all pods crash-looping) or its rollout fails |
 | `Progressing` | Config rollout in progress; stays `True` until the Deployment has observed the change and every replica is updated and available |
 | `DragonflyReady` | DragonflyDB instance is operational |
@@ -256,6 +257,7 @@ kubectl describe deploy <name>-krakend
   `krakend` container's HTTP probe on `/healthz`, and (when
   `spec.openapi.enabled: true`) the `openapi-serve` sidecar's TCP probe on the
   openapi port. `kubectl describe pod` names the container that failed.
+- `PluginsResolved=False`, reason `ConfigMapNotFound` — a plugin ConfigMap is missing; the Deployment is held until it exists. Create it in the gateway's namespace.
 - `ProgressDeadlineExceeded` — sets `Available=False`/`RolloutFailed` (phase `Error`) with a `RolloutFailed` event; the gateway returns to `Running` once the rollout recovers
 
 ### Gateway stuck in `Error`
