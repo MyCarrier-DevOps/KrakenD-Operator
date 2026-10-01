@@ -286,7 +286,7 @@ spec:
             storage: "10Gi"
         # storageClassName: ""         # default storage class
     args: []                           # additional Dragonfly server flags
-    authentication:
+    authentication:                    # secures Dragonfly; not rendered into KrakenD's pool yet (EE)
       passwordFromSecret:
         name: dragonfly-auth
         key: password
@@ -297,16 +297,16 @@ spec:
   redis:
     connectionPool:
       addresses: []                    # user-set for external Redis only; when dragonfly.enabled=true, operator derives address internally — leave empty
-      password:                          # only used when dragonfly.enabled=false (external Redis/Dragonfly)
+      password:                          # not rendered yet: KrakenD connects without it
         secretRef:
           name: ""
           key: ""
       poolSize: 50
       minIdleConns: 10
       dialTimeout: "5s"
-      readTimeout: "3s"
-      writeTimeout: "3s"
-      tls:                             # only used when dragonfly.enabled=false (external Redis/Dragonfly)
+      readTimeout: "3s"                # deprecated: no effect, KrakenD's redis pools have no such setting
+      writeTimeout: "3s"               # deprecated: no effect, KrakenD's redis pools have no such setting
+      tls:                             # not rendered yet: KrakenD connects without it
         enabled: false
         secretName: ""               # Opaque Secret containing ca.crt, tls.crt, tls.key (cert-manager adds ca.crt automatically; create manually if not using cert-manager)
 
@@ -866,12 +866,12 @@ When `dragonfly.enabled=true` and `edition=EE` (and not CE fallback active), the
 1. Renders a `Dragonfly` CR (`dragonflydb.io/v1alpha1`) with an `ownerReference` to the KrakenDGateway
 2. Sets the Dragonfly service DNS as `{gateway-name}-dragonfly.{namespace}.svc.cluster.local:6379`
 3. Derives `redis.connectionPool.addresses` from the Dragonfly Service DNS convention (users should leave `redis.connectionPool.addresses` empty)
-4. Injects the `redis` namespace into the rendered `krakend.json` `extra_config`. The Dragonfly authentication password is **not** embedded in the ConfigMap; instead, the operator injects it via a Secret-backed environment variable (e.g., `REDIS_PASSWORD`) and uses KrakenD's `$ENV_VAR` substitution in the rendered config. This ensures the password stays in a Kubernetes Secret and is never stored in plaintext in the ConfigMap
+4. Injects the EE service-level `redis` namespace: one `connection_pools` entry named `default` (a single address) or one `clusters` entry named `default` (several addresses), which EE components reference with `"connection_name": "default"`.
 5. Watches the `Dragonfly` CR status and reports `DragonflyReady` on the KrakenDGateway when the Dragonfly Operator reports the instance as `ready`
 
 > **Note:** Steps 3–4 (redis address derivation and `extra_config` injection) apply only when `edition=EE` and CE fallback is not active. Steps 1, 2, and 5 apply whenever `dragonfly.enabled=true`, regardless of edition or CE fallback state, so the Dragonfly instance is available when EE is restored.
 
-> **Password handling:** When `dragonfly.enabled=true`, the password is derived from `dragonfly.authentication.passwordFromSecret` and the `redis.connectionPool.password` field is ignored. When `dragonfly.enabled=false` (external Redis/Dragonfly), use `redis.connectionPool.addresses` and `redis.connectionPool.password.secretRef` to configure the connection.
+> **Password and TLS:** not rendered yet. KrakenD's redis pool is rendered without a password or TLS settings, so `redis.connectionPool.password`, `.tls` and, on EE gateways, `dragonfly.authentication.passwordFromSecret` do not reach KrakenD; the gateway webhook warns when they are set.
 
 ### Dragonfly Unavailability Behavior
 
