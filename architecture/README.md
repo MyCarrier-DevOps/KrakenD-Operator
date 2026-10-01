@@ -752,7 +752,7 @@ sequenceDiagram
 | KrakenDAutoConfig created, or spec generation/label/annotation changed | AutoConfig controller | Fetch OpenAPI spec from configured source, parse operations, apply URL transforms and filters, and converge owned KrakenDEndpoint resources to the desired state (create/update/delete). A status-only update (the phase/condition writes the reconciler itself makes) does not re-trigger this — only generation, label, and annotation changes do. Generated endpoints trigger the endpoint controller watch → gateway reconciler. |
 | KrakenDAutoConfig deleted | Kubernetes GC | All owned KrakenDEndpoints are garbage-collected via ownerReference. The AutoConfig controller doesn't reconcile a terminating AutoConfig, so under foreground deletion it doesn't recreate endpoints as they are collected. |
 | Owned KrakenDEndpoint spec changed or deleted, or the `openapi.configMapRef`/CUE definitions ConfigMap changed | AutoConfig controller | Re-run the full pipeline. A generated endpoint that was hand-edited or deleted out of band is restored to the desired spec (endpoint specs are compared by decoded JSON value, so re-encoding/formatting differences alone don't cause a write). |
-| AutoConfig resync timer | AutoConfig controller | `trigger: OnChange` AutoConfigs are additionally re-polled every 5 minutes (`defaultResyncInterval`); `trigger: Periodic` AutoConfigs at `spec.periodic.interval`. Every reconcile — resync or watch-triggered — runs the full pipeline; a reconcile that changes nothing writes no status and emits no event. A spec/CUE/unmatched-override/scope failure — including a failed external `$ref` fetch/decode, which now fails closed the same way instead of falling back to the raw spec — retries at `spec.periodic.interval` (`Periodic`) or via exponential backoff (`OnChange`); an endpoint write failure (`EndpointReconcileFailed`) always retries with backoff, on either trigger; a status or endpoint write `Conflict` (this reconcile read a stale cache) requeues quietly a second later with no error, event, or status change. |
+| AutoConfig resync timer | AutoConfig controller | `trigger: OnChange` AutoConfigs are additionally re-polled every 5 minutes (`defaultResyncInterval`); `trigger: Periodic` AutoConfigs at `spec.periodic.interval`. Every reconcile — resync or watch-triggered — runs the full pipeline; a reconcile that changes nothing writes no status and emits no event. A spec/CUE/unmatched-override/scope failure — including a failed external `$ref` fetch/decode, which now fails closed the same way instead of falling back to the raw spec — retries at `spec.periodic.interval` (`Periodic`) or via exponential backoff capped at 5 minutes (`OnChange`); an endpoint write failure (`EndpointReconcileFailed`) always retries with backoff, on either trigger; a status or endpoint write `Conflict` (this reconcile read a stale cache) requeues quietly a second later with no error, event, or status change. |
 | KrakenDGateway or KrakenDBackendPolicy created or deleted | Endpoint controller | Re-resolve references of the endpoints that reference it (`ResolvedRefs` `GatewayNotFound`/`PolicyNotFound` → phase `Detached`/`Invalid`). Gateway and policy updates are ignored: only their existence matters. Re-attachment occurs automatically when the gateway is created again. |
 | Secret (LICENSE) created or updated | Gateway controller | Re-parse X.509 `notAfter` from new Secret; run license validation state machine (`ValidateLicense` → `EERunning`/`EEWarning`/`PreExpiry`/`LicenseExpired`); trigger rolling restart if the license has not expired and the parsed `notAfter` has changed from the last observed value. Also trigger EE recovery (rolling restart) if `expiry > now+1h` AND the gateway is currently in Degraded or Error state (license-caused only) |
 | Dragonfly CR status updated | Gateway controller | Reflect `DragonflyReady` condition on KrakenDGateway; emit `DragonflyNotReady` Warning event if phase regresses |
@@ -1746,6 +1746,7 @@ conditions and shown with `-o wide`.
 |---|---|
 | KrakenDGateway | the configuration is validated and applied, the Deployment is available and not rolling out, and the EE license (if any) is valid |
 | KrakenDEndpoint | `ResolvedRefs` and `Accepted` are True, `Accepted` for the current generation |
+| KrakenDAutoConfig | `SpecAvailable` and `Synced` are True |
 
 ### Gateway Status Conditions
 
@@ -2007,9 +2008,9 @@ spec:
   #   interval: "1h"                   # re-fetch spec on this interval (only when trigger=Periodic)
 
 status:
-  phase: Synced                        # Pending, Synced, Error (Fetching/Rendering are kept in the
-                                        # API for compatibility; the controller no longer sets them)
-  lastSyncTime: "2026-04-03T10:00:00Z"
+  phase: Synced                        # derived from Synced: Pending, Synced, Error (Fetching/Rendering are never written)
+  observedGeneration: 4
+  lastSyncTime: "2026-04-03T10:00:00Z" # last sync that changed inputs or endpoints, not a heartbeat
   specChecksum: "sha256:def456..."
   generatedEndpoints: 15
   skippedOperations: 3                 # operations excluded by filters or skipped due to duplicate operationId
@@ -2017,13 +2018,18 @@ status:
     - type: SpecAvailable
       status: "True"
       lastTransitionTime: "2026-04-03T10:00:00Z"
-      reason: FetchSuccess
-      message: "OpenAPI spec fetched from http://user-service..."
+      reason: SpecFetched
+      message: "OpenAPI spec fetched successfully"
     - type: Synced
       status: "True"
       lastTransitionTime: "2026-04-03T10:00:00Z"
-      reason: EndpointsGenerated
-      message: "15 KrakenDEndpoints generated, 3 operations skipped"
+      reason: Synced
+      message: "Generated 15 endpoints"
+    - type: Ready
+      status: "True"
+      lastTransitionTime: "2026-04-03T10:00:00Z"
+      reason: Ready
+      message: "OpenAPI spec fetched and endpoints in sync"
 ```
 
 ### Architecture
