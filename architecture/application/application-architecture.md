@@ -569,7 +569,6 @@ const (
     ReasonDragonflyNotReady             = "DragonflyNotReady"
     ReasonIstioVSCreated                = "IstioVirtualServiceCreated"
     ReasonEndpointConflict              = "EndpointConflict"
-    ReasonEndpointInvalid               = "EndpointInvalid"
     ReasonLicenseSecretMissing          = "LicenseSecretMissing"
     ReasonSpecFetched                   = "SpecFetched"
     ReasonSpecFetchFailed               = "SpecFetchFailed"
@@ -890,11 +889,10 @@ flowchart TD
     C --> C1[Fetch referenced KrakenDBackendPolicies]
     C1 --> C2[Determine CEFallback from<br/>status conditions LicenseDegraded]
     C2 --> F[Call Renderer.Render<br/>passes endpoints + policies +<br/>CEFallback. Renderer handles<br/>conflict detection internally]
-    F --> F1[Update endpoint statuses from<br/>RenderOutput.ConflictedEndpoints<br/>and InvalidEndpoints]
-    F1 --> G{Checksum changed?}
+    F --> G{Checksum changed?}
     G -->|No| G1{Image drift?}
     G1 -->|No| G2{Plugin checksum changed?}
-    G2 -->|No| H[Reconcile owned resources]
+    G2 -->|No| H[Record Accepted on each endpoint,<br/>reconcile owned resources]
     H --> H1{Phase not Degraded,<br/>Error, or Deploying?}
     H1 -->|Yes| H2[Set phase=Running]
     H1 -->|No| SKIP[No phase change]
@@ -913,7 +911,7 @@ flowchart TD
     K -->|Unavailable| L2[Set ConfigValid=Unknown<br/>reason ValidatorUnavailable,<br/>keep phase and applied config,<br/>one Warning event,<br/>return error: retry with backoff]
     K -->|Valid| M[Update ConfigMap, set ConfigValid=True,<br/>phase=Deploying, Progressing=True]
     M --> I
-    I --> N[Reconcile Deployment, Service, SA, PDB, HPA]
+    I --> N[Record Accepted on each endpoint,<br/>reconcile Deployment, Service, SA, PDB, HPA]
     N --> O[Reconcile Dragonfly CR if enabled]
     O --> P[Reconcile ExternalSecret if enabled]
     P --> Q[Reconcile VirtualService if Istio enabled]
@@ -922,9 +920,9 @@ flowchart TD
 
 ### Key Implementation Details
 
-**Endpoint conflict detection** — The renderer (§10) iterates all `KrakenDEndpoint` resources for the gateway and flattens their `spec.endpoints[]` arrays. It groups entries by `(endpoint, method)` tuples across all CRs. When multiple entries from different `KrakenDEndpoint` resources share the same path and method, all conflicting `KrakenDEndpoint` resources except the oldest (by `creationTimestamp`) are excluded from the rendered config. The renderer returns `ConflictedEndpoints` and `InvalidEndpoints` in `RenderOutput`. The gateway controller then updates the statuses of those endpoints (marking them `Conflicted` or `Invalid`) and emits `Warning` events with reason `EndpointConflict`.
+**Endpoint conflict detection** — The renderer (§10) iterates all `KrakenDEndpoint` resources for the gateway and flattens their `spec.endpoints[]` arrays. It groups entries by `(endpoint, method)` tuples across all CRs. When multiple entries from different `KrakenDEndpoint` resources share the same path and method, the conflicting entries of all `KrakenDEndpoint` resources except the oldest (by `creationTimestamp`) are excluded from the rendered config. The renderer returns `ConflictedEndpoints` and `InvalidEndpoints` in `RenderOutput`. The gateway controller then writes its `Accepted` condition on each endpoint of the render, but only for a render that is the gateway's applied configuration (validated now, or unchanged since) and only when the verdict changes: `True` (`Accepted`) for an included endpoint, `False` (`EndpointConflict`) for one that lost a path and method pair, and no `Accepted` condition for one excluded by a missing policy. Only the conflicting entries are dropped; the losing endpoint's other entries are still rendered. A `Warning` event with reason `EndpointConflict` is emitted on the transition, and a `Normal` `Accepted` event when a conflict clears.
 
-**Policy resolution** — The controller fetches all referenced `KrakenDBackendPolicy` resources before calling `Renderer.Render`, populating `RenderInput.Policies`. The renderer itself has no Kubernetes client dependency — all inputs are passed as parameters. If a policy referenced by a `policyRef` does not exist in the map, the renderer marks the owning endpoint as `Invalid` and excludes it from the rendered config.
+**Policy resolution** — The controller fetches all referenced `KrakenDBackendPolicy` resources before calling `Renderer.Render`, populating `RenderInput.Policies`. The renderer itself has no Kubernetes client dependency — all inputs are passed as parameters. If a policy referenced by a `policyRef` does not exist in the map, the renderer reports the owning endpoint in `InvalidEndpoints` and excludes it from the rendered config; the endpoint controller reports the cause through `ResolvedRefs`.
 
 **CE fallback determination** — Before calling `Renderer.Render`, the controller reads `gw.Status.Conditions` to determine whether `LicenseDegraded=True`. This value is passed as `RenderInput.CEFallback`, controlling image selection and wildcard endpoint stripping.
 
@@ -2882,7 +2880,7 @@ func TestGatewayReconciler_CreatesOwnedResources(t *testing.T) {
 |---|---|
 | Gateway create → Deployment + Service + ConfigMap + SA + PDB created | Resource builder correctness, owner references |
 | Endpoint create → gateway re-reconciles → ConfigMap updated | Endpoint watch, config rendering |
-| Endpoint conflict → oldest wins, others marked Conflicted | Conflict detection logic across endpoints[] entries |
+| Endpoint conflict → oldest wins, the others get Accepted=False (EndpointConflict) | Conflict detection logic across endpoints[] entries |
 | Policy update → all gateways with referencing endpoints re-queued → ConfigMap updated | `policyToGateways` mapper, namespace-scoped list, re-render |
 | Policy delete blocked by referencing endpoint | Webhook DELETE validation |
 | Policy create/update with invalid field ranges rejected | Webhook CREATE/UPDATE validation |
