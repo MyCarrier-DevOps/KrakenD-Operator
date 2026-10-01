@@ -361,6 +361,33 @@ kubectl get krakendgateways -A -o json | jq -r '
 A message containing `failing loading "https://www.krakend.io/schema` marks
 a gateway blocked by the schema download rather than by its config.
 
+### A rejected config no longer loops; `Rendering` and `Validating` are gone
+
+A gateway whose rendered config failed validation used to rewrite its status
+three times per reconcile (`Rendering`, `Validating`, `Error`), run krakend
+check again each time, and emit a `ConfigValidationFailed` event on every
+pass, continuously, until the input was fixed. Now:
+
+- `status.phase` is no longer set to `Rendering` or `Validating`, and a new
+  gateway is no longer written as `Pending` before its first full reconcile.
+  The values remain in the API for compatibility.
+- Gateway status is written only when it changes.
+- The operator remembers the exact input krakend check rejected and does not
+  run the check again for it. It validates again as soon as any input
+  changes, including a switch to or from CE fallback, and once after an
+  operator restart.
+- `ConfigValidationFailed` fires when the verdict or its message changes,
+  not on every reconcile.
+- `config_validation_failures_total` counts each rejected input once, not
+  once per reconcile. A rejection that lasts no longer keeps the counter
+  rising, so an alert on `rate(config_validation_failures_total[5m]) > 0`
+  fires when a new rejection occurs and then resolves, instead of staying
+  firing while the gateway stays rejected. Use the `ConfigValid` condition
+  to find gateways that are currently rejected.
+
+Tooling that waits for `Rendering` or `Validating` should wait on the
+`ConfigValid` condition instead.
+
 ## v0.14.0 — openapi-serve liveness probe (one-time rollout)
 
 The `openapi-serve` sidecar now renders with a liveness probe. It previously
