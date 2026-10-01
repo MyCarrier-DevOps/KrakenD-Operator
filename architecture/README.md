@@ -1316,7 +1316,7 @@ flowchart TD
 
     P --> Q{Verdict?}
     Q -->|Yes| R[Set ConfigValid=True<br/>Set Progressing=True<br/>Update ConfigMap<br/>Write status.configChecksum]
-    Q -->|No| S[Set ConfigValid=False<br/>Derive Ready=False, phase Error<br/>Warning Event if the verdict changed<br/>Remember the rejected copy<br/>STOP]
+    Q -->|No| S[Set ConfigValid=False<br/>Keep the applied config<br/>Emit Warning Event<br/>Continue with the infrastructure stage]
     Q -->|Unavailable| V[Set ConfigValid=Unknown<br/>reason ValidatorUnavailable<br/>Ready=Unknown, keep the serving phase and applied config<br/>One Warning Event<br/>Return error: retry with backoff]
 
     R --> T[Patch Deployment<br/>pod annotation: checksum/config +<br/>checksum/plugins + container image]
@@ -1327,6 +1327,17 @@ flowchart TD
     style U fill:#6f6,stroke:#333
     style BC fill:#ff6,stroke:#333
 ```
+
+### Config stage and infrastructure stage
+
+Each reconcile runs two stages. The config stage (render → validate →
+publish) is the only code that decides the applied config
+(`status.configChecksum`) or writes config content. The infrastructure stage
+then always runs. It converges the ServiceAccount, Service, PDB, Deployment,
+HPA, post-restart Job and optional resources on the *applied* config, so a
+rejected or unjudged render never stops drift correction. The Deployment is
+created only once a config has been applied. The gateway status is written
+once, after both stages.
 
 ### Deterministic Ordering
 
