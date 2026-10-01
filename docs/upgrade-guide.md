@@ -1027,9 +1027,14 @@ and an orphaned VirtualService kept claiming its hosts.
 
 - **Replicas.** Once the HPA is deleted the Deployment returns to
   `spec.replicas` (while the Deployment is held, because no config has been
-  applied yet, that happens when the hold clears). If `spec.replicas` is
+  applied yet or because the applied config's ConfigMap is missing while a
+  newer render is rejected, that happens once a config passes validation;
+  until then it keeps the HPA's last replica count). If `spec.replicas` is
   unset that is one pod, so set `spec.replicas` before upgrading or before
-  removing `spec.autoscaling`.
+  removing `spec.autoscaling`. Setting `spec.replicas` while
+  `spec.autoscaling` is still set gives the expected admission warning
+  "spec.replicas is ignored while spec.autoscaling is set: the
+  HorizontalPodAutoscaler manages the replica count".
 - **License.** A gateway that disabled the ExternalSecret but whose
   `license.secretRef` points at the `<gateway>-license` Secret loses its
   license when that Secret is garbage-collected. Point `secretRef` at a Secret
