@@ -1623,3 +1623,49 @@ func TestGatewayReconcile_NeverAppliedGatewayClearsLeftoverConflicts(t *testing.
 		t.Errorf("status.conflicts = %+v, want cleared with the Accepted it belonged to", got.Status.Conflicts)
 	}
 }
+
+// partlyConflictedPair returns an older endpoint and a newer one that shares
+// only /shared with it, so the newer one is partly served.
+func partlyConflictedPair() (older, newer *v1alpha1.KrakenDEndpoint) {
+	older = testEndpoint("older", "/shared")
+	older.CreationTimestamp = metav1.NewTime(testNow)
+	newer = testEndpoint("newer", "/shared")
+	newer.Spec.Endpoints = append(newer.Spec.Endpoints, v1alpha1.EndpointEntry{
+		Endpoint: "/own", Method: "GET",
+		Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc:8080"}, URLPattern: "/x"}},
+	})
+	newer.CreationTimestamp = metav1.NewTime(testNow.Add(time.Minute))
+	return older, newer
+}
+
+func TestGatewayReconcile_WarnsWhenAnEndpointBecomesPartiallyAccepted(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		prev func(*v1alpha1.KrakenDEndpoint)
+	}{
+		{"from Accepted", func(ep *v1alpha1.KrakenDEndpoint) {
+			withAccepted(ep, metav1.ConditionTrue, v1alpha1.ReasonAccepted)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gw := reconciledGateway()
+			older, newer := partlyConflictedPair()
+			tc.prev(newer)
+			c := fakeClientBuilder().WithObjects(gw, older, newer).WithStatusSubresource(gw, older, newer).Build()
+			r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}), &mockValidator{})
+
+			if err := reconcileGateway(t, r, gw); err != nil {
+				t.Fatalf("reconcile: %v", err)
+			}
+			var warned int
+			for _, e := range drainEvents(r.Recorder.(*record.FakeRecorder)) {
+				if strings.HasPrefix(e, "Warning "+v1alpha1.ReasonPartiallyAccepted+" ") {
+					warned++
+				}
+			}
+			if warned != 1 {
+				t.Errorf("PartiallyAccepted Warning events = %d, want 1", warned)
+			}
+		})
+	}
+}
