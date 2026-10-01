@@ -159,8 +159,9 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, err
 	}
 
-	// Determine CE fallback from status conditions
-	ceFallback := meta.IsStatusConditionTrue(gw.Status.Conditions, v1alpha1.ConditionLicenseDegraded)
+	// The license decides whether this gateway renders and runs CE.
+	lic := r.reconcileLicense(ctx, &gw)
+	ceFallback := lic.ceFallback
 
 	// Gather plugin ConfigMaps
 	pluginConfigMaps, err := r.gatherPluginConfigMaps(ctx, &gw)

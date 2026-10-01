@@ -229,6 +229,8 @@ func main() {
 		Validator: krakendValidator,
 		Clock:     clock.RealClock{},
 		APIReader: mgr.GetAPIReader(),
+
+		LicenseParser: licenseutil.NewX509LicenseParser(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "KrakenDGateway")
 		os.Exit(1)
@@ -267,17 +269,6 @@ func main() {
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder
-
-	licenseMonitor := controller.NewLicenseMonitor(
-		mgr.GetClient(),
-		mgr.GetEventRecorderFor("license-monitor"),
-		clock.RealClock{},
-		licenseutil.NewX509LicenseParser(),
-	)
-	if err := mgr.Add(licenseMonitor); err != nil {
-		setupLog.Error(err, "unable to add license monitor")
-		os.Exit(1)
-	}
 
 	if metricsCertWatcher != nil {
 		setupLog.Info("Adding metrics certificate watcher to manager")
