@@ -1795,11 +1795,11 @@ conditions and shown with `-o wide`.
 | `ConfigValid` | Last rendered krakend.json passed `krakend check -t -n -c` (`Unknown` with reason `ValidatorUnavailable` while krakend check cannot run) |
 | `Available` | The Deployment is available: it mirrors the Deployment's `Available` condition once a rollout is not in flight, and is `False` with reason `RolloutFailed` when the Deployment exceeds its progress deadline |
 | `LicenseValid` | EE license state: `True`/`LicenseOK`, `True`/`LicenseExpiringSoon` inside the warning window, `False`/`LicensePreExpiry` or `False`/`LicenseExpired` |
-| `LicenseDegraded` | Gateway is actively running in CE mode as a fallback because the EE license expired or entered the pre-expiry safety window (only **True** when `fallbackToCE=true` and CE image is deployed; `False` with reason `EEActive` during normal EE operation) |
+| `LicenseDegraded` | Gateway is actively running in CE mode as a fallback because the EE license expired or entered the pre-expiry safety window (only **True** when `fallbackToCE=true` and CE image is deployed; `False` with reason `LicenseRestored` after recovery, and absent otherwise) |
 | `DragonflyReady` | Dragonfly CR status reports `ready` phase (watched from Dragonfly Operator) |
 | `IstioConfigured` | VirtualService was successfully created/updated |
 | `LicenseSecretUnavailable` | License Secret is not available — either the ExternalSecret failed to sync or the referenced Secret (`secretRef`) does not exist |
-| `LicenseExpired` | License has expired and `fallbackToCE=false`; if a Deployment exists, gateway pods will self-terminate at T-0; on cold-start, Deployment creation is skipped. `False` with reason `EEActive` during normal EE operation |
+| `LicenseExpired` | License has expired or is inside the 1 h safety buffer (reason `LicenseExpired` or `LicensePreExpiry`), whether or not `fallbackToCE` is set; without `fallbackToCE` (no `LicenseDegraded`) the gateway reports phase `Error`, and its pods self-terminate at T-0. `False` with reason `LicenseRestored` after recovery, and absent otherwise |
 | `Progressing` | A rolling deployment is in progress; it ends (`RolloutComplete`) only when the Deployment has observed the change, its pods carry the applied config checksum, and every replica is updated and available |
 
 ### Endpoint Status Conditions
