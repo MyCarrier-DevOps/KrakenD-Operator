@@ -121,7 +121,8 @@ func matchLine(line string, routes []renderedRoute) []int {
 // matchRouterError attributes a router error that quotes "path '…'" and maybe
 // "prefix '…'" but names no method. krakend keeps one route tree per method,
 // so only the methods holding an entry of the new path can be at fault; within
-// those, the blamed entries are the new path and the prefix it collides with.
+// those (for a duplicate-handler error, only those holding the shape twice),
+// the blamed entries are the new path and the prefix it collides with.
 // A line that quotes no path, or one no entry has, names nothing.
 func matchRouterError(line string, routes []renderedRoute) []int {
 	m := newPathRe.FindStringSubmatch(line)
@@ -129,16 +130,15 @@ func matchRouterError(line string, routes []renderedRoute) []int {
 		return nil
 	}
 	newShape := routeShape(m[1])
+	minCount := 1
+	if strings.Contains(line, "handlers are already registered") {
+		minCount = 2
+	}
 	prefix := ""
 	if pm := prefixRe.FindStringSubmatch(line); pm != nil {
 		prefix = routeShape(pm[1])
 	}
-	methods := map[string]bool{}
-	for _, r := range routes {
-		if r.shape == newShape {
-			methods[r.method] = true
-		}
-	}
+	methods := methodsHolding(routes, newShape, minCount)
 	var indices []int
 	for i, r := range routes {
 		if methods[r.method] && (r.shape == newShape || underPrefix(r.shape, prefix)) {
@@ -146,6 +146,23 @@ func matchRouterError(line string, routes []renderedRoute) []int {
 		}
 	}
 	return indices
+}
+
+// methodsHolding returns the methods with at least min entries of the shape.
+func methodsHolding(routes []renderedRoute, shape string, min int) map[string]bool {
+	counts := map[string]int{}
+	for _, r := range routes {
+		if r.shape == shape {
+			counts[r.method]++
+		}
+	}
+	methods := map[string]bool{}
+	for method, n := range counts {
+		if n >= min {
+			methods[method] = true
+		}
+	}
+	return methods
 }
 
 // underPrefix reports whether shape is the prefix route or lies beneath it.
