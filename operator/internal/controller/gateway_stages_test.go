@@ -29,6 +29,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clocktesting "k8s.io/utils/clock/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
@@ -219,5 +220,63 @@ func TestGatewayReconcile_UnavailableDeploymentDuringRolloutIsDeployingNotError(
 	if phase := getGateway(t, c, gw).Status.Phase; phase != v1alpha1.PhaseDeploying {
 		t.Errorf("phase = %s, want %s: a Deployment that is unavailable while its rollout is in flight is not an error",
 			phase, v1alpha1.PhaseDeploying)
+	}
+}
+
+// servingGateway returns a gateway whose applied config is checksum and whose
+// rollout has completed: Available, Progressing=False and ConfigValid.
+func servingGateway(checksum, image string) *v1alpha1.KrakenDGateway {
+	gw := reconciledGateway()
+	gw.Status.ConfigChecksum = checksum
+	gw.Status.ActiveImage = image
+	for _, cond := range []metav1.Condition{
+		{Type: v1alpha1.ConditionConfigValid, Status: metav1.ConditionTrue, Reason: v1alpha1.ReasonConfigApplied},
+		{Type: v1alpha1.ConditionAvailable, Status: metav1.ConditionTrue, Reason: "DeploymentAvailable"},
+		{Type: v1alpha1.ConditionProgressing, Status: metav1.ConditionFalse, Reason: "RolloutComplete"},
+	} {
+		meta.SetStatusCondition(&gw.Status.Conditions, cond)
+	}
+	return gw
+}
+
+// staleDeploymentReads makes every read of the gateway Deployment return
+// stale, as an informer cache does until it has seen the controller's own
+// update.
+func staleDeploymentReads(stale *appsv1.Deployment) interceptor.Funcs {
+	return interceptor.Funcs{
+		Get: func(
+			ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object,
+			opts ...client.GetOption,
+		) error {
+			if dep, ok := obj.(*appsv1.Deployment); ok {
+				stale.DeepCopyInto(dep)
+				return nil
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	}
+}
+
+func TestGatewayReconcile_ImageChangeIsNotReadyUntilTheDeploymentRunsIt(t *testing.T) {
+	gw := servingGateway("applied", "img:v1")
+	stale := makeConvergedDeployment(gw, "applied")
+	c := fakeClientBuilder().WithObjects(gw, stale).WithStatusSubresource(gw).
+		WithInterceptorFuncs(staleDeploymentReads(stale)).Build()
+	rend := &mockRenderer{output: &renderer.RenderOutput{
+		JSON: []byte(`{"version":3}`), Checksum: "applied", DesiredImage: "img:v2",
+	}}
+	r := newTestGatewayReconciler(c, rend, &mockValidator{})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	got := getGateway(t, c, gw)
+	progressing := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionProgressing)
+	if progressing == nil || progressing.Status != metav1.ConditionTrue || progressing.Reason != "DeploymentUpdated" {
+		t.Errorf("Progressing = %+v, want True/DeploymentUpdated while the Deployment still runs img:v1", progressing)
+	}
+	ready := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionReady)
+	if ready != nil && ready.Status == metav1.ConditionTrue {
+		t.Errorf("Ready = %+v, want not True before the Deployment runs img:v2", ready)
 	}
 }
