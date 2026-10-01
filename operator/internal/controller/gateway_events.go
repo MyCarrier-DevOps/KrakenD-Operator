@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -31,6 +32,19 @@ func (r *KrakenDGatewayReconciler) setConditionWithEvent(gw *v1alpha1.KrakenDGat
 	prev := copyCondition(meta.FindStatusCondition(gw.Status.Conditions, cond.Type))
 	meta.SetStatusCondition(&gw.Status.Conditions, cond)
 	recordConditionTransition(r.Recorder, gw, prev, cond)
+}
+
+// setProblemCondition sets cond, a condition whose True status reports a
+// problem (LicenseSecretUnavailable, LicenseDegraded, CEFallbackApplied). It
+// records a Warning, with the condition's reason and message, when the
+// condition turns True or changes reason while True.
+func (r *KrakenDGatewayReconciler) setProblemCondition(gw *v1alpha1.KrakenDGateway, cond metav1.Condition) {
+	prev := copyCondition(meta.FindStatusCondition(gw.Status.Conditions, cond.Type))
+	meta.SetStatusCondition(&gw.Status.Conditions, cond)
+	if cond.Status == metav1.ConditionTrue &&
+		(prev == nil || prev.Status != metav1.ConditionTrue || prev.Reason != cond.Reason) {
+		r.Recorder.Event(gw, corev1.EventTypeWarning, cond.Reason, cond.Message)
+	}
 }
 
 // copyCondition returns a copy of c, or nil. meta.SetStatusCondition updates
