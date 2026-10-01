@@ -269,13 +269,7 @@ func applyEndpointStatus(ep *v1alpha1.KrakenDEndpoint, resolved metav1.Condition
 	meta.SetStatusCondition(&ep.Status.Conditions, resolved)
 	meta.RemoveStatusCondition(&ep.Status.Conditions, v1alpha1.ConditionAvailable)
 	status, reason, message := v1alpha1.EndpointReady(ep.Status.Conditions)
-	meta.SetStatusCondition(&ep.Status.Conditions, metav1.Condition{
-		Type:               v1alpha1.ConditionReady,
-		Status:             status,
-		ObservedGeneration: ep.Generation,
-		Reason:             reason,
-		Message:            message,
-	})
+	setReadyCondition(&ep.Status.Conditions, ep.Generation, status, reason, message)
 	ep.Status.Phase = v1alpha1.EndpointPhaseFromReady(status, reason)
 	ep.Status.ObservedGeneration = ep.Generation
 	ep.Status.EndpointCount = int32(len(ep.Spec.Endpoints))
