@@ -198,6 +198,11 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	// Config stage: decide and publish the applied config. Its error is
 	// returned only after the infrastructure stage and the status write.
+	// A status written before configEdition existed is adopted once, whatever
+	// the verdict on this render, so a later edition change cannot re-read it.
+	if gw.Status.ConfigChecksum != "" && gw.Status.ConfigEdition == "" {
+		gw.Status.ConfigEdition = appliedKey(&gw, edition).edition
+	}
 	appliedBefore := appliedKey(&gw, edition)
 	cfg, configErr := r.reconcileConfig(ctx, &gw, before, output, edition)
 	image := appliedImage(&gw, edition)
