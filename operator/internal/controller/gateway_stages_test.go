@@ -1109,3 +1109,35 @@ func TestGatewayReconcile_RejectedConfigNamesTheEndpointAtFault(t *testing.T) {
 		t.Errorf("ConfigValid = %+v, want its message to name default/bad", cv)
 	}
 }
+
+func TestGatewayReconcile_RememberedRejectionKeepsAttribution(t *testing.T) {
+	gw := reconciledGateway()
+	good, bad := testEndpoint("good", "/a"), testEndpoint("bad", "/b")
+	endpointWrites := 0
+	c := fakeClientBuilder().WithObjects(gw, good, bad).WithStatusSubresource(gw, good, bad).
+		WithInterceptorFuncs(countStatusWrites[*v1alpha1.KrakenDEndpoint](&endpointWrites)).Build()
+	val := &countingValidator{err: rejectedBy(badNamespaceVerdict)}
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}), val)
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+	writesAfterFirst := endpointWrites
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+	if val.calls != 1 {
+		t.Fatalf("validator calls = %d, want 1: the rejection memo answers the second pass", val.calls)
+	}
+	if cond := storedAccepted(t, c, client.ObjectKeyFromObject(bad)); cond == nil ||
+		cond.Reason != v1alpha1.ReasonGatewayConfigRejected {
+		t.Errorf("after the remembered rejection the bad endpoint's Accepted = %+v, want it still %s",
+			cond, v1alpha1.ReasonGatewayConfigRejected)
+	}
+	if n := endpointWrites - writesAfterFirst; n != 0 {
+		t.Errorf("endpoint status writes on the remembered pass = %d, want 0", n)
+	}
+	if n := eventsWithReason(r.Recorder.(*record.FakeRecorder), v1alpha1.ReasonGatewayConfigRejected); n != 1 {
+		t.Errorf("GatewayConfigRejected events over two reconciles = %d, want 1", n)
+	}
+}
