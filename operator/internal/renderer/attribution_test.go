@@ -46,6 +46,12 @@ func TestAttribute_MapsKrakendCheckOutputToSources(t *testing.T) {
 			output:    "ERROR parsing the configuration file:\t'/tmp/k.json': undefined output param 'other'! endpoint: GET /a/:id, backend: 0. input: [id], output: [other]\n",
 			wantIndex: []int{1},
 		},
+		{
+			name:      "method and brace path",
+			rendered:  `{"endpoints":[{"endpoint":"/ok/{p}","method":"GET"},{"endpoint":"/__debug/{x}","method":"POST"}]}`,
+			output:    "ERROR parsing the configuration file:\t'/tmp/k.json': ignoring the 'POST /__debug/{x}' endpoint, since it is invalid!!!\n",
+			wantIndex: []int{1},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
