@@ -770,6 +770,49 @@ A `PartiallyAccepted` endpoint is not `Ready`, and its phase is
 `Conflicted`. Becoming `PartiallyAccepted` emits a `Warning` event with that
 reason, and returning to fully `Accepted` emits a `Normal` `Accepted` event.
 
+### License checks run inside the gateway reconcile
+
+The separate license monitor is gone. Each EE gateway's license is evaluated
+on every gateway reconcile. The gateway is requeued at the next boundary
+(the start of the warning window, the start of the 1 h safety buffer, and
+expiry) and at least every 5 minutes. License Secret changes are picked up
+immediately.
+
+- The first check happens at operator startup, not 5 minutes later.
+- The operator no longer writes the `gateway.krakend.io/license-check`
+  annotation to your KrakenDGateway. It writes only the gateway's status.
+  Existing annotations are harmless; remove them with
+  `kubectl annotate krakendgateway <name> gateway.krakend.io/license-check-`.
+- `LicenseValid` is now always present on an EE gateway with a license:
+  - `True` with reason `LicenseOK`;
+  - `True` with reason `LicenseExpiringSoon` inside the warning window;
+  - `False` with reason `LicensePreExpiry` or `LicenseExpired`.
+- An expired or pre-expiry license sets `LicenseExpired=True`. Without
+  `fallbackToCE` the gateway reports phase `Error`; with it, the operator
+  also sets `LicenseDegraded=True` (reason `LicenseFallbackCE`) and the phase
+  is `Degraded`.
+- `LicenseExpiringSoon`, `LicenseFallbackCE`, `LicenseExpiredNoFallback`,
+  `LicenseSecretMissing` and `LicenseRestored` events fire once per
+  transition. `LicenseExpiringSoon` is no longer repeated every 24 hours.
+- The `license_expiry_seconds` series of a deleted or terminating gateway is
+  removed and not recreated.
+- An EE gateway whose license cannot be read or parsed reports
+  `LicenseValid=Unknown` (reason `LicenseSecretMissing`) next to
+  `LicenseSecretUnavailable=True`. The operator still judges the stage from
+  the last known expiry (`status.licenseExpiry`), so a `fallbackToCE` gateway
+  falls back to CE when that expiry comes inside the 1 h safety buffer even
+  while the Secret is missing; with no known expiry it keeps its last
+  fallback decision.
+- A gateway switched from EE to CE loses its `License*` conditions,
+  `status.licenseExpiry` and `license_expiry_seconds` series, so a stale
+  `LicenseExpired=True` no longer holds it at phase `Error`.
+- Turning `fallbackToCE` off while the license is expired emits one
+  `LicenseExpiredNoFallback` event as the gateway goes from `Degraded` to
+  `Error`.
+- A failing gateway reconcile is now retried with a backoff capped at 5
+  minutes (it used to grow to about 16.7 minutes), so the license is always
+  looked at at least that often.
+
 ---
 
 ## v0.14.0 — openapi-serve liveness probe (one-time rollout)
@@ -1346,30 +1389,3 @@ cluster with `postRestartJob.enabled: true`.
     to a new explicit value rather than removing an existing override** —
     that is unambiguous and always observable to the reconciler. Removing
     an override is not detected as a change in and of itself.
-
-### License checks run inside the gateway reconcile
-
-The separate license monitor is gone. Each EE gateway's license is evaluated
-on every gateway reconcile. The gateway is requeued at the next boundary
-(the start of the warning window, the start of the 1 h safety buffer, and
-expiry) and at least every 5 minutes. License Secret changes are picked up
-immediately.
-
-- The first check happens at operator startup, not 5 minutes later.
-- The operator no longer writes the `gateway.krakend.io/license-check`
-  annotation to your KrakenDGateway. It writes only the gateway's status.
-  Existing annotations are harmless; remove them with
-  `kubectl annotate krakendgateway <name> gateway.krakend.io/license-check-`.
-- `LicenseValid` is now always present on an EE gateway with a license:
-  - `True` with reason `LicenseOK`;
-  - `True` with reason `LicenseExpiringSoon` inside the warning window;
-  - `False` with reason `LicensePreExpiry` or `LicenseExpired`.
-- An expired or pre-expiry license sets `LicenseExpired=True`. Without
-  `fallbackToCE` the gateway reports phase `Error`; with it, the operator
-  also sets `LicenseDegraded=True` (reason `LicenseFallbackCE`) and the phase
-  is `Degraded`.
-- `LicenseExpiringSoon`, `LicenseFallbackCE`, `LicenseExpiredNoFallback`,
-  `LicenseSecretMissing` and `LicenseRestored` events fire once per
-  transition. `LicenseExpiringSoon` is no longer repeated every 24 hours.
-- The `license_expiry_seconds` series of a deleted or terminating gateway is
-  removed and not recreated.
