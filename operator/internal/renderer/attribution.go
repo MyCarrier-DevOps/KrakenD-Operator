@@ -17,6 +17,7 @@ limitations under the License.
 package renderer
 
 import (
+	"encoding/json"
 	"regexp"
 	"strconv"
 	"strings"
@@ -35,21 +36,32 @@ type Attribution struct {
 	Message  string
 }
 
-var lintPointerRe = regexp.MustCompile(`^- at '/endpoints/(\d+)[/']`)
+var (
+	lintPointerRe = regexp.MustCompile(`^- at '/endpoints/(\d+)[/']`)
+	methodPathRe  = regexp.MustCompile(`\b(GET|POST|PUT|PATCH|DELETE) (/[^\s',!]*)`)
+	braceParamRe  = regexp.MustCompile(`\{([^}/]+)\}`)
+)
+
+// renderedRoute is one rendered endpoint entry as krakend's router sees it.
+type renderedRoute struct {
+	method string
+	shape  string
+}
 
 // Attribute maps krakend check output back to the KrakenDEndpoints that
 // produced the entries it names. renderedJSON is the rendered config, whose
 // endpoints array is index-aligned with sources (RenderOutput.Sources). Each
 // attributable output line yields one Attribution per entry it names; a line
 // that names none yields one with Index -1.
-func Attribute(_ []byte, sources []types.NamespacedName, checkOutput string) []Attribution {
+func Attribute(renderedJSON []byte, sources []types.NamespacedName, checkOutput string) []Attribution {
+	routes := parseRoutes(renderedJSON)
 	var out []Attribution
 	for _, raw := range strings.Split(checkOutput, "\n") {
 		line := strings.TrimSpace(raw)
 		if skipCheckLine(line) {
 			continue
 		}
-		indices := matchLine(line)
+		indices := matchLine(line, routes)
 		if len(indices) == 0 {
 			out = append(out, Attribution{Index: -1, Message: line})
 			continue
@@ -73,14 +85,57 @@ func skipCheckLine(line string) bool {
 }
 
 // matchLine returns the indices of the rendered entries line names: a lint
-// pointer's index.
-func matchLine(line string) []int {
+// pointer's index, else every entry whose method and route shape match a
+// "METHOD /path" in the line.
+func matchLine(line string, routes []renderedRoute) []int {
 	if m := lintPointerRe.FindStringSubmatch(line); m != nil {
 		i, err := strconv.Atoi(m[1])
-		if err != nil {
+		if err != nil || i >= len(routes) {
 			return nil
 		}
 		return []int{i}
 	}
-	return nil
+	var indices []int
+	seen := map[int]bool{}
+	add := func(match func(renderedRoute) bool) {
+		for i, r := range routes {
+			if !seen[i] && match(r) {
+				seen[i] = true
+				indices = append(indices, i)
+			}
+		}
+	}
+	for _, m := range methodPathRe.FindAllStringSubmatch(line, -1) {
+		method, shape := m[1], routeShape(m[2])
+		add(func(r renderedRoute) bool { return r.method == method && r.shape == shape })
+	}
+	return indices
+}
+
+// routeShape spells a route the way krakend's router errors do: {param} is
+// written :param.
+func routeShape(path string) string {
+	return braceParamRe.ReplaceAllString(path, ":$1")
+}
+
+// parseRoutes reads the method and route shape of every rendered entry.
+func parseRoutes(renderedJSON []byte) []renderedRoute {
+	var doc struct {
+		Endpoints []struct {
+			Endpoint string `json:"endpoint"`
+			Method   string `json:"method"`
+		} `json:"endpoints"`
+	}
+	if err := json.Unmarshal(renderedJSON, &doc); err != nil {
+		return nil
+	}
+	routes := make([]renderedRoute, len(doc.Endpoints))
+	for i, ep := range doc.Endpoints {
+		method := ep.Method
+		if method == "" {
+			method = "GET"
+		}
+		routes[i] = renderedRoute{method: method, shape: routeShape(ep.Endpoint)}
+	}
+	return routes
 }
