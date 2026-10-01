@@ -6,6 +6,7 @@ on:
     paths:
       - "charts/**"
       - ".github/workflows/helm-ci.yml"
+      - ".github/scripts/chart-render-test.sh"
 
 permissions:
   contents: read
@@ -28,3 +29,5 @@ jobs:
       - uses: azure/setup-helm@v5
       - name: Template Helm chart
         run: helm template test charts/krakend-operator > /dev/null
+      - name: Chart render tests
+        run: bash .github/scripts/chart-render-test.sh
