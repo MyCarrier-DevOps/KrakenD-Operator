@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -67,6 +68,7 @@ type licenseVerdict struct {
 // time-driven changes through requeueAfter.
 func (r *KrakenDGatewayReconciler) reconcileLicense(ctx context.Context, gw *v1alpha1.KrakenDGateway) licenseVerdict {
 	if gw.Spec.Edition != v1alpha1.EditionEE {
+		forgetLicense(gw)
 		return licenseVerdict{}
 	}
 	notAfter, err := r.readLicense(ctx, gw)
@@ -99,6 +101,22 @@ func (r *KrakenDGatewayReconciler) reconcileLicense(ctx context.Context, gw *v1a
 		ceFallback:   r.applyLicenseStage(gw, window.StageAt(notAfter, now), notAfter),
 		requeueAfter: nextLicenseCheck(window, notAfter, now),
 	}
+}
+
+// forgetLicense drops the license state of a gateway that is not EE (for
+// instance one switched from EE to CE), so a stale LicenseExpired cannot keep
+// it out of Ready.
+func forgetLicense(gw *v1alpha1.KrakenDGateway) {
+	gw.Status.Conditions = slices.DeleteFunc(gw.Status.Conditions, func(c metav1.Condition) bool {
+		switch c.Type {
+		case v1alpha1.ConditionLicenseValid, v1alpha1.ConditionLicenseExpired,
+			v1alpha1.ConditionLicenseDegraded, v1alpha1.ConditionLicenseSecretUnavailable:
+			return true
+		}
+		return false
+	})
+	gw.Status.LicenseExpiry = nil
+	licenseExpirySeconds.DeleteLabelValues(gw.Namespace, gw.Name)
 }
 
 // applyLicenseStage sets LicenseValid, LicenseExpired and LicenseDegraded for
