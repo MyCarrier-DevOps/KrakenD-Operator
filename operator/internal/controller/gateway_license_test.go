@@ -160,3 +160,30 @@ func TestGatewayReconcile_RenewedLicenseRestoresEE(t *testing.T) {
 		t.Errorf("LicenseRestored events = %d, want 1", n)
 	}
 }
+
+func TestGatewayReconcile_MissingLicenseSecretKeepsTheFallbackDecision(t *testing.T) {
+	gw, _, parser := licensedEEGateway(testNow, true) // the Secret is not created
+	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+		Type: v1alpha1.ConditionLicenseDegraded, Status: metav1.ConditionTrue, Reason: v1alpha1.ReasonLicenseFallbackCE,
+	})
+	c := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).Build()
+	var captured *renderer.RenderInput
+	r := newTestGatewayReconciler(c,
+		&capturingRenderer{delegate: renderOutput("cs"), captured: &captured}, &mockValidator{})
+	r.LicenseParser = parser
+
+	for range 2 {
+		if err := reconcileGateway(t, r, gw); err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+	}
+	if !captured.CEFallback {
+		t.Error("with the license unknown, the gateway must keep its last fallback decision")
+	}
+	if !meta.IsStatusConditionTrue(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionLicenseSecretUnavailable) {
+		t.Error("LicenseSecretUnavailable must be True")
+	}
+	if n := eventsWithReason(r.Recorder.(*record.FakeRecorder), v1alpha1.ReasonLicenseSecretMissing); n != 1 {
+		t.Errorf("LicenseSecretMissing events over two reconciles = %d, want 1", n)
+	}
+}
