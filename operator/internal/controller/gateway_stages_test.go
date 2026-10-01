@@ -34,6 +34,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
@@ -2058,5 +2059,43 @@ func TestGatewayReconcile_AdoptionKeepsTheCurrentEditionForAnAmbiguousImage(t *t
 	}
 	if got := getGateway(t, c, gw).Status.ConfigEdition; got != v1alpha1.EditionCE {
 		t.Errorf("status.configEdition = %q, want the current edition CE for an image that names neither", got)
+	}
+}
+
+// fallbackEndpoints are two endpoints of the test gateway that use
+// Enterprise-only features: one serves only an EE wildcard, the other
+// protects a plain route with auth/api-keys.
+func fallbackEndpoints() (wildcardOnly, withAPIKeys *v1alpha1.KrakenDEndpoint) {
+	wildcardOnly = testEndpoint("wildcard-only", "/files/*")
+	withAPIKeys = testEndpoint("with-api-keys", "/users")
+	withAPIKeys.Spec.Endpoints[0].ExtraConfig = &runtime.RawExtension{Raw: []byte(`{"auth/api-keys":{"roles":["admin"]}}`)}
+	return wildcardOnly, withAPIKeys
+}
+
+func TestGatewayReconcile_CEFallbackListsWhatItRemovedFromEachEndpoint(t *testing.T) {
+	gw, secret, parser := licensedEEGateway(testNow.Add(-time.Minute), true)
+	wildcardOnly, withAPIKeys := fallbackEndpoints()
+	c := fakeClientBuilder().WithObjects(gw, secret, wildcardOnly, withAPIKeys).
+		WithStatusSubresource(gw, wildcardOnly, withAPIKeys).Build()
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}), &mockValidator{})
+	r.LicenseParser = parser
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	for _, tc := range []struct {
+		ep      *v1alpha1.KrakenDEndpoint
+		status  metav1.ConditionStatus
+		mention string
+	}{
+		{wildcardOnly, metav1.ConditionFalse, "GET /files/*: wildcard endpoint"},
+		{withAPIKeys, metav1.ConditionTrue, "GET /users: extra_config auth/api-keys"},
+	} {
+		cond := storedAccepted(t, c, client.ObjectKeyFromObject(tc.ep))
+		if cond == nil || cond.Status != tc.status || cond.Reason != v1alpha1.ReasonEEFeaturesStripped ||
+			!strings.Contains(cond.Message, tc.mention) {
+			t.Errorf("%s: Accepted = %+v, want %s/%s mentioning %q",
+				tc.ep.Name, cond, tc.status, v1alpha1.ReasonEEFeaturesStripped, tc.mention)
+		}
 	}
 }
