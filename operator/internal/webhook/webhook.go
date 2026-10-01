@@ -26,6 +26,7 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -46,6 +47,27 @@ import (
 func isTerminating(obj runtime.Object) bool {
 	o, ok := obj.(metav1.Object)
 	return ok && !o.GetDeletionTimestamp().IsZero()
+}
+
+// terminatingWithUnchangedSpec reports whether an UPDATE only touches the
+// metadata of an object that is being deleted (removing a finalizer, for
+// example). Rejecting such an update would leave the object stuck in
+// Terminating, so validators admit it. A spec change is not skipped: the
+// gateway still renders terminating endpoints and policies, so it must pass
+// the usual rules. If the specs cannot be compared, it reports false.
+func terminatingWithUnchangedSpec(oldObj, newObj runtime.Object) bool {
+	if !isTerminating(newObj) {
+		return false
+	}
+	oldMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(oldObj)
+	if err != nil {
+		return false
+	}
+	newMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(newObj)
+	if err != nil {
+		return false
+	}
+	return equality.Semantic.DeepEqual(oldMap["spec"], newMap["spec"])
 }
 
 // GatewayValidator validates KrakenDGateway resources.
@@ -78,7 +100,7 @@ func (v *GatewayValidator) ValidateUpdate(
 	oldObj runtime.Object,
 	newObj runtime.Object,
 ) (admission.Warnings, error) {
-	if isTerminating(newObj) {
+	if terminatingWithUnchangedSpec(oldObj, newObj) {
 		return nil, nil
 	}
 	gw, ok := newObj.(*v1alpha1.KrakenDGateway)
