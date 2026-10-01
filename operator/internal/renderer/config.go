@@ -55,7 +55,8 @@ func (r *krakendRenderer) Render(input RenderInput) (*RenderOutput, error) {
 	for _, fe := range flat {
 		if input.CEFallback && IsEEWildcard(fe.Entry.Endpoint) {
 			stripped = append(stripped, StrippedEEFeature{
-				Source: fe.Source, Method: fe.Entry.Method, Endpoint: fe.Entry.Endpoint, Feature: FeatureWildcardEndpoint,
+				Source: fe.Source, Method: fe.Entry.Method, Endpoint: fe.Entry.Endpoint,
+				Feature: FeatureWildcardEndpoint,
 			})
 			continue
 		}
@@ -86,7 +87,8 @@ func (r *krakendRenderer) Render(input RenderInput) (*RenderOutput, error) {
 		appendEndpointComponentSchemas(gatewayEC, input.Endpoints)
 	}
 	if input.CEFallback {
-		stripped = append(stripped, stripNamespaces(gatewayEC, eeOnlyServiceNamespaces, StrippedEEFeature{}, "extra_config")...)
+		stripped = append(stripped,
+			stripNamespaces(gatewayEC, eeOnlyServiceNamespaces, StrippedEEFeature{}, "extra_config")...)
 	}
 
 	if len(gatewayEC) > 0 {

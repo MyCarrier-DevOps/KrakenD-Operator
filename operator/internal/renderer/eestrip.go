@@ -123,7 +123,10 @@ func stripEndpointEEFeatures(ep map[string]any, fe flatEndpoint) []StrippedEEFea
 			delete(ep, "extra_config")
 		}
 	}
-	backends, _ := ep["backend"].([]any)
+	backends, ok := ep["backend"].([]any)
+	if !ok {
+		return out
+	}
 	for i, b := range backends {
 		bm, ok := b.(map[string]any)
 		if !ok {
