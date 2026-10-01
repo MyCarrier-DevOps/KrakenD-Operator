@@ -958,9 +958,17 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 		return fmt.Errorf("reconciling pdb: %w", err)
 	}
 
-	// The Deployment exists only once a config has passed validation: before
-	// that it would have nothing valid to mount.
-	if in.appliedChecksum != "" {
+	switch {
+	case in.appliedChecksum == "":
+		// Nothing has passed validation yet: a Deployment would have
+		// nothing valid to mount.
+	case in.configMapName == "":
+		// The applied config's ConfigMap is gone (deleted out of band while
+		// a newer render is rejected). Leave the Deployment exactly as it
+		// is rather than point it at a config that does not exist.
+		log.Error(errAppliedConfigMissing, "holding the Deployment as it is",
+			"checksum", in.appliedChecksum)
+	default:
 		if err := r.reconcileDeployment(ctx, gw, in); err != nil {
 			return err
 		}

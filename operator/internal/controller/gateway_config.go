@@ -107,6 +107,10 @@ func (r *KrakenDGatewayReconciler) legacyConfig(ctx context.Context, gw *v1alpha
 	return []byte(cm.Data[resources.ConfigKey]), nil
 }
 
+// errAppliedConfigMissing is logged when no ConfigMap holds the applied
+// config, so the Deployment is held as it is.
+var errAppliedConfigMissing = stderrors.New("no ConfigMap holds the applied config")
+
 // publishConfig makes sure the immutable ConfigMap for checksum exists and
 // holds jsonData. An existing ConfigMap is never updated: its name is its
 // content's address.
