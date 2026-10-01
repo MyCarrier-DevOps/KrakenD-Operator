@@ -768,7 +768,7 @@ func (r *KrakenDGatewayReconciler) handleValidationError(
 	rejected *renderer.ValidationError,
 	summary string,
 ) {
-	message := truncateMessage(summary+"\n"+rejected.Error(), maxConditionMessageBytes)
+	message := truncateMessage(summary + "\n" + rejected.Error())
 	prev := meta.FindStatusCondition(before.Conditions, v1alpha1.ConditionConfigValid)
 	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
 		Type:               v1alpha1.ConditionConfigValid,
@@ -794,7 +794,7 @@ func (r *KrakenDGatewayReconciler) handleValidatorUnavailable(
 	cause error,
 ) error {
 	message := truncateMessage(
-		fmt.Sprintf("config validator unavailable, retrying: %v", cause), maxConditionMessageBytes)
+		fmt.Sprintf("config validator unavailable, retrying: %v", cause))
 	prev := meta.FindStatusCondition(before.Conditions, v1alpha1.ConditionConfigValid)
 	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
 		Type:               v1alpha1.ConditionConfigValid,
@@ -901,16 +901,15 @@ func eeStripped(cond *metav1.Condition, ep *v1alpha1.KrakenDEndpoint, stripped [
 		cond.Status = metav1.ConditionFalse
 	}
 	cond.Reason = v1alpha1.ReasonEEFeaturesStripped
-	cond.Message = truncateMessage("The gateway runs KrakenD CE in license fallback, which removed these "+
-		"Enterprise-only features: "+strippedList(stripped), maxConditionMessageBytes)
+	cond.Message = truncateMessage("The gateway runs KrakenD CE in license fallback, which removed these " +
+		"Enterprise-only features: " + strippedList(stripped))
 }
 
 // noteStripped appends what a CE-fallback render removed to a conflict
 // verdict, which keeps its reason.
 func noteStripped(cond *metav1.Condition, stripped []renderer.StrippedEEFeature) {
 	if len(stripped) > 0 {
-		cond.Message = truncateMessage(cond.Message+"; CE fallback also removed: "+strippedList(stripped),
-			maxConditionMessageBytes)
+		cond.Message = truncateMessage(cond.Message + "; CE fallback also removed: " + strippedList(stripped))
 	}
 }
 

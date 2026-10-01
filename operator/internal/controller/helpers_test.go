@@ -379,17 +379,17 @@ type stubManager struct {
 func (m *stubManager) GetFieldIndexer() client.FieldIndexer { return m.indexer }
 
 func TestTruncateMessage(t *testing.T) {
-	if got := truncateMessage("short", 4096); got != "short" {
+	if got := truncateMessage("short"); got != "short" {
 		t.Errorf("a message within the bound must be unchanged, got %q", got)
 	}
 	long := "x" + strings.Repeat("é", 5000) // one line; rune starts fall on odd offsets
-	got := truncateMessage(long, 4096)
+	got := truncateMessage(long)
 	if len(got) > 4096 || !utf8.ValidString(got) {
 		t.Errorf("got %d bytes, valid UTF-8 = %v; want at most 4096 valid bytes", len(got), utf8.ValidString(got))
 	}
 
 	line := strings.Repeat("l", 100)
-	lines := truncateMessage(strings.Repeat(line+"\n", 100), 4096) // 100 lines, 101 bytes each
+	lines := truncateMessage(strings.Repeat(line+"\n", 100)) // 100 lines, 101 bytes each
 	// 4096-64 bytes hold 39 whole lines; the empty string after the final
 	// newline is not a line, so 61 of the 100 remain.
 	if want := "(output truncated, 61 more lines)"; !strings.HasSuffix(lines, want) {

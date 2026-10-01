@@ -100,15 +100,16 @@ const maxConditionMessageBytes = 4096
 // lines)" marker.
 const truncationReserve = 64
 
-// truncateMessage returns msg unchanged when it fits in maxBytes. Otherwise
+// truncateMessage returns msg unchanged when it fits in
+// maxConditionMessageBytes. Otherwise
 // it keeps as many whole leading lines as fit, cutting the first line at a
 // rune boundary if even that one is too long, and appends a marker counting
 // the lines it dropped.
-func truncateMessage(msg string, maxBytes int) string {
-	if len(msg) <= maxBytes {
+func truncateMessage(msg string) string {
+	if len(msg) <= maxConditionMessageBytes {
 		return msg
 	}
-	budget := maxBytes - truncationReserve
+	budget := maxConditionMessageBytes - truncationReserve
 	lines := strings.Split(strings.TrimSuffix(msg, "\n"), "\n")
 	var b strings.Builder
 	kept := 0

@@ -309,8 +309,8 @@ func rejectionsByEndpoint(atts []renderer.Attribution) map[types.NamespacedName]
 	}
 	out := make(map[types.NamespacedName]string, len(lines))
 	for nn, l := range lines {
-		out[nn] = truncateMessage("The gateway's newest config was rejected by krakend check and not applied; "+
-			"findings naming this endpoint: "+strings.Join(l, "; "), maxConditionMessageBytes)
+		out[nn] = truncateMessage("The gateway's newest config was rejected by krakend check and not applied; " +
+			"findings naming this endpoint: " + strings.Join(l, "; "))
 	}
 	return out
 }
@@ -580,14 +580,15 @@ func (r *KrakenDGatewayReconciler) reconcileCEFallbackCondition(
 		}
 		msg := "Running KrakenD CE in license fallback; the config uses no Enterprise-only features"
 		if n > 0 {
-			msg = fmt.Sprintf("Running KrakenD CE in license fallback; removed %d Enterprise-only feature(s): %s", n, list)
+			msg = fmt.Sprintf("Running KrakenD CE in license fallback; removed %d Enterprise-only feature(s): %s",
+				n, list)
 		}
 		r.setProblemCondition(gw, metav1.Condition{
 			Type:               v1alpha1.ConditionCEFallbackApplied,
 			Status:             metav1.ConditionTrue,
 			ObservedGeneration: gw.Generation,
 			Reason:             v1alpha1.ReasonEEFeaturesStripped,
-			Message:            truncateMessage(msg, maxConditionMessageBytes),
+			Message:            truncateMessage(msg),
 		})
 	}
 }
