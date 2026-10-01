@@ -2099,3 +2099,40 @@ func TestGatewayReconcile_CEFallbackListsWhatItRemovedFromEachEndpoint(t *testin
 		}
 	}
 }
+
+func TestGatewayReconcile_CEFallbackAppliedListsTheRemovedFeatures(t *testing.T) {
+	gw, secret, parser := licensedEEGateway(testNow.Add(-time.Minute), true)
+	wildcardOnly, withAPIKeys := fallbackEndpoints()
+	c := fakeClientBuilder().WithObjects(gw, secret, wildcardOnly, withAPIKeys).
+		WithStatusSubresource(gw, wildcardOnly, withAPIKeys).Build()
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}), &mockValidator{})
+	r.LicenseParser = parser
+
+	rec := r.Recorder.(*record.FakeRecorder)
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	// One Warning on the gateway (CEFallbackApplied turned True) and one on
+	// wildcard-only (Accepted turned False); with-api-keys stays True.
+	if n := eventsWithReason(rec, v1alpha1.ReasonEEFeaturesStripped); n != 2 {
+		t.Errorf("EEFeaturesStripped events on the first reconcile = %d, want 2", n)
+	}
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if n := eventsWithReason(rec, v1alpha1.ReasonEEFeaturesStripped); n != 0 {
+		t.Errorf("EEFeaturesStripped events on an unchanged reconcile = %d, want 0", n)
+	}
+	got := getGateway(t, c, gw)
+	cond := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionCEFallbackApplied)
+	if cond == nil || cond.Status != metav1.ConditionTrue || cond.Reason != v1alpha1.ReasonEEFeaturesStripped ||
+		!strings.Contains(cond.Message, "default/wildcard-only GET /files/*: wildcard endpoint") ||
+		!strings.Contains(cond.Message, "default/with-api-keys GET /users: extra_config auth/api-keys") {
+		t.Errorf("CEFallbackApplied = %+v, want True/%s listing both removed features", cond, v1alpha1.ReasonEEFeaturesStripped)
+	}
+	ready := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionReady)
+	if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != v1alpha1.ReasonEEFeaturesStripped ||
+		got.Status.Phase != v1alpha1.PhaseDegraded {
+		t.Errorf("Ready = %+v, phase %s; want False/%s, Degraded", ready, got.Status.Phase, v1alpha1.ReasonEEFeaturesStripped)
+	}
+}
