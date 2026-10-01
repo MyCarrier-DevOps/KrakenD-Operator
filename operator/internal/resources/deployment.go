@@ -696,3 +696,14 @@ func buildOpenAPIPieces(
 
 	return initContainer, sidecar, volume, initMount
 }
+
+// MountedConfigMapName returns the ConfigMap spec mounts as the gateway
+// config, or "" when it mounts none.
+func MountedConfigMapName(spec *corev1.PodSpec) string {
+	for _, v := range spec.Volumes {
+		if v.Name == configVolumeName && v.ConfigMap != nil {
+			return v.ConfigMap.Name
+		}
+	}
+	return ""
+}
