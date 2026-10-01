@@ -674,6 +674,15 @@ annotation, which records the image the operator set (the operator compares
 it rather than the container image, which admission webhooks may rewrite).
 Existing gateways roll their pods once when the operator is upgraded.
 
+### Gateway events fire on transitions only
+
+`RolloutFailed`, `IstioVirtualServiceCreated` and `DragonflyNotReady` are now
+recorded once, when the condition behind them changes, instead of on every
+reconcile. `IstioVirtualServiceCreated` is recorded when `IstioConfigured`
+becomes True after being False, not when the VirtualService is first
+created. Alerts that counted these events per interval see one event per
+transition.
+
 ---
 
 ## v0.14.0 — openapi-serve liveness probe (one-time rollout)
