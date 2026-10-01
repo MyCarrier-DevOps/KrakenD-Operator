@@ -129,12 +129,6 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// Status as read, so each write below happens only when it changes.
 	before := gw.Status.DeepCopy()
 
-	// Initialize phase in memory; the first status write that is needed
-	// anyway persists it.
-	if gw.Status.Phase == "" {
-		gw.Status.Phase = v1alpha1.PhasePending
-	}
-
 	// Gather endpoints via field index
 	var endpointList v1alpha1.KrakenDEndpointList
 	indexKey := gw.Namespace + "/" + gw.Name
