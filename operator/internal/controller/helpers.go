@@ -57,6 +57,8 @@ func conditionsEqual(a, b []metav1.Condition) bool {
 	return true
 }
 
+func sameCondition(a, b *metav1.Condition) bool { return false }
+
 // maxConditionMessageBytes bounds validator output copied into a condition
 // message or an event. The CRDs cap condition messages at 32768 characters,
 // and krakend check can print far more for one bad policy used by many

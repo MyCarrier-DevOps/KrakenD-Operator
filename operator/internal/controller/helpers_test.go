@@ -429,3 +429,18 @@ func TestRecordConditionTransition(t *testing.T) {
 		})
 	}
 }
+
+func TestSameCondition(t *testing.T) {
+	tests := []struct {
+		name string
+		a, b *metav1.Condition
+		want bool
+	}{
+		{"both absent", nil, nil, true},
+	}
+	for _, tt := range tests {
+		if got := sameCondition(tt.a, tt.b); got != tt.want {
+			t.Errorf("%s: sameCondition = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
