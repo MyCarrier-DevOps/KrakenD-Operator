@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"time"
@@ -87,23 +88,24 @@ func (v *KrakenDValidator) Validate(ctx context.Context, jsonData []byte) (retEr
 
 	tmpFile, err := os.CreateTemp("", "krakend-config-*.json")
 	if err != nil {
-		return fmt.Errorf("creating temp file: %w", err)
+		return fmt.Errorf("creating temp file: %w", withoutPath(err))
 	}
 	tmpName := tmpFile.Name()
 	defer func() {
 		if err := os.Remove(tmpName); err != nil && retErr == nil {
-			retErr = fmt.Errorf("removing temp file: %w", err)
+			retErr = fmt.Errorf("removing temp file: %w", withoutPath(err))
 		}
 	}()
 
 	if _, writeErr := tmpFile.Write(jsonData); writeErr != nil {
 		if closeErr := tmpFile.Close(); closeErr != nil {
-			return fmt.Errorf("writing config to temp file: %w, close error: %w", writeErr, closeErr)
+			return fmt.Errorf("writing config to temp file: %w, close error: %w",
+				withoutPath(writeErr), withoutPath(closeErr))
 		}
-		return fmt.Errorf("writing config to temp file: %w", writeErr)
+		return fmt.Errorf("writing config to temp file: %w", withoutPath(writeErr))
 	}
 	if err := tmpFile.Close(); err != nil {
-		return fmt.Errorf("closing temp file: %w", err)
+		return fmt.Errorf("closing temp file: %w", withoutPath(err))
 	}
 
 	output, err := v.Executor.Execute(ctx, v.BinaryPath, "check", "-t", "-n", "-c", tmpName)
@@ -111,6 +113,19 @@ func (v *KrakenDValidator) Validate(ctx context.Context, jsonData []byte) (retEr
 		return classifyCheckError(ctx, output, err)
 	}
 	return nil
+}
+
+// withoutPath drops the file name from a *fs.PathError and keeps the
+// operation and the underlying error. The temp file name is random, so an
+// error that carries it reads differently on every call; callers that
+// record the message in a status would then write it on every retry. The
+// underlying error stays wrapped, so errors.Is still matches the errno.
+func withoutPath(err error) error {
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
+		return fmt.Errorf("%s: %w", pathErr.Op, pathErr.Err)
+	}
+	return err
 }
 
 // classifyCheckError separates a verdict from a validator that could not
