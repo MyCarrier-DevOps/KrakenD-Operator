@@ -78,8 +78,8 @@ func namespaceSet(names ...string) map[string]struct{} {
 	return set
 }
 
-// dropCEInertNamespaces removes, in place, the namespaces a CE-edition render
-// drops from a rendered entry.
+// dropCEInertNamespaces removes, in place, the namespaces every CE render (CE
+// edition or CE fallback) drops from a rendered entry.
 func dropCEInertNamespaces(ep map[string]any) {
 	ec, ok := ep["extra_config"].(map[string]any)
 	if !ok {
@@ -159,7 +159,7 @@ const (
 // Enterprise implements at level, sorted, or nil for an unknown level. A
 // CE-fallback render strips them; admission rejects them on CE gateways,
 // where KrakenD CE would accept and then silently ignore them. At
-// LevelEndpoint it leaves out the namespaces a CE-edition render drops
+// LevelEndpoint it leaves out the namespaces every CE render drops
 // (ceDroppedEndpointNamespaces).
 func EEOnlyNamespaces(level NamespaceLevel) []string {
 	set, ok := map[NamespaceLevel]map[string]struct{}{
