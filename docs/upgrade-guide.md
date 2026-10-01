@@ -505,6 +505,27 @@ kubectl get krakendgateways,krakendendpoints,krakendautoconfigs,krakendbackendpo
   | jq -r '.items[] | select(((.status.conditions // []) | map(.type) | length) != ((.status.conditions // []) | map(.type) | unique | length)) | "\(.kind) \(.metadata.namespace)/\(.metadata.name)"'
 ```
 
+### KrakenDEndpoint: `Accepted` (gateway controller)
+
+- The gateway controller no longer writes an endpoint's `phase` or its
+  `Available` condition, and no longer marks endpoints with a missing policy
+  `Invalid`. It owns one condition, `Accepted`, which it writes for every
+  endpoint of the gateway, and only when the verdict changes:
+  - `True`, reason `Accepted`: the endpoint is part of the gateway's
+    validated configuration.
+  - `False`, reason `EndpointConflict`: an older endpoint owns one of its
+    (path, method) pairs; those entries are not served. A resolved conflict
+    now clears by itself.
+  - removed: a policy it references is missing, so it is not in the
+    configuration (the endpoint controller reports why).
+- `Accepted` is written only for a configuration that passed validation, or
+  is unchanged since it did, and records the endpoint generation that
+  configuration contains. While a gateway's rendered configuration fails
+  validation, no verdict changes.
+- The `EndpointConflict` Warning event fires once per transition instead of
+  on every gateway reconcile. A `Normal` `Accepted` event marks a conflict
+  that cleared. The `EndpointInvalid` event is gone.
+
 ## v0.14.0 — openapi-serve liveness probe (one-time rollout)
 
 The `openapi-serve` sidecar now renders with a liveness probe. It previously
