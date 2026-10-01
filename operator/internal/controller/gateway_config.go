@@ -467,3 +467,29 @@ func renderEdition(gw *v1alpha1.KrakenDGateway, ceFallback bool) v1alpha1.Editio
 	}
 	return v1alpha1.EditionCE
 }
+
+// configKey identifies a verdict: krakend check is deterministic for a
+// rendered document and the edition it is checked as.
+type configKey struct {
+	checksum string
+	edition  v1alpha1.Edition
+}
+
+// appliedKey is the key of the config the gateway serves. A status written
+// before configEdition existed recorded no edition. That config was deployed
+// with the image of the edition the gateway renders for now, so it counts as
+// that. A render that differs between editions has a different checksum and
+// is validated anew.
+func appliedKey(gw *v1alpha1.KrakenDGateway, current v1alpha1.Edition) configKey {
+	edition := gw.Status.ConfigEdition
+	if edition == "" {
+		edition = current
+	}
+	return configKey{checksum: gw.Status.ConfigChecksum, edition: edition}
+}
+
+// isApplied reports whether output, rendered for edition, is the gateway's
+// applied config.
+func isApplied(gw *v1alpha1.KrakenDGateway, output *renderer.RenderOutput, edition v1alpha1.Edition) bool {
+	return appliedKey(gw, edition) == configKey{checksum: output.Checksum, edition: edition}
+}
