@@ -124,6 +124,7 @@ validating; the operator does not write them.
 | `LicenseExpired` | `True` once the license is expired or inside the 1 h safety buffer; without `fallbackToCE` the gateway reports phase `Error` |
 | `LicenseDegraded` | `True` (`LicenseFallbackCE`) while the gateway runs CE because its license expired or entered the 1 h safety buffer |
 | `LicenseSecretUnavailable` | License secret could not be read or parsed; `LicenseValid` is `Unknown` meanwhile. The stage is still judged from the last known expiry (`status.licenseExpiry`), so a `fallbackToCE` gateway falls back to CE when that expiry enters the 1 h safety buffer. Once that expiry is inside the buffer or past, `LicenseValid` shows the stage (`False`, reason `LicensePreExpiry` or `LicenseExpired`) instead of `Unknown` |
+| any of `DragonflyReady`, `IstioConfigured`, `LicenseSecretUnavailable` with reason `CRDNotInstalled` | The feature is enabled but its CRD (Dragonfly Operator, Istio, External Secrets Operator) is not installed. Install it, then restart the operator so it also watches the kind |
 
 ---
 
