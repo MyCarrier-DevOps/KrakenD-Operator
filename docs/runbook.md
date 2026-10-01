@@ -309,7 +309,10 @@ names this endpoint. The gateway still serves its last applied config, so
 this endpoint's latest change is not live.
 `kubectl describe krakendendpoint <name>` shows the findings; fix the spec
 they point at. The gateway's `ConfigValid` message lists every endpoint
-named.
+named. The condition is removed as soon as no finding names the endpoint,
+and cleared by a config that passes validation. A gateway that has never
+applied a config leaves no `Accepted` on endpoints it has not accepted, so
+they read `Pending` until one is applied.
 
 ### AutoConfig not generating endpoints
 
