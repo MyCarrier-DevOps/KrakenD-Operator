@@ -78,7 +78,7 @@ func TestEndpointReconcile_InitialPhase(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if result != (ctrl.Result{}) {
-		t.Error("should not requeue; initial phase is set inline")
+		t.Error("should not requeue; status is patched inline")
 	}
 
 	var updated v1alpha1.KrakenDEndpoint
@@ -867,6 +867,10 @@ func TestEndpointPredicate(t *testing.T) {
 	ownWrite.Status.Conditions = append(ownWrite.Status.Conditions, metav1.Condition{
 		Type: v1alpha1.ConditionReady, Status: metav1.ConditionTrue, Reason: v1alpha1.ReasonReady,
 	})
+	firstAcceptance := old.DeepCopy()
+	firstAcceptance.Status.Conditions = nil
+	acceptedRemoved := old.DeepCopy()
+	acceptedRemoved.Status.Conditions = nil
 	acceptedTimeOnly := old.DeepCopy()
 	acceptedTimeOnly.Status.Conditions[0].LastTransitionTime = metav1.Now()
 
@@ -881,11 +885,15 @@ func TestEndpointPredicate(t *testing.T) {
 		{"gateway accepted a new generation", acceptedRegenerated, true},
 		{"the controller's own Ready and phase write", ownWrite, false},
 		{"Accepted lastTransitionTime only", acceptedTimeOnly, false},
+		{"Accepted removed", acceptedRemoved, true},
 	}
 	for _, tt := range tests {
 		if got := p.Update(event.UpdateEvent{ObjectOld: old, ObjectNew: tt.newObj}); got != tt.want {
 			t.Errorf("%s: Update = %v, want %v", tt.name, got, tt.want)
 		}
+	}
+	if !p.Update(event.UpdateEvent{ObjectOld: firstAcceptance, ObjectNew: old}) {
+		t.Error("first acceptance (Accepted absent to present): Update = false, want true")
 	}
 	if !p.Create(event.CreateEvent{Object: old}) {
 		t.Error("Create = false, want true")
