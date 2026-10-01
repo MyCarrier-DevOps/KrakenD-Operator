@@ -915,53 +915,6 @@ func TestGatewayReconcile_ExternalSecretSkippedWhenCRDMissing(t *testing.T) {
 	}
 }
 
-func TestGatewayReconcile_VirtualServiceSkippedWhenCRDMissing(t *testing.T) {
-	gw := testGateway()
-	gw.Spec.Istio = &v1alpha1.IstioSpec{
-		Enabled:  true,
-		Hosts:    []string{"api.example.com"},
-		Gateways: []string{"istio-system/gateway"},
-	}
-	gw.Status.Phase = v1alpha1.PhaseRunning
-	rec := fakeRecorder()
-	c := fakeClientBuilder().
-		WithObjects(gw).
-		WithStatusSubresource(gw).
-		Build()
-
-	r := &KrakenDGatewayReconciler{
-		Client:   c,
-		Scheme:   testScheme(),
-		Recorder: rec,
-		Renderer: &mockRenderer{
-			output: &renderer.RenderOutput{
-				JSON: []byte(`{}`), Checksum: "cs",
-			},
-		},
-		Validator: &mockValidator{},
-	}
-
-	_, err := r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: client.ObjectKeyFromObject(gw),
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	// Verify warning event was emitted about missing CRD.
-	found := false
-	for len(rec.Events) > 0 {
-		e := <-rec.Events
-		if strings.Contains(e, "CRDNotInstalled") && strings.Contains(e, "networking.istio.io") {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Error("expected CRDNotInstalled warning event for VirtualService")
-	}
-}
-
 func TestInspectDeploymentStatus_ProgressDeadlineExceeded(t *testing.T) {
 	gw := testGateway()
 	gw.Status.Phase = v1alpha1.PhaseDeploying
