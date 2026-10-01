@@ -40,7 +40,8 @@ func BuildService(svc *corev1.Service, gw *v1alpha1.KrakenDGateway, ceRender boo
 		},
 	}
 
-	if gw.Spec.OpenAPI != nil && gw.Spec.OpenAPI.Enabled {
+	// No openapi-serve sidecar runs on a CE render, so nothing listens there.
+	if !ceRender && gw.Spec.OpenAPI != nil && gw.Spec.OpenAPI.Enabled {
 		oaPort := OpenAPIPort(gw)
 		ports = append(ports, corev1.ServicePort{
 			Name:       "openapi",
