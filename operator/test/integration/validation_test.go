@@ -97,3 +97,16 @@ func TestGateway_RejectedConfigSettles(t *testing.T) {
 		t.Errorf("the unchanged rejected config was validated %d more times", n)
 	}
 }
+
+func TestGateway_OversizedValidationOutputIsRecorded(t *testing.T) {
+	gw := createRejectedGateway(t, "gw-rejected-huge", rejectHugeMarker)
+
+	var got v1alpha1.KrakenDGateway
+	if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(gw), &got); err != nil {
+		t.Fatal(err)
+	}
+	cond := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionConfigValid)
+	if len(cond.Message) > 4096 {
+		t.Errorf("ConfigValid message is %d bytes, want at most 4096", len(cond.Message))
+	}
+}
