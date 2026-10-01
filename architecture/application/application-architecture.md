@@ -882,7 +882,7 @@ flowchart TD
     G4 --> I
     G -->|Yes| J1{Same render and edition<br/>already rejected?}
     J1 -->|Yes| L[Re-apply the remembered rejection:<br/>ConfigValid=False,<br/>Warning event only if the verdict changed, return]
-    J1 -->|No| J[Validate as the render's edition:<br/>EE wildcard rule in Go, then<br/>krakend check -t -n -c on the copy]
+    J1 -->|No| J[Validate as the render's edition:<br/>EE wildcard rules in Go; only if they<br/>find nothing, krakend check -t -n -c on the copy]
     J --> K{Verdict?}
     K -->|Rejected| L
     K -->|Unavailable| L2[Set ConfigValid=Unknown<br/>reason ValidatorUnavailable,<br/>Ready Unknown, keep applied config,<br/>one Warning event,<br/>return error: retry with backoff]
