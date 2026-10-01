@@ -179,86 +179,34 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 	configRenders.Inc()
 
-	// Determine if config changed
-	configChanged := output.Checksum != gw.Status.ConfigChecksum
-	imageChanged := output.DesiredImage != gw.Status.ActiveImage
-	pluginChanged := output.PluginChecksum != "" && output.PluginChecksum != gw.Status.PluginChecksum
-
-	if configChanged {
-		// Validate, then update the ConfigMap. No phase is written for the
-		// steps in between: each write would re-enqueue the gateway.
-		if err := r.validateConfig(ctx, &gw, output.JSON, ceFallback); err != nil {
-			var rejected *renderer.ValidationError
-			if !stderrors.As(err, &rejected) {
-				return ctrl.Result{}, r.handleValidatorUnavailable(ctx, &gw, before, err)
-			}
-			return ctrl.Result{}, r.handleValidationError(ctx, &gw, before, rejected)
-		}
-
-		// Update ConfigMap
-		cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
-			Name: gw.Name, Namespace: gw.Namespace,
-		}}
-		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, cm, func() error {
-			resources.BuildConfigMap(cm, &gw, output.JSON)
-			return controllerutil.SetControllerReference(&gw, cm, r.Scheme)
-		}); err != nil {
-			return ctrl.Result{}, fmt.Errorf("reconciling configmap: %w", err)
-		}
-
-		setConfigApplied(&gw)
-		gw.Status.ConfigChecksum = output.Checksum
-		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
-			Type:               v1alpha1.ConditionProgressing,
-			Status:             metav1.ConditionTrue,
-			ObservedGeneration: gw.Generation,
-			Reason:             v1alpha1.ReasonConfigDeployed,
-			Message:            "Configuration updated, rolling deployment",
-		})
-
-		r.Recorder.Event(&gw, "Normal", v1alpha1.ReasonConfigDeployed,
-			fmt.Sprintf("Configuration updated, checksum: %s", output.Checksum))
-		rollingRestarts.Inc()
-	} else {
-		// The rendered configuration is the applied one, which passed
-		// validation when it was applied, so a revert to it clears a rejection.
-		setConfigApplied(&gw)
-		if imageChanged || pluginChanged {
-			meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
-				Type:               v1alpha1.ConditionProgressing,
-				Status:             metav1.ConditionTrue,
-				ObservedGeneration: gw.Generation,
-				Reason:             "DeploymentUpdated",
-				Message:            "Deployment updated for image or plugin change",
-			})
-			rollingRestarts.Inc()
-		}
+	// Config stage: decide and publish the applied config. Its error is
+	// returned only after the infrastructure stage and the status write.
+	appliedBefore := gw.Status.ConfigChecksum
+	configErr := r.reconcileConfig(ctx, &gw, before, output, ceFallback)
+	if gw.Status.ConfigChecksum == appliedBefore {
+		r.markDeploymentUpdate(&gw, output.DesiredImage, output.PluginChecksum)
 	}
 
 	// Record each endpoint's Accepted verdict, but only for a render that is
 	// the gateway's applied configuration: validated just now, or unchanged
-	// since it was. A failed endpoint status write does not stop the owned
-	// resources or the gateway status from converging; it is returned after
-	// them so the reconcile is retried.
+	// since it was. A rejected or unjudged render is not the applied one, so
+	// its endpoints keep the verdict of the config that is running. A failed
+	// endpoint status write does not stop the infrastructure stage or the
+	// gateway status; it is returned after them so the reconcile is retried.
 	var acceptanceErr error
-	// Always true in today's flow: a rejected render returns earlier and an
-	// accepted one has just been recorded. Kept because the split of this
-	// reconcile into configuration and infrastructure stages relies on it.
 	if output.Checksum == gw.Status.ConfigChecksum {
 		acceptanceErr = r.reconcileEndpointAcceptance(ctx, &gw, endpoints, output)
 	}
 
-	// Reconcile owned resources
-	if err := r.reconcileOwnedResources(ctx, &gw, output); err != nil {
-		return ctrl.Result{}, err
-	}
-
-	// Inspect Deployment rollout status
+	// Infrastructure stage: always runs, and deploys the applied config.
+	infraErr := r.reconcileInfrastructure(ctx, &gw, infraInputs{
+		appliedChecksum: gw.Status.ConfigChecksum,
+		pluginChecksum:  output.PluginChecksum,
+		image:           output.DesiredImage,
+	})
 	r.inspectDeploymentStatus(ctx, &gw)
 
 	// Update final status
-	gw.Status.ActiveImage = output.DesiredImage
-	gw.Status.PluginChecksum = output.PluginChecksum
 	gw.Status.EndpointCount = int32(len(endpoints))
 	endpointsPerGateway.WithLabelValues(gw.Namespace, gw.Name).Set(float64(len(endpoints)))
 	gatewayInfo.WithLabelValues(gw.Namespace, gw.Name, string(gw.Spec.Edition), gw.Spec.Version).Set(1)
@@ -267,8 +215,8 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	if err := r.updateStatusIfChanged(ctx, &gw, before); err != nil {
 		return ctrl.Result{}, fmt.Errorf("updating gateway status: %w", err)
 	}
-	if acceptanceErr != nil {
-		return ctrl.Result{}, acceptanceErr
+	if err := stderrors.Join(configErr, acceptanceErr, infraErr); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	log.V(1).Info("gateway reconciled",
@@ -619,6 +567,108 @@ func findDeploymentCondition(
 	return nil
 }
 
+// reconcileConfig is the config stage. It decides whether the current render
+// becomes the applied config (status.configChecksum), and it is the only code
+// that writes config content. Reconcile returns its error only after the
+// infrastructure stage has run, so a rejected or unjudged render never stops
+// drift correction of the gateway's other resources.
+func (r *KrakenDGatewayReconciler) reconcileConfig(
+	ctx context.Context,
+	gw *v1alpha1.KrakenDGateway,
+	before *v1alpha1.KrakenDGatewayStatus,
+	output *renderer.RenderOutput,
+	ceFallback bool,
+) error {
+	if output.Checksum == gw.Status.ConfigChecksum {
+		// The applied config passed validation when it was applied, so a
+		// revert to it clears a rejection. Rewriting it reverts an
+		// out-of-band edit.
+		setConfigApplied(gw)
+		return r.writeConfigMap(ctx, gw, output.JSON)
+	}
+	return r.validateAndApply(ctx, gw, before, output, ceFallback)
+}
+
+// validateAndApply validates a render that is not the applied config and,
+// when it passes, makes it the applied config. validateConfig answers from
+// the rejection memo when this exact input was already rejected.
+func (r *KrakenDGatewayReconciler) validateAndApply(
+	ctx context.Context,
+	gw *v1alpha1.KrakenDGateway,
+	before *v1alpha1.KrakenDGatewayStatus,
+	output *renderer.RenderOutput,
+	ceFallback bool,
+) error {
+	err := r.validateConfig(ctx, gw, output.JSON, ceFallback)
+	var rejected *renderer.ValidationError
+	switch {
+	case stderrors.As(err, &rejected):
+		r.handleValidationError(gw, before, rejected)
+		return nil
+	case err != nil:
+		return r.handleValidatorUnavailable(gw, before, err)
+	}
+	if err := r.writeConfigMap(ctx, gw, output.JSON); err != nil {
+		return err
+	}
+	r.markConfigApplied(gw, output.Checksum)
+	return nil
+}
+
+// writeConfigMap writes the config the gateway serves into its ConfigMap.
+func (r *KrakenDGatewayReconciler) writeConfigMap(
+	ctx context.Context, gw *v1alpha1.KrakenDGateway, jsonData []byte,
+) error {
+	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace}}
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, cm, func() error {
+		resources.BuildConfigMap(cm, gw, jsonData)
+		return controllerutil.SetControllerReference(gw, cm, r.Scheme)
+	}); err != nil {
+		return fmt.Errorf("reconciling configmap: %w", err)
+	}
+	return nil
+}
+
+// markConfigApplied makes checksum the applied config and reports the rollout
+// the infrastructure stage starts for it.
+func (r *KrakenDGatewayReconciler) markConfigApplied(gw *v1alpha1.KrakenDGateway, checksum string) {
+	gw.Status.ConfigChecksum = checksum
+	setConfigApplied(gw)
+	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+		Type:               v1alpha1.ConditionProgressing,
+		Status:             metav1.ConditionTrue,
+		ObservedGeneration: gw.Generation,
+		Reason:             v1alpha1.ReasonConfigDeployed,
+		Message:            "Configuration updated, rolling deployment",
+	})
+	r.Recorder.Event(gw, corev1.EventTypeNormal, v1alpha1.ReasonConfigDeployed,
+		fmt.Sprintf("Configuration updated, checksum: %s", checksum))
+	rollingRestarts.Inc()
+}
+
+// markDeploymentUpdate reports the rollout the infrastructure stage is about
+// to start for an image or plugin change when no new config was applied.
+func (r *KrakenDGatewayReconciler) markDeploymentUpdate(
+	gw *v1alpha1.KrakenDGateway, image, pluginChecksum string,
+) {
+	if gw.Status.ConfigChecksum == "" {
+		return
+	}
+	imageChanged := image != gw.Status.ActiveImage
+	pluginChanged := pluginChecksum != "" && pluginChecksum != gw.Status.PluginChecksum
+	if !imageChanged && !pluginChanged {
+		return
+	}
+	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+		Type:               v1alpha1.ConditionProgressing,
+		Status:             metav1.ConditionTrue,
+		ObservedGeneration: gw.Generation,
+		Reason:             "DeploymentUpdated",
+		Message:            "Deployment updated for image or plugin change",
+	})
+	rollingRestarts.Inc()
+}
+
 // validateConfig runs krakend check on the validation copy of jsonData.
 // When the validator already rejected identical input for this gateway, the
 // remembered rejection is returned without running krakend check again.
@@ -653,17 +703,18 @@ func (r *KrakenDGatewayReconciler) validateConfig(
 
 // handleValidationError records a rejected configuration: ConfigValid=False
 // with the validator's output (bounded by truncateMessage to 4 KiB; the full
-// output is in the log), and the derived Ready and phase (Error). The Warning
-// event fires only when the recorded verdict changes, so a gateway that keeps
-// rendering the same rejected config stays quiet. It returns nil: the
-// rejection is persistent, and a change to any input re-enqueues the gateway.
+// output is in the log). The Warning event fires only when the recorded
+// verdict changes, so a gateway that keeps rendering the same rejected config
+// stays quiet. The applied config is left alone; the status, with the derived
+// Ready and phase, is written at the end of Reconcile after the
+// infrastructure stage. The rejection is persistent and a change to any input
+// re-enqueues the gateway, so no error is returned.
 func (r *KrakenDGatewayReconciler) handleValidationError(
-	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
 	before *v1alpha1.KrakenDGatewayStatus,
-	validationErr error,
-) error {
-	message := truncateMessage(validationErr.Error(), maxConditionMessageBytes)
+	rejected *renderer.ValidationError,
+) {
+	message := truncateMessage(rejected.Error(), maxConditionMessageBytes)
 	prev := meta.FindStatusCondition(before.Conditions, v1alpha1.ConditionConfigValid)
 	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
 		Type:               v1alpha1.ConditionConfigValid,
@@ -672,24 +723,18 @@ func (r *KrakenDGatewayReconciler) handleValidationError(
 		Reason:             v1alpha1.ReasonConfigValidationFailed,
 		Message:            message,
 	})
-	setGatewayReadiness(gw)
 	if prev == nil || prev.Status != metav1.ConditionFalse || prev.Message != message {
 		r.Recorder.Event(gw, "Warning", v1alpha1.ReasonConfigValidationFailed, message)
 	}
-	if err := r.updateStatusIfChanged(ctx, gw, before); err != nil {
-		return fmt.Errorf("updating status after validation failure: %w", err)
-	}
-	return nil
 }
 
 // handleValidatorUnavailable records that the rendered config could not be
 // judged: krakend check did not run to completion, or the validation copy
-// could not be prepared. The applied config is left as it is, ConfigValid
-// goes Unknown with reason ValidatorUnavailable, Ready follows it, the phase
-// stays at the serving phase, and the error is returned so the reconcile is
-// retried with backoff.
+// could not be prepared. The applied config is left as it is, and ConfigValid
+// goes Unknown with reason ValidatorUnavailable. The derived Ready and phase
+// are written at the end of Reconcile, after the infrastructure stage. It
+// returns the error, so the reconcile is retried with backoff.
 func (r *KrakenDGatewayReconciler) handleValidatorUnavailable(
-	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
 	before *v1alpha1.KrakenDGatewayStatus,
 	cause error,
@@ -704,12 +749,8 @@ func (r *KrakenDGatewayReconciler) handleValidatorUnavailable(
 		Reason:             v1alpha1.ReasonValidatorUnavailable,
 		Message:            message,
 	})
-	setGatewayReadiness(gw)
 	if prev == nil || prev.Reason != v1alpha1.ReasonValidatorUnavailable {
 		r.Recorder.Event(gw, "Warning", v1alpha1.ReasonValidatorUnavailable, message)
-	}
-	if err := r.updateStatusIfChanged(ctx, gw, before); err != nil {
-		return fmt.Errorf("updating status after validator failure: %w", err)
 	}
 	return fmt.Errorf("validating config: %w", cause)
 }
@@ -861,12 +902,24 @@ func (r *KrakenDGatewayReconciler) writeEndpointAccepted(
 	return nil
 }
 
-// reconcileOwnedResources creates or updates all Kubernetes resources owned
-// by the gateway using the create-or-update pattern.
-func (r *KrakenDGatewayReconciler) reconcileOwnedResources(
+// infraInputs is what the infrastructure stage deploys. It names the applied
+// config and never carries config content, which only the config stage
+// writes.
+type infraInputs struct {
+	// appliedChecksum is status.configChecksum after the config stage ran;
+	// "" means no config has passed validation yet.
+	appliedChecksum string
+	pluginChecksum  string
+	image           string
+}
+
+// reconcileInfrastructure is the infrastructure stage. It creates or updates
+// all Kubernetes resources owned by the gateway using the create-or-update
+// pattern, deploying the applied config.
+func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
-	output *renderer.RenderOutput,
+	in infraInputs,
 ) error {
 	log := logf.FromContext(ctx)
 	errCRDMissing := fmt.Errorf("CRD not installed")
@@ -893,17 +946,6 @@ func (r *KrakenDGatewayReconciler) reconcileOwnedResources(
 		return fmt.Errorf("reconciling service: %w", err)
 	}
 
-	// ConfigMap (may already exist from rendering pipeline)
-	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
-		Name: gw.Name, Namespace: gw.Namespace,
-	}}
-	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, cm, func() error {
-		resources.BuildConfigMap(cm, gw, output.JSON)
-		return controllerutil.SetControllerReference(gw, cm, r.Scheme)
-	}); err != nil {
-		return fmt.Errorf("reconciling configmap: %w", err)
-	}
-
 	// PodDisruptionBudget
 	pdb := &policyv1.PodDisruptionBudget{ObjectMeta: metav1.ObjectMeta{
 		Name: gw.Name, Namespace: gw.Namespace,
@@ -916,14 +958,8 @@ func (r *KrakenDGatewayReconciler) reconcileOwnedResources(
 	}
 
 	// Deployment
-	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
-		Name: gw.Name, Namespace: gw.Namespace,
-	}}
-	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, dep, func() error {
-		resources.BuildDeployment(dep, gw, output.Checksum, output.PluginChecksum, output.DesiredImage)
-		return controllerutil.SetControllerReference(gw, dep, r.Scheme)
-	}); err != nil {
-		return fmt.Errorf("reconciling deployment: %w", err)
+	if err := r.reconcileDeployment(ctx, gw, in); err != nil {
+		return err
 	}
 
 	// HPA (only if autoscaling is configured)
@@ -942,7 +978,7 @@ func (r *KrakenDGatewayReconciler) reconcileOwnedResources(
 	// Post-restart Job (only if enabled, and only after rollout convergence
 	// for the current config checksum). Jobs are idempotent by name so each
 	// unique config revision produces exactly one Job.
-	if err := r.reconcilePostRestartJob(ctx, gw, output.Checksum); err != nil {
+	if err := r.reconcilePostRestartJob(ctx, gw, in.appliedChecksum); err != nil {
 		return err
 	}
 
@@ -1046,6 +1082,23 @@ func (r *KrakenDGatewayReconciler) reconcileOwnedResources(
 		}
 	}
 
+	return nil
+}
+
+// reconcileDeployment converges the gateway Deployment on the applied config
+// and records what it now runs.
+func (r *KrakenDGatewayReconciler) reconcileDeployment(
+	ctx context.Context, gw *v1alpha1.KrakenDGateway, in infraInputs,
+) error {
+	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace}}
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, dep, func() error {
+		resources.BuildDeployment(dep, gw, in.appliedChecksum, in.pluginChecksum, in.image)
+		return controllerutil.SetControllerReference(gw, dep, r.Scheme)
+	}); err != nil {
+		return fmt.Errorf("reconciling deployment: %w", err)
+	}
+	gw.Status.ActiveImage = in.image
+	gw.Status.PluginChecksum = in.pluginChecksum
 	return nil
 }
 

@@ -21,7 +21,6 @@ import (
 	"testing"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
-	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 	"github.com/mycarrier-devops/krakend-operator/internal/resources"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -170,12 +169,8 @@ func TestReconcileOwnedResources_DragonflyDisabledClearsStaleRunAsRootCondition(
 	c := fakeClientBuilder().WithObjects(gw).Build()
 	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
 
-	output := &renderer.RenderOutput{
-		JSON:         []byte(`{"version":3}`),
-		Checksum:     "abc123",
-		DesiredImage: "krakend/krakend-ce:2.7.0",
-	}
-	if err := r.reconcileOwnedResources(context.Background(), gw, output); err != nil {
+	in := infraInputs{appliedChecksum: "abc123", image: "krakend/krakend-ce:2.7.0"}
+	if err := r.reconcileInfrastructure(context.Background(), gw, in); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
