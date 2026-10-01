@@ -2894,6 +2894,10 @@ func TestAutoConfigReadiness(t *testing.T) {
 			[]metav1.Condition{c("SpecAvailable", metav1.ConditionTrue, "SpecFetched"),
 				c("Synced", metav1.ConditionFalse, "UnmatchedOverride")},
 			metav1.ConditionFalse, "UnmatchedOverride", v1alpha1.AutoConfigPhaseError},
+		{"synced",
+			[]metav1.Condition{c("SpecAvailable", metav1.ConditionTrue, "SpecFetched"),
+				c("Synced", metav1.ConditionTrue, "Synced")},
+			metav1.ConditionTrue, "Ready", v1alpha1.AutoConfigPhaseSynced},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
