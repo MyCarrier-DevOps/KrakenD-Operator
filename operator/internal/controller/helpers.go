@@ -29,6 +29,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 )
@@ -65,6 +66,8 @@ func sameCondition(a, b *metav1.Condition) bool {
 		a.Message == b.Message &&
 		a.ObservedGeneration == b.ObservedGeneration
 }
+
+func existencePredicate() predicate.Predicate { return predicate.Funcs{} }
 
 // maxConditionMessageBytes bounds validator output copied into a condition
 // message or an event. The CRDs cap condition messages at 32768 characters,

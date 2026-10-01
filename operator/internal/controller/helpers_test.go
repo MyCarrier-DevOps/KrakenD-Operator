@@ -28,6 +28,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 )
@@ -451,5 +452,18 @@ func TestSameCondition(t *testing.T) {
 		if got := sameCondition(tt.a, tt.b); got != tt.want {
 			t.Errorf("%s: sameCondition = %v, want %v", tt.name, got, tt.want)
 		}
+	}
+}
+
+func TestExistencePredicate(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default", Generation: 1}}
+	changed := gw.DeepCopy()
+	changed.Generation = 2
+	p := existencePredicate()
+	if !p.Create(event.CreateEvent{Object: gw}) || !p.Delete(event.DeleteEvent{Object: gw}) {
+		t.Error("create and delete events must pass: they change whether the object exists")
+	}
+	if p.Update(event.UpdateEvent{ObjectOld: gw, ObjectNew: changed}) {
+		t.Error("update events must not pass: an update never changes whether the object exists")
 	}
 }
