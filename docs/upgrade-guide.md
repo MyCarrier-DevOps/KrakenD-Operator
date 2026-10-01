@@ -589,9 +589,9 @@ kubectl patch <kind>/<name> --subresource=status --type=json \
   availability after a rollout finished, e.g. all replicas crash-looping.
 - `status.observedGeneration` advances on every reconcile that evaluated the
   spec, including a rejected configuration.
-- The license monitor no longer writes `phase`; it writes only the
-  `License*` conditions and `licenseExpiry`, with an optimistic lock, so it
-  cannot revert conditions the gateway controller just wrote.
+- The license check no longer writes `phase`; the gateway controller derives
+  it, together with `Ready`, from the `License*` conditions (see "License
+  checks run inside the gateway reconcile").
 
 ### KrakenDAutoConfig
 
@@ -1346,3 +1346,30 @@ cluster with `postRestartJob.enabled: true`.
     to a new explicit value rather than removing an existing override** —
     that is unambiguous and always observable to the reconciler. Removing
     an override is not detected as a change in and of itself.
+
+### License checks run inside the gateway reconcile
+
+The separate license monitor is gone. Each EE gateway's license is evaluated
+on every gateway reconcile. The gateway is requeued at the next boundary
+(the start of the warning window, the start of the 1 h safety buffer, and
+expiry) and at least every 5 minutes. License Secret changes are picked up
+immediately.
+
+- The first check happens at operator startup, not 5 minutes later.
+- The operator no longer writes the `gateway.krakend.io/license-check`
+  annotation to your KrakenDGateway. It writes only the gateway's status.
+  Existing annotations are harmless; remove them with
+  `kubectl annotate krakendgateway <name> gateway.krakend.io/license-check-`.
+- `LicenseValid` is now always present on an EE gateway with a license:
+  - `True` with reason `LicenseOK`;
+  - `True` with reason `LicenseExpiringSoon` inside the warning window;
+  - `False` with reason `LicensePreExpiry` or `LicenseExpired`.
+- An expired or pre-expiry license sets `LicenseExpired=True`. Without
+  `fallbackToCE` the gateway reports phase `Error`; with it, the operator
+  also sets `LicenseDegraded=True` (reason `LicenseFallbackCE`) and the phase
+  is `Degraded`.
+- `LicenseExpiringSoon`, `LicenseFallbackCE`, `LicenseExpiredNoFallback`,
+  `LicenseSecretMissing` and `LicenseRestored` events fire once per
+  transition. `LicenseExpiringSoon` is no longer repeated every 24 hours.
+- The `license_expiry_seconds` series of a deleted or terminating gateway is
+  removed and not recreated.
