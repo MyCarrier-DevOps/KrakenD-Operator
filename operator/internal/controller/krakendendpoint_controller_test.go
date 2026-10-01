@@ -855,9 +855,20 @@ func TestEndpointReconcile_FirstMissingPolicyIsReportedInSpecOrder(t *testing.T)
 
 func TestEndpointPredicate(t *testing.T) {
 	old := endpointOnGW1(1, acceptedAt(1))
+	withGeneration := old.DeepCopy()
+	withGeneration.Generation = 2
 	acceptedFlipped := old.DeepCopy()
 	acceptedFlipped.Status.Conditions[0].Status = metav1.ConditionFalse
 	acceptedFlipped.Status.Conditions[0].Reason = v1alpha1.ReasonEndpointConflict
+	acceptedRegenerated := old.DeepCopy()
+	acceptedRegenerated.Status.Conditions[0].ObservedGeneration = 2
+	ownWrite := old.DeepCopy()
+	ownWrite.Status.Phase = v1alpha1.EndpointPhaseActive
+	ownWrite.Status.Conditions = append(ownWrite.Status.Conditions, metav1.Condition{
+		Type: v1alpha1.ConditionReady, Status: metav1.ConditionTrue, Reason: v1alpha1.ReasonReady,
+	})
+	acceptedTimeOnly := old.DeepCopy()
+	acceptedTimeOnly.Status.Conditions[0].LastTransitionTime = metav1.Now()
 
 	p := endpointPredicate()
 	tests := []struct {
@@ -865,11 +876,18 @@ func TestEndpointPredicate(t *testing.T) {
 		newObj *v1alpha1.KrakenDEndpoint
 		want   bool
 	}{
+		{"spec change", withGeneration, true},
 		{"gateway changed Accepted", acceptedFlipped, true},
+		{"gateway accepted a new generation", acceptedRegenerated, true},
+		{"the controller's own Ready and phase write", ownWrite, false},
+		{"Accepted lastTransitionTime only", acceptedTimeOnly, false},
 	}
 	for _, tt := range tests {
 		if got := p.Update(event.UpdateEvent{ObjectOld: old, ObjectNew: tt.newObj}); got != tt.want {
 			t.Errorf("%s: Update = %v, want %v", tt.name, got, tt.want)
 		}
+	}
+	if !p.Create(event.CreateEvent{Object: old}) {
+		t.Error("Create = false, want true")
 	}
 }
