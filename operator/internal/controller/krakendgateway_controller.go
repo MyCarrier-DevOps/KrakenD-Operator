@@ -1006,7 +1006,7 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 	// Post-restart Job (only if enabled, and only after rollout convergence
 	// for the current config checksum). Jobs are idempotent by name so each
 	// unique config revision produces exactly one Job.
-	if err := r.reconcilePostRestartJob(ctx, gw, in.appliedChecksum); err != nil {
+	if err := r.reconcilePostRestartJob(ctx, gw, in); err != nil {
 		return err
 	}
 
@@ -1152,8 +1152,9 @@ func (r *KrakenDGatewayReconciler) reconcileDeployment(
 func (r *KrakenDGatewayReconciler) reconcilePostRestartJob(
 	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
-	configChecksum string,
+	in infraInputs,
 ) error {
+	configChecksum := in.appliedChecksum
 	spec := gw.Spec.PostRestartJob
 	if spec == nil || !spec.Enabled || spec.Script == "" {
 		// review id 3807285652 (#7): postRestartJob is off (unset, disabled,
@@ -1209,20 +1210,12 @@ func (r *KrakenDGatewayReconciler) reconcilePostRestartJob(
 		return fmt.Errorf("getting deployment for post-restart check: %w", err)
 	}
 
-	annot := dep.Spec.Template.Annotations[resources.PostRestartJobChecksumAnnotation]
-	if annot != configChecksum {
+	if !deploymentConverged(&dep, in) {
 		return nil
 	}
-	desired := int32(1)
-	if dep.Spec.Replicas != nil {
-		desired = *dep.Spec.Replicas
-	}
-	if desired == 0 {
+	if dep.Spec.Replicas != nil && *dep.Spec.Replicas == 0 {
 		// Deployment is intentionally scaled to zero — no pods have rolled
 		// so a post-restart Job must not be created.
-		return nil
-	}
-	if dep.Status.UpdatedReplicas != desired || dep.Status.AvailableReplicas != desired {
 		return nil
 	}
 

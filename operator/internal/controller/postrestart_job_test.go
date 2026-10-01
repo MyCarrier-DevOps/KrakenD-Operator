@@ -83,7 +83,7 @@ func TestReconcilePostRestartJob_CreatesWhenConverged(t *testing.T) {
 	c := fakeClientBuilder().WithObjects(gw, dep).Build()
 	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
 
-	if err := r.reconcilePostRestartJob(context.Background(), gw, "abc123"); err != nil {
+	if err := r.reconcilePostRestartJob(context.Background(), gw, convergedInputs("abc123")); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	var jobs batchv1.JobList
@@ -128,7 +128,7 @@ func TestReconcilePostRestartJob_SkipsWhenNotConverged(t *testing.T) {
 	c := fakeClientBuilder().WithObjects(gw, dep).Build()
 	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
 
-	if err := r.reconcilePostRestartJob(context.Background(), gw, "abc123"); err != nil {
+	if err := r.reconcilePostRestartJob(context.Background(), gw, convergedInputs("abc123")); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	var jobs batchv1.JobList
@@ -174,7 +174,7 @@ func TestReconcilePostRestartJob_NotYetConvergedPreservesConditions(t *testing.T
 	c := fakeClientBuilder().WithObjects(gw, dep).Build()
 	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
 
-	if err := r.reconcilePostRestartJob(context.Background(), gw, "abc123"); err != nil {
+	if err := r.reconcilePostRestartJob(context.Background(), gw, convergedInputs("abc123")); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -203,7 +203,7 @@ func TestReconcilePostRestartJob_SkipsWhenChecksumMismatch(t *testing.T) {
 	c := fakeClientBuilder().WithObjects(gw, dep).Build()
 	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
 
-	if err := r.reconcilePostRestartJob(context.Background(), gw, "new-checksum"); err != nil {
+	if err := r.reconcilePostRestartJob(context.Background(), gw, convergedInputs("new-checksum")); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	var jobs batchv1.JobList
@@ -229,7 +229,7 @@ func TestReconcilePostRestartJob_Idempotent(t *testing.T) {
 	c := fakeClientBuilder().WithObjects(gw, dep, existing).Build()
 	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
 
-	if err := r.reconcilePostRestartJob(context.Background(), gw, "abc123"); err != nil {
+	if err := r.reconcilePostRestartJob(context.Background(), gw, convergedInputs("abc123")); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	var jobs batchv1.JobList
@@ -296,7 +296,7 @@ func TestReconcilePostRestartJob_AdoptsExistingFailedJobWithDistinctMessage(t *t
 	c := fakeClientBuilder().WithObjects(gw, dep, existing).Build()
 	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
 
-	if err := r.reconcilePostRestartJob(context.Background(), gw, "abc123"); err != nil {
+	if err := r.reconcilePostRestartJob(context.Background(), gw, convergedInputs("abc123")); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	var jobs batchv1.JobList
@@ -345,7 +345,7 @@ func TestReconcilePostRestartJob_SkipsRecreateAfterTTLGC(t *testing.T) {
 	c := fakeClientBuilder().WithObjects(gw, dep).Build()
 	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
 
-	if err := r.reconcilePostRestartJob(context.Background(), gw, "abc123"); err != nil {
+	if err := r.reconcilePostRestartJob(context.Background(), gw, convergedInputs("abc123")); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	var jobs batchv1.JobList
@@ -397,7 +397,7 @@ func TestReconcilePostRestartJob_StaleOldFormatStatusTriggersRerun(t *testing.T)
 	c := fakeClientBuilder().WithObjects(gw, dep).Build()
 	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
 
-	if err := r.reconcilePostRestartJob(context.Background(), gw, "abc123"); err != nil {
+	if err := r.reconcilePostRestartJob(context.Background(), gw, convergedInputs("abc123")); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -431,7 +431,7 @@ func TestReconcilePostRestartJob_DisabledSpec(t *testing.T) {
 	c := fakeClientBuilder().WithObjects(gw, dep).Build()
 	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
 
-	if err := r.reconcilePostRestartJob(context.Background(), gw, "abc"); err != nil {
+	if err := r.reconcilePostRestartJob(context.Background(), gw, convergedInputs("abc")); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	var jobs batchv1.JobList
@@ -475,7 +475,7 @@ func TestReconcilePostRestartJob_DisabledSpecClearsStaleConditions(t *testing.T)
 	c := fakeClientBuilder().WithObjects(gw, dep).Build()
 	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
 
-	if err := r.reconcilePostRestartJob(context.Background(), gw, "abc"); err != nil {
+	if err := r.reconcilePostRestartJob(context.Background(), gw, convergedInputs("abc")); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -528,7 +528,7 @@ func TestReconcileExistingPostRestartRevision_SucceededKnobChangeSkips(t *testin
 	c := fakeClientBuilder().WithObjects(gw, existing).Build()
 	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
 
-	if err := r.reconcilePostRestartJob(context.Background(), gw, "abc123"); err != nil {
+	if err := r.reconcilePostRestartJob(context.Background(), gw, convergedInputs("abc123")); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -581,7 +581,7 @@ func TestReconcileExistingPostRestartRevision_FailedSpecUnchangedSkips(t *testin
 
 	// Simulate several consecutive reconciles: none must re-create the Job.
 	for i := 0; i < 3; i++ {
-		if err := r.reconcilePostRestartJob(context.Background(), gw, "abc123"); err != nil {
+		if err := r.reconcilePostRestartJob(context.Background(), gw, convergedInputs("abc123")); err != nil {
 			t.Fatalf("unexpected error on reconcile %d: %v", i, err)
 		}
 	}
@@ -635,7 +635,7 @@ func TestReconcileExistingPostRestartRevision_FailedSpecChangedRecreates(t *test
 	c := fakeClientBuilder().WithStatusSubresource(&v1alpha1.KrakenDGateway{}).WithObjects(gw, existing).Build()
 	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
 
-	if err := r.reconcilePostRestartJob(context.Background(), gw, "abc123"); err != nil {
+	if err := r.reconcilePostRestartJob(context.Background(), gw, convergedInputs("abc123")); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -686,7 +686,7 @@ func TestReconcilePostRestartJob_ROFSConditionSetOnCreate(t *testing.T) {
 	c := fakeClientBuilder().WithObjects(gw, dep).Build()
 	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
 
-	if err := r.reconcilePostRestartJob(context.Background(), gw, "abc123"); err != nil {
+	if err := r.reconcilePostRestartJob(context.Background(), gw, convergedInputs("abc123")); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -713,7 +713,7 @@ func TestReconcilePostRestartJob_DeploymentNotFound(t *testing.T) {
 	c := fakeClientBuilder().WithObjects(gw).Build()
 	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
 
-	if err := r.reconcilePostRestartJob(context.Background(), gw, "abc"); err != nil {
+	if err := r.reconcilePostRestartJob(context.Background(), gw, convergedInputs("abc")); err != nil {
 		t.Fatalf("unexpected error when deployment missing: %v", err)
 	}
 	got := &batchv1.Job{}
@@ -740,7 +740,7 @@ func TestReconcilePostRestartJob_ROFSConditionFalseWhenDisabled(t *testing.T) {
 	c := fakeClientBuilder().WithObjects(gw, dep).Build()
 	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
 
-	if err := r.reconcilePostRestartJob(context.Background(), gw, "abc123"); err != nil {
+	if err := r.reconcilePostRestartJob(context.Background(), gw, convergedInputs("abc123")); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -788,7 +788,7 @@ func TestReconcileExistingPostRestartRevision_StillRunningSkipsNoMutation(t *tes
 	c := fakeClientBuilder().WithObjects(gw, existing).Build()
 	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
 
-	if err := r.reconcilePostRestartJob(context.Background(), gw, "abc123"); err != nil {
+	if err := r.reconcilePostRestartJob(context.Background(), gw, convergedInputs("abc123")); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -880,7 +880,7 @@ func TestReconcileExistingPostRestartRevision_CreateFailsAfterDeleteClearsChecks
 		Build()
 	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
 
-	if err := r.reconcilePostRestartJob(context.Background(), gw, "abc123"); err == nil {
+	if err := r.reconcilePostRestartJob(context.Background(), gw, convergedInputs("abc123")); err == nil {
 		t.Fatal("expected the simulated transient Create error to propagate")
 	}
 
@@ -917,7 +917,7 @@ func TestReconcileExistingPostRestartRevision_CreateFailsAfterDeleteClearsChecks
 	if err := c.Create(context.Background(), dep); err != nil {
 		t.Fatalf("creating converged deployment for recovery reconcile: %v", err)
 	}
-	if err := r.reconcilePostRestartJob(context.Background(), gw, "abc123"); err != nil {
+	if err := r.reconcilePostRestartJob(context.Background(), gw, convergedInputs("abc123")); err != nil {
 		t.Fatalf("unexpected error on recovery reconcile: %v", err)
 	}
 	if err := c.List(context.Background(), &jobs, client.InNamespace("ns")); err != nil {
@@ -968,7 +968,7 @@ func TestReconcileExistingPostRestartRevision_RecreateToleratesAlreadyExists(t *
 		Build()
 	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
 
-	if err := r.reconcilePostRestartJob(context.Background(), gw, "abc123"); err != nil {
+	if err := r.reconcilePostRestartJob(context.Background(), gw, convergedInputs("abc123")); err != nil {
 		t.Fatalf("expected AlreadyExists on re-create to be tolerated, got error: %v", err)
 	}
 
@@ -989,7 +989,7 @@ func TestReconcilePostRestartJob_SkipsWhileDeploymentHasNotObservedItsSpec(t *te
 	c := fakeClientBuilder().WithObjects(gw, dep).Build()
 	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
 
-	if err := r.reconcilePostRestartJob(context.Background(), gw, "abc123"); err != nil {
+	if err := r.reconcilePostRestartJob(context.Background(), gw, convergedInputs("abc123")); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	var jobs batchv1.JobList
@@ -999,4 +999,10 @@ func TestReconcilePostRestartJob_SkipsWhileDeploymentHasNotObservedItsSpec(t *te
 	if len(jobs.Items) != 0 {
 		t.Fatalf("expected no job while the Deployment has not observed its latest spec, got %d", len(jobs.Items))
 	}
+}
+
+// convergedInputs returns the infrastructure inputs that deploy checksum on
+// the image makeConvergedDeployment runs.
+func convergedInputs(checksum string) infraInputs {
+	return infraInputs{appliedChecksum: checksum, image: convergedImage}
 }
