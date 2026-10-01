@@ -249,7 +249,7 @@ kubectl get events --field-selector involvedObject.name=<name> --sort-by='.lastT
 
 **Diagnosis:** the condition message carries the cause. `no such file or directory` means the operator image lacks `/usr/local/bin/krakend`; `context deadline exceeded` means a run exceeded 30 seconds (check the operator pod's CPU throttling and memory); `signal: killed` without `context deadline exceeded` means the process was killed, usually by memory pressure on the operator container (a timeout's message also ends in `signal: killed`); `creating temp file` or `writing config to temp file` means the operator's temp directory is unwritable or full; `preparing validation copy` means the validation copy of the rendered config could not be built.
 
-**Resolution:** fix the environment; the operator retries with exponential backoff and the gateway recovers on its own.
+**Resolution:** fix the environment; the operator retries with exponential backoff and the gateway recovers on its own. Backoff grows up to about 16–17 minutes, so recovery can lag that long after the cause is fixed. Editing the gateway, or restarting the operator, retries at once.
 
 ### Endpoint shows `Invalid`
 
