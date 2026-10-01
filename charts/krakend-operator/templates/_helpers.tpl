@@ -75,7 +75,7 @@ base64 encoding of the PEM, which is what the API server expects.
 */}}
 {{- define "krakend-operator.webhookCABundle" -}}
 {{- $ca := .Values.webhooks.caBundle | default "" | trim -}}
-{{- if hasPrefix "-----BEGIN" $ca -}}
+{{- if contains "-----BEGIN" $ca -}}
 {{- $ca | b64enc -}}
 {{- else -}}
 {{- $ca -}}
