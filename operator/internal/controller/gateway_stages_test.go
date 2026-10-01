@@ -2345,3 +2345,21 @@ func TestEEStripped_ATruncatedMessageKeepsWholeEntriesAndCountsTheRest(t *testin
 
 	wantWholeEntries(t, cond.Message, features)
 }
+
+func TestReconcileCEFallbackCondition_ATruncatedMessageKeepsTheOpenAPINoteAndWholeEntries(t *testing.T) {
+	features := manyStripped(200)
+	gw, _, _ := licensedEEGateway(testNow.Add(-time.Minute), true)
+	gw.Spec.OpenAPI = &v1alpha1.OpenAPIExportSpec{Enabled: true}
+	gw.Status.ConfigChecksum, gw.Status.ConfigEdition = "cs", v1alpha1.EditionCE
+	r := newTestGatewayReconciler(fakeClientBuilder().Build(), &mockRenderer{}, &mockValidator{})
+
+	r.reconcileCEFallbackCondition(gw,
+		&renderer.RenderOutput{Checksum: "cs", StrippedEEFeatures: features}, v1alpha1.EditionCE)
+
+	msg := meta.FindStatusCondition(gw.Status.Conditions, v1alpha1.ConditionCEFallbackApplied).Message
+	if !strings.Contains(msg, openAPIFallbackNote) {
+		t.Errorf("the OpenAPI note was cut from %q", msg)
+	}
+	// The note is the first entry, so drop it before comparing with features.
+	wantWholeEntries(t, strings.Replace(msg, openAPIFallbackNote+"\n", "", 1), features[:len(features)])
+}
