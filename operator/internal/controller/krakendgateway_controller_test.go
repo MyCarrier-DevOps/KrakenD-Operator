@@ -1667,6 +1667,9 @@ func TestGatewayReadinessFor(t *testing.T) {
 		{"nothing observed yet", nil, metav1.ConditionUnknown, "Pending", v1alpha1.PhasePending},
 		{"ready", []metav1.Condition{valid, available, settled},
 			metav1.ConditionTrue, "Ready", v1alpha1.PhaseRunning},
+		{"configuration rejected",
+			[]metav1.Condition{c("ConfigValid", metav1.ConditionFalse, "ConfigValidationFailed"), available, settled},
+			metav1.ConditionFalse, "ConfigValidationFailed", v1alpha1.PhaseError},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
