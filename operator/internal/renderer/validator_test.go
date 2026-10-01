@@ -335,3 +335,16 @@ func TestValidate_MissingBinaryIsTransient(t *testing.T) {
 		t.Errorf("expected the error to wrap fs.ErrNotExist, got %v", err)
 	}
 }
+
+func TestValidate_KilledProcessIsTransient(t *testing.T) {
+	bin := fakeKrakenD(t, "kill -9 $$")
+	v := NewValidator(ValidatorOptions{Executor: NewKrakenDExecutor(bin), BinaryPath: bin})
+	err := v.Validate(context.Background(), []byte(`{"version":3}`))
+	if err == nil {
+		t.Fatal("expected an error for a killed process")
+	}
+	var valErr *ValidationError
+	if errors.As(err, &valErr) {
+		t.Fatalf("a process killed by a signal was reported as an invalid config: %v", err)
+	}
+}
