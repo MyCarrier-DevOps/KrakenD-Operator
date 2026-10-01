@@ -2471,3 +2471,48 @@ func TestGatewayReconcile_OpenAPIPiecesFollowTheAppliedRender(t *testing.T) {
 		t.Errorf("CEFallbackApplied = %+v, want it removed once the EE render is applied", cond)
 	}
 }
+
+func TestGatewayReconcile_MissingPluginConfigMapHoldsTheDeployment(t *testing.T) {
+	gw := reconciledGateway()
+	const config = `{"version":3,"name":"with-plugins"}`
+	gw.Status.ConfigChecksum = hash.SHA256Hex([]byte(config))
+	gw.Spec.Plugins = &v1alpha1.PluginsSpec{Sources: []v1alpha1.PluginSource{
+		{ConfigMapRef: &v1alpha1.ConfigMapKeyRef{Name: "plugins-a", Key: "auth.so"}},
+	}}
+	c := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderOf(config), &mockValidator{})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	got := getGateway(t, c, gw)
+	cond := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionPluginsResolved)
+	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != v1alpha1.ReasonConfigMapNotFound ||
+		!strings.Contains(cond.Message, "plugins-a") {
+		t.Errorf("PluginsResolved = %+v, want False/%s naming plugins-a", cond, v1alpha1.ReasonConfigMapNotFound)
+	}
+	if ready := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionReady); ready == nil ||
+		ready.Reason != v1alpha1.ReasonConfigMapNotFound {
+		t.Errorf("Ready = %+v, want reason %s", ready, v1alpha1.ReasonConfigMapNotFound)
+	}
+	var dep appsv1.Deployment
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(gw), &dep); !apierrors.IsNotFound(err) {
+		t.Fatalf("Deployment Get = %v; no pod template may mount a ConfigMap that does not exist", err)
+	}
+
+	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "plugins-a", Namespace: gw.Namespace},
+		BinaryData: map[string][]byte{"auth.so": []byte("plugin")}}
+	if err := c.Create(context.Background(), cm); err != nil {
+		t.Fatal(err)
+	}
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if cond := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions,
+		v1alpha1.ConditionPluginsResolved); cond == nil || cond.Status != metav1.ConditionTrue {
+		t.Errorf("PluginsResolved = %+v, want True once the ConfigMap exists", cond)
+	}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(gw), &dep); err != nil {
+		t.Errorf("the Deployment must be created once the plugin ConfigMap exists: %v", err)
+	}
+}
