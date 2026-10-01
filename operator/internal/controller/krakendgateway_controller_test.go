@@ -1651,6 +1651,12 @@ func TestGatewayReconcile_AcceptedWrittenWhenConfigUnchangedSinceApplied(t *test
 }
 
 func TestGatewayReadinessFor(t *testing.T) {
+	c := func(typ string, status metav1.ConditionStatus, reason string) metav1.Condition {
+		return metav1.Condition{Type: typ, Status: status, Reason: reason, Message: reason + " message"}
+	}
+	valid := c("ConfigValid", metav1.ConditionTrue, "ConfigApplied")
+	available := c("Available", metav1.ConditionTrue, "DeploymentAvailable")
+	settled := c("Progressing", metav1.ConditionFalse, "RolloutComplete")
 	tests := []struct {
 		name       string
 		conds      []metav1.Condition
@@ -1659,6 +1665,8 @@ func TestGatewayReadinessFor(t *testing.T) {
 		wantPhase  v1alpha1.GatewayPhase
 	}{
 		{"nothing observed yet", nil, metav1.ConditionUnknown, "Pending", v1alpha1.PhasePending},
+		{"ready", []metav1.Condition{valid, available, settled},
+			metav1.ConditionTrue, "Ready", v1alpha1.PhaseRunning},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
