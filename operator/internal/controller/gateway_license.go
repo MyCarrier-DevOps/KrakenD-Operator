@@ -123,12 +123,18 @@ func (r *KrakenDGatewayReconciler) reconcileLicense(ctx context.Context, gw *v1a
 func (r *KrakenDGatewayReconciler) reconcileUnreadableLicense(
 	gw *v1alpha1.KrakenDGateway, readErr error, window license.Window, now time.Time,
 ) licenseVerdict {
+	reason, message := v1alpha1.ReasonLicenseSecretMissing, readErr.Error()
+	if r.externalSecretCRDMissing(gw) {
+		reason = v1alpha1.ReasonCRDNotInstalled
+		message = fmt.Sprintf("spec.license.externalSecret is enabled but the external-secrets.io ExternalSecret "+
+			"CRD is not installed, so Secret %s-license is never synced: %v", gw.Name, readErr)
+	}
 	r.setProblemCondition(gw, metav1.Condition{
 		Type:               v1alpha1.ConditionLicenseSecretUnavailable,
 		Status:             metav1.ConditionTrue,
 		ObservedGeneration: gw.Generation,
-		Reason:             v1alpha1.ReasonLicenseSecretMissing,
-		Message:            readErr.Error(),
+		Reason:             reason,
+		Message:            message,
 	})
 	verdict := licenseVerdict{
 		ceFallback:   meta.IsStatusConditionTrue(gw.Status.Conditions, v1alpha1.ConditionLicenseDegraded),
@@ -148,6 +154,16 @@ func (r *KrakenDGatewayReconciler) reconcileUnreadableLicense(
 		r.setLicenseValidUnknown(gw, readErr)
 	}
 	return verdict
+}
+
+// externalSecretCRDMissing reports whether the gateway's license comes from an
+// ExternalSecret whose CRD is not installed, so nothing ever syncs the Secret.
+func (r *KrakenDGatewayReconciler) externalSecretCRDMissing(gw *v1alpha1.KrakenDGateway) bool {
+	if gw.Spec.License == nil || !gw.Spec.License.ExternalSecret.Enabled {
+		return false
+	}
+	available, err := r.crdAvailable(externalSecretGVK)
+	return err == nil && !available
 }
 
 func (r *KrakenDGatewayReconciler) setLicenseValidUnknown(gw *v1alpha1.KrakenDGateway, readErr error) {
