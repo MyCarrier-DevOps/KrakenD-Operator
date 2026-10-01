@@ -30,6 +30,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -615,4 +617,67 @@ func waitPastCreationSecond(t *testing.T, ns, name string) {
 		t.Fatal(err)
 	}
 	time.Sleep(time.Until(cm.CreationTimestamp.Add(time.Second)))
+}
+
+// waitForQuietDeployment waits until the gateway's Deployment has not changed
+// for five seconds, so that a later reconcile can only come from the event
+// under test.
+func waitForQuietDeployment(t *testing.T, key client.ObjectKey) {
+	t.Helper()
+	var last string
+	since := time.Now()
+	eventuallyWithin(t, 90*time.Second, func() error {
+		var dep appsv1.Deployment
+		if err := k8sClient.Get(ctx, key, &dep); err != nil {
+			return err
+		}
+		if dep.ResourceVersion != last {
+			last, since = dep.ResourceVersion, time.Now()
+			return fmt.Errorf("the Deployment is still changing")
+		}
+		if time.Since(since) < 5*time.Second {
+			return fmt.Errorf("waiting for five quiet seconds")
+		}
+		return nil
+	})
+}
+
+func TestGateway_DeletedVirtualServiceIsRecreated(t *testing.T) {
+	ns := testNamespace(t)
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "istio-gw", Namespace: ns},
+		Spec: v1alpha1.KrakenDGatewaySpec{Version: "2.9", Edition: v1alpha1.EditionCE,
+			Istio: &v1alpha1.IstioSpec{Enabled: true, Hosts: []string{"api.example.com"}, Gateways: []string{"istio-system/gw"}},
+		},
+	}
+	if err := k8sClient.Create(ctx, gw); err != nil {
+		t.Fatalf("create gateway: %v", err)
+	}
+	key := types.NamespacedName{Namespace: ns, Name: gw.Name}
+	vsGVK := schema.GroupVersionKind{Group: "networking.istio.io", Version: "v1", Kind: "VirtualService"}
+	getVS := func() (*unstructured.Unstructured, error) {
+		u := &unstructured.Unstructured{}
+		u.SetGroupVersionKind(vsGVK)
+		return u, k8sClient.Get(ctx, key, u)
+	}
+	eventually(t, func() error { _, err := getVS(); return err })
+	waitForQuietDeployment(t, key)
+
+	vs, err := getVS()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := k8sClient.Delete(ctx, vs); err != nil {
+		t.Fatalf("delete virtualservice: %v", err)
+	}
+	eventuallyWithin(t, 20*time.Second, func() error {
+		got, err := getVS()
+		if err != nil {
+			return fmt.Errorf("waiting for the VirtualService to be recreated: %w", err)
+		}
+		if got.GetUID() == vs.GetUID() {
+			return fmt.Errorf("still the deleted VirtualService")
+		}
+		return nil
+	})
 }
