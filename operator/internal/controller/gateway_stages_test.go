@@ -531,3 +531,56 @@ func TestGatewayReconcile_PublishesTheAppliedConfigAsAnImmutableConfigMap(t *tes
 		t.Errorf("Deployment mounts %q, want %q", got, want)
 	}
 }
+
+// legacyConfigMap is the ConfigMap an operator version before content
+// addressing kept under the gateway's own name.
+func legacyConfigMap(gw *v1alpha1.KrakenDGateway, config string) *corev1.ConfigMap {
+	return &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            gw.Name,
+			Namespace:       gw.Namespace,
+			Labels:          resources.StandardLabels(gw),
+			OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(gw, v1alpha1.GroupVersion.WithKind("KrakenDGateway"))},
+		},
+		Data: map[string]string{resources.ConfigKey: config},
+	}
+}
+
+// legacyDeployment is a gateway Deployment that mounts legacyConfigMap.
+func legacyDeployment(gw *v1alpha1.KrakenDGateway) *appsv1.Deployment {
+	return &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace},
+		Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
+			Volumes: []corev1.Volume{{
+				Name: "config",
+				VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: gw.Name},
+				}},
+			}},
+		}}},
+	}
+}
+
+func TestGatewayReconcile_UpgradeWhileRejectedSeedsAppliedConfigMapFromLegacy(t *testing.T) {
+	gw := reconciledGateway()
+	const lastGood = `{"version":3,"name":"last-good"}`
+	gw.Status.ConfigChecksum = hash.SHA256Hex([]byte(lastGood))
+	c := fakeClientBuilder().
+		WithObjects(gw, legacyConfigMap(gw, lastGood), legacyDeployment(gw)).
+		WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderOf(`{"version":3,"name":"rejected"}`),
+		&countingValidator{err: rejectedBy("- at '/endpoints/0/endpoint': bad")})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	want := resources.ConfigMapName(gw, gw.Status.ConfigChecksum)
+	var cm corev1.ConfigMap
+	getObject(t, c, gw, want, &cm)
+	if cm.Data[resources.ConfigKey] != lastGood {
+		t.Errorf("seeded config = %q, want the last-good %q", cm.Data[resources.ConfigKey], lastGood)
+	}
+	if got := mountedConfig(t, c, gw); got != want {
+		t.Errorf("Deployment mounts %q, want the seeded %q", got, want)
+	}
+}
