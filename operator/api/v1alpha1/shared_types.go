@@ -168,4 +168,10 @@ const (
 	ReasonDragonflyRunAsRootUnacknowledged = "RunAsRootUnacknowledged"
 	ReasonDragonflyRunAsRootAcknowledged   = "RunAsRootAcknowledged"
 	ReasonDragonflyRunAsRootNoRequest      = "NoRunAsRootRequest"
+
+	// ReasonValidatorUnavailable backs ConfigValid=Unknown: krakend check
+	// could not run to completion, so the rendered config was not judged.
+	// The applied config is unchanged and the reconcile is retried with
+	// backoff.
+	ReasonValidatorUnavailable = "ValidatorUnavailable"
 )
