@@ -291,3 +291,19 @@ func TestGatewayReconcile_PluginChangeIsNotReadyUntilTheDeploymentRunsIt(t *test
 		t.Errorf("Ready = %+v, want not True before the Deployment runs the new plugins", ready)
 	}
 }
+
+func TestGatewayReconcile_RejectedRenderWithADeploymentWritesStatusOnce(t *testing.T) {
+	gw := servingGateway("applied", "img:v1")
+	c, phases := gatewayStatusWrites(gw, makeConvergedDeployment(gw, "applied"))
+	r := newTestGatewayReconciler(c, renderOutput("new"),
+		&countingValidator{err: rejectedBy("- at '/endpoints/0/endpoint': bad")})
+
+	for range 2 {
+		if err := reconcileGateway(t, r, gw); err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+	}
+	if len(*phases) != 1 {
+		t.Errorf("two reconciles of a rejected render wrote status %d times (%v), want once", len(*phases), *phases)
+	}
+}
