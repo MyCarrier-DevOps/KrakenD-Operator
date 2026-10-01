@@ -142,7 +142,10 @@ func (r *KrakenDGatewayReconciler) publishConfig(
 		// The cache has not seen the ConfigMap that is already there: it may
 		// be this controller's own earlier create or someone else's. Verify
 		// it live rather than trust it.
-		_, err := r.verifyExistingConfigMap(ctx, r.APIReader, gw, checksum)
+		found, err := r.verifyExistingConfigMap(ctx, r.APIReader, gw, checksum)
+		if err == nil && !found {
+			return fmt.Errorf("configmap %s was deleted after a create found it existing", name)
+		}
 		return err
 	default:
 		return fmt.Errorf("creating configmap %s: %w", name, err)
