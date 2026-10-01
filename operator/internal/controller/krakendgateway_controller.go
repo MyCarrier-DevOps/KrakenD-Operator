@@ -192,15 +192,17 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		r.markDeploymentUpdate(&gw, output.DesiredImage, output.PluginChecksum)
 	}
 
-	// Record each endpoint's Accepted verdict, but only for a render that is
-	// the gateway's applied configuration: validated just now, or unchanged
-	// since it was. A rejected or unjudged render is not the applied one, so
-	// its endpoints keep the verdict of the config that is running. A failed
-	// endpoint status write does not stop the infrastructure stage or the
-	// gateway status; it is returned after them so the reconcile is retried.
+	// Accepted: the applied render sets every endpoint's verdict; a rejected
+	// render sets GatewayConfigRejected on the endpoints its findings name,
+	// and nothing else. A failed endpoint status write does not stop the
+	// infrastructure stage or the gateway status; it is returned after them
+	// so the reconcile is retried.
 	var acceptanceErr error
-	if output.Checksum == gw.Status.ConfigChecksum {
+	switch {
+	case output.Checksum == gw.Status.ConfigChecksum:
 		acceptanceErr = r.reconcileEndpointAcceptance(ctx, &gw, endpoints, output)
+	case len(cfg.rejections) > 0:
+		acceptanceErr = r.recordRejections(ctx, endpoints, cfg.rejections)
 	}
 
 	// Infrastructure stage: always runs, and deploys the applied config.
@@ -596,11 +598,13 @@ func (r *KrakenDGatewayReconciler) reconcileConfig(
 		setConfigApplied(gw)
 		return r.publishApplied(ctx, gw, output)
 	}
-	err := r.validateAndApply(ctx, gw, before, output, ceFallback)
+	rejections, err := r.validateAndApply(ctx, gw, before, output, ceFallback)
 	if output.Checksum == gw.Status.ConfigChecksum {
 		return configResult{appliedConfigMap: resources.ConfigMapName(gw, output.Checksum)}, nil
 	}
-	return r.keepApplied(ctx, gw, err)
+	res, err := r.keepApplied(ctx, gw, err)
+	res.rejections = rejections
+	return res, err
 }
 
 // validateAndApply validates a render that is not the applied config and,
@@ -613,23 +617,24 @@ func (r *KrakenDGatewayReconciler) validateAndApply(
 	before *v1alpha1.KrakenDGatewayStatus,
 	output *renderer.RenderOutput,
 	ceFallback bool,
-) error {
+) (map[types.NamespacedName]string, error) {
 	err := r.validateConfig(ctx, gw, output.JSON, ceFallback)
 	var rejected *renderer.ValidationError
 	switch {
 	case stderrors.As(err, &rejected):
-		r.handleValidationError(gw, before, rejected)
-		return nil
+		atts := renderer.Attribute(output.JSON, output.Sources, rejected.Output)
+		r.handleValidationError(gw, before, rejected, rejectionSummary(atts))
+		return rejectionsByEndpoint(atts), nil
 	case err != nil:
-		return r.handleValidatorUnavailable(gw, before, err)
+		return nil, r.handleValidatorUnavailable(gw, before, err)
 	}
 	// Publish before recording the checksum as applied: status must never
 	// name a config that no ConfigMap holds.
 	if err := r.publishConfig(ctx, gw, output.JSON, output.Checksum); err != nil {
-		return err
+		return nil, err
 	}
 	r.markConfigApplied(gw, output.Checksum)
-	return nil
+	return nil, nil
 }
 
 // markConfigApplied makes checksum the applied config and reports the rollout
@@ -716,8 +721,9 @@ func (r *KrakenDGatewayReconciler) handleValidationError(
 	gw *v1alpha1.KrakenDGateway,
 	before *v1alpha1.KrakenDGatewayStatus,
 	rejected *renderer.ValidationError,
+	summary string,
 ) {
-	message := truncateMessage(rejected.Error(), maxConditionMessageBytes)
+	message := truncateMessage(summary+"\n"+rejected.Error(), maxConditionMessageBytes)
 	prev := meta.FindStatusCondition(before.Conditions, v1alpha1.ConditionConfigValid)
 	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
 		Type:               v1alpha1.ConditionConfigValid,
