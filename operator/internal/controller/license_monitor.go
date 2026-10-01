@@ -133,7 +133,7 @@ func (m *LicenseMonitor) checkGateway(ctx context.Context, gw *v1alpha1.KrakenDG
 	}
 
 	// Populate license expiry in gateway status
-	patch := client.MergeFrom(gw.DeepCopy())
+	patch := client.MergeFromWithOptions(gw.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	gw.Status.LicenseExpiry = &metav1.Time{Time: info.NotAfter}
 	// Clear LicenseSecretUnavailable if previously set
 	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
@@ -227,7 +227,7 @@ func (m *LicenseMonitor) handleSecretUnavailable(
 	gw *v1alpha1.KrakenDGateway,
 	secretErr error,
 ) error {
-	patch := client.MergeFrom(gw.DeepCopy())
+	patch := client.MergeFromWithOptions(gw.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
 		Type:               v1alpha1.ConditionLicenseSecretUnavailable,
 		Status:             metav1.ConditionTrue,
@@ -245,7 +245,7 @@ func (m *LicenseMonitor) handleSecretUnavailable(
 func (m *LicenseMonitor) handleExpired(ctx context.Context, gw *v1alpha1.KrakenDGateway) error {
 	fallbackToCE := gw.Spec.License != nil && gw.Spec.License.FallbackToCE
 
-	patch := client.MergeFrom(gw.DeepCopy())
+	patch := client.MergeFromWithOptions(gw.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
 		Type:               v1alpha1.ConditionLicenseExpired,
 		Status:             metav1.ConditionTrue,
@@ -300,7 +300,7 @@ func (m *LicenseMonitor) handleRecoveryIfNeeded(
 		return nil
 	}
 
-	patch := client.MergeFrom(gw.DeepCopy())
+	patch := client.MergeFromWithOptions(gw.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
 		Type:               v1alpha1.ConditionLicenseDegraded,
 		Status:             metav1.ConditionFalse,
