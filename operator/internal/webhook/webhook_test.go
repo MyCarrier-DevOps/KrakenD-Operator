@@ -2769,3 +2769,22 @@ func TestPolicyValidator_RejectsSpecChangeOnTerminatingObject(t *testing.T) {
 		t.Fatal("a spec change to an invalid value on a terminating policy was admitted; want it rejected")
 	}
 }
+
+func TestAutoConfigValidator_RejectsSpecChangeOnTerminatingObject(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"}}
+	oldAC := terminating(&v1alpha1.KrakenDAutoConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "ac", Namespace: "default"},
+		Spec: v1alpha1.KrakenDAutoConfigSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: "gw"},
+			OpenAPI:    v1alpha1.OpenAPISource{URL: "https://example.com/api"},
+			Trigger:    v1alpha1.TriggerOnChange,
+		},
+	})
+	newAC := oldAC.DeepCopy()
+	newAC.Spec.GatewayRef.Name = "missing-gw"
+
+	_, err := (&AutoConfigValidator{Client: fakeClient(gw)}).ValidateUpdate(context.Background(), oldAC, newAC)
+	if err == nil {
+		t.Fatal("a spec change to an invalid value on a terminating autoconfig was admitted; want it rejected")
+	}
+}
