@@ -31,8 +31,9 @@ import (
 )
 
 // eeFeatureInput is an EE gateway with two EE-only namespaces at every level
-// (written out of order, so the sorted lists are pinned) and a wildcard
-// endpoint.
+// and a wildcard endpoint. Go randomises map iteration, so a test that
+// compares the stripped lists pins their sorting (with a single namespace per
+// level there would be nothing to sort).
 func eeFeatureInput(ceFallback bool) RenderInput {
 	gw := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "ns"},
