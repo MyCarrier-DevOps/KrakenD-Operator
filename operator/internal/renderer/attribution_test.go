@@ -90,3 +90,11 @@ func TestAttribute_MapsKrakendCheckOutputToSources(t *testing.T) {
 		})
 	}
 }
+
+func TestAttribute_IndexBeyondSourcesIsUnnamed(t *testing.T) {
+	got := Attribute([]byte(`{"endpoints":[{"endpoint":"/a","method":"GET"}]}`), nil,
+		"- at '/endpoints/0/endpoint': bad\n")
+	if len(got) != 1 || got[0].Index != 0 || got[0].Endpoint != (types.NamespacedName{}) {
+		t.Errorf("Attribute = %+v, want one finding at index 0 with no source", got)
+	}
+}
