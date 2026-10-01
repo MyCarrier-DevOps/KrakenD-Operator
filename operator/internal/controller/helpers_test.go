@@ -384,4 +384,12 @@ func TestTruncateMessage(t *testing.T) {
 	if len(got) > 4096 || !utf8.ValidString(got) {
 		t.Errorf("got %d bytes, valid UTF-8 = %v; want at most 4096 valid bytes", len(got), utf8.ValidString(got))
 	}
+
+	line := strings.Repeat("l", 100)
+	lines := truncateMessage(strings.Repeat(line+"\n", 100), 4096) // 100 lines, 101 bytes each
+	// 4096-64 bytes hold 39 whole lines; the empty string after the final
+	// newline is not a line, so 61 of the 100 remain.
+	if want := "(output truncated, 61 more lines)"; !strings.HasSuffix(lines, want) {
+		t.Errorf("got ending %q, want it to end with %q", lines[max(0, len(lines)-50):], want)
+	}
 }
