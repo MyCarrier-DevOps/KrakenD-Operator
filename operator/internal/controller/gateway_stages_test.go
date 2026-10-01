@@ -133,3 +133,33 @@ func TestGatewayReconcile_UnavailableValidatorIsNotReady(t *testing.T) {
 			ready, v1alpha1.ReasonValidatorUnavailable)
 	}
 }
+
+func TestGatewayReconcile_UnavailableValidatorStillRefreshesRolloutConditions(t *testing.T) {
+	gw := reconciledGateway()
+	gw.Status.ConfigChecksum = "applied"
+	gw.Status.ActiveImage = "img:v1"
+	for _, cond := range []metav1.Condition{
+		{Type: v1alpha1.ConditionConfigValid, Status: metav1.ConditionTrue, Reason: v1alpha1.ReasonConfigApplied},
+		{Type: v1alpha1.ConditionAvailable, Status: metav1.ConditionTrue, Reason: "DeploymentAvailable"},
+		{Type: v1alpha1.ConditionProgressing, Status: metav1.ConditionTrue, Reason: v1alpha1.ReasonConfigDeployed},
+	} {
+		meta.SetStatusCondition(&gw.Status.Conditions, cond)
+	}
+	c := fakeClientBuilder().WithObjects(gw, makeConvergedDeployment(gw, "applied")).
+		WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderOutput("new"),
+		&countingValidator{err: errors.New("fork/exec /usr/local/bin/krakend: no such file or directory")})
+
+	if err := reconcileGateway(t, r, gw); err == nil {
+		t.Fatal("an unavailable validator must fail the reconcile so it is retried")
+	}
+	got := getGateway(t, c, gw)
+	if got.Status.Phase != v1alpha1.PhaseRunning {
+		t.Errorf("phase = %s, want %s: the converged rollout must be recorded while the validator is down",
+			got.Status.Phase, v1alpha1.PhaseRunning)
+	}
+	ready := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionReady)
+	if ready == nil || ready.Status != metav1.ConditionUnknown || ready.Reason != v1alpha1.ReasonValidatorUnavailable {
+		t.Errorf("Ready = %+v, want Unknown/%s", ready, v1alpha1.ReasonValidatorUnavailable)
+	}
+}
