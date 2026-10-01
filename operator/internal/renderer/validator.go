@@ -84,14 +84,14 @@ func (v *KrakenDValidator) Validate(ctx context.Context, jsonData []byte, editio
 		return fmt.Errorf("preparing validation copy: %w", err)
 	}
 	if len(findings) > 0 {
-		return &ValidationError{Output: strings.Join(findings, "\n"), Err: errEEWildcardConflict}
+		return &ValidationError{Output: strings.Join(findings, "\n"), Err: errEEWildcardRule}
 	}
 	return v.check(ctx, doc)
 }
 
-// errEEWildcardConflict is the verdict for an EE wildcard route the EE router
+// errEEWildcardRule is the verdict for an EE wildcard endpoint that EE
 // would refuse, found before krakend check runs.
-var errEEWildcardConflict = errors.New("EE wildcard route conflict")
+var errEEWildcardRule = errors.New("EE wildcard rule")
 
 // check writes jsonData to a temp file and runs `krakend check -t -n -c`
 // on it: -t tests the router and -n lints against the JSON schema built into
