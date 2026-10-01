@@ -2053,12 +2053,13 @@ type gatewayReadiness struct {
 // gatewayReadinessFor derives a gateway's Ready condition and phase from the
 // conditions the gateway controller and the license monitor maintain. The
 // first rule that applies wins: a rejected configuration, an expired license
-// without CE fallback, a failed rollout, CE fallback (the removed features first), no validated
-// configuration yet, a configuration that could not be validated, a rollout
-// in progress, and a Deployment not yet available. The gateway is Ready only
-// when none applies. A configuration that could not be validated (the
-// validator was unavailable) makes Ready Unknown, not False, and leaves the
-// phase at the serving phase: the last applied configuration keeps serving.
+// without CE fallback, a failed rollout, CE fallback (the removed features
+// first), no validated configuration yet, a configuration that could not be
+// validated, a rollout in progress, and a Deployment not yet available. The
+// gateway is Ready only when none applies. A configuration that could not be
+// validated (the validator was unavailable) makes Ready Unknown, not False,
+// and leaves the phase at the serving phase: the last applied configuration
+// keeps serving.
 func gatewayReadinessFor(conds []metav1.Condition) gatewayReadiness {
 	configValid := meta.FindStatusCondition(conds, v1alpha1.ConditionConfigValid)
 	available := meta.FindStatusCondition(conds, v1alpha1.ConditionAvailable)
