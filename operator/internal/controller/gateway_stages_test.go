@@ -1194,3 +1194,34 @@ func TestGatewayReconcile_RejectionNamingNoEndpointBlamesNone(t *testing.T) {
 		t.Errorf("configChecksum = %q, want it unset: nothing was applied", got.Status.ConfigChecksum)
 	}
 }
+
+func TestGatewayReconcile_RejectedFirstRenderOverridesStaleAccepted(t *testing.T) {
+	gw := reconciledGateway() // recreated: no config has ever been applied
+	bad := testEndpoint("bad", "/b")
+	// The previous gateway of the same name accepted this endpoint.
+	bad.Status.Conditions = []metav1.Condition{
+		{Type: v1alpha1.ConditionResolvedRefs, Status: metav1.ConditionTrue, ObservedGeneration: 1,
+			Reason: "ResolvedRefs"},
+		{Type: v1alpha1.ConditionAccepted, Status: metav1.ConditionTrue, ObservedGeneration: 1,
+			Reason: v1alpha1.ReasonAccepted},
+	}
+	c := fakeClientBuilder().WithObjects(gw, bad).WithStatusSubresource(gw, bad).Build()
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}),
+		&countingValidator{err: rejectedBy("- at '/endpoints/0/extra_config': additional properties 'bad/ns' not allowed")})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	var stored v1alpha1.KrakenDEndpoint
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(bad), &stored); err != nil {
+		t.Fatal(err)
+	}
+	cond := meta.FindStatusCondition(stored.Status.Conditions, v1alpha1.ConditionAccepted)
+	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != v1alpha1.ReasonGatewayConfigRejected {
+		t.Errorf("Accepted = %+v, want False/%s over the previous gateway's True",
+			cond, v1alpha1.ReasonGatewayConfigRejected)
+	}
+	if status, _, _ := v1alpha1.EndpointReady(stored.Status.Conditions); status == metav1.ConditionTrue {
+		t.Error("endpoint is Ready although the new gateway rejected its config")
+	}
+}
