@@ -183,7 +183,9 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// returned only after the infrastructure stage and the status write.
 	appliedBefore := gw.Status.ConfigChecksum
 	cfg, configErr := r.reconcileConfig(ctx, &gw, before, output, ceFallback)
-	if gw.Status.ConfigChecksum == appliedBefore {
+	// A held Deployment (no ConfigMap holds the applied config) starts no
+	// rollout, so none is reported.
+	if gw.Status.ConfigChecksum == appliedBefore && cfg.appliedConfigMap != "" {
 		r.markDeploymentUpdate(&gw, output.DesiredImage, output.PluginChecksum)
 	}
 
