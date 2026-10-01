@@ -1068,6 +1068,10 @@ reason `CRDNotInstalled`:
 It is no longer a `CRDNotInstalled` Warning event on every reconcile. The
 event fires once, when the condition is first set.
 
+A newly created gateway with Dragonfly enabled now records one
+`DragonflyNotReady` Warning on its first reconcile, while its Dragonfly CR is
+created.
+
 ---
 
 ## v0.14.0 — openapi-serve liveness probe (one-time rollout)
