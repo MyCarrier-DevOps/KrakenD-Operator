@@ -1797,6 +1797,7 @@ The operator should deploy a `ValidatingAdmissionWebhook` with `failurePolicy: F
 - **KrakenDGateway** — reject if `edition: EE` but neither `license.externalSecret.enabled=true` nor `license.secretRef` is set
 - **KrakenDGateway** — reject if both `license.externalSecret.enabled=true` and `license.secretRef` are set (mutually exclusive)
 - **KrakenDGateway** — reject if `edition: CE` and either `license.externalSecret.enabled=true` or `license.secretRef` is set (CE requires no license)
+- **KrakenDGateway (DELETE)** — not registered: deleting a gateway needs no validation, and with `failurePolicy: Fail` a registration would make gateway and namespace deletion depend on a reachable operator
 - **KrakenDBackendPolicy** — validate field ranges (e.g., `circuitBreaker.maxErrors > 0`)
 - **KrakenDBackendPolicy (DELETE)** — reject deletion if any KrakenDEndpoint references this policy via `policyRef`; emit a descriptive error listing the referencing endpoints
 - **KrakenDAutoConfig** — reject if `gatewayRef` references a non-existent KrakenDGateway
