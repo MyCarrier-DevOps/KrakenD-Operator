@@ -795,21 +795,21 @@ func gatewayStatusChanged(before, after *v1alpha1.KrakenDGatewayStatus) bool {
 	return !equality.Semantic.DeepEqual(b, a)
 }
 
-// endpointAccepted returns the Accepted condition the gateway reports for ep,
-// given the render that is now its applied configuration. The condition is
-// True when every entry of ep is included, and False with EndpointConflict
-// when an older KrakenDEndpoint won one of its (endpoint, method) pairs. It
-// returns nil when the render excluded ep because a policy it references is
-// missing: the endpoint controller reports that through ResolvedRefs, and a
-// leftover Accepted=True would claim the endpoint is served.
-func endpointAccepted(
-	gw *v1alpha1.KrakenDGateway,
-	ep *v1alpha1.KrakenDEndpoint,
-	conflicted, unresolved map[types.NamespacedName]struct{},
-) *metav1.Condition {
+// endpointAccepted returns the gateway's verdict on ep for the render that is
+// now its applied configuration:
+//   - True/Accepted when every entry of ep is included;
+//   - True/PartiallyAccepted when an older KrakenDEndpoint won some but not
+//     all of its (endpoint, method) pairs;
+//   - False/EndpointConflict when it won all of them.
+//
+// status.conflicts lists the lost entries. The condition is nil when the
+// render excluded ep because a policy it references is missing: the endpoint
+// controller reports that through ResolvedRefs, and a leftover Accepted=True
+// would claim the endpoint is served.
+func endpointAccepted(gw *v1alpha1.KrakenDGateway, ep *v1alpha1.KrakenDEndpoint, rv renderVerdicts) acceptance {
 	key := client.ObjectKeyFromObject(ep)
-	if _, ok := unresolved[key]; ok {
-		return nil
+	if _, ok := rv.unresolved[key]; ok {
+		return acceptance{}
 	}
 	cond := &metav1.Condition{
 		Type:               v1alpha1.ConditionAccepted,
@@ -818,14 +818,23 @@ func endpointAccepted(
 		Reason:             v1alpha1.ReasonAccepted,
 		Message:            fmt.Sprintf("Included in the configuration of gateway %s/%s", gw.Namespace, gw.Name),
 	}
-	if _, ok := conflicted[key]; ok {
-		cond.Status = metav1.ConditionFalse
-		cond.Reason = v1alpha1.ReasonEndpointConflict
-		cond.Message = fmt.Sprintf(
-			"Entries conflict with an older KrakenDEndpoint on gateway %s/%s; the conflicting entries are not served",
-			gw.Namespace, gw.Name)
+	if _, ok := rv.conflicted[key]; !ok {
+		return acceptance{condition: cond}
 	}
-	return cond
+	lost := rv.lost[key]
+	if total := entryCount(ep); len(lost) > 0 && len(lost) < total {
+		cond.Reason = v1alpha1.ReasonPartiallyAccepted
+		cond.Message = fmt.Sprintf(
+			"%d of %d entries are served on gateway %s/%s; status.conflicts lists the entries an older "+
+				"KrakenDEndpoint serves", total-len(lost), total, gw.Namespace, gw.Name)
+		return acceptance{condition: cond, conflicts: endpointConflicts(lost)}
+	}
+	cond.Status = metav1.ConditionFalse
+	cond.Reason = v1alpha1.ReasonEndpointConflict
+	cond.Message = fmt.Sprintf(
+		"Entries conflict with an older KrakenDEndpoint on gateway %s/%s; the conflicting entries are not served",
+		gw.Namespace, gw.Name)
+	return acceptance{condition: cond, conflicts: endpointConflicts(lost)}
 }
 
 // namespacedNameSet returns names as a set.
@@ -847,31 +856,31 @@ func (r *KrakenDGatewayReconciler) reconcileEndpointAcceptance(
 	endpoints []v1alpha1.KrakenDEndpoint,
 	output *renderer.RenderOutput,
 ) error {
-	conflicted := namespacedNameSet(output.ConflictedEndpoints)
-	unresolved := namespacedNameSet(output.InvalidEndpoints)
+	rv := newRenderVerdicts(output)
 	var errs []error
 	for i := range endpoints {
-		want := endpointAccepted(gw, &endpoints[i], conflicted, unresolved)
-		if err := r.writeEndpointAccepted(ctx, &endpoints[i], want, nil); err != nil {
+		a := endpointAccepted(gw, &endpoints[i], rv)
+		if err := r.writeEndpointAccepted(ctx, &endpoints[i], a, nil); err != nil {
 			errs = append(errs, err)
 		}
 	}
 	return utilerrors.NewAggregate(errs)
 }
 
-// writeEndpointAccepted sets the Accepted condition want on the endpoint the
-// render saw as rendered, or removes it when want is nil. It reads the
+// writeEndpointAccepted sets the verdict a on the endpoint the render saw as
+// rendered: its Accepted condition, removed when a.condition is nil, and its
+// status.conflicts. It reads the
 // endpoint again and patches its status with an optimistic lock, so a write
 // never replaces conditions the endpoint controller set after the read; a
 // Conflict is retried against a new read. It writes only when the condition
-// changes, and emits an event only on a transition. When want is nil, an
+// changes, and emits an event only on a transition. When a.condition is nil, an
 // Accepted condition is removed only if removable (nil: always) accepts the
 // live one, so a stale caller cannot remove a verdict it did not see. An endpoint deleted, or
 // deleted and created again, since the render is skipped.
 func (r *KrakenDGatewayReconciler) writeEndpointAccepted(
 	ctx context.Context,
 	rendered *v1alpha1.KrakenDEndpoint,
-	want *metav1.Condition,
+	a acceptance,
 	removable func(live *metav1.Condition) bool,
 ) error {
 	key := client.ObjectKeyFromObject(rendered)
@@ -890,15 +899,17 @@ func (r *KrakenDGatewayReconciler) writeEndpointAccepted(
 		}
 		base := ep.DeepCopy()
 		prev = meta.FindStatusCondition(base.Status.Conditions, v1alpha1.ConditionAccepted)
-		if want == nil {
+		if a.condition == nil {
 			if removable != nil && !removable(prev) {
 				return nil
 			}
 			meta.RemoveStatusCondition(&ep.Status.Conditions, v1alpha1.ConditionAccepted)
 		} else {
-			meta.SetStatusCondition(&ep.Status.Conditions, *want)
+			meta.SetStatusCondition(&ep.Status.Conditions, *a.condition)
 		}
-		if conditionsEqual(base.Status.Conditions, ep.Status.Conditions) {
+		ep.Status.Conflicts = a.conflicts
+		if conditionsEqual(base.Status.Conditions, ep.Status.Conditions) &&
+			equality.Semantic.DeepEqual(base.Status.Conflicts, ep.Status.Conflicts) {
 			return nil
 		}
 		if err := r.Status().Patch(ctx, &ep,
@@ -914,8 +925,8 @@ func (r *KrakenDGatewayReconciler) writeEndpointAccepted(
 	if err != nil {
 		return fmt.Errorf("writing Accepted on endpoint %s: %w", key, err)
 	}
-	if wrote && want != nil {
-		recordConditionTransition(r.Recorder, &ep, prev, *want)
+	if wrote && a.condition != nil {
+		recordConditionTransition(r.Recorder, &ep, prev, *a.condition)
 	}
 	return nil
 }

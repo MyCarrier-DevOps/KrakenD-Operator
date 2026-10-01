@@ -402,9 +402,58 @@ func (r *KrakenDGatewayReconciler) recordRejections(
 			(!neverApplied && !isConfigRejected(cur)) {
 			continue
 		}
-		if err := r.writeEndpointAccepted(ctx, ep, want, removable); err != nil {
+		a := acceptance{condition: want, conflicts: ep.Status.Conflicts}
+		if neverApplied {
+			a.conflicts = nil
+		}
+		if err := r.writeEndpointAccepted(ctx, ep, a, removable); err != nil {
 			errs = append(errs, err)
 		}
 	}
 	return utilerrors.NewAggregate(errs)
+}
+
+// renderVerdicts is what one render says about its endpoints.
+type renderVerdicts struct {
+	conflicted map[types.NamespacedName]struct{}
+	lost       map[types.NamespacedName][]renderer.EntryConflict
+	unresolved map[types.NamespacedName]struct{}
+}
+
+// newRenderVerdicts indexes output for per-endpoint lookups.
+func newRenderVerdicts(output *renderer.RenderOutput) renderVerdicts {
+	return renderVerdicts{
+		conflicted: namespacedNameSet(output.ConflictedEndpoints),
+		lost:       output.EntryConflicts,
+		unresolved: namespacedNameSet(output.InvalidEndpoints),
+	}
+}
+
+// acceptance is the gateway's verdict on one endpoint: its Accepted condition
+// (nil removes it) and the entries it does not serve.
+type acceptance struct {
+	condition *metav1.Condition
+	conflicts []v1alpha1.EndpointConflict
+}
+
+// entryCount is the number of distinct (endpoint, method) entries of ep.
+func entryCount(ep *v1alpha1.KrakenDEndpoint) int {
+	seen := map[[2]string]struct{}{}
+	for _, e := range ep.Spec.Endpoints {
+		seen[[2]string{e.Endpoint, e.Method}] = struct{}{}
+	}
+	return len(seen)
+}
+
+// endpointConflicts converts a render's lost entries to their status form;
+// none gives nil.
+func endpointConflicts(lost []renderer.EntryConflict) []v1alpha1.EndpointConflict {
+	if len(lost) == 0 {
+		return nil
+	}
+	out := make([]v1alpha1.EndpointConflict, 0, len(lost))
+	for _, l := range lost {
+		out = append(out, v1alpha1.EndpointConflict{Endpoint: l.Endpoint, Method: l.Method, Winner: l.Winner.String()})
+	}
+	return out
 }
