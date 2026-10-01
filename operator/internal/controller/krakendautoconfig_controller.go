@@ -361,16 +361,17 @@ func (r *KrakenDAutoConfigReconciler) handleEndpointError(
 	return ctrl.Result{}, syncErr
 }
 
-// recordSyncedFailure records a failed sync: the synced gauge 0, phase Error
-// and the Synced condition False with the given reason and error, then, once
-// that status write succeeds, the buffered input warnings followed by a
-// Warning event for syncErr. It returns the status write's error, if any,
-// other than a Conflict: a reconcile whose failure-status write conflicts read
-// a stale copy of the AutoConfig, but its sync failed all the same, so it
-// records no events and its caller returns the failure's own result. The
-// quiet conflictRequeueDelay requeue would make controller-runtime forget the
-// item and reset its exponential backoff, turning a persistent failure's
-// retries into a conflictRequeueDelay loop while the cache stays stale.
+// recordSyncedFailure records a failed sync: the synced gauge 0, the Synced
+// condition False with the given reason and error, and the Ready, phase and
+// observedGeneration derived from it, then, once that status write succeeds,
+// the buffered input warnings followed by a Warning event for syncErr. It
+// returns the status write's error, if any, other than a Conflict: a
+// reconcile whose failure-status write conflicts read a stale copy of the
+// AutoConfig, but its sync failed all the same, so it records no events and
+// its caller returns the failure's own result. The quiet conflictRequeueDelay
+// requeue would make controller-runtime forget the item and reset its
+// exponential backoff, turning a persistent failure's retries into a
+// conflictRequeueDelay loop while the cache stays stale.
 func (r *KrakenDAutoConfigReconciler) recordSyncedFailure(
 	ctx context.Context,
 	ac *v1alpha1.KrakenDAutoConfig,
@@ -378,7 +379,6 @@ func (r *KrakenDAutoConfigReconciler) recordSyncedFailure(
 	syncErr error,
 	warnings *inputWarnings,
 ) error {
-	ac.Status.Phase = v1alpha1.AutoConfigPhaseError
 	meta.SetStatusCondition(&ac.Status.Conditions, metav1.Condition{
 		Type:               v1alpha1.ConditionSynced,
 		Status:             metav1.ConditionFalse,
@@ -386,6 +386,7 @@ func (r *KrakenDAutoConfigReconciler) recordSyncedFailure(
 		Reason:             reason,
 		Message:            syncErr.Error(),
 	})
+	setAutoConfigReadiness(ac)
 	// The sync has failed whether or not its status write succeeds.
 	autoConfigSynced.WithLabelValues(ac.Namespace, ac.Name).Set(0)
 	if err := r.Status().Update(ctx, ac); err != nil {
