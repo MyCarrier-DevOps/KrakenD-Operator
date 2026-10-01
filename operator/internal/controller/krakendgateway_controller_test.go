@@ -58,12 +58,8 @@ type mockValidator struct {
 	validateErr error
 }
 
-func (m *mockValidator) Validate(_ context.Context, _ []byte) error {
+func (m *mockValidator) Validate(_ context.Context, _ []byte, _ v1alpha1.Edition) error {
 	return m.validateErr
-}
-
-func (m *mockValidator) PrepareValidationCopy(jsonData []byte, _ bool) ([]byte, error) {
-	return jsonData, nil
 }
 
 func testGateway() *v1alpha1.KrakenDGateway {

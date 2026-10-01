@@ -436,7 +436,7 @@ type markerValidator struct {
 // suiteValidator is the validator the suite's gateway controller uses.
 var suiteValidator = &markerValidator{}
 
-func (v *markerValidator) Validate(_ context.Context, jsonData []byte) error {
+func (v *markerValidator) Validate(_ context.Context, jsonData []byte, _ v1alpha1.Edition) error {
 	if !bytes.Contains(jsonData, []byte(rejectMarker)) {
 		return nil
 	}
@@ -449,10 +449,6 @@ func (v *markerValidator) Validate(_ context.Context, jsonData []byte) error {
 			"ERROR at '/endpoints/0/backend/0/extra_config': additional properties not allowed\n", 1500)
 	}
 	return &renderer.ValidationError{Output: output, Err: errors.New("exit status 1")}
-}
-
-func (v *markerValidator) PrepareValidationCopy(jsonData []byte, _ bool) ([]byte, error) {
-	return jsonData, nil
 }
 
 // waitForNodes polls the Kubernetes API until all nodes report Ready.

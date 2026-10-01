@@ -25,7 +25,10 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
+
+	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 )
 
 // DefaultValidateTimeout bounds one krakend check run when no Timeout is
@@ -74,7 +77,23 @@ func (e *KrakenDExecutor) Execute(
 	return cmd.CombinedOutput()
 }
 
-// Validate writes jsonData to a temp file and runs `krakend check -t -n -c`
+// Validate checks jsonData as the given edition would load it.
+func (v *KrakenDValidator) Validate(ctx context.Context, jsonData []byte, edition v1alpha1.Edition) error {
+	doc, findings, err := validationCopy(jsonData, edition)
+	if err != nil {
+		return fmt.Errorf("preparing validation copy: %w", err)
+	}
+	if len(findings) > 0 {
+		return &ValidationError{Output: strings.Join(findings, "\n"), Err: errEEWildcardConflict}
+	}
+	return v.check(ctx, doc)
+}
+
+// errEEWildcardConflict is the verdict for an EE wildcard route the EE router
+// would refuse, found before krakend check runs.
+var errEEWildcardConflict = errors.New("EE wildcard route conflict")
+
+// check writes jsonData to a temp file and runs `krakend check -t -n -c`
 // on it: -t tests the router and -n lints against the JSON schema built into
 // the binary, so validation never needs network access.
 //
@@ -83,7 +102,7 @@ func (e *KrakenDExecutor) Execute(
 // verdict on the config. Every other failure (binary missing, temp-file I/O,
 // deadline exceeded, process killed by a signal) comes back as a plain error:
 // the config was not judged and the caller should retry.
-func (v *KrakenDValidator) Validate(ctx context.Context, jsonData []byte) (retErr error) {
+func (v *KrakenDValidator) check(ctx context.Context, jsonData []byte) (retErr error) {
 	ctx, cancel := context.WithTimeout(ctx, v.timeout())
 	defer cancel()
 
@@ -155,35 +174,21 @@ var ceUnsupportedExtraConfig = []string{
 	"backend/redis",
 }
 
-// PrepareValidationCopy creates a copy of the rendered config suitable for
-// validation with the embedded CE krakend binary. It strips:
-//   - EE-only extra_config keys that the CE linter rejects.
-//   - Wildcard (/*) endpoints when eeWithoutFallback is true, since the CE
-//     validator does not support them.
-func (v *KrakenDValidator) PrepareValidationCopy(jsonData []byte, eeWithoutFallback bool) ([]byte, error) {
+// validationCopy creates the document the embedded CE krakend binary checks
+// for a render of the given edition. It strips the EE-only extra_config keys
+// that the CE linter rejects and, for an EE render, the exact "/*" endpoint,
+// which the CE validator does not support. Non-nil findings are a verdict
+// reached without running krakend check.
+func validationCopy(jsonData []byte, edition v1alpha1.Edition) ([]byte, []string, error) {
 	var config map[string]any
 	if err := json.Unmarshal(jsonData, &config); err != nil {
-		return nil, fmt.Errorf("unmarshaling config for validation copy: %w", err)
+		return nil, nil, fmt.Errorf("unmarshaling config for validation copy: %w", err)
 	}
 
-	modified := false
-
-	// Strip EE-only root extra_config keys for all configs.
-	if ec, ok := config["extra_config"].(map[string]any); ok {
-		for _, key := range ceUnsupportedExtraConfig {
-			if _, exists := ec[key]; exists {
-				delete(ec, key)
-				modified = true
-			}
-		}
-		if len(ec) == 0 {
-			delete(config, "extra_config")
-			modified = true
-		}
-	}
+	modified := stripCEUnsupportedExtraConfig(config)
 
 	// Strip wildcard endpoints for EE configs validated against CE.
-	if eeWithoutFallback {
+	if edition == v1alpha1.EditionEE {
 		if endpoints, ok := config["endpoints"].([]any); ok {
 			filtered := make([]any, 0, len(endpoints))
 			for _, ep := range endpoints {
@@ -202,9 +207,32 @@ func (v *KrakenDValidator) PrepareValidationCopy(jsonData []byte, eeWithoutFallb
 	}
 
 	if !modified {
-		return jsonData, nil
+		return jsonData, nil, nil
 	}
-	return serializeJSON(config)
+	doc, err := serializeJSON(config)
+	return doc, nil, err
+}
+
+// stripCEUnsupportedExtraConfig removes, in place, the root extra_config keys
+// the CE linter rejects, and the block itself when that empties it. It
+// reports whether config changed.
+func stripCEUnsupportedExtraConfig(config map[string]any) bool {
+	ec, ok := config["extra_config"].(map[string]any)
+	if !ok {
+		return false
+	}
+	modified := false
+	for _, key := range ceUnsupportedExtraConfig {
+		if _, exists := ec[key]; exists {
+			delete(ec, key)
+			modified = true
+		}
+	}
+	if len(ec) == 0 {
+		delete(config, "extra_config")
+		modified = true
+	}
+	return modified
 }
 
 func (v *KrakenDValidator) timeout() time.Duration {

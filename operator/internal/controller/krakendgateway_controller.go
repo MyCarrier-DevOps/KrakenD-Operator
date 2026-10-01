@@ -170,6 +170,7 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// The license decides whether this gateway renders and runs CE.
 	lic := r.reconcileLicense(ctx, &gw)
 	ceFallback := lic.ceFallback
+	edition := renderEdition(&gw, ceFallback)
 	licenseChecksum := lic.checksumFor(deployedLicense)
 
 	// Gather plugin ConfigMaps
@@ -198,7 +199,7 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// Config stage: decide and publish the applied config. Its error is
 	// returned only after the infrastructure stage and the status write.
 	appliedBefore := gw.Status.ConfigChecksum
-	cfg, configErr := r.reconcileConfig(ctx, &gw, before, output, ceFallback)
+	cfg, configErr := r.reconcileConfig(ctx, &gw, before, output, edition)
 	// A held Deployment (no ConfigMap holds the applied config) starts no
 	// rollout, so none is reported.
 	if gw.Status.ConfigChecksum == appliedBefore && cfg.appliedConfigMap != "" {
@@ -626,7 +627,7 @@ func (r *KrakenDGatewayReconciler) reconcileConfig(
 	gw *v1alpha1.KrakenDGateway,
 	before *v1alpha1.KrakenDGatewayStatus,
 	output *renderer.RenderOutput,
-	ceFallback bool,
+	edition v1alpha1.Edition,
 ) (configResult, error) {
 	if output.Checksum == gw.Status.ConfigChecksum {
 		// The applied config passed validation when it was applied, so a
@@ -634,7 +635,7 @@ func (r *KrakenDGatewayReconciler) reconcileConfig(
 		setConfigApplied(gw)
 		return r.publishApplied(ctx, gw, output)
 	}
-	rejections, err := r.validateAndApply(ctx, gw, before, output, ceFallback)
+	rejections, err := r.validateAndApply(ctx, gw, before, output, edition)
 	if output.Checksum == gw.Status.ConfigChecksum {
 		return configResult{appliedConfigMap: resources.ConfigMapName(gw, output.Checksum)}, nil
 	}
@@ -652,9 +653,9 @@ func (r *KrakenDGatewayReconciler) validateAndApply(
 	gw *v1alpha1.KrakenDGateway,
 	before *v1alpha1.KrakenDGatewayStatus,
 	output *renderer.RenderOutput,
-	ceFallback bool,
+	edition v1alpha1.Edition,
 ) (map[types.NamespacedName]string, error) {
-	err := r.validateConfig(ctx, gw, output.JSON, ceFallback)
+	err := r.validateConfig(ctx, gw, output, edition)
 	var rejected *renderer.ValidationError
 	switch {
 	case stderrors.As(err, &rejected):
@@ -714,33 +715,27 @@ func (r *KrakenDGatewayReconciler) markDeploymentUpdate(
 	rollingRestarts.Inc()
 }
 
-// validateConfig runs krakend check on the validation copy of jsonData.
-// When the validator already rejected identical input for this gateway, the
-// remembered rejection is returned without running krakend check again.
+// validateConfig checks the render as the given edition. When the validator
+// already rejected this exact render for this edition on this gateway, the
+// remembered rejection is returned without running krakend check again: a
+// verdict is deterministic for (render, edition), so a CE-fallback flip
+// re-validates.
 func (r *KrakenDGatewayReconciler) validateConfig(
-	ctx context.Context,
-	gw *v1alpha1.KrakenDGateway,
-	jsonData []byte,
-	ceFallback bool,
+	ctx context.Context, gw *v1alpha1.KrakenDGateway, output *renderer.RenderOutput, edition v1alpha1.Edition,
 ) error {
-	eeWithoutFallback := gw.Spec.Edition == v1alpha1.EditionEE && !ceFallback
-	validationJSON, err := r.Validator.PrepareValidationCopy(jsonData, eeWithoutFallback)
-	if err != nil {
-		return fmt.Errorf("preparing validation copy: %w", err)
-	}
 	key := client.ObjectKeyFromObject(gw)
-	checksum := hash.SHA256Hex(validationJSON)
-	if rejected := r.rejections.lookup(key, checksum); rejected != nil {
+	input := hash.CombineHex(output.Checksum, string(edition))
+	if rejected := r.rejections.lookup(key, input); rejected != nil {
 		return rejected
 	}
-	err = r.Validator.Validate(ctx, validationJSON)
+	err := r.Validator.Validate(ctx, output.JSON, edition)
 	var rejected *renderer.ValidationError
 	switch {
 	case err == nil:
 		r.rejections.forget(key)
 	case stderrors.As(err, &rejected):
 		configValidationFailures.Inc()
-		r.rejections.remember(key, checksum, rejected)
+		r.rejections.remember(key, input, rejected)
 		logf.FromContext(ctx).Error(err, "krakend check rejected the rendered config")
 	}
 	return err

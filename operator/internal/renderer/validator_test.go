@@ -28,6 +28,8 @@ import (
 	"slices"
 	"testing"
 	"time"
+
+	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 )
 
 // mockExecutor implements CommandExecutor for testing.
@@ -63,7 +65,7 @@ func TestValidate_Success(t *testing.T) {
 		Executor:   &mockExecutor{output: []byte("Syntax OK!"), err: nil},
 		BinaryPath: "krakend",
 	})
-	err := v.Validate(context.Background(), []byte(`{"version":3}`))
+	err := v.Validate(context.Background(), []byte(`{"version":3}`), v1alpha1.EditionCE)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -74,7 +76,7 @@ func TestValidate_Failure(t *testing.T) {
 		Executor:   &mockExecutor{output: []byte("ERROR: invalid config"), err: exitError(t, 1)},
 		BinaryPath: "krakend",
 	})
-	err := v.Validate(context.Background(), []byte(`{"version":3}`))
+	err := v.Validate(context.Background(), []byte(`{"version":3}`), v1alpha1.EditionCE)
 	if err == nil {
 		t.Fatal("expected validation error")
 	}
@@ -107,9 +109,8 @@ func TestValidationError_Unwrap(t *testing.T) {
 }
 
 func TestPrepareValidationCopy_NoStripping(t *testing.T) {
-	v := NewValidator(ValidatorOptions{Executor: &mockExecutor{}, BinaryPath: "krakend"})
 	input := []byte(`{"version":3,"endpoints":[{"endpoint":"/api"},{"endpoint":"/*"}]}`)
-	out, err := v.PrepareValidationCopy(input, false)
+	out, _, err := validationCopy(input, v1alpha1.EditionCE)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -120,9 +121,8 @@ func TestPrepareValidationCopy_NoStripping(t *testing.T) {
 }
 
 func TestPrepareValidationCopy_StripsWildcard(t *testing.T) {
-	v := NewValidator(ValidatorOptions{Executor: &mockExecutor{}, BinaryPath: "krakend"})
 	input := []byte(`{"endpoints":[{"endpoint":"/api","method":"GET"},{"endpoint":"/*","method":"GET"}],"version":3}`)
-	out, err := v.PrepareValidationCopy(input, true)
+	out, _, err := validationCopy(input, v1alpha1.EditionEE)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -142,9 +142,8 @@ func TestPrepareValidationCopy_StripsWildcard(t *testing.T) {
 }
 
 func TestPrepareValidationCopy_NoEndpoints(t *testing.T) {
-	v := NewValidator(ValidatorOptions{Executor: &mockExecutor{}, BinaryPath: "krakend"})
 	input := []byte(`{"version":3}`)
-	out, err := v.PrepareValidationCopy(input, true)
+	out, _, err := validationCopy(input, v1alpha1.EditionEE)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -154,9 +153,8 @@ func TestPrepareValidationCopy_NoEndpoints(t *testing.T) {
 }
 
 func TestPrepareValidationCopy_AllWildcardEndpoints(t *testing.T) {
-	v := NewValidator(ValidatorOptions{Executor: &mockExecutor{}, BinaryPath: "krakend"})
 	input := []byte(`{"endpoints":[{"endpoint":"/*","method":"GET"}],"version":3}`)
-	out, err := v.PrepareValidationCopy(input, true)
+	out, _, err := validationCopy(input, v1alpha1.EditionEE)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -175,9 +173,8 @@ func TestPrepareValidationCopy_AllWildcardEndpoints(t *testing.T) {
 }
 
 func TestPrepareValidationCopy_EmptyEndpointsArray(t *testing.T) {
-	v := NewValidator(ValidatorOptions{Executor: &mockExecutor{}, BinaryPath: "krakend"})
 	input := []byte(`{"endpoints":[],"version":3}`)
-	out, err := v.PrepareValidationCopy(input, true)
+	out, _, err := validationCopy(input, v1alpha1.EditionEE)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -193,19 +190,17 @@ func TestPrepareValidationCopy_EmptyEndpointsArray(t *testing.T) {
 }
 
 func TestPrepareValidationCopy_InvalidJSON(t *testing.T) {
-	v := NewValidator(ValidatorOptions{Executor: &mockExecutor{}, BinaryPath: "krakend"})
-	_, err := v.PrepareValidationCopy([]byte(`{invalid`), true)
+	_, _, err := validationCopy([]byte(`{invalid`), v1alpha1.EditionEE)
 	if err == nil {
 		t.Fatal("expected error for invalid JSON")
 	}
 }
 
 func TestPrepareValidationCopy_StripsEEExtraConfig(t *testing.T) {
-	v := NewValidator(ValidatorOptions{Executor: &mockExecutor{}, BinaryPath: "krakend"})
 	input := []byte(
 		`{"version":3,"extra_config":{"backend/redis":{"host":"dragonfly:6379"},"telemetry/logging":{"level":"DEBUG"}}}`,
 	)
-	out, err := v.PrepareValidationCopy(input, false)
+	out, _, err := validationCopy(input, v1alpha1.EditionCE)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -227,9 +222,8 @@ func TestPrepareValidationCopy_StripsEEExtraConfig(t *testing.T) {
 }
 
 func TestPrepareValidationCopy_StripsEEExtraConfigRemovesEmptyBlock(t *testing.T) {
-	v := NewValidator(ValidatorOptions{Executor: &mockExecutor{}, BinaryPath: "krakend"})
 	input := []byte(`{"version":3,"extra_config":{"backend/redis":{"host":"dragonfly:6379"}}}`)
-	out, err := v.PrepareValidationCopy(input, false)
+	out, _, err := validationCopy(input, v1alpha1.EditionCE)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -244,11 +238,10 @@ func TestPrepareValidationCopy_StripsEEExtraConfigRemovesEmptyBlock(t *testing.T
 }
 
 func TestPrepareValidationCopy_StripsEEExtraConfigAndWildcard(t *testing.T) {
-	v := NewValidator(ValidatorOptions{Executor: &mockExecutor{}, BinaryPath: "krakend"})
 	input := []byte(
 		`{"version":3,"extra_config":{"backend/redis":{"host":"dragonfly:6379"}},"endpoints":[{"endpoint":"/api","method":"GET"},{"endpoint":"/*","method":"GET"}]}`,
 	)
-	out, err := v.PrepareValidationCopy(input, true)
+	out, _, err := validationCopy(input, v1alpha1.EditionEE)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -307,7 +300,7 @@ func fakeKrakenD(t *testing.T, script string) string {
 func TestValidate_LintsOffline(t *testing.T) {
 	rec := &recordingExecutor{}
 	v := NewValidator(ValidatorOptions{Executor: rec, BinaryPath: "/usr/local/bin/krakend"})
-	if err := v.Validate(context.Background(), []byte(`{"version":3}`)); err != nil {
+	if err := v.Validate(context.Background(), []byte(`{"version":3}`), v1alpha1.EditionCE); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if rec.name != "/usr/local/bin/krakend" {
@@ -324,7 +317,7 @@ func TestValidate_LintsOffline(t *testing.T) {
 func TestValidate_MissingBinaryIsTransient(t *testing.T) {
 	bin := filepath.Join(t.TempDir(), "no-such-krakend")
 	v := NewValidator(ValidatorOptions{Executor: NewKrakenDExecutor(bin), BinaryPath: bin})
-	err := v.Validate(context.Background(), []byte(`{"version":3}`))
+	err := v.Validate(context.Background(), []byte(`{"version":3}`), v1alpha1.EditionCE)
 	if err == nil {
 		t.Fatal("expected an error for a missing binary")
 	}
@@ -340,7 +333,7 @@ func TestValidate_MissingBinaryIsTransient(t *testing.T) {
 func TestValidate_KilledProcessIsTransient(t *testing.T) {
 	bin := fakeKrakenD(t, "kill -9 $$")
 	v := NewValidator(ValidatorOptions{Executor: NewKrakenDExecutor(bin), BinaryPath: bin})
-	err := v.Validate(context.Background(), []byte(`{"version":3}`))
+	err := v.Validate(context.Background(), []byte(`{"version":3}`), v1alpha1.EditionCE)
 	if err == nil {
 		t.Fatal("expected an error for a killed process")
 	}
@@ -358,7 +351,7 @@ func TestValidate_DeadlineIsTransient(t *testing.T) {
 		Timeout:    200 * time.Millisecond,
 	})
 	start := time.Now()
-	err := v.Validate(context.Background(), []byte(`{"version":3}`))
+	err := v.Validate(context.Background(), []byte(`{"version":3}`), v1alpha1.EditionCE)
 	if elapsed := time.Since(start); elapsed > 3*time.Second {
 		t.Errorf("Validate took %s; the timeout did not stop krakend check", elapsed)
 	}
@@ -374,7 +367,7 @@ func TestValidate_DeadlineIsTransient(t *testing.T) {
 func TestValidate_RejectionIsAVerdict(t *testing.T) {
 	bin := fakeKrakenD(t, `echo "ERROR: bad endpoint"; exit 1`)
 	v := NewValidator(ValidatorOptions{Executor: NewKrakenDExecutor(bin), BinaryPath: bin})
-	err := v.Validate(context.Background(), []byte(`{"version":3}`))
+	err := v.Validate(context.Background(), []byte(`{"version":3}`), v1alpha1.EditionCE)
 	var valErr *ValidationError
 	if !errors.As(err, &valErr) {
 		t.Fatalf("expected *ValidationError for a non-zero exit, got %v", err)
@@ -388,8 +381,8 @@ func TestValidate_TempFileErrorIsStable(t *testing.T) {
 	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "missing"))
 	v := NewValidator(ValidatorOptions{Executor: &mockExecutor{}, BinaryPath: "krakend"})
 
-	first := v.Validate(context.Background(), []byte(`{"version":3}`))
-	second := v.Validate(context.Background(), []byte(`{"version":3}`))
+	first := v.Validate(context.Background(), []byte(`{"version":3}`), v1alpha1.EditionCE)
+	second := v.Validate(context.Background(), []byte(`{"version":3}`), v1alpha1.EditionCE)
 
 	if first == nil || second == nil {
 		t.Fatalf("expected temp-file errors, got %v and %v", first, second)
@@ -411,8 +404,8 @@ func TestValidate_VerdictOutputDoesNotCarryTheTempPath(t *testing.T) {
 	bin := fakeKrakenD(t, `echo "ERROR parsing the configuration file:	'$5': bad"; exit 1`)
 	v := NewValidator(ValidatorOptions{Executor: NewKrakenDExecutor(bin), BinaryPath: bin})
 
-	first := v.Validate(context.Background(), []byte(`{"version":3}`))
-	second := v.Validate(context.Background(), []byte(`{"version":3}`))
+	first := v.Validate(context.Background(), []byte(`{"version":3}`), v1alpha1.EditionCE)
+	second := v.Validate(context.Background(), []byte(`{"version":3}`), v1alpha1.EditionCE)
 
 	var firstVerdict, secondVerdict *ValidationError
 	if !errors.As(first, &firstVerdict) || !errors.As(second, &secondVerdict) {

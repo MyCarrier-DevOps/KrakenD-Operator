@@ -458,3 +458,12 @@ func endpointConflicts(lost []renderer.EntryConflict) []v1alpha1.EndpointConflic
 	}
 	return out
 }
+
+// renderEdition is the edition a render is for: CE for a CE gateway or for
+// an EE gateway in license fallback, otherwise EE.
+func renderEdition(gw *v1alpha1.KrakenDGateway, ceFallback bool) v1alpha1.Edition {
+	if gw.Spec.Edition == v1alpha1.EditionEE && !ceFallback {
+		return v1alpha1.EditionEE
+	}
+	return v1alpha1.EditionCE
+}

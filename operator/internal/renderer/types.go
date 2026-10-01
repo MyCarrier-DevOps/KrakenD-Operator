@@ -70,8 +70,10 @@ type Options struct{}
 
 // Validator validates a rendered krakend.json configuration.
 type Validator interface {
-	Validate(ctx context.Context, jsonData []byte) error
-	PrepareValidationCopy(jsonData []byte, eeWithoutFallback bool) ([]byte, error)
+	// Validate checks jsonData the way KrakenD of the given edition would load
+	// it, using the embedded CE binary. An invalid config returns
+	// *ValidationError; any other error means the validator could not run.
+	Validate(ctx context.Context, jsonData []byte, edition v1alpha1.Edition) error
 }
 
 // CommandExecutor executes external commands.

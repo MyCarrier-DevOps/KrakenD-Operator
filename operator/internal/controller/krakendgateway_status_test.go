@@ -40,24 +40,15 @@ import (
 )
 
 // countingValidator returns err from every Validate call and counts the
-// calls, i.e. how often krakend check would have run. Its validation copy
-// depends on the edition mode the way the real one does for a config with
-// an EE-only wildcard endpoint.
+// calls, i.e. how often krakend check would have run.
 type countingValidator struct {
 	calls int
 	err   error
 }
 
-func (v *countingValidator) Validate(context.Context, []byte) error {
+func (v *countingValidator) Validate(context.Context, []byte, v1alpha1.Edition) error {
 	v.calls++
 	return v.err
-}
-
-func (v *countingValidator) PrepareValidationCopy(jsonData []byte, eeWithoutFallback bool) ([]byte, error) {
-	if eeWithoutFallback {
-		return append([]byte("ee-validation-copy:"), jsonData...), nil
-	}
-	return jsonData, nil
 }
 
 // rejectedBy returns a validation error shaped like a krakend check
