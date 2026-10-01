@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	clocktesting "k8s.io/utils/clock/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -37,6 +38,7 @@ import (
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 	"github.com/mycarrier-devops/krakend-operator/internal/resources"
+	"github.com/mycarrier-devops/krakend-operator/internal/util/hash"
 )
 
 // testNow is the instant the gateway tests' clock reads.
@@ -474,5 +476,58 @@ func TestGatewayReconcile_EventsOnlyOnConditionTransitions(t *testing.T) {
 				t.Errorf("%s events over three reconciles = %d, want 1 (only the transition)", tc.reason, got)
 			}
 		})
+	}
+}
+
+// renderOf is a renderer that renders config, with its real checksum.
+func renderOf(config string) *mockRenderer {
+	return &mockRenderer{output: &renderer.RenderOutput{
+		JSON: []byte(config), Checksum: hash.SHA256Hex([]byte(config)), DesiredImage: "krakend:2.7.0",
+	}}
+}
+
+// getObject fetches name from gw's namespace into obj and fails the test on
+// error.
+func getObject(t *testing.T, c client.Client, gw *v1alpha1.KrakenDGateway, name string, obj client.Object) {
+	t.Helper()
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: gw.Namespace, Name: name}, obj); err != nil {
+		t.Fatalf("getting %s: %v", name, err)
+	}
+}
+
+// mountedConfig returns the ConfigMap the gateway Deployment's pods mount as
+// their config.
+func mountedConfig(t *testing.T, c client.Client, gw *v1alpha1.KrakenDGateway) string {
+	t.Helper()
+	var dep appsv1.Deployment
+	getObject(t, c, gw, gw.Name, &dep)
+	for _, v := range dep.Spec.Template.Spec.Volumes {
+		if v.Name == "config" && v.ConfigMap != nil {
+			return v.ConfigMap.Name
+		}
+	}
+	return ""
+}
+
+func TestGatewayReconcile_PublishesTheAppliedConfigAsAnImmutableConfigMap(t *testing.T) {
+	gw := reconciledGateway()
+	const config = `{"version":3,"name":"published"}`
+	c := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderOf(config), &mockValidator{})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	want := resources.ConfigMapName(gw, hash.SHA256Hex([]byte(config)))
+	var cm corev1.ConfigMap
+	getObject(t, c, gw, want, &cm)
+	if cm.Immutable == nil || !*cm.Immutable {
+		t.Error("the published config ConfigMap must be immutable")
+	}
+	if cm.Data[resources.ConfigKey] != config {
+		t.Errorf("config data = %q, want %q", cm.Data[resources.ConfigKey], config)
+	}
+	if got := mountedConfig(t, c, gw); got != want {
+		t.Errorf("Deployment mounts %q, want %q", got, want)
 	}
 }
