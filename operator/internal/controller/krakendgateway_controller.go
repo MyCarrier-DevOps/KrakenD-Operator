@@ -161,13 +161,15 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, err
 	}
 
-	// The license decides whether this gateway renders and runs CE.
-	lic := r.reconcileLicense(ctx, &gw)
-	ceFallback := lic.ceFallback
+	// Read the deployed license first: a failed read must not follow license
+	// transitions (and their events) that the returned error would discard.
 	deployedLicense, err := r.deployedLicenseChecksum(ctx, &gw)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	// The license decides whether this gateway renders and runs CE.
+	lic := r.reconcileLicense(ctx, &gw)
+	ceFallback := lic.ceFallback
 	licenseChecksum := lic.checksumFor(deployedLicense)
 
 	// Gather plugin ConfigMaps
@@ -991,8 +993,8 @@ type infraInputs struct {
 	// "" means no config has passed validation yet.
 	appliedChecksum string
 	pluginChecksum  string
-	// licenseChecksum identifies the license bytes the pods run with; "" when
-	// no license is mounted.
+	// licenseChecksum identifies the license bytes the pods mount, fallback
+	// or not; "" when no license is mounted.
 	licenseChecksum string
 	image           string
 	// configMapName is the ConfigMap holding the applied config; "" means
@@ -1200,11 +1202,10 @@ func (r *KrakenDGatewayReconciler) reconcileDeployment(
 	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace}}
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, dep, func() error {
 		resources.BuildDeployment(dep, gw, resources.DeploymentInputs{
-			ConfigMapName:  in.configMapName,
-			ConfigChecksum: in.appliedChecksum,
-			PluginChecksum: in.pluginChecksum,
-			Image:          in.image,
-
+			ConfigMapName:   in.configMapName,
+			ConfigChecksum:  in.appliedChecksum,
+			PluginChecksum:  in.pluginChecksum,
+			Image:           in.image,
 			LicenseChecksum: in.licenseChecksum,
 		})
 		return controllerutil.SetControllerReference(gw, dep, r.Scheme)
