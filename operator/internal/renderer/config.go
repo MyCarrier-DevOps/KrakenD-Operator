@@ -508,6 +508,9 @@ func appendRedisConfig(ec map[string]any, redis *v1alpha1.RedisSpec, df *Dragonf
 			pool["dial_timeout"] = p.DialTimeout
 		}
 	}
+	if df != nil && df.Enabled && df.ServiceDNS != "" {
+		addresses = []string{df.ServiceDNS}
+	}
 	switch len(addresses) {
 	case 0:
 		return
