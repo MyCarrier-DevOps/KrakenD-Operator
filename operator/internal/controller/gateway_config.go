@@ -348,10 +348,15 @@ func rejectionSummary(atts []renderer.Attribution) string {
 // Accepted=False/GatewayConfigRejected. An endpoint carrying
 // GatewayConfigRejected that no finding names any longer has it removed, so
 // its Ready is derived afresh. Every other endpoint keeps the verdict of the
-// applied render. writeEndpointAccepted writes only on change, so a
+// applied render, unless no config has ever been applied (neverApplied): then
+// there is no applied render to keep, and any Accepted left by an earlier
+// gateway of the same name is removed. writeEndpointAccepted writes only on change, so a
 // remembered rejection writes nothing.
 func (r *KrakenDGatewayReconciler) recordRejections(
-	ctx context.Context, endpoints []v1alpha1.KrakenDEndpoint, rejections map[types.NamespacedName]string,
+	ctx context.Context,
+	endpoints []v1alpha1.KrakenDEndpoint,
+	rejections map[types.NamespacedName]string,
+	neverApplied bool,
 ) error {
 	var errs []error
 	for i := range endpoints {
@@ -366,7 +371,7 @@ func (r *KrakenDGatewayReconciler) recordRejections(
 				Message:            msg,
 			}
 		} else if cur := meta.FindStatusCondition(ep.Status.Conditions, v1alpha1.ConditionAccepted); cur == nil ||
-			cur.Reason != v1alpha1.ReasonGatewayConfigRejected {
+			(!neverApplied && cur.Reason != v1alpha1.ReasonGatewayConfigRejected) {
 			continue
 		}
 		if err := r.writeEndpointAccepted(ctx, ep, want); err != nil {

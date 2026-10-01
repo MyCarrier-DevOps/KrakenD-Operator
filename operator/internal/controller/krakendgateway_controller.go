@@ -198,11 +198,10 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// infrastructure stage or the gateway status; it is returned after them
 	// so the reconcile is retried.
 	var acceptanceErr error
-	switch {
-	case output.Checksum == gw.Status.ConfigChecksum:
+	if output.Checksum == gw.Status.ConfigChecksum {
 		acceptanceErr = r.reconcileEndpointAcceptance(ctx, &gw, endpoints, output)
-	default:
-		acceptanceErr = r.recordRejections(ctx, endpoints, cfg.rejections)
+	} else {
+		acceptanceErr = r.recordRejections(ctx, endpoints, cfg.rejections, gw.Status.ConfigChecksum == "")
 	}
 
 	// Infrastructure stage: always runs, and deploys the applied config.
