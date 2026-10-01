@@ -729,7 +729,7 @@ sequenceDiagram
             Pod->>Pod: KrakenD starts, loads config
             Note over Op: Deployment status watch triggers:
 
-            alt Rollout converges
+            alt Rollout converges (generation observed, applied checksum on the pod template,<br/>all replicas updated and available)
                 Op->>K8s: Update replicas/readyReplicas
                 Op->>K8s: Set Progressing=False, Available=True (Ready=True, phase Running)
             else ProgressDeadlineExceeded
@@ -750,7 +750,7 @@ sequenceDiagram
 | KrakenDGateway updated | Gateway controller | Re-render config, update child resources, rolling restart |
 | KrakenDGateway deleted | Kubernetes GC | ownerReference cascade deletes all child resources. A KrakenDGateway with a deletionTimestamp is not reconciled: garbage collection removes its children, and the operator does not recreate them. |
 | KrakenDEndpoint created, spec changed, or its `Accepted` changed | Endpoint controller | Resolve gateway and policy references into `ResolvedRefs`; derive `Ready` and `phase` from `ResolvedRefs` and `Accepted`; patch status (optimistic lock) only when it changed. The gateway controller re-renders the target gateway on spec changes and records `Accepted` on every endpoint of an applied render. A resolved conflict flips `Accepted` back to `True`. |
-| KrakenDBackendPolicy created/updated/deleted | Policy controller | Set `Ready` from the policy's fields and `observedGeneration`. The gateway controller re-renders every gateway with endpoints referencing the policy. The endpoint controller re-resolves references only when the policy is created or deleted. `referencedBy` is recounted when an endpoint is created, deleted, or has its spec changed. |
+| KrakenDBackendPolicy created/updated/deleted | Policy controller | Set `Ready` from the policy's fields and `observedGeneration`. The gateway controller re-renders every gateway with endpoints referencing the policy. The endpoint controller re-resolves references only when the policy is created or deleted. Deleting a policy that endpoints still reference is rejected by the admission webhook; if it is deleted anyway (for example when the webhook is bypassed), each referencing endpoint gets `ResolvedRefs=False`/`PolicyNotFound` and phase `Invalid`, and the gateway excludes the endpoint from the rendered config and removes its `Accepted` condition. `referencedBy` is recounted when an endpoint is created, deleted, or has its spec changed. |
 | KrakenDAutoConfig created, or spec generation/label/annotation changed | AutoConfig controller | Fetch OpenAPI spec from configured source, parse operations, apply URL transforms and filters, and converge owned KrakenDEndpoint resources to the desired state (create/update/delete). A status-only update (the phase/condition writes the reconciler itself makes) does not re-trigger this — only generation, label, and annotation changes do. Generated endpoints trigger the endpoint controller watch → gateway reconciler. |
 | KrakenDAutoConfig deleted | Kubernetes GC | All owned KrakenDEndpoints are garbage-collected via ownerReference. The AutoConfig controller doesn't reconcile a terminating AutoConfig, so under foreground deletion it doesn't recreate endpoints as they are collected. |
 | Owned KrakenDEndpoint spec changed or deleted, or the `openapi.configMapRef`/CUE definitions ConfigMap changed | AutoConfig controller | Re-run the full pipeline. A generated endpoint that was hand-edited or deleted out of band is restored to the desired spec (endpoint specs are compared by decoded JSON value, so re-encoding/formatting differences alone don't cause a write). |
@@ -758,7 +758,7 @@ sequenceDiagram
 | KrakenDGateway or KrakenDBackendPolicy created or deleted | Endpoint controller | Re-resolve references of the endpoints that reference it (`ResolvedRefs` `GatewayNotFound`/`PolicyNotFound` → phase `Detached`/`Invalid`). Gateway and policy updates are ignored: only their existence matters. Re-attachment occurs automatically when the gateway is created again. |
 | Secret (LICENSE) created or updated | Gateway controller | Re-parse X.509 `notAfter` from new Secret; run license validation state machine (`ValidateLicense` → `EERunning`/`EEWarning`/`PreExpiry`/`LicenseExpired`); trigger rolling restart if the license has not expired and the parsed `notAfter` has changed from the last observed value. Also trigger EE recovery (rolling restart) if `expiry > now+1h` AND the gateway is currently in Degraded or Error state (license-caused only) |
 | Dragonfly CR status updated | Gateway controller | Reflect `DragonflyReady` condition on KrakenDGateway; emit `DragonflyNotReady` Warning event if phase regresses |
-| Deployment status updated | Gateway controller | Update `status.replicas`, `status.readyReplicas`, `Available` and `Progressing` conditions on KrakenDGateway. When rollout converges (`updatedReplicas == status.replicas AND availableReplicas == status.replicas`), set `Progressing=False` and the derived phase becomes `Running`. If the Deployment reports `ProgressDeadlineExceeded`, set `Progressing=False`, `Available=False` (reason: `RolloutFailed`), and emit `RolloutFailed` Warning event. `ConfigValid` remains `True` (config passed validation). Existing pods are left running to preserve availability. |
+| Deployment status updated | Gateway controller | Update `status.replicas`, `status.readyReplicas`, `Available` and `Progressing` conditions on KrakenDGateway. The rollout counts as converged only when the Deployment has observed its latest generation (`observedGeneration >= generation`), its pod template carries the applied config checksum, and `replicas == updatedReplicas == availableReplicas ==` the desired count; then `Progressing=False`, `Available=True`, and the derived phase becomes `Running`. Until then `Ready` stays `False`, because the cached Deployment can still describe the previous ReplicaSet. If the Deployment reports `Available=False` (for example `MinimumReplicasUnavailable`) and no rollout is in flight, that condition is mirrored into the gateway's `Available`, so `Ready` goes `False` with phase `Error`. If the Deployment reports `ProgressDeadlineExceeded`, set `Progressing=False`, `Available=False` (reason: `RolloutFailed`), and emit `RolloutFailed` Warning event. `ConfigValid` remains `True` (config passed validation). Existing pods are left running to preserve availability. |
 | License approaching expiry | License monitor (periodic) | Emit warning events; if within the expiry warning window (`now+1h < expiry ≤ now+warningDays`), set `LicenseValid=False` (reason: `ExpiringSoon`) and emit `LicenseExpiringSoon` Warning event (rate-limited to once per 24h). If `expiry > now+1h` AND currently Degraded or Error (license-caused only), trigger EE recovery (even within the warning window). If PreExpiry (`now < expiry ≤ now+1h`) AND `fallbackToCE=true`, switch to CE image. If expired AND `fallbackToCE=true`, switch to CE image. If PreExpiry AND `fallbackToCE=false`, set `LicenseValid=False` (reason: `LicensePreExpiry`; the gateway controller derives phase `Error`), and emit `LicenseExpiredNoFallback` Warning event; leave Deployment running. If expired AND `fallbackToCE=false`, set `LicenseValid=False` (reason: `LicenseExpired`), `LicenseExpired=True` (the gateway controller derives phase `Error`), and emit `LicenseExpiredNoFallback` Warning event; leave Deployment running. If license is healthy (`expiry > now+warningDays`), set `LicenseValid=True`; if currently Degraded or Error (license-caused only), trigger EE recovery. |
 
 ### Reconciliation Queueing
@@ -1746,7 +1746,7 @@ conditions and shown with `-o wide`.
 
 | Kind | `Ready` is True when |
 |---|---|
-| KrakenDGateway | the configuration is validated and applied, the Deployment is available and not rolling out, and the EE license (if any) is valid |
+| KrakenDGateway | the configuration is validated and applied, the Deployment is available and the applied config is rolled out to all replicas, and the EE license (if any) is valid |
 | KrakenDEndpoint | `ResolvedRefs` and `Accepted` are True, `Accepted` for the current generation |
 | KrakenDAutoConfig | `SpecAvailable` and `Synced` are True |
 | KrakenDBackendPolicy | its fields are in range |
@@ -1757,14 +1757,14 @@ conditions and shown with `-o wide`.
 |---|---|
 | `Ready` | Summary condition written only by the gateway controller, derived from ConfigValid, Available, Progressing, LicenseExpired and LicenseDegraded (`Unknown` while the validator is unavailable); phase is derived from the same rules |
 | `ConfigValid` | Last rendered krakend.json passed `krakend check -t -n -c` (`Unknown` with reason `ValidatorUnavailable` while krakend check cannot run) |
-| `Available` | Desired number of KrakenD pods are ready and serving traffic |
+| `Available` | The Deployment is available: it mirrors the Deployment's `Available` condition once a rollout is not in flight, and is `False` with reason `RolloutFailed` when the Deployment exceeds its progress deadline |
 | `LicenseValid` | EE license exists and is not within the expiry warning window |
 | `LicenseDegraded` | Gateway is actively running in CE mode as a fallback because the EE license expired or entered the pre-expiry safety window (only **True** when `fallbackToCE=true` and CE image is deployed; `False` with reason `EEActive` during normal EE operation) |
 | `DragonflyReady` | Dragonfly CR status reports `ready` phase (watched from Dragonfly Operator) |
 | `IstioConfigured` | VirtualService was successfully created/updated |
 | `LicenseSecretUnavailable` | License Secret is not available — either the ExternalSecret failed to sync or the referenced Secret (`secretRef`) does not exist |
 | `LicenseExpired` | License has expired and `fallbackToCE=false`; if a Deployment exists, gateway pods will self-terminate at T-0; on cold-start, Deployment creation is skipped. `False` with reason `EEActive` during normal EE operation |
-| `Progressing` | A rolling deployment is in progress |
+| `Progressing` | A rolling deployment is in progress; it ends (`RolloutComplete`) only when the Deployment has observed the change, its pods carry the applied config checksum, and every replica is updated and available |
 
 ### Endpoint Status Conditions
 
@@ -1796,7 +1796,7 @@ Per-gateway series (`namespace`, `name` labels) are removed when the gateway is 
 
 ### Kubernetes Events
 
-The operator emits events on the resource a condition or action concerns: KrakenDGateway for the rows below, except `EndpointConflict` and `Accepted`, which are emitted on the affected KrakenDEndpoint, and the AutoConfig rows, which are emitted on the KrakenDAutoConfig.
+The operator emits events on the resource a condition or action concerns. Events on a KrakenDEndpoint are `EndpointConflict`, `Accepted` (emitted by the gateway controller), and `GatewayNotFound`, `PolicyNotFound` and `RefsResolved` (emitted by the endpoint controller). Events on a KrakenDBackendPolicy are `InvalidCircuitBreaker`, `InvalidRateLimit` and `Ready`. Events on a KrakenDAutoConfig are the AutoConfig rows (`SpecFetched` through `DuplicateOperationId`). All other rows are emitted on the KrakenDGateway. Condition-transition events (endpoint `ResolvedRefs`, policy `Ready`) fire on the transition only: a Warning when the condition becomes `False` or changes reason, and a Normal event when it recovers.
 
 | Event | Type | Reason |
 |---|---|---|
@@ -1810,6 +1810,12 @@ The operator emits events on the resource a condition or action concerns: Kraken
 | VirtualService created | Normal | `IstioVirtualServiceCreated` |
 | Endpoint newly excluded by a path+method conflict (on the transition only) | Warning | `EndpointConflict` |
 | Previously conflicted endpoint included again | Normal | `Accepted` |
+| Endpoint's gateway does not exist (`ResolvedRefs` False) | Warning | `GatewayNotFound` |
+| Endpoint references a policy that does not exist (`ResolvedRefs` False) | Warning | `PolicyNotFound` |
+| Endpoint references resolve again | Normal | `RefsResolved` |
+| Policy circuit breaker fields out of range (`Ready` False) | Warning | `InvalidCircuitBreaker` |
+| Policy rate limit fields out of range (`Ready` False) | Warning | `InvalidRateLimit` |
+| Invalid policy corrected | Normal | `Ready` |
 | Referenced license Secret missing (`secretRef` path) | Warning | `LicenseSecretMissing` |
 | License renewed, EE restored | Normal | `LicenseRestored` |
 | OpenAPI spec fetched successfully | Normal | `SpecFetched` |
@@ -2011,7 +2017,7 @@ spec:
   #   interval: "1h"                   # re-fetch spec on this interval (only when trigger=Periodic)
 
 status:
-  phase: Synced                        # derived from Synced: Pending, Synced, Error (Fetching/Rendering are never written)
+  phase: Synced                        # derived from Synced: Synced or Error; empty before the first sync (Pending/Fetching/Rendering are never written)
   observedGeneration: 4
   lastSyncTime: "2026-04-03T10:00:00Z" # last sync that changed inputs or endpoints, not a heartbeat
   specChecksum: "sha256:def456..."
@@ -2093,7 +2099,7 @@ The autoconfig controller is **watch-driven with a resync backstop**, and every 
 4. **On an `openapi.configMapRef` or CUE definitions ConfigMap update** — the controller watches the referenced ConfigMap(s) and re-runs the pipeline.
 5. **On a resync** — `trigger: OnChange` AutoConfigs are re-polled every 5 minutes (`defaultResyncInterval`) even with no watch event, so upstream spec changes and out-of-band endpoint drift are converged by the next successful sync; `trigger: Periodic` AutoConfigs resync at `spec.periodic.interval` instead.
 
-A reconcile that finds nothing to change — the common steady-state case — writes no status and emits no event. When something does change, `status.lastSyncTime` and an `EndpointsGenerated` event (`"Generated N endpoints (C created, U updated, D deleted, S skipped)"`) are recorded; `CUEEvaluationWarning`, `DuplicateOperationId`, and `AdditionalEndpointOverride` warning events fire only when the spec/CUE-definitions/generation inputs differ from the last successful sync's, so they don't spam on every resync. A failed sync doesn't record its inputs, so they do repeat on each retry of a failing sync whose inputs changed; a spec fetch failure emits `SpecFetchFailed` instead. `status.phase` no longer transitions through `Fetching`/`Rendering`; those enum values remain for compatibility, but the controller now only sets `Pending`, `Synced`, or `Error`.
+A reconcile that finds nothing to change — the common steady-state case — writes no status and emits no event. When something does change, `status.lastSyncTime` and an `EndpointsGenerated` event (`"Generated N endpoints (C created, U updated, D deleted, S skipped)"`) are recorded; `CUEEvaluationWarning`, `DuplicateOperationId`, and `AdditionalEndpointOverride` warning events fire only when the spec/CUE-definitions/generation inputs differ from the last successful sync's, so they don't spam on every resync. A failed sync doesn't record its inputs, so they do repeat on each retry of a failing sync whose inputs changed; a spec fetch failure emits `SpecFetchFailed` instead. `status.phase` no longer transitions through `Fetching`/`Rendering`; those enum values remain for compatibility, but the controller only writes `Synced` or `Error`, and the phase is empty before the first sync.
 
 Retry cadence differs by failure kind. A spec fetch, CUE, unmatched-override, or scope failure — including a failure to fetch or decode an external `$ref` document, which fails the sync closed the same way instead of falling back to the raw spec — retries at `spec.periodic.interval` for `Periodic` or via controller-runtime's exponential backoff for `OnChange`. An endpoint write failure (`EndpointReconcileFailed`) does not follow that split: it always retries with backoff, on either trigger, since it's usually transient and a `Periodic` AutoConfig would otherwise wait a whole interval to recover. A `Conflict` on a status write, or a `Conflict`/`AlreadyExists` on an endpoint write, means this reconcile acted on a stale cached copy — it is not a failure: it requeues quietly one second later with no error log, no event, and no status change, and its input warning events (`CUEEvaluationWarning`, `DuplicateOperationId`, `AdditionalEndpointOverride`) are held back and recorded only once the reconcile's own status write succeeds, so a retry after a lost conflict doesn't re-emit them. The exception is a failed sync whose failure-status write conflicts: the sync failed all the same, so it keeps the failure's own retry (backoff, or `spec.periodic.interval` where that applies) with no event from that attempt, since the one-second requeue would reset controller-runtime's backoff.
 
