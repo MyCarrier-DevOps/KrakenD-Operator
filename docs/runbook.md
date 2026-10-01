@@ -119,6 +119,24 @@ Metrics are exposed on port **8443** (HTTPS). Key metrics:
 
 ---
 
+## Endpoint Status
+
+| Condition | Meaning |
+|---|---|
+| `ResolvedRefs` | Gateway and referenced policies exist (endpoint controller) |
+| `Accepted` | Included in the gateway's validated configuration (gateway controller) |
+| `Ready` | Both of the above, for the current generation |
+
+- **`Ready=Unknown`, reason `Pending`, for more than a few seconds:** the
+  gateway has not accepted this generation. Check the gateway:
+  `kubectl get krakendgateway <gw> -n <ns> -o jsonpath='{.status.conditions[?(@.type=="ConfigValid")]}'`.
+  A rejected configuration keeps every changed endpoint `Pending`.
+- **`Accepted=False`, reason `EndpointConflict`:** an older KrakenDEndpoint
+  owns one of this endpoint's (path, method) pairs; those entries are not
+  served. Rename the route or remove the duplicate.
+- **`ResolvedRefs=False`:** create the named gateway or policy; the endpoint
+  recovers on its own.
+
 ## ReadMe Publishing (postRestartJob)
 
 The three gateway CRs in `AppCluster-Infrastructure` (dev, preprod, and prod
@@ -261,7 +279,6 @@ kubectl describe krakendendpoint <name>
 **Common causes:**
 - `gatewayRef` points to a non-existent gateway
 - `policyRef` references a non-existent policy
-- Duplicate endpoint path + method combination (oldest wins)
 
 ### AutoConfig not generating endpoints
 
