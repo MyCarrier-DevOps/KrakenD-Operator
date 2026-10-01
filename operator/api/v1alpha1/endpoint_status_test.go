@@ -67,6 +67,11 @@ func TestEndpointReady(t *testing.T) {
 			[]metav1.Condition{refsOK, testCondition("Accepted", metav1.ConditionTrue, "Accepted", 1)},
 			metav1.ConditionUnknown, "Pending", "generation 2",
 		},
+		{
+			"accepted",
+			[]metav1.Condition{refsOK, testCondition("Accepted", metav1.ConditionTrue, "Accepted", 2)},
+			metav1.ConditionTrue, "Ready", "",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
