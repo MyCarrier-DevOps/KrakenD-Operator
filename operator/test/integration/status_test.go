@@ -324,7 +324,7 @@ func TestEndpointStatus_ConflictedEndpointReportsBothWriters(t *testing.T) {
 			v1alpha1.EndpointPhaseActive)
 	}
 	eventually(t, olderReady)
-	newer := createEndpoint(t, ns, "ep-b-newer", gw.Name, "/users", "/only-b")
+	newer := createEndpoint(t, ns, "ep-b-newer", gw.Name, "/users")
 	newerConflicted := func() error {
 		return expectEndpointStatus(newer, metav1.ConditionFalse, metav1.ConditionFalse,
 			"EndpointConflict", "EndpointConflict", v1alpha1.EndpointPhaseConflicted)
