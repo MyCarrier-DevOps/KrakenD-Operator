@@ -1955,3 +1955,45 @@ func TestGatewayReconcile_RejectedEditionFlipToEEKeepsTheCEImage(t *testing.T) {
 		t.Errorf("image = %q while the EE render is rejected, want the applied edition's image %q", got, want)
 	}
 }
+
+func TestGatewayReconcile_RejectedRenderKeepsTheAppliedPlugins(t *testing.T) {
+	gw := reconciledGateway()
+	const applied = `{"version":3,"name":"applied-with-old-plugins"}`
+	c := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).Build()
+	val := &recordingValidator{}
+	r := newTestGatewayReconciler(c, &mockRenderer{output: &renderer.RenderOutput{
+		JSON: []byte(applied), Checksum: hash.SHA256Hex([]byte(applied)), PluginChecksum: "plugins-old",
+	}}, val)
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	live := getGateway(t, c, gw)
+	live.Status.Conditions = nil
+	if err := c.Status().Update(context.Background(), live); err != nil {
+		t.Fatal(err)
+	}
+
+	// A newer render that changes the plugins is rejected.
+	val.err = rejectedBy("- at '/endpoints/0/endpoint': bad")
+	const rejected = `{"version":3,"name":"rejected-with-new-plugins"}`
+	r.Renderer = &mockRenderer{output: &renderer.RenderOutput{
+		JSON: []byte(rejected), Checksum: hash.SHA256Hex([]byte(rejected)), PluginChecksum: "plugins-new",
+	}}
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	var dep appsv1.Deployment
+	getObject(t, c, gw, gw.Name, &dep)
+	if got := dep.Spec.Template.Annotations[resources.PluginChecksumAnnotation]; got != "plugins-old" {
+		t.Errorf("plugin annotation = %q, want the applied render's plugins-old", got)
+	}
+	got := getGateway(t, c, gw)
+	if got.Status.PluginChecksum != "plugins-old" {
+		t.Errorf("status.pluginChecksum = %q, want the applied render's plugins-old", got.Status.PluginChecksum)
+	}
+	progressing := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionProgressing)
+	if progressing != nil && progressing.Reason == "DeploymentUpdated" {
+		t.Errorf("Progressing = %+v, want no rollout reported for a render that was not applied", progressing)
+	}
+}
