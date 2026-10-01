@@ -126,3 +126,30 @@ func TestGatewayReconcile_SteadyStateWritesNoStatus(t *testing.T) {
 		}
 	}
 }
+
+func TestGatewayReconcile_RejectedRenderIsNotRevalidated(t *testing.T) {
+	gw := testGateway()
+	c, phases := gatewayStatusWrites(gw)
+	recorder := fakeRecorder()
+	validator := &countingValidator{err: rejectedBy("bad endpoint")}
+	r := &KrakenDGatewayReconciler{
+		Client: c, Scheme: testScheme(), Recorder: recorder,
+		Renderer: renderOutput("bad"), Validator: validator,
+	}
+
+	for i := range 3 {
+		if err := reconcileGateway(t, r, gw); err != nil {
+			t.Fatalf("reconcile %d: %v", i, err)
+		}
+	}
+
+	if validator.calls != 1 {
+		t.Errorf("krakend check ran %d times for one unchanged render, want 1", validator.calls)
+	}
+	if len(*phases) != 1 || (*phases)[0] != v1alpha1.PhaseError {
+		t.Errorf("status writes = %v, want exactly one, with phase Error", *phases)
+	}
+	if n := len(recorder.Events); n != 1 {
+		t.Errorf("got %d events, want one ConfigValidationFailed", n)
+	}
+}
