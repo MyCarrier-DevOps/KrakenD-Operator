@@ -24,6 +24,7 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -619,5 +620,31 @@ func TestGatewayReconcile_RefusesAConfigMapItDoesNotControl(t *testing.T) {
 	if got := getGateway(t, c, gw); got.Status.ConfigChecksum != "" {
 		t.Errorf("status.configChecksum = %q; a config that was never published must not be recorded as applied",
 			got.Status.ConfigChecksum)
+	}
+}
+
+func TestGatewayReconcile_UpgradeRolloutDoesNotRerunThePostRestartJob(t *testing.T) {
+	const config = `{"version":3,"name":"already-applied"}`
+	sum := hash.SHA256Hex([]byte(config))
+	gw := makeGWWithJob("echo published")
+	gw.Status.ConfigChecksum = sum
+	jobChecksum, err := resources.PostRestartJobChecksum(gw.Spec.PostRestartJob, gw, sum)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gw.Status.LastPostRestartJobChecksum = jobChecksum
+	dep := makeConvergedDeployment(gw, sum)
+	c := fakeClientBuilder().WithObjects(gw, legacyConfigMap(gw, config), dep).WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderOf(config), &mockValidator{})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	var jobs batchv1.JobList
+	if err := c.List(context.Background(), &jobs, client.InNamespace(gw.Namespace)); err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs.Items) != 0 {
+		t.Errorf("the migration rollout re-ran the post-restart Job: %d Job(s) created", len(jobs.Items))
 	}
 }
