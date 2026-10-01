@@ -192,3 +192,32 @@ func TestGatewayReconcile_UnavailableValidatorStillReportsFailedRollout(t *testi
 			ready, v1alpha1.ReasonRolloutFailed)
 	}
 }
+
+func TestGatewayReconcile_UnavailableDeploymentDuringRolloutIsDeployingNotError(t *testing.T) {
+	gw := reconciledGateway()
+	gw.Status.ConfigChecksum = "applied"
+	gw.Status.ActiveImage = "img:v1"
+	for _, cond := range []metav1.Condition{
+		{Type: v1alpha1.ConditionConfigValid, Status: metav1.ConditionTrue, Reason: v1alpha1.ReasonConfigApplied},
+		{Type: v1alpha1.ConditionAvailable, Status: metav1.ConditionTrue, Reason: "DeploymentAvailable"},
+		{Type: v1alpha1.ConditionProgressing, Status: metav1.ConditionTrue, Reason: v1alpha1.ReasonConfigDeployed},
+	} {
+		meta.SetStatusCondition(&gw.Status.Conditions, cond)
+	}
+	dep := makeConvergedDeployment(gw, "applied")
+	dep.Status = appsv1.DeploymentStatus{
+		Conditions: []appsv1.DeploymentCondition{{
+			Type: appsv1.DeploymentAvailable, Status: corev1.ConditionFalse, Reason: "MinimumReplicasUnavailable",
+		}},
+	}
+	c := fakeClientBuilder().WithObjects(gw, dep).WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderOutput("applied"), &mockValidator{})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if phase := getGateway(t, c, gw).Status.Phase; phase != v1alpha1.PhaseDeploying {
+		t.Errorf("phase = %s, want %s: a Deployment that is unavailable while its rollout is in flight is not an error",
+			phase, v1alpha1.PhaseDeploying)
+	}
+}
