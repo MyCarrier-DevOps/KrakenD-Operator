@@ -181,7 +181,11 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		// Validate, then update the ConfigMap. No phase is written for the
 		// steps in between: each write would re-enqueue the gateway.
 		if err := r.validateConfig(ctx, &gw, output.JSON, ceFallback); err != nil {
-			return ctrl.Result{}, r.handleValidationError(ctx, &gw, before, err)
+			var rejected *renderer.ValidationError
+			if !stderrors.As(err, &rejected) {
+				return ctrl.Result{}, r.handleValidatorUnavailable(ctx, &gw, before, err)
+			}
+			return ctrl.Result{}, r.handleValidationError(ctx, &gw, before, rejected)
 		}
 
 		// Update ConfigMap
@@ -620,6 +624,35 @@ func (r *KrakenDGatewayReconciler) handleValidationError(
 		return fmt.Errorf("updating status after validation failure: %w", err)
 	}
 	return nil
+}
+
+// handleValidatorUnavailable records that the rendered config could not be
+// judged because krakend check did not run to completion. The applied
+// config and the phase are left as they are, ConfigValid goes Unknown with
+// reason ValidatorUnavailable, and the error is returned so the reconcile is
+// retried with backoff.
+func (r *KrakenDGatewayReconciler) handleValidatorUnavailable(
+	ctx context.Context,
+	gw *v1alpha1.KrakenDGateway,
+	before *v1alpha1.KrakenDGatewayStatus,
+	cause error,
+) error {
+	message := fmt.Sprintf("config validator unavailable, retrying: %v", cause)
+	prev := meta.FindStatusCondition(before.Conditions, v1alpha1.ConditionConfigValid)
+	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+		Type:               v1alpha1.ConditionConfigValid,
+		Status:             metav1.ConditionUnknown,
+		ObservedGeneration: gw.Generation,
+		Reason:             v1alpha1.ReasonValidatorUnavailable,
+		Message:            message,
+	})
+	if prev == nil || prev.Reason != v1alpha1.ReasonValidatorUnavailable {
+		r.Recorder.Event(gw, "Warning", v1alpha1.ReasonValidatorUnavailable, message)
+	}
+	if err := r.updateStatusIfChanged(ctx, gw, before); err != nil {
+		return fmt.Errorf("updating status after validator failure: %w", err)
+	}
+	return fmt.Errorf("validating config: %w", cause)
 }
 
 // updateStatusIfChanged writes gw's status only when it differs from
