@@ -2538,3 +2538,49 @@ func TestGatewayReconcile_HeldForPluginConfigMapReportsNoRollout(t *testing.T) {
 		t.Errorf("events = %q, want no ConfigDeployed while the Deployment is held", events)
 	}
 }
+
+func TestGatewayReconcile_HeldForPluginConfigMapStillReconcilesTheRestOfTheInfrastructure(t *testing.T) {
+	gw := reconciledGateway()
+	gw.Spec.Autoscaling = &v1alpha1.AutoscalingSpec{MinReplicas: ptr.To(int32(2)), MaxReplicas: 4}
+	gw.Spec.Plugins = &v1alpha1.PluginsSpec{Sources: []v1alpha1.PluginSource{
+		{ConfigMapRef: &v1alpha1.ConfigMapKeyRef{Name: "plugins-a", Key: "auth.so"}},
+	}}
+	c := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderOf(`{"version":3,"name":"held"}`), &mockValidator{})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	var hpa autoscalingv2.HorizontalPodAutoscaler
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(gw), &hpa); err != nil {
+		t.Errorf("the HPA must still be reconciled while the Deployment is held: %v", err)
+	}
+}
+
+func TestGatewayReconcile_PluginsResolvedIsAbsentWithoutConfigMapSources(t *testing.T) {
+	gw := reconciledGateway()
+	gw.Spec.Plugins = &v1alpha1.PluginsSpec{Sources: []v1alpha1.PluginSource{
+		{ConfigMapRef: &v1alpha1.ConfigMapKeyRef{Name: "plugins-a", Key: "auth.so"}},
+	}}
+	c := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderOf(`{"version":3,"name":"plugins"}`), &mockValidator{})
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionPluginsResolved) == nil {
+		t.Fatal("PluginsResolved is not set while a ConfigMap plugin source is missing")
+	}
+
+	latest := getGateway(t, c, gw)
+	latest.Spec.Plugins = nil
+	if err := c.Update(context.Background(), latest); err != nil {
+		t.Fatal(err)
+	}
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if cond := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions,
+		v1alpha1.ConditionPluginsResolved); cond != nil {
+		t.Errorf("PluginsResolved = %+v, want it removed once no ConfigMap plugin source remains", cond)
+	}
+}
