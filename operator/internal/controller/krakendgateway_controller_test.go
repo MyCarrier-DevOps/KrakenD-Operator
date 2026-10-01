@@ -30,6 +30,7 @@ import (
 	policyv1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -1323,5 +1324,36 @@ func TestGatewayMapper_EndpointToGatewayCrossNamespace(t *testing.T) {
 	}
 	if requests[0].Namespace != "operator-ns" {
 		t.Errorf("expected namespace operator-ns, got %s", requests[0].Namespace)
+	}
+}
+
+func TestGatewayReconcile_AutoscaledReplicasAreNotReset(t *testing.T) {
+	gw := testGateway()
+	gw.Status.Phase = v1alpha1.PhaseRunning
+	gw.Spec.Replicas = ptr.To(int32(2))
+	gw.Spec.Autoscaling = &v1alpha1.AutoscalingSpec{MinReplicas: ptr.To(int32(2)), MaxReplicas: 10}
+	scaled := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace},
+		Spec:       appsv1.DeploymentSpec{Replicas: ptr.To(int32(7))}, // chosen by the HPA
+	}
+	c := fakeClientBuilder().WithObjects(gw, scaled).WithStatusSubresource(gw).Build()
+	r := &KrakenDGatewayReconciler{
+		Client: c, Scheme: testScheme(), Recorder: fakeRecorder(),
+		Renderer: &mockRenderer{output: &renderer.RenderOutput{
+			JSON: []byte(`{"version":3}`), Checksum: "cs", DesiredImage: "img:v1",
+		}},
+		Validator: &mockValidator{},
+	}
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(gw)}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var dep appsv1.Deployment
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(gw), &dep); err != nil {
+		t.Fatal(err)
+	}
+	if got := ptr.Deref(dep.Spec.Replicas, -1); got != 7 {
+		t.Errorf("replicas = %d, want the HPA's 7 kept", got)
 	}
 }
