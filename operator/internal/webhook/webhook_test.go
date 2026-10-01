@@ -2740,3 +2740,18 @@ func TestGatewayValidator_RejectsSpecChangeOnTerminatingObject(t *testing.T) {
 		t.Fatal("a spec change to an invalid value on a terminating gateway was admitted; want it rejected")
 	}
 }
+
+func TestEndpointValidator_RejectsSpecChangeOnTerminatingObject(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"}}
+	oldEP := terminating(&v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "ep", Namespace: "default"},
+		Spec:       v1alpha1.KrakenDEndpointSpec{GatewayRef: v1alpha1.GatewayRef{Name: "gw"}},
+	})
+	newEP := oldEP.DeepCopy()
+	newEP.Spec.GatewayRef.Name = "missing-gw"
+
+	_, err := (&EndpointValidator{Client: fakeClient(gw)}).ValidateUpdate(context.Background(), oldEP, newEP)
+	if err == nil {
+		t.Fatal("a spec change to an invalid value on a terminating endpoint was admitted; want it rejected")
+	}
+}
