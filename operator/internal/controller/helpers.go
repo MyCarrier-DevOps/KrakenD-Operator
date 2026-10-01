@@ -24,6 +24,8 @@ import (
 	"unicode/utf8"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -183,4 +185,7 @@ func registerEndpointIndexes(indexer client.FieldIndexer) error {
 	}
 
 	return nil
+}
+
+func recordConditionTransition(recorder record.EventRecorder, obj runtime.Object, prev *metav1.Condition, next metav1.Condition) {
 }

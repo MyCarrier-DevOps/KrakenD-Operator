@@ -18,12 +18,14 @@ package controller
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"unicode/utf8"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -391,5 +393,39 @@ func TestTruncateMessage(t *testing.T) {
 	// newline is not a line, so 61 of the 100 remain.
 	if want := "(output truncated, 61 more lines)"; !strings.HasSuffix(lines, want) {
 		t.Errorf("got ending %q, want it to end with %q", lines[max(0, len(lines)-50):], want)
+	}
+}
+
+func TestRecordConditionTransition(t *testing.T) {
+	obj := &v1alpha1.KrakenDEndpoint{ObjectMeta: metav1.ObjectMeta{Name: "ep", Namespace: "default"}}
+	notAccepted := func(reason string) metav1.Condition {
+		return metav1.Condition{Type: "Accepted", Status: metav1.ConditionFalse, Reason: reason, Message: reason + " message"}
+	}
+	accepted := metav1.Condition{Type: "Accepted", Status: metav1.ConditionTrue, Reason: "Accepted", Message: "included"}
+	tests := []struct {
+		name string
+		prev *metav1.Condition
+		next metav1.Condition
+		want []string
+	}{
+		{"first set True", nil, accepted, nil},
+		{"first set False", nil, notAccepted("EndpointConflict"),
+			[]string{"Warning EndpointConflict EndpointConflict message"}},
+		{"False unchanged", new(notAccepted("EndpointConflict")), notAccepted("EndpointConflict"), nil},
+		{"False with a new reason", new(notAccepted("EndpointConflict")), notAccepted("GatewayConfigRejected"),
+			[]string{"Warning GatewayConfigRejected GatewayConfigRejected message"}},
+		{"True to False", &accepted, notAccepted("EndpointConflict"),
+			[]string{"Warning EndpointConflict EndpointConflict message"}},
+		{"False to True", new(notAccepted("EndpointConflict")), accepted, []string{"Normal Accepted included"}},
+		{"True unchanged", &accepted, accepted, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := record.NewFakeRecorder(10)
+			recordConditionTransition(rec, obj, tt.prev, tt.next)
+			if got := drainEvents(rec); !slices.Equal(got, tt.want) {
+				t.Errorf("events = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
