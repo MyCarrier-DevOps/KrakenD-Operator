@@ -307,3 +307,14 @@ func TestGatewayReconcile_RejectedRenderWithADeploymentWritesStatusOnce(t *testi
 		t.Errorf("two reconciles of a rejected render wrote status %d times (%v), want once", len(*phases), *phases)
 	}
 }
+
+func TestDeploymentConverged_ImageIsTheOneTheOperatorSet(t *testing.T) {
+	gw := servingGateway("applied", convergedImage)
+	dep := makeConvergedDeployment(gw, "applied")
+	// An admission webhook pinned the container to a digest.
+	dep.Spec.Template.Spec.Containers[0].Image = convergedImage + "@sha256:abc"
+
+	if !deploymentConverged(dep, convergedInputs("applied")) {
+		t.Error("a container image rewritten after admission must not stop the rollout counting as converged")
+	}
+}
