@@ -44,6 +44,8 @@ spec:
             {{- end }}
             {{- if .Values.webhooks.enabled }}
             - --webhook-cert-path=/tmp/k8s-webhook-server/serving-certs
+            {{- else }}
+            - --enable-webhooks=false
             {{- end }}
           ports:
             {{- if .Values.metrics.enabled }}
