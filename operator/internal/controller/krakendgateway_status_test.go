@@ -229,7 +229,7 @@ func TestGatewayReconcile_ValidatorUnavailableIsRetried(t *testing.T) {
 	gw := testGateway()
 	gw.Status.Phase = v1alpha1.PhaseRunning
 	gw.Status.ConfigChecksum = "applied"
-	c, _ := gatewayStatusWrites(gw)
+	c, writes := gatewayStatusWrites(gw)
 	validator := &countingValidator{err: fmt.Errorf("running krakend check: %w", fs.ErrNotExist)}
 	r := &KrakenDGatewayReconciler{
 		Client: c, Scheme: testScheme(), Recorder: fakeRecorder(),
@@ -254,5 +254,9 @@ func TestGatewayReconcile_ValidatorUnavailableIsRetried(t *testing.T) {
 	}
 	if validator.calls != 2 {
 		t.Errorf("krakend check ran %d times over two reconciles, want 2: nothing is remembered", validator.calls)
+	}
+	if len(*writes) != 1 {
+		t.Errorf("%d status writes over two reconciles with the same cause, want 1: "+
+			"each write re-enqueues the gateway ahead of the backoff", len(*writes))
 	}
 }
