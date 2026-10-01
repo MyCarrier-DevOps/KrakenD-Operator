@@ -523,8 +523,9 @@ const (
 // +kubebuilder:validation:Enum=Pending;Fetching;Rendering;Synced;Error
 type AutoConfigPhase string
 
-// The controller sets only Pending, Synced, and Error; Fetching and
-// Rendering remain in the enum for compatibility.
+// The phase is derived from the Synced condition and is empty before the
+// first sync; the controller writes only Synced and Error. Pending, Fetching
+// and Rendering remain in the enum for compatibility.
 const (
     AutoConfigPhasePending   AutoConfigPhase = "Pending"
     AutoConfigPhaseFetching  AutoConfigPhase = "Fetching"
@@ -882,10 +883,7 @@ The `Reconcile` method follows the pipeline described in operator architecture �
 flowchart TD
     A[Fetch KrakenDGateway] --> B{Found and<br/>not terminating?}
     B -->|No| Z[Forget the gateway<br/>metrics and rejection memo<br/>Return]
-    B -->|Yes| B1{phase == empty?}
-    B1 -->|Yes| B2[Set phase=Pending in memory;<br/>the first needed status write persists it]
-    B2 --> C
-    B1 -->|No| C[List KrakenDEndpoints by gatewayRef]
+    B -->|Yes| C[List KrakenDEndpoints by gatewayRef]
     C --> C1[Fetch referenced KrakenDBackendPolicies]
     C1 --> C2[Determine CEFallback from<br/>status conditions LicenseDegraded]
     C2 --> F[Call Renderer.Render<br/>passes endpoints + policies +<br/>CEFallback. Renderer handles<br/>conflict detection internally]
@@ -893,29 +891,25 @@ flowchart TD
     G -->|No| G1{Image drift?}
     G1 -->|No| G2{Plugin checksum changed?}
     G2 -->|No| H[Record Accepted on each endpoint,<br/>reconcile owned resources]
-    H --> H1{Phase not Degraded,<br/>Error, or Deploying?}
-    H1 -->|Yes| H2[Set phase=Running]
-    H1 -->|No| SKIP[No phase change]
-    H2 --> R
-    SKIP --> R
-    G2 -->|Yes| G5[Set phase=Deploying,<br/>Progressing=True]
+    H --> R
+    G2 -->|Yes| G5[Progressing=True<br/>reason DeploymentUpdated]
     G5 --> I[Patch pod annotation]
-    G1 -->|Yes| G4[Set phase=Deploying,<br/>Progressing=True]
+    G1 -->|Yes| G4[Progressing=True<br/>reason DeploymentUpdated]
     G4 --> I
     G -->|Yes| J0[PrepareValidationCopy:<br/>strip wildcards if EE<br/>and CE fallback not active]
     J0 --> J1{Same copy already<br/>rejected?}
-    J1 -->|Yes| L[Re-apply the remembered rejection:<br/>ConfigValid=False, phase=Error,<br/>Warning event only if the verdict changed, return]
+    J1 -->|Yes| L[Re-apply the remembered rejection:<br/>ConfigValid=False,<br/>Warning event only if the verdict changed, return]
     J1 -->|No| J[Validate via krakend check -t -n -c]
     J --> K{Verdict?}
     K -->|Rejected| L
-    K -->|Unavailable| L2[Set ConfigValid=Unknown<br/>reason ValidatorUnavailable,<br/>keep phase and applied config,<br/>one Warning event,<br/>return error: retry with backoff]
-    K -->|Valid| M[Update ConfigMap, set ConfigValid=True,<br/>phase=Deploying, Progressing=True]
+    K -->|Unavailable| L2[Set ConfigValid=Unknown<br/>reason ValidatorUnavailable,<br/>Ready Unknown, keep applied config,<br/>one Warning event,<br/>return error: retry with backoff]
+    K -->|Valid| M[Update ConfigMap, set ConfigValid=True,<br/>Progressing=True reason ConfigDeployed]
     M --> I
     I --> N[Record Accepted on each endpoint,<br/>reconcile Deployment, Service, SA, PDB, HPA]
     N --> O[Reconcile Dragonfly CR if enabled]
     O --> P[Reconcile ExternalSecret if enabled]
     P --> Q[Reconcile VirtualService if Istio enabled]
-    Q --> R[Update gateway status]
+    Q --> R[Inspect the Deployment status, then derive Ready and<br/>the phase from the conditions via gatewayReadinessFor<br/>and update the gateway status only if it changed]
 ```
 
 ### Key Implementation Details
@@ -932,24 +926,26 @@ flowchart TD
 
 **Plugin checksum** — Computed from ConfigMap data hashes and OCI image tags. Changes trigger a rolling restart via pod annotation patch, independent of config checksum.
 
-**Phase transitions** — The controller sets `status.phase` to track the gateway through the pipeline:
+**Phase transitions** — The controller does not latch `status.phase` at points in the pipeline. At the end of each reconcile it derives `Ready` and the phase from the gateway's conditions (`ConfigValid`, `Progressing`, `Available`, `LicenseExpired`, `LicenseDegraded`) with `gatewayReadinessFor`, and writes status only when something changed. The license monitor writes only the `License*` conditions; the gateway reconcile turns them into `Ready` and the phase. The phase is the compatibility view of `Ready`:
 
-| Phase | Set When |
+| Phase | Derived When |
 |---|---|
-| `Pending` | Initial state after CR creation, before first reconcile |
+| `Pending` | No configuration has been validated or rolled out yet |
 | `Rendering` | No longer written by the operator; kept only for status values persisted by older versions |
 | `Validating` | No longer written by the operator; kept only for status values persisted by older versions |
-| `Deploying` | ConfigMap updated or Deployment patched — rolling update in progress |
-| `Running` | Deployment is fully rolled out (all replicas ready) and not in Degraded/Error |
+| `Deploying` | A rollout is in progress (`Progressing=True`), or the Deployment is not yet available |
+| `Running` | Config valid, the applied config rolled out to every replica, the Deployment available, and no license condition degrading it |
 | `Degraded` | CE fallback is active (`LicenseDegraded=True`) |
-| `Error` | Config validation failed, or license expired with `fallbackToCE=false` |
+| `Error` | Config validation failed, the rollout failed or the Deployment lost availability (`Available=False`), or the license expired with `fallbackToCE=false` |
+
+A configuration that could not be validated because the validator was unavailable leaves `Ready` Unknown with reason `ValidatorUnavailable` and keeps the serving phase.
 
 ### Watch Triggers
 
 | Source | Event | Controller Action |
 |---|---|---|
 | KrakenDGateway | Create/Update/Delete | Full reconcile |
-| Owned Deployment | Update (status change) | Update replicas/readyReplicas, `Available` condition. On rollout converge: set `Progressing=False`, `phase=Running`. On `ProgressDeadlineExceeded`: set `phase=Error`, `Progressing=False`, `Available=False`, emit `RolloutFailed` |
+| Owned Deployment | Update (status change) | Update replicas/readyReplicas. A rollout counts as converged only when the Deployment has observed its latest generation, its pod template carries the applied config checksum, and replicas, updated replicas and available replicas all equal the desired count; then `Progressing=False` and `Available=True`. A Deployment `Available=False` outside a rollout is mirrored into the gateway's `Available` condition. On `ProgressDeadlineExceeded`: `Progressing=False`, `Available=False`, emit `RolloutFailed`. `Ready` and the phase are re-derived from the conditions |
 | Owned Service | Update | Reconcile to correct drift |
 | Owned ConfigMap | Update | Reconcile to correct drift |
 | Owned Dragonfly CR | Status update | Update `DragonflyReady` condition on gateway; emit `DragonflyNotReady` Warning event on phase regression |
@@ -1074,12 +1070,12 @@ This ensures idempotent reconciliation: the same `Reconcile` call can be retried
 
 **File:** `internal/controller/endpoint_controller.go`
 
-The endpoint controller is lightweight. Its primary purpose is maintaining endpoint status and triggering gateway reconciliation via the mapper.
+The endpoint controller is lightweight. It resolves the endpoint's gateway and policy references into the `ResolvedRefs` condition and derives `Ready` and the phase. The `Accepted` condition belongs to the gateway controller, which this controller never overwrites; status is patched with an optimistic lock, and only when it changed.
 
 ### Reconciler Struct
 
 ```go
-type EndpointReconciler struct {
+type KrakenDEndpointReconciler struct {
     client.Client
     Scheme   *runtime.Scheme
     Recorder record.EventRecorder
@@ -1092,18 +1088,22 @@ type EndpointReconciler struct {
 flowchart TD
     A[Fetch KrakenDEndpoint] --> B{Found?}
     B -->|No| Z[Return]
-    B -->|Yes| B1{phase == empty?}
-    B1 -->|Yes| B2[Set phase=Pending]
-    B2 --> C
-    B1 -->|No| C[Validate gatewayRef exists]
+    B -->|Yes| C[Validate gatewayRef exists]
     C --> D{Gateway exists?}
-    D -->|No| E[Set status: Detached<br/>reason: GatewayNotFound]
+    D -->|No| E[ResolvedRefs=False<br/>reason GatewayNotFound]
     D -->|Yes| F[Validate policyRef exists<br/>for each backend in each<br/>endpoints entry]
     F --> G{All policies exist?}
-    G -->|No| H[Set status: Invalid<br/>reason: PolicyNotFound]
-    G -->|Yes| I[Set status: Active]
+    G -->|No| H[ResolvedRefs=False<br/>reason PolicyNotFound]
+    G -->|Yes| I[ResolvedRefs=True<br/>reason RefsResolved]
+    E --> J
+    H --> J
+    I --> J[Drop the legacy Available condition,<br/>derive Ready and the phase from<br/>ResolvedRefs and Accepted<br/>via v1alpha1.EndpointReady]
+    J --> K{Status changed?}
+    K -->|Yes| L[Patch status with optimistic lock,<br/>emit an event on a ResolvedRefs transition]
+    K -->|No| Z
 ```
 
+`Ready` is `False` with the failing condition's reason when `ResolvedRefs` is `False` (`ResolvedRefs` is checked before `Accepted`), `Unknown` with reason `Pending` until the gateway has reported `Accepted` for the endpoint's current generation, and otherwise follows `Accepted`. The phase is the compatibility view of `Ready`: `Active` when `Ready` is `True`, `Pending` when it is `Unknown`, `Detached` for `GatewayNotFound`, `Conflicted` for `EndpointConflict` or `PartiallyAccepted`, and `Invalid` for any other failure. `ResolvedRefs` events fire on transitions only: a `Warning` with reason `GatewayNotFound` or `PolicyNotFound` when the references stop resolving, and a `Normal` `RefsResolved` when they resolve again.
 The endpoint controller does NOT render config or manage Kubernetes resources. Config rendering is exclusively the gateway controller's responsibility, triggered when the gateway controller's endpoint watch fires.
 
 ### SetupWithManager
@@ -1111,35 +1111,47 @@ The endpoint controller does NOT render config or manage Kubernetes resources. C
 ```go
 func (r *EndpointReconciler) SetupWithManager(mgr ctrl.Manager) error {
     return ctrl.NewControllerManagedBy(mgr).
-        For(&v1alpha1.KrakenDEndpoint{}).
+        For(&v1alpha1.KrakenDEndpoint{}, builder.WithPredicates(endpointPredicate())).
         Watches(
             &v1alpha1.KrakenDGateway{},
             handler.EnqueueRequestsFromMapFunc(r.gatewayToEndpoints),
+            builder.WithPredicates(existencePredicate()),
         ).
+        Watches(
+            &v1alpha1.KrakenDBackendPolicy{},
+            handler.EnqueueRequestsFromMapFunc(r.policyToEndpoints),
+            builder.WithPredicates(existencePredicate()),
+        ).
+        Named("krakendendpoint").
         Complete(r)
 }
 ```
 
-The `gatewayToEndpoints` mapper re-queues all endpoints targeting a gateway when the gateway is updated or deleted (e.g., so endpoints can transition to `Detached` phase if the gateway is removed):
+Each watch carries a predicate so the controller's own writes do not enqueue it again:
+
+- `endpointPredicate` gates the primary watch. It passes spec changes (generation bumps) and changes to the gateway-owned `Accepted` condition, ignoring its `lastTransitionTime`. The controller's own status writes change neither.
+- `existencePredicate` gates the gateway and policy watches. It passes create and delete events only, because an update never changes whether the referenced object exists, which is all `ResolvedRefs` depends on.
+
+The `gatewayToEndpoints` mapper re-queues all endpoints targeting a gateway through the gateway field index when the gateway is created or deleted (e.g., so endpoints can transition to `Detached` if the gateway is removed). The `policyToEndpoints` mapper does the same for the endpoints that reference a created or deleted policy, through the policy field index:
 
 ```go
-func (r *EndpointReconciler) gatewayToEndpoints(
+func (r *KrakenDEndpointReconciler) gatewayToEndpoints(
     ctx context.Context, obj client.Object,
 ) []reconcile.Request {
     var endpoints v1alpha1.KrakenDEndpointList
-    if err := r.List(ctx, &endpoints, client.InNamespace(obj.GetNamespace())); err != nil {
+    if err := r.List(ctx, &endpoints,
+        client.MatchingFields{EndpointGatewayIndex: obj.GetNamespace() + "/" + obj.GetName()},
+    ); err != nil {
         return nil
     }
-    var requests []reconcile.Request
+    requests := make([]reconcile.Request, 0, len(endpoints.Items))
     for i := range endpoints.Items {
-        if endpoints.Items[i].Spec.GatewayRef.Name == obj.GetName() {
-            requests = append(requests, reconcile.Request{
-                NamespacedName: types.NamespacedName{
-                    Name:      endpoints.Items[i].Name,
-                    Namespace: endpoints.Items[i].Namespace,
-                },
-            })
-        }
+        requests = append(requests, reconcile.Request{
+            NamespacedName: types.NamespacedName{
+                Name:      endpoints.Items[i].Name,
+                Namespace: endpoints.Items[i].Namespace,
+            },
+        })
     }
     return requests
 }
@@ -1156,7 +1168,7 @@ The policy controller maintains the `referencedBy` count in policy status and tr
 ### Reconciler Struct
 
 ```go
-type PolicyReconciler struct {
+type KrakenDBackendPolicyReconciler struct {
     client.Client
     Scheme   *runtime.Scheme
     Recorder record.EventRecorder
@@ -1173,9 +1185,14 @@ flowchart TD
     C --> D[Count endpoints where<br/>any backend references this policy]
     D --> E[Update status.referencedBy]
     E --> F{Validate policy fields}
-    F -->|Invalid| G[Set condition Valid=False<br/>Emit PolicyInvalid]
-    F -->|Valid| H[Set condition Valid=True]
+    F -->|Invalid| G[Set Ready=False with the<br/>InvalidCircuitBreaker or<br/>InvalidRateLimit reason]
+    F -->|Valid| H[Set Ready=True<br/>reason Ready]
+    G --> J[Drop the legacy PolicyValid condition,<br/>write status only if it changed]
+    H --> J
+    J --> K[Emit an event on a Ready transition]
 ```
+
+`Ready` replaces the earlier `PolicyValid` condition, which is removed from policies written by earlier versions. It is `False` when `circuitBreaker.maxErrors`, `interval` or `timeout` is not positive (`InvalidCircuitBreaker`) or `rateLimit.maxRate` is not positive (`InvalidRateLimit`), and `True` otherwise. Events fire on transitions only: a `Warning` with the invalid reason when `Ready` becomes `False` or changes reason, and a `Normal` `Ready` when it recovers.
 
 The policy controller's reconciliation is straightforward. The `referencedBy` count scans all `KrakenDEndpoint` resources in the namespace and counts how many have at least one `backend[].policyRef.name` matching this policy. The important cross-controller interaction is through the gateway controller's `policyToGateways` mapper: when a policy is updated, all gateways with endpoints referencing that policy are re-queued for re-rendering.
 
@@ -1255,9 +1272,7 @@ flowchart TD
     B -->|No| Z[Return]
     B -->|Yes| BD{deletionTimestamp set?}
     BD -->|Yes| Z
-    BD -->|No| B1{phase == empty?}
-    B1 -->|Yes| B2[Set phase=Pending<br/>return requeue]
-    B1 -->|No| D[Fetch OpenAPI spec<br/>via Fetcher]
+    BD -->|No| D[Fetch OpenAPI spec<br/>via Fetcher]
     D --> E{Fetch OK?}
     E -->|No| F[Set SpecAvailable=False<br/>Fail sync:<br/>SpecFetchFailed]
     E -->|Yes| G[Resolve external $refs, strip servers<br/>Set SpecAvailable=True]
@@ -1290,7 +1305,7 @@ flowchart TD
     P --> Q[Delete undesired endpoints<br/>CreateOrUpdate desired: labels, spec<br/>by JSON value, controller reference]
     Q --> Q1{Every write OK?}
     Q1 -->|No| Q2[Fail sync:<br/>EndpointReconcileFailed]
-    Q1 -->|Yes| R[Set phase=Synced, Synced=True,<br/>specChecksum, endpoint counts]
+    Q1 -->|Yes| R[Set Synced=True, specChecksum,<br/>endpoint counts; Ready and phase=Synced<br/>are derived when status is written]
     R --> R1{inputsChanged or<br/>any endpoint write?}
     R1 -->|Yes| R2[Set lastSyncTime]
     R1 -->|No| R3
@@ -1301,7 +1316,7 @@ flowchart TD
     R5 --> R6[RequeueAfter periodic.interval<br/>or 5m for OnChange]
 ```
 
-Every reconcile runs the whole pipeline — there is no checksum gate — so owned endpoints converge to the desired state whatever woke the controller. **Fail sync** is `handleSyncedFailure`: `phase=Error`, the `Synced` condition `False` with that reason, and a Warning event with the same reason; `OnChange` returns the error so controller-runtime retries with exponential backoff, `Periodic` requeues at `spec.periodic.interval`. A fetch failure (`SpecFetchFailed`), including an external `$ref` document that can't be fetched or decoded, fails the sync the same way and also sets `SpecAvailable=False`. If the failure's status write conflicts, the reconcile still returns the failure's result (not the quiet one-second requeue, which would reset the backoff) and records no event. A failed sync leaves `status.specChecksum` at the last successful sync's value, and drift repair stops at the failure until a sync succeeds: every other failure stops the pipeline before any endpoint is touched, and an endpoint write failure stops convergence at that endpoint. `phase` never passes through `Fetching` or `Rendering`; the controller sets only `Pending`, `Synced`, and `Error`.
+Every reconcile runs the whole pipeline — there is no checksum gate — so owned endpoints converge to the desired state whatever woke the controller. **Fail sync** is `handleSyncedFailure`: the `Synced` condition `False` with that reason (so `Ready` is `False` and the derived phase is `Error`), and a Warning event with the same reason; `OnChange` returns the error so controller-runtime retries with exponential backoff, `Periodic` requeues at `spec.periodic.interval`. A fetch failure (`SpecFetchFailed`), including an external `$ref` document that can't be fetched or decoded, fails the sync the same way and also sets `SpecAvailable=False`. If the failure's status write conflicts, the reconcile still returns the failure's result (not the quiet one-second requeue, which would reset the backoff) and records no event. A failed sync leaves `status.specChecksum` at the last successful sync's value, and drift repair stops at the failure until a sync succeeds: every other failure stops the pipeline before any endpoint is touched, and an endpoint write failure stops convergence at that endpoint. `phase` never passes through `Fetching` or `Rendering`. It is derived from the `Synced` condition each time status is written, and every status write sets `Synced`, so the phase is empty before the first write and is then only `Synced` or `Error`; `Ready` is `Unknown` with reason `Pending` until the first sync.
 
 A terminating AutoConfig (`deletionTimestamp` set) is not reconciled. Under foreground deletion it lingers while garbage collection deletes its endpoints, each delete re-enqueues it through the `Owns` watch, and converging would recreate the endpoint just collected.
 
@@ -1403,12 +1418,12 @@ flowchart TD
     H --> N{fallbackToCE?}
     J --> N
     N -->|Yes| O[Trigger CE fallback<br/>via gateway reconcile]
-    N -->|No| P[Set phase=Error<br/>emit LicenseExpiredNoFallback]
+    N -->|No| P[Set LicenseExpired=True without LicenseDegraded,<br/>emit LicenseExpiredNoFallback;<br/>the gateway derives Ready=False and phase=Error]
 ```
 
 ### Triggering Gateway Reconciliation
 
-The license monitor does not directly modify Deployments or ConfigMaps. The `checkGateway` method first patches the gateway's **status conditions** (e.g., setting `LicenseDegraded=True`, `LicenseValid=False`, `LicenseExpired=True`) using a status subresource patch. After conditions are set, it calls `triggerReconcile` to patch an annotation on the gateway resource. This annotation update triggers the gateway controller's watch, which re-enqueues the gateway for reconciliation. The gateway controller's reconcile loop then reads the current status conditions (already set by `checkGateway`) and acts accordingly (e.g., reading `LicenseDegraded=True` to determine `CEFallback`).
+The license monitor does not directly modify Deployments or ConfigMaps. The `checkGateway` method first patches the gateway's **status conditions** (e.g., setting `LicenseDegraded=True`, `LicenseValid=False`, `LicenseExpired=True`) using a status subresource patch. After conditions are set, it calls `triggerReconcile` to patch an annotation on the gateway resource. This annotation update triggers the gateway controller's watch, which re-enqueues the gateway for reconciliation. The gateway controller's reconcile loop then reads the current status conditions (already set by `checkGateway`) and acts accordingly (e.g., reading `LicenseDegraded=True` to determine `CEFallback`). The monitor writes only the `License*` conditions and `licenseExpiry`; it never writes `Ready` or the phase. The gateway controller derives both from the license conditions together with the rest of the gateway's conditions.
 
 ```go
 func (m *LicenseMonitor) triggerReconcile(ctx context.Context, gw *v1alpha1.KrakenDGateway) error {
@@ -2670,10 +2685,10 @@ client := fake.NewClientBuilder().
 | Permanent validation errors | Set status condition, emit event, return `nil` (no retry) | Config fails `krakend check -t -n -c` |
 | Missing prerequisites | Set status condition, return `nil` with `RequeueAfter` | License Secret not yet synced |
 | Programming errors | Panic (should never reach production) | Nil pointer on required field that passed webhook validation |
-| Validator unavailable (binary missing, timeout, killed, temp-file I/O, validation copy not prepared) | Set `ConfigValid=Unknown` with reason `ValidatorUnavailable`, emit one Warning event, keep the phase and the applied config, return `error` — controller-runtime retries with backoff | `krakend check -t -n -c` hits its deadline or `/usr/local/bin/krakend` is missing |
+| Validator unavailable (binary missing, timeout, killed, temp-file I/O, validation copy not prepared) | Set `ConfigValid=Unknown` with reason `ValidatorUnavailable`, emit one Warning event, leave `Ready` Unknown and the serving phase and applied config unchanged, return `error` — controller-runtime retries with backoff | `krakend check -t -n -c` hits its deadline or `/usr/local/bin/krakend` is missing |
 | AutoConfig spec/CUE/unmatched-override/scope failures | `Periodic`: `RequeueAfter: spec.periodic.interval`; `OnChange`: return `error` for backoff | `SpecFetchFailed`, `CUEEvaluationFailed`, `UnmatchedOverride`, `AdditionalEndpointScopeFailed` — includes a failed external `$ref` fetch/decode, which fails closed as `SpecFetchFailed` instead of falling back to the raw spec |
 | AutoConfig endpoint write failures | Return `error` for backoff regardless of trigger (a `Periodic` AutoConfig does not wait for `spec.periodic.interval`) | `EndpointReconcileFailed` |
-| AutoConfig status/endpoint write conflicts | Quiet `RequeueAfter: 1s` — no error log, no event, no status change | Stale-cache `Conflict` on the initial-phase or a successful sync's status write, or `Conflict`/`AlreadyExists` on an endpoint write; a failed sync whose status write conflicts keeps its failure row's handling, with no event |
+| AutoConfig status/endpoint write conflicts | Quiet `RequeueAfter: 1s` — no error log, no event, no status change | Stale-cache `Conflict` on a successful sync's status write, or `Conflict`/`AlreadyExists` on an endpoint write; a failed sync whose status write conflicts keeps its failure row's handling, with no event |
 
 ### Error Wrapping Convention
 
