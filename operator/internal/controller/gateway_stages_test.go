@@ -2188,6 +2188,7 @@ func TestGatewayReconcile_RejectedCEFallbackKeepsTheOpenAPIPieces(t *testing.T) 
 }
 
 func TestReconcileCEFallbackCondition_NamesTheOpenAPIExport(t *testing.T) {
+	stripped := []renderer.StrippedEEFeature{{Feature: "extra_config auth/api-keys"}}
 	for _, tc := range []struct {
 		name     string
 		openapi  *v1alpha1.OpenAPIExportSpec
@@ -2200,6 +2201,8 @@ func TestReconcileCEFallbackCondition_NamesTheOpenAPIExport(t *testing.T) {
 			[]string{"the config uses no Enterprise-only features"}, "OpenAPI"},
 		{"only the OpenAPI export", &v1alpha1.OpenAPIExportSpec{Enabled: true}, nil,
 			[]string{"removed 1 Enterprise-only feature(s): " + openAPIFallbackNote}, "uses no Enterprise-only features"},
+		{"features and the OpenAPI export", &v1alpha1.OpenAPIExportSpec{Enabled: true}, stripped,
+			[]string{"removed 2 Enterprise-only feature(s): gateway: extra_config auth/api-keys; " + openAPIFallbackNote}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			gw, _, _ := licensedEEGateway(testNow.Add(-time.Minute), true)
