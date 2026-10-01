@@ -756,10 +756,10 @@ sequenceDiagram
 | Owned KrakenDEndpoint spec changed or deleted, or the `openapi.configMapRef`/CUE definitions ConfigMap changed | AutoConfig controller | Re-run the full pipeline. A generated endpoint that was hand-edited or deleted out of band is restored to the desired spec (endpoint specs are compared by decoded JSON value, so re-encoding/formatting differences alone don't cause a write). |
 | AutoConfig resync timer | AutoConfig controller | `trigger: OnChange` AutoConfigs are additionally re-polled every 5 minutes (`defaultResyncInterval`); `trigger: Periodic` AutoConfigs at `spec.periodic.interval`. Every reconcile — resync or watch-triggered — runs the full pipeline; a reconcile that changes nothing writes no status and emits no event. A spec/CUE/unmatched-override/scope failure — including a failed external `$ref` fetch/decode, which now fails closed the same way instead of falling back to the raw spec — retries at `spec.periodic.interval` (`Periodic`) or via exponential backoff capped at 5 minutes (`OnChange`); an endpoint write failure (`EndpointReconcileFailed`) always retries with backoff, on either trigger; a status or endpoint write `Conflict` (this reconcile read a stale cache) requeues quietly a second later with no error, event, or status change. |
 | KrakenDGateway or KrakenDBackendPolicy created or deleted | Endpoint controller | Re-resolve references of the endpoints that reference it (`ResolvedRefs` `GatewayNotFound`/`PolicyNotFound` → phase `Detached`/`Invalid`). Gateway and policy updates are ignored: only their existence matters. Re-attachment occurs automatically when the gateway is created again. |
-| Secret (LICENSE) created or updated | Gateway controller | Re-parse X.509 `notAfter` from new Secret; run license validation state machine (`ValidateLicense` → `EERunning`/`EEWarning`/`PreExpiry`/`LicenseExpired`); trigger rolling restart if the license has not expired and the parsed `notAfter` has changed from the last observed value. Also trigger EE recovery (rolling restart) if `expiry > now+1h` AND the gateway is currently in Degraded or Error state (license-caused only) |
+| Secret (LICENSE) created or updated | Gateway controller | Re-evaluate the license inside the reconcile: re-parse X.509 `notAfter` from the Secret and set the `License*` conditions for its stage (below). A renewed license that clears `LicenseExpired`/`LicenseDegraded` re-renders EE and rolls the Deployment back to the EE image; a changed `notAfter` alone does not restart pods. |
 | Dragonfly CR status updated | Gateway controller | Reflect `DragonflyReady` condition on KrakenDGateway; emit `DragonflyNotReady` Warning event if phase regresses |
 | Deployment status updated | Gateway controller | Update `status.replicas`, `status.readyReplicas`, `Available` and `Progressing` conditions on KrakenDGateway. The rollout counts as converged only when the Deployment has observed its latest generation (`observedGeneration >= generation`), its pod template carries the applied config checksum, and `replicas == updatedReplicas == availableReplicas ==` the desired count; then `Progressing=False`, `Available=True`, and the derived phase becomes `Running`. Until then `Ready` stays `False`, because the cached Deployment can still describe the previous ReplicaSet. If the Deployment reports `Available=False` (for example `MinimumReplicasUnavailable`) and no rollout is in flight, that condition is mirrored into the gateway's `Available`, so `Ready` goes `False` with phase `Error`. If the Deployment reports `ProgressDeadlineExceeded`, set `Progressing=False`, `Available=False` (reason: `RolloutFailed`), and emit `RolloutFailed` Warning event. `ConfigValid` remains `True` (config passed validation). Existing pods are left running to preserve availability. |
-| License approaching expiry | License monitor (periodic) | Emit warning events; if within the expiry warning window (`now+1h < expiry ≤ now+warningDays`), set `LicenseValid=False` (reason: `ExpiringSoon`) and emit `LicenseExpiringSoon` Warning event (rate-limited to once per 24h). If `expiry > now+1h` AND currently Degraded or Error (license-caused only), trigger EE recovery (even within the warning window). If PreExpiry (`now < expiry ≤ now+1h`) AND `fallbackToCE=true`, switch to CE image. If expired AND `fallbackToCE=true`, switch to CE image. If PreExpiry AND `fallbackToCE=false`, set `LicenseValid=False` (reason: `LicensePreExpiry`; the gateway controller derives phase `Error`), and emit `LicenseExpiredNoFallback` Warning event; leave Deployment running. If expired AND `fallbackToCE=false`, set `LicenseValid=False` (reason: `LicenseExpired`), `LicenseExpired=True` (the gateway controller derives phase `Error`), and emit `LicenseExpiredNoFallback` Warning event; leave Deployment running. If license is healthy (`expiry > now+warningDays`), set `LicenseValid=True`; if currently Degraded or Error (license-caused only), trigger EE recovery. |
+| License stage boundary | Gateway controller (requeue) | The reconcile evaluates the license on every run and requeues itself at the next stage boundary (start of the warning window, start of the 1 h safety buffer, expiry), and at least every 5 minutes. Stage `LicenseExpiringSoon` (`now+1h < expiry ≤ now+warningDays`): `LicenseValid=True` (reason: `LicenseExpiringSoon`) and one `LicenseExpiringSoon` Warning event on entering the window. Stage `LicensePreExpiry` (`now < expiry ≤ now+1h`) or expired: `LicenseValid=False` and `LicenseExpired=True` (reason: `LicensePreExpiry` or `LicenseExpired`; the gateway controller derives phase `Error` from `LicenseExpired=True`). With `fallbackToCE=true` it also sets `LicenseDegraded=True` (reason: `LicenseFallbackCE`), renders CE and emits one `LicenseFallbackCE` Warning event; with `fallbackToCE=false` it emits one `LicenseExpiredNoFallback` Warning event and leaves the Deployment running. Healthy (`expiry > now+warningDays`): `LicenseValid=True` (reason: `LicenseOK`). Back in a healthy or warning stage while `LicenseExpired` or `LicenseDegraded` is True, both become `False` (reason: `LicenseRestored`) and one `LicenseRestored` event is emitted. Events fire on condition transitions only, so a steady state repeats nothing. |
 
 ### Reconciliation Queueing
 
@@ -927,67 +927,52 @@ sequenceDiagram
     else ExternalSecret Ready=True
         Op->>K8s: Read Secret, parse X.509 notAfter
         Op->>Op: Run license validation (§9 ValidateLicense)
-        alt EERunning (expiry > now+warningDays)
+        alt Valid (expiry > now+warningDays)
             Op->>K8s: Create Deployment with<br/>Secret volume mount at /etc/krakend/LICENSE<br/>using EE image
             Op->>K8s: Set condition LicenseValid=True (reason=LicenseOK)
-        else EEWarning (now+1h < expiry ≤ now+warningDays)
+        else ExpiringSoon (now+1h < expiry ≤ now+warningDays)
             Op->>K8s: Create Deployment with<br/>Secret volume mount at /etc/krakend/LICENSE<br/>using EE image
-            Op->>K8s: Set condition LicenseValid=False (reason=ExpiringSoon)
-            Op->>K8s: Emit LicenseExpiringSoon Warning event
+            Op->>K8s: Set condition LicenseValid=True (reason=LicenseExpiringSoon)
+            Op->>K8s: Emit LicenseExpiringSoon Warning event (once, on entering the stage)
         else PreExpiry or Expired AND fallbackToCE=true
             Op->>K8s: Create Deployment with<br/>Secret volume mount at /etc/krakend/LICENSE<br/>using CE image (ceImage or krakend/krakend:version)
-            Op->>K8s: Set condition LicenseValid=False (reason per entry path: LicensePreExpiry or LicenseExpired)
-            Op->>K8s: Set condition LicenseDegraded=True (reason per entry path: LicensePreExpiry or LicenseExpired; the gateway controller derives phase Degraded)
+            Op->>K8s: Set LicenseValid=False and LicenseExpired=True (reason per stage: LicensePreExpiry or LicenseExpired)
+            Op->>K8s: Set condition LicenseDegraded=True (reason=LicenseFallbackCE)
             Op->>K8s: Emit LicenseFallbackCE Warning Event
             Note over Op: CE fallback on cold start —<br/>no intermediate EE Deployment created.
-        else PreExpiry AND fallbackToCE=false
-            Op->>K8s: Set LicenseValid=False (reason=LicensePreExpiry) (the gateway controller derives phase Error)
+        else PreExpiry or Expired AND fallbackToCE=false
+            Op->>K8s: Set LicenseValid=False and LicenseExpired=True (reason per stage: LicensePreExpiry or LicenseExpired)<br/>(the gateway controller derives phase Error from LicenseExpired=True)
             Op->>K8s: Emit LicenseExpiredNoFallback Warning Event
-            Note over Op: STOP — license within pre-expiry safety window,<br/>no fallback configured.
-        else Expired AND fallbackToCE=false
-            Op->>K8s: Set condition LicenseValid=False (reason=LicenseExpired)
-            Op->>K8s: Set LicenseExpired=True (the gateway controller derives phase Error)
-            Op->>K8s: Emit LicenseExpiredNoFallback Warning Event
-            Note over Op: STOP — license expired, no fallback configured.
+            Note over Op: STOP — license expired or within the pre-expiry safety window,<br/>no fallback configured.
         end
     end
 
     Note over Op: /etc/krakend is KrakenD's default working<br/>directory. LICENSE at this path is the default<br/>lookup location. No KRAKEND_LICENSE_PATH needed.
 
-    Note over Op: Periodic license check
+    Note over Op: Every gateway reconcile, and again at the next stage boundary (at most 5 minutes later)
     Op->>K8s: Read Secret, parse X.509 notAfter
-    alt now < expiry ≤ now+1h (PreExpiry) AND fallbackToCE=true
+    alt now < expiry ≤ now+1h (PreExpiry) or expiry ≤ now (Expired), fallbackToCE=true
         Op->>Op: Strip wildcard endpoints from rendered config
         Op->>K8s: Switch Deployment image to CE (ceImage or krakend/krakend:version)
-        Op->>K8s: Set condition LicenseValid=False (reason=LicensePreExpiry)
-        Op->>K8s: Set condition LicenseDegraded=True (reason=LicensePreExpiry)
-        Op->>K8s: Emit LicenseFallbackCE Warning Event
-    else now < expiry ≤ now+1h (PreExpiry) AND fallbackToCE=false
-        Op->>K8s: Set LicenseValid=False (reason=LicensePreExpiry) (the gateway controller derives phase Error)
-        Op->>K8s: Emit LicenseExpiredNoFallback Warning Event
-    else now+1h < expiry AND expiry ≤ now+warningDays (EEWarning)
-        Op->>K8s: Set condition LicenseValid=False (reason=ExpiringSoon)
-        Op->>K8s: Emit LicenseExpiringSoon Warning event (rate-limited to once per 24h)
-        opt Currently in Degraded or Error state (license-caused only)
-            Op->>Op: Trigger EE Recovery (re-render, switch to EE image)
-            Op->>K8s: Clear LicenseDegraded (if set), set LicenseExpired=False (if set)
+        Op->>K8s: Set LicenseValid=False and LicenseExpired=True (reason=LicensePreExpiry or LicenseExpired)
+        Op->>K8s: Set condition LicenseDegraded=True (reason=LicenseFallbackCE)
+        Op->>K8s: Emit LicenseFallbackCE Warning Event (once)
+    else PreExpiry or Expired, fallbackToCE=false
+        Op->>K8s: Set LicenseValid=False and LicenseExpired=True (reason=LicensePreExpiry or LicenseExpired)<br/>(the gateway controller derives phase Error from LicenseExpired=True)
+        Op->>K8s: Emit LicenseExpiredNoFallback Warning Event (once)
+    else now+1h < expiry ≤ now+warningDays (ExpiringSoon)
+        Op->>K8s: Set condition LicenseValid=True (reason=LicenseExpiringSoon)
+        Op->>K8s: Emit LicenseExpiringSoon Warning event (once, on entering the stage)
+        opt LicenseExpired or LicenseDegraded is True
+            Op->>Op: Render EE again (switch to EE image)
+            Op->>K8s: Set LicenseDegraded=False and LicenseExpired=False (reason=LicenseRestored)
             Op->>K8s: Emit LicenseRestored
         end
-    else expiry ≤ now AND fallbackToCE=true
-        Op->>Op: Strip wildcard endpoints from rendered config
-        Op->>K8s: Switch Deployment image to CE (ceImage or krakend/krakend:version)
-        Op->>K8s: Set condition LicenseValid=False (reason=LicenseExpired)
-        Op->>K8s: Set condition LicenseDegraded=True (reason=LicenseExpired)
-        Op->>K8s: Emit LicenseFallbackCE Warning Event
-    else expiry ≤ now AND fallbackToCE=false
-        Op->>K8s: Set condition LicenseValid=False (reason=LicenseExpired)
-        Op->>K8s: Set LicenseExpired=True (the gateway controller derives phase Error)
-        Op->>K8s: Emit LicenseExpiredNoFallback Warning Event
-    else expiry > now+warningDays (EERunning — license healthy)
-        Op->>K8s: Set condition LicenseValid=True, reason=LicenseOK
-        opt Currently in Degraded or Error state (license-caused only)
-            Op->>Op: Trigger EE Recovery (re-render, switch to EE image)
-            Op->>K8s: Clear LicenseDegraded (if set), set LicenseExpired=False (if set)
+    else expiry > now+warningDays (Valid)
+        Op->>K8s: Set condition LicenseValid=True (reason=LicenseOK)
+        opt LicenseExpired or LicenseDegraded is True
+            Op->>Op: Render EE again (switch to EE image)
+            Op->>K8s: Set LicenseDegraded=False and LicenseExpired=False (reason=LicenseRestored)
             Op->>K8s: Emit LicenseRestored
         end
     end
@@ -1215,24 +1200,24 @@ stateDiagram-v2
 **State behavior notes:**
 
 - **PreExpiry** takes precedence over EEWarning when `expiry ≤ now+1h`.
-- **EERunning** — Sets `LicenseValid=True` (reason: `LicenseOK`). If currently Degraded or Error (license-caused only): triggers EE recovery (re-renders EE config, switches to EE image). From Degraded: clears `LicenseDegraded`. From Error: sets `LicenseExpired=False` (if previously set). Emits `LicenseRestored`.
-- **EEWarning** — Sets `LicenseValid=False` (reason: `ExpiringSoon`). Emits `LicenseExpiringSoon` Warning event, rate-limited to once per 24h. If currently Degraded or Error (license-caused only): triggers EE recovery (re-renders EE config, switches to EE image). From Degraded: clears `LicenseDegraded`. From Error: sets `LicenseExpired=False` (if previously set). Emits `LicenseRestored`.
+- **EERunning** — Sets `LicenseValid=True` (reason: `LicenseOK`). If `LicenseExpired` or `LicenseDegraded` is True (license-caused only): triggers EE recovery (re-renders EE config, switches to EE image), sets both to `False` (reason: `LicenseRestored`) and emits `LicenseRestored`.
+- **EEWarning** — Sets `LicenseValid=True` (reason: `LicenseExpiringSoon`). Emits one `LicenseExpiringSoon` Warning event when the license enters the warning window; later reconciles in the window emit nothing. Recovery is the same as for EERunning.
 - **FallbackCE → StripEEFeatures → DeployCE** — CE fallback is executed via the §10 rendering pipeline. The checksum comparison and image-drift check (§10) prevent redundant rolling restarts when config and image are already at the desired CE state. Periodic rechecks that re-enter FallbackCE while the gateway is already running CE are no-ops.
-- **DeployCE → Degraded** — Sets `LicenseValid=False`, `LicenseDegraded=True` (reason per entry path: `LicensePreExpiry` or `LicenseExpired`).
+- **DeployCE → Degraded** — Sets `LicenseValid=False` and `LicenseExpired=True` (reason per entry path: `LicensePreExpiry` or `LicenseExpired`) and `LicenseDegraded=True` (reason: `LicenseFallbackCE`).
 
 ### License Check Frequency and Safety Buffer
 
-The license monitor runs on a **5-minute period** independent of the main reconciliation loop. Because KrakenD EE processes terminate immediately upon license expiry, the operator triggers the CE fallback **1 hour before the actual expiry time** (not at T-0). This safety buffer ensures the rolling deployment to CE completes well before any EE pod would self-terminate. The license monitor writes only the License* conditions and licenseExpiry; the gateway controller derives phase and Ready from them.
+License evaluation runs inside the gateway reconcile, so gateway status has a single writer. The reconcile requeues itself at the license's next stage boundary (warning window, safety buffer, expiry) and at least every **5 minutes**, and the watched license Secret triggers it on change. Because KrakenD EE processes terminate immediately upon license expiry, the operator triggers the CE fallback **1 hour before the actual expiry time** (not at T-0). This safety buffer ensures the rolling deployment to CE completes well before any EE pod would self-terminate. The reconcile writes the License* conditions, `status.licenseExpiry` and the `license_expiry_seconds` metric, and nothing on the user's KrakenDGateway object; the metric series is removed when the gateway is deleted or terminating.
 
-> **Note:** In steady-state operation, `PreExpiry` fires first (1 hour before T-0). The `LicenseExpired` state is most commonly reached on cold-start (e.g., the operator is deployed into a cluster where the license has already expired), but is also reachable via the `Error → CheckLicense → WaitForSecret → ValidateLicense` recheck path if the monitor was in `Error` state when T-0 passed.
+> **Note:** In steady-state operation, `PreExpiry` fires first (1 hour before T-0). The `LicenseExpired` state is most commonly reached on cold-start (e.g., the operator is deployed into a cluster where the license has already expired), but is also reachable via the `Error → CheckLicense → WaitForSecret → ValidateLicense` recheck path if the gateway was in `Error` state when T-0 passed.
 
 ### Error State Behavior
 
 When `fallbackToCE=false` and the license is expired or approaching expiry, the operator transitions to the `Error` state:
 
-1. **Record the failed license** — set `LicenseValid=False`; if `expiry ≤ now`, also set `LicenseExpired=True` (reason: `LicenseExpired`); otherwise (PreExpiry path) set reason `LicensePreExpiry`. Emit `LicenseExpiredNoFallback` Warning event. The gateway controller derives phase `Error` from these conditions
+1. **Record the failed license** — set `LicenseValid=False` and `LicenseExpired=True` with reason `LicenseExpired` (`expiry ≤ now`) or `LicensePreExpiry` (PreExpiry path). Emit one `LicenseExpiredNoFallback` Warning event, on the transition only. The gateway controller derives phase `Error` from `LicenseExpired=True`
 2. **Leave the existing Deployment running** — the operator does not scale down or delete the Deployment. EE pods will self-terminate at the actual license expiry time (T-0), entering `CrashLoopBackOff` as KrakenD refuses to start without a valid license
-3. **Continuously re-check** — the license monitor continues its 5-minute periodic recheck. If a renewed license becomes available, the operator transitions through `CheckLicense` back to `ValidateLicense` and recovers normally
+3. **Continuously re-check** — each reconcile re-evaluates the license, and the gateway is requeued at least every 5 minutes. If a renewed license becomes available, the operator transitions through `CheckLicense` back to `ValidateLicense` and recovers normally
 
 This is a conscious design choice: the operator provides maximum observability (error phase + events + metrics) without destructively interfering with a running workload. Cluster operators are expected to monitor `LicenseExpiredNoFallback` events and take corrective action.
 
@@ -1246,19 +1231,19 @@ When falling back from EE to CE:
 2. **Switch container image** — use `spec.ceImage` if set; otherwise fall back to `krakend/krakend:{spec.version}`. The `spec.image` field (EE override) is ignored during CE fallback
 3. **Keep EE `extra_config` namespaces** — CE silently ignores unknown namespaces like `security/policies`, `auth/api-keys`, etc.
 4. **Disable Dragonfly-dependent features** — cluster rate limiting, quota, and token revocation won't function without the EE binary, even with Redis available
-5. **Set `LicenseValid=False`** — reason `LicensePreExpiry` if entering from the PreExpiry path; reason `LicenseExpired` if entering from the LicenseExpired path
-6. **Set status condition** — `LicenseDegraded=True` (reason: `LicensePreExpiry` or `LicenseExpired`) with message explaining the degradation
+5. **Set `LicenseValid=False` and `LicenseExpired=True`** — reason `LicensePreExpiry` if entering from the PreExpiry path; reason `LicenseExpired` if entering from the LicenseExpired path
+6. **Set status condition** — `LicenseDegraded=True` (reason: `LicenseFallbackCE`) with message explaining the degradation
 7. **Emit Kubernetes event** — `Warning` event on the KrakenDGateway for alerting
 
 ### EE Recovery (from Degraded or Error back to EE)
 
 When a valid license becomes available again (e.g., Secret updated by ESO with a renewed certificate):
 
-1. **License monitor detects valid license** — reads the Secret, parses X.509 `notAfter`, confirms validity
+1. **The gateway reconcile detects a valid license** — reads the Secret, parses X.509 `notAfter`, confirms validity
 2. **Re-render config from original CRD spec** — the KrakenDGateway and KrakenDEndpoint CRDs retain the full EE configuration (including wildcard endpoints); re-render restores all EE features
 3. **Switch container image back to EE** — restore `spec.image` if set (user override); otherwise use `krakend/krakend-ee:{spec.version}`
 4. **Rolling deployment** — new EE pods start with the full config and valid license (if recovering from `Error` with no existing Deployment, create the Deployment)
-5. **Clear `LicenseDegraded` condition** — set `LicenseDegraded=False` (only applicable when recovering from `Degraded`). If recovering to `EERunning` state (`expiry > now+warningDays`), set `LicenseValid=True` (reason: `LicenseOK`). If recovering to `EEWarning` state (`now+1h < expiry ≤ now+warningDays`), set `LicenseValid=False` (reason: `ExpiringSoon`) — the license is still approaching expiry, so the reason is updated from the prior fallback reason to `ExpiringSoon`. If recovering from `Error`, set `LicenseExpired` to `False` (if previously set) and set `LicenseValid` per the applicable state
+5. **Clear `LicenseDegraded` and `LicenseExpired`** — set both to `False` (reason: `LicenseRestored`). If recovering to `EERunning` state (`expiry > now+warningDays`), set `LicenseValid=True` (reason: `LicenseOK`). If recovering to `EEWarning` state (`now+1h < expiry ≤ now+warningDays`), set `LicenseValid=True` (reason: `LicenseExpiringSoon`) — the license is still approaching expiry
 6. **Emit Normal event** — `LicenseRestored` on the KrakenDGateway
 
 ---
@@ -1809,7 +1794,7 @@ conditions and shown with `-o wide`.
 | `Ready` | Summary condition written only by the gateway controller, derived from ConfigValid, Available, Progressing, LicenseExpired and LicenseDegraded (`Unknown` while the validator is unavailable); phase is derived from the same rules |
 | `ConfigValid` | Last rendered krakend.json passed `krakend check -t -n -c` (`Unknown` with reason `ValidatorUnavailable` while krakend check cannot run) |
 | `Available` | The Deployment is available: it mirrors the Deployment's `Available` condition once a rollout is not in flight, and is `False` with reason `RolloutFailed` when the Deployment exceeds its progress deadline |
-| `LicenseValid` | EE license exists and is not within the expiry warning window |
+| `LicenseValid` | EE license state: `True`/`LicenseOK`, `True`/`LicenseExpiringSoon` inside the warning window, `False`/`LicensePreExpiry` or `False`/`LicenseExpired` |
 | `LicenseDegraded` | Gateway is actively running in CE mode as a fallback because the EE license expired or entered the pre-expiry safety window (only **True** when `fallbackToCE=true` and CE image is deployed; `False` with reason `EEActive` during normal EE operation) |
 | `DragonflyReady` | Dragonfly CR status reports `ready` phase (watched from Dragonfly Operator) |
 | `IstioConfigured` | VirtualService was successfully created/updated |
@@ -2308,7 +2293,7 @@ Go project layout following [Standard Go Project Layout](https://github.com/gola
 │   │   │   ├── endpoint_controller.go          # KrakenDEndpoint reconciler
 │   │   │   ├── policy_controller.go            # KrakenDBackendPolicy reconciler
 │   │   │   ├── autoconfig_controller.go        # KrakenDAutoConfig reconciler (OpenAPI watcher)
-│   │   │   └── license_monitor.go              # Periodic license expiry checker
+│   │   │   └── gateway_license.go              # License evaluation inside the gateway reconcile
 │   │   ├── autoconfig/
 │   │   │   ├── fetcher.go                      # OpenAPI spec fetcher (HTTP + ConfigMap sources)
 │   │   │   ├── cue_evaluator.go                # CUE evaluation engine (cuelang.org/go/cue)
