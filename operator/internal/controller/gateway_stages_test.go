@@ -1911,3 +1911,29 @@ func TestGatewayReconcile_RejectedCEFallbackKeepsEEImage(t *testing.T) {
 		t.Errorf("image = %q after the CE render was applied, want the CE image %q", got, ceImage)
 	}
 }
+
+// deployedImage is the image of the gateway Deployment's container.
+func deployedImage(t *testing.T, c client.Client, gw *v1alpha1.KrakenDGateway) string {
+	t.Helper()
+	var dep appsv1.Deployment
+	getObject(t, c, gw, gw.Name, &dep)
+	return dep.Spec.Template.Spec.Containers[0].Image
+}
+
+func TestGatewayReconcile_RejectedEditionFlipToCEKeepsTheEEImage(t *testing.T) {
+	gw := reconciledGateway()
+	const config = `{"version":3,"name":"applied-as-ee"}`
+	gw.Spec.Edition = v1alpha1.EditionCE // flipped from EE
+	gw.Status.ConfigChecksum = hash.SHA256Hex([]byte(config))
+	gw.Status.ConfigEdition = v1alpha1.EditionEE
+	c := fakeClientBuilder().WithObjects(gw, legacyConfigMap(gw, config)).WithStatusSubresource(gw).Build()
+	val := &recordingValidator{err: rejectedBy("ERROR testing the configuration file:\tnot a CE config")}
+	r := newTestGatewayReconciler(c, renderOf(`{"version":3,"name":"rendered-as-ce"}`), val)
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if got, want := deployedImage(t, c, gw), "krakend/krakend-ee:2.7.0"; got != want {
+		t.Errorf("image = %q while the CE render is rejected, want the applied edition's image %q", got, want)
+	}
+}
