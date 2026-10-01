@@ -122,6 +122,13 @@ func TestAttribute_RouterErrorsRespectMethods(t *testing.T) {
 				"conflicts with existing wildcard ':id' in existing prefix '/a/:id'\n",
 			wantIndex: []int{1, 2},
 		},
+		{
+			name: "duplicate handlers blame only the method registered twice",
+			rendered: `{"endpoints":[{"endpoint":"/a/:id","method":"GET"},` +
+				`{"endpoint":"/a/{id}","method":"GET"},{"endpoint":"/a/{id}","method":"POST"}]}`,
+			output:    "ERROR testing the configuration file:\thandlers are already registered for path '/a/:id'\n",
+			wantIndex: []int{0, 1},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
