@@ -2363,3 +2363,43 @@ func TestReconcileCEFallbackCondition_ATruncatedMessageKeepsTheOpenAPINoteAndWho
 	// The note is the first entry, so drop it before comparing with features.
 	wantWholeEntries(t, strings.Replace(msg, openAPIFallbackNote+"\n", "", 1), features[:len(features)])
 }
+
+func TestEndpointAccepted_StrippedWildcardsAreNotCountedAsServed(t *testing.T) {
+	gw := reconciledGateway()
+	ep := testEndpoint("x", "/users")
+	ep.Spec.Endpoints = append(ep.Spec.Endpoints, ep.Spec.Endpoints[0], ep.Spec.Endpoints[0])
+	ep.Spec.Endpoints[1].Endpoint = "/files/*"
+	ep.Spec.Endpoints[2].Endpoint = "/orders"
+	key := client.ObjectKeyFromObject(ep)
+	older := types.NamespacedName{Namespace: "default", Name: "older"}
+	wildcard := renderer.StrippedEEFeature{Source: key, Method: "GET", Endpoint: "/files/*",
+		Feature: renderer.FeatureWildcardEndpoint}
+	for _, tc := range []struct {
+		name       string
+		entries    int
+		wantStatus metav1.ConditionStatus
+		wantReason string
+		wantServed string
+	}{
+		{"nothing is left", 2, metav1.ConditionFalse, v1alpha1.ReasonEndpointConflict, ""},
+		{"one entry is left", 3, metav1.ConditionTrue, v1alpha1.ReasonPartiallyAccepted, "1 of 3 entries are served"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ep := ep.DeepCopy()
+			ep.Spec.Endpoints = ep.Spec.Endpoints[:tc.entries]
+			rv := renderVerdicts{
+				conflicted: map[types.NamespacedName]struct{}{key: {}},
+				lost: map[types.NamespacedName][]renderer.EntryConflict{
+					key: {{Endpoint: "/users", Method: "GET", Winner: older}}},
+				stripped: map[types.NamespacedName][]renderer.StrippedEEFeature{key: {wildcard}},
+			}
+
+			cond := endpointAccepted(gw, ep, rv).condition
+
+			if cond.Status != tc.wantStatus || cond.Reason != tc.wantReason ||
+				!strings.Contains(cond.Message, tc.wantServed) {
+				t.Errorf("Accepted = %+v, want %s/%s containing %q", cond, tc.wantStatus, tc.wantReason, tc.wantServed)
+			}
+		})
+	}
+}
