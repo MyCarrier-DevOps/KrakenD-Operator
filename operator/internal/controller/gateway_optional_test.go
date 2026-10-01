@@ -116,3 +116,23 @@ func TestGatewayReconcile_DeletesTheResourcesOfDisabledFeatures(t *testing.T) {
 		t.Errorf("status.dragonflyAddress = %q, want it cleared", got.Status.DragonflyAddress)
 	}
 }
+
+func TestGatewayReconcile_NeverDeletesWhatItDoesNotControl(t *testing.T) {
+	gw := reconciledGateway()
+	gw.UID = "gw-uid"
+	gw.Status.ConfigChecksum = "applied"
+	foreign := controlledChild(gw, virtualServiceGVK, gw.Name)
+	foreign.SetOwnerReferences(nil)
+	c := fakeClientBuilder().WithRESTMapper(optionalCRDMapper(optionalOwnedGVKs...)).
+		WithObjects(gw, foreign).WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderOutput("applied"), &mockValidator{})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	u := &unstructured.Unstructured{}
+	u.SetGroupVersionKind(virtualServiceGVK)
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(foreign), u); err != nil {
+		t.Errorf("a VirtualService the gateway does not control must survive: %v", err)
+	}
+}
