@@ -1601,3 +1601,25 @@ func TestGatewayReconcile_RejectedPassKeepsTheLiveConflicts(t *testing.T) {
 		t.Errorf("status.conflicts = %+v, want the live %+v kept", got.Status.Conflicts, fresh)
 	}
 }
+
+func TestGatewayReconcile_NeverAppliedGatewayClearsLeftoverConflicts(t *testing.T) {
+	gw := reconciledGateway() // recreated: no config has ever been applied
+	stale := withAccepted(testEndpoint("stale", "/a"), metav1.ConditionTrue, v1alpha1.ReasonPartiallyAccepted)
+	stale.Status.Conflicts = []v1alpha1.EndpointConflict{{Endpoint: "/a", Method: "GET", Winner: "default/old"}}
+	bad := testEndpoint("bad", "/b")
+	c := fakeClientBuilder().WithObjects(gw, stale, bad).WithStatusSubresource(gw, stale, bad).Build()
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}),
+		&countingValidator{err: rejectedBy(badNamespaceVerdict)})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	assertNotAccepted(t, c, stale)
+	var got v1alpha1.KrakenDEndpoint
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(stale), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Status.Conflicts) != 0 {
+		t.Errorf("status.conflicts = %+v, want cleared with the Accepted it belonged to", got.Status.Conflicts)
+	}
+}
