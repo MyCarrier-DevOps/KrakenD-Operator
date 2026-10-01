@@ -23,6 +23,7 @@ import (
 	"sync"
 	"unicode/utf8"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
@@ -187,5 +188,19 @@ func registerEndpointIndexes(indexer client.FieldIndexer) error {
 	return nil
 }
 
-func recordConditionTransition(recorder record.EventRecorder, obj runtime.Object, prev *metav1.Condition, next metav1.Condition) {
+// recordConditionTransition emits an event when next is a transition from
+// prev. It emits a Warning when next is False and prev was absent or had
+// another status or reason, and a Normal event when next is True and prev
+// existed but was not True. Unchanged conditions, and a condition first set
+// to True, emit nothing, so repeated reconciles do not repeat events.
+func recordConditionTransition(
+	recorder record.EventRecorder, obj runtime.Object, prev *metav1.Condition, next metav1.Condition,
+) {
+	switch {
+	case next.Status == metav1.ConditionFalse &&
+		(prev == nil || prev.Status != next.Status || prev.Reason != next.Reason):
+		recorder.Event(obj, corev1.EventTypeWarning, next.Reason, next.Message)
+	case next.Status == metav1.ConditionTrue && prev != nil && prev.Status != metav1.ConditionTrue:
+		recorder.Event(obj, corev1.EventTypeNormal, next.Reason, next.Message)
+	}
 }
