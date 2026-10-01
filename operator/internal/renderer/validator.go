@@ -179,7 +179,7 @@ var ceUnsupportedExtraConfig = []string{
 // that the CE linter rejects and, for an EE render, rewrites each wildcard
 // endpoint to a parameter route. Every endpoint stays at its index. Non-nil
 // findings are a verdict reached without running krakend check.
-func validationCopy(jsonData []byte, edition v1alpha1.Edition) ([]byte, []string, error) {
+func validationCopy(jsonData []byte, edition v1alpha1.Edition) (doc []byte, findings []string, err error) {
 	var config map[string]any
 	if err := json.Unmarshal(jsonData, &config); err != nil {
 		return nil, nil, fmt.Errorf("unmarshaling config for validation copy: %w", err)
@@ -187,9 +187,8 @@ func validationCopy(jsonData []byte, edition v1alpha1.Edition) ([]byte, []string
 
 	modified := stripCEUnsupportedExtraConfig(config)
 
-	if edition == v1alpha1.EditionEE {
-		endpoints, _ := config["endpoints"].([]any)
-		if findings := eeWildcardFindings(endpoints); len(findings) > 0 {
+	if endpoints, ok := config["endpoints"].([]any); ok && edition == v1alpha1.EditionEE {
+		if findings = eeWildcardFindings(endpoints); len(findings) > 0 {
 			return nil, findings, nil
 		}
 		if rewriteEEWildcards(endpoints) {
@@ -200,7 +199,7 @@ func validationCopy(jsonData []byte, edition v1alpha1.Edition) ([]byte, []string
 	if !modified {
 		return jsonData, nil, nil
 	}
-	doc, err := serializeJSON(config)
+	doc, err = serializeJSON(config)
 	return doc, nil, err
 }
 
