@@ -54,6 +54,61 @@ func newTestGatewayReconciler(
 	}
 }
 
+// servingGateway returns a gateway whose applied config is checksum and whose
+// rollout has completed: ConfigValid, Available and Progressing=False.
+func servingGateway(checksum, image string) *v1alpha1.KrakenDGateway {
+	gw := reconciledGateway()
+	gw.Status.ConfigChecksum = checksum
+	gw.Status.ActiveImage = image
+	for _, cond := range []metav1.Condition{
+		{Type: v1alpha1.ConditionConfigValid, Status: metav1.ConditionTrue, Reason: v1alpha1.ReasonConfigApplied},
+		{Type: v1alpha1.ConditionAvailable, Status: metav1.ConditionTrue, Reason: "DeploymentAvailable"},
+		{Type: v1alpha1.ConditionProgressing, Status: metav1.ConditionFalse, Reason: "RolloutComplete"},
+	} {
+		meta.SetStatusCondition(&gw.Status.Conditions, cond)
+	}
+	return gw
+}
+
+// staleDeploymentReads makes every read of the gateway Deployment return
+// stale, as an informer cache does until it has seen the controller's own
+// update.
+func staleDeploymentReads(stale *appsv1.Deployment) interceptor.Funcs {
+	return interceptor.Funcs{
+		Get: func(
+			ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object,
+			opts ...client.GetOption,
+		) error {
+			if dep, ok := obj.(*appsv1.Deployment); ok {
+				stale.DeepCopyInto(dep)
+				return nil
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	}
+}
+
+// rollingGateway is servingGateway with a config rollout still reported as
+// in progress.
+func rollingGateway(checksum, image string) *v1alpha1.KrakenDGateway {
+	gw := servingGateway(checksum, image)
+	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+		Type: v1alpha1.ConditionProgressing, Status: metav1.ConditionTrue, Reason: v1alpha1.ReasonConfigDeployed,
+	})
+	return gw
+}
+
+// reconcileWithUnavailableValidator reconciles gw against a validator that
+// cannot run, and requires the reconcile to fail so it is retried.
+func reconcileWithUnavailableValidator(t *testing.T, c client.Client, gw *v1alpha1.KrakenDGateway) {
+	t.Helper()
+	r := newTestGatewayReconciler(c, renderOutput("new"),
+		&countingValidator{err: errors.New("fork/exec /usr/local/bin/krakend: no such file or directory")})
+	if err := reconcileGateway(t, r, gw); err == nil {
+		t.Fatal("an unavailable validator must fail the reconcile so it is retried")
+	}
+}
+
 func TestGatewayReconcile_InfrastructureRunsWhateverTheConfigVerdict(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -110,24 +165,10 @@ func TestGatewayReconcile_NoDeploymentBeforeAnyConfigPasses(t *testing.T) {
 }
 
 func TestGatewayReconcile_UnavailableValidatorIsNotReady(t *testing.T) {
-	gw := reconciledGateway()
-	gw.Status.ConfigChecksum = "applied"
-	gw.Status.ActiveImage = "img:v1"
-	for _, cond := range []metav1.Condition{
-		{Type: v1alpha1.ConditionConfigValid, Status: metav1.ConditionTrue, Reason: v1alpha1.ReasonConfigApplied},
-		{Type: v1alpha1.ConditionAvailable, Status: metav1.ConditionTrue, Reason: "DeploymentAvailable"},
-		{Type: v1alpha1.ConditionProgressing, Status: metav1.ConditionFalse, Reason: "RolloutComplete"},
-	} {
-		meta.SetStatusCondition(&gw.Status.Conditions, cond)
-	}
+	gw := servingGateway("applied", "img:v1")
 	c := fakeClientBuilder().WithObjects(gw, makeConvergedDeployment(gw, "applied")).
 		WithStatusSubresource(gw).Build()
-	r := newTestGatewayReconciler(c, renderOutput("new"),
-		&countingValidator{err: errors.New("fork/exec /usr/local/bin/krakend: no such file or directory")})
-
-	if err := reconcileGateway(t, r, gw); err == nil {
-		t.Fatal("an unavailable validator must fail the reconcile so it is retried")
-	}
+	reconcileWithUnavailableValidator(t, c, gw)
 	ready := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionReady)
 	if ready == nil || ready.Status != metav1.ConditionUnknown || ready.Reason != v1alpha1.ReasonValidatorUnavailable {
 		t.Errorf("Ready = %+v, want Unknown/%s: the newest render has not been judged",
@@ -136,24 +177,10 @@ func TestGatewayReconcile_UnavailableValidatorIsNotReady(t *testing.T) {
 }
 
 func TestGatewayReconcile_UnavailableValidatorStillRefreshesRolloutConditions(t *testing.T) {
-	gw := reconciledGateway()
-	gw.Status.ConfigChecksum = "applied"
-	gw.Status.ActiveImage = "img:v1"
-	for _, cond := range []metav1.Condition{
-		{Type: v1alpha1.ConditionConfigValid, Status: metav1.ConditionTrue, Reason: v1alpha1.ReasonConfigApplied},
-		{Type: v1alpha1.ConditionAvailable, Status: metav1.ConditionTrue, Reason: "DeploymentAvailable"},
-		{Type: v1alpha1.ConditionProgressing, Status: metav1.ConditionTrue, Reason: v1alpha1.ReasonConfigDeployed},
-	} {
-		meta.SetStatusCondition(&gw.Status.Conditions, cond)
-	}
+	gw := rollingGateway("applied", "img:v1")
 	c := fakeClientBuilder().WithObjects(gw, makeConvergedDeployment(gw, "applied")).
 		WithStatusSubresource(gw).Build()
-	r := newTestGatewayReconciler(c, renderOutput("new"),
-		&countingValidator{err: errors.New("fork/exec /usr/local/bin/krakend: no such file or directory")})
-
-	if err := reconcileGateway(t, r, gw); err == nil {
-		t.Fatal("an unavailable validator must fail the reconcile so it is retried")
-	}
+	reconcileWithUnavailableValidator(t, c, gw)
 	got := getGateway(t, c, gw)
 	if got.Status.Phase != v1alpha1.PhaseRunning {
 		t.Errorf("phase = %s, want %s: the converged rollout must be recorded while the validator is down",
@@ -166,27 +193,13 @@ func TestGatewayReconcile_UnavailableValidatorStillRefreshesRolloutConditions(t 
 }
 
 func TestGatewayReconcile_UnavailableValidatorStillReportsFailedRollout(t *testing.T) {
-	gw := reconciledGateway()
-	gw.Status.ConfigChecksum = "applied"
-	gw.Status.ActiveImage = "img:v1"
-	for _, cond := range []metav1.Condition{
-		{Type: v1alpha1.ConditionConfigValid, Status: metav1.ConditionTrue, Reason: v1alpha1.ReasonConfigApplied},
-		{Type: v1alpha1.ConditionAvailable, Status: metav1.ConditionTrue, Reason: "DeploymentAvailable"},
-		{Type: v1alpha1.ConditionProgressing, Status: metav1.ConditionTrue, Reason: v1alpha1.ReasonConfigDeployed},
-	} {
-		meta.SetStatusCondition(&gw.Status.Conditions, cond)
-	}
+	gw := rollingGateway("applied", "img:v1")
 	dep := makeConvergedDeployment(gw, "applied")
 	dep.Status.Conditions = []appsv1.DeploymentCondition{{
 		Type: appsv1.DeploymentProgressing, Status: corev1.ConditionFalse, Reason: "ProgressDeadlineExceeded",
 	}}
 	c := fakeClientBuilder().WithObjects(gw, dep).WithStatusSubresource(gw).Build()
-	r := newTestGatewayReconciler(c, renderOutput("new"),
-		&countingValidator{err: errors.New("fork/exec /usr/local/bin/krakend: no such file or directory")})
-
-	if err := reconcileGateway(t, r, gw); err == nil {
-		t.Fatal("an unavailable validator must fail the reconcile so it is retried")
-	}
+	reconcileWithUnavailableValidator(t, c, gw)
 	ready := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionReady)
 	if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != v1alpha1.ReasonRolloutFailed {
 		t.Errorf("Ready = %+v, want False/%s: a failed rollout outranks the unjudged render",
@@ -195,16 +208,7 @@ func TestGatewayReconcile_UnavailableValidatorStillReportsFailedRollout(t *testi
 }
 
 func TestGatewayReconcile_UnavailableDeploymentDuringRolloutIsDeployingNotError(t *testing.T) {
-	gw := reconciledGateway()
-	gw.Status.ConfigChecksum = "applied"
-	gw.Status.ActiveImage = "img:v1"
-	for _, cond := range []metav1.Condition{
-		{Type: v1alpha1.ConditionConfigValid, Status: metav1.ConditionTrue, Reason: v1alpha1.ReasonConfigApplied},
-		{Type: v1alpha1.ConditionAvailable, Status: metav1.ConditionTrue, Reason: "DeploymentAvailable"},
-		{Type: v1alpha1.ConditionProgressing, Status: metav1.ConditionTrue, Reason: v1alpha1.ReasonConfigDeployed},
-	} {
-		meta.SetStatusCondition(&gw.Status.Conditions, cond)
-	}
+	gw := rollingGateway("applied", "img:v1")
 	dep := makeConvergedDeployment(gw, "applied")
 	dep.Status = appsv1.DeploymentStatus{
 		Conditions: []appsv1.DeploymentCondition{{
@@ -220,40 +224,6 @@ func TestGatewayReconcile_UnavailableDeploymentDuringRolloutIsDeployingNotError(
 	if phase := getGateway(t, c, gw).Status.Phase; phase != v1alpha1.PhaseDeploying {
 		t.Errorf("phase = %s, want %s: a Deployment that is unavailable while its rollout is in flight is not an error",
 			phase, v1alpha1.PhaseDeploying)
-	}
-}
-
-// servingGateway returns a gateway whose applied config is checksum and whose
-// rollout has completed: Available, Progressing=False and ConfigValid.
-func servingGateway(checksum, image string) *v1alpha1.KrakenDGateway {
-	gw := reconciledGateway()
-	gw.Status.ConfigChecksum = checksum
-	gw.Status.ActiveImage = image
-	for _, cond := range []metav1.Condition{
-		{Type: v1alpha1.ConditionConfigValid, Status: metav1.ConditionTrue, Reason: v1alpha1.ReasonConfigApplied},
-		{Type: v1alpha1.ConditionAvailable, Status: metav1.ConditionTrue, Reason: "DeploymentAvailable"},
-		{Type: v1alpha1.ConditionProgressing, Status: metav1.ConditionFalse, Reason: "RolloutComplete"},
-	} {
-		meta.SetStatusCondition(&gw.Status.Conditions, cond)
-	}
-	return gw
-}
-
-// staleDeploymentReads makes every read of the gateway Deployment return
-// stale, as an informer cache does until it has seen the controller's own
-// update.
-func staleDeploymentReads(stale *appsv1.Deployment) interceptor.Funcs {
-	return interceptor.Funcs{
-		Get: func(
-			ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object,
-			opts ...client.GetOption,
-		) error {
-			if dep, ok := obj.(*appsv1.Deployment); ok {
-				stale.DeepCopyInto(dep)
-				return nil
-			}
-			return c.Get(ctx, key, obj, opts...)
-		},
 	}
 }
 
