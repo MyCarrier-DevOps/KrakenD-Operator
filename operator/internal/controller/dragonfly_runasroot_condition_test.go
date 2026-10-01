@@ -148,14 +148,14 @@ func TestRecordDragonflyRunAsRootCondition_NoRequest(t *testing.T) {
 	}
 }
 
-// TestReconcileOwnedResources_DragonflyDisabledClearsStaleRunAsRootCondition
+// TestReconcileInfrastructure_DragonflyDisabledClearsStaleRunAsRootCondition
 // covers D3/D2(iv): when Dragonfly is deliberately off
 // (gw.Spec.Dragonfly == nil or Enabled: false), a stale
 // ConditionDragonflyRunAsRootUnacknowledged left over from a prior reconcile
 // (while Dragonfly WAS enabled) must be removed — mirroring
 // reconcilePostRestartJob's disabled/empty guard
 // (TestReconcilePostRestartJob_DisabledSpecClearsStaleConditions).
-func TestReconcileOwnedResources_DragonflyDisabledClearsStaleRunAsRootCondition(t *testing.T) {
+func TestReconcileInfrastructure_DragonflyDisabledClearsStaleRunAsRootCondition(t *testing.T) {
 	gw := testGateway()
 	gw.Spec.Dragonfly = nil // deliberately off
 	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
