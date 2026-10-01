@@ -1789,6 +1789,13 @@ type gatewayReadiness struct {
 }
 
 func gatewayReadinessFor(conds []metav1.Condition) gatewayReadiness {
-	return gatewayReadiness{status: metav1.ConditionUnknown, reason: v1alpha1.ReasonPending,
-		message: "Waiting for the first configuration to be validated", phase: v1alpha1.PhasePending}
+	configValid := meta.FindStatusCondition(conds, v1alpha1.ConditionConfigValid)
+	switch {
+	case configValid == nil:
+		return gatewayReadiness{status: metav1.ConditionUnknown, reason: v1alpha1.ReasonPending,
+			message: "Waiting for the first configuration to be validated", phase: v1alpha1.PhasePending}
+	default:
+		return gatewayReadiness{status: metav1.ConditionTrue, reason: v1alpha1.ReasonReady,
+			message: "Configuration applied and all replicas available", phase: v1alpha1.PhaseRunning}
+	}
 }
