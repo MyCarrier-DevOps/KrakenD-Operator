@@ -1807,3 +1807,36 @@ func TestGatewayReconcile_LoserFollowsTheNewWinnerWhenTheOldestIsDeleted(t *test
 		t.Errorf("status.conflicts = %+v, want %+v", got.Status.Conflicts, want)
 	}
 }
+
+// recordingValidator records the edition of every validation and returns err.
+type recordingValidator struct {
+	editions []v1alpha1.Edition
+	err      error
+}
+
+func (v *recordingValidator) Validate(_ context.Context, _ []byte, edition v1alpha1.Edition) error {
+	v.editions = append(v.editions, edition)
+	return v.err
+}
+
+func TestGatewayReconcile_CEFallbackFlipRevalidatesTheSameRender(t *testing.T) {
+	gw, secret, parser := licensedEEGateway(testNow.Add(-time.Minute), true) // expired, falls back
+	const config = `{"version":3,"name":"same-bytes-in-both-editions"}`
+	gw.Status.ConfigChecksum = hash.SHA256Hex([]byte(config))
+	gw.Status.ConfigEdition = v1alpha1.EditionEE
+	c := fakeClientBuilder().WithObjects(gw, secret).WithStatusSubresource(gw).Build()
+	val := &recordingValidator{}
+	r := newTestGatewayReconciler(c, renderOf(config), val)
+	r.LicenseParser = parser
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if !slices.Equal(val.editions, []v1alpha1.Edition{v1alpha1.EditionCE}) {
+		t.Fatalf("validations = %v, want one as CE: the same bytes applied as EE were never checked as CE",
+			val.editions)
+	}
+	if got := getGateway(t, c, gw).Status.ConfigEdition; got != v1alpha1.EditionCE {
+		t.Errorf("status.configEdition = %q, want CE once the CE check passed", got)
+	}
+}
