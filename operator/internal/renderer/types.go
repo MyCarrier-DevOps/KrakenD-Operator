@@ -55,6 +55,10 @@ type RenderOutput struct {
 	PluginChecksum      string
 	ConflictedEndpoints []types.NamespacedName
 	InvalidEndpoints    []types.NamespacedName
+	// EntryConflicts maps each KrakenDEndpoint that lost at least one entry
+	// to the entries it lost, sorted by endpoint then method. Its keys are
+	// ConflictedEndpoints.
+	EntryConflicts map[types.NamespacedName][]EntryConflict
 	// Sources is index-aligned with the rendered "endpoints" array:
 	// Sources[i] is the KrakenDEndpoint that produced endpoints[i]. It is the
 	// only way back from a krakend check finding to the CR at fault.
@@ -87,4 +91,14 @@ func (e *ValidationError) Error() string {
 
 func (e *ValidationError) Unwrap() error {
 	return e.Err
+}
+
+// EntryConflict is one entry of a KrakenDEndpoint that the render left out
+// because an older KrakenDEndpoint has an entry with the same endpoint and
+// method.
+type EntryConflict struct {
+	Endpoint string
+	Method   string
+	// Winner is the KrakenDEndpoint whose entry is rendered instead.
+	Winner types.NamespacedName
 }

@@ -18,6 +18,7 @@ package renderer
 
 import (
 	"encoding/json"
+	"reflect"
 	"slices"
 	"testing"
 	"time"
@@ -1051,5 +1052,36 @@ func TestRender_SourcesExcludeConflictLosersAndInvalidPolicyCRs(t *testing.T) {
 	want := []types.NamespacedName{{Namespace: "default", Name: "winner"}}
 	if !slices.Equal(out.Sources, want) {
 		t.Errorf("Sources = %v, want only the rendered winner %v", out.Sources, want)
+	}
+}
+
+func TestRender_EntryConflictsNameTheWinner(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "ns"},
+		Spec:       v1alpha1.KrakenDGatewaySpec{Edition: v1alpha1.EditionCE, Version: "2.13"},
+	}
+	backend := []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/x"}}
+	entry := func(path string) v1alpha1.EndpointEntry {
+		return v1alpha1.EndpointEntry{Endpoint: path, Method: "GET", Backends: backend}
+	}
+	t0 := metav1.NewTime(time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC))
+	t1 := metav1.NewTime(t0.Add(time.Minute))
+	endpoints := []v1alpha1.KrakenDEndpoint{
+		{ObjectMeta: metav1.ObjectMeta{Name: "older", Namespace: "ns", CreationTimestamp: t0},
+			Spec: v1alpha1.KrakenDEndpointSpec{Endpoints: []v1alpha1.EndpointEntry{entry("/shared")}}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "newer", Namespace: "ns", CreationTimestamp: t1},
+			Spec: v1alpha1.KrakenDEndpointSpec{Endpoints: []v1alpha1.EndpointEntry{entry("/shared"), entry("/own")}}},
+	}
+	out, err := New(Options{}).Render(RenderInput{Gateway: gw, Endpoints: endpoints})
+	if err != nil {
+		t.Fatal(err)
+	}
+	newer := types.NamespacedName{Namespace: "ns", Name: "newer"}
+	want := []EntryConflict{{Endpoint: "/shared", Method: "GET", Winner: types.NamespacedName{Namespace: "ns", Name: "older"}}}
+	if got := out.EntryConflicts[newer]; !reflect.DeepEqual(got, want) {
+		t.Errorf("EntryConflicts[newer] = %+v, want %+v", got, want)
+	}
+	if _, ok := out.EntryConflicts[types.NamespacedName{Namespace: "ns", Name: "older"}]; ok {
+		t.Error("the winner lost nothing and must have no entry conflicts")
 	}
 }
