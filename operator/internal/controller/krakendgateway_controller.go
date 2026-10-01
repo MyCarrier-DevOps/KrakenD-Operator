@@ -39,6 +39,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/retry"
 	utilclock "k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -777,42 +778,55 @@ func (r *KrakenDGatewayReconciler) reconcileEndpointAcceptance(
 }
 
 // writeEndpointAccepted sets the Accepted condition want on the endpoint the
-// render saw as rendered, or removes it when want is nil. It patches status
-// with an optimistic lock, so it never replaces conditions written after its
-// read. It writes only when the condition changes, and emits an event only on
-// a transition. An endpoint deleted, or deleted and created again, since the
-// render is skipped.
+// render saw as rendered, or removes it when want is nil. It reads the
+// endpoint again and patches its status with an optimistic lock, so a write
+// never replaces conditions the endpoint controller set after the read; a
+// Conflict is retried against a new read. It writes only when the condition
+// changes, and emits an event only on a transition. An endpoint deleted, or
+// deleted and created again, since the render is skipped.
 func (r *KrakenDGatewayReconciler) writeEndpointAccepted(
 	ctx context.Context,
 	rendered *v1alpha1.KrakenDEndpoint,
 	want *metav1.Condition,
 ) error {
 	key := client.ObjectKeyFromObject(rendered)
-	var ep v1alpha1.KrakenDEndpoint
-	if err := r.Get(ctx, key, &ep); err != nil {
-		if errors.IsNotFound(err) {
+	var (
+		ep    v1alpha1.KrakenDEndpoint
+		prev  *metav1.Condition
+		wrote bool
+	)
+	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		ep, wrote = v1alpha1.KrakenDEndpoint{}, false
+		if err := r.Get(ctx, key, &ep); err != nil {
+			return err
+		}
+		if ep.UID != rendered.UID {
 			return nil
 		}
-		return fmt.Errorf("getting endpoint %s: %w", key, err)
-	}
-	if ep.UID != rendered.UID {
+		base := ep.DeepCopy()
+		prev = meta.FindStatusCondition(base.Status.Conditions, v1alpha1.ConditionAccepted)
+		if want == nil {
+			meta.RemoveStatusCondition(&ep.Status.Conditions, v1alpha1.ConditionAccepted)
+		} else {
+			meta.SetStatusCondition(&ep.Status.Conditions, *want)
+		}
+		if conditionsEqual(base.Status.Conditions, ep.Status.Conditions) {
+			return nil
+		}
+		if err := r.Status().Patch(ctx, &ep,
+			client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil {
+			return err
+		}
+		wrote = true
+		return nil
+	})
+	if errors.IsNotFound(err) {
 		return nil
 	}
-	base := ep.DeepCopy()
-	prev := meta.FindStatusCondition(base.Status.Conditions, v1alpha1.ConditionAccepted)
-	if want == nil {
-		meta.RemoveStatusCondition(&ep.Status.Conditions, v1alpha1.ConditionAccepted)
-	} else {
-		meta.SetStatusCondition(&ep.Status.Conditions, *want)
-	}
-	if conditionsEqual(base.Status.Conditions, ep.Status.Conditions) {
-		return nil
-	}
-	if err := r.Status().Patch(ctx, &ep,
-		client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil {
+	if err != nil {
 		return fmt.Errorf("writing Accepted on endpoint %s: %w", key, err)
 	}
-	if want != nil {
+	if wrote && want != nil {
 		recordConditionTransition(r.Recorder, &ep, prev, *want)
 	}
 	return nil
