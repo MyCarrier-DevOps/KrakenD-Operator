@@ -30,7 +30,6 @@ webhooks:
         operations:
           - CREATE
           - UPDATE
-          - DELETE
         resources:
           - krakendgateways
     sideEffects: None
