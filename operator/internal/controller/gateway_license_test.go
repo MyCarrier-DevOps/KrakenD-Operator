@@ -665,3 +665,24 @@ func TestGatewayReconcile_RenewedLicenseBytesRollTheDeployment(t *testing.T) {
 		t.Error("Ready must not be True while the pods roll to the renewed license")
 	}
 }
+
+func TestGatewayReconcile_UnchangedLicenseBytesRollNothing(t *testing.T) {
+	s := settleLicensedGateway(t)
+	before := s.deployment(t)
+	restartsBefore := testutil.ToFloat64(rollingRestarts)
+
+	s.reconcileWhileCacheLags(t)
+
+	if after := s.deployment(t); after.ResourceVersion != before.ResourceVersion {
+		t.Errorf("Deployment resourceVersion %s -> %s; unchanged license bytes must write nothing",
+			before.ResourceVersion, after.ResourceVersion)
+	}
+	stored := getGateway(t, s.c, s.gw)
+	if progressing := meta.FindStatusCondition(stored.Status.Conditions, v1alpha1.ConditionProgressing); progressing == nil ||
+		progressing.Reason == "DeploymentUpdated" {
+		t.Errorf("Progressing = %+v, want no DeploymentUpdated for an unchanged license", progressing)
+	}
+	if got := testutil.ToFloat64(rollingRestarts); got != restartsBefore {
+		t.Errorf("rollingRestarts rose from %v to %v", restartsBefore, got)
+	}
+}
