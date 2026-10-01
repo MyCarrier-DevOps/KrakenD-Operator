@@ -1085,7 +1085,6 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 	in infraInputs,
 ) error {
 	log := logf.FromContext(ctx)
-	errCRDMissing := fmt.Errorf("CRD not installed")
 
 	// ServiceAccount
 	sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{
@@ -1216,12 +1215,9 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 		if esErr != nil {
 			return fmt.Errorf("checking ExternalSecret CRD: %w", esErr)
 		}
-		if !esAvailable {
-			log.Error(errCRDMissing,
-				"ExternalSecret requested but external-secrets.io CRD is not available")
-			r.Recorder.Event(gw, "Warning", "CRDNotInstalled",
-				"ExternalSecret is enabled but the external-secrets.io CRD is not installed in the cluster")
-		} else {
+		// Without the CRD there is nothing to create: reconcileLicense reports
+		// LicenseSecretUnavailable=True/CRDNotInstalled.
+		if esAvailable {
 			es := &unstructured.Unstructured{}
 			es.SetGroupVersionKind(externalSecretGVK)
 			es.SetName(resources.ExternalSecretName(gw))
