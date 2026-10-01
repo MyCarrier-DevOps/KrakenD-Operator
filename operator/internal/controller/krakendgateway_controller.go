@@ -1788,6 +1788,15 @@ type gatewayReadiness struct {
 	phase   v1alpha1.GatewayPhase
 }
 
+// gatewayReadinessFor derives a gateway's Ready condition and phase from the
+// conditions the gateway controller and the license monitor maintain. The
+// first rule that applies wins: a rejected configuration, an expired license
+// without CE fallback, a failed rollout, CE fallback, no validated
+// configuration yet, a configuration that could not be validated, a rollout
+// in progress, and a Deployment not yet available. The gateway is Ready only
+// when none applies. A configuration that could not be validated (the
+// validator was unavailable) makes Ready Unknown, not False, and leaves the
+// phase at the serving phase: the last applied configuration keeps serving.
 func gatewayReadinessFor(conds []metav1.Condition) gatewayReadiness {
 	configValid := meta.FindStatusCondition(conds, v1alpha1.ConditionConfigValid)
 	available := meta.FindStatusCondition(conds, v1alpha1.ConditionAvailable)
@@ -1832,7 +1841,9 @@ func condFalse(c *metav1.Condition) bool { return c != nil && c.Status == metav1
 // condTrue reports whether c exists and is True.
 func condTrue(c *metav1.Condition) bool { return c != nil && c.Status == metav1.ConditionTrue }
 
-// servingPhase is the phase of a gateway judged only by its rollout.
+// servingPhase is the phase of a gateway judged only by its rollout: Pending
+// before anything was rolled out, Deploying while a rollout is in progress or
+// the Deployment is not available, Running otherwise.
 func servingPhase(progressing, available *metav1.Condition) v1alpha1.GatewayPhase {
 	switch {
 	case progressing == nil && available == nil:
