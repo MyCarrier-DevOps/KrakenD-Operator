@@ -174,10 +174,11 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	licenseChecksum := lic.checksumFor(deployedLicense)
 
 	// Gather plugin ConfigMaps
-	pluginConfigMaps, err := r.gatherPluginConfigMaps(ctx, &gw)
+	pluginConfigMaps, missingPlugins, err := r.gatherPluginConfigMaps(ctx, &gw)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	r.setPluginsResolved(&gw, missingPlugins)
 
 	// Detect Dragonfly state
 	dragonflyState := r.detectDragonflyState(ctx, &gw)
@@ -209,7 +210,7 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	image := appliedImage(&gw, edition)
 	// A held Deployment (no ConfigMap holds the applied config) starts no
 	// rollout, so none is reported.
-	if appliedKey(&gw, edition) == appliedBefore && cfg.appliedConfigMap != "" {
+	if appliedKey(&gw, edition) == appliedBefore && cfg.appliedConfigMap != "" && len(missingPlugins) == 0 {
 		r.markDeploymentUpdate(&gw, image, output.PluginChecksum, licenseChecksum != deployedLicense)
 	}
 
@@ -238,6 +239,7 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		ceRender:        appliedKey(&gw, edition).edition == v1alpha1.EditionCE,
 		configMapName:   cfg.appliedConfigMap,
 		heldBecause:     cfg.heldBecause,
+		missingPlugins:  missingPlugins,
 	}
 	infraErr := r.reconcileInfrastructure(ctx, &gw, infra)
 	r.inspectDeploymentStatus(ctx, &gw, infra)
@@ -397,15 +399,15 @@ func (r *KrakenDGatewayReconciler) gatherPolicies(
 	return policies, nil
 }
 
-// gatherPluginConfigMaps fetches ConfigMaps referenced by plugin sources.
+// gatherPluginConfigMaps fetches ConfigMaps referenced by plugin sources and
+// names the ones that do not exist.
 func (r *KrakenDGatewayReconciler) gatherPluginConfigMaps(
 	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
-) ([]corev1.ConfigMap, error) {
+) (found []corev1.ConfigMap, missing []string, err error) {
 	if gw.Spec.Plugins == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
-	var cms []corev1.ConfigMap
 	for _, src := range gw.Spec.Plugins.Sources {
 		if src.ConfigMapRef == nil {
 			continue
@@ -414,13 +416,14 @@ func (r *KrakenDGatewayReconciler) gatherPluginConfigMaps(
 		key := types.NamespacedName{Name: src.ConfigMapRef.Name, Namespace: gw.Namespace}
 		if err := r.Get(ctx, key, &cm); err != nil {
 			if errors.IsNotFound(err) {
+				missing = append(missing, src.ConfigMapRef.Name)
 				continue
 			}
-			return nil, fmt.Errorf("getting plugin configmap %s: %w", key, err)
+			return nil, nil, fmt.Errorf("getting plugin configmap %s: %w", key, err)
 		}
-		cms = append(cms, cm)
+		found = append(found, cm)
 	}
-	return cms, nil
+	return found, missing, nil
 }
 
 // detectDragonflyState checks if a Dragonfly CR exists and reports its readiness.
@@ -1074,6 +1077,9 @@ type infraInputs struct {
 	configMapName string
 	// heldBecause is why configMapName is "": nil when none exists.
 	heldBecause error
+	// missingPlugins are the plugin ConfigMaps that do not exist; while any
+	// is missing the Deployment is held.
+	missingPlugins []string
 }
 
 // reconcileInfrastructure is the infrastructure stage. It creates or updates
@@ -1134,6 +1140,10 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 			reason = errAppliedConfigMissing
 		}
 		log.Error(reason, "holding the Deployment as it is", "checksum", in.appliedChecksum)
+	case len(in.missingPlugins) > 0:
+		// A pod template that mounts a missing ConfigMap never starts
+		// (FailedMount). Leave the Deployment as it is; PluginsResolved
+		// names the ConfigMaps, and their creation reconciles the gateway.
 	default:
 		if err := r.reconcileDeployment(ctx, gw, in); err != nil {
 			return err
