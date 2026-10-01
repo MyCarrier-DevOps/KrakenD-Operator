@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -1470,5 +1471,49 @@ func TestGatewayReconcile_StaleEmptyChecksumKeepsAnAcceptedEndpoint(t *testing.T
 	}
 	if cond := storedAccepted(t, c, client.ObjectKeyFromObject(ep)); cond == nil || cond.Status != metav1.ConditionTrue {
 		t.Errorf("Accepted = %+v; a stale empty checksum must not strip an accepted endpoint", cond)
+	}
+}
+
+func TestGatewayReconcile_PartlyConflictedEndpointIsPartiallyAccepted(t *testing.T) {
+	gw := reconciledGateway()
+	older := testEndpoint("older", "/shared")
+	older.CreationTimestamp = metav1.NewTime(testNow)
+	newer := testEndpoint("newer", "/shared")
+	newer.Spec.Endpoints = append(newer.Spec.Endpoints, v1alpha1.EndpointEntry{
+		Endpoint: "/own", Method: "GET",
+		Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc:8080"}, URLPattern: "/x"}},
+	})
+	newer.CreationTimestamp = metav1.NewTime(testNow.Add(time.Minute))
+	lostAll := testEndpoint("lost-all", "/shared")
+	lostAll.CreationTimestamp = metav1.NewTime(testNow.Add(2 * time.Minute))
+	c := fakeClientBuilder().WithObjects(gw, older, newer, lostAll).
+		WithStatusSubresource(gw, older, newer, lostAll).Build()
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}), &mockValidator{})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	wantConflicts := []v1alpha1.EndpointConflict{{Endpoint: "/shared", Method: "GET", Winner: "default/older"}}
+	for _, tc := range []struct {
+		name      string
+		status    metav1.ConditionStatus
+		reason    string
+		conflicts []v1alpha1.EndpointConflict
+	}{
+		{"older", metav1.ConditionTrue, v1alpha1.ReasonAccepted, nil},
+		{"newer", metav1.ConditionTrue, v1alpha1.ReasonPartiallyAccepted, wantConflicts},
+		{"lost-all", metav1.ConditionFalse, v1alpha1.ReasonEndpointConflict, wantConflicts},
+	} {
+		var ep v1alpha1.KrakenDEndpoint
+		if err := c.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: tc.name}, &ep); err != nil {
+			t.Fatal(err)
+		}
+		cond := meta.FindStatusCondition(ep.Status.Conditions, v1alpha1.ConditionAccepted)
+		if cond == nil || cond.Status != tc.status || cond.Reason != tc.reason {
+			t.Errorf("%s: Accepted = %+v, want %s/%s", tc.name, cond, tc.status, tc.reason)
+		}
+		if !reflect.DeepEqual(ep.Status.Conflicts, tc.conflicts) {
+			t.Errorf("%s: status.conflicts = %+v, want %+v", tc.name, ep.Status.Conflicts, tc.conflicts)
+		}
 	}
 }
