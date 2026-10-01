@@ -30,6 +30,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 )
 
 func TestEndpointReconcile_NotFound(t *testing.T) {
@@ -848,6 +849,27 @@ func TestEndpointReconcile_FirstMissingPolicyIsReportedInSpecOrder(t *testing.T)
 		refs := meta.FindStatusCondition(storedEP1(t, c).Status.Conditions, v1alpha1.ConditionResolvedRefs)
 		if refs == nil || !strings.Contains(refs.Message, `"policy-b"`) {
 			t.Fatalf("run %d: ResolvedRefs = %+v, want the message to name policy-b, the first in spec order", run, refs)
+		}
+	}
+}
+
+func TestEndpointPredicate(t *testing.T) {
+	old := endpointOnGW1(1, acceptedAt(1))
+	acceptedFlipped := old.DeepCopy()
+	acceptedFlipped.Status.Conditions[0].Status = metav1.ConditionFalse
+	acceptedFlipped.Status.Conditions[0].Reason = v1alpha1.ReasonEndpointConflict
+
+	p := endpointPredicate()
+	tests := []struct {
+		name   string
+		newObj *v1alpha1.KrakenDEndpoint
+		want   bool
+	}{
+		{"gateway changed Accepted", acceptedFlipped, true},
+	}
+	for _, tt := range tests {
+		if got := p.Update(event.UpdateEvent{ObjectOld: old, ObjectNew: tt.newObj}); got != tt.want {
+			t.Errorf("%s: Update = %v, want %v", tt.name, got, tt.want)
 		}
 	}
 }

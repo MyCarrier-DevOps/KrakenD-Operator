@@ -172,6 +172,8 @@ func (r *KrakenDEndpointReconciler) resolveRefs(
 	return cond, nil
 }
 
+func endpointPredicate() predicate.Predicate { return predicate.GenerationChangedPredicate{} }
+
 // gatewayToEndpoints maps a Gateway event to endpoints that reference it via field index.
 func (r *KrakenDEndpointReconciler) gatewayToEndpoints(
 	ctx context.Context, obj client.Object,
