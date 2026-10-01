@@ -17,14 +17,18 @@ limitations under the License.
 package controller
 
 import (
+	"cmp"
 	"context"
 	stderrors "errors"
 	"fmt"
+	"slices"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
@@ -167,6 +171,104 @@ func verifyConfigMap(cm *corev1.ConfigMap, gw *v1alpha1.KrakenDGateway, checksum
 	return nil
 }
 
-func (r *KrakenDGatewayReconciler) collectConfigMaps(_ context.Context, _ *v1alpha1.KrakenDGateway, _ string) error {
+// configMapHistoryLimit is how many of a gateway's config revisions GC keeps
+// even when nothing mounts them.
+const configMapHistoryLimit = 3
+
+// collectConfigMaps deletes the gateway's config ConfigMaps that nothing can
+// still mount. A ConfigMap is kept when any of these holds:
+//   - it is inUse (the applied config, which the Deployment template mounts);
+//   - it is in the revision history (configMapGCCandidates);
+//   - a live ReplicaSet of the gateway's Deployment mounts it.
+//
+// The ConfigMap an earlier operator version kept under the gateway's own name
+// is collected on the same terms, but never counts toward the history.
+func (r *KrakenDGatewayReconciler) collectConfigMaps(
+	ctx context.Context, gw *v1alpha1.KrakenDGateway, inUse string,
+) error {
+	var list corev1.ConfigMapList
+	if err := r.List(ctx, &list, client.InNamespace(gw.Namespace),
+		client.MatchingLabels(resources.SelectorLabels(gw))); err != nil {
+		return fmt.Errorf("listing config configmaps: %w", err)
+	}
+	candidates := configMapGCCandidates(gw, list.Items, inUse)
+	if len(candidates) == 0 {
+		return nil
+	}
+	mounted, err := r.liveReplicaSetConfigMaps(ctx, gw)
+	if err != nil {
+		return err
+	}
+	for i := range candidates {
+		cm := &candidates[i]
+		if mounted[cm.Name] {
+			continue
+		}
+		uid := cm.UID
+		if err := r.Delete(ctx, cm, client.Preconditions{UID: &uid}); client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("deleting configmap %s: %w", cm.Name, err)
+		}
+	}
 	return nil
+}
+
+// configMapGCCandidates returns the gateway's config ConfigMaps that only a
+// live ReplicaSet could still keep: every controlled one except inUse and the
+// revision history.
+func configMapGCCandidates(gw *v1alpha1.KrakenDGateway, cms []corev1.ConfigMap, inUse string) []corev1.ConfigMap {
+	var revisions, candidates []corev1.ConfigMap
+	for i := range cms {
+		cm := cms[i]
+		if !metav1.IsControlledBy(&cm, gw) {
+			continue
+		}
+		switch {
+		case cm.Labels[resources.ConfigRevisionLabel] != "":
+			revisions = append(revisions, cm)
+		case cm.Name == gw.Name && cm.Name != inUse:
+			candidates = append(candidates, cm)
+		}
+	}
+	slices.SortFunc(revisions, func(a, b corev1.ConfigMap) int {
+		if c := b.CreationTimestamp.Compare(a.CreationTimestamp.Time); c != 0 {
+			return c // newest first
+		}
+		return cmp.Compare(a.Name, b.Name)
+	})
+	for i := range revisions {
+		if i >= configMapHistoryLimit && revisions[i].Name != inUse {
+			candidates = append(candidates, revisions[i])
+		}
+	}
+	return candidates
+}
+
+// liveReplicaSetConfigMaps returns the config ConfigMaps mounted by the
+// ReplicaSets of the gateway's Deployment that have or want pods. A
+// ReplicaSet scaled to zero keeps nothing alive: a gateway is rolled back
+// through its CRs, and the operator reverts `kubectl rollout undo`. It reads
+// through APIReader, so ReplicaSets are never cached cluster-wide.
+func (r *KrakenDGatewayReconciler) liveReplicaSetConfigMaps(
+	ctx context.Context, gw *v1alpha1.KrakenDGateway,
+) (map[string]bool, error) {
+	var list appsv1.ReplicaSetList
+	if err := r.APIReader.List(ctx, &list, client.InNamespace(gw.Namespace),
+		client.MatchingLabels(resources.SelectorLabels(gw))); err != nil {
+		return nil, fmt.Errorf("listing replicasets: %w", err)
+	}
+	mounted := map[string]bool{}
+	for i := range list.Items {
+		rs := &list.Items[i]
+		owner := metav1.GetControllerOf(rs)
+		if owner == nil || owner.Kind != "Deployment" || owner.Name != gw.Name {
+			continue
+		}
+		if ptr.Deref(rs.Spec.Replicas, 1) == 0 && rs.Status.Replicas == 0 {
+			continue
+		}
+		if name := resources.MountedConfigMapName(&rs.Spec.Template.Spec); name != "" {
+			mounted[name] = true
+		}
+	}
+	return mounted, nil
 }
