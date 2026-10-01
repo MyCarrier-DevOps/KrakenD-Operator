@@ -2060,6 +2060,12 @@ func servingPhase(progressing, available *metav1.Condition) v1alpha1.GatewayPhas
 // gateway whose reconcile keeps failing still has its license looked at at
 // least that often.
 func newGatewayRateLimiter() workqueue.TypedRateLimiter[reconcile.Request] {
+	return cappedRateLimiter(licenseRecheckInterval)
+}
+
+// cappedRateLimiter is controller-runtime's default rate limiter with the
+// per-item backoff capped at max.
+func cappedRateLimiter(max time.Duration) workqueue.TypedRateLimiter[reconcile.Request] {
 	return workqueue.NewTypedWithMaxWaitRateLimiter(
-		workqueue.DefaultTypedControllerRateLimiter[reconcile.Request](), licenseRecheckInterval)
+		workqueue.DefaultTypedControllerRateLimiter[reconcile.Request](), max)
 }
