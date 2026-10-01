@@ -625,10 +625,15 @@ type OCIImageRef struct {
 type KrakenDGatewayStatus struct {
 	// Phase is derived from the Ready condition on every reconcile and kept
 	// for compatibility; read the Ready condition instead.
-	Phase              GatewayPhase `json:"phase,omitempty"`
-	ConfigChecksum     string       `json:"configChecksum,omitempty"`
-	PluginChecksum     string       `json:"pluginChecksum,omitempty"`
-	ObservedGeneration int64        `json:"observedGeneration,omitempty"`
+	Phase          GatewayPhase `json:"phase,omitempty"`
+	ConfigChecksum string       `json:"configChecksum,omitempty"`
+	// ConfigEdition is the edition configChecksum was validated for and is
+	// deployed with: EE, or CE for a CE gateway or an EE gateway in license
+	// fallback. The Deployment's image follows it.
+	// +optional
+	ConfigEdition      Edition `json:"configEdition,omitempty"`
+	PluginChecksum     string  `json:"pluginChecksum,omitempty"`
+	ObservedGeneration int64   `json:"observedGeneration,omitempty"`
 	// Conditions are keyed by type. Ready is the summary condition.
 	// +listType=map
 	// +listMapKey=type
