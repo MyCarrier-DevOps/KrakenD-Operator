@@ -40,6 +40,12 @@ func TestAttribute_MapsKrakendCheckOutputToSources(t *testing.T) {
 				"- at '/endpoints/2/extra_config': additional properties 'totally/unknown' not allowed\n",
 			wantIndex: []int{1, 2},
 		},
+		{
+			name:      "method and gin-style path",
+			rendered:  `{"endpoints":[{"endpoint":"/ok","method":"GET"},{"endpoint":"/a/{id}","method":"GET"}]}`,
+			output:    "ERROR parsing the configuration file:\t'/tmp/k.json': undefined output param 'other'! endpoint: GET /a/:id, backend: 0. input: [id], output: [other]\n",
+			wantIndex: []int{1},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
