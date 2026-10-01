@@ -46,7 +46,9 @@ const (
 
 // LicenseMonitor periodically checks EE gateway license certificates and
 // updates gateway status conditions accordingly. It runs as a manager.Runnable
-// goroutine, not as a standard controller-runtime reconciler.
+// goroutine, not as a standard controller-runtime reconciler. It writes only
+// the License* conditions and licenseExpiry; the gateway controller derives
+// phase and Ready from them.
 type LicenseMonitor struct {
 	client.Client
 	Recorder      record.EventRecorder
@@ -327,9 +329,6 @@ func (m *LicenseMonitor) handleRecoveryIfNeeded(
 		Message:            "license secret is available",
 		ObservedGeneration: gw.Generation,
 	})
-	// Reset phase so the gateway controller can re-assess (enables
-	// recovery from PhaseError after license-expired-without-fallback).
-	gw.Status.Phase = v1alpha1.PhasePending
 
 	if err := m.Status().Patch(ctx, gw, patch); err != nil {
 		return err
