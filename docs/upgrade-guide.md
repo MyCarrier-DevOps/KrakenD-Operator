@@ -944,6 +944,44 @@ sidecar (and its Service loses the `openapi` port); those pods could not have
 started the export, which needs the Enterprise binary. The admission webhook
 now warns about `spec.openapi` on a CE gateway.
 
+### Redis and Dragonfly connection pools are now actually configured
+
+The operator rendered Redis settings under `extra_config["backend/redis"]`,
+which is not a KrakenD namespace, and removed that key before validation.
+KrakenD ignored it, so the previous key had no effect: `spec.redis` and
+Dragonfly configured no connection pool at all, and shared Redis state such
+as cluster-wide rate limits never applied. The operator now renders the
+documented Enterprise service-level namespace `redis`, so that state now
+actually applies:
+
+- one `connection_pools` entry named `default` for a single address (or
+  the Dragonfly Service);
+- one `clusters` entry named `default` when `spec.redis.connectionPool.addresses`
+  lists several.
+
+The namespace is validated like the rest of the config. Reference the pool
+from Enterprise components by name, for example
+`"qos/ratelimit/router/redis": {"connection_name": "default", …}`. A gateway
+that falls back to Community lists `redis` among the Enterprise features it
+dropped.
+
+- `readTimeout` and `writeTimeout` have no equivalent in KrakenD and are no
+  longer rendered; the gateway webhook warns when they are set.
+- **On upgrade**, every gateway with `spec.redis` or Dragonfly renders a new
+  config. It is validated and rolled out once, and its post-restart Job runs
+  for the new config revision.
+- `spec.redis.connectionPool.password` and `.tls` are still not rendered, and
+  neither is `dragonfly.authentication.passwordFromSecret` into KrakenD's pool:
+  KrakenD connects without them. The gateway webhook warns when they are set.
+
+### `spec.config.dnsCacheTTL` renders the documented root field
+
+`spec.config.dnsCacheTTL` was rendered as `extra_config["qos/dns"]`, which
+KrakenD 2.13 rejects ("additional properties 'qos/dns' not allowed"). It now
+renders the root `dns_cache_ttl` field, in the same duration-string format
+(for example `"30s"`). No gateway could have set it successfully before, so
+there is no upgrade impact beyond this note.
+
 ---
 
 ## v0.14.0 — openapi-serve liveness probe (one-time rollout)
