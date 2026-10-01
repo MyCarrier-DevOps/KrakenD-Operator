@@ -208,9 +208,13 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	cfg, configErr := r.reconcileConfig(ctx, &gw, before, output, edition)
 	r.reconcileCEFallbackCondition(&gw, output, edition)
 	image := appliedImage(&gw, edition)
-	// A held Deployment (no ConfigMap holds the applied config) starts no
-	// rollout, so none is reported.
-	if appliedKey(&gw, edition) == appliedBefore && cfg.appliedConfigMap != "" && len(missingPlugins) == 0 {
+	// A held Deployment (no ConfigMap holds the applied config, or a plugin
+	// ConfigMap is missing) starts no rollout, so none is reported.
+	switch {
+	case len(missingPlugins) > 0:
+	case appliedKey(&gw, edition) != appliedBefore:
+		r.reportConfigRollout(&gw)
+	case cfg.appliedConfigMap != "":
 		r.markDeploymentUpdate(&gw, image, output.PluginChecksum, licenseChecksum != deployedLicense)
 	}
 
@@ -703,18 +707,20 @@ func (r *KrakenDGatewayReconciler) validateAndApply(
 	if err := r.publishConfig(ctx, gw, output.JSON, output.Checksum); err != nil {
 		return nil, err
 	}
-	r.markConfigApplied(gw, output.Checksum, edition)
+	markConfigApplied(gw, output.Checksum, edition)
 	return map[types.NamespacedName]string{}, nil
 }
 
-// markConfigApplied makes checksum, validated as edition, the applied config
-// and reports the rollout the infrastructure stage starts for it.
-func (r *KrakenDGatewayReconciler) markConfigApplied(
-	gw *v1alpha1.KrakenDGateway, checksum string, edition v1alpha1.Edition,
-) {
+// markConfigApplied makes checksum, validated as edition, the applied config.
+func markConfigApplied(gw *v1alpha1.KrakenDGateway, checksum string, edition v1alpha1.Edition) {
 	gw.Status.ConfigChecksum = checksum
 	gw.Status.ConfigEdition = edition
 	setConfigApplied(gw)
+}
+
+// reportConfigRollout reports the rollout the infrastructure stage starts for
+// a newly applied config.
+func (r *KrakenDGatewayReconciler) reportConfigRollout(gw *v1alpha1.KrakenDGateway) {
 	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
 		Type:               v1alpha1.ConditionProgressing,
 		Status:             metav1.ConditionTrue,
@@ -723,7 +729,7 @@ func (r *KrakenDGatewayReconciler) markConfigApplied(
 		Message:            "Configuration updated, rolling deployment",
 	})
 	r.Recorder.Event(gw, corev1.EventTypeNormal, v1alpha1.ReasonConfigDeployed,
-		fmt.Sprintf("Configuration updated, checksum: %s", checksum))
+		fmt.Sprintf("Configuration updated, checksum: %s", gw.Status.ConfigChecksum))
 	rollingRestarts.Inc()
 }
 
