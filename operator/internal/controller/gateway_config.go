@@ -166,3 +166,7 @@ func verifyConfigMap(cm *corev1.ConfigMap, gw *v1alpha1.KrakenDGateway, checksum
 	}
 	return nil
 }
+
+func (r *KrakenDGatewayReconciler) collectConfigMaps(_ context.Context, _ *v1alpha1.KrakenDGateway, _ string) error {
+	return nil
+}
