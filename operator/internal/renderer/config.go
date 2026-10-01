@@ -148,6 +148,9 @@ func buildRootConfig(gw *v1alpha1.KrakenDGateway) map[string]any {
 	if spec.CacheTTL != "" {
 		config["cache_ttl"] = spec.CacheTTL
 	}
+	if spec.DNSCacheTTL != "" {
+		config["dns_cache_ttl"] = spec.DNSCacheTTL
+	}
 	if spec.OutputEncoding != "" {
 		config["output_encoding"] = spec.OutputEncoding
 	}
@@ -182,10 +185,6 @@ func buildGatewayExtraConfig(gw *v1alpha1.KrakenDGateway, df *DragonflyState) ma
 	appendRouterConfig(ec, spec.Router)
 	appendLoggingConfig(ec, spec.Logging)
 	appendDocumentationConfig(ec, spec.Documentation)
-
-	if spec.DNSCacheTTL != "" {
-		ec["qos/dns"] = map[string]any{"ttl": spec.DNSCacheTTL}
-	}
 
 	appendRedisConfig(ec, gw.Spec.Redis, df)
 
