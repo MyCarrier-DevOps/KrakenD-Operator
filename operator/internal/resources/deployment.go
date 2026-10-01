@@ -116,6 +116,9 @@ func BuildDeployment(dep *appsv1.Deployment, gw *v1alpha1.KrakenDGateway, in Dep
 	if in.PluginChecksum != "" {
 		annotations[PluginChecksumAnnotation] = in.PluginChecksum
 	}
+	if in.LicenseChecksum != "" {
+		annotations[LicenseChecksumAnnotation] = in.LicenseChecksum
+	}
 
 	port := int32(8080)
 	if gw.Spec.Config.Port != 0 {
