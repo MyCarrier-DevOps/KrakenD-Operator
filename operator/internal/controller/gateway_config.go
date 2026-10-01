@@ -513,15 +513,3 @@ func appliedImage(gw *v1alpha1.KrakenDGateway, current v1alpha1.Edition) string 
 	}
 	return renderer.ResolveImage(gw, appliedFallback(gw, current))
 }
-
-// appliedPluginChecksum is the plugin checksum of the applied render: output's
-// when output is the applied config, otherwise the one the gateway runs. A
-// newer render that was rejected or not judged never changes the plugins.
-func appliedPluginChecksum(
-	gw *v1alpha1.KrakenDGateway, output *renderer.RenderOutput, edition v1alpha1.Edition,
-) string {
-	if isApplied(gw, output, edition) {
-		return output.PluginChecksum
-	}
-	return gw.Status.PluginChecksum
-}
