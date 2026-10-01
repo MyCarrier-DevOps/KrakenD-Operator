@@ -212,7 +212,7 @@ func (r *KrakenDGatewayReconciler) collectConfigMaps(
 			continue
 		}
 		uid := cm.UID
-		if err := r.Delete(ctx, cm, client.Preconditions{UID: &uid}); client.IgnoreNotFound(err) != nil {
+		if err := r.Delete(ctx, cm, client.Preconditions{UID: &uid}); err != nil && !errors.IsNotFound(err) {
 			return fmt.Errorf("deleting configmap %s: %w", cm.Name, err)
 		}
 	}
