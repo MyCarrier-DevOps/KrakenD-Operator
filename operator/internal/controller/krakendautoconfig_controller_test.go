@@ -2927,6 +2927,9 @@ func TestAutoConfigReconcile_FailedSyncReportsReadyFalse(t *testing.T) {
 func TestNewAutoConfigRateLimiter_CapsBackoffAtResyncInterval(t *testing.T) {
 	limiter := newAutoConfigRateLimiter()
 	req := reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: "test-ac"}}
+	if first := limiter.When(req); first != 5*time.Millisecond {
+		t.Fatalf("first delay = %v, want 5ms", first)
+	}
 	var delay time.Duration
 	for range 30 {
 		delay = limiter.When(req)
