@@ -330,7 +330,7 @@ func TestEndpointStatus_ConflictedEndpointReportsBothWriters(t *testing.T) {
 	eventually(t, olderReady)
 	eventually(t, newerConflicted)
 	consistently(t, 5*time.Second, newerConflicted)
-	lossWatch.requireNoLoss(t)
+	lossWatch.requireNoLoss(t, older.Name, newer.Name)
 
 	// Steady state: further gateway reconciles write nothing to the endpoint.
 	before, err := getEndpoint(newer)
@@ -397,7 +397,7 @@ func TestEndpointStatus_ConcurrentSpecChangesConverge(t *testing.T) {
 		}
 		return nil
 	})
-	lossWatch.requireNoLoss(t)
+	lossWatch.requireNoLoss(t, "ep-a", "ep-b", "ep-c", "ep-d")
 }
 
 func TestEndpoint_ReattachesWhenGatewayCreatedLater(t *testing.T) {
@@ -463,6 +463,7 @@ type conditionLossWatch struct {
 	done       chan struct{}
 	mu         sync.Mutex
 	violations []string
+	observed   map[string]int
 }
 
 // watchConditionLoss starts watching endpoints in ns. The watch is open
@@ -479,7 +480,7 @@ func watchConditionLoss(t *testing.T, ns string) *conditionLossWatch {
 		stop()
 		t.Fatalf("watching endpoints: %v", err)
 	}
-	cw := &conditionLossWatch{stop: stop, done: make(chan struct{})}
+	cw := &conditionLossWatch{stop: stop, done: make(chan struct{}), observed: map[string]int{}}
 	go cw.run(wctx, w)
 	t.Cleanup(stop)
 	return cw
@@ -495,12 +496,16 @@ func (cw *conditionLossWatch) run(wctx context.Context, w watch.Interface) {
 			return
 		case ev, ok := <-w.ResultChan():
 			if !ok {
+				if wctx.Err() == nil {
+					cw.record("watch closed early")
+				}
 				return
 			}
 			ep, isEp := ev.Object.(*v1alpha1.KrakenDEndpoint)
 			if !isEp || (ev.Type != watch.Added && ev.Type != watch.Modified) {
 				continue
 			}
+			cw.observe(ep.Name)
 			if seen[ep.Name] == nil {
 				seen[ep.Name] = map[string]bool{}
 			}
@@ -523,13 +528,26 @@ func (cw *conditionLossWatch) record(v string) {
 	cw.violations = append(cw.violations, v)
 }
 
-// requireNoLoss stops the watch and fails the test if any condition was lost.
-func (cw *conditionLossWatch) requireNoLoss(t *testing.T) {
+func (cw *conditionLossWatch) observe(name string) {
+	cw.mu.Lock()
+	defer cw.mu.Unlock()
+	cw.observed[name]++
+}
+
+// requireNoLoss stops the watch and fails the test if any condition was lost,
+// the watch closed before this call, or it never saw one of the named
+// endpoints: a watch that saw nothing proves nothing.
+func (cw *conditionLossWatch) requireNoLoss(t *testing.T, endpoints ...string) {
 	t.Helper()
 	cw.stop()
 	<-cw.done
 	cw.mu.Lock()
 	defer cw.mu.Unlock()
+	for _, name := range endpoints {
+		if cw.observed[name] == 0 {
+			cw.violations = append(cw.violations, name+": no events observed")
+		}
+	}
 	if len(cw.violations) > 0 {
 		t.Fatalf("a status write dropped another writer's condition:\n  %s", strings.Join(cw.violations, "\n  "))
 	}
