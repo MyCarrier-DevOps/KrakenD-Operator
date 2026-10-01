@@ -843,6 +843,26 @@ that mounts a license once. It coincides with the rollouts caused by the
 `krakend.io/image` annotation and the config ConfigMap migration above, so an
 upgrade still rolls each gateway only once.
 
+### EE wildcard endpoints validate correctly
+
+EE gateways with `/prefix/*` wildcard endpoints were rejected by
+validation: the operator checks configs with the embedded CE binary, which
+refuses unnamed wildcards. Validation of an EE config now works like this:
+
+- **The EE router's wildcard rule is applied by the operator.** A
+  `/prefix/*` endpoint conflicts with any other endpoint of the same method
+  whose path starts with `/prefix/`, for example `GET /v1/*` next to
+  `GET /v1/users`. The EE router refuses to start in that case. Both
+  endpoints are named in the gateway's `ConfigValid` message and get
+  `Accepted=False/GatewayConfigRejected`.
+- **Everything else is checked by `krakend check`.** For the check, each
+  wildcard is rewritten to a path parameter (`/v1/{Wildcard}`), so the
+  wildcard endpoints' backends and `extra_config` are linted and parsed too.
+
+A root `/*` endpoint is invalid in both editions (KrakenD requires at least
+one path segment before `/*`). It used to be dropped from validation, and is
+now rejected.
+
 ---
 
 ## v0.14.0 — openapi-serve liveness probe (one-time rollout)
