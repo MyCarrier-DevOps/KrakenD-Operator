@@ -39,6 +39,7 @@ type Attribution struct {
 var (
 	lintPointerRe = regexp.MustCompile(`^- at '/endpoints/(\d+)[/']`)
 	methodPathRe  = regexp.MustCompile(`\b(GET|POST|PUT|PATCH|DELETE) (/[^\s',!]*)`)
+	quotedPathRe  = regexp.MustCompile(`(?:path|prefix) '(/[^']*)'`)
 	braceParamRe  = regexp.MustCompile(`\{([^}/]+)\}`)
 )
 
@@ -86,7 +87,8 @@ func skipCheckLine(line string) bool {
 
 // matchLine returns the indices of the rendered entries line names: a lint
 // pointer's index, else every entry whose method and route shape match a
-// "METHOD /path" in the line.
+// "METHOD /path" in the line, else every entry whose route shape matches a
+// quoted "path '…'" or "prefix '…'".
 func matchLine(line string, routes []renderedRoute) []int {
 	if m := lintPointerRe.FindStringSubmatch(line); m != nil {
 		i, err := strconv.Atoi(m[1])
@@ -108,6 +110,13 @@ func matchLine(line string, routes []renderedRoute) []int {
 	for _, m := range methodPathRe.FindAllStringSubmatch(line, -1) {
 		method, shape := m[1], routeShape(m[2])
 		add(func(r renderedRoute) bool { return r.method == method && r.shape == shape })
+	}
+	if len(indices) > 0 {
+		return indices
+	}
+	for _, m := range quotedPathRe.FindAllStringSubmatch(line, -1) {
+		shape := routeShape(m[1])
+		add(func(r renderedRoute) bool { return r.shape == shape })
 	}
 	return indices
 }
