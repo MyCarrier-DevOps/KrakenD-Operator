@@ -1286,7 +1286,7 @@ flowchart TD
     N2 --> U
     N -->|Yes| RJ{Same render and edition<br/>already rejected?}
     RJ -->|Yes| S
-    RJ -->|No| P[Validate as the render's edition:<br/>EE wildcard rule in Go, then<br/>krakend check -t -n -c on the copy]
+    RJ -->|No| P[Validate as the render's edition:<br/>EE wildcard rules in Go; only if they<br/>find nothing, krakend check -t -n -c on the copy]
 
     P --> Q{Verdict?}
     Q -->|Yes| R[Set ConfigValid=True<br/>Set Progressing=True<br/>Update ConfigMap<br/>Write status.configChecksum]
@@ -1364,7 +1364,7 @@ The embedded-binary approach is preferred for latency and simplicity.
 
 Each run is limited to 30 seconds. Only a run that completes and exits non-zero is a verdict ("the config is invalid"); a missing binary, a timeout or a killed process means the config was not judged, and the controller retries.
 
-A rejection's krakend check output can be far larger than a condition allows (one bad policy used by many backends), so the `ConfigValid` condition message and the `ConfigValidationFailed` event carry at most 4 KiB of it: the leading whole lines that fit, then `(output truncated, N more lines)`. The operator logs the full output once per rejected input, as `krakend check rejected the rendered config`.
+A rejection's krakend check output can be far larger than a condition allows (one bad policy used by many backends), so the `ConfigValid` condition message and the `ConfigValidationFailed` event carry at most 4 KiB of it: the leading whole lines that fit, then `(output truncated, N more lines)`. The operator logs the full output once per rejected input, as `validation rejected the rendered config`.
 
 When validation fails, the rendered config is not applied and the gateway
 keeps serving the last applied one; there is no per-endpoint quarantine.
