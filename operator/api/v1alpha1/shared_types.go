@@ -211,3 +211,14 @@ const (
 	// while its Deployment has not reported available replicas.
 	ReasonAwaitingAvailability = "AwaitingAvailability"
 )
+
+// Reasons of the LicenseValid, LicenseExpired and LicenseDegraded conditions.
+const (
+	// ReasonLicenseOK: the EE license is valid beyond the warning window.
+	ReasonLicenseOK = "LicenseOK"
+	// ReasonLicensePreExpiry: the EE license expires within the safety buffer;
+	// the gateway already acts as if it had expired.
+	ReasonLicensePreExpiry = "LicensePreExpiry"
+	// ReasonLicenseExpired: the EE license certificate has expired.
+	ReasonLicenseExpired = "LicenseExpired"
+)
