@@ -139,7 +139,17 @@ func BuildDeployment(dep *appsv1.Deployment, gw *v1alpha1.KrakenDGateway, in Dep
 	volumes, volumeMounts, initContainers := buildVolumes(gw, in.ConfigMapName)
 
 	// OpenAPI export init container + shared volume (so the sidecar can serve it)
-	oaInit, oaSidecar, oaVolume, oaMountForExport := buildOpenAPIPieces(gw, in.Image)
+	// OpenAPI export and serving are Enterprise features: the CE binary has
+	// no `openapi` command, and a CE render has no documentation/openapi to
+	// export. A pod running a CE render runs without them.
+	var (
+		oaInit, oaSidecar *corev1.Container
+		oaVolume          *corev1.Volume
+		oaMountForExport  *corev1.VolumeMount
+	)
+	if !in.CERender {
+		oaInit, oaSidecar, oaVolume, oaMountForExport = buildOpenAPIPieces(gw, in.Image)
+	}
 	if oaVolume != nil {
 		volumes = append(volumes, *oaVolume)
 	}
