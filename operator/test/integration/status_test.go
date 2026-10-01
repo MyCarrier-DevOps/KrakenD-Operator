@@ -219,7 +219,7 @@ func TestGatewayAcceptance_MarksIncludedAndConflictedEndpoints(t *testing.T) {
 		}
 		return expectCondition(ep, "Accepted", metav1.ConditionTrue, "Accepted")
 	})
-	newer := createEndpoint(t, ns, "ep-b-newer", gw.Name, "/users", "/only-b")
+	newer := createEndpoint(t, ns, "ep-b-newer", gw.Name, "/users")
 	eventually(t, func() error {
 		ep, err := getEndpoint(newer)
 		if err != nil {
@@ -253,6 +253,22 @@ func TestGatewayAcceptance_MarksIncludedAndConflictedEndpoints(t *testing.T) {
 			return err
 		}
 		return expectCondition(ep, "Accepted", metav1.ConditionFalse, "EndpointConflict")
+	})
+
+	partial := createEndpoint(t, ns, "ep-c-partial", gw.Name, "/users", "/only-c")
+	eventually(t, func() error {
+		ep, err := getEndpoint(partial)
+		if err != nil {
+			return err
+		}
+		if err := expectCondition(ep, "Accepted", metav1.ConditionTrue, "PartiallyAccepted"); err != nil {
+			return err
+		}
+		want := v1alpha1.EndpointConflict{Endpoint: "/users", Method: "GET", Winner: ns + "/ep-a-older"}
+		if len(ep.Status.Conflicts) != 1 || ep.Status.Conflicts[0] != want {
+			return fmt.Errorf("status.conflicts = %+v, want [%+v]", ep.Status.Conflicts, want)
+		}
+		return nil
 	})
 }
 
