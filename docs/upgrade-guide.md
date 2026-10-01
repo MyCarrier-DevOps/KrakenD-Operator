@@ -866,6 +866,27 @@ The config schema rejects a root `/*` endpoint in both editions (it needs a
 path segment before `/*`). It used to be dropped from validation, and is now
 rejected. Move such an endpoint to `/prefix/*`.
 
+### CE fallback is validated as CE, and the image follows the validated config
+
+`status.configEdition` (`EE` or `CE`) records the edition the applied config
+was validated for. A render counts as applied only when both its checksum
+and its edition match:
+
+- **License fallback.** When a license expiry switches an EE gateway to
+  fallback, the CE render is validated as CE, even when it has the same
+  bytes as the EE config.
+- **Image.** The Deployment's image follows the applied edition, never the
+  edition the license asks for next. While a CE-fallback render is rejected,
+  the pods keep the EE image with the EE-validated config. They switch to the
+  CE image only once a CE-validated config is applied.
+- **Plugins.** The plugin checksum deployed with the pods also comes from the
+  applied render. A newer render that was rejected, or could not be checked,
+  does not change it.
+
+On upgrade, a status without `configEdition` is read as validated for the
+edition the gateway renders for now, which is the image it already runs.
+The field is filled in on the first reconcile, without a rollout.
+
 ---
 
 ## v0.14.0 — openapi-serve liveness probe (one-time rollout)
