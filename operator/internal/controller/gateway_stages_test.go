@@ -1924,6 +1924,8 @@ func TestGatewayReconcile_RejectedEditionFlipToCEKeepsTheEEImage(t *testing.T) {
 	gw := reconciledGateway()
 	const config = `{"version":3,"name":"applied-as-ee"}`
 	gw.Spec.Edition = v1alpha1.EditionCE // flipped from EE
+	gw.Spec.Image = "ce-custom:1"        // spec.image is read before the edition
+	gw.Status.ActiveImage = "krakend/krakend-ee:2.7.0"
 	gw.Status.ConfigChecksum = hash.SHA256Hex([]byte(config))
 	gw.Status.ConfigEdition = v1alpha1.EditionEE
 	c := fakeClientBuilder().WithObjects(gw, legacyConfigMap(gw, config)).WithStatusSubresource(gw).Build()
@@ -1943,6 +1945,9 @@ func TestGatewayReconcile_RejectedEditionFlipToEEKeepsTheCEImage(t *testing.T) {
 	const config = `{"version":3,"name":"applied-as-ce"}`
 	gw.Status.ConfigChecksum = hash.SHA256Hex([]byte(config))
 	gw.Status.ConfigEdition = v1alpha1.EditionCE
+	gw.Spec.Image = "ee-custom:1"
+	gw.Spec.CEImage = "ce-custom:1"
+	gw.Status.ActiveImage = "ce-custom:1"
 	c := fakeClientBuilder().WithObjects(gw, secret, legacyConfigMap(gw, config)).WithStatusSubresource(gw).Build()
 	val := &recordingValidator{err: rejectedBy("ERROR testing the configuration file:\tnot an EE config")}
 	r := newTestGatewayReconciler(c, renderOf(`{"version":3,"name":"rendered-as-ee"}`), val)
@@ -1951,7 +1956,7 @@ func TestGatewayReconcile_RejectedEditionFlipToEEKeepsTheCEImage(t *testing.T) {
 	if err := reconcileGateway(t, r, gw); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if got, want := deployedImage(t, c, gw), "krakend:2.7.0"; got != want {
+	if got, want := deployedImage(t, c, gw), "ce-custom:1"; got != want {
 		t.Errorf("image = %q while the EE render is rejected, want the applied edition's image %q", got, want)
 	}
 }
