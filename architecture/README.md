@@ -547,13 +547,15 @@ spec:
   raw: {}
 
 status:
+  observedGeneration: 1
   referencedBy: 3
   conditions:
-    - type: Valid
+    - type: Ready
       status: "True"
+      observedGeneration: 1
       lastTransitionTime: "2026-04-03T10:00:00Z"
-      reason: PolicyValid
-      message: "All fields within valid ranges"
+      reason: Ready
+      message: "Policy configuration is valid"
 ```
 
 ### 3.4 KrakenDAutoConfig
@@ -748,7 +750,7 @@ sequenceDiagram
 | KrakenDGateway updated | Gateway controller | Re-render config, update child resources, rolling restart |
 | KrakenDGateway deleted | Kubernetes GC | ownerReference cascade deletes all child resources. A KrakenDGateway with a deletionTimestamp is not reconciled: garbage collection removes its children, and the operator does not recreate them. |
 | KrakenDEndpoint created, spec changed, or its `Accepted` changed | Endpoint controller | Resolve gateway and policy references into `ResolvedRefs`; derive `Ready` and `phase` from `ResolvedRefs` and `Accepted`; patch status (optimistic lock) only when it changed. The gateway controller re-renders the target gateway on spec changes and records `Accepted` on every endpoint of an applied render. A resolved conflict flips `Accepted` back to `True`. |
-| KrakenDBackendPolicy created/updated/deleted | Policy controller | Re-render config for all gateways with endpoints referencing this policy. If deleted while referenced, the endpoint controller's policy watch sets `ResolvedRefs=False` (`PolicyNotFound`) on affected endpoints, so `Ready` is `False` and the phase `Invalid`, and the gateway controller removes their `Accepted` (defense-in-depth: the admission webhook rejects such deletions, but this path handles cases where the webhook is in `failurePolicy: Ignore` mode, is temporarily unavailable, or is not deployed). |
+| KrakenDBackendPolicy created/updated/deleted | Policy controller | Set `Ready` from the policy's fields and `observedGeneration`. The gateway controller re-renders every gateway with endpoints referencing the policy. The endpoint controller re-resolves references only when the policy is created or deleted. `referencedBy` is recounted when an endpoint is created, deleted, or has its spec changed. |
 | KrakenDAutoConfig created, or spec generation/label/annotation changed | AutoConfig controller | Fetch OpenAPI spec from configured source, parse operations, apply URL transforms and filters, and converge owned KrakenDEndpoint resources to the desired state (create/update/delete). A status-only update (the phase/condition writes the reconciler itself makes) does not re-trigger this — only generation, label, and annotation changes do. Generated endpoints trigger the endpoint controller watch → gateway reconciler. |
 | KrakenDAutoConfig deleted | Kubernetes GC | All owned KrakenDEndpoints are garbage-collected via ownerReference. The AutoConfig controller doesn't reconcile a terminating AutoConfig, so under foreground deletion it doesn't recreate endpoints as they are collected. |
 | Owned KrakenDEndpoint spec changed or deleted, or the `openapi.configMapRef`/CUE definitions ConfigMap changed | AutoConfig controller | Re-run the full pipeline. A generated endpoint that was hand-edited or deleted out of band is restored to the desired spec (endpoint specs are compared by decoded JSON value, so re-encoding/formatting differences alone don't cause a write). |
@@ -1747,6 +1749,7 @@ conditions and shown with `-o wide`.
 | KrakenDGateway | the configuration is validated and applied, the Deployment is available and not rolling out, and the EE license (if any) is valid |
 | KrakenDEndpoint | `ResolvedRefs` and `Accepted` are True, `Accepted` for the current generation |
 | KrakenDAutoConfig | `SpecAvailable` and `Synced` are True |
+| KrakenDBackendPolicy | its fields are in range |
 
 ### Gateway Status Conditions
 
