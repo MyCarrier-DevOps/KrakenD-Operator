@@ -642,9 +642,10 @@ func (r *KrakenDGatewayReconciler) handleValidationError(
 
 // handleValidatorUnavailable records that the rendered config could not be
 // judged: krakend check did not run to completion, or the validation copy
-// could not be prepared. The applied config and the phase are left as they
-// are, ConfigValid goes Unknown with reason ValidatorUnavailable, and the
-// error is returned so the reconcile is retried with backoff.
+// could not be prepared. The applied config is left as it is, ConfigValid
+// goes Unknown with reason ValidatorUnavailable, Ready follows it, the phase
+// stays at the serving phase, and the error is returned so the reconcile is
+// retried with backoff.
 func (r *KrakenDGatewayReconciler) handleValidatorUnavailable(
 	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
@@ -661,6 +662,7 @@ func (r *KrakenDGatewayReconciler) handleValidatorUnavailable(
 		Reason:             v1alpha1.ReasonValidatorUnavailable,
 		Message:            message,
 	})
+	setGatewayReadiness(gw)
 	if prev == nil || prev.Reason != v1alpha1.ReasonValidatorUnavailable {
 		r.Recorder.Event(gw, "Warning", v1alpha1.ReasonValidatorUnavailable, message)
 	}
