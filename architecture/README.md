@@ -341,7 +341,7 @@ spec:
     fallbackToCE: true                 # switch to CE image on license expiry
 
 status:
-  phase: Running                       # Pending, Rendering, Validating, Deploying, Running, Degraded, Error
+  phase: Running                       # Pending, Deploying, Running, Degraded, Error (Rendering and Validating are no longer written)
   configChecksum: "sha256:abc123..."
   observedGeneration: 5
   replicas: 3
@@ -698,14 +698,12 @@ sequenceDiagram
             end
         end
     else Checksum changed
-        Op->>K8s: Update KrakenDGateway phase → Rendering
-        Op->>K8s: Update KrakenDGateway phase → Validating
         Op->>Op: 6. Create validation copy<br/>(strip wildcard endpoints if edition=EE<br/>and CE fallback not active),<br/>validate via krakend check -t -n -c
 
         alt Validation fails
             Op->>K8s: Update KrakenDGateway condition → ConfigValid=False
             Op->>K8s: Update KrakenDGateway phase → Error
-            Op->>K8s: Emit Warning Event
+            Op->>K8s: Emit Warning Event (when the verdict changes)
             Note over Op: STOP — do not deploy invalid config
         else Validation passes
             Op->>K8s: Update KrakenDGateway condition → ConfigValid=True
@@ -736,7 +734,7 @@ sequenceDiagram
 
 | Event | Controller | Action |
 |---|---|---|
-| KrakenDGateway created | Gateway controller | Set initial phase to `Pending`. Create Deployment, Service, ConfigMap, SA; optionally Dragonfly CR, VS, ExternalSecret. Re-attach any KrakenDEndpoints in `Detached` phase with matching `gatewayRef`; trigger config render. |
+| KrakenDGateway created | Gateway controller | The phase is not written up front; the first status write the reconcile needs persists it (`Pending` until a config is accepted or rejected). Create Deployment, Service, ConfigMap, SA; optionally Dragonfly CR, VS, ExternalSecret. Re-attach any KrakenDEndpoints in `Detached` phase with matching `gatewayRef`; trigger config render. |
 | KrakenDGateway updated | Gateway controller | Re-render config, update child resources, rolling restart |
 | KrakenDGateway deleted | Kubernetes GC | ownerReference cascade deletes all child resources |
 | KrakenDEndpoint created/updated/deleted | Endpoint controller | Set initial phase to `Pending` on creation. Re-render config for the target gateway, validate, rolling restart. Conflict detection re-evaluates all endpoints; previously `Conflicted` endpoints may be promoted to `Active` if the conflict is resolved. |
@@ -1300,14 +1298,14 @@ flowchart TD
     N4 --> U
     N1 -->|Yes| N2[Set phase=Deploying<br/>Set Progressing=True<br/>Patch Deployment container image +<br/>checksum/plugins if changed]
     N2 --> U
-    N -->|Yes| D0[Set phase=Rendering]
-    D0 --> N0[Set phase=Validating]
-    N0 --> PW[Create validation copy:<br/>strip wildcard endpoints<br/>if edition=EE AND CE fallback not active]
-    PW --> P[Run krakend check -t -n -c<br/>on validation copy]
+    N -->|Yes| PW[Create validation copy:<br/>strip wildcard endpoints<br/>if edition=EE AND CE fallback not active]
+    PW --> RJ{Same validation copy<br/>already rejected?}
+    RJ -->|Yes| S
+    RJ -->|No| P[Run krakend check -t -n -c<br/>on validation copy]
 
     P --> Q{Valid?}
     Q -->|Yes| R[Set ConfigValid=True<br/>Set phase=Deploying<br/>Set Progressing=True<br/>Update ConfigMap<br/>Write status.configChecksum]
-    Q -->|No| S[Set ConfigValid=False<br/>Set phase=Error<br/>Emit Warning Event<br/>STOP]
+    Q -->|No| S[Set ConfigValid=False<br/>Set phase=Error<br/>Warning Event if the verdict changed<br/>Remember the rejected copy<br/>STOP]
 
     R --> T[Patch Deployment<br/>pod annotation: checksum/config +<br/>checksum/plugins + container image]
     T --> U[Kubernetes Rolling Update]
@@ -1325,6 +1323,8 @@ To ensure consistent JSON output (and avoid unnecessary rolling restarts from no
 - Sorts `extra_config` keys alphabetically
 - Sorts backend `host` arrays alphabetically
 - Uses canonical JSON serialization (no trailing commas, consistent indentation)
+
+Status is written only when it changes, so a reconcile with nothing to do makes no API write, and a gateway whose config stays rejected settles instead of re-validating on every event. The operator remembers, in memory and per gateway, the exact validation copy krakend check last rejected; it validates again when that copy changes (any input, or a switch to or from CE fallback) and once after an operator restart.
 
 ### Validation Strategy
 
