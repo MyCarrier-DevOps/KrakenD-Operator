@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -35,6 +36,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	clocktesting "k8s.io/utils/clock/testing"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -895,6 +897,9 @@ func TestGatewayReconcile_ExternalSecretSkippedWhenCRDMissing(t *testing.T) {
 			},
 		},
 		Validator: &mockValidator{},
+		Clock:     clocktesting.NewFakeClock(testNow),
+
+		LicenseParser: &mockLicenseParser{err: errors.New("no license in this test")},
 	}
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
