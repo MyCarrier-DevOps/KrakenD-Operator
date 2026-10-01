@@ -2042,3 +2042,21 @@ func TestGatewayReconcile_AdoptionReadsTheEditionFromTheActiveImage(t *testing.T
 		t.Errorf("status.configEdition = %q, want EE: the pods run the EE image", got)
 	}
 }
+
+func TestGatewayReconcile_AdoptionKeepsTheCurrentEditionForAnAmbiguousImage(t *testing.T) {
+	gw, secret, parser := licensedEEGateway(testNow.Add(-time.Minute), true)
+	const config = `{"version":3,"name":"applied-before-the-upgrade"}`
+	gw.Status.ConfigChecksum = hash.SHA256Hex([]byte(config))
+	gw.Status.ActiveImage = "registry.example/custom:1" // neither edition's image
+	c := fakeClientBuilder().WithObjects(gw, secret, legacyConfigMap(gw, config)).WithStatusSubresource(gw).Build()
+	val := &recordingValidator{err: rejectedBy("ERROR testing the configuration file:\tbad")}
+	r := newTestGatewayReconciler(c, renderOf(`{"version":3,"name":"rendered-as-ce"}`), val)
+	r.LicenseParser = parser
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if got := getGateway(t, c, gw).Status.ConfigEdition; got != v1alpha1.EditionCE {
+		t.Errorf("status.configEdition = %q, want the current edition CE for an image that names neither", got)
+	}
+}
