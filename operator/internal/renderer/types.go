@@ -55,6 +55,10 @@ type RenderOutput struct {
 	PluginChecksum      string
 	ConflictedEndpoints []types.NamespacedName
 	InvalidEndpoints    []types.NamespacedName
+	// Sources is index-aligned with the rendered "endpoints" array:
+	// Sources[i] is the KrakenDEndpoint that produced endpoints[i]. It is the
+	// only way back from a krakend check finding to the CR at fault.
+	Sources []types.NamespacedName
 }
 
 // Options configures the renderer (reserved for future use).

@@ -24,6 +24,7 @@ import (
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 func minimalGateway() *v1alpha1.KrakenDGateway {
@@ -973,5 +974,47 @@ func TestAppendEndpointComponentSchemas_FirstSeenWins(t *testing.T) {
 	schemaMap := schemas["user"].(map[string]any)
 	if schemaMap["description"] != "first" {
 		t.Errorf("expected first-seen wins, got description=%v", schemaMap["description"])
+	}
+}
+
+func TestRender_SourcesAreIndexAlignedWithEndpoints(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "ns"},
+		Spec:       v1alpha1.KrakenDGatewaySpec{Edition: v1alpha1.EditionCE, Version: "2.13"},
+	}
+	backend := []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/x"}}
+	endpoints := []v1alpha1.KrakenDEndpoint{
+		{ObjectMeta: metav1.ObjectMeta{Name: "b", Namespace: "ns"}, Spec: v1alpha1.KrakenDEndpointSpec{
+			Endpoints: []v1alpha1.EndpointEntry{
+				{Endpoint: "/z", Method: "GET", Backends: backend},
+				{Endpoint: "/a", Method: "POST", Backends: backend},
+			},
+		}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "a", Namespace: "ns"}, Spec: v1alpha1.KrakenDEndpointSpec{
+			Endpoints: []v1alpha1.EndpointEntry{{Endpoint: "/m", Method: "GET", Backends: backend}},
+		}},
+	}
+	out, err := New(Options{}).Render(RenderInput{Gateway: gw, Endpoints: endpoints})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Endpoints []struct {
+			Endpoint string `json:"endpoint"`
+		} `json:"endpoints"`
+	}
+	if err := json.Unmarshal(out.JSON, &doc); err != nil {
+		t.Fatal(err)
+	}
+	owner := map[string]types.NamespacedName{
+		"/a": {Namespace: "ns", Name: "b"}, "/m": {Namespace: "ns", Name: "a"}, "/z": {Namespace: "ns", Name: "b"},
+	}
+	if len(out.Sources) != len(doc.Endpoints) {
+		t.Fatalf("len(Sources) = %d, want one per rendered endpoint (%d)", len(out.Sources), len(doc.Endpoints))
+	}
+	for i, ep := range doc.Endpoints {
+		if out.Sources[i] != owner[ep.Endpoint] {
+			t.Errorf("Sources[%d] = %s for %s, want %s", i, out.Sources[i], ep.Endpoint, owner[ep.Endpoint])
+		}
 	}
 }
