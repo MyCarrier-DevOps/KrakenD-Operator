@@ -980,3 +980,23 @@ func TestReconcileExistingPostRestartRevision_RecreateToleratesAlreadyExists(t *
 			gw.Status.LastPostRestartJobChecksum)
 	}
 }
+
+func TestReconcilePostRestartJob_SkipsWhileDeploymentHasNotObservedItsSpec(t *testing.T) {
+	gw := makeGWWithJob("echo ok")
+	dep := makeConvergedDeployment(gw, "abc123")
+	dep.Generation = 2
+	dep.Status.ObservedGeneration = 1
+	c := fakeClientBuilder().WithObjects(gw, dep).Build()
+	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
+
+	if err := r.reconcilePostRestartJob(context.Background(), gw, "abc123"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var jobs batchv1.JobList
+	if err := c.List(context.Background(), &jobs, client.InNamespace("ns")); err != nil {
+		t.Fatalf("listing jobs: %v", err)
+	}
+	if len(jobs.Items) != 0 {
+		t.Fatalf("expected no job while the Deployment has not observed its latest spec, got %d", len(jobs.Items))
+	}
+}
