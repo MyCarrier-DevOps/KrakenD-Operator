@@ -1225,3 +1225,34 @@ func TestGatewayReconcile_RejectedFirstRenderOverridesStaleAccepted(t *testing.T
 		t.Error("endpoint is Ready although the new gateway rejected its config")
 	}
 }
+
+// withAccepted seeds ep's stored Accepted condition.
+func withAccepted(ep *v1alpha1.KrakenDEndpoint, status metav1.ConditionStatus, reason string) *v1alpha1.KrakenDEndpoint {
+	ep.Status.Conditions = []metav1.Condition{
+		{Type: v1alpha1.ConditionResolvedRefs, Status: metav1.ConditionTrue, ObservedGeneration: ep.Generation,
+			Reason: v1alpha1.ReasonRefsResolved},
+		{Type: v1alpha1.ConditionAccepted, Status: status, ObservedGeneration: ep.Generation, Reason: reason},
+	}
+	return ep
+}
+
+func TestGatewayReconcile_RejectionLiftsABlameThatMovedAway(t *testing.T) {
+	gw := servingGateway("applied", "img:v1")
+	// An earlier rejection blamed good; the findings now name bad.
+	good := withAccepted(testEndpoint("good", "/a"), metav1.ConditionFalse, v1alpha1.ReasonGatewayConfigRejected)
+	bad := testEndpoint("bad", "/b")
+	c := fakeClientBuilder().WithObjects(gw, good, bad).WithStatusSubresource(gw, good, bad).Build()
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}),
+		&countingValidator{err: rejectedBy(badNamespaceVerdict)})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if cond := storedAccepted(t, c, client.ObjectKeyFromObject(good)); cond != nil {
+		t.Errorf("good endpoint Accepted = %+v; a blame no finding repeats must be lifted", cond)
+	}
+	if cond := storedAccepted(t, c, client.ObjectKeyFromObject(bad)); cond == nil ||
+		cond.Reason != v1alpha1.ReasonGatewayConfigRejected {
+		t.Errorf("bad endpoint Accepted = %+v, want %s", cond, v1alpha1.ReasonGatewayConfigRejected)
+	}
+}
