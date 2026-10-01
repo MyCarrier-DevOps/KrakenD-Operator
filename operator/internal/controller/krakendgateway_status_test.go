@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -221,5 +222,37 @@ func TestGatewayReconcile_RememberedRejectionRestoresOverwrittenStatus(t *testin
 	}
 	if validator.calls != 1 {
 		t.Errorf("krakend check ran %d times, want 1", validator.calls)
+	}
+}
+
+func TestGatewayReconcile_ValidatorUnavailableIsRetried(t *testing.T) {
+	gw := testGateway()
+	gw.Status.Phase = v1alpha1.PhaseRunning
+	gw.Status.ConfigChecksum = "applied"
+	c, _ := gatewayStatusWrites(gw)
+	validator := &countingValidator{err: fmt.Errorf("running krakend check: %w", fs.ErrNotExist)}
+	r := &KrakenDGatewayReconciler{
+		Client: c, Scheme: testScheme(), Recorder: fakeRecorder(),
+		Renderer: renderOutput("new"), Validator: validator,
+	}
+
+	if err := reconcileGateway(t, r, gw); err == nil {
+		t.Fatal("expected an error, so the reconcile is retried with backoff")
+	}
+
+	got := getGateway(t, c, gw)
+	cond := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionConfigValid)
+	if cond == nil || cond.Status != metav1.ConditionUnknown || cond.Reason != v1alpha1.ReasonValidatorUnavailable {
+		t.Errorf("ConfigValid = %+v, want Unknown/ValidatorUnavailable", cond)
+	}
+	if got.Status.Phase != v1alpha1.PhaseRunning || got.Status.ConfigChecksum != "applied" {
+		t.Errorf("phase = %s, checksum = %s; an unavailable validator must not change either",
+			got.Status.Phase, got.Status.ConfigChecksum)
+	}
+	if err := reconcileGateway(t, r, gw); err == nil {
+		t.Fatal("expected the retry to fail the same way")
+	}
+	if validator.calls != 2 {
+		t.Errorf("krakend check ran %d times over two reconciles, want 2: nothing is remembered", validator.calls)
 	}
 }
