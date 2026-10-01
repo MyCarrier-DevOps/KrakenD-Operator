@@ -73,7 +73,7 @@ func TestEndpointReconcile_InitialPhase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result.Requeue {
+	if result != (ctrl.Result{}) {
 		t.Error("should not requeue; initial phase is set inline")
 	}
 
@@ -85,8 +85,8 @@ func TestEndpointReconcile_InitialPhase(t *testing.T) {
 	); err != nil {
 		t.Fatalf("failed to get endpoint: %v", err)
 	}
-	if updated.Status.Phase != v1alpha1.EndpointPhaseActive {
-		t.Errorf("expected phase Active (gateway exists), got %s", updated.Status.Phase)
+	if updated.Status.Phase != v1alpha1.EndpointPhasePending {
+		t.Errorf("expected phase Pending until the gateway accepts the endpoint, got %s", updated.Status.Phase)
 	}
 }
 
