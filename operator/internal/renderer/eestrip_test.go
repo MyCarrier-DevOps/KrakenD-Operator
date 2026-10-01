@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -208,5 +209,66 @@ func TestRender_CEEditionDropsEndpointDocumentation(t *testing.T) {
 	if slices.Contains(EEOnlyNamespaces(LevelEndpoint), "documentation/openapi") {
 		t.Error("EEOnlyNamespaces(LevelEndpoint) lists documentation/openapi, which a CE render drops: " +
 			"admission would refuse every AutoConfig endpoint of a CE gateway")
+	}
+}
+
+func TestRender_CEFallbackDropsEntryDocsWithoutListingThem(t *testing.T) {
+	entry := func(path, extraConfig string) v1alpha1.EndpointEntry {
+		return v1alpha1.EndpointEntry{
+			Endpoint: path, Method: "GET",
+			ExtraConfig: &runtime.RawExtension{Raw: []byte(extraConfig)},
+			Backends:    []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: path}},
+		}
+	}
+	docsOnly := v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "docs-only", Namespace: "ns"},
+		Spec: v1alpha1.KrakenDEndpointSpec{
+			ComponentSchemas: map[string]runtime.RawExtension{"User": {Raw: []byte(`{"type":"object"}`)}},
+			Endpoints: []v1alpha1.EndpointEntry{
+				entry("/users", `{"documentation/openapi":{"audience":["public"]}}`),
+			},
+		},
+	}
+	withKeys := v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "with-keys", Namespace: "ns"},
+		Spec: v1alpha1.KrakenDEndpointSpec{Endpoints: []v1alpha1.EndpointEntry{
+			entry("/keys", `{"auth/api-keys":{"roles":["admin"]},"documentation/openapi":{"audience":["public"]}}`),
+		}},
+	}
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "ns"},
+		Spec:       v1alpha1.KrakenDGatewaySpec{Edition: v1alpha1.EditionEE, Version: "2.13"},
+	}
+
+	out, err := New(Options{}).Render(RenderInput{
+		Gateway: gw, Endpoints: []v1alpha1.KrakenDEndpoint{docsOnly, withKeys}, CEFallback: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var perEntry []StrippedEEFeature
+	gatewayDocs := false
+	for _, f := range out.StrippedEEFeatures {
+		if f.Source == (types.NamespacedName{}) {
+			gatewayDocs = gatewayDocs || f.Feature == "extra_config documentation/openapi"
+			continue
+		}
+		perEntry = append(perEntry, f)
+	}
+	want := []StrippedEEFeature{{
+		Source: types.NamespacedName{Namespace: "ns", Name: "with-keys"}, Method: "GET", Endpoint: "/keys",
+		Feature: "extra_config auth/api-keys",
+	}}
+	if !reflect.DeepEqual(perEntry, want) {
+		t.Errorf("per-endpoint features = %+v, want only %+v: docs-only namespaces are not listed per endpoint",
+			perEntry, want)
+	}
+	if !gatewayDocs {
+		t.Errorf("StrippedEEFeatures = %+v, want the gateway-level documentation/openapi listed",
+			out.StrippedEEFeatures)
+	}
+	if strings.Contains(string(out.JSON), "documentation/openapi") {
+		t.Errorf("the fallback render still carries documentation/openapi: %s", out.JSON)
 	}
 }
