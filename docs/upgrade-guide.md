@@ -457,8 +457,8 @@ policies until they are gone.
 - `webhooks.caBundle` (used when `webhooks.certManager.enabled: false`)
   accepts the PEM CA bundle or its base64 encoding. A base64 value, which
   the chart's comment asked for, used to be encoded a second time, so the
-  API server could not verify the webhook's certificate and every write to
-  the four CRDs failed.
+  API server could not verify the webhook's certificate and, with the
+  default `failurePolicy: Fail`, every write to the four CRDs failed.
 
 ## v0.14.0 — openapi-serve liveness probe (one-time rollout)
 
