@@ -1828,3 +1828,50 @@ func TestGatewayReconcile_ValidationFailureAdvancesObservedGeneration(t *testing
 			stored.Status.ObservedGeneration, ready, stored.Status.Phase)
 	}
 }
+
+// convergedGatewayAt returns a gateway whose applied configuration is
+// checksum, rolled out and Ready.
+func convergedGatewayAt(checksum string) *v1alpha1.KrakenDGateway {
+	gw := testGateway()
+	gw.Generation = 1
+	now := metav1.Now()
+	gw.Status = v1alpha1.KrakenDGatewayStatus{
+		Phase: v1alpha1.PhaseRunning, ConfigChecksum: checksum, ActiveImage: "img:v1", ObservedGeneration: 1,
+		Conditions: []metav1.Condition{
+			{Type: "ConfigValid", Status: metav1.ConditionTrue, Reason: "ConfigApplied",
+				Message: "applied", ObservedGeneration: 1, LastTransitionTime: now},
+			{Type: "Available", Status: metav1.ConditionTrue, Reason: "DeploymentAvailable",
+				Message: "All replicas are available", ObservedGeneration: 1, LastTransitionTime: now},
+			{Type: "Progressing", Status: metav1.ConditionFalse, Reason: "RolloutComplete",
+				Message: "Deployment rollout completed successfully", ObservedGeneration: 1, LastTransitionTime: now},
+		},
+	}
+	return gw
+}
+
+func TestGatewayReconcile_ConfigChangeNotReadyWhileOldStatusLingers(t *testing.T) {
+	gw := convergedGatewayAt("cs-old")
+	// The update just applied bumped the Deployment's generation, but its
+	// status still describes the old ReplicaSet.
+	dep := makeConvergedDeployment(gw, "cs-old")
+	dep.Generation = 2
+	dep.Status.ObservedGeneration = 1
+	c := fakeClientBuilder().WithObjects(gw, dep).WithStatusSubresource(gw).Build()
+	r := acceptanceReconciler(c, fakeRecorder(), &renderer.RenderOutput{
+		JSON: []byte(`{"version":3}`), Checksum: "cs-new", DesiredImage: "img:v1",
+	})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+
+	stored := getGateway(t, c, gw)
+	progressing := meta.FindStatusCondition(stored.Status.Conditions, v1alpha1.ConditionProgressing)
+	if progressing == nil || progressing.Status != metav1.ConditionTrue || progressing.Reason != "ConfigDeployed" {
+		t.Errorf("Progressing = %+v, want True/ConfigDeployed until the new revision rolls out", progressing)
+	}
+	ready := meta.FindStatusCondition(stored.Status.Conditions, v1alpha1.ConditionReady)
+	if ready == nil || ready.Status == metav1.ConditionTrue {
+		t.Errorf("Ready = %+v, want not True during the rollout", ready)
+	}
+}
