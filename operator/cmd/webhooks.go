@@ -23,8 +23,8 @@ import (
 // registerWebhooks wires the admission webhooks into mgr when enabled.
 // With webhooks disabled nothing asks mgr for its webhook server, so the
 // server is never started and, as the certificate watcher is skipped too,
-// no serving certificate is read: the
-// controllers run, protected only by render-time validation.
+// no serving certificate is read: the controllers run, protected only by
+// render-time validation.
 func registerWebhooks(mgr ctrl.Manager, enabled bool, setup func(ctrl.Manager) error) error {
 	if !enabled {
 		setupLog.Info("admission webhooks disabled; invalid objects are caught only at render time")
