@@ -435,6 +435,17 @@ Deployment starts at `spec.autoscaling.minReplicas` (1 when unset); after
 that the HPA alone owns the count. `spec.replicas` is ignored while
 autoscaling is set, and the gateway webhook now warns when both are set.
 
+### Updates to objects being deleted are admitted when they don't change the spec
+
+All four validating webhooks (gateway, endpoint, policy and AutoConfig)
+admit an UPDATE to an object that has a `deletionTimestamp` when the update
+doesn't change its spec, without running any rule. Such updates remove
+finalizers (for example `foregroundDeletion`). Rejecting them, for instance
+because the referenced gateway had already been deleted, left the object
+stuck in `Terminating`. A spec change on a terminating object is still
+validated, because the gateway keeps rendering terminating endpoints and
+policies until they are gone.
+
 ## v0.14.0 — openapi-serve liveness probe (one-time rollout)
 
 The `openapi-serve` sidecar now renders with a liveness probe. It previously
