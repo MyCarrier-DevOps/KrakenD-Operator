@@ -269,3 +269,28 @@ func TestNewGatewayRateLimiter_CapsBackoffAtTheLicenseRecheckInterval(t *testing
 		t.Fatalf("delay after 30 failures = %v, want the %v cap", delay, licenseRecheckInterval)
 	}
 }
+
+func TestGatewayReconcile_PreExpiryLicenseFallsBackToCE(t *testing.T) {
+	gw, secret, parser := licensedEEGateway(testNow.Add(30*time.Minute), true)
+	c := fakeClientBuilder().WithObjects(gw, secret).WithStatusSubresource(gw).Build()
+	var captured *renderer.RenderInput
+	r := newTestGatewayReconciler(c,
+		&capturingRenderer{delegate: renderOutput("cs"), captured: &captured}, &mockValidator{})
+	r.LicenseParser = parser
+
+	for range 2 {
+		if err := reconcileGateway(t, r, gw); err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+	}
+	if !captured.CEFallback {
+		t.Error("a license inside the safety buffer must render the CE fallback")
+	}
+	cond := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionLicenseValid)
+	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != v1alpha1.ReasonLicensePreExpiry {
+		t.Errorf("LicenseValid = %+v, want False/%s", cond, v1alpha1.ReasonLicensePreExpiry)
+	}
+	if n := eventsWithReason(r.Recorder.(*record.FakeRecorder), v1alpha1.ReasonLicenseFallbackCE); n != 1 {
+		t.Errorf("LicenseFallbackCE events over two reconciles = %d, want 1", n)
+	}
+}
