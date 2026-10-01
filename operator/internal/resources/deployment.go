@@ -90,6 +90,7 @@ func BuildDeployment(
 	// Pod annotations for config change detection
 	annotations := map[string]string{
 		PostRestartJobChecksumAnnotation: configChecksum,
+		ImageAnnotation:                  image,
 	}
 	if pluginChecksum != "" {
 		annotations[PluginChecksumAnnotation] = pluginChecksum
