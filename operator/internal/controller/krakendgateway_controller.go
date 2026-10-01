@@ -241,6 +241,9 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// resources or the gateway status from converging; it is returned after
 	// them so the reconcile is retried.
 	var acceptanceErr error
+	// Always true in today's flow: a rejected render returns earlier and an
+	// accepted one has just been recorded. Kept because the split of this
+	// reconcile into configuration and infrastructure stages relies on it.
 	if output.Checksum == gw.Status.ConfigChecksum {
 		acceptanceErr = r.reconcileEndpointAcceptance(ctx, &gw, endpoints, output)
 	}
