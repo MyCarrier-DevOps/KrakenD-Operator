@@ -1221,7 +1221,7 @@ stateDiagram-v2
 
 ### License Check Frequency and Safety Buffer
 
-The license monitor runs on a **5-minute period** independent of the main reconciliation loop. Because KrakenD EE processes terminate immediately upon license expiry, the operator triggers the CE fallback **1 hour before the actual expiry time** (not at T-0). The license monitor writes only the License* conditions and licenseExpiry; the gateway controller derives phase and Ready from them.This safety buffer ensures the rolling deployment to CE completes well before any EE pod would self-terminate.
+The license monitor runs on a **5-minute period** independent of the main reconciliation loop. Because KrakenD EE processes terminate immediately upon license expiry, the operator triggers the CE fallback **1 hour before the actual expiry time** (not at T-0). This safety buffer ensures the rolling deployment to CE completes well before any EE pod would self-terminate. The license monitor writes only the License* conditions and licenseExpiry; the gateway controller derives phase and Ready from them.
 
 > **Note:** In steady-state operation, `PreExpiry` fires first (1 hour before T-0). The `LicenseExpired` state is most commonly reached on cold-start (e.g., the operator is deployed into a cluster where the license has already expired), but is also reachable via the `Error → CheckLicense → WaitForSecret → ValidateLicense` recheck path if the monitor was in `Error` state when T-0 passed.
 
