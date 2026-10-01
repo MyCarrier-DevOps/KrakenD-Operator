@@ -1283,7 +1283,7 @@ func validateAdditionalEndpoints(ac *v1alpha1.KrakenDAutoConfig) field.ErrorList
 // documentation/openapi.audience value inside an ExtraConfig RawExtension.
 // KrakenD's OpenAPI documentation plugin requires audience to be a list of
 // strings; a malformed value (e.g. a YAML mapping coerced to a JSON object)
-// passes CRD and CUE validation unchanged but fails `krakend check -tlc`,
+// passes CRD and CUE validation unchanged but fails `krakend check -t -n -c`,
 // which blocks config updates for every service on the gateway. Invalid JSON
 // and an absent documentation/openapi block or audience key are not this
 // helper's concern.
