@@ -40,7 +40,7 @@ import (
 )
 
 // KrakenDBackendPolicyReconciler reconciles a KrakenDBackendPolicy object.
-// It maintains the referencedBy count and validates policy fields.
+// It maintains referencedBy and the Ready condition.
 type KrakenDBackendPolicyReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
@@ -51,7 +51,7 @@ type KrakenDBackendPolicyReconciler struct {
 // +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendbackendpolicies/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendbackendpolicies/finalizers,verbs=update
 
-// Reconcile counts endpoint references and validates policy fields.
+// Reconcile counts endpoint references and sets the Ready condition.
 func (r *KrakenDBackendPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
@@ -65,6 +65,7 @@ func (r *KrakenDBackendPolicyReconciler) Reconcile(ctx context.Context, req ctrl
 
 	// Capture original status for change detection
 	origRef := policy.Status.ReferencedBy
+	origGeneration := policy.Status.ObservedGeneration
 	origConditions := policy.Status.DeepCopy().Conditions
 
 	// Count how many endpoints reference this policy using the field index
@@ -79,34 +80,14 @@ func (r *KrakenDBackendPolicyReconciler) Reconcile(ctx context.Context, req ctrl
 
 	policy.Status.ReferencedBy = refCount
 
-	// Validate policy fields
-	prevValid := meta.FindStatusCondition(origConditions, v1alpha1.ConditionPolicyValid)
-	if reason, msg := validatePolicy(&policy); reason != "" {
-		meta.SetStatusCondition(&policy.Status.Conditions, metav1.Condition{
-			Type:               v1alpha1.ConditionPolicyValid,
-			Status:             metav1.ConditionFalse,
-			ObservedGeneration: policy.Generation,
-			Reason:             reason,
-			Message:            msg,
-		})
-		if prevValid == nil ||
-			prevValid.Status != metav1.ConditionFalse ||
-			prevValid.Reason != reason ||
-			prevValid.Message != msg {
-			r.Recorder.Event(&policy, "Warning", "PolicyInvalid", msg)
-		}
-	} else {
-		meta.SetStatusCondition(&policy.Status.Conditions, metav1.Condition{
-			Type:               v1alpha1.ConditionPolicyValid,
-			Status:             metav1.ConditionTrue,
-			ObservedGeneration: policy.Generation,
-			Reason:             "Valid",
-			Message:            "Policy configuration is valid",
-		})
-	}
+	// Ready summarizes the policy's own fields; it replaces PolicyValid.
+	meta.SetStatusCondition(&policy.Status.Conditions, policyReadyCondition(&policy))
+	meta.RemoveStatusCondition(&policy.Status.Conditions, legacyConditionPolicyValid)
+	policy.Status.ObservedGeneration = policy.Generation
 
 	// Only write status if it actually changed
 	if policy.Status.ReferencedBy != origRef ||
+		policy.Status.ObservedGeneration != origGeneration ||
 		!conditionsEqual(origConditions, policy.Status.Conditions) {
 		if err := r.Status().Update(ctx, &policy); err != nil {
 			return ctrl.Result{}, fmt.Errorf("updating policy status: %w", err)
@@ -168,6 +149,26 @@ func (r *KrakenDBackendPolicyReconciler) endpointPolicyHandler() handler.EventHa
 			}
 		},
 	}
+}
+
+// legacyConditionPolicyValid is the condition Ready replaced; Reconcile
+// removes it from policies written by earlier versions.
+const legacyConditionPolicyValid = "PolicyValid"
+
+// policyReadyCondition returns the policy's Ready condition: False with the
+// validatePolicy reason when a field is out of range, True otherwise.
+func policyReadyCondition(policy *v1alpha1.KrakenDBackendPolicy) metav1.Condition {
+	cond := metav1.Condition{
+		Type:               v1alpha1.ConditionReady,
+		Status:             metav1.ConditionTrue,
+		ObservedGeneration: policy.Generation,
+		Reason:             v1alpha1.ReasonReady,
+		Message:            "Policy configuration is valid",
+	}
+	if reason, msg := validatePolicy(policy); reason != "" {
+		cond.Status, cond.Reason, cond.Message = metav1.ConditionFalse, reason, msg
+	}
+	return cond
 }
 
 // validatePolicy checks policy fields for validity. Returns (reason, message)
