@@ -416,3 +416,27 @@ func TestGatewayReconcile_CommunityGatewayDropsItsStaleLicenseState(t *testing.T
 		t.Error("the license_expiry_seconds series of a CE gateway must be removed")
 	}
 }
+
+func TestGatewayReconcile_DisablingFallbackOnAnExpiredLicenseSaysSoOnce(t *testing.T) {
+	gw, secret, parser := licensedEEGateway(testNow.Add(-time.Minute), true)
+	c := fakeClientBuilder().WithObjects(gw, secret).WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderOutput("cs"), &mockValidator{})
+	r.LicenseParser = parser
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	stored := getGateway(t, c, gw)
+	stored.Spec.License.FallbackToCE = false
+	if err := c.Update(context.Background(), stored); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := reconcileGateway(t, r, gw); err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+	}
+	if n := eventsWithReason(r.Recorder.(*record.FakeRecorder), v1alpha1.ReasonLicenseExpiredNoFallback); n != 1 {
+		t.Errorf("LicenseExpiredNoFallback events after disabling the fallback = %d, want 1", n)
+	}
+}
