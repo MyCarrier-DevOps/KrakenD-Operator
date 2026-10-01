@@ -487,7 +487,7 @@ func TestValidate_EEWildcardParameterIsNotAnOutputParam(t *testing.T) {
 	v := NewValidator(ValidatorOptions{Executor: exec, BinaryPath: "krakend"})
 	rendered := []byte(`{"version":3,"endpoints":[` +
 		`{"endpoint":"/ok","method":"GET","backend":[{"url_pattern":"/ok"}]},` +
-		`{"endpoint":"/v1/*","method":"GET","backend":[{"url_pattern":"/x"},{"url_pattern":"/x/{Wildcard}"}]}]}`)
+		`{"endpoint":"/v1/*","method":"GET","backend":[{"url_pattern":"/x/{Wildcard}"}]}]}`)
 	sources := []types.NamespacedName{{Namespace: "ns", Name: "ok"}, {Namespace: "ns", Name: "wild"}}
 
 	err := v.Validate(context.Background(), rendered, v1alpha1.EditionEE)
@@ -501,5 +501,27 @@ func TestValidate_EEWildcardParameterIsNotAnOutputParam(t *testing.T) {
 	}
 	if len(exec.checked) != 0 {
 		t.Errorf("krakend check ran %d time(s); the verdict was already known", len(exec.checked))
+	}
+}
+
+func TestValidate_EEWildcardEndpointAllowsOneBackend(t *testing.T) {
+	exec := &capturingExecutor{}
+	v := NewValidator(ValidatorOptions{Executor: exec, BinaryPath: "krakend"})
+	rendered := []byte(`{"version":3,"endpoints":[` +
+		`{"endpoint":"/ok","method":"GET","backend":[{"url_pattern":"/a"},{"url_pattern":"/b"}]},` +
+		`{"endpoint":"/v1/*","method":"GET","backend":[{"url_pattern":"/x"},{"url_pattern":"/y"}]}]}`)
+	sources := []types.NamespacedName{{Namespace: "ns", Name: "ok"}, {Namespace: "ns", Name: "wild"}}
+
+	err := v.Validate(context.Background(), rendered, v1alpha1.EditionEE)
+	var verr *ValidationError
+	if !errors.As(err, &verr) {
+		t.Fatalf("Validate = %v; EE refuses a wildcard endpoint with more than one backend", err)
+	}
+	if !strings.Contains(verr.Output, "wildcard endpoint can only have 1 backend") {
+		t.Errorf("output %q lacks EE's message", verr.Output)
+	}
+	got := Attribute(rendered, sources, verr.Output)
+	if len(got) != 1 || got[0].Endpoint != sources[1] {
+		t.Errorf("attribution = %+v, want one finding blamed on %s", got, sources[1])
 	}
 }
