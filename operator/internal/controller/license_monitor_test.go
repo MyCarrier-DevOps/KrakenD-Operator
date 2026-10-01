@@ -23,6 +23,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -692,5 +693,47 @@ func TestNewLicenseMonitor(t *testing.T) {
 	}
 	if monitor.lastWarningSent == nil {
 		t.Error("expected lastWarningSent map to be initialized")
+	}
+}
+
+func TestLicenseMonitor_StaleCopyDoesNotRevertGatewayConditions(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	gw := newEEGateway("test-gw", "default")
+	secret := newLicenseSecret("my-license", "default")
+	c := fakeClientBuilder().WithObjects(gw, secret).WithStatusSubresource(gw).Build()
+	key := types.NamespacedName{Name: "test-gw", Namespace: "default"}
+
+	var stale v1alpha1.KrakenDGateway
+	if err := c.Get(context.Background(), key, &stale); err != nil {
+		t.Fatal(err)
+	}
+	// The gateway controller writes Ready after the monitor's cached read.
+	var fresh v1alpha1.KrakenDGateway
+	if err := c.Get(context.Background(), key, &fresh); err != nil {
+		t.Fatal(err)
+	}
+	meta.SetStatusCondition(&fresh.Status.Conditions, metav1.Condition{
+		Type: v1alpha1.ConditionReady, Status: metav1.ConditionFalse, Reason: "ConfigValidationFailed", Message: "rejected",
+	})
+	if err := c.Status().Update(context.Background(), &fresh); err != nil {
+		t.Fatal(err)
+	}
+
+	monitor := &LicenseMonitor{
+		Client: c, Recorder: fakeRecorder(), Clock: clocktesting.NewFakeClock(now),
+		LicenseParser: &mockLicenseParser{info: &license.LicenseInfo{NotAfter: now.Add(-24 * time.Hour)}},
+		CheckInterval: 5 * time.Minute, SafetyBuffer: time.Hour,
+		lastWarningSent: make(map[types.NamespacedName]time.Time),
+	}
+	err := monitor.checkGateway(context.Background(), &stale)
+	if !apierrors.IsConflict(err) {
+		t.Fatalf("checkGateway from a stale copy: got %v, want a Conflict", err)
+	}
+	var stored v1alpha1.KrakenDGateway
+	if err := c.Get(context.Background(), key, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if meta.FindStatusCondition(stored.Status.Conditions, v1alpha1.ConditionReady) == nil {
+		t.Error("the monitor's patch removed the gateway controller's Ready condition")
 	}
 }
