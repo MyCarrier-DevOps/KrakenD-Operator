@@ -1937,3 +1937,21 @@ func TestGatewayReconcile_RejectedEditionFlipToCEKeepsTheEEImage(t *testing.T) {
 		t.Errorf("image = %q while the CE render is rejected, want the applied edition's image %q", got, want)
 	}
 }
+
+func TestGatewayReconcile_RejectedEditionFlipToEEKeepsTheCEImage(t *testing.T) {
+	gw, secret, parser := licensedEEGateway(testNow.Add(time.Hour), true) // valid license
+	const config = `{"version":3,"name":"applied-as-ce"}`
+	gw.Status.ConfigChecksum = hash.SHA256Hex([]byte(config))
+	gw.Status.ConfigEdition = v1alpha1.EditionCE
+	c := fakeClientBuilder().WithObjects(gw, secret, legacyConfigMap(gw, config)).WithStatusSubresource(gw).Build()
+	val := &recordingValidator{err: rejectedBy("ERROR testing the configuration file:\tnot an EE config")}
+	r := newTestGatewayReconciler(c, renderOf(`{"version":3,"name":"rendered-as-ee"}`), val)
+	r.LicenseParser = parser
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if got, want := deployedImage(t, c, gw), "krakend:2.7.0"; got != want {
+		t.Errorf("image = %q while the EE render is rejected, want the applied edition's image %q", got, want)
+	}
+}
