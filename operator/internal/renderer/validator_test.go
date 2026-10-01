@@ -470,3 +470,25 @@ func TestValidate_FindingAfterWildcardEntriesBlamesItsOwnEndpoint(t *testing.T) 
 		t.Errorf("attribution = %+v, want the single finding blamed on %s, not a neighbour", got, sources[2])
 	}
 }
+
+func TestValidate_EEWildcardParameterIsNotAnOutputParam(t *testing.T) {
+	exec := &capturingExecutor{}
+	v := NewValidator(ValidatorOptions{Executor: exec, BinaryPath: "krakend"})
+	rendered := []byte(`{"version":3,"endpoints":[` +
+		`{"endpoint":"/ok","method":"GET","backend":[{"url_pattern":"/ok"}]},` +
+		`{"endpoint":"/v1/*","method":"GET","backend":[{"url_pattern":"/x"},{"url_pattern":"/x/{Wildcard}"}]}]}`)
+	sources := []types.NamespacedName{{Namespace: "ns", Name: "ok"}, {Namespace: "ns", Name: "wild"}}
+
+	err := v.Validate(context.Background(), rendered, v1alpha1.EditionEE)
+	var verr *ValidationError
+	if !errors.As(err, &verr) {
+		t.Fatalf("Validate = %v; EE has no input parameter named Wildcard, so /x/{Wildcard} is undefined there", err)
+	}
+	got := Attribute(rendered, sources, verr.Output)
+	if len(got) != 1 || got[0].Endpoint != sources[1] {
+		t.Errorf("attribution = %+v, want one finding blamed on %s", got, sources[1])
+	}
+	if len(exec.checked) != 0 {
+		t.Errorf("krakend check ran %d time(s); the verdict was already known", len(exec.checked))
+	}
+}
