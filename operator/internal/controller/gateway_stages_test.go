@@ -2516,3 +2516,25 @@ func TestGatewayReconcile_MissingPluginConfigMapHoldsTheDeployment(t *testing.T)
 		t.Errorf("the Deployment must be created once the plugin ConfigMap exists: %v", err)
 	}
 }
+
+func TestGatewayReconcile_HeldForPluginConfigMapReportsNoRollout(t *testing.T) {
+	gw := reconciledGateway()
+	gw.Spec.Plugins = &v1alpha1.PluginsSpec{Sources: []v1alpha1.PluginSource{
+		{ConfigMapRef: &v1alpha1.ConfigMapKeyRef{Name: "plugins-a", Key: "auth.so"}},
+	}}
+	c := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderOf(`{"version":3,"name":"new"}`), &mockValidator{})
+	rec := fakeRecorder()
+	r.Recorder = rec
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	got := getGateway(t, c, gw)
+	if cond := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionProgressing); condTrue(cond) {
+		t.Errorf("Progressing = %+v, want no rollout reported while the Deployment is held", cond)
+	}
+	if events := drainEvents(rec); hasEventReason(events, v1alpha1.ReasonConfigDeployed) {
+		t.Errorf("events = %q, want no ConfigDeployed while the Deployment is held", events)
+	}
+}
