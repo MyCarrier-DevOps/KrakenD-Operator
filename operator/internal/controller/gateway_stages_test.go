@@ -308,13 +308,80 @@ func TestGatewayReconcile_RejectedRenderWithADeploymentWritesStatusOnce(t *testi
 	}
 }
 
-func TestDeploymentConverged_ImageIsTheOneTheOperatorSet(t *testing.T) {
-	gw := servingGateway("applied", convergedImage)
-	dep := makeConvergedDeployment(gw, "applied")
-	// An admission webhook pinned the container to a digest.
-	dep.Spec.Template.Spec.Containers[0].Image = convergedImage + "@sha256:abc"
+func TestDeploymentConverged(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(dep *appsv1.Deployment)
+		want   func(in *infraInputs)
+		wantOK bool
+	}{
+		{name: "matching Deployment", wantOK: true},
+		{
+			name: "container image rewritten after admission",
+			mutate: func(dep *appsv1.Deployment) {
+				dep.Spec.Template.Spec.Containers[0].Image = convergedImage + "@sha256:abc"
+			},
+			wantOK: true,
+		},
+		{
+			name:   "image annotation differs",
+			want:   func(in *infraInputs) { in.image = "img:v2" },
+			wantOK: false,
+		},
+		{
+			name:   "plugin checksum differs",
+			want:   func(in *infraInputs) { in.pluginChecksum = "plugins-new" },
+			wantOK: false,
+		},
+		{
+			name: "plugin annotation present while none is wanted",
+			mutate: func(dep *appsv1.Deployment) {
+				dep.Spec.Template.Annotations[resources.PluginChecksumAnnotation] = "plugins-old"
+			},
+			wantOK: false,
+		},
+		{
+			name: "spec not yet observed",
+			mutate: func(dep *appsv1.Deployment) {
+				dep.Generation = 2
+				dep.Status.ObservedGeneration = 1
+			},
+			wantOK: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dep := makeConvergedDeployment(servingGateway("applied", convergedImage), "applied")
+			if tc.mutate != nil {
+				tc.mutate(dep)
+			}
+			in := convergedInputs("applied")
+			if tc.want != nil {
+				tc.want(&in)
+			}
+			if got := deploymentConverged(dep, in); got != tc.wantOK {
+				t.Errorf("deploymentConverged = %v, want %v", got, tc.wantOK)
+			}
+		})
+	}
+}
 
-	if !deploymentConverged(dep, convergedInputs("applied")) {
-		t.Error("a container image rewritten after admission must not stop the rollout counting as converged")
+func TestGatewayReconcile_ImageRolloutCompletesWhenTheDeploymentRunsIt(t *testing.T) {
+	gw := rollingGateway("applied", "img:v1")
+	dep := makeConvergedDeployment(gw, "applied")
+	dep.Spec.Template.Annotations[resources.ImageAnnotation] = "img:v2"
+	dep.Spec.Template.Spec.Containers[0].Image = "img:v2"
+	c := fakeClientBuilder().WithObjects(gw, dep).WithStatusSubresource(gw).Build()
+	rend := &mockRenderer{output: &renderer.RenderOutput{
+		JSON: []byte(`{"version":3}`), Checksum: "applied", DesiredImage: "img:v2",
+	}}
+	r := newTestGatewayReconciler(c, rend, &mockValidator{})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	ready := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionReady)
+	if ready == nil || ready.Status != metav1.ConditionTrue {
+		t.Errorf("Ready = %+v, want True once the Deployment runs img:v2", ready)
 	}
 }
