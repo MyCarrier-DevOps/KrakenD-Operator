@@ -183,8 +183,8 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 	configRenders.Inc()
 
-	// Update endpoint statuses for conflicted/invalid
-	if err := r.updateEndpointStatuses(ctx, output); err != nil {
+	// Record each endpoint's Accepted verdict for this render.
+	if err := r.reconcileEndpointAcceptance(ctx, &gw, endpoints, output); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -709,54 +709,93 @@ func gatewayStatusChanged(before, after *v1alpha1.KrakenDGatewayStatus) bool {
 	return !equality.Semantic.DeepEqual(b, a)
 }
 
-// updateEndpointStatuses marks conflicted and invalid endpoints.
-func (r *KrakenDGatewayReconciler) updateEndpointStatuses(
+// endpointAccepted returns the Accepted condition the gateway reports for ep,
+// given the render that is now its applied configuration. The condition is
+// True when every entry of ep is included, and False with EndpointConflict
+// when an older KrakenDEndpoint won one of its (endpoint, method) pairs. It
+// returns nil when the render excluded ep because a policy it references is
+// missing: the endpoint controller reports that through ResolvedRefs, and a
+// leftover Accepted=True would claim the endpoint is served.
+func endpointAccepted(
+	gw *v1alpha1.KrakenDGateway,
+	ep *v1alpha1.KrakenDEndpoint,
+	conflicted, unresolved map[types.NamespacedName]struct{},
+) *metav1.Condition {
+	key := client.ObjectKeyFromObject(ep)
+	if _, ok := unresolved[key]; ok {
+		return nil
+	}
+	cond := &metav1.Condition{
+		Type:               v1alpha1.ConditionAccepted,
+		Status:             metav1.ConditionTrue,
+		ObservedGeneration: ep.Generation,
+		Reason:             v1alpha1.ReasonAccepted,
+		Message:            fmt.Sprintf("Included in the configuration of gateway %s/%s", gw.Namespace, gw.Name),
+	}
+	if _, ok := conflicted[key]; ok {
+		cond.Status = metav1.ConditionFalse
+		cond.Reason = v1alpha1.ReasonEndpointConflict
+		cond.Message = fmt.Sprintf(
+			"Entries conflict with an older KrakenDEndpoint on gateway %s/%s; the conflicting entries are not served",
+			gw.Namespace, gw.Name)
+	}
+	return cond
+}
+
+// namespacedNameSet returns names as a set.
+func namespacedNameSet(names []types.NamespacedName) map[types.NamespacedName]struct{} {
+	set := make(map[types.NamespacedName]struct{}, len(names))
+	for _, n := range names {
+		set[n] = struct{}{}
+	}
+	return set
+}
+
+// reconcileEndpointAcceptance writes the gateway's Accepted verdict on every
+// endpoint of this render.
+func (r *KrakenDGatewayReconciler) reconcileEndpointAcceptance(
 	ctx context.Context,
+	gw *v1alpha1.KrakenDGateway,
+	endpoints []v1alpha1.KrakenDEndpoint,
 	output *renderer.RenderOutput,
 ) error {
-	for _, nn := range output.ConflictedEndpoints {
-		var ep v1alpha1.KrakenDEndpoint
-		if err := r.Get(ctx, nn, &ep); err != nil {
-			if errors.IsNotFound(err) {
-				continue
-			}
-			return fmt.Errorf("getting conflicted endpoint %s: %w", nn, err)
+	conflicted := namespacedNameSet(output.ConflictedEndpoints)
+	unresolved := namespacedNameSet(output.InvalidEndpoints)
+	for i := range endpoints {
+		want := endpointAccepted(gw, &endpoints[i], conflicted, unresolved)
+		if err := r.writeEndpointAccepted(ctx, &endpoints[i], want); err != nil {
+			return err
 		}
-		ep.Status.Phase = v1alpha1.EndpointPhaseConflicted
-		meta.SetStatusCondition(&ep.Status.Conditions, metav1.Condition{
-			Type:               v1alpha1.ConditionAvailable,
-			Status:             metav1.ConditionFalse,
-			ObservedGeneration: ep.Generation,
-			Reason:             v1alpha1.ReasonEndpointConflict,
-			Message:            "Endpoint path/method conflicts with an older KrakenDEndpoint",
-		})
-		if err := r.Status().Update(ctx, &ep); err != nil {
-			return fmt.Errorf("updating conflicted endpoint status %s: %w", nn, err)
-		}
-		r.Recorder.Event(&ep, "Warning", v1alpha1.ReasonEndpointConflict,
-			"Endpoint excluded due to path/method conflict with older resource")
 	}
-	for _, nn := range output.InvalidEndpoints {
-		var ep v1alpha1.KrakenDEndpoint
-		if err := r.Get(ctx, nn, &ep); err != nil {
-			if errors.IsNotFound(err) {
-				continue
-			}
-			return fmt.Errorf("getting invalid endpoint %s: %w", nn, err)
+	return nil
+}
+
+// writeEndpointAccepted sets the Accepted condition want on the endpoint the
+// render saw as rendered, or removes it when want is nil. It patches status
+// with an optimistic lock, so it never replaces conditions written after its
+// read.
+func (r *KrakenDGatewayReconciler) writeEndpointAccepted(
+	ctx context.Context,
+	rendered *v1alpha1.KrakenDEndpoint,
+	want *metav1.Condition,
+) error {
+	key := client.ObjectKeyFromObject(rendered)
+	var ep v1alpha1.KrakenDEndpoint
+	if err := r.Get(ctx, key, &ep); err != nil {
+		if errors.IsNotFound(err) {
+			return nil
 		}
-		ep.Status.Phase = v1alpha1.EndpointPhaseInvalid
-		meta.SetStatusCondition(&ep.Status.Conditions, metav1.Condition{
-			Type:               v1alpha1.ConditionAvailable,
-			Status:             metav1.ConditionFalse,
-			ObservedGeneration: ep.Generation,
-			Reason:             v1alpha1.ReasonEndpointInvalid,
-			Message:            "Endpoint excluded due to missing policy reference",
-		})
-		if err := r.Status().Update(ctx, &ep); err != nil {
-			return fmt.Errorf("updating invalid endpoint status %s: %w", nn, err)
-		}
-		r.Recorder.Event(&ep, "Warning", v1alpha1.ReasonEndpointInvalid,
-			"Endpoint excluded due to missing policy reference")
+		return fmt.Errorf("getting endpoint %s: %w", key, err)
+	}
+	base := ep.DeepCopy()
+	if want == nil {
+		meta.RemoveStatusCondition(&ep.Status.Conditions, v1alpha1.ConditionAccepted)
+	} else {
+		meta.SetStatusCondition(&ep.Status.Conditions, *want)
+	}
+	if err := r.Status().Patch(ctx, &ep,
+		client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil {
+		return fmt.Errorf("writing Accepted on endpoint %s: %w", key, err)
 	}
 	return nil
 }
