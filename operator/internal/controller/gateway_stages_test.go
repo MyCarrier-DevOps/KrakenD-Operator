@@ -1840,3 +1840,23 @@ func TestGatewayReconcile_CEFallbackFlipRevalidatesTheSameRender(t *testing.T) {
 		t.Errorf("status.configEdition = %q, want CE once the CE check passed", got)
 	}
 }
+
+func TestGatewayReconcile_StatusWithoutEditionAdoptsTheCurrentOne(t *testing.T) {
+	gw := reconciledGateway()
+	const config = `{"version":3,"name":"applied-before-the-upgrade"}`
+	gw.Status.ConfigChecksum = hash.SHA256Hex([]byte(config))
+	c := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).Build()
+	val := &recordingValidator{}
+	r := newTestGatewayReconciler(c, renderOf(config), val)
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(val.editions) != 0 {
+		t.Errorf("validations = %v; an applied config from before configEdition existed must not be re-validated",
+			val.editions)
+	}
+	if got := getGateway(t, c, gw).Status.ConfigEdition; got != v1alpha1.EditionCE {
+		t.Errorf("status.configEdition = %q, want the CE gateway's edition recorded", got)
+	}
+}
