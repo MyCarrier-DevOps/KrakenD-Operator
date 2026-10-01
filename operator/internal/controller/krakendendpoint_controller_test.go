@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -610,5 +611,88 @@ func TestEndpointReconcile_GatewayToEndpointsCrossNamespace(t *testing.T) {
 	}
 	if !names["ep-cross"] {
 		t.Error("expected ep-cross in results")
+	}
+}
+
+var ep1Request = ctrl.Request{NamespacedName: types.NamespacedName{Name: "ep1", Namespace: "default"}}
+
+// testGW1 is the gateway default/gw1 the endpoint tests reference.
+func testGW1() *v1alpha1.KrakenDGateway {
+	return &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw1", Namespace: "default"},
+		Spec:       v1alpha1.KrakenDGatewaySpec{Version: "2.7.0", Edition: v1alpha1.EditionCE},
+	}
+}
+
+// endpointOnGW1 returns default/ep1 on gw1 at the given generation, with one
+// GET entry and the given seeded conditions.
+func endpointOnGW1(generation int64, conds ...metav1.Condition) *v1alpha1.KrakenDEndpoint {
+	return &v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "ep1", Namespace: "default", Generation: generation},
+		Spec: v1alpha1.KrakenDEndpointSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: "gw1"},
+			Endpoints: []v1alpha1.EndpointEntry{{
+				Endpoint: "/api/v1/test", Method: "GET",
+				Backends: []v1alpha1.BackendSpec{{Host: []string{"http://backend:8080"}, URLPattern: "/test"}},
+			}},
+		},
+		Status: v1alpha1.KrakenDEndpointStatus{Conditions: conds},
+	}
+}
+
+// storedEP1 returns the stored default/ep1.
+func storedEP1(t *testing.T, c client.Client) *v1alpha1.KrakenDEndpoint {
+	t.Helper()
+	var ep v1alpha1.KrakenDEndpoint
+	if err := c.Get(context.Background(), ep1Request.NamespacedName, &ep); err != nil {
+		t.Fatalf("getting ep1: %v", err)
+	}
+	return &ep
+}
+
+func TestEndpointReconcile_ReadyDerivedFromBothWriters(t *testing.T) {
+	tests := []struct {
+		name       string
+		ep         *v1alpha1.KrakenDEndpoint
+		wantReady  metav1.ConditionStatus
+		wantReason string
+		wantPhase  v1alpha1.EndpointPhase
+	}{
+		{"no gateway verdict yet", endpointOnGW1(1), metav1.ConditionUnknown, "Pending", v1alpha1.EndpointPhasePending},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			seeded := meta.FindStatusCondition(tt.ep.Status.Conditions, v1alpha1.ConditionAccepted)
+			c := fakeClientBuilder().WithObjects(testGW1(), tt.ep).WithStatusSubresource(tt.ep).Build()
+			r := &KrakenDEndpointReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
+			if _, err := r.Reconcile(context.Background(), ep1Request); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			stored := storedEP1(t, c)
+			gen := tt.ep.Generation
+			refs := meta.FindStatusCondition(stored.Status.Conditions, "ResolvedRefs")
+			if refs == nil || refs.Status != metav1.ConditionTrue || refs.Reason != "RefsResolved" ||
+				refs.ObservedGeneration != gen {
+				t.Errorf("ResolvedRefs = %+v, want True/RefsResolved at generation %d", refs, gen)
+			}
+			ready := meta.FindStatusCondition(stored.Status.Conditions, "Ready")
+			if ready == nil || ready.Status != tt.wantReady || ready.Reason != tt.wantReason ||
+				ready.ObservedGeneration != gen {
+				t.Errorf("Ready = %+v, want %s/%s at generation %d", ready, tt.wantReady, tt.wantReason, gen)
+			}
+			if stored.Status.Phase != tt.wantPhase {
+				t.Errorf("phase = %q, want %q", stored.Status.Phase, tt.wantPhase)
+			}
+			if meta.FindStatusCondition(stored.Status.Conditions, "Available") != nil {
+				t.Error("legacy Available condition was not removed")
+			}
+			got := meta.FindStatusCondition(stored.Status.Conditions, v1alpha1.ConditionAccepted)
+			if (seeded == nil) != (got == nil) || (got != nil && (got.Status != seeded.Status ||
+				got.Reason != seeded.Reason || got.Message != seeded.Message ||
+				got.ObservedGeneration != seeded.ObservedGeneration ||
+				!got.LastTransitionTime.Equal(&seeded.LastTransitionTime))) {
+				t.Errorf("Accepted = %+v, want it untouched (%+v): the gateway owns it", got, seeded)
+			}
+		})
 	}
 }
