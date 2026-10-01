@@ -60,11 +60,15 @@ func (r *krakendRenderer) Render(input RenderInput) (*RenderOutput, error) {
 			continue
 		}
 		ep := buildEndpointJSON(fe.Entry, input.Policies, fe.Source.Namespace)
-		switch {
-		case input.CEFallback:
-			stripped = append(stripped, stripEndpointEEFeatures(ep, fe)...)
-		case gw.Spec.Edition == v1alpha1.EditionCE:
+		// Every CE render drops the entries' docs-only namespaces and lists
+		// nothing for them: they never change what the gateway serves. A
+		// CE-fallback render then strips and lists the functional
+		// Enterprise-only features.
+		if input.CEFallback || gw.Spec.Edition == v1alpha1.EditionCE {
 			dropCEInertNamespaces(ep)
+		}
+		if input.CEFallback {
+			stripped = append(stripped, stripEndpointEEFeatures(ep, fe)...)
 		}
 		endpointsJSON = append(endpointsJSON, ep)
 		sources = append(sources, fe.Source)
