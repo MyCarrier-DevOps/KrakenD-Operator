@@ -574,10 +574,13 @@ func (r *KrakenDGatewayReconciler) reconcileCEFallbackCondition(
 	case !appliedFallback(gw, edition):
 		meta.RemoveStatusCondition(&gw.Status.Conditions, v1alpha1.ConditionCEFallbackApplied)
 	case isApplied(gw, output, edition):
+		list, n := strippedList(output.StrippedEEFeatures), len(output.StrippedEEFeatures)
+		if gw.Spec.OpenAPI != nil && gw.Spec.OpenAPI.Enabled {
+			list, n = strings.TrimPrefix(list+"; "+openAPIFallbackNote, "; "), n+1
+		}
 		msg := "Running KrakenD CE in license fallback; the config uses no Enterprise-only features"
-		if n := len(output.StrippedEEFeatures); n > 0 {
-			msg = fmt.Sprintf("Running KrakenD CE in license fallback; removed %d Enterprise-only feature(s): %s",
-				n, strippedList(output.StrippedEEFeatures))
+		if n > 0 {
+			msg = fmt.Sprintf("Running KrakenD CE in license fallback; removed %d Enterprise-only feature(s): %s", n, list)
 		}
 		r.setProblemCondition(gw, metav1.Condition{
 			Type:               v1alpha1.ConditionCEFallbackApplied,
