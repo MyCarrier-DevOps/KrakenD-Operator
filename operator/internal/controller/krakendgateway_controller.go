@@ -441,7 +441,13 @@ func (r *KrakenDGatewayReconciler) detectDragonflyState(
 		return nil
 	}
 	if !available {
-		log.V(1).Info("Dragonfly CRD not installed, skipping state detection")
+		r.setConditionWithEvent(gw, metav1.Condition{
+			Type:               v1alpha1.ConditionDragonflyReady,
+			Status:             metav1.ConditionFalse,
+			ObservedGeneration: gw.Generation,
+			Reason:             v1alpha1.ReasonCRDNotInstalled,
+			Message:            "Dragonfly is enabled but the dragonflydb.io Dragonfly CRD is not installed in the cluster",
+		})
 		return nil
 	}
 
@@ -1168,12 +1174,9 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 		if dfErr != nil {
 			return fmt.Errorf("checking Dragonfly CRD: %w", dfErr)
 		}
-		if !dfAvailable {
-			log.Error(errCRDMissing,
-				"Dragonfly requested but dragonflydb.io CRD is not available")
-			r.Recorder.Event(gw, "Warning", "CRDNotInstalled",
-				"Dragonfly is enabled but the dragonflydb.io CRD is not installed in the cluster")
-		} else {
+		// Without the CRD there is nothing to create: detectDragonflyState
+		// reports DragonflyReady=False/CRDNotInstalled.
+		if dfAvailable {
 			df := &unstructured.Unstructured{}
 			df.SetGroupVersionKind(dragonflyGVK)
 			df.SetName(resources.DragonflyName(gw))
