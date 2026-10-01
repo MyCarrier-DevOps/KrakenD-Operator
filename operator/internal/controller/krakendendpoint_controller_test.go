@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -827,5 +828,26 @@ func TestEndpointReconcile_StatusConflictRequeuesWithoutClobbering(t *testing.T)
 	if ready == nil || ready.Status != metav1.ConditionTrue ||
 		meta.FindStatusCondition(stored.Status.Conditions, v1alpha1.ConditionAccepted) == nil {
 		t.Errorf("after the retry: conditions = %+v, want Accepted kept and Ready True", stored.Status.Conditions)
+	}
+}
+
+func TestEndpointReconcile_FirstMissingPolicyIsReportedInSpecOrder(t *testing.T) {
+	// A map-ordered lookup names a different missing policy from run to run,
+	// which changes the message and rewrites status on every reconcile.
+	for run := range 20 {
+		ep := endpointOnGW1(1)
+		ep.Spec.Endpoints[0].Backends = []v1alpha1.BackendSpec{
+			{Host: []string{"http://b:8080"}, URLPattern: "/b", PolicyRef: &v1alpha1.PolicyRef{Name: "policy-b"}},
+			{Host: []string{"http://a:8080"}, URLPattern: "/a", PolicyRef: &v1alpha1.PolicyRef{Name: "policy-a"}},
+		}
+		c := fakeClientBuilder().WithObjects(testGW1(), ep).WithStatusSubresource(ep).Build()
+		r := &KrakenDEndpointReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
+		if _, err := r.Reconcile(context.Background(), ep1Request); err != nil {
+			t.Fatal(err)
+		}
+		refs := meta.FindStatusCondition(storedEP1(t, c).Status.Conditions, v1alpha1.ConditionResolvedRefs)
+		if refs == nil || !strings.Contains(refs.Message, `"policy-b"`) {
+			t.Fatalf("run %d: ResolvedRefs = %+v, want the message to name policy-b, the first in spec order", run, refs)
+		}
 	}
 }
