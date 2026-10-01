@@ -25,6 +25,7 @@ import (
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
+	"github.com/mycarrier-devops/krakend-operator/internal/resources"
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
@@ -202,9 +203,7 @@ func TestGatewayReconcile_FullPipeline(t *testing.T) {
 		t.Fatalf("serviceaccount not created: %v", err)
 	}
 	var cm corev1.ConfigMap
-	if err := c.Get(context.Background(), client.ObjectKeyFromObject(gw), &cm); err != nil {
-		t.Fatalf("configmap not created: %v", err)
-	}
+	getObject(t, c, gw, resources.ConfigMapName(gw, "newchecksum"), &cm)
 	if cm.Data["krakend.json"] != `{"version":3}` {
 		t.Errorf("unexpected configmap data: %s", cm.Data["krakend.json"])
 	}
