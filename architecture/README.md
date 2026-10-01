@@ -343,6 +343,7 @@ spec:
 status:
   phase: Running                       # derived from Ready: Pending, Deploying, Running, Degraded, Error
   configChecksum: "sha256:abc123..."
+  configEdition: EE                    # the edition configChecksum was validated for
   observedGeneration: 5
   replicas: 3
   readyReplicas: 3
@@ -1218,7 +1219,13 @@ This is a conscious design choice: the operator provides maximum observability (
 When falling back from EE to CE:
 
 1. **Strip structural EE features** — remove wildcard endpoints (`/*`) which CE's router rejects
-2. **Switch container image** — use `spec.ceImage` if set; otherwise fall back to `krakend/krakend:{spec.version}`. The `spec.image` field (EE override) is ignored during CE fallback
+2. **Switch container image — only once the CE render is applied.** The CE
+   render is validated as CE: verdicts are keyed on (checksum, edition), and
+   `status.configEdition` records the edition of the applied config. The
+   image follows the applied edition, so while a CE render is rejected the
+   pods stay on EE with the EE-validated config. The CE image is
+   `spec.ceImage` if set, otherwise `krakend/krakend:{spec.version}`;
+   `spec.image` (EE override) is ignored during CE fallback.
 3. **Keep EE `extra_config` namespaces** — CE silently ignores unknown namespaces like `security/policies`, `auth/api-keys`, etc.
 4. **Disable Dragonfly-dependent features** — cluster rate limiting, quota, and token revocation won't function without the EE binary, even with Redis available
 5. **Set `LicenseValid=False` and `LicenseExpired=True`** — reason `LicensePreExpiry` if entering from the PreExpiry path; reason `LicenseExpired` if entering from the LicenseExpired path
@@ -1306,7 +1313,8 @@ flowchart TD
 
 Each reconcile runs two stages. The config stage (render → validate →
 publish) is the only code that decides the applied config
-(`status.configChecksum`) or writes config content. The infrastructure stage
+(`status.configChecksum`, with the edition it was validated for in
+`status.configEdition`) or writes config content. The infrastructure stage
 then always runs. It converges the ServiceAccount, Service, PDB, Deployment,
 HPA, post-restart Job and optional resources on the *applied* config, so a
 rejected or unjudged render never stops drift correction. The Deployment is
