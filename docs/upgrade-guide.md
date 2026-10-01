@@ -738,11 +738,17 @@ you *which* KrakenDEndpoint to fix:
   `GatewayConfigRejected` and the findings that name it. Findings are mapped
   from `/endpoints/<i>/…` pointers and from `METHOD /path` or `path '…'` in
   router errors. A route conflict names both endpoints involved.
-- Endpoints no finding names keep the verdict of the last applied config. On
-  a gateway that has never applied a config, that is whatever an earlier
-  gateway of the same name left on them.
-- Findings about gateway-level settings or plugins name no endpoint. The
-  gateway message says how many there are.
+- Endpoints no finding names keep the verdict of the last applied config,
+  except that a `GatewayConfigRejected` left by an earlier rejection is
+  removed once no finding names the endpoint any more (its `Ready` is then
+  derived afresh). This also holds when the validator is unavailable.
+- A gateway that has never applied a config has no verdict to keep. On a
+  rejected or unjudged render the operator removes `Accepted` from every
+  endpoint that still carries it, for example one left by an earlier gateway
+  of the same name, so no endpoint reads `Ready` while nothing serves it.
+- Findings about gateway-level settings or plugins name no endpoint. When
+  some findings name an endpoint and others do not, the gateway message says
+  how many name none; when none names an endpoint, it says so.
 - The blame clears as soon as a config passes validation.
 
 ---
