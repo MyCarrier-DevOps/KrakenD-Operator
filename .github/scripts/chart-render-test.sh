@@ -58,14 +58,16 @@ expect_contains "webhooks.enabled=false disables them in the operator" \
 	"--enable-webhooks=false" --set webhooks.enabled=false
 expect_absent "webhooks.enabled=false passes no serving certificate path" \
 	"--webhook-cert-path" --set webhooks.enabled=false
-expect_absent "webhooks.enabled=false mounts no serving certificate" \
-	"webhook-server-cert" --set webhooks.enabled=false
 expect_absent "webhooks.enabled=false declares no serving certificate volume" \
+	"webhook-server-cert" --set webhooks.enabled=false
+expect_absent "webhooks.enabled=false mounts no serving certificate" \
 	"serving-certs" --set webhooks.enabled=false
 expect_contains "enabled webhooks pass the serving certificate path" \
 	"--webhook-cert-path=/tmp/k8s-webhook-server/serving-certs"
+expect_contains "enabled webhooks declare the serving certificate volume" \
+	"secretName: t-krakend-operator-webhook-server-cert" --show-only templates/deployment.yaml
 expect_contains "enabled webhooks mount the serving certificate" \
-	"secretName: t-krakend-operator-webhook-server-cert"
+	"mountPath: /tmp/k8s-webhook-server/serving-certs" --show-only templates/deployment.yaml
 
 # --- caBundle is base64 of the PEM, never double-encoded ------------------
 pem=$'-----BEGIN CERTIFICATE-----\nZmFrZS1jZXJ0aWZpY2F0ZQ==\n-----END CERTIFICATE-----'
