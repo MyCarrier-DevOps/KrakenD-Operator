@@ -373,7 +373,7 @@ The operator uses leader election (`krakend-operator-leader` lease). You can run
 
 ### Gateway Replicas
 
-Set `spec.replicas` on the `KrakenDGateway` resource. If HPA is configured (`spec.autoscaling`), the operator creates an HPA targeting the gateway Deployment.
+Set `spec.replicas` on the `KrakenDGateway` resource. With `spec.autoscaling` set, the operator creates an HPA targeting the gateway Deployment, starts a new Deployment at `spec.autoscaling.minReplicas` (1 when unset), and never writes the replica count again: the HPA owns it, and `spec.replicas` is ignored (the webhook warns when both are set).
 
 ---
 
