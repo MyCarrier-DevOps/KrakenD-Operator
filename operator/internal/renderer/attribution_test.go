@@ -147,17 +147,36 @@ func TestAttribute_RouterErrorsRespectMethods(t *testing.T) {
 			output:    "ERROR testing the configuration file:\thandlers are already registered for path '/a/:id'\n",
 			wantIndex: []int{0, 1},
 		},
+		{
+			name: "conflict needs the new path and the prefix in the same method",
+			rendered: `{"endpoints":[{"endpoint":"/a/{id}","method":"GET"},` +
+				`{"endpoint":"/a/{name}","method":"GET"},{"endpoint":"/a/{name}","method":"POST"}]}`,
+			output: "ERROR testing the configuration file:\t':name' in new path '/a/:name' " +
+				"conflicts with existing wildcard ':id' in existing prefix '/a/:id'\n",
+			wantIndex: []int{0, 1},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			names := []string{"a", "b", "c"}
 			sources := []types.NamespacedName{{Name: "a"}, {Name: "b"}, {Name: "c"}}
 			var indices []int
+			var blamed []string
 			for _, a := range Attribute([]byte(tc.rendered), sources, tc.output) {
 				indices = append(indices, a.Index)
+				blamed = append(blamed, a.Endpoint.Name)
 			}
 			slices.Sort(indices)
+			slices.Sort(blamed)
 			if !slices.Equal(indices, tc.wantIndex) {
 				t.Errorf("blamed indices = %v, want %v", indices, tc.wantIndex)
+			}
+			var wantNames []string
+			for _, i := range tc.wantIndex {
+				wantNames = append(wantNames, names[i])
+			}
+			if !slices.Equal(blamed, wantNames) {
+				t.Errorf("blamed endpoints = %v, want %v", blamed, wantNames)
 			}
 		})
 	}
