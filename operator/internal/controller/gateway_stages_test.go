@@ -648,3 +648,44 @@ func TestGatewayReconcile_UpgradeRolloutDoesNotRerunThePostRestartJob(t *testing
 		t.Errorf("the migration rollout re-ran the post-restart Job: %d Job(s) created", len(jobs.Items))
 	}
 }
+
+func TestGatewayReconcile_RestoresADeletedAppliedConfigMapFromTheAppliedConfigNotTheRejectedRender(t *testing.T) {
+	gw := reconciledGateway()
+	const lastGood = `{"version":3,"name":"last-good"}`
+	const rejected = `{"version":3,"name":"rejected"}`
+	c := fakeClientBuilder().WithObjects(gw, legacyConfigMap(gw, lastGood)).WithStatusSubresource(gw).Build()
+	rend := renderOf(lastGood)
+	val := &countingValidator{}
+	r := newTestGatewayReconciler(c, rend, val)
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile of the last-good config: %v", err)
+	}
+	appliedName := resources.ConfigMapName(gw, hash.SHA256Hex([]byte(lastGood)))
+	var applied corev1.ConfigMap
+	getObject(t, c, gw, appliedName, &applied)
+	if err := c.Delete(context.Background(), &applied); err != nil {
+		t.Fatal(err)
+	}
+
+	*rend = *renderOf(rejected)
+	val.err = rejectedBy("- at '/endpoints/0/endpoint': bad")
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile of the rejected config: %v", err)
+	}
+
+	var restored corev1.ConfigMap
+	getObject(t, c, gw, appliedName, &restored)
+	if got := restored.Data[resources.ConfigKey]; got != lastGood {
+		t.Errorf("restored config = %q, want the applied %q and never the rejected render", got, lastGood)
+	}
+	if got := mountedConfig(t, c, gw); got != appliedName {
+		t.Errorf("Deployment mounts %q, want the restored %q", got, appliedName)
+	}
+	var rejectedCM corev1.ConfigMap
+	err := c.Get(context.Background(), types.NamespacedName{
+		Namespace: gw.Namespace, Name: resources.ConfigMapName(gw, hash.SHA256Hex([]byte(rejected))),
+	}, &rejectedCM)
+	if !apierrors.IsNotFound(err) {
+		t.Errorf("the rejected render must never be published; Get returned %v", err)
+	}
+}
