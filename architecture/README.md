@@ -1375,7 +1375,10 @@ keeps serving the last applied one; there is no per-endpoint quarantine.
 so each `krakend check` finding (a `/endpoints/<i>` pointer, or a
 `METHOD /path` or `path '…'` in router errors) maps back to its
 KrakenDEndpoint. Those endpoints get `Accepted=False/GatewayConfigRejected`,
-and every other endpoint keeps the verdict of the applied config. A later
+and every other endpoint keeps the verdict of the applied config, except
+that a `GatewayConfigRejected` no finding names any more is removed. While no
+config has ever been applied, `Accepted` is removed from every endpoint that
+carries it, so a recreated gateway cannot inherit its predecessor's verdicts. A later
 pass that renders the same rejected config reuses the remembered verdict
 and writes nothing.
 
