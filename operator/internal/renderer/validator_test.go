@@ -111,19 +111,19 @@ func TestValidationError_Unwrap(t *testing.T) {
 	}
 }
 
-func TestPrepareValidationCopy_NoStripping(t *testing.T) {
+func TestValidationCopy_CEIsUnchanged(t *testing.T) {
 	input := []byte(`{"version":3,"endpoints":[{"endpoint":"/api"},{"endpoint":"/*"}]}`)
 	out, _, err := validationCopy(input, v1alpha1.EditionCE)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// When eeWithoutFallback is false, no stripping occurs
+	// A CE render is checked as it is rendered
 	if string(out) != string(input) {
-		t.Error("expected unchanged output when eeWithoutFallback is false")
+		t.Error("expected a CE render to be unchanged")
 	}
 }
 
-func TestPrepareValidationCopy_NoEndpoints(t *testing.T) {
+func TestValidationCopy_NoEndpoints(t *testing.T) {
 	input := []byte(`{"version":3}`)
 	out, _, err := validationCopy(input, v1alpha1.EditionEE)
 	if err != nil {
@@ -134,7 +134,7 @@ func TestPrepareValidationCopy_NoEndpoints(t *testing.T) {
 	}
 }
 
-func TestPrepareValidationCopy_EmptyEndpointsArray(t *testing.T) {
+func TestValidationCopy_EmptyEndpointsArray(t *testing.T) {
 	input := []byte(`{"endpoints":[],"version":3}`)
 	out, _, err := validationCopy(input, v1alpha1.EditionEE)
 	if err != nil {
@@ -151,14 +151,14 @@ func TestPrepareValidationCopy_EmptyEndpointsArray(t *testing.T) {
 	}
 }
 
-func TestPrepareValidationCopy_InvalidJSON(t *testing.T) {
+func TestValidationCopy_InvalidJSON(t *testing.T) {
 	_, _, err := validationCopy([]byte(`{invalid`), v1alpha1.EditionEE)
 	if err == nil {
 		t.Fatal("expected error for invalid JSON")
 	}
 }
 
-func TestPrepareValidationCopy_StripsEEExtraConfig(t *testing.T) {
+func TestValidationCopy_StripsEEOnlyExtraConfig(t *testing.T) {
 	input := []byte(
 		`{"version":3,"extra_config":{"backend/redis":{"host":"dragonfly:6379"},"telemetry/logging":{"level":"DEBUG"}}}`,
 	)
@@ -183,7 +183,7 @@ func TestPrepareValidationCopy_StripsEEExtraConfig(t *testing.T) {
 	}
 }
 
-func TestPrepareValidationCopy_StripsEEExtraConfigRemovesEmptyBlock(t *testing.T) {
+func TestValidationCopy_DropsEmptiedExtraConfigBlock(t *testing.T) {
 	input := []byte(`{"version":3,"extra_config":{"backend/redis":{"host":"dragonfly:6379"}}}`)
 	out, _, err := validationCopy(input, v1alpha1.EditionCE)
 	if err != nil {
