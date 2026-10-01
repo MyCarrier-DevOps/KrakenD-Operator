@@ -431,6 +431,17 @@ func TestValidate_EEWildcardConflictsWithSameMethodRouteUnderPrefix(t *testing.T
 			t.Errorf("output %q blames %s, which the EE router accepts", verr.Output, accepted)
 		}
 	}
+	sources := []types.NamespacedName{
+		{Namespace: "ns", Name: "p"}, {Namespace: "ns", Name: "wild"}, {Namespace: "ns", Name: "static"},
+		{Namespace: "ns", Name: "post"}, {Namespace: "ns", Name: "pq"},
+	}
+	blamed := map[types.NamespacedName]bool{}
+	for _, a := range Attribute(rendered, sources, verr.Output) {
+		blamed[a.Endpoint] = true
+	}
+	if len(blamed) != 2 || !blamed[sources[1]] || !blamed[sources[2]] {
+		t.Errorf("findings blame %v, want exactly %s and %s", blamed, sources[1], sources[2])
+	}
 	if len(exec.checked) != 0 {
 		t.Errorf("krakend check ran %d time(s); the verdict was already known", len(exec.checked))
 	}
