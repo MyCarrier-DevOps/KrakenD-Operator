@@ -46,11 +46,7 @@ func conditionsEqual(a, b []metav1.Condition) bool {
 	}
 	for _, c := range b {
 		prev, ok := index[c.Type]
-		if !ok ||
-			prev.Status != c.Status ||
-			prev.Reason != c.Reason ||
-			prev.Message != c.Message ||
-			prev.ObservedGeneration != c.ObservedGeneration {
+		if !ok || !sameCondition(&prev, &c) {
 			return false
 		}
 	}
