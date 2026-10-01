@@ -192,16 +192,20 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		r.markDeploymentUpdate(&gw, output.DesiredImage, output.PluginChecksum)
 	}
 
-	// Accepted: the applied render sets every endpoint's verdict; a rejected
-	// render sets GatewayConfigRejected on the endpoints its findings name and
-	// lifts it from those it no longer names. A failed endpoint status write does not stop the
-	// infrastructure stage or the gateway status; it is returned after them
-	// so the reconcile is retried.
+	// Accepted: the applied render sets every endpoint's verdict. On a pass
+	// that applies nothing (a rejected render, or a validator that could not
+	// judge), the endpoints the findings name get GatewayConfigRejected and
+	// those it no longer names lose it; while no config has ever been
+	// applied, every endpoint no finding names also loses its Accepted. A
+	// failed endpoint status write does not stop the infrastructure stage or
+	// the gateway status; it is returned after them so the reconcile is
+	// retried.
 	var acceptanceErr error
 	if output.Checksum == gw.Status.ConfigChecksum {
 		acceptanceErr = r.reconcileEndpointAcceptance(ctx, &gw, endpoints, output)
 	} else {
-		acceptanceErr = r.recordRejections(ctx, endpoints, cfg.rejections, gw.Status.ConfigChecksum == "")
+		never, neverErr := r.neverApplied(ctx, &gw)
+		acceptanceErr = stderrors.Join(neverErr, r.recordRejections(ctx, endpoints, cfg.rejections, never))
 	}
 
 	// Infrastructure stage: always runs, and deploys the applied config.
