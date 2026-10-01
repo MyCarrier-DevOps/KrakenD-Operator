@@ -46,10 +46,10 @@ expect_equal() {
 	if [ "$2" = "$3" ]; then pass "$1"; else fail "$1 (want '$2', got '$3')"; fi
 }
 
-# ca_bundles [helm args...]: the distinct caBundle values, space-separated.
+# ca_bundles [helm args...]: the caBundle value of each webhook, space-separated.
 ca_bundles() {
 	render --show-only templates/validating-webhook-configuration.yaml "$@" |
-		awk '$1 == "caBundle:" { print $2 }' | sort -u | tr '\n' ' '
+		awk '$1 == "caBundle:" { print $2 }' | tr '\n' ' '
 }
 
 # --- webhooks.enabled drives --enable-webhooks ---------------------------
@@ -73,11 +73,15 @@ expect_contains "enabled webhooks mount the serving certificate" \
 pem=$'-----BEGIN CERTIFICATE-----\nZmFrZS1jZXJ0aWZpY2F0ZQ==\n-----END CERTIFICATE-----'
 printf '%s' "$pem" >"$workdir/ca.pem"
 b64=$(printf '%s' "$pem" | base64 | tr -d '\n')
+want="$b64 $b64 $b64 $b64 " # one per webhook
+printf '# Issuer: Example Root CA\n%s' "$pem" >"$workdir/ca-commented.pem"
 no_cert_manager=(--set webhooks.certManager.enabled=false)
-expect_equal "a PEM caBundle is base64-encoded once" "$b64 " \
+expect_equal "a PEM caBundle is base64-encoded once" "$want" \
 	"$(ca_bundles "${no_cert_manager[@]}" --set-file webhooks.caBundle="$workdir/ca.pem")"
-expect_equal "a base64 caBundle is passed through" "$b64 " \
+expect_equal "a base64 caBundle is passed through" "$want" \
 	"$(ca_bundles "${no_cert_manager[@]}" --set webhooks.caBundle="$b64")"
+expect_equal "a PEM with leading text is base64-encoded once" "$want" \
+	"$(ca_bundles "${no_cert_manager[@]}" --set-file webhooks.caBundle="$workdir/ca-commented.pem")"
 
 if [ "$failures" -gt 0 ]; then
 	printf '%d chart render test(s) failed\n' "$failures"
