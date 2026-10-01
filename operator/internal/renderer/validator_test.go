@@ -30,6 +30,8 @@ import (
 	"testing"
 	"time"
 
+	"k8s.io/apimachinery/pkg/types"
+
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 )
 
@@ -431,5 +433,40 @@ func TestValidate_EEWildcardConflictsWithSameMethodRouteUnderPrefix(t *testing.T
 	}
 	if len(exec.checked) != 0 {
 		t.Errorf("krakend check ran %d time(s); the verdict was already known", len(exec.checked))
+	}
+}
+
+// lintingExecutor reports a lint finding on the "/later" endpoint, at the
+// index that endpoint has in the document it was asked to check.
+type lintingExecutor struct {
+	t *testing.T
+}
+
+func (e lintingExecutor) Execute(_ context.Context, _ string, args ...string) ([]byte, error) {
+	data, err := os.ReadFile(args[len(args)-1])
+	if err != nil {
+		return nil, err
+	}
+	at := slices.Index(endpointPaths(e.t, data), "/later")
+	return []byte(fmt.Sprintf("- at '/endpoints/%d/extra_config': additional properties not allowed\n", at)),
+		exitError(e.t, 1)
+}
+
+func TestValidate_FindingAfterWildcardEntriesBlamesItsOwnEndpoint(t *testing.T) {
+	v := NewValidator(ValidatorOptions{Executor: lintingExecutor{t: t}, BinaryPath: "krakend"})
+	rendered := []byte(`{"version":3,"endpoints":[` +
+		`{"endpoint":"/*","method":"GET"},{"endpoint":"/v1/*","method":"GET"},{"endpoint":"/later","method":"GET"}]}`)
+	sources := []types.NamespacedName{
+		{Namespace: "ns", Name: "root"}, {Namespace: "ns", Name: "prefix"}, {Namespace: "ns", Name: "later"},
+	}
+
+	err := v.Validate(context.Background(), rendered, v1alpha1.EditionEE)
+	var verr *ValidationError
+	if !errors.As(err, &verr) {
+		t.Fatalf("Validate = %v, want a ValidationError", err)
+	}
+	got := Attribute(rendered, sources, verr.Output)
+	if len(got) != 1 || got[0].Endpoint != sources[2] {
+		t.Errorf("attribution = %+v, want the single finding blamed on %s, not a neighbour", got, sources[2])
 	}
 }
