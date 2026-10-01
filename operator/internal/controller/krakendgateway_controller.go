@@ -19,6 +19,7 @@ package controller
 import (
 	"cmp"
 	"context"
+	stderrors "errors"
 	"fmt"
 	"slices"
 	"time"
@@ -51,6 +52,7 @@ import (
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 	"github.com/mycarrier-devops/krakend-operator/internal/resources"
+	"github.com/mycarrier-devops/krakend-operator/internal/util/hash"
 )
 
 // KrakenDGatewayReconciler reconciles a KrakenDGateway object.
@@ -63,6 +65,10 @@ type KrakenDGatewayReconciler struct {
 	Renderer  renderer.Renderer
 	Validator renderer.Validator
 	Clock     utilclock.Clock
+
+	// rejections remembers each gateway's last rejected validation input,
+	// so an unchanged bad render is not re-validated on every event.
+	rejections rejectionMemo
 }
 
 // +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendgateways,verbs=get;list;watch;create;update;patch;delete
@@ -175,7 +181,6 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		// Validate, then update the ConfigMap. No phase is written for the
 		// steps in between: each write would re-enqueue the gateway.
 		if err := r.validateConfig(ctx, &gw, output.JSON, ceFallback); err != nil {
-			configValidationFailures.Inc()
 			return ctrl.Result{}, r.handleValidationError(ctx, &gw, before, err)
 		}
 
@@ -556,7 +561,9 @@ func (r *KrakenDGatewayReconciler) inspectDeploymentStatus(
 	}
 }
 
-// validateConfig runs the krakend check validation pipeline.
+// validateConfig runs krakend check on the validation copy of jsonData.
+// When the validator already rejected identical input for this gateway, the
+// remembered rejection is returned without running krakend check again.
 func (r *KrakenDGatewayReconciler) validateConfig(
 	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
@@ -568,28 +575,47 @@ func (r *KrakenDGatewayReconciler) validateConfig(
 	if err != nil {
 		return fmt.Errorf("preparing validation copy: %w", err)
 	}
-	return r.Validator.Validate(ctx, validationJSON)
+	key := client.ObjectKeyFromObject(gw)
+	checksum := hash.SHA256Hex(validationJSON)
+	if rejected := r.rejections.lookup(key, checksum); rejected != nil {
+		return rejected
+	}
+	err = r.Validator.Validate(ctx, validationJSON)
+	var rejected *renderer.ValidationError
+	switch {
+	case err == nil:
+		r.rejections.forget(key)
+	case stderrors.As(err, &rejected):
+		configValidationFailures.Inc()
+		r.rejections.remember(key, checksum, rejected)
+	}
+	return err
 }
 
 // handleValidationError records a rejected configuration: ConfigValid=False
-// with the validator's output, and phase Error. It returns nil: the
-// rejection is persistent, and a change to any input re-enqueues the
-// gateway.
+// with the validator's output, and phase Error. The Warning event fires only
+// when the recorded verdict changes, so a gateway that keeps rendering the
+// same rejected config stays quiet. It returns nil: the rejection is
+// persistent, and a change to any input re-enqueues the gateway.
 func (r *KrakenDGatewayReconciler) handleValidationError(
 	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
 	before *v1alpha1.KrakenDGatewayStatus,
 	validationErr error,
 ) error {
+	message := validationErr.Error()
+	prev := meta.FindStatusCondition(before.Conditions, v1alpha1.ConditionConfigValid)
 	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
 		Type:               v1alpha1.ConditionConfigValid,
 		Status:             metav1.ConditionFalse,
 		ObservedGeneration: gw.Generation,
 		Reason:             v1alpha1.ReasonConfigValidationFailed,
-		Message:            validationErr.Error(),
+		Message:            message,
 	})
 	gw.Status.Phase = v1alpha1.PhaseError
-	r.Recorder.Event(gw, "Warning", v1alpha1.ReasonConfigValidationFailed, validationErr.Error())
+	if prev == nil || prev.Status != metav1.ConditionFalse || prev.Message != message {
+		r.Recorder.Event(gw, "Warning", v1alpha1.ReasonConfigValidationFailed, message)
+	}
 	if err := r.updateStatusIfChanged(ctx, gw, before); err != nil {
 		return fmt.Errorf("updating status after validation failure: %w", err)
 	}
