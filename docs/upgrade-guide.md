@@ -995,6 +995,21 @@ A gateway that sets it was failing validation and held at its last-known-good
 config, so on upgrade it applies all of its pending changes at once. No live
 gateway is known to set it.
 
+### Dragonfly, ExternalSecret and VirtualService are watched
+
+When their CRDs are installed at operator startup, the operator now watches
+the Dragonfly, ExternalSecret and VirtualService objects it creates:
+
+- an edited or deleted VirtualService or ExternalSecret is restored at once;
+- Dragonfly becoming ready is reflected in `DragonflyReady` at once.
+
+**A CRD installed after the operator started is not watched until the
+operator restarts.** The operator logs `optional CRD not installed at
+startup` for each such kind. Its objects are still created and corrected on
+every gateway reconcile, just not on their own changes. Restart the operator
+(`kubectl rollout restart deployment -n <operator-namespace> <operator-deployment>`)
+after installing Istio, External Secrets Operator or the Dragonfly Operator.
+
 ---
 
 ## v0.14.0 — openapi-serve liveness probe (one-time rollout)
