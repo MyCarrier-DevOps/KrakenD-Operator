@@ -47,6 +47,19 @@ func TestEndpointReady(t *testing.T) {
 			[]metav1.Condition{testCondition("Available", metav1.ConditionTrue, "ReferencesValid", 1)},
 			metav1.ConditionUnknown, "Pending", "not been resolved",
 		},
+		{
+			"gateway missing",
+			[]metav1.Condition{testCondition("ResolvedRefs", metav1.ConditionFalse, "GatewayNotFound", 2)},
+			metav1.ConditionFalse, "GatewayNotFound", "GatewayNotFound message",
+		},
+		{
+			"refs failure wins over acceptance",
+			[]metav1.Condition{
+				testCondition("ResolvedRefs", metav1.ConditionFalse, "PolicyNotFound", 2),
+				testCondition("Accepted", metav1.ConditionTrue, "Accepted", 2),
+			},
+			metav1.ConditionFalse, "PolicyNotFound", "PolicyNotFound message",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
