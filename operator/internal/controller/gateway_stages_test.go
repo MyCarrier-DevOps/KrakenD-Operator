@@ -280,3 +280,30 @@ func TestGatewayReconcile_ImageChangeIsNotReadyUntilTheDeploymentRunsIt(t *testi
 		t.Errorf("Ready = %+v, want not True before the Deployment runs img:v2", ready)
 	}
 }
+
+func TestGatewayReconcile_PluginChangeIsNotReadyUntilTheDeploymentRunsIt(t *testing.T) {
+	gw := servingGateway("applied", "img:v1")
+	gw.Status.PluginChecksum = "plugins-old"
+	stale := makeConvergedDeployment(gw, "applied")
+	stale.Spec.Template.Annotations[resources.PluginChecksumAnnotation] = "plugins-old"
+	c := fakeClientBuilder().WithObjects(gw, stale).WithStatusSubresource(gw).
+		WithInterceptorFuncs(staleDeploymentReads(stale)).Build()
+	rend := &mockRenderer{output: &renderer.RenderOutput{
+		JSON: []byte(`{"version":3}`), Checksum: "applied", DesiredImage: "img:v1", PluginChecksum: "plugins-new",
+	}}
+	r := newTestGatewayReconciler(c, rend, &mockValidator{})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	got := getGateway(t, c, gw)
+	progressing := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionProgressing)
+	if progressing == nil || progressing.Status != metav1.ConditionTrue || progressing.Reason != "DeploymentUpdated" {
+		t.Errorf("Progressing = %+v, want True/DeploymentUpdated while the Deployment still runs the old plugins",
+			progressing)
+	}
+	ready := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionReady)
+	if ready != nil && ready.Status == metav1.ConditionTrue {
+		t.Errorf("Ready = %+v, want not True before the Deployment runs the new plugins", ready)
+	}
+}
