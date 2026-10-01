@@ -370,8 +370,8 @@ status:
     - type: DragonflyReady
       status: "True"
       lastTransitionTime: "2026-04-03T10:00:10Z"
-      reason: DragonflyPhaseReady
-      message: "Dragonfly CR reports ready phase"
+      reason: DragonflyReady
+      message: "Dragonfly instance is ready"
     - type: IstioConfigured
       status: "True"
       lastTransitionTime: "2026-04-03T10:00:02Z"
@@ -380,8 +380,8 @@ status:
     - type: Progressing
       status: "False"
       lastTransitionTime: "2026-04-03T10:00:15Z"
-      reason: DeploymentComplete
-      message: "Rolling update completed"
+      reason: RolloutComplete
+      message: "Deployment rollout completed successfully"
     - type: LicenseSecretUnavailable
       status: "False"
       lastTransitionTime: "2026-04-03T09:59:55Z"
@@ -1004,7 +1004,7 @@ spec:
 
 ### Alternative: Pre-Existing Secret
 
-When `license.secretRef` is used instead of `externalSecret`, the operator skips ExternalSecret creation and directly mounts the referenced Secret. The user is responsible for managing rotation. If the referenced Secret does not exist, the operator sets `LicenseSecretUnavailable=True`, emits a `LicenseSecretMissing` Warning event (once), sets `LicenseValid=Unknown` and requeues within 5 minutes. The gateway phase is not set to `Error` for this: the Deployment and its last fallback decision are kept, and the pods keep the license checksum they already carry, so a missing Secret never rolls them. If the last known expiry (`status.licenseExpiry`) is already inside the 1 h safety buffer or past, the stage verdict applies instead of `Unknown` (`LicenseValid=False`, reason `LicensePreExpiry` or `LicenseExpired`, and the CE fallback when `fallbackToCE` is set). The operator resumes normal license processing once the Secret becomes available.
+When `license.secretRef` is used instead of `externalSecret`, the operator skips ExternalSecret creation and directly mounts the referenced Secret. The user is responsible for managing rotation. If the referenced Secret does not exist, the operator sets `LicenseSecretUnavailable=True`, emits a `LicenseSecretMissing` Warning event (once), sets `LicenseValid=Unknown` and requeues within 5 minutes. The gateway phase is not set to `Error` for the missing Secret alone (if the last known expiry has passed and `fallbackToCE` is off, `LicenseExpired=True` still gives phase `Error`): the Deployment and its last fallback decision are kept, and the pods keep the license checksum they already carry, so a missing Secret never rolls them. If the last known expiry (`status.licenseExpiry`) is already inside the 1 h safety buffer or past, the stage verdict applies instead of `Unknown` (`LicenseValid=False`, reason `LicensePreExpiry` or `LicenseExpired`, and the CE fallback when `fallbackToCE` is set). The operator resumes normal license processing once the Secret becomes available.
 
 ---
 
@@ -1480,7 +1480,7 @@ restart on the previous ReplicaSet.
 The license is mounted with `subPath`, which never receives Secret updates,
 and KrakenD reads its license at startup. The pod template therefore also
 carries `krakend.io/checksum-license`, the SHA-256 of the license bytes the
-operator read, set only for an EE gateway that is not falling back to CE.
+operator read. It tracks the mounted license, so it is present for every EE gateway with a readable license, CE fallback or not (the license stays mounted under fallback, so a fallback toggle alone never changes the pod template), and absent on a Community gateway.
 Changing the license in the Secret changes the annotation, rolls the
 Deployment (`Progressing=True`, reason `DeploymentUpdated`) and holds `Ready`
 until the new pods are available. When the Secret cannot be read, the
@@ -1801,7 +1801,7 @@ conditions and shown with `-o wide`.
 | `IstioConfigured` | VirtualService was successfully created/updated |
 | `LicenseSecretUnavailable` | `True` while the license cannot be read: the ExternalSecret failed to sync, the referenced Secret (`secretRef`) or its key does not exist, or the certificate does not parse. `LicenseValid` is `Unknown` meanwhile, unless the last known expiry (`status.licenseExpiry`) is already inside the safety buffer or past, in which case the stage verdict applies. `False` with reason `SecretAvailable` once it can be read |
 | `LicenseExpired` | License has expired or is inside the 1 h safety buffer (reason `LicenseExpired` or `LicensePreExpiry`), whether or not `fallbackToCE` is set; without `fallbackToCE` (no `LicenseDegraded`) the gateway reports phase `Error`, and its pods self-terminate at T-0. `False` with reason `LicenseRestored` after recovery, and absent otherwise |
-| `Progressing` | A rolling deployment is in progress; it ends (`RolloutComplete`) only when the Deployment has observed the change, its pods carry the applied config checksum, and every replica is updated and available |
+| `Progressing` | A rolling deployment is in progress; it ends (`RolloutComplete`) only when the Deployment has observed the change, its pods carry the applied config checksum, image, plugin checksum and license checksum, and every replica is updated and available |
 
 ### Endpoint Status Conditions
 
