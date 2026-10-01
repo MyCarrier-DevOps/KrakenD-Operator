@@ -29,6 +29,7 @@ import (
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -91,7 +92,7 @@ func openAPISpec(t *testing.T, operations map[string]string) string {
 
 // newSyncedAutoConfig creates a gateway, a spec ConfigMap and an OnChange
 // AutoConfig sourcing that ConfigMap in a fresh namespace, and waits until the
-// AutoConfig is Synced and every generated endpoint is Active.
+// AutoConfig is Synced and Ready and every generated endpoint is Active.
 func newSyncedAutoConfig(t *testing.T) *v1alpha1.KrakenDAutoConfig {
 	t.Helper()
 	ns := testNamespace(t)
@@ -157,6 +158,11 @@ func newSyncedAutoConfig(t *testing.T) *v1alpha1.KrakenDAutoConfig {
 		}
 		if cur.Status.Phase != v1alpha1.AutoConfigPhaseSynced {
 			return fmt.Errorf("expected phase Synced, got %q", cur.Status.Phase)
+		}
+		ready := meta.FindStatusCondition(cur.Status.Conditions, v1alpha1.ConditionReady)
+		if ready == nil || ready.Status != metav1.ConditionTrue || cur.Status.ObservedGeneration != cur.Generation {
+			return fmt.Errorf("expected Ready=True at generation %d, got %+v (observedGeneration %d)",
+				cur.Generation, ready, cur.Status.ObservedGeneration)
 		}
 		if cur.Status.GeneratedEndpoints != len(initialEndpointNames) {
 			return fmt.Errorf("expected %d generated endpoints, got %d",
