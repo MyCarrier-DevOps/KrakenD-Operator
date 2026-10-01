@@ -175,10 +175,11 @@ func (v *GatewayValidator) validate(gw, old *v1alpha1.KrakenDGateway) (admission
 		// CR is accepted, the rendered Deployment is rejected by the API server,
 		// and the reconcile then fails on backoff. That failure is SILENT -- a
 		// probe-only edit does not change the config checksum, so no validation or
-		// ConfigValid write happens, and reconcileOwnedResources returns before
-		// inspectDeploymentStatus, so Available is never set False. The CR keeps
-		// its last-good Ready and phase with no condition and no event while the
-		// Deployment, HPA and post-restart Job freeze. Rejecting the input up front is the only
+		// ConfigValid write happens, and the failed Deployment update leaves the
+		// old Deployment in place: inspectDeploymentStatus still finds it
+		// converged, so Available is never set False. The CR keeps its last-good
+		// Ready and phase with no condition and no event while the Deployment,
+		// HPA and post-restart Job freeze. Rejecting the input up front is the only
 		// place the user gets told.
 		//
 		// Fail-closed with no update ratchet, unlike the postRestartJob and
