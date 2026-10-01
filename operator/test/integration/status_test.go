@@ -534,3 +534,64 @@ func (cw *conditionLossWatch) requireNoLoss(t *testing.T) {
 		t.Fatalf("a status write dropped another writer's condition:\n  %s", strings.Join(cw.violations, "\n  "))
 	}
 }
+
+func TestPolicy_ReferencedByFollowsPolicyRefChange(t *testing.T) {
+	ns := testNamespace(t)
+	createGateway(t, ns, "gw-refs")
+	for _, name := range []string{"pol-a", "pol-b"} {
+		if err := k8sClient.Create(ctx, &v1alpha1.KrakenDBackendPolicy{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		}); err != nil {
+			t.Fatalf("create policy %s: %v", name, err)
+		}
+	}
+	ep := &v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "ep-refs", Namespace: ns},
+		Spec: v1alpha1.KrakenDEndpointSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: "gw-refs"},
+			Endpoints: []v1alpha1.EndpointEntry{{
+				Endpoint: "/refs", Method: "GET",
+				Backends: []v1alpha1.BackendSpec{{
+					Host: []string{"http://svc:8080"}, URLPattern: "/refs",
+					PolicyRef: &v1alpha1.PolicyRef{Name: "pol-a"},
+				}},
+			}},
+		},
+	}
+	if err := k8sClient.Create(ctx, ep); err != nil {
+		t.Fatal(err)
+	}
+	expectRefs := func(a, b int) func() error {
+		return func() error {
+			for name, want := range map[string]int{"pol-a": a, "pol-b": b} {
+				var p v1alpha1.KrakenDBackendPolicy
+				if err := k8sClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, &p); err != nil {
+					return err
+				}
+				if p.Status.ReferencedBy != want {
+					return fmt.Errorf("%s referencedBy = %d, want %d", name, p.Status.ReferencedBy, want)
+				}
+				ready := meta.FindStatusCondition(p.Status.Conditions, "Ready")
+				if ready == nil || ready.Status != metav1.ConditionTrue || p.Status.ObservedGeneration != p.Generation {
+					return fmt.Errorf("%s: Ready %+v, observedGeneration %d, want True at %d",
+						name, ready, p.Status.ObservedGeneration, p.Generation)
+				}
+			}
+			return nil
+		}
+	}
+	eventually(t, expectRefs(1, 0))
+
+	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		cur, err := getEndpoint(client.ObjectKeyFromObject(ep))
+		if err != nil {
+			return err
+		}
+		cur.Spec.Endpoints[0].Backends[0].PolicyRef = &v1alpha1.PolicyRef{Name: "pol-b"}
+		return k8sClient.Update(ctx, cur)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, expectRefs(0, 1))
+}
