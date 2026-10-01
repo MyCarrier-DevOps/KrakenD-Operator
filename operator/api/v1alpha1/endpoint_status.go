@@ -62,5 +62,11 @@ func EndpointReady(conds []metav1.Condition) (status metav1.ConditionStatus, rea
 // EndpointPhaseFromReady returns the compatibility phase for a KrakenDEndpoint
 // whose Ready condition has the given status and reason.
 func EndpointPhaseFromReady(status metav1.ConditionStatus, reason string) EndpointPhase {
+	switch {
+	case status == metav1.ConditionTrue:
+		return EndpointPhaseActive
+	case status == metav1.ConditionUnknown:
+		return EndpointPhasePending
+	}
 	return ""
 }
