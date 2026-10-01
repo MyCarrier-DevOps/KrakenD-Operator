@@ -62,11 +62,12 @@ var (
 	)
 )
 
-// ceDroppedEndpointNamespaces are the Enterprise-only entry namespaces a
-// CE-edition render drops instead of carrying them inert:
+// ceDroppedEndpointNamespaces are the Enterprise-only entry namespaces every
+// CE render (CE edition or CE fallback) drops without listing them:
 // documentation/openapi, which AutoConfig generates on every endpoint and
-// only KrakenD Enterprise publishes. A CE gateway loses nothing by it, so
-// EEOnlyNamespaces leaves them out and admission does not reject them.
+// only KrakenD Enterprise publishes. Dropping it changes nothing the gateway
+// serves, so EEOnlyNamespaces leaves it out, admission does not reject it,
+// and a CE fallback does not report it per endpoint.
 var ceDroppedEndpointNamespaces = namespaceSet("documentation/openapi")
 
 func namespaceSet(names ...string) map[string]struct{} {
