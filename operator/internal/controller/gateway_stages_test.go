@@ -689,3 +689,38 @@ func TestGatewayReconcile_RestoresADeletedAppliedConfigMapFromTheAppliedConfigNo
 		t.Errorf("the rejected render must never be published; Get returned %v", err)
 	}
 }
+
+func TestGatewayReconcile_HoldsTheDeploymentWhenTheAppliedConfigMapIsNotTheGatewaysOwn(t *testing.T) {
+	const applied = `{"version":3,"name":"applied"}`
+	cases := []struct {
+		name   string
+		render *mockRenderer
+		val    renderer.Validator
+	}{
+		{
+			name:   "newer render rejected",
+			render: renderOf(`{"version":3,"name":"rejected"}`),
+			val:    &countingValidator{err: rejectedBy("- at '/endpoints/0/endpoint': bad")},
+		},
+		{name: "render is the applied config", render: renderOf(applied), val: &mockValidator{}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gw := reconciledGateway()
+			gw.Status.ConfigChecksum = hash.SHA256Hex([]byte(applied))
+			squatter := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
+				Name: resources.ConfigMapName(gw, gw.Status.ConfigChecksum), Namespace: gw.Namespace,
+			}, Data: map[string]string{resources.ConfigKey: `{"version":3,"name":"something else"}`}}
+			c := fakeClientBuilder().WithObjects(gw, squatter, legacyDeployment(gw)).WithStatusSubresource(gw).Build()
+			r := newTestGatewayReconciler(c, tc.render, tc.val)
+
+			err := reconcileGateway(t, r, gw)
+			if err == nil || !strings.Contains(err.Error(), "not controlled by gateway") {
+				t.Fatalf("reconcile error = %v, want a refusal to serve a ConfigMap the gateway does not control", err)
+			}
+			if got := mountedConfig(t, c, gw); got != gw.Name {
+				t.Errorf("Deployment mounts %q; it must be held mounting %q", got, gw.Name)
+			}
+		})
+	}
+}
