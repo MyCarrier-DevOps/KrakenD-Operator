@@ -493,3 +493,11 @@ func appliedKey(gw *v1alpha1.KrakenDGateway, current v1alpha1.Edition) configKey
 func isApplied(gw *v1alpha1.KrakenDGateway, output *renderer.RenderOutput, edition v1alpha1.Edition) bool {
 	return appliedKey(gw, edition) == configKey{checksum: output.Checksum, edition: edition}
 }
+
+// appliedFallback reports whether the applied config is the CE-fallback
+// render of an EE gateway. The image follows the applied config's edition,
+// never the edition the license asks for next: CE pods must never load a
+// config validated only as EE.
+func appliedFallback(gw *v1alpha1.KrakenDGateway, current v1alpha1.Edition) bool {
+	return gw.Spec.Edition == v1alpha1.EditionEE && appliedKey(gw, current).edition == v1alpha1.EditionCE
+}
