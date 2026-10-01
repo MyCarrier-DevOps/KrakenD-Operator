@@ -878,18 +878,27 @@ and its edition match:
 - **Image.** The Deployment's image follows the applied edition, never the
   edition the license asks for next. While a CE-fallback render is rejected,
   the pods keep the EE image with the EE-validated config. They switch to the
-  CE image only once a CE-validated config is applied.
-- **Plugins.** Plugins follow the spec like the image version does: the
-  plugin sources, the plugin checksum and `DeploymentUpdated` are not held
-  back by a rejected render.
+  CE image only once a CE-validated config is applied. While the applied
+  edition differs from the current one (a rejected `spec.edition` flip, or a
+  CE fallback whose render is rejected), changes to `spec.version`,
+  `spec.image` and `spec.ceImage` wait as well. They take effect once a
+  render is validated for the new edition.
+- **Plugins.** Plugins are not held back by the config verdict: the plugin
+  sources, the plugin checksum and `DeploymentUpdated` follow the spec,
+  even while a render is rejected.
 
 On upgrade, a status without `configEdition` is read as validated for the
 edition the gateway renders for now, which is the image it already runs.
 The field is saved on the first reconcile, whatever the verdict on that
-render, and causes no rollout. The adoption assumes the license evaluation
-in that reconcile reaches the same fallback decision the previous version
-was running. A gateway upgraded exactly at a license expiry boundary may be
-adopted with the edition it was running.
+render, and causes no rollout. For an EE gateway the edition is read from
+`status.activeImage` when it equals exactly one of the EE image and the CE
+image of the spec. Otherwise (a custom image, or both images equal) the
+adoption assumes the license evaluation in that reconcile reaches the same
+fallback decision the previous version was running. A gateway with such an
+image that is upgraded exactly at a license expiry boundary may be adopted
+with an edition other than the one it was running. For example, an EE gateway
+adopted as CE gets the CE image for an EE-validated config, until a render is
+validated for CE.
 
 ---
 
