@@ -98,7 +98,7 @@ func getGateway(t *testing.T, c client.Client, gw *v1alpha1.KrakenDGateway) *v1a
 // the given checksum.
 func renderOutput(checksum string) *mockRenderer {
 	return &mockRenderer{output: &renderer.RenderOutput{
-		JSON: []byte(`{"version":3,"checksum":"` + checksum + `"}`), Checksum: checksum, DesiredImage: "img:v1",
+		JSON: []byte(`{"version":3,"checksum":"` + checksum + `"}`), Checksum: checksum,
 	}}
 }
 
