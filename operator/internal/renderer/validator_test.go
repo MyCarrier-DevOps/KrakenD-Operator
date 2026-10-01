@@ -525,3 +525,13 @@ func TestValidate_EEWildcardEndpointAllowsOneBackend(t *testing.T) {
 		t.Errorf("attribution = %+v, want one finding blamed on %s", got, sources[1])
 	}
 }
+
+func TestValidate_EEWildcardMayUseAParameterTheEndpointDeclares(t *testing.T) {
+	v := NewValidator(ValidatorOptions{Executor: &capturingExecutor{}, BinaryPath: "krakend"})
+	rendered := []byte(`{"version":3,"endpoints":[` +
+		`{"endpoint":"/a/{Wildcard}/*","method":"GET","backend":[{"url_pattern":"/x/{Wildcard}"}]}]}`)
+
+	if err := v.Validate(context.Background(), rendered, v1alpha1.EditionEE); err != nil {
+		t.Errorf("Validate = %v; the endpoint declares {Wildcard} itself, so EE resolves it", err)
+	}
+}
