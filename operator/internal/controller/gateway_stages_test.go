@@ -943,8 +943,11 @@ func TestGatewayReconcile_CollectsTheLegacyConfigMapOnceNoLiveReplicaSetMountsIt
 	var live appsv1.ReplicaSet
 	getObject(t, c, gw, oldRS.Name, &live)
 	live.Spec.Replicas = ptr.To(int32(0))
-	live.Status.Replicas = 0 // the rollout finished: the old ReplicaSet is scaled to zero
 	if err := c.Update(context.Background(), &live); err != nil {
+		t.Fatal(err)
+	}
+	live.Status.Replicas = 0 // the rollout finished: the old ReplicaSet is scaled to zero
+	if err := c.Status().Update(context.Background(), &live); err != nil {
 		t.Fatal(err)
 	}
 	if err := reconcileGateway(t, r, gw); err != nil {
