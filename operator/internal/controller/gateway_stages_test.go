@@ -1558,3 +1558,46 @@ func TestGatewayReconcile_PartlyConflictedEndpointIsNotRewrittenOnTheNextPass(t 
 		t.Errorf("second reconcile wrote endpoint status %d times, want 0 in a steady state", endpointWrites)
 	}
 }
+
+func TestGatewayReconcile_RejectedPassKeepsTheLiveConflicts(t *testing.T) {
+	gw := servingGateway("applied", "img:v1")
+	good := testEndpoint("good", "/a")
+	bad := testEndpoint("bad", "/b")
+	fresh := []v1alpha1.EndpointConflict{{Endpoint: "/b", Method: "GET", Winner: "default/fresh"}}
+	bad.Status.Conflicts = fresh
+	staleList := interceptor.Funcs{
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if err := c.List(ctx, list, opts...); err != nil {
+				return err
+			}
+			if eps, ok := list.(*v1alpha1.KrakenDEndpointList); ok {
+				for i := range eps.Items {
+					if eps.Items[i].Name == "bad" {
+						eps.Items[i].Status.Conflicts = []v1alpha1.EndpointConflict{
+							{Endpoint: "/b", Method: "GET", Winner: "default/stale"}}
+					}
+				}
+			}
+			return nil
+		},
+	}
+	c := fakeClientBuilder().WithObjects(gw, good, bad).WithStatusSubresource(gw, good, bad).
+		WithInterceptorFuncs(staleList).Build()
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}),
+		&countingValidator{err: rejectedBy(badNamespaceVerdict)})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	var got v1alpha1.KrakenDEndpoint
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(bad), &got); err != nil {
+		t.Fatal(err)
+	}
+	if cond := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionAccepted); cond == nil ||
+		cond.Reason != v1alpha1.ReasonGatewayConfigRejected {
+		t.Fatalf("Accepted = %+v, want the rejection recorded", cond)
+	}
+	if !reflect.DeepEqual(got.Status.Conflicts, fresh) {
+		t.Errorf("status.conflicts = %+v, want the live %+v kept", got.Status.Conflicts, fresh)
+	}
+}
