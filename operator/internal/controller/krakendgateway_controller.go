@@ -1807,6 +1807,9 @@ func gatewayReadinessFor(conds []metav1.Condition) gatewayReadiness {
 	case configValid == nil:
 		return gatewayReadiness{status: metav1.ConditionUnknown, reason: v1alpha1.ReasonPending,
 			message: "Waiting for the first configuration to be validated", phase: v1alpha1.PhasePending}
+	case configValid.Status == metav1.ConditionUnknown:
+		return gatewayReadiness{status: metav1.ConditionUnknown, reason: configValid.Reason,
+			message: configValid.Message, phase: servingPhase(progressing, available)}
 	case condTrue(progressing):
 		return notReady(progressing, v1alpha1.PhaseDeploying)
 	case !condTrue(available):
@@ -1828,3 +1831,8 @@ func condFalse(c *metav1.Condition) bool { return c != nil && c.Status == metav1
 
 // condTrue reports whether c exists and is True.
 func condTrue(c *metav1.Condition) bool { return c != nil && c.Status == metav1.ConditionTrue }
+
+// servingPhase is the phase of a gateway judged only by its rollout.
+func servingPhase(_, _ *metav1.Condition) v1alpha1.GatewayPhase {
+	return v1alpha1.PhaseRunning
+}
