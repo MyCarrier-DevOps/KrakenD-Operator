@@ -900,6 +900,41 @@ with an edition other than the one it was running. For example, an EE gateway
 adopted as CE gets the CE image for an EE-validated config, until a render is
 validated for CE.
 
+### CE fallback removes Enterprise-only features and says exactly which
+
+When an EE license expires (or enters its 1 h safety buffer) and
+`spec.license.fallbackToCE` is set, the gateway now renders a CE config
+instead of loading the EE config into the CE binary. The CE render removes:
+
+- every EE wildcard endpoint (`/prefix/*`), which the CE router cannot load;
+- every Enterprise-only `extra_config` namespace at service, endpoint and
+  backend level, for example `auth/api-keys`, `security/policies`, `redis`,
+  `qos/ratelimit/service`, `backend/http/client` and `documentation/openapi`.
+  KrakenD CE silently ignores these, which previously left routes unprotected
+  with no trace in status.
+
+**What you see:**
+- The gateway reports `CEFallbackApplied=True`, reason `EEFeaturesStripped`,
+  listing every removed feature. `Ready` is False with the same reason, and
+  the phase is `Degraded`.
+- Each affected KrakenDEndpoint reports `Accepted` reason
+  `EEFeaturesStripped` with its list. It is `True` while some of its entries
+  are still served, and `False` when all of them were wildcards.
+- Docs-only namespaces (the endpoints' `documentation/openapi` and the
+  component schemas the docs publish) are dropped too, but they are not
+  listed on the endpoints and never make one not Ready: they change nothing
+  the gateway serves. The gateway's `CEFallbackApplied` lists them.
+- The OpenAPI export init container and the `openapi-serve` sidecar do not
+  run on any CE render (a CE-edition gateway, or a CE fallback), because the
+  CE binary cannot export OpenAPI; in a fallback with `spec.openapi` enabled,
+  `CEFallbackApplied` lists that too. They return with EE.
+- Everything is restored when a valid license is back.
+
+**One-time rollout on upgrade.** Any CE-edition gateway whose entries carry
+`documentation/openapi`, or whose endpoints have component schemas, now
+renders a different config. On operator upgrade that means one rollout plus
+one post-restart Job run, because the Job is keyed by config checksum.
+
 ---
 
 ## v0.14.0 — openapi-serve liveness probe (one-time rollout)
