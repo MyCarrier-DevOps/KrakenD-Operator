@@ -1045,3 +1045,38 @@ func TestReconcilePostRestartJob_SkipsWhileDeploymentRunsAnotherImage(t *testing
 		t.Fatalf("expected no job while the Deployment runs the previous image, got %d", len(jobs.Items))
 	}
 }
+
+func TestReconcileExistingPostRestartRevision_FailedRecreateWaitsForObservedSpec(t *testing.T) {
+	gw := makeGWWithJob("echo ok")
+	jobChecksum, err := resources.PostRestartJobChecksum(gw.Spec.PostRestartJob, gw, "abc123")
+	if err != nil {
+		t.Fatalf("computing job checksum: %v", err)
+	}
+	existing := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{
+		Name: resources.PostRestartJobName(gw, jobChecksum), Namespace: gw.Namespace,
+	}}
+	resources.BuildPostRestartJob(existing, gw, "abc123", jobChecksum)
+	setJobCondition(existing, batchv1.JobFailed)
+	gw.Status.LastPostRestartJobChecksum = jobChecksum
+	gw.Spec.PostRestartJob.BackoffLimit = new(int32(9)) // forces the recreate path
+	dep := makeConvergedDeployment(gw, "abc123")
+	dep.Generation = 2
+	dep.Status.ObservedGeneration = 1
+	c := fakeClientBuilder().WithStatusSubresource(&v1alpha1.KrakenDGateway{}).WithObjects(gw, dep, existing).Build()
+	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
+
+	if err := r.reconcilePostRestartJob(context.Background(), gw, convergedInputs("abc123")); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var got batchv1.Job
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(existing), &got); err != nil {
+		t.Fatalf("the failed job must not be deleted before the Deployment has observed its spec: %v", err)
+	}
+	if len(got.Status.Conditions) == 0 {
+		t.Errorf("the failed job was re-created while the Deployment had not observed its spec")
+	}
+	if gw.Status.LastPostRestartJobChecksum != jobChecksum {
+		t.Errorf("checksum = %q, want %q: nothing may be cleared while the rollout is in flight",
+			gw.Status.LastPostRestartJobChecksum, jobChecksum)
+	}
+}
