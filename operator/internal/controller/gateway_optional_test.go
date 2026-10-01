@@ -28,7 +28,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/resources"
@@ -172,5 +174,35 @@ func TestGatewayReconcile_KeepsChildrenAnotherControllerOwns(t *testing.T) {
 		if err := c.Get(context.Background(), client.ObjectKeyFromObject(ch), u); err != nil {
 			t.Errorf("a %s another gateway controls must survive: %v", ch.GetKind(), err)
 		}
+	}
+}
+
+func TestGatewayReconcile_DeletesWithAUIDPrecondition(t *testing.T) {
+	gw := reconciledGateway()
+	gw.UID = "gw-uid"
+	gw.Status.ConfigChecksum = "applied"
+	vs := controlledChild(gw, virtualServiceGVK, gw.Name)
+	vs.SetUID("vs-uid")
+	var preconditionUID *types.UID
+	c := interceptor.NewClient(
+		fakeClientBuilder().WithRESTMapper(optionalCRDMapper(optionalOwnedGVKs...)).
+			WithObjects(gw, vs).WithStatusSubresource(gw).Build(),
+		interceptor.Funcs{Delete: func(
+			ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.DeleteOption,
+		) error {
+			var o client.DeleteOptions
+			o.ApplyOptions(opts)
+			if o.Preconditions != nil {
+				preconditionUID = o.Preconditions.UID
+			}
+			return cl.Delete(ctx, obj, opts...)
+		}})
+	r := newTestGatewayReconciler(c, renderOutput("applied"), &mockValidator{})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if preconditionUID == nil || *preconditionUID != "vs-uid" {
+		t.Errorf("delete precondition UID = %v, want vs-uid", preconditionUID)
 	}
 }
