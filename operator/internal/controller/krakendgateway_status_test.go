@@ -22,7 +22,11 @@ import (
 	"io/fs"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	appsv1 "k8s.io/api/apps/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -309,5 +313,55 @@ func TestGatewayReconcile_OversizedRejectionWarnsOnce(t *testing.T) {
 	}
 	if got := len(recorder.Events); got != 1 {
 		t.Errorf("got %d events for one oversized rejection reconciled twice, want 1", got)
+	}
+}
+
+// setGatewaySeries gives the gateway a series in every per-gateway metric.
+func setGatewaySeries(namespace, name string) {
+	endpointsPerGateway.WithLabelValues(namespace, name).Set(4)
+	gatewayInfo.WithLabelValues(namespace, name, "CE", "2.7.0").Set(1)
+	dragonflyReady.WithLabelValues(namespace, name).Set(1)
+	licenseExpirySeconds.WithLabelValues(namespace, name).Set(100)
+	reconcileDuration.WithLabelValues("gateway", namespace, name).Observe(0.1)
+}
+
+// remainingGatewaySeries deletes and counts the gateway's leftover series.
+func remainingGatewaySeries(namespace, name string) int {
+	gateway := prometheus.Labels{"namespace": namespace, "name": name}
+	n := endpointsPerGateway.DeletePartialMatch(gateway) +
+		gatewayInfo.DeletePartialMatch(gateway) +
+		dragonflyReady.DeletePartialMatch(gateway) +
+		licenseExpirySeconds.DeletePartialMatch(gateway)
+	return n + reconcileDuration.DeletePartialMatch(prometheus.Labels{
+		"controller": "gateway", "namespace": namespace, "name": name,
+	})
+}
+
+func TestGatewayReconcile_TerminatingGatewayIsLeftAlone(t *testing.T) {
+	gw := testGateway()
+	gw.Namespace = "terminating"
+	gw.Finalizers = []string{"test.krakend.io/hold"}
+	gw.DeletionTimestamp = &metav1.Time{Time: time.Now()}
+	c, phases := gatewayStatusWrites(gw)
+	setGatewaySeries(gw.Namespace, gw.Name)
+	r := &KrakenDGatewayReconciler{
+		Client: c, Scheme: testScheme(), Recorder: fakeRecorder(),
+		Renderer:  &mockRenderer{err: fmt.Errorf("a terminating gateway must not be rendered")},
+		Validator: &mockValidator{},
+	}
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var dep appsv1.Deployment
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(gw), &dep); !apierrors.IsNotFound(err) {
+		t.Errorf("Deployment exists for a terminating gateway (get err = %v)", err)
+	}
+	if len(*phases) != 0 {
+		t.Errorf("status written for a terminating gateway: %v", *phases)
+	}
+	if n := remainingGatewaySeries(gw.Namespace, gw.Name); n != 0 {
+		t.Errorf("%d metric series left for a terminating gateway, want 0", n)
 	}
 }
