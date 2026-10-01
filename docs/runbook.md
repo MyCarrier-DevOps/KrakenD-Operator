@@ -122,8 +122,8 @@ validating; the operator does not write them.
 | `IstioConfigured` | VirtualService has been reconciled |
 | `LicenseValid` | EE license state: `True` (`LicenseOK`), `True` (`LicenseExpiringSoon`) inside the warning window, or `False` (`LicensePreExpiry`, `LicenseExpired`) |
 | `LicenseExpired` | `True` once the license is expired or inside the 1 h safety buffer; without `fallbackToCE` the gateway reports phase `Error` |
-| `LicenseDegraded` | `True` (`LicenseFallbackCE`) while the gateway runs CE because its license expired |
-| `LicenseSecretUnavailable` | License secret could not be read |
+| `LicenseDegraded` | `True` (`LicenseFallbackCE`) while the gateway runs CE because its license expired or entered the 1 h safety buffer |
+| `LicenseSecretUnavailable` | License secret could not be read or parsed; `LicenseValid` is `Unknown` meanwhile. The stage is still judged from the last known expiry (`status.licenseExpiry`), so a `fallbackToCE` gateway falls back to CE when that expiry enters the 1 h safety buffer |
 
 ---
 
@@ -279,7 +279,7 @@ kubectl get events --field-selector involvedObject.name=<name> --sort-by='.lastT
 
 **Diagnosis:** the condition message carries the cause. `no such file or directory` means the operator image lacks `/usr/local/bin/krakend`; `context deadline exceeded` means a run exceeded 30 seconds (check the operator pod's CPU throttling and memory); `signal: killed` without `context deadline exceeded` means the process was killed, usually by memory pressure on the operator container (a timeout's message also ends in `signal: killed`); `creating temp file` or `writing config to temp file` means the operator's temp directory is unwritable or full; `preparing validation copy` means the validation copy of the rendered config could not be built.
 
-**Resolution:** fix the environment; the operator retries with exponential backoff and the gateway recovers on its own. Backoff grows up to about 16–17 minutes, so recovery can lag that long after the cause is fixed. Editing the gateway, or restarting the operator, retries at once. Reverting the change that could not be validated also clears the condition: once the render equals the applied configuration again, `ConfigValid` returns to `True`.
+**Resolution:** fix the environment; the operator retries with exponential backoff and the gateway recovers on its own. Backoff grows up to 5 minutes, so recovery can lag that long after the cause is fixed. Editing the gateway, or restarting the operator, retries at once. Reverting the change that could not be validated also clears the condition: once the render equals the applied configuration again, `ConfigValid` returns to `True`.
 
 ### Gateway Deployment not updated: "no ConfigMap holds the applied config"
 
