@@ -318,7 +318,7 @@ AutoConfig's `spec.overrides[]`, `spec.defaults.endpoint`, or
 `spec.additionalEndpoints[]`, or on a `KrakenDEndpoint`'s
 `spec.endpoints[]` — was set to something other than a list of strings (a
 YAML mapping is the usual mistake). Left unchecked, this would pass CRD and
-CUE validation unchanged but fail `krakend check -tlc`, blocking config
+CUE validation unchanged but fail `krakend check -t -n -c`, blocking config
 updates for every service on that gateway, not just the one with the bad
 value.
 
