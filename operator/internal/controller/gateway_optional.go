@@ -87,7 +87,8 @@ func (r *KrakenDGatewayReconciler) deleteIfControlled(
 		return nil
 	}
 	uid := obj.GetUID()
-	if err := r.Delete(ctx, obj, client.Preconditions{UID: &uid}); client.IgnoreNotFound(err) != nil {
+	err := client.IgnoreNotFound(r.Delete(ctx, obj, client.Preconditions{UID: &uid}))
+	if err != nil {
 		return fmt.Errorf("deleting %T %s: %w", obj, key, err)
 	}
 	return nil
