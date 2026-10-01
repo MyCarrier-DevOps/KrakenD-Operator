@@ -551,7 +551,8 @@ func (r *KrakenDGatewayReconciler) inspectDeploymentStatus(
 // proof.
 func deploymentConverged(dep *appsv1.Deployment, want infraInputs) bool {
 	tmpl := dep.Spec.Template
-	if tmpl.Annotations[resources.PostRestartJobChecksumAnnotation] != want.appliedChecksum {
+	if tmpl.Annotations[resources.PostRestartJobChecksumAnnotation] != want.appliedChecksum ||
+		tmpl.Annotations[resources.PluginChecksumAnnotation] != want.pluginChecksum {
 		return false
 	}
 	if !runsImage(tmpl.Spec.Containers, want.image) {
