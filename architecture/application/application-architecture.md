@@ -1040,7 +1040,7 @@ dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
     Namespace: gw.Namespace,
 }}
 op, err := controllerutil.CreateOrUpdate(ctx, r.Client, dep, func() error {
-    resources.BuildDeployment(dep, gw, configChecksum, pluginChecksum, desiredImage)
+    resources.BuildDeployment(dep, gw, inputs) // inputs: applied checksum, plugins, license, image of the applied edition
     return controllerutil.SetControllerReference(gw, dep, r.Scheme)
 })
 ```
@@ -1413,7 +1413,6 @@ type DragonflyState struct {
 type RenderOutput struct {
     JSON             []byte
     Checksum         string   // SHA-256 hex
-    DesiredImage     string
     PluginChecksum   string
     ConflictedEndpoints []types.NamespacedName
     InvalidEndpoints    []types.NamespacedName
