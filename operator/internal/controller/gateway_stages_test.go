@@ -1169,3 +1169,28 @@ func TestGatewayReconcile_AppliedConfigClearsTheBlame(t *testing.T) {
 		t.Errorf("after the fix was applied, Accepted = %+v; the blame must clear", cond)
 	}
 }
+
+func TestGatewayReconcile_RejectionNamingNoEndpointBlamesNone(t *testing.T) {
+	gw := reconciledGateway()
+	ep := testEndpoint("ep", "/a")
+	c := fakeClientBuilder().WithObjects(gw, ep).WithStatusSubresource(gw, ep).Build()
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}),
+		&countingValidator{err: rejectedBy("Parsing configuration file: krakend.json\n")})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if cond := storedAccepted(t, c, client.ObjectKeyFromObject(ep)); cond != nil {
+		t.Errorf("endpoint Accepted = %+v; a rejection naming no endpoint blames none", cond)
+	}
+	got := getGateway(t, c, gw)
+	cv := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionConfigValid)
+	if cv == nil || cv.Status != metav1.ConditionFalse || cv.Reason != v1alpha1.ReasonConfigValidationFailed ||
+		!strings.Contains(cv.Message, "no finding names a KrakenDEndpoint") {
+		t.Errorf("ConfigValid = %+v, want False/%s saying no finding names an endpoint",
+			cv, v1alpha1.ReasonConfigValidationFailed)
+	}
+	if got.Status.ConfigChecksum != "" {
+		t.Errorf("configChecksum = %q, want it unset: nothing was applied", got.Status.ConfigChecksum)
+	}
+}
