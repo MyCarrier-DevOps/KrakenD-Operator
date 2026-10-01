@@ -31,6 +31,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
@@ -322,5 +323,40 @@ func TestDeleteIfControlled_ErrorNamesTheKind(t *testing.T) {
 
 	if err == nil || !strings.Contains(err.Error(), "VirtualService") {
 		t.Errorf("error = %v, want it to name the VirtualService kind", err)
+	}
+}
+
+func TestGatewayReconcile_MissingOptionalCRDIsACondition(t *testing.T) {
+	cases := []struct {
+		name   string
+		enable func(gw *v1alpha1.KrakenDGateway)
+		cond   string
+		status metav1.ConditionStatus
+	}{
+		{"Dragonfly", func(gw *v1alpha1.KrakenDGateway) {
+			gw.Spec.Dragonfly = &v1alpha1.DragonflySpec{Enabled: true}
+		}, v1alpha1.ConditionDragonflyReady, metav1.ConditionFalse},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gw := reconciledGateway()
+			gw.Status.ConfigChecksum = "applied"
+			tc.enable(gw)
+			c := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).Build() // no optional CRDs
+			r := newTestGatewayReconciler(c, renderOutput("applied"), &mockValidator{})
+
+			for range 2 {
+				if err := reconcileGateway(t, r, gw); err != nil {
+					t.Fatalf("reconcile: %v", err)
+				}
+			}
+			cond := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, tc.cond)
+			if cond == nil || cond.Status != tc.status || cond.Reason != v1alpha1.ReasonCRDNotInstalled {
+				t.Errorf("%s = %+v, want %s/%s", tc.cond, cond, tc.status, v1alpha1.ReasonCRDNotInstalled)
+			}
+			if n := eventsWithReason(r.Recorder.(*record.FakeRecorder), v1alpha1.ReasonCRDNotInstalled); n != 1 {
+				t.Errorf("CRDNotInstalled events over two reconciles = %d, want 1", n)
+			}
+		})
 	}
 }
