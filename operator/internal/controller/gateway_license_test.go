@@ -550,3 +550,18 @@ func TestGatewayReconcile_UnreadableLicenseWatchesTheKnownExpiry(t *testing.T) {
 		t.Errorf("license_expiry_seconds = %v, want %v from the known expiry", got, want)
 	}
 }
+
+func TestGatewayReconcile_UnreadableLicenseWithoutKnownExpiryDropsTheGauge(t *testing.T) {
+	gw, _, parser := licensedEEGateway(testNow, true) // the Secret is not created
+	licenseExpirySeconds.WithLabelValues(gw.Namespace, gw.Name).Set(42)
+	c := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderOutput("cs"), &mockValidator{})
+	r.LicenseParser = parser
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if licenseExpirySeconds.DeleteLabelValues(gw.Namespace, gw.Name) {
+		t.Error("a license that was never read must leave no license_expiry_seconds series")
+	}
+}
