@@ -141,6 +141,7 @@ const (
 	ReasonEndpointConflict              = "EndpointConflict"
 	ReasonLicenseSecretSyncFailed       = "LicenseSecretSyncFailed"
 	ReasonLicenseSecretMissing          = "LicenseSecretMissing"
+	ReasonCRDNotInstalled               = "CRDNotInstalled"
 	ReasonSpecFetched                   = "SpecFetched"
 	ReasonSpecFetchFailed               = "SpecFetchFailed"
 	ReasonEndpointsGenerated            = "EndpointsGenerated"
