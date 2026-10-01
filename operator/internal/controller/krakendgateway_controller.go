@@ -183,11 +183,6 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 	configRenders.Inc()
 
-	// Record each endpoint's Accepted verdict for this render.
-	if err := r.reconcileEndpointAcceptance(ctx, &gw, endpoints, output); err != nil {
-		return ctrl.Result{}, err
-	}
-
 	// Determine if config changed
 	configChanged := output.Checksum != gw.Status.ConfigChecksum
 	imageChanged := output.DesiredImage != gw.Status.ActiveImage
@@ -245,6 +240,16 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			Message:            "Deployment updated for image or plugin change",
 		})
 		rollingRestarts.Inc()
+	}
+
+	// Record each endpoint's Accepted verdict, but only for a render that is
+	// the gateway's applied configuration: validated just now, or unchanged
+	// since it was. A rejected render never reaches this point, and would
+	// fail the check if a later change let it: every verdict stays as it was.
+	if output.Checksum == gw.Status.ConfigChecksum {
+		if err := r.reconcileEndpointAcceptance(ctx, &gw, endpoints, output); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	// Reconcile owned resources
@@ -752,7 +757,8 @@ func namespacedNameSet(names []types.NamespacedName) map[types.NamespacedName]st
 }
 
 // reconcileEndpointAcceptance writes the gateway's Accepted verdict on every
-// endpoint of this render.
+// endpoint of this render. It is called only when the render is the gateway's
+// applied configuration.
 func (r *KrakenDGatewayReconciler) reconcileEndpointAcceptance(
 	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
