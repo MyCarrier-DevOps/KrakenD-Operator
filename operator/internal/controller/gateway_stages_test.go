@@ -1141,3 +1141,31 @@ func TestGatewayReconcile_RememberedRejectionKeepsAttribution(t *testing.T) {
 		t.Errorf("GatewayConfigRejected events over two reconciles = %d, want 1", n)
 	}
 }
+
+func TestGatewayReconcile_AppliedConfigClearsTheBlame(t *testing.T) {
+	gw := reconciledGateway()
+	bad := testEndpoint("bad", "/b")
+	c := fakeClientBuilder().WithObjects(gw, bad).WithStatusSubresource(gw, bad).Build()
+	val := &countingValidator{err: rejectedBy("- at '/endpoints/0/extra_config': additional properties 'bad/ns' not allowed")}
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}), val)
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	var fixed v1alpha1.KrakenDEndpoint
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(bad), &fixed); err != nil {
+		t.Fatal(err)
+	}
+	fixed.Spec.Endpoints[0].Endpoint = "/b-fixed"
+	if err := c.Update(context.Background(), &fixed); err != nil {
+		t.Fatal(err)
+	}
+	val.err = nil
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if cond := storedAccepted(t, c, client.ObjectKeyFromObject(bad)); cond == nil ||
+		cond.Reason == v1alpha1.ReasonGatewayConfigRejected {
+		t.Errorf("after the fix was applied, Accepted = %+v; the blame must clear", cond)
+	}
+}
