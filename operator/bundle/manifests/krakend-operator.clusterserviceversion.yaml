@@ -157,6 +157,12 @@ spec:
           - update
           - watch
         - apiGroups:
+          - apps
+          resources:
+          - replicasets
+          verbs:
+          - list
+        - apiGroups:
           - autoscaling
           resources:
           - horizontalpodautoscalers
