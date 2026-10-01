@@ -126,6 +126,8 @@ func (v *GatewayValidator) validate(gw, old *v1alpha1.KrakenDGateway) (admission
 		))
 	}
 
+	warnings = append(warnings, replicasWithAutoscalingWarning(gw)...)
+
 	if gw.Spec.OpenAPI != nil && gw.Spec.OpenAPI.Enabled {
 		gwPort := resources.GatewayPort(gw)
 		oaPort := resources.OpenAPIPort(gw)
@@ -200,6 +202,20 @@ func (v *GatewayValidator) validate(gw, old *v1alpha1.KrakenDGateway) (admission
 	}
 
 	return warnings, errs.ToAggregate()
+}
+
+// replicasWithAutoscalingWarning warns when spec.replicas is set together
+// with spec.autoscaling: the HorizontalPodAutoscaler owns the replica count,
+// so the operator ignores spec.replicas. It is a warning, not a rejection,
+// because the combination is harmless and may already be stored.
+func replicasWithAutoscalingWarning(gw *v1alpha1.KrakenDGateway) admission.Warnings {
+	if gw.Spec.Replicas == nil || gw.Spec.Autoscaling == nil {
+		return nil
+	}
+	return admission.Warnings{
+		"spec.replicas is ignored while spec.autoscaling is set: " +
+			"the HorizontalPodAutoscaler manages the replica count",
+	}
 }
 
 // validatePostRestartJob validates spec.postRestartJob when enabled. Split
