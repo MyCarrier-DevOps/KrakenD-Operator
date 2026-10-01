@@ -303,7 +303,7 @@ func (r *KrakenDGatewayReconciler) liveReplicaSetConfigMaps(
 func rejectionsByEndpoint(atts []renderer.Attribution) map[types.NamespacedName]string {
 	lines := map[types.NamespacedName][]string{}
 	for _, a := range atts {
-		if a.Endpoint != (types.NamespacedName{}) {
+		if a.Endpoint != (types.NamespacedName{}) && !slices.Contains(lines[a.Endpoint], a.Message) {
 			lines[a.Endpoint] = append(lines[a.Endpoint], a.Message)
 		}
 	}
