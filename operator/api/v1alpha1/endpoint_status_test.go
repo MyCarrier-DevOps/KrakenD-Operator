@@ -34,6 +34,7 @@ func testCondition(typ string, status metav1.ConditionStatus, reason string, gen
 }
 
 func TestEndpointReady(t *testing.T) {
+	refsOK := testCondition("ResolvedRefs", metav1.ConditionTrue, "RefsResolved", 2)
 	tests := []struct {
 		name        string
 		conds       []metav1.Condition
@@ -59,6 +60,12 @@ func TestEndpointReady(t *testing.T) {
 				testCondition("Accepted", metav1.ConditionTrue, "Accepted", 2),
 			},
 			metav1.ConditionFalse, "PolicyNotFound", "PolicyNotFound message",
+		},
+		{"not yet accepted", []metav1.Condition{refsOK}, metav1.ConditionUnknown, "Pending", "generation 2"},
+		{
+			"accepted for an older generation",
+			[]metav1.Condition{refsOK, testCondition("Accepted", metav1.ConditionTrue, "Accepted", 1)},
+			metav1.ConditionUnknown, "Pending", "generation 2",
 		},
 	}
 	for _, tt := range tests {
