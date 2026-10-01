@@ -401,6 +401,10 @@ func TestGateway_DeletedDeploymentRecreatedWhileConfigRejected(t *testing.T) {
 	ns := testNamespace(t)
 	gw := createGateway(t, ns, "drift-gw")
 	applied := waitForAppliedChecksum(t, gw)
+	var appliedCM corev1.ConfigMap
+	if err := k8sClient.Get(ctx, gw, &appliedCM); err != nil {
+		t.Fatalf("get the applied ConfigMap: %v", err)
+	}
 
 	createEndpoint(t, ns, "rejected", gw.Name, rejectMarker)
 	eventually(t, func() error {
@@ -432,4 +436,12 @@ func TestGateway_DeletedDeploymentRecreatedWhileConfigRejected(t *testing.T) {
 		}
 		return nil
 	})
+
+	var cm corev1.ConfigMap
+	if err := k8sClient.Get(ctx, gw, &cm); err != nil {
+		t.Fatalf("get the ConfigMap: %v", err)
+	}
+	if cm.Data["krakend.json"] != appliedCM.Data["krakend.json"] {
+		t.Errorf("the rejected config reached the ConfigMap:\n%s", cm.Data["krakend.json"])
+	}
 }
