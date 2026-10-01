@@ -57,8 +57,8 @@ func TestRender_MinimalGateway(t *testing.T) {
 	if out.Checksum == "" {
 		t.Fatal("expected non-empty checksum")
 	}
-	if out.DesiredImage != "krakend:2.7.0" {
-		t.Errorf("expected CE image, got %s", out.DesiredImage)
+	if got := ResolveImage(minimalGateway(), false); got != "krakend:2.7.0" {
+		t.Errorf("expected CE image, got %s", got)
 	}
 
 	var config map[string]any
