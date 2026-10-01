@@ -62,12 +62,34 @@ var (
 	)
 )
 
+// ceDroppedEndpointNamespaces are the Enterprise-only entry namespaces a
+// CE-edition render drops instead of carrying them inert:
+// documentation/openapi, which AutoConfig generates on every endpoint and
+// only KrakenD Enterprise publishes. A CE gateway loses nothing by it, so
+// EEOnlyNamespaces leaves them out and admission does not reject them.
+var ceDroppedEndpointNamespaces = namespaceSet("documentation/openapi")
+
 func namespaceSet(names ...string) map[string]struct{} {
 	set := make(map[string]struct{}, len(names))
 	for _, n := range names {
 		set[n] = struct{}{}
 	}
 	return set
+}
+
+// dropCEInertNamespaces removes, in place, the namespaces a CE-edition render
+// drops from a rendered entry.
+func dropCEInertNamespaces(ep map[string]any) {
+	ec, ok := ep["extra_config"].(map[string]any)
+	if !ok {
+		return
+	}
+	for ns := range ceDroppedEndpointNamespaces {
+		delete(ec, ns)
+	}
+	if len(ec) == 0 {
+		delete(ep, "extra_config")
+	}
 }
 
 // stripNamespaces deletes, in place, ec's keys that are in eeOnly, and returns
@@ -132,7 +154,9 @@ const (
 // EEOnlyNamespaces returns the extra_config namespaces that only KrakenD
 // Enterprise implements at level, sorted, or nil for an unknown level. A
 // CE-fallback render strips them; admission rejects them on CE gateways,
-// where KrakenD CE would accept and then silently ignore them.
+// where KrakenD CE would accept and then silently ignore them. At
+// LevelEndpoint it leaves out the namespaces a CE-edition render drops
+// (ceDroppedEndpointNamespaces).
 func EEOnlyNamespaces(level NamespaceLevel) []string {
 	set, ok := map[NamespaceLevel]map[string]struct{}{
 		LevelService:  eeOnlyServiceNamespaces,
@@ -142,5 +166,12 @@ func EEOnlyNamespaces(level NamespaceLevel) []string {
 	if !ok {
 		return nil
 	}
-	return slices.Sorted(maps.Keys(set))
+	names := slices.Sorted(maps.Keys(set))
+	if level == LevelEndpoint {
+		names = slices.DeleteFunc(names, func(n string) bool {
+			_, dropped := ceDroppedEndpointNamespaces[n]
+			return dropped
+		})
+	}
+	return names
 }
