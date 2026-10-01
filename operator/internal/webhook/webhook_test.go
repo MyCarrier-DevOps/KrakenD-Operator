@@ -2726,3 +2726,17 @@ func TestValidators_AdmitUpdatesToTerminatingObjects(t *testing.T) {
 		})
 	}
 }
+
+func TestGatewayValidator_RejectsSpecChangeOnTerminatingObject(t *testing.T) {
+	oldGW := terminating(&v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+		Spec:       v1alpha1.KrakenDGatewaySpec{Version: "2.13", Edition: v1alpha1.EditionCE},
+	})
+	newGW := oldGW.DeepCopy()
+	newGW.Spec.Edition = v1alpha1.EditionEE // EE without a license
+
+	_, err := (&GatewayValidator{}).ValidateUpdate(context.Background(), oldGW, newGW)
+	if err == nil {
+		t.Fatal("a spec change to an invalid value on a terminating gateway was admitted; want it rejected")
+	}
+}
