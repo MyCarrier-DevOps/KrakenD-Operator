@@ -277,8 +277,11 @@ kubectl describe krakendendpoint <name>
 ```
 
 **Common causes:**
-- `gatewayRef` points to a non-existent gateway
-- `policyRef` references a non-existent policy
+- `policyRef` references a non-existent policy (`ResolvedRefs=False`, reason `PolicyNotFound`)
+
+A `gatewayRef` to a non-existent gateway shows phase `Detached` instead
+(`ResolvedRefs=False`, reason `GatewayNotFound`). For what each condition
+means, see [Endpoint Status](#endpoint-status).
 
 ### AutoConfig not generating endpoints
 
