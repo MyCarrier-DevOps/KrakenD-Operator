@@ -82,6 +82,7 @@ type KrakenDGatewayReconciler struct {
 // +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendendpoints/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendbackendpolicies,verbs=get;list;watch
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apps,resources=replicasets,verbs=list
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update;patch;delete
@@ -980,6 +981,9 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 		log.Error(reason, "holding the Deployment as it is", "checksum", in.appliedChecksum)
 	default:
 		if err := r.reconcileDeployment(ctx, gw, in); err != nil {
+			return err
+		}
+		if err := r.collectConfigMaps(ctx, gw, in.configMapName); err != nil {
 			return err
 		}
 	}
