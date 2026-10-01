@@ -681,11 +681,11 @@ sequenceDiagram
     Op->>Op: 4. Build krakend.json via template engine
     Op->>Op: 5. Compute SHA-256 of rendered config
 
-    alt Checksum unchanged
+    alt Checksum and edition match the applied config
         alt Applied image ≠ current Deployment image
             Op->>K8s: Set Progressing=True (phase Deploying is derived)
             Op->>Dep: Patch Deployment container image + checksum/plugins if changed
-            Note over Op: Image-only change (e.g., a version bump).<br/>The image follows the applied config's edition,<br/>so a CE↔EE change is a config change, validated as the new edition.
+            Note over Op: Image-only change (e.g., a version bump).<br/>The image follows the applied config's edition,<br/>so a CE↔EE change is a config change, validated as the new edition.<br/>Version and custom-image changes wait while the applied edition differs<br/>from the current one, and apply once a render is validated for it.
         else Image unchanged
             alt Plugin checksum changed
                 Op->>K8s: Set Progressing=True (phase Deploying is derived)
@@ -696,14 +696,14 @@ sequenceDiagram
                 Op->>K8s: Set ConfigValid=True (ConfigApplied); derive Ready and phase
             end
         end
-    else Checksum changed
+    else Not the applied config (new checksum or edition)
         Op->>Op: 6. Validate as the render's edition<br/>(EE: apply the wildcard route rule, rewrite /p/* to /p/{Wildcard}),<br/>via krakend check -t -n -c
 
         alt Validation fails
             Op->>K8s: Update KrakenDGateway condition → ConfigValid=False
             Op->>K8s: Set Ready=False (ConfigValidationFailed), phase Error
             Op->>K8s: Emit Warning Event (when the verdict changes)
-            Note over Op: STOP — do not deploy invalid config
+            Note over Op: STOP — do not deploy invalid config content.<br/>Image, version and plugin changes still roll (the infrastructure stage runs),<br/>except an image held while the applied edition differs from the current one
         else Validator unavailable (binary missing, timeout, killed, I/O error)
             Op->>K8s: Update KrakenDGateway condition → ConfigValid=Unknown<br/>(reason ValidatorUnavailable)
             Op->>K8s: Emit one Warning Event (ValidatorUnavailable)
@@ -1225,7 +1225,10 @@ When falling back from EE to CE:
    image follows the applied edition, so while a CE render is rejected the
    pods stay on EE with the EE-validated config. The CE image is
    `spec.ceImage` if set, otherwise `krakend/krakend:{spec.version}`;
-   `spec.image` (EE override) is ignored during CE fallback.
+   `spec.image` (EE override) is ignored during CE fallback. While the
+   applied edition differs from the current one (a CE fallback whose render is
+   rejected), version and custom-image changes wait too, and take effect once a
+   render is validated for the new edition.
 3. **Keep EE `extra_config` namespaces** — CE silently ignores unknown namespaces like `security/policies`, `auth/api-keys`, etc.
 4. **Disable Dragonfly-dependent features** — cluster rate limiting, quota, and token revocation won't function without the EE binary, even with Redis available
 5. **Set `LicenseValid=False` and `LicenseExpired=True`** — reason `LicensePreExpiry` if entering from the PreExpiry path; reason `LicenseExpired` if entering from the LicenseExpired path
@@ -1283,14 +1286,14 @@ flowchart TD
     L --> M[Compute SHA-256 checksum]
     M --> N{checksum and edition<br/>match the applied config?}
 
-    N -->|No| N1{Applied image ≠<br/>current Deployment image?}
+    N -->|Yes| N1{Applied image ≠<br/>current Deployment image?}
     N1 -->|No| N3{checksum/plugins<br/>changed?}
     N3 -->|No| O[No-op: skip deployment<br/>Set ConfigValid=True<br/>Derive Ready and phase]
     N3 -->|Yes| N4[Set Progressing=True<br/>Patch pod annotation: checksum/plugins]
     N4 --> U
     N1 -->|Yes| N2[Set Progressing=True<br/>Patch Deployment container image +<br/>checksum/plugins if changed]
     N2 --> U
-    N -->|Yes| RJ{Same render and edition<br/>already rejected?}
+    N -->|No| RJ{Same render and edition<br/>already rejected?}
     RJ -->|Yes| S
     RJ -->|No| P[Validate as the render's edition:<br/>EE wildcard rules in Go; only if they<br/>find nothing, krakend check -t -n -c on the copy]
 
