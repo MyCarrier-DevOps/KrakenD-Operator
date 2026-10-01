@@ -31,6 +31,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -172,7 +173,30 @@ func (r *KrakenDEndpointReconciler) resolveRefs(
 	return cond, nil
 }
 
-func endpointPredicate() predicate.Predicate { return predicate.GenerationChangedPredicate{} }
+// endpointPredicate gates the primary KrakenDEndpoint watch. It passes spec
+// changes (generation bumps) and changes to the gateway-owned Accepted
+// condition, from which Ready and phase are derived. The controller's own
+// status writes change neither, so they do not enqueue the endpoint again.
+func endpointPredicate() predicate.Predicate {
+	return predicate.Or(
+		predicate.GenerationChangedPredicate{},
+		predicate.Funcs{UpdateFunc: acceptedChanged},
+	)
+}
+
+// acceptedChanged reports whether an update changed the endpoint's Accepted
+// condition, ignoring its lastTransitionTime.
+func acceptedChanged(e event.UpdateEvent) bool {
+	oldEp, okOld := e.ObjectOld.(*v1alpha1.KrakenDEndpoint)
+	newEp, okNew := e.ObjectNew.(*v1alpha1.KrakenDEndpoint)
+	if !okOld || !okNew {
+		return false
+	}
+	return !sameCondition(
+		meta.FindStatusCondition(oldEp.Status.Conditions, v1alpha1.ConditionAccepted),
+		meta.FindStatusCondition(newEp.Status.Conditions, v1alpha1.ConditionAccepted),
+	)
+}
 
 // gatewayToEndpoints maps a Gateway event to endpoints that reference it via field index.
 func (r *KrakenDEndpointReconciler) gatewayToEndpoints(
