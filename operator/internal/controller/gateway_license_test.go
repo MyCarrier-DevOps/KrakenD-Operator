@@ -25,6 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/record"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
@@ -102,5 +103,31 @@ func TestGatewayReconcile_ExpiredLicenseFallsBackToCEAndSaysSoOnce(t *testing.T)
 	}
 	if gatewayWrites != 0 {
 		t.Errorf("writes to the gateway object (not its status) = %d, want 0", gatewayWrites)
+	}
+}
+
+func TestGatewayReconcile_RequeuesAtTheNextLicenseBoundary(t *testing.T) {
+	cases := []struct {
+		name     string
+		notAfter time.Time
+		want     time.Duration
+	}{
+		{"boundary before the recheck interval", testNow.Add(time.Hour + 2*time.Minute), 2 * time.Minute},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gw, secret, parser := licensedEEGateway(tc.notAfter, true)
+			c := fakeClientBuilder().WithObjects(gw, secret).WithStatusSubresource(gw).Build()
+			r := newTestGatewayReconciler(c, renderOutput("cs"), &mockValidator{})
+			r.LicenseParser = parser
+
+			res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(gw)})
+			if err != nil {
+				t.Fatalf("reconcile: %v", err)
+			}
+			if res.RequeueAfter != tc.want {
+				t.Errorf("RequeueAfter = %s, want %s", res.RequeueAfter, tc.want)
+			}
+		})
 	}
 }
