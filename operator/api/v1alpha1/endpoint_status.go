@@ -46,5 +46,8 @@ func EndpointReady(conds []metav1.Condition) (status metav1.ConditionStatus, rea
 		return metav1.ConditionUnknown, ReasonPending,
 			fmt.Sprintf("Waiting for the gateway to accept generation %d", refs.ObservedGeneration)
 	}
+	if accepted.Status != metav1.ConditionTrue {
+		return metav1.ConditionFalse, accepted.Reason, accepted.Message
+	}
 	return metav1.ConditionTrue, ReasonReady, "References resolved and accepted by the gateway"
 }
