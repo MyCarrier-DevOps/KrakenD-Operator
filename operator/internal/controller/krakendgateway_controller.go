@@ -235,6 +235,7 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		pluginChecksum:  output.PluginChecksum,
 		licenseChecksum: licenseChecksum,
 		image:           image,
+		ceRender:        appliedKey(&gw, edition).edition == v1alpha1.EditionCE,
 		configMapName:   cfg.appliedConfigMap,
 		heldBecause:     cfg.heldBecause,
 	}
@@ -1039,6 +1040,8 @@ type infraInputs struct {
 	// or not; "" when no license is mounted.
 	licenseChecksum string
 	image           string
+	// ceRender: the applied config is a CE render (CE edition or CE fallback).
+	ceRender bool
 	// configMapName is the ConfigMap holding the applied config; "" means
 	// none does.
 	configMapName string
@@ -1249,6 +1252,7 @@ func (r *KrakenDGatewayReconciler) reconcileDeployment(
 			PluginChecksum:  in.pluginChecksum,
 			Image:           in.image,
 			LicenseChecksum: in.licenseChecksum,
+			CERender:        in.ceRender,
 		})
 		return controllerutil.SetControllerReference(gw, dep, r.Scheme)
 	}); err != nil {
