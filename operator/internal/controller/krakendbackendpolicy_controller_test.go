@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 )
 
 func TestPolicyReconcile_NotFound(t *testing.T) {
@@ -536,5 +537,23 @@ func TestPolicyReconcile_InvalidPolicyEventOnTransitionOnly(t *testing.T) {
 	}
 	if got := drainEvents(rec); len(got) != 0 {
 		t.Errorf("unchanged invalid policy: events = %q, want none", got)
+	}
+}
+
+func TestPolicyEndpointPredicate_DropsStatusOnlyUpdates(t *testing.T) {
+	old := &v1alpha1.KrakenDEndpoint{ObjectMeta: metav1.ObjectMeta{Name: "ep", Namespace: "default", Generation: 1}}
+	statusOnly := old.DeepCopy()
+	statusOnly.Status.Phase = v1alpha1.EndpointPhaseActive
+	specChange := old.DeepCopy()
+	specChange.Generation = 2
+	p := policyEndpointPredicate()
+	if p.Update(event.UpdateEvent{ObjectOld: old, ObjectNew: statusOnly}) {
+		t.Error("a status-only endpoint update must not recount references")
+	}
+	if !p.Update(event.UpdateEvent{ObjectOld: old, ObjectNew: specChange}) {
+		t.Error("an endpoint spec change must recount references")
+	}
+	if !p.Create(event.CreateEvent{Object: old}) || !p.Delete(event.DeleteEvent{Object: old}) {
+		t.Error("endpoint creates and deletes must recount references")
 	}
 }

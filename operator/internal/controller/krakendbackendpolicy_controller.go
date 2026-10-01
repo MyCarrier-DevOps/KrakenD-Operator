@@ -225,3 +225,5 @@ func policyRefsFromEndpoint(obj client.Object) []reconcile.Request {
 	}
 	return requests
 }
+
+func policyEndpointPredicate() predicate.Predicate { return predicate.Funcs{} }
