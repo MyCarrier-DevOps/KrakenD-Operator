@@ -1517,3 +1517,44 @@ func TestGatewayReconcile_PartlyConflictedEndpointIsPartiallyAccepted(t *testing
 		}
 	}
 }
+
+func TestGatewayReconcile_PartlyConflictedEndpointIsNotRewrittenOnTheNextPass(t *testing.T) {
+	gw := reconciledGateway()
+	older := testEndpoint("older", "/shared")
+	older.CreationTimestamp = metav1.NewTime(testNow)
+	newer := testEndpoint("newer", "/shared")
+	newer.Spec.Endpoints = append(newer.Spec.Endpoints, v1alpha1.EndpointEntry{
+		Endpoint: "/own", Method: "GET",
+		Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc:8080"}, URLPattern: "/x"}},
+	})
+	newer.CreationTimestamp = metav1.NewTime(testNow.Add(time.Minute))
+	var endpointWrites int
+	c := fakeClientBuilder().WithObjects(gw, older, newer).
+		WithStatusSubresource(gw, older, newer).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourcePatch: func(
+				ctx context.Context, c client.Client, sub string, obj client.Object,
+				patch client.Patch, opts ...client.SubResourcePatchOption,
+			) error {
+				if _, ok := obj.(*v1alpha1.KrakenDEndpoint); ok {
+					endpointWrites++
+				}
+				return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
+			},
+		}).Build()
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}), &mockValidator{})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+	if endpointWrites == 0 {
+		t.Fatal("the first pass wrote no endpoint status; the test would prove nothing")
+	}
+	endpointWrites = 0
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+	if endpointWrites != 0 {
+		t.Errorf("second reconcile wrote endpoint status %d times, want 0 in a steady state", endpointWrites)
+	}
+}
