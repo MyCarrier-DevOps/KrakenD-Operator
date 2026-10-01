@@ -42,7 +42,7 @@
 - Monitor EE license expiry and proactively alert or fall back to CE before processes shut down
 - Mount custom KrakenD plugins (`.so` files) via Kubernetes volumes without requiring custom image builds
 - Automatically generate KrakenDEndpoint CRDs from OpenAPI (Swagger) specifications via the `KrakenDAutoConfig` CRD
-- Validate generated KrakenD configurations before deployment (`krakend check -tlc`)
+- Validate generated KrakenD configurations before deployment (`krakend check -t -n -c`)
 
 ### Non-Goals
 
@@ -351,7 +351,7 @@ status:
       status: "True"
       lastTransitionTime: "2026-04-03T10:00:00Z"
       reason: ValidationPassed
-      message: "krakend check -tlc passed"
+      message: "krakend check -t -n -c passed"
     - type: Available
       status: "True"
       lastTransitionTime: "2026-04-03T10:00:05Z"
@@ -700,7 +700,7 @@ sequenceDiagram
     else Checksum changed
         Op->>K8s: Update KrakenDGateway phase → Rendering
         Op->>K8s: Update KrakenDGateway phase → Validating
-        Op->>Op: 6. Create validation copy<br/>(strip wildcard endpoints if edition=EE<br/>and CE fallback not active),<br/>validate via krakend check -tlc
+        Op->>Op: 6. Create validation copy<br/>(strip wildcard endpoints if edition=EE<br/>and CE fallback not active),<br/>validate via krakend check -t -n -c
 
         alt Validation fails
             Op->>K8s: Update KrakenDGateway condition → ConfigValid=False
@@ -1303,7 +1303,7 @@ flowchart TD
     N -->|Yes| D0[Set phase=Rendering]
     D0 --> N0[Set phase=Validating]
     N0 --> PW[Create validation copy:<br/>strip wildcard endpoints<br/>if edition=EE AND CE fallback not active]
-    PW --> P[Run krakend check -tlc<br/>on validation copy]
+    PW --> P[Run krakend check -t -n -c<br/>on validation copy]
 
     P --> Q{Valid?}
     Q -->|Yes| R[Set ConfigValid=True<br/>Set phase=Deploying<br/>Set Progressing=True<br/>Update ConfigMap<br/>Write status.configChecksum]
@@ -1328,9 +1328,9 @@ To ensure consistent JSON output (and avoid unnecessary rolling restarts from no
 
 ### Validation Strategy
 
-The operator runs `krakend check -tlc` against the rendered configuration before deploying. The KrakenD CE binary must be embedded in the operator's container image (via multi-stage Docker build). Validation is executed by invoking the binary as a subprocess against the rendered JSON file.
+The operator runs `krakend check -t -n -c` against the rendered configuration before deploying. The KrakenD CE binary must be embedded in the operator's container image (via multi-stage Docker build). Validation is executed by invoking the binary as a subprocess against the rendered JSON file.
 
-> **EE wildcard endpoints and CE validation:** The CE binary's router rejects wildcard endpoint patterns (`/*`). To validate EE configurations containing wildcards (when CE fallback is not active), the operator **strips wildcard endpoints from the validation copy** before running `krakend check -tlc`, then includes them in the final deployed ConfigMap. When CE fallback is active, wildcards are already stripped from the deployed config itself (the "Strip wildcard endpoints from deployed config" step earlier in the pipeline), so the validation copy inherits this stripped state. The CE validator thus validates all non-wildcard structural and semantic aspects. Wildcard routing correctness is only fully validated at EE runtime. This approach avoids requiring an EE license in the operator image.
+> **EE wildcard endpoints and CE validation:** The CE binary's router rejects wildcard endpoint patterns (`/*`). To validate EE configurations containing wildcards (when CE fallback is not active), the operator **strips wildcard endpoints from the validation copy** before running `krakend check -t -n -c`, then includes them in the final deployed ConfigMap. When CE fallback is active, wildcards are already stripped from the deployed config itself (the "Strip wildcard endpoints from deployed config" step earlier in the pipeline), so the validation copy inherits this stripped state. The CE validator thus validates all non-wildcard structural and semantic aspects. Wildcard routing correctness is only fully validated at EE runtime. This approach avoids requiring an EE license in the operator image.
 
 Alternatively, for environments where embedding the binary is impractical:
 
@@ -1339,7 +1339,9 @@ Alternatively, for environments where embedding the binary is impractical:
 
 The embedded-binary approach is preferred for latency and simplicity.
 
-> **Note:** The CE validator's `-l` (lint) flag validates against the CE JSON schema. EE-only `extra_config` namespaces (e.g., `governance/quota`, `security/policies`) pass lint if structurally valid JSON but are not semantically validated. EE-specific configuration errors may only surface at runtime. This is an accepted limitation — the CE validator still catches structural errors, unknown root keys, and router conflicts.
+> **Note:** The `-n` flag lints against the JSON schema built into the embedded binary, so validation needs no network access and its verdict changes only with an operator upgrade. EE-only `extra_config` namespaces (e.g., `governance/quota`, `security/policies`) pass lint if structurally valid JSON but are not semantically validated. EE-specific configuration errors may only surface at runtime. This is an accepted limitation — the CE validator still catches structural errors, unknown root keys, and router conflicts.
+
+Each run is limited to 30 seconds. Only a run that completes and exits non-zero is a verdict ("the config is invalid"); a missing binary, a timeout or a killed process means the config was not judged, and the controller retries.
 
 ---
 
@@ -1723,7 +1725,7 @@ rules:
 
 | Condition | Meaning |
 |---|---|
-| `ConfigValid` | Last rendered krakend.json passed `krakend check -tlc` |
+| `ConfigValid` | Last rendered krakend.json passed `krakend check -t -n -c` |
 | `Available` | Desired number of KrakenD pods are ready and serving traffic |
 | `LicenseValid` | EE license exists and is not within the expiry warning window |
 | `LicenseDegraded` | Gateway is actively running in CE mode as a fallback because the EE license expired or entered the pre-expiry safety window (only **True** when `fallbackToCE=true` and CE image is deployed; `False` with reason `EEActive` during normal EE operation) |
@@ -1796,7 +1798,7 @@ The operator should deploy a `ValidatingAdmissionWebhook` with `failurePolicy: F
 - **KrakenDAutoConfig** — reject if `openapi.configMapRef` is used and `urlTransform.hostMapping` is not provided (no URL to infer backend host from)
 - **KrakenDAutoConfig** — reject if `trigger: Periodic` but `periodic.interval` is absent
 - **KrakenDAutoConfig** — reject if both `auth.bearerTokenSecret` and `auth.basicAuthSecret` are set (mutually exclusive)
-- **KrakenDAutoConfig** / **KrakenDEndpoint** — reject a non-list `documentation/openapi.audience` value inside `extraConfig` (`spec.overrides[].extraConfig`, `spec.defaults.endpoint.extraConfig`, and `spec.additionalEndpoints[].extraConfig` on KrakenDAutoConfig; `spec.endpoints[].extraConfig` on KrakenDEndpoint) — KrakenD's OpenAPI documentation plugin requires a list of strings, and a malformed value would otherwise pass validation here but fail `krakend check -tlc`, blocking config updates for every service on that gateway
+- **KrakenDAutoConfig** / **KrakenDEndpoint** — reject a non-list `documentation/openapi.audience` value inside `extraConfig` (`spec.overrides[].extraConfig`, `spec.defaults.endpoint.extraConfig`, and `spec.additionalEndpoints[].extraConfig` on KrakenDAutoConfig; `spec.endpoints[].extraConfig` on KrakenDEndpoint) — KrakenD's OpenAPI documentation plugin requires a list of strings, and a malformed value would otherwise pass validation here but fail `krakend check -t -n -c`, blocking config updates for every service on that gateway
 - **KrakenDGateway** — reject if multiple `plugins.sources[]` entries use `persistentVolumeClaimRef` (only one PVC source supported)
 
 This provides fast feedback to users at `kubectl apply` time rather than waiting for reconciliation.
@@ -2199,7 +2201,7 @@ Go project layout following [Standard Go Project Layout](https://github.com/gola
 │   │   │   ├── endpoints.go                    # Endpoint array builder
 │   │   │   ├── extra_config.go                 # extra_config namespace builder
 │   │   │   ├── plugins.go                      # Plugin volume + krakend.json plugin block builder
-│   │   │   └── validator.go                    # krakend check -tlc wrapper
+│   │   │   └── validator.go                    # krakend check -t -n -c wrapper
 │   │   ├── resources/
 │   │   │   ├── deployment.go                   # Deployment builder (includes plugin volume assembly)
 │   │   │   ├── service.go                      # Service builder
