@@ -79,7 +79,6 @@ const (
 	ConditionProgressing              = "Progressing"
 	ConditionSpecAvailable            = "SpecAvailable"
 	ConditionSynced                   = "Synced"
-	ConditionPolicyValid              = "PolicyValid"
 	ConditionPostRestartJobSkipped    = "PostRestartJobSkipped"
 
 	// ConditionPostRestartJobReadOnlyRootFilesystem is an informational
