@@ -1170,10 +1170,10 @@ func (v *AutoConfigValidator) ValidateCreate(
 // ValidateUpdate validates an updated KrakenDAutoConfig.
 func (v *AutoConfigValidator) ValidateUpdate(
 	ctx context.Context,
-	_ runtime.Object,
+	oldObj runtime.Object,
 	newObj runtime.Object,
 ) (admission.Warnings, error) {
-	if isTerminating(newObj) {
+	if terminatingWithUnchangedSpec(oldObj, newObj) {
 		return nil, nil
 	}
 	ac, ok := newObj.(*v1alpha1.KrakenDAutoConfig)
