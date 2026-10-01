@@ -45,7 +45,9 @@ const (
 	// LicenseChecksumAnnotation records the license the pod template was
 	// built for. The license is mounted with subPath, which never receives
 	// Secret updates, so a changed license has to change the pod template to
-	// reach running pods. It is absent when no license is mounted.
+	// reach running pods. It tracks the mounted license, so it is present for
+	// every EE gateway with a readable license, CE fallback or not, and absent
+	// when no license is mounted.
 	LicenseChecksumAnnotation = "krakend.io/checksum-license"
 )
 
@@ -80,7 +82,7 @@ type DeploymentInputs struct {
 	PluginChecksum string
 	Image          string
 	// LicenseChecksum is the checksum of the license bytes mounted into an
-	// EE gateway; "" for a gateway without a mounted license.
+	// EE gateway, whether or not it falls back to CE; "" when none is mounted.
 	LicenseChecksum string
 }
 
