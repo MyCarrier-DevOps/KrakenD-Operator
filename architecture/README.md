@@ -677,7 +677,7 @@ sequenceDiagram
     Op->>Op: 1. Detect endpoint path+method conflicts
 
     opt Conflicts found
-        Note over Op: Conflicting entries are excluded from render.<br/>Older endpoint (by creationTimestamp) wins.<br/>Equal timestamps: lower lexicographic name wins.<br/>The losing KrakenDEndpoint's other entries are still rendered.
+        Note over Op: Conflicting entries are excluded from render.<br/>Older endpoint (by creationTimestamp) wins.<br/>Equal timestamps: lower lexicographic name wins.<br/>The losing KrakenDEndpoint's other entries are still rendered,<br/>and status.conflicts names what it lost.
     end
 
     Op->>Op: 2. Merge gateway config + non-conflicted endpoints
@@ -723,7 +723,7 @@ sequenceDiagram
             Op->>CM: Update ConfigMap with new krakend.json
             Op->>K8s: Write status.configChecksum = newChecksum
             Op->>Dep: Patch Deployment: pod annotations<br/>checksum/config + checksum/plugins,<br/>container image (all to desired state)
-            Op->>K8s: Patch Accepted on each endpoint of the render, only on change:<br/>True (Accepted), False (EndpointConflict), or removed (missing policy)
+            Op->>K8s: Patch Accepted on each endpoint of the render, only on change:<br/>True (Accepted or PartiallyAccepted), False (EndpointConflict), or removed (missing policy), plus status.conflicts
             Note over Op: Requeue: wait for Deployment rollout
             Dep->>Pod: Rolling update (new pods with new config)
             Pod->>Pod: KrakenD starts, loads config
@@ -1272,7 +1272,7 @@ flowchart TD
     A[Collect KrakenDGateway spec] --> B[List all KrakenDEndpoints<br/>matching gatewayRef]
     B --> BA[Detect endpoint path+method<br/>conflicts across all endpoints]
     BA --> BB{conflicts?}
-    BB -->|Yes| BC[Mark conflicting endpoints<br/>as Conflicted<br/>Emit Warning Events]
+    BB -->|Yes| BC[Record each lost entry<br/>PartiallyAccepted or EndpointConflict<br/>Emit Warning Events]
     BB -->|No| C
     BC --> C[Resolve KrakenDBackendPolicy<br/>references]
     C --> CA{Missing policyRef?}
@@ -1338,6 +1338,15 @@ HPA, post-restart Job and optional resources on the *applied* config, so a
 rejected or unjudged render never stops drift correction. The Deployment is
 created only once a config has been applied. The gateway status is written
 once, after both stages.
+
+### Conflict reporting
+
+Conflicts are resolved per `(endpoint, method)` entry: the oldest
+KrakenDEndpoint's entry is rendered. A KrakenDEndpoint that lost some but not
+all of its entries is `Accepted=True/PartiallyAccepted`; one that lost all of
+them is `Accepted=False/EndpointConflict`. In both cases `status.conflicts`
+lists each lost entry and the KrakenDEndpoint that serves it. The gateway
+writes it in the same optimistic-lock status patch as `Accepted`.
 
 ### Deterministic Ordering
 
@@ -1813,7 +1822,7 @@ conditions and shown with `-o wide`.
 | Condition | Writer | Meaning |
 |---|---|---|
 | `ResolvedRefs` | endpoint controller | The gateway and every referenced policy exist (`RefsResolved`, `GatewayNotFound`, `PolicyNotFound`) |
-| `Accepted` | gateway controller | Part of the gateway's validated configuration (`Accepted`), or not because of a conflict (`EndpointConflict`); removed while a referenced policy is missing |
+| `Accepted` | gateway controller | Part of the gateway's validated configuration (`Accepted`), `PartiallyAccepted` (True; `status.conflicts` lists the lost entries) when a conflict cost it some entries, or `EndpointConflict` (False) when it cost it all of them; removed while a referenced policy is missing |
 | `Ready` | endpoint controller | Derived by `api/v1alpha1.EndpointReady`: `Unknown`/`Pending` until the gateway accepts the current generation. A docs-only `SchemaNameConflict` on `Accepted` keeps `Ready=True`, with that reason: schema defects never affect whether a route renders or serves |
 
 Both writers patch status with an optimistic lock (`MergeFromWithOptimisticLock`),
@@ -1856,7 +1865,7 @@ reason. A steady state emits no events. `ConfigValidationFailed` and
 | License expired or entering pre-expiry safety window, CE fallback not configured | Warning | `LicenseExpiredNoFallback` |
 | Dragonfly not ready | Warning | `DragonflyNotReady` |
 | VirtualService created | Normal | `IstioVirtualServiceCreated` |
-| Endpoint newly excluded by a path+method conflict (on the transition only) | Warning | `EndpointConflict` |
+| Endpoint newly loses all its entries to a path+method conflict (on the transition only) | Warning | `EndpointConflict` |
 | Previously conflicted endpoint included again | Normal | `Accepted` |
 | Endpoint's gateway does not exist (`ResolvedRefs` False) | Warning | `GatewayNotFound` |
 | Endpoint references a policy that does not exist (`ResolvedRefs` False) | Warning | `PolicyNotFound` |
