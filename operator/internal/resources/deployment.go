@@ -84,6 +84,9 @@ type DeploymentInputs struct {
 	// LicenseChecksum is the checksum of the license bytes mounted into an
 	// EE gateway, whether or not it falls back to CE; "" when none is mounted.
 	LicenseChecksum string
+	// CERender: the applied config is a CE render — a CE-edition gateway's,
+	// or an EE gateway's CE fallback — run with the CE image.
+	CERender bool
 }
 
 // BuildDeployment mutates dep in place with a complete Deployment for the
