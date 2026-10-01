@@ -64,6 +64,15 @@ webhook_operations() {
 			f && /- (CREATE|UPDATE|DELETE|CONNECT)$/ { printf "%s ", $2 }'
 }
 
+# manifest_operations WEBHOOK FILE: the same, for a kustomize manifest in
+# which each webhook item starts with "- admissionReviewVersions:".
+manifest_operations() {
+	awk -v w="name: $1" '
+		/^- admissionReviewVersions:/ { f = 0 }
+		index($0, w) { f = 1 }
+		f && /- (CREATE|UPDATE|DELETE|CONNECT)$/ { printf "%s ", $2 }' "$2"
+}
+
 # --- webhooks.enabled drives --enable-webhooks ---------------------------
 expect_absent "enabled webhooks pass no flag (older images keep working)" "--enable-webhooks"
 expect_contains "webhooks.enabled=false disables them in the operator" \
@@ -103,6 +112,8 @@ expect_equal "a wrapped base64 caBundle is rendered unwrapped" "$want" \
 # --- no webhook is registered for an operation it does not validate -------
 expect_equal "the chart's gateway webhook is not registered for DELETE" \
 	"CREATE UPDATE " "$(webhook_operations vkrakendgateway.kb.io)"
+expect_equal "the kustomize gateway webhook is not registered for DELETE" \
+	"CREATE UPDATE " "$(manifest_operations vkrakendgateway.kb.io operator/config/webhook/manifests.yaml)"
 
 if [ "$failures" -gt 0 ]; then
 	printf '%d chart render test(s) failed\n' "$failures"
