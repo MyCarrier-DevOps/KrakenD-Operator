@@ -89,7 +89,7 @@ func (r *KrakenDGatewayReconciler) deleteIfControlled(
 	uid := obj.GetUID()
 	err := client.IgnoreNotFound(r.Delete(ctx, obj, client.Preconditions{UID: &uid}))
 	if err != nil {
-		return fmt.Errorf("deleting %T %s: %w", obj, key, err)
+		return fmt.Errorf("deleting %s %s: %w", kindOf(obj), key, err)
 	}
 	return nil
 }
@@ -100,12 +100,24 @@ func (r *KrakenDGatewayReconciler) deleteOptionalIfControlled(
 	ctx context.Context, gw *v1alpha1.KrakenDGateway, gvk schema.GroupVersionKind, name string,
 ) error {
 	available, err := r.crdAvailable(gvk)
-	if err != nil || !available {
-		return err
+	if err != nil {
+		return fmt.Errorf("checking %s CRD: %w", gvk.Kind, err)
+	}
+	if !available {
+		return nil
 	}
 	u := &unstructured.Unstructured{}
 	u.SetGroupVersionKind(gvk)
 	u.SetName(name)
 	u.SetNamespace(gw.Namespace)
 	return r.deleteIfControlled(ctx, gw, u)
+}
+
+// kindOf names obj's kind: its GVK Kind when set (unstructured objects),
+// else its Go type.
+func kindOf(obj client.Object) string {
+	if kind := obj.GetObjectKind().GroupVersionKind().Kind; kind != "" {
+		return kind
+	}
+	return fmt.Sprintf("%T", obj)
 }
