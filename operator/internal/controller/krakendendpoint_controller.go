@@ -116,16 +116,16 @@ func (r *KrakenDEndpointReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&v1alpha1.KrakenDEndpoint{},
-			builder.WithPredicates(predicate.GenerationChangedPredicate{}),
-		).
+		For(&v1alpha1.KrakenDEndpoint{}, builder.WithPredicates(endpointPredicate())).
 		Watches(
 			&v1alpha1.KrakenDGateway{},
 			handler.EnqueueRequestsFromMapFunc(r.gatewayToEndpoints),
+			builder.WithPredicates(existencePredicate()),
 		).
 		Watches(
 			&v1alpha1.KrakenDBackendPolicy{},
 			handler.EnqueueRequestsFromMapFunc(r.policyToEndpoints),
+			builder.WithPredicates(existencePredicate()),
 		).
 		Named("krakendendpoint").
 		Complete(r)
