@@ -17,6 +17,7 @@ limitations under the License.
 package renderer
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -110,10 +111,14 @@ func (v *KrakenDValidator) Validate(ctx context.Context, jsonData []byte) (retEr
 
 	output, err := v.Executor.Execute(ctx, v.BinaryPath, "check", "-t", "-n", "-c", tmpName)
 	if err != nil {
-		return classifyCheckError(ctx, output, err)
+		return classifyCheckError(ctx, bytes.ReplaceAll(output, []byte(tmpName), []byte(checkedConfigName)), err)
 	}
 	return nil
 }
+
+// checkedConfigName stands in for the random temp file name in krakend's
+// output, so a verdict reads the same on every run.
+const checkedConfigName = "krakend.json"
 
 // withoutPath drops the file name from a *fs.PathError and keeps the
 // operation and the underlying error. The temp file name is random, so an
