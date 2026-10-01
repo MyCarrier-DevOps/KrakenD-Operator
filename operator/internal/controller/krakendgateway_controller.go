@@ -1833,9 +1833,13 @@ func condFalse(c *metav1.Condition) bool { return c != nil && c.Status == metav1
 func condTrue(c *metav1.Condition) bool { return c != nil && c.Status == metav1.ConditionTrue }
 
 // servingPhase is the phase of a gateway judged only by its rollout.
-func servingPhase(progressing, _ *metav1.Condition) v1alpha1.GatewayPhase {
-	if condTrue(progressing) {
+func servingPhase(progressing, available *metav1.Condition) v1alpha1.GatewayPhase {
+	switch {
+	case progressing == nil && available == nil:
+		return v1alpha1.PhasePending
+	case condTrue(progressing):
 		return v1alpha1.PhaseDeploying
+	default:
+		return v1alpha1.PhaseRunning
 	}
-	return v1alpha1.PhaseRunning
 }
