@@ -406,3 +406,19 @@ func TestValidate_TempFileErrorIsStable(t *testing.T) {
 		t.Errorf("errors.Is(fs.ErrNotExist) = false for %v", first)
 	}
 }
+
+func TestValidate_VerdictOutputDoesNotCarryTheTempPath(t *testing.T) {
+	bin := fakeKrakenD(t, `echo "ERROR parsing the configuration file:	'$5': bad"; exit 1`)
+	v := NewValidator(ValidatorOptions{Executor: NewKrakenDExecutor(bin), BinaryPath: bin})
+
+	first := v.Validate(context.Background(), []byte(`{"version":3}`))
+	second := v.Validate(context.Background(), []byte(`{"version":3}`))
+
+	var firstVerdict, secondVerdict *ValidationError
+	if !errors.As(first, &firstVerdict) || !errors.As(second, &secondVerdict) {
+		t.Fatalf("expected verdicts, got %v and %v", first, second)
+	}
+	if first.Error() != second.Error() {
+		t.Errorf("verdict text changes between runs:\n%q\n%q", first, second)
+	}
+}
