@@ -558,7 +558,8 @@ func (r *KrakenDGatewayReconciler) inspectDeploymentStatus(
 	if dep.Spec.Replicas != nil {
 		desired = *dep.Spec.Replicas
 	}
-	if dep.Status.UpdatedReplicas == desired &&
+	if dep.Status.ObservedGeneration >= dep.Generation &&
+		dep.Status.UpdatedReplicas == desired &&
 		dep.Status.AvailableReplicas == desired {
 		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
 			Type:               v1alpha1.ConditionProgressing,
