@@ -458,7 +458,7 @@ func (r *KrakenDGatewayReconciler) detectDragonflyState(
 	key := types.NamespacedName{Name: dfName, Namespace: gw.Namespace}
 	if err := r.Get(ctx, key, df); err != nil {
 		if errors.IsNotFound(err) {
-			meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+			r.setConditionWithEvent(gw, metav1.Condition{
 				Type:               v1alpha1.ConditionDragonflyReady,
 				Status:             metav1.ConditionFalse,
 				ObservedGeneration: gw.Generation,
