@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -316,5 +317,21 @@ func TestValidate_LintsOffline(t *testing.T) {
 	}
 	if slices.Contains(rec.args, "-l") {
 		t.Errorf("args %q include -l, which lints against the online schema", rec.args)
+	}
+}
+
+func TestValidate_MissingBinaryIsTransient(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "no-such-krakend")
+	v := NewValidator(ValidatorOptions{Executor: NewKrakenDExecutor(bin), BinaryPath: bin})
+	err := v.Validate(context.Background(), []byte(`{"version":3}`))
+	if err == nil {
+		t.Fatal("expected an error for a missing binary")
+	}
+	var valErr *ValidationError
+	if errors.As(err, &valErr) {
+		t.Fatalf("a missing binary was reported as an invalid config: %v", err)
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("expected the error to wrap fs.ErrNotExist, got %v", err)
 	}
 }
