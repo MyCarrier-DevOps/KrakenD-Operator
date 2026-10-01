@@ -388,3 +388,26 @@ func TestEndpointStatus_ConcurrentSpecChangesConverge(t *testing.T) {
 		return nil
 	})
 }
+
+func TestEndpoint_ReattachesWhenGatewayCreatedLater(t *testing.T) {
+	ns := testNamespace(t)
+	ep := createEndpoint(t, ns, "ep-early", "gw-late", "/early")
+	eventually(t, func() error {
+		cur, err := getEndpoint(ep)
+		if err != nil {
+			return err
+		}
+		if err := expectCondition(cur, "ResolvedRefs", metav1.ConditionFalse, "GatewayNotFound"); err != nil {
+			return err
+		}
+		if cur.Status.Phase != v1alpha1.EndpointPhaseDetached {
+			return fmt.Errorf("phase %q, want Detached", cur.Status.Phase)
+		}
+		return nil
+	})
+	createGateway(t, ns, "gw-late")
+	eventually(t, func() error {
+		return expectEndpointStatus(ep, metav1.ConditionTrue, metav1.ConditionTrue, "Accepted", "Ready",
+			v1alpha1.EndpointPhaseActive)
+	})
+}
