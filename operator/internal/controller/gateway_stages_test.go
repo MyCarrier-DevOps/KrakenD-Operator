@@ -2228,3 +2228,35 @@ func TestReconcileCEFallbackCondition_NamesTheOpenAPIExport(t *testing.T) {
 		})
 	}
 }
+
+func TestGatewayReconcile_DocsOnlyFallbackKeepsEndpointsReady(t *testing.T) {
+	gw, secret, parser := licensedEEGateway(testNow.Add(-time.Minute), true)
+	gw.Spec.OpenAPI = &v1alpha1.OpenAPIExportSpec{Enabled: true}
+	generated := testEndpoint("generated", "/users")
+	generated.Spec.Endpoints[0].ExtraConfig = &runtime.RawExtension{Raw: []byte(
+		`{"documentation/openapi":{"audience":["public"],"summary":"List users"}}`)}
+	generated.Spec.ComponentSchemas = map[string]runtime.RawExtension{"User": {Raw: []byte(`{"type":"object"}`)}}
+	c := fakeClientBuilder().WithObjects(gw, secret, generated).WithStatusSubresource(gw, generated).Build()
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}), &mockValidator{})
+	r.LicenseParser = parser
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	accepted := storedAccepted(t, c, client.ObjectKeyFromObject(generated))
+	if accepted == nil || accepted.Status != metav1.ConditionTrue || accepted.Reason != v1alpha1.ReasonAccepted {
+		t.Fatalf("Accepted = %+v, want True/%s: dropping docs changes nothing the endpoint serves",
+			accepted, v1alpha1.ReasonAccepted)
+	}
+	resolved := metav1.Condition{Type: v1alpha1.ConditionResolvedRefs, Status: metav1.ConditionTrue,
+		Reason: v1alpha1.ReasonRefsResolved, ObservedGeneration: accepted.ObservedGeneration}
+	status, reason, _ := v1alpha1.EndpointReady([]metav1.Condition{resolved, *accepted})
+	if status != metav1.ConditionTrue {
+		t.Errorf("Ready = %s/%s, want True", status, reason)
+	}
+	cond := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionCEFallbackApplied)
+	if cond == nil || !strings.Contains(cond.Message, "gateway: extra_config documentation/openapi") ||
+		!strings.Contains(cond.Message, openAPIFallbackNote) {
+		t.Errorf("CEFallbackApplied = %+v, want it to say the docs and the OpenAPI export are off", cond)
+	}
+}
