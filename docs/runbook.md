@@ -312,7 +312,7 @@ kubectl get events --field-selector involvedObject.name=<name>
   isn't a list of strings
 - Filter excludes all operations
 - An override's `operationId` doesn't match any operation in the spec — see *AutoConfig sync fails with `UnmatchedOverride`* below
-- Generated endpoints can't be written: the `Synced` condition is `False` with reason `EndpointReconcileFailed` and the message names the endpoint and the API error (e.g. an admission webhook rejected it, or a `KrakenDEndpoint` with that name is controlled by another owner). This retries with backoff regardless of `trigger`. A `Conflict` or `AlreadyExists` from a stale cache is *not* this failure — it requeues quietly a second later with no error or event, so if the AutoConfig converges a moment later with nothing in between, that's this path working as intended, not a bug.
+- Generated endpoints can't be written: the `Synced` condition is `False` with reason `EndpointReconcileFailed` and the message names the endpoint and the API error (e.g. an admission webhook rejected it, or a `KrakenDEndpoint` with that name is controlled by another owner). This retries with backoff regardless of `trigger`, at least every 5 minutes. A `Conflict` or `AlreadyExists` from a stale cache is *not* this failure — it requeues quietly a second later with no error or event, so if the AutoConfig converges a moment later with nothing in between, that's this path working as intended, not a bug.
 
 ### AutoConfig sync fails with `UnmatchedOverride`
 
