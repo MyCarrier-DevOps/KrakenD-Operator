@@ -1791,6 +1791,8 @@ type gatewayReadiness struct {
 func gatewayReadinessFor(conds []metav1.Condition) gatewayReadiness {
 	configValid := meta.FindStatusCondition(conds, v1alpha1.ConditionConfigValid)
 	switch {
+	case condFalse(configValid):
+		return notReady(configValid, v1alpha1.PhaseError)
 	case configValid == nil:
 		return gatewayReadiness{status: metav1.ConditionUnknown, reason: v1alpha1.ReasonPending,
 			message: "Waiting for the first configuration to be validated", phase: v1alpha1.PhasePending}
@@ -1799,3 +1801,11 @@ func gatewayReadinessFor(conds []metav1.Condition) gatewayReadiness {
 			message: "Configuration applied and all replicas available", phase: v1alpha1.PhaseRunning}
 	}
 }
+
+// notReady is a False Ready that carries cause's reason and message.
+func notReady(cause *metav1.Condition, phase v1alpha1.GatewayPhase) gatewayReadiness {
+	return gatewayReadiness{status: metav1.ConditionFalse, reason: cause.Reason, message: cause.Message, phase: phase}
+}
+
+// condFalse reports whether c exists and is False.
+func condFalse(c *metav1.Condition) bool { return c != nil && c.Status == metav1.ConditionFalse }
