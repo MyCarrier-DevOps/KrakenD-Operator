@@ -18,6 +18,8 @@ package renderer
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
 )
 
@@ -127,5 +129,18 @@ const (
 	LevelBackend  NamespaceLevel = "backend"
 )
 
-// EEOnlyNamespaces is a stub until the lists are exported.
-func EEOnlyNamespaces(level NamespaceLevel) []string { return nil }
+// EEOnlyNamespaces returns the extra_config namespaces that only KrakenD
+// Enterprise implements at level, sorted, or nil for an unknown level. A
+// CE-fallback render strips them; admission rejects them on CE gateways,
+// where KrakenD CE would accept and then silently ignore them.
+func EEOnlyNamespaces(level NamespaceLevel) []string {
+	set, ok := map[NamespaceLevel]map[string]struct{}{
+		LevelService:  eeOnlyServiceNamespaces,
+		LevelEndpoint: eeOnlyEndpointNamespaces,
+		LevelBackend:  eeOnlyBackendNamespaces,
+	}[level]
+	if !ok {
+		return nil
+	}
+	return slices.Sorted(maps.Keys(set))
+}
