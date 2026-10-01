@@ -1394,3 +1394,32 @@ func TestRejectionsByEndpoint_ListsEachFindingOncePerEndpoint(t *testing.T) {
 		t.Errorf("message = %q, want the finding once", msg)
 	}
 }
+
+func TestGatewayReconcile_ServingGatewayKeepsAnUnblamedVerdict(t *testing.T) {
+	gw := servingGateway("applied", "img:v1")
+	good := withAccepted(testEndpoint("good", "/a"), metav1.ConditionTrue, v1alpha1.ReasonAccepted)
+	bad := testEndpoint("bad", "/b")
+	c := fakeClientBuilder().WithObjects(gw, good, bad).WithStatusSubresource(gw, good, bad).Build()
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}),
+		&countingValidator{err: rejectedBy(badNamespaceVerdict)})
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if cond := storedAccepted(t, c, client.ObjectKeyFromObject(good)); cond == nil || cond.Status != metav1.ConditionTrue {
+		t.Errorf("good Accepted = %+v, want the applied render's True kept", cond)
+	}
+}
+
+func TestGatewayReconcile_ServingGatewayKeepsAVerdictWhileTheValidatorIsUnavailable(t *testing.T) {
+	gw := servingGateway("applied", "img:v1")
+	good := withAccepted(testEndpoint("good", "/a"), metav1.ConditionTrue, v1alpha1.ReasonAccepted)
+	c := fakeClientBuilder().WithObjects(gw, good).WithStatusSubresource(gw, good).Build()
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}),
+		&countingValidator{err: errors.New("fork/exec /usr/local/bin/krakend: no such file or directory")})
+	if err := reconcileGateway(t, r, gw); err == nil {
+		t.Fatal("an unavailable validator must fail the reconcile so it is retried")
+	}
+	if cond := storedAccepted(t, c, client.ObjectKeyFromObject(good)); cond == nil || cond.Status != metav1.ConditionTrue {
+		t.Errorf("good Accepted = %+v, want the applied render's True kept", cond)
+	}
+}
