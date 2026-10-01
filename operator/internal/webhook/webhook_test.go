@@ -2679,6 +2679,14 @@ func terminating[T metav1.Object](obj T) T {
 	return obj
 }
 
+// unfinalized returns a copy of obj with its finalizers removed, the new
+// object of a finalizer-removal UPDATE.
+func unfinalized[T client.Object](obj T) T {
+	c := obj.DeepCopyObject().(T)
+	c.SetFinalizers(nil)
+	return c
+}
+
 func TestValidators_AdmitUpdatesToTerminatingObjects(t *testing.T) {
 	ctx := context.Background()
 	gw := terminating(&v1alpha1.KrakenDGateway{
@@ -2707,13 +2715,17 @@ func TestValidators_AdmitUpdatesToTerminatingObjects(t *testing.T) {
 		name     string
 		validate func() (admission.Warnings, error)
 	}{
-		{"gateway", func() (admission.Warnings, error) { return (&GatewayValidator{}).ValidateUpdate(ctx, gw, gw) }},
-		{"endpoint", func() (admission.Warnings, error) {
-			return (&EndpointValidator{Client: fakeClient()}).ValidateUpdate(ctx, ep, ep)
+		{"gateway", func() (admission.Warnings, error) {
+			return (&GatewayValidator{}).ValidateUpdate(ctx, gw, unfinalized(gw))
 		}},
-		{"policy", func() (admission.Warnings, error) { return (&PolicyValidator{}).ValidateUpdate(ctx, policy, policy) }},
+		{"endpoint", func() (admission.Warnings, error) {
+			return (&EndpointValidator{Client: fakeClient()}).ValidateUpdate(ctx, ep, unfinalized(ep))
+		}},
+		{"policy", func() (admission.Warnings, error) {
+			return (&PolicyValidator{}).ValidateUpdate(ctx, policy, unfinalized(policy))
+		}},
 		{"autoconfig", func() (admission.Warnings, error) {
-			return (&AutoConfigValidator{Client: fakeClient()}).ValidateUpdate(ctx, ac, ac)
+			return (&AutoConfigValidator{Client: fakeClient()}).ValidateUpdate(ctx, ac, unfinalized(ac))
 		}},
 	}
 	for _, tc := range cases {
@@ -2796,13 +2808,17 @@ func TestTerminatingWithUnchangedSpec(t *testing.T) {
 	}
 	changed := base.DeepCopy()
 	changed.Spec.RateLimit.MaxRate = 20
+	unfinalizedTerminating := func(o *v1alpha1.KrakenDBackendPolicy) *v1alpha1.KrakenDBackendPolicy {
+		return unfinalized(terminating(o.DeepCopy()))
+	}
 
 	cases := []struct {
-		name         string
+		name           string
 		oldObj, newObj runtime.Object
-		want         bool
+		want           bool
 	}{
 		{"terminating with the same spec", terminating(base.DeepCopy()), terminating(base.DeepCopy()), true},
+		{"terminating with a finalizer removed", terminating(base.DeepCopy()), unfinalizedTerminating(base), true},
 		{"not terminating", base.DeepCopy(), base.DeepCopy(), false},
 		{"terminating with a changed spec", terminating(base.DeepCopy()), terminating(changed), false},
 	}
