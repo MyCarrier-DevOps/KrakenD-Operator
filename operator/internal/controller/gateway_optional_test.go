@@ -373,3 +373,25 @@ func TestGatewayReconcile_MissingOptionalCRDIsACondition(t *testing.T) {
 		})
 	}
 }
+
+func TestGatewayReconcile_DragonflyNotYetCreatedRecordsOneEvent(t *testing.T) {
+	gw := reconciledGateway()
+	gw.Status.ConfigChecksum = "applied"
+	gw.Spec.Dragonfly = &v1alpha1.DragonflySpec{Enabled: true}
+	c := fakeClientBuilder().WithRESTMapper(optionalCRDMapper(dragonflyGVK)).
+		WithObjects(gw).WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderOutput("applied"), &mockValidator{})
+
+	for range 2 {
+		if err := reconcileGateway(t, r, gw); err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+	}
+	cond := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionDragonflyReady)
+	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != v1alpha1.ReasonDragonflyNotReady {
+		t.Errorf("DragonflyReady = %+v, want False/%s", cond, v1alpha1.ReasonDragonflyNotReady)
+	}
+	if n := eventsWithReason(r.Recorder.(*record.FakeRecorder), v1alpha1.ReasonDragonflyNotReady); n != 1 {
+		t.Errorf("DragonflyNotReady events over two reconciles = %d, want 1", n)
+	}
+}
