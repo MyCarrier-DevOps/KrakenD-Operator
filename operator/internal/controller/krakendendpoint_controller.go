@@ -156,26 +156,16 @@ func (r *KrakenDEndpointReconciler) resolveRefs(
 		cond.Message = fmt.Sprintf("gateway %s/%s not found", gwKey.Namespace, gwKey.Name)
 		return cond, nil
 	}
-	policyKeys := make(map[string]types.NamespacedName)
-	for _, entry := range ep.Spec.Endpoints {
-		for _, be := range entry.Backends {
-			if be.PolicyRef == nil {
-				continue
-			}
-			policyKeys[be.PolicyRef.PolicyKey(ep.Namespace)] = types.NamespacedName{
-				Name:      be.PolicyRef.Name,
-				Namespace: be.PolicyRef.ResolvedNamespace(ep.Namespace),
-			}
-		}
-	}
-	for _, policyKey := range policyKeys {
+	// policyRefsFromEndpoint lists each referenced policy once, in spec
+	// order, so the first missing policy (and the message) is stable.
+	for _, ref := range policyRefsFromEndpoint(ep) {
 		var policy v1alpha1.KrakenDBackendPolicy
-		if err := r.Get(ctx, policyKey, &policy); err != nil {
+		if err := r.Get(ctx, ref.NamespacedName, &policy); err != nil {
 			if !errors.IsNotFound(err) {
-				return cond, fmt.Errorf("getting policy %s: %w", policyKey, err)
+				return cond, fmt.Errorf("getting policy %s: %w", ref.NamespacedName, err)
 			}
 			cond.Status, cond.Reason = metav1.ConditionFalse, v1alpha1.ReasonPolicyNotFound
-			cond.Message = fmt.Sprintf("policy %q not found in namespace %q", policyKey.Name, policyKey.Namespace)
+			cond.Message = fmt.Sprintf("policy %q not found in namespace %q", ref.Name, ref.Namespace)
 			return cond, nil
 		}
 	}
