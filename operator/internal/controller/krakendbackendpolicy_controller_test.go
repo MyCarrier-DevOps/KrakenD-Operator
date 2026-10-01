@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
@@ -508,5 +509,32 @@ func TestPolicyReconcile_ReadyReplacesPolicyValid(t *testing.T) {
 		stored.Status.ObservedGeneration != 2 {
 		t.Errorf("Ready = %+v, observedGeneration %d; want True/Ready at generation 2",
 			ready, stored.Status.ObservedGeneration)
+	}
+}
+
+func TestPolicyReconcile_InvalidPolicyEventOnTransitionOnly(t *testing.T) {
+	policy := &v1alpha1.KrakenDBackendPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "pol1", Namespace: "default", Generation: 1},
+		Spec: v1alpha1.KrakenDBackendPolicySpec{
+			CircuitBreaker: &v1alpha1.CircuitBreakerSpec{MaxErrors: 0, Interval: 60, Timeout: 30},
+		},
+	}
+	c := fakeClientBuilder().WithObjects(policy).WithStatusSubresource(policy).Build()
+	rec := fakeRecorder()
+	r := &KrakenDBackendPolicyReconciler{Client: c, Scheme: testScheme(), Recorder: rec}
+	req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(policy)}
+
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"Warning InvalidCircuitBreaker circuitBreaker.maxErrors must be positive"}
+	if got := drainEvents(rec); !slices.Equal(got, want) {
+		t.Errorf("events = %q, want %q", got, want)
+	}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	if got := drainEvents(rec); len(got) != 0 {
+		t.Errorf("unchanged invalid policy: events = %q, want none", got)
 	}
 }
