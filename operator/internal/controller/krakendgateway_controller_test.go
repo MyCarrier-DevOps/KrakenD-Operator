@@ -1718,3 +1718,37 @@ func TestGatewayReadinessFor(t *testing.T) {
 		})
 	}
 }
+
+func TestGatewayReconcile_RecoveredRolloutClearsError(t *testing.T) {
+	gw := testGateway()
+	gw.Generation = 1
+	now := metav1.Now()
+	gw.Status = v1alpha1.KrakenDGatewayStatus{
+		Phase: v1alpha1.PhaseError, ConfigChecksum: "cs1", ActiveImage: "img:v1",
+		Conditions: []metav1.Condition{
+			{Type: "ConfigValid", Status: metav1.ConditionTrue, Reason: "ConfigApplied",
+				Message: "Configuration passed validation and is applied", ObservedGeneration: 1, LastTransitionTime: now},
+			{Type: "Available", Status: metav1.ConditionFalse, Reason: "RolloutFailed",
+				Message: "Deployment exceeded its progress deadline", ObservedGeneration: 1, LastTransitionTime: now},
+			{Type: "Progressing", Status: metav1.ConditionFalse, Reason: "RolloutFailed",
+				Message: "Deployment exceeded its progress deadline", ObservedGeneration: 1, LastTransitionTime: now},
+		},
+	}
+	c := fakeClientBuilder().
+		WithObjects(gw, makeConvergedDeployment(gw, "")).
+		WithStatusSubresource(gw).
+		Build()
+	r := acceptanceReconciler(c, fakeRecorder(), &renderer.RenderOutput{
+		JSON: []byte(`{"version":3}`), Checksum: "cs1", DesiredImage: "img:v1",
+	})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+
+	stored := getGateway(t, c, gw)
+	ready := meta.FindStatusCondition(stored.Status.Conditions, v1alpha1.ConditionReady)
+	if ready == nil || ready.Status != metav1.ConditionTrue || stored.Status.Phase != v1alpha1.PhaseRunning {
+		t.Errorf("after the rollout recovered: Ready = %+v, phase %q; want True and Running", ready, stored.Status.Phase)
+	}
+}
