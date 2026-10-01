@@ -1006,3 +1006,42 @@ func TestReconcilePostRestartJob_SkipsWhileDeploymentHasNotObservedItsSpec(t *te
 func convergedInputs(checksum string) infraInputs {
 	return infraInputs{appliedChecksum: checksum, image: convergedImage}
 }
+
+func TestReconcilePostRestartJob_SkipsWhileSurplusReplicasRemain(t *testing.T) {
+	gw := makeGWWithJob("echo ok")
+	dep := makeConvergedDeployment(gw, "abc123")
+	dep.Status.Replicas = 2
+	c := fakeClientBuilder().WithObjects(gw, dep).Build()
+	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
+
+	if err := r.reconcilePostRestartJob(context.Background(), gw, convergedInputs("abc123")); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var jobs batchv1.JobList
+	if err := c.List(context.Background(), &jobs, client.InNamespace("ns")); err != nil {
+		t.Fatalf("listing jobs: %v", err)
+	}
+	if len(jobs.Items) != 0 {
+		t.Fatalf("expected no job while an old replica is still running, got %d", len(jobs.Items))
+	}
+}
+
+func TestReconcilePostRestartJob_SkipsWhileDeploymentRunsAnotherImage(t *testing.T) {
+	gw := makeGWWithJob("echo ok")
+	dep := makeConvergedDeployment(gw, "abc123")
+	c := fakeClientBuilder().WithObjects(gw, dep).Build()
+	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
+	in := convergedInputs("abc123")
+	in.image = "img:v2"
+
+	if err := r.reconcilePostRestartJob(context.Background(), gw, in); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var jobs batchv1.JobList
+	if err := c.List(context.Background(), &jobs, client.InNamespace("ns")); err != nil {
+		t.Fatalf("listing jobs: %v", err)
+	}
+	if len(jobs.Items) != 0 {
+		t.Fatalf("expected no job while the Deployment runs the previous image, got %d", len(jobs.Items))
+	}
+}
