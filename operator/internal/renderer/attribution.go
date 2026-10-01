@@ -39,7 +39,8 @@ type Attribution struct {
 var (
 	lintPointerRe = regexp.MustCompile(`^- at '/endpoints/(\d+)[/']`)
 	methodPathRe  = regexp.MustCompile(`\b(GET|POST|PUT|PATCH|DELETE) (/[^\s',!]*)`)
-	quotedPathRe  = regexp.MustCompile(`(?:path|prefix) '(/[^']*)'`)
+	newPathRe     = regexp.MustCompile(`path '(/[^']*)'`)
+	prefixRe      = regexp.MustCompile(`prefix '(/[^']*)'`)
 	braceParamRe  = regexp.MustCompile(`\{([^}/]+)\}`)
 )
 
@@ -87,8 +88,8 @@ func skipCheckLine(line string) bool {
 
 // matchLine returns the indices of the rendered entries line names: a lint
 // pointer's index, else every entry whose method and route shape match a
-// "METHOD /path" in the line, else every entry whose route shape matches a
-// quoted "path '…'" or "prefix '…'".
+// "METHOD /path" in the line, else the entries a router error about a quoted
+// path (and prefix) implicates; see matchRouterError.
 func matchLine(line string, routes []renderedRoute) []int {
 	if m := lintPointerRe.FindStringSubmatch(line); m != nil {
 		i, err := strconv.Atoi(m[1])
@@ -114,9 +115,35 @@ func matchLine(line string, routes []renderedRoute) []int {
 	if len(indices) > 0 {
 		return indices
 	}
-	for _, m := range quotedPathRe.FindAllStringSubmatch(line, -1) {
-		shape := routeShape(m[1])
-		add(func(r renderedRoute) bool { return r.shape == shape })
+	return matchRouterError(line, routes)
+}
+
+// matchRouterError attributes a router error that quotes "path '…'" and maybe
+// "prefix '…'" but names no method. krakend keeps one route tree per method,
+// so only the methods holding an entry of the new path can be at fault; within
+// those, the blamed entries are the new path and the prefix it collides with.
+// A line that quotes no path, or one no entry has, names nothing.
+func matchRouterError(line string, routes []renderedRoute) []int {
+	m := newPathRe.FindStringSubmatch(line)
+	if m == nil {
+		return nil
+	}
+	newShape := routeShape(m[1])
+	prefix := ""
+	if pm := prefixRe.FindStringSubmatch(line); pm != nil {
+		prefix = routeShape(pm[1])
+	}
+	methods := map[string]bool{}
+	for _, r := range routes {
+		if r.shape == newShape {
+			methods[r.method] = true
+		}
+	}
+	var indices []int
+	for i, r := range routes {
+		if methods[r.method] && (r.shape == newShape || (prefix != "" && r.shape == prefix)) {
+			indices = append(indices, i)
+		}
 	}
 	return indices
 }
