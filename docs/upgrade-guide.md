@@ -370,7 +370,8 @@ pass, continuously, until the input was fixed. Now:
 
 - `status.phase` is no longer set to `Rendering` or `Validating`, and a new
   gateway is no longer written as `Pending` before its first full reconcile.
-  The values remain in the API for compatibility.
+  The values remain in the API for compatibility. A value persisted by an
+  older operator version stays until the gateway's next verdict replaces it.
 - Gateway status is written only when it changes.
 - The operator remembers the exact input krakend check rejected and does not
   run the check again for it. It validates again as soon as any input
@@ -399,7 +400,7 @@ full, or the validation copy cannot be prepared), the gateway now reports
 `ConfigValid=Unknown` with reason `ValidatorUnavailable`, emits one
 `ValidatorUnavailable` Warning event, keeps its phase and its applied
 config, and retries with exponential backoff. Previously such failures were
-reported as an invalid config and not retried.
+reported as an invalid config (and re-run in a status-write loop).
 
 `config_validation_failures_total` counts only a fresh verdict from krakend
 check. Failures to prepare the validation copy and other errors that are not
