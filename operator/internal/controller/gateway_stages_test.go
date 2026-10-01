@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -722,5 +723,26 @@ func TestGatewayReconcile_HoldsTheDeploymentWhenTheAppliedConfigMapIsNotTheGatew
 				t.Errorf("Deployment mounts %q; it must be held mounting %q", got, gw.Name)
 			}
 		})
+	}
+}
+
+func TestGatewayReconcile_HeldDeploymentReportsNoRollout(t *testing.T) {
+	gw := servingGateway(hash.SHA256Hex([]byte(`{"version":3,"name":"gone"}`)), "img:v1")
+	c := fakeClientBuilder().WithObjects(gw, legacyDeployment(gw)).WithStatusSubresource(gw).Build()
+	// The render names another image, but the Deployment is held, so no
+	// rollout starts.
+	r := newTestGatewayReconciler(c, renderOf(`{"version":3,"name":"rejected"}`),
+		&countingValidator{err: rejectedBy("- at '/endpoints/0/endpoint': bad")})
+	restartsBefore := testutil.ToFloat64(rollingRestarts)
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	progressing := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionProgressing)
+	if progressing != nil && progressing.Reason == "DeploymentUpdated" {
+		t.Errorf("Progressing = %+v; a held Deployment starts no rollout", progressing)
+	}
+	if got := testutil.ToFloat64(rollingRestarts); got != restartsBefore {
+		t.Errorf("rollingRestarts rose from %v to %v for a rollout that never started", restartsBefore, got)
 	}
 }
