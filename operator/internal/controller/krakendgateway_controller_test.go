@@ -1816,7 +1816,9 @@ func TestGatewayReconcile_ValidationFailureAdvancesObservedGeneration(t *testing
 		Output: "invalid config line 5", Err: fmt.Errorf("exit code 1"),
 	}}
 
-	_ = reconcileGateway(t, r, gw)
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("a rejection is persistent and must not be retried: %v", err)
+	}
 
 	stored := getGateway(t, c, gw)
 	ready := meta.FindStatusCondition(stored.Status.Conditions, v1alpha1.ConditionReady)
