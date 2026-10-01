@@ -24,8 +24,10 @@ import (
 	"time"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/resources"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -371,6 +373,62 @@ func TestPolicy_RequeuesGateway(t *testing.T) {
 		}
 		if updated.Status.ReferencedBy < 1 {
 			return fmt.Errorf("expected ReferencedBy >= 1, got %d", updated.Status.ReferencedBy)
+		}
+		return nil
+	})
+}
+
+// waitForAppliedChecksum waits until the gateway key has an applied config
+// and returns its checksum.
+func waitForAppliedChecksum(t *testing.T, key client.ObjectKey) string {
+	t.Helper()
+	var applied string
+	eventually(t, func() error {
+		var got v1alpha1.KrakenDGateway
+		if err := k8sClient.Get(ctx, key, &got); err != nil {
+			return err
+		}
+		if got.Status.ConfigChecksum == "" {
+			return fmt.Errorf("no applied config yet")
+		}
+		applied = got.Status.ConfigChecksum
+		return nil
+	})
+	return applied
+}
+
+func TestGateway_DeletedDeploymentRecreatedWhileConfigRejected(t *testing.T) {
+	ns := testNamespace(t)
+	gw := createGateway(t, ns, "drift-gw")
+	applied := waitForAppliedChecksum(t, gw)
+
+	createEndpoint(t, ns, "rejected", gw.Name, rejectMarker)
+	eventually(t, func() error {
+		var got v1alpha1.KrakenDGateway
+		if err := k8sClient.Get(ctx, gw, &got); err != nil {
+			return err
+		}
+		c := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionConfigValid)
+		if c == nil || c.Status != metav1.ConditionFalse {
+			return fmt.Errorf("ConfigValid = %+v, want False", c)
+		}
+		return nil
+	})
+
+	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: ns}}
+	if err := k8sClient.Delete(ctx, dep); err != nil {
+		t.Fatalf("delete deployment: %v", err)
+	}
+	eventually(t, func() error {
+		var got appsv1.Deployment
+		if err := k8sClient.Get(ctx, gw, &got); err != nil {
+			return fmt.Errorf("waiting for the Deployment to be recreated: %w", err)
+		}
+		if !got.DeletionTimestamp.IsZero() {
+			return fmt.Errorf("the old Deployment is still terminating")
+		}
+		if a := got.Spec.Template.Annotations[resources.PostRestartJobChecksumAnnotation]; a != applied {
+			return fmt.Errorf("recreated Deployment carries config %q, want the applied %q", a, applied)
 		}
 		return nil
 	})
