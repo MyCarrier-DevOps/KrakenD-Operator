@@ -902,14 +902,14 @@ func eeStripped(cond *metav1.Condition, ep *v1alpha1.KrakenDEndpoint, stripped [
 	}
 	cond.Reason = v1alpha1.ReasonEEFeaturesStripped
 	cond.Message = truncateMessage("The gateway runs KrakenD CE in license fallback, which removed these " +
-		"Enterprise-only features: " + strippedList(stripped))
+		"Enterprise-only features:\n" + strippedList(stripped))
 }
 
 // noteStripped appends what a CE-fallback render removed to a conflict
 // verdict, which keeps its reason.
 func noteStripped(cond *metav1.Condition, stripped []renderer.StrippedEEFeature) {
 	if len(stripped) > 0 {
-		cond.Message = truncateMessage(cond.Message + "; CE fallback also removed: " + strippedList(stripped))
+		cond.Message = truncateMessage(cond.Message + "\nCE fallback also removed:\n" + strippedList(stripped))
 	}
 }
 
