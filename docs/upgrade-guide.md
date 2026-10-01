@@ -550,6 +550,30 @@ kubectl get krakendgateways,krakendendpoints,krakendautoconfigs,krakendbackendpo
 - When the referenced gateway is deleted, `Accepted` keeps that gateway's
   last verdict; `Ready` reports `GatewayNotFound` and the phase is `Detached`.
 
+### KrakenDGateway
+
+- New `Ready` condition. The first matching rule gives its value:
+  `ConfigValid=False` (its reason), license expired without CE fallback
+  (`LicenseExpiredNoFallback`), `Available=False` (e.g. `RolloutFailed`),
+  CE fallback (`LicenseFallbackCE`), no configuration validated yet
+  (`Unknown`/`Pending`), a configuration that could not be validated
+  because the validator was unavailable (`Unknown`/`ValidatorUnavailable`;
+  the phase stays at the serving phase), a rollout in progress (the
+  `Progressing` reason, `ConfigDeployed` or `DeploymentUpdated`), and a
+  Deployment not yet available (`AwaitingAvailability`). Otherwise it is
+  `True`/`Ready`.
+- `phase` is derived from the same rules on every reconcile (`Error`,
+  `Degraded`, `Pending`, `Deploying`, `Running`) and no longer latches: a
+  GitOps revert to the last good configuration now reports
+  `ConfigValid=True` and `Running`, and a rollout that recovers after
+  `ProgressDeadlineExceeded` returns to `Running`.
+- `ConfigValid=True` now has reason `ConfigApplied` (was `ConfigValid`).
+- `status.observedGeneration` advances on every reconcile that evaluated the
+  spec, including a rejected configuration.
+- The license monitor no longer writes `phase`; it writes only the
+  `License*` conditions and `licenseExpiry`, with an optimistic lock, so it
+  cannot revert conditions the gateway controller just wrote.
+
 ### Watch scope
 
 - The endpoint controller now reacts to gateways and policies being created
