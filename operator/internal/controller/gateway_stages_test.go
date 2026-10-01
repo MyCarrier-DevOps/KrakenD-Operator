@@ -24,6 +24,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	clocktesting "k8s.io/utils/clock/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -81,5 +82,25 @@ func TestGatewayReconcile_InfrastructureRunsWhateverTheConfigVerdict(t *testing.
 				t.Errorf("the Service must be reconciled whatever the config verdict: %v", err)
 			}
 		})
+	}
+}
+
+func TestGatewayReconcile_NoDeploymentBeforeAnyConfigPasses(t *testing.T) {
+	gw := reconciledGateway()
+	c := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderOutput("new"),
+		&countingValidator{err: rejectedBy("- at '/endpoints/0/endpoint': bad")})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	var svc corev1.Service
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(gw), &svc); err != nil {
+		t.Fatalf("the Service must be reconciled before any config passes: %v", err)
+	}
+	var dep appsv1.Deployment
+	err := c.Get(context.Background(), client.ObjectKeyFromObject(gw), &dep)
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("no Deployment may exist before any config passes validation; Get returned %v", err)
 	}
 }
