@@ -235,10 +235,18 @@ func configMapGCCandidates(gw *v1alpha1.KrakenDGateway, cms []corev1.ConfigMap, 
 		}
 		return cmp.Compare(a.Name, b.Name)
 	})
+	// The history is configMapHistoryLimit revisions: inUse, however old,
+	// plus the most recently created others.
+	kept := 1
 	for i := range revisions {
-		if i >= configMapHistoryLimit && revisions[i].Name != inUse {
-			candidates = append(candidates, revisions[i])
+		if revisions[i].Name == inUse {
+			continue
 		}
+		if kept < configMapHistoryLimit {
+			kept++
+			continue
+		}
+		candidates = append(candidates, revisions[i])
 	}
 	return candidates
 }
