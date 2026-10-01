@@ -164,6 +164,11 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// The license decides whether this gateway renders and runs CE.
 	lic := r.reconcileLicense(ctx, &gw)
 	ceFallback := lic.ceFallback
+	deployedLicense, err := r.deployedLicenseChecksum(ctx, &gw)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	licenseChecksum := lic.checksumFor(deployedLicense)
 
 	// Gather plugin ConfigMaps
 	pluginConfigMaps, err := r.gatherPluginConfigMaps(ctx, &gw)
@@ -195,7 +200,7 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// A held Deployment (no ConfigMap holds the applied config) starts no
 	// rollout, so none is reported.
 	if gw.Status.ConfigChecksum == appliedBefore && cfg.appliedConfigMap != "" {
-		r.markDeploymentUpdate(&gw, output.DesiredImage, output.PluginChecksum)
+		r.markDeploymentUpdate(&gw, output.DesiredImage, output.PluginChecksum, licenseChecksum != deployedLicense)
 	}
 
 	// Accepted: the applied render sets every endpoint's verdict. On a pass
@@ -218,6 +223,7 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	infra := infraInputs{
 		appliedChecksum: gw.Status.ConfigChecksum,
 		pluginChecksum:  output.PluginChecksum,
+		licenseChecksum: licenseChecksum,
 		image:           output.DesiredImage,
 		configMapName:   cfg.appliedConfigMap,
 		heldBecause:     cfg.heldBecause,
@@ -553,7 +559,7 @@ func (r *KrakenDGatewayReconciler) inspectDeploymentStatus(
 }
 
 // deploymentConverged reports whether dep has finished rolling out want: its
-// pod template carries the applied config, image and plugins (compared through
+// pod template carries the applied config, image, plugins and license (compared through
 // annotations, since admission can rewrite the container image), it has observed
 // its latest spec, and every replica is updated and available. The cache can
 // still hold the Deployment from before an update, or one whose status
@@ -563,7 +569,8 @@ func deploymentConverged(dep *appsv1.Deployment, want infraInputs) bool {
 	tmpl := dep.Spec.Template
 	if tmpl.Annotations[resources.PostRestartJobChecksumAnnotation] != want.appliedChecksum ||
 		tmpl.Annotations[resources.PluginChecksumAnnotation] != want.pluginChecksum ||
-		tmpl.Annotations[resources.ImageAnnotation] != want.image {
+		tmpl.Annotations[resources.ImageAnnotation] != want.image ||
+		tmpl.Annotations[resources.LicenseChecksumAnnotation] != want.licenseChecksum {
 		return false
 	}
 	desired := int32(1)
@@ -574,6 +581,23 @@ func deploymentConverged(dep *appsv1.Deployment, want infraInputs) bool {
 		dep.Status.Replicas == desired &&
 		dep.Status.UpdatedReplicas == desired &&
 		dep.Status.AvailableReplicas == desired
+}
+
+// deployedLicenseChecksum is the license checksum the gateway Deployment's
+// pod template carries now; "" when there is no Deployment or it carries
+// none.
+func (r *KrakenDGatewayReconciler) deployedLicenseChecksum(
+	ctx context.Context, gw *v1alpha1.KrakenDGateway,
+) (string, error) {
+	var dep appsv1.Deployment
+	err := r.Get(ctx, types.NamespacedName{Name: gw.Name, Namespace: gw.Namespace}, &dep)
+	if errors.IsNotFound(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("reading the deployed license checksum: %w", err)
+	}
+	return dep.Spec.Template.Annotations[resources.LicenseChecksumAnnotation], nil
 }
 
 // findDeploymentCondition returns the Deployment's condition of the given
@@ -665,16 +689,17 @@ func (r *KrakenDGatewayReconciler) markConfigApplied(gw *v1alpha1.KrakenDGateway
 }
 
 // markDeploymentUpdate reports the rollout the infrastructure stage is about
-// to start for an image or plugin change when no new config was applied.
+// to start for an image, plugin or license change when no new config was
+// applied.
 func (r *KrakenDGatewayReconciler) markDeploymentUpdate(
-	gw *v1alpha1.KrakenDGateway, image, pluginChecksum string,
+	gw *v1alpha1.KrakenDGateway, image, pluginChecksum string, licenseChanged bool,
 ) {
 	if gw.Status.ConfigChecksum == "" {
 		return
 	}
 	imageChanged := image != gw.Status.ActiveImage
 	pluginChanged := pluginChecksum != "" && pluginChecksum != gw.Status.PluginChecksum
-	if !imageChanged && !pluginChanged {
+	if !imageChanged && !pluginChanged && !licenseChanged {
 		return
 	}
 	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
@@ -682,7 +707,7 @@ func (r *KrakenDGatewayReconciler) markDeploymentUpdate(
 		Status:             metav1.ConditionTrue,
 		ObservedGeneration: gw.Generation,
 		Reason:             "DeploymentUpdated",
-		Message:            "Deployment updated for image or plugin change",
+		Message:            "Deployment updated for image, plugin or license change",
 	})
 	rollingRestarts.Inc()
 }
@@ -966,6 +991,9 @@ type infraInputs struct {
 	// "" means no config has passed validation yet.
 	appliedChecksum string
 	pluginChecksum  string
+	// licenseChecksum identifies the license bytes the pods run with; "" when
+	// no license is mounted.
+	licenseChecksum string
 	image           string
 	// configMapName is the ConfigMap holding the applied config; "" means
 	// none does.
@@ -1176,6 +1204,8 @@ func (r *KrakenDGatewayReconciler) reconcileDeployment(
 			ConfigChecksum: in.appliedChecksum,
 			PluginChecksum: in.pluginChecksum,
 			Image:          in.image,
+
+			LicenseChecksum: in.licenseChecksum,
 		})
 		return controllerutil.SetControllerReference(gw, dep, r.Scheme)
 	}); err != nil {
