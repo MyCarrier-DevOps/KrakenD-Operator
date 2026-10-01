@@ -632,7 +632,7 @@ func TestReconcileExistingPostRestartRevision_FailedSpecChangedRecreates(t *test
 			recheck, jobChecksum, err)
 	}
 
-	c := fakeClientBuilder().WithStatusSubresource(&v1alpha1.KrakenDGateway{}).WithObjects(gw, existing).Build()
+	c := fakeClientBuilder().WithStatusSubresource(&v1alpha1.KrakenDGateway{}).WithObjects(gw, makeConvergedDeployment(gw, "abc123"), existing).Build()
 	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
 
 	if err := r.reconcilePostRestartJob(context.Background(), gw, convergedInputs("abc123")); err != nil {
@@ -875,7 +875,7 @@ func TestReconcileExistingPostRestartRevision_CreateFailsAfterDeleteClearsChecks
 	}
 	c := fakeClientBuilder().
 		WithStatusSubresource(&v1alpha1.KrakenDGateway{}).
-		WithObjects(gw, existing).
+		WithObjects(gw, makeConvergedDeployment(gw, "abc123"), existing).
 		WithInterceptorFuncs(failingCreate).
 		Build()
 	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
@@ -913,10 +913,6 @@ func TestReconcileExistingPostRestartRevision_CreateFailsAfterDeleteClearsChecks
 	// Recovery: the next reconcile (Create now succeeds) must take the
 	// top-level create path (checksum no longer matches) and actually
 	// create a fresh Job — proving the gateway is not stranded.
-	dep := makeConvergedDeployment(gw, "abc123")
-	if err := c.Create(context.Background(), dep); err != nil {
-		t.Fatalf("creating converged deployment for recovery reconcile: %v", err)
-	}
 	if err := r.reconcilePostRestartJob(context.Background(), gw, convergedInputs("abc123")); err != nil {
 		t.Fatalf("unexpected error on recovery reconcile: %v", err)
 	}
@@ -963,7 +959,7 @@ func TestReconcileExistingPostRestartRevision_RecreateToleratesAlreadyExists(t *
 	}
 	c := fakeClientBuilder().
 		WithStatusSubresource(&v1alpha1.KrakenDGateway{}).
-		WithObjects(gw, existing).
+		WithObjects(gw, makeConvergedDeployment(gw, "abc123"), existing).
 		WithInterceptorFuncs(alreadyExistsCreate).
 		Build()
 	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
