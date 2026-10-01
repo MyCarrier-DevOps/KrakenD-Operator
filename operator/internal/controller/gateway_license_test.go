@@ -803,3 +803,26 @@ func TestGatewayReconcile_FallbackToggleKeepsTheLicenseChecksum(t *testing.T) {
 		t.Error("the fallback did not start, so the test proves nothing")
 	}
 }
+
+func TestGatewayReconcile_FailedDeploymentReadFiresNoLicenseEvents(t *testing.T) {
+	gw, secret, parser := licensedEEGateway(testNow.Add(-time.Minute), true)
+	c := fakeClientBuilder().WithObjects(gw, secret).WithStatusSubresource(gw).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object,
+				opts ...client.GetOption) error {
+				if _, ok := obj.(*appsv1.Deployment); ok {
+					return errors.New("cache not synced")
+				}
+				return cl.Get(ctx, key, obj, opts...)
+			},
+		}).Build()
+	r := newTestGatewayReconciler(c, renderOutput("cs"), &mockValidator{})
+	r.LicenseParser = parser
+
+	if err := reconcileGateway(t, r, gw); err == nil {
+		t.Fatal("a failed Deployment read must fail the reconcile")
+	}
+	if n := eventsWithReason(r.Recorder.(*record.FakeRecorder), v1alpha1.ReasonLicenseFallbackCE); n != 0 {
+		t.Errorf("LicenseFallbackCE events = %d, want 0: the status that records the transition is not written", n)
+	}
+}
