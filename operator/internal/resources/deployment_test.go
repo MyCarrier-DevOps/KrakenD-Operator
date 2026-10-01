@@ -183,6 +183,29 @@ func TestBuildDeployment_PluginChecksum(t *testing.T) {
 	}
 }
 
+func TestBuildDeployment_LicenseChecksum(t *testing.T) {
+	cases := map[string]struct {
+		checksum string
+		want     string
+		present  bool
+	}{
+		"a license checksum is recorded": {checksum: "abc", want: "abc", present: true},
+		"no license checksum is absent":  {checksum: "", present: false},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			dep := &appsv1.Deployment{}
+			BuildDeployment(dep, testGateway(), DeploymentInputs{
+				ConfigChecksum: "cs", Image: "img:v1", LicenseChecksum: tc.checksum,
+			})
+			got, ok := dep.Spec.Template.Annotations[LicenseChecksumAnnotation]
+			if ok != tc.present || got != tc.want {
+				t.Errorf("license annotation = %q (present %v), want %q (present %v)", got, ok, tc.want, tc.present)
+			}
+		})
+	}
+}
+
 func TestBuildDeployment_RecordsTheImageItSet(t *testing.T) {
 	dep := &appsv1.Deployment{}
 	BuildDeployment(dep, testGateway(), DeploymentInputs{ConfigChecksum: "abc", PluginChecksum: "", Image: "img:latest"})

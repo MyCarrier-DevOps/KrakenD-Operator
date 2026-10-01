@@ -41,6 +41,12 @@ const (
 	// (digest pinning, registry mirrors), so rollout checks compare this
 	// annotation instead.
 	ImageAnnotation = "krakend.io/image"
+
+	// LicenseChecksumAnnotation records the license the pod template was
+	// built for. The license is mounted with subPath, which never receives
+	// Secret updates, so a changed license has to change the pod template to
+	// reach running pods. It is absent when no license is mounted.
+	LicenseChecksumAnnotation = "krakend.io/checksum-license"
 )
 
 // desiredReplicas returns the replica count BuildDeployment writes. With
@@ -73,6 +79,9 @@ type DeploymentInputs struct {
 	ConfigChecksum string
 	PluginChecksum string
 	Image          string
+	// LicenseChecksum is the checksum of the license bytes mounted into an
+	// EE gateway; "" for a gateway without a mounted license.
+	LicenseChecksum string
 }
 
 // BuildDeployment mutates dep in place with a complete Deployment for the
