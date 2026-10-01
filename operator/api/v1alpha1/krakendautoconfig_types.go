@@ -38,6 +38,8 @@ const (
 	TriggerPeriodic TriggerType = "Periodic"
 )
 
+// AutoConfigPhase is derived from the Synced condition. Fetching and Rendering are never
+// written; they stay in the enum so previously stored values keep validating.
 // +kubebuilder:validation:Enum=Pending;Fetching;Rendering;Synced;Error
 type AutoConfigPhase string
 
@@ -346,20 +348,35 @@ type PeriodicSpec struct {
 
 // KrakenDAutoConfigStatus defines the observed state of KrakenDAutoConfig.
 type KrakenDAutoConfigStatus struct {
-	Phase              AutoConfigPhase    `json:"phase,omitempty"`
-	LastSyncTime       *metav1.Time       `json:"lastSyncTime,omitempty"`
-	SpecChecksum       string             `json:"specChecksum,omitempty"`
-	GeneratedEndpoints int                `json:"generatedEndpoints,omitempty"`
-	SkippedOperations  int                `json:"skippedOperations,omitempty"`
-	Conditions         []metav1.Condition `json:"conditions,omitempty"`
+	// Phase is derived from the Synced condition and kept for compatibility;
+	// read the Ready condition instead.
+	Phase AutoConfigPhase `json:"phase,omitempty"`
+	// ObservedGeneration is the metadata.generation this status was computed for.
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+	// LastSyncTime is when a sync last changed something: new inputs (a
+	// different OpenAPI spec, CUE definitions or spec generation) or an
+	// endpoint create, update or delete. A resync that changes nothing leaves
+	// it alone, so an old value does not mean the AutoConfig is stale; use
+	// the Ready condition or the krakend_operator_autoconfig_synced metric
+	// for freshness.
+	LastSyncTime       *metav1.Time `json:"lastSyncTime,omitempty"`
+	SpecChecksum       string       `json:"specChecksum,omitempty"`
+	GeneratedEndpoints int          `json:"generatedEndpoints,omitempty"`
+	SkippedOperations  int          `json:"skippedOperations,omitempty"`
+	// Conditions are keyed by type. Ready is the summary condition.
+	// +listType=map
+	// +listMapKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:shortName=kac
 // +kubebuilder:printcolumn:name="Gateway",type=string,JSONPath=`.spec.gatewayRef.name`
-// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
+// +kubebuilder:printcolumn:name="Reason",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].reason`
 // +kubebuilder:printcolumn:name="Generated",type=integer,JSONPath=`.status.generatedEndpoints`
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // KrakenDAutoConfig is the Schema for the krakendautoconfigs API.
