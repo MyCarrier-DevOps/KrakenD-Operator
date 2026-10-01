@@ -1145,7 +1145,9 @@ func TestGatewayReconcile_RememberedRejectionKeepsAttribution(t *testing.T) {
 func TestGatewayReconcile_AppliedConfigClearsTheBlame(t *testing.T) {
 	gw := reconciledGateway()
 	bad := testEndpoint("bad", "/b")
-	c := fakeClientBuilder().WithObjects(gw, bad).WithStatusSubresource(gw, bad).Build()
+	writes := 0
+	c := fakeClientBuilder().WithObjects(gw, bad).WithStatusSubresource(gw, bad).
+		WithInterceptorFuncs(countStatusWrites[*v1alpha1.KrakenDEndpoint](&writes)).Build()
 	val := &countingValidator{err: rejectedBy("- at '/endpoints/0/extra_config': additional properties 'bad/ns' not allowed")}
 	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}), val)
 	if err := reconcileGateway(t, r, gw); err != nil {
@@ -1161,12 +1163,26 @@ func TestGatewayReconcile_AppliedConfigClearsTheBlame(t *testing.T) {
 		t.Fatal(err)
 	}
 	val.err = nil
+	drainEvents(r.Recorder.(*record.FakeRecorder))
+	writesBefore := writes
 	if err := reconcileGateway(t, r, gw); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 	if cond := storedAccepted(t, c, client.ObjectKeyFromObject(bad)); cond == nil ||
-		cond.Reason == v1alpha1.ReasonGatewayConfigRejected {
-		t.Errorf("after the fix was applied, Accepted = %+v; the blame must clear", cond)
+		cond.Status != metav1.ConditionTrue || cond.Reason != v1alpha1.ReasonAccepted {
+		t.Errorf("after the fix was applied, Accepted = %+v, want True/%s", cond, v1alpha1.ReasonAccepted)
+	}
+	if n := writes - writesBefore; n != 1 {
+		t.Errorf("endpoint status writes when the fix was applied = %d, want 1", n)
+	}
+	normal := 0
+	for _, e := range drainEvents(r.Recorder.(*record.FakeRecorder)) {
+		if strings.HasPrefix(e, "Normal "+v1alpha1.ReasonAccepted+" ") {
+			normal++
+		}
+	}
+	if normal != 1 {
+		t.Errorf("Normal %s events when the blame cleared = %d, want 1", v1alpha1.ReasonAccepted, normal)
 	}
 }
 
@@ -1201,7 +1217,7 @@ func TestGatewayReconcile_RejectedFirstRenderOverridesStaleAccepted(t *testing.T
 	// The previous gateway of the same name accepted this endpoint.
 	bad.Status.Conditions = []metav1.Condition{
 		{Type: v1alpha1.ConditionResolvedRefs, Status: metav1.ConditionTrue, ObservedGeneration: 1,
-			Reason: "ResolvedRefs"},
+			Reason: v1alpha1.ReasonRefsResolved},
 		{Type: v1alpha1.ConditionAccepted, Status: metav1.ConditionTrue, ObservedGeneration: 1,
 			Reason: v1alpha1.ReasonAccepted},
 	}
