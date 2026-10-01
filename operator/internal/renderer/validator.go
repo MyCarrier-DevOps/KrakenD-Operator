@@ -19,6 +19,7 @@ package renderer
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -89,12 +90,19 @@ func (v *KrakenDValidator) Validate(ctx context.Context, jsonData []byte) (retEr
 
 	output, err := v.Executor.Execute(ctx, v.BinaryPath, "check", "-t", "-n", "-c", tmpName)
 	if err != nil {
-		return &ValidationError{
-			Output: string(output),
-			Err:    err,
-		}
+		return classifyCheckError(ctx, output, err)
 	}
 	return nil
+}
+
+// classifyCheckError separates a verdict from a validator that could not
+// run.
+func classifyCheckError(_ context.Context, output []byte, err error) error {
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return &ValidationError{Output: string(output), Err: err}
+	}
+	return fmt.Errorf("running krakend check: %w", err)
 }
 
 // ceUnsupportedExtraConfig lists root extra_config keys that are not
