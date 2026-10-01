@@ -18,6 +18,7 @@ package webhook
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -2856,5 +2857,54 @@ func TestTerminatingWithUnchangedSpec(t *testing.T) {
 				t.Errorf("terminatingWithUnchangedSpec = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestGatewayValidator_WarnsAboutRedisSettingsWithNoEffect(t *testing.T) {
+	// spec.redis configures an Enterprise feature, which admission refuses on CE gateways.
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionEE,
+			License: &v1alpha1.LicenseConfig{SecretRef: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: "lic"}, Key: "LICENSE",
+			}},
+			Redis: &v1alpha1.RedisSpec{ConnectionPool: v1alpha1.RedisConnectionPool{
+				Addresses: []string{"redis:6379"}, ReadTimeout: "3s", WriteTimeout: "3s",
+				Password: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: "s"}, Key: "p",
+				},
+				TLS: &v1alpha1.RedisTLSConfig{Enabled: true},
+			}},
+		},
+	}
+	warnings, err := (&GatewayValidator{}).ValidateCreate(context.Background(), gw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{
+		"spec.redis.connectionPool.readTimeout", "spec.redis.connectionPool.writeTimeout",
+		"spec.redis.connectionPool.password", "spec.redis.connectionPool.tls",
+	} {
+		if !slices.ContainsFunc(warnings, func(w string) bool { return strings.Contains(w, field) }) {
+			t.Errorf("warnings %q do not mention %s", warnings, field)
+		}
+	}
+
+	// A Dragonfly password has no effect on KrakenD's pool on EE, where the
+	// pool is rendered; a CE gateway renders none to begin with.
+	ee := &v1alpha1.KrakenDGateway{Spec: v1alpha1.KrakenDGatewaySpec{Edition: v1alpha1.EditionEE,
+		Dragonfly: &v1alpha1.DragonflySpec{Enabled: true, Authentication: &v1alpha1.DragonflyAuthSpec{
+			PasswordFromSecret: &corev1.SecretKeySelector{Key: "p"},
+		}},
+	}}
+	const dfPassword = "spec.dragonfly.authentication.passwordFromSecret"
+	if w := redisPoolWarnings(ee); len(w) != 1 || !strings.Contains(w[0], dfPassword) {
+		t.Errorf("EE Dragonfly password warnings = %q, want one naming %s", w, dfPassword)
+	}
+	ce := ee.DeepCopy()
+	ce.Spec.Edition = v1alpha1.EditionCE
+	if w := redisPoolWarnings(ce); len(w) != 0 {
+		t.Errorf("CE Dragonfly password warnings = %q, want none", w)
 	}
 }

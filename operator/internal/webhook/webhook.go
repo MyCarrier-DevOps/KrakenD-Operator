@@ -1441,3 +1441,5 @@ func SetupWebhooks(mgr ctrl.Manager) error {
 
 	return nil
 }
+
+func redisPoolWarnings(*v1alpha1.KrakenDGateway) admission.Warnings { return nil }
