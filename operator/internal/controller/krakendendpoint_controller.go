@@ -87,6 +87,9 @@ func (r *KrakenDEndpointReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, fmt.Errorf("patching endpoint status: %w", err)
 	}
 
+	recordConditionTransition(r.Recorder, &ep,
+		meta.FindStatusCondition(base.Status.Conditions, v1alpha1.ConditionResolvedRefs), resolved)
+
 	log.V(1).Info("endpoint reconciled", "phase", ep.Status.Phase, "endpoints", ep.Status.EndpointCount)
 	return ctrl.Result{}, nil
 }
