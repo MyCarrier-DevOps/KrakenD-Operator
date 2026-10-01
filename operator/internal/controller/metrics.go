@@ -69,6 +69,19 @@ var (
 	}, []string{"namespace", "name"})
 )
 
+// deleteGatewayMetrics removes every series labelled with the gateway, so a
+// deleted gateway stops reporting, and alerting, until it is recreated.
+func deleteGatewayMetrics(namespace, name string) {
+	gateway := prometheus.Labels{"namespace": namespace, "name": name}
+	endpointsPerGateway.DeletePartialMatch(gateway)
+	gatewayInfo.DeletePartialMatch(gateway)
+	dragonflyReady.DeletePartialMatch(gateway)
+	licenseExpirySeconds.DeletePartialMatch(gateway)
+	reconcileDuration.DeletePartialMatch(prometheus.Labels{
+		"controller": "gateway", "namespace": namespace, "name": name,
+	})
+}
+
 func init() { //nolint:gochecknoinits // required by prometheus metric registration
 	metrics.Registry.MustRegister(
 		configRenders,
