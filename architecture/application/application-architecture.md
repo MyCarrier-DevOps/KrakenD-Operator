@@ -880,8 +880,8 @@ flowchart TD
     G5 --> I[Patch pod annotation]
     G1 -->|Yes| G4[Progressing=True<br/>reason DeploymentUpdated]
     G4 --> I
-    G -->|Yes| J0[PrepareValidationCopy:<br/>strip wildcards if EE<br/>and CE fallback not active]
-    J0 --> J1{Same copy already<br/>rejected?}
+    G -->|Yes| J0[EE render: apply the wildcard route rule,<br/>rewrite /p/* to /p/{Wildcard}]
+    J0 --> J1{Same render and edition<br/>already rejected?}
     J1 -->|Yes| L[Re-apply the remembered rejection:<br/>ConfigValid=False,<br/>Warning event only if the verdict changed, return]
     J1 -->|No| J[Validate via krakend check -t -n -c]
     J --> K{Verdict?}
@@ -1547,38 +1547,12 @@ func (v *KrakenDValidator) Validate(ctx context.Context, jsonData []byte) error 
 
 ### EE Wildcard Handling
 
-Per operator architecture §10, EE configurations containing wildcard endpoints (`/*`) require special handling during validation:
-
-```go
-func (v *KrakenDValidator) PrepareValidationCopy(jsonData []byte, eeWithoutFallback bool) ([]byte, error) {
-    if !eeWithoutFallback {
-        return jsonData, nil
-    }
-    // Strip wildcard endpoints from the validation copy
-    // The CE validator rejects /* patterns
-    var config map[string]any
-    if err := json.Unmarshal(jsonData, &config); err != nil {
-        return nil, fmt.Errorf("unmarshaling config for validation copy: %w", err)
-    }
-    endpoints, ok := config["endpoints"].([]any)
-    if !ok {
-        return jsonData, nil
-    }
-    var filtered []any
-    for _, ep := range endpoints {
-        epMap, ok := ep.(map[string]any)
-        if !ok {
-            continue
-        }
-        if path, ok := epMap["endpoint"].(string); ok && path == "/*" {
-            continue // strip wildcard
-        }
-        filtered = append(filtered, ep)
-    }
-    config["endpoints"] = filtered
-    return serializeJSON(config)
-}
-```
+EE configurations containing wildcard endpoints are handled by
+`KrakenDValidator.Validate(ctx, json, edition)`. For
+`EditionEE` it first applies the EE router rule: `/p/*` conflicts with any
+same-method route under `/p/` (`eeWildcardFindings`). It then checks a copy
+in which `/p/*` is rewritten to `/p/{Wildcard}` (`rewriteEEWildcards`). The
+copy is index-aligned with the render. See `internal/renderer/eewildcard.go`.
 
 ### Extra Config Merge Order
 
