@@ -29,8 +29,9 @@ import (
 )
 
 // desiredReplicas returns the replica count BuildDeployment writes. With
-// autoscaling configured the HorizontalPodAutoscaler owns spec.replicas, so
-// an existing Deployment keeps its live value.
+// autoscaling configured the HorizontalPodAutoscaler owns spec.replicas: an
+// existing Deployment keeps its live value, and a new one starts at the
+// HPA's floor, MinReplicas (1 when unset, as for the HPA itself).
 func desiredReplicas(dep *appsv1.Deployment, gw *v1alpha1.KrakenDGateway) *int32 {
 	if gw.Spec.Autoscaling == nil {
 		return gw.Spec.Replicas
@@ -38,7 +39,7 @@ func desiredReplicas(dep *appsv1.Deployment, gw *v1alpha1.KrakenDGateway) *int32
 	if dep.Spec.Replicas != nil {
 		return dep.Spec.Replicas
 	}
-	return gw.Spec.Autoscaling.MinReplicas
+	return ptr.To(ptr.Deref(gw.Spec.Autoscaling.MinReplicas, 1))
 }
 
 // BuildDeployment mutates dep in place with a complete Deployment for the
