@@ -104,7 +104,7 @@ func TestGatewayReconcile_FirstReconcileWritesOnlyTheDerivedStatus(t *testing.T)
 		WithInterceptorFuncs(countStatusWrites[*v1alpha1.KrakenDGateway](&writes)).
 		Build()
 	r := acceptanceReconciler(c, fakeRecorder(), &renderer.RenderOutput{
-		JSON: []byte(`{"version":3}`), Checksum: "cs1", DesiredImage: "img:v1",
+		JSON: []byte(`{"version":3}`), Checksum: "cs1",
 	})
 
 	result, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(gw)})
@@ -151,9 +151,8 @@ func TestGatewayReconcile_FullPipeline(t *testing.T) {
 
 	mockRend := &mockRenderer{
 		output: &renderer.RenderOutput{
-			JSON:         []byte(`{"version":3}`),
-			Checksum:     "newchecksum",
-			DesiredImage: "krakend/krakend-ce:2.7.0",
+			JSON:     []byte(`{"version":3}`),
+			Checksum: "newchecksum",
 		},
 	}
 
@@ -233,9 +232,8 @@ func TestGatewayReconcile_ChecksumUnchanged(t *testing.T) {
 
 	mockRend := &mockRenderer{
 		output: &renderer.RenderOutput{
-			JSON:         []byte(`{"version":3}`),
-			Checksum:     "samechecksum",
-			DesiredImage: "krakend/krakend-ce:2.7.0",
+			JSON:     []byte(`{"version":3}`),
+			Checksum: "samechecksum",
 		},
 	}
 
@@ -275,9 +273,8 @@ func TestGatewayReconcile_ValidationFailure(t *testing.T) {
 
 	mockRend := &mockRenderer{
 		output: &renderer.RenderOutput{
-			JSON:         []byte(`{"version":3}`),
-			Checksum:     "newchecksum",
-			DesiredImage: "krakend/krakend-ce:2.7.0",
+			JSON:     []byte(`{"version":3}`),
+			Checksum: "newchecksum",
 		},
 	}
 
@@ -586,9 +583,8 @@ func TestGatewayReconcile_GathersPolicies(t *testing.T) {
 	var capturedInput *renderer.RenderInput
 	mockRend := &mockRenderer{
 		output: &renderer.RenderOutput{
-			JSON:         []byte(`{"version":3}`),
-			Checksum:     "newcs",
-			DesiredImage: "img:v1",
+			JSON:     []byte(`{"version":3}`),
+			Checksum: "newcs",
 		},
 	}
 	// Wrap with capturing renderer
@@ -654,7 +650,7 @@ func TestGatewayReconcile_WithPluginConfigMaps(t *testing.T) {
 	var capturedInput *renderer.RenderInput
 	mockRend := &mockRenderer{
 		output: &renderer.RenderOutput{
-			JSON: []byte(`{}`), Checksum: "cs", DesiredImage: "img:v1",
+			JSON: []byte(`{}`), Checksum: "cs",
 		},
 	}
 	capturingRend := &capturingRenderer{delegate: mockRend, captured: &capturedInput}
@@ -696,7 +692,7 @@ func TestGatewayReconcile_WithHPA(t *testing.T) {
 
 	mockRend := &mockRenderer{
 		output: &renderer.RenderOutput{
-			JSON: []byte(`{}`), Checksum: "cs", DesiredImage: "img:v1",
+			JSON: []byte(`{}`), Checksum: "cs",
 		},
 	}
 
@@ -755,7 +751,7 @@ func TestGatewayReconcile_MissingPolicySkipped(t *testing.T) {
 	var capturedInput *renderer.RenderInput
 	mockRend := &mockRenderer{
 		output: &renderer.RenderOutput{
-			JSON: []byte(`{}`), Checksum: "cs", DesiredImage: "img:v1",
+			JSON: []byte(`{}`), Checksum: "cs",
 		},
 	}
 	capturingRend := &capturingRenderer{delegate: mockRend, captured: &capturedInput}
@@ -837,7 +833,7 @@ func TestGatewayReconcile_WithDragonflyEnabled(t *testing.T) {
 	var capturedInput *renderer.RenderInput
 	mockRend := &mockRenderer{
 		output: &renderer.RenderOutput{
-			JSON: []byte(`{}`), Checksum: "cs", DesiredImage: "img:v1",
+			JSON: []byte(`{}`), Checksum: "cs",
 		},
 	}
 	capturingRend := &capturingRenderer{delegate: mockRend, captured: &capturedInput}
@@ -889,7 +885,7 @@ func TestGatewayReconcile_ExternalSecretSkippedWhenCRDMissing(t *testing.T) {
 		Recorder: rec,
 		Renderer: &mockRenderer{
 			output: &renderer.RenderOutput{
-				JSON: []byte(`{}`), Checksum: "cs", DesiredImage: "img:v1",
+				JSON: []byte(`{}`), Checksum: "cs",
 			},
 		},
 		Validator: &mockValidator{},
@@ -939,7 +935,7 @@ func TestGatewayReconcile_VirtualServiceSkippedWhenCRDMissing(t *testing.T) {
 		Recorder: rec,
 		Renderer: &mockRenderer{
 			output: &renderer.RenderOutput{
-				JSON: []byte(`{}`), Checksum: "cs", DesiredImage: "img:v1",
+				JSON: []byte(`{}`), Checksum: "cs",
 			},
 		},
 		Validator: &mockValidator{},
@@ -1119,9 +1115,8 @@ func TestGatewayReconcile_CrossNamespaceEndpoints(t *testing.T) {
 	var capturedInput *renderer.RenderInput
 	mockRend := &mockRenderer{
 		output: &renderer.RenderOutput{
-			JSON:         []byte(`{"version":3}`),
-			Checksum:     "crossns",
-			DesiredImage: "img:v1",
+			JSON:     []byte(`{"version":3}`),
+			Checksum: "crossns",
 		},
 	}
 	capturingRend := &capturingRenderer{delegate: mockRend, captured: &capturedInput}
@@ -1184,9 +1179,8 @@ func TestGatewayReconcile_CrossNamespacePolicies(t *testing.T) {
 	var capturedInput *renderer.RenderInput
 	mockRend := &mockRenderer{
 		output: &renderer.RenderOutput{
-			JSON:         []byte(`{"version":3}`),
-			Checksum:     "crossnspol",
-			DesiredImage: "img:v1",
+			JSON:     []byte(`{"version":3}`),
+			Checksum: "crossnspol",
 		},
 	}
 	capturingRend := &capturingRenderer{delegate: mockRend, captured: &capturedInput}
@@ -1251,7 +1245,7 @@ func TestGatewayReconcile_AutoscaledReplicasAreNotReset(t *testing.T) {
 	r := &KrakenDGatewayReconciler{
 		Client: c, Scheme: testScheme(), Recorder: fakeRecorder(),
 		Renderer: &mockRenderer{output: &renderer.RenderOutput{
-			JSON: []byte(`{"version":3}`), Checksum: "cs", DesiredImage: "img:v1",
+			JSON: []byte(`{"version":3}`), Checksum: "cs",
 		}},
 		Validator: &mockValidator{},
 	}
@@ -1328,7 +1322,7 @@ func TestGatewayReconcile_WritesAcceptedOnEveryEndpoint(t *testing.T) {
 		WithStatusSubresource(gw, included, conflicted, unresolved).
 		Build()
 	r := acceptanceReconciler(c, fakeRecorder(), &renderer.RenderOutput{
-		JSON: []byte(`{"version":3}`), Checksum: "cs1", DesiredImage: "img:v1",
+		JSON: []byte(`{"version":3}`), Checksum: "cs1",
 		ConflictedEndpoints: []types.NamespacedName{client.ObjectKeyFromObject(conflicted)},
 		InvalidEndpoints:    []types.NamespacedName{client.ObjectKeyFromObject(unresolved)},
 	})
@@ -1373,7 +1367,7 @@ func TestGatewayReconcile_AcceptedWrittenOnlyOnChange(t *testing.T) {
 		Build()
 	rec := fakeRecorder()
 	r := acceptanceReconciler(c, rec, &renderer.RenderOutput{
-		JSON: []byte(`{"version":3}`), Checksum: "cs1", DesiredImage: "img:v1",
+		JSON: []byte(`{"version":3}`), Checksum: "cs1",
 		ConflictedEndpoints: []types.NamespacedName{client.ObjectKeyFromObject(conflicted)},
 	})
 
@@ -1416,7 +1410,7 @@ func TestGatewayReconcile_AcceptedEventWhenConflictResolves(t *testing.T) {
 	c := fakeClientBuilder().WithObjects(gw, ep).WithStatusSubresource(gw, ep).Build()
 	rec := fakeRecorder()
 	r := acceptanceReconciler(c, rec, &renderer.RenderOutput{
-		JSON: []byte(`{"version":3}`), Checksum: "cs1", DesiredImage: "img:v1",
+		JSON: []byte(`{"version":3}`), Checksum: "cs1",
 	})
 
 	if err := reconcileGateway(t, r, gw); err != nil {
@@ -1441,7 +1435,7 @@ func TestGatewayReconcile_AcceptedNotWrittenWhenValidationFails(t *testing.T) {
 		WithInterceptorFuncs(countStatusWrites[*v1alpha1.KrakenDEndpoint](&writes)).
 		Build()
 	r := acceptanceReconciler(c, fakeRecorder(), &renderer.RenderOutput{
-		JSON: []byte(`{"version":3}`), Checksum: "cs-rejected", DesiredImage: "img:v1",
+		JSON: []byte(`{"version":3}`), Checksum: "cs-rejected",
 		ConflictedEndpoints: []types.NamespacedName{client.ObjectKeyFromObject(conflicted)},
 	})
 	// Build the failing validator the same way TestGatewayReconcile_ValidationFailure
@@ -1483,7 +1477,7 @@ func TestGatewayReconcile_AcceptedSkipsEndpointReplacedSinceRender(t *testing.T)
 		if err := c.Create(context.Background(), replacement); err != nil {
 			return nil, err
 		}
-		return &renderer.RenderOutput{JSON: []byte(`{"version":3}`), Checksum: "cs1", DesiredImage: "img:v1"}, nil
+		return &renderer.RenderOutput{JSON: []byte(`{"version":3}`), Checksum: "cs1"}, nil
 	})
 
 	if err := reconcileGateway(t, r, gw); err != nil {
@@ -1510,7 +1504,7 @@ func TestGatewayReconcile_AcceptedRecordsRenderedGeneration(t *testing.T) {
 		if err := c.Update(context.Background(), &stored); err != nil {
 			return nil, err
 		}
-		return &renderer.RenderOutput{JSON: []byte(`{"version":3}`), Checksum: "cs1", DesiredImage: "img:v1"}, nil
+		return &renderer.RenderOutput{JSON: []byte(`{"version":3}`), Checksum: "cs1"}, nil
 	})
 
 	if err := reconcileGateway(t, r, gw); err != nil {
@@ -1560,7 +1554,7 @@ func TestGatewayReconcile_AcceptedRetriesAfterConflictWithoutClobbering(t *testi
 		}).
 		Build()
 	r := acceptanceReconciler(c, fakeRecorder(), &renderer.RenderOutput{
-		JSON: []byte(`{"version":3}`), Checksum: "cs1", DesiredImage: "img:v1",
+		JSON: []byte(`{"version":3}`), Checksum: "cs1",
 	})
 
 	if err := reconcileGateway(t, r, gw); err != nil {
@@ -1601,7 +1595,7 @@ func TestGatewayReconcile_EndpointStatusFailureDoesNotBlockOwnedResources(t *tes
 		}).
 		Build()
 	r := acceptanceReconciler(c, fakeRecorder(), &renderer.RenderOutput{
-		JSON: []byte(`{"version":3}`), Checksum: "cs1", DesiredImage: "img:v1",
+		JSON: []byte(`{"version":3}`), Checksum: "cs1",
 	})
 
 	err := reconcileGateway(t, r, gw)
@@ -1643,7 +1637,7 @@ func TestGatewayReconcile_AcceptedWrittenWhenConfigUnchangedSinceApplied(t *test
 	c := fakeClientBuilder().WithObjects(gw, ep).WithStatusSubresource(gw, ep).Build()
 	rec := fakeRecorder()
 	r := acceptanceReconciler(c, rec, &renderer.RenderOutput{
-		JSON: []byte(`{"version":3}`), Checksum: "cs1", DesiredImage: "img:v1",
+		JSON: []byte(`{"version":3}`), Checksum: "cs1",
 	})
 
 	if err := reconcileGateway(t, r, gw); err != nil {
@@ -1747,7 +1741,7 @@ func TestGatewayReconcile_RecoveredRolloutClearsError(t *testing.T) {
 		WithStatusSubresource(gw).
 		Build()
 	r := acceptanceReconciler(c, fakeRecorder(), &renderer.RenderOutput{
-		JSON: []byte(`{"version":3}`), Checksum: "cs1", DesiredImage: "img:v1",
+		JSON: []byte(`{"version":3}`), Checksum: "cs1",
 	})
 
 	if err := reconcileGateway(t, r, gw); err != nil {
@@ -1779,7 +1773,7 @@ func TestGatewayReconcile_RevertToAppliedConfigClearsRejection(t *testing.T) {
 	c := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).Build()
 	// The spec was reverted: the render equals the configuration that is still applied.
 	r := acceptanceReconciler(c, fakeRecorder(), &renderer.RenderOutput{
-		JSON: []byte(`{"version":3}`), Checksum: "good", DesiredImage: "img:v1",
+		JSON: []byte(`{"version":3}`), Checksum: "good",
 	})
 
 	if err := reconcileGateway(t, r, gw); err != nil {
@@ -1811,7 +1805,7 @@ func TestGatewayReconcile_ValidationFailureAdvancesObservedGeneration(t *testing
 	}
 	c := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).Build()
 	r := acceptanceReconciler(c, fakeRecorder(), &renderer.RenderOutput{
-		JSON: []byte(`{"version":3}`), Checksum: "new", DesiredImage: "img:v1",
+		JSON: []byte(`{"version":3}`), Checksum: "new",
 	})
 	r.Validator = &mockValidator{validateErr: &renderer.ValidationError{
 		Output: "invalid config line 5", Err: fmt.Errorf("exit code 1"),
@@ -1859,7 +1853,7 @@ func TestGatewayReconcile_ConfigChangeNotReadyWhileOldStatusLingers(t *testing.T
 	dep.Status.ObservedGeneration = 1
 	c := fakeClientBuilder().WithObjects(gw, dep).WithStatusSubresource(gw).Build()
 	r := acceptanceReconciler(c, fakeRecorder(), &renderer.RenderOutput{
-		JSON: []byte(`{"version":3}`), Checksum: "cs-new", DesiredImage: "img:v1",
+		JSON: []byte(`{"version":3}`), Checksum: "cs-new",
 	})
 
 	if err := reconcileGateway(t, r, gw); err != nil {
@@ -1929,7 +1923,7 @@ func TestGatewayReconcile_NotReadyWhenDeploymentLosesAvailability(t *testing.T) 
 	}}
 	c := fakeClientBuilder().WithObjects(gw, dep).WithStatusSubresource(gw).Build()
 	r := acceptanceReconciler(c, fakeRecorder(), &renderer.RenderOutput{
-		JSON: []byte(`{"version":3}`), Checksum: "cs1", DesiredImage: "img:v1",
+		JSON: []byte(`{"version":3}`), Checksum: "cs1",
 	})
 
 	if err := reconcileGateway(t, r, gw); err != nil {
