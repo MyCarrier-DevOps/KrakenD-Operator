@@ -30,14 +30,15 @@ import (
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 )
 
-// eeFeatureInput is an EE gateway with an EE-only namespace at every level
-// and a wildcard endpoint.
+// eeFeatureInput is an EE gateway with two EE-only namespaces at every level
+// (written out of order, so the sorted lists are pinned) and a wildcard
+// endpoint.
 func eeFeatureInput(ceFallback bool) RenderInput {
 	gw := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "ns"},
 		Spec: v1alpha1.KrakenDGatewaySpec{Edition: v1alpha1.EditionEE, Version: "2.13",
 			Config: v1alpha1.GatewayConfig{ExtraConfig: &runtime.RawExtension{
-				Raw: []byte(`{"auth/api-keys":{"keys":[]},"security/cors":{"allow_origins":["*"]}}`),
+				Raw: []byte(`{"auth/api-keys":{"keys":[]},"redis":{"connection_pools":[]},"security/cors":{"allow_origins":["*"]}}`),
 			}},
 		},
 	}
@@ -46,10 +47,10 @@ func eeFeatureInput(ceFallback bool) RenderInput {
 		Spec: v1alpha1.KrakenDEndpointSpec{Endpoints: []v1alpha1.EndpointEntry{
 			{Endpoint: "/v1/*", Method: "GET", Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/x"}}},
 			{Endpoint: "/users", Method: "GET",
-				ExtraConfig: &runtime.RawExtension{Raw: []byte(`{"auth/api-keys":{"roles":["admin"]},"qos/ratelimit/router":{"max_rate":10}}`)},
+				ExtraConfig: &runtime.RawExtension{Raw: []byte(`{"modifier/jmespath":{"expr":"a"},"auth/api-keys":{"roles":["admin"]},"qos/ratelimit/router":{"max_rate":10}}`)},
 				Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/users",
 					ExtraConfig: &runtime.RawExtension{Raw: []byte(
-						`{"backend/http/client":{"proxy_address":"http://proxy"},"qos/circuit-breaker":{"interval":60,"timeout":10,"max_errors":1}}`)},
+						`{"backend/http/client":{"proxy_address":"http://proxy"},"auth/gcp":{"audience":"a"},"qos/circuit-breaker":{"interval":60,"timeout":10,"max_errors":1}}`)},
 				}}},
 		}},
 	}
@@ -64,9 +65,12 @@ func TestRender_CEFallbackStripsEEOnlyFeaturesAndListsThem(t *testing.T) {
 	a := types.NamespacedName{Namespace: "ns", Name: "a"}
 	want := []StrippedEEFeature{
 		{Source: a, Method: "GET", Endpoint: "/users", Feature: "extra_config auth/api-keys"},
+		{Source: a, Method: "GET", Endpoint: "/users", Feature: "extra_config modifier/jmespath"},
+		{Source: a, Method: "GET", Endpoint: "/users", Feature: "backend[0] extra_config auth/gcp"},
 		{Source: a, Method: "GET", Endpoint: "/users", Feature: "backend[0] extra_config backend/http/client"},
 		{Source: a, Method: "GET", Endpoint: "/v1/*", Feature: "wildcard endpoint"},
 		{Feature: "extra_config auth/api-keys"},
+		{Feature: "extra_config redis"},
 	}
 	if !reflect.DeepEqual(out.StrippedEEFeatures, want) {
 		t.Errorf("StrippedEEFeatures = %+v, want %+v", out.StrippedEEFeatures, want)
