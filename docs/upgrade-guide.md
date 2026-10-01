@@ -683,6 +683,31 @@ becomes True after being False, not when the VirtualService is first
 created. Alerts that counted these events per interval see one event per
 transition.
 
+### Config ConfigMaps are immutable and content-addressed
+
+The rendered `krakend.json` is no longer rewritten in place in a ConfigMap
+named after the gateway. Each applied config revision gets its own immutable
+ConfigMap named `<gateway>-config-<first 10 hex characters of the checksum>`:
+
+- label `krakend.io/config-revision`;
+- annotation `krakend.io/checksum-config`, holding the full checksum.
+
+The Deployment mounts that ConfigMap by name. A pod of an older ReplicaSet
+that restarts during a stalled rollout therefore still starts on the
+last-known-good config.
+
+**On upgrade:**
+- Every gateway rolls once, because its pod template now mounts
+  `<gateway>-config-<hash>` instead of `<gateway>`. It is an ordinary
+  rolling update (`maxSurge: 1`, `maxUnavailable: 0`). The config checksum
+  is unchanged, so the post-restart Job does **not** run again.
+- A gateway may have its newest render rejected at upgrade time. The
+  operator then copies the applied config out of the old `<gateway>`
+  ConfigMap, but only when that content hashes to `status.configChecksum`,
+  and keeps serving it.
+- The old `<gateway>` ConfigMap is deleted once no running ReplicaSet mounts
+  it.
+
 ---
 
 ## v0.14.0 — openapi-serve liveness probe (one-time rollout)
