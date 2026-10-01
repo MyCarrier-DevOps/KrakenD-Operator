@@ -745,3 +745,32 @@ func TestGatewayReconcile_RenewedLicenseDoesNotRerunThePostRestartJob(t *testing
 		t.Errorf("lastPostRestartJobChecksum = %q, want %q: a license change must not re-run the Job", got, ranFor)
 	}
 }
+
+func TestGatewayReconcile_LicenseChecksumIsOnlyForTheEditionThatRunsTheLicense(t *testing.T) {
+	cases := map[string]func(gw *v1alpha1.KrakenDGateway, p *mockLicenseParser){
+		"CE fallback": func(_ *v1alpha1.KrakenDGateway, p *mockLicenseParser) {
+			p.info.NotAfter = testNow.Add(-time.Minute)
+		},
+		"community edition": func(gw *v1alpha1.KrakenDGateway, _ *mockLicenseParser) {
+			gw.Spec.Edition = v1alpha1.EditionCE
+		},
+	}
+	for name, tweak := range cases {
+		t.Run(name, func(t *testing.T) {
+			gw, secret, parser := licensedEEGateway(testNow.Add(90*24*time.Hour), true)
+			tweak(gw, parser)
+			c := fakeClientBuilder().WithObjects(gw, secret).WithStatusSubresource(gw).Build()
+			r := newTestGatewayReconciler(c, renderOutput("cs"), &mockValidator{})
+			r.LicenseParser = parser
+
+			if err := reconcileGateway(t, r, gw); err != nil {
+				t.Fatalf("reconcile: %v", err)
+			}
+			var dep appsv1.Deployment
+			getObject(t, c, gw, gw.Name, &dep)
+			if got, ok := dep.Spec.Template.Annotations[resources.LicenseChecksumAnnotation]; ok {
+				t.Errorf("license annotation = %q, want none", got)
+			}
+		})
+	}
+}
