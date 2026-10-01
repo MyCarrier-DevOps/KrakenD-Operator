@@ -602,3 +602,22 @@ func TestGatewayReconcile_HoldsTheDeploymentWhenNoConfigMapHoldsTheAppliedConfig
 			got, gw.Name)
 	}
 }
+
+func TestGatewayReconcile_RefusesAConfigMapItDoesNotControl(t *testing.T) {
+	gw := reconciledGateway()
+	const config = `{"version":3,"name":"squatted"}`
+	squatter := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
+		Name: resources.ConfigMapName(gw, hash.SHA256Hex([]byte(config))), Namespace: gw.Namespace,
+	}, Data: map[string]string{resources.ConfigKey: `{"version":3,"name":"something else"}`}}
+	c := fakeClientBuilder().WithObjects(gw, squatter).WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderOf(config), &mockValidator{})
+
+	err := reconcileGateway(t, r, gw)
+	if err == nil || !strings.Contains(err.Error(), "not controlled by gateway") {
+		t.Fatalf("reconcile error = %v, want a refusal to serve a ConfigMap the gateway does not control", err)
+	}
+	if got := getGateway(t, c, gw); got.Status.ConfigChecksum != "" {
+		t.Errorf("status.configChecksum = %q; a config that was never published must not be recorded as applied",
+			got.Status.ConfigChecksum)
+	}
+}
