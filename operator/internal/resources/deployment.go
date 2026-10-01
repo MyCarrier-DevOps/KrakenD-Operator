@@ -28,6 +28,16 @@ import (
 	"k8s.io/utils/ptr"
 )
 
+// desiredReplicas returns the replica count BuildDeployment writes. With
+// autoscaling configured the HorizontalPodAutoscaler owns spec.replicas, so
+// an existing Deployment keeps its live value.
+func desiredReplicas(dep *appsv1.Deployment, gw *v1alpha1.KrakenDGateway) *int32 {
+	if gw.Spec.Autoscaling != nil && dep.Spec.Replicas != nil {
+		return dep.Spec.Replicas
+	}
+	return gw.Spec.Replicas
+}
+
 // BuildDeployment mutates dep in place with a complete Deployment for the
 // KrakenD gateway. The image parameter is the resolved container image
 // (from renderer.ResolveImage). configChecksum and pluginChecksum are
@@ -44,7 +54,7 @@ func BuildDeployment(
 
 	dep.Labels = labels
 
-	dep.Spec.Replicas = gw.Spec.Replicas
+	dep.Spec.Replicas = desiredReplicas(dep, gw)
 	dep.Spec.Selector = &metav1.LabelSelector{
 		MatchLabels: selectorLabels,
 	}
