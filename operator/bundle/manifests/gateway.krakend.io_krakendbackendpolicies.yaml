@@ -17,6 +17,12 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Ready")].reason
+      name: Reason
+      type: string
     - jsonPath: .status.referencedBy
       name: ReferencedBy
       type: integer
@@ -111,6 +117,7 @@ spec:
               KrakenDBackendPolicy.
             properties:
               conditions:
+                description: Conditions are keyed by type. Ready is the summary condition.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -166,6 +173,14 @@ spec:
                   - type
                   type: object
                 type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              observedGeneration:
+                description: ObservedGeneration is the metadata.generation this status
+                  was computed for.
+                format: int64
+                type: integer
               referencedBy:
                 type: integer
             type: object
