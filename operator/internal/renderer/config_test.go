@@ -509,6 +509,9 @@ func TestBuildGatewayExtraConfig_RedisUsesTheDocumentedNamespace(t *testing.T) {
 				"pool_size": 10, "min_idle_conns": 2, "dial_timeout": "5s",
 			}},
 		}},
+		{"Dragonfly without spec.redis", nil, dragonfly, map[string]any{
+			"connection_pools": []any{map[string]any{"name": "default", "address": "gw-dragonfly.ns.svc.cluster.local:6379"}},
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
