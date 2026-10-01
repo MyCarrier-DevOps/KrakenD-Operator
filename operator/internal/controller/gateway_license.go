@@ -80,6 +80,7 @@ func (r *KrakenDGatewayReconciler) reconcileLicense(ctx context.Context, gw *v1a
 			Reason:             v1alpha1.ReasonLicenseSecretMissing,
 			Message:            err.Error(),
 		})
+		r.setLicenseValid(gw, metav1.ConditionUnknown, v1alpha1.ReasonLicenseSecretMissing, err.Error())
 		// The license is unknown: keep the fallback decision recorded last.
 		return licenseVerdict{
 			ceFallback:   meta.IsStatusConditionTrue(gw.Status.Conditions, v1alpha1.ConditionLicenseDegraded),
