@@ -635,6 +635,7 @@ func TestGatewayReconcile_UpgradeRolloutDoesNotRerunThePostRestartJob(t *testing
 	}
 	gw.Status.LastPostRestartJobChecksum = jobChecksum
 	dep := makeConvergedDeployment(gw, sum)
+	dep.Spec.Template.Spec.Volumes = legacyDeployment(gw).Spec.Template.Spec.Volumes
 	c := fakeClientBuilder().WithObjects(gw, legacyConfigMap(gw, config), dep).WithStatusSubresource(gw).Build()
 	r := newTestGatewayReconciler(c, renderOf(config), &mockValidator{})
 
@@ -647,6 +648,15 @@ func TestGatewayReconcile_UpgradeRolloutDoesNotRerunThePostRestartJob(t *testing
 	}
 	if len(jobs.Items) != 0 {
 		t.Errorf("the migration rollout re-ran the post-restart Job: %d Job(s) created", len(jobs.Items))
+	}
+	want := resources.ConfigMapName(gw, sum)
+	if got := mountedConfig(t, c, gw); got != want {
+		t.Errorf("Deployment mounts %q, want it re-pointed at %q", got, want)
+	}
+	var migrated corev1.ConfigMap
+	getObject(t, c, gw, want, &migrated)
+	if migrated.Data[resources.ConfigKey] != config {
+		t.Errorf("migrated config = %q, want the legacy content %q", migrated.Data[resources.ConfigKey], config)
 	}
 }
 
