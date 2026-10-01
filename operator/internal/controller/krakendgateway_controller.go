@@ -544,7 +544,8 @@ func (r *KrakenDGatewayReconciler) inspectDeploymentStatus(
 }
 
 // deploymentConverged reports whether dep has finished rolling out want: its
-// pod template carries the applied config, image and plugins, it has observed
+// pod template carries the applied config, image and plugins (compared through
+// annotations, since admission can rewrite the container image), it has observed
 // its latest spec, and every replica is updated and available. The cache can
 // still hold the Deployment from before an update, or one whose status
 // describes the previous ReplicaSet, so the replica counts alone are not
@@ -552,10 +553,8 @@ func (r *KrakenDGatewayReconciler) inspectDeploymentStatus(
 func deploymentConverged(dep *appsv1.Deployment, want infraInputs) bool {
 	tmpl := dep.Spec.Template
 	if tmpl.Annotations[resources.PostRestartJobChecksumAnnotation] != want.appliedChecksum ||
-		tmpl.Annotations[resources.PluginChecksumAnnotation] != want.pluginChecksum {
-		return false
-	}
-	if !runsImage(tmpl.Spec.Containers, want.image) {
+		tmpl.Annotations[resources.PluginChecksumAnnotation] != want.pluginChecksum ||
+		tmpl.Annotations[resources.ImageAnnotation] != want.image {
 		return false
 	}
 	desired := int32(1)
@@ -566,16 +565,6 @@ func deploymentConverged(dep *appsv1.Deployment, want infraInputs) bool {
 		dep.Status.Replicas == desired &&
 		dep.Status.UpdatedReplicas == desired &&
 		dep.Status.AvailableReplicas == desired
-}
-
-// runsImage reports whether the gateway container runs image.
-func runsImage(containers []corev1.Container, image string) bool {
-	for _, c := range containers {
-		if c.Name == resources.GatewayContainerName {
-			return c.Image == image
-		}
-	}
-	return false
 }
 
 // findDeploymentCondition returns the Deployment's condition of the given
