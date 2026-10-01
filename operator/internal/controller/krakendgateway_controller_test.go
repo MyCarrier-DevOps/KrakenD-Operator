@@ -1759,3 +1759,38 @@ func TestGatewayReconcile_RecoveredRolloutClearsError(t *testing.T) {
 		t.Errorf("after the rollout recovered: Ready = %+v, phase %q; want True and Running", ready, stored.Status.Phase)
 	}
 }
+
+func TestGatewayReconcile_RevertToAppliedConfigClearsRejection(t *testing.T) {
+	gw := testGateway()
+	gw.Generation = 3
+	now := metav1.Now()
+	gw.Status = v1alpha1.KrakenDGatewayStatus{
+		Phase: v1alpha1.PhaseError, ConfigChecksum: "good", ActiveImage: "img:v1", ObservedGeneration: 2,
+		Conditions: []metav1.Condition{
+			{Type: "ConfigValid", Status: metav1.ConditionFalse, Reason: "ConfigValidationFailed",
+				Message: "bad config", ObservedGeneration: 2, LastTransitionTime: now},
+			{Type: "Available", Status: metav1.ConditionTrue, Reason: "DeploymentAvailable",
+				Message: "All replicas are available", ObservedGeneration: 2, LastTransitionTime: now},
+			{Type: "Progressing", Status: metav1.ConditionFalse, Reason: "RolloutComplete",
+				Message: "Deployment rollout completed successfully", ObservedGeneration: 2, LastTransitionTime: now},
+		},
+	}
+	c := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).Build()
+	// The spec was reverted: the render equals the configuration that is still applied.
+	r := acceptanceReconciler(c, fakeRecorder(), &renderer.RenderOutput{
+		JSON: []byte(`{"version":3}`), Checksum: "good", DesiredImage: "img:v1",
+	})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+
+	stored := getGateway(t, c, gw)
+	cv := meta.FindStatusCondition(stored.Status.Conditions, v1alpha1.ConditionConfigValid)
+	if cv == nil || cv.Status != metav1.ConditionTrue || cv.Reason != "ConfigApplied" {
+		t.Errorf("ConfigValid = %+v, want True/ConfigApplied after the revert", cv)
+	}
+	if stored.Status.Phase != v1alpha1.PhaseRunning {
+		t.Errorf("phase = %q, want Running", stored.Status.Phase)
+	}
+}
