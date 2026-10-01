@@ -479,6 +479,7 @@ func TestBuildRootConfig_DNSCacheTTLIsTheRootField(t *testing.T) {
 }
 
 func TestBuildGatewayExtraConfig_RedisUsesTheDocumentedNamespace(t *testing.T) {
+	dragonfly := &DragonflyState{Enabled: true, ServiceDNS: "gw-dragonfly.ns.svc.cluster.local:6379"}
 	pool := func(addresses ...string) *v1alpha1.RedisSpec {
 		return &v1alpha1.RedisSpec{ConnectionPool: v1alpha1.RedisConnectionPool{
 			Addresses: addresses, PoolSize: 10, MinIdleConns: 2, DialTimeout: "5s",
@@ -499,6 +500,12 @@ func TestBuildGatewayExtraConfig_RedisUsesTheDocumentedNamespace(t *testing.T) {
 		{"several addresses are a cluster", pool("r1:6379", "r2:6379"), nil, map[string]any{
 			"clusters": []any{map[string]any{
 				"name": "default", "addresses": []string{"r1:6379", "r2:6379"},
+				"pool_size": 10, "min_idle_conns": 2, "dial_timeout": "5s",
+			}},
+		}},
+		{"Dragonfly overrides the addresses", pool("old:6379"), dragonfly, map[string]any{
+			"connection_pools": []any{map[string]any{
+				"name": "default", "address": "gw-dragonfly.ns.svc.cluster.local:6379",
 				"pool_size": 10, "min_idle_conns": 2, "dial_timeout": "5s",
 			}},
 		}},
