@@ -60,8 +60,11 @@ func (r *krakendRenderer) Render(input RenderInput) (*RenderOutput, error) {
 			continue
 		}
 		ep := buildEndpointJSON(fe.Entry, input.Policies, fe.Source.Namespace)
-		if input.CEFallback {
+		switch {
+		case input.CEFallback:
 			stripped = append(stripped, stripEndpointEEFeatures(ep, fe)...)
+		case gw.Spec.Edition == v1alpha1.EditionCE:
+			dropCEInertNamespaces(ep)
 		}
 		endpointsJSON = append(endpointsJSON, ep)
 		sources = append(sources, fe.Source)
@@ -72,9 +75,12 @@ func (r *krakendRenderer) Render(input RenderInput) (*RenderOutput, error) {
 	gatewayEC := buildGatewayExtraConfig(gw, input.Dragonfly)
 
 	// Aggregate component schemas from all endpoints into root
-	// documentation/openapi.components_schemas so that endpoint-level
-	// ref fields resolve correctly.
-	appendEndpointComponentSchemas(gatewayEC, input.Endpoints)
+	// documentation/openapi.components_schemas so that endpoint-level ref
+	// fields resolve. Only KrakenD Enterprise publishes it, so a CE-edition
+	// render aggregates nothing.
+	if gw.Spec.Edition != v1alpha1.EditionCE {
+		appendEndpointComponentSchemas(gatewayEC, input.Endpoints)
+	}
 	if input.CEFallback {
 		stripped = append(stripped, stripNamespaces(gatewayEC, eeOnlyServiceNamespaces, StrippedEEFeature{}, "extra_config")...)
 	}
