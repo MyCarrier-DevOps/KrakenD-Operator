@@ -82,6 +82,11 @@ func TestEndpointReady(t *testing.T) {
 			[]metav1.Condition{refsOK, testCondition("Accepted", metav1.ConditionFalse, "GatewayConfigRejected", 2)},
 			metav1.ConditionFalse, "GatewayConfigRejected", "GatewayConfigRejected message",
 		},
+		{
+			"accepted with a docs-only schema name conflict",
+			[]metav1.Condition{refsOK, testCondition("Accepted", metav1.ConditionTrue, "SchemaNameConflict", 2)},
+			metav1.ConditionTrue, "SchemaNameConflict", "SchemaNameConflict message",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
