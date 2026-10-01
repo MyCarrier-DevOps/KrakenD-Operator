@@ -1657,6 +1657,7 @@ func TestGatewayReadinessFor(t *testing.T) {
 	valid := c("ConfigValid", metav1.ConditionTrue, "ConfigApplied")
 	available := c("Available", metav1.ConditionTrue, "DeploymentAvailable")
 	settled := c("Progressing", metav1.ConditionFalse, "RolloutComplete")
+	expired := c("LicenseExpired", metav1.ConditionTrue, "LicenseExpired")
 	tests := []struct {
 		name       string
 		conds      []metav1.Condition
@@ -1670,6 +1671,8 @@ func TestGatewayReadinessFor(t *testing.T) {
 		{"configuration rejected",
 			[]metav1.Condition{c("ConfigValid", metav1.ConditionFalse, "ConfigValidationFailed"), available, settled},
 			metav1.ConditionFalse, "ConfigValidationFailed", v1alpha1.PhaseError},
+		{"license expired without fallback", []metav1.Condition{valid, available, settled, expired},
+			metav1.ConditionFalse, "LicenseExpiredNoFallback", v1alpha1.PhaseError},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
