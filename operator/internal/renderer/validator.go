@@ -23,18 +23,26 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"time"
 )
+
+// DefaultValidateTimeout bounds one krakend check run when no Timeout is
+// configured. A healthy run takes about a second.
+const DefaultValidateTimeout = 30 * time.Second
 
 // ValidatorOptions configures the KrakenD config validator.
 type ValidatorOptions struct {
 	Executor   CommandExecutor
 	BinaryPath string
+	// Timeout bounds one krakend check run. Zero means DefaultValidateTimeout.
+	Timeout time.Duration
 }
 
 // KrakenDValidator validates rendered KrakenD JSON via krakend check.
 type KrakenDValidator struct {
 	Executor   CommandExecutor
 	BinaryPath string
+	Timeout    time.Duration
 }
 
 // NewValidator creates a KrakenDValidator with the given options.
@@ -42,6 +50,7 @@ func NewValidator(opts ValidatorOptions) *KrakenDValidator {
 	return &KrakenDValidator{
 		Executor:   opts.Executor,
 		BinaryPath: opts.BinaryPath,
+		Timeout:    opts.Timeout,
 	}
 }
 
@@ -163,4 +172,11 @@ func (v *KrakenDValidator) PrepareValidationCopy(jsonData []byte, eeWithoutFallb
 		return jsonData, nil
 	}
 	return serializeJSON(config)
+}
+
+func (v *KrakenDValidator) timeout() time.Duration {
+	if v.Timeout > 0 {
+		return v.Timeout
+	}
+	return DefaultValidateTimeout
 }
