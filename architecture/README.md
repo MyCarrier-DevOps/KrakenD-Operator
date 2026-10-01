@@ -643,6 +643,11 @@ erDiagram
 | **Istio VirtualService** | KrakenDGateway | Operator-managed (when `istio.enabled=true`) |
 | **Istio Gateway** | **User** | **NOT managed by operator** — referenced only |
 
+When a feature is disabled, the gateway deletes the child it created for it
+(HPA, Dragonfly, ExternalSecret, VirtualService) under its deterministic
+name, only if the gateway is its controller, and removes that feature's
+conditions.
+
 ---
 
 ## 5. Reconciliation Data Flow
