@@ -21,8 +21,19 @@ import (
 	corev1 "k8s.io/api/core/v1"
 )
 
+// ConfigRevisionLabel marks a gateway's content-addressed config ConfigMaps;
+// its value is the short checksum in the ConfigMap's name.
+const ConfigRevisionLabel = "krakend.io/config-revision"
+
+// ConfigKey is the ConfigMap key the gateway config is stored under.
+const ConfigKey = "krakend.json"
+
+// ConfigMapName returns the name of the immutable ConfigMap that holds the
+// rendered config with the given checksum: "<gateway>-config-<10 hex>".
+func ConfigMapName(_ *v1alpha1.KrakenDGateway, _ string) string { return "" }
+
 // BuildConfigMap mutates cm in place with the rendered krakend.json data.
-func BuildConfigMap(cm *corev1.ConfigMap, gw *v1alpha1.KrakenDGateway, jsonData []byte) {
+func BuildConfigMap(cm *corev1.ConfigMap, gw *v1alpha1.KrakenDGateway, jsonData []byte, _ string) {
 	cm.Labels = StandardLabels(gw)
 	cm.Data = map[string]string{
 		"krakend.json": string(jsonData),

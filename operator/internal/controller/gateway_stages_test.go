@@ -126,7 +126,7 @@ func TestGatewayReconcile_InfrastructureRunsWhateverTheConfigVerdict(t *testing.
 			gw := reconciledGateway()
 			gw.Status.ConfigChecksum = "applied"
 			appliedCM := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace}}
-			resources.BuildConfigMap(appliedCM, gw, []byte(`{"applied":true}`))
+			resources.BuildConfigMap(appliedCM, gw, []byte(`{"applied":true}`), "applied")
 			c := fakeClientBuilder().WithObjects(gw, appliedCM).WithStatusSubresource(gw).Build()
 			r := newTestGatewayReconciler(c, renderOutput("new"), &countingValidator{err: tc.verdict})
 

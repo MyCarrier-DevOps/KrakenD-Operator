@@ -28,17 +28,29 @@ import (
 
 // === ConfigMap Tests ===
 
-func TestBuildConfigMap(t *testing.T) {
+func TestBuildConfigMap_IsAnImmutableContentAddressedRevision(t *testing.T) {
 	gw := testGateway()
+	checksum := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	cm := &corev1.ConfigMap{}
-	jsonData := []byte(`{"version":3}`)
-	BuildConfigMap(cm, gw, jsonData)
+	BuildConfigMap(cm, gw, []byte(`{"version":3}`), checksum)
 
-	if cm.Labels["app.kubernetes.io/name"] != "krakend" {
-		t.Error("expected standard labels")
+	if got, want := ConfigMapName(gw, checksum), gw.Name+"-config-0123456789"; got != want {
+		t.Errorf("ConfigMapName = %q, want %q", got, want)
 	}
-	if cm.Data["krakend.json"] != `{"version":3}` {
-		t.Errorf("unexpected config data: %s", cm.Data["krakend.json"])
+	if cm.Immutable == nil || !*cm.Immutable {
+		t.Error("a config revision must be immutable")
+	}
+	if cm.Labels[ConfigRevisionLabel] != "0123456789" {
+		t.Errorf("revision label = %q, want the short checksum", cm.Labels[ConfigRevisionLabel])
+	}
+	if cm.Labels["app.kubernetes.io/instance"] != gw.Name {
+		t.Error("a config revision must carry the gateway's standard labels")
+	}
+	if cm.Annotations[PostRestartJobChecksumAnnotation] != checksum {
+		t.Errorf("checksum annotation = %q, want the full checksum", cm.Annotations[PostRestartJobChecksumAnnotation])
+	}
+	if cm.Data[ConfigKey] != `{"version":3}` {
+		t.Errorf("config data = %q", cm.Data[ConfigKey])
 	}
 }
 

@@ -588,7 +588,7 @@ func (r *KrakenDGatewayReconciler) reconcileConfig(
 		// revert to it clears a rejection. Rewriting it reverts an
 		// out-of-band edit.
 		setConfigApplied(gw)
-		return r.writeConfigMap(ctx, gw, output.JSON)
+		return r.writeConfigMap(ctx, gw, output.JSON, output.Checksum)
 	}
 	return r.validateAndApply(ctx, gw, before, output, ceFallback)
 }
@@ -612,7 +612,7 @@ func (r *KrakenDGatewayReconciler) validateAndApply(
 	case err != nil:
 		return r.handleValidatorUnavailable(gw, before, err)
 	}
-	if err := r.writeConfigMap(ctx, gw, output.JSON); err != nil {
+	if err := r.writeConfigMap(ctx, gw, output.JSON, output.Checksum); err != nil {
 		return err
 	}
 	r.markConfigApplied(gw, output.Checksum)
@@ -621,11 +621,11 @@ func (r *KrakenDGatewayReconciler) validateAndApply(
 
 // writeConfigMap writes the config the gateway serves into its ConfigMap.
 func (r *KrakenDGatewayReconciler) writeConfigMap(
-	ctx context.Context, gw *v1alpha1.KrakenDGateway, jsonData []byte,
+	ctx context.Context, gw *v1alpha1.KrakenDGateway, jsonData []byte, checksum string,
 ) error {
 	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace}}
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, cm, func() error {
-		resources.BuildConfigMap(cm, gw, jsonData)
+		resources.BuildConfigMap(cm, gw, jsonData, checksum)
 		return controllerutil.SetControllerReference(gw, cm, r.Scheme)
 	}); err != nil {
 		return fmt.Errorf("reconciling configmap: %w", err)
