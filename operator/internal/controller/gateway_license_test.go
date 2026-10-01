@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -376,5 +377,42 @@ func TestGatewayReconcile_CommunityGatewayHasNoLicenseRequeue(t *testing.T) {
 	}
 	if res.RequeueAfter != 0 {
 		t.Errorf("RequeueAfter = %s, want 0 for a CE gateway", res.RequeueAfter)
+	}
+}
+
+func TestGatewayReconcile_CommunityGatewayDropsItsStaleLicenseState(t *testing.T) {
+	gw := reconciledGateway()
+	gw.Namespace = "ce-switched"
+	gw.Spec.Edition = v1alpha1.EditionCE
+	gw.Status.LicenseExpiry = &metav1.Time{Time: testNow.Add(-time.Hour)}
+	for _, typ := range []string{
+		v1alpha1.ConditionLicenseValid, v1alpha1.ConditionLicenseExpired,
+		v1alpha1.ConditionLicenseDegraded, v1alpha1.ConditionLicenseSecretUnavailable,
+	} {
+		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+			Type: typ, Status: metav1.ConditionTrue, Reason: "LicenseExpired",
+		})
+	}
+	licenseExpirySeconds.WithLabelValues(gw.Namespace, gw.Name).Set(-3600)
+	c := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderOutput("cs"), &mockValidator{})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	got := getGateway(t, c, gw)
+	for _, cond := range got.Status.Conditions {
+		if strings.HasPrefix(cond.Type, "License") {
+			t.Errorf("CE gateway still has condition %s=%s", cond.Type, cond.Status)
+		}
+	}
+	if got.Status.LicenseExpiry != nil {
+		t.Errorf("licenseExpiry = %v, want nil", got.Status.LicenseExpiry)
+	}
+	if got.Status.Phase == v1alpha1.PhaseError {
+		t.Errorf("phase = %s, a stale LicenseExpired must not keep a CE gateway in Error", got.Status.Phase)
+	}
+	if licenseExpirySeconds.DeleteLabelValues(gw.Namespace, gw.Name) {
+		t.Error("the license_expiry_seconds series of a CE gateway must be removed")
 	}
 }
