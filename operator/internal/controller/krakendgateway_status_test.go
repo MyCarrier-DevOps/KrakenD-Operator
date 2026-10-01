@@ -261,6 +261,10 @@ func TestGatewayReconcile_ValidatorUnavailableIsRetried(t *testing.T) {
 		t.Errorf("phase = %s, checksum = %s; an unavailable validator must not change either",
 			got.Status.Phase, got.Status.ConfigChecksum)
 	}
+	if ready := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionReady); ready == nil ||
+		ready.Status != metav1.ConditionUnknown || ready.Reason != v1alpha1.ReasonValidatorUnavailable {
+		t.Errorf("Ready = %+v, want Unknown/ValidatorUnavailable", ready)
+	}
 	if err := reconcileGateway(t, r, gw); err == nil {
 		t.Fatal("expected the retry to fail the same way")
 	}
