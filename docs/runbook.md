@@ -288,13 +288,15 @@ The operator deletes these when the gateway no longer asks for them
 `spec.license.externalSecret.enabled`, `spec.istio.enabled`). It deletes
 only objects whose controller owner reference is the gateway. To keep one,
 re-enable the feature, or copy the object under another name before
-disabling the feature.
+disabling the feature. For the HPA, keep `spec.autoscaling` set instead: with
+it removed the operator sets the Deployment's replicas to `spec.replicas` on
+every reconcile and would fight a renamed HPA.
 
 Disabling the license ExternalSecret also garbage-collects the
 `<gateway>-license` Secret it created, so a `license.secretRef` pointing at
 that Secret stops working. Disabling Dragonfly deletes the instance at once;
 pods still running the previous config lose their Redis connection until the
-rollout completes.
+rollout completes, or until a rejected render is fixed.
 
 ### Gateway reports `ValidatorUnavailable`
 
