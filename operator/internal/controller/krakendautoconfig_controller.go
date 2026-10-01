@@ -829,12 +829,20 @@ func extractHost(rawURL string) string {
 	return u.Scheme + "://" + u.Host
 }
 
+// autoConfigReady derives an AutoConfig's Ready condition from its
+// SpecAvailable and Synced conditions: False with the first failing
+// condition's reason, Unknown before the first sync, True once both are True.
 func autoConfigReady(conds []metav1.Condition) (status metav1.ConditionStatus, reason, message string) {
-	if c := meta.FindStatusCondition(conds, v1alpha1.ConditionSpecAvailable); c != nil &&
-		c.Status != metav1.ConditionTrue {
-		return metav1.ConditionFalse, c.Reason, c.Message
+	for _, typ := range []string{v1alpha1.ConditionSpecAvailable, v1alpha1.ConditionSynced} {
+		c := meta.FindStatusCondition(conds, typ)
+		switch {
+		case c == nil:
+			return metav1.ConditionUnknown, v1alpha1.ReasonPending, "Waiting for the first sync"
+		case c.Status != metav1.ConditionTrue:
+			return metav1.ConditionFalse, c.Reason, c.Message
+		}
 	}
-	return metav1.ConditionUnknown, v1alpha1.ReasonPending, "Waiting for the first sync"
+	return metav1.ConditionTrue, v1alpha1.ReasonReady, "OpenAPI spec fetched and endpoints in sync"
 }
 
 func autoConfigPhase(conds []metav1.Condition) v1alpha1.AutoConfigPhase {
