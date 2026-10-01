@@ -292,3 +292,22 @@ func TestGatewayReconcile_ValidationMessageIsBounded(t *testing.T) {
 		t.Errorf("event message is %d bytes, want the same bound as the condition", len(event))
 	}
 }
+
+func TestGatewayReconcile_OversizedRejectionWarnsOnce(t *testing.T) {
+	gw := testGateway()
+	c, _ := gatewayStatusWrites(gw)
+	recorder := fakeRecorder()
+	huge := strings.Repeat("ERROR at '/endpoints/0': additional properties not allowed\n", 1000)
+	r := &KrakenDGatewayReconciler{
+		Client: c, Scheme: testScheme(), Recorder: recorder,
+		Renderer: renderOutput("bad"), Validator: &countingValidator{err: rejectedBy(huge)},
+	}
+	for range 2 {
+		if err := reconcileGateway(t, r, gw); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := len(recorder.Events); got != 1 {
+		t.Errorf("got %d events for one oversized rejection reconciled twice, want 1", got)
+	}
+}
