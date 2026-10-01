@@ -18,6 +18,7 @@ package renderer
 
 import (
 	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 
@@ -1016,5 +1017,39 @@ func TestRender_SourcesAreIndexAlignedWithEndpoints(t *testing.T) {
 		if out.Sources[i] != owner[ep.Endpoint] {
 			t.Errorf("Sources[%d] = %s for %s, want %s", i, out.Sources[i], ep.Endpoint, owner[ep.Endpoint])
 		}
+	}
+}
+
+func TestRender_SourcesExcludeConflictLosersAndInvalidPolicyCRs(t *testing.T) {
+	earlier := metav1.NewTime(time.Now().Add(-time.Hour))
+	later := metav1.NewTime(time.Now())
+	entry := func(path, policy string) v1alpha1.EndpointEntry {
+		b := v1alpha1.BackendSpec{Host: []string{"http://svc:80"}, URLPattern: "/x"}
+		if policy != "" {
+			b.PolicyRef = &v1alpha1.PolicyRef{Name: policy}
+		}
+		return v1alpha1.EndpointEntry{Endpoint: path, Method: "GET", Backends: []v1alpha1.BackendSpec{b}}
+	}
+	cr := func(name string, created metav1.Time, e v1alpha1.EndpointEntry) v1alpha1.KrakenDEndpoint {
+		return v1alpha1.KrakenDEndpoint{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", CreationTimestamp: created},
+			Spec: v1alpha1.KrakenDEndpointSpec{
+				GatewayRef: v1alpha1.GatewayRef{Name: "test"}, Endpoints: []v1alpha1.EndpointEntry{e},
+			},
+		}
+	}
+	endpoints := []v1alpha1.KrakenDEndpoint{
+		cr("winner", earlier, entry("/dup", "")),
+		cr("loser", later, entry("/dup", "")),
+		cr("broken", earlier, entry("/broken", "nonexistent")),
+	}
+
+	out, err := New(Options{}).Render(RenderInput{Gateway: minimalGateway(), Endpoints: endpoints})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []types.NamespacedName{{Namespace: "default", Name: "winner"}}
+	if !slices.Equal(out.Sources, want) {
+		t.Errorf("Sources = %v, want only the rendered winner %v", out.Sources, want)
 	}
 }
