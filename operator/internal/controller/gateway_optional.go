@@ -17,10 +17,16 @@ limitations under the License.
 package controller
 
 import (
+	"context"
 	"fmt"
 
 	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 )
 
 // The third-party kinds a gateway creates when the matching feature is
@@ -65,4 +71,40 @@ func kindInstalled(mapper meta.RESTMapper, gvk schema.GroupVersionKind) (bool, e
 	default:
 		return false, err
 	}
+}
+
+// deleteIfControlled deletes obj, looked up by its name and namespace, when
+// it exists and gw controls it. An object someone else owns under the same
+// name is left alone.
+func (r *KrakenDGatewayReconciler) deleteIfControlled(
+	ctx context.Context, gw *v1alpha1.KrakenDGateway, obj client.Object,
+) error {
+	key := client.ObjectKeyFromObject(obj)
+	if err := r.Get(ctx, key, obj); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	if !metav1.IsControlledBy(obj, gw) {
+		return nil
+	}
+	uid := obj.GetUID()
+	if err := r.Delete(ctx, obj, client.Preconditions{UID: &uid}); client.IgnoreNotFound(err) != nil {
+		return fmt.Errorf("deleting %T %s: %w", obj, key, err)
+	}
+	return nil
+}
+
+// deleteOptionalIfControlled is deleteIfControlled for an optional kind.
+// Without its CRD there is nothing to delete.
+func (r *KrakenDGatewayReconciler) deleteOptionalIfControlled(
+	ctx context.Context, gw *v1alpha1.KrakenDGateway, gvk schema.GroupVersionKind, name string,
+) error {
+	available, err := r.crdAvailable(gvk)
+	if err != nil || !available {
+		return err
+	}
+	u := &unstructured.Unstructured{}
+	u.SetGroupVersionKind(gvk)
+	u.SetName(name)
+	u.SetNamespace(gw.Namespace)
+	return r.deleteIfControlled(ctx, gw, u)
 }
