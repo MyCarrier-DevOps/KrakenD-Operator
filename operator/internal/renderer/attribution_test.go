@@ -114,6 +114,14 @@ func TestAttribute_RouterErrorsRespectMethods(t *testing.T) {
 				"conflicts with existing wildcard ':id' in existing prefix '/users/:id'\n",
 			wantIndex: []int{0, 2},
 		},
+		{
+			name: "conflict blames a longer route under the prefix",
+			rendered: `{"endpoints":[{"endpoint":"/a/{id}","method":"POST"},` +
+				`{"endpoint":"/a/{id}/b","method":"GET"},{"endpoint":"/a/{name}","method":"GET"}]}`,
+			output: "ERROR testing the configuration file:\t':name' in new path '/a/:name' " +
+				"conflicts with existing wildcard ':id' in existing prefix '/a/:id'\n",
+			wantIndex: []int{1, 2},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
