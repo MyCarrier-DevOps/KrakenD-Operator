@@ -104,12 +104,14 @@ func eeWildcardFindings(endpoints []any) []string {
 // eeWildcardParamFindings rejects a backend url_pattern that references
 // {Wildcard} on an EE wildcard endpoint. The copy the CE binary checks
 // declares that parameter, but the EE router does not, so EE refuses such a
-// config with "undefined output param".
+// config with "undefined output param". An endpoint whose own path declares
+// {Wildcard} is left alone: EE resolves the reference to that parameter.
 func eeWildcardParamFindings(endpoints []any) []string {
 	var findings []string
 	for i, ep := range endpoints {
 		m, ok := ep.(map[string]any)
-		if !ok || !IsEEWildcard(stringField(m, "endpoint")) {
+		path := stringField(m, "endpoint")
+		if !ok || !IsEEWildcard(path) || strings.Contains(path, eeWildcardParam) {
 			continue
 		}
 		backends, ok := m["backend"].([]any)
