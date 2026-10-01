@@ -34,6 +34,7 @@ import (
 	"github.com/mycarrier-devops/krakend-operator/internal/autoconfig"
 	"github.com/mycarrier-devops/krakend-operator/internal/controller"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
+	licenseutil "github.com/mycarrier-devops/krakend-operator/internal/util/license"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/k3s"
 	appsv1 "k8s.io/api/apps/v1"
@@ -177,6 +178,9 @@ func runTests(m *testing.M) int {
 		Renderer:  renderer.New(renderer.Options{}),
 		Validator: suiteValidator,
 		APIReader: mgr.GetAPIReader(),
+		Clock:     clock.RealClock{},
+
+		LicenseParser: licenseutil.NewX509LicenseParser(),
 	}).SetupWithManager(mgr); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to setup gateway controller: %v\n", err)
 		return 1
