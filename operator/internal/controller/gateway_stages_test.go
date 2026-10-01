@@ -922,3 +922,35 @@ func TestCollectConfigMaps_ListsNoReplicaSetsWhenNothingIsCollectable(t *testing
 		t.Errorf("ReplicaSet lists = %d, want 0 when nothing can be collected", lists)
 	}
 }
+
+func TestGatewayReconcile_CollectsTheLegacyConfigMapOnceNoLiveReplicaSetMountsIt(t *testing.T) {
+	gw := reconciledGateway()
+	gw.UID = "gw-uid"
+	const config = `{"version":3,"name":"migrated"}`
+	gw.Status.ConfigChecksum = hash.SHA256Hex([]byte(config))
+	oldRS := gatewayReplicaSet(gw, "test-gw-old", gw.Name, 1)
+	c := fakeClientBuilder().WithObjects(gw, legacyConfigMap(gw, config), legacyDeployment(gw), oldRS).
+		WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderOf(config), &mockValidator{})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if got := remainingConfigMaps(t, c, gw); !slices.Contains(got, gw.Name) {
+		t.Fatalf("remaining ConfigMaps = %v; the legacy ConfigMap must survive while a live ReplicaSet mounts it", got)
+	}
+
+	var live appsv1.ReplicaSet
+	getObject(t, c, gw, oldRS.Name, &live)
+	live.Spec.Replicas = ptr.To(int32(0))
+	live.Status.Replicas = 0 // the rollout finished: the old ReplicaSet is scaled to zero
+	if err := c.Update(context.Background(), &live); err != nil {
+		t.Fatal(err)
+	}
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if got := remainingConfigMaps(t, c, gw); slices.Contains(got, gw.Name) {
+		t.Errorf("remaining ConfigMaps = %v; the legacy ConfigMap must be collected once the rollout finished", got)
+	}
+}
