@@ -466,18 +466,15 @@ func TestBuildGatewayExtraConfig_Logging(t *testing.T) {
 	}
 }
 
-func TestBuildGatewayExtraConfig_DNSCache(t *testing.T) {
+func TestBuildRootConfig_DNSCacheTTLIsTheRootField(t *testing.T) {
 	gw := minimalGateway()
 	gw.Spec.Config.DNSCacheTTL = "30s"
 
-	ec := buildGatewayExtraConfig(gw, nil)
-	dns, ok := ec["qos/dns"]
-	if !ok {
-		t.Fatal("expected qos/dns in extra_config")
+	if got := buildRootConfig(gw)["dns_cache_ttl"]; got != "30s" {
+		t.Errorf("dns_cache_ttl = %v, want 30s", got)
 	}
-	dnsMap := dns.(map[string]any)
-	if dnsMap["ttl"] != "30s" {
-		t.Errorf("expected ttl 30s, got %v", dnsMap["ttl"])
+	if _, ok := buildGatewayExtraConfig(gw, nil)["qos/dns"]; ok {
+		t.Error("qos/dns is not a KrakenD namespace and must not be rendered")
 	}
 }
 
