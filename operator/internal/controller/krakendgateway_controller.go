@@ -780,7 +780,8 @@ func (r *KrakenDGatewayReconciler) reconcileEndpointAcceptance(
 // render saw as rendered, or removes it when want is nil. It patches status
 // with an optimistic lock, so it never replaces conditions written after its
 // read. It writes only when the condition changes, and emits an event only on
-// a transition.
+// a transition. An endpoint deleted, or deleted and created again, since the
+// render is skipped.
 func (r *KrakenDGatewayReconciler) writeEndpointAccepted(
 	ctx context.Context,
 	rendered *v1alpha1.KrakenDEndpoint,
@@ -793,6 +794,9 @@ func (r *KrakenDGatewayReconciler) writeEndpointAccepted(
 			return nil
 		}
 		return fmt.Errorf("getting endpoint %s: %w", key, err)
+	}
+	if ep.UID != rendered.UID {
+		return nil
 	}
 	base := ep.DeepCopy()
 	prev := meta.FindStatusCondition(base.Status.Conditions, v1alpha1.ConditionAccepted)
