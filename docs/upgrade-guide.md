@@ -855,13 +855,15 @@ refuses unnamed wildcards. Validation of an EE config now works like this:
   `GET /v1/users`. The EE router refuses to start in that case. Both
   endpoints are named in the gateway's `ConfigValid` message and get
   `Accepted=False/GatewayConfigRejected`.
-- **Everything else is checked by `krakend check`.** For the check, each
-  wildcard is rewritten to a path parameter (`/v1/{Wildcard}`), so the
-  wildcard endpoints' backends and `extra_config` are linted and parsed too.
+- **Everything else is checked by `krakend check`.** For the check only,
+  each wildcard is modelled as a path parameter, so the wildcard endpoints'
+  backends and `extra_config` are linted and parsed too. That parameter does
+  not exist in EE: a backend `url_pattern` that references `{Wildcard}` on a
+  wildcard endpoint is rejected, as EE would reject it.
 
-A root `/*` endpoint is invalid in both editions (KrakenD requires at least
-one path segment before `/*`). It used to be dropped from validation, and is
-now rejected.
+The config schema rejects a root `/*` endpoint in both editions (it needs a
+path segment before `/*`). It used to be dropped from validation, and is now
+rejected. Move such an endpoint to `/prefix/*`.
 
 ---
 
