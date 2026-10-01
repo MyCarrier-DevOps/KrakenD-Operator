@@ -518,3 +518,20 @@ func TestBuildDeployment_AutoscalingWithoutMinStartsAtOne(t *testing.T) {
 		t.Errorf("replicas = %d, want 1, the HPA default floor", got)
 	}
 }
+
+func TestBuildDeployment_MountsTheNamedConfigMap(t *testing.T) {
+	gw := testGateway()
+	dep := &appsv1.Deployment{}
+	BuildDeployment(dep, gw, DeploymentInputs{
+		ConfigMapName: "test-gw-config-0123456789", ConfigChecksum: "cs", Image: "img:v1",
+	})
+	for _, v := range dep.Spec.Template.Spec.Volumes {
+		if v.Name == "config" {
+			if v.ConfigMap == nil || v.ConfigMap.Name != "test-gw-config-0123456789" {
+				t.Fatalf("config volume = %+v, want ConfigMap test-gw-config-0123456789", v.VolumeSource)
+			}
+			return
+		}
+	}
+	t.Fatal("no config volume")
+}
