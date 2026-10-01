@@ -534,6 +534,9 @@ func TestGateway_CollectsConfigRevisionsOutsideTheHistory(t *testing.T) {
 		// Nothing keeps an earlier revision alive but the history: drop the
 		// ReplicaSets that still mount an older one.
 		deleteStaleReplicaSets(t, ns, names[len(names)-1])
+		// Collection orders revisions by creationTimestamp, which has
+		// one-second resolution; keep every revision in its own second.
+		waitPastCreationSecond(t, ns, names[len(names)-1])
 		path := fmt.Sprintf("/items-%d", i)
 		ep := &v1alpha1.KrakenDEndpoint{
 			ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("items-%d", i), Namespace: ns},
@@ -601,4 +604,15 @@ func deleteStaleReplicaSets(t *testing.T, ns, current string) {
 			t.Fatal(err)
 		}
 	}
+}
+
+// waitPastCreationSecond blocks until the wall clock is past the second in
+// which the ConfigMap name was created.
+func waitPastCreationSecond(t *testing.T, ns, name string) {
+	t.Helper()
+	var cm corev1.ConfigMap
+	if err := k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &cm); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(time.Until(cm.CreationTimestamp.Add(time.Second)))
 }
