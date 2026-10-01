@@ -431,9 +431,6 @@ func TestGatewayReconcile_ImageRolloutCompletesWhenTheDeploymentRunsIt(t *testin
 	}
 }
 
-// virtualServiceTestGVK is the Istio VirtualService kind the gateway creates.
-var virtualServiceTestGVK = schema.GroupVersionKind{Group: "networking.istio.io", Version: "v1", Kind: "VirtualService"}
-
 // eventsWithReason drains rec and counts the recorded events with reason.
 func eventsWithReason(rec *record.FakeRecorder, reason string) int {
 	n := 0
@@ -503,7 +500,7 @@ func TestGatewayReconcile_EventsOnlyOnConditionTransitions(t *testing.T) {
 			gw := reconciledGateway()
 			gw.Status.ConfigChecksum = "applied"
 			objs := append([]client.Object{gw}, tc.setup(gw)...)
-			c := fakeClientBuilder().WithRESTMapper(optionalCRDMapper(virtualServiceTestGVK)).
+			c := fakeClientBuilder().WithRESTMapper(optionalCRDMapper(virtualServiceGVK)).
 				WithObjects(objs...).WithStatusSubresource(gw).Build()
 			r := newTestGatewayReconciler(c, renderOutput("applied"), &mockValidator{})
 
