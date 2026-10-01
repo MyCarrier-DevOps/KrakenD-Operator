@@ -1837,7 +1837,7 @@ func servingPhase(progressing, available *metav1.Condition) v1alpha1.GatewayPhas
 	switch {
 	case progressing == nil && available == nil:
 		return v1alpha1.PhasePending
-	case condTrue(progressing):
+	case condTrue(progressing) || !condTrue(available):
 		return v1alpha1.PhaseDeploying
 	default:
 		return v1alpha1.PhaseRunning
