@@ -993,8 +993,8 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 		}
 	}
 
-	// Post-restart Job (only if enabled, and only after rollout convergence
-	// for the current config checksum). Jobs are idempotent by name so each
+	// Post-restart Job (only if enabled, and only after the Deployment has
+	// rolled out the applied config, image and plugins). Jobs are idempotent by name so each
 	// unique config revision produces exactly one Job.
 	if err := r.reconcilePostRestartJob(ctx, gw, in); err != nil {
 		return err
@@ -1126,8 +1126,8 @@ func (r *KrakenDGatewayReconciler) reconcileDeployment(
 // resources.PostRestartJobChecksum) so each (config, postRestartJob spec)
 // revision pair produces at most one Job under that name, ever — including
 // a spec-only edit, not just a krakend.json change (nhig root cause 2). The
-// Job is only created after the Deployment has converged on the current
-// config checksum.
+// Job is only created, or re-created, after the Deployment has converged on
+// the applied config, image and plugins (see deploymentConverged).
 //
 // gw.Status.LastPostRestartJobChecksum is checked before touching the API
 // server: it guards against TTLSecondsAfterFinished's cleanup GC'ing a
@@ -1185,8 +1185,8 @@ func (r *KrakenDGatewayReconciler) reconcilePostRestartJob(
 	}
 
 	// review id 3807285652 (#7): the Deployment-not-found / not-yet-converged
-	// early returns below (through the desired==0 and replica-mismatch
-	// checks) deliberately do NOT touch PostRestartJobSkipped/ROFS
+	// early returns below (see postRestartRolloutDone)
+	// deliberately do NOT touch PostRestartJobSkipped/ROFS
 	// conditions, unlike the disabled/empty guard above. These describe an
 	// in-progress rollout, not a completed decision about this revision —
 	// clearing conditions here would make them flicker away and back every
@@ -1524,8 +1524,8 @@ func (r *KrakenDGatewayReconciler) postRestartRolloutDone(
 //
 // Correction (review id 3807285652, #7): "every branch" means every branch
 // reachable once postRestartJob is enabled/configured with script and
-// config checksum present AND the Deployment has converged on that
-// checksum — i.e. every branch of reconcileExistingPostRestartRevision plus
+// config checksum present AND the Deployment has converged on the applied
+// config, image and plugins — i.e. every branch of reconcileExistingPostRestartRevision plus
 // the create/already-exists branches of reconcilePostRestartJob. It does
 // NOT cover the disabled/unconfigured guard or the not-yet-converged early
 // returns in reconcilePostRestartJob, which precede any revision-specific
