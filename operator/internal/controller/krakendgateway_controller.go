@@ -55,6 +55,7 @@ import (
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 	"github.com/mycarrier-devops/krakend-operator/internal/resources"
 	"github.com/mycarrier-devops/krakend-operator/internal/util/hash"
+	"github.com/mycarrier-devops/krakend-operator/internal/util/license"
 )
 
 // KrakenDGatewayReconciler reconciles a KrakenDGateway object.
@@ -69,6 +70,8 @@ type KrakenDGatewayReconciler struct {
 	Clock     utilclock.Clock
 	// APIReader reads uncached from the API server (ReplicaSets for config GC)
 	APIReader client.Reader
+	// LicenseParser reads EE license certificates
+	LicenseParser license.LicenseParser
 
 	// rejections remembers each gateway's last rejected validation input,
 	// so an unchanged bad render is not re-validated on every event.

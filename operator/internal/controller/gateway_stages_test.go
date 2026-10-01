@@ -66,6 +66,8 @@ func newTestGatewayReconciler(
 		Validator: val,
 		Clock:     clocktesting.NewFakeClock(testNow),
 		APIReader: c,
+
+		LicenseParser: &mockLicenseParser{err: errors.New("no license in this test")},
 	}
 }
 

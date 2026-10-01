@@ -33,16 +33,6 @@ import (
 	"github.com/mycarrier-devops/krakend-operator/internal/util/license"
 )
 
-// mockLicenseParser implements license.LicenseParser for testing.
-type mockLicenseParser struct {
-	info *license.LicenseInfo
-	err  error
-}
-
-func (p *mockLicenseParser) Parse(_ []byte) (*license.LicenseInfo, error) {
-	return p.info, p.err
-}
-
 func newEEGateway(name, namespace string) *v1alpha1.KrakenDGateway {
 	return &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{
