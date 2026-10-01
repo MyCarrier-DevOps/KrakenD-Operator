@@ -67,19 +67,19 @@ func TestAttribute_MapsKrakendCheckOutputToSources(t *testing.T) {
 		{
 			name:      "no backends",
 			rendered:  `{"endpoints":[{"endpoint":"/ok","method":"GET"},{"endpoint":"/empty","method":"GET"}]}`,
-			output:    "ERROR parsing the configuration file:\\t'/k.json': ignoring the 'GET /empty' endpoint, since it has 0 backends defined!\\n",
+			output:    "ERROR parsing the configuration file:\t'/k.json': ignoring the 'GET /empty' endpoint, since it has 0 backends defined!\n",
 			wantIndex: []int{1},
 		},
 		{
 			name:      "unnamed wildcard",
 			rendered:  `{"endpoints":[{"endpoint":"/w/*","method":"GET"},{"endpoint":"/ok","method":"GET"}]}`,
-			output:    "ERROR testing the configuration file:\\twildcards must be named with a non-empty name in path '/w/*'\\n",
+			output:    "ERROR testing the configuration file:\twildcards must be named with a non-empty name in path '/w/*'\n",
 			wantIndex: []int{0},
 		},
 		{
 			name:      "non-endpoint lint pointer",
 			rendered:  `{"endpoints":[{"endpoint":"/ok","method":"GET"}]}`,
-			output:    "- at '/extra_config/router/return_error_msg': got string, want boolean\\n",
+			output:    "- at '/extra_config/router/return_error_msg': got string, want boolean\n",
 			wantIndex: []int{-1},
 		},
 	}
