@@ -352,14 +352,11 @@ func (r *KrakenDGatewayReconciler) forgetGateway(key types.NamespacedName) {
 // API discovery. Returns (false, nil) when the CRD is simply not installed,
 // and (false, err) for transient or unexpected errors.
 func (r *KrakenDGatewayReconciler) crdAvailable(gvk schema.GroupVersionKind) (bool, error) {
-	_, err := r.RESTMapper().RESTMapping(gvk.GroupKind(), gvk.Version)
-	if err == nil {
-		return true, nil
+	ok, err := kindInstalled(r.RESTMapper(), gvk)
+	if err != nil {
+		return false, fmt.Errorf("checking CRD availability for %s: %w", gvk, err)
 	}
-	if meta.IsNoMatchError(err) {
-		return false, nil
-	}
-	return false, fmt.Errorf("checking CRD availability for %s: %w", gvk, err)
+	return ok, nil
 }
 
 // gatherPolicies fetches all unique KrakenDBackendPolicy resources referenced
