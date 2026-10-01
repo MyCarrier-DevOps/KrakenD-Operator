@@ -29,6 +29,7 @@ import (
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -1570,5 +1571,43 @@ func TestGatewayReconcile_AcceptedRetriesAfterConflictWithoutClobbering(t *testi
 	if a := meta.FindStatusCondition(stored.Status.Conditions, v1alpha1.ConditionAccepted); a == nil ||
 		a.Status != metav1.ConditionTrue {
 		t.Errorf("Accepted = %+v, want True after the retry", a)
+	}
+}
+
+func TestGatewayReconcile_EndpointStatusFailureDoesNotBlockOwnedResources(t *testing.T) {
+	gw := reconciledGateway()
+	epA := gatewayEndpoint("ep-a", 1)
+	epB := gatewayEndpoint("ep-b", 1)
+	c := fakeClientBuilder().
+		WithObjects(gw, epA, epB).
+		WithStatusSubresource(gw, epA, epB).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourcePatch: func(ctx context.Context, cl client.Client, sub string, obj client.Object,
+				patch client.Patch, opts ...client.SubResourcePatchOption) error {
+				if _, ok := obj.(*v1alpha1.KrakenDEndpoint); ok && obj.GetName() == "ep-a" {
+					return apierrors.NewInternalError(fmt.Errorf("etcd timeout"))
+				}
+				return cl.SubResource(sub).Patch(ctx, obj, patch, opts...)
+			},
+		}).
+		Build()
+	r := acceptanceReconciler(c, fakeRecorder(), &renderer.RenderOutput{
+		JSON: []byte(`{"version":3}`), Checksum: "cs1", DesiredImage: "img:v1",
+	})
+
+	err := reconcileGateway(t, r, gw)
+	if err == nil || !strings.Contains(err.Error(), "ep-a") {
+		t.Fatalf("Reconcile error = %v, want one naming ep-a so the reconcile is retried", err)
+	}
+	if got := storedAccepted(t, c, client.ObjectKeyFromObject(epB)); got == nil || got.Status != metav1.ConditionTrue {
+		t.Errorf("ep-b: Accepted = %+v, want True: one failing endpoint must not stop the others", got)
+	}
+	var dep appsv1.Deployment
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(gw), &dep); err != nil {
+		t.Errorf("Deployment not reconciled after an endpoint status failure: %v", err)
+	}
+	if got := getGateway(t, c, gw); got.Status.ConfigChecksum != "cs1" {
+		t.Errorf("gateway status.configChecksum = %q, want cs1 (the gateway status write must still happen)",
+			got.Status.ConfigChecksum)
 	}
 }
