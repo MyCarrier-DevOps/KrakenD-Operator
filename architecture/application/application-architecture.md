@@ -902,7 +902,7 @@ flowchart TD
 
 **Policy resolution** — The controller fetches all referenced `KrakenDBackendPolicy` resources before calling `Renderer.Render`, populating `RenderInput.Policies`. The renderer itself has no Kubernetes client dependency — all inputs are passed as parameters. If a policy referenced by a `policyRef` does not exist in the map, the renderer reports the owning endpoint in `InvalidEndpoints` and excludes it from the rendered config; the endpoint controller reports the cause through `ResolvedRefs`.
 
-**CE fallback determination** — Before calling `Renderer.Render`, the controller calls `reconcileLicense`, which evaluates the license stage and returns the `ceFallback` verdict (the stage decision, or the last recorded decision while the license is unreadable). The verdict is passed as `RenderInput.CEFallback`, controlling image selection and wildcard endpoint stripping.
+**CE fallback determination** — Before calling `Renderer.Render`, the controller calls `reconcileLicense`, which evaluates the license stage and returns the `ceFallback` verdict (the stage decision; while the license is unreadable, the stage judged from the last known expiry in `status.licenseExpiry` once that is inside the safety buffer or past, otherwise the last recorded decision). The verdict is passed as `RenderInput.CEFallback`, controlling image selection and wildcard endpoint stripping.
 
 **Checksum comparison** — After rendering, the controller compares the new SHA-256 checksum against `status.configChecksum`. If unchanged, it skips ConfigMap update and validation. It still reconciles owned resources (Deployment, Service, etc.) to handle drift.
 
@@ -1348,12 +1348,16 @@ The gateway reconcile evaluates an EE gateway's license before it renders, becau
 
 ```go
 type licenseVerdict struct {
-    ceFallback   bool          // render and run CE instead of EE
-    requeueAfter time.Duration // when to look at the license again
+    ceFallback          bool          // render and run CE instead of EE
+    requeueAfter        time.Duration // when to look at the license again
+    licenseChecksum     string        // SHA-256 of the license bytes the pods must run with
+    keepDeployedLicense bool          // license unreadable: keep the checksum the Deployment carries
 }
 ```
 
-The stage comes from `license.Window{Warning, SafetyBuffer}.StageAt(notAfter, now)`: `StageValid`, `StageExpiringSoon`, `StagePreExpiry` or `StageExpired`. `Warning` is `spec.license.expiryWarningDays` (default 30 days) and must stay longer than `SafetyBuffer` (1 hour); a compile-time constant check enforces this. The reconcile requeues at the next stage boundary (`Window.NextChange`), and at least every 5 minutes (`licenseRecheckInterval`). A Secret change enqueues the gateway through the Secret watch. If the license cannot be read, `LicenseValid` is `Unknown` and the stage is judged from the last known expiry in `status.licenseExpiry`. The gateway controller's retry backoff is capped at the same 5 minutes (`newGatewayRateLimiter`). CE gateways return an empty verdict.
+The stage comes from `license.Window{Warning, SafetyBuffer}.StageAt(notAfter, now)`: `StageValid`, `StageExpiringSoon`, `StagePreExpiry` or `StageExpired`. `Warning` is `spec.license.expiryWarningDays` (default 30 days) and must stay longer than `SafetyBuffer` (1 hour); a compile-time constant check enforces this. The reconcile requeues at the next stage boundary (`Window.NextChange`), and at least every 5 minutes (`licenseRecheckInterval`). A Secret change enqueues the gateway through the Secret watch. If the license cannot be read, `LicenseValid` is `Unknown` unless the last known expiry in `status.licenseExpiry` is already inside the safety buffer or past, in which case the stage verdict (`False`) applies and the CE fallback happens as for a readable license; otherwise the last fallback decision is kept. The gateway controller's retry backoff is capped at the same 5 minutes (`newGatewayRateLimiter`, built with `cappedRateLimiter`). CE gateways return an empty verdict.
+
+The license is mounted with `subPath`, so a renewed Secret never reaches running pods by itself. `licenseChecksum` is the SHA-256 of the license bytes read, set only for an EE gateway that is not falling back to CE; the gateway controller passes it through `infraInputs` to `resources.BuildDeployment`, which writes it as the `krakend.io/checksum-license` pod-template annotation. A changed value rolls the Deployment (`Progressing=True/DeploymentUpdated`, and `deploymentConverged` waits for it). When the license is unreadable, `keepDeployedLicense` makes the controller reuse the annotation the live Deployment carries, so nothing rolls. The post-restart Job identity does not include it.
 
 ### License Check Logic
 
@@ -1361,7 +1365,7 @@ The stage comes from `license.Window{Warning, SafetyBuffer}.StageAt(notAfter, no
 flowchart TD
     A[Gateway reconcile, edition=EE] --> C[Read license Secret]
     C --> D{Secret readable<br/>and parseable?}
-    D -->|No| E[Set LicenseSecretUnavailable=True,<br/>emit LicenseSecretMissing once;<br/>keep the last fallback decision;<br/>requeue in 5 minutes]
+    D -->|No| E[Set LicenseSecretUnavailable=True,<br/>emit LicenseSecretMissing once;<br/>LicenseValid=Unknown unless the last known<br/>expiry is in the safety buffer or past,<br/>then apply that stage;<br/>otherwise keep the last fallback decision;<br/>keep the deployed license checksum;<br/>requeue at the next boundary, at most 5 minutes]
     D -->|Yes| F[Set licenseExpiry and the<br/>license_expiry_seconds metric]
     F --> G{Stage}
     G -->|Valid| M[LicenseValid=True LicenseOK]
