@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/util/hash"
 	"github.com/mycarrier-devops/krakend-operator/internal/util/license"
 )
 
@@ -60,6 +61,22 @@ type licenseVerdict struct {
 	// requeueAfter is when to look at the license again; 0 for a gateway
 	// without an EE license.
 	requeueAfter time.Duration
+	// licenseChecksum identifies the license bytes the pods must run with: set
+	// only for an EE gateway whose license was read and that is not falling
+	// back to CE.
+	licenseChecksum string
+	// keepDeployedLicense: the license could not be read, so the checksum
+	// the Deployment already carries stays, and nothing rolls.
+	keepDeployedLicense bool
+}
+
+// checksumFor is the license checksum the Deployment should carry, given the
+// one it carries now.
+func (v licenseVerdict) checksumFor(deployed string) string {
+	if v.keepDeployedLicense {
+		return deployed
+	}
+	return v.licenseChecksum
 }
 
 // reconcileLicense evaluates an EE gateway's license certificate. It is the
@@ -73,9 +90,11 @@ func (r *KrakenDGatewayReconciler) reconcileLicense(ctx context.Context, gw *v1a
 	}
 	window := license.Window{Warning: expiryWarning(gw), SafetyBuffer: licenseSafetyBuffer}
 	now := r.Clock.Now()
-	notAfter, err := r.readLicense(ctx, gw)
+	checksum, notAfter, err := r.readLicense(ctx, gw)
 	if err != nil {
-		return r.reconcileUnreadableLicense(gw, err, window, now)
+		verdict := r.reconcileUnreadableLicense(gw, err, window, now)
+		verdict.keepDeployedLicense = !verdict.ceFallback
+		return verdict
 	}
 	gw.Status.LicenseExpiry = &metav1.Time{Time: notAfter}
 	licenseExpirySeconds.WithLabelValues(gw.Namespace, gw.Name).Set(notAfter.Sub(now).Seconds())
@@ -86,10 +105,14 @@ func (r *KrakenDGatewayReconciler) reconcileLicense(ctx context.Context, gw *v1a
 		Reason:             "SecretAvailable",
 		Message:            "license secret is available",
 	})
-	return licenseVerdict{
+	verdict := licenseVerdict{
 		ceFallback:   r.applyLicenseStage(gw, window.StageAt(notAfter, now), notAfter),
 		requeueAfter: nextLicenseCheck(window, notAfter, now),
 	}
+	if !verdict.ceFallback {
+		verdict.licenseChecksum = checksum
+	}
+	return verdict
 }
 
 // reconcileUnreadableLicense handles a license that cannot be read or parsed.
@@ -235,17 +258,20 @@ func (r *KrakenDGatewayReconciler) recoverLicense(gw *v1alpha1.KrakenDGateway) {
 		"license restored, recovering from degraded state")
 }
 
-// readLicense returns the NotAfter of the gateway's license certificate.
-func (r *KrakenDGatewayReconciler) readLicense(ctx context.Context, gw *v1alpha1.KrakenDGateway) (time.Time, error) {
+// readLicense returns the checksum of the gateway's license bytes and the
+// NotAfter of its certificate.
+func (r *KrakenDGatewayReconciler) readLicense(
+	ctx context.Context, gw *v1alpha1.KrakenDGateway,
+) (string, time.Time, error) {
 	data, err := r.readLicenseSecret(ctx, gw)
 	if err != nil {
-		return time.Time{}, err
+		return "", time.Time{}, err
 	}
 	info, err := r.LicenseParser.Parse(data)
 	if err != nil {
-		return time.Time{}, err
+		return "", time.Time{}, err
 	}
-	return info.NotAfter, nil
+	return hash.SHA256Hex(data), info.NotAfter, nil
 }
 
 // readLicenseSecret returns the license data the gateway's spec points at.
