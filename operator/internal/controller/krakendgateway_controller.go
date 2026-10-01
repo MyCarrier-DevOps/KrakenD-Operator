@@ -957,9 +957,12 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 		return fmt.Errorf("reconciling pdb: %w", err)
 	}
 
-	// Deployment
-	if err := r.reconcileDeployment(ctx, gw, in); err != nil {
-		return err
+	// The Deployment exists only once a config has passed validation: before
+	// that it would have nothing valid to mount.
+	if in.appliedChecksum != "" {
+		if err := r.reconcileDeployment(ctx, gw, in); err != nil {
+			return err
+		}
 	}
 
 	// HPA (only if autoscaling is configured)
