@@ -869,10 +869,11 @@ func setAutoConfigReadiness(ac *v1alpha1.KrakenDAutoConfig) {
 
 // newAutoConfigRateLimiter is controller-runtime's default rate limiter with
 // the per-item backoff capped at defaultResyncInterval instead of 1000s. An
-// AutoConfig whose reconcile returns an error, or that is requeued for an
-// OnChange failure or EndpointReconcileFailed, therefore retries at least as
+// AutoConfig whose reconcile returns an error (every OnChange failure, and
+// EndpointReconcileFailed for either trigger) therefore retries at least as
 // often as a healthy OnChange one resyncs, including once a missing gateway,
 // policy or auth Secret appears, or an unreachable spec source recovers.
+// A Periodic AutoConfig's other failures requeue at spec.periodic.interval.
 func newAutoConfigRateLimiter() workqueue.TypedRateLimiter[reconcile.Request] {
 	return workqueue.NewTypedWithMaxWaitRateLimiter(
 		workqueue.DefaultTypedControllerRateLimiter[reconcile.Request](), defaultResyncInterval)
