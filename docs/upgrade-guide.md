@@ -576,11 +576,28 @@ kubectl get krakendgateways,krakendendpoints,krakendautoconfigs,krakendbackendpo
   `License*` conditions and `licenseExpiry`, with an optimistic lock, so it
   cannot revert conditions the gateway controller just wrote.
 
+### KrakenDAutoConfig
+
+- New `Ready` condition: `True` when `SpecAvailable` and `Synced` are both
+  `True`, otherwise `False` with the first failing condition's reason (e.g.
+  `SpecFetchFailed`, `UnmatchedOverride`, `EndpointReconcileFailed`).
+- New `status.observedGeneration`, set on every status write.
+- `phase` is derived from `Synced` (`Synced`, `Error`; `Pending` only before
+  the first sync). A new AutoConfig no longer gets a separate `Pending`
+  status write and an extra reconcile.
+- `lastSyncTime` is documented on the field: it is the last sync that
+  changed something, not a heartbeat.
+- A failing AutoConfig now retries at least every 5 minutes (the exponential
+  backoff used to grow to about 16.7 minutes), so it recovers within one
+  resync interval once a missing gateway, policy or auth Secret appears or
+  its spec source comes back.
+
 ### Watch scope
 
 - The endpoint controller now reacts to gateways and policies being created
   or deleted only (not to their status updates), and to changes of its own
   spec or of its `Accepted` condition.
+- AutoConfig retry backoff is capped at the 5-minute resync interval.
 
 ## v0.14.0 — openapi-serve liveness probe (one-time rollout)
 
