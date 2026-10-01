@@ -935,8 +935,7 @@ sequenceDiagram
         else PreExpiry or Expired AND fallbackToCE=true
             Op->>K8s: Create Deployment with<br/>Secret volume mount at /etc/krakend/LICENSE<br/>using CE image (ceImage or krakend/krakend:version)
             Op->>K8s: Set condition LicenseValid=False (reason per entry path: LicensePreExpiry or LicenseExpired)
-            Op->>K8s: Set condition LicenseDegraded=True (reason per entry path: LicensePreExpiry or LicenseExpired)
-            Op->>K8s: Set LicenseDegraded=True (the gateway controller derives phase Degraded)
+            Op->>K8s: Set condition LicenseDegraded=True (reason per entry path: LicensePreExpiry or LicenseExpired; the gateway controller derives phase Degraded)
             Op->>K8s: Emit LicenseFallbackCE Warning Event
             Note over Op: CE fallback on cold start —<br/>no intermediate EE Deployment created.
         else PreExpiry AND fallbackToCE=false
