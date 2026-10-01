@@ -483,9 +483,29 @@ type configKey struct {
 func appliedKey(gw *v1alpha1.KrakenDGateway, current v1alpha1.Edition) configKey {
 	edition := gw.Status.ConfigEdition
 	if edition == "" {
-		edition = current
+		edition = adoptedEdition(gw, current)
 	}
 	return configKey{checksum: gw.Status.ConfigChecksum, edition: edition}
+}
+
+// adoptedEdition is the edition a status without configEdition was validated
+// for. An EE gateway's active image tells it when it names one edition only;
+// otherwise (no image, a custom one, or the same for both) it is the edition
+// the gateway renders for now.
+func adoptedEdition(gw *v1alpha1.KrakenDGateway, current v1alpha1.Edition) v1alpha1.Edition {
+	if gw.Spec.Edition != v1alpha1.EditionEE {
+		return current
+	}
+	ee, ce := renderer.ResolveImage(gw, false), renderer.ResolveImage(gw, true)
+	switch active := gw.Status.ActiveImage; {
+	case ee == ce:
+		return current
+	case active == ee:
+		return v1alpha1.EditionEE
+	case active == ce:
+		return v1alpha1.EditionCE
+	}
+	return current
 }
 
 // isApplied reports whether output, rendered for edition, is the gateway's
@@ -502,11 +522,12 @@ func appliedFallback(gw *v1alpha1.KrakenDGateway, current v1alpha1.Edition) bool
 	return gw.Spec.Edition == v1alpha1.EditionEE && appliedKey(gw, current).edition == v1alpha1.EditionCE
 }
 
-// appliedImage is the image the gateway runs. While spec.edition asks for a
-// different edition than the applied config was validated for, that is the
-// image deployed with the applied config (spec.image is read before the
-// edition, so the spec cannot say which one it was). Otherwise it follows
-// the spec.
+// appliedImage is the image the gateway runs. While the edition rendered now
+// differs from the one the applied config was validated for (spec.edition was
+// changed, or a license fallback started), that is the image deployed with the
+// applied config: spec.image is read before the edition, so the spec cannot
+// say which one it was, and version or image changes wait until a render is
+// validated for the new edition. Otherwise it follows the spec.
 func appliedImage(gw *v1alpha1.KrakenDGateway, current v1alpha1.Edition) string {
 	if gw.Status.ActiveImage != "" && appliedKey(gw, current).edition != current {
 		return gw.Status.ActiveImage
