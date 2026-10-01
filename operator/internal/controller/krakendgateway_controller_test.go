@@ -1915,3 +1915,29 @@ func TestInspectDeploymentStatus_SurplusOldReplicasAreNotConverged(t *testing.T)
 		t.Errorf("Progressing = %+v, want True while an old replica is still running", progressing)
 	}
 }
+
+func TestGatewayReconcile_NotReadyWhenDeploymentLosesAvailability(t *testing.T) {
+	gw := convergedGatewayAt("cs1")
+	// Every replica is crash-looping: the rollout is long finished, but the
+	// Deployment no longer has its minimum available replicas.
+	dep := makeConvergedDeployment(gw, "cs1")
+	dep.Status.AvailableReplicas = 0
+	dep.Status.Conditions = []appsv1.DeploymentCondition{{
+		Type: appsv1.DeploymentAvailable, Status: corev1.ConditionFalse,
+		Reason: "MinimumReplicasUnavailable", Message: "Deployment does not have minimum availability.",
+	}}
+	c := fakeClientBuilder().WithObjects(gw, dep).WithStatusSubresource(gw).Build()
+	r := acceptanceReconciler(c, fakeRecorder(), &renderer.RenderOutput{
+		JSON: []byte(`{"version":3}`), Checksum: "cs1", DesiredImage: "img:v1",
+	})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+
+	stored := getGateway(t, c, gw)
+	ready := meta.FindStatusCondition(stored.Status.Conditions, v1alpha1.ConditionReady)
+	if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != "MinimumReplicasUnavailable" {
+		t.Errorf("Ready = %+v, want False/MinimumReplicasUnavailable", ready)
+	}
+}
