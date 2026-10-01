@@ -1790,9 +1790,14 @@ type gatewayReadiness struct {
 
 func gatewayReadinessFor(conds []metav1.Condition) gatewayReadiness {
 	configValid := meta.FindStatusCondition(conds, v1alpha1.ConditionConfigValid)
+	degraded := meta.FindStatusCondition(conds, v1alpha1.ConditionLicenseDegraded)
+	expired := meta.FindStatusCondition(conds, v1alpha1.ConditionLicenseExpired)
 	switch {
 	case condFalse(configValid):
 		return notReady(configValid, v1alpha1.PhaseError)
+	case condTrue(expired) && !condTrue(degraded):
+		return gatewayReadiness{status: metav1.ConditionFalse, reason: v1alpha1.ReasonLicenseExpiredNoFallback,
+			message: expired.Message, phase: v1alpha1.PhaseError}
 	case configValid == nil:
 		return gatewayReadiness{status: metav1.ConditionUnknown, reason: v1alpha1.ReasonPending,
 			message: "Waiting for the first configuration to be validated", phase: v1alpha1.PhasePending}
@@ -1809,3 +1814,6 @@ func notReady(cause *metav1.Condition, phase v1alpha1.GatewayPhase) gatewayReadi
 
 // condFalse reports whether c exists and is False.
 func condFalse(c *metav1.Condition) bool { return c != nil && c.Status == metav1.ConditionFalse }
+
+// condTrue reports whether c exists and is True.
+func condTrue(c *metav1.Condition) bool { return c != nil && c.Status == metav1.ConditionTrue }
