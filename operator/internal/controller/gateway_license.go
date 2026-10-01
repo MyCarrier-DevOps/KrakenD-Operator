@@ -61,9 +61,10 @@ type licenseVerdict struct {
 	// requeueAfter is when to look at the license again; 0 for a gateway
 	// without an EE license.
 	requeueAfter time.Duration
-	// licenseChecksum identifies the license bytes the pods must run with: set
-	// only for an EE gateway whose license was read and that is not falling
-	// back to CE.
+	// licenseChecksum identifies the license bytes the pods mount: set for an
+	// EE gateway whose license was read, whether or not it falls back to CE
+	// (the license stays mounted, so a fallback toggle alone must not change
+	// the pod template).
 	licenseChecksum string
 	// keepDeployedLicense: the license could not be read, so the checksum
 	// the Deployment already carries stays, and nothing rolls.
@@ -93,7 +94,7 @@ func (r *KrakenDGatewayReconciler) reconcileLicense(ctx context.Context, gw *v1a
 	checksum, notAfter, err := r.readLicense(ctx, gw)
 	if err != nil {
 		verdict := r.reconcileUnreadableLicense(gw, err, window, now)
-		verdict.keepDeployedLicense = !verdict.ceFallback
+		verdict.keepDeployedLicense = true
 		return verdict
 	}
 	gw.Status.LicenseExpiry = &metav1.Time{Time: notAfter}
@@ -109,9 +110,7 @@ func (r *KrakenDGatewayReconciler) reconcileLicense(ctx context.Context, gw *v1a
 		ceFallback:   r.applyLicenseStage(gw, window.StageAt(notAfter, now), notAfter),
 		requeueAfter: nextLicenseCheck(window, notAfter, now),
 	}
-	if !verdict.ceFallback {
-		verdict.licenseChecksum = checksum
-	}
+	verdict.licenseChecksum = checksum
 	return verdict
 }
 
