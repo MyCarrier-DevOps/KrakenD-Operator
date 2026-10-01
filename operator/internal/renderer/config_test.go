@@ -478,63 +478,37 @@ func TestBuildRootConfig_DNSCacheTTLIsTheRootField(t *testing.T) {
 	}
 }
 
-func TestBuildGatewayExtraConfig_Redis(t *testing.T) {
-	gw := minimalGateway()
-	gw.Spec.Redis = &v1alpha1.RedisSpec{
-		ConnectionPool: v1alpha1.RedisConnectionPool{
-			Addresses: []string{"redis:6379"},
-			PoolSize:  10,
-		},
+func TestBuildGatewayExtraConfig_RedisUsesTheDocumentedNamespace(t *testing.T) {
+	pool := func(addresses ...string) *v1alpha1.RedisSpec {
+		return &v1alpha1.RedisSpec{ConnectionPool: v1alpha1.RedisConnectionPool{
+			Addresses: addresses, PoolSize: 10, MinIdleConns: 2, DialTimeout: "5s",
+			ReadTimeout: "3s", WriteTimeout: "3s",
+		}}
 	}
-
-	ec := buildGatewayExtraConfig(gw, nil)
-	redis, ok := ec["backend/redis"]
-	if !ok {
-		t.Fatal("expected backend/redis in extra_config")
+	cases := []struct {
+		name  string
+		redis *v1alpha1.RedisSpec
+		df    *DragonflyState
+		want  map[string]any
+	}{
+		{"one address is a connection pool", pool("redis:6379"), nil, map[string]any{
+			"connection_pools": []any{map[string]any{
+				"name": "default", "address": "redis:6379", "pool_size": 10, "min_idle_conns": 2, "dial_timeout": "5s",
+			}},
+		}},
 	}
-	redisMap := redis.(map[string]any)
-	addrs := redisMap["addresses"].([]string)
-	if len(addrs) != 1 || addrs[0] != "redis:6379" {
-		t.Errorf("unexpected redis addresses: %v", addrs)
-	}
-}
-
-func TestBuildGatewayExtraConfig_DragonflyOverridesRedis(t *testing.T) {
-	gw := minimalGateway()
-	gw.Spec.Redis = &v1alpha1.RedisSpec{
-		ConnectionPool: v1alpha1.RedisConnectionPool{
-			Addresses: []string{"old-redis:6379"},
-		},
-	}
-	df := &DragonflyState{
-		Enabled:    true,
-		ServiceDNS: "gw-dragonfly.ns.svc.cluster.local:6379",
-	}
-
-	ec := buildGatewayExtraConfig(gw, df)
-	redis := ec["backend/redis"].(map[string]any)
-	addrs := redis["addresses"].([]string)
-	if len(addrs) != 1 || addrs[0] != "gw-dragonfly.ns.svc.cluster.local:6379" {
-		t.Errorf("expected dragonfly DNS to override redis, got %v", addrs)
-	}
-}
-
-func TestBuildGatewayExtraConfig_DragonflyWithoutRedis(t *testing.T) {
-	gw := minimalGateway()
-	df := &DragonflyState{
-		Enabled:    true,
-		ServiceDNS: "gw-dragonfly.ns.svc.cluster.local:6379",
-	}
-
-	ec := buildGatewayExtraConfig(gw, df)
-	redis, ok := ec["backend/redis"]
-	if !ok {
-		t.Fatal("expected backend/redis from dragonfly state")
-	}
-	redisMap := redis.(map[string]any)
-	addrs := redisMap["addresses"].([]string)
-	if addrs[0] != "gw-dragonfly.ns.svc.cluster.local:6379" {
-		t.Errorf("expected dragonfly DNS, got %v", addrs)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gw := minimalGateway()
+			gw.Spec.Redis = tc.redis
+			ec := buildGatewayExtraConfig(gw, tc.df)
+			if _, ok := ec["backend/redis"]; ok {
+				t.Error("backend/redis is not a KrakenD namespace and must not be rendered")
+			}
+			if !reflect.DeepEqual(ec["redis"], tc.want) {
+				t.Errorf("redis = %#v, want %#v", ec["redis"], tc.want)
+			}
+		})
 	}
 }
 
