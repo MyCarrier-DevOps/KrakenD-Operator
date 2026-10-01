@@ -592,6 +592,7 @@ func (r *KrakenDGatewayReconciler) validateConfig(
 	case stderrors.As(err, &rejected):
 		configValidationFailures.Inc()
 		r.rejections.remember(key, checksum, rejected)
+		logf.FromContext(ctx).Error(err, "krakend check rejected the rendered config")
 	}
 	return err
 }
@@ -607,7 +608,7 @@ func (r *KrakenDGatewayReconciler) handleValidationError(
 	before *v1alpha1.KrakenDGatewayStatus,
 	validationErr error,
 ) error {
-	message := validationErr.Error()
+	message := truncateMessage(validationErr.Error(), maxConditionMessageBytes)
 	prev := meta.FindStatusCondition(before.Conditions, v1alpha1.ConditionConfigValid)
 	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
 		Type:               v1alpha1.ConditionConfigValid,
@@ -638,7 +639,8 @@ func (r *KrakenDGatewayReconciler) handleValidatorUnavailable(
 	before *v1alpha1.KrakenDGatewayStatus,
 	cause error,
 ) error {
-	message := fmt.Sprintf("config validator unavailable, retrying: %v", cause)
+	message := truncateMessage(
+		fmt.Sprintf("config validator unavailable, retrying: %v", cause), maxConditionMessageBytes)
 	prev := meta.FindStatusCondition(before.Conditions, v1alpha1.ConditionConfigValid)
 	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
 		Type:               v1alpha1.ConditionConfigValid,
