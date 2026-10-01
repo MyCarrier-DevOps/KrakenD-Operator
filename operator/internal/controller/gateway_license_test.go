@@ -577,14 +577,30 @@ type settledLicensedGateway struct {
 	r      *KrakenDGatewayReconciler
 	gw     *v1alpha1.KrakenDGateway
 	secret *corev1.Secret
+	// cached, while set, is what every read of the Deployment returns, as an
+	// informer cache does until it has seen the controller's own update.
+	cached *appsv1.Deployment
 }
 
 func settleLicensedGateway(t *testing.T) *settledLicensedGateway {
 	t.Helper()
 	gw, secret, parser := licensedEEGateway(testNow.Add(90*24*time.Hour), false)
-	c := fakeClientBuilder().WithObjects(gw, secret).WithStatusSubresource(gw).Build()
-	r := newTestGatewayReconciler(c, renderOutput("cs"), &mockValidator{})
-	r.LicenseParser = parser
+	s := &settledLicensedGateway{gw: gw, secret: secret}
+	s.c = fakeClientBuilder().WithObjects(gw, secret).WithStatusSubresource(gw).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object,
+				opts ...client.GetOption) error {
+				if dep, ok := obj.(*appsv1.Deployment); ok && s.cached != nil {
+					s.cached.DeepCopyInto(dep)
+					return nil
+				}
+				return c.Get(ctx, key, obj, opts...)
+			},
+		}).Build()
+	c := s.c
+	s.r = newTestGatewayReconciler(c, renderOutput("cs"), &mockValidator{})
+	s.r.LicenseParser = parser
+	r := s.r
 	if err := reconcileGateway(t, r, gw); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
@@ -597,7 +613,19 @@ func settleLicensedGateway(t *testing.T) *settledLicensedGateway {
 	if err := reconcileGateway(t, r, gw); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	return &settledLicensedGateway{c: c, r: r, gw: gw, secret: secret}
+	return s
+}
+
+// reconcileWhileCacheLags reconciles with every Deployment read returning
+// the Deployment as it stands now, so the rollout the pass starts does not
+// look finished.
+func (s *settledLicensedGateway) reconcileWhileCacheLags(t *testing.T) {
+	t.Helper()
+	s.cached = s.deployment(t)
+	defer func() { s.cached = nil }()
+	if err := reconcileGateway(t, s.r, s.gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
 }
 
 // setLicenseBytes replaces the license in the Secret.
@@ -623,9 +651,7 @@ func TestGatewayReconcile_RenewedLicenseBytesRollTheDeployment(t *testing.T) {
 	s := settleLicensedGateway(t)
 	s.setLicenseBytes(t, "renewed certificate")
 
-	if err := reconcileGateway(t, s.r, s.gw); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
+	s.reconcileWhileCacheLags(t)
 	want := hash.SHA256Hex([]byte("renewed certificate"))
 	if got := s.deployment(t).Spec.Template.Annotations[resources.LicenseChecksumAnnotation]; got != want {
 		t.Errorf("license annotation = %q, want %q", got, want)
