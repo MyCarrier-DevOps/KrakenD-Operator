@@ -287,8 +287,14 @@ The operator deletes these when the gateway no longer asks for them
 (`spec.autoscaling`, `spec.dragonfly.enabled`,
 `spec.license.externalSecret.enabled`, `spec.istio.enabled`). It deletes
 only objects whose controller owner reference is the gateway. To keep one,
-re-enable the feature, or remove the object's owner reference before
-disabling it.
+re-enable the feature, or copy the object under another name before
+disabling the feature.
+
+Disabling the license ExternalSecret also garbage-collects the
+`<gateway>-license` Secret it created, so a `license.secretRef` pointing at
+that Secret stops working. Disabling Dragonfly deletes the instance at once;
+pods still running the previous config lose their Redis connection until the
+rollout completes.
 
 ### Gateway reports `ValidatorUnavailable`
 
