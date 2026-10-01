@@ -583,9 +583,11 @@ type RedisConnectionPool struct {
 	PoolSize     int                       `json:"poolSize,omitempty"`
 	MinIdleConns int                       `json:"minIdleConns,omitempty"`
 	DialTimeout  string                    `json:"dialTimeout,omitempty"`
-	ReadTimeout  string                    `json:"readTimeout,omitempty"`
-	WriteTimeout string                    `json:"writeTimeout,omitempty"`
-	TLS          *RedisTLSConfig           `json:"tls,omitempty"`
+	// Deprecated: has no effect. KrakenD's redis connection pools have no such setting; it is not rendered.
+	ReadTimeout string `json:"readTimeout,omitempty"`
+	// Deprecated: has no effect. KrakenD's redis connection pools have no such setting; it is not rendered.
+	WriteTimeout string          `json:"writeTimeout,omitempty"`
+	TLS          *RedisTLSConfig `json:"tls,omitempty"`
 }
 
 // RedisTLSConfig configures TLS for Redis connections.
