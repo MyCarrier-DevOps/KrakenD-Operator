@@ -592,3 +592,14 @@ func TestBuildDeployment_CERenderRunsWithoutTheOpenAPIPieces(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildDeployment_RemovedAutoscalingReturnsToSpecReplicas(t *testing.T) {
+	gw := testGateway()
+	gw.Spec.Replicas = ptr.To(int32(3))
+	dep := &appsv1.Deployment{}
+	dep.Spec.Replicas = ptr.To(int32(7)) // left by the HPA that was just deleted
+	BuildDeployment(dep, gw, DeploymentInputs{ConfigChecksum: "abc123", PluginChecksum: "", Image: "krakend/krakend-ce:2.7.0"})
+	if got := ptr.Deref(dep.Spec.Replicas, -1); got != 3 {
+		t.Errorf("replicas = %d, want spec.replicas 3 once autoscaling is removed", got)
+	}
+}
