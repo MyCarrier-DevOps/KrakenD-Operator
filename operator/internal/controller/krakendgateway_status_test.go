@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
+	"strings"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -258,5 +259,36 @@ func TestGatewayReconcile_ValidatorUnavailableIsRetried(t *testing.T) {
 	if len(*writes) != 1 {
 		t.Errorf("%d status writes over two reconciles with the same cause, want 1: "+
 			"each write re-enqueues the gateway ahead of the backoff", len(*writes))
+	}
+}
+
+func TestGatewayReconcile_ValidationMessageIsBounded(t *testing.T) {
+	gw := testGateway()
+	c, _ := gatewayStatusWrites(gw)
+	recorder := fakeRecorder()
+	line := "ERROR at '/endpoints/0/backend/0/extra_config/qos~1circuit-breaker/interval': got string, want integer"
+	huge := strings.Repeat(line+"\n", 1000)
+	r := &KrakenDGatewayReconciler{
+		Client: c, Scheme: testScheme(), Recorder: recorder,
+		Renderer: renderOutput("bad"), Validator: &countingValidator{err: rejectedBy(huge)},
+	}
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+
+	cond := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionConfigValid)
+	if cond == nil {
+		t.Fatal("ConfigValid not set")
+	}
+	if len(cond.Message) > 4096 {
+		t.Errorf("condition message is %d bytes, want at most 4096", len(cond.Message))
+	}
+	if !strings.Contains(cond.Message, line) || !strings.HasSuffix(cond.Message, "more lines)") {
+		t.Errorf("message should keep the first lines and count the rest, got %d bytes ending %q",
+			len(cond.Message), cond.Message[max(0, len(cond.Message)-80):])
+	}
+	event := <-recorder.Events
+	if len(event) > 4096+len("Warning ConfigValidationFailed ") {
+		t.Errorf("event message is %d bytes, want the same bound as the condition", len(event))
 	}
 }
