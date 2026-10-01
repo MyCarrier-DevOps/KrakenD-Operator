@@ -93,9 +93,10 @@ func (r *KrakenDGatewayReconciler) reconcileLicense(ctx context.Context, gw *v1a
 }
 
 // reconcileUnreadableLicense handles a license that cannot be read or parsed.
-// LicenseValid becomes Unknown. The stage is judged from the last known
-// expiry (status.licenseExpiry), so the CE fallback still happens when that
-// expiry comes inside the safety buffer; otherwise the fallback decision
+// LicenseValid becomes Unknown, unless the last known expiry
+// (status.licenseExpiry) is already inside the safety buffer or past: then
+// the stage verdict alone applies, so the CE fallback still happens and
+// LicenseValid does not flip through Unknown. Otherwise the fallback decision
 // recorded last is kept.
 func (r *KrakenDGatewayReconciler) reconcileUnreadableLicense(
 	gw *v1alpha1.KrakenDGateway, readErr error, window license.Window, now time.Time,
@@ -107,12 +108,12 @@ func (r *KrakenDGatewayReconciler) reconcileUnreadableLicense(
 		Reason:             v1alpha1.ReasonLicenseSecretMissing,
 		Message:            readErr.Error(),
 	})
-	r.setLicenseValid(gw, metav1.ConditionUnknown, v1alpha1.ReasonLicenseSecretMissing, readErr.Error())
 	verdict := licenseVerdict{
 		ceFallback:   meta.IsStatusConditionTrue(gw.Status.Conditions, v1alpha1.ConditionLicenseDegraded),
 		requeueAfter: licenseRecheckInterval,
 	}
 	if gw.Status.LicenseExpiry == nil {
+		r.setLicenseValidUnknown(gw, readErr)
 		licenseExpirySeconds.DeleteLabelValues(gw.Namespace, gw.Name)
 		return verdict
 	}
@@ -121,8 +122,14 @@ func (r *KrakenDGatewayReconciler) reconcileUnreadableLicense(
 	verdict.requeueAfter = nextLicenseCheck(window, known, now)
 	if stage := window.StageAt(known, now); stage == license.StagePreExpiry || stage == license.StageExpired {
 		verdict.ceFallback = r.applyLicenseStage(gw, stage, known) || verdict.ceFallback
+	} else {
+		r.setLicenseValidUnknown(gw, readErr)
 	}
 	return verdict
+}
+
+func (r *KrakenDGatewayReconciler) setLicenseValidUnknown(gw *v1alpha1.KrakenDGateway, readErr error) {
+	r.setLicenseValid(gw, metav1.ConditionUnknown, v1alpha1.ReasonLicenseSecretMissing, readErr.Error())
 }
 
 // forgetLicense drops the license state of a gateway that is not EE (for
