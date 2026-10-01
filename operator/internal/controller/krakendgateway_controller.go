@@ -240,7 +240,7 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		"phase", gw.Status.Phase,
 		"checksum", gw.Status.ConfigChecksum,
 		"endpoints", gw.Status.EndpointCount)
-	return ctrl.Result{}, nil
+	return ctrl.Result{RequeueAfter: lic.requeueAfter}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.

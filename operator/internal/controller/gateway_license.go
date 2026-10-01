@@ -41,6 +41,11 @@ const (
 	defaultExpiryWarningDays = 30
 )
 
+// license.Window requires its warning to be longer than its safety buffer.
+// The shortest warning this file builds is one day (see expiryWarning), so
+// this constant stops compiling if the buffer ever reaches that length.
+const _ = uint64(24*time.Hour - licenseSafetyBuffer - 1)
+
 // Sentinel errors for license Secret lookup.
 var (
 	errNoLicenseConfigured = fmt.Errorf("no license configuration found")
@@ -90,7 +95,10 @@ func (r *KrakenDGatewayReconciler) reconcileLicense(ctx context.Context, gw *v1a
 		Message:            "license secret is available",
 	})
 	window := license.Window{Warning: expiryWarning(gw), SafetyBuffer: licenseSafetyBuffer}
-	return licenseVerdict{ceFallback: r.applyLicenseStage(gw, window.StageAt(notAfter, now), notAfter)}
+	return licenseVerdict{
+		ceFallback:   r.applyLicenseStage(gw, window.StageAt(notAfter, now), notAfter),
+		requeueAfter: nextLicenseCheck(window, notAfter, now),
+	}
 }
 
 // applyLicenseStage sets LicenseValid, LicenseExpired and LicenseDegraded for
@@ -221,6 +229,16 @@ func (r *KrakenDGatewayReconciler) readLicenseSecret(ctx context.Context, gw *v1
 		return nil, errLicenseKeyNotFound
 	}
 	return data, nil
+}
+
+// nextLicenseCheck is when to look at the license again: at its next stage
+// boundary, but at least every licenseRecheckInterval. NextChange returns 0
+// once the license has expired, which means no boundary is left, not "now".
+func nextLicenseCheck(w license.Window, notAfter, now time.Time) time.Duration {
+	if d := w.NextChange(notAfter, now); d > 0 && d < licenseRecheckInterval {
+		return d
+	}
+	return licenseRecheckInterval
 }
 
 // expiryWarning is how long before expiry the license counts as expiring
