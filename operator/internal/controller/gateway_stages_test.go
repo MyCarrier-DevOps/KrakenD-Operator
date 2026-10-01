@@ -2260,3 +2260,44 @@ func TestGatewayReconcile_DocsOnlyFallbackKeepsEndpointsReady(t *testing.T) {
 		t.Errorf("CEFallbackApplied = %+v, want it to say the docs and the OpenAPI export are off", cond)
 	}
 }
+
+func TestEndpointAccepted_ConflictKeepsItsReasonAndNamesTheRemovedFeatures(t *testing.T) {
+	gw := reconciledGateway()
+	ep := testEndpoint("ep", "/users")
+	key := client.ObjectKeyFromObject(ep)
+	removed := []renderer.StrippedEEFeature{{Source: key, Method: "GET", Endpoint: "/users",
+		Feature: "extra_config auth/api-keys"}}
+	winner := types.NamespacedName{Namespace: "default", Name: "older"}
+	for _, tc := range []struct {
+		name       string
+		twoEntries bool
+		lost       []renderer.EntryConflict
+		wantStatus metav1.ConditionStatus
+		wantReason string
+	}{
+		{"every entry lost", false, []renderer.EntryConflict{{Endpoint: "/users", Method: "GET", Winner: winner}},
+			metav1.ConditionFalse, v1alpha1.ReasonEndpointConflict},
+		{"some entries lost", true, []renderer.EntryConflict{{Endpoint: "/orders", Method: "GET", Winner: winner}},
+			metav1.ConditionTrue, v1alpha1.ReasonPartiallyAccepted},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ep := ep.DeepCopy()
+			if tc.twoEntries {
+				ep.Spec.Endpoints = append(ep.Spec.Endpoints, ep.Spec.Endpoints[0])
+				ep.Spec.Endpoints[1].Endpoint = "/orders"
+			}
+			rv := renderVerdicts{
+				conflicted: map[types.NamespacedName]struct{}{key: {}},
+				lost:       map[types.NamespacedName][]renderer.EntryConflict{key: tc.lost},
+				stripped:   map[types.NamespacedName][]renderer.StrippedEEFeature{key: removed},
+			}
+
+			cond := endpointAccepted(gw, ep, rv).condition
+
+			if cond.Status != tc.wantStatus || cond.Reason != tc.wantReason ||
+				!strings.Contains(cond.Message, "CE fallback also removed: default/ep GET /users: extra_config auth/api-keys") {
+				t.Errorf("Accepted = %+v, want %s/%s naming the removed feature", cond, tc.wantStatus, tc.wantReason)
+			}
+		})
+	}
+}
