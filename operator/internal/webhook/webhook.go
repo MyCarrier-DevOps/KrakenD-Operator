@@ -903,10 +903,10 @@ func (v *EndpointValidator) ValidateCreate(
 // ValidateUpdate validates an updated KrakenDEndpoint.
 func (v *EndpointValidator) ValidateUpdate(
 	ctx context.Context,
-	_ runtime.Object,
+	oldObj runtime.Object,
 	newObj runtime.Object,
 ) (admission.Warnings, error) {
-	if isTerminating(newObj) {
+	if terminatingWithUnchangedSpec(oldObj, newObj) {
 		return nil, nil
 	}
 	ep, ok := newObj.(*v1alpha1.KrakenDEndpoint)
