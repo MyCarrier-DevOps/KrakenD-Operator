@@ -215,7 +215,7 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// the gateway status; it is returned after them so the reconcile is
 	// retried.
 	var acceptanceErr error
-	if output.Checksum == gw.Status.ConfigChecksum {
+	if isApplied(&gw, output, edition) {
 		acceptanceErr = r.reconcileEndpointAcceptance(ctx, &gw, endpoints, output)
 	} else {
 		never, neverErr := r.neverApplied(ctx, &gw)
@@ -629,14 +629,16 @@ func (r *KrakenDGatewayReconciler) reconcileConfig(
 	output *renderer.RenderOutput,
 	edition v1alpha1.Edition,
 ) (configResult, error) {
-	if output.Checksum == gw.Status.ConfigChecksum {
+	if isApplied(gw, output, edition) {
 		// The applied config passed validation when it was applied, so a
-		// revert to it clears a rejection.
+		// revert to it clears a rejection. Recording the edition adopts a
+		// status written before configEdition existed.
+		gw.Status.ConfigEdition = edition
 		setConfigApplied(gw)
 		return r.publishApplied(ctx, gw, output)
 	}
 	rejections, err := r.validateAndApply(ctx, gw, before, output, edition)
-	if output.Checksum == gw.Status.ConfigChecksum {
+	if isApplied(gw, output, edition) {
 		return configResult{appliedConfigMap: resources.ConfigMapName(gw, output.Checksum)}, nil
 	}
 	res, err := r.keepApplied(ctx, gw, err)
@@ -670,14 +672,17 @@ func (r *KrakenDGatewayReconciler) validateAndApply(
 	if err := r.publishConfig(ctx, gw, output.JSON, output.Checksum); err != nil {
 		return nil, err
 	}
-	r.markConfigApplied(gw, output.Checksum)
+	r.markConfigApplied(gw, output.Checksum, edition)
 	return map[types.NamespacedName]string{}, nil
 }
 
-// markConfigApplied makes checksum the applied config and reports the rollout
-// the infrastructure stage starts for it.
-func (r *KrakenDGatewayReconciler) markConfigApplied(gw *v1alpha1.KrakenDGateway, checksum string) {
+// markConfigApplied makes checksum, validated as edition, the applied config
+// and reports the rollout the infrastructure stage starts for it.
+func (r *KrakenDGatewayReconciler) markConfigApplied(
+	gw *v1alpha1.KrakenDGateway, checksum string, edition v1alpha1.Edition,
+) {
 	gw.Status.ConfigChecksum = checksum
+	gw.Status.ConfigEdition = edition
 	setConfigApplied(gw)
 	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
 		Type:               v1alpha1.ConditionProgressing,
