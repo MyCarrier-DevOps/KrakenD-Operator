@@ -875,6 +875,5 @@ func setAutoConfigReadiness(ac *v1alpha1.KrakenDAutoConfig) {
 // policy or auth Secret appears, or an unreachable spec source recovers.
 // A Periodic AutoConfig's other failures requeue at spec.periodic.interval.
 func newAutoConfigRateLimiter() workqueue.TypedRateLimiter[reconcile.Request] {
-	return workqueue.NewTypedWithMaxWaitRateLimiter(
-		workqueue.DefaultTypedControllerRateLimiter[reconcile.Request](), defaultResyncInterval)
+	return cappedRateLimiter(defaultResyncInterval)
 }
