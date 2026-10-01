@@ -390,31 +390,29 @@ func TestEndpointReconcile_NoOpWhenUnchanged(t *testing.T) {
 			EndpointCount:      1,
 			Methods:            "GET",
 			Conditions: []metav1.Condition{
-				{
-					Type:               v1alpha1.ConditionAvailable,
-					Status:             metav1.ConditionTrue,
-					Reason:             "ReferencesValid",
-					Message:            "All gateway and policy references are valid",
-					ObservedGeneration: 1,
-				},
+				{Type: "ResolvedRefs", Status: metav1.ConditionTrue, Reason: "RefsResolved",
+					Message: "Gateway and all policy references resolved", ObservedGeneration: 1,
+					LastTransitionTime: transitionTime},
+				acceptedAt(1),
+				{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Ready",
+					Message: "References resolved and accepted by the gateway", ObservedGeneration: 1,
+					LastTransitionTime: transitionTime},
 			},
 		},
 	}
+	writes := 0
 	c := fakeClientBuilder().
 		WithObjects(gw, ep).
 		WithStatusSubresource(ep).
+		WithInterceptorFuncs(countStatusWrites[*v1alpha1.KrakenDEndpoint](&writes)).
 		Build()
 	r := &KrakenDEndpointReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
 
-	// First reconcile sets Active
-	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(ep)})
-	if err != nil {
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(ep)}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Second reconcile should be a no-op (no status update needed)
-	_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(ep)})
-	if err != nil {
-		t.Fatalf("unexpected error on second reconcile: %v", err)
+	if writes != 0 {
+		t.Errorf("status writes for an unchanged endpoint = %d, want 0", writes)
 	}
 }
 
