@@ -517,3 +517,88 @@ func TestGateway_DeletedDeploymentRecreatedWhileConfigRejected(t *testing.T) {
 		t.Errorf("the rejected config reached the ConfigMap:\n%s", cm.Data[resources.ConfigKey])
 	}
 }
+
+// TestGateway_CollectsConfigRevisionsOutsideTheHistory builds more config
+// revisions than the history keeps, with no ReplicaSet left to mount the old
+// ones, and expects the oldest to be collected from a real API server.
+func TestGateway_CollectsConfigRevisionsOutsideTheHistory(t *testing.T) {
+	const revisions = 6 // more than the three the history keeps
+	ns := testNamespace(t)
+	gw := createGateway(t, ns, "gc-gw")
+	var names []string
+	names = append(names, resources.ConfigMapName(&v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: gw.Name},
+	}, waitForAppliedChecksum(t, gw)))
+
+	for i := 1; i < revisions; i++ {
+		// Nothing keeps an earlier revision alive but the history: drop the
+		// ReplicaSets that still mount an older one.
+		deleteStaleReplicaSets(t, ns, names[len(names)-1])
+		path := fmt.Sprintf("/items-%d", i)
+		ep := &v1alpha1.KrakenDEndpoint{
+			ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("items-%d", i), Namespace: ns},
+			Spec: v1alpha1.KrakenDEndpointSpec{
+				GatewayRef: v1alpha1.GatewayRef{Name: gw.Name},
+				Endpoints: []v1alpha1.EndpointEntry{{
+					Endpoint: path, Method: "GET",
+					Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc:8080"}, URLPattern: path}},
+				}},
+			},
+		}
+		if err := k8sClient.Create(ctx, ep); err != nil {
+			t.Fatalf("create endpoint: %v", err)
+		}
+		previous := names[len(names)-1]
+		eventually(t, func() error {
+			var got v1alpha1.KrakenDGateway
+			if err := k8sClient.Get(ctx, gw, &got); err != nil {
+				return err
+			}
+			name := resources.ConfigMapName(&got, got.Status.ConfigChecksum)
+			if name == previous {
+				return fmt.Errorf("revision %d is not applied yet", i+1)
+			}
+			names = append(names, name)
+			return nil
+		})
+	}
+
+	eventually(t, func() error {
+		var list corev1.ConfigMapList
+		if err := k8sClient.List(ctx, &list, client.InNamespace(ns),
+			client.HasLabels{resources.ConfigRevisionLabel}); err != nil {
+			return err
+		}
+		got := map[string]bool{}
+		for i := range list.Items {
+			got[list.Items[i].Name] = true
+		}
+		for i, name := range names {
+			kept := i >= len(names)-3
+			if got[name] != kept {
+				return fmt.Errorf("revision %d (%s): present = %v, want %v", i+1, name, got[name], kept)
+			}
+		}
+		return nil
+	})
+}
+
+// deleteStaleReplicaSets deletes the ReplicaSets in ns that do not mount
+// current.
+func deleteStaleReplicaSets(t *testing.T, ns, current string) {
+	t.Helper()
+	var list appsv1.ReplicaSetList
+	if err := k8sClient.List(ctx, &list, client.InNamespace(ns)); err != nil {
+		t.Fatal(err)
+	}
+	for i := range list.Items {
+		rs := &list.Items[i]
+		if resources.MountedConfigMapName(&rs.Spec.Template.Spec) == current {
+			continue
+		}
+		if err := k8sClient.Delete(ctx, rs, client.PropagationPolicy(metav1.DeletePropagationBackground)); err != nil &&
+			!apierrors.IsNotFound(err) {
+			t.Fatal(err)
+		}
+	}
+}
