@@ -1349,3 +1349,48 @@ func TestGatewayReconcile_WritesAcceptedOnEveryEndpoint(t *testing.T) {
 		}
 	}
 }
+
+func TestGatewayReconcile_AcceptedWrittenOnlyOnChange(t *testing.T) {
+	gw := reconciledGateway()
+	included := gatewayEndpoint("ep-included", 1)
+	conflicted := gatewayEndpoint("ep-conflicted", 1)
+	writes := 0
+	c := fakeClientBuilder().
+		WithObjects(gw, included, conflicted).
+		WithStatusSubresource(gw, included, conflicted).
+		WithInterceptorFuncs(countStatusWrites[*v1alpha1.KrakenDEndpoint](&writes)).
+		Build()
+	rec := fakeRecorder()
+	r := acceptanceReconciler(c, rec, &renderer.RenderOutput{
+		JSON: []byte(`{"version":3}`), Checksum: "cs1", DesiredImage: "img:v1",
+		ConflictedEndpoints: []types.NamespacedName{client.ObjectKeyFromObject(conflicted)},
+	})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+	if writes != 2 {
+		t.Errorf("first reconcile: endpoint status writes = %d, want 2", writes)
+	}
+	events := drainEvents(rec)
+	conflicts := 0
+	for _, ev := range events {
+		if strings.HasPrefix(ev, "Warning EndpointConflict ") {
+			conflicts++
+		}
+	}
+	if conflicts != 1 || hasEventReason(events, v1alpha1.ReasonAccepted) {
+		t.Errorf("first reconcile events = %q, want one EndpointConflict Warning and no Accepted event", events)
+	}
+
+	writes = 0
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+	if writes != 0 {
+		t.Errorf("unchanged verdicts: endpoint status writes = %d, want 0", writes)
+	}
+	if ev := drainEvents(rec); hasEventReason(ev, v1alpha1.ReasonEndpointConflict) {
+		t.Errorf("unchanged verdicts: events = %q, want no EndpointConflict", ev)
+	}
+}
