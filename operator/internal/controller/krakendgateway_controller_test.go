@@ -1483,3 +1483,30 @@ func TestGatewayReconcile_AcceptedSkipsEndpointReplacedSinceRender(t *testing.T)
 		t.Errorf("replacement endpoint: Accepted = %+v, want none (the render saw the object it replaced)", got)
 	}
 }
+
+func TestGatewayReconcile_AcceptedRecordsRenderedGeneration(t *testing.T) {
+	gw := reconciledGateway()
+	ep := gatewayEndpoint("ep-a", 1)
+	c := fakeClientBuilder().WithObjects(gw, ep).WithStatusSubresource(gw, ep).Build()
+	key := client.ObjectKeyFromObject(ep)
+	r := acceptanceReconciler(c, fakeRecorder(), nil)
+	// The endpoint's spec changes while the gateway renders generation 1.
+	r.Renderer = renderFunc(func(renderer.RenderInput) (*renderer.RenderOutput, error) {
+		var stored v1alpha1.KrakenDEndpoint
+		if err := c.Get(context.Background(), key, &stored); err != nil {
+			return nil, err
+		}
+		stored.Generation = 2
+		if err := c.Update(context.Background(), &stored); err != nil {
+			return nil, err
+		}
+		return &renderer.RenderOutput{JSON: []byte(`{"version":3}`), Checksum: "cs1", DesiredImage: "img:v1"}, nil
+	})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+	if got := storedAccepted(t, c, key); got == nil || got.ObservedGeneration != 1 {
+		t.Errorf("Accepted = %+v, want observedGeneration 1: generation 2 was never rendered", got)
+	}
+}
