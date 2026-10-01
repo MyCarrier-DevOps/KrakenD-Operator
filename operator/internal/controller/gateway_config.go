@@ -336,7 +336,8 @@ func rejectionSummary(atts []renderer.Attribution) string {
 	case unattributed == 0:
 		return fmt.Sprintf("Rejected by krakend check; findings name KrakenDEndpoint(s) %s.", strings.Join(names, ", "))
 	default:
-		return fmt.Sprintf("Rejected by krakend check; findings name KrakenDEndpoint(s) %s; %d finding(s) name no endpoint.",
+		return fmt.Sprintf(
+			"Rejected by krakend check; findings name KrakenDEndpoint(s) %s; %d finding(s) name no endpoint.",
 			strings.Join(names, ", "), unattributed)
 	}
 }
