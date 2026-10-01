@@ -621,7 +621,8 @@ func (r *KrakenDGatewayReconciler) validateConfig(
 }
 
 // handleValidationError records a rejected configuration: ConfigValid=False
-// with the validator's output, and phase Error. The Warning event fires only
+// with the validator's output (bounded by truncateMessage to 4 KiB; the full
+// output is in the log), and phase Error. The Warning event fires only
 // when the recorded verdict changes, so a gateway that keeps rendering the
 // same rejected config stays quiet. It returns nil: the rejection is
 // persistent, and a change to any input re-enqueues the gateway.
@@ -652,10 +653,9 @@ func (r *KrakenDGatewayReconciler) handleValidationError(
 
 // handleValidatorUnavailable records that the rendered config could not be
 // judged: krakend check did not run to completion, or the validation copy
-// could not be prepared. The applied
-// config and the phase are left as they are, ConfigValid goes Unknown with
-// reason ValidatorUnavailable, and the error is returned so the reconcile is
-// retried with backoff.
+// could not be prepared. The applied config and the phase are left as they
+// are, ConfigValid goes Unknown with reason ValidatorUnavailable, and the
+// error is returned so the reconcile is retried with backoff.
 func (r *KrakenDGatewayReconciler) handleValidatorUnavailable(
 	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
@@ -1274,8 +1274,9 @@ func (r *KrakenDGatewayReconciler) reconcileExistingPostRestartRevision(
 	// reconcilePostRestartJob's top-level create path (Get existing Job by
 	// name -> NotFound -> fresh Create) instead of this function's
 	// now-permanently-skip branch. On success, the checksum is restored
-	// in-memory below and persisted by the caller's final Status().Update
-	// at the end of Reconcile.
+	// in-memory below. The final status write at the end of Reconcile
+	// (updateStatusIfChanged) persists it, because the condition change
+	// makes the status differ from the start-of-reconcile snapshot.
 	gw.Status.LastPostRestartJobChecksum = ""
 	if err := r.Status().Update(ctx, gw); err != nil {
 		return fmt.Errorf("clearing post-restart job checksum before re-create: %w", err)
