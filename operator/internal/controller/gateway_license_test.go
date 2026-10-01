@@ -578,6 +578,7 @@ type settledLicensedGateway struct {
 	r      *KrakenDGatewayReconciler
 	gw     *v1alpha1.KrakenDGateway
 	secret *corev1.Secret
+	parser *mockLicenseParser
 	// cached, while set, is what every read of the Deployment returns, as an
 	// informer cache does until it has seen the controller's own update.
 	cached *appsv1.Deployment
@@ -589,7 +590,7 @@ func settleLicensedGateway(t *testing.T, tweaks ...func(gw *v1alpha1.KrakenDGate
 	for _, tweak := range tweaks {
 		tweak(gw)
 	}
-	s := &settledLicensedGateway{gw: gw, secret: secret}
+	s := &settledLicensedGateway{gw: gw, secret: secret, parser: parser}
 	s.c = fakeClientBuilder().WithObjects(gw, secret).WithStatusSubresource(gw).
 		WithInterceptorFuncs(interceptor.Funcs{
 			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object,
@@ -782,5 +783,23 @@ func TestGatewayReconcile_LicenseChecksumFollowsTheMountedLicense(t *testing.T) 
 				t.Errorf("license annotation = %q (present %v), want %q (present %v)", got, ok, want, tc.present)
 			}
 		})
+	}
+}
+
+func TestGatewayReconcile_FallbackToggleKeepsTheLicenseChecksum(t *testing.T) {
+	s := settleLicensedGateway(t, func(gw *v1alpha1.KrakenDGateway) { gw.Spec.License.FallbackToCE = true })
+	before := s.deployment(t).Spec.Template.Annotations[resources.LicenseChecksumAnnotation]
+	if before == "" {
+		t.Fatal("the settled Deployment carries no license checksum")
+	}
+	s.parser.info.NotAfter = testNow.Add(30 * time.Minute) // inside the safety buffer: the fallback starts
+
+	s.reconcileWhileCacheLags(t)
+
+	if got := s.deployment(t).Spec.Template.Annotations[resources.LicenseChecksumAnnotation]; got != before {
+		t.Errorf("license annotation = %q across the fallback, want it unchanged at %q", got, before)
+	}
+	if !meta.IsStatusConditionTrue(getGateway(t, s.c, s.gw).Status.Conditions, v1alpha1.ConditionLicenseDegraded) {
+		t.Error("the fallback did not start, so the test proves nothing")
 	}
 }
