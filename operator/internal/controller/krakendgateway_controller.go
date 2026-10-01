@@ -219,7 +219,6 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			Reason:             "ConfigValid",
 			Message:            "Configuration passed validation",
 		})
-		gw.Status.Phase = v1alpha1.PhaseDeploying
 		gw.Status.ConfigChecksum = output.Checksum
 		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
 			Type:               v1alpha1.ConditionProgressing,
@@ -233,7 +232,6 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			fmt.Sprintf("Configuration updated, checksum: %s", output.Checksum))
 		rollingRestarts.Inc()
 	} else if imageChanged || pluginChanged {
-		gw.Status.Phase = v1alpha1.PhaseDeploying
 		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
 			Type:               v1alpha1.ConditionProgressing,
 			Status:             metav1.ConditionTrue,
@@ -265,17 +263,10 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// Update final status
 	gw.Status.ActiveImage = output.DesiredImage
 	gw.Status.PluginChecksum = output.PluginChecksum
-	gw.Status.ObservedGeneration = gw.Generation
 	gw.Status.EndpointCount = int32(len(endpoints))
 	endpointsPerGateway.WithLabelValues(gw.Namespace, gw.Name).Set(float64(len(endpoints)))
 	gatewayInfo.WithLabelValues(gw.Namespace, gw.Name, string(gw.Spec.Edition), gw.Spec.Version).Set(1)
-	if gw.Status.Phase != v1alpha1.PhaseDegraded && gw.Status.Phase != v1alpha1.PhaseError {
-		if ceFallback {
-			gw.Status.Phase = v1alpha1.PhaseDegraded
-		} else if gw.Status.Phase != v1alpha1.PhaseDeploying {
-			gw.Status.Phase = v1alpha1.PhaseRunning
-		}
-	}
+	setGatewayReadiness(&gw)
 
 	if err := r.updateStatusIfChanged(ctx, &gw, before); err != nil {
 		return ctrl.Result{}, fmt.Errorf("updating gateway status: %w", err)
@@ -522,8 +513,8 @@ func (r *KrakenDGatewayReconciler) detectDragonflyState(
 }
 
 // inspectDeploymentStatus reads the owned Deployment's status and updates
-// the gateway's replica counts, Available and Progressing conditions, and
-// phase based on rollout health.
+// the gateway's replica counts, Available and Progressing conditions based on
+// rollout health; the phase is derived from them.
 func (r *KrakenDGatewayReconciler) inspectDeploymentStatus(
 	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
@@ -550,7 +541,6 @@ func (r *KrakenDGatewayReconciler) inspectDeploymentStatus(
 			c.Reason != "ProgressDeadlineExceeded" {
 			continue
 		}
-		gw.Status.Phase = v1alpha1.PhaseError
 		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
 			Type:               v1alpha1.ConditionProgressing,
 			Status:             metav1.ConditionFalse,
@@ -591,10 +581,6 @@ func (r *KrakenDGatewayReconciler) inspectDeploymentStatus(
 			Reason:             "DeploymentAvailable",
 			Message:            "All replicas are available",
 		})
-		// Clear Deploying phase on convergence (Degraded/Error take precedence)
-		if gw.Status.Phase == v1alpha1.PhaseDeploying {
-			gw.Status.Phase = v1alpha1.PhaseRunning
-		}
 	}
 }
 
@@ -1828,6 +1814,22 @@ func gatewayReadinessFor(conds []metav1.Condition) gatewayReadiness {
 		return gatewayReadiness{status: metav1.ConditionTrue, reason: v1alpha1.ReasonReady,
 			message: "Configuration applied and all replicas available", phase: v1alpha1.PhaseRunning}
 	}
+}
+
+// setGatewayReadiness writes the derived Ready condition, phase and
+// observedGeneration into gw's in-memory status. Call it immediately before
+// every gateway status write that ends a reconcile.
+func setGatewayReadiness(gw *v1alpha1.KrakenDGateway) {
+	rd := gatewayReadinessFor(gw.Status.Conditions)
+	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+		Type:               v1alpha1.ConditionReady,
+		Status:             rd.status,
+		ObservedGeneration: gw.Generation,
+		Reason:             rd.reason,
+		Message:            rd.message,
+	})
+	gw.Status.Phase = rd.phase
+	gw.Status.ObservedGeneration = gw.Generation
 }
 
 // notReady is a False Ready that carries cause's reason and message.
