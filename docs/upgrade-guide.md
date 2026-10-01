@@ -394,7 +394,8 @@ Tooling that waits for `Rendering` or `Validating` should wait on the
 Only a completed krakend check run that rejects the config marks it invalid
 (`ConfigValid=False`, reason `ConfigValidationFailed`, phase `Error`). When
 the check cannot run to completion (the binary is missing, the 30-second
-limit is hit, or the process is killed), the gateway now reports
+limit is hit, the process is killed, the temp directory is unwritable or
+full, or the validation copy cannot be prepared), the gateway now reports
 `ConfigValid=Unknown` with reason `ValidatorUnavailable`, emits one
 `ValidatorUnavailable` Warning event, keeps its phase and its applied
 config, and retries with exponential backoff. Previously such failures were
