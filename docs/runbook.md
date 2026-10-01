@@ -428,10 +428,19 @@ new pods are available the gateway shows `Progressing=True` (reason
 rolls.
 
 If the license reaches its safety buffer (1 h before expiry) or expires and
-`fallbackToCE` is enabled, the gateway falls back to CE: `LicenseDegraded` is
-`True` (reason `LicenseFallbackCE`), EE-only features are disabled, and the
-gateway keeps operating with the CE feature set. Without `fallbackToCE`,
-`LicenseExpired` is `True` and the gateway reports phase `Error`.
+`fallbackToCE` is enabled, the gateway falls back to CE:
+
+- `LicenseDegraded` is `True` (reason `LicenseFallbackCE`) and the gateway
+  transitions to `Degraded` phase, with `CEFallbackApplied=True`
+- The condition's message lists every Enterprise-only feature removed from
+  the config (wildcard endpoints, namespaces such as `auth/api-keys`); each
+  affected KrakenDEndpoint shows the same list under `Accepted` reason
+  `EEFeaturesStripped`. **Check it: removed authentication means those
+  routes are now unauthenticated.**
+- OpenAPI export and the `openapi-serve` sidecar are off until EE returns
+
+Without `fallbackToCE`, `LicenseExpired` is `True` and the gateway reports
+phase `Error`.
 
 ---
 
