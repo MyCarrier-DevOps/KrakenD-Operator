@@ -448,6 +448,7 @@ func (r *KrakenDGatewayReconciler) detectDragonflyState(
 			Reason:             v1alpha1.ReasonCRDNotInstalled,
 			Message:            "Dragonfly is enabled but the dragonflydb.io Dragonfly CRD is not installed in the cluster",
 		})
+		dragonflyReady.WithLabelValues(gw.Namespace, gw.Name).Set(0)
 		return nil
 	}
 
