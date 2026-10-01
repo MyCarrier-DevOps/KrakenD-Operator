@@ -415,6 +415,17 @@ output over the CRD's 32768-character limit (for example one bad key in a
 policy used by many backends) made the status write fail, so the rejection
 was never recorded.
 
+### Terminating gateways are left alone; deleted gateways stop reporting metrics
+
+A `KrakenDGateway` with a `deletionTimestamp` (for example during foreground
+deletion) is no longer reconciled, so the operator no longer recreates the
+children garbage collection is removing. When a gateway is deleted or starts
+terminating, its `krakend_operator_endpoints`,
+`krakend_operator_gateway_info`, `krakend_operator_dragonfly_ready`,
+`krakend_operator_license_expiry_seconds` and
+`krakend_operator_reconcile_duration_seconds{controller="gateway"}` series
+are removed, so alerts on a deleted gateway stop firing.
+
 ## v0.14.0 — openapi-serve liveness probe (one-time rollout)
 
 The `openapi-serve` sidecar now renders with a liveness probe. It previously
