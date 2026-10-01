@@ -24,6 +24,7 @@ import (
 	"unicode/utf8"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
@@ -34,6 +35,20 @@ import (
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 )
+
+// setReadyCondition sets the Ready condition on conds, stamped with the
+// generation of the object it summarizes.
+func setReadyCondition(
+	conds *[]metav1.Condition, generation int64, status metav1.ConditionStatus, reason, message string,
+) {
+	meta.SetStatusCondition(conds, metav1.Condition{
+		Type:               v1alpha1.ConditionReady,
+		Status:             status,
+		ObservedGeneration: generation,
+		Reason:             reason,
+		Message:            message,
+	})
+}
 
 // conditionsEqual returns true if two condition slices have the same semantic
 // content, compared as a set keyed by Type. LastTransitionTime is ignored
