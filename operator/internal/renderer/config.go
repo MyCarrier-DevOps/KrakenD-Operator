@@ -99,6 +99,7 @@ func (r *krakendRenderer) Render(input RenderInput) (*RenderOutput, error) {
 		DesiredImage:        desiredImage,
 		PluginChecksum:      pluginChecksum,
 		ConflictedEndpoints: conflictedSlice,
+		EntryConflicts:      conflicted,
 		InvalidEndpoints:    invalidSlice,
 		Sources:             sources,
 	}, nil
