@@ -436,11 +436,7 @@ func (r *KrakenDGatewayReconciler) detectDragonflyState(
 		dragonflyReady.WithLabelValues(gw.Namespace, gw.Name).Set(1)
 		gw.Status.DragonflyAddress = resources.DragonflyServiceDNS(gw)
 	} else {
-		// Only emit DragonflyNotReady event on condition transition
-		prevCond := meta.FindStatusCondition(gw.Status.Conditions, v1alpha1.ConditionDragonflyReady)
-		wasReady := prevCond != nil && prevCond.Status == metav1.ConditionTrue
-
-		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+		r.setConditionWithEvent(gw, metav1.Condition{
 			Type:               v1alpha1.ConditionDragonflyReady,
 			Status:             metav1.ConditionFalse,
 			ObservedGeneration: gw.Generation,
@@ -448,10 +444,6 @@ func (r *KrakenDGatewayReconciler) detectDragonflyState(
 			Message:            fmt.Sprintf("Dragonfly phase: %s", phase),
 		})
 		dragonflyReady.WithLabelValues(gw.Namespace, gw.Name).Set(0)
-		if wasReady || prevCond == nil {
-			r.Recorder.Event(gw, "Warning", v1alpha1.ReasonDragonflyNotReady,
-				fmt.Sprintf("Dragonfly instance is not ready (phase: %s)", phase))
-		}
 	}
 
 	return &renderer.DragonflyState{Enabled: true, ServiceDNS: resources.DragonflyServiceDNS(gw)}
