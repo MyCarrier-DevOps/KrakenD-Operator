@@ -1088,6 +1088,42 @@ type infraInputs struct {
 	missingPlugins []string
 }
 
+// reconcileDeploymentUnlessHeld reconciles the Deployment, or leaves it exactly
+// as it is while a hold applies: no config has passed validation yet, no
+// ConfigMap holds the applied config, or a plugin ConfigMap is missing. It
+// returns the ConfigMap collection error separately, because collection is
+// housekeeping that must not hold back the rest of the stage.
+func (r *KrakenDGatewayReconciler) reconcileDeploymentUnlessHeld(
+	ctx context.Context,
+	gw *v1alpha1.KrakenDGateway,
+	in infraInputs,
+) (gcErr, err error) {
+	switch {
+	case in.appliedChecksum == "":
+		// Nothing has passed validation yet: a Deployment would have
+		// nothing valid to mount.
+	case in.configMapName == "":
+		// The applied config's ConfigMap is gone (deleted out of band while
+		// a newer render is rejected). Leave the Deployment exactly as it
+		// is rather than point it at a config that does not exist.
+		reason := in.heldBecause
+		if reason == nil {
+			reason = errAppliedConfigMissing
+		}
+		logf.FromContext(ctx).Error(reason, "holding the Deployment as it is", "checksum", in.appliedChecksum)
+	case len(in.missingPlugins) > 0:
+		// A pod template that mounts a missing ConfigMap never starts
+		// (FailedMount). Leave the Deployment as it is; PluginsResolved
+		// names the ConfigMaps, and their creation reconciles the gateway.
+	default:
+		if err := r.reconcileDeployment(ctx, gw, in); err != nil {
+			return nil, err
+		}
+		gcErr = r.collectConfigMaps(ctx, gw, in.configMapName)
+	}
+	return gcErr, nil
+}
+
 // reconcileInfrastructure is the infrastructure stage. It creates or updates
 // the Kubernetes resources owned by the gateway, except the gateway ConfigMap,
 // using the create-or-update pattern, deploying the applied config. The
@@ -1097,8 +1133,6 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 	gw *v1alpha1.KrakenDGateway,
 	in infraInputs,
 ) error {
-	log := logf.FromContext(ctx)
-
 	// ServiceAccount
 	sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{
 		Name: gw.Name, Namespace: gw.Namespace,
@@ -1132,31 +1166,9 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 		return fmt.Errorf("reconciling pdb: %w", err)
 	}
 
-	var gcErr error
-	switch {
-	case in.appliedChecksum == "":
-		// Nothing has passed validation yet: a Deployment would have
-		// nothing valid to mount.
-	case in.configMapName == "":
-		// The applied config's ConfigMap is gone (deleted out of band while
-		// a newer render is rejected). Leave the Deployment exactly as it
-		// is rather than point it at a config that does not exist.
-		reason := in.heldBecause
-		if reason == nil {
-			reason = errAppliedConfigMissing
-		}
-		log.Error(reason, "holding the Deployment as it is", "checksum", in.appliedChecksum)
-	case len(in.missingPlugins) > 0:
-		// A pod template that mounts a missing ConfigMap never starts
-		// (FailedMount). Leave the Deployment as it is; PluginsResolved
-		// names the ConfigMaps, and their creation reconciles the gateway.
-	default:
-		if err := r.reconcileDeployment(ctx, gw, in); err != nil {
-			return err
-		}
-		// Collection is housekeeping: its failure must not hold back the
-		// rest of the stage, but is still reported.
-		gcErr = r.collectConfigMaps(ctx, gw, in.configMapName)
+	gcErr, err := r.reconcileDeploymentUnlessHeld(ctx, gw, in)
+	if err != nil {
+		return err
 	}
 
 	// HPA (only if autoscaling is configured; otherwise one the gateway
