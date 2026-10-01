@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -35,6 +36,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	clocktesting "k8s.io/utils/clock/testing"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -61,6 +63,7 @@ func newTestGatewayReconciler(
 		Renderer:  rend,
 		Validator: val,
 		Clock:     clocktesting.NewFakeClock(testNow),
+		APIReader: c,
 	}
 }
 
@@ -780,5 +783,94 @@ func TestGatewayReconcile_HoldLogSaysWhyTheDeploymentIsHeld(t *testing.T) {
 	if !strings.Contains(logged.String(), "holding the Deployment as it is") ||
 		!strings.Contains(logged.String(), "not controlled by gateway") {
 		t.Errorf("the hold log must say the ConfigMap failed verification, got:\n%s", logged.String())
+	}
+}
+
+// ownedConfigMap is a config ConfigMap controlled by gw and created at
+// created. revision marks a content-addressed revision; otherwise it stands
+// for the pre-content-addressing ConfigMap.
+func ownedConfigMap(gw *v1alpha1.KrakenDGateway, name string, created time.Time, revision bool) *corev1.ConfigMap {
+	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
+		Name:              name,
+		Namespace:         gw.Namespace,
+		Labels:            resources.StandardLabels(gw),
+		CreationTimestamp: metav1.NewTime(created),
+		OwnerReferences: []metav1.OwnerReference{
+			*metav1.NewControllerRef(gw, v1alpha1.GroupVersion.WithKind("KrakenDGateway")),
+		},
+	}}
+	if revision {
+		cm.Labels[resources.ConfigRevisionLabel] = name
+	}
+	return cm
+}
+
+// gatewayReplicaSet is a ReplicaSet of gw's Deployment that mounts configMap
+// and runs replicas pods.
+func gatewayReplicaSet(gw *v1alpha1.KrakenDGateway, name, configMap string, replicas int32) *appsv1.ReplicaSet {
+	return &appsv1.ReplicaSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: gw.Namespace,
+			Labels:    resources.StandardLabels(gw),
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "apps/v1", Kind: "Deployment", Name: gw.Name, UID: "dep-uid", Controller: ptr.To(true),
+			}},
+		},
+		Spec: appsv1.ReplicaSetSpec{
+			Replicas: ptr.To(replicas),
+			Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Volumes: []corev1.Volume{{
+				Name: "config",
+				VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: configMap},
+				}},
+			}}}},
+		},
+		Status: appsv1.ReplicaSetStatus{Replicas: replicas},
+	}
+}
+
+// remainingConfigMaps lists the ConfigMap names left in gw's namespace,
+// sorted.
+func remainingConfigMaps(t *testing.T, c client.Client, gw *v1alpha1.KrakenDGateway) []string {
+	t.Helper()
+	var list corev1.ConfigMapList
+	if err := c.List(context.Background(), &list, client.InNamespace(gw.Namespace)); err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, 0, len(list.Items))
+	for i := range list.Items {
+		names = append(names, list.Items[i].Name)
+	}
+	slices.Sort(names)
+	return names
+}
+
+func TestCollectConfigMaps_DeletesWhatNothingCanMount(t *testing.T) {
+	gw := reconciledGateway()
+	gw.UID = "gw-uid"
+	at := func(h int) time.Time { return testNow.Add(time.Duration(h) * time.Hour) }
+	unowned := ownedConfigMap(gw, "someone-elses", at(0), true)
+	unowned.OwnerReferences = nil
+	c := fakeClientBuilder().WithObjects(
+		gw, unowned,
+		ownedConfigMap(gw, gw.Name, at(0), false), // pre-content-addressing
+		ownedConfigMap(gw, "test-gw-config-r1", at(1), true),
+		ownedConfigMap(gw, "test-gw-config-r2", at(2), true),
+		ownedConfigMap(gw, "test-gw-config-r3", at(3), true),
+		ownedConfigMap(gw, "test-gw-config-r4", at(4), true),
+		ownedConfigMap(gw, "test-gw-config-r5", at(5), true),
+		ownedConfigMap(gw, "test-gw-config-r6", at(6), true),
+		gatewayReplicaSet(gw, "test-gw-live", "test-gw-config-r2", 1),
+		gatewayReplicaSet(gw, "test-gw-idle", gw.Name, 0),
+	).Build()
+	r := newTestGatewayReconciler(c, &mockRenderer{}, &mockValidator{})
+
+	if err := r.collectConfigMaps(context.Background(), gw, "test-gw-config-r6"); err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	want := []string{"someone-elses", "test-gw-config-r2", "test-gw-config-r4", "test-gw-config-r5", "test-gw-config-r6"}
+	if got := remainingConfigMaps(t, c, gw); !slices.Equal(got, want) {
+		t.Errorf("remaining ConfigMaps = %v, want %v", got, want)
 	}
 }
