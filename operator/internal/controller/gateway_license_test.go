@@ -458,3 +458,23 @@ func TestGatewayReconcile_UnreadableLicenseMakesLicenseValidUnknown(t *testing.T
 		t.Errorf("LicenseValid = %+v, want Unknown/%s", cond, v1alpha1.ReasonLicenseSecretMissing)
 	}
 }
+
+func TestGatewayReconcile_UnreadableLicenseStillFallsBackAtTheSafetyBuffer(t *testing.T) {
+	gw, _, parser := licensedEEGateway(testNow, true) // the Secret is not created
+	gw.Status.LicenseExpiry = &metav1.Time{Time: testNow.Add(30 * time.Minute)}
+	c := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).Build()
+	var captured *renderer.RenderInput
+	r := newTestGatewayReconciler(c,
+		&capturingRenderer{delegate: renderOutput("cs"), captured: &captured}, &mockValidator{})
+	r.LicenseParser = parser
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if !captured.CEFallback {
+		t.Error("a last known expiry inside the safety buffer must render the CE fallback")
+	}
+	if !meta.IsStatusConditionTrue(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionLicenseDegraded) {
+		t.Error("LicenseDegraded must be True while falling back")
+	}
+}
