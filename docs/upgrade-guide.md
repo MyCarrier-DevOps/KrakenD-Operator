@@ -801,8 +801,10 @@ immediately.
   `LicenseSecretUnavailable=True`. The operator still judges the stage from
   the last known expiry (`status.licenseExpiry`), so a `fallbackToCE` gateway
   falls back to CE when that expiry comes inside the 1 h safety buffer even
-  while the Secret is missing; with no known expiry it keeps its last
-  fallback decision.
+  while the Secret is missing. Once that expiry is inside the buffer or past,
+  `LicenseValid` shows the stage (`False` with reason `LicensePreExpiry` or
+  `LicenseExpired`) instead of `Unknown`. With no known expiry, or one still
+  ahead of the buffer, it keeps its last fallback decision.
 - A gateway switched from EE to CE loses its `License*` conditions,
   `status.licenseExpiry` and `license_expiry_seconds` series, so a stale
   `LicenseExpired=True` no longer holds it at phase `Error`.
@@ -812,6 +814,32 @@ immediately.
 - A failing gateway reconcile is now retried with a backoff capped at 5
   minutes (it used to grow to about 16.7 minutes), so the license is always
   looked at at least that often.
+
+### A renewed license rolls the EE pods
+
+KrakenD reads its license at startup, and the license file is mounted with
+`subPath`, which Kubernetes never refreshes from an updated Secret. Updating
+the license Secret in place used to change `LicenseValid` but leave the
+running pods on the old file, so with `fallbackToCE: false` an expired
+license stayed in force after the renewal.
+
+The pod template now carries `krakend.io/checksum-license`, the SHA-256 of
+the license bytes the operator read:
+
+- When the license in the Secret changes, the Deployment rolls and every pod
+  starts with the new license. The gateway reports `Progressing=True` (reason
+  `DeploymentUpdated`) and is not `Ready` until the new pods are available.
+- When the bytes do not change, nothing rolls.
+- When the Secret cannot be read, the annotation the Deployment already
+  carries is kept, so a transient read failure never rolls pods.
+- The annotation is absent on a Community gateway and while an EE gateway
+  runs the CE fallback.
+- The post-restart Job does not run again for a license change.
+
+**One-time rollout on upgrade.** Adding the annotation rolls each EE gateway
+that mounts a license once. It coincides with the rollouts caused by the
+`krakend.io/image` annotation and the config ConfigMap migration above, so an
+upgrade still rolls each gateway only once.
 
 ---
 
