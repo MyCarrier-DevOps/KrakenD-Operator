@@ -99,7 +99,7 @@ func (v *KrakenDValidator) Validate(ctx context.Context, jsonData []byte) (retEr
 // run.
 func classifyCheckError(_ context.Context, output []byte, err error) error {
 	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
+	if errors.As(err, &exitErr) && exitErr.ExitCode() > 0 {
 		return &ValidationError{Output: string(output), Err: err}
 	}
 	return fmt.Errorf("running krakend check: %w", err)
