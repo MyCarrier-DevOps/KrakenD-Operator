@@ -67,6 +67,8 @@ type KrakenDGatewayReconciler struct {
 	Renderer  renderer.Renderer
 	Validator renderer.Validator
 	Clock     utilclock.Clock
+	// APIReader reads uncached from the API server (ReplicaSets for config GC)
+	APIReader client.Reader
 
 	// rejections remembers each gateway's last rejected validation input,
 	// so an unchanged bad render is not re-validated on every event.
