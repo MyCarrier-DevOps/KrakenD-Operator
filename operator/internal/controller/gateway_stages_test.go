@@ -1423,3 +1423,33 @@ func TestGatewayReconcile_ServingGatewayKeepsAVerdictWhileTheValidatorIsUnavaila
 		t.Errorf("good Accepted = %+v, want the applied render's True kept", cond)
 	}
 }
+
+func TestGatewayReconcile_StaleListCannotRemoveALiveAccepted(t *testing.T) {
+	gw := servingGateway("applied", "img:v1")
+	// The endpoint was blamed before; the live object has since been accepted.
+	live := withAccepted(testEndpoint("x", "/a"), metav1.ConditionTrue, v1alpha1.ReasonAccepted)
+	staleList := interceptor.Funcs{
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if err := c.List(ctx, list, opts...); err != nil {
+				return err
+			}
+			if eps, ok := list.(*v1alpha1.KrakenDEndpointList); ok {
+				for i := range eps.Items {
+					withAccepted(&eps.Items[i], metav1.ConditionFalse, v1alpha1.ReasonGatewayConfigRejected)
+				}
+			}
+			return nil
+		},
+	}
+	c := fakeClientBuilder().WithObjects(gw, live).WithStatusSubresource(gw, live).
+		WithInterceptorFuncs(staleList).Build()
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}),
+		&countingValidator{err: rejectedBy("- at '/extra_config': additional properties 'bad/ns' not allowed")})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if cond := storedAccepted(t, c, client.ObjectKeyFromObject(live)); cond == nil || cond.Status != metav1.ConditionTrue {
+		t.Errorf("Accepted = %+v; a stale list must not remove the live True", cond)
+	}
+}
