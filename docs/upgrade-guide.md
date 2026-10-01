@@ -1018,14 +1018,39 @@ created for it, but only a resource the gateway controls:
 | Turned off | Deleted |
 |---|---|
 | `spec.autoscaling` removed | the HPA `<gateway>` |
-| `spec.dragonfly.enabled: false` or removed | the Dragonfly `<gateway>-dragonfly`, plus `DragonflyReady`, the `dragonfly_ready` series and `status.dragonflyAddress` |
-| `spec.license.externalSecret.enabled: false` or removed | the ExternalSecret `<gateway>-license` |
+| `spec.dragonfly.enabled: false` or removed | the Dragonfly `<gateway>-dragonfly`, plus `DragonflyReady`, the `krakend_operator_dragonfly_ready` series and `status.dragonflyAddress` |
+| `spec.license.externalSecret.enabled: false` or removed | the ExternalSecret `<gateway>-license`, and the `<gateway>-license` Secret it created (its creation policy is `Owner`) |
 | `spec.istio.enabled: false` or removed | the VirtualService `<gateway>`, plus `IstioConfigured` |
 
 Previously these stayed behind. An orphaned HPA kept scaling the Deployment,
-and an orphaned VirtualService kept claiming its hosts. **Check before
-upgrading** that nothing else relies on such a leftover object. After the
-HPA is deleted the Deployment returns to `spec.replicas`.
+and an orphaned VirtualService kept claiming its hosts.
+
+- **Replicas.** Once the HPA is deleted the Deployment returns to
+  `spec.replicas` (while the Deployment is held, because no config has been
+  applied yet, that happens when the hold clears). If `spec.replicas` is
+  unset that is one pod, so set `spec.replicas` before upgrading or before
+  removing `spec.autoscaling`.
+- **License.** A gateway that disabled the ExternalSecret but whose
+  `license.secretRef` points at the `<gateway>-license` Secret loses its
+  license when that Secret is garbage-collected. Point `secretRef` at a Secret
+  you manage first.
+- **Dragonfly.** The instance is deleted at once. Pods still running the
+  previous config, which points at Dragonfly's Redis address, lose that
+  connection until the rollout completes, or until a rejected render is fixed.
+
+**Check before upgrading** that nothing relies on a leftover object. The first
+loop lists the children gateways control; the second lists which features each
+gateway still enables. A child from the first loop whose feature is false in
+the second listing is deleted by the upgrade.
+
+```bash
+for kind in horizontalpodautoscalers.autoscaling dragonflies.dragonflydb.io externalsecrets.external-secrets.io virtualservices.networking.istio.io; do
+  kubectl get "$kind" -A -o json 2>/dev/null | jq -r --arg kind "$kind" '
+    .items[] | select(any(.metadata.ownerReferences[]?; .kind=="KrakenDGateway" and .controller==true))
+    | "\($kind)\t\(.metadata.namespace)/\(.metadata.name)\towner=\(.metadata.ownerReferences[] | select(.kind=="KrakenDGateway") | .name)"'
+done
+kubectl get krakendgateways -A -o json | jq -r '.items[] | "\(.metadata.namespace)/\(.metadata.name)\tautoscaling=\(.spec.autoscaling != null)\tdragonfly=\(.spec.dragonfly.enabled // false)\texternalSecret=\(.spec.license.externalSecret.enabled // false)\tistio=\(.spec.istio.enabled // false)"'
+```
 
 ---
 
