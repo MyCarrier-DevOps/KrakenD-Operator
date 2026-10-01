@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -1392,5 +1393,30 @@ func TestGatewayReconcile_AcceptedWrittenOnlyOnChange(t *testing.T) {
 	}
 	if ev := drainEvents(rec); hasEventReason(ev, v1alpha1.ReasonEndpointConflict) {
 		t.Errorf("unchanged verdicts: events = %q, want no EndpointConflict", ev)
+	}
+}
+
+func TestGatewayReconcile_AcceptedEventWhenConflictResolves(t *testing.T) {
+	gw := reconciledGateway()
+	ep := gatewayEndpoint("ep-b", 2)
+	ep.Status.Conditions = []metav1.Condition{{
+		Type: v1alpha1.ConditionAccepted, Status: metav1.ConditionFalse, Reason: v1alpha1.ReasonEndpointConflict,
+		Message: "conflict", ObservedGeneration: 2, LastTransitionTime: metav1.Now(),
+	}}
+	c := fakeClientBuilder().WithObjects(gw, ep).WithStatusSubresource(gw, ep).Build()
+	rec := fakeRecorder()
+	r := acceptanceReconciler(c, rec, &renderer.RenderOutput{
+		JSON: []byte(`{"version":3}`), Checksum: "cs1", DesiredImage: "img:v1",
+	})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+	if got := storedAccepted(t, c, client.ObjectKeyFromObject(ep)); got == nil || got.Status != metav1.ConditionTrue {
+		t.Fatalf("Accepted = %+v, want True once the conflict is gone", got)
+	}
+	want := "Normal Accepted Included in the configuration of gateway default/test-gw"
+	if events := drainEvents(rec); !slices.Contains(events, want) {
+		t.Errorf("events = %q, want %q", events, want)
 	}
 }
