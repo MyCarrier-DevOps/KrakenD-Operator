@@ -1866,7 +1866,8 @@ reason. A steady state emits no events. `ConfigValidationFailed` and
 | Dragonfly not ready | Warning | `DragonflyNotReady` |
 | VirtualService created | Normal | `IstioVirtualServiceCreated` |
 | Endpoint newly loses all its entries to a path+method conflict (on the transition only) | Warning | `EndpointConflict` |
-| Previously conflicted endpoint included again | Normal | `Accepted` |
+| Endpoint newly loses some of its entries to a path+method conflict (on the transition only) | Warning | `PartiallyAccepted` |
+| Previously conflicted (fully or partly) endpoint included again | Normal | `Accepted` |
 | Endpoint's gateway does not exist (`ResolvedRefs` False) | Warning | `GatewayNotFound` |
 | Endpoint references a policy that does not exist (`ResolvedRefs` False) | Warning | `PolicyNotFound` |
 | Endpoint references resolve again | Normal | `RefsResolved` |
