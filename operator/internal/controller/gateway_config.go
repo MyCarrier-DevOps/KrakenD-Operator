@@ -557,3 +557,29 @@ func appliedImage(gw *v1alpha1.KrakenDGateway, current v1alpha1.Edition) string 
 	}
 	return renderer.ResolveImage(gw, appliedFallback(gw, current))
 }
+
+// reconcileCEFallbackCondition reports the CE-fallback render the gateway
+// serves and what it removed. It describes the applied config: while a newer
+// render is not applied it is left as it was, and it is removed when the
+// applied config is not a fallback render.
+func (r *KrakenDGatewayReconciler) reconcileCEFallbackCondition(
+	gw *v1alpha1.KrakenDGateway, output *renderer.RenderOutput, edition v1alpha1.Edition,
+) {
+	switch {
+	case !appliedFallback(gw, edition):
+		meta.RemoveStatusCondition(&gw.Status.Conditions, v1alpha1.ConditionCEFallbackApplied)
+	case isApplied(gw, output, edition):
+		msg := "Running KrakenD CE in license fallback; the config uses no Enterprise-only features"
+		if n := len(output.StrippedEEFeatures); n > 0 {
+			msg = fmt.Sprintf("Running KrakenD CE in license fallback; removed %d Enterprise-only feature(s): %s",
+				n, strippedList(output.StrippedEEFeatures))
+		}
+		r.setProblemCondition(gw, metav1.Condition{
+			Type:               v1alpha1.ConditionCEFallbackApplied,
+			Status:             metav1.ConditionTrue,
+			ObservedGeneration: gw.Generation,
+			Reason:             v1alpha1.ReasonEEFeaturesStripped,
+			Message:            truncateMessage(msg, maxConditionMessageBytes),
+		})
+	}
+}
