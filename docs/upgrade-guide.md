@@ -522,9 +522,11 @@ kubectl patch <kind>/<name> --subresource=status --type=json \
   endpoint of the gateway, and only when the verdict changes:
   - `True`, reason `Accepted`: the endpoint is part of the gateway's
     validated configuration.
-  - `False`, reason `EndpointConflict`: an older endpoint owns one of its
-    (path, method) pairs; those entries are not served. A resolved conflict
-    now clears by itself.
+  - `True`, reason `PartiallyAccepted`: an older endpoint owns some of its
+    (path, method) pairs and the rest are served.
+  - `False`, reason `EndpointConflict`: older endpoints own all of its
+    (path, method) pairs; none is served. A resolved conflict now clears by
+    itself.
   - removed: a policy it references is missing, so it is not in the
     configuration (the endpoint controller reports why).
 - `Accepted` is written only for a configuration that passed validation, or
@@ -540,14 +542,14 @@ kubectl patch <kind>/<name> --subresource=status --type=json \
 | Condition | Written by | True when | Reasons |
 |---|---|---|---|
 | `ResolvedRefs` | endpoint controller | the gateway and every referenced policy exist | `RefsResolved`, `GatewayNotFound`, `PolicyNotFound` |
-| `Accepted` | gateway controller | the endpoint is in the gateway's validated configuration | `Accepted`, `EndpointConflict` |
+| `Accepted` | gateway controller | the endpoint is in the gateway's validated configuration | `Accepted`, `PartiallyAccepted`, `EndpointConflict` |
 | `Ready` | endpoint controller | both are True, `Accepted` for the current generation | `Ready`, `Pending`, or the failing condition's reason; `SchemaNameConflict` (docs only) keeps it True |
 
 - The `Available` condition is removed. On its first reconcile after the
   upgrade, the endpoint controller drops it and writes `ResolvedRefs` and
   `Ready`. Replace alerts or health checks on `Available` with `Ready`.
 - `phase` is derived from `Ready`: `True` → `Active`; `Unknown` → `Pending`;
-  `GatewayNotFound` → `Detached`; `EndpointConflict` → `Conflicted`; any
+  `GatewayNotFound` → `Detached`; `EndpointConflict` and `PartiallyAccepted` → `Conflicted`; any
   other `False` reason → `Invalid`. This ends the flip-flop in which a
   conflicted endpoint alternated between `Conflicted` and `Active`.
 - `Ready=Unknown` with reason `Pending` ("Waiting for the gateway to accept
@@ -1328,3 +1330,17 @@ cluster with `postRestartJob.enabled: true`.
     to a new explicit value rather than removing an existing override** —
     that is unambiguous and always observable to the reconciler. Removing
     an override is not detected as a change in and of itself.
+
+### Partly conflicting endpoints report exactly what is not served
+
+When two KrakenDEndpoints on a gateway declare the same path and method, the
+older one's entry is served. The newer one's other entries are still
+served. The newer KrakenDEndpoint now reports:
+
+- `Accepted=True` with reason `PartiallyAccepted` when some of its entries
+  are served. It is `Accepted=False/EndpointConflict` only when none are.
+- `status.conflicts`, a list of `{endpoint, method, winner}`, one item per
+  entry that is not served, naming the KrakenDEndpoint that serves it.
+
+A `PartiallyAccepted` endpoint is not `Ready`, and its phase is
+`Conflicted`.
