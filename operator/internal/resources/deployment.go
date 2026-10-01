@@ -131,7 +131,7 @@ func BuildDeployment(dep *appsv1.Deployment, gw *v1alpha1.KrakenDGateway, in Dep
 			corev1.VolumeMount{
 				Name:      configVolumeName,
 				MountPath: "/etc/krakend/krakend.json",
-				SubPath:   "krakend.json",
+				SubPath:   ConfigKey,
 				ReadOnly:  true,
 			},
 			corev1.VolumeMount{
@@ -269,7 +269,7 @@ func buildVolumes(gw *v1alpha1.KrakenDGateway, configMapName string) (
 	mounts = append(mounts, corev1.VolumeMount{
 		Name:      configVolumeName,
 		MountPath: "/etc/krakend/krakend.json",
-		SubPath:   "krakend.json",
+		SubPath:   ConfigKey,
 		ReadOnly:  true,
 	})
 
