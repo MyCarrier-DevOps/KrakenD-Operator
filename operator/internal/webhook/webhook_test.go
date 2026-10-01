@@ -2671,6 +2671,34 @@ func TestGatewayValidator_NoReplicasWarningWithoutAutoscaling(t *testing.T) {
 	}
 }
 
+func TestGatewayValidator_WarnsWhenOpenAPIIsSetOnACEGateway(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		openapi *v1alpha1.OpenAPIExportSpec
+		want    int
+	}{
+		{"export enabled", &v1alpha1.OpenAPIExportSpec{Enabled: true}, 1},
+		{"export disabled", &v1alpha1.OpenAPIExportSpec{Enabled: false}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gw := &v1alpha1.KrakenDGateway{
+				ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
+				Spec: v1alpha1.KrakenDGatewaySpec{
+					Version: "2.13", Edition: v1alpha1.EditionCE, Config: v1alpha1.GatewayConfig{}, OpenAPI: tc.openapi,
+				},
+			}
+			warnings, err := (&GatewayValidator{}).ValidateCreate(context.Background(), gw)
+			if err != nil {
+				t.Fatalf("expected the gateway to be admitted, got %v", err)
+			}
+			if len(warnings) != tc.want ||
+				(tc.want == 1 && !strings.Contains(warnings[0], "spec.openapi is ignored on CE gateways")) {
+				t.Errorf("warnings = %q, want %d saying spec.openapi is ignored on CE gateways", warnings, tc.want)
+			}
+		})
+	}
+}
+
 // terminating marks obj as being deleted, the state in which the API server
 // sends finalizer-removal UPDATEs.
 func terminating[T metav1.Object](obj T) T {
