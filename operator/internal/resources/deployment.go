@@ -57,6 +57,9 @@ func desiredReplicas(dep *appsv1.Deployment, gw *v1alpha1.KrakenDGateway) *int32
 	return ptr.To(ptr.Deref(gw.Spec.Autoscaling.MinReplicas, 1))
 }
 
+// configVolumeName is the name of the volume holding the gateway config.
+const configVolumeName = "config"
+
 // DeploymentInputs is what BuildDeployment needs besides the gateway spec.
 // Named fields, not positional strings: four strings transposed would
 // compile silently.
@@ -115,7 +118,7 @@ func BuildDeployment(dep *appsv1.Deployment, gw *v1alpha1.KrakenDGateway, in Dep
 	}
 
 	// Volumes and volume mounts
-	volumes, volumeMounts, initContainers := buildVolumes(gw)
+	volumes, volumeMounts, initContainers := buildVolumes(gw, in.ConfigMapName)
 
 	// OpenAPI export init container + shared volume (so the sidecar can serve it)
 	oaInit, oaSidecar, oaVolume, oaMountForExport := buildOpenAPIPieces(gw, in.Image)
@@ -126,7 +129,7 @@ func BuildDeployment(dep *appsv1.Deployment, gw *v1alpha1.KrakenDGateway, in Dep
 		// The export init container needs the rendered config and writable /tmp.
 		oaInit.VolumeMounts = append(oaInit.VolumeMounts,
 			corev1.VolumeMount{
-				Name:      "config",
+				Name:      configVolumeName,
 				MountPath: "/etc/krakend/krakend.json",
 				SubPath:   "krakend.json",
 				ReadOnly:  true,
@@ -249,22 +252,22 @@ func BuildDeployment(dep *appsv1.Deployment, gw *v1alpha1.KrakenDGateway, in Dep
 // buildVolumes assembles volumes, volume mounts, and init containers for the
 // KrakenD deployment. Always mounts the ConfigMap and emptyDir /tmp. Adds
 // license Secret if EE and plugin volumes if plugins are configured.
-func buildVolumes(gw *v1alpha1.KrakenDGateway) (
+func buildVolumes(gw *v1alpha1.KrakenDGateway, configMapName string) (
 	volumes []corev1.Volume,
 	mounts []corev1.VolumeMount,
 	initContainers []corev1.Container,
 ) {
 	// ConfigMap volume: krakend.json
 	volumes = append(volumes, corev1.Volume{
-		Name: "config",
+		Name: configVolumeName,
 		VolumeSource: corev1.VolumeSource{
 			ConfigMap: &corev1.ConfigMapVolumeSource{
-				LocalObjectReference: corev1.LocalObjectReference{Name: gw.Name},
+				LocalObjectReference: corev1.LocalObjectReference{Name: configMapName},
 			},
 		},
 	})
 	mounts = append(mounts, corev1.VolumeMount{
-		Name:      "config",
+		Name:      configVolumeName,
 		MountPath: "/etc/krakend/krakend.json",
 		SubPath:   "krakend.json",
 		ReadOnly:  true,
