@@ -1875,3 +1875,23 @@ func TestGatewayReconcile_ConfigChangeNotReadyWhileOldStatusLingers(t *testing.T
 		t.Errorf("Ready = %+v, want not True during the rollout", ready)
 	}
 }
+
+func TestInspectDeploymentStatus_StalePodTemplateIsNotConverged(t *testing.T) {
+	gw := convergedGatewayAt("cs-new")
+	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+		Type: v1alpha1.ConditionProgressing, Status: metav1.ConditionTrue, Reason: v1alpha1.ReasonConfigDeployed,
+		Message: "rolling out",
+	})
+	// A cached Deployment from before the update: its template still carries
+	// the previous config checksum, and its status is internally consistent.
+	dep := makeConvergedDeployment(gw, "cs-old")
+	c := fakeClientBuilder().WithObjects(gw, dep).Build()
+	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
+
+	r.inspectDeploymentStatus(context.Background(), gw)
+
+	progressing := meta.FindStatusCondition(gw.Status.Conditions, v1alpha1.ConditionProgressing)
+	if progressing == nil || progressing.Status != metav1.ConditionTrue {
+		t.Errorf("Progressing = %+v, want True: the Deployment still runs the previous config", progressing)
+	}
+}
