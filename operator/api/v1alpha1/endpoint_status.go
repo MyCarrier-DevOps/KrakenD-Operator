@@ -36,5 +36,8 @@ func EndpointReady(conds []metav1.Condition) (status metav1.ConditionStatus, rea
 	if refs == nil {
 		return metav1.ConditionUnknown, ReasonPending, "References have not been resolved yet"
 	}
+	if refs.Status != metav1.ConditionTrue {
+		return metav1.ConditionFalse, refs.Reason, refs.Message
+	}
 	return "", "", ""
 }
