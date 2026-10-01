@@ -27,6 +27,7 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/time/rate"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -39,6 +40,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	crcontroller "sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -273,6 +275,7 @@ func (r *KrakenDAutoConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			&corev1.ConfigMap{},
 			handler.EnqueueRequestsFromMapFunc(r.configMapToAutoConfigs),
 		).
+		WithOptions(crcontroller.Options{RateLimiter: newAutoConfigRateLimiter()}).
 		Named("krakendautoconfig").
 		Complete(r)
 }
@@ -865,6 +868,15 @@ func setAutoConfigReadiness(ac *v1alpha1.KrakenDAutoConfig) {
 	ac.Status.ObservedGeneration = ac.Generation
 }
 
+// newAutoConfigRateLimiter is controller-runtime's default rate limiter with
+// the per-item backoff capped at defaultResyncInterval instead of 1000s. A
+// failing AutoConfig therefore retries at least as often as a healthy
+// OnChange one resyncs, including once a missing gateway, policy or auth
+// Secret appears, or an unreachable spec source recovers.
 func newAutoConfigRateLimiter() workqueue.TypedRateLimiter[reconcile.Request] {
-	return workqueue.DefaultTypedControllerRateLimiter[reconcile.Request]()
+	return workqueue.NewTypedMaxOfRateLimiter(
+		workqueue.NewTypedItemExponentialFailureRateLimiter[reconcile.Request](
+			5*time.Millisecond, defaultResyncInterval),
+		&workqueue.TypedBucketRateLimiter[reconcile.Request]{Limiter: rate.NewLimiter(rate.Limit(10), 100)},
+	)
 }
