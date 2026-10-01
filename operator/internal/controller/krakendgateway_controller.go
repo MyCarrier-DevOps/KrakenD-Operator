@@ -966,6 +966,7 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 		return fmt.Errorf("reconciling pdb: %w", err)
 	}
 
+	var gcErr error
 	switch {
 	case in.appliedChecksum == "":
 		// Nothing has passed validation yet: a Deployment would have
@@ -983,9 +984,9 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 		if err := r.reconcileDeployment(ctx, gw, in); err != nil {
 			return err
 		}
-		if err := r.collectConfigMaps(ctx, gw, in.configMapName); err != nil {
-			return err
-		}
+		// Collection is housekeeping: its failure must not hold back the
+		// rest of the stage, but is still reported.
+		gcErr = r.collectConfigMaps(ctx, gw, in.configMapName)
 	}
 
 	// HPA (only if autoscaling is configured)
@@ -1107,7 +1108,7 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 		}
 	}
 
-	return nil
+	return gcErr
 }
 
 // reconcileDeployment converges the gateway Deployment on the applied config
