@@ -1322,3 +1322,59 @@ func assertNotAccepted(t *testing.T, c client.Client, ep *v1alpha1.KrakenDEndpoi
 		t.Errorf("endpoint %s is Ready although no config has been applied", ep.Name)
 	}
 }
+
+func TestGatewayReconcile_UnavailableValidatorOnANeverAppliedGatewayRemovesAStaleAccepted(t *testing.T) {
+	gw := reconciledGateway()
+	stale := withAccepted(testEndpoint("stale", "/a"), metav1.ConditionTrue, v1alpha1.ReasonAccepted)
+	c := fakeClientBuilder().WithObjects(gw, stale).WithStatusSubresource(gw, stale).Build()
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}),
+		&countingValidator{err: errors.New("fork/exec /usr/local/bin/krakend: no such file or directory")})
+
+	if err := reconcileGateway(t, r, gw); err == nil {
+		t.Fatal("an unavailable validator must fail the reconcile so it is retried")
+	}
+	assertNotAccepted(t, c, stale)
+}
+
+func TestGatewayReconcile_UnavailableValidatorLiftsAnOldBlame(t *testing.T) {
+	gw := servingGateway("applied", "img:v1")
+	ep := withAccepted(testEndpoint("ep", "/a"), metav1.ConditionFalse, v1alpha1.ReasonGatewayConfigRejected)
+	c := fakeClientBuilder().WithObjects(gw, ep).WithStatusSubresource(gw, ep).Build()
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}),
+		&countingValidator{err: errors.New("fork/exec /usr/local/bin/krakend: no such file or directory")})
+
+	if err := reconcileGateway(t, r, gw); err == nil {
+		t.Fatal("an unavailable validator must fail the reconcile so it is retried")
+	}
+	if cond := storedAccepted(t, c, client.ObjectKeyFromObject(ep)); cond != nil {
+		t.Errorf("Accepted = %+v; the config was not judged, so the old blame must lift", cond)
+	}
+}
+
+func TestRejectionSummary_CountsFindingsNamingNoEndpoint(t *testing.T) {
+	atts := []renderer.Attribution{
+		{Endpoint: types.NamespacedName{Namespace: "default", Name: "bad"}, Index: 1, Message: "m1"},
+		{Index: -1, Message: "m2"},
+		{Index: -1, Message: "m3"},
+	}
+	want := "Rejected by krakend check; findings name KrakenDEndpoint(s) default/bad; 2 finding(s) name no endpoint."
+	if got := rejectionSummary(atts); got != want {
+		t.Errorf("rejectionSummary = %q, want %q", got, want)
+	}
+	if got := rejectionSummary(nil); !strings.Contains(got, "no finding names a KrakenDEndpoint") {
+		t.Errorf("rejectionSummary(nil) = %q", got)
+	}
+}
+
+func TestRejectionsByEndpoint_ListsEachFindingOncePerEndpoint(t *testing.T) {
+	owner := types.NamespacedName{Namespace: "default", Name: "both"}
+	// A router error blaming two entries of one CR is reported once per entry.
+	atts := []renderer.Attribution{
+		{Endpoint: owner, Index: 0, Message: "conflict"},
+		{Endpoint: owner, Index: 1, Message: "conflict"},
+	}
+	msg := rejectionsByEndpoint(atts)[owner]
+	if strings.Count(msg, "conflict") != 1 {
+		t.Errorf("message = %q, want the finding once", msg)
+	}
+}
