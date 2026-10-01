@@ -330,11 +330,14 @@ func TestAutoConfigReconcile_NotFound(t *testing.T) {
 	}
 }
 
-func TestAutoConfigReconcile_InitialPhase(t *testing.T) {
+func TestAutoConfigReconcile_FirstReconcileWritesOnlyTheSyncedStatus(t *testing.T) {
 	ac := testAutoConfig()
+	ac.Generation = 1
+	counts := &writeCounts{}
 	c := fakeClientBuilder().
 		WithObjects(ac).
 		WithStatusSubresource(ac).
+		WithInterceptorFuncs(countWrites(counts)).
 		Build()
 	f, ce, fi, g := defaultMocks()
 	r := newACReconciler(c, f, ce, fi, g)
@@ -345,20 +348,21 @@ func TestAutoConfigReconcile_InitialPhase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !result.Requeue {
-		t.Error("should requeue after setting initial phase")
+	if result != (ctrl.Result{RequeueAfter: defaultResyncInterval}) {
+		t.Errorf("result = %+v, want only the resync requeue", result)
 	}
-
-	var updated v1alpha1.KrakenDAutoConfig
-	if err := c.Get(
-		context.Background(),
-		types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
-		&updated,
-	); err != nil {
-		t.Fatalf("getting updated autoconfig: %v", err)
+	if counts.statusUpdates != 1 {
+		t.Errorf("status writes = %d, want 1 (no separate Pending write)", counts.statusUpdates)
 	}
-	if updated.Status.Phase != v1alpha1.AutoConfigPhasePending {
-		t.Errorf("expected phase Pending, got %s", updated.Status.Phase)
+	var stored v1alpha1.KrakenDAutoConfig
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(ac), &stored); err != nil {
+		t.Fatal(err)
+	}
+	ready := meta.FindStatusCondition(stored.Status.Conditions, v1alpha1.ConditionReady)
+	if stored.Status.Phase != v1alpha1.AutoConfigPhaseSynced || stored.Status.ObservedGeneration != 1 ||
+		ready == nil || ready.Status != metav1.ConditionTrue || ready.ObservedGeneration != 1 {
+		t.Errorf("phase %q, observedGeneration %d, Ready %+v; want Synced, 1, True at generation 1",
+			stored.Status.Phase, stored.Status.ObservedGeneration, ready)
 	}
 }
 
@@ -1736,24 +1740,6 @@ func assertQuietRequeue(t *testing.T, result ctrl.Result, err error, rec *record
 	if events := drainEvents(rec); len(events) != 0 {
 		t.Errorf("expected no events, got %v", events)
 	}
-}
-
-func TestAutoConfigReconcile_InitialPhaseStatusConflictRequeuesQuietly(t *testing.T) {
-	ac := testAutoConfig()
-	c := fakeClientBuilder().
-		WithObjects(ac).
-		WithStatusSubresource(ac).
-		WithInterceptorFuncs(conflictStatusWrites()).
-		Build()
-	f, ce, fi, g := defaultMocks()
-	rec := fakeRecorder()
-	r := newACReconciler(c, f, ce, fi, g)
-	r.Recorder = rec
-
-	result, err := r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
-	})
-	assertQuietRequeue(t, result, err, rec)
 }
 
 func TestAutoConfigReconcile_SyncStatusConflictRequeuesQuietly(t *testing.T) {
