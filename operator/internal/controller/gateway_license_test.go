@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -292,5 +293,88 @@ func TestGatewayReconcile_PreExpiryLicenseFallsBackToCE(t *testing.T) {
 	}
 	if n := eventsWithReason(r.Recorder.(*record.FakeRecorder), v1alpha1.ReasonLicenseFallbackCE); n != 1 {
 		t.Errorf("LicenseFallbackCE events over two reconciles = %d, want 1", n)
+	}
+}
+
+func TestGatewayReconcile_ReadsTheExternalSecretConventionSecret(t *testing.T) {
+	gw, secret, parser := licensedEEGateway(testNow.Add(90*24*time.Hour), false)
+	gw.Spec.License.SecretRef = nil
+	gw.Spec.License.ExternalSecret.Enabled = true
+	secret.Name = gw.Name + "-license"
+	c := fakeClientBuilder().WithObjects(gw, secret).WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderOutput("cs"), &mockValidator{})
+	r.LicenseParser = parser
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	cond := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionLicenseValid)
+	if cond == nil || cond.Status != metav1.ConditionTrue || cond.Reason != v1alpha1.ReasonLicenseOK {
+		t.Errorf("LicenseValid = %+v, want True/%s", cond, v1alpha1.ReasonLicenseOK)
+	}
+}
+
+func TestGatewayReconcile_HealthyLicenseIsValid(t *testing.T) {
+	notAfter := testNow.Add(90 * 24 * time.Hour)
+	gw, secret, parser := licensedEEGateway(notAfter, true)
+	c := fakeClientBuilder().WithObjects(gw, secret).WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderOutput("cs"), &mockValidator{})
+	r.LicenseParser = parser
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	got := getGateway(t, c, gw)
+	cond := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionLicenseValid)
+	if cond == nil || cond.Status != metav1.ConditionTrue || cond.Reason != v1alpha1.ReasonLicenseOK {
+		t.Errorf("LicenseValid = %+v, want True/%s", cond, v1alpha1.ReasonLicenseOK)
+	}
+	if got.Status.LicenseExpiry == nil || !got.Status.LicenseExpiry.Time.Equal(notAfter) {
+		t.Errorf("licenseExpiry = %v, want %v", got.Status.LicenseExpiry, notAfter)
+	}
+}
+
+func TestGatewayReconcile_UnusableLicenseIsReportedAsUnavailable(t *testing.T) {
+	cases := map[string]func(gw *v1alpha1.KrakenDGateway, p *mockLicenseParser){
+		"the certificate does not parse": func(_ *v1alpha1.KrakenDGateway, p *mockLicenseParser) {
+			p.info, p.err = nil, errors.New("not a certificate")
+		},
+		"no license is configured": func(gw *v1alpha1.KrakenDGateway, _ *mockLicenseParser) { gw.Spec.License = nil },
+	}
+	for name, spoil := range cases {
+		t.Run(name, func(t *testing.T) {
+			gw, secret, parser := licensedEEGateway(testNow.Add(90*24*time.Hour), false)
+			spoil(gw, parser)
+			c := fakeClientBuilder().WithObjects(gw, secret).WithStatusSubresource(gw).Build()
+			r := newTestGatewayReconciler(c, renderOutput("cs"), &mockValidator{})
+			r.LicenseParser = parser
+
+			res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(gw)})
+			if err != nil {
+				t.Fatalf("reconcile: %v", err)
+			}
+			cond := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionLicenseSecretUnavailable)
+			if cond == nil || cond.Status != metav1.ConditionTrue || cond.Reason != v1alpha1.ReasonLicenseSecretMissing {
+				t.Errorf("LicenseSecretUnavailable = %+v, want True/%s", cond, v1alpha1.ReasonLicenseSecretMissing)
+			}
+			if res.RequeueAfter != licenseRecheckInterval {
+				t.Errorf("RequeueAfter = %s, want %s", res.RequeueAfter, licenseRecheckInterval)
+			}
+		})
+	}
+}
+
+func TestGatewayReconcile_CommunityGatewayHasNoLicenseRequeue(t *testing.T) {
+	gw := reconciledGateway()
+	gw.Spec.Edition = v1alpha1.EditionCE
+	c := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderOutput("cs"), &mockValidator{})
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(gw)})
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if res.RequeueAfter != 0 {
+		t.Errorf("RequeueAfter = %s, want 0 for a CE gateway", res.RequeueAfter)
 	}
 }
