@@ -80,7 +80,6 @@ func (r *krakendRenderer) Render(input RenderInput) (*RenderOutput, error) {
 	}
 
 	checksum := hash.SHA256Hex(jsonData)
-	desiredImage := ResolveImage(gw, input.CEFallback)
 	pluginChecksum := computePluginChecksum(gw, input.PluginConfigMaps)
 
 	// Convert conflict/invalid sets to slices
@@ -96,7 +95,6 @@ func (r *krakendRenderer) Render(input RenderInput) (*RenderOutput, error) {
 	return &RenderOutput{
 		JSON:                jsonData,
 		Checksum:            checksum,
-		DesiredImage:        desiredImage,
 		PluginChecksum:      pluginChecksum,
 		ConflictedEndpoints: conflictedSlice,
 		EntryConflicts:      conflicted,

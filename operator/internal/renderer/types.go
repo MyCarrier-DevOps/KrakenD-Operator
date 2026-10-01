@@ -51,7 +51,6 @@ type DragonflyState struct {
 type RenderOutput struct {
 	JSON                []byte
 	Checksum            string
-	DesiredImage        string
 	PluginChecksum      string
 	ConflictedEndpoints []types.NamespacedName
 	InvalidEndpoints    []types.NamespacedName
