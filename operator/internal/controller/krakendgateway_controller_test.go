@@ -1695,6 +1695,9 @@ func TestGatewayReadinessFor(t *testing.T) {
 		{"validator unavailable before anything was deployed",
 			[]metav1.Condition{c("ConfigValid", metav1.ConditionUnknown, "ValidatorUnavailable")},
 			metav1.ConditionUnknown, "ValidatorUnavailable", v1alpha1.PhasePending},
+		{"validator unavailable and the deployment not available",
+			[]metav1.Condition{c("ConfigValid", metav1.ConditionUnknown, "ValidatorUnavailable"), settled},
+			metav1.ConditionUnknown, "ValidatorUnavailable", v1alpha1.PhaseDeploying},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
