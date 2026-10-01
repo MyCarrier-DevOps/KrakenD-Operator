@@ -158,44 +158,16 @@ func TestValidationCopy_InvalidJSON(t *testing.T) {
 	}
 }
 
-func TestValidationCopy_StripsEEOnlyExtraConfig(t *testing.T) {
-	input := []byte(
-		`{"version":3,"extra_config":{"backend/redis":{"host":"dragonfly:6379"},"telemetry/logging":{"level":"DEBUG"}}}`,
-	)
-	out, _, err := validationCopy(input, v1alpha1.EditionCE)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	var config map[string]any
-	if err := json.Unmarshal(out, &config); err != nil {
-		t.Fatalf("invalid JSON output: %v", err)
-	}
-	ec, ok := config["extra_config"].(map[string]any)
-	if !ok {
-		t.Fatal("expected extra_config to exist")
-	}
-	if _, exists := ec["backend/redis"]; exists {
-		t.Error("expected backend/redis to be stripped")
-	}
-	if _, exists := ec["telemetry/logging"]; !exists {
-		t.Error("expected telemetry/logging to remain")
-	}
-}
-
-func TestValidationCopy_DropsEmptiedExtraConfigBlock(t *testing.T) {
-	input := []byte(`{"version":3,"extra_config":{"backend/redis":{"host":"dragonfly:6379"}}}`)
-	out, _, err := validationCopy(input, v1alpha1.EditionCE)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	var config map[string]any
-	if err := json.Unmarshal(out, &config); err != nil {
-		t.Fatalf("invalid JSON output: %v", err)
-	}
-	if _, exists := config["extra_config"]; exists {
-		t.Error("expected extra_config block to be removed when empty")
+func TestValidationCopy_ValidatesTheRedisNamespace(t *testing.T) {
+	input := []byte(`{"version":3,"extra_config":{"redis":{"connection_pools":[{"name":"default","address":"r:6379"}]}}}`)
+	for _, edition := range []v1alpha1.Edition{v1alpha1.EditionCE, v1alpha1.EditionEE} {
+		out, findings, err := validationCopy(input, edition)
+		if err != nil || len(findings) != 0 {
+			t.Fatalf("%s: validationCopy = %v, %v", edition, findings, err)
+		}
+		if !strings.Contains(string(out), `"redis"`) {
+			t.Errorf("%s: the copy dropped the redis namespace; krakend check must lint it", edition)
+		}
 	}
 }
 
