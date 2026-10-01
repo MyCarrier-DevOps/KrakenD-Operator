@@ -840,7 +840,9 @@ func gatewayStatusChanged(before, after *v1alpha1.KrakenDGatewayStatus) bool {
 //   - True/Accepted when every entry of ep is included;
 //   - True/PartiallyAccepted when an older KrakenDEndpoint won some but not
 //     all of its (endpoint, method) pairs;
-//   - False/EndpointConflict when it won all of them.
+//   - False/EndpointConflict when it won all of them;
+//   - reason EEFeaturesStripped when a CE-fallback render removed Enterprise-only
+//     features from it (False when nothing of it is served).
 //
 // status.conflicts lists the lost entries. The condition is nil when the
 // render excluded ep because a policy it references is missing: the endpoint
@@ -858,7 +860,11 @@ func endpointAccepted(gw *v1alpha1.KrakenDGateway, ep *v1alpha1.KrakenDEndpoint,
 		Reason:             v1alpha1.ReasonAccepted,
 		Message:            fmt.Sprintf("Included in the configuration of gateway %s/%s", gw.Namespace, gw.Name),
 	}
+	stripped := rv.stripped[key]
 	if _, ok := rv.conflicted[key]; !ok {
+		if len(stripped) > 0 {
+			eeStripped(cond, ep, stripped)
+		}
 		return acceptance{condition: cond}
 	}
 	lost := rv.lost[key]
@@ -867,6 +873,7 @@ func endpointAccepted(gw *v1alpha1.KrakenDGateway, ep *v1alpha1.KrakenDEndpoint,
 		cond.Message = fmt.Sprintf(
 			"%d of %d entries are served on gateway %s/%s; status.conflicts lists the entries an older "+
 				"KrakenDEndpoint serves", total-len(lost), total, gw.Namespace, gw.Name)
+		noteStripped(cond, stripped)
 		return acceptance{condition: cond, conflicts: endpointConflicts(lost)}
 	}
 	cond.Status = metav1.ConditionFalse
@@ -874,7 +881,35 @@ func endpointAccepted(gw *v1alpha1.KrakenDGateway, ep *v1alpha1.KrakenDEndpoint,
 	cond.Message = fmt.Sprintf(
 		"Entries conflict with an older KrakenDEndpoint on gateway %s/%s; the conflicting entries are not served",
 		gw.Namespace, gw.Name)
+	noteStripped(cond, stripped)
 	return acceptance{condition: cond, conflicts: endpointConflicts(lost)}
+}
+
+// eeStripped makes cond the verdict for an endpoint that a CE-fallback render
+// removed Enterprise-only features from. It stays True while some entry is
+// still served, and turns False when every entry was an EE wildcard.
+func eeStripped(cond *metav1.Condition, ep *v1alpha1.KrakenDEndpoint, stripped []renderer.StrippedEEFeature) {
+	removed := 0
+	for _, f := range stripped {
+		if f.Feature == renderer.FeatureWildcardEndpoint {
+			removed++
+		}
+	}
+	if removed >= entryCount(ep) {
+		cond.Status = metav1.ConditionFalse
+	}
+	cond.Reason = v1alpha1.ReasonEEFeaturesStripped
+	cond.Message = truncateMessage("The gateway runs KrakenD CE in license fallback, which removed these "+
+		"Enterprise-only features: "+strippedList(stripped), maxConditionMessageBytes)
+}
+
+// noteStripped appends what a CE-fallback render removed to a conflict
+// verdict, which keeps its reason.
+func noteStripped(cond *metav1.Condition, stripped []renderer.StrippedEEFeature) {
+	if len(stripped) > 0 {
+		cond.Message = truncateMessage(cond.Message+"; CE fallback also removed: "+strippedList(stripped),
+			maxConditionMessageBytes)
+	}
 }
 
 // namespacedNameSet returns names as a set.
