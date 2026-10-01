@@ -52,6 +52,12 @@ func TestAttribute_MapsKrakendCheckOutputToSources(t *testing.T) {
 			output:    "ERROR parsing the configuration file:\t'/tmp/k.json': ignoring the 'POST /__debug/{x}' endpoint, since it is invalid!!!\n",
 			wantIndex: []int{1},
 		},
+		{
+			name:      "route conflict names both parties",
+			rendered:  `{"endpoints":[{"endpoint":"/a/{id}","method":"GET"},{"endpoint":"/a/{name}","method":"GET"}]}`,
+			output:    "ERROR testing the configuration file:\t':name' in new path '/a/:name' conflicts with existing wildcard ':id' in existing prefix '/a/:id'\n",
+			wantIndex: []int{0, 1},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
