@@ -1939,7 +1939,7 @@ func TestGatewayReconcile_RejectedEditionFlipToCEKeepsTheEEImage(t *testing.T) {
 }
 
 func TestGatewayReconcile_RejectedEditionFlipToEEKeepsTheCEImage(t *testing.T) {
-	gw, secret, parser := licensedEEGateway(testNow.Add(time.Hour), true) // valid license
+	gw, secret, parser := licensedEEGateway(testNow.Add(365*24*time.Hour), true) // valid license
 	const config = `{"version":3,"name":"applied-as-ce"}`
 	gw.Status.ConfigChecksum = hash.SHA256Hex([]byte(config))
 	gw.Status.ConfigEdition = v1alpha1.EditionCE
@@ -1999,7 +1999,7 @@ func TestGatewayReconcile_RejectedRenderKeepsTheAppliedPlugins(t *testing.T) {
 }
 
 func TestGatewayReconcile_AdoptedEditionSurvivesARejectedFirstRender(t *testing.T) {
-	gw, secret, parser := licensedEEGateway(testNow.Add(time.Hour), true) // valid license
+	gw, secret, parser := licensedEEGateway(testNow.Add(365*24*time.Hour), true) // valid license
 	const config = `{"version":3,"name":"applied-before-the-upgrade"}`
 	gw.Status.ConfigChecksum = hash.SHA256Hex([]byte(config)) // no configEdition: written by the previous operator
 	c := fakeClientBuilder().WithObjects(gw, secret, legacyConfigMap(gw, config)).WithStatusSubresource(gw).Build()
