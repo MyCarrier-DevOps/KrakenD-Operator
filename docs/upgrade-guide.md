@@ -313,7 +313,7 @@ apply` time (`must be a list of strings, e.g. ["internal"]`); a value
 declared on the operation itself is caught by the default CUE definitions
 instead and fails the sync with reason `CUEEvaluationFailed`. Previously a
 malformed value (e.g. a YAML mapping) passed both checks unchanged and only
-surfaced as a `krakend check -tlc` failure, which blocks config updates for
+surfaced as a `krakend check -t -n -c` failure, which blocks config updates for
 every service on that gateway — not just the one with the bad value.
 
 The admission check runs on `UPDATE` as well as `CREATE` and validates the
@@ -332,6 +332,34 @@ is the backstop (when the webhooks are enabled): the generated endpoint is
 rejected and the sync fails with `EndpointReconcileFailed`.
 
 ---
+
+## Unreleased — Gateway validation, status and admission fixes
+
+### Config validation runs offline
+
+The operator now validates rendered configs with `krakend check -t -n -c`.
+`-n` lints against the JSON schema built into the operator's krakend
+binary; the previous `-l` downloaded the schema from the KrakenD website on
+every validation. Validation no longer needs egress from the operator pod,
+no longer fails while that site is unreachable, and its verdict changes only
+with an operator upgrade. The built-in schema gave the same verdict as the
+online one on every config tested. Each validation run is limited to 30
+seconds.
+
+**On upgrade:** a gateway reporting `ConfigValid=False` only because the
+online schema could not be fetched is re-validated on the first reconcile
+and, if its config is valid, rolled out. To list the gateways whose config
+is currently not valid, and why, before upgrading:
+
+```bash
+kubectl get krakendgateways -A -o json | jq -r '
+  .items[] | . as $g | (.status.conditions // [])[]
+  | select(.type == "ConfigValid" and .status != "True")
+  | "\($g.metadata.namespace)/\($g.metadata.name)\t\(.reason)\t\(.message | .[0:160])"'
+```
+
+A message containing `failing loading "https://www.krakend.io/schema` marks
+a gateway blocked by the schema download rather than by its config.
 
 ## v0.14.0 — openapi-serve liveness probe (one-time rollout)
 
