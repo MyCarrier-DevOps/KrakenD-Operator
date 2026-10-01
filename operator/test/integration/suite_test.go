@@ -140,28 +140,22 @@ func runTests(m *testing.M) int {
 		return 1
 	}
 
-	// Install CRDs into the K3s cluster using the apiextensions client.
-	crdDir, err := filepath.Abs(
-		filepath.Join("..", "..", "config", "crd", "bases"),
-	)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to resolve CRD directory path: %v\n", err)
-		return 1
-	}
-	if err := installCRDs(ctx, cfg, crdDir); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to install CRDs: %v\n", err)
-		return 1
-	}
-
-	// Optional third-party CRDs the operator watches when present at startup.
-	testCRDDir, err := filepath.Abs(filepath.Join("testdata", "crds"))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to resolve test CRD directory path: %v\n", err)
-		return 1
-	}
-	if err := installCRDs(ctx, cfg, testCRDDir); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to install test CRDs: %v\n", err)
-		return 1
+	// Install CRDs into the K3s cluster using the apiextensions client: the
+	// operator's own, then the optional third-party ones it watches when
+	// present at startup.
+	for _, dir := range [][]string{
+		{"..", "..", "config", "crd", "bases"},
+		{"testdata", "crds"},
+	} {
+		crdDir, err := filepath.Abs(filepath.Join(dir...))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to resolve CRD directory path %v: %v\n", dir, err)
+			return 1
+		}
+		if err := installCRDs(ctx, cfg, crdDir); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to install CRDs from %s: %v\n", crdDir, err)
+			return 1
+		}
 	}
 
 	restConfig = cfg
