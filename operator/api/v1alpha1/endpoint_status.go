@@ -58,3 +58,9 @@ func EndpointReady(conds []metav1.Condition) (status metav1.ConditionStatus, rea
 		return metav1.ConditionFalse, accepted.Reason, accepted.Message
 	}
 }
+
+// EndpointPhaseFromReady returns the compatibility phase for a KrakenDEndpoint
+// whose Ready condition has the given status and reason.
+func EndpointPhaseFromReady(status metav1.ConditionStatus, reason string) EndpointPhase {
+	return ""
+}

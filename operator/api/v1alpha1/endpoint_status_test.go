@@ -103,3 +103,19 @@ func TestEndpointReady(t *testing.T) {
 		})
 	}
 }
+
+func TestEndpointPhaseFromReady(t *testing.T) {
+	tests := []struct {
+		status metav1.ConditionStatus
+		reason string
+		want   EndpointPhase
+	}{
+		{metav1.ConditionTrue, "Ready", "Active"},
+		{metav1.ConditionUnknown, "Pending", "Pending"},
+	}
+	for _, tt := range tests {
+		if got := EndpointPhaseFromReady(tt.status, tt.reason); got != tt.want {
+			t.Errorf("EndpointPhaseFromReady(%s, %q) = %q, want %q", tt.status, tt.reason, got, tt.want)
+		}
+	}
+}
