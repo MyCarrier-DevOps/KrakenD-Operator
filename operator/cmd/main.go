@@ -67,6 +67,7 @@ func main() {
 	var probeAddr string
 	var secureMetrics bool
 	var enableHTTP2 bool
+	var enableWebhooks bool
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -85,6 +86,9 @@ func main() {
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+	flag.BoolVar(&enableWebhooks, "enable-webhooks", true,
+		"Serve the validating admission webhooks. With false the webhook server does not start "+
+			"and invalid objects are caught only at render time.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -257,7 +261,7 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "KrakenDAutoConfig")
 		os.Exit(1)
 	}
-	if err := webhooksetup.SetupWebhooks(mgr); err != nil {
+	if err := registerWebhooks(mgr, enableWebhooks, webhooksetup.SetupWebhooks); err != nil {
 		setupLog.Error(err, "unable to set up webhooks")
 		os.Exit(1)
 	}
