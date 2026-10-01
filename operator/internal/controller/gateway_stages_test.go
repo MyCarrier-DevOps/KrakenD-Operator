@@ -122,7 +122,9 @@ func TestGatewayReconcile_InfrastructureRunsWhateverTheConfigVerdict(t *testing.
 		t.Run(tc.name, func(t *testing.T) {
 			gw := reconciledGateway()
 			gw.Status.ConfigChecksum = "applied"
-			c := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).Build()
+			appliedCM := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace}}
+			resources.BuildConfigMap(appliedCM, gw, []byte(`{"applied":true}`))
+			c := fakeClientBuilder().WithObjects(gw, appliedCM).WithStatusSubresource(gw).Build()
 			r := newTestGatewayReconciler(c, renderOutput("new"), &countingValidator{err: tc.verdict})
 
 			err := reconcileGateway(t, r, gw)
@@ -139,6 +141,13 @@ func TestGatewayReconcile_InfrastructureRunsWhateverTheConfigVerdict(t *testing.
 			var svc corev1.Service
 			if err := c.Get(context.Background(), client.ObjectKeyFromObject(gw), &svc); err != nil {
 				t.Errorf("the Service must be reconciled whatever the config verdict: %v", err)
+			}
+			var cm corev1.ConfigMap
+			if err := c.Get(context.Background(), client.ObjectKeyFromObject(gw), &cm); err != nil {
+				t.Fatalf("getting the gateway ConfigMap: %v", err)
+			}
+			if got, want := cm.Data["krakend.json"], appliedCM.Data["krakend.json"]; got != want {
+				t.Errorf("a config that did not pass must not reach the ConfigMap: got %q, want %q", got, want)
 			}
 		})
 	}
