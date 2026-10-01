@@ -176,9 +176,9 @@ var ceUnsupportedExtraConfig = []string{
 
 // validationCopy creates the document the embedded CE krakend binary checks
 // for a render of the given edition. It strips the EE-only extra_config keys
-// that the CE linter rejects and, for an EE render, the exact "/*" endpoint,
-// which the CE validator does not support. Non-nil findings are a verdict
-// reached without running krakend check.
+// that the CE linter rejects and, for an EE render, rewrites each wildcard
+// endpoint to a parameter route. Every endpoint stays at its index. Non-nil
+// findings are a verdict reached without running krakend check.
 func validationCopy(jsonData []byte, edition v1alpha1.Edition) ([]byte, []string, error) {
 	var config map[string]any
 	if err := json.Unmarshal(jsonData, &config); err != nil {
@@ -187,21 +187,9 @@ func validationCopy(jsonData []byte, edition v1alpha1.Edition) ([]byte, []string
 
 	modified := stripCEUnsupportedExtraConfig(config)
 
-	// Strip wildcard endpoints for EE configs validated against CE.
 	if edition == v1alpha1.EditionEE {
-		if endpoints, ok := config["endpoints"].([]any); ok {
-			filtered := make([]any, 0, len(endpoints))
-			for _, ep := range endpoints {
-				epMap, ok := ep.(map[string]any)
-				if !ok {
-					continue
-				}
-				if path, ok := epMap["endpoint"].(string); ok && path == "/*" {
-					continue
-				}
-				filtered = append(filtered, ep)
-			}
-			config["endpoints"] = filtered
+		endpoints, _ := config["endpoints"].([]any)
+		if rewriteEEWildcards(endpoints) {
 			modified = true
 		}
 	}
