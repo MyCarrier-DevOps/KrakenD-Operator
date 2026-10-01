@@ -460,6 +460,16 @@ policies until they are gone.
   API server could not verify the webhook's certificate and, with the
   default `failurePolicy: Fail`, every write to the four CRDs failed.
 
+### The gateway webhook is no longer called on DELETE
+
+`vkrakendgateway.kb.io` was registered for DELETE although its handler
+validated nothing. With `failurePolicy: Fail`, deleting a gateway, or a
+namespace containing one, needed a reachable operator. The registration now
+covers CREATE and UPDATE only, in the Helm chart and in
+`operator/config/webhook/manifests.yaml`.
+
+---
+
 ## v0.14.0 — openapi-serve liveness probe (one-time rollout)
 
 The `openapi-serve` sidecar now renders with a liveness probe. It previously
