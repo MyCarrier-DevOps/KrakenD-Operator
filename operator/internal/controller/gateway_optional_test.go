@@ -206,3 +206,24 @@ func TestGatewayReconcile_DeletesWithAUIDPrecondition(t *testing.T) {
 		t.Errorf("delete precondition UID = %v, want vs-uid", preconditionUID)
 	}
 }
+
+func TestGatewayReconcile_NoCRDNeverReadsLive(t *testing.T) {
+	gw := reconciledGateway()
+	gw.UID = "gw-uid"
+	gw.Status.ConfigChecksum = "applied"
+	c := interceptor.NewClient(
+		fakeClientBuilder().WithRESTMapper(optionalCRDMapper()).WithObjects(gw).WithStatusSubresource(gw).Build(),
+		interceptor.Funcs{Get: func(
+			ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption,
+		) error {
+			if u, ok := obj.(*unstructured.Unstructured); ok {
+				t.Errorf("live Get of %s %s without its CRD", u.GetKind(), key)
+			}
+			return cl.Get(ctx, key, obj, opts...)
+		}})
+	r := newTestGatewayReconciler(c, renderOutput("applied"), &mockValidator{})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+}
