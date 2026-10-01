@@ -1085,3 +1085,37 @@ func TestRender_EntryConflictsNameTheWinner(t *testing.T) {
 		t.Error("the winner lost nothing and must have no entry conflicts")
 	}
 }
+
+func TestRender_EntryConflictsAreSortedByEndpointThenMethod(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "ns"},
+		Spec:       v1alpha1.KrakenDGatewaySpec{Edition: v1alpha1.EditionCE, Version: "2.13"},
+	}
+	backend := []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/x"}}
+	entry := func(path, method string) v1alpha1.EndpointEntry {
+		return v1alpha1.EndpointEntry{Endpoint: path, Method: method, Backends: backend}
+	}
+	t0 := metav1.NewTime(time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC))
+	endpoints := []v1alpha1.KrakenDEndpoint{
+		{ObjectMeta: metav1.ObjectMeta{Name: "older", Namespace: "ns", CreationTimestamp: t0},
+			Spec: v1alpha1.KrakenDEndpointSpec{Endpoints: []v1alpha1.EndpointEntry{
+				entry("/a", "GET"), entry("/b", "GET"), entry("/b", "POST"), entry("/c", "GET")}}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "newer", Namespace: "ns", CreationTimestamp: metav1.NewTime(t0.Add(time.Minute))},
+			Spec: v1alpha1.KrakenDEndpointSpec{Endpoints: []v1alpha1.EndpointEntry{
+				entry("/c", "GET"), entry("/b", "POST"), entry("/a", "GET"), entry("/b", "GET")}}},
+	}
+	out, err := New(Options{}).Render(RenderInput{Gateway: gw, Endpoints: endpoints})
+	if err != nil {
+		t.Fatal(err)
+	}
+	winner := types.NamespacedName{Namespace: "ns", Name: "older"}
+	want := []EntryConflict{
+		{Endpoint: "/a", Method: "GET", Winner: winner},
+		{Endpoint: "/b", Method: "GET", Winner: winner},
+		{Endpoint: "/b", Method: "POST", Winner: winner},
+		{Endpoint: "/c", Method: "GET", Winner: winner},
+	}
+	if got := out.EntryConflicts[types.NamespacedName{Namespace: "ns", Name: "newer"}]; !reflect.DeepEqual(got, want) {
+		t.Errorf("EntryConflicts[newer] = %+v, want %+v", got, want)
+	}
+}
