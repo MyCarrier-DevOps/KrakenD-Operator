@@ -416,6 +416,19 @@ func optionalCRDMapper(gvks ...schema.GroupVersionKind) meta.RESTMapper {
 	return m
 }
 
+// deploymentPastProgressDeadline is gw's Deployment as the Deployment
+// controller reports it once a rollout has exceeded its progress deadline.
+func deploymentPastProgressDeadline(gw *v1alpha1.KrakenDGateway) *appsv1.Deployment {
+	return &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace},
+		Status: appsv1.DeploymentStatus{Conditions: []appsv1.DeploymentCondition{{
+			Type:   appsv1.DeploymentProgressing,
+			Status: corev1.ConditionFalse,
+			Reason: "ProgressDeadlineExceeded",
+		}}},
+	}
+}
+
 func TestGatewayReconcile_EventsOnlyOnConditionTransitions(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -433,6 +446,13 @@ func TestGatewayReconcile_EventsOnlyOnConditionTransitions(t *testing.T) {
 					Type: v1alpha1.ConditionIstioConfigured, Status: metav1.ConditionFalse, Reason: "CRDNotInstalled",
 				})
 				return nil
+			},
+		},
+		{
+			name:   "rollout past its progress deadline",
+			reason: v1alpha1.ReasonRolloutFailed,
+			setup: func(gw *v1alpha1.KrakenDGateway) []client.Object {
+				return []client.Object{deploymentPastProgressDeadline(gw)}
 			},
 		},
 	}
