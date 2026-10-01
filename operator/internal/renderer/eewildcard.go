@@ -68,8 +68,7 @@ func eeWildcardFindings(endpoints []any) []string {
 		if !ok {
 			continue
 		}
-		path, _ := m["endpoint"].(string)
-		method, _ := m["method"].(string)
+		path, method := stringField(m, "endpoint"), stringField(m, "method")
 		if method == "" {
 			method = "GET"
 		}
@@ -96,4 +95,13 @@ func eeWildcardFindings(endpoints []any) []string {
 	}
 	sort.Strings(findings)
 	return findings
+}
+
+// stringField returns m[key] when it is a string, and "" otherwise.
+func stringField(m map[string]any, key string) string {
+	v, ok := m[key].(string)
+	if !ok {
+		return ""
+	}
+	return v
 }
