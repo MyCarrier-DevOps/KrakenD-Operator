@@ -661,16 +661,16 @@ While the validator cannot run (`ConfigValid=Unknown/ValidatorUnavailable`),
 a gateway that is otherwise healthy reports `Ready=Unknown` with the same
 reason. It keeps serving its applied config.
 
-### Ready follows image and plugin rollouts
+### Ready follows image, plugin and license rollouts
 
 Gateway `Ready` now stays not True until the Deployment has finished rolling
-out an image or plugin change, as it already did for a config change.
+out an image, plugin or license change, as it already did for a config change.
 Previously a version bump, an EE recovery or a plugin change could report
 `Ready=True` while the old pods were still being replaced.
 
 The post-restart Job applies the same test. It runs, and re-runs after a
 failure, only once the Deployment has observed its latest generation and
-every replica runs the applied config, image and plugins.
+every replica runs the applied config, image, plugins and license.
 
 **One-time rollout on upgrade.** The pod template gains a `krakend.io/image`
 annotation, which records the image the operator set (the operator compares
@@ -832,8 +832,10 @@ the license bytes the operator read:
 - When the bytes do not change, nothing rolls.
 - When the Secret cannot be read, the annotation the Deployment already
   carries is kept, so a transient read failure never rolls pods.
-- The annotation is absent on a Community gateway and while an EE gateway
-  runs the CE fallback.
+- The annotation is present for every EE gateway with a readable license,
+  including one running the CE fallback (the license stays mounted), so a
+  fallback toggle alone does not change it. It is absent on a Community
+  gateway.
 - The post-restart Job does not run again for a license change.
 
 **One-time rollout on upgrade.** Adding the annotation rolls each EE gateway
