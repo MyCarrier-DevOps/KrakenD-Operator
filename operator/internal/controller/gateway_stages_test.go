@@ -2186,3 +2186,42 @@ func TestGatewayReconcile_RejectedCEFallbackKeepsTheOpenAPIPieces(t *testing.T) 
 		t.Errorf("CEFallbackApplied = %+v, want none: the applied config is still the EE one", cond)
 	}
 }
+
+func TestReconcileCEFallbackCondition_NamesTheOpenAPIExport(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		openapi  *v1alpha1.OpenAPIExportSpec
+		stripped []renderer.StrippedEEFeature
+		want     []string
+		notWant  string
+	}{
+		{"nothing removed", nil, nil, []string{"the config uses no Enterprise-only features"}, "OpenAPI"},
+		{"OpenAPI export disabled", &v1alpha1.OpenAPIExportSpec{Enabled: false}, nil,
+			[]string{"the config uses no Enterprise-only features"}, "OpenAPI"},
+		{"only the OpenAPI export", &v1alpha1.OpenAPIExportSpec{Enabled: true}, nil,
+			[]string{"removed 1 Enterprise-only feature(s): " + openAPIFallbackNote}, "uses no Enterprise-only features"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gw, _, _ := licensedEEGateway(testNow.Add(-time.Minute), true)
+			gw.Spec.OpenAPI = tc.openapi
+			gw.Status.ConfigChecksum, gw.Status.ConfigEdition = "cs", v1alpha1.EditionCE
+			r := newTestGatewayReconciler(fakeClientBuilder().Build(), &mockRenderer{}, &mockValidator{})
+
+			r.reconcileCEFallbackCondition(gw,
+				&renderer.RenderOutput{Checksum: "cs", StrippedEEFeatures: tc.stripped}, v1alpha1.EditionCE)
+
+			cond := meta.FindStatusCondition(gw.Status.Conditions, v1alpha1.ConditionCEFallbackApplied)
+			if cond == nil {
+				t.Fatal("CEFallbackApplied is not set")
+			}
+			for _, w := range tc.want {
+				if !strings.Contains(cond.Message, w) {
+					t.Errorf("message %q does not contain %q", cond.Message, w)
+				}
+			}
+			if tc.notWant != "" && strings.Contains(cond.Message, tc.notWant) {
+				t.Errorf("message %q contains %q", cond.Message, tc.notWant)
+			}
+		})
+	}
+}
