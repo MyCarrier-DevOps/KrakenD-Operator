@@ -1837,9 +1837,9 @@ conditions and shown with `-o wide`.
 | `LicenseValid` | EE license state: `True`/`LicenseOK`, `True`/`LicenseExpiringSoon` inside the warning window, `False`/`LicensePreExpiry` or `False`/`LicenseExpired`, and `Unknown`/`LicenseSecretMissing` while the license cannot be read or parsed. While unreadable, the stage is judged from the last known expiry (`status.licenseExpiry`): once that is inside the safety buffer or past, the stage verdict (`False`) replaces `Unknown` |
 | `LicenseDegraded` | Gateway is actively running in CE mode as a fallback because the EE license expired or entered the pre-expiry safety window (**True** when the fallback decision is made, before the CE rollout has finished, and only when `fallbackToCE=true`; `False` with reason `LicenseRestored` after recovery, or `False` with reason `LicenseExpiredNoFallback` when the license expired and `fallbackToCE` is off while the condition was already present; absent otherwise) |
 | `CEFallbackApplied` | The applied config is the CE-fallback render (reason `EEFeaturesStripped`); the message lists the Enterprise-only features it removed. Absent otherwise |
-| `DragonflyReady` | Dragonfly CR status reports `ready` phase (watched from Dragonfly Operator); reason `CRDNotInstalled` when the feature is enabled but its CRD is not installed |
-| `IstioConfigured` | VirtualService was successfully created/updated; reason `CRDNotInstalled` when the feature is enabled but its CRD is not installed |
-| `LicenseSecretUnavailable` | `True` while the license cannot be read: the ExternalSecret failed to sync, the referenced Secret (`secretRef`) or its key does not exist, or the certificate does not parse. `LicenseValid` is `Unknown` meanwhile, unless the last known expiry (`status.licenseExpiry`) is already inside the safety buffer or past, in which case the stage verdict applies. `False` with reason `SecretAvailable` once it can be read; reason `CRDNotInstalled` when the feature is enabled but its CRD is not installed |
+| `DragonflyReady` | Dragonfly CR status reports `ready` phase (watched from Dragonfly Operator); `False`/`CRDNotInstalled` when the feature is enabled but its CRD is not installed |
+| `IstioConfigured` | VirtualService was successfully created/updated; `False`/`CRDNotInstalled` when the feature is enabled but its CRD is not installed |
+| `LicenseSecretUnavailable` | `True` while the license cannot be read: the ExternalSecret failed to sync, the referenced Secret (`secretRef`) or its key does not exist, or the certificate does not parse. `LicenseValid` is `Unknown` meanwhile, unless the last known expiry (`status.licenseExpiry`) is already inside the safety buffer or past, in which case the stage verdict applies. `False` with reason `SecretAvailable` once it can be read; `True`/`CRDNotInstalled` when the license comes from an ExternalSecret whose CRD is not installed |
 | `LicenseExpired` | License has expired or is inside the 1 h safety buffer (reason `LicenseExpired` or `LicensePreExpiry`), whether or not `fallbackToCE` is set; without `fallbackToCE` (no `LicenseDegraded`) the gateway reports phase `Error`, and its pods self-terminate at T-0. `False` with reason `LicenseRestored` after recovery, and absent otherwise |
 | `Progressing` | A rolling deployment is in progress; it ends (`RolloutComplete`) only when the Deployment has observed the change, its pods carry the applied config checksum, image, plugin checksum and license checksum, and every replica is updated and available |
 
@@ -1875,7 +1875,7 @@ Per-gateway series (`namespace`, `name` labels) are removed when the gateway is 
 
 The operator emits events on the resource a condition or action concerns. Events on a KrakenDEndpoint are `EndpointConflict`, `Accepted` (emitted by the gateway controller), and `GatewayNotFound`, `PolicyNotFound` and `RefsResolved` (emitted by the endpoint controller). Events on a KrakenDBackendPolicy are `InvalidCircuitBreaker`, `InvalidRateLimit` and `Ready`. Events on a KrakenDAutoConfig are the AutoConfig rows (`SpecFetched` through `DuplicateOperationId`). All other rows are emitted on the KrakenDGateway. Condition-transition events (endpoint `ResolvedRefs`, policy `Ready`) fire on the transition only: a Warning when the condition becomes `False` or changes reason, and a Normal event when it recovers.
 A gateway event backed by a condition (`RolloutFailed`,
-`IstioVirtualServiceCreated`, `DragonflyNotReady`, the license events and
+`IstioVirtualServiceCreated`, `DragonflyNotReady`, `DragonflyReady`, the license events and
 `CRDNotInstalled`) is recorded only when that condition changes status or
 reason. A steady state emits no events. `ConfigValidationFailed` and
 `ValidatorUnavailable` fire when the recorded verdict changes.
@@ -1890,6 +1890,7 @@ reason. A steady state emits no events. `ConfigValidationFailed` and
 | License expired or entering pre-expiry safety window, falling back to CE | Warning | `LicenseFallbackCE` |
 | License expired or entering pre-expiry safety window, CE fallback not configured | Warning | `LicenseExpiredNoFallback` |
 | Dragonfly not ready | Warning | `DragonflyNotReady` |
+| Dragonfly ready again | Normal | `DragonflyReady` |
 | Dragonfly, Istio or the license ExternalSecret is enabled but its CRD is not installed (on the transition only) | Warning | `CRDNotInstalled` |
 | VirtualService created | Normal | `IstioVirtualServiceCreated` |
 | Endpoint newly loses all its entries to a path+method conflict (on the transition only) | Warning | `EndpointConflict` |
