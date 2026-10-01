@@ -299,3 +299,24 @@ func TestDeleteOptionalIfControlled_CRDCheckErrorNamesTheKind(t *testing.T) {
 		t.Errorf("error = %v, want it to read \"checking VirtualService CRD\"", err)
 	}
 }
+
+func TestDeleteIfControlled_ErrorNamesTheKind(t *testing.T) {
+	gw := reconciledGateway()
+	gw.UID = "gw-uid"
+	vs := controlledChild(gw, virtualServiceGVK, gw.Name)
+	c := interceptor.NewClient(fakeClientBuilder().WithObjects(vs).Build(), interceptor.Funcs{
+		Delete: func(context.Context, client.WithWatch, client.Object, ...client.DeleteOption) error {
+			return errors.New("forbidden")
+		}})
+	r := newTestGatewayReconciler(c, renderOutput("applied"), &mockValidator{})
+	target := &unstructured.Unstructured{}
+	target.SetGroupVersionKind(virtualServiceGVK)
+	target.SetName(gw.Name)
+	target.SetNamespace(gw.Namespace)
+
+	err := r.deleteIfControlled(context.Background(), gw, target)
+
+	if err == nil || !strings.Contains(err.Error(), "VirtualService") {
+		t.Errorf("error = %v, want it to name the VirtualService kind", err)
+	}
+}
