@@ -141,11 +141,16 @@ func matchRouterError(line string, routes []renderedRoute) []int {
 	}
 	var indices []int
 	for i, r := range routes {
-		if methods[r.method] && (r.shape == newShape || (prefix != "" && r.shape == prefix)) {
+		if methods[r.method] && (r.shape == newShape || underPrefix(r.shape, prefix)) {
 			indices = append(indices, i)
 		}
 	}
 	return indices
+}
+
+// underPrefix reports whether shape is the prefix route or lies beneath it.
+func underPrefix(shape, prefix string) bool {
+	return prefix != "" && (shape == prefix || strings.HasPrefix(shape, prefix+"/"))
 }
 
 // routeShape spells a route the way krakend's router errors do: {param} is
