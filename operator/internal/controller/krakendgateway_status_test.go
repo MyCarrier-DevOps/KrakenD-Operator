@@ -21,6 +21,8 @@ import (
 	"fmt"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -151,5 +153,37 @@ func TestGatewayReconcile_RejectedRenderIsNotRevalidated(t *testing.T) {
 	}
 	if n := len(recorder.Events); n != 1 {
 		t.Errorf("got %d events, want one ConfigValidationFailed", n)
+	}
+}
+
+func TestGatewayReconcile_EditionModeFlipRevalidatesSameRender(t *testing.T) {
+	gw := testGateway()
+	gw.Spec.Edition = v1alpha1.EditionEE
+	c, _ := gatewayStatusWrites(gw)
+	validator := &countingValidator{err: rejectedBy("wildcards must be named")}
+	r := &KrakenDGatewayReconciler{
+		Client: c, Scheme: testScheme(), Recorder: fakeRecorder(),
+		Renderer: renderOutput("same"), Validator: validator,
+	}
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+
+	// The license monitor switches the gateway to CE fallback: the render
+	// is unchanged, but the validation input is not.
+	degraded := getGateway(t, c, gw)
+	meta.SetStatusCondition(&degraded.Status.Conditions, metav1.Condition{
+		Type: v1alpha1.ConditionLicenseDegraded, Status: metav1.ConditionTrue,
+		Reason: v1alpha1.ReasonLicenseFallbackCE, Message: "license expired",
+	})
+	if err := c.Status().Update(context.Background(), degraded); err != nil {
+		t.Fatal(err)
+	}
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+
+	if validator.calls != 2 {
+		t.Errorf("krakend check ran %d times, want 2: CE fallback changes what is validated", validator.calls)
 	}
 }
