@@ -39,6 +39,9 @@ type configResult struct {
 	// appliedConfigMap is the ConfigMap holding the applied config. It is ""
 	// when none does, and the Deployment is then left as it is.
 	appliedConfigMap string
+	// heldBecause says why appliedConfigMap is "": nil means no ConfigMap
+	// exists, otherwise the ConfigMap that does failed verification.
+	heldBecause error
 }
 
 // publishApplied republishes the applied config. Publishing is idempotent,
@@ -47,7 +50,7 @@ func (r *KrakenDGatewayReconciler) publishApplied(
 	ctx context.Context, gw *v1alpha1.KrakenDGateway, output *renderer.RenderOutput,
 ) (configResult, error) {
 	if err := r.publishConfig(ctx, gw, output.JSON, output.Checksum); err != nil {
-		return configResult{}, err
+		return configResult{heldBecause: err}, err
 	}
 	return configResult{appliedConfigMap: resources.ConfigMapName(gw, output.Checksum)}, nil
 }
@@ -58,7 +61,7 @@ func (r *KrakenDGatewayReconciler) keepApplied(
 	ctx context.Context, gw *v1alpha1.KrakenDGateway, verdictErr error,
 ) (configResult, error) {
 	name, err := r.appliedConfigMapName(ctx, gw)
-	return configResult{appliedConfigMap: name}, stderrors.Join(verdictErr, err)
+	return configResult{appliedConfigMap: name, heldBecause: err}, stderrors.Join(verdictErr, err)
 }
 
 // appliedConfigMapName returns the ConfigMap holding the applied config
