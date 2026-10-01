@@ -504,3 +504,27 @@ func TestGatewayReconcile_UnreadableLicenseInsideTheBufferDoesNotFlipLicenseVali
 		t.Errorf("LastTransitionTime = %v, want it unchanged at %v", cond.LastTransitionTime, seeded)
 	}
 }
+
+func TestGatewayReconcile_UnreadableExpiredLicenseHonoursDisabledFallback(t *testing.T) {
+	gw, _, parser := licensedEEGateway(testNow, false) // the Secret is not created
+	gw.Status.LicenseExpiry = &metav1.Time{Time: testNow.Add(-time.Hour)}
+	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+		Type: v1alpha1.ConditionLicenseDegraded, Status: metav1.ConditionTrue, Reason: v1alpha1.ReasonLicenseFallbackCE,
+	})
+	c := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).Build()
+	var captured *renderer.RenderInput
+	r := newTestGatewayReconciler(c,
+		&capturingRenderer{delegate: renderOutput("cs"), captured: &captured}, &mockValidator{})
+	r.LicenseParser = parser
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if captured.CEFallback {
+		t.Error("with fallbackToCE off, the pass that records LicenseDegraded=False must not render CE")
+	}
+	cond := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionLicenseDegraded)
+	if cond == nil || cond.Status != metav1.ConditionFalse {
+		t.Errorf("LicenseDegraded = %+v, want False", cond)
+	}
+}
