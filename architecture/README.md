@@ -682,10 +682,10 @@ sequenceDiagram
     Op->>Op: 5. Compute SHA-256 of rendered config
 
     alt Checksum unchanged
-        alt Desired image ≠ current Deployment image
+        alt Applied image ≠ current Deployment image
             Op->>K8s: Set Progressing=True (phase Deploying is derived)
             Op->>Dep: Patch Deployment container image + checksum/plugins if changed
-            Note over Op: Image-only change (e.g., CE↔EE transition<br/>with no config diff). Triggers rolling update.
+            Note over Op: Image-only change (e.g., a version bump).<br/>The image follows the applied config's edition,<br/>so a CE↔EE change is a config change, validated as the new edition.
         else Image unchanged
             alt Plugin checksum changed
                 Op->>K8s: Set Progressing=True (phase Deploying is derived)
@@ -1279,12 +1279,11 @@ flowchart TD
     I --> J[Apply backend policies<br/>merge extraConfig + policyRef<br/>inline extraConfig takes precedence on key collision]
     J --> K[Inject TLS config<br/>if tls.enabled and NOT istio]
     K --> K1[Inject plugin block<br/>if plugins configured]
-    K1 --> K2[Select container image:<br/>if CE fallback: use ceImage or<br/>krakend/krakend:version<br/>else: use image or edition default]
-    K2 --> L[Serialize to JSON<br/>— this is the deploy config]
+    K1 --> L[Serialize to JSON<br/>— this is the deploy config]
     L --> M[Compute SHA-256 checksum]
-    M --> N{checksum changed?}
+    M --> N{checksum and edition<br/>match the applied config?}
 
-    N -->|No| N1{Desired image ≠<br/>current Deployment image?}
+    N -->|No| N1{Applied image ≠<br/>current Deployment image?}
     N1 -->|No| N3{checksum/plugins<br/>changed?}
     N3 -->|No| O[No-op: skip deployment<br/>Set ConfigValid=True<br/>Derive Ready and phase]
     N3 -->|Yes| N4[Set Progressing=True<br/>Patch pod annotation: checksum/plugins]
