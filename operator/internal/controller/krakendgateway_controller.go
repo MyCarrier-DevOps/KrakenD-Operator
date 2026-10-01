@@ -1089,14 +1089,13 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 			}); err != nil {
 				return fmt.Errorf("reconciling virtualservice: %w", err)
 			}
-			meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+			r.setConditionWithEvent(gw, metav1.Condition{
 				Type:               v1alpha1.ConditionIstioConfigured,
 				Status:             metav1.ConditionTrue,
 				ObservedGeneration: gw.Generation,
 				Reason:             v1alpha1.ReasonIstioVSCreated,
 				Message:            "Istio VirtualService reconciled",
 			})
-			r.Recorder.Event(gw, "Normal", v1alpha1.ReasonIstioVSCreated, "Istio VirtualService reconciled")
 		}
 	}
 
