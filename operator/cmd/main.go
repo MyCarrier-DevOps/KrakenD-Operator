@@ -228,6 +228,7 @@ func main() {
 		Renderer:  krakendRenderer,
 		Validator: krakendValidator,
 		Clock:     clock.RealClock{},
+		APIReader: mgr.GetAPIReader(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "KrakenDGateway")
 		os.Exit(1)
