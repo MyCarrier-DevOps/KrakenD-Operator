@@ -187,3 +187,23 @@ func TestGatewayReconcile_MissingLicenseSecretKeepsTheFallbackDecision(t *testin
 		t.Errorf("LicenseSecretMissing events over two reconciles = %d, want 1", n)
 	}
 }
+
+func TestGatewayReconcile_ExpiringSoonWarnsOnceWhenEnteringTheWindow(t *testing.T) {
+	gw, secret, parser := licensedEEGateway(testNow.Add(10*24*time.Hour), true)
+	c := fakeClientBuilder().WithObjects(gw, secret).WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderOutput("cs"), &mockValidator{})
+	r.LicenseParser = parser
+
+	for range 3 {
+		if err := reconcileGateway(t, r, gw); err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+	}
+	cond := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionLicenseValid)
+	if cond == nil || cond.Status != metav1.ConditionTrue || cond.Reason != v1alpha1.ReasonLicenseExpiringSoon {
+		t.Errorf("LicenseValid = %+v, want True/%s", cond, v1alpha1.ReasonLicenseExpiringSoon)
+	}
+	if n := eventsWithReason(r.Recorder.(*record.FakeRecorder), v1alpha1.ReasonLicenseExpiringSoon); n != 1 {
+		t.Errorf("LicenseExpiringSoon events over three reconciles = %d, want 1", n)
+	}
+}
