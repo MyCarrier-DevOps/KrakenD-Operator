@@ -302,6 +302,15 @@ A `gatewayRef` to a non-existent gateway shows phase `Detached` instead
 (`ResolvedRefs=False`, reason `GatewayNotFound`). For what each condition
 means, see [Endpoint Status](#endpoint-status).
 
+### Endpoint shows `Accepted=False`, reason `GatewayConfigRejected`
+
+The gateway's newest config was rejected by `krakend check`, and a finding
+names this endpoint. The gateway still serves its last applied config, so
+this endpoint's latest change is not live.
+`kubectl describe krakendendpoint <name>` shows the findings; fix the spec
+they point at. The gateway's `ConfigValid` message lists every endpoint
+named.
+
 ### AutoConfig not generating endpoints
 
 **Diagnosis:**
