@@ -870,11 +870,14 @@ func endpointAccepted(gw *v1alpha1.KrakenDGateway, ep *v1alpha1.KrakenDEndpoint,
 		return acceptance{condition: cond}
 	}
 	lost := rv.lost[key]
-	if total := entryCount(ep); len(lost) > 0 && len(lost) < total {
+	// The CE fallback strips wildcards after the conflicts are settled, so a
+	// stripped entry is one that won its pair and is not served either.
+	served := entryCount(ep) - len(lost) - wildcardCount(stripped)
+	if total := entryCount(ep); len(lost) > 0 && served > 0 {
 		cond.Reason = v1alpha1.ReasonPartiallyAccepted
 		cond.Message = fmt.Sprintf(
 			"%d of %d entries are served on gateway %s/%s; status.conflicts lists the entries an older "+
-				"KrakenDEndpoint serves", total-len(lost), total, gw.Namespace, gw.Name)
+				"KrakenDEndpoint serves", served, total, gw.Namespace, gw.Name)
 		noteStripped(cond, stripped)
 		return acceptance{condition: cond, conflicts: endpointConflicts(lost)}
 	}
@@ -891,18 +894,23 @@ func endpointAccepted(gw *v1alpha1.KrakenDGateway, ep *v1alpha1.KrakenDEndpoint,
 // removed Enterprise-only features from. It stays True while some entry is
 // still served, and turns False when every entry was an EE wildcard.
 func eeStripped(cond *metav1.Condition, ep *v1alpha1.KrakenDEndpoint, stripped []renderer.StrippedEEFeature) {
-	removed := 0
-	for _, f := range stripped {
-		if f.Feature == renderer.FeatureWildcardEndpoint {
-			removed++
-		}
-	}
-	if removed >= entryCount(ep) {
+	if wildcardCount(stripped) >= entryCount(ep) {
 		cond.Status = metav1.ConditionFalse
 	}
 	cond.Reason = v1alpha1.ReasonEEFeaturesStripped
 	cond.Message = truncateMessage("The gateway runs KrakenD CE in license fallback, which removed these " +
 		"Enterprise-only features:\n" + strippedList(stripped))
+}
+
+// wildcardCount is how many of features are removed EE wildcard entries.
+func wildcardCount(features []renderer.StrippedEEFeature) int {
+	n := 0
+	for _, f := range features {
+		if f.Feature == renderer.FeatureWildcardEndpoint {
+			n++
+		}
+	}
+	return n
 }
 
 // noteStripped appends what a CE-fallback render removed to a conflict
