@@ -27,6 +27,7 @@ import (
 	"github.com/go-logr/logr/funcr"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	appsv1 "k8s.io/api/apps/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -991,4 +992,33 @@ func TestPublishConfig_VerifiesTheConfigMapALostCreateRaceLeftBehind(t *testing.
 	if err == nil || !strings.Contains(err.Error(), "not controlled by gateway") {
 		t.Errorf("publishConfig = %v, want the lost create race's ConfigMap rejected as not the gateway's own", err)
 	}
+}
+
+func TestGatewayReconcile_ACollectionFailureDoesNotStallTheRestOfTheInfrastructure(t *testing.T) {
+	gw := reconciledGateway()
+	gw.UID = "gw-uid"
+	gw.Spec.Autoscaling = &v1alpha1.AutoscalingSpec{MinReplicas: ptr.To(int32(2)), MaxReplicas: 4}
+	const config = `{"version":3,"name":"migrated"}`
+	gw.Status.ConfigChecksum = hash.SHA256Hex([]byte(config))
+	c := fakeClientBuilder().WithObjects(gw, legacyConfigMap(gw, config), legacyDeployment(gw)).
+		WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderOf(config), &mockValidator{})
+	// The legacy ConfigMap is a candidate, so collection reads ReplicaSets;
+	// the operator's role may not allow it.
+	r.APIReader = interceptor.NewClient(c, interceptor.Funcs{
+		List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if _, ok := list.(*appsv1.ReplicaSetList); ok {
+				return errors.New("replicasets is forbidden")
+			}
+			return cl.List(ctx, list, opts...)
+		},
+	})
+
+	err := reconcileGateway(t, r, gw)
+
+	if err == nil || !strings.Contains(err.Error(), "replicasets is forbidden") {
+		t.Errorf("reconcile = %v, want the collection failure returned", err)
+	}
+	var hpa autoscalingv2.HorizontalPodAutoscaler
+	getObject(t, c, gw, gw.Name, &hpa)
 }
