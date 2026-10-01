@@ -41,7 +41,7 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 - `config.go` — Core Render() method, buildRootConfig, buildGatewayExtraConfig (refactored into 6 helpers), ResolveImage, serializeJSON
 - `endpoints.go` — flattenEndpoints (oldest-wins conflict resolution), buildEndpointJSON, buildBackendJSON
 - `extra_config.go` — 3-layer merge (raw < typed < inline) for backend/endpoint extra_config
-- `validator.go` — KrakenD CLI validation via temp file, PrepareValidationCopy strips EE-only extra_config keys (e.g. `backend/redis`) and wildcard endpoints before CE validation
+- `validator.go` — KrakenD CLI validation via temp file, validation rewrites EE wildcard endpoints to a parameter route and applies the EE wildcard route rule; the Redis pool is rendered under the EE `redis` namespace and validated
 - `plugins.go` — buildPluginBlock, computePluginChecksum
 - 60 tests, 94.1% coverage, 0 lint issues
 
