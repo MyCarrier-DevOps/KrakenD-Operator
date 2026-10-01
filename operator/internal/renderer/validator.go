@@ -177,18 +177,14 @@ func validationCopy(jsonData []byte, edition v1alpha1.Edition) (doc []byte, find
 		return nil, nil, fmt.Errorf("unmarshaling config for validation copy: %w", err)
 	}
 
-	modified := false
-
-	if endpoints, ok := config["endpoints"].([]any); ok && edition == v1alpha1.EditionEE {
-		if findings = eeWildcardFindings(endpoints); len(findings) > 0 {
-			return nil, findings, nil
-		}
-		if rewriteEEWildcards(endpoints) {
-			modified = true
-		}
+	endpoints, ok := config["endpoints"].([]any)
+	if !ok || edition != v1alpha1.EditionEE {
+		return jsonData, nil, nil
 	}
-
-	if !modified {
+	if findings = eeWildcardFindings(endpoints); len(findings) > 0 {
+		return nil, findings, nil
+	}
+	if !rewriteEEWildcards(endpoints) {
 		return jsonData, nil, nil
 	}
 	doc, err = serializeJSON(config)
