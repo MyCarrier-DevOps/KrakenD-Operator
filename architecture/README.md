@@ -734,7 +734,7 @@ sequenceDiagram
 
 | Event | Controller | Action |
 |---|---|---|
-| KrakenDGateway created | Gateway controller | The phase is not written up front; the first status write the reconcile needs persists it (`Pending` until a config is accepted or rejected). Create Deployment, Service, ConfigMap, SA; optionally Dragonfly CR, VS, ExternalSecret. Re-attach any KrakenDEndpoints in `Detached` phase with matching `gatewayRef`; trigger config render. |
+| KrakenDGateway created | Gateway controller | The phase is not written up front; the first status write the reconcile needs persists it (`Pending` until a config is accepted or rejected, including while the validator is unavailable). Create Deployment, Service, ConfigMap, SA; optionally Dragonfly CR, VS, ExternalSecret. Re-attach any KrakenDEndpoints in `Detached` phase with matching `gatewayRef`; trigger config render. |
 | KrakenDGateway updated | Gateway controller | Re-render config, update child resources, rolling restart |
 | KrakenDGateway deleted | Kubernetes GC | ownerReference cascade deletes all child resources |
 | KrakenDEndpoint created/updated/deleted | Endpoint controller | Set initial phase to `Pending` on creation. Re-render config for the target gateway, validate, rolling restart. Conflict detection re-evaluates all endpoints; previously `Conflicted` endpoints may be promoted to `Active` if the conflict is resolved. |
@@ -1725,7 +1725,7 @@ rules:
 
 | Condition | Meaning |
 |---|---|
-| `ConfigValid` | Last rendered krakend.json passed `krakend check -t -n -c` |
+| `ConfigValid` | Last rendered krakend.json passed `krakend check -t -n -c` (`Unknown` with reason `ValidatorUnavailable` while krakend check cannot run) |
 | `Available` | Desired number of KrakenD pods are ready and serving traffic |
 | `LicenseValid` | EE license exists and is not within the expiry warning window |
 | `LicenseDegraded` | Gateway is actively running in CE mode as a fallback because the EE license expired or entered the pre-expiry safety window (only **True** when `fallbackToCE=true` and CE image is deployed; `False` with reason `EEActive` during normal EE operation) |
@@ -1757,6 +1757,7 @@ The operator emits events on KrakenDGateway resources:
 |---|---|---|
 | Config rendered and deployed | Normal | `ConfigDeployed` |
 | Config validation failed | Warning | `ConfigValidationFailed` |
+| krakend check could not run (retried with backoff) | Warning | `ValidatorUnavailable` |
 | License expiring soon | Warning | `LicenseExpiringSoon` |
 | License expired or entering pre-expiry safety window, falling back to CE | Warning | `LicenseFallbackCE` |
 | License expired or entering pre-expiry safety window, CE fallback not configured | Warning | `LicenseExpiredNoFallback` |
