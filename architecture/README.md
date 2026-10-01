@@ -489,20 +489,29 @@ spec:
             name: standard-backend-policy
 
 status:
-  phase: Active                        # Pending, Active, Invalid, Conflicted, Detached
+  phase: Active                        # derived from Ready: Pending, Active, Invalid, Conflicted, Detached
   observedGeneration: 3
   endpointCount: 2
+  methods: GET,POST
   conditions:
-    - type: Accepted
+    - type: ResolvedRefs               # endpoint controller
       status: "True"
+      observedGeneration: 3
       lastTransitionTime: "2026-04-03T10:00:00Z"
-      reason: GatewayFound
-      message: "Attached to gateway production-gateway"
-    - type: Valid
+      reason: RefsResolved
+      message: "Gateway and all policy references resolved"
+    - type: Accepted                   # gateway controller
       status: "True"
-      lastTransitionTime: "2026-04-03T10:00:00Z"
-      reason: SchemaValidPassed
-      message: "Schema validation passed"
+      observedGeneration: 3
+      lastTransitionTime: "2026-04-03T10:00:01Z"
+      reason: Accepted
+      message: "Included in the configuration of gateway api-gateway/production-gateway"
+    - type: Ready                      # endpoint controller, derived from the two above
+      status: "True"
+      observedGeneration: 3
+      lastTransitionTime: "2026-04-03T10:00:01Z"
+      reason: Ready
+      message: "References resolved and accepted by the gateway"
 ```
 
 ### 3.3 KrakenDBackendPolicy
@@ -738,13 +747,13 @@ sequenceDiagram
 | KrakenDGateway created | Gateway controller | The phase is not written up front; the first status write the reconcile needs persists it (`Pending` until a config is accepted or rejected, including while the validator is unavailable). Create Deployment, Service, ConfigMap, SA; optionally Dragonfly CR, VS, ExternalSecret. Re-attach any KrakenDEndpoints in `Detached` phase with matching `gatewayRef`; trigger config render. |
 | KrakenDGateway updated | Gateway controller | Re-render config, update child resources, rolling restart |
 | KrakenDGateway deleted | Kubernetes GC | ownerReference cascade deletes all child resources. A KrakenDGateway with a deletionTimestamp is not reconciled: garbage collection removes its children, and the operator does not recreate them. |
-| KrakenDEndpoint created/updated/deleted | Endpoint controller | Set initial phase to `Pending` on creation. Re-render config for the target gateway, validate, rolling restart. Conflict detection re-evaluates all endpoints; previously `Conflicted` endpoints may be promoted to `Active` if the conflict is resolved. |
+| KrakenDEndpoint created, spec changed, or its `Accepted` changed | Endpoint controller | Resolve gateway and policy references into `ResolvedRefs`; derive `Ready` and `phase` from `ResolvedRefs` and `Accepted`; patch status (optimistic lock) only when it changed. The gateway controller re-renders the target gateway on spec changes and records `Accepted` on every endpoint of an applied render. A resolved conflict flips `Accepted` back to `True`. |
 | KrakenDBackendPolicy created/updated/deleted | Policy controller | Re-render config for all gateways with endpoints referencing this policy. If deleted while referenced, affected endpoints are marked `Invalid` (defense-in-depth: the admission webhook rejects such deletions, but this path handles cases where the webhook is in `failurePolicy: Ignore` mode, is temporarily unavailable, or is not deployed). |
 | KrakenDAutoConfig created, or spec generation/label/annotation changed | AutoConfig controller | Fetch OpenAPI spec from configured source, parse operations, apply URL transforms and filters, and converge owned KrakenDEndpoint resources to the desired state (create/update/delete). A status-only update (the phase/condition writes the reconciler itself makes) does not re-trigger this — only generation, label, and annotation changes do. Generated endpoints trigger the endpoint controller watch → gateway reconciler. |
 | KrakenDAutoConfig deleted | Kubernetes GC | All owned KrakenDEndpoints are garbage-collected via ownerReference. The AutoConfig controller doesn't reconcile a terminating AutoConfig, so under foreground deletion it doesn't recreate endpoints as they are collected. |
 | Owned KrakenDEndpoint spec changed or deleted, or the `openapi.configMapRef`/CUE definitions ConfigMap changed | AutoConfig controller | Re-run the full pipeline. A generated endpoint that was hand-edited or deleted out of band is restored to the desired spec (endpoint specs are compared by decoded JSON value, so re-encoding/formatting differences alone don't cause a write). |
 | AutoConfig resync timer | AutoConfig controller | `trigger: OnChange` AutoConfigs are additionally re-polled every 5 minutes (`defaultResyncInterval`); `trigger: Periodic` AutoConfigs at `spec.periodic.interval`. Every reconcile — resync or watch-triggered — runs the full pipeline; a reconcile that changes nothing writes no status and emits no event. A spec/CUE/unmatched-override/scope failure — including a failed external `$ref` fetch/decode, which now fails closed the same way instead of falling back to the raw spec — retries at `spec.periodic.interval` (`Periodic`) or via exponential backoff (`OnChange`); an endpoint write failure (`EndpointReconcileFailed`) always retries with backoff, on either trigger; a status or endpoint write `Conflict` (this reconcile read a stale cache) requeues quietly a second later with no error, event, or status change. |
-| KrakenDGateway deleted | Endpoint controller | Orphaned KrakenDEndpoints (no ownerReference) are set to `Detached` phase. They remain in the cluster but are excluded from all rendering. Re-attachment occurs automatically if a new KrakenDGateway with the same name is created. |
+| KrakenDGateway or KrakenDBackendPolicy created or deleted | Endpoint controller | Re-resolve references of the endpoints that reference it (`ResolvedRefs` `GatewayNotFound`/`PolicyNotFound` → phase `Detached`/`Invalid`). Gateway and policy updates are ignored: only their existence matters. Re-attachment occurs automatically when the gateway is created again. |
 | Secret (LICENSE) created or updated | Gateway controller | Re-parse X.509 `notAfter` from new Secret; run license validation state machine (`ValidateLicense` → `EERunning`/`EEWarning`/`PreExpiry`/`LicenseExpired`); trigger rolling restart if the license has not expired and the parsed `notAfter` has changed from the last observed value. Also trigger EE recovery (rolling restart) if `expiry > now+1h` AND the gateway is currently in Degraded or Error state (license-caused only) |
 | Dragonfly CR status updated | Gateway controller | Reflect `DragonflyReady` condition on KrakenDGateway; emit `DragonflyNotReady` Warning event if phase regresses |
 | Deployment status updated | Gateway controller | Update `status.replicas`, `status.readyReplicas`, `Available` and `Progressing` conditions on KrakenDGateway. When rollout converges (`updatedReplicas == status.replicas AND availableReplicas == status.replicas`), set `Progressing=False` and transition gateway phase from `Deploying` to `Running`. If the Deployment reports `ProgressDeadlineExceeded`, set `phase=Error`, `Progressing=False`, `Available=False` (reason: `ProgressDeadlineExceeded`), and emit `RolloutFailed` Warning event. `ConfigValid` remains `True` (config passed validation). Existing pods are left running to preserve availability. |
@@ -1736,6 +1745,7 @@ conditions and shown with `-o wide`.
 
 | Kind | `Ready` is True when |
 |---|---|
+| KrakenDEndpoint | `ResolvedRefs` and `Accepted` are True, `Accepted` for the current generation |
 
 ### Gateway Status Conditions
 
@@ -1750,6 +1760,18 @@ conditions and shown with `-o wide`.
 | `LicenseSecretUnavailable` | License Secret is not available — either the ExternalSecret failed to sync or the referenced Secret (`secretRef`) does not exist |
 | `LicenseExpired` | License has expired and `fallbackToCE=false`; if a Deployment exists, gateway pods will self-terminate at T-0; on cold-start, Deployment creation is skipped. `False` with reason `EEActive` during normal EE operation |
 | `Progressing` | A rolling deployment is in progress |
+
+### Endpoint Status Conditions
+
+| Condition | Writer | Meaning |
+|---|---|---|
+| `ResolvedRefs` | endpoint controller | The gateway and every referenced policy exist (`RefsResolved`, `GatewayNotFound`, `PolicyNotFound`) |
+| `Accepted` | gateway controller | Part of the gateway's validated configuration (`Accepted`), or not because of a conflict (`EndpointConflict`); removed while a referenced policy is missing |
+| `Ready` | endpoint controller | Derived by `api/v1alpha1.EndpointReady`: `Unknown`/`Pending` until the gateway accepts the current generation. A docs-only `SchemaNameConflict` on `Accepted` keeps `Ready=True`, with that reason: schema defects never affect whether a route renders or serves |
+
+Both writers patch status with an optimistic lock (`MergeFromWithOptimisticLock`),
+so neither can overwrite the other's condition; a writer that lost the race
+re-reads and retries.
 
 ### Operator Metrics (Prometheus)
 
