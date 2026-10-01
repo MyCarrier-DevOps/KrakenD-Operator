@@ -19,7 +19,7 @@ webhooks:
         namespace: {{ .Release.Namespace }}
         path: /validate-gateway-krakend-io-v1alpha1-krakendgateway
       {{- if not .Values.webhooks.certManager.enabled }}
-      caBundle: {{ .Values.webhooks.caBundle | default "" | b64enc }}
+      caBundle: {{ include "krakend-operator.webhookCABundle" . }}
       {{- end }}
     failurePolicy: {{ .Values.webhooks.failurePolicy }}
     rules:
@@ -43,7 +43,7 @@ webhooks:
         namespace: {{ .Release.Namespace }}
         path: /validate-gateway-krakend-io-v1alpha1-krakendendpoint
       {{- if not .Values.webhooks.certManager.enabled }}
-      caBundle: {{ .Values.webhooks.caBundle | default "" | b64enc }}
+      caBundle: {{ include "krakend-operator.webhookCABundle" . }}
       {{- end }}
     failurePolicy: {{ .Values.webhooks.failurePolicy }}
     rules:
@@ -66,7 +66,7 @@ webhooks:
         namespace: {{ .Release.Namespace }}
         path: /validate-gateway-krakend-io-v1alpha1-krakendbackendpolicy
       {{- if not .Values.webhooks.certManager.enabled }}
-      caBundle: {{ .Values.webhooks.caBundle | default "" | b64enc }}
+      caBundle: {{ include "krakend-operator.webhookCABundle" . }}
       {{- end }}
     failurePolicy: {{ .Values.webhooks.failurePolicy }}
     rules:
@@ -90,7 +90,7 @@ webhooks:
         namespace: {{ .Release.Namespace }}
         path: /validate-gateway-krakend-io-v1alpha1-krakendautoconfig
       {{- if not .Values.webhooks.certManager.enabled }}
-      caBundle: {{ .Values.webhooks.caBundle | default "" | b64enc }}
+      caBundle: {{ include "krakend-operator.webhookCABundle" . }}
       {{- end }}
     failurePolicy: {{ .Values.webhooks.failurePolicy }}
     rules:
