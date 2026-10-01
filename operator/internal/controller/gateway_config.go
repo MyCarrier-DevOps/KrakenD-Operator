@@ -594,3 +594,36 @@ func (r *KrakenDGatewayReconciler) reconcileCEFallbackCondition(
 		})
 	}
 }
+
+// setPluginsResolved reports whether every plugin ConfigMap the gateway
+// mounts exists. The condition exists only while the gateway has ConfigMap
+// plugin sources.
+func (r *KrakenDGatewayReconciler) setPluginsResolved(gw *v1alpha1.KrakenDGateway, missing []string) {
+	hasConfigMapSources := false
+	if gw.Spec.Plugins != nil {
+		for _, src := range gw.Spec.Plugins.Sources {
+			hasConfigMapSources = hasConfigMapSources || src.ConfigMapRef != nil
+		}
+	}
+	switch {
+	case !hasConfigMapSources:
+		meta.RemoveStatusCondition(&gw.Status.Conditions, v1alpha1.ConditionPluginsResolved)
+	case len(missing) > 0:
+		r.setConditionWithEvent(gw, metav1.Condition{
+			Type:               v1alpha1.ConditionPluginsResolved,
+			Status:             metav1.ConditionFalse,
+			ObservedGeneration: gw.Generation,
+			Reason:             v1alpha1.ReasonConfigMapNotFound,
+			Message: fmt.Sprintf("plugin ConfigMap(s) %s not found in namespace %s; "+
+				"the Deployment is held until they exist", strings.Join(missing, ", "), gw.Namespace),
+		})
+	default:
+		r.setConditionWithEvent(gw, metav1.Condition{
+			Type:               v1alpha1.ConditionPluginsResolved,
+			Status:             metav1.ConditionTrue,
+			ObservedGeneration: gw.Generation,
+			Reason:             v1alpha1.ReasonConfigMapsFound,
+			Message:            "every plugin ConfigMap exists",
+		})
+	}
+}
