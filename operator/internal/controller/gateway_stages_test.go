@@ -365,6 +365,13 @@ func TestDeploymentConverged(t *testing.T) {
 			wantOK: false,
 		},
 		{
+			name: "license annotation present while none is wanted",
+			mutate: func(dep *appsv1.Deployment) {
+				dep.Spec.Template.Annotations[resources.LicenseChecksumAnnotation] = "license-old"
+			},
+			wantOK: false,
+		},
+		{
 			name: "spec not yet observed",
 			mutate: func(dep *appsv1.Deployment) {
 				dep.Generation = 2
