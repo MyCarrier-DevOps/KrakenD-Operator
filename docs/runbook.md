@@ -281,6 +281,15 @@ corrected only when their gateway reconciles for another reason. The
 operator log lists the kinds it did not watch (`optional CRD not installed
 at startup`).
 
+### An HPA, Dragonfly, ExternalSecret or VirtualService disappeared
+
+The operator deletes these when the gateway no longer asks for them
+(`spec.autoscaling`, `spec.dragonfly.enabled`,
+`spec.license.externalSecret.enabled`, `spec.istio.enabled`). It deletes
+only objects whose controller owner reference is the gateway. To keep one,
+re-enable the feature, or remove the object's owner reference before
+disabling it.
+
 ### Gateway reports `ValidatorUnavailable`
 
 **Symptom:** `ConfigValid` is `Unknown` with reason `ValidatorUnavailable`; the gateway keeps serving its last applied config and new changes are not rolled out.
