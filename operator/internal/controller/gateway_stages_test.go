@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -2300,4 +2301,47 @@ func TestEndpointAccepted_ConflictKeepsItsReasonAndNamesTheRemovedFeatures(t *te
 			}
 		})
 	}
+}
+
+// manyStripped is n features of one endpoint, enough to pass the message cap.
+func manyStripped(n int) []renderer.StrippedEEFeature {
+	out := make([]renderer.StrippedEEFeature, 0, n)
+	for i := 0; i < n; i++ {
+		out = append(out, renderer.StrippedEEFeature{
+			Source: types.NamespacedName{Namespace: "default", Name: "big"}, Method: "GET",
+			Endpoint: fmt.Sprintf("/route-%03d", i), Feature: "extra_config auth/api-keys",
+		})
+	}
+	return out
+}
+
+// wantWholeEntries checks that a capped message keeps whole entries, one per
+// line, and that its marker counts exactly the entries it dropped.
+func wantWholeEntries(t *testing.T, msg string, features []renderer.StrippedEEFeature) {
+	t.Helper()
+	lines := strings.Split(msg, "\n")
+	marker := lines[len(lines)-1]
+	var dropped int
+	if _, err := fmt.Sscanf(marker, "(output truncated, %d more lines)", &dropped); err != nil {
+		t.Fatalf("last line %q is not the truncation marker", marker)
+	}
+	kept := lines[1 : len(lines)-1] // the first line is the header
+	for i, line := range kept {
+		if line != features[i].String() {
+			t.Fatalf("line %d = %q, want the whole entry %q", i, line, features[i].String())
+		}
+	}
+	if dropped != len(features)-len(kept) || dropped == 0 {
+		t.Errorf("marker says %d dropped, but %d of %d entries were cut", dropped, len(features)-len(kept), len(features))
+	}
+}
+
+func TestEEStripped_ATruncatedMessageKeepsWholeEntriesAndCountsTheRest(t *testing.T) {
+	features := manyStripped(200)
+	ep := testEndpoint("big", "/x")
+	cond := &metav1.Condition{Status: metav1.ConditionTrue}
+
+	eeStripped(cond, ep, features)
+
+	wantWholeEntries(t, cond.Message, features)
 }
