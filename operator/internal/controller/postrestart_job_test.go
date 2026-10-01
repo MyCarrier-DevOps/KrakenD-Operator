@@ -50,6 +50,9 @@ func makeGWWithJob(script string) *v1alpha1.KrakenDGateway {
 	}
 }
 
+// convergedImage is the image makeConvergedDeployment runs.
+const convergedImage = "img:v1"
+
 func makeConvergedDeployment(gw *v1alpha1.KrakenDGateway, checksum string) *appsv1.Deployment {
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace},
@@ -60,6 +63,9 @@ func makeConvergedDeployment(gw *v1alpha1.KrakenDGateway, checksum string) *apps
 					Annotations: map[string]string{
 						resources.PostRestartJobChecksumAnnotation: checksum,
 					},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{Name: "krakend", Image: convergedImage}},
 				},
 			},
 		},
