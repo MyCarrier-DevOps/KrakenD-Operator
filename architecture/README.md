@@ -869,9 +869,9 @@ When `dragonfly.enabled=true` and `edition=EE` (and not CE fallback active), the
 4. Injects the EE service-level `redis` namespace: one `connection_pools` entry named `default` (a single address) or one `clusters` entry named `default` (several addresses), which EE components reference with `"connection_name": "default"`.
 5. Watches the `Dragonfly` CR status and reports `DragonflyReady` on the KrakenDGateway when the Dragonfly Operator reports the instance as `ready`
 
-> **Note:** Steps 3–4 (redis address derivation and `extra_config` injection) apply only when `edition=EE` and CE fallback is not active. Steps 1, 2, and 5 apply whenever `dragonfly.enabled=true`, regardless of edition or CE fallback state, so the Dragonfly instance is available when EE is restored.
+> **Note:** Steps 3–4 (redis address derivation and `extra_config` injection) apply whenever the config is rendered, but only an EE binary uses the `redis` namespace: a CE-edition gateway renders it and KrakenD CE ignores it, and a CE fallback strips it and lists it as a dropped feature. Steps 1, 2, and 5 apply whenever `dragonfly.enabled=true`, regardless of edition or CE fallback state, so the Dragonfly instance is available when EE is restored.
 
-> **Password and TLS:** not rendered yet. KrakenD's redis pool is rendered without a password or TLS settings, so `redis.connectionPool.password`, `.tls` and, on EE gateways, `dragonfly.authentication.passwordFromSecret` do not reach KrakenD; the gateway webhook warns when they are set.
+> **Password and TLS:** not rendered yet. KrakenD's redis pool is rendered without a password or TLS settings, so `redis.connectionPool.password` and `.tls` do not reach KrakenD, and neither does `dragonfly.authentication.passwordFromSecret` on EE gateways. Dragonfly still requires that password, so KrakenD's connections to it are refused (NOAUTH). The gateway webhook warns when they are set.
 
 ### Dragonfly Unavailability Behavior
 
