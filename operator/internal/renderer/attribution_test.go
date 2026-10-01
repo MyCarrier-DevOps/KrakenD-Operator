@@ -64,6 +64,12 @@ func TestAttribute_MapsKrakendCheckOutputToSources(t *testing.T) {
 			output:    "ERROR parsing the configuration file:\t'/tmp/k.json': decoding failed due to the following error(s):\n\n'timeout' time: unknown unit\n",
 			wantIndex: []int{-1, -1},
 		},
+		{
+			name:      "no backends",
+			rendered:  `{"endpoints":[{"endpoint":"/ok","method":"GET"},{"endpoint":"/empty","method":"GET"}]}`,
+			output:    "ERROR parsing the configuration file:\\t'/k.json': ignoring the 'GET /empty' endpoint, since it has 0 backends defined!\\n",
+			wantIndex: []int{1},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
