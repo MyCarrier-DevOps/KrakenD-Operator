@@ -28,6 +28,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
@@ -342,26 +343,31 @@ func rejectionSummary(atts []renderer.Attribution) string {
 	}
 }
 
-// recordRejections sets Accepted=False/GatewayConfigRejected on each endpoint
-// that krakend check blamed for the current, rejected render. Every other
-// endpoint keeps the verdict of the applied render. writeEndpointAccepted
-// writes only on change, so a remembered rejection writes nothing.
+// recordRejections settles the endpoints' Accepted verdicts on a pass whose
+// render is not the applied config. An endpoint the current findings name gets
+// Accepted=False/GatewayConfigRejected. An endpoint carrying
+// GatewayConfigRejected that no finding names any longer has it removed, so
+// its Ready is derived afresh. Every other endpoint keeps the verdict of the
+// applied render. writeEndpointAccepted writes only on change, so a
+// remembered rejection writes nothing.
 func (r *KrakenDGatewayReconciler) recordRejections(
 	ctx context.Context, endpoints []v1alpha1.KrakenDEndpoint, rejections map[types.NamespacedName]string,
 ) error {
 	var errs []error
 	for i := range endpoints {
 		ep := &endpoints[i]
-		msg, ok := rejections[client.ObjectKeyFromObject(ep)]
-		if !ok {
+		var want *metav1.Condition
+		if msg, ok := rejections[client.ObjectKeyFromObject(ep)]; ok {
+			want = &metav1.Condition{
+				Type:               v1alpha1.ConditionAccepted,
+				Status:             metav1.ConditionFalse,
+				ObservedGeneration: ep.Generation,
+				Reason:             v1alpha1.ReasonGatewayConfigRejected,
+				Message:            msg,
+			}
+		} else if cur := meta.FindStatusCondition(ep.Status.Conditions, v1alpha1.ConditionAccepted); cur == nil ||
+			cur.Reason != v1alpha1.ReasonGatewayConfigRejected {
 			continue
-		}
-		want := &metav1.Condition{
-			Type:               v1alpha1.ConditionAccepted,
-			Status:             metav1.ConditionFalse,
-			ObservedGeneration: ep.Generation,
-			Reason:             v1alpha1.ReasonGatewayConfigRejected,
-			Message:            msg,
 		}
 		if err := r.writeEndpointAccepted(ctx, ep, want); err != nil {
 			errs = append(errs, err)
