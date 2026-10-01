@@ -187,3 +187,39 @@ func TestGatewayReconcile_EditionModeFlipRevalidatesSameRender(t *testing.T) {
 		t.Errorf("krakend check ran %d times, want 2: CE fallback changes what is validated", validator.calls)
 	}
 }
+
+func TestGatewayReconcile_RememberedRejectionRestoresOverwrittenStatus(t *testing.T) {
+	gw := testGateway()
+	c, _ := gatewayStatusWrites(gw)
+	validator := &countingValidator{err: rejectedBy("bad endpoint")}
+	r := &KrakenDGatewayReconciler{
+		Client: c, Scheme: testScheme(), Recorder: fakeRecorder(),
+		Renderer: renderOutput("bad"), Validator: validator,
+	}
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+
+	// Another writer replaces the conditions with a stale copy.
+	clobbered := getGateway(t, c, gw)
+	meta.SetStatusCondition(&clobbered.Status.Conditions, metav1.Condition{
+		Type: v1alpha1.ConditionConfigValid, Status: metav1.ConditionTrue,
+		Reason: "ConfigValid", Message: "Configuration passed validation",
+	})
+	clobbered.Status.Phase = v1alpha1.PhaseRunning
+	if err := c.Status().Update(context.Background(), clobbered); err != nil {
+		t.Fatal(err)
+	}
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+
+	got := getGateway(t, c, gw)
+	cond := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionConfigValid)
+	if cond == nil || cond.Status != metav1.ConditionFalse || got.Status.Phase != v1alpha1.PhaseError {
+		t.Errorf("ConfigValid = %+v, phase = %s; want the remembered rejection restored", cond, got.Status.Phase)
+	}
+	if validator.calls != 1 {
+		t.Errorf("krakend check ran %d times, want 1", validator.calls)
+	}
+}
