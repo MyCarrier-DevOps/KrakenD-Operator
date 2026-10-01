@@ -114,6 +114,7 @@ func (r *KrakenDBackendPolicyReconciler) SetupWithManager(mgr ctrl.Manager) erro
 		Watches(
 			&v1alpha1.KrakenDEndpoint{},
 			r.endpointPolicyHandler(),
+			builder.WithPredicates(policyEndpointPredicate()),
 		).
 		Named("krakendbackendpolicy").
 		Complete(r)
@@ -226,4 +227,9 @@ func policyRefsFromEndpoint(obj client.Object) []reconcile.Request {
 	return requests
 }
 
-func policyEndpointPredicate() predicate.Predicate { return predicate.Funcs{} }
+// policyEndpointPredicate gates the KrakenDEndpoint watch: referencedBy
+// depends only on endpoint specs, so status-only endpoint updates are
+// dropped. Creates and deletes always pass.
+func policyEndpointPredicate() predicate.Predicate {
+	return predicate.GenerationChangedPredicate{}
+}
