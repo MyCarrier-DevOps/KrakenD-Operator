@@ -52,6 +52,18 @@ ca_bundles() {
 		awk '$1 == "caBundle:" { print $2 }' | tr '\n' ' '
 }
 
+# webhook_operations WEBHOOK [helm args...]: the admission operations the
+# chart registers for WEBHOOK, space-separated.
+webhook_operations() {
+	local webhook=$1
+	shift
+	render --show-only templates/validating-webhook-configuration.yaml "$@" |
+		awk -v w="- name: $webhook" '
+			index($0, w) { f = 1; next }
+			/- name: v/ { f = 0 }
+			f && /- (CREATE|UPDATE|DELETE|CONNECT)$/ { printf "%s ", $2 }'
+}
+
 # --- webhooks.enabled drives --enable-webhooks ---------------------------
 expect_absent "enabled webhooks pass no flag (older images keep working)" "--enable-webhooks"
 expect_contains "webhooks.enabled=false disables them in the operator" \
@@ -87,6 +99,10 @@ expect_equal "a PEM with leading text is base64-encoded once" "$want_commented" 
 printf '%s' "$pem" | base64 -w 20 >"$workdir/ca-wrapped.b64"
 expect_equal "a wrapped base64 caBundle is rendered unwrapped" "$want" \
 	"$(ca_bundles "${no_cert_manager[@]}" --set-file webhooks.caBundle="$workdir/ca-wrapped.b64")"
+
+# --- no webhook is registered for an operation it does not validate -------
+expect_equal "the chart's gateway webhook is not registered for DELETE" \
+	"CREATE UPDATE " "$(webhook_operations vkrakendgateway.kb.io)"
 
 if [ "$failures" -gt 0 ]; then
 	printf '%d chart render test(s) failed\n' "$failures"
