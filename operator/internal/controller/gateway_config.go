@@ -501,3 +501,14 @@ func isApplied(gw *v1alpha1.KrakenDGateway, output *renderer.RenderOutput, editi
 func appliedFallback(gw *v1alpha1.KrakenDGateway, current v1alpha1.Edition) bool {
 	return gw.Spec.Edition == v1alpha1.EditionEE && appliedKey(gw, current).edition == v1alpha1.EditionCE
 }
+
+// appliedImage is the image the gateway runs: the one of the applied config's
+// edition, whatever edition spec.edition asks for now.
+func appliedImage(gw *v1alpha1.KrakenDGateway, current v1alpha1.Edition) string {
+	if appliedKey(gw, current).edition == v1alpha1.EditionEE {
+		ee := *gw
+		ee.Spec.Edition = v1alpha1.EditionEE
+		return renderer.ResolveImage(&ee, false)
+	}
+	return renderer.ResolveImage(gw, appliedFallback(gw, current))
+}
