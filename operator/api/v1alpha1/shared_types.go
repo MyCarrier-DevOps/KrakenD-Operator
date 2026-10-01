@@ -170,7 +170,8 @@ const (
 	ReasonDragonflyRunAsRootNoRequest      = "NoRunAsRootRequest"
 
 	// ReasonValidatorUnavailable backs ConfigValid=Unknown: krakend check
-	// could not run to completion, so the rendered config was not judged.
+	// could not run to completion or the validation copy could not be
+	// prepared, so the rendered config was not judged.
 	// The applied config is unchanged and the reconcile is retried with
 	// backoff.
 	ReasonValidatorUnavailable = "ValidatorUnavailable"
