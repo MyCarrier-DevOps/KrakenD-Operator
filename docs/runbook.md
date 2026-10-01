@@ -97,7 +97,7 @@ Metrics are exposed on port **8443** (HTTPS). Key metrics:
 
 | Phase | Meaning |
 |---|---|
-| `Pending` | Not reconciled yet, or the new config could not be validated yet (see `ConfigValid`) |
+| `Pending` | A new gateway before its first config is accepted or rejected, including while the validator is unavailable (`ConfigValid` is `Unknown`). It is persisted by the first status write, so a gateway that has not been reconciled yet has no phase |
 | `Rendering`, `Validating` | No longer written; kept in the API for compatibility |
 | `Deploying` | Deployment is rolling out |
 | `Running` | Deployment converged, all replicas ready |
@@ -108,7 +108,7 @@ Metrics are exposed on port **8443** (HTTPS). Key metrics:
 
 | Condition | Meaning |
 |---|---|
-| `ConfigValid` | Config passed KrakenD CLI validation |
+| `ConfigValid` | `True`: the rendered config passed `krakend check`. `False` (`ConfigValidationFailed`): rejected; the last applied config keeps serving. `Unknown` (`ValidatorUnavailable`): krakend check could not run; retried with backoff |
 | `Available` | Deployment has ready replicas |
 | `Progressing` | Deployment rollout in progress |
 | `DragonflyReady` | DragonflyDB instance is operational |
@@ -242,6 +242,14 @@ kubectl get events --field-selector involvedObject.name=<name> --sort-by='.lastT
 - Config validation failure — check `ConfigValid` condition message
 - License missing for EE gateway — provide license secret
 - Rollout timeout — check Deployment events
+
+### Gateway reports `ValidatorUnavailable`
+
+**Symptom:** `ConfigValid` is `Unknown` with reason `ValidatorUnavailable`; the gateway keeps serving its last applied config and new changes are not rolled out.
+
+**Diagnosis:** the condition message carries the cause. `no such file or directory` means the operator image lacks `/usr/local/bin/krakend`; `context deadline exceeded` means a run exceeded 30 seconds (check the operator pod's CPU throttling and memory); `signal: killed` usually means the operator container hit its memory limit.
+
+**Resolution:** fix the environment; the operator retries with exponential backoff and the gateway recovers on its own.
 
 ### Endpoint shows `Invalid`
 
