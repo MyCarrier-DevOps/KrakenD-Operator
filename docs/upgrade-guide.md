@@ -923,17 +923,26 @@ instead of loading the EE config into the CE binary. The CE render removes:
 - Docs-only namespaces (the endpoints' `documentation/openapi` and the
   component schemas the docs publish) are dropped too, but they are not
   listed on the endpoints and never make one not Ready: they change nothing
-  the gateway serves. The gateway's `CEFallbackApplied` lists them.
+  the gateway serves. The gateway's `CEFallbackApplied` lists only the
+  gateway-level `documentation/openapi`, which exists when an endpoint has
+  component schemas or `spec.config.documentation` is set. An entry's own
+  `documentation/openapi` is dropped without being listed anywhere.
 - The OpenAPI export init container and the `openapi-serve` sidecar do not
   run on any CE render (a CE-edition gateway, or a CE fallback), because the
   CE binary cannot export OpenAPI; in a fallback with `spec.openapi` enabled,
   `CEFallbackApplied` lists that too. They return with EE.
-- Everything is restored when a valid license is back.
+- Everything is restored once an EE render is validated and applied after
+  a valid license is back.
 
 **One-time rollout on upgrade.** Any CE-edition gateway whose entries carry
 `documentation/openapi`, or whose endpoints have component schemas, now
 renders a different config. On operator upgrade that means one rollout plus
-one post-restart Job run, because the Job is keyed by config checksum.
+one post-restart Job run, because the Job is keyed by config checksum. A
+CE-edition gateway with `spec.openapi` enabled also rolls once, because its
+pod template loses the export init container and the `openapi-serve`
+sidecar (and its Service loses the `openapi` port); those pods could not have
+started the export, which needs the Enterprise binary. The admission webhook
+now warns about `spec.openapi` on a CE gateway.
 
 ---
 
