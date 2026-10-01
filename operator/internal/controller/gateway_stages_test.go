@@ -897,3 +897,28 @@ func TestCollectConfigMaps_KeepsInUseEvenWhenOldest(t *testing.T) {
 			got, want, configMapHistoryLimit)
 	}
 }
+
+func TestCollectConfigMaps_ListsNoReplicaSetsWhenNothingIsCollectable(t *testing.T) {
+	gw := reconciledGateway()
+	gw.UID = "gw-uid"
+	lists := 0
+	c := fakeClientBuilder().WithObjects(gw,
+		ownedConfigMap(gw, "test-gw-config-r1", testNow, true),
+		ownedConfigMap(gw, "test-gw-config-r2", testNow.Add(time.Hour), true),
+	).WithInterceptorFuncs(interceptor.Funcs{
+		List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if _, ok := list.(*appsv1.ReplicaSetList); ok {
+				lists++
+			}
+			return cl.List(ctx, list, opts...)
+		},
+	}).Build()
+	r := newTestGatewayReconciler(c, &mockRenderer{}, &mockValidator{})
+
+	if err := r.collectConfigMaps(context.Background(), gw, "test-gw-config-r2"); err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	if lists != 0 {
+		t.Errorf("ReplicaSet lists = %d, want 0 when nothing can be collected", lists)
+	}
+}
