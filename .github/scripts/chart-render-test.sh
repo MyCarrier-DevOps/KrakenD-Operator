@@ -80,7 +80,9 @@ expect_equal "a PEM caBundle is base64-encoded once" "$want" \
 	"$(ca_bundles "${no_cert_manager[@]}" --set-file webhooks.caBundle="$workdir/ca.pem")"
 expect_equal "a base64 caBundle is passed through" "$want" \
 	"$(ca_bundles "${no_cert_manager[@]}" --set webhooks.caBundle="$b64")"
-expect_equal "a PEM with leading text is base64-encoded once" "$want" \
+b64_commented=$(base64 <"$workdir/ca-commented.pem" | tr -d '\n')
+want_commented="$b64_commented $b64_commented $b64_commented $b64_commented "
+expect_equal "a PEM with leading text is base64-encoded once" "$want_commented" \
 	"$(ca_bundles "${no_cert_manager[@]}" --set-file webhooks.caBundle="$workdir/ca-commented.pem")"
 
 if [ "$failures" -gt 0 ]; then
