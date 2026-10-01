@@ -135,7 +135,6 @@ const (
 	ReasonDragonflyNotReady             = "DragonflyNotReady"
 	ReasonIstioVSCreated                = "IstioVirtualServiceCreated"
 	ReasonEndpointConflict              = "EndpointConflict"
-	ReasonEndpointInvalid               = "EndpointInvalid"
 	ReasonLicenseSecretSyncFailed       = "LicenseSecretSyncFailed"
 	ReasonLicenseSecretMissing          = "LicenseSecretMissing"
 	ReasonSpecFetched                   = "SpecFetched"
