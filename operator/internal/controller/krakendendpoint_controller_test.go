@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
 func TestEndpointReconcile_NotFound(t *testing.T) {
@@ -778,5 +779,53 @@ func TestEndpointReconcile_ResolvedRefsEventsOnTransitionOnly(t *testing.T) {
 	want = []string{"Normal RefsResolved Gateway and all policy references resolved"}
 	if got := drainEvents(rec); !slices.Equal(got, want) {
 		t.Errorf("after the gateway appears: events = %q, want %q", got, want)
+	}
+}
+
+func TestEndpointReconcile_StatusConflictRequeuesWithoutClobbering(t *testing.T) {
+	ep := endpointOnGW1(1)
+	endpointGets := 0
+	c := fakeClientBuilder().
+		WithObjects(testGW1(), ep).
+		WithStatusSubresource(ep).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object,
+				opts ...client.GetOption) error {
+				if err := cl.Get(ctx, key, obj, opts...); err != nil {
+					return err
+				}
+				stored, ok := obj.(*v1alpha1.KrakenDEndpoint)
+				if !ok {
+					return nil
+				}
+				endpointGets++
+				if endpointGets > 1 {
+					return nil
+				}
+				// The gateway writes Accepted after this reconcile read the endpoint.
+				fresh := stored.DeepCopy()
+				meta.SetStatusCondition(&fresh.Status.Conditions, acceptedAt(1))
+				return cl.Status().Update(ctx, fresh)
+			},
+		}).
+		Build()
+	rec := fakeRecorder()
+	r := &KrakenDEndpointReconciler{Client: c, Scheme: testScheme(), Recorder: rec}
+
+	result, err := r.Reconcile(context.Background(), ep1Request)
+	assertQuietRequeue(t, result, err, rec)
+	stored := storedEP1(t, c)
+	if meta.FindStatusCondition(stored.Status.Conditions, v1alpha1.ConditionAccepted) == nil {
+		t.Fatal("the stale write removed the gateway's Accepted condition")
+	}
+
+	if _, err := r.Reconcile(context.Background(), ep1Request); err != nil {
+		t.Fatal(err)
+	}
+	stored = storedEP1(t, c)
+	ready := meta.FindStatusCondition(stored.Status.Conditions, v1alpha1.ConditionReady)
+	if ready == nil || ready.Status != metav1.ConditionTrue ||
+		meta.FindStatusCondition(stored.Status.Conditions, v1alpha1.ConditionAccepted) == nil {
+		t.Errorf("after the retry: conditions = %+v, want Accepted kept and Ready True", stored.Status.Conditions)
 	}
 }
