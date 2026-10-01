@@ -471,6 +471,40 @@ covers CREATE and UPDATE only, in the Helm chart and in
 
 ---
 
+## Unreleased — Status model: `Ready` conditions and single-writer status
+
+Every kind now has a summary `Ready` condition and a top-level
+`status.observedGeneration`, and each condition type has exactly one writer.
+`status.phase` is still set where it was, but it is derived from the
+conditions on every reconcile and kept only for compatibility. Read `Ready`
+instead, for example:
+
+```bash
+kubectl wait --for=condition=Ready krakendendpoint/<name> -n <ns> --timeout=2m
+```
+
+### CRDs: apply them before upgrading the operator
+
+Helm does not upgrade CRDs (see *CRD Upgrades* above), and this release
+changes all four:
+
+- `status.conditions` is a map keyed by `type` (`x-kubernetes-list-type: map`),
+  so the API server rejects a status write that carries two conditions of
+  the same type.
+- `KrakenDAutoConfig` and `KrakenDBackendPolicy` gain `status.observedGeneration`.
+  With the old CRDs, the API server drops the field the new operator writes,
+  and those objects' status is rewritten on every reconcile.
+- `kubectl get` shows `Ready` and `Reason` columns; `Phase` moves to
+  `kubectl get -o wide`.
+
+Before upgrading, check that no object already carries a duplicate condition
+type (no output expected):
+
+```bash
+kubectl get krakendgateways,krakendendpoints,krakendautoconfigs,krakendbackendpolicies -A -o json \
+  | jq -r '.items[] | select(((.status.conditions // []) | map(.type) | length) != ((.status.conditions // []) | map(.type) | unique | length)) | "\(.kind) \(.metadata.namespace)/\(.metadata.name)"'
+```
+
 ## v0.14.0 — openapi-serve liveness probe (one-time rollout)
 
 The `openapi-serve` sidecar now renders with a liveness probe. It previously
