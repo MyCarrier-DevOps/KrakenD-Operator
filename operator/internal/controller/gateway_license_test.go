@@ -25,6 +25,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -582,9 +583,12 @@ type settledLicensedGateway struct {
 	cached *appsv1.Deployment
 }
 
-func settleLicensedGateway(t *testing.T) *settledLicensedGateway {
+func settleLicensedGateway(t *testing.T, tweaks ...func(gw *v1alpha1.KrakenDGateway)) *settledLicensedGateway {
 	t.Helper()
 	gw, secret, parser := licensedEEGateway(testNow.Add(90*24*time.Hour), false)
+	for _, tweak := range tweaks {
+		tweak(gw)
+	}
 	s := &settledLicensedGateway{gw: gw, secret: secret}
 	s.c = fakeClientBuilder().WithObjects(gw, secret).WithStatusSubresource(gw).
 		WithInterceptorFuncs(interceptor.Funcs{
@@ -715,5 +719,29 @@ func TestGatewayReconcile_UnreadableLicenseKeepsTheDeployedChecksum(t *testing.T
 	if progressing := meta.FindStatusCondition(stored.Status.Conditions, v1alpha1.ConditionProgressing); progressing == nil ||
 		progressing.Reason == "DeploymentUpdated" {
 		t.Errorf("Progressing = %+v, want no DeploymentUpdated", progressing)
+	}
+}
+
+func TestGatewayReconcile_RenewedLicenseDoesNotRerunThePostRestartJob(t *testing.T) {
+	s := settleLicensedGateway(t, func(gw *v1alpha1.KrakenDGateway) {
+		gw.Spec.PostRestartJob = &v1alpha1.PostRestartJobSpec{Enabled: true, Script: "echo done"}
+	})
+	var jobs batchv1.JobList
+	if err := s.c.List(context.Background(), &jobs); err != nil || len(jobs.Items) != 1 {
+		t.Fatalf("jobs after settling = %d (%v), want the one post-restart Job", len(jobs.Items), err)
+	}
+	ranFor := getGateway(t, s.c, s.gw).Status.LastPostRestartJobChecksum
+	s.setLicenseBytes(t, "renewed certificate")
+
+	s.reconcileWhileCacheLags(t)
+	if err := reconcileGateway(t, s.r, s.gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	if err := s.c.List(context.Background(), &jobs); err != nil || len(jobs.Items) != 1 {
+		t.Errorf("jobs after the license changed = %d (%v), want still 1", len(jobs.Items), err)
+	}
+	if got := getGateway(t, s.c, s.gw).Status.LastPostRestartJobChecksum; got != ranFor {
+		t.Errorf("lastPostRestartJobChecksum = %q, want %q: a license change must not re-run the Job", got, ranFor)
 	}
 }
