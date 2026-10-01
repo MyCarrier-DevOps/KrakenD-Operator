@@ -48,10 +48,22 @@ func (r *krakendRenderer) Render(input RenderInput) (*RenderOutput, error) {
 	config := buildRootConfig(gw)
 
 	// Build endpoints array, recording each entry's source in the same order.
+	// A CE-fallback render drops Enterprise-only features and lists them.
 	endpointsJSON := make([]any, 0, len(flat))
 	sources := make([]types.NamespacedName, 0, len(flat))
+	var stripped []StrippedEEFeature
 	for _, fe := range flat {
-		endpointsJSON = append(endpointsJSON, buildEndpointJSON(fe.Entry, input.Policies, fe.Source.Namespace))
+		if input.CEFallback && IsEEWildcard(fe.Entry.Endpoint) {
+			stripped = append(stripped, StrippedEEFeature{
+				Source: fe.Source, Method: fe.Entry.Method, Endpoint: fe.Entry.Endpoint, Feature: FeatureWildcardEndpoint,
+			})
+			continue
+		}
+		ep := buildEndpointJSON(fe.Entry, input.Policies, fe.Source.Namespace)
+		if input.CEFallback {
+			stripped = append(stripped, stripEndpointEEFeatures(ep, fe)...)
+		}
+		endpointsJSON = append(endpointsJSON, ep)
 		sources = append(sources, fe.Source)
 	}
 	config["endpoints"] = endpointsJSON
@@ -63,6 +75,9 @@ func (r *krakendRenderer) Render(input RenderInput) (*RenderOutput, error) {
 	// documentation/openapi.components_schemas so that endpoint-level
 	// ref fields resolve correctly.
 	appendEndpointComponentSchemas(gatewayEC, input.Endpoints)
+	if input.CEFallback {
+		stripped = append(stripped, stripNamespaces(gatewayEC, eeOnlyServiceNamespaces, StrippedEEFeature{}, "extra_config")...)
+	}
 
 	if len(gatewayEC) > 0 {
 		config["extra_config"] = gatewayEC
@@ -100,6 +115,7 @@ func (r *krakendRenderer) Render(input RenderInput) (*RenderOutput, error) {
 		EntryConflicts:      conflicted,
 		InvalidEndpoints:    invalidSlice,
 		Sources:             sources,
+		StrippedEEFeatures:  stripped,
 	}, nil
 }
 
