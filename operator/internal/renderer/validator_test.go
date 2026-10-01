@@ -383,3 +383,26 @@ func TestValidate_RejectionIsAVerdict(t *testing.T) {
 		t.Errorf("output = %q", valErr.Output)
 	}
 }
+
+func TestValidate_TempFileErrorIsStable(t *testing.T) {
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "missing"))
+	v := NewValidator(ValidatorOptions{Executor: &mockExecutor{}, BinaryPath: "krakend"})
+
+	first := v.Validate(context.Background(), []byte(`{"version":3}`))
+	second := v.Validate(context.Background(), []byte(`{"version":3}`))
+
+	if first == nil || second == nil {
+		t.Fatalf("expected temp-file errors, got %v and %v", first, second)
+	}
+	var verdict *ValidationError
+	if errors.As(first, &verdict) {
+		t.Errorf("a temp-file failure is not a verdict: %v", first)
+	}
+	if first.Error() != second.Error() {
+		t.Errorf("error text changes between calls, so a status message built from it never settles:\n%q\n%q",
+			first, second)
+	}
+	if !errors.Is(first, fs.ErrNotExist) {
+		t.Errorf("errors.Is(fs.ErrNotExist) = false for %v", first)
+	}
+}
