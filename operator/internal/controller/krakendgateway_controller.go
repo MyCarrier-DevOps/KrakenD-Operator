@@ -201,10 +201,11 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	appliedBefore := appliedKey(&gw, edition)
 	cfg, configErr := r.reconcileConfig(ctx, &gw, before, output, edition)
 	image := appliedImage(&gw, edition)
+	pluginChecksum := appliedPluginChecksum(&gw, output, edition)
 	// A held Deployment (no ConfigMap holds the applied config) starts no
 	// rollout, so none is reported.
 	if appliedKey(&gw, edition) == appliedBefore && cfg.appliedConfigMap != "" {
-		r.markDeploymentUpdate(&gw, image, output.PluginChecksum, licenseChecksum != deployedLicense)
+		r.markDeploymentUpdate(&gw, image, pluginChecksum, licenseChecksum != deployedLicense)
 	}
 
 	// Accepted: the applied render sets every endpoint's verdict. On a pass
@@ -226,7 +227,7 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// Infrastructure stage: always runs, and deploys the applied config.
 	infra := infraInputs{
 		appliedChecksum: gw.Status.ConfigChecksum,
-		pluginChecksum:  output.PluginChecksum,
+		pluginChecksum:  pluginChecksum,
 		licenseChecksum: licenseChecksum,
 		image:           image,
 		configMapName:   cfg.appliedConfigMap,
