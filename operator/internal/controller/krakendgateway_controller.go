@@ -46,6 +46,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	crcontroller "sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -301,6 +302,7 @@ func (r *KrakenDGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			&corev1.ConfigMap{},
 			handler.EnqueueRequestsFromMapFunc(r.pluginConfigMapToGateway),
 		).
+		WithOptions(crcontroller.Options{RateLimiter: newGatewayRateLimiter()}).
 		Named("krakendgateway").
 		Complete(r)
 }
@@ -2053,8 +2055,11 @@ func servingPhase(progressing, available *metav1.Condition) v1alpha1.GatewayPhas
 	}
 }
 
-// newGatewayRateLimiter is controller-runtime's default rate limiter, which
-// this stub does not yet cap.
+// newGatewayRateLimiter is controller-runtime's default rate limiter with the
+// per-item backoff capped at licenseRecheckInterval instead of 1000s, so a
+// gateway whose reconcile keeps failing still has its license looked at at
+// least that often.
 func newGatewayRateLimiter() workqueue.TypedRateLimiter[reconcile.Request] {
-	return workqueue.DefaultTypedControllerRateLimiter[reconcile.Request]()
+	return workqueue.NewTypedWithMaxWaitRateLimiter(
+		workqueue.DefaultTypedControllerRateLimiter[reconcile.Request](), licenseRecheckInterval)
 }
