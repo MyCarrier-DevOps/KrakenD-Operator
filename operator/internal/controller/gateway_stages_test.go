@@ -127,7 +127,11 @@ func TestGatewayReconcile_InfrastructureRunsWhateverTheConfigVerdict(t *testing.
 		t.Run(tc.name, func(t *testing.T) {
 			gw := reconciledGateway()
 			gw.Status.ConfigChecksum = "applied"
-			appliedCM := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace}}
+			appliedCM := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
+				Name:            resources.ConfigMapName(gw, "applied"),
+				Namespace:       gw.Namespace,
+				OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(gw, v1alpha1.GroupVersion.WithKind("KrakenDGateway"))},
+			}}
 			resources.BuildConfigMap(appliedCM, gw, []byte(`{"applied":true}`), "applied")
 			c := fakeClientBuilder().WithObjects(gw, appliedCM).WithStatusSubresource(gw).Build()
 			r := newTestGatewayReconciler(c, renderOutput("new"), &countingValidator{err: tc.verdict})
@@ -148,9 +152,7 @@ func TestGatewayReconcile_InfrastructureRunsWhateverTheConfigVerdict(t *testing.
 				t.Errorf("the Service must be reconciled whatever the config verdict: %v", err)
 			}
 			var cm corev1.ConfigMap
-			if err := c.Get(context.Background(), client.ObjectKeyFromObject(gw), &cm); err != nil {
-				t.Fatalf("getting the gateway ConfigMap: %v", err)
-			}
+			getObject(t, c, gw, appliedCM.Name, &cm)
 			if got, want := cm.Data["krakend.json"], appliedCM.Data["krakend.json"]; got != want {
 				t.Errorf("a config that did not pass must not reach the ConfigMap: got %q, want %q", got, want)
 			}
@@ -582,5 +584,21 @@ func TestGatewayReconcile_UpgradeWhileRejectedSeedsAppliedConfigMapFromLegacy(t 
 	}
 	if got := mountedConfig(t, c, gw); got != want {
 		t.Errorf("Deployment mounts %q, want the seeded %q", got, want)
+	}
+}
+
+func TestGatewayReconcile_HoldsTheDeploymentWhenNoConfigMapHoldsTheAppliedConfig(t *testing.T) {
+	gw := reconciledGateway()
+	gw.Status.ConfigChecksum = hash.SHA256Hex([]byte(`{"version":3,"name":"gone"}`))
+	c := fakeClientBuilder().WithObjects(gw, legacyDeployment(gw)).WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderOf(`{"version":3,"name":"rejected"}`),
+		&countingValidator{err: rejectedBy("- at '/endpoints/0/endpoint': bad")})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if got := mountedConfig(t, c, gw); got != gw.Name {
+		t.Errorf("Deployment mounts %q; with no ConfigMap holding the applied config it must be left mounting %q",
+			got, gw.Name)
 	}
 }
