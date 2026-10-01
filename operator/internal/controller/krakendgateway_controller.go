@@ -1778,3 +1778,14 @@ func (r *KrakenDGatewayReconciler) pluginConfigMapToGateway(
 	}
 	return requests
 }
+
+// gatewayReadiness is a gateway's derived Ready condition and the
+// compatibility phase that goes with it.
+type gatewayReadiness struct {
+	status  metav1.ConditionStatus
+	reason  string
+	message string
+	phase   v1alpha1.GatewayPhase
+}
+
+func gatewayReadinessFor(conds []metav1.Condition) gatewayReadiness { return gatewayReadiness{} }

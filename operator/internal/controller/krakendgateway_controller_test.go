@@ -1649,3 +1649,24 @@ func TestGatewayReconcile_AcceptedWrittenWhenConfigUnchangedSinceApplied(t *test
 		t.Errorf("events = %q, want no ConfigDeployed: the config did not change", events)
 	}
 }
+
+func TestGatewayReadinessFor(t *testing.T) {
+	tests := []struct {
+		name       string
+		conds      []metav1.Condition
+		wantStatus metav1.ConditionStatus
+		wantReason string
+		wantPhase  v1alpha1.GatewayPhase
+	}{
+		{"nothing observed yet", nil, metav1.ConditionUnknown, "Pending", v1alpha1.PhasePending},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := gatewayReadinessFor(tt.conds)
+			if got.status != tt.wantStatus || got.reason != tt.wantReason || got.phase != tt.wantPhase {
+				t.Errorf("gatewayReadinessFor() = %+v, want %s/%s phase %s",
+					got, tt.wantStatus, tt.wantReason, tt.wantPhase)
+			}
+		})
+	}
+}
