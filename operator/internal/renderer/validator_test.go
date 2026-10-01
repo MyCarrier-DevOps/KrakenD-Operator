@@ -26,6 +26,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -402,5 +403,33 @@ func TestValidate_EEWildcardIsCheckedAsAParameterRoute(t *testing.T) {
 	if got := endpointPaths(t, exec.checked[0]); !slices.Equal(got, want) {
 		t.Errorf("checked endpoints = %v, want %v (index-aligned; /* is left for krakend check to reject, as EE does)",
 			got, want)
+	}
+}
+
+func TestValidate_EEWildcardConflictsWithSameMethodRouteUnderPrefix(t *testing.T) {
+	exec := &capturingExecutor{}
+	v := NewValidator(ValidatorOptions{Executor: exec, BinaryPath: "krakend"})
+	rendered := []byte(`{"version":3,"endpoints":[` +
+		`{"endpoint":"/p","method":"GET"},{"endpoint":"/p/*","method":"GET"},` +
+		`{"endpoint":"/p/static","method":"GET"},{"endpoint":"/p/x","method":"POST"},` +
+		`{"endpoint":"/pq","method":"GET"}]}`)
+
+	err := v.Validate(context.Background(), rendered, v1alpha1.EditionEE)
+	var verr *ValidationError
+	if !errors.As(err, &verr) {
+		t.Fatalf("Validate = %v; the EE router refuses GET /p/static next to GET /p/*", err)
+	}
+	for _, want := range []string{"- at '/endpoints/1/endpoint'", "- at '/endpoints/2/endpoint'"} {
+		if !strings.Contains(verr.Output, want) {
+			t.Errorf("output %q lacks %q", verr.Output, want)
+		}
+	}
+	for _, accepted := range []string{"/endpoints/0/", "/endpoints/3/", "/endpoints/4/"} {
+		if strings.Contains(verr.Output, accepted) {
+			t.Errorf("output %q blames %s, which the EE router accepts", verr.Output, accepted)
+		}
+	}
+	if len(exec.checked) != 0 {
+		t.Errorf("krakend check ran %d time(s); the verdict was already known", len(exec.checked))
 	}
 }
