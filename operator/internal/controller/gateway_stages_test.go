@@ -1646,6 +1646,10 @@ func TestGatewayReconcile_WarnsWhenAnEndpointBecomesPartiallyAccepted(t *testing
 		{"from Accepted", func(ep *v1alpha1.KrakenDEndpoint) {
 			withAccepted(ep, metav1.ConditionTrue, v1alpha1.ReasonAccepted)
 		}},
+		{"from absent", func(*v1alpha1.KrakenDEndpoint) {}},
+		{"from EndpointConflict", func(ep *v1alpha1.KrakenDEndpoint) {
+			withAccepted(ep, metav1.ConditionFalse, v1alpha1.ReasonEndpointConflict)
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			gw := reconciledGateway()
@@ -1667,5 +1671,44 @@ func TestGatewayReconcile_WarnsWhenAnEndpointBecomesPartiallyAccepted(t *testing
 				t.Errorf("PartiallyAccepted Warning events = %d, want 1", warned)
 			}
 		})
+	}
+}
+
+func TestGatewayReconcile_PartiallyAcceptedEventsFireOnTransitionsOnly(t *testing.T) {
+	gw := reconciledGateway()
+	older, newer := partlyConflictedPair()
+	c := fakeClientBuilder().WithObjects(gw, older, newer).WithStatusSubresource(gw, older, newer).Build()
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}), &mockValidator{})
+	rec := r.Recorder.(*record.FakeRecorder)
+	count := func(prefix string) int {
+		n := 0
+		for _, e := range drainEvents(rec) {
+			if strings.HasPrefix(e, prefix) {
+				n++
+			}
+		}
+		return n
+	}
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	count("") // discard the first pass's events
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+	if n := count(""); n != 0 {
+		t.Errorf("an unchanged PartiallyAccepted emitted %d events, want 0", n)
+	}
+
+	// The older endpoint goes away: newer is served whole again.
+	if err := c.Delete(context.Background(), older); err != nil {
+		t.Fatal(err)
+	}
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("third reconcile: %v", err)
+	}
+	if n := count("Normal " + v1alpha1.ReasonAccepted + " "); n != 1 {
+		t.Errorf("Normal Accepted events after recovery = %d, want 1", n)
 	}
 }
