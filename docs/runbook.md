@@ -239,7 +239,7 @@ kubectl get events --field-selector involvedObject.name=<name> --sort-by='.lastT
 ```
 
 **Common causes:**
-- Config validation failure — check `ConfigValid` condition message
+- Config validation failure — check the `ConfigValid` condition message. It carries at most 4 KiB of krakend check output; the full output is in the operator log, message `krakend check rejected the rendered config`.
 - License missing for EE gateway — provide license secret
 - Rollout timeout — check Deployment events
 
