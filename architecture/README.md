@@ -174,7 +174,7 @@ spec:
   version: "2.13"                      # KrakenD version tag
   image: ""                            # Override: full image reference (ignores edition/version for image selection only; `edition` still controls config rendering)
   ceImage: ""                          # CE fallback image override (default: krakend/krakend:{version}); used when fallbackToCE=true and the operator switches from EE to CE
-  replicas: 3                          # omitted from Deployment when autoscaling.enabled=true (HPA owns scaling)
+  replicas: 3                          # ignored when autoscaling is set; a new Deployment starts at minReplicas and the HPA owns the count
   autoscaling:
     enabled: false
     minReplicas: 2
@@ -628,7 +628,7 @@ erDiagram
 | **Service** | KrakenDGateway | Operator-managed; garbage-collected via ownerReference |
 | **ConfigMap** | KrakenDGateway | Operator-managed; garbage-collected via ownerReference |
 | **ServiceAccount** | KrakenDGateway | Operator-managed; garbage-collected via ownerReference |
-| **HorizontalPodAutoscaler** | KrakenDGateway | Operator-managed (when `autoscaling.enabled=true`); `spec.replicas` omitted from Deployment when HPA is active |
+| **HorizontalPodAutoscaler** | KrakenDGateway | Operator-managed (when `autoscaling` is set); the operator sets Deployment `spec.replicas` only when creating it (to `minReplicas`) |
 | **PodDisruptionBudget** | KrakenDGateway | Operator-managed; garbage-collected via ownerReference |
 | **Dragonfly CR** | KrakenDGateway | Operator-managed (when `dragonfly.enabled=true`); Dragonfly Operator reconciles into StatefulSet, Service, PVC |
 | **ExternalSecret** | KrakenDGateway | Operator-managed (when `license.externalSecret.enabled=true`) |
