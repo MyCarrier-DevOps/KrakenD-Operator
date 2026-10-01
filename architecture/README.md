@@ -1769,7 +1769,7 @@ Per-gateway series (`namespace`, `name` labels) are removed when the gateway is 
 
 ### Kubernetes Events
 
-The operator emits events on KrakenDGateway resources:
+The operator emits events on the resource a condition or action concerns: KrakenDGateway for the rows below, except `EndpointConflict` and `Accepted`, which are emitted on the affected KrakenDEndpoint, and the AutoConfig rows, which are emitted on the KrakenDAutoConfig.
 
 | Event | Type | Reason |
 |---|---|---|
