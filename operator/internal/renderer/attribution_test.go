@@ -53,6 +53,12 @@ func TestAttribute_MapsKrakendCheckOutputToSources(t *testing.T) {
 			wantIndex: []int{1},
 		},
 		{
+			name:      "CE message about a rewritten EE wildcard",
+			rendered:  `{"endpoints":[{"endpoint":"/p/*","method":"GET"},{"endpoint":"/q/{id}","method":"GET"}]}`,
+			output:    "ERROR parsing the configuration file:\t'/tmp/k.json': undefined output param 'x'! endpoint: GET /p/:Wildcard, backend: 0.\n",
+			wantIndex: []int{0},
+		},
+		{
 			name:      "route conflict names both parties",
 			rendered:  `{"endpoints":[{"endpoint":"/a/{id}","method":"GET"},{"endpoint":"/a/{name}","method":"GET"}]}`,
 			output:    "ERROR testing the configuration file:\t':name' in new path '/a/:name' conflicts with existing wildcard ':id' in existing prefix '/a/:id'\n",
