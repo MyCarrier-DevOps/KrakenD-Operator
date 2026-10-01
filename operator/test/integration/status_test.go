@@ -29,6 +29,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -248,5 +249,95 @@ func TestGatewayAcceptance_MarksIncludedAndConflictedEndpoints(t *testing.T) {
 			return err
 		}
 		return expectCondition(ep, "Accepted", metav1.ConditionFalse, "EndpointConflict")
+	})
+}
+
+// setTimeout sets every entry's timeout on the endpoint key, which bumps its
+// generation, retrying on write conflicts with the controllers' status writes.
+func setTimeout(key client.ObjectKey, d time.Duration) error {
+	backoff := wait.Backoff{Duration: 50 * time.Millisecond, Factor: 1.5, Jitter: 0.2, Steps: 10}
+	return retry.RetryOnConflict(backoff, func() error {
+		ep, err := getEndpoint(key)
+		if err != nil {
+			return err
+		}
+		for i := range ep.Spec.Endpoints {
+			ep.Spec.Endpoints[i].Timeout = &metav1.Duration{Duration: d}
+		}
+		return k8sClient.Update(ctx, ep)
+	})
+}
+
+// expectEndpointStatus checks all three endpoint conditions at the current
+// generation, the derived phase, and that the legacy Available is gone.
+func expectEndpointStatus(key client.ObjectKey, accepted, ready metav1.ConditionStatus,
+	acceptedReason, readyReason string, phase v1alpha1.EndpointPhase) error {
+	ep, err := getEndpoint(key)
+	if err != nil {
+		return err
+	}
+	if err := expectCondition(ep, "ResolvedRefs", metav1.ConditionTrue, "RefsResolved"); err != nil {
+		return err
+	}
+	if err := expectCondition(ep, "Accepted", accepted, acceptedReason); err != nil {
+		return err
+	}
+	if err := expectCondition(ep, "Ready", ready, readyReason); err != nil {
+		return err
+	}
+	if ep.Status.Phase != phase {
+		return fmt.Errorf("%s: phase %q, want %q", ep.Name, ep.Status.Phase, phase)
+	}
+	if meta.FindStatusCondition(ep.Status.Conditions, "Available") != nil {
+		return fmt.Errorf("%s: legacy Available condition still present", ep.Name)
+	}
+	return nil
+}
+
+func TestEndpointStatus_ConflictedEndpointReportsBothWriters(t *testing.T) {
+	ns := testNamespace(t)
+	gw := createGateway(t, ns, "gw-both")
+	older := createEndpoint(t, ns, "ep-a-older", gw.Name, "/users")
+	olderReady := func() error {
+		return expectEndpointStatus(older, metav1.ConditionTrue, metav1.ConditionTrue, "Accepted", "Ready",
+			v1alpha1.EndpointPhaseActive)
+	}
+	eventually(t, olderReady)
+	newer := createEndpoint(t, ns, "ep-b-newer", gw.Name, "/users", "/only-b")
+	newerConflicted := func() error {
+		return expectEndpointStatus(newer, metav1.ConditionFalse, metav1.ConditionFalse,
+			"EndpointConflict", "EndpointConflict", v1alpha1.EndpointPhaseConflicted)
+	}
+	eventually(t, newerConflicted)
+
+	// Drive both writers at once: spec changes on the older endpoint re-run
+	// the endpoint and gateway controllers together, and gateway annotations
+	// re-run the gateway controller.
+	for i := 1; i <= 3; i++ {
+		if err := setTimeout(older, time.Duration(i)*time.Second); err != nil {
+			t.Fatal(err)
+		}
+		touchGateway(t, gw, strconv.Itoa(i))
+	}
+	eventually(t, olderReady)
+	consistently(t, 5*time.Second, newerConflicted)
+
+	// Steady state: further gateway reconciles write nothing to the endpoint.
+	before, err := getEndpoint(newer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	touchGateway(t, gw, "steady-1")
+	touchGateway(t, gw, "steady-2")
+	consistently(t, 5*time.Second, func() error {
+		cur, err := getEndpoint(newer)
+		if err != nil {
+			return err
+		}
+		if cur.ResourceVersion != before.ResourceVersion {
+			return fmt.Errorf("ep-b-newer rewritten in steady state: resourceVersion %s -> %s",
+				before.ResourceVersion, cur.ResourceVersion)
+		}
+		return nil
 	})
 }
