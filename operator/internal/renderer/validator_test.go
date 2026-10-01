@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 )
 
 // mockExecutor implements CommandExecutor for testing.
@@ -346,5 +347,26 @@ func TestValidate_KilledProcessIsTransient(t *testing.T) {
 	var valErr *ValidationError
 	if errors.As(err, &valErr) {
 		t.Fatalf("a process killed by a signal was reported as an invalid config: %v", err)
+	}
+}
+
+func TestValidate_DeadlineIsTransient(t *testing.T) {
+	bin := fakeKrakenD(t, "exec sleep 5")
+	v := NewValidator(ValidatorOptions{
+		Executor:   NewKrakenDExecutor(bin),
+		BinaryPath: bin,
+		Timeout:    200 * time.Millisecond,
+	})
+	start := time.Now()
+	err := v.Validate(context.Background(), []byte(`{"version":3}`))
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Errorf("Validate took %s; the timeout did not stop krakend check", elapsed)
+	}
+	var valErr *ValidationError
+	if errors.As(err, &valErr) {
+		t.Fatalf("a timed-out run was reported as an invalid config: %v", err)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("expected the error to wrap context.DeadlineExceeded, got %v", err)
 	}
 }
