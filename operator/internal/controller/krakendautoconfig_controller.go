@@ -830,7 +830,9 @@ func extractHost(rawURL string) string {
 }
 
 func autoConfigReady(conds []metav1.Condition) (status metav1.ConditionStatus, reason, message string) {
-	return "", "", ""
+	return metav1.ConditionUnknown, v1alpha1.ReasonPending, "Waiting for the first sync"
 }
 
-func autoConfigPhase(conds []metav1.Condition) v1alpha1.AutoConfigPhase { return "" }
+func autoConfigPhase(conds []metav1.Condition) v1alpha1.AutoConfigPhase {
+	return v1alpha1.AutoConfigPhasePending
+}
