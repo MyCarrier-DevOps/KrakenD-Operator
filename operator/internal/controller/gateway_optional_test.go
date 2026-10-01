@@ -379,18 +379,28 @@ func TestGatewayReconcile_DragonflyNotYetCreatedRecordsOneEvent(t *testing.T) {
 	gw := reconciledGateway()
 	gw.Status.ConfigChecksum = "applied"
 	gw.Spec.Dragonfly = &v1alpha1.DragonflySpec{Enabled: true}
-	c := fakeClientBuilder().WithRESTMapper(optionalCRDMapper(dragonflyGVK)).
-		WithObjects(gw).WithStatusSubresource(gw).Build()
+	// The Dragonfly create is swallowed, so the CR stays absent and both
+	// reconciles report that it is not yet created.
+	c := interceptor.NewClient(fakeClientBuilder().WithRESTMapper(optionalCRDMapper(dragonflyGVK)).
+		WithObjects(gw).WithStatusSubresource(gw).Build(), interceptor.Funcs{
+		Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if obj.GetObjectKind().GroupVersionKind() == dragonflyGVK {
+				return nil
+			}
+			return cl.Create(ctx, obj, opts...)
+		}})
 	r := newTestGatewayReconciler(c, renderOutput("applied"), &mockValidator{})
 
-	for range 2 {
+	for pass := 1; pass <= 2; pass++ {
 		if err := reconcileGateway(t, r, gw); err != nil {
-			t.Fatalf("reconcile: %v", err)
+			t.Fatalf("reconcile %d: %v", pass, err)
 		}
-	}
-	cond := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionDragonflyReady)
-	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != v1alpha1.ReasonDragonflyNotReady {
-		t.Errorf("DragonflyReady = %+v, want False/%s", cond, v1alpha1.ReasonDragonflyNotReady)
+		cond := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionDragonflyReady)
+		if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != v1alpha1.ReasonDragonflyNotReady ||
+			cond.Message != "Dragonfly CR not yet created" {
+			t.Errorf("reconcile %d: DragonflyReady = %+v, want False/%s %q",
+				pass, cond, v1alpha1.ReasonDragonflyNotReady, "Dragonfly CR not yet created")
+		}
 	}
 	if n := eventsWithReason(r.Recorder.(*record.FakeRecorder), v1alpha1.ReasonDragonflyNotReady); n != 1 {
 		t.Errorf("DragonflyNotReady events over two reconciles = %d, want 1", n)
