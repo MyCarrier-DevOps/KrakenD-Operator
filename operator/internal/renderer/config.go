@@ -482,38 +482,35 @@ func appendEndpointComponentSchemas(ec map[string]any, endpoints []v1alpha1.Krak
 	ec["documentation/openapi"] = docConfig
 }
 
-func appendRedisConfig(ec map[string]any, redis *v1alpha1.RedisSpec, df *DragonflyState) {
-	if redis != nil {
-		pool := redis.ConnectionPool
-		r := map[string]any{"addresses": pool.Addresses}
-		if pool.PoolSize > 0 {
-			r["pool_size"] = pool.PoolSize
-		}
-		if pool.MinIdleConns > 0 {
-			r["min_idle_conns"] = pool.MinIdleConns
-		}
-		if pool.DialTimeout != "" {
-			r["dial_timeout"] = pool.DialTimeout
-		}
-		if pool.ReadTimeout != "" {
-			r["read_timeout"] = pool.ReadTimeout
-		}
-		if pool.WriteTimeout != "" {
-			r["write_timeout"] = pool.WriteTimeout
-		}
-		ec["backend/redis"] = r
-	}
+// RedisPoolName names the Redis connection pool (or cluster) rendered from
+// spec.redis and Dragonfly. KrakenD EE components reference it by name, for
+// example qos/ratelimit/router/redis {"connection_name": "default"}.
+const RedisPoolName = "default"
 
-	if df != nil && df.Enabled && df.ServiceDNS != "" {
-		if existing, ok := ec["backend/redis"]; ok {
-			if redisMap, ok := existing.(map[string]any); ok {
-				redisMap["addresses"] = []string{df.ServiceDNS}
-			}
-		} else {
-			ec["backend/redis"] = map[string]any{
-				"addresses": []string{df.ServiceDNS},
-			}
+// appendRedisConfig renders the KrakenD EE service-level "redis" namespace
+// (https://www.krakend.io/docs/enterprise/service-settings/redis-connection-pools/):
+// one connection pool for a single address, or one cluster for several.
+// readTimeout and writeTimeout have no equivalent in that namespace and are
+// not rendered.
+func appendRedisConfig(ec map[string]any, redis *v1alpha1.RedisSpec, df *DragonflyState) {
+	pool := map[string]any{"name": RedisPoolName}
+	var addresses []string
+	if redis != nil {
+		p := redis.ConnectionPool
+		addresses = p.Addresses
+		if p.PoolSize > 0 {
+			pool["pool_size"] = p.PoolSize
 		}
+		if p.MinIdleConns > 0 {
+			pool["min_idle_conns"] = p.MinIdleConns
+		}
+		if p.DialTimeout != "" {
+			pool["dial_timeout"] = p.DialTimeout
+		}
+	}
+	if len(addresses) == 1 {
+		pool["address"] = addresses[0]
+		ec["redis"] = map[string]any{"connection_pools": []any{pool}}
 	}
 }
 
