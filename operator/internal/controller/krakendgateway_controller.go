@@ -1791,6 +1791,7 @@ type gatewayReadiness struct {
 func gatewayReadinessFor(conds []metav1.Condition) gatewayReadiness {
 	configValid := meta.FindStatusCondition(conds, v1alpha1.ConditionConfigValid)
 	available := meta.FindStatusCondition(conds, v1alpha1.ConditionAvailable)
+	progressing := meta.FindStatusCondition(conds, v1alpha1.ConditionProgressing)
 	degraded := meta.FindStatusCondition(conds, v1alpha1.ConditionLicenseDegraded)
 	expired := meta.FindStatusCondition(conds, v1alpha1.ConditionLicenseExpired)
 	switch {
@@ -1806,6 +1807,8 @@ func gatewayReadinessFor(conds []metav1.Condition) gatewayReadiness {
 	case configValid == nil:
 		return gatewayReadiness{status: metav1.ConditionUnknown, reason: v1alpha1.ReasonPending,
 			message: "Waiting for the first configuration to be validated", phase: v1alpha1.PhasePending}
+	case condTrue(progressing):
+		return notReady(progressing, v1alpha1.PhaseDeploying)
 	default:
 		return gatewayReadiness{status: metav1.ConditionTrue, reason: v1alpha1.ReasonReady,
 			message: "Configuration applied and all replicas available", phase: v1alpha1.PhaseRunning}
