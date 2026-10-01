@@ -746,19 +746,24 @@ func TestGatewayReconcile_RenewedLicenseDoesNotRerunThePostRestartJob(t *testing
 	}
 }
 
-func TestGatewayReconcile_LicenseChecksumIsOnlyForTheEditionThatRunsTheLicense(t *testing.T) {
-	cases := map[string]func(gw *v1alpha1.KrakenDGateway, p *mockLicenseParser){
-		"CE fallback": func(_ *v1alpha1.KrakenDGateway, p *mockLicenseParser) {
-			p.info.NotAfter = testNow.Add(-time.Minute)
+func TestGatewayReconcile_LicenseChecksumFollowsTheMountedLicense(t *testing.T) {
+	cases := map[string]struct {
+		tweak   func(gw *v1alpha1.KrakenDGateway, p *mockLicenseParser)
+		present bool
+	}{
+		"CE fallback still mounts the license": {
+			tweak:   func(_ *v1alpha1.KrakenDGateway, p *mockLicenseParser) { p.info.NotAfter = testNow.Add(-time.Minute) },
+			present: true,
 		},
-		"community edition": func(gw *v1alpha1.KrakenDGateway, _ *mockLicenseParser) {
-			gw.Spec.Edition = v1alpha1.EditionCE
+		"community edition mounts none": {
+			tweak:   func(gw *v1alpha1.KrakenDGateway, _ *mockLicenseParser) { gw.Spec.Edition = v1alpha1.EditionCE },
+			present: false,
 		},
 	}
-	for name, tweak := range cases {
+	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			gw, secret, parser := licensedEEGateway(testNow.Add(90*24*time.Hour), true)
-			tweak(gw, parser)
+			tc.tweak(gw, parser)
 			c := fakeClientBuilder().WithObjects(gw, secret).WithStatusSubresource(gw).Build()
 			r := newTestGatewayReconciler(c, renderOutput("cs"), &mockValidator{})
 			r.LicenseParser = parser
@@ -768,8 +773,13 @@ func TestGatewayReconcile_LicenseChecksumIsOnlyForTheEditionThatRunsTheLicense(t
 			}
 			var dep appsv1.Deployment
 			getObject(t, c, gw, gw.Name, &dep)
-			if got, ok := dep.Spec.Template.Annotations[resources.LicenseChecksumAnnotation]; ok {
-				t.Errorf("license annotation = %q, want none", got)
+			want := ""
+			if tc.present {
+				want = hash.SHA256Hex(secret.Data["LICENSE"])
+			}
+			got, ok := dep.Spec.Template.Annotations[resources.LicenseChecksumAnnotation]
+			if ok != tc.present || got != want {
+				t.Errorf("license annotation = %q (present %v), want %q (present %v)", got, ok, want, tc.present)
 			}
 		})
 	}
