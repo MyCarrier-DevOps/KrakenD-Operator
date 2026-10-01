@@ -133,3 +133,30 @@ func TestGatewayReconcile_RequeuesAtTheNextLicenseBoundary(t *testing.T) {
 		})
 	}
 }
+
+func TestGatewayReconcile_RenewedLicenseRestoresEE(t *testing.T) {
+	gw, secret, parser := licensedEEGateway(testNow.Add(90*24*time.Hour), true)
+	for _, typ := range []string{v1alpha1.ConditionLicenseDegraded, v1alpha1.ConditionLicenseExpired} {
+		meta.SetStatusCondition(&gw.Status.Conditions,
+			metav1.Condition{Type: typ, Status: metav1.ConditionTrue, Reason: "LicenseExpired"})
+	}
+	c := fakeClientBuilder().WithObjects(gw, secret).WithStatusSubresource(gw).Build()
+	var captured *renderer.RenderInput
+	r := newTestGatewayReconciler(c,
+		&capturingRenderer{delegate: renderOutput("cs"), captured: &captured}, &mockValidator{})
+	r.LicenseParser = parser
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if captured.CEFallback {
+		t.Error("a renewed license must render EE again") // pinned by StageValid returning false
+	}
+	cond := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionLicenseDegraded)
+	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != v1alpha1.ReasonLicenseRestored {
+		t.Errorf("LicenseDegraded = %+v, want False/%s", cond, v1alpha1.ReasonLicenseRestored) // pinned by recoverLicense
+	}
+	if n := eventsWithReason(r.Recorder.(*record.FakeRecorder), v1alpha1.ReasonLicenseRestored); n != 1 {
+		t.Errorf("LicenseRestored events = %d, want 1", n)
+	}
+}
