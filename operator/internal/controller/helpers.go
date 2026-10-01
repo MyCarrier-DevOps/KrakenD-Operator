@@ -19,7 +19,9 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
+	"unicode/utf8"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -50,6 +52,57 @@ func conditionsEqual(a, b []metav1.Condition) bool {
 		}
 	}
 	return true
+}
+
+// maxConditionMessageBytes bounds validator output copied into a condition
+// message or an event. The CRDs cap condition messages at 32768 characters,
+// and krakend check can print far more for one bad policy used by many
+// backends; the full output goes to the operator log instead.
+const maxConditionMessageBytes = 4096
+
+// truncationReserve is the room kept for the "(output truncated, N more
+// lines)" marker.
+const truncationReserve = 64
+
+// truncateMessage returns msg unchanged when it fits in maxBytes. Otherwise
+// it keeps as many whole leading lines as fit, cutting the first line at a
+// rune boundary if even that one is too long, and appends a marker counting
+// the lines it dropped.
+func truncateMessage(msg string, maxBytes int) string {
+	if len(msg) <= maxBytes {
+		return msg
+	}
+	budget := maxBytes - truncationReserve
+	lines := strings.Split(msg, "\n")
+	var b strings.Builder
+	kept := 0
+	for _, line := range lines {
+		if b.Len()+len(line)+1 > budget {
+			break
+		}
+		b.WriteString(line)
+		b.WriteByte('\n')
+		kept++
+	}
+	if kept == 0 {
+		b.WriteString(truncateAtRune(lines[0], budget))
+		b.WriteByte('\n')
+		kept = 1
+	}
+	fmt.Fprintf(&b, "(output truncated, %d more lines)", len(lines)-kept)
+	return b.String()
+}
+
+// truncateAtRune returns the longest prefix of s that is at most n bytes and
+// does not split a UTF-8 sequence.
+func truncateAtRune(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
 }
 
 // endpointIndexRegistration tracks one in-flight or completed index
