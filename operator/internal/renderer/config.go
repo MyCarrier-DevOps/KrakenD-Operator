@@ -508,9 +508,15 @@ func appendRedisConfig(ec map[string]any, redis *v1alpha1.RedisSpec, df *Dragonf
 			pool["dial_timeout"] = p.DialTimeout
 		}
 	}
-	if len(addresses) == 1 {
+	switch len(addresses) {
+	case 0:
+		return
+	case 1:
 		pool["address"] = addresses[0]
 		ec["redis"] = map[string]any{"connection_pools": []any{pool}}
+	default:
+		pool["addresses"] = addresses
+		ec["redis"] = map[string]any{"clusters": []any{pool}}
 	}
 }
 
