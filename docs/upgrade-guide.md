@@ -1026,10 +1026,10 @@ Previously these stayed behind. An orphaned HPA kept scaling the Deployment,
 and an orphaned VirtualService kept claiming its hosts.
 
 - **Replicas.** Once the HPA is deleted the Deployment returns to
-  `spec.replicas` (while the Deployment is held, because no config has been
-  applied yet or because the applied config's ConfigMap is missing while a
-  newer render is rejected, that happens once a config passes validation;
-  until then it keeps the HPA's last replica count). If `spec.replicas` is
+  `spec.replicas`. While the Deployment is held it keeps the HPA's last
+  replica count until the hold ends. It is held when no config has been
+  applied yet, when the applied config's ConfigMap is missing while a newer
+  render is rejected, and when a plugin ConfigMap is missing. If `spec.replicas` is
   unset that is one pod, so set `spec.replicas` before upgrading or before
   removing `spec.autoscaling`. Setting `spec.replicas` while
   `spec.autoscaling` is still set gives the expected admission warning
@@ -1071,6 +1071,20 @@ event fires once, when the condition is first set.
 A newly created gateway with Dragonfly enabled now records one
 `DragonflyNotReady` Warning on its first reconcile, while its Dragonfly CR is
 created.
+
+### A missing plugin ConfigMap is reported, and nothing is rolled out that cannot start
+
+A `spec.plugins.sources[].configMapRef` naming a ConfigMap that does not
+exist now sets `PluginsResolved=False` with reason `ConfigMapNotFound`,
+naming the ConfigMap. `Ready` goes False with the same reason and the phase
+is `Error`. The Deployment is held as it is, and a new gateway gets no
+Deployment yet. No `Progressing` rollout or `ConfigDeployed` event is
+reported while it is held. The Service, PDB, HPA, Dragonfly, ExternalSecret
+and VirtualService are still reconciled.
+Previously the operator rolled out a pod template that mounted the missing
+ConfigMap, and new pods hung in `ContainerCreating`. Creating the ConfigMap
+releases the hold. `PluginsResolved` exists only while the gateway has
+ConfigMap plugin sources.
 
 ---
 
