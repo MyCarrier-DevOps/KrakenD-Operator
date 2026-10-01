@@ -2875,6 +2875,9 @@ func TestAutoConfigReconcile_SyncedGaugeDeletedOnTerminating(t *testing.T) {
 }
 
 func TestAutoConfigReadiness(t *testing.T) {
+	c := func(typ string, status metav1.ConditionStatus, reason string) metav1.Condition {
+		return metav1.Condition{Type: typ, Status: status, Reason: reason, Message: reason + " message"}
+	}
 	tests := []struct {
 		name       string
 		conds      []metav1.Condition
@@ -2883,6 +2886,10 @@ func TestAutoConfigReadiness(t *testing.T) {
 		wantPhase  v1alpha1.AutoConfigPhase
 	}{
 		{"not synced yet", nil, metav1.ConditionUnknown, "Pending", v1alpha1.AutoConfigPhasePending},
+		{"spec fetch failed",
+			[]metav1.Condition{c("SpecAvailable", metav1.ConditionFalse, "SpecFetchFailed"),
+				c("Synced", metav1.ConditionFalse, "SpecFetchFailed")},
+			metav1.ConditionFalse, "SpecFetchFailed", v1alpha1.AutoConfigPhaseError},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
