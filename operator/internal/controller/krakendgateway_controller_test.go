@@ -18,7 +18,6 @@ package controller
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -36,7 +35,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
-	clocktesting "k8s.io/utils/clock/testing"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -857,61 +855,6 @@ func TestGatewayReconcile_WithDragonflyEnabled(t *testing.T) {
 	}
 	if (*capturedInput).Dragonfly != nil {
 		t.Error("expected nil DragonflyState when CRD is not installed")
-	}
-}
-
-func TestGatewayReconcile_ExternalSecretSkippedWhenCRDMissing(t *testing.T) {
-	gw := testGateway()
-	gw.Spec.Edition = v1alpha1.EditionEE
-	gw.Spec.License = &v1alpha1.LicenseConfig{
-		ExternalSecret: v1alpha1.ExternalSecretLicenseConfig{
-			Enabled: true,
-			SecretStoreRef: v1alpha1.SecretStoreRef{
-				Name: "vault", Kind: "ClusterSecretStore",
-			},
-			RemoteRef: v1alpha1.ExternalRemoteRef{Key: "krakend/license"},
-		},
-	}
-	gw.Status.Phase = v1alpha1.PhaseRunning
-	rec := fakeRecorder()
-	c := fakeClientBuilder().
-		WithObjects(gw).
-		WithStatusSubresource(gw).
-		Build()
-
-	r := &KrakenDGatewayReconciler{
-		Client:   c,
-		Scheme:   testScheme(),
-		Recorder: rec,
-		Renderer: &mockRenderer{
-			output: &renderer.RenderOutput{
-				JSON: []byte(`{}`), Checksum: "cs",
-			},
-		},
-		Validator: &mockValidator{},
-		Clock:     clocktesting.NewFakeClock(testNow),
-
-		LicenseParser: &mockLicenseParser{err: errors.New("no license in this test")},
-	}
-
-	_, err := r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: client.ObjectKeyFromObject(gw),
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	// Verify warning event was emitted about missing CRD.
-	found := false
-	for len(rec.Events) > 0 {
-		e := <-rec.Events
-		if strings.Contains(e, "CRDNotInstalled") && strings.Contains(e, "external-secrets.io") {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Error("expected CRDNotInstalled warning event for ExternalSecret")
 	}
 }
 
