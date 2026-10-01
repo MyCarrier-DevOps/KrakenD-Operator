@@ -336,6 +336,11 @@ func TestGatewayReconcile_MissingOptionalCRDIsACondition(t *testing.T) {
 		{"Dragonfly", func(gw *v1alpha1.KrakenDGateway) {
 			gw.Spec.Dragonfly = &v1alpha1.DragonflySpec{Enabled: true}
 		}, v1alpha1.ConditionDragonflyReady, metav1.ConditionFalse},
+		{"Istio", func(gw *v1alpha1.KrakenDGateway) {
+			gw.Spec.Istio = &v1alpha1.IstioSpec{
+				Enabled: true, Hosts: []string{"api.example.com"}, Gateways: []string{"istio-system/gw"},
+			}
+		}, v1alpha1.ConditionIstioConfigured, metav1.ConditionFalse},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
