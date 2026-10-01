@@ -268,6 +268,44 @@ func openAPIOnCEWarning(gw *v1alpha1.KrakenDGateway) admission.Warnings {
 	}
 }
 
+// redisPoolWarnings reports Redis and Dragonfly settings that do not reach
+// KrakenD's connection: its redis namespace has no field for readTimeout or
+// writeTimeout, and the operator does not render the pool's password or tls.
+// On EE it does not render the Dragonfly password either, though Dragonfly
+// requires it, so KrakenD's connections to Dragonfly are refused.
+func redisPoolWarnings(gw *v1alpha1.KrakenDGateway) admission.Warnings {
+	const (
+		noSetting   = "has no effect: KrakenD's redis connection pools have no such setting"
+		notRendered = "has no effect: the operator does not render it yet, so KrakenD connects without it"
+		dfRequires  = "is not rendered: Dragonfly requires this password, but the operator does not render it into " +
+			"KrakenD's redis pool, so KrakenD's connections to Dragonfly are refused"
+	)
+	var pool v1alpha1.RedisConnectionPool
+	if gw.Spec.Redis != nil {
+		pool = gw.Spec.Redis.ConnectionPool
+	}
+	//nolint:staticcheck // reads deprecated fields to warn users
+	hasRead, hasWrite := pool.ReadTimeout != "", pool.WriteTimeout != ""
+	df := gw.Spec.Dragonfly
+	var warnings admission.Warnings
+	for _, f := range []struct {
+		path, why string
+		set       bool
+	}{
+		{"spec.redis.connectionPool.readTimeout", noSetting, hasRead},
+		{"spec.redis.connectionPool.writeTimeout", noSetting, hasWrite},
+		{"spec.redis.connectionPool.password", notRendered, pool.Password != nil},
+		{"spec.redis.connectionPool.tls", notRendered, pool.TLS != nil},
+		{"spec.dragonfly.authentication.passwordFromSecret", dfRequires, gw.Spec.Edition == v1alpha1.EditionEE &&
+			df != nil && df.Authentication != nil && df.Authentication.PasswordFromSecret != nil},
+	} {
+		if f.set {
+			warnings = append(warnings, f.path+" "+f.why)
+		}
+	}
+	return warnings
+}
+
 // validatePostRestartJob validates spec.postRestartJob when enabled. Split
 // out of GatewayValidator.validate to keep that function's cyclomatic
 // complexity in check (gocyclo) as this block grew with round-2 review
@@ -1441,40 +1479,4 @@ func SetupWebhooks(mgr ctrl.Manager) error {
 	}
 
 	return nil
-}
-
-// redisPoolWarnings reports Redis and Dragonfly settings that have no effect
-// on how KrakenD connects: KrakenD's redis namespace has no field for
-// readTimeout or writeTimeout, and the operator does not render the pool's
-// password or tls, nor, on EE, the Dragonfly password, so KrakenD connects
-// without them.
-func redisPoolWarnings(gw *v1alpha1.KrakenDGateway) admission.Warnings {
-	const (
-		noSetting   = "KrakenD's redis connection pools have no such setting"
-		notRendered = "the operator does not render it yet, so KrakenD connects without it"
-	)
-	var pool v1alpha1.RedisConnectionPool
-	if gw.Spec.Redis != nil {
-		pool = gw.Spec.Redis.ConnectionPool
-	}
-	//nolint:staticcheck // reads deprecated fields to warn users
-	hasRead, hasWrite := pool.ReadTimeout != "", pool.WriteTimeout != ""
-	df := gw.Spec.Dragonfly
-	var warnings admission.Warnings
-	for _, f := range []struct {
-		path, why string
-		set       bool
-	}{
-		{"spec.redis.connectionPool.readTimeout", noSetting, hasRead},
-		{"spec.redis.connectionPool.writeTimeout", noSetting, hasWrite},
-		{"spec.redis.connectionPool.password", notRendered, pool.Password != nil},
-		{"spec.redis.connectionPool.tls", notRendered, pool.TLS != nil},
-		{"spec.dragonfly.authentication.passwordFromSecret", notRendered, gw.Spec.Edition == v1alpha1.EditionEE &&
-			df != nil && df.Authentication != nil && df.Authentication.PasswordFromSecret != nil},
-	} {
-		if f.set {
-			warnings = append(warnings, f.path+" has no effect: "+f.why)
-		}
-	}
-	return warnings
 }
