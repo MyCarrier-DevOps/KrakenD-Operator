@@ -2584,3 +2584,33 @@ func TestGatewayReconcile_PluginsResolvedIsAbsentWithoutConfigMapSources(t *test
 		t.Errorf("PluginsResolved = %+v, want it removed once no ConfigMap plugin source remains", cond)
 	}
 }
+
+func TestGatewayReconcile_HeldForPluginConfigMapReportsNoDeploymentUpdate(t *testing.T) {
+	gw := servingGateway("applied", convergedImage)
+	stale := makeConvergedDeployment(gw, "applied")
+	gw.Spec.Image = "img:v2"
+	gw.Spec.Plugins = &v1alpha1.PluginsSpec{Sources: []v1alpha1.PluginSource{
+		{ConfigMapRef: &v1alpha1.ConfigMapKeyRef{Name: "plugins-a", Key: "auth.so"}},
+	}}
+	c := fakeClientBuilder().WithObjects(gw, stale).WithStatusSubresource(gw).
+		WithInterceptorFuncs(staleDeploymentReads(stale)).Build()
+	rend := &mockRenderer{output: &renderer.RenderOutput{
+		JSON: []byte(`{"version":3}`), Checksum: "applied",
+	}}
+	r := newTestGatewayReconciler(c, rend, &mockValidator{})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	got := getGateway(t, c, gw)
+	if cond := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionProgressing); condTrue(cond) {
+		t.Errorf("Progressing = %+v, want no rollout reported while the Deployment is held", cond)
+	}
+	var dep appsv1.Deployment
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(gw), &dep); err != nil {
+		t.Fatal(err)
+	}
+	if image := dep.Spec.Template.Spec.Containers[0].Image; image != convergedImage {
+		t.Errorf("Deployment image = %s, want it left at %s while held", image, convergedImage)
+	}
+}
