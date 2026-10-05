@@ -268,6 +268,8 @@ func TestGatewayAdmission_CERejectsEnterpriseOnlyNamespaces(t *testing.T) {
 			Raw: &runtime.RawExtension{Raw: []byte(`{"backend/http/client":{"proxy_address":"http://p"}}`)},
 		},
 	}
+	generated := testEndpoint("generated", "/g")
+	generated.Spec.Endpoints[0].ExtraConfig = &runtime.RawExtension{Raw: []byte(`{"documentation/openapi":{"summary":"s"}}`)}
 	proxied := testEndpoint("proxied", "/x")
 	proxied.Spec.Endpoints[0].Backends[0].ExtraConfig = &runtime.RawExtension{
 		Raw: []byte(`{"backend/http/client":{"proxy_address":"http://q"}}`)}
@@ -304,6 +306,7 @@ func TestGatewayAdmission_CERejectsEnterpriseOnlyNamespaces(t *testing.T) {
 			testGateway(), ee(), []string{
 				"KrakenDEndpoint default/proxied spec.endpoints[0].backends[0].extraConfig backend/http/client: proxy_address",
 				"KrakenDBackendPolicy default/p spec.raw backend/http/client: proxy_address"}},
+		{"EE to CE with an entry's documentation/openapi", []client.Object{generated}, testGateway(), ee(), nil},
 		{"EE to CE with nothing Enterprise-only", []client.Object{testEndpoint("plain", "/p")}, testGateway(), ee(), nil},
 		{"CE stays CE with stored EE namespaces", []client.Object{keys, proxy}, edited(testGateway()), testGateway(), nil},
 		{"EE to CE with only keys CE honors", []client.Object{redirects, honored}, testGateway(), ee(), nil},
