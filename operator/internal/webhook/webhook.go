@@ -154,11 +154,16 @@ func (v *GatewayValidator) admit(
 }
 
 // eeNamespacesOnCE rejects Enterprise-only extra_config namespaces that a CE
-// gateway would accept and then silently ignore, in spec.config.extraConfig.
+// gateway would accept and then silently ignore, in spec.config.extraConfig
+// when it is new, changed or newly on CE.
 func (v *GatewayValidator) eeNamespacesOnCE(
-	_ context.Context, _, gw *v1alpha1.KrakenDGateway,
+	_ context.Context, old, gw *v1alpha1.KrakenDGateway,
 ) (field.ErrorList, error) {
 	if gw.Spec.Edition != v1alpha1.EditionCE {
+		return nil, nil
+	}
+	if old != nil && old.Spec.Edition == v1alpha1.EditionCE &&
+		equality.Semantic.DeepEqual(old.Spec.Config.ExtraConfig, gw.Spec.Config.ExtraConfig) {
 		return nil, nil
 	}
 	return ceIgnores(field.NewPath("spec", "config", "extraConfig"),
