@@ -573,7 +573,7 @@ func (r *KrakenDGatewayReconciler) inspectDeploymentStatus(
 			Reason:             "RolloutComplete",
 			Message:            "Deployment rollout completed successfully",
 		})
-	case obs.templateChanged:
+	case rolloutInFlight(obs):
 		raiseProgressing(gw, note)
 	}
 
@@ -1371,7 +1371,9 @@ func (r *KrakenDGatewayReconciler) reconcileDeployment(
 	// built template differs from the stored one on every pass.
 	changed := result == controllerutil.OperationResultUpdated &&
 		!equality.Semantic.DeepEqual(before, &dep.Spec.Template)
-	return deploymentObservation{dep: dep, templateChanged: changed}, nil
+	return deploymentObservation{
+		dep: dep, created: result == controllerutil.OperationResultCreated, templateChanged: changed,
+	}, nil
 }
 
 // reconcilePostRestartJob creates a Job to run the user-provided bash script
