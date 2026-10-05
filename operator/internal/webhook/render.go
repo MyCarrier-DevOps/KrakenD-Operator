@@ -36,9 +36,10 @@ import (
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 )
 
-// renderChecks are the four checks of the verdict ratchet, each over a
-// proposed change: the gateway with it, and without it, then the same two on
-// the isolated baseline used when the gateway already fails.
+// renderChecks are the checks of the verdict ratchet, each over a proposed
+// change: the gateway with it, and without it, then, optionally, the same two
+// on the isolated baseline used when the gateway already fails (a change with
+// no isolated form leaves isoAfter and isoBefore nil).
 type renderChecks struct {
 	after, before, isoAfter, isoBefore func(context.Context) (configcheck.Verdict, error)
 }
@@ -55,9 +56,9 @@ func bindCheck(
 // failing one. It runs after, then before; when before fails too the failure
 // is a warning (preexisting words it from before's verdict) unless the change
 // fails on the isolated baseline where its own baseline passed. Without an
-// isolated baseline (isoAfter nil) a preexisting failure is only a warning. A check that
-// cannot run is a 500 with no warning: the request is not judged. deny builds
-// the rejection from a failing verdict.
+// isolated baseline (isoAfter nil) a preexisting failure is only a warning.
+// A check that cannot run is a 500 with no warning: the request is not
+// judged. deny builds the rejection from a failing verdict.
 func ratchetRender(
 	ctx context.Context, c renderChecks, deny func(configcheck.Verdict) error,
 	preexisting func(before configcheck.Verdict) string,
