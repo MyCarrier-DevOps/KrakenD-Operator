@@ -107,3 +107,4 @@ KrakenDBackendPolicy b/p-other: Enterprise-only on CE gateway a/ce-gw: spec.raw 
 KrakenDEndpoint a/ee-backend: Enterprise-only on CE gateway a/ce-gw: spec.endpoints[0].backends[0].extraConfig backend/http/client
 KrakenDEndpoint a/ee-both: Enterprise-only on CE gateway a/ce-gw: spec.endpoints[0].extraConfig auth/api-keys, spec.endpoints[0].backends[0].extraConfig backend/http/client
 KrakenDEndpoint a/ee-entry: Enterprise-only on CE gateway a/ce-gw: spec.endpoints[0].extraConfig auth/api-keys
+KrakenDEndpoint a/null-client: Enterprise-only on CE gateway a/ce-gw: spec.endpoints[0].backends[0].extraConfig backend/http/client
