@@ -148,3 +148,17 @@ func TestSchemaClosure_FollowsRefsTransitively(t *testing.T) {
 		t.Errorf("unresolved = %v, want none", unresolved)
 	}
 }
+
+func TestSchemaClosure_ReportsUnresolvableRefs(t *testing.T) {
+	entry := docEntry("/pets", `{"response_definition":{"200":{"ref":"Ghost"},`+
+		`"400":{"example_schema":{"type":"object","properties":{"x":{"$ref":"#/definitions/Legacy"}}}}}}`)
+
+	closure, unresolved := SchemaClosure(entry, petSchemas())
+
+	if closure != nil {
+		t.Errorf("closure = %v, want nil", closure)
+	}
+	if want := []string{"#/definitions/Legacy", "Ghost"}; !slices.Equal(unresolved, want) {
+		t.Errorf("unresolved = %v, want %v", unresolved, want)
+	}
+}
