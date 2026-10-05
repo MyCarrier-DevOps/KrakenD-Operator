@@ -44,7 +44,7 @@ jq_opts=(-r --arg path_re "$endpoint_path_re" --arg go_re "$go_duration_re" --ar
 jq_lib='
 # The API server anchors ^ and $ at the ends of the text only; Oniguruma also
 # anchors them at line breaks, so anchor the CRD pattern at the ends explicitly.
-def crd_test($re): test($re | sub("^\\^"; "\\A") | sub("\\$$"; "\\z"));
+def crd_test($re): type == "string" and test($re | sub("^\\^"; "\\A") | sub("\\$$"; "\\z"));
 # Largest whole count of each unit that fits in 64 bits of nanoseconds, and the
 # nanoseconds in one.
 def unit_max: {"ns": "9223372036854775807", "us": "9223372036854775", "µs": "9223372036854775",
