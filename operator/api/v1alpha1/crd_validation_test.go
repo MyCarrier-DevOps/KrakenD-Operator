@@ -41,6 +41,8 @@ const (
 	endpointsCRD = "gateway.krakend.io_krakendendpoints.yaml"
 	policiesCRD  = "gateway.krakend.io_krakendbackendpolicies.yaml"
 	gatewaysCRD  = "gateway.krakend.io_krakendgateways.yaml"
+
+	autoconfigsCRD = "gateway.krakend.io_krakendautoconfigs.yaml"
 )
 
 // validateCRD validates a create of objectYAML against crdFile.
@@ -358,4 +360,12 @@ func TestValidateCRD_SkipsCELAfterABlockingSchemaError(t *testing.T) {
 			t.Errorf("%s: errors = %v, want the skipped-rules message", name, errs)
 		}
 	}
+}
+
+const autoconfigHead = `{apiVersion: gateway.krakend.io/v1alpha1, kind: KrakenDAutoConfig, metadata: {name: a}, spec: {gatewayRef: {name: gw}, `
+
+func TestAutoConfigCRD_Rules(t *testing.T) {
+	runCRDCases(t, autoconfigsCRD, []crdCase{
+		{"valid", autoconfigHead + `openapi: {url: "http://svc/openapi.json"}, trigger: Periodic, periodic: {interval: 5m0s}, additionalEndpoints: [{endpoint: /health}]}}`, ""},
+	})
 }
