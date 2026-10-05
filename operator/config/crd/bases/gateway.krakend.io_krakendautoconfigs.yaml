@@ -864,10 +864,63 @@ spec:
                 - Synced
                 - Error
                 type: string
+              skipped:
+                description: |-
+                  Skipped lists up to 20 operations the last sync generated no endpoint
+                  for by rule: an HTTP method KrakenDEndpoint does not accept
+                  (UnsupportedMethod), or a duplicate of an earlier operation
+                  (DuplicateOperationId).
+                items:
+                  description: |-
+                    OperationStatus reports one OpenAPI operation the AutoConfig skipped or
+                    could not converge.
+                  properties:
+                    endpoint:
+                      description: |-
+                        Endpoint is the KrakenDEndpoint generated for the operation, when the
+                        problem concerns that object.
+                      type: string
+                    message:
+                      description: Message explains Reason, truncated to 256 bytes.
+                      type: string
+                    method:
+                      description: Method is the operation's HTTP method, upper case.
+                      type: string
+                    operationId:
+                      description: OperationID is the operation's operationId, when
+                        it declares one.
+                      type: string
+                    path:
+                      description: Path is the gateway path the operation's endpoint
+                        has, or would have.
+                      type: string
+                    reason:
+                      description: Reason is a CamelCase code for why the operation
+                        is listed.
+                      type: string
+                  required:
+                  - method
+                  - path
+                  - reason
+                  type: object
+                type: array
+                x-kubernetes-list-type: atomic
               skippedOperations:
+                description: |-
+                  SkippedOperations counts the operations the last sync generated no
+                  endpoint for by rule (see skipped), including any beyond the 20 listed.
                 type: integer
               specChecksum:
                 type: string
+              warnings:
+                description: |-
+                  Warnings lists up to 20 problems in the OpenAPI spec or the AutoConfig
+                  that do not stop a sync, such as unresolved or colliding schema
+                  references, which leave the published documentation wrong.
+                items:
+                  type: string
+                type: array
+                x-kubernetes-list-type: atomic
             type: object
         required:
         - spec
