@@ -4189,3 +4189,41 @@ func TestAutoConfigReconcile_LongCUEErrorIsBoundedInStatusAndEvent(t *testing.T)
 		t.Errorf("expected the Warning event to carry the truncated message, got %d events", len(events))
 	}
 }
+
+func TestAutoConfigReconcile_ManyFailedWritesAreBoundedAndStatusWritten(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	failing := make(map[string]error, 200)
+	g.output.Endpoints = nil
+	for i := range 200 {
+		ep := generatedEndpoint(fmt.Sprintf("op%03d", i), fmt.Sprintf("/op%03d", i))
+		g.output.Endpoints = append(g.output.Endpoints, ep)
+		failing[ep.Name] = errors.New(strings.Repeat("e", 200))
+	}
+	var ops []string
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).
+		WithInterceptorFuncs(recordEndpointWrites(&ops, failing)).Build()
+	rec := fakeRecorder()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Recorder = rec
+
+	if _, err := reconcileAC(r, ac); err == nil {
+		t.Fatal("expected the aggregated write error to be returned")
+	}
+
+	if len(ops) != 200 {
+		t.Errorf("expected all 200 writes attempted, got %d", len(ops))
+	}
+	got := getAC(t, c, ac)
+	cond := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionSynced)
+	if got.Status.Phase != v1alpha1.AutoConfigPhaseError || cond == nil ||
+		cond.Reason != v1alpha1.ReasonEndpointReconcileFailed || len(cond.Message) > maxConditionMessageBytes {
+		t.Fatalf("expected phase Error and a Synced message within %d bytes, got %q %+v",
+			maxConditionMessageBytes, got.Status.Phase, cond)
+	}
+	events := drainEvents(rec)
+	if want := "Warning EndpointReconcileFailed " + cond.Message; !slices.Contains(events, want) {
+		t.Errorf("expected the Warning event to carry the truncated message, got %d events", len(events))
+	}
+}
