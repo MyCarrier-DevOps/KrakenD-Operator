@@ -168,6 +168,10 @@ spec:
                           sd:
                             description: SD selects the service discovery provider
                               (e.g. "static", "dns").
+                            enum:
+                            - static
+                            - dns
+                            - dns-shared
                             type: string
                           sdScheme:
                             description: SDScheme sets the service discovery scheme
