@@ -76,13 +76,29 @@ func validateEntries(ep *v1alpha1.KrakenDEndpoint, changed []int, gw *v1alpha1.K
 	return errs
 }
 
+// pathDrops is what a CE render drops from the extra_config at path.
+type pathDrops struct {
+	path  *field.Path
+	drops []renderer.CEDrop
+}
+
+// entryDrops lists, in order, what a CE render drops from the extraConfig of
+// an entry and of the entry's backends.
+func entryDrops(p *field.Path, e v1alpha1.EndpointEntry) []pathDrops {
+	found := []pathDrops{{p.Child("extraConfig"), eeOnlyNamespacesIn(e.ExtraConfig, renderer.LevelEndpoint)}}
+	for j, be := range e.Backends {
+		found = append(found, pathDrops{p.Child("backends").Index(j).Child("extraConfig"),
+			eeOnlyNamespacesIn(be.ExtraConfig, renderer.LevelBackend)})
+	}
+	return found
+}
+
 // validateEENamespaces rejects the Enterprise-only namespaces in the
 // extraConfig of an entry of a CE gateway and of the entry's backends.
 func validateEENamespaces(p *field.Path, e v1alpha1.EndpointEntry) field.ErrorList {
-	errs := ceIgnores(p.Child("extraConfig"), eeOnlyNamespacesIn(e.ExtraConfig, renderer.LevelEndpoint))
-	for j, be := range e.Backends {
-		errs = append(errs, ceIgnores(p.Child("backends").Index(j).Child("extraConfig"),
-			eeOnlyNamespacesIn(be.ExtraConfig, renderer.LevelBackend))...)
+	var errs field.ErrorList
+	for _, d := range entryDrops(p, e) {
+		errs = append(errs, ceIgnores(d.path, d.drops)...)
 	}
 	return errs
 }
