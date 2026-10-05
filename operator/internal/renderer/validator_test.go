@@ -612,17 +612,27 @@ func TestEditionFor(t *testing.T) {
 func TestValidationCopy_PluginConfigMapsDoNotReachIt(t *testing.T) {
 	gw := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "ns"},
-		Spec:       v1alpha1.KrakenDGatewaySpec{Version: "2.13", Edition: v1alpha1.EditionEE},
+		Spec: v1alpha1.KrakenDGatewaySpec{Version: "2.13", Edition: v1alpha1.EditionEE,
+			Plugins: &v1alpha1.PluginsSpec{Sources: []v1alpha1.PluginSource{
+				{ConfigMapRef: &v1alpha1.ConfigMapKeyRef{Name: "plugins"}},
+			}},
+		},
 	}
 	in := RenderInput{Gateway: gw}
 	plain, err := New(Options{}).Render(in)
 	if err != nil {
 		t.Fatal(err)
 	}
-	in.PluginConfigMaps = []corev1.ConfigMap{{ObjectMeta: metav1.ObjectMeta{Name: "plugins", Namespace: "ns"}}}
+	in.PluginConfigMaps = []corev1.ConfigMap{{
+		ObjectMeta: metav1.ObjectMeta{Name: "plugins", Namespace: "ns"},
+		BinaryData: map[string][]byte{"auth.so": []byte("plugin")},
+	}}
 	full, err := New(Options{}).Render(in)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if plain.PluginChecksum == full.PluginChecksum {
+		t.Fatal("the ConfigMaps did not reach the plugin checksum, so this test guards nothing")
 	}
 	for _, edition := range []v1alpha1.Edition{v1alpha1.EditionCE, v1alpha1.EditionEE} {
 		a, _, err := validationCopy(plain.JSON, edition)
