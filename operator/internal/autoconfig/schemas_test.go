@@ -282,3 +282,21 @@ func TestSchemaClosure_FollowsDiscriminatorMappings(t *testing.T) {
 		t.Errorf("unresolved = %v, want none", unresolved)
 	}
 }
+
+func TestSchemaClosure_DiscriminatorMappingValueForms(t *testing.T) {
+	components := map[string]runtime.RawExtension{
+		"Pet": {Raw: []byte(`{"discriminator":{"propertyName":"kind","mapping":{"dog":"Dog","cat":"Ghost"}},` +
+			`"properties":{"labels":{"mapping":{"x":"NotASchema"}}}}`)},
+		"Dog": {Raw: []byte(`{"type":"object"}`)},
+	}
+	entry := docEntry("/pets", `{"response_definition":{"200":{"ref":"Pet"}}}`)
+
+	closure, unresolved := SchemaClosure(entry, components)
+
+	if got, want := slices.Sorted(maps.Keys(closure)), []string{"Dog", "Pet"}; !slices.Equal(got, want) {
+		t.Errorf("closure = %v, want %v", got, want)
+	}
+	if want := []string{"Ghost"}; !slices.Equal(unresolved, want) {
+		t.Errorf("unresolved = %v, want %v (a mapping outside a discriminator is not read)", unresolved, want)
+	}
+}
