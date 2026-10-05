@@ -115,6 +115,12 @@ expect_equal "the chart's gateway webhook is not registered for DELETE" \
 expect_equal "the kustomize gateway webhook is not registered for DELETE" \
 	"CREATE UPDATE " "$(manifest_operations vkrakendgateway.kb.io operator/config/webhook/manifests.yaml)"
 
+# --- deleting a policy never waits on the webhook (a finalizer protects it) ---
+expect_equal "the chart's policy webhook is not registered for DELETE" \
+	"CREATE UPDATE " "$(webhook_operations vkrakendbackendpolicy.kb.io)"
+expect_equal "the kustomize policy webhook is not registered for DELETE" \
+	"CREATE UPDATE " "$(manifest_operations vkrakendbackendpolicy.kb.io operator/config/webhook/manifests.yaml)"
+
 # --- three concurrent krakend validations fit in the operator's limit ------
 memory_limit() {
 	render --show-only templates/deployment.yaml "$@" |
