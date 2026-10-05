@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -98,6 +99,15 @@ func endpoint(name string, paths ...string) *v1alpha1.KrakenDEndpoint {
 		})
 	}
 	return ep
+}
+
+// degraded marks gw as the gateway controller leaves it while the license is
+// in fallback.
+func degraded(gw *v1alpha1.KrakenDGateway) *v1alpha1.KrakenDGateway {
+	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+		Type: v1alpha1.ConditionLicenseDegraded, Status: metav1.ConditionTrue, Reason: "Fallback",
+	})
+	return gw
 }
 
 func policy(name string) *v1alpha1.KrakenDBackendPolicy {
@@ -350,5 +360,17 @@ func TestCheck_ReleasesTheSlotWhenTheValidatorPanics(t *testing.T) {
 	verdict, err := c.CheckGateway(ctx, gateway(v1alpha1.EditionCE), nil)
 	if err != nil || !verdict.OK {
 		t.Fatalf("verdict = %+v, err = %v; want OK after a panicked check", verdict, err)
+	}
+}
+
+func TestCheckGateway_AnEEGatewayInLicenseFallbackIsLintedAsCE(t *testing.T) {
+	v := &fakeValidator{}
+	c := newChecker(v, endpoint("a", "/a"))
+
+	if _, err := c.CheckGateway(context.Background(), degraded(gateway(v1alpha1.EditionEE)), nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(v.editions) != 1 || v.editions[0] != v1alpha1.EditionCE {
+		t.Errorf("editions = %v, want one CE lint", v.editions)
 	}
 }
