@@ -372,6 +372,8 @@ func TestCEDrops(t *testing.T) {
 			[]CEDrop{{Namespace: "auth/api-keys"}}},
 		// CE honors send_body_on_redirect, so a block with nothing else drops nothing.
 		{"CE-honored keys only", LevelBackend, `{"backend/http/client":{"send_body_on_redirect":true}}`, nil},
+		{"a null block is no block and goes whole", LevelBackend, `{"backend/http/client":null}`,
+			[]CEDrop{{Namespace: "backend/http/client"}}},
 		{"a block that is no object goes whole", LevelBackend, `{"backend/http/client":"x"}`,
 			[]CEDrop{{Namespace: "backend/http/client"}}},
 		{"EE keys beside CE-honored ones", LevelBackend,
