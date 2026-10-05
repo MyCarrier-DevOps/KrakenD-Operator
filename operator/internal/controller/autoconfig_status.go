@@ -73,13 +73,14 @@ func capList[T any](s []T) []T {
 }
 
 // specWarnings returns the distinct warnings, sorted, each truncated to
-// maxStatusMessageLen bytes and capped at maxStatusListLen.
+// maxStatusMessageLen bytes. It does not cap the list: callers count the
+// whole set, then capList what they list.
 func specWarnings(warnings []string) []string {
 	set := map[string]struct{}{}
 	for _, w := range warnings {
 		set[truncate(w, maxStatusMessageLen)] = struct{}{}
 	}
-	return capList(slices.Sorted(maps.Keys(set)))
+	return slices.Sorted(maps.Keys(set))
 }
 
 // truncate shortens s to at most n bytes, marking the cut with "...".
