@@ -404,6 +404,7 @@ func TestGatewayAdmission_CERejectsEnterpriseOnlyFields(t *testing.T) {
 		{"created on EE", withFields(ee()), nil, nil},
 		{"unchanged on CE", edited(withFields(testGateway())), withFields(testGateway()), nil},
 		{"added on CE", withFields(testGateway()), testGateway(), all},
+		{"EE to CE while set", withFields(testGateway()), withFields(ee()), all},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
