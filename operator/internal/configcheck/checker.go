@@ -22,8 +22,11 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
@@ -102,7 +105,7 @@ func (c *Checker) acquire(ctx context.Context) error {
 	}
 }
 
-// gather lists gw's endpoints and applies replace.
+// gather lists gw's endpoints, applies replace, and gathers their policies.
 func (c *Checker) gather(ctx context.Context, gw *v1alpha1.KrakenDGateway, replace []v1alpha1.KrakenDEndpoint,
 	opts ...client.ListOption) (renderer.RenderInput, error) {
 	var list v1alpha1.KrakenDEndpointList
@@ -112,7 +115,36 @@ func (c *Checker) gather(ctx context.Context, gw *v1alpha1.KrakenDGateway, repla
 	}
 	endpoints := substitute(list.Items, replace)
 	sortEndpoints(endpoints)
-	return renderer.RenderInput{Gateway: gw, Endpoints: endpoints, CEFallback: ceFallback(gw)}, nil
+	policies, err := c.policiesFor(ctx, endpoints)
+	if err != nil {
+		return renderer.RenderInput{}, err
+	}
+	return renderer.RenderInput{Gateway: gw, Endpoints: endpoints, Policies: policies, CEFallback: ceFallback(gw)}, nil
+}
+
+// policiesFor fetches every policy the endpoints reference, keyed by
+// PolicyRef.PolicyKey. A missing policy is left out: the renderer then marks
+// the endpoint invalid.
+func (c *Checker) policiesFor(ctx context.Context,
+	endpoints []v1alpha1.KrakenDEndpoint) (map[string]*v1alpha1.KrakenDBackendPolicy, error) {
+	policies := make(map[string]*v1alpha1.KrakenDBackendPolicy)
+	for i := range endpoints {
+		for _, key := range fieldindex.EndpointPolicyKeys(&endpoints[i]) {
+			if _, ok := policies[key]; ok {
+				continue
+			}
+			ns, name, _ := strings.Cut(key, "/")
+			var policy v1alpha1.KrakenDBackendPolicy
+			if err := c.reader.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &policy); err != nil {
+				if apierrors.IsNotFound(err) {
+					continue
+				}
+				return nil, fmt.Errorf("getting policy %s: %w", key, err)
+			}
+			policies[key] = &policy
+		}
+	}
+	return policies, nil
 }
 
 // substitute returns current with each replace entry in place of the endpoint
