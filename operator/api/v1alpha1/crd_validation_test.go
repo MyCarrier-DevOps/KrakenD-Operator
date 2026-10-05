@@ -255,6 +255,7 @@ func TestGatewayCRD_Rules(t *testing.T) {
 		{"one PVC plugin source", gatewayHead + `edition: CE, config: {}, plugins: {sources: [{persistentVolumeClaimRef: {claimName: a}}, {configMapRef: {name: c, key: k}}]}}}`, ""},
 		{"redis password", gatewayHead + `edition: CE, config: {}, redis: {connectionPool: {addresses: ["redis:6379"], password: {name: s, key: p}}}}}`, "password is not supported yet"},
 		{"redis tls", gatewayHead + `edition: CE, config: {}, redis: {connectionPool: {addresses: ["redis:6379"], tls: {enabled: true}}}}}`, "tls is not supported yet"},
+		{"redis dial timeout", gatewayHead + `edition: CE, config: {}, redis: {connectionPool: {addresses: ["redis:6379"], dialTimeout: "5 seconds"}}}}`, "spec.redis.connectionPool.dialTimeout"},
 	})
 }
 
