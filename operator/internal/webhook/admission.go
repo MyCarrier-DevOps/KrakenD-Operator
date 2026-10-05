@@ -17,12 +17,30 @@ limitations under the License.
 package webhook
 
 import (
+	"context"
+	"time"
+
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
 )
+
+// admissionBudget is how long a validator works on one request. The API
+// server cuts a webhook call off at 15 s with a generic timeout; stopping
+// earlier lets the validator answer with a clear, transient error.
+const admissionBudget = 12 * time.Second
+
+// ConfigChecker renders a gateway's config with a proposed change and
+// validates it. *configcheck.Checker implements it.
+type ConfigChecker interface {
+	CheckGateway(ctx context.Context, gw *v1alpha1.KrakenDGateway,
+		replace []v1alpha1.KrakenDEndpoint) (configcheck.Verdict, error)
+	CheckIsolated(ctx context.Context, gw *v1alpha1.KrakenDGateway,
+		eps []v1alpha1.KrakenDEndpoint) (configcheck.Verdict, error)
+}
 
 // invalid is the admission error for field errors: 422 Invalid with one
 // status cause per error, so kubectl and API clients see each rejected field.
