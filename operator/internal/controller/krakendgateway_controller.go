@@ -171,7 +171,7 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// The license decides whether this gateway renders and runs CE.
 	lic := r.reconcileLicense(ctx, &gw)
 	ceFallback := lic.ceFallback
-	edition := renderEdition(&gw, ceFallback)
+	edition := renderer.EditionFor(&gw, ceFallback)
 	licenseChecksum := lic.checksumFor(deployed.license)
 
 	// Gather plugin ConfigMaps
