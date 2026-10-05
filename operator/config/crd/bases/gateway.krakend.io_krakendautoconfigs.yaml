@@ -509,6 +509,9 @@ spec:
                       from.
                     type: string
                 type: object
+                x-kubernetes-validations:
+                - message: exactly one of url or configMapRef is required
+                  rule: (has(self.url) && size(self.url) > 0) != has(self.configMapRef)
               overrides:
                 description: Overrides applies per-operation overrides to generated
                   endpoints.
