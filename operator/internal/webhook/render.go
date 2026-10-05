@@ -18,6 +18,8 @@ package webhook
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
@@ -98,7 +100,15 @@ func gatewayRenderDenial(gw *v1alpha1.KrakenDGateway, verdict configcheck.Verdic
 
 // versionWarning warns, when spec.version is set or changed, that gw runs a
 // KrakenD minor version other than the one admission and the controller
-// validate with.
-func versionWarning(_, _ *v1alpha1.KrakenDGateway) admission.Warnings {
-	return nil
+// validate with: their checks may not match what that version accepts.
+func versionWarning(gw, old *v1alpha1.KrakenDGateway) admission.Warnings {
+	if old != nil && old.Spec.Version == gw.Spec.Version {
+		return nil
+	}
+	parts := strings.SplitN(strings.TrimPrefix(gw.Spec.Version, "v"), ".", 3)
+	if len(parts) >= 2 && parts[0]+"."+parts[1] == configcheck.ValidatorVersion {
+		return nil
+	}
+	return admission.Warnings{fmt.Sprintf("spec.version %s: configs are validated with KrakenD %s; "+
+		"the checks may not match what %s accepts", gw.Spec.Version, configcheck.ValidatorVersion, gw.Spec.Version)}
 }
