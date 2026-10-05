@@ -857,3 +857,21 @@ func TestEndpointAdmission_OnlyOperatorUpdatesToAutoConfigEndpointsSkipRenderChe
 		})
 	}
 }
+
+// A check that cannot run leaves the request unjudged: the 500 carries no
+// warning about the failure that was already there.
+func TestEndpointAdmission_UnavailableCheckCarriesNoWarning(t *testing.T) {
+	broken := failing("other", 0, "broken elsewhere")
+	chk := &scriptedChecker{verdicts: []configcheck.Verdict{broken, broken}, failCall: 3,
+		err: errors.New("waiting for a validation slot: context deadline exceeded")}
+	v := &EndpointValidator{Client: fakeClient(testGateway()), Checker: chk}
+
+	warnings, err := v.ValidateCreate(context.Background(), testEndpoint("new", "/a"))
+
+	if !apierrors.IsInternalError(err) {
+		t.Fatalf("err = %v, want a 500", err)
+	}
+	if len(warnings) != 0 {
+		t.Errorf("warnings = %v, want none with the error", warnings)
+	}
+}
