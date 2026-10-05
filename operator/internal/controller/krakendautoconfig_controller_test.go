@@ -3447,3 +3447,31 @@ func TestAutoConfigReconcile_ParameterExpansionBeyondTheBodyLimitFailsTheSync(t 
 		t.Errorf("expected Synced False with reason %s, got %+v", v1alpha1.ReasonSpecFetchFailed, cond)
 	}
 }
+
+// configMapSpecWithExternalRef makes ac ConfigMap-sourced and f return a
+// spec with one external $ref.
+func configMapSpecWithExternalRef(ac *v1alpha1.KrakenDAutoConfig, f *mockFetcher) {
+	ac.Spec.OpenAPI = v1alpha1.OpenAPISource{ConfigMapRef: &v1alpha1.ConfigMapKeyRef{Name: "spec"}}
+	f.result = &autoconfig.FetchResult{
+		Data: []byte(`{"paths":{"/x":{"get":{"responses":{"200":{"$ref":"other.json#/R"}}}}}}`),
+	}
+}
+
+const externalRefNote = `external $ref "other.json#/R" is not resolved: ` +
+	"a ConfigMap-sourced spec cannot fetch other documents"
+
+func TestAutoConfigReconcile_ReportsExternalRefsInConfigMapSpec(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	f, ce, fi, g := defaultMocks()
+	configMapSpecWithExternalRef(ac, f)
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if got := getAC(t, c, ac).Status.Warnings; !slices.Equal(got, []string{externalRefNote}) {
+		t.Errorf("warnings = %q, want [%q]", got, externalRefNote)
+	}
+}
