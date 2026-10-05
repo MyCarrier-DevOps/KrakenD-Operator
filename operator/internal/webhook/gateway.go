@@ -139,7 +139,7 @@ func (v *GatewayValidator) eeNamespacesOnCE(
 	if old == nil || old.Spec.Edition != v1alpha1.EditionCE ||
 		!equality.Semantic.DeepEqual(old.Spec.Config.ExtraConfig, gw.Spec.Config.ExtraConfig) {
 		errs = ceIgnores(field.NewPath("spec", "config", "extraConfig"),
-			eeOnlyNamespacesIn(gw.Spec.Config.ExtraConfig, renderer.LevelService))
+			renderer.EEOnlyNamespacesIn(gw.Spec.Config.ExtraConfig, renderer.LevelService))
 	}
 	if old == nil || old.Spec.Edition != v1alpha1.EditionEE {
 		return errs, nil
@@ -198,7 +198,7 @@ func (v *GatewayValidator) eeNamespacesInUse(ctx context.Context, gw *v1alpha1.K
 			}
 			return nil, fmt.Errorf("getting policy %s: %w", key, err)
 		}
-		for _, d := range eeOnlyNamespacesIn(p.Spec.Raw, renderer.LevelBackend) {
+		for _, d := range renderer.EEOnlyNamespacesIn(p.Spec.Raw, renderer.LevelBackend) {
 			uses = append(uses, fmt.Sprintf("KrakenDBackendPolicy %s spec.raw %s", key, droppedLabel(d)))
 		}
 	}
