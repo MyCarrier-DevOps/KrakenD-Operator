@@ -4,3 +4,4 @@ KrakenDEndpoint a/dup: duplicate entry GET /x
 KrakenDEndpoint a/path: spec.endpoints[0].endpoint x
 KrakenDEndpoint a/no-backends: spec.endpoints[0].backends is empty
 KrakenDEndpoint a/timeout-pattern: spec.endpoints[0].timeout 3 seconds
+KrakenDEndpoint a/timeout-long: spec.endpoints[0].timeout is longer than 64 characters
