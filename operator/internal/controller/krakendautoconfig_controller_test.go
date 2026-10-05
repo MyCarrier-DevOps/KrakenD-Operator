@@ -3272,28 +3272,32 @@ func assertEndpointKept(t *testing.T, c client.Client, name string) {
 	}
 }
 
-func TestAutoConfigReconcile_FailedOperationFailsSyncClosed(t *testing.T) {
+func TestAutoConfigReconcile_FailedOperationHoldsItsEndpointAndStaleEndpoints(t *testing.T) {
 	cm := testCUEDefinitionsCM()
 	ac := syncedAutoConfig(cm)
+	lastGood := ownedCopy(t, ac, generatedEndpoint("getB", "/b"))
+	stale := ownedCopy(t, ac, generatedEndpoint("old", "/old"))
 	f, ce, fi, g := defaultMocks()
-	stale := staleOwnedEndpoint(t, ac, g)
-	c := fakeClientBuilder().WithObjects(ac, cm, stale).WithStatusSubresource(ac).Build()
 	ce.output.Failed = []autoconfig.OperationIssue{failedGetB()}
+	c := fakeClientBuilder().WithObjects(ac, cm, lastGood, stale).WithStatusSubresource(ac).Build()
 	r := newACReconciler(c, f, ce, fi, g)
 
-	if _, err := reconcileAC(r, ac); err == nil {
-		t.Fatal("expected an error for an OnChange trigger")
+	result, err := reconcileAC(r, ac)
+
+	if err != nil || result.RequeueAfter != defaultResyncInterval {
+		t.Fatalf("expected no error and the resync requeue, got %v, %+v", err, result)
 	}
-	cond := meta.FindStatusCondition(getAC(t, c, ac).Status.Conditions, v1alpha1.ConditionSynced)
-	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != v1alpha1.ReasonCUEEvaluationFailed ||
-		!strings.Contains(cond.Message, "GET /b (getB): CUEEvaluationFailed") {
-		t.Errorf("expected Synced False/CUEEvaluationFailed naming GET /b, got %+v", cond)
+	for _, name := range []string{"test-ac-getb", "test-ac-old", "test-ac-listusers"} {
+		if !endpointExists(t, c, name) {
+			t.Errorf("expected endpoint %s to exist", name)
+		}
 	}
-	assertEndpointKept(t, c, stale.Name)
-	var ep v1alpha1.KrakenDEndpoint
-	if err := c.Get(context.Background(), types.NamespacedName{Name: "test-ac-listusers", Namespace: "default"},
-		&ep); !apierrors.IsNotFound(err) {
-		t.Errorf("expected no endpoint written, got %v", err)
+	want := []v1alpha1.OperationStatus{{
+		Method: "GET", Path: "/b", OperationID: "getB",
+		Reason: v1alpha1.ReasonCUEEvaluationFailed, Message: `time: missing unit in duration "30"`,
+	}}
+	if got := getAC(t, c, ac).Status.FailedOperations; !slices.Equal(got, want) {
+		t.Errorf("failedOperations = %+v, want %+v", got, want)
 	}
 }
 
@@ -3321,8 +3325,8 @@ func TestAutoConfigReconcile_FailedOperationsAreListedSortedAndCapped(t *testing
 	ac := syncedAutoConfig(cm)
 	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).Build()
 	f, ce, fi, g := defaultMocks()
-	// Seven failures in reverse order: the message names the first five by
-	// path, then counts the rest, whatever order the evaluator reports them.
+	// Seven failures in reverse order: the status lists them by path,
+	// whatever order the evaluator reports them.
 	for i := 7; i >= 1; i-- {
 		ce.output.Failed = append(ce.output.Failed, autoconfig.OperationIssue{
 			Operation: autoconfig.Operation{Method: "GET", Path: fmt.Sprintf("/p%d", i), OperationID: fmt.Sprintf("op%d", i)},
@@ -3332,23 +3336,23 @@ func TestAutoConfigReconcile_FailedOperationsAreListedSortedAndCapped(t *testing
 	}
 	r := newACReconciler(c, f, ce, fi, g)
 
-	if _, err := reconcileAC(r, ac); err == nil {
-		t.Fatal("expected an error for an OnChange trigger")
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
 	}
-	want := "operations failed CUE evaluation: GET /p1 (op1): CUEEvaluationFailed; GET /p2 (op2): CUEEvaluationFailed; " +
-		"GET /p3 (op3): CUEEvaluationFailed; GET /p4 (op4): CUEEvaluationFailed; GET /p5 (op5): CUEEvaluationFailed; " +
-		"and 2 more"
-	cond := meta.FindStatusCondition(getAC(t, c, ac).Status.Conditions, v1alpha1.ConditionSynced)
-	if cond == nil || cond.Message != want {
-		t.Errorf("Synced = %+v, want message %q", cond, want)
+	var paths []string
+	for _, op := range getAC(t, c, ac).Status.FailedOperations {
+		paths = append(paths, op.Path)
+	}
+	if want := []string{"/p1", "/p2", "/p3", "/p4", "/p5", "/p6", "/p7"}; !slices.Equal(paths, want) {
+		t.Errorf("failedOperations paths = %v, want %v", paths, want)
 	}
 }
 
-func TestAutoConfigReconcile_RemappedFailedOperationInFilterFailsClosed(t *testing.T) {
+func TestAutoConfigReconcile_RemappedFailedOperationInFilterIsHeld(t *testing.T) {
 	// A HEAD operation that fails CUE is remapped by an override to GET
 	// /v2/users: the failure carries that route, so the include filter keeps
-	// it and the sync fails closed instead of deleting the existing
-	// /v2/users endpoint as stale.
+	// it and the sync holds it instead of deleting the existing /v2/users
+	// endpoint as stale.
 	cm := testCUEDefinitionsCM()
 	ac := testAutoConfig()
 	ac.Spec.Filter = &v1alpha1.FilterSpec{IncludePaths: []string{"/v2/*"}}
@@ -3363,15 +3367,18 @@ func TestAutoConfigReconcile_RemappedFailedOperationInFilterFailsClosed(t *testi
 	r := newACReconciler(c, f, ce, &mockFilter{}, g)
 	r.Filter = autoconfig.NewFilter()
 
-	if _, err := reconcileAC(r, ac); err == nil {
-		t.Fatal("expected an error for an OnChange trigger")
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
 	}
 	assertEndpointKept(t, c, stale.Name)
+	if got := getAC(t, c, ac).Status.FailedOperations; len(got) != 1 || got[0].OperationID != "headUsers" {
+		t.Errorf("failedOperations = %+v, want headUsers", got)
+	}
 }
 
 func TestAutoConfigReconcile_FailedOperationWithUnknownMethodKeepsEndpoint(t *testing.T) {
 	// The evaluator could not tell the method of the failed operation: it
-	// reports it Failed with no method, and the sync fails closed instead of
+	// reports it Failed with no method, and the sync holds it instead of
 	// deleting the operation's existing endpoint.
 	cm := testCUEDefinitionsCM()
 	ac := syncedAutoConfig(cm)
@@ -3385,17 +3392,15 @@ func TestAutoConfigReconcile_FailedOperationWithUnknownMethodKeepsEndpoint(t *te
 	}}
 	r := newACReconciler(c, f, ce, fi, g)
 
-	if _, err := reconcileAC(r, ac); err == nil {
-		t.Fatal("expected an error for an OnChange trigger")
-	}
-	cond := meta.FindStatusCondition(getAC(t, c, ac).Status.Conditions, v1alpha1.ConditionSynced)
-	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != v1alpha1.ReasonCUEEvaluationFailed {
-		t.Errorf("expected Synced False/CUEEvaluationFailed, got %+v", cond)
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
 	}
 	assertEndpointKept(t, c, existing.Name)
+	if got := getAC(t, c, ac).Status.FailedOperations; len(got) != 1 || got[0].Path != "/users/{id}" {
+		t.Errorf("failedOperations = %+v, want /users/{id}", got)
+	}
 }
 
-// invalidError is the 422 the API server answers a rejected endpoint with.
 func invalidError(name string) error {
 	return apierrors.NewInvalid(schema.GroupKind{Group: v1alpha1.GroupVersion.Group, Kind: "KrakenDEndpoint"},
 		name, field.ErrorList{field.Invalid(field.NewPath("spec", "endpoints").Index(0), "x", "rejected")})
