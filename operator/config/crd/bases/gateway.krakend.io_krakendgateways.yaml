@@ -1751,6 +1751,11 @@ spec:
                 required:
                 - sources
                 type: object
+                x-kubernetes-validations:
+                - fieldPath: .sources
+                  message: only one PVC plugin source is supported
+                  rule: self.sources.filter(s, has(s.persistentVolumeClaimRef)).size()
+                    <= 1
               postRestartJob:
                 description: |-
                   PostRestartJob configures a Kubernetes Job that runs a user-provided
