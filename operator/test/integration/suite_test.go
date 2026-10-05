@@ -207,9 +207,10 @@ func runTests(m *testing.M) int {
 
 	// Wire up the BackendPolicy controller.
 	if err := (&controller.KrakenDBackendPolicyReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   scheme,
-		Recorder: mgr.GetEventRecorderFor("krakendbackendpolicy-controller"),
+		Client:    mgr.GetClient(),
+		Scheme:    scheme,
+		Recorder:  mgr.GetEventRecorderFor("krakendbackendpolicy-controller"),
+		APIReader: mgr.GetAPIReader(),
 	}).SetupWithManager(mgr); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to setup policy controller: %v\n", err)
 		return 1
