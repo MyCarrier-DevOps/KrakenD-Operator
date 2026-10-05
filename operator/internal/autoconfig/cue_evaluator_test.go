@@ -2207,3 +2207,21 @@ func TestEvaluate_FailedOperationWithUnknownMethodStaysFailed(t *testing.T) {
 		t.Errorf("expected getUser failed, got %+v", out.Failed)
 	}
 }
+
+func TestEvaluate_FailedOperationWithLabelMethodStaysFailed(t *testing.T) {
+	// The label suffix HEAD is not a method the entry declares: its method
+	// is not concrete, so the failure must not be skipped.
+	out, err := evaluateWithCustomDefs(`{"paths":{}}`, map[string]string{
+		"a.cue": `endpoint: "users:HEAD": {
+	endpoint: "/users"
+	method: string
+	_operationId: "listUsers"
+}`,
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if len(out.Skipped) != 0 || len(out.Failed) != 1 || out.Failed[0].OperationID != "listUsers" {
+		t.Errorf("expected listUsers failed and nothing skipped, got failed %+v skipped %+v", out.Failed, out.Skipped)
+	}
+}
