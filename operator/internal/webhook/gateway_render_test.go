@@ -21,6 +21,8 @@ import (
 	"strings"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/runtime"
+
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
 )
@@ -30,6 +32,9 @@ func rootFailure(msg string) configcheck.Verdict {
 }
 
 func TestGatewayAdmission_Render(t *testing.T) {
+	old := testGateway()
+	edited := old.DeepCopy()
+	edited.Spec.Config.Timeout = "5s"
 	tests := []struct {
 		name     string
 		old      *v1alpha1.KrakenDGateway
@@ -40,12 +45,18 @@ func TestGatewayAdmission_Render(t *testing.T) {
 		{"create checks the root alone", nil, nil, true, "isolated"},
 		{"create with a failing root", nil,
 			[]configcheck.Verdict{rootFailure("'timeout' time: unknown unit")}, false, "isolated"},
+		{"update keeps it passing", old, nil, true, "gateway"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			chk := &scriptedChecker{verdicts: tt.verdicts}
 			v := &GatewayValidator{Client: fakeClient(), Checker: chk}
-			resp := review(t, v, "alice", testGateway(), nil)
+			obj := testGateway()
+			var oldObj runtime.Object
+			if tt.old != nil {
+				obj, oldObj = edited, tt.old
+			}
+			resp := review(t, v, "alice", obj, oldObj)
 			if resp.Allowed != tt.allowed {
 				t.Errorf("allowed = %v, want %v (%+v)", resp.Allowed, tt.allowed, resp.Result)
 			}
