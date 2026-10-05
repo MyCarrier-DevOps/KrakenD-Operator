@@ -425,6 +425,10 @@ func TestGatewayAdmission_CERejectsEnterpriseOnlyFields(t *testing.T) {
 	}
 	disabled := testGateway()
 	disabled.Spec.OpenAPI = &v1alpha1.OpenAPIExportSpec{Enabled: false}
+	otherRedis := withFields(testGateway())
+	otherRedis.Spec.Redis.ConnectionPool.Addresses = []string{"other:6379"}
+	otherDocs := withFields(testGateway())
+	otherDocs.Spec.Config.Documentation.Version = "2.0"
 	all := []string{"spec.redis: Forbidden", "spec.config.documentation: Forbidden",
 		"spec.openapi.enabled: Forbidden", "spec.dragonfly.enabled: Forbidden"}
 	tests := []struct {
@@ -437,6 +441,9 @@ func TestGatewayAdmission_CERejectsEnterpriseOnlyFields(t *testing.T) {
 		{"OpenAPI export disabled on CE", disabled, nil, nil},
 		{"unchanged on CE", edited(withFields(testGateway())), withFields(testGateway()), nil},
 		{"added on CE", withFields(testGateway()), testGateway(), all},
+		{"redis changed on CE", otherRedis, withFields(testGateway()), []string{"spec.redis: Forbidden"}},
+		{"documentation changed on CE", otherDocs, withFields(testGateway()),
+			[]string{"spec.config.documentation: Forbidden"}},
 		{"EE to CE while set", withFields(testGateway()), withFields(ee()), all},
 	}
 	for _, tt := range tests {
