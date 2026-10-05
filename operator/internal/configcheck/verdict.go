@@ -5,6 +5,7 @@
 package configcheck
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -66,5 +67,35 @@ func (v Verdict) Summary(limit int) string {
 // when nothing was attributed, the trimmed output is one gateway finding.
 func findingsFrom(atts []renderer.Attribution, renderedJSON []byte,
 	endpoints []v1alpha1.KrakenDEndpoint, output string) []Finding {
-	return nil
+	if len(atts) == 0 {
+		return []Finding{{Index: -1, Message: strings.TrimSpace(output)}}
+	}
+	var doc struct {
+		Endpoints []struct {
+			Endpoint string `json:"endpoint"`
+			Method   string `json:"method"`
+		} `json:"endpoints"`
+	}
+	if json.Unmarshal(renderedJSON, &doc) != nil {
+		doc.Endpoints = nil
+	}
+	specs := make(map[types.NamespacedName]*v1alpha1.KrakenDEndpoint, len(endpoints))
+	for i := range endpoints {
+		specs[types.NamespacedName{Namespace: endpoints[i].Namespace, Name: endpoints[i].Name}] = &endpoints[i]
+	}
+	out := make([]Finding, 0, len(atts))
+	for _, a := range atts {
+		f := Finding{Endpoint: a.Endpoint, Index: -1, Message: a.Message}
+		if ep := specs[a.Endpoint]; ep != nil && a.Index >= 0 && a.Index < len(doc.Endpoints) {
+			rendered := doc.Endpoints[a.Index]
+			for i, e := range ep.Spec.Endpoints {
+				if e.Method == rendered.Method && e.Endpoint == rendered.Endpoint {
+					f.Index = i
+					break
+				}
+			}
+		}
+		out = append(out, f)
+	}
+	return out
 }
