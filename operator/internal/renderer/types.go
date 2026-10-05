@@ -131,11 +131,13 @@ func (e *ValidationError) Unwrap() error {
 }
 
 // EntryConflict is one entry of a KrakenDEndpoint that the render left out
-// because an older KrakenDEndpoint has an entry with the same endpoint and
-// method.
+// because an older KrakenDEndpoint, or an earlier entry of the same one, has
+// an entry with the same method and route shape (paths that differ only in
+// parameter names are the same route).
 type EntryConflict struct {
 	Endpoint string
 	Method   string
-	// Winner is the KrakenDEndpoint whose entry is rendered instead.
+	// Winner is the KrakenDEndpoint whose entry is rendered instead. It is the
+	// losing KrakenDEndpoint itself when an earlier entry of its own won.
 	Winner types.NamespacedName
 }
