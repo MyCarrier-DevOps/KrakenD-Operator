@@ -47,7 +47,7 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 
 ### Resource Builders (`internal/resources/`)
 - `labels.go` — StandardLabels (6 labels), SelectorLabels (2), DragonflyLabels (4)
-- `configmap.go` — BuildConfigMap stores rendered krakend.json
+- `configmap.go` — ConfigMapName (`<gw>-config-<10 hex of the checksum>`) and BuildConfigMap, which stores the rendered krakend.json in an immutable, owned, checksum-annotated ConfigMap
 - `serviceaccount.go` — BuildServiceAccount with standard labels
 - `service.go` — BuildService with ClusterIP, configurable port
 - `pdb.go` — BuildPDB with maxUnavailable=1, selector labels
@@ -56,7 +56,7 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 - 23 tests, 100% coverage, 0 lint issues
 
 ### Controllers (`internal/controller/`)
-- `krakendgateway_controller.go` — Primary reconciler: gathers endpoints/policies/plugin ConfigMaps → detects Dragonfly state → Renderer.Render → checksum comparison → Validator.Validate → update ConfigMap → reconcileOwnedResources (SA, Service, ConfigMap, PDB, Deployment, HPA, Dragonfly, ExternalSecret, VirtualService via CreateOrUpdate) → inspectDeploymentStatus (replica propagation, ProgressDeadlineExceeded detection, rollout convergence: observed generation, applied config checksum on the pod template, and all replicas updated and available; a lost Deployment `Available` is mirrored). Mappers: endpointToGateway, policyToGateways, licenseSecretToGateway. Owns() watches for 9 resource types including unstructured external CRDs. `Clock` field for timing. `detectDragonflyState()` sets DragonflyReady condition and `dragonfly_ready` metric. RBAC markers for dragonflydb.io, external-secrets.io, networking.istio.io. Writes each endpoint's `Accepted` condition for an applied render; derives its own `Ready` and phase.
+- `krakendgateway_controller.go` — Primary reconciler, in two stages. Config stage: license evaluation → render → validate as the render's edition (memo keyed on checksum+edition) → publish an immutable content-addressed ConfigMap `<gw>-config-<hash>` → attribute rejections to endpoints (`Accepted=False/GatewayConfigRejected`). Infrastructure stage, always: SA, Service, PDB, Deployment (mounts the applied ConfigMap; image of the applied edition; held while plugin ConfigMaps are missing), HPA, post-restart Job, Dragonfly, ExternalSecret, VirtualService; deletes the children of disabled features; GCs unreferenced config ConfigMaps. Watches the optional kinds whose CRDs exist at startup. Then inspectDeploymentStatus (replica propagation, ProgressDeadlineExceeded detection, rollout convergence: observed generation, applied config checksum on the pod template, and all replicas updated and available; a lost Deployment `Available` is mirrored). Mappers: endpointToGateway, policyToGateways, licenseSecretToGateway, pluginConfigMapToGateway. Owns() watches for 7 typed resource types plus up to 3 optional kinds (Dragonfly, ExternalSecret, VirtualService) when their CRDs exist at startup. `Clock` field for timing. `detectDragonflyState()` sets DragonflyReady condition and `dragonfly_ready` metric. RBAC markers for dragonflydb.io, external-secrets.io, networking.istio.io. Writes each endpoint's `Accepted` condition for an applied render; derives its own `Ready` and phase.
 - `krakendendpoint_controller.go` — Resolves gateway/policy refs into `ResolvedRefs` and derives `Ready` and phase from `ResolvedRefs` and the gateway-owned `Accepted` (`api/v1alpha1.EndpointReady`); patches status with an optimistic lock, only on change; events on ResolvedRefs transitions. Watches: own spec and `Accepted` changes; gateway/policy create and delete. Mappers: gatewayToEndpoints, policyToEndpoints.
 - `krakendbackendpolicy_controller.go` — Counts endpoint references (referencedBy); `Ready` from validatePolicy (replaces PolicyValid); observedGeneration. Watches endpoint creates, deletes and spec changes (old and new refs on update).
 - `krakendautoconfig_controller.go` — AutoConfig reconciler: every reconcile fetches spec → loads CUE definitions → CUE evaluate → filter → generate → diff/create/update/delete KrakenDEndpoint CRs, converging owned endpoints on every run (drift repair, no checksum short-circuit). Ready and phase derived from `SpecAvailable` and `Synced` (the phase is empty before the first sync, then Synced or Error; Pending/Fetching/Rendering kept in the enum for compatibility but never written). `OnChange` resync every `defaultResyncInterval` (5m); `Periodic` resync at `spec.periodic.interval`. Watches: spec generation/label/annotation changes, owned KrakenDEndpoint spec changes/deletions, `spec.openapi.configMapRef` and CUE definition ConfigMaps. Status/events written only when something changed. A stale-cache `Conflict` on a successful sync's status write, or a `Conflict`/`AlreadyExists` on an endpoint write, requeues quietly after 1s instead of failing (a failed sync whose status write conflicts keeps its own error/interval result); a non-conflict endpoint write failure always retries with backoff regardless of trigger; a failure to fetch or decode an external `$ref` document fails the sync closed the same way as a spec fetch failure (`SpecAvailable` and `Synced` False, reason `SpecFetchFailed`). Owner-reference-based endpoint lifecycle. `Clock` field for timing.
@@ -65,14 +65,15 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 - 69 tests across 6 test files, ~84.8% coverage (filtered), 0 lint issues
 
 ### Prometheus Metrics (`internal/controller/metrics.go`)
-- 9 metrics registered via controller-runtime `metrics.Registry`
+- 10 metrics registered via controller-runtime `metrics.Registry`
 - `config_renders_total`, `config_validation_failures_total`, `rolling_restarts_total`
 - `license_expiry_seconds` (gauge per gateway), `endpoints` (gauge per gateway)
 - `dragonfly_ready` (gauge per gateway, 1 if ready, 0 otherwise)
+- `gateway_config_valid` (gauge per gateway)
 - `reconcile_duration_seconds` (histogram), `gateway_info` (metadata labels)
 - `autoconfig_synced` (gauge per AutoConfig namespace+name: 1 after a successful sync, 0 while failing; removed on delete)
-- Instrumented in gateway controller Reconcile (including Dragonfly state), gateway controller license evaluation (`reconcileLicense`), and the AutoConfig controller
-- `cmd/main.go` — Wires Renderer, Validator, Recorder, Clock into all controller setups; gives the gateway reconciler a RealClock and the X509LicenseParser; wires AutoConfig controller with Fetcher, CUEEvaluator, Filter, Generator; calls `webhook.SetupWebhooks(mgr)` for admission webhook registration; `LeaderElectionID` set to `krakend-operator-leader`
+- Instrumented in gateway controller Reconcile (including Dragonfly state) and the AutoConfig controller
+- `cmd/main.go` — Wires Renderer, Validator, Recorder, Clock into all controller setups; passes X509LicenseParser and the API reader to the gateway reconciler; wires AutoConfig controller with Fetcher, CUEEvaluator, Filter, Generator; calls `webhook.SetupWebhooks(mgr)` for admission webhook registration; `LeaderElectionID` set to `krakend-operator-leader`
 
 ### External CRD Builders (`internal/resources/`)
 - `dragonfly.go` — BuildDragonfly as `unstructured.Unstructured`, DragonflyGVR, DragonflyName, DragonflyServiceDNS, buildResourceRequirements helper
@@ -92,9 +93,10 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 - Uses `cuelang.org/go` v0.16.0
 - 60 tests across 5 test files, ~94% coverage, 0 lint issues
 
-### License Evaluation (`internal/controller/gateway_license.go`)
-- `reconcileLicense` — runs inside the gateway reconcile for EE gateways; the only writer of the `License*` conditions, `status.licenseExpiry` and the license expiry metric; writes nothing to the user's gateway object
-- Stage comes from `license.Window` (valid, expiring soon, pre-expiry, expired); requeues at the next stage boundary and at least every 5 minutes
+### License Evaluation (`internal/controller/gateway_license.go`, `internal/util/license/window.go`)
+- Evaluated in the gateway reconcile; single writer of License* conditions
+- `license.Window` computes the stage and the next boundary; the gateway requeues at it, at least every 5 min
+- Events on transitions; no writes to the KrakenDGateway object
 - Handles expiry (with/without fallback-to-CE) and the 1 h safety buffer; events fire on condition transitions only
 - Recovery detection: clears degraded/expired conditions and emits `LicenseRestored`
 - `readLicenseSecret` — supports both SecretRef and ExternalSecret convention (`{name}-license`)
@@ -109,6 +111,9 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 - 28 unit tests, 84.3% webhook package coverage
 
 ## Recent Changes
+
+### 2026-09-28 — Conformance gateway reconcile correctness
+- **Gateway reconcile correctness** — config stage / infrastructure stage split; immutable content-addressed config ConfigMaps with GC; render attribution (`RenderOutput.Sources`, `Accepted=False/GatewayConfigRejected`); per-entry conflicts (`PartiallyAccepted`, `status.conflicts`); EE wildcard validation by the EE router's rules; validation and image keyed on (checksum, edition) with `status.configEdition`; CE fallback strips and lists Enterprise-only features (`CEFallbackApplied`, `EEFeaturesStripped`); Redis pool rendered under KrakenD's `redis` namespace; license evaluation folded into the gateway reconcile; optional kinds watched when installed at startup; disabled features' resources deleted; `CRDNotInstalled`, `PluginsResolved`; `gateway_config_valid` metric. Updated `architecture/README.md`, `architecture/application/application-architecture.md`, `docs/upgrade-guide.md`, `docs/runbook.md`.
 
 ### 2026-09-28 — Conformance status model
 - **Status model: Ready conditions and single-writer endpoint status** — Every kind has a summary `Ready` condition, a top-level `status.observedGeneration`, and `status.conditions` keyed by type (`+listType=map`); `kubectl get` shows Ready/Reason (Phase with `-o wide`). KrakenDEndpoint status has one writer per condition: the endpoint controller owns `ResolvedRefs` (`RefsResolved`/`GatewayNotFound`/`PolicyNotFound`) and `Ready`; the gateway controller owns `Accepted` (`Accepted`/`EndpointConflict`; `PartiallyAccepted`, `GatewayConfigRejected`, `SchemaNameConflict` and `EEFeaturesStripped` are defined for later use; a docs-only `SchemaNameConflict` keeps `Ready=True`), written on every endpoint of a render only once that render is the applied configuration, only on change, with events on transitions. Both write with `Status().Patch` and `MergeFromWithOptimisticLock`. `Ready` and `phase` come from `api/v1alpha1.EndpointReady` and `EndpointPhaseFromReady`; the legacy `Available` condition is removed, which ends the Conflicted/Active flip-flop. Gateway `Ready` and phase are derived on every reconcile (no latching: a revert or a recovered rollout clears Error; `ConfigValid` reason `ConfigApplied`); `observedGeneration` advances on a rejected configuration; `Ready=Unknown` (`ValidatorUnavailable`) while the validator is unavailable; the license monitor writes only License* conditions, with an optimistic lock. AutoConfig: `Ready` from SpecAvailable and Synced, phase from Synced, no initial Pending write, retry backoff capped at 5m. Policy: `Ready` replaces `PolicyValid`. Watches: the endpoint controller reacts to gateway/policy create/delete and to `Accepted` changes; the policy controller to endpoint spec changes only. Updated `architecture/README.md`, `docs/upgrade-guide.md`, `docs/runbook.md`.
