@@ -80,7 +80,10 @@ type KrakenDAutoConfigReconciler struct {
 	CUEEvaluator autoconfig.CUEEvaluator
 	Filter       autoconfig.Filter
 	Generator    autoconfig.Generator
-	Clock        utilclock.Clock
+	// Checker runs the gateway config check over the endpoints a sync would
+	// write, before it writes them.
+	Checker AutoConfigChecker
+	Clock   utilclock.Clock
 }
 
 // +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendautoconfigs,verbs=get;list;watch;create;update;patch;delete
