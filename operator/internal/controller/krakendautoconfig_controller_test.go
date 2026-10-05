@@ -3428,6 +3428,30 @@ func TestAutoConfigReconcile_InvalidEndpointIsHeldNotRetried(t *testing.T) {
 	}
 }
 
+func TestAutoConfigReconcile_EndpointControlledByAnotherIsHeldNotRetried(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	taken := g.output.Endpoints[0].DeepCopy()
+	taken.OwnerReferences = []metav1.OwnerReference{{
+		APIVersion: v1alpha1.GroupVersion.String(), Kind: "KrakenDAutoConfig", Name: "other", UID: "other-uid",
+		Controller: ptr.To(true),
+	}}
+	c := fakeClientBuilder().WithObjects(ac, cm, taken).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+
+	result, err := reconcileAC(r, ac)
+
+	if err != nil || result.RequeueAfter != defaultResyncInterval {
+		t.Fatalf("expected no error and the resync requeue, got %v, %+v", err, result)
+	}
+	failed := getAC(t, c, ac).Status.FailedOperations
+	if len(failed) != 1 || failed[0].Endpoint != "test-ac-listusers" ||
+		failed[0].Reason != v1alpha1.ReasonEndpointRejected || failed[0].OperationID != "listUsers" {
+		t.Errorf("failedOperations = %+v", failed)
+	}
+}
+
 func TestAutoConfigReconcile_DereferencesParameterRefsBeforeEvaluation(t *testing.T) {
 	cm := testCUEDefinitionsCM()
 	ac := testAutoConfig()
