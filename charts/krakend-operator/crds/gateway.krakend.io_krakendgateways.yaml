@@ -2667,6 +2667,12 @@ spec:
             - edition
             - version
             type: object
+            x-kubernetes-validations:
+            - fieldPath: .license
+              message: edition EE requires license.externalSecret.enabled or license.secretRef
+              rule: self.edition != 'EE' || (has(self.license) && ((has(self.license.externalSecret)
+                && has(self.license.externalSecret.enabled) && self.license.externalSecret.enabled)
+                || has(self.license.secretRef)))
           status:
             description: KrakenDGatewayStatus defines the observed state of KrakenDGateway.
             properties:
