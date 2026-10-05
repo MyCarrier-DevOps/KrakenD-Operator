@@ -478,6 +478,8 @@ func TestEndpointAdmission_PassToFailIsRejectedAs422NamingTheEntry(t *testing.T)
 
 func TestEndpointAdmission_BrokenGatewayFallsBackToIsolation(t *testing.T) {
 	broken := failing("other", 0, "broken elsewhere")
+	moved := testEndpoint("new", "/old")
+	moved.Spec.GatewayRef.Name = "elsewhere"
 	tests := []struct {
 		name     string
 		old      *v1alpha1.KrakenDEndpoint
@@ -498,6 +500,8 @@ func TestEndpointAdmission_BrokenGatewayFallsBackToIsolation(t *testing.T) {
 			[]configcheck.Verdict{broken, broken, failing("new", 0, "bad"), failing("new", 0, "bad")}, true,
 			"gateway+candidate,gateway,isolated,isolated",
 			"default/new[GET /a]|-|default/new[GET /a]|default/new[GET /old]"},
+		{"move failing alone", moved, []configcheck.Verdict{broken, broken, failing("new", 0, "bad"), {OK: true}}, false,
+			"gateway+candidate,gateway,isolated,isolated", "default/new[GET /a]|-|default/new[GET /a]|-"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
