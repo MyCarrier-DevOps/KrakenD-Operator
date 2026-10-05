@@ -42,12 +42,15 @@ func TestGatewayAdmission_Render(t *testing.T) {
 		verdicts []configcheck.Verdict
 		allowed  bool
 		calls    string
+		warns    string
 	}{
-		{"create checks the root alone", nil, nil, true, "isolated"},
+		{"create checks the root alone", nil, nil, true, "isolated", ""},
 		{"create with a failing root", nil,
-			[]configcheck.Verdict{rootFailure("'timeout' time: unknown unit")}, false, "isolated"},
-		{"update keeps it passing", old, nil, true, "gateway"},
-		{"update breaks it", old, []configcheck.Verdict{broken, {OK: true}}, false, "gateway,gateway"},
+			[]configcheck.Verdict{rootFailure("'timeout' time: unknown unit")}, false, "isolated", ""},
+		{"update keeps it passing", old, nil, true, "gateway", ""},
+		{"update breaks it", old, []configcheck.Verdict{broken, {OK: true}}, false, "gateway,gateway", ""},
+		{"update of a broken gateway, root still fine", old, []configcheck.Verdict{broken, broken, {OK: true}}, true,
+			"gateway,gateway,isolated", "already fails validation"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -67,6 +70,9 @@ func TestGatewayAdmission_Render(t *testing.T) {
 			}
 			if got := strings.Join(chk.calls, ","); got != tt.calls {
 				t.Errorf("checks = %s, want %s", got, tt.calls)
+			}
+			if tt.warns != "" && (len(resp.Warnings) == 0 || !strings.Contains(resp.Warnings[0], tt.warns)) {
+				t.Errorf("warnings = %v, want %q", resp.Warnings, tt.warns)
 			}
 		})
 	}
