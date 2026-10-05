@@ -557,3 +557,40 @@ func TestResolveExternalRefs_LocalRefWarningSkipsExamplePayload(t *testing.T) {
 		t.Errorf("warnings = %q, want exactly one, about #/Owner", warnings)
 	}
 }
+
+func TestResolveExternalRefs_LocalRefIsAttributedToItsOwnDocument(t *testing.T) {
+	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"content":{"application/json":` +
+		`{"schema":{"$ref":"a.json#/A"}}}}}}}}}`)
+	a := []byte(`{"A":{"properties":{"b":{"$ref":"sub/b.json#/B"}}}}`)
+	b := []byte(`{"B":{"properties":{"z":{"$ref":"#/Z"}}},"Z":{"type":"string"}}`)
+	fetcher := &stubFetcher{docs: map[string][]byte{
+		"https://api.example.com/a.json":     a,
+		"https://api.example.com/sub/b.json": b,
+	}}
+
+	_, warnings, err := ResolveExternalRefs(context.Background(), main,
+		"https://api.example.com/openapi.json", fetcher, FetchSource{})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	want := `$ref "#/Z" in https://api.example.com/sub/b.json is resolved against the main spec`
+	if len(warnings) != 1 || !strings.Contains(warnings[0], want) {
+		t.Errorf("warnings = %q, want one containing %q", warnings, want)
+	}
+}
+
+func TestResolveExternalRefs_LocalRefToAnExampleObjectIsWarnedAbout(t *testing.T) {
+	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"content":{"application/json":` +
+		`{"schema":{"$ref":"common.json#/Pet"}}}}}}}}}`)
+	common := []byte(`{"Pet":{"examples":{"e":{"$ref":"#/Sample"}}},"Sample":{"value":1}}`)
+	fetcher := &stubFetcher{docs: map[string][]byte{"https://api.example.com/common.json": common}}
+
+	_, warnings, err := ResolveExternalRefs(context.Background(), main,
+		"https://api.example.com/openapi.json", fetcher, FetchSource{})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], `"#/Sample"`) {
+		t.Errorf("warnings = %q, want exactly one, about #/Sample", warnings)
+	}
+}
