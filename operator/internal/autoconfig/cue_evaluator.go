@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -157,10 +158,13 @@ func (e *cueEvaluator) Evaluate(_ context.Context, input CUEInput) (*CUEOutput, 
 	return output, nil
 }
 
+// loadDefinitions unifies the definition files in filename order: CUE words
+// a conflict by the order of its operands, so map order would change the
+// text of an error from one evaluation to the next.
 func loadDefinitions(cueCtx *cue.Context, defs map[string]string) cue.Value {
 	var unified cue.Value
-	for filename, content := range defs {
-		val := cueCtx.CompileString(content, cue.Filename(filename))
+	for _, filename := range slices.Sorted(maps.Keys(defs)) {
+		val := cueCtx.CompileString(defs[filename], cue.Filename(filename))
 		if !unified.Exists() {
 			unified = val
 		} else {
