@@ -166,5 +166,6 @@ jq "${jq_opts[@]}" "$jq_lib"'
    then "both auth secrets set" else empty end),
   (if $s.trigger == "Periodic"
       and ($s.periodic.interval // "" | crd_test($go_re) and (overflows | not) and duration_ns < 3e10)
-   then "periodic.interval below 30s" else empty end)
+   then "periodic.interval below 30s" else empty end),
+  (if $s.trigger == "Periodic" and $s.periodic == null then "trigger Periodic without a periodic block" else empty end)
 ]} | report("KrakenDAutoConfig")' "$work/autoconfigs.json"
