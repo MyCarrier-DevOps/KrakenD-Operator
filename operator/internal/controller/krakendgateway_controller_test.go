@@ -64,6 +64,7 @@ func (m *mockValidator) Validate(_ context.Context, _ []byte, _ v1alpha1.Edition
 func (m *mockValidator) Lint(ctx context.Context, jsonData []byte, edition v1alpha1.Edition) error {
 	return m.Validate(ctx, jsonData, edition)
 }
+
 func testGateway() *v1alpha1.KrakenDGateway {
 	return &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "test-gw", Namespace: "default"},
