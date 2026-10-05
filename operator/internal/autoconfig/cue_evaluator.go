@@ -51,9 +51,13 @@ type CUEOutput struct {
 	Entries      []v1alpha1.EndpointEntry
 	OperationIDs map[string]string
 	Tags         map[string][]string
-	// UnmatchedOverrides holds the operationIds from spec.overrides that
-	// matched no generated entry, in override order.
+	// UnmatchedOverrides holds, in override order, an operationId from
+	// spec.overrides that no operation has, or "<operationId> backends[<i>]"
+	// for a backend index out of range.
 	UnmatchedOverrides []string
+	// AmbiguousOverrides holds the operationIds from spec.overrides that
+	// more than one operation declares, in override order.
+	AmbiguousOverrides []string
 	// Skipped holds the operations whose method the KrakenDEndpoint API does
 	// not accept (reason UnsupportedMethod), sorted by path then method, with
 	// the path and method their entry has after the URL transform and the
