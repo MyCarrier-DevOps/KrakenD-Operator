@@ -176,10 +176,10 @@ func TestRouteConflicts_StopsAfterTheFirstRefusedRoutes(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Each refusal names the refused route and the one it clashes with.
-	if want := 2*maxRouteRefusals + 1; len(lines) != want {
-		t.Fatalf("%d lines, want %d: %d refusals and the stop notice", len(lines), want, maxRouteRefusals)
+	if want := 2*MaxRouteRefusals + 1; len(lines) != want {
+		t.Fatalf("%d lines, want %d: %d refusals and the stop notice", len(lines), want, MaxRouteRefusals)
 	}
-	wantNotice := fmt.Sprintf("- route check stopped after %d refused routes", maxRouteRefusals)
+	wantNotice := fmt.Sprintf("- route check stopped after %d refused routes", MaxRouteRefusals)
 	if last := lines[len(lines)-1]; last != wantNotice {
 		t.Errorf("last line = %q, want %q", last, wantNotice)
 	}
