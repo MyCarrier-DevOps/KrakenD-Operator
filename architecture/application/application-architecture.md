@@ -2122,10 +2122,10 @@ func (v *AutoConfigValidator) ValidateCreate(
 ### Webhook Registration
 
 ```go
-func SetupWebhooks(mgr ctrl.Manager) error {
+func SetupWebhooks(mgr ctrl.Manager, v Validators) error {
     if err := ctrl.NewWebhookManagedBy(mgr).
         For(&v1alpha1.KrakenDGateway{}).
-        WithValidator(&GatewayValidator{Client: mgr.GetClient()}).
+        WithValidator(v.Gateway).
         Complete(); err != nil {
         return err
     }
