@@ -2448,3 +2448,41 @@ func TestNewValidators_HandTheCheckerToThePolicyValidator(t *testing.T) {
 		t.Errorf("the policy validator's checker = %v, want the one passed in", v.Policy.Checker)
 	}
 }
+
+func TestAutoConfigAdmission_OverrideOperationIDs(t *testing.T) {
+	ac := func(ids ...string) *v1alpha1.KrakenDAutoConfig {
+		a := &v1alpha1.KrakenDAutoConfig{
+			ObjectMeta: metav1.ObjectMeta{Name: "ac", Namespace: "default"},
+			Spec: v1alpha1.KrakenDAutoConfigSpec{GatewayRef: v1alpha1.GatewayRef{Name: "gw"},
+				OpenAPI: v1alpha1.OpenAPISource{URL: "http://svc/openapi.json"}, Trigger: v1alpha1.TriggerOnChange},
+		}
+		for _, id := range ids {
+			a.Spec.Overrides = append(a.Spec.Overrides, v1alpha1.OperationOverride{OperationID: id})
+		}
+		return a
+	}
+	v := &AutoConfigValidator{Client: fakeClient(testGateway())}
+	tests := []struct {
+		name   string
+		obj    *v1alpha1.KrakenDAutoConfig
+		reject string
+	}{
+		{"distinct", ac("getA", "getB"), ""},
+		{"duplicate", ac("getA", "getA"), "Duplicate value"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := review(t, v, "alice", tt.obj, nil)
+			if tt.reject == "" {
+				if !resp.Allowed {
+					t.Errorf("denied: %+v", resp.Result)
+				}
+				return
+			}
+			if resp.Allowed || resp.Result.Details.Causes[0].Field != "spec.overrides[1].operationId" ||
+				!strings.Contains(resp.Result.Details.Causes[0].Message, tt.reject) {
+				t.Errorf("response = %+v, want %q on spec.overrides[1].operationId", resp.Result, tt.reject)
+			}
+		})
+	}
+}
