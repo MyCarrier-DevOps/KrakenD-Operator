@@ -3280,7 +3280,9 @@ func TestAutoConfigReconcile_FailedOperationHoldsItsEndpointAndStaleEndpoints(t 
 	f, ce, fi, g := defaultMocks()
 	ce.output.Failed = []autoconfig.OperationIssue{failedGetB()}
 	c := fakeClientBuilder().WithObjects(ac, cm, lastGood, stale).WithStatusSubresource(ac).Build()
+	rec := fakeRecorder()
 	r := newACReconciler(c, f, ce, fi, g)
+	r.Recorder = rec
 
 	result, err := reconcileAC(r, ac)
 
@@ -3315,6 +3317,18 @@ func TestAutoConfigReconcile_FailedOperationHoldsItsEndpointAndStaleEndpoints(t 
 	}
 	if got := testutil.ToFloat64(autoConfigSynced.WithLabelValues(ac.Namespace, ac.Name)); got != 0 {
 		t.Errorf("synced gauge = %v, want 0", got)
+	}
+	if !hasEventReason(drainEvents(rec), v1alpha1.ReasonOperationsFailed) {
+		t.Error("expected an OperationsFailed event")
+	}
+
+	// The same failure again: no status change, no event, still no backoff.
+	result, err = reconcileAC(r, updated)
+	if err != nil || result.RequeueAfter != defaultResyncInterval {
+		t.Fatalf("second reconcile: %v, %+v", err, result)
+	}
+	if hasEventReason(drainEvents(rec), v1alpha1.ReasonOperationsFailed) {
+		t.Error("expected no OperationsFailed event for an unchanged failure")
 	}
 }
 
