@@ -92,3 +92,10 @@ func TestListed_JoinsAtMostFiveItems(t *testing.T) {
 		t.Errorf("listed = %q, want %q", got, want)
 	}
 }
+
+func TestListed_NamesFiveThenCountsTheRest(t *testing.T) {
+	items := []string{"a", "b", "c", "d", "e", "f", "g"}
+	if got, want := listed(items), "a; b; c; d; e; and 2 more"; got != want {
+		t.Errorf("listed = %q, want %q", got, want)
+	}
+}
