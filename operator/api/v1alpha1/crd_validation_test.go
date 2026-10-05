@@ -243,5 +243,6 @@ func TestGatewayCRD_Rules(t *testing.T) {
 		{"EE needs a license", gatewayHead + `edition: EE, config: {}}}`, "edition EE requires"},
 		{"EE with secretRef", gatewayHead + `edition: EE, config: {}, license: {secretRef: {name: l, key: k}}}}`, ""},
 		{"CE with a license", gatewayHead + `edition: CE, config: {}, license: {secretRef: {name: l, key: k}}}}`, "CE edition does not require"},
+		{"CE with fallback flag only", gatewayHead + `edition: CE, config: {}, license: {fallbackToCE: true}}}`, ""},
 	})
 }
