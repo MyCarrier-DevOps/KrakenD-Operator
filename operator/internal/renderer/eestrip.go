@@ -23,6 +23,8 @@ import (
 	"maps"
 	"slices"
 	"sort"
+
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // The extra_config namespaces KrakenD 2.13 documents as Enterprise-only, by
@@ -239,6 +241,20 @@ func CEDrops(level NamespaceLevel, ec map[string]json.RawMessage) []CEDrop {
 		}
 	}
 	return drops
+}
+
+// EEOnlyNamespacesIn returns what a CE render drops from the extra_config raw
+// at level. raw that is not a JSON object drops nothing; the render check
+// reports it.
+func EEOnlyNamespacesIn(raw *runtime.RawExtension, level NamespaceLevel) []CEDrop {
+	if raw == nil || raw.Raw == nil {
+		return nil
+	}
+	var ec map[string]json.RawMessage
+	if json.Unmarshal(raw.Raw, &ec) != nil {
+		return nil
+	}
+	return CEDrops(level, ec)
 }
 
 // ceDroppedKeys decides what a CE render drops from the block of namespace ns
