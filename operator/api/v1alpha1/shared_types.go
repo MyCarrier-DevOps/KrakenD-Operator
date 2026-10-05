@@ -164,6 +164,8 @@ const (
 	ReasonUnmatchedOverride             = "UnmatchedOverride"
 	ReasonAmbiguousOverride             = "AmbiguousOverride"
 	ReasonEndpointReconcileFailed       = "EndpointReconcileFailed"
+	ReasonEndpointRejected              = "EndpointRejected"
+	ReasonOperationsFailed              = "OperationsFailed"
 	ReasonPostRestartJobAlreadyRun      = "PostRestartJobAlreadyRun"
 	ReasonPostRestartJobCreated         = "PostRestartJobCreated"
 	// ReasonPostRestartJobAdopted covers the "Job for this revision's
