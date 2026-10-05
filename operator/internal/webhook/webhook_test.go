@@ -2474,3 +2474,22 @@ func TestGatewayAdmission_RatchetsStoredFieldErrors(t *testing.T) {
 		t.Error("newly introduced negative tmpSizeLimit admitted")
 	}
 }
+
+// A metadata-only update is not validated at all: no stored error, and no
+// warning, is reported again.
+func TestGatewayAdmission_UnchangedSpecIsNotValidated(t *testing.T) {
+	old := gwWithProbes(nil, &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{
+		Host: "10.0.0.1", Path: "/", Port: intstr.FromInt32(8090)}}}, "")
+	old.Spec.Replicas = ptr.To[int32](2)
+	old.Spec.Autoscaling = &v1alpha1.AutoscalingSpec{MaxReplicas: 5}
+	labeled := old.DeepCopy()
+	labeled.Labels = map[string]string{"team": "edge"}
+
+	resp := review(t, &GatewayValidator{}, "alice", labeled, old)
+	if !resp.Allowed {
+		t.Errorf("label-only update denied: %+v", resp.Result)
+	}
+	if len(resp.Warnings) != 0 {
+		t.Errorf("label-only update warned: %q", resp.Warnings)
+	}
+}
