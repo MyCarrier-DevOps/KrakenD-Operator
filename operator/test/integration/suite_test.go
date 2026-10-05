@@ -175,9 +175,9 @@ func runTests(m *testing.M) int {
 		return 1
 	}
 
-	// Wire up the Gateway controller with a real renderer and the marker
-	// validator (the krakend binary is not available here), behind one config
-	// checker.
+	// Wire up the Gateway and AutoConfig controllers with a real renderer and
+	// the marker validator (the krakend binary is not available here), behind
+	// one config checker.
 	krakendRenderer := renderer.New(renderer.Options{})
 	checker := configcheck.New(mgr.GetClient(), krakendRenderer, suiteValidator, 1)
 	if err := (&controller.KrakenDGatewayReconciler{
@@ -226,6 +226,7 @@ func runTests(m *testing.M) int {
 		CUEEvaluator: autoconfig.NewCUEEvaluator(),
 		Filter:       autoconfig.NewFilter(),
 		Generator:    autoconfig.NewGenerator(),
+		Checker:      checker,
 		Clock:        clock.RealClock{},
 	}).SetupWithManager(mgr); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to setup autoconfig controller: %v\n", err)
