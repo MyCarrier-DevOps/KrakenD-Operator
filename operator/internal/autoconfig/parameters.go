@@ -61,7 +61,7 @@ func DereferenceParameters(specData []byte) (out []byte, warnings []string, err 
 		if !ok {
 			continue
 		}
-		if err := d.list(item, path); err != nil {
+		if err := d.list(item, path+" (used by every operation on "+path+")"); err != nil {
 			return specData, nil, err
 		}
 		for _, method := range httpMethods {
@@ -94,8 +94,8 @@ type dereferencer struct {
 }
 
 // list dereferences the local $refs in holder's "parameters" list in place.
-// where names holder in warnings: the path for a path item, "METHOD /path"
-// for an operation.
+// where names holder in warnings: the path (and that it applies to every
+// operation) for a path item, "METHOD /path" for an operation.
 func (d *dereferencer) list(holder map[string]any, where string) error {
 	params, ok := holder["parameters"].([]any)
 	if !ok {
