@@ -4742,3 +4742,26 @@ func TestAutoConfigReconcile_PrecheckHoldsAttributedOperations(t *testing.T) {
 		t.Errorf("failedOperations = %+v", failed)
 	}
 }
+
+func TestAutoConfigReconcile_PrecheckUnavailableWritesNothing(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	stale := ownedCopy(t, ac, generatedEndpoint("old", "/old"))
+	f, ce, fi, g := defaultMocks()
+	var ops []string
+	c := fakeClientBuilder().WithObjects(ac, cm, stale, testGateway()).WithStatusSubresource(ac).
+		WithInterceptorFuncs(recordEndpointWrites(&ops, nil)).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Checker = &fakeChecker{err: errors.New("no free validator slot before the deadline")}
+
+	if _, err := reconcileAC(r, ac); err == nil {
+		t.Fatal("expected an error to retry with backoff")
+	}
+	if len(ops) != 0 {
+		t.Errorf("expected no endpoint writes or deletes, got %v", ops)
+	}
+	cond := meta.FindStatusCondition(getAC(t, c, ac).Status.Conditions, v1alpha1.ConditionSynced)
+	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != v1alpha1.ReasonValidatorUnavailable {
+		t.Errorf("expected Synced False/ValidatorUnavailable, got %+v", cond)
+	}
+}
