@@ -406,6 +406,26 @@ an earlier entry of the same KrakenDEndpoint serves the route. Remove the
 duplicate entry from one of the two, or move it to the KrakenDEndpoint that
 should own it.
 
+### A KrakenDEndpoint is rejected with `Duplicate value`
+
+Admission refuses an entry whose method and route another entry on the same
+gateway already has: the same path, a path that differs only in parameter
+names (`/users/{id}` and `/users/{name}`) or in repeated slashes. The message
+names the KrakenDEndpoint that owns the route (or the entry of the same
+KrakenDEndpoint). Remove or change the entry, or delete the other one first.
+Only added or changed entries are checked, so an older conflict does not block
+unrelated edits; it shows as `PartiallyAccepted` or `EndpointConflict` above.
+
+### Renaming a path parameter across several routes
+
+Routes that share a parameterized prefix (`/users/{id}` and
+`/users/{id}/orders`) must use the same parameter name at that position, because
+KrakenD cannot route both otherwise. When they live in different
+KrakenDEndpoints there is no valid intermediate state: each rename is rejected
+until the other is done. Keep such routes in one KrakenDEndpoint and rename them
+in one apply, or delete the second KrakenDEndpoint, rename the first, then
+recreate the second with the new name.
+
 ### AutoConfig not generating endpoints
 
 **Diagnosis:**
