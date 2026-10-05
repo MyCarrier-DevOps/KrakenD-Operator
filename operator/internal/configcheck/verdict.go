@@ -99,7 +99,11 @@ func (v Verdict) Summary(limit int) string {
 func findingsFrom(atts []renderer.Attribution, renderedJSON []byte,
 	endpoints []v1alpha1.KrakenDEndpoint, output string) []Finding {
 	if len(atts) == 0 {
-		return []Finding{{Index: -1, Message: strings.TrimSpace(output)}}
+		msg := strings.TrimSpace(output)
+		if msg == "" {
+			msg = "rejected with no output"
+		}
+		return []Finding{{Index: -1, Message: msg}}
 	}
 	var doc struct {
 		Endpoints []struct {
