@@ -1079,7 +1079,9 @@ func checkGatewayRender(
 		if err != nil || withEndpoints.OK {
 			return nil, checkErr(err)
 		}
-		return admission.Warnings{fmt.Sprintf("with the endpoints that already reference this gateway, its config fails validation: %s", withEndpoints.Summary(warningLimit))}, nil
+		return admission.Warnings{fmt.Sprintf(
+			"with the endpoints that already reference this gateway, its config fails validation: %s",
+			withEndpoints.Summary(warningLimit))}, nil
 	}
 	return ratchetRender(ctx, renderChecks{
 		after:     bindCheck(chk.CheckGateway, gw, nil),
