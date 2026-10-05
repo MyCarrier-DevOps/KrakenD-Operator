@@ -20,7 +20,6 @@ import (
 	"context"
 	"fmt"
 	"time"
-	"unicode/utf8"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -81,11 +80,7 @@ func truncate(s string, limit int) string {
 	if len(s) <= limit {
 		return s
 	}
-	cut := limit
-	for cut > 0 && !utf8.RuneStart(s[cut]) {
-		cut--
-	}
-	return s[:cut] + "..."
+	return configcheck.Truncate(s, limit) + "..."
 }
 
 // newErrors returns the errors in errs that old does not already have, matched
