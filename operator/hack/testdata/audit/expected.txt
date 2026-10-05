@@ -28,3 +28,4 @@ KrakenDGateway a/ee-nolicense: EE without a license source
 KrakenDGateway a/ee-emptyname: EE license secretRef has an empty name
 KrakenDGateway a/ce-license: CE with a license source
 KrakenDGateway a/both-license: both license sources set
+KrakenDGateway a/openapi-port: spec.openapi.port equals the gateway port
