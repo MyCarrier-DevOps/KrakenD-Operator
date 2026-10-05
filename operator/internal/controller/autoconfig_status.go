@@ -45,8 +45,8 @@ func operationLabel(v1alpha1.OperationStatus) string {
 
 // listed joins the first maxConditionListed items, noting how many more
 // there are.
-func listed([]string) string {
-	return ""
+func listed(items []string) string {
+	return strings.Join(items, "; ")
 }
 
 // operationStatuses converts pipeline issues to status entries, each message
