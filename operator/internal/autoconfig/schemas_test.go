@@ -325,3 +325,22 @@ func TestSchemaClosure_SeesRefsUnderSchemaMapsMemberNamedExample(t *testing.T) {
 		})
 	}
 }
+
+// An example payload that happens to look like a reference to an undefined
+// schema is data, so it produces no unresolved reference.
+func TestSchemaClosure_ExamplePayloadsNamingUndefinedSchemasAreNotReported(t *testing.T) {
+	components := map[string]runtime.RawExtension{
+		"Pet": {Raw: []byte(`{"type":"object","example":{"ref":"ABC","$ref":"#/components/schemas/ABC"}}`)},
+	}
+	entry := docEntry("/pets", `{"response_definition":{"200":{"ref":"Pet","example":{"ref":"ABC"},`+
+		`"examples":{"a":{"value":{"ref":"ABC"}}}}}}`)
+
+	closure, unresolved := SchemaClosure(entry, components)
+
+	if got, want := slices.Sorted(maps.Keys(closure)), []string{"Pet"}; !slices.Equal(got, want) {
+		t.Errorf("closure = %v, want %v", got, want)
+	}
+	if len(unresolved) != 0 {
+		t.Errorf("unresolved = %v, want none", unresolved)
+	}
+}
