@@ -210,6 +210,21 @@ func duplicateListUsers() autoconfig.OperationIssue {
 	}
 }
 
+// reconcileAC runs one reconcile of ac with r.
+func reconcileAC(r *KrakenDAutoConfigReconciler, ac *v1alpha1.KrakenDAutoConfig) (ctrl.Result, error) {
+	return r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(ac)})
+}
+
+// getAC returns the stored copy of ac.
+func getAC(t *testing.T, c client.Client, ac *v1alpha1.KrakenDAutoConfig) *v1alpha1.KrakenDAutoConfig {
+	t.Helper()
+	var cur v1alpha1.KrakenDAutoConfig
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(ac), &cur); err != nil {
+		t.Fatalf("getting autoconfig: %v", err)
+	}
+	return &cur
+}
+
 func newACReconciler(
 	c client.Client,
 	fetcher *mockFetcher,
@@ -2153,6 +2168,43 @@ func TestAutoConfigReconcile_InputWarningEventsPrecedeEndpointsGenerated(t *test
 		} else if idx > generatedIdx {
 			t.Errorf("expected %s before %s, got %v", reason, v1alpha1.ReasonEndpointsGenerated, events)
 		}
+	}
+}
+
+func TestAutoConfigReconcile_RecordsSkippedOperationsAndNotes(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	// An additional endpoint on the generated route replaces it.
+	ac.Spec.AdditionalEndpoints = []v1alpha1.AdditionalEndpoint{
+		{Endpoint: "/api/users", Method: "GET", Host: "http://override"},
+	}
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).Build()
+	f, ce, fi, g := defaultMocks()
+	g.output.Skipped = []autoconfig.OperationIssue{duplicateListUsers()}
+	r := newACReconciler(c, f, ce, fi, g)
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	updated := getAC(t, c, ac)
+	wantSkipped := []v1alpha1.OperationStatus{{
+		Method: "GET", Path: "/v2/users", OperationID: "listUsers",
+		Reason:  v1alpha1.ReasonDuplicateOperationId,
+		Message: `operationId "listUsers" is already used by GET /api/users`,
+	}}
+	if !slices.Equal(updated.Status.Skipped, wantSkipped) || updated.Status.SkippedOperations != 1 {
+		t.Errorf("skipped = %+v (count %d), want %+v", updated.Status.Skipped,
+			updated.Status.SkippedOperations, wantSkipped)
+	}
+	wantWarnings := []string{`Additional endpoint "/api/users:GET" overrides a spec-derived endpoint`}
+	if !slices.Equal(updated.Status.Warnings, wantWarnings) {
+		t.Errorf("warnings = %q, want %q", updated.Status.Warnings, wantWarnings)
+	}
+	cond := meta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionSynced)
+	wantMsg := "Generated 1 endpoints; 1 operations skipped (see status.skipped); 1 spec warnings (see status.warnings)"
+	if cond == nil || cond.Status != metav1.ConditionTrue || cond.Message != wantMsg {
+		t.Errorf("expected Synced True %q, got %+v", wantMsg, cond)
 	}
 }
 
