@@ -53,7 +53,7 @@ func TestGatewayAdmission_Render(t *testing.T) {
 		calls    string
 		warns    string
 	}{
-		{"create checks the root alone", nil, nil, true, "isolated", ""},
+		{"create checks the root, then the gateway with its endpoints", nil, nil, true, "isolated,gateway", ""},
 		{"create with a failing root", nil,
 			[]configcheck.Verdict{rootFailure("'timeout' time: unknown unit")}, false, "isolated", ""},
 		{"update keeps it passing", old, nil, true, "gateway", ""},
