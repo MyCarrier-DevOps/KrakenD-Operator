@@ -48,7 +48,7 @@ These principles govern all application code. They complement the Go coding stan
 | Deterministic output | The rendering pipeline produces byte-identical JSON for identical CRD state. Maps are serialized with sorted keys, slices are sorted by defined criteria. |
 | Fail fast at boundaries | Webhook validation rejects invalid CRs before they reach etcd. Controllers validate preconditions at the top of `Reconcile()` before mutating cluster state. |
 | No global state | No `init()` functions except for scheme registration (standard Kubebuilder convention). All other state is owned by structs wired in `main.go`. |
-| Testable by default | Every function that performs I/O accepts an interface parameter. Integration tests use envtest; unit tests use fakes and mocks. |
+| Testable by default | Every function that performs I/O accepts an interface parameter. Integration tests run against an ephemeral K3s cluster; unit tests use fakes and mocks. |
 
 ---
 
@@ -1885,7 +1885,7 @@ Every validator follows the same rules (`admission.go`, `webhook.go`):
 
 - **Ratchet.** `ValidateUpdate` first admits an update to a terminating object that leaves the spec alone (`terminatingWithUnchangedSpec`, so a finalizer can be removed), then admits an update whose spec is unchanged without running a rule. A field rule rejects an update only for errors the stored object did not already have (`newErrors`, matched on the error's field, type, value and detail). References are checked only when added or changed, and endpoint entries are matched on (`endpoint`, `method`), so a reorder is not a change.
 - **Responses.** A rejected field is a `422 Invalid` with one cause per field error (`invalid`). A failed lookup, or a config check that cannot run or cannot get a validation slot, is a `500` (`unavailable`, `checkErr`): the request was not judged and is retried.
-- **Budget.** Every request stops its work after `admissionBudget` (12 s), inside the API server's 15 s `timeoutSeconds`, so the answer is a clear `500` and not a generic timeout.
+- **Budget.** The three validators that run a render check (endpoint, gateway and policy) stop their work after `admissionBudget` (12 s), inside the API server's 15 s `timeoutSeconds`, so the answer is a clear `500` and not a generic timeout.
 - **Render checks.** The validators depend on one port, `ConfigChecker`, implemented by the `configcheck.Checker` the gateway controller also uses:
 
 ```go
@@ -2028,7 +2028,7 @@ func (v *AutoConfigValidator) ValidateUpdate(
 }
 ```
 
-`validateFields` checks the shape of `documentation/openapi.audience` in each `extraConfig` (`spec.overrides[]`, `spec.defaults.endpoint` and `spec.additionalEndpoints[]`) and `validateOverrideIDs`, which rejects two overrides for one operation: an `operationId` listed twice (`Duplicate value`) or two that map to one override key (`autoconfig.SanitizeName`, which the CUE evaluator keys overrides on). `policyRefWarnings` looks up every `policyRef` in `spec.defaults`, `spec.overrides[]` and `spec.additionalEndpoints[].backends[]` and warns, in order of field path, about each that names no KrakenDBackendPolicy. It is a warning because a release may create the policy after the AutoConfig; the generated endpoints are rejected by the KrakenDEndpoint webhook until it exists. A failed lookup is a `500`.
+`validateFields` checks the shape of `documentation/openapi.audience` in each `extraConfig` (`spec.overrides[]`, `spec.defaults.endpoint` and `spec.additionalEndpoints[]`) and runs `validateOverrideIDs`, which rejects two overrides for one operation: an `operationId` listed twice (`Duplicate value`) or two that generate one endpoint name (`autoconfig.OperationEndpointName`: the AutoConfig name and `SanitizeName(operationId)`, cut to 253 characters), of which the generator keeps only the first. `policyRefWarnings` looks up every `policyRef` in `spec.defaults`, `spec.overrides[]` and `spec.additionalEndpoints[].backends[]` and warns, in field order, about each that names no KrakenDBackendPolicy (at most `maxPolicyWarnings`, then a count). It is a warning because a release may create the policy after the AutoConfig; the generated endpoints are rejected by the KrakenDEndpoint webhook until it exists. A failed lookup is a `500`.
 
 Admission does not compare route shapes between the endpoints one AutoConfig generates: they share a controller, which the KrakenDEndpoint webhook exempts from the route check. Same-shape paths (`/h/{a}` and `/h/{b}`) from one AutoConfig are therefore not rejected anywhere in admission; the renderer reports the newer one as `EndpointConflict`.
 
@@ -2710,7 +2710,7 @@ Every per-gateway series is removed when the gateway is deleted or terminating (
 graph TB
     subgraph "Test Pyramid"
         E2E["E2E Tests<br/>test/e2e/<br/>Real cluster (kind/k3d)<br/>Full operator + CRDs + KrakenD"]
-        INT["Integration Tests<br/>test/integration/<br/>envtest (API server + etcd)<br/>Controllers + webhooks + real API"]
+        INT["Integration Tests<br/>test/integration/<br/>Ephemeral K3s (testcontainers)<br/>Controllers + CRD schema and CEL + real API"]
         UNIT["Unit Tests<br/>*_test.go (adjacent)<br/>Pure functions + fakes<br/>Renderer, parser, filter, transformer"]
     end
 
@@ -2772,7 +2772,7 @@ func TestRender_DeterministicOutput(t *testing.T) {
 
 **Location:** `test/integration/`
 
-Integration tests use envtest to run a real Kubernetes API server and etcd, testing controller logic end-to-end without a real cluster:
+Integration tests run the controllers against a real Kubernetes API server, an ephemeral K3s cluster that testcontainers starts, so they test controller logic and the CRD schema and CEL rules end-to-end. The suite starts no webhook server: the webhook rules are unit-tested in `internal/webhook`.
 
 ```go
 func TestGatewayReconciler_CreatesOwnedResources(t *testing.T) {
@@ -2810,14 +2810,13 @@ func TestGatewayReconciler_CreatesOwnedResources(t *testing.T) {
 | Endpoint conflict → oldest wins; a loser of every entry gets Accepted=False (EndpointConflict), a loser of some gets Accepted=True (PartiallyAccepted); status.conflicts names the lost entries | Conflict detection logic across endpoints[] entries |
 | Policy update → all gateways with referencing endpoints re-queued → ConfigMap updated | `policyToGateways` mapper, namespace-scoped list, re-render |
 | Policy delete while an endpoint references it → held Terminating with a `DeletionBlocked` event, then released when the last reference goes | Protection finalizer, endpoint watch, uncached confirmation before release |
-| Policy create/update with out-of-range fields rejected | CRD schema minimums, enforced by the API server |
 | Config validation failure → Error phase, no Deployment update | Validation pipeline, error handling |
 | License expiry → CE fallback (image + config change) | License evaluation inside the gateway reconcile |
 | EE recovery → restored image + full config | License restoration flow |
 | Gateway deletion → orphaned endpoints marked Detached | Endpoint controller gateway watch, Detached phase |
 | AutoConfig create → generated endpoints | AutoConfig pipeline end-to-end |
 | AutoConfig periodic re-sync | RequeueAfter behavior |
-| Admission rejects invalid CRs | CRD schema and CEL rules, and the webhook rules: references, route uniqueness, entry rules, render checks |
+| The API server rejects invalid CRs | CRD schema and CEL rules (`TestCRD_EndpointRules`, `TestCRD_GatewayRules`, `TestCRD_AutoConfigRules`). The policy minimums are unit-tested in `api/v1alpha1` (`TestPolicyCRD_Minimums`) |
 
 ### End-to-End Tests
 
@@ -2838,47 +2837,43 @@ func TestE2E_FullGatewayLifecycle(t *testing.T) {
 }
 ```
 
-### envtest Suite Setup
+### Integration Suite Setup
+
+`test/integration/suite_test.go` starts the cluster and the controllers once for the whole package (build tag `integration`):
 
 ```go
-var (
-    testEnv   *envtest.Environment
-    k8sClient client.Client
-    ctx       context.Context
-    cancel    context.CancelFunc
-)
+func runTests(m *testing.M) int {
+    // An ephemeral K3s cluster through testcontainers. K3s 1.32 is used because
+    // 1.33 removed the KubeletInUserNamespace feature gate that rootless
+    // podman needs; the kubelet args work around rootless cgroup constraints.
+    k3sContainer, err = k3s.Run(ctx, "rancher/k3s:v1.32.13-k3s1", testcontainers.WithCmdArgs(
+        "--disable=traefik",
+        "--disable=metrics-server",
+        "--kubelet-arg=feature-gates=KubeletInUserNamespace=true",
+        "--kubelet-arg=cgroups-per-qos=false",
+        "--kubelet-arg=enforce-node-allocatable=",
+    ))
+    defer k3sContainer.Terminate(terminateCtx)
 
-func TestMain(m *testing.M) {
-    ctx, cancel = context.WithCancel(context.Background())
+    // Build a rest.Config from the cluster's kubeconfig, wait for the nodes,
+    // install the CRDs from config/crd/bases, then start a manager in the background.
+    mgr, err := ctrl.NewManager(cfg, ctrl.Options{Scheme: scheme})
 
-    testEnv = &envtest.Environment{
-        CRDDirectoryPaths: []string{
-            filepath.Join("..", "..", "config", "crd", "bases"),
-        },
-        WebhookInstallOptions: envtest.WebhookInstallOptions{
-            Paths: []string{filepath.Join("..", "..", "config", "webhook")},
-        },
-    }
+    // The gateway controller gets the real renderer and one config checker over a
+    // marker validator, because the krakend binary is not available here.
+    checker := configcheck.New(mgr.GetClient(), krakendRenderer, suiteValidator, 1)
+    // ... set up the Gateway, Endpoint, Policy and AutoConfig controllers on mgr
 
-    cfg, err := testEnv.Start()
-    if err != nil {
-        panic(err)
-    }
-
-    // Register scheme, create client, start manager with controllers
-    // ...
-
-    code := m.Run()
-    cancel()
-    testEnv.Stop()
-    os.Exit(code)
+    return m.Run()
 }
 ```
+
+Run it with `make test-integration`, which needs a container runtime (rootless podman works with `DOCKER_HOST` and `TESTCONTAINERS_RYUK_DISABLED=true`).
 
 ### Coverage Requirements
 
 - **Unit tests:** ≥ 85% line coverage per package
-- **Integration tests:** Cover every reconciliation path and webhook rule
+- **Integration tests:** Cover every reconciliation path and the CRD schema and CEL rules
 - **E2E tests:** Cover the critical user journey (create gateway → add endpoints → update → delete)
 
 ---
