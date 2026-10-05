@@ -1976,3 +1976,19 @@ func TestEvaluate_InvalidEntryFailsOnlyItsOperation(t *testing.T) {
 		t.Errorf("unexpected failed operation %+v", f)
 	}
 }
+
+func TestEvaluate_UndecodableEntryFailsOnlyItsOperation(t *testing.T) {
+	// timeout "30" is valid CUE but not a duration: the entry cannot be
+	// decoded, and must fail its operation instead of disappearing.
+	out := evaluateEmbedded(t, `{"paths":{
+		"/a":{"get":{"operationId":"getA","responses":{"200":{"description":"OK"}}}},
+		"/b":{"get":{"operationId":"getB","timeout":"30","responses":{"200":{"description":"OK"}}}}}}`)
+
+	if len(out.Entries) != 1 || out.Entries[0].Endpoint != "/a" {
+		t.Fatalf("expected only the /a entry, got %+v", out.Entries)
+	}
+	if len(out.Failed) != 1 || out.Failed[0].OperationID != "getB" ||
+		!strings.Contains(out.Failed[0].Message, "missing unit in duration") {
+		t.Errorf("expected getB failed with the duration error, got %+v", out.Failed)
+	}
+}
