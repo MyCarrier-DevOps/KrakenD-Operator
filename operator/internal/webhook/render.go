@@ -27,32 +27,44 @@ import (
 )
 
 // checkGatewayRender validates gw's config. A new gateway must render on its
-// own.
+// own. An update is rejected only when it turns a passing config (the root
+// with its endpoints) into a failing one; when the config already fails, only
+// the root alone is judged.
 func checkGatewayRender(
 	ctx context.Context, chk ConfigChecker, old, gw *v1alpha1.KrakenDGateway,
 ) (admission.Warnings, error) {
-	if old != nil {
-		after, err := chk.CheckGateway(ctx, gw, nil)
-		if err != nil || after.OK {
+	if old == nil {
+		root, err := chk.CheckIsolated(ctx, gw, nil)
+		if err != nil || root.OK {
 			return nil, checkErr(err)
 		}
-		before, err := chk.CheckGateway(ctx, old, nil)
-		if err != nil {
-			return nil, checkErr(err)
-		}
-		if before.OK {
-			return nil, gatewayRenderDenial(gw, after)
-		}
-		preexisting := admission.Warnings{"the gateway's config already fails validation: " +
-			before.Summary(warningLimit)}
-		_, err = chk.CheckIsolated(ctx, gw, nil)
-		return preexisting, checkErr(err)
+		return nil, gatewayRenderDenial(gw, root)
 	}
-	root, err := chk.CheckIsolated(ctx, gw, nil)
-	if err != nil || root.OK {
+	after, err := chk.CheckGateway(ctx, gw, nil)
+	if err != nil || after.OK {
 		return nil, checkErr(err)
 	}
-	return nil, gatewayRenderDenial(gw, root)
+	before, err := chk.CheckGateway(ctx, old, nil)
+	if err != nil {
+		return nil, checkErr(err)
+	}
+	if before.OK {
+		return nil, gatewayRenderDenial(gw, after)
+	}
+	preexisting := admission.Warnings{"the gateway's config already fails validation: " +
+		before.Summary(warningLimit)}
+	rootAfter, err := chk.CheckIsolated(ctx, gw, nil)
+	if err != nil || rootAfter.OK {
+		return preexisting, checkErr(err)
+	}
+	rootBefore, err := chk.CheckIsolated(ctx, old, nil)
+	if err != nil {
+		return nil, checkErr(err)
+	}
+	if rootBefore.OK {
+		return nil, gatewayRenderDenial(gw, rootAfter)
+	}
+	return preexisting, nil
 }
 
 // gatewayRenderDenial rejects gw: gateway-root findings on spec.config. The
