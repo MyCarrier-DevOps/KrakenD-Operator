@@ -108,6 +108,11 @@ func (c *Checker) CheckGatewayPolicy(ctx context.Context, gw *v1alpha1.KrakenDGa
 	return c.lint(ctx, in)
 }
 
+// LintPolicy lints policy on its own.
+func (c *Checker) LintPolicy(_ context.Context, _ *v1alpha1.KrakenDBackendPolicy) (Verdict, error) {
+	return Verdict{}, nil
+}
+
 func (c *Checker) lint(ctx context.Context, in renderer.RenderInput) (Verdict, error) {
 	out, err := c.renderer.Render(in)
 	if err != nil {

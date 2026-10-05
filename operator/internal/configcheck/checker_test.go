@@ -512,3 +512,17 @@ func TestCheckGatewayPolicy_RendersTheCandidatePolicy(t *testing.T) {
 		t.Errorf("linted %s, want the candidate policy only", v.seen[0])
 	}
 }
+
+func TestLintPolicy_RendersThePolicyOnASyntheticBackend(t *testing.T) {
+	v := &fakeValidator{}
+	c := newChecker(v)
+	p := policy("p")
+	p.Spec.Raw = &runtime.RawExtension{Raw: []byte(`{"qos/circuit-breakr":{}}`)}
+
+	if _, err := c.LintPolicy(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	if len(v.seen) != 1 || !strings.Contains(v.seen[0], "qos/circuit-breakr") {
+		t.Errorf("linted %v, want the policy's raw block", v.seen)
+	}
+}
