@@ -2530,3 +2530,35 @@ func TestGatewayAdmission_ChangedTerminationGracePeriodIsRechecked(t *testing.T)
 		t.Errorf("unchanged probe denied: %+v", resp.Result)
 	}
 }
+
+func TestAutoConfigAdmission_RatchetsGatewayRefAndFields(t *testing.T) {
+	old := &v1alpha1.KrakenDAutoConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "ac", Namespace: "default"},
+		Spec: v1alpha1.KrakenDAutoConfigSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: "gone"}, Trigger: v1alpha1.TriggerOnChange,
+			OpenAPI: v1alpha1.OpenAPISource{URL: "http://svc/openapi.json"},
+			Overrides: []v1alpha1.OperationOverride{{OperationID: "getA",
+				ExtraConfig: &runtime.RawExtension{Raw: []byte(`{"documentation/openapi":{"audience":"x"}}`)}}},
+		},
+	}
+	v := &AutoConfigValidator{Client: fakeClient()}
+
+	edited := old.DeepCopy()
+	edited.Spec.Filter = &v1alpha1.FilterSpec{IncludeTags: []string{"public"}}
+	if resp := review(t, v, "alice", edited, old); !resp.Allowed {
+		t.Errorf("unrelated edit denied: %+v", resp.Result)
+	}
+
+	moved := edited.DeepCopy()
+	moved.Spec.GatewayRef.Name = "other"
+	if resp := review(t, v, "alice", moved, old); resp.Allowed {
+		t.Error("gatewayRef changed to a missing gateway admitted")
+	}
+
+	worse := edited.DeepCopy()
+	worse.Spec.Overrides[0].ExtraConfig = &runtime.RawExtension{
+		Raw: []byte(`{"documentation/openapi":{"audience":"y"}}`)}
+	if resp := review(t, v, "alice", worse, old); resp.Allowed {
+		t.Error("a different malformed audience admitted")
+	}
+}
