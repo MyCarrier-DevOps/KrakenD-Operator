@@ -407,7 +407,7 @@ func TestAutoConfigCRD_Rules(t *testing.T) {
 		{"override concurrent calls", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, overrides: [{operationId: x, concurrentCalls: 0}]}}`, "spec.overrides[0].concurrentCalls"},
 		{"override endpoint with a query", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, overrides: [{operationId: x, endpoint: "/a?b"}]}}`, "spec.overrides[0].endpoint"},
 		{"additional endpoint with a query", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, additionalEndpoints: [{endpoint: "/a?b"}]}}`, "spec.additionalEndpoints[0].endpoint"},
-		{"periodic interval too long", autoconfigHead + `openapi: {url: "http://x"}, trigger: Periodic, periodic: {interval: "` + strings.Repeat("1s", 17) + `"}}}`, "spec.periodic.interval"},
+		{"periodic interval too long", autoconfigHead + `openapi: {url: "http://x"}, trigger: Periodic, periodic: {interval: "` + strings.Repeat("1h", 17) + `"}}}`, "spec.periodic.interval"},
 		{"duration too long", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, defaults: {endpoint: {timeout: "` + strings.Repeat("1s", 33) + `"}}}}`, "spec.defaults.endpoint.timeout"},
 	})
 }
