@@ -20,12 +20,16 @@ import (
 	"strings"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/runtime"
+
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 )
 
 func TestValidateEntries(t *testing.T) {
 	custom := testGateway()
 	custom.Spec.Config.Router = &v1alpha1.RouterConfig{HealthPath: "/healthz"}
+	rawRouter := testGateway()
+	rawRouter.Spec.Config.ExtraConfig = &runtime.RawExtension{Raw: []byte(`{"router":{"health_path":"/live"}}`)}
 	tests := []struct {
 		name   string
 		gw     *v1alpha1.KrakenDGateway
@@ -37,6 +41,7 @@ func TestValidateEntries(t *testing.T) {
 		{"reserved below debug", testGateway(), testEndpoint("e", "/x/__debug/y"), "reserved by KrakenD"},
 		{"not reserved", testGateway(), testEndpoint("e", "/__other"), ""},
 		{"custom health path", custom, testEndpoint("e", "/healthz"), "health endpoint"},
+		{"raw health path", rawRouter, testEndpoint("e", "/live"), "health endpoint"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
