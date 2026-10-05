@@ -217,3 +217,14 @@ jq "${jq_opts[@]}" "$jq_lib"'
   (if $s.defaults.policyRef != null and ($s.defaults.policyRef.name // "") == ""
    then "spec.defaults.policyRef.name is empty" else empty end)
 ]} | report("KrakenDAutoConfig")' "$work/autoconfigs.json"
+
+# Two entries a gateway would route as one: the same method and the same path
+# once parameter names are erased. KrakenD cannot register both.
+jq "${jq_opts[@]}" "$jq_lib"'
+[.items[] | . as $o
+  | "\(.spec.gatewayRef.namespace // .metadata.namespace)/\(.spec.gatewayRef.name)" as $gw
+  | (.spec.endpoints // [])[]
+  | {gw: $gw, owner: "\($o.metadata.namespace)/\($o.metadata.name)",
+     key: "\(.method) \(.endpoint | gsub("/\\{[a-zA-Z0-9_-]+\\}"; "/{}"))", route: "\(.method) \(.endpoint)"}]
+| group_by([.gw, .key])[] | select(([.[].owner] | unique | length) > 1)
+| "gateway \(.[0].gw): \([.[] | "\(.route) (\(.owner))"] | join(" vs "))"' "$work/endpoints.json"
