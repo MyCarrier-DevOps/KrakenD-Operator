@@ -266,6 +266,15 @@ spec:
                     outputEncoding:
                       description: OutputEncoding overrides the endpoint response
                         encoding.
+                      enum:
+                      - json
+                      - json-collection
+                      - yaml
+                      - fast-json
+                      - xml
+                      - negotiate
+                      - string
+                      - no-op
                       type: string
                     timeout:
                       description: Timeout overrides the endpoint timeout.
