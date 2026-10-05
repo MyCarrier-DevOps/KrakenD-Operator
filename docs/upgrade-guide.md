@@ -1254,6 +1254,15 @@ tree while `router.auto_options` is on, because `auto_options` joins every
 method's paths in one tree (for example `GET /users/{id}` with
 `POST /users/{userId}/orders`).
 
+**The validator binary is pinned by digest.** The operator image takes its
+`krakend` binary from KrakenD CE 2.13.11, referenced by digest in the
+`Dockerfile` (`KRAKEND_IMAGE`), instead of the floating `krakend:2.13` tag.
+Admission and the gateway controller validate every gateway with that binary,
+whatever its `spec.version`, and the validator changes only when the pin does.
+An integration test (`TestConfigCheckParity`) runs the pinned binary against
+the route check to confirm that admission's `krakend check -n` plus the route
+check rejects everything `krakend check -t -n` rejects.
+
 ---
 
 ## v0.14.0 — openapi-serve liveness probe (one-time rollout)
