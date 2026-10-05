@@ -52,6 +52,9 @@ var eeOnlyNamespacesFile []byte
 type eeOnlyData struct {
 	EnterpriseOnly map[NamespaceLevel][]string `json:"enterpriseOnly"`
 	CERenderDrops  map[NamespaceLevel][]string `json:"ceRenderDrops"`
+	// CEHonoredKeys lists, per level and Enterprise-listed namespace, the keys
+	// KrakenD CE honors. Any other key of the block is Enterprise-only.
+	CEHonoredKeys map[NamespaceLevel]map[string][]string `json:"ceHonoredKeys"`
 }
 
 var eeOnlyLists = func() eeOnlyData {
@@ -241,21 +244,15 @@ func CEDrops(level NamespaceLevel, ec map[string]json.RawMessage) []CEDrop {
 // that has keys. partly is false when CE honors nothing of ns, so the whole
 // namespace goes. Otherwise dropped lists, sorted, the keys CE does not honor.
 func ceDroppedKeys(level NamespaceLevel, ns string, keys []string) (partly bool, dropped []string) {
-	honored, partly := ceHonoredKeys[level][ns]
+	honored, partly := eeOnlyLists.CEHonoredKeys[level][ns]
 	if !partly {
 		return false, nil
 	}
 	for _, k := range keys {
-		if !honored[k] {
+		if !slices.Contains(honored, k) {
 			dropped = append(dropped, k)
 		}
 	}
 	slices.Sort(dropped)
 	return true, dropped
-}
-
-// ceHonoredKeys are, per level and Enterprise-listed namespace, the keys KrakenD
-// CE honors. Any other key of the block is Enterprise-only.
-var ceHonoredKeys = map[NamespaceLevel]map[string]map[string]bool{
-	LevelBackend: {"backend/http/client": {"send_body_on_redirect": true}},
 }
