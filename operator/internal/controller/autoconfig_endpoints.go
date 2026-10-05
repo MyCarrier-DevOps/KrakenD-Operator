@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -498,10 +499,21 @@ func routeCollisions(
 		key := e.Method + " " + renderer.ConflictKey(e.Endpoint)
 		groups[key] = append(groups[key], ep)
 	}
+	created := make(map[string]int64, len(controlled))
+	for i := range controlled {
+		created[controlled[i].Name] = controlled[i].CreationTimestamp.Unix()
+	}
+	// A new endpoint sorts after the existing ones.
+	createdAt := func(name string) int64 {
+		if t, ok := created[name]; ok {
+			return t
+		}
+		return math.MaxInt64
+	}
 	collisions := map[string]rejection{}
 	for _, group := range groups {
 		slices.SortFunc(group, func(a, b *v1alpha1.KrakenDEndpoint) int {
-			return strings.Compare(a.Name, b.Name)
+			return cmp.Or(cmp.Compare(createdAt(a.Name), createdAt(b.Name)), strings.Compare(a.Name, b.Name))
 		})
 		survivor := group[0]
 		for _, ep := range group[1:] {
