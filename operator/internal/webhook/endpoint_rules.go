@@ -23,6 +23,7 @@ import (
 	"slices"
 	"strings"
 
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
@@ -65,7 +66,48 @@ func validateEntries(ep *v1alpha1.KrakenDEndpoint, changed []int, gw *v1alpha1.K
 			errs = append(errs, field.Invalid(p.Child("endpoint"), e.Endpoint,
 				"unnamed wildcards (/*) are an Enterprise feature; the gateway runs CE"))
 		}
+		if gw.Spec.Edition == v1alpha1.EditionCE {
+			errs = append(errs, validateEENamespaces(p, e)...)
+		}
 		errs = append(errs, validatePlaceholders(p, e)...)
+	}
+	return errs
+}
+
+// validateEENamespaces rejects the Enterprise-only namespaces in the
+// extraConfig of an entry of a CE gateway.
+func validateEENamespaces(p *field.Path, e v1alpha1.EndpointEntry) field.ErrorList {
+	return ceIgnores(p.Child("extraConfig"), eeOnlyNamespacesIn(e.ExtraConfig, renderer.LevelEndpoint))
+}
+
+// eeOnlyNamespacesIn returns the namespaces of the extra_config raw that only
+// KrakenD Enterprise implements at level, in name order. raw that is not a
+// JSON object has none; the render check reports it.
+func eeOnlyNamespacesIn(raw *runtime.RawExtension, level renderer.NamespaceLevel) []string {
+	if raw == nil || raw.Raw == nil {
+		return nil
+	}
+	var ec map[string]json.RawMessage
+	if json.Unmarshal(raw.Raw, &ec) != nil {
+		return nil
+	}
+	var found []string
+	for _, ns := range renderer.EEOnlyNamespaces(level) {
+		if _, ok := ec[ns]; ok {
+			found = append(found, ns)
+		}
+	}
+	return found
+}
+
+// ceIgnores reports each Enterprise-only namespace in names on p. KrakenD CE
+// accepts such a namespace in krakend check and then ignores it, so an entry
+// that asks for API-key authentication would be served without any.
+func ceIgnores(p *field.Path, names []string) field.ErrorList {
+	var errs field.ErrorList
+	for _, ns := range names {
+		errs = append(errs, field.Invalid(p, ns,
+			"Enterprise-only extra_config namespace: the gateway runs CE, which ignores it silently"))
 	}
 	return errs
 }
