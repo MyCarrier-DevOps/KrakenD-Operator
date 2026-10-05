@@ -1486,8 +1486,10 @@ func NewKrakenDExecutor(binaryPath string) *KrakenDExecutor {
 ```go
 type Validator interface {
     // Validate checks jsonData the way KrakenD of the given edition would load
-    // it, using the embedded CE binary.
+    // it, using the embedded CE binary, including krakend's router test.
     Validate(ctx context.Context, jsonData []byte, edition v1alpha1.Edition) error
+    // Lint is Validate without krakend's router test.
+    Lint(ctx context.Context, jsonData []byte, edition v1alpha1.Edition) error
 }
 ```
 
