@@ -47,6 +47,11 @@ import (
 	// +kubebuilder:scaffold:imports
 )
 
+// configCheckSlots is how many config validations the operator runs at once,
+// across the gateway controller and the admission webhooks. Each krakend exec
+// peaks at ~110 MB.
+const configCheckSlots = 3
+
 var (
 	scheme   = runtime.NewScheme()
 	setupLog = ctrl.Log.WithName("setup")
