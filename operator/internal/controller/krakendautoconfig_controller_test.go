@@ -3552,3 +3552,26 @@ func TestAutoConfigReconcile_ManyExternalRefsStayBoundedAndQuiet(t *testing.T) {
 		t.Errorf("an identical second pass emitted %v, want no events", events)
 	}
 }
+
+func TestAutoConfigReconcile_GeneratorWarningsPersistAndEmit(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).Build()
+	f, ce, fi, g := defaultMocks()
+	g.output.Warnings = []string{
+		`schema reference "Ghost" (first used by GET /api/users) is not defined in components/schemas`,
+	}
+	rec := fakeRecorder()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Recorder = rec
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if got := getAC(t, c, ac).Status.Warnings; !slices.Equal(got, g.output.Warnings) {
+		t.Errorf("warnings = %q, want %q", got, g.output.Warnings)
+	}
+	if events := drainEvents(rec); !slices.Contains(events, "Warning "+v1alpha1.ReasonSpecWarning+" "+g.output.Warnings[0]) {
+		t.Errorf("expected a SpecWarning event, got %v", events)
+	}
+}
