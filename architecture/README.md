@@ -526,7 +526,7 @@ status:
 - `timeout` and `cacheTTL` match Go's `time.ParseDuration` grammar without a sign. A malformed value would otherwise break decoding of the whole `KrakenDEndpointList` in every informer. A CEL rule also requires that they parse as a duration that fits in 64 bits of nanoseconds, with a `maxLength` of 64: the pattern alone admits overflowing values such as `2562048h`.
 - `outputEncoding`, a backend's `encoding`, `sd` and `method` are enums taken from KrakenD 2.13's own schema. `gatewayRef.name` and `policyRef.name` have a minimum length of 1.
 
-Kubernetes 1.33 is the supported floor because it ratchets CRD validation: an update that leaves an already-invalid field unchanged is admitted, so objects stored before a rule existed keep accepting unrelated changes. A list without per-item keys is the exception: an entry's `backends` (atomic), and the AutoConfig `overrides[]` and `additionalEndpoints[]`, ratchet only while the whole list is unchanged, so any edit to the list re-checks every item. CEL evaluation errors are never ratcheted either: a stored duration that matches the pattern but overflows (for example `2562048h`) fails its parse rule on every update to that object until it is corrected. On the gateway's string durations the parse rule applies only to pattern-valid values, so a stored value that breaks the pattern still ratchets. Rules that need other objects (reference existence, cross-object conflicts, the rendered configuration) stay in the webhooks.
+Kubernetes 1.33 is the supported floor because it ratchets CRD validation: an update that leaves an already-invalid field unchanged is admitted, so objects stored before a rule existed keep accepting unrelated changes. A list without per-item keys is the exception: an entry's `backends` (atomic), and the AutoConfig `overrides[]`, ratchet only while the whole list is unchanged, so any edit to the list re-checks every item. CEL evaluation errors are never ratcheted either: a stored duration that matches the pattern but overflows (for example `2562048h`) fails its parse rule on every update to that object until it is corrected. On the gateway's string durations the parse rule applies only to pattern-valid values, so a stored value that breaks the pattern still ratchets. Rules that need other objects (reference existence, cross-object conflicts, the rendered configuration) stay in the webhooks.
 
 ### 3.3 KrakenDBackendPolicy
 
@@ -2177,6 +2177,18 @@ status:
       reason: Ready
       message: "OpenAPI spec fetched and endpoints in sync"
 ```
+
+The CRD enforces the object-decidable rules of the spec:
+
+- `openapi` has exactly one of `url` or `configMapRef`, and `configMapRef` requires `urlTransform.hostMapping`.
+- `trigger: Periodic` requires `periodic`, whose `interval` is a Go duration of at least 30s. The rule applies only to pattern-valid values, so a stored malformed value still ratchets.
+- `bearerTokenSecret` and `basicAuthSecret` are mutually exclusive. The object name is at most 63 characters, since it becomes a label value on generated endpoints.
+- An override `method` is one of GET, POST, PUT, PATCH or DELETE, `backends[].index` is 0 or more, and `overrides` holds at most 1024 items (the per-item duration rules multiply by the list bound in the API server's cost estimate).
+- `additionalEndpointsBasePath` and `additionalEndpoints[].endpoint` start with `/`, and the base path is mutually exclusive with `urlTransform.addPathPrefix`.
+- `additionalEndpoints` is a map list keyed on (`endpoint`, `method`) with at most 256 items. `method` defaults to `GET` in the API server, so two entries for one path with and without the method collide. An entry sets either `backends` or the `host`/`backendUrlPattern`/`encoding` shorthand.
+- `timeout` and `cacheTTL` on the defaults, overrides and additional endpoints are Go durations that fit in 64 bits of nanoseconds. `outputEncoding`, `defaults.backend.encoding` and the shorthand `encoding` carry the same enums as the KrakenDEndpoint schema, so a typo is rejected on the AutoConfig instead of failing every generated endpoint write.
+
+The webhook keeps the gateway lookup and the `documentation/openapi.audience` shape checks. Rules written on `spec` itself are re-evaluated whenever the spec changes; rules on a field ratchet with it.
 
 ### Architecture
 
