@@ -123,10 +123,10 @@ func TestCRD_GatewayRules(t *testing.T) {
 	}
 }
 
-// optionalOldSelf is beta and on by default in the 1.32 test cluster, and GA
-// (locked on) from 1.33, the floor.
 // A tmpSizeLimit whose exponent is beyond int32 takes the quantity parser
-// seconds to evaluate; the API server must refuse it on its pattern first.
+// seconds to evaluate, and an API server that evaluates it cannot answer in
+// time. With the bound on the exponent loosened in the types and the CRDs
+// regenerated, this call times out on the K3s cluster.
 func TestCRD_GatewayRefusesAHugeQuantityExponentFast(t *testing.T) {
 	ns := testNamespace(t)
 	gw := &unstructured.Unstructured{Object: map[string]any{
@@ -146,6 +146,8 @@ func TestCRD_GatewayRefusesAHugeQuantityExponentFast(t *testing.T) {
 	}
 }
 
+// optionalOldSelf is beta and on by default in the 1.32 test cluster, and GA
+// (locked on) from 1.33, the floor.
 func TestCRD_GatewayDragonflyPasswordRatchets(t *testing.T) {
 	ns := testNamespace(t)
 	g := &v1alpha1.KrakenDGateway{
