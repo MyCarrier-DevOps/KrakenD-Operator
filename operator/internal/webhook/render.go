@@ -18,6 +18,7 @@ package webhook
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -51,7 +52,8 @@ func bindCheck(
 // ratchetRender rejects a change only when it turns a passing config into a
 // failing one. It runs after, then before; when before fails too the failure
 // is a warning (preexisting words it from before's verdict) unless the change
-// fails on the isolated baseline where its own baseline passed. A check that
+// fails on the isolated baseline where its own baseline passed. Without an
+// isolated baseline (isoAfter nil) a preexisting failure is only a warning. A check that
 // cannot run is a 500 with no warning: the request is not judged. deny builds
 // the rejection from a failing verdict.
 func ratchetRender(
@@ -70,6 +72,9 @@ func ratchetRender(
 		return nil, deny(after)
 	}
 	warning := admission.Warnings{preexisting(before)}
+	if c.isoAfter == nil {
+		return warning, nil
+	}
 	isoAfter, err := c.isoAfter(ctx)
 	if err != nil {
 		return nil, checkErr(err)
@@ -159,12 +164,41 @@ func checkPolicyRender(
 	if err != nil {
 		return nil, unavailable(err)
 	}
+	var errs field.ErrorList
+	var warnings admission.Warnings
 	for i := range gateways {
-		if _, err := chk.CheckGatewayPolicy(ctx, &gateways[i], policy); err != nil {
-			return nil, checkErr(err)
+		gw := &gateways[i]
+		w, err := ratchetRender(ctx, renderChecks{
+			after:  bindPolicyCheck(chk.CheckGatewayPolicy, gw, policy),
+			before: bindCheck(chk.CheckGateway, gw, nil),
+		},
+			func(after configcheck.Verdict) error {
+				errs = append(errs, field.Invalid(field.NewPath("spec"), field.OmitValueType{},
+					fmt.Sprintf("breaks gateway %s/%s: %s", gw.Namespace, gw.Name, after.Summary(warningLimit))))
+				return errPolicyBreaksGateway
+			},
+			func(before configcheck.Verdict) string {
+				return fmt.Sprintf("gateway %s/%s already fails validation: %s",
+					gw.Namespace, gw.Name, before.Summary(warningLimit))
+			})
+		if err != nil && !errors.Is(err, errPolicyBreaksGateway) {
+			return nil, err
 		}
+		warnings = append(warnings, w...)
 	}
-	return nil, nil
+	return warnings, invalid("KrakenDBackendPolicy", policy.Name, errs)
+}
+
+// errPolicyBreaksGateway tells checkPolicyRender's loop that a gateway's
+// ratchet denied the policy; the cause itself is already collected.
+var errPolicyBreaksGateway = errors.New("policy breaks gateway")
+
+// bindPolicyCheck fixes the gateway and the policy a check runs on.
+func bindPolicyCheck(
+	run func(context.Context, *v1alpha1.KrakenDGateway, *v1alpha1.KrakenDBackendPolicy) (configcheck.Verdict, error),
+	gw *v1alpha1.KrakenDGateway, policy *v1alpha1.KrakenDBackendPolicy,
+) func(context.Context) (configcheck.Verdict, error) {
+	return func(ctx context.Context) (configcheck.Verdict, error) { return run(ctx, gw, policy) }
 }
 
 // messages joins a verdict's messages without their locations: a policy's
