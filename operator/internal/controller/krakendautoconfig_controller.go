@@ -196,7 +196,7 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// security-relevant config (e.g. auth/validator).
 	if len(cueOutput.UnmatchedOverrides) > 0 {
 		unmatchedErr := fmt.Errorf(
-			"spec.overrides reference operationIds not present in the OpenAPI spec: %s",
+			"spec.overrides reference operationIds or backend indexes not present in the OpenAPI spec: %s",
 			strings.Join(cueOutput.UnmatchedOverrides, ", "))
 		return r.handleSyncedFailure(ctx, &ac, v1alpha1.ReasonUnmatchedOverride, unmatchedErr, warnings)
 	}
