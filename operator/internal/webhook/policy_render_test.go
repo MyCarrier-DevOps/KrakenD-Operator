@@ -94,3 +94,22 @@ func TestPolicyAdmission_Render(t *testing.T) {
 		})
 	}
 }
+
+// An update that leaves the spec alone, such as the protection finalizer, is
+// never rendered: a stored policy that fails must not block it.
+func TestPolicyAdmission_MetadataOnlyUpdateIsNotValidated(t *testing.T) {
+	chk := &scriptedChecker{verdicts: []configcheck.Verdict{failing("policy-lint", 0, "bad")}}
+	v := &PolicyValidator{Client: fakeClient(referencing()...), Checker: chk}
+	old := testPolicy(`{"qos/circuit-breakr":{}}`)
+	policy := old.DeepCopy()
+	policy.Finalizers = []string{"gateway.krakend.io/policy-protection"}
+
+	resp := review(t, v, "alice", policy, old)
+
+	if !resp.Allowed {
+		t.Errorf("response = %+v, want a metadata-only update admitted", resp.Result)
+	}
+	if len(chk.calls) != 0 {
+		t.Errorf("checks = %v, want none", chk.calls)
+	}
+}
