@@ -247,7 +247,13 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// Update final status
 	gw.Status.EndpointCount = int32(len(endpoints))
 	recordGatewayMetrics(&gw, len(endpoints))
-	setGatewayReadiness(&gw)
+	// A pass that could not reconcile a child resource has not applied this
+	// generation, so the status keeps claiming the one it last applied.
+	observed := gw.Generation
+	if infraErr != nil {
+		observed = before.ObservedGeneration
+	}
+	setGatewayReadiness(&gw, observed)
 
 	if err := r.updateStatusIfChanged(ctx, &gw, before); err != nil {
 		return ctrl.Result{}, fmt.Errorf("updating gateway status: %w", err)
@@ -2200,13 +2206,16 @@ func gatewayReadinessFor(conds []metav1.Condition) gatewayReadiness {
 }
 
 // setGatewayReadiness writes the derived Ready condition, phase and
-// observedGeneration into gw's in-memory status. Call it immediately before
-// every gateway status write that ends a reconcile.
-func setGatewayReadiness(gw *v1alpha1.KrakenDGateway) {
+// observedGeneration into gw's in-memory status. observed is the generation
+// the status claims to have applied: gw's own, or an earlier one while this
+// pass left part of the spec unapplied. Ready carries it too, so the two never
+// disagree. Call it immediately before every gateway status write that ends a
+// reconcile.
+func setGatewayReadiness(gw *v1alpha1.KrakenDGateway, observed int64) {
 	rd := gatewayReadinessFor(gw.Status.Conditions)
-	setReadyCondition(&gw.Status.Conditions, gw.Generation, rd.status, rd.reason, rd.message)
+	setReadyCondition(&gw.Status.Conditions, observed, rd.status, rd.reason, rd.message)
 	gw.Status.Phase = rd.phase
-	gw.Status.ObservedGeneration = gw.Generation
+	gw.Status.ObservedGeneration = observed
 }
 
 // setConfigApplied records that the rendered configuration passed
