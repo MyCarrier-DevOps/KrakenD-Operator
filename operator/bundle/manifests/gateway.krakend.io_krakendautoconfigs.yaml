@@ -219,6 +219,15 @@ spec:
                       description: |-
                         Encoding sets the synthesized backend's encoding. "no-op" also sets the
                         endpoint output encoding to no-op unless OutputEncoding is set. Ignored when Backends is set.
+                      enum:
+                      - json
+                      - safejson
+                      - fast-json
+                      - xml
+                      - rss
+                      - string
+                      - no-op
+                      - yaml
                       type: string
                     endpoint:
                       description: Endpoint is the public path KrakenD exposes (e.g.
