@@ -66,3 +66,11 @@ func TestDereferenceParameters_ReportsUnresolvableRef(t *testing.T) {
 		t.Errorf("warnings = %q", warnings)
 	}
 }
+
+func TestDereferenceParameters_LeavesSpecWithoutRefsByteIdentical(t *testing.T) {
+	spec := []byte(`{"paths": {"/pets": {"get": {"parameters": [{"name": "limit", "in": "query"}]}}}}`)
+	out, warnings, err := DereferenceParameters(spec)
+	if err != nil || len(warnings) != 0 || !bytes.Equal(out, spec) {
+		t.Errorf("got %s, %v, %v; want the input unchanged", out, warnings, err)
+	}
+}
