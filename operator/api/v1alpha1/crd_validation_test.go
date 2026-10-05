@@ -279,6 +279,7 @@ func TestGatewayCRD_Rules(t *testing.T) {
 		{"Dragonfly password on EE", gatewayHead + `edition: EE, config: {}, license: {secretRef: {name: l, key: k}}, dragonfly: {enabled: true, authentication: {passwordFromSecret: {name: s, key: p}}}}}`, "passwordFromSecret is not supported yet with edition EE"},
 		{"Dragonfly password on CE", gatewayHead + `edition: CE, config: {}, dragonfly: {enabled: true, authentication: {passwordFromSecret: {name: s, key: p}}}}}`, ""},
 		{"openapi explicit non-default port clash", gatewayHead + `edition: CE, config: {port: 9090}, openapi: {enabled: true, port: 9090}}}`, "openapi port must differ"},
+		{"openapi with distinct ports", gatewayHead + `edition: CE, config: {}, openapi: {enabled: true}}}`, ""},
 	})
 }
 
