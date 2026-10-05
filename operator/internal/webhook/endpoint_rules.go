@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -34,6 +35,10 @@ const defaultHealthPath = "/__health"
 // reservedPathPattern matches the paths KrakenD reserves for its own
 // endpoints (lura's invalidPattern, less what the CRD pattern covers).
 var reservedPathPattern = regexp.MustCompile(`/__(debug|echo|health)(/.*)?$`)
+
+// urlPlaceholderPattern matches a "{name}" placeholder in a backend
+// urlPattern (lura's simpleURLKeysPattern).
+var urlPlaceholderPattern = regexp.MustCompile(`\{([\w\-.:/]+)\}`)
 
 // validateEntries applies the entry rules KrakenD enforces that admission can
 // decide from the entry and its gateway, to the entries at positions changed.
@@ -54,6 +59,24 @@ func validateEntries(ep *v1alpha1.KrakenDEndpoint, changed []int, gw *v1alpha1.K
 		if gw.Spec.Edition == v1alpha1.EditionCE && strings.HasSuffix(e.Endpoint, "/*") {
 			errs = append(errs, field.Invalid(p.Child("endpoint"), e.Endpoint,
 				"unnamed wildcards (/*) are an Enterprise feature; the gateway runs CE"))
+		}
+		errs = append(errs, validatePlaceholders(p, e)...)
+	}
+	return errs
+}
+
+// validatePlaceholders rejects backend urlPattern placeholders that are not a
+// parameter of the endpoint path.
+func validatePlaceholders(p *field.Path, e v1alpha1.EndpointEntry) field.ErrorList {
+	var errs field.ErrorList
+	params := renderer.PathParams(e.Endpoint)
+	for j, be := range e.Backends {
+		for _, m := range urlPlaceholderPattern.FindAllStringSubmatch(be.URLPattern, -1) {
+			if slices.Contains(params, m[1]) {
+				continue
+			}
+			errs = append(errs, field.Invalid(p.Child("backends").Index(j).Child("urlPattern"), be.URLPattern,
+				fmt.Sprintf("placeholder {%s} is not a parameter of the endpoint path %s", m[1], e.Endpoint)))
 		}
 	}
 	return errs
