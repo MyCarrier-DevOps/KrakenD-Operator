@@ -3194,3 +3194,35 @@ func TestNewAutoConfigRateLimiter_CapsBackoffAtResyncInterval(t *testing.T) {
 		t.Fatalf("delay after 30 failures = %v, want the %v cap", delay, defaultResyncInterval)
 	}
 }
+
+func TestAutoConfigReconcile_ReportsUnsupportedMethodsInScope(t *testing.T) {
+	head := autoconfig.OperationIssue{
+		Operation: autoconfig.Operation{Method: "HEAD", Path: "/api/users", OperationID: "headUsers"},
+		Reason:    v1alpha1.ReasonUnsupportedMethod,
+		Message:   "KrakenDEndpoint supports only GET, POST, PUT, PATCH, DELETE",
+	}
+	for name, tc := range map[string]struct {
+		filter *v1alpha1.FilterSpec
+		want   int
+	}{
+		"reported": {filter: nil, want: 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cm := testCUEDefinitionsCM()
+			ac := testAutoConfig()
+			ac.Spec.Filter = tc.filter
+			c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).Build()
+			f, ce, _, g := defaultMocks()
+			ce.output.Skipped = []autoconfig.OperationIssue{head}
+			r := newACReconciler(c, f, ce, &mockFilter{}, g)
+			r.Filter = autoconfig.NewFilter()
+
+			if _, err := reconcileAC(r, ac); err != nil {
+				t.Fatalf("reconcile: %v", err)
+			}
+			if got := getAC(t, c, ac).Status.Skipped; len(got) != tc.want {
+				t.Errorf("skipped = %+v, want %d entries", got, tc.want)
+			}
+		})
+	}
+}
