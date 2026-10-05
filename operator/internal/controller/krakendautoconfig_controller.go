@@ -154,6 +154,9 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// status.SpecChecksum unchanged, so each retry of a failing sync whose
 	// inputs changed emits them again.
 	warnings := &inputWarnings{inputsChanged: combinedChecksum != origStatus.SpecChecksum}
+	// specNotes are the problems in the spec or the AutoConfig that do not
+	// stop the sync, for status.warnings.
+	var specNotes []string
 
 	// Load CUE definitions: prefer ConfigMap, fall back to embedded defaults
 	defaultDefs, err := r.loadCUEDefinitions(ctx, ac.Namespace, defaultCUEDefinitionsConfigMap)
@@ -220,7 +223,8 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		filtered = r.Filter.Apply(cueOutput.Entries, cueOutput.Tags, cueOutput.OperationIDs, *ac.Spec.Filter)
 	}
 
-	filtered, scopeErr := applyAdditionalEndpoints(&ac, filtered, warnings)
+	filtered, replaced, scopeErr := applyAdditionalEndpoints(&ac, filtered, warnings)
+	specNotes = append(specNotes, replaced...)
 	if scopeErr != nil {
 		return r.handleSyncedFailure(ctx, &ac, v1alpha1.ReasonAdditionalEndpointScopeFailed, scopeErr, warnings)
 	}
@@ -242,8 +246,9 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	// Warn about duplicate operations the generator skipped
-	for _, dup := range genOutput.Duplicates {
-		warnings.add(v1alpha1.ReasonDuplicateOperationId, fmt.Sprintf("Duplicate operation %q skipped", dup))
+	for _, dup := range genOutput.Skipped {
+		warnings.add(v1alpha1.ReasonDuplicateOperationId, fmt.Sprintf("Duplicate operation %s %s skipped: %s",
+			dup.Method, dup.Path, dup.Message))
 	}
 
 	// Diff and reconcile endpoints
@@ -252,14 +257,20 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return r.handleEndpointError(ctx, &ac, err, warnings)
 	}
 
-	if err := r.recordSync(ctx, &ac, origStatus, combinedChecksum, genOutput, changes, warnings); err != nil {
+	if err := r.recordSync(ctx, &ac, origStatus, syncResult{
+		checksum:  combinedChecksum,
+		generated: len(genOutput.Endpoints),
+		skipped:   operationStatuses(genOutput.Skipped),
+		warnings:  specWarnings(specNotes),
+		changes:   changes,
+	}, warnings); err != nil {
 		return statusWriteFailure(ctx, err)
 	}
 
 	log.V(1).Info("autoconfig reconciled",
 		"phase", ac.Status.Phase,
 		"endpoints", len(genOutput.Endpoints),
-		"skipped", genOutput.SkippedOperations,
+		"skipped", len(genOutput.Skipped),
 	)
 
 	return r.requeueResult(&ac), nil
@@ -435,14 +446,15 @@ func (r *KrakenDAutoConfigReconciler) handleCUEError(
 // applyAdditionalEndpoints builds, transforms, scopes, and merges additional
 // endpoints into the filtered set, adding an AdditionalEndpointOverride
 // warning to warnings for each spec-derived endpoint one replaces. It returns
-// the combined slice, or a non-nil error when no base path can be determined.
+// the combined slice and a note per replacement for status.warnings, or a
+// non-nil error when no base path can be determined.
 func applyAdditionalEndpoints(
 	ac *v1alpha1.KrakenDAutoConfig,
 	filtered []v1alpha1.EndpointEntry,
 	warnings *inputWarnings,
-) ([]v1alpha1.EndpointEntry, error) {
+) ([]v1alpha1.EndpointEntry, []string, error) {
 	if len(ac.Spec.AdditionalEndpoints) == 0 {
-		return filtered, nil
+		return filtered, nil, nil
 	}
 
 	additional := autoconfig.BuildAdditionalEntries(
@@ -458,7 +470,7 @@ func applyAdditionalEndpoints(
 	if base == "" && !hasAddPrefix {
 		base = autoconfig.DeriveBasePath(filtered)
 		if base == "" {
-			return nil, fmt.Errorf(
+			return nil, nil, fmt.Errorf(
 				"cannot derive a base path for additionalEndpoints (generated " +
 					"endpoints share no common parent); set " +
 					"spec.additionalEndpointsBasePath or spec.urlTransform.addPathPrefix")
@@ -468,13 +480,14 @@ func applyAdditionalEndpoints(
 		autoconfig.ScopeAdditionalEntries(additional, base)
 	}
 
-	var replaced []string
+	var replaced, notes []string
 	filtered, replaced = autoconfig.MergeAdditional(filtered, additional)
 	for _, key := range replaced {
-		warnings.add(v1alpha1.ReasonAdditionalEndpointOverride,
-			fmt.Sprintf("Additional endpoint %q overrides a spec-derived endpoint", key))
+		note := fmt.Sprintf("Additional endpoint %q overrides a spec-derived endpoint", key)
+		warnings.add(v1alpha1.ReasonAdditionalEndpointOverride, note)
+		notes = append(notes, note)
 	}
-	return filtered, nil
+	return filtered, notes, nil
 }
 
 // postProcessSpec resolves external $refs and strips upstream server entries
@@ -618,38 +631,47 @@ func (c endpointChanges) total() int {
 	return c.created + c.updated + c.deleted
 }
 
-// recordSync records a successful sync: the Synced condition and the Ready,
-// phase and observedGeneration derived from it, the combined checksum, and
-// the endpoint counts. LastSyncTime and the EndpointsGenerated event mark a
-// sync that changed something — new inputs (a different combined checksum)
-// or endpoint writes — so a steady-state reconcile leaves both alone. Status
-// is written only when it differs from orig, the status read at the start of
-// the reconcile. The buffered input warnings are recorded once that write
-// succeeds, before EndpointsGenerated.
+// syncResult is what a pipeline pass that reached its endpoint writes
+// produced, for recordSync.
+type syncResult struct {
+	// checksum is the pass's combined input checksum.
+	checksum string
+	// generated counts the endpoints the pass generated.
+	generated int
+	// skipped lists the operations the pass generated no endpoint for.
+	skipped []v1alpha1.OperationStatus
+	// warnings lists the problems that do not stop a sync.
+	warnings []string
+	changes  endpointChanges
+}
+
+// recordSync records a sync that reached its endpoint writes: the combined
+// checksum, the endpoint counts and lists, and the Synced condition, with
+// the Ready, phase and observedGeneration derived from it. LastSyncTime and
+// the EndpointsGenerated event mark a sync that changed something: new
+// inputs (a different combined checksum) or endpoint writes, so a
+// steady-state reconcile leaves both alone. Status is written only when it
+// differs from orig, the status read at the start of the reconcile. The
+// buffered input warnings are recorded once that write succeeds, before
+// EndpointsGenerated.
 func (r *KrakenDAutoConfigReconciler) recordSync(
 	ctx context.Context,
 	ac *v1alpha1.KrakenDAutoConfig,
 	orig *v1alpha1.KrakenDAutoConfigStatus,
-	combinedChecksum string,
-	genOutput *autoconfig.GenerateOutput,
-	changes endpointChanges,
+	res syncResult,
 	warnings *inputWarnings,
 ) error {
-	changed := combinedChecksum != orig.SpecChecksum || changes.total() > 0
-	ac.Status.SpecChecksum = combinedChecksum
+	changed := res.checksum != orig.SpecChecksum || res.changes.total() > 0
+	ac.Status.SpecChecksum = res.checksum
 	if changed {
 		now := metav1.Now()
 		ac.Status.LastSyncTime = &now
 	}
-	ac.Status.GeneratedEndpoints = len(genOutput.Endpoints)
-	ac.Status.SkippedOperations = genOutput.SkippedOperations
-	meta.SetStatusCondition(&ac.Status.Conditions, metav1.Condition{
-		Type:               v1alpha1.ConditionSynced,
-		Status:             metav1.ConditionTrue,
-		ObservedGeneration: ac.Generation,
-		Reason:             "Synced",
-		Message:            fmt.Sprintf("Generated %d endpoints", len(genOutput.Endpoints)),
-	})
+	ac.Status.GeneratedEndpoints = res.generated
+	ac.Status.SkippedOperations = len(res.skipped)
+	ac.Status.Skipped = capList(res.skipped)
+	ac.Status.Warnings = res.warnings
+	meta.SetStatusCondition(&ac.Status.Conditions, syncedCondition(res, ac.Generation))
 	setAutoConfigReadiness(ac)
 	if autoConfigStatusChanged(orig, &ac.Status) {
 		if err := r.Status().Update(ctx, ac); err != nil {
@@ -662,9 +684,25 @@ func (r *KrakenDAutoConfigReconciler) recordSync(
 	if changed {
 		r.Recorder.Eventf(ac, "Normal", v1alpha1.ReasonEndpointsGenerated,
 			"Generated %d endpoints (%d created, %d updated, %d deleted, %d skipped)",
-			len(genOutput.Endpoints), changes.created, changes.updated, changes.deleted, genOutput.SkippedOperations)
+			res.generated, res.changes.created, res.changes.updated, res.changes.deleted, len(res.skipped))
 	}
 	return nil
+}
+
+// syncedCondition is the Synced condition for res: True, counting what was
+// skipped and warned about.
+func syncedCondition(res syncResult, generation int64) metav1.Condition {
+	c := metav1.Condition{
+		Type: v1alpha1.ConditionSynced, Status: metav1.ConditionTrue, ObservedGeneration: generation, Reason: "Synced",
+		Message: fmt.Sprintf("Generated %d endpoints", res.generated),
+	}
+	if n := len(res.skipped); n > 0 {
+		c.Message += fmt.Sprintf("; %d operations skipped (see status.skipped)", n)
+	}
+	if n := len(res.warnings); n > 0 {
+		c.Message += fmt.Sprintf("; %d spec warnings (see status.warnings)", n)
+	}
+	return c
 }
 
 // autoConfigStatusChanged reports whether cur differs semantically from orig.
