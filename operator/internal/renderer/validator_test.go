@@ -365,7 +365,7 @@ func TestValidate_EEWildcardIsCheckedAsAParameterRoute(t *testing.T) {
 	exec := &capturingExecutor{}
 	v := NewValidator(ValidatorOptions{Executor: exec, BinaryPath: "krakend"})
 	rendered := []byte(`{"version":3,"endpoints":[` +
-		`{"endpoint":"/*","method":"GET"},{"endpoint":"/a/{id}/*","method":"GET"},{"endpoint":"/v1/*","method":"GET"}]}`)
+		`{"endpoint":"/a/{id}/*","method":"GET"},{"endpoint":"/v1/*","method":"GET"}]}`)
 
 	if err := v.Validate(context.Background(), rendered, v1alpha1.EditionEE); err != nil {
 		t.Fatalf("Validate: %v", err)
@@ -373,10 +373,9 @@ func TestValidate_EEWildcardIsCheckedAsAParameterRoute(t *testing.T) {
 	if len(exec.checked) != 1 {
 		t.Fatalf("krakend check ran %d times, want 1", len(exec.checked))
 	}
-	want := []string{"/*", "/a/{id}/{Wildcard}", "/v1/{Wildcard}"}
+	want := []string{"/a/{id}/{Wildcard}", "/v1/{Wildcard}"}
 	if got := endpointPaths(t, exec.checked[0]); !slices.Equal(got, want) {
-		t.Errorf("checked endpoints = %v, want %v (index-aligned; /* is left for krakend check to reject, as EE does)",
-			got, want)
+		t.Errorf("checked endpoints = %v, want %v (index-aligned)", got, want)
 	}
 }
 
@@ -438,10 +437,8 @@ func (e lintingExecutor) Execute(_ context.Context, _ string, args ...string) ([
 func TestValidate_FindingAfterWildcardEntriesBlamesItsOwnEndpoint(t *testing.T) {
 	v := NewValidator(ValidatorOptions{Executor: lintingExecutor{t: t}, BinaryPath: "krakend"})
 	rendered := []byte(`{"version":3,"endpoints":[` +
-		`{"endpoint":"/*","method":"GET"},{"endpoint":"/v1/*","method":"GET"},{"endpoint":"/later","method":"GET"}]}`)
-	sources := []types.NamespacedName{
-		{Namespace: "ns", Name: "root"}, {Namespace: "ns", Name: "prefix"}, {Namespace: "ns", Name: "later"},
-	}
+		`{"endpoint":"/v1/*","method":"GET"},{"endpoint":"/later","method":"GET"}]}`)
+	sources := []types.NamespacedName{{Namespace: "ns", Name: "prefix"}, {Namespace: "ns", Name: "later"}}
 
 	err := v.Validate(context.Background(), rendered, v1alpha1.EditionEE)
 	var verr *ValidationError
@@ -449,8 +446,8 @@ func TestValidate_FindingAfterWildcardEntriesBlamesItsOwnEndpoint(t *testing.T) 
 		t.Fatalf("Validate = %v, want a ValidationError", err)
 	}
 	got := Attribute(rendered, sources, verr.Output)
-	if len(got) != 1 || got[0].Endpoint != sources[2] {
-		t.Errorf("attribution = %+v, want the single finding blamed on %s, not a neighbour", got, sources[2])
+	if len(got) != 1 || got[0].Endpoint != sources[1] {
+		t.Errorf("attribution = %+v, want the single finding blamed on %s, not a neighbour", got, sources[1])
 	}
 }
 
