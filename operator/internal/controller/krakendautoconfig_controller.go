@@ -280,7 +280,7 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 	if len(outcome.transient) > 0 {
 		// A race beside a real failure is part of the same failed pass.
-		failures := endpointFailures{errs: slices.Concat(outcome.transient, outcome.raced)}
+		failures := endpointFailuresError{errs: slices.Concat(outcome.transient, outcome.raced)}
 		return r.handleEndpointError(ctx, &ac, failures, warnings)
 	}
 	if len(outcome.raced) > 0 {
@@ -407,7 +407,7 @@ func (r *KrakenDAutoConfigReconciler) handleSyncedFailure(
 }
 
 // handleEndpointError fails the sync with EndpointReconcileFailed for
-// endpointErr: a failed list, or the endpointFailures of one pass, which can
+// endpointErr: a failed list, or the endpointFailuresError of one pass, which can
 // hold transient write, raced (beside a transient one), adoption and delete
 // errors. A pass whose only failures are raced never gets here; it requeues
 // quietly. The error is returned for every trigger, so controller-runtime

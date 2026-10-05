@@ -200,24 +200,24 @@ func (o *endpointOutcome) record(err error) {
 	o.transient = append(o.transient, err)
 }
 
-// endpointFailures is every failure of one endpoint pass. Error is the whole
+// endpointFailuresError is every failure of one endpoint pass. Error is the whole
 // list, for the log and the returned error; Summary names the first few and
 // counts the rest, for the status and the event.
-type endpointFailures struct {
+type endpointFailuresError struct {
 	errs []error
 }
 
-func (f endpointFailures) Error() string {
+func (f endpointFailuresError) Error() string {
 	return kerrors.NewAggregate(f.errs).Error()
 }
 
 // Unwrap exposes the failures to errors.Is and errors.As.
-func (f endpointFailures) Unwrap() []error {
+func (f endpointFailuresError) Unwrap() []error {
 	return f.errs
 }
 
 // Summary names the first failures, as listed does.
-func (f endpointFailures) Summary() string {
+func (f endpointFailuresError) Summary() string {
 	messages := make([]string, len(f.errs))
 	for i, err := range f.errs {
 		messages[i] = err.Error()
