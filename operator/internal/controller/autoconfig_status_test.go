@@ -36,3 +36,17 @@ func TestTruncate_BoundsBytesAndMarksTheCut(t *testing.T) {
 		t.Errorf("truncate = %q, want valid UTF-8 ending in \"...\"", got)
 	}
 }
+
+func TestCapList_KeepsTheFirstTwentyItems(t *testing.T) {
+	items := make([]int, maxStatusListLen+5)
+	for i := range items {
+		items[i] = i
+	}
+	got := capList(items)
+	if len(got) != maxStatusListLen || got[0] != 0 || got[maxStatusListLen-1] != maxStatusListLen-1 {
+		t.Errorf("capList kept %v, want the first %d items", got, maxStatusListLen)
+	}
+	if short := capList([]int{1, 2}); len(short) != 2 {
+		t.Errorf("capList(short) = %v, want it unchanged", short)
+	}
+}
