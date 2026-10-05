@@ -96,6 +96,15 @@ def quantity_problem($label):
   else empty end;
 # The keys of an extra_config object that are in $names.
 def eeonly($names): [(. // {}) | keys[] | select(IN($names[]))];
+# The Enterprise-only namespaces of a backend extra_config that a CE render
+# drops: for a namespace CE partly honors, only when the block holds a key CE
+# does not honor (renderer.CEDrops).
+def backend_eeonly:
+  (. // {}) as $ec
+  | [$ec | keys[] | select(IN($ee[0].enterpriseOnly.backend[])) | . as $ns
+    | ($ee[0].ceHonoredKeys.backend[$ns]) as $honored
+    | select($honored == null or ($ec[$ns] | type) != "object"
+        or ([$ec[$ns] | keys[] | select(IN($honored[]) | not)] | length > 0))];
 # The values the endpoint and AutoConfig enum fields allow.
 def output_encodings: ["json", "json-collection", "yaml", "fast-json", "xml", "negotiate", "string", "no-op"];
 def backend_encodings: ["json", "safejson", "fast-json", "xml", "rss", "string", "no-op", "yaml"];
@@ -122,6 +131,10 @@ def conflict_key:
 # extra_config last), and the route check reads health_path only from the
 # merged block, which the Go decoder matches to its keys regardless of case; a
 # block that is not an object, or has a key of the wrong type, counts as empty.
+# The folding here is ASCII lower-casing, so it can differ from the Go decoder
+# for a block that holds the same key in two spellings (for example
+# Health_Path: 5 beside health_path: "/a") and for Unicode simple folding
+# (a long s in a key). Those are not chased.
 def health_path:
   (.spec.config.extraConfig // {}) as $x
   | if ($x | type) != "object" or ($x | has("router") | not)
@@ -292,12 +305,12 @@ jq "${jq_opts[@]}" --slurpfile gws "$work/gateways.json" --slurpfile pols "$work
   | select($ce[$gw])
   | (([(.spec.endpoints // []) | to_entries[] | .key as $i | .value as $en
       | (($en.extraConfig | eeonly($entry_ee)[] | "spec.endpoints[\($i)].extraConfig \(.)"),
-         (($en.backends // []) | to_entries[] | .key as $j | .value.extraConfig | eeonly($ee[0].enterpriseOnly.backend)[]
+         (($en.backends // []) | to_entries[] | .key as $j | .value.extraConfig | backend_eeonly[]
            | "spec.endpoints[\($i)].backends[\($j)].extraConfig \(.)"))]
   | select(length > 0)
   | "KrakenDEndpoint \($e.metadata.namespace)/\($e.metadata.name): Enterprise-only on CE gateway \($gw): \(join(", "))"),
      ((.spec.endpoints // [])[] | (.backends // [])[] | .policyRef // empty
       | "\(.namespace // $e.metadata.namespace)/\(.name)" as $key
-      | ($pol[$key] // empty) | (.spec.raw | eeonly($ee[0].enterpriseOnly.backend)) as $ns | select($ns | length > 0)
+      | ($pol[$key] // empty) | (.spec.raw | backend_eeonly) as $ns | select($ns | length > 0)
       | "KrakenDBackendPolicy \($key): Enterprise-only on CE gateway \($gw): spec.raw \($ns | join(", "))"))]
 | unique[]' "$work/endpoints.json"
