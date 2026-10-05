@@ -1230,7 +1230,21 @@ sources.
 
 ## Unreleased — Complete admission
 
-**Route-shape conflicts resolve at render time.** Two KrakenDEndpoints on one gateway whose paths differ only in parameter names (for example `GET /users/{id}` and `GET /users/{name}`) used to reach the rendered config together, and `krakend check` rejected the whole gateway (`':name' ... conflicts with existing wildcard ':id'`). The renderer now treats them as the same route: the older KrakenDEndpoint wins and the newer one is reported with `Accepted=False/EndpointConflict`, or `Accepted=True/PartiallyAccepted` when some of its entries are still served, and `status.conflicts[]`, exactly as for exact duplicates. Admission rejects such pairs outright (below); this covers objects stored before the upgrade and concurrent applies.
+**Route-shape conflicts resolve at render time.** Two KrakenDEndpoints on one
+gateway whose paths differ only in parameter names (for example
+`GET /users/{id}` and `GET /users/{name}`), or only in repeated slashes
+(`GET /a//b` and `GET /a/b`), used to reach the rendered config together, and
+`krakend check` rejected the whole gateway (`':name' ... conflicts with
+existing wildcard ':id'`). The renderer now treats them as the same route: the
+older KrakenDEndpoint wins and the newer one is reported with
+`Accepted=False/EndpointConflict`, or `Accepted=True/PartiallyAccepted` when
+some of its entries are still served, and `status.conflicts[]`, exactly as for
+exact duplicates. Between two entries of one KrakenDEndpoint the earlier spec
+entry wins, and `status.conflicts[].winner` then names the endpoint itself.
+Admission rejects such pairs outright (below); this covers objects stored
+before the upgrade and concurrent applies.
+
+---
 
 ## v0.14.0 — openapi-serve liveness probe (one-time rollout)
 
