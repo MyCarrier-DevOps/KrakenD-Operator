@@ -2456,3 +2456,13 @@ func TestGatewayAdmission_ChangedPostRestartRunAsStillUnacknowledgedIsRejected(t
 		t.Errorf("changed, still unacknowledged postRestartJob runAsUser 0: %+v, want 422", resp.Result)
 	}
 }
+
+func TestNewValidators_HandTheCheckerToTheEndpointValidator(t *testing.T) {
+	chk := &scriptedChecker{}
+
+	v := NewValidators(fakeClient(), chk)
+
+	if v.Endpoint.Checker != ConfigChecker(chk) {
+		t.Errorf("the endpoint validator's checker = %v, want the one passed in", v.Endpoint.Checker)
+	}
+}
