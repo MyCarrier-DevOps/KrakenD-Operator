@@ -195,6 +195,7 @@ type EndpointDefaults struct {
 	CacheTTL *metav1.Duration `json:"cacheTTL,omitempty"`
 
 	// OutputEncoding sets the default response encoding (e.g. "json", "no-op").
+	// +kubebuilder:validation:Enum=json;json-collection;yaml;fast-json;xml;negotiate;string;no-op
 	OutputEncoding string `json:"outputEncoding,omitempty"`
 
 	// ConcurrentCalls sets the default number of concurrent backend calls.
