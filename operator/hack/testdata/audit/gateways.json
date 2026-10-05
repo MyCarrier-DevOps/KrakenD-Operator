@@ -29,5 +29,6 @@
  {"metadata":{"namespace":"a","name":"cors-overflow-ok"},"spec":{"edition":"CE","config":{"cors":{"maxAge":"99999999999h"}}}},
  {"metadata":{"namespace":"a","name":"ee-features"},"spec":{"edition":"EE","config":{"extraConfig":{"auth/api-keys":{"keys":[]}},"documentation":{"version":"1.0"}},"redis":{"connectionPool":{"addresses":["r"]}},"openapi":{"enabled":true},"dragonfly":{"enabled":true},"license":{"secretRef":{"name":"l","key":"k"}}}},
  {"metadata":{"namespace":"a","name":"ce-df-password"},"spec":{"edition":"CE","config":{},"dragonfly":{"enabled":true,"authentication":{"passwordFromSecret":{"name":"s","key":"p"}}}}},
- {"metadata":{"namespace":"a","name":"hp"},"spec":{"edition":"CE","config":{"router":{"healthPath":"/healthz"}}}}
+ {"metadata":{"namespace":"a","name":"hp"},"spec":{"edition":"CE","config":{"router":{"healthPath":"/healthz"}}}},
+ {"metadata":{"namespace":"a","name":"hp-default"},"spec":{"edition":"CE","config":{}}}
 ]}
