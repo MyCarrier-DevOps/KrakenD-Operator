@@ -19,6 +19,8 @@ package autoconfig
 import (
 	"encoding/base64"
 	"encoding/json"
+	"maps"
+	"slices"
 	"strings"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
@@ -54,19 +56,23 @@ func ExtractComponentSchemas(specData []byte) map[string]runtime.RawExtension {
 const componentSchemaPrefix = "#/components/schemas/"
 
 // SchemaClosure returns the component schemas entry's documentation
-// references, directly or through the schemas it references. The result is nil
-// when there are none.
+// references, directly or through the schemas it references, and the sorted
+// references components cannot satisfy: a schema name components does not
+// define, or a local "#/..." pointer outside components/schemas. closure is nil
+// when empty.
 func SchemaClosure(
 	entry v1alpha1.EndpointEntry,
 	components map[string]runtime.RawExtension,
 ) (closure map[string]runtime.RawExtension, unresolved []string) {
 	closure = map[string]runtime.RawExtension{}
+	missing := map[string]struct{}{}
 	pending := documentationRefs(entry)
 	for len(pending) > 0 {
 		ref := pending[len(pending)-1]
 		pending = pending[:len(pending)-1]
 		name, ok := schemaName(ref)
 		if !ok {
+			missing[ref] = struct{}{}
 			continue
 		}
 		if _, done := closure[name]; done {
@@ -74,6 +80,7 @@ func SchemaClosure(
 		}
 		body, ok := components[name]
 		if !ok {
+			missing[name] = struct{}{}
 			continue
 		}
 		closure[name] = body
@@ -85,7 +92,7 @@ func SchemaClosure(
 	if len(closure) == 0 {
 		closure = nil
 	}
-	return closure, nil
+	return closure, slices.Sorted(maps.Keys(missing))
 }
 
 // schemaName returns the component schema name ref denotes: ref itself when
