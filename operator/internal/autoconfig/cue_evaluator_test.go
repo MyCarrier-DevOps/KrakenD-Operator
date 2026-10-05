@@ -2009,3 +2009,11 @@ func TestEvaluate_ErrorOutsideEntriesFailsEvaluation(t *testing.T) {
 		t.Errorf("expected a whole-evaluation error naming _defaultTimeout, got %v", err)
 	}
 }
+
+func TestEvaluate_OverrideOnFailedOperationIsHeldNotUnmatched(t *testing.T) {
+	out := evaluateEmbedded(t, `{"paths":{"/b":{"get":{"operationId":"getB","responses":{"200":{}}}}}}`,
+		v1alpha1.OperationOverride{OperationID: "getB"})
+	if len(out.UnmatchedOverrides) != 0 {
+		t.Errorf("expected no unmatched overrides for a failed target, got %v", out.UnmatchedOverrides)
+	}
+}
