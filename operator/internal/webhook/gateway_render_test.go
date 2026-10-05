@@ -385,6 +385,11 @@ func TestGatewayAdmission_CERejectsEnterpriseOnlyFields(t *testing.T) {
 		}
 		return gw
 	}
+	ee := func() *v1alpha1.KrakenDGateway {
+		gw := testGateway()
+		gw.Spec.Edition = v1alpha1.EditionEE
+		return gw
+	}
 	all := []string{"spec.redis: Forbidden"}
 	tests := []struct {
 		name    string
@@ -392,6 +397,7 @@ func TestGatewayAdmission_CERejectsEnterpriseOnlyFields(t *testing.T) {
 		reject  []string // substrings of the denial; none means admitted
 	}{
 		{"created on CE", withFields(testGateway()), nil, all},
+		{"created on EE", withFields(ee()), nil, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
