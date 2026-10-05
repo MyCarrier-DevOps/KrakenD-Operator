@@ -214,8 +214,8 @@ func TestGenerator_MultipleEntries(t *testing.T) {
 	if len(out.Endpoints) != 5 {
 		t.Errorf("expected 5 endpoints, got %d", len(out.Endpoints))
 	}
-	if out.SkippedOperations != 0 {
-		t.Errorf("expected 0 skipped, got %d", out.SkippedOperations)
+	if len(out.Skipped) != 0 {
+		t.Errorf("expected nothing skipped, got %+v", out.Skipped)
 	}
 }
 
