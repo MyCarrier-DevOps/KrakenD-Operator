@@ -538,3 +538,20 @@ func TestExternalRefs_IgnoresExamplePayloads(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveExternalRefs_LocalRefWarningSkipsExamplePayload(t *testing.T) {
+	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"content":{"application/json":` +
+		`{"schema":{"$ref":"common.json#/Pet"}}}}}}}}}`)
+	common := []byte(`{"Pet":{"example":{"$ref":"#/just-data"},` +
+		`"properties":{"owner":{"$ref":"#/Owner"}}},"Owner":{"type":"string"}}`)
+	fetcher := &stubFetcher{docs: map[string][]byte{"https://api.example.com/common.json": common}}
+
+	_, warnings, err := ResolveExternalRefs(context.Background(), main,
+		"https://api.example.com/openapi.json", fetcher, FetchSource{})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], `"#/Owner"`) {
+		t.Errorf("warnings = %q, want exactly one, about #/Owner", warnings)
+	}
+}
