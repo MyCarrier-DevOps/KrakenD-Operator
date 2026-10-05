@@ -38,3 +38,4 @@ KrakenDGateway a/df-password-ee: spec.dragonfly.authentication.passwordFromSecre
 KrakenDGateway a/tmp-pattern: spec.postRestartJob.tmpSizeLimit lots
 KrakenDGateway a/tmp-long: spec.postRestartJob.tmpSizeLimit is longer than 64 characters
 KrakenDGateway a/tmp-undecodable: spec.postRestartJob.tmpSizeLimit 1e9223372036854775808 is not a quantity Kubernetes can decode
+KrakenDGateway a/ce-ee-namespace: spec.config.extraConfig auth/api-keys is Enterprise-only on a CE gateway
