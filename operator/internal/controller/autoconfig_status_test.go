@@ -99,3 +99,12 @@ func TestListed_NamesFiveThenCountsTheRest(t *testing.T) {
 		t.Errorf("listed = %q, want %q", got, want)
 	}
 }
+
+func TestOperationLabel_NamesMethodPathOperationAndReason(t *testing.T) {
+	got := operationLabel(v1alpha1.OperationStatus{
+		Method: "GET", Path: "/b", OperationID: "getB", Reason: v1alpha1.ReasonCUEEvaluationFailed,
+	})
+	if want := "GET /b (getB): CUEEvaluationFailed"; got != want {
+		t.Errorf("operationLabel = %q, want %q", got, want)
+	}
+}
