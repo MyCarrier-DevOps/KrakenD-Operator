@@ -143,5 +143,7 @@ jq "${jq_opts[@]}" "$jq_lib"'
   ($s.postRestartJob.tmpSizeLimit // empty | quantity_problem("spec.postRestartJob.tmpSizeLimit")),
   (if $s.edition == "CE" then ($s.config.extraConfig | eeonly($ee[0].enterpriseOnly.service))[]
      | "spec.config.extraConfig \(.) is Enterprise-only on a CE gateway" else empty end),
-  (if $s.edition == "CE" and $s.redis != null then "spec.redis is Enterprise-only on a CE gateway" else empty end)
+  (if $s.edition == "CE" and $s.redis != null then "spec.redis is Enterprise-only on a CE gateway" else empty end),
+  (if $s.edition == "CE" and $s.config.documentation != null
+   then "spec.config.documentation is Enterprise-only on a CE gateway" else empty end)
 ]} | report("KrakenDGateway")' "$work/gateways.json"
