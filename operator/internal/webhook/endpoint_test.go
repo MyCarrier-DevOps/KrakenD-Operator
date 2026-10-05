@@ -350,14 +350,25 @@ func TestEndpointAdmission_MovingOntoACEGatewayChecksEntryRulesAndRoutes(t *test
 	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("response = %+v, want 422", resp.Result)
 	}
-	var fields []string
+	type cause struct{ field, kind string }
+	var got []cause
+	var eeMessage string
 	for _, c := range resp.Result.Details.Causes {
-		fields = append(fields, c.Field)
+		got = append(got, cause{c.Field, string(c.Type)})
+		if c.Field == "spec.endpoints[0].extraConfig" {
+			eeMessage = c.Message
+		}
 	}
-	slices.Sort(fields)
-	want := []string{"spec.endpoints[0]", "spec.endpoints[0].extraConfig"}
-	if !slices.Equal(fields, want) {
-		t.Errorf("cause fields = %v, want %v: the duplicate route and the EE-only namespace", fields, want)
+	slices.SortFunc(got, func(a, b cause) int { return strings.Compare(a.field, b.field) })
+	want := []cause{
+		{"spec.endpoints[0]", string(metav1.CauseTypeFieldValueDuplicate)},
+		{"spec.endpoints[0].extraConfig", string(metav1.CauseTypeFieldValueInvalid)},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("causes = %v, want %v: the duplicate route and the EE-only namespace", got, want)
+	}
+	if !strings.Contains(eeMessage, `"auth/api-keys"`) {
+		t.Errorf("EE-only cause message = %q, want it to name \"auth/api-keys\"", eeMessage)
 	}
 }
 
