@@ -178,5 +178,8 @@ jq "${jq_opts[@]}" "$jq_lib"'
    then "additionalEndpointsBasePath with urlTransform.addPathPrefix" else empty end),
   (if (($s.additionalEndpoints // []) | length) > 256 then "more than 256 additionalEndpoints" else empty end),
   (($s.additionalEndpoints // []) | map(.method //= "GET") | group_by([.endpoint, .method])[] | select(length > 1)
-    | "duplicate additionalEndpoint \(.[0].method) \(.[0].endpoint)")
+    | "duplicate additionalEndpoint \(.[0].method) \(.[0].endpoint)"),
+  (($s.additionalEndpoints // []) | to_entries[] | .key as $i | .value as $a | "spec.additionalEndpoints[\($i)]" as $p | (
+    (if ($a.endpoint // "" | crd_test($path_re)) then empty else "\($p).endpoint \($a.endpoint)" end)
+  ))
 ]} | report("KrakenDAutoConfig")' "$work/autoconfigs.json"
