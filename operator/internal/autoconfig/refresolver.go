@@ -426,6 +426,9 @@ func ExternalRefs(specData []byte) ([]string, error) {
 	}
 	refs := map[string]struct{}{}
 	walkJSON(root, func(key string, value any) bool {
+		if payload, _ := examplePayload(key, value); payload {
+			return false
+		}
 		if s, ok := value.(string); ok && key == "$ref" && !strings.HasPrefix(s, "#") {
 			refs[s] = struct{}{}
 		}
