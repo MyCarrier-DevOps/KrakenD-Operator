@@ -58,6 +58,15 @@ func (f Finding) String() string {
 type Verdict struct {
 	OK       bool
 	Findings []Finding
+	// Rejection is the validator's rejection behind a verdict that is not OK.
+	// A caller that remembers it can rebuild the findings with Rejected
+	// against whatever the endpoints are by then.
+	Rejection *renderer.ValidationError
+}
+
+// Rejected returns the verdict for rejection of out, the render of in.
+func Rejected(rejection *renderer.ValidationError, in renderer.RenderInput, out *renderer.RenderOutput) Verdict {
+	return Verdict{}
 }
 
 // Summary joins the findings into one message, cut at a finding boundary and

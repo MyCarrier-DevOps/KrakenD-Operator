@@ -182,3 +182,43 @@ func TestVerdictSummary_MarksASingleCutFindingTruncated(t *testing.T) {
 		t.Errorf("summary = %q, want it to end with \" (truncated)\"", got)
 	}
 }
+
+func TestRejected_NamesTheEntryOfTheCurrentSpec(t *testing.T) {
+	rejection := &renderer.ValidationError{
+		Output: "- at '/endpoints/1/extra_config': bad", Err: fmt.Errorf("exit status 1"),
+	}
+	ep := types.NamespacedName{Namespace: "ns", Name: "b"}
+	rendered := &renderer.RenderOutput{
+		JSON:    []byte(`{"endpoints":[{"endpoint":"/a","method":"GET"},{"endpoint":"/x","method":"GET"}]}`),
+		Sources: []types.NamespacedName{{Namespace: "ns", Name: "a"}, ep},
+	}
+	specWith := func(paths ...string) []v1alpha1.KrakenDEndpoint {
+		var entries []v1alpha1.EndpointEntry
+		for _, p := range paths {
+			entries = append(entries, v1alpha1.EndpointEntry{Endpoint: p, Method: "GET"})
+		}
+		return []v1alpha1.KrakenDEndpoint{
+			{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "a"}, Spec: v1alpha1.KrakenDEndpointSpec{
+				Endpoints: []v1alpha1.EndpointEntry{{Endpoint: "/a", Method: "GET"}}}},
+			{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "b"}, Spec: v1alpha1.KrakenDEndpointSpec{
+				Endpoints: entries}},
+		}
+	}
+
+	for name, tc := range map[string]struct {
+		paths []string
+		want  string
+	}{
+		"as stored":         {[]string{"/y", "/x"}, "ns/b spec.endpoints[1]: - at '/endpoints/1/extra_config': bad"},
+		"entries reordered": {[]string{"/x", "/y"}, "ns/b spec.endpoints[0]: - at '/endpoints/1/extra_config': bad"},
+	} {
+		got := Rejected(rejection, renderer.RenderInput{Endpoints: specWith(tc.paths...)}, rendered)
+
+		if got.OK || len(got.Findings) != 1 || got.Findings[0].String() != tc.want {
+			t.Errorf("%s: verdict = %+v, want one finding %q", name, got, tc.want)
+		}
+		if got.Rejection != rejection {
+			t.Errorf("%s: Rejection = %v, want the rejection it was built from", name, got.Rejection)
+		}
+	}
+}
