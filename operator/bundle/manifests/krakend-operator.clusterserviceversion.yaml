@@ -389,7 +389,7 @@ spec:
   - email: devops@mycarrier.com
     name: MyCarrier DevOps
   maturity: alpha
-  minKubeVersion: 1.28.0
+  minKubeVersion: 1.33.0
   provider:
     name: MyCarrier DevOps
     url: https://github.com/MyCarrier-DevOps
