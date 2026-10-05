@@ -60,3 +60,4 @@ KrakenDAutoConfig a/many-additional: more than 256 additionalEndpoints
 KrakenDAutoConfig a/dup-additional: duplicate additionalEndpoint GET /h
 KrakenDAutoConfig a/additional-path: spec.additionalEndpoints[0].endpoint h
 KrakenDAutoConfig a/mixed-shorthand: spec.additionalEndpoints[0] mixes backends with the shorthand
+KrakenDAutoConfig a/additional-timeout: spec.additionalEndpoints[0].timeout 30
