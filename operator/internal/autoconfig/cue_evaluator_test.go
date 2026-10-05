@@ -334,6 +334,7 @@ func TestNormalizeToJSON_AutoDetect(t *testing.T) {
 // overrideLookupDefs is a custom definition that reads _overrides by the
 // operationId.
 const overrideLookupDefs = `
+import "regexp"
 import "strings"
 
 _spec: _
@@ -351,13 +352,14 @@ endpoint: {
 					// The entry-level extraConfig is also merged from the
 					// override by the evaluator, so the backend carries the
 					// observable result of the lookup.
-					if _overrides[strings.ToLower(op.operationId)] != _|_ {
-						"extraConfig": _overrides[strings.ToLower(op.operationId)]
+					if _overrides[_key] != _|_ {
+						"extraConfig": _overrides[_key]
 					}
 				}]
-				// SanitizeName lowercases operationId
-				if _overrides[strings.ToLower(op.operationId)] != _|_ {
-					"extraConfig": _overrides[strings.ToLower(op.operationId)]
+				// Override keys are the SanitizeName form of the operationId.
+				_key: strings.Trim(regexp.ReplaceAll("[^a-z0-9-]", strings.ToLower(op.operationId), "-"), "-")
+				if _overrides[_key] != _|_ {
+					"extraConfig": _overrides[_key]
 				}
 				_operationId: op.operationId
 			}
