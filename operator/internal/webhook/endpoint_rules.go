@@ -75,9 +75,14 @@ func validateEntries(ep *v1alpha1.KrakenDEndpoint, changed []int, gw *v1alpha1.K
 }
 
 // validateEENamespaces rejects the Enterprise-only namespaces in the
-// extraConfig of an entry of a CE gateway.
+// extraConfig of an entry of a CE gateway and of the entry's backends.
 func validateEENamespaces(p *field.Path, e v1alpha1.EndpointEntry) field.ErrorList {
-	return ceIgnores(p.Child("extraConfig"), eeOnlyNamespacesIn(e.ExtraConfig, renderer.LevelEndpoint))
+	errs := ceIgnores(p.Child("extraConfig"), eeOnlyNamespacesIn(e.ExtraConfig, renderer.LevelEndpoint))
+	for j, be := range e.Backends {
+		errs = append(errs, ceIgnores(p.Child("backends").Index(j).Child("extraConfig"),
+			eeOnlyNamespacesIn(be.ExtraConfig, renderer.LevelBackend))...)
+	}
+	return errs
 }
 
 // eeOnlyNamespacesIn returns the namespaces of the extra_config raw that only
