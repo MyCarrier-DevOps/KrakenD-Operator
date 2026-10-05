@@ -387,6 +387,10 @@ spec:
                       sd:
                         description: SD sets the default service discovery provider
                           (e.g. "static", "dns").
+                        enum:
+                        - static
+                        - dns
+                        - dns-shared
                         type: string
                       sdScheme:
                         description: SDScheme sets the default service discovery scheme
