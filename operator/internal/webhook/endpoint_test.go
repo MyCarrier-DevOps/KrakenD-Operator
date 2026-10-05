@@ -484,17 +484,20 @@ func TestEndpointAdmission_BrokenGatewayFallsBackToIsolation(t *testing.T) {
 		verdicts []configcheck.Verdict
 		allowed  bool
 		calls    string
+		args     string // what each check was handed, in order
 	}{
 		{"candidate fine alone", nil, []configcheck.Verdict{broken, broken, {OK: true}}, true,
-			"gateway+candidate,gateway,isolated"},
+			"gateway+candidate,gateway,isolated", "default/new[GET /a]|-|default/new[GET /a]"},
 		{"create failing alone", nil, []configcheck.Verdict{broken, broken, failing("new", 0, "bad")}, false,
-			"gateway+candidate,gateway,isolated"},
+			"gateway+candidate,gateway,isolated", "default/new[GET /a]|-|default/new[GET /a]"},
 		{"update newly failing alone", testEndpoint("new", "/old"),
 			[]configcheck.Verdict{broken, broken, failing("new", 0, "bad"), {OK: true}}, false,
-			"gateway+candidate,gateway,isolated,isolated"},
+			"gateway+candidate,gateway,isolated,isolated",
+			"default/new[GET /a]|-|default/new[GET /a]|default/new[GET /old]"},
 		{"update already failing alone", testEndpoint("new", "/old"),
 			[]configcheck.Verdict{broken, broken, failing("new", 0, "bad"), failing("new", 0, "bad")}, true,
-			"gateway+candidate,gateway,isolated,isolated"},
+			"gateway+candidate,gateway,isolated,isolated",
+			"default/new[GET /a]|-|default/new[GET /a]|default/new[GET /old]"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -513,6 +516,9 @@ func TestEndpointAdmission_BrokenGatewayFallsBackToIsolation(t *testing.T) {
 			}
 			if got := strings.Join(chk.calls, ","); got != tt.calls {
 				t.Errorf("checks = %s, want %s", got, tt.calls)
+			}
+			if tt.args != "" && strings.Join(chk.args, "|") != tt.args {
+				t.Errorf("checks were handed %s, want %s", strings.Join(chk.args, "|"), tt.args)
 			}
 		})
 	}
