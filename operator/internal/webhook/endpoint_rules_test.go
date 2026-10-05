@@ -84,6 +84,9 @@ func TestValidateEntries(t *testing.T) {
 		{"JWT placeholder", testGateway(), withPattern("/a", "/u/{JWT.sub}"), ""},
 		{"EE-only entry namespace on CE", testGateway(), withExtra(`{"auth/api-keys":{"roles":["a"]}}`, ""),
 			`spec.endpoints[0].extraConfig: Invalid value: "auth/api-keys"`},
+		{"EE-only backend namespace on CE", testGateway(),
+			withExtra("", `{"backend/http/client":{"proxy_address":"http://p"}}`),
+			`spec.endpoints[0].backends[0].extraConfig: Invalid value: "backend/http/client"`},
 		{"only GET collides with the health endpoint", custom, post, ""},
 		// A raw router block replaces the typed one, so the typed healthPath is gone.
 		{"raw router replaces the typed one", rawRouterBlock(`{"auto_options":true}`),
