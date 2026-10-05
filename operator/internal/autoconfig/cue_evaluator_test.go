@@ -842,23 +842,20 @@ func TestApplyFieldOverrides_BackendExtraConfig(t *testing.T) {
 	}
 }
 
-func TestApplyFieldOverrides_BackendIndexOutOfBounds(t *testing.T) {
+func TestApplyFieldOverrides_BackendIndexOutOfRangeIsUnmatched(t *testing.T) {
 	out := testOutputWithEntries()
-	backendEC := &runtime.RawExtension{
-		Raw: []byte(`{"backend/http":{"return_error_code":true}}`),
+	ec := &runtime.RawExtension{Raw: []byte(`{"backend/http":{"return_error_code":true}}`)}
+	applyFieldOverrides(out, []v1alpha1.OperationOverride{{
+		OperationID: "createOrder",
+		Backends:    []v1alpha1.BackendOverride{{Index: 1, ExtraConfig: ec}, {Index: 2, ExtraConfig: ec}, {Index: -1}},
+	}})
+	want := []string{"createOrder backends[2]", "createOrder backends[-1]"}
+	if !slices.Equal(out.UnmatchedOverrides, want) {
+		t.Errorf("UnmatchedOverrides = %v, want %v", out.UnmatchedOverrides, want)
 	}
-	applyFieldOverrides(out, []v1alpha1.OperationOverride{
-		{
-			OperationID: "listUsers",
-			Backends: []v1alpha1.BackendOverride{
-				{Index: 99, ExtraConfig: backendEC},
-			},
-		},
-	})
-
-	// Should not panic; backend[0] should remain unmodified
-	if out.Entries[0].Backends[0].ExtraConfig != nil {
-		t.Error("backend[0] ExtraConfig should remain nil (out-of-bounds index should be skipped)")
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(out.Entries[1].Backends[1].ExtraConfig.Raw, &got); err != nil || got["backend/http"] == nil {
+		t.Errorf("in-range backends[1] override not applied: %v", out.Entries[1].Backends[1].ExtraConfig)
 	}
 }
 
