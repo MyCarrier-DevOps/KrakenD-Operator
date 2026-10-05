@@ -17,3 +17,4 @@ KrakenDEndpoint a/path-linebreak: spec.endpoints[0].endpoint x
 KrakenDEndpoint a/timeout-newline: spec.endpoints[0].timeout 5s
 
 KrakenDGateway a/timeout-pattern: spec.config.timeout 3 seconds
+KrakenDGateway a/cachettl-long: spec.config.cacheTTL is longer than 64 characters
