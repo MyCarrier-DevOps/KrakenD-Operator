@@ -172,5 +172,6 @@ jq "${jq_opts[@]}" "$jq_lib"'
   (if $s.trigger == "Periodic" and $s.periodic == null then "trigger Periodic without a periodic block" else empty end),
   ($s.periodic.interval // empty | if $s.trigger == "Periodic"
      then dur_problem($go_re; 32; "spec.periodic.interval")
-     else dur_shape_problem($go_re; 32; "spec.periodic.interval") end)
+     else dur_shape_problem($go_re; 32; "spec.periodic.interval") end),
+  ($s.additionalEndpointsBasePath // empty | select(crd_test("^/") | not) | "spec.additionalEndpointsBasePath \(.)")
 ]} | report("KrakenDAutoConfig")' "$work/autoconfigs.json"
