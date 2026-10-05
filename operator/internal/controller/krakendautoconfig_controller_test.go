@@ -2208,6 +2208,56 @@ func TestAutoConfigReconcile_RecordsSkippedOperationsAndNotes(t *testing.T) {
 	}
 }
 
+// skippedAndWarnedAutoConfig is an AutoConfig whose sync lists one skipped
+// operation and one warning, with the mocks that produce them.
+func skippedAndWarnedAutoConfig() (
+	*v1alpha1.KrakenDAutoConfig, *mockFetcher, *mockCUEEvaluator, *mockFilter, *mockGenerator,
+) {
+	ac := testAutoConfig()
+	ac.Spec.AdditionalEndpoints = []v1alpha1.AdditionalEndpoint{
+		{Endpoint: "/api/users", Method: "GET", Host: "http://override"},
+	}
+	f, ce, fi, g := defaultMocks()
+	g.output.Skipped = []autoconfig.OperationIssue{duplicateListUsers()}
+	return ac, f, ce, fi, g
+}
+
+func TestAutoConfigReconcile_ListContentAloneRewritesStatus(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac, f, ce, fi, g := skippedAndWarnedAutoConfig()
+	var counts writeCounts
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).
+		WithInterceptorFuncs(countWrites(&counts)).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+	synced := getAC(t, c, ac)
+
+	// Change what the lists say but not how many entries they hold, so the
+	// Synced message, the counts and the phase stay as they were.
+	stale := synced.DeepCopy()
+	stale.Status.Skipped[0].Message = "stale"
+	stale.Status.Warnings[0] = "stale"
+	if err := c.Status().Update(context.Background(), stale); err != nil {
+		t.Fatalf("tampering with status: %v", err)
+	}
+	counts = writeCounts{}
+
+	if _, err := reconcileAC(r, stale); err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+	if counts.statusUpdates != 1 {
+		t.Errorf("status updates = %d, want 1 to restore the lists", counts.statusUpdates)
+	}
+	got := getAC(t, c, ac)
+	if !slices.Equal(got.Status.Skipped, synced.Status.Skipped) ||
+		!slices.Equal(got.Status.Warnings, synced.Status.Warnings) {
+		t.Errorf("lists = %+v / %q, want %+v / %q", got.Status.Skipped, got.Status.Warnings,
+			synced.Status.Skipped, synced.Status.Warnings)
+	}
+}
+
 func TestAutoConfigPredicate_IgnoresStatusOnlyUpdate(t *testing.T) {
 	old := &v1alpha1.KrakenDAutoConfig{
 		ObjectMeta: metav1.ObjectMeta{
