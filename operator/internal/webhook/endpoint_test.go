@@ -121,3 +121,21 @@ func TestEndpointAdmission_MovingToAnotherGatewayRechecksEveryEntry(t *testing.T
 		t.Errorf("unrelated edit on the same gateway denied: %+v", resp.Result)
 	}
 }
+
+func TestEndpointAdmission_MovingToAnotherNamespaceRechecksEveryEntry(t *testing.T) {
+	old := testEndpoint("e", "/bad")
+	old.Spec.Endpoints[0].ExtraConfig = &runtime.RawExtension{
+		Raw: []byte(`{"documentation/openapi":{"audience":{"a":1}}}`),
+	}
+	elsewhere := testGateway()
+	elsewhere.Namespace = "edge"
+	v := &EndpointValidator{Client: fakeClient(testGateway(), elsewhere)}
+
+	moved := old.DeepCopy()
+	moved.Spec.GatewayRef.Namespace = "edge"
+	resp := review(t, v, "alice", moved, old)
+	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity ||
+		!strings.Contains(resp.Result.Details.Causes[0].Field, "spec.endpoints[0].extraConfig") {
+		t.Errorf("entry moved to a gateway of the same name in another namespace: %+v, want 422", resp.Result)
+	}
+}
