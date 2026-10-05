@@ -205,7 +205,9 @@ func classifyCheckError(ctx context.Context, output []byte, err error) error {
 // schemas, so nothing is stripped: for an EE render, each wildcard endpoint is
 // rewritten to a parameter route and every endpoint stays at its index.
 // Non-nil findings are a verdict reached without running krakend check.
-func validationCopy(ctx context.Context, jsonData []byte, edition v1alpha1.Edition) (doc []byte, findings []string, err error) {
+func validationCopy(
+	ctx context.Context, jsonData []byte, edition v1alpha1.Edition,
+) (doc []byte, findings []string, err error) {
 	var config map[string]any
 	if err := json.Unmarshal(jsonData, &config); err != nil {
 		return nil, nil, fmt.Errorf("unmarshaling config for validation copy: %w", err)
