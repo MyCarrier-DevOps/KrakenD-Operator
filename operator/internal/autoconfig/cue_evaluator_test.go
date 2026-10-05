@@ -2060,3 +2060,37 @@ func TestEvaluate_FailedOperationsAreSortedByTransformedPath(t *testing.T) {
 		t.Errorf("expected failed operations sorted /a, /b, got %+v", out.Failed)
 	}
 }
+
+func TestEvaluate_FailedMessageIsStableAcrossRuns(t *testing.T) {
+	// The message lands in status, so a different text on each pass would
+	// rewrite it forever. CUE reports a conflict in the order its operands
+	// were unified, which follows the order the definition files load in.
+	defs, err := EmbeddedCUEDefinitions()
+	if err != nil {
+		t.Fatalf("loading defs: %v", err)
+	}
+	messages := map[string]bool{}
+	for range 100 {
+		out, err := NewCUEEvaluator().Evaluate(context.Background(), CUEInput{
+			SpecData:    []byte(`{"paths":{"/b":{"get":{"operationId":"getB","responses":{"200":{"description":"OK"}}}}}}`),
+			SpecFormat:  v1alpha1.SpecFormatJSON,
+			DefaultDefs: defs,
+			CustomDefs: map[string]string{
+				"a.cue": `endpoint: "/b:GET": timeout: "1s"`,
+				"b.cue": `endpoint: "/b:GET": timeout: "2s"`,
+				"c.cue": `endpoint: "/b:GET": timeout: "3s"`,
+			},
+			ServiceName: "_spec",
+		})
+		if err != nil {
+			t.Fatalf("evaluate: %v", err)
+		}
+		if len(out.Failed) != 1 {
+			t.Fatalf("expected 1 failed operation, got %+v", out.Failed)
+		}
+		messages[out.Failed[0].Message] = true
+	}
+	if len(messages) != 1 {
+		t.Errorf("expected one message across runs, got %d: %v", len(messages), messages)
+	}
+}
