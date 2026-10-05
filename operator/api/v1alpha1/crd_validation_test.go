@@ -375,5 +375,6 @@ func TestAutoConfigCRD_Rules(t *testing.T) {
 		{"periodic without interval", autoconfigHead + `openapi: {url: "http://x"}, trigger: Periodic}}`, "at least 30s"},
 		{"periodic interval overflows", autoconfigHead + `openapi: {url: "http://x"}, trigger: Periodic, periodic: {interval: "99999999999h"}}}`, "spec.periodic.interval"},
 		{"both auth secrets", autoconfigHead + `openapi: {url: "http://x", auth: {bearerTokenSecret: {name: s, key: k}, basicAuthSecret: {name: b}}}, trigger: OnChange}}`, "mutually exclusive"},
+		{"name too long", `{apiVersion: gateway.krakend.io/v1alpha1, kind: KrakenDAutoConfig, metadata: {name: ` + strings.Repeat("a", 64) + `}, spec: {gatewayRef: {name: gw}, openapi: {url: "http://x"}, trigger: OnChange}}`, "at most 63 characters"},
 	})
 }
