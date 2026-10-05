@@ -394,12 +394,15 @@ namespace's `krakend-cue-definitions` ConfigMap replaces those defaults, so it
 doesn't get the rule unless it's updated from the new `cue/defaults.cue`;
 definitions from `spec.cue.definitionsConfigMapRef` are unified on top of
 whichever defaults apply, so they keep the rule only where the embedded
-defaults are in use. Without the rule, the AutoConfig controller's own
-precheck is the backstop: it validates the whole set of endpoints it is about
-to write with the same checker the webhooks use, and a set that fails is not
-written. The operator's writes of generated endpoints skip the admission render
-check (see *Complete admission*), so the webhook is no longer a second line
-for them.
+defaults are in use. Without the rule, a malformed operation-level audience
+is still stopped. The `KrakenDEndpoint` webhook's audience rule rejects the
+write with a 422 for every writer, the operator included, and it is the only
+guard on a CE gateway, where the render drops `documentation/openapi`. On an EE
+gateway the AutoConfig controller's own precheck, which validates the
+endpoints it is about to write with the checker the webhooks use, catches it
+first. That precheck holds the operations that fail and writes the rest; it
+does not hold back the whole set. The operator's writes of generated endpoints
+skip only the admission render check (see *Complete admission*).
 
 ---
 
@@ -1408,10 +1411,10 @@ config that fails it keeps the gateway at its last-known-good config.
 **The operator's own writes to AutoConfig endpoints skip the render check.**
 A write the operator makes to a KrakenDEndpoint that a KrakenDAutoConfig
 controls (by controller owner reference, never by labels) is not rendered and
-linted: the AutoConfig controller validates its whole desired set before it
-writes, and checking every write again would cost one `krakend check` per
-generated operation. Those writes still get the schema, reference, duplicate
-route and entry checks. The operator recognises its own requests by
+linted: the AutoConfig controller validates the endpoints it is about to write
+before it writes them, and checking every write again would cost one `krakend
+check` per generated operation. Those writes still get the schema, reference,
+audience, duplicate route and entry checks. The operator recognises its own requests by
 `--operator-username`, which defaults to its ServiceAccount
 (`system:serviceaccount:$POD_NAMESPACE:$POD_SERVICE_ACCOUNT`), and the chart
 and the kustomize manifests now set both variables from the downward API.
