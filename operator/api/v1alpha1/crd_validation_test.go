@@ -390,5 +390,6 @@ func TestAutoConfigCRD_Rules(t *testing.T) {
 		{"too many additional endpoints", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, additionalEndpoints: [` + strings.Repeat(`{endpoint: /h}, `, 257) + `]}}`, "Too many: 257: must have at most 256 items"},
 		{"additional endpoint shorthand and backends", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, additionalEndpoints: [{endpoint: /h, host: "http://h", backends: [{host: ["http://x"], urlPattern: /}]}]}}`, "mutually exclusive"},
 		{"additional endpoint timeout overflows", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, additionalEndpoints: [{endpoint: /h, timeout: "2562048h"}]}}`, "spec.additionalEndpoints[0].timeout"},
+		{"additional endpoint cacheTTL overflows", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, additionalEndpoints: [{endpoint: /h, cacheTTL: "99999999999s"}]}}`, "spec.additionalEndpoints[0].cacheTTL"},
 	})
 }
