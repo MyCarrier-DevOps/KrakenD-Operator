@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -90,12 +91,20 @@ func (r *KrakenDBackendPolicyReconciler) Reconcile(ctx context.Context, req ctrl
 			}
 		}
 	} else if refCount == 0 {
-		if controllerutil.RemoveFinalizer(&policy, v1alpha1.PolicyProtectionFinalizer) {
-			if err := r.Update(ctx, &policy); err != nil {
-				return ctrl.Result{}, fmt.Errorf("removing policy-protection finalizer: %w", err)
-			}
+		// The cache can lag a reference created a moment ago, so confirm on
+		// the API server before the policy goes.
+		referenced, err := r.referencedOnServer(ctx, &policy)
+		if err != nil {
+			return ctrl.Result{}, err
 		}
-		return ctrl.Result{}, nil
+		if !referenced {
+			if controllerutil.RemoveFinalizer(&policy, v1alpha1.PolicyProtectionFinalizer) {
+				if err := r.Update(ctx, &policy); err != nil {
+					return ctrl.Result{}, fmt.Errorf("removing policy-protection finalizer: %w", err)
+				}
+			}
+			return ctrl.Result{}, nil
+		}
 	}
 
 	policy.Status.ReferencedBy = refCount
@@ -119,6 +128,25 @@ func (r *KrakenDBackendPolicyReconciler) Reconcile(ctx context.Context, req ctrl
 
 	log.V(1).Info("policy reconciled", "referencedBy", refCount)
 	return ctrl.Result{}, nil
+}
+
+// referencedOnServer reports whether any endpoint references policy, reading
+// uncached. The field index exists only in the cache, so it lists every
+// endpoint, which is affordable on the one reconcile that ends a deletion.
+func (r *KrakenDBackendPolicyReconciler) referencedOnServer(
+	ctx context.Context, policy *v1alpha1.KrakenDBackendPolicy,
+) (bool, error) {
+	var endpoints v1alpha1.KrakenDEndpointList
+	if err := r.APIReader.List(ctx, &endpoints); err != nil {
+		return false, fmt.Errorf("listing endpoints uncached: %w", err)
+	}
+	key := policy.Namespace + "/" + policy.Name
+	for i := range endpoints.Items {
+		if slices.Contains(fieldindex.EndpointPolicyKeys(&endpoints.Items[i]), key) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
