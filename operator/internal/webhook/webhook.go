@@ -34,6 +34,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/autoconfig"
 	"github.com/mycarrier-devops/krakend-operator/internal/fieldindex"
 )
 
@@ -230,16 +231,24 @@ func validateFields(ac *v1alpha1.KrakenDAutoConfig) field.ErrorList {
 }
 
 // validateOverrideIDs rejects overrides that target the same operation: an
-// operationId listed twice.
+// operationId listed twice, or two operationIds that map to one override key
+// (autoconfig.SanitizeName), which the CUE evaluator cannot keep apart.
 func validateOverrideIDs(overrides []v1alpha1.OperationOverride) field.ErrorList {
 	var errs field.ErrorList
-	seen := map[string]struct{}{}
+	first := map[string]string{}
 	for i, ov := range overrides {
-		if _, dup := seen[ov.OperationID]; dup {
-			errs = append(errs, field.Duplicate(
-				field.NewPath("spec", "overrides").Index(i).Child("operationId"), ov.OperationID))
+		p := field.NewPath("spec", "overrides").Index(i).Child("operationId")
+		key := autoconfig.SanitizeName(ov.OperationID)
+		prev, seen := first[key]
+		switch {
+		case !seen:
+			first[key] = ov.OperationID
+		case prev == ov.OperationID:
+			errs = append(errs, field.Duplicate(p, ov.OperationID))
+		default:
+			errs = append(errs, field.Invalid(p, ov.OperationID,
+				fmt.Sprintf("collides with operationId %q: both map to the override key %q", prev, key)))
 		}
-		seen[ov.OperationID] = struct{}{}
 	}
 	return errs
 }
