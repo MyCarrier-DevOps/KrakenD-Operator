@@ -237,12 +237,13 @@ func newRoutes(stored, ep *v1alpha1.KrakenDEndpoint, changed []int) []int {
 	})
 }
 
-// validateRouteUniqueness rejects each changed entry whose route another entry
+// validateRouteUniqueness rejects each listed entry whose route another entry
 // on the same gateway already claims: the same method and path, or the same
-// method and route shape, meaning paths that differ only in parameter names,
-// which KrakenD's router cannot tell apart. Endpoints with ep's controller are
-// exempt: they are the transient state of an operation rename, which that
-// owner resolves by deleting the old endpoint in the same sync.
+// method and route shape, meaning paths that differ only in parameter names
+// or repeated slashes, which KrakenD's router cannot tell apart. Endpoints
+// with ep's controller are exempt: while an AutoConfig renames an operation
+// its new endpoint and the old one share a route until the old one is deleted.
+// The denial names the claimant the renderer serves.
 func (v *EndpointValidator) validateRouteUniqueness(
 	ctx context.Context, ep *v1alpha1.KrakenDEndpoint, changed []int, gw *v1alpha1.KrakenDGateway,
 ) (field.ErrorList, error) {
