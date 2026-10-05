@@ -379,7 +379,8 @@ type LoggingConfig struct {
 
 // RouterConfig configures KrakenD router behavior.
 type RouterConfig struct {
-	ReturnErrorMsg               bool     `json:"returnErrorMsg,omitempty"`
+	ReturnErrorMsg bool `json:"returnErrorMsg,omitempty"`
+	// +kubebuilder:validation:Pattern=`^/`
 	HealthPath                   string   `json:"healthPath,omitempty"`
 	AutoOptions                  bool     `json:"autoOptions,omitempty"`
 	DisableAccessLog             bool     `json:"disableAccessLog,omitempty"`
