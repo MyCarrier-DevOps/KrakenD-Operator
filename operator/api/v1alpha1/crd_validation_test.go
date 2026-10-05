@@ -286,7 +286,7 @@ func TestGatewayCRD_Rules(t *testing.T) {
 		{"overflowing redis dial timeout", gatewayHead + `edition: CE, config: {}, redis: {connectionPool: {addresses: ["redis:6379"], dialTimeout: "99999999999h"}}}}`, "spec.redis.connectionPool.dialTimeout"},
 		{"overflowing tmpSizeLimit", gatewayHead + `edition: CE, config: {}, postRestartJob: {enabled: true, script: x, tmpSizeLimit: "1e99999999999999999999"}}}`, "spec.postRestartJob.tmpSizeLimit"},
 		{"fractional exponent tmpSizeLimit", gatewayHead + `edition: CE, config: {}, postRestartJob: {enabled: true, script: x, tmpSizeLimit: "1.5e3.5"}}}`, "spec.postRestartJob.tmpSizeLimit"},
-		{"long tmpSizeLimit", gatewayHead + `edition: CE, config: {}, postRestartJob: {enabled: true, script: x, tmpSizeLimit: "0.00000000000000000000000000000000000000000000000000000000000000000000001"}}}`, "Too long"},
+		{"long tmpSizeLimit", gatewayHead + `edition: CE, config: {}, postRestartJob: {enabled: true, script: x, tmpSizeLimit: "0.00000000000000000000000000000000000000000000000000000000000000000000001"}}}`, "at most 64 characters"},
 	})
 }
 
