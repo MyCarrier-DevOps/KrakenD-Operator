@@ -79,11 +79,11 @@ func testGateway() *v1alpha1.KrakenDGateway {
 func TestGatewayReconcile_NotFound(t *testing.T) {
 	c := fakeClientBuilder().Build()
 	r := &KrakenDGatewayReconciler{
-		Client:    c,
-		Scheme:    testScheme(),
-		Recorder:  fakeRecorder(),
-		Renderer:  &mockRenderer{},
-		Validator: &mockValidator{}, Checker: newTestChecker(c, &mockValidator{}),
+		Client:   c,
+		Scheme:   testScheme(),
+		Recorder: fakeRecorder(),
+		Renderer: &mockRenderer{},
+		Checker:  newTestChecker(c, &mockValidator{}),
 	}
 
 	result, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -160,11 +160,11 @@ func TestGatewayReconcile_FullPipeline(t *testing.T) {
 	}
 
 	r := &KrakenDGatewayReconciler{
-		Client:    c,
-		Scheme:    testScheme(),
-		Recorder:  fakeRecorder(),
-		Renderer:  mockRend,
-		Validator: &mockValidator{}, Checker: newTestChecker(c, &mockValidator{}),
+		Client:   c,
+		Scheme:   testScheme(),
+		Recorder: fakeRecorder(),
+		Renderer: mockRend,
+		Checker:  newTestChecker(c, &mockValidator{}),
 	}
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -241,11 +241,11 @@ func TestGatewayReconcile_ChecksumUnchanged(t *testing.T) {
 	}
 
 	r := &KrakenDGatewayReconciler{
-		Client:    c,
-		Scheme:    testScheme(),
-		Recorder:  fakeRecorder(),
-		Renderer:  mockRend,
-		Validator: &mockValidator{}, Checker: newTestChecker(c, &mockValidator{}),
+		Client:   c,
+		Scheme:   testScheme(),
+		Recorder: fakeRecorder(),
+		Renderer: mockRend,
+		Checker:  newTestChecker(c, &mockValidator{}),
 	}
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -287,12 +287,7 @@ func TestGatewayReconcile_ValidationFailure(t *testing.T) {
 		Scheme:    testScheme(),
 		Recorder:  fakeRecorder(),
 		Renderer:  mockRend,
-		Validator: &mockValidator{
-			validateErr: &renderer.ValidationError{
-				Output: "invalid config line 5",
-				Err:    fmt.Errorf("exit code 1"),
-			},
-		}, Checker: newTestChecker(c, &mockValidator{
+		Checker: newTestChecker(c, &mockValidator{
 			validateErr: &renderer.ValidationError{
 				Output: "invalid config line 5",
 				Err:    fmt.Errorf("exit code 1"),
@@ -456,11 +451,11 @@ func TestGatewayReconcile_RenderError(t *testing.T) {
 		Build()
 
 	r := &KrakenDGatewayReconciler{
-		Client:    c,
-		Scheme:    testScheme(),
-		Recorder:  fakeRecorder(),
-		Renderer:  &mockRenderer{err: fmt.Errorf("render boom")},
-		Validator: &mockValidator{}, Checker: newTestChecker(c, &mockValidator{}),
+		Client:   c,
+		Scheme:   testScheme(),
+		Recorder: fakeRecorder(),
+		Renderer: &mockRenderer{err: fmt.Errorf("render boom")},
+		Checker:  newTestChecker(c, &mockValidator{}),
 	}
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -753,11 +748,11 @@ func TestGatewayReconcile_GathersPolicies(t *testing.T) {
 	capturingRend := &capturingRenderer{delegate: mockRend, captured: &capturedInput}
 
 	r := &KrakenDGatewayReconciler{
-		Client:    c,
-		Scheme:    testScheme(),
-		Recorder:  fakeRecorder(),
-		Renderer:  capturingRend,
-		Validator: &mockValidator{}, Checker: newTestChecker(c, &mockValidator{}),
+		Client:   c,
+		Scheme:   testScheme(),
+		Recorder: fakeRecorder(),
+		Renderer: capturingRend,
+		Checker:  newTestChecker(c, &mockValidator{}),
 	}
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -818,11 +813,11 @@ func TestGatewayReconcile_WithPluginConfigMaps(t *testing.T) {
 	capturingRend := &capturingRenderer{delegate: mockRend, captured: &capturedInput}
 
 	r := &KrakenDGatewayReconciler{
-		Client:    c,
-		Scheme:    testScheme(),
-		Recorder:  fakeRecorder(),
-		Renderer:  capturingRend,
-		Validator: &mockValidator{}, Checker: newTestChecker(c, &mockValidator{}),
+		Client:   c,
+		Scheme:   testScheme(),
+		Recorder: fakeRecorder(),
+		Renderer: capturingRend,
+		Checker:  newTestChecker(c, &mockValidator{}),
 	}
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -859,11 +854,11 @@ func TestGatewayReconcile_WithHPA(t *testing.T) {
 	}
 
 	r := &KrakenDGatewayReconciler{
-		Client:    c,
-		Scheme:    testScheme(),
-		Recorder:  fakeRecorder(),
-		Renderer:  mockRend,
-		Validator: &mockValidator{}, Checker: newTestChecker(c, &mockValidator{}),
+		Client:   c,
+		Scheme:   testScheme(),
+		Recorder: fakeRecorder(),
+		Renderer: mockRend,
+		Checker:  newTestChecker(c, &mockValidator{}),
 	}
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -919,11 +914,11 @@ func TestGatewayReconcile_MissingPolicySkipped(t *testing.T) {
 	capturingRend := &capturingRenderer{delegate: mockRend, captured: &capturedInput}
 
 	r := &KrakenDGatewayReconciler{
-		Client:    c,
-		Scheme:    testScheme(),
-		Recorder:  fakeRecorder(),
-		Renderer:  capturingRend,
-		Validator: &mockValidator{}, Checker: newTestChecker(c, &mockValidator{}),
+		Client:   c,
+		Scheme:   testScheme(),
+		Recorder: fakeRecorder(),
+		Renderer: capturingRend,
+		Checker:  newTestChecker(c, &mockValidator{}),
 	}
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -1001,11 +996,11 @@ func TestGatewayReconcile_WithDragonflyEnabled(t *testing.T) {
 	capturingRend := &capturingRenderer{delegate: mockRend, captured: &capturedInput}
 
 	r := &KrakenDGatewayReconciler{
-		Client:    c,
-		Scheme:    testScheme(),
-		Recorder:  fakeRecorder(),
-		Renderer:  capturingRend,
-		Validator: &mockValidator{}, Checker: newTestChecker(c, &mockValidator{}),
+		Client:   c,
+		Scheme:   testScheme(),
+		Recorder: fakeRecorder(),
+		Renderer: capturingRend,
+		Checker:  newTestChecker(c, &mockValidator{}),
 	}
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -1182,11 +1177,11 @@ func TestGatewayReconcile_CrossNamespaceEndpoints(t *testing.T) {
 	capturingRend := &capturingRenderer{delegate: mockRend, captured: &capturedInput}
 
 	r := &KrakenDGatewayReconciler{
-		Client:    c,
-		Scheme:    testScheme(),
-		Recorder:  fakeRecorder(),
-		Renderer:  capturingRend,
-		Validator: &mockValidator{}, Checker: newTestChecker(c, &mockValidator{}),
+		Client:   c,
+		Scheme:   testScheme(),
+		Recorder: fakeRecorder(),
+		Renderer: capturingRend,
+		Checker:  newTestChecker(c, &mockValidator{}),
 	}
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -1246,11 +1241,11 @@ func TestGatewayReconcile_CrossNamespacePolicies(t *testing.T) {
 	capturingRend := &capturingRenderer{delegate: mockRend, captured: &capturedInput}
 
 	r := &KrakenDGatewayReconciler{
-		Client:    c,
-		Scheme:    testScheme(),
-		Recorder:  fakeRecorder(),
-		Renderer:  capturingRend,
-		Validator: &mockValidator{}, Checker: newTestChecker(c, &mockValidator{}),
+		Client:   c,
+		Scheme:   testScheme(),
+		Recorder: fakeRecorder(),
+		Renderer: capturingRend,
+		Checker:  newTestChecker(c, &mockValidator{}),
 	}
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -1307,7 +1302,7 @@ func TestGatewayReconcile_AutoscaledReplicasAreNotReset(t *testing.T) {
 		Renderer: &mockRenderer{output: &renderer.RenderOutput{
 			JSON: []byte(`{"version":3}`), Checksum: "cs",
 		}},
-		Validator: &mockValidator{}, Checker: newTestChecker(c, &mockValidator{}),
+		Checker: newTestChecker(c, &mockValidator{}),
 	}
 
 	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(gw)}); err != nil {
@@ -1352,7 +1347,7 @@ func acceptanceReconciler(
 ) *KrakenDGatewayReconciler {
 	return &KrakenDGatewayReconciler{
 		Client: c, Scheme: testScheme(), Recorder: rec,
-		Renderer: &mockRenderer{output: output}, Validator: &mockValidator{}, Checker: newTestChecker(c, &mockValidator{}), APIReader: c,
+		Renderer: &mockRenderer{output: output}, Checker: newTestChecker(c, &mockValidator{}), APIReader: c,
 	}
 }
 
@@ -1500,10 +1495,9 @@ func TestGatewayReconcile_AcceptedNotWrittenWhenValidationFails(t *testing.T) {
 	})
 	// Build the failing validator the same way TestGatewayReconcile_ValidationFailure
 	// does: a *renderer.ValidationError is an "invalid config" verdict.
-	r.Validator = &mockValidator{validateErr: &renderer.ValidationError{
+	r.Checker = newTestChecker(r.Client, &mockValidator{validateErr: &renderer.ValidationError{
 		Output: "invalid config line 5", Err: fmt.Errorf("exit code 1"),
-	}}
-	r.Checker = newTestChecker(r.Client, r.Validator)
+	}})
 
 	// Other tests cover the gateway's own status on a rejection; only the endpoint side is checked here.
 	_ = reconcileGateway(t, r, gw)
@@ -1889,10 +1883,9 @@ func TestGatewayReconcile_ValidationFailureAdvancesObservedGeneration(t *testing
 	r := acceptanceReconciler(c, fakeRecorder(), &renderer.RenderOutput{
 		JSON: []byte(`{"version":3}`), Checksum: "new",
 	})
-	r.Validator = &mockValidator{validateErr: &renderer.ValidationError{
+	r.Checker = newTestChecker(r.Client, &mockValidator{validateErr: &renderer.ValidationError{
 		Output: "invalid config line 5", Err: fmt.Errorf("exit code 1"),
-	}}
-	r.Checker = newTestChecker(r.Client, r.Validator)
+	}})
 
 	if err := reconcileGateway(t, r, gw); err != nil {
 		t.Fatalf("a rejection is persistent and must not be retried: %v", err)
