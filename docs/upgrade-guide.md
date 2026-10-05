@@ -1318,6 +1318,31 @@ removed: the schema enforces them, and a rejection now comes from the API
 server (`Duplicate value`, `should be greater than or equal to 1`) rather than
 from the webhook.
 
+A KrakenDEndpoint `timeout` or `cacheTTL` must also parse as a duration that
+fits in 64 bits of nanoseconds and be at most 64 characters: a value such as
+`2562048h` matched the pattern but overflowed, and one stored object like it
+broke decoding of the whole endpoint list.
+
+**KrakenDGateway schema.** `config.timeout`, `cacheTTL`, `dnsCacheTTL`,
+`cors.maxAge` and `redis.connectionPool.dialTimeout` must be KrakenD durations
+(one integer and one unit: `3s`, `12h`, not `12h0m`); `config.port` must be
+1-65535; `config.outputEncoding` must be a KrakenD 2.13 value; and
+`router.healthPath` must start with `/`. The license, OpenAPI port, single PVC
+plugin source and post-restart script rules moved from the webhook to the CRD
+with the same messages; an Enterprise license `secretRef` now needs a
+non-empty name, and a gateway may list at most 32 plugin sources.
+
+**Redis and Dragonfly credentials are rejected until they are supported.** The
+operator has never rendered `spec.redis.connectionPool.password` or `.tls`, so
+KrakenD connected without them. Setting or changing either is now rejected
+(`not supported yet`). A stored value keeps being accepted on unrelated
+updates, and the gateway webhook still warns about it.
+`dragonfly.authentication.passwordFromSecret` on an Enterprise gateway is
+rejected for the same reason: the Dragonfly instance requires the password and
+the rendered KrakenD pool has none. A gateway that already has it keeps being
+accepted on unrelated updates; adding it, or switching a gateway that has it to
+Enterprise, is rejected.
+
 ---
 
 ## v0.14.0 — openapi-serve liveness probe (one-time rollout)
