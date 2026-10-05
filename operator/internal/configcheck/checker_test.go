@@ -100,6 +100,21 @@ func endpoint(name string, paths ...string) *v1alpha1.KrakenDEndpoint {
 	return ep
 }
 
+func policy(name string) *v1alpha1.KrakenDBackendPolicy {
+	return &v1alpha1.KrakenDBackendPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "ns"},
+		Spec: v1alpha1.KrakenDBackendPolicySpec{
+			CircuitBreaker: &v1alpha1.CircuitBreakerSpec{Interval: 60, Timeout: 10, MaxErrors: 3},
+		},
+	}
+}
+
+// withPolicy makes ep's first backend reference the policy of that name.
+func withPolicy(ep *v1alpha1.KrakenDEndpoint, name string) *v1alpha1.KrakenDEndpoint {
+	ep.Spec.Endpoints[0].Backends[0].PolicyRef = &v1alpha1.PolicyRef{Name: name}
+	return ep
+}
+
 func newChecker(v renderer.Validator, objs ...client.Object) *Checker {
 	return New(newReader(objs...), renderer.New(renderer.Options{}), v, 1)
 }
@@ -231,5 +246,17 @@ func TestCheckIsolated_UsesOnlyTheGivenEndpoints(t *testing.T) {
 	}
 	if strings.Contains(v.seen[0], "/stored") || !strings.Contains(v.seen[0], "/alone") {
 		t.Errorf("linted %s, want only /alone", v.seen[0])
+	}
+}
+
+func TestCheckGateway_RendersThePoliciesTheEndpointsReference(t *testing.T) {
+	v := &fakeValidator{}
+	c := newChecker(v, policy("breaker"), withPolicy(endpoint("a", "/a"), "breaker"))
+
+	if _, err := c.CheckGateway(context.Background(), gateway(v1alpha1.EditionCE), nil); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(v.seen[0], "qos/circuit-breaker") {
+		t.Errorf("config lacks the policy's circuit breaker: %s", v.seen[0])
 	}
 }
