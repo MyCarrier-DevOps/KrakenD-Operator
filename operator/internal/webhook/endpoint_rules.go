@@ -64,10 +64,17 @@ func healthPath(gw *v1alpha1.KrakenDGateway) string {
 	}
 	var raw struct {
 		Router struct {
-			HealthPath string `json:"health_path"`
+			HealthPath    string `json:"health_path"`
+			DisableHealth bool   `json:"disable_health"`
 		} `json:"router"`
 	}
-	if json.Unmarshal(gw.Spec.Config.ExtraConfig.Raw, &raw) == nil && raw.Router.HealthPath != "" {
+	if json.Unmarshal(gw.Spec.Config.ExtraConfig.Raw, &raw) != nil {
+		return path
+	}
+	if raw.Router.DisableHealth {
+		return ""
+	}
+	if raw.Router.HealthPath != "" {
 		return raw.Router.HealthPath
 	}
 	return path
