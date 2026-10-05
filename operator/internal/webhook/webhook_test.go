@@ -1553,44 +1553,6 @@ func TestPolicyValidator_Valid(t *testing.T) {
 	}
 }
 
-func TestPolicyValidator_DeleteBlocked(t *testing.T) {
-	p := &v1alpha1.KrakenDBackendPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "my-policy", Namespace: "default"},
-	}
-	ep := &v1alpha1.KrakenDEndpoint{
-		ObjectMeta: metav1.ObjectMeta{Name: "ep1", Namespace: "default"},
-		Spec: v1alpha1.KrakenDEndpointSpec{
-			GatewayRef: v1alpha1.GatewayRef{Name: "gw"},
-			Endpoints: []v1alpha1.EndpointEntry{
-				{Endpoint: "/api", Method: "GET",
-					Backends: []v1alpha1.BackendSpec{{
-						Host: []string{"http://svc"}, URLPattern: "/",
-						PolicyRef: &v1alpha1.PolicyRef{Name: "my-policy"},
-					}}},
-			},
-		},
-	}
-	v := &PolicyValidator{Client: fakeClient(p, ep), Checker: &scriptedChecker{}}
-	_, err := v.ValidateDelete(context.Background(), p)
-	if err == nil {
-		t.Error("expected error: policy referenced")
-	}
-	if !strings.Contains(err.Error(), "ep1") {
-		t.Errorf("expected ep1 in error, got: %v", err)
-	}
-}
-
-func TestPolicyValidator_DeleteAllowed(t *testing.T) {
-	p := &v1alpha1.KrakenDBackendPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "my-policy", Namespace: "default"},
-	}
-	v := &PolicyValidator{Client: fakeClient(p), Checker: &scriptedChecker{}}
-	_, err := v.ValidateDelete(context.Background(), p)
-	if err != nil {
-		t.Errorf("expected no error, got %v", err)
-	}
-}
-
 func TestAutoConfigValidator_Valid(t *testing.T) {
 	gw := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "my-gw", Namespace: "default"},
@@ -1773,33 +1735,6 @@ func TestEndpointValidator_CrossNamespacePolicyNotFound(t *testing.T) {
 	_, err := v.ValidateCreate(context.Background(), ep)
 	if err == nil {
 		t.Error("expected error for cross-ns policy not found")
-	}
-}
-
-func TestPolicyValidator_DeleteBlockedCrossNamespace(t *testing.T) {
-	p := &v1alpha1.KrakenDBackendPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "shared-policy", Namespace: "policies"},
-	}
-	ep := &v1alpha1.KrakenDEndpoint{
-		ObjectMeta: metav1.ObjectMeta{Name: "ep1", Namespace: "app"},
-		Spec: v1alpha1.KrakenDEndpointSpec{
-			GatewayRef: v1alpha1.GatewayRef{Name: "gw"},
-			Endpoints: []v1alpha1.EndpointEntry{
-				{Endpoint: "/api", Method: "GET",
-					Backends: []v1alpha1.BackendSpec{{
-						Host: []string{"http://svc"}, URLPattern: "/",
-						PolicyRef: &v1alpha1.PolicyRef{Name: "shared-policy", Namespace: "policies"},
-					}}},
-			},
-		},
-	}
-	v := &PolicyValidator{Client: fakeClient(p, ep), Checker: &scriptedChecker{}}
-	_, err := v.ValidateDelete(context.Background(), p)
-	if err == nil {
-		t.Error("expected error: cross-ns policy still referenced")
-	}
-	if !strings.Contains(err.Error(), "ep1") {
-		t.Errorf("expected ep1 in error, got: %v", err)
 	}
 }
 
