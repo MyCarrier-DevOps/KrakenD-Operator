@@ -3294,3 +3294,22 @@ func TestAutoConfigReconcile_FailedOperationFailsSyncClosed(t *testing.T) {
 		t.Errorf("expected no endpoint written, got %v", err)
 	}
 }
+
+func TestAutoConfigReconcile_FailedOperationOutsideFilterDoesNotFail(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	ac.Spec.Filter = &v1alpha1.FilterSpec{ExcludePaths: []string{"/b"}}
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).Build()
+	f, ce, _, g := defaultMocks()
+	ce.output.Failed = []autoconfig.OperationIssue{failedGetB()}
+	r := newACReconciler(c, f, ce, &mockFilter{}, g)
+	r.Filter = autoconfig.NewFilter()
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if cond := meta.FindStatusCondition(getAC(t, c, ac).Status.Conditions, v1alpha1.ConditionSynced); cond == nil ||
+		cond.Status != metav1.ConditionTrue {
+		t.Errorf("expected Synced True, got %+v", cond)
+	}
+}
