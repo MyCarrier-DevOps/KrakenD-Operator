@@ -164,7 +164,6 @@ func (e *cueEvaluator) Evaluate(_ context.Context, input CUEInput) (*CUEOutput, 
 
 	applyFieldOverrides(output, input.Overrides)
 	skipUnsupportedMethods(output)
-	skipRouteCollisions(output)
 	// Sorted once the paths and methods are final: a prefix strip or an
 	// override can reorder them.
 	sortIssues(output.Failed)
@@ -394,43 +393,6 @@ func skipUnsupportedMethods(output *CUEOutput) {
 		output.Skipped = append(output.Skipped, unsupportedMethodIssue(failed.Operation))
 	}
 	output.Failed = stillFailed
-}
-
-// skipRouteCollisions keeps the first entry of each path and method, in
-// Entries order, and moves every later one to Skipped (reason
-// DuplicateOperationId) under its own operationId. A URL transform or an
-// override can put several operations on one route, and OperationIDs, keyed
-// by route, holds one id per route: the id of the entry kept is restored from
-// the per-entry record, so the entry that publishes is named for itself.
-func skipRouteCollisions(output *CUEOutput) {
-	if len(output.entryOperationIDs) != len(output.Entries) {
-		return
-	}
-	first := map[string]string{}
-	entries := output.Entries[:0]
-	ids := output.entryOperationIDs[:0]
-	for i, entry := range output.Entries {
-		key := entry.Endpoint + ":" + entry.Method
-		if by, taken := first[key]; taken {
-			output.Skipped = append(output.Skipped, OperationIssue{
-				Operation: Operation{
-					Method: entry.Method, Path: entry.Endpoint, OperationID: output.entryOperationIDs[i],
-				},
-				Reason:  v1alpha1.ReasonDuplicateOperationId,
-				Message: "same path and method as " + by,
-			})
-			continue
-		}
-		first[key] = entry.Method + " " + entry.Endpoint
-		entries = append(entries, entry)
-		ids = append(ids, output.entryOperationIDs[i])
-		if id := output.entryOperationIDs[i]; id != "" {
-			output.OperationIDs[key] = id
-		} else {
-			delete(output.OperationIDs, key)
-		}
-	}
-	output.Entries, output.entryOperationIDs = entries, ids
 }
 
 // unsupportedMethodIssue reports op as skipped for its method.
