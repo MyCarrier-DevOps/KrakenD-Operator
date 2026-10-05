@@ -65,6 +65,7 @@ jq "${jq_opts[@]}" "$jq_lib"'
   ((.spec.endpoints // []) | to_entries[] | .key as $i | .value as $e | "spec.endpoints[\($i)]" as $p | (
     (if ($e.endpoint // "" | crd_test($path_re)) then empty else "\($p).endpoint \($e.endpoint)" end),
     (if (($e.backends // []) | length) == 0 then "\($p).backends is empty" else empty end),
-    ($e.timeout // empty | dur_problem($go_re; 64; "\($p).timeout"))
+    ($e.timeout // empty | dur_problem($go_re; 64; "\($p).timeout")),
+    ($e.cacheTTL // empty | dur_problem($go_re; 64; "\($p).cacheTTL"))
   ))
 ]} | report("KrakenDEndpoint")' "$work/endpoints.json"
