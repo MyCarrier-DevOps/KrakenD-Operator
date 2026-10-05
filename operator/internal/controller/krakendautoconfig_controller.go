@@ -256,7 +256,12 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	// Unresolved schema references are spec notes like the fetch-time ones:
 	// distinct, counted whole in the status message, and listed up to the cap.
-	for _, note := range capList(specWarnings(genOutput.Warnings)) {
+	// A note already emitted for the fetch is not emitted again.
+	emitted := specWarnings(specNotes)
+	fresh := slices.DeleteFunc(specWarnings(genOutput.Warnings), func(note string) bool {
+		return slices.Contains(emitted, note)
+	})
+	for _, note := range capList(fresh) {
 		warnings.add(v1alpha1.ReasonSpecWarning, note)
 	}
 	specNotes = append(specNotes, genOutput.Warnings...)
