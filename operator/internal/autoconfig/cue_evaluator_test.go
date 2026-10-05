@@ -2183,3 +2183,27 @@ func TestEvaluate_FailedOperationWithUnsupportedMethodIsSkipped(t *testing.T) {
 		t.Errorf("expected headUsers skipped as UnsupportedMethod, got %+v", out.Skipped)
 	}
 }
+
+func TestEvaluate_FailedOperationWithUnknownMethodStaysFailed(t *testing.T) {
+	// A conflicting method leaves the entry's method unknown. The operation
+	// is not known to be unsupported, so it must keep failing the sync
+	// rather than be skipped and let its endpoint be deleted as stale.
+	out, err := evaluateWithCustomDefs(`{"paths":{}}`, map[string]string{
+		"a.cue": `endpoint: getUser: {
+	endpoint: "/users/{id}"
+	method: "GET"
+	backends: [{host: ["http://x"], urlPattern: "/users/{id}", method: "GET"}]
+	_operationId: "getUser"
+}`,
+		"b.cue": `endpoint: getUser: method: "POST"`,
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if len(out.Skipped) != 0 {
+		t.Errorf("expected nothing skipped, got %+v", out.Skipped)
+	}
+	if len(out.Failed) != 1 || out.Failed[0].OperationID != "getUser" {
+		t.Errorf("expected getUser failed, got %+v", out.Failed)
+	}
+}
