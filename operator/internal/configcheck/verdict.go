@@ -6,6 +6,7 @@ package configcheck
 
 import (
 	"fmt"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/types"
 )
@@ -41,5 +42,17 @@ type Verdict struct {
 // Summary joins the findings into one message of at most limit bytes, cut at
 // a finding boundary and ending with the number of findings left out.
 func (v Verdict) Summary(limit int) string {
-	return ""
+	var b strings.Builder
+	for i, f := range v.Findings {
+		s := f.String()
+		if i > 0 {
+			s = "; " + s
+		}
+		if b.Len()+len(s) > limit {
+			fmt.Fprintf(&b, " (+%d more)", len(v.Findings)-i)
+			break
+		}
+		b.WriteString(s)
+	}
+	return b.String()
 }
