@@ -310,6 +310,8 @@ type FilterSpec struct {
 // spec.defaults.
 type AdditionalEndpoint struct {
 	// Endpoint is the public path KrakenD exposes (e.g. "/liveness").
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:Pattern=`^/`
 	Endpoint string `json:"endpoint"`
 
 	// Method is the HTTP method. Defaults to GET.
