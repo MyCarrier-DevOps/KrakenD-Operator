@@ -40,7 +40,8 @@ func expectInvalid(t *testing.T, obj client.Object, want string) {
 
 // The real API server runs these rules, so this proves the generated CRD is
 // accepted and enforced. The test cluster runs Kubernetes 1.32, below the
-// documented 1.33 floor; the rules used here do not depend on ratcheting.
+// documented 1.33 floor; the rules used here do not depend on ratcheting, which
+// (like optionalOldSelf) is beta and on by default in 1.32.
 func TestCRD_EndpointRules(t *testing.T) {
 	ns := testNamespace(t)
 	ep := func(name string, entries ...v1alpha1.EndpointEntry) *v1alpha1.KrakenDEndpoint {
