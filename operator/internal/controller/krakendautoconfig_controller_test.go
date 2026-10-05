@@ -3499,3 +3499,52 @@ func TestAutoConfigReconcile_SpecNotesEmittedBeforeUnmatchedFailure(t *testing.T
 		t.Errorf("expected %q before %q, got %v", wantNote, wantUnmatched, events)
 	}
 }
+
+func TestAutoConfigReconcile_ManyExternalRefsStayBoundedAndQuiet(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	f, ce, fi, g := defaultMocks()
+	configMapSpecWithExternalRef(ac, f)
+	var refs []string
+	for i := range 3 * maxStatusListLen {
+		refs = append(refs, fmt.Sprintf(`"/p%03d":{"get":{"responses":{"200":{"$ref":"other.json#/R%03d"}}}}`, i, i))
+	}
+	f.result = &autoconfig.FetchResult{Data: []byte(`{"paths":{` + strings.Join(refs, ",") + `}}`)}
+	var counts writeCounts
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).
+		WithInterceptorFuncs(countWrites(&counts)).Build()
+	rec := fakeRecorder()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Recorder = rec
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+	first := getAC(t, c, ac)
+	if got := len(first.Status.Warnings); got != maxStatusListLen {
+		t.Errorf("status warnings = %d, want %d", got, maxStatusListLen)
+	}
+	if !slices.IsSorted(first.Status.Warnings) {
+		t.Errorf("status warnings are not sorted: %q", first.Status.Warnings)
+	}
+	specWarningEvents := 0
+	for _, ev := range drainEvents(rec) {
+		if strings.HasPrefix(ev, "Warning "+v1alpha1.ReasonSpecWarning+" ") {
+			specWarningEvents++
+		}
+	}
+	if specWarningEvents != maxStatusListLen {
+		t.Errorf("SpecWarning events = %d, want %d", specWarningEvents, maxStatusListLen)
+	}
+	counts = writeCounts{}
+
+	if _, err := reconcileAC(r, first); err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+	if counts != (writeCounts{}) {
+		t.Errorf("an identical second pass wrote %+v, want no writes", counts)
+	}
+	if events := drainEvents(rec); len(events) != 0 {
+		t.Errorf("an identical second pass emitted %v, want no events", events)
+	}
+}
