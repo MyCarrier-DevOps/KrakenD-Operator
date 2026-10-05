@@ -1926,3 +1926,24 @@ func TestEvaluate_UnsupportedMethodsAreSkippedAndReported(t *testing.T) {
 		t.Errorf("skipped = %q, want %q", got, want)
 	}
 }
+
+func TestEvaluate_SkippedOperationsCarryTheTransformedPath(t *testing.T) {
+	defs, err := EmbeddedCUEDefinitions()
+	if err != nil {
+		t.Fatalf("loading defs: %v", err)
+	}
+	out, err := NewCUEEvaluator().Evaluate(context.Background(), CUEInput{
+		SpecData: []byte(`{"paths":{"/v1/a":{"head":{"operationId":"headA",` +
+			`"responses":{"200":{"description":"OK"}}}}}}`),
+		SpecFormat:   v1alpha1.SpecFormatJSON,
+		DefaultDefs:  defs,
+		URLTransform: &v1alpha1.URLTransformSpec{StripPathPrefix: "/v1", AddPathPrefix: "/api"},
+		ServiceName:  "_spec",
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if len(out.Skipped) != 1 || out.Skipped[0].Path != "/api/a" {
+		t.Errorf("skipped = %+v, want one entry at /api/a", out.Skipped)
+	}
+}
