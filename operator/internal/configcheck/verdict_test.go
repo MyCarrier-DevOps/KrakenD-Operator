@@ -128,3 +128,21 @@ func TestFindingsFrom_NamesTheWinnerOfTwoSameShapeEntries(t *testing.T) {
 		t.Errorf("findings = %+v, want one finding on spec.endpoints[1], the earlier of the pair", got)
 	}
 }
+
+func TestFindingsFrom_LeavesTheIndexOpenWithoutAnExactMatch(t *testing.T) {
+	rendered := []byte(`{"endpoints":[{"endpoint":"/a","method":"GET"}]}`)
+	known := types.NamespacedName{Namespace: "ns", Name: "a"}
+	missing := types.NamespacedName{Namespace: "ns", Name: "gone"}
+	eps := []v1alpha1.KrakenDEndpoint{
+		{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "a"}, Spec: v1alpha1.KrakenDEndpointSpec{
+			Endpoints: []v1alpha1.EndpointEntry{{Endpoint: "/a", Method: "POST"}}}},
+	}
+
+	for name, ep := range map[string]types.NamespacedName{"no exact match": known, "endpoint not listed": missing} {
+		got := findingsFrom([]renderer.Attribution{{Endpoint: ep, Index: 0, Message: "bad"}}, rendered, eps, "")
+
+		if len(got) != 1 || got[0].Index != -1 || got[0].String() != ep.String()+": bad" {
+			t.Errorf("%s: findings = %+v, want %q", name, got, ep.String()+": bad")
+		}
+	}
+}
