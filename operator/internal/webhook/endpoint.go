@@ -22,6 +22,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -220,8 +221,12 @@ func changedEntries(old, ep *v1alpha1.KrakenDEndpoint) []int {
 	return changed
 }
 
-// validateRouteUniqueness rejects each changed entry whose route another
-// KrakenDEndpoint on the same gateway already claims.
+// validateRouteUniqueness rejects each changed entry whose route another entry
+// on the same gateway already claims: the same method and path, or the same
+// method and route shape, meaning paths that differ only in parameter names,
+// which KrakenD's router cannot tell apart. Endpoints with ep's controller are
+// exempt: they are the transient state of an operation rename, which that
+// owner resolves by deleting the old endpoint in the same sync.
 func (v *EndpointValidator) validateRouteUniqueness(
 	ctx context.Context, ep *v1alpha1.KrakenDEndpoint, changed []int, gw *v1alpha1.KrakenDGateway,
 ) (field.ErrorList, error) {
@@ -234,7 +239,7 @@ func (v *EndpointValidator) validateRouteUniqueness(
 	claims := map[string]claim{}
 	for i := range list.Items {
 		other := &list.Items[i]
-		if other.Namespace == ep.Namespace && other.Name == ep.Name {
+		if other.Namespace == ep.Namespace && other.Name == ep.Name || sameController(ep, other) {
 			continue
 		}
 		for _, e := range other.Spec.Endpoints {
@@ -259,6 +264,13 @@ func (v *EndpointValidator) validateRouteUniqueness(
 		}
 	}
 	return errs, nil
+}
+
+// sameController reports whether a and b have the same controller owner, for
+// example two endpoints one KrakenDAutoConfig generated.
+func sameController(a, b metav1.Object) bool {
+	ca, cb := metav1.GetControllerOf(a), metav1.GetControllerOf(b)
+	return ca != nil && cb != nil && ca.UID == cb.UID
 }
 
 func routeKey(e v1alpha1.EndpointEntry) string {
