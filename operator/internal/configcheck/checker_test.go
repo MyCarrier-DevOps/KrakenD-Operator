@@ -221,6 +221,27 @@ func TestCheckGateway_AttributesLintOutputToTheSpecEntry(t *testing.T) {
 	}
 }
 
+func TestCheckRendered_AVerdictCarriesTheValidatorsRejection(t *testing.T) {
+	rejection := &renderer.ValidationError{
+		Output: "- at '/endpoints/0/extra_config': bad", Err: errors.New("exit status 1"),
+	}
+	c := newChecker(&fakeValidator{err: rejection}, endpoint("a", "/a"))
+	in, err := c.Gather(context.Background(), gateway(v1alpha1.EditionCE), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := renderer.New(renderer.Options{}).Render(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	verdict, err := c.CheckRendered(context.Background(), in, out)
+
+	if err != nil || verdict.OK || verdict.Rejection != rejection {
+		t.Errorf("verdict = %+v, err = %v; want a rejection carrying %v", verdict, err, rejection)
+	}
+}
+
 func TestCheck_TransientValidatorErrorIsAnError(t *testing.T) {
 	c := newChecker(&fakeValidator{err: errors.New("running krakend check: fork/exec: no such file")}, endpoint("a", "/a"))
 	if verdict, err := c.CheckGateway(context.Background(), gateway(v1alpha1.EditionCE), nil); err == nil {
