@@ -2672,7 +2672,8 @@ spec:
               message: edition EE requires license.externalSecret.enabled or license.secretRef
               rule: self.edition != 'EE' || (has(self.license) && ((has(self.license.externalSecret)
                 && has(self.license.externalSecret.enabled) && self.license.externalSecret.enabled)
-                || has(self.license.secretRef)))
+                || (has(self.license.secretRef) && size(self.license.secretRef.name)
+                > 0)))
             - fieldPath: .license
               message: CE edition does not require license configuration
               rule: self.edition != 'CE' || !has(self.license) || !((has(self.license.externalSecret)
