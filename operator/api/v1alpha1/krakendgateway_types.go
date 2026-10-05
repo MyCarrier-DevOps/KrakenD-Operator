@@ -327,7 +327,7 @@ type GatewayConfig struct {
 	// DNSCacheTTL is the DNS lookup cache duration (e.g. "30s").
 	// +kubebuilder:validation:Pattern=`^[0-9]+(ns|ms|us|µs|s|m|h)$`
 	// +kubebuilder:validation:MaxLength=64
-	// +kubebuilder:validation:XValidation:rule="duration(self) >= duration('0s')",message="must be a duration that fits in 64 bits of nanoseconds"
+	// +kubebuilder:validation:XValidation:rule="!self.matches('^[0-9]+(ns|ms|us|µs|s|m|h)$') || duration(self) >= duration('0s')",message="must be a duration that fits in 64 bits of nanoseconds"
 	DNSCacheTTL string `json:"dnsCacheTTL,omitempty"`
 
 	// EchoEndpoint enables the /__echo/ endpoint for debugging.
