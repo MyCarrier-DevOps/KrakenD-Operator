@@ -324,3 +324,31 @@ func TestCheckGateway_HealthPathClash(t *testing.T) {
 		t.Errorf("findings = %+v, want ns/a spec.endpoints[0] clashing with the health route", verdict.Findings)
 	}
 }
+
+// panicValidator panics in either mode.
+type panicValidator struct{}
+
+func (panicValidator) Validate(context.Context, []byte, v1alpha1.Edition) error {
+	panic("validator exploded")
+}
+func (panicValidator) Lint(context.Context, []byte, v1alpha1.Edition) error {
+	panic("validator exploded")
+}
+
+// controller-runtime recovers a panicking webhook or reconciler, so a check
+// that panics must still give its slot back.
+func TestCheck_ReleasesTheSlotWhenTheValidatorPanics(t *testing.T) {
+	c := newChecker(panicValidator{}, endpoint("a", "/a"))
+	func() {
+		defer func() { _ = recover() }()
+		_, _ = c.CheckGateway(context.Background(), gateway(v1alpha1.EditionCE), nil)
+	}()
+	c.validator = &fakeValidator{}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	verdict, err := c.CheckGateway(ctx, gateway(v1alpha1.EditionCE), nil)
+	if err != nil || !verdict.OK {
+		t.Fatalf("verdict = %+v, err = %v; want OK after a panicked check", verdict, err)
+	}
+}
