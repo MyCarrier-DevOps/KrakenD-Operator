@@ -37,10 +37,11 @@ import (
 // pods: an endpoint carrying both managed labels for ac, no controller
 // reference and no deletion timestamp gets ac as its controller. An endpoint
 // controlled by another object is never touched. Both lists are scoped to
-// ac's namespace.
+// ac's namespace. Adoption failures are recorded in outcome.
 func (r *KrakenDAutoConfigReconciler) claimEndpoints(
 	ctx context.Context,
 	ac *v1alpha1.KrakenDAutoConfig,
+	outcome *endpointOutcome,
 ) ([]v1alpha1.KrakenDEndpoint, error) {
 	var owned v1alpha1.KrakenDEndpointList
 	if err := r.List(ctx, &owned, client.InNamespace(ac.Namespace),
@@ -61,10 +62,12 @@ func (r *KrakenDAutoConfigReconciler) claimEndpoints(
 			continue
 		}
 		if err := controllerutil.SetControllerReference(ac, orphan, r.Scheme); err != nil {
-			return nil, fmt.Errorf("adopting endpoint %s: %w", orphan.Name, err)
+			outcome.record(fmt.Errorf("adopting endpoint %s: %w", orphan.Name, err))
+			continue
 		}
 		if err := r.Update(ctx, orphan); err != nil {
-			return nil, fmt.Errorf("adopting endpoint %s: %w", orphan.Name, err)
+			outcome.record(fmt.Errorf("adopting endpoint %s: %w", orphan.Name, err))
+			continue
 		}
 		controlled = append(controlled, *orphan)
 	}
