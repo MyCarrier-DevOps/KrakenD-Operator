@@ -30,6 +30,7 @@ import (
 	"github.com/go-logr/logr/funcr"
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/autoconfig"
+	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -246,7 +247,34 @@ func newACReconciler(
 		CUEEvaluator: cueEval,
 		Filter:       filter,
 		Generator:    gen,
+		Checker:      &fakeChecker{},
 	}
+}
+
+// fakeChecker is an AutoConfigChecker that returns verdicts in order, then
+// passes; err, when set, is returned by every call. calls records each
+// call's replace set.
+type fakeChecker struct {
+	verdicts []configcheck.Verdict
+	err      error
+	calls    [][]v1alpha1.KrakenDEndpoint
+}
+
+func (f *fakeChecker) CheckGateway(
+	_ context.Context,
+	_ *v1alpha1.KrakenDGateway,
+	replace []v1alpha1.KrakenDEndpoint,
+) (configcheck.Verdict, error) {
+	f.calls = append(f.calls, replace)
+	if f.err != nil {
+		return configcheck.Verdict{}, f.err
+	}
+	if len(f.verdicts) == 0 {
+		return configcheck.Verdict{OK: true}, nil
+	}
+	v := f.verdicts[0]
+	f.verdicts = f.verdicts[1:]
+	return v, nil
 }
 
 // drainEvents returns every event recorded so far, without blocking.
@@ -1440,10 +1468,8 @@ func TestAutoConfigReconcile_UnmatchedOverrideFailsSync(t *testing.T) {
 	f, ce, fi, g := defaultMocks()
 	ce.output.UnmatchedOverrides = []string{"WebhookStatus", "WebhookDocuments"}
 	rec := fakeRecorder()
-	r := &KrakenDAutoConfigReconciler{
-		Client: c, Scheme: testScheme(), Recorder: rec,
-		Fetcher: f, CUEEvaluator: ce, Filter: fi, Generator: g,
-	}
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Recorder = rec
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
@@ -1706,6 +1732,7 @@ func TestAutoConfigReconcile_OverrideOnFilteredOutOperationDoesNotFailSync(t *te
 		CUEEvaluator: autoconfig.NewCUEEvaluator(),
 		Filter:       autoconfig.NewFilter(),
 		Generator:    autoconfig.NewGenerator(),
+		Checker:      &fakeChecker{},
 	}
 
 	if _, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -2060,10 +2087,8 @@ func TestAutoConfigReconcile_SteadyStateSuppressesInputWarningEvents(t *testing.
 	f, ce, fi, g := defaultMocks()
 	g.output.Skipped = []autoconfig.OperationIssue{duplicateListUsers()}
 	rec := fakeRecorder()
-	r := &KrakenDAutoConfigReconciler{
-		Client: c, Scheme: testScheme(), Recorder: rec,
-		Fetcher: f, CUEEvaluator: ce, Filter: fi, Generator: g,
-	}
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Recorder = rec
 
 	if _, err := r.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
@@ -2093,10 +2118,8 @@ func TestAutoConfigReconcile_ChangedInputsEmitsInputWarningEvents(t *testing.T) 
 	f, ce, fi, g := defaultMocks()
 	g.output.Skipped = []autoconfig.OperationIssue{duplicateListUsers()}
 	rec := fakeRecorder()
-	r := &KrakenDAutoConfigReconciler{
-		Client: c, Scheme: testScheme(), Recorder: rec,
-		Fetcher: f, CUEEvaluator: ce, Filter: fi, Generator: g,
-	}
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Recorder = rec
 
 	if _, err := r.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
@@ -2658,10 +2681,8 @@ func TestAutoConfigReconcile_AdditionalEndpointOverrideEmitsWarning(t *testing.T
 	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).Build()
 	f, ce, fi, g := defaultMocks()
 	rec := fakeRecorder()
-	r := &KrakenDAutoConfigReconciler{
-		Client: c, Scheme: testScheme(), Recorder: rec,
-		Fetcher: f, CUEEvaluator: ce, Filter: fi, Generator: g,
-	}
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Recorder = rec
 
 	if _, err := r.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
