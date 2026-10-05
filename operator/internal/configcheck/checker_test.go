@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -37,8 +38,10 @@ import (
 )
 
 // fakeValidator records which mode ran, for which edition, and on which config,
-// and answers with err.
+// and answers with err. It is safe for concurrent use; read the recorded
+// fields only after the checks have returned.
 type fakeValidator struct {
+	mu       sync.Mutex
 	err      error
 	calls    []string
 	editions []v1alpha1.Edition
@@ -54,6 +57,8 @@ func (f *fakeValidator) Lint(_ context.Context, jsonData []byte, edition v1alpha
 }
 
 func (f *fakeValidator) record(mode string, jsonData []byte, edition v1alpha1.Edition) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls, f.editions, f.seen = append(f.calls, mode), append(f.editions, edition), append(f.seen, string(jsonData))
 	return f.err
 }
