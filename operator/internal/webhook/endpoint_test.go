@@ -146,6 +146,7 @@ func TestEndpointAdmission_RejectsRouteClaimedByAnotherEndpoint(t *testing.T) {
 	}{
 		{"exact duplicate", "/users/{id}", "/users/{id}", "already defined by KrakenDEndpoint default/other"},
 		{"same shape", "/users/{id}", "/users/{name}", "has the same route as GET /users/{id}"},
+		{"collapsed slashes", "/a/b", "/a//b", "has the same route as GET /a/b"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
