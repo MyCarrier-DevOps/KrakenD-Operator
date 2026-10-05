@@ -4774,7 +4774,8 @@ func TestAutoConfigReconcile_UnattributedCheckFailure(t *testing.T) {
 		failure, baseline configcheck.Verdict
 		wantWrite         bool
 	}{
-		"another endpoint, change breaks gateway: hold": {otherEndpoint, configcheck.Verdict{OK: true}, false},
+		"another endpoint, gateway already broken: write": {otherEndpoint, otherEndpoint, true},
+		"another endpoint, change breaks gateway: hold":   {otherEndpoint, configcheck.Verdict{OK: true}, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			cm := testCUEDefinitionsCM()
