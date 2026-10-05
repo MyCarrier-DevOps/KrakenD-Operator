@@ -175,3 +175,25 @@ func TestDereferenceParameters_RefToPathsDoesNotMultiplyTheSpec(t *testing.T) {
 		t.Errorf("got %d failed operations, want 16", len(failed))
 	}
 }
+
+func TestDereferenceParameters_WarnsOnRefsToNonParameters(t *testing.T) {
+	for name, target := range map[string]string{
+		"info section":      `#/info`,
+		"external chain":    `#/components/parameters/Remote`,
+		"schema":            `#/components/schemas/Pet`,
+		"named but no 'in'": `#/components/parameters/NoIn`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			spec := []byte(`{"info":{"name":"x","in":"y"},"paths":{"/a":{"get":{"parameters":[{"$ref":"` + target + `"}]}}},` +
+				`"components":{"schemas":{"Pet":{"type":"object"}},"parameters":{` +
+				`"Remote":{"$ref":"https://example.com/p.json#/Limit"},"NoIn":{"name":"n"}}}}`)
+			out, warnings, err := DereferenceParameters(spec)
+			if err != nil || len(warnings) != 1 || !strings.Contains(warnings[0], target) {
+				t.Errorf("warnings = %q, err = %v", warnings, err)
+			}
+			if !bytes.Equal(out, spec) {
+				t.Errorf("expected the spec unchanged, got %s", out)
+			}
+		})
+	}
+}
