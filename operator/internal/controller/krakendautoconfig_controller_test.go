@@ -2361,6 +2361,37 @@ func TestAutoConfigReconcile_SharedBrokenRefEmitsOneSpecWarning(t *testing.T) {
 	}
 }
 
+func TestAutoConfigReconcile_SyncedMessageCountsEveryDistinctWarning(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).Build()
+	f, ce, fi, g := defaultMocks()
+	// 45 operations, each referencing its own missing pointer.
+	var paths []string
+	for i := range 45 {
+		paths = append(paths, fmt.Sprintf(
+			`"/p%d":{"get":{"responses":{"200":{"$ref":"common.json#/Missing%d"}}}}`, i, i))
+	}
+	f.result = &autoconfig.FetchResult{Data: []byte(`{"paths":{` + strings.Join(paths, ",") + `}}`)}
+	f.byURL = map[string]mockFetchOutcome{
+		"https://example.com/common.json": {result: &autoconfig.FetchResult{Data: []byte(`{}`)}},
+	}
+	r := newACReconciler(c, f, ce, fi, g)
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	updated := getAC(t, c, ac)
+	if len(updated.Status.Warnings) != maxStatusListLen {
+		t.Errorf("listed warnings = %d, want the %d cap", len(updated.Status.Warnings), maxStatusListLen)
+	}
+	cond := meta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionSynced)
+	want := "Generated 1 endpoints; 45 spec warnings (see status.warnings)"
+	if cond == nil || cond.Message != want {
+		t.Errorf("Synced = %+v, want message %q", cond, want)
+	}
+}
+
 func TestAutoConfigPredicate_IgnoresStatusOnlyUpdate(t *testing.T) {
 	old := &v1alpha1.KrakenDAutoConfig{
 		ObjectMeta: metav1.ObjectMeta{
