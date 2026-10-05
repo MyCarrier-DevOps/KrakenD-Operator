@@ -312,6 +312,7 @@ type FilterSpec struct {
 // document. Only Endpoint is required; everything else is optional and, when
 // omitted, is synthesized or (when InheritDefaults is true) taken from
 // spec.defaults.
+// +kubebuilder:validation:XValidation:rule="!(has(self.backends) && size(self.backends) > 0 && ((has(self.host) && size(self.host) > 0) || (has(self.backendUrlPattern) && size(self.backendUrlPattern) > 0) || (has(self.encoding) && size(self.encoding) > 0)))",message="backends and the host/backendUrlPattern/encoding shorthand are mutually exclusive"
 type AdditionalEndpoint struct {
 	// Endpoint is the public path KrakenD exposes (e.g. "/liveness").
 	// +kubebuilder:validation:MinLength=1
