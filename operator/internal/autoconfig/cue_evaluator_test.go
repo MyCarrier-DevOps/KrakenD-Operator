@@ -349,7 +349,7 @@ endpoint: {
 					"host": ["http://svc"]
 					"url_pattern": path
 				}]
-				// sanitizeName lowercases operationId
+				// SanitizeName lowercases operationId
 				if _overrides[strings.ToLower(op.operationId)] != _|_ {
 					"extraConfig": _overrides[strings.ToLower(op.operationId)]
 				}

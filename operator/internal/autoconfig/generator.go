@@ -123,7 +123,7 @@ const maxNameLength = 253
 func endpointName(autoconfigName, operationID, method, path string) string {
 	var name string
 	if operationID != "" {
-		name = fmt.Sprintf("%s-%s", autoconfigName, sanitizeName(operationID))
+		name = fmt.Sprintf("%s-%s", autoconfigName, SanitizeName(operationID))
 	} else {
 		name = fmt.Sprintf("%s-%s-%s", autoconfigName, strings.ToLower(method), sanitizePath(path))
 	}
@@ -133,7 +133,10 @@ func endpointName(autoconfigName, operationID, method, path string) string {
 	return strings.TrimRight(name, "-")
 }
 
-func sanitizeName(s string) string {
+// SanitizeName lowercases s and replaces every character outside [a-z0-9-]
+// with "-", trimming leading and trailing dashes. It names generated endpoints
+// and keys CUE overrides.
+func SanitizeName(s string) string {
 	s = strings.ToLower(s)
 	s = strings.Map(func(r rune) rune {
 		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {

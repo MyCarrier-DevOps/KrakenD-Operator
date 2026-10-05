@@ -175,8 +175,8 @@ func TestSanitizeName(t *testing.T) {
 		{"---trim---", "trim"},
 	}
 	for _, tt := range tests {
-		if got := sanitizeName(tt.input); got != tt.expected {
-			t.Errorf("sanitizeName(%q) = %q, want %q", tt.input, got, tt.expected)
+		if got := SanitizeName(tt.input); got != tt.expected {
+			t.Errorf("SanitizeName(%q) = %q, want %q", tt.input, got, tt.expected)
 		}
 	}
 }

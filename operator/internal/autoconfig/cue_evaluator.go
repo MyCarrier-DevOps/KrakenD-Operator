@@ -167,7 +167,7 @@ func normalizeToJSON(data []byte, format v1alpha1.SpecFormat) ([]byte, error) {
 func applyOverrides(cueCtx *cue.Context, unified cue.Value, input CUEInput) cue.Value {
 	for _, override := range input.Overrides {
 		if override.ExtraConfig != nil && override.ExtraConfig.Raw != nil {
-			key := sanitizeName(override.OperationID)
+			key := SanitizeName(override.OperationID)
 			overrideCUE := fmt.Sprintf("_overrides: %s: _\n_overrides: %s: %s", key, key, override.ExtraConfig.Raw)
 			val := cueCtx.CompileString(overrideCUE, cue.Filename("override-"+key+".cue"))
 			unified = unified.Unify(val)
