@@ -37,6 +37,8 @@ func TestValidateEntries(t *testing.T) {
 	}
 	post := testEndpoint("e", "/healthz")
 	post.Spec.Endpoints[0].Method = "POST"
+	ee := testGateway()
+	ee.Spec.Edition = v1alpha1.EditionEE
 	tests := []struct {
 		name   string
 		gw     *v1alpha1.KrakenDGateway
@@ -59,6 +61,7 @@ func TestValidateEntries(t *testing.T) {
 		{"empty raw health_path reads as default", rawRouterBlock(`{"health_path":""}`),
 			testEndpoint("e", "/healthz"), ""},
 		{"unnamed wildcard on CE", testGateway(), testEndpoint("e", "/files/*"), "Enterprise feature"},
+		{"unnamed wildcard on EE", ee, testEndpoint("e", "/files/*"), ""},
 		{"only GET collides with the health endpoint", custom, post, ""},
 		// A raw router block replaces the typed one, so the typed healthPath is gone.
 		{"raw router replaces the typed one", rawRouterBlock(`{"auto_options":true}`),
