@@ -335,9 +335,11 @@ func sortIssues(issues []OperationIssue) {
 	})
 }
 
-// skipUnsupportedMethods moves every entry whose final method the
-// KrakenDEndpoint API does not accept from Entries to Skipped, so an override
-// that changes the method decides whether the operation is generated.
+// skipUnsupportedMethods moves every entry, and every failed operation, whose
+// final method the KrakenDEndpoint API does not accept to Skipped, so an
+// override that changes the method decides whether the operation is
+// generated. A failed operation of such a method can never publish, so it
+// must not hold anything back.
 func skipUnsupportedMethods(output *CUEOutput) {
 	kept := output.Entries[:0]
 	for _, entry := range output.Entries {
@@ -346,18 +348,33 @@ func skipUnsupportedMethods(output *CUEOutput) {
 			continue
 		}
 		key := entry.Endpoint + ":" + entry.Method
-		output.Skipped = append(output.Skipped, OperationIssue{
-			Operation: Operation{
-				Method: entry.Method, Path: entry.Endpoint,
-				OperationID: output.OperationIDs[key], Tags: output.Tags[key],
-			},
-			Reason:  v1alpha1.ReasonUnsupportedMethod,
-			Message: "KrakenDEndpoint supports only " + strings.Join(supportedMethods, ", "),
-		})
+		output.Skipped = append(output.Skipped, unsupportedMethodIssue(Operation{
+			Method: entry.Method, Path: entry.Endpoint,
+			OperationID: output.OperationIDs[key], Tags: output.Tags[key],
+		}))
 		delete(output.OperationIDs, key)
 		delete(output.Tags, key)
 	}
 	output.Entries = kept
+
+	stillFailed := output.Failed[:0]
+	for _, failed := range output.Failed {
+		if slices.Contains(supportedMethods, failed.Method) {
+			stillFailed = append(stillFailed, failed)
+			continue
+		}
+		output.Skipped = append(output.Skipped, unsupportedMethodIssue(failed.Operation))
+	}
+	output.Failed = stillFailed
+}
+
+// unsupportedMethodIssue reports op as skipped for its method.
+func unsupportedMethodIssue(op Operation) OperationIssue {
+	return OperationIssue{
+		Operation: op,
+		Reason:    v1alpha1.ReasonUnsupportedMethod,
+		Message:   "KrakenDEndpoint supports only " + strings.Join(supportedMethods, ", "),
+	}
 }
 
 // applyDefaults applies CR-level EndpointDefaults to all entries. These replace
