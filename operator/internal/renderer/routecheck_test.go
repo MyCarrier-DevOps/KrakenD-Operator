@@ -17,6 +17,7 @@ limitations under the License.
 package renderer
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -43,23 +44,24 @@ func TestRouteConflicts_MirrorsTheRuntimeRouter(t *testing.T) {
 	tests := []struct {
 		name, doc string
 		refused   string // substring of the first line; "" means no lines
+		blames    []int  // endpoint index each line points at, in order
 	}{
-		{"static beside parameter", `{"endpoints":[{"endpoint":"/a/{id}","method":"GET"},{"endpoint":"/a/static","method":"GET"}]}`, ""},
-		{"trailing slash is distinct", `{"endpoints":[{"endpoint":"/a","method":"GET"},{"endpoint":"/a/","method":"GET"}]}`, ""},
-		{"methods have separate trees", `{"endpoints":[{"endpoint":"/a/{id}","method":"GET"},{"endpoint":"/a/{name}","method":"POST"}]}`, ""},
-		{"parameter beside static prefix", `{"endpoints":[{"endpoint":"/a/{id}","method":"GET"},{"endpoint":"/{x}/b","method":"GET"}]}`, ""},
-		{"mid-segment braces are literal", `{"endpoints":[{"endpoint":"/a/b{id}","method":"GET"}]}`, ""},
-		{"suffix after a parameter", `{"endpoints":[{"endpoint":"/a/{id}","method":"GET"},{"endpoint":"/a/{id}.json","method":"GET"}]}`, "conflicts with existing wildcard"},
-		{"exact duplicate", `{"endpoints":[{"endpoint":"/a","method":"GET"},{"endpoint":"/a","method":"GET"}]}`, "handlers are already registered"},
-		{"double slash duplicate", `{"endpoints":[{"endpoint":"/a//b","method":"GET"},{"endpoint":"/a/b","method":"GET"}]}`, "handlers are already registered"},
-		{"unnamed wildcard", `{"endpoints":[{"endpoint":"/a/*","method":"GET"}]}`, "wildcards must be named"},
-		{"custom health path", `{"extra_config":{"router":{"health_path":"/healthz"}},"endpoints":[{"endpoint":"/healthz","method":"GET"}]}`, "the gateway's own route"},
-		{"health path is GET only", `{"extra_config":{"router":{"health_path":"/healthz"}},"endpoints":[{"endpoint":"/healthz","method":"POST"}]}`, ""},
-		{"health disabled", `{"extra_config":{"router":{"disable_health":true}},"endpoints":[{"endpoint":"/__health","method":"GET"}]}`, ""},
-		{"auto options joins methods", `{"extra_config":{"router":{"auto_options":true}},"endpoints":[{"endpoint":"/a/{id}","method":"GET"},{"endpoint":"/a/{name}","method":"POST"}]}`, "conflicts with existing wildcard"},
-		{"auto options registers one route per path", `{"extra_config":{"router":{"auto_options":true}},"endpoints":[{"endpoint":"/a","method":"GET"},{"endpoint":"/a","method":"POST"}]}`, ""},
-		{"auto options cleans the path first", `{"extra_config":{"router":{"auto_options":true}},"endpoints":[{"endpoint":"a","method":"GET"},{"endpoint":"/a","method":"POST"}]}`, ""},
-		{"echo beside root parameter", `{"echo_endpoint":true,"endpoints":[{"endpoint":"/{x}","method":"GET"}]}`, ""},
+		{"static beside parameter", `{"endpoints":[{"endpoint":"/a/{id}","method":"GET"},{"endpoint":"/a/static","method":"GET"}]}`, "", nil},
+		{"trailing slash is distinct", `{"endpoints":[{"endpoint":"/a","method":"GET"},{"endpoint":"/a/","method":"GET"}]}`, "", nil},
+		{"methods have separate trees", `{"endpoints":[{"endpoint":"/a/{id}","method":"GET"},{"endpoint":"/a/{name}","method":"POST"}]}`, "", nil},
+		{"parameter beside static prefix", `{"endpoints":[{"endpoint":"/a/{id}","method":"GET"},{"endpoint":"/{x}/b","method":"GET"}]}`, "", nil},
+		{"mid-segment braces are literal", `{"endpoints":[{"endpoint":"/a/b{id}","method":"GET"}]}`, "", nil},
+		{"suffix after a parameter", `{"endpoints":[{"endpoint":"/a/{id}","method":"GET"},{"endpoint":"/a/{id}.json","method":"GET"}]}`, "conflicts with existing wildcard", []int{1, 0}},
+		{"exact duplicate", `{"endpoints":[{"endpoint":"/a","method":"GET"},{"endpoint":"/a","method":"GET"}]}`, "handlers are already registered", []int{1, 0}},
+		{"double slash duplicate", `{"endpoints":[{"endpoint":"/a//b","method":"GET"},{"endpoint":"/a/b","method":"GET"}]}`, "handlers are already registered", []int{1, 0}},
+		{"unnamed wildcard", `{"endpoints":[{"endpoint":"/a/*","method":"GET"}]}`, "wildcards must be named", []int{0}},
+		{"custom health path", `{"extra_config":{"router":{"health_path":"/healthz"}},"endpoints":[{"endpoint":"/healthz","method":"GET"}]}`, "the gateway's own route", []int{0}},
+		{"health path is GET only", `{"extra_config":{"router":{"health_path":"/healthz"}},"endpoints":[{"endpoint":"/healthz","method":"POST"}]}`, "", nil},
+		{"health disabled", `{"extra_config":{"router":{"disable_health":true}},"endpoints":[{"endpoint":"/__health","method":"GET"}]}`, "", nil},
+		{"auto options joins methods", `{"extra_config":{"router":{"auto_options":true}},"endpoints":[{"endpoint":"/a/{id}","method":"GET"},{"endpoint":"/a/{name}","method":"POST"}]}`, "conflicts with existing wildcard", []int{1, 0}},
+		{"auto options registers one route per path", `{"extra_config":{"router":{"auto_options":true}},"endpoints":[{"endpoint":"/a","method":"GET"},{"endpoint":"/a","method":"POST"}]}`, "", nil},
+		{"auto options cleans the path first", `{"extra_config":{"router":{"auto_options":true}},"endpoints":[{"endpoint":"a","method":"GET"},{"endpoint":"/a","method":"POST"}]}`, "", nil},
+		{"echo beside root parameter", `{"echo_endpoint":true,"endpoints":[{"endpoint":"/{x}","method":"GET"}]}`, "", nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -73,8 +75,13 @@ func TestRouteConflicts_MirrorsTheRuntimeRouter(t *testing.T) {
 				}
 				return
 			}
-			if len(lines) == 0 || !strings.Contains(lines[0], tt.refused) {
-				t.Errorf("lines = %q, want one containing %q", lines, tt.refused)
+			if len(lines) != len(tt.blames) || !strings.Contains(lines[0], tt.refused) {
+				t.Fatalf("lines = %q, want %d lines, the first containing %q", lines, len(tt.blames), tt.refused)
+			}
+			for i, idx := range tt.blames {
+				if want := fmt.Sprintf("- at '/endpoints/%d/endpoint': ", idx); !strings.HasPrefix(lines[i], want) {
+					t.Errorf("lines[%d] = %q, want prefix %q", i, lines[i], want)
+				}
 			}
 		})
 	}
