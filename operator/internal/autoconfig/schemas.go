@@ -150,10 +150,18 @@ func documentationRefs(entry v1alpha1.EndpointEntry) []string {
 }
 
 // schemaRefs returns the local "#/..." $ref pointers inside a JSON schema.
-// Examples are data and are not searched.
+// Examples are data and are not searched, but the members of a "properties"
+// map are schemas whatever they are named, so a property called "example" is
+// searched like any other.
 func schemaRefs(schema any) []string {
 	var refs []string
 	walkJSON(schema, func(key string, value any) bool {
+		if props, ok := value.(map[string]any); ok && key == "properties" {
+			for _, name := range slices.Sorted(maps.Keys(props)) {
+				refs = append(refs, schemaRefs(props[name])...)
+			}
+			return false
+		}
 		if payload, _ := examplePayload(key, value); payload {
 			return false
 		}
