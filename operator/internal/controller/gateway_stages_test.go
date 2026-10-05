@@ -35,6 +35,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -2542,10 +2543,17 @@ func TestGatewayReconcile_HeldForPluginConfigMapReportsNoRollout(t *testing.T) {
 func TestGatewayReconcile_HeldForPluginConfigMapStillReconcilesTheRestOfTheInfrastructure(t *testing.T) {
 	gw := reconciledGateway()
 	gw.Spec.Autoscaling = &v1alpha1.AutoscalingSpec{MinReplicas: ptr.To(int32(2)), MaxReplicas: 4}
+	gw.Spec.Dragonfly = &v1alpha1.DragonflySpec{Enabled: true}
+	gw.Spec.License = &v1alpha1.LicenseConfig{ExternalSecret: v1alpha1.ExternalSecretLicenseConfig{Enabled: true}}
+	gw.Spec.Istio = &v1alpha1.IstioSpec{
+		Enabled: true, Hosts: []string{"api.example.com"}, Gateways: []string{"istio-system/gw"},
+	}
 	gw.Spec.Plugins = &v1alpha1.PluginsSpec{Sources: []v1alpha1.PluginSource{
 		{ConfigMapRef: &v1alpha1.ConfigMapKeyRef{Name: "plugins-a", Key: "auth.so"}},
 	}}
-	c := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).Build()
+	c := fakeClientBuilder().
+		WithRESTMapper(optionalCRDMapper(dragonflyGVK, externalSecretGVK, virtualServiceGVK)).
+		WithObjects(gw).WithStatusSubresource(gw).Build()
 	r := newTestGatewayReconciler(c, renderOf(`{"version":3,"name":"held"}`), &mockValidator{})
 
 	if err := reconcileGateway(t, r, gw); err != nil {
@@ -2554,6 +2562,17 @@ func TestGatewayReconcile_HeldForPluginConfigMapStillReconcilesTheRestOfTheInfra
 	var hpa autoscalingv2.HorizontalPodAutoscaler
 	if err := c.Get(context.Background(), client.ObjectKeyFromObject(gw), &hpa); err != nil {
 		t.Errorf("the HPA must still be reconciled while the Deployment is held: %v", err)
+	}
+	for gvk, name := range map[schema.GroupVersionKind]string{
+		dragonflyGVK:      resources.DragonflyName(gw),
+		externalSecretGVK: resources.ExternalSecretName(gw),
+		virtualServiceGVK: gw.Name,
+	} {
+		u := &unstructured.Unstructured{}
+		u.SetGroupVersionKind(gvk)
+		if err := c.Get(context.Background(), client.ObjectKey{Namespace: gw.Namespace, Name: name}, u); err != nil {
+			t.Errorf("the %s must still be reconciled while the Deployment is held: %v", gvk.Kind, err)
+		}
 	}
 }
 
