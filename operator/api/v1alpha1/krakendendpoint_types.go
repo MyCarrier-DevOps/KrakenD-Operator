@@ -70,7 +70,9 @@ type EndpointEntry struct {
 	// +kubebuilder:validation:MinItems=1
 	Backends []BackendSpec `json:"backends"`
 
-	// Timeout overrides the global endpoint timeout.
+	// Timeout overrides the global endpoint timeout (a Go duration).
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:Pattern=`^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$`
 	Timeout *metav1.Duration `json:"timeout,omitempty"`
 
 	// CacheTTL overrides the global cache TTL.
