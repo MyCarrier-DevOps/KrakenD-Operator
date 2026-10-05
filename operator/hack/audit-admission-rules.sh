@@ -256,9 +256,12 @@ jq "${jq_opts[@]}" "$jq_lib"'
     ($o.endpoint // empty | select(crd_test($path_re) | not) | "\($p).endpoint \(tojson)"),
     (if $o.policyRef != null and ($o.policyRef.name // "") == "" then "\($p).policyRef.name is empty" else empty end)
   )),
-  # The override key is autoconfig.SanitizeName: Go lowercases U+212A and U+0130 to ASCII, jq does not.
-  (($s.overrides // []) | group_by(.operationId | gsub("\u212a"; "k") | gsub("\u0130"; "i") | ascii_downcase
-      | gsub("[^a-z0-9-]"; "-") | gsub("^-+|-+$"; ""))[]
+  # Overrides collide when they generate one endpoint name: autoconfig.OperationEndpointName is the AutoConfig
+  # name, a dash and SanitizeName(operationId), cut to 253 characters. Go lowercases U+212A and U+0130 to
+  # ASCII, jq does not.
+  (.metadata.name as $acName | ($s.overrides // []) | group_by(
+      $acName + "-" + (.operationId | gsub("\u212a"; "k") | gsub("\u0130"; "i") | ascii_downcase
+        | gsub("[^a-z0-9-]"; "-") | gsub("^-+|-+$"; "")) | .[0:253] | gsub("-+$"; ""))[]
     | select(length > 1) | "overrides collide: \([.[].operationId | tojson] | join(", "))"),
   ($s.defaults.endpoint.timeout // empty | dur_problem($go_re; 64; "spec.defaults.endpoint.timeout")),
   ($s.defaults.endpoint.cacheTTL // empty | dur_problem($go_re; 64; "spec.defaults.endpoint.cacheTTL")),
