@@ -452,7 +452,8 @@ func checkSet(
 
 // attributeFindings maps each candidate a finding's Endpoint names to a
 // rejection carrying that endpoint's least finding message, so the hold reads
-// the same whatever order the findings arrive in. Finding.Index is the entry's
+// the same whatever order the findings arrive in. The rejection's cause joins
+// every finding of the endpoint, sorted, for the log. Finding.Index is the entry's
 // position in that endpoint's spec.endpoints, or -1 when unknown; a generated
 // endpoint has one entry, so either value means its single operation. A
 // gateway-root finding (empty Endpoint) names no candidate.
@@ -465,17 +466,23 @@ func attributeFindings(
 		byKey[types.NamespacedName{Namespace: ep.Namespace, Name: ep.Name}] = ep
 	}
 	attributed := map[string]rejection{}
+	all := map[string][]string{}
 	for _, f := range findings {
 		ep, ok := byKey[f.Endpoint]
 		if !ok {
 			continue
 		}
+		all[ep.Name] = append(all[ep.Name], f.String())
 		if prev, seen := attributed[ep.Name]; !seen || f.Message < prev.message {
 			attributed[ep.Name] = rejection{
-				endpoint: ep, reason: v1alpha1.ReasonConfigValidationFailed,
-				message: f.Message, cause: errors.New(f.String()),
+				endpoint: ep, reason: v1alpha1.ReasonConfigValidationFailed, message: f.Message,
 			}
 		}
+	}
+	for name, rej := range attributed {
+		slices.Sort(all[name])
+		rej.cause = errors.New(strings.Join(all[name], "; "))
+		attributed[name] = rej
 	}
 	return attributed
 }
