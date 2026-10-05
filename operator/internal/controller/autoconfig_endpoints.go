@@ -344,7 +344,8 @@ func (r *KrakenDAutoConfigReconciler) precheck(
 	failedByCheck := 0
 	for round := 0; len(candidates) > 0; round++ {
 		if round == maxPrecheckRounds {
-			message := fmt.Sprintf("not checked: %d other operations failed the gateway config check first", failedByCheck)
+			message := fmt.Sprintf(
+				"not checked: %d other operations failed the gateway config check first", failedByCheck)
 			hold(rejected, candidates, message, errors.New(message))
 			return rejected, nil
 		}
