@@ -254,6 +254,13 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	skippedOps = append(skippedOps, genOutput.Skipped...)
 
+	// Unresolved schema references are spec notes like the fetch-time ones:
+	// distinct, counted whole in the status message, and listed up to the cap.
+	for _, note := range capList(specWarnings(genOutput.Warnings)) {
+		warnings.add(v1alpha1.ReasonSpecWarning, note)
+	}
+	specNotes = append(specNotes, genOutput.Warnings...)
+
 	// Warn about duplicate operations the generator skipped
 	for _, dup := range genOutput.Skipped {
 		warnings.add(v1alpha1.ReasonDuplicateOperationId, fmt.Sprintf("Duplicate operation %s %s skipped: %s",
