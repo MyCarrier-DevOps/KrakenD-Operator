@@ -37,7 +37,8 @@ type KrakenDEndpointSpec struct {
 	// GatewayRef references the KrakenDGateway this endpoint belongs to.
 	GatewayRef GatewayRef `json:"gatewayRef"`
 
-	// Endpoints is the list of endpoint definitions.
+	// Endpoints is the list of endpoint definitions, at least one.
+	// +kubebuilder:validation:MinItems=1
 	Endpoints []EndpointEntry `json:"endpoints"`
 
 	// ComponentSchemas holds OpenAPI component schemas referenced by endpoint
