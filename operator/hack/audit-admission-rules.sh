@@ -235,6 +235,9 @@ jq "${jq_opts[@]}" "$jq_lib"'
   | "\(.spec.gatewayRef.namespace // .metadata.namespace)/\(.spec.gatewayRef.name)" as $gw
   | (.spec.endpoints // [])[]
   | {gw: $gw, owner: "\($o.metadata.namespace)/\($o.metadata.name)",
-     key: "\(.method) \(.endpoint | conflict_key)", route: "\(.method) \(.endpoint)"}]
-| group_by([.gw, .key])[] | select((unique_by([.owner, .route]) | length) > 1)
+     key: "\(.method) \(.endpoint | conflict_key)", route: "\(.method) \(.endpoint)",
+     ctrl: ([$o.metadata.ownerReferences // [] | .[] | select(.controller == true) | .uid][0])}]
+| group_by([.gw, .key])[] | select(. as $g | [$g[] as $a | $g[] as $b
+    | select(($a.owner != $b.owner or $a.route != $b.route)
+      and ($a.owner == $b.owner or $a.ctrl == null or $a.ctrl != $b.ctrl))] | length > 0)
 | "gateway \(.[0].gw): \([.[] | "\(.route) (\(.owner))"] | join(" vs "))"' "$work/endpoints.json"
