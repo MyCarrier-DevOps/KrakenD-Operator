@@ -359,8 +359,12 @@ spec:
                     type: object
                   timeout:
                     description: Timeout is the global request timeout (e.g. "3s").
+                    maxLength: 64
                     pattern: ^[0-9]+(ns|ms|us|µs|s|m|h)$
                     type: string
+                    x-kubernetes-validations:
+                    - message: must be a duration that fits in 64 bits of nanoseconds
+                      rule: duration(self) >= duration('0s')
                 type: object
               dragonfly:
                 description: Dragonfly configures an in-cluster Dragonfly instance
