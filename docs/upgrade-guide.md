@@ -1249,8 +1249,10 @@ crash-looping.** The controller's route check now rejects them. Such a gateway
 keeps its last-known-good config with `ConfigValid=False`. Before this release
 the same render was published and new pods panicked at startup. The clashes
 are an endpoint on the gateway's custom `health_path` with a GET method, and
-endpoints that differ only in parameter names under different methods while
-`router.auto_options` is on.
+endpoints under different methods whose routes would clash in one method's
+tree while `router.auto_options` is on, because `auto_options` joins every
+method's paths in one tree (for example `GET /users/{id}` with
+`POST /users/{userId}/orders`).
 
 ---
 
