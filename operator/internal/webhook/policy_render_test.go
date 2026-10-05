@@ -151,3 +151,38 @@ func TestPolicyAdmission_DenialIsBounded(t *testing.T) {
 		t.Errorf("denial is %d bytes, want it bounded near %d", n, warningLimit)
 	}
 }
+
+func TestPolicyAdmission_RejectsEnterpriseOnlyRawOnACEGateway(t *testing.T) {
+	const proxy = `{"backend/http/client":{"proxy_address":"http://p"}}`
+	tests := []struct {
+		name    string
+		objs    []client.Object
+		policy  *v1alpha1.KrakenDBackendPolicy
+		old     *v1alpha1.KrakenDBackendPolicy
+		allowed bool
+		calls   string
+	}{
+		{"new raw on a CE gateway", referencing(), testPolicy(proxy), nil, false, "policy"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			chk := &scriptedChecker{}
+			v := &PolicyValidator{Client: fakeClient(tt.objs...), Checker: chk}
+			var old runtime.Object
+			if tt.old != nil {
+				old = tt.old
+			}
+			resp := review(t, v, "alice", tt.policy, old)
+			if resp.Allowed != tt.allowed {
+				t.Errorf("allowed = %v, want %v (%+v)", resp.Allowed, tt.allowed, resp.Result)
+			}
+			if !tt.allowed && (resp.Result.Code != http.StatusUnprocessableEntity ||
+				!strings.Contains(resp.Result.Message, "gateway default/gw runs CE")) {
+				t.Errorf("denial = %+v, want a 422 naming the CE gateway", resp.Result)
+			}
+			if got := strings.Join(chk.calls, ","); got != tt.calls {
+				t.Errorf("checks = %s, want %s", got, tt.calls)
+			}
+		})
+	}
+}
