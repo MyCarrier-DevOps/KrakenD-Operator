@@ -163,10 +163,11 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	// Read the deployed license first: a failed read must not follow license
 	// transitions (and their events) that the returned error would discard.
-	deployedLicense, err := r.deployedLicenseChecksum(ctx, &gw)
+	deployed, err := r.deployedChecksums(ctx, &gw)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	deployedLicense := deployed.license
 	// The license decides whether this gateway renders and runs CE.
 	lic := r.reconcileLicense(ctx, &gw)
 	ceFallback := lic.ceFallback
@@ -178,6 +179,7 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	pluginsHeldBefore := condFalse(meta.FindStatusCondition(gw.Status.Conditions, v1alpha1.ConditionPluginsResolved))
 	r.setPluginsResolved(&gw, missingPlugins)
 
 	// Detect Dragonfly state
@@ -212,7 +214,9 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// ConfigMap is missing) starts no rollout, so none is reported.
 	switch {
 	case len(missingPlugins) > 0:
-	case appliedKey(&gw, edition) != appliedBefore:
+	case appliedKey(&gw, edition) != appliedBefore,
+		// The hold just lifted: the config applied meanwhile starts rolling now.
+		pluginsHeldBefore && cfg.appliedConfigMap != "" && deployed.config != gw.Status.ConfigChecksum:
 		r.reportConfigRollout(&gw)
 	case cfg.appliedConfigMap != "":
 		r.markDeploymentUpdate(&gw, image, output.PluginChecksum, licenseChecksum != deployedLicense)
@@ -621,21 +625,30 @@ func deploymentConverged(dep *appsv1.Deployment, want infraInputs) bool {
 		dep.Status.AvailableReplicas == desired
 }
 
-// deployedLicenseChecksum is the license checksum the gateway Deployment's
-// pod template carries now; "" when there is no Deployment or it carries
-// none.
-func (r *KrakenDGatewayReconciler) deployedLicenseChecksum(
+// deployedChecksums are the config and license checksums the gateway
+// Deployment's pod template carries now; "" for one it carries none of.
+type deployedChecksums struct {
+	config, license string
+}
+
+// deployedChecksums reads them from the gateway Deployment; both are "" when
+// there is no Deployment.
+func (r *KrakenDGatewayReconciler) deployedChecksums(
 	ctx context.Context, gw *v1alpha1.KrakenDGateway,
-) (string, error) {
+) (deployedChecksums, error) {
 	var dep appsv1.Deployment
 	err := r.Get(ctx, types.NamespacedName{Name: gw.Name, Namespace: gw.Namespace}, &dep)
 	if errors.IsNotFound(err) {
-		return "", nil
+		return deployedChecksums{}, nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("reading the deployed license checksum: %w", err)
+		return deployedChecksums{}, fmt.Errorf("reading the deployed checksums: %w", err)
 	}
-	return dep.Spec.Template.Annotations[resources.LicenseChecksumAnnotation], nil
+	annotations := dep.Spec.Template.Annotations
+	return deployedChecksums{
+		config:  annotations[resources.PostRestartJobChecksumAnnotation],
+		license: annotations[resources.LicenseChecksumAnnotation],
+	}, nil
 }
 
 // findDeploymentCondition returns the Deployment's condition of the given
