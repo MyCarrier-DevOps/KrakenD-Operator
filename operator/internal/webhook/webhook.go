@@ -86,8 +86,8 @@ func (v *GatewayValidator) ValidateCreate(
 	if !ok {
 		return nil, fmt.Errorf("expected KrakenDGateway, got %T", obj)
 	}
-	warnings, err := v.validate(gw, nil)
-	return warnings, err
+	warnings, errs := v.validate(gw, nil)
+	return warnings, invalid("KrakenDGateway", gw.Name, errs)
 }
 
 // ValidateUpdate validates an updated KrakenDGateway. The old (stored) object
@@ -111,8 +111,8 @@ func (v *GatewayValidator) ValidateUpdate(
 	if !ok {
 		return nil, fmt.Errorf("expected KrakenDGateway, got %T", oldObj)
 	}
-	warnings, err := v.validate(gw, old)
-	return warnings, err
+	warnings, errs := v.validate(gw, old)
+	return warnings, invalid("KrakenDGateway", gw.Name, errs)
 }
 
 // ValidateDelete is required by admission.CustomValidator. The gateway webhook
@@ -127,7 +127,7 @@ func (v *GatewayValidator) ValidateDelete(
 // validate runs all admission checks for gw. old is the previously-stored
 // object on an Update (nil on Create) — see validatePostRestartJob's
 // ratchet handling.
-func (v *GatewayValidator) validate(gw, old *v1alpha1.KrakenDGateway) (admission.Warnings, error) {
+func (v *GatewayValidator) validate(gw, old *v1alpha1.KrakenDGateway) (admission.Warnings, field.ErrorList) {
 	var errs field.ErrorList
 	var warnings admission.Warnings
 
@@ -237,7 +237,7 @@ func (v *GatewayValidator) validate(gw, old *v1alpha1.KrakenDGateway) (admission
 		errs = append(errs, validateDragonflyRunAsRoot(gw.Spec.Dragonfly, oldDF)...)
 	}
 
-	return warnings, errs.ToAggregate()
+	return warnings, errs
 }
 
 // replicasWithAutoscalingWarning warns when spec.replicas is set together
@@ -942,7 +942,7 @@ func (v *EndpointValidator) ValidateCreate(
 		return nil, fmt.Errorf("expected KrakenDEndpoint, got %T", obj)
 	}
 	errs, warnings := v.validate(ctx, ep)
-	return warnings, errs.ToAggregate()
+	return warnings, invalid("KrakenDEndpoint", ep.Name, errs)
 }
 
 // ValidateUpdate validates an updated KrakenDEndpoint.
@@ -959,7 +959,7 @@ func (v *EndpointValidator) ValidateUpdate(
 		return nil, fmt.Errorf("expected KrakenDEndpoint, got %T", newObj)
 	}
 	errs, warnings := v.validate(ctx, ep)
-	return warnings, errs.ToAggregate()
+	return warnings, invalid("KrakenDEndpoint", ep.Name, errs)
 }
 
 // ValidateDelete is a no-op for endpoints.
@@ -1100,7 +1100,7 @@ func (v *PolicyValidator) ValidateCreate(
 	if !ok {
 		return nil, fmt.Errorf("expected KrakenDBackendPolicy, got %T", obj)
 	}
-	return nil, validatePolicyFields(policy)
+	return nil, invalid("KrakenDBackendPolicy", policy.Name, validatePolicyFields(policy))
 }
 
 // ValidateUpdate validates an updated KrakenDBackendPolicy.
@@ -1116,7 +1116,7 @@ func (v *PolicyValidator) ValidateUpdate(
 	if !ok {
 		return nil, fmt.Errorf("expected KrakenDBackendPolicy, got %T", newObj)
 	}
-	return nil, validatePolicyFields(policy)
+	return nil, invalid("KrakenDBackendPolicy", policy.Name, validatePolicyFields(policy))
 }
 
 // ValidateDelete blocks deletion if the policy is still referenced by endpoints.
@@ -1144,18 +1144,18 @@ func (v *PolicyValidator) ValidateDelete(
 	sort.Strings(references)
 
 	if len(references) > 0 {
-		return nil, field.ErrorList{
+		return nil, invalid("KrakenDBackendPolicy", policy.Name, field.ErrorList{
 			field.Forbidden(
 				field.NewPath("metadata", "name"),
 				fmt.Sprintf("policy is referenced by endpoints: %s",
 					strings.Join(references, ", ")),
 			),
-		}.ToAggregate()
+		})
 	}
 	return nil, nil
 }
 
-func validatePolicyFields(policy *v1alpha1.KrakenDBackendPolicy) error {
+func validatePolicyFields(policy *v1alpha1.KrakenDBackendPolicy) field.ErrorList {
 	var errs field.ErrorList
 
 	if policy.Spec.CircuitBreaker != nil {
@@ -1192,7 +1192,7 @@ func validatePolicyFields(policy *v1alpha1.KrakenDBackendPolicy) error {
 		}
 	}
 
-	return errs.ToAggregate()
+	return errs
 }
 
 // AutoConfigValidator validates KrakenDAutoConfig resources.
@@ -1209,7 +1209,7 @@ func (v *AutoConfigValidator) ValidateCreate(
 	if !ok {
 		return nil, fmt.Errorf("expected KrakenDAutoConfig, got %T", obj)
 	}
-	return nil, v.validate(ctx, ac)
+	return nil, invalid("KrakenDAutoConfig", ac.Name, v.validate(ctx, ac))
 }
 
 // ValidateUpdate validates an updated KrakenDAutoConfig.
@@ -1225,7 +1225,7 @@ func (v *AutoConfigValidator) ValidateUpdate(
 	if !ok {
 		return nil, fmt.Errorf("expected KrakenDAutoConfig, got %T", newObj)
 	}
-	return nil, v.validate(ctx, ac)
+	return nil, invalid("KrakenDAutoConfig", ac.Name, v.validate(ctx, ac))
 }
 
 // ValidateDelete is a no-op for autoconfigs.
@@ -1239,7 +1239,7 @@ func (v *AutoConfigValidator) ValidateDelete(
 func (v *AutoConfigValidator) validate(
 	ctx context.Context,
 	ac *v1alpha1.KrakenDAutoConfig,
-) error {
+) field.ErrorList {
 	var errs field.ErrorList
 
 	gw := &v1alpha1.KrakenDGateway{}
@@ -1260,7 +1260,7 @@ func (v *AutoConfigValidator) validate(
 			return field.ErrorList{field.InternalError(
 				field.NewPath("spec", "gatewayRef"),
 				fmt.Errorf("looking up gateway: %w", err),
-			)}.ToAggregate()
+			)}
 		}
 	}
 
@@ -1325,7 +1325,7 @@ func (v *AutoConfigValidator) validate(
 
 	errs = append(errs, validateAdditionalEndpoints(ac)...)
 
-	return errs.ToAggregate()
+	return errs
 }
 
 // validateAdditionalEndpoints validates the additionalEndpoints field and the
