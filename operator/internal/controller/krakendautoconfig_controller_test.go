@@ -3378,6 +3378,46 @@ func TestAutoConfigReconcile_FailedOperationOutsideFilterIsIgnored(t *testing.T)
 	}
 }
 
+func TestAutoConfigReconcile_FailedOperationKeepsSpecAndGeneratorNotes(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	// A spec note from the external reference resolver, a note from the
+	// generator, and an operation that failed: the sync holds it and still
+	// reports both notes, as a clean sync does.
+	f.result = &autoconfig.FetchResult{
+		Data: []byte(`{"paths":{"/x":{"get":{"responses":{"200":{"$ref":"common.json#/Missing"}}}}}}`),
+	}
+	f.byURL = map[string]mockFetchOutcome{
+		"https://example.com/common.json": {result: &autoconfig.FetchResult{Data: []byte(`{}`)}},
+	}
+	generatorNote := `schema reference "Ghost" (first used by GET /api/users) is not defined in components/schemas`
+	g.output.Warnings = []string{generatorNote}
+	ce.output.Failed = []autoconfig.OperationIssue{failedGetB()}
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).Build()
+	rec := fakeRecorder()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Recorder = rec
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	updated := getAC(t, c, ac)
+	if cond := meta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionSynced); cond == nil ||
+		cond.Reason != v1alpha1.ReasonOperationsFailed {
+		t.Fatalf("expected Synced False/OperationsFailed, got %+v", cond)
+	}
+	warnings := updated.Status.Warnings
+	if len(warnings) != 2 || !slices.Contains(warnings, generatorNote) ||
+		!slices.ContainsFunc(warnings, func(w string) bool { return strings.Contains(w, "Missing") }) {
+		t.Errorf("status.warnings = %q, want the spec note and the generator note", warnings)
+	}
+	if events := drainEvents(rec); !slices.Contains(events, "Warning "+v1alpha1.ReasonSpecWarning+" "+generatorNote) {
+		t.Errorf("expected the generator note as a SpecWarning event, got %v", events)
+	}
+}
+
 func TestAutoConfigReconcile_FailedOperationsAreListedSortedAndCapped(t *testing.T) {
 	cm := testCUEDefinitionsCM()
 	ac := syncedAutoConfig(cm)
