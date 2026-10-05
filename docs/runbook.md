@@ -525,6 +525,7 @@ kubectl get events --field-selector involvedObject.name=<name>
   `documentation/openapi.audience` declared directly on an operation that
   isn't a list of strings
 - Filter excludes all operations
+- A `policyRef` in `defaults`, `overrides` or `additionalEndpoints` names a policy that doesn't exist: the AutoConfig's `kubectl apply` printed a `Warning:` naming the field (for example `spec.defaults.policyRef: KrakenDBackendPolicy ns/name not found`), and each generated endpoint that uses it is rejected at admission (`Not found` on `...policyRef.name`), so `Synced` is `False` with reason `EndpointReconcileFailed`. Create the policy or fix the reference; `kubectl get krakendbackendpolicies -n <namespace>` lists what exists
 - An override's `operationId` doesn't match any operation in the spec — see *AutoConfig sync fails with `UnmatchedOverride`* below
 - Generated endpoints can't be written: the `Synced` condition is `False` with reason `EndpointReconcileFailed` and the message names the endpoint and the API error (e.g. an admission webhook rejected it, or a `KrakenDEndpoint` with that name is controlled by another owner). This retries with backoff regardless of `trigger`, at least every 5 minutes. A `Conflict` or `AlreadyExists` from a stale cache is *not* this failure — it requeues quietly a second later with no error or event, so if the AutoConfig converges a moment later with nothing in between, that's this path working as intended, not a bug.
 
