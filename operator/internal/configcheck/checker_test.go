@@ -21,6 +21,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -390,5 +391,52 @@ func TestCheckGateway_AStaleFallbackConditionDoesNotAffectACEGateway(t *testing.
 
 	if err != nil || verdict.OK {
 		t.Errorf("verdict = %+v, err = %v; want the CE wildcard entry linted and rejected", verdict, err)
+	}
+}
+
+// gateValidator blocks every lint on gate and tracks how many run at once.
+type gateValidator struct {
+	gate     chan struct{}
+	inFlight atomic.Int32
+	peak     atomic.Int32
+}
+
+func (g *gateValidator) Validate(ctx context.Context, jsonData []byte, e v1alpha1.Edition) error {
+	return g.Lint(ctx, jsonData, e)
+}
+
+func (g *gateValidator) Lint(context.Context, []byte, v1alpha1.Edition) error {
+	n := g.inFlight.Add(1)
+	defer g.inFlight.Add(-1)
+	for p := g.peak.Load(); n > p && !g.peak.CompareAndSwap(p, n); p = g.peak.Load() {
+	}
+	<-g.gate
+	return nil
+}
+
+func TestCheck_RunsAtMostTheConfiguredNumberOfValidationsAtOnce(t *testing.T) {
+	v := &gateValidator{gate: make(chan struct{})}
+	c := New(newReader(endpoint("a", "/a")), renderer.New(renderer.Options{}), v, 2)
+
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := c.CheckGateway(context.Background(), gateway(v1alpha1.EditionCE), nil); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for v.inFlight.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(100 * time.Millisecond) // time for a third validation to start, if the limit leaks
+	close(v.gate)
+	wg.Wait()
+
+	if got := v.peak.Load(); got != 2 {
+		t.Errorf("peak concurrent validations = %d, want 2", got)
 	}
 }
