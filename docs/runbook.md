@@ -281,8 +281,9 @@ kubectl get events --field-selector involvedObject.name=<name> --sort-by='.lastT
 
 **Common causes:**
 - Config validation failure — check the `ConfigValid` condition message. It
-  carries at most 4 KiB of krakend check output; the full output is in the
-  operator log, message `validation rejected the rendered config`. The gateway
+  lists each failure on its own line, as `namespace/name spec.endpoints[i]: …`
+  or `gateway: …` when the failure names no endpoint, up to 4 KiB; the full
+  output is in the operator log, message `validation rejected the rendered config`. The gateway
   keeps serving the last applied config (`status.configChecksum`), and its
   Deployment (unless a plugin ConfigMap is missing, which holds it), Service
   and other resources are still reconciled. Only the rejected render waits for
