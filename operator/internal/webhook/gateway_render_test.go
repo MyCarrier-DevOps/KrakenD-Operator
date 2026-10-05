@@ -54,6 +54,8 @@ func TestGatewayAdmission_Render(t *testing.T) {
 		warns    string
 	}{
 		{"create checks the root, then the gateway with its endpoints", nil, nil, true, "isolated,gateway", ""},
+		{"create whose orphaned endpoints clash with the root", nil,
+			[]configcheck.Verdict{{OK: true}, broken}, true, "isolated,gateway", "default/ep spec.endpoints[0]"},
 		{"create with a failing root", nil,
 			[]configcheck.Verdict{rootFailure("'timeout' time: unknown unit")}, false, "isolated", ""},
 		{"update keeps it passing", old, nil, true, "gateway", ""},
