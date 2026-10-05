@@ -146,6 +146,7 @@ func (e *cueEvaluator) Evaluate(_ context.Context, input CUEInput) (*CUEOutput, 
 
 	if input.URLTransform != nil {
 		applyURLTransform(output, input.URLTransform)
+		transformIssuePaths(output.Failed, input.URLTransform)
 	}
 
 	applyFieldOverrides(output, input.Overrides)
@@ -442,6 +443,22 @@ func applyURLTransform(output *CUEOutput, transform *v1alpha1.URLTransformSpec) 
 				delete(output.Tags, oldKey)
 				output.Tags[newKey] = tags
 			}
+		}
+	}
+}
+
+// transformIssuePaths gives each issue the path strip and add-prefix its
+// entry would have after applyURLTransform.
+func transformIssuePaths(issues []OperationIssue, transform *v1alpha1.URLTransformSpec) {
+	for i := range issues {
+		if transform.StripPathPrefix != "" {
+			issues[i].Path = strings.TrimPrefix(issues[i].Path, transform.StripPathPrefix)
+			if issues[i].Path == "" {
+				issues[i].Path = "/"
+			}
+		}
+		if transform.AddPathPrefix != "" {
+			issues[i].Path = transform.AddPathPrefix + issues[i].Path
 		}
 	}
 }
