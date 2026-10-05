@@ -48,6 +48,7 @@ import (
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/autoconfig"
+	"github.com/mycarrier-devops/krakend-operator/internal/fieldindex"
 )
 
 const defaultCUEDefinitionsConfigMap = "krakend-cue-definitions"
@@ -298,6 +299,9 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *KrakenDAutoConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if err := fieldindex.EnsureEndpointIndexes(mgr); err != nil {
+		return err
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.KrakenDAutoConfig{}, builder.WithPredicates(autoConfigPredicate())).
 		Owns(&v1alpha1.KrakenDEndpoint{}, builder.WithPredicates(ownedEndpointPredicate())).
