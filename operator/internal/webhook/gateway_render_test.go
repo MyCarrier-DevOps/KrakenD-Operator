@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/utils/ptr"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
@@ -193,5 +194,25 @@ func TestGatewayAdmission_ChecksRunUnderTheAdmissionBudget(t *testing.T) {
 		if left <= 0 || left > admissionBudget {
 			t.Errorf("check %d ran with %s left, want a deadline within %s", i+1, left, admissionBudget)
 		}
+	}
+}
+
+func TestGatewayAdmission_WarnsOnAnotherKrakenDMinor(t *testing.T) {
+	v := &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
+	other := testGateway()
+	other.Spec.Version = "2.12"
+	patch := testGateway()
+	patch.Spec.Version = "2.13.4"
+	if resp := review(t, v, "alice", other, nil); len(resp.Warnings) != 1 ||
+		!strings.Contains(resp.Warnings[0], "validated with KrakenD "+configcheck.ValidatorVersion) {
+		t.Errorf("2.12 warnings = %v, want the version warning", resp.Warnings)
+	}
+	if resp := review(t, v, "alice", patch, nil); len(resp.Warnings) != 0 {
+		t.Errorf("2.13.4 warnings = %v, want none", resp.Warnings)
+	}
+	labeled := other.DeepCopy()
+	labeled.Spec.Replicas = ptr.To[int32](2)
+	if resp := review(t, v, "alice", labeled, other); len(resp.Warnings) != 0 {
+		t.Errorf("unchanged version warned again: %v", resp.Warnings)
 	}
 }
