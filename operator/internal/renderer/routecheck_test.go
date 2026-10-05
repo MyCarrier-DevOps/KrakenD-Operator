@@ -184,3 +184,16 @@ func TestRouteConflicts_StopsAfterTheFirstRefusedRoutes(t *testing.T) {
 		t.Errorf("last line = %q, want %q", last, wantNotice)
 	}
 }
+
+func TestClashRefusals_ACancelledContextIsAnError(t *testing.T) {
+	accepted := []ginRoute{{index: 0, method: "GET", path: "/users/:id"}}
+	refused := ginRoute{index: 1, method: "GET", path: "/users/:userId/orders"}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	got, err := clashRefusals(ctx, accepted, refused, "refused")
+
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("clashRefusals = %v, %v, want the context error", got, err)
+	}
+}
