@@ -381,11 +381,14 @@ pass, continuously, until the input was fixed. Now:
   not on every reconcile.
 - `config_validation_failures_total` counts each rejected input once, not
   once per reconcile. A lasting rejection no longer keeps the counter rising.
-  The runbook's `KrakenDConfigValidationFailures` alert
-  (`rate(config_validation_failures_total[5m]) > 0` for 10 minutes)
-  therefore no longer fires for a single lasting rejection. To find the
-  gateways that are rejected right now, use the `ConfigValid` query under
-  "Config validation runs offline" above.
+  An alert on its rate, such as the runbook's former
+  `KrakenDConfigValidationFailures`
+  (`rate(config_validation_failures_total[5m]) > 0` for 10 minutes),
+  therefore no longer fires for a single lasting rejection. The runbook now
+  alerts per gateway on `krakend_operator_gateway_config_valid`
+  (`KrakenDGatewayConfigRejected`; see "Metrics" under "Gateway reconcile
+  correctness"). To list the gateways that are rejected right now, use the
+  `ConfigValid` query under "Config validation runs offline" above.
 
 Tooling that waits for `Rendering` or `Validating` should wait on the
 `ConfigValid` condition instead.
@@ -422,10 +425,10 @@ A `KrakenDGateway` with a `deletionTimestamp` (for example during foreground
 deletion) is no longer reconciled, so the operator no longer recreates the
 children garbage collection is removing. When a gateway is deleted or starts
 terminating, its `krakend_operator_endpoints`,
-`krakend_operator_gateway_info`, `krakend_operator_dragonfly_ready`,
-`krakend_operator_license_expiry_seconds` and
-`krakend_operator_reconcile_duration_seconds{controller="gateway"}` series
-are removed, so alerts on a deleted gateway stop firing.
+`krakend_operator_gateway_info`, `krakend_operator_gateway_config_valid`,
+`krakend_operator_dragonfly_ready`, `krakend_operator_license_expiry_seconds`
+and `krakend_operator_reconcile_duration_seconds{controller="gateway"}`
+series are removed, so alerts on a deleted gateway stop firing.
 
 ### Autoscaled gateways keep the HPA's replica count
 
@@ -1095,8 +1098,12 @@ sources.
 
 - New gauge `krakend_operator_gateway_config_valid{namespace,name}`: 1 while
   the gateway's newest config passed validation, 0 while it is rejected or
-  could not be checked. Alert on it instead of the unlabelled
-  `config_validation_failures_total`.
+  could not be checked. Like the other per-gateway series, it is removed when
+  the gateway is deleted. Alert on it instead of the unlabelled
+  `config_validation_failures_total`: the runbook's
+  `KrakenDConfigValidationFailures` rule is replaced by
+  `KrakenDGatewayConfigRejected` (`krakend_operator_gateway_config_valid == 0`
+  for 15 minutes).
 - `krakend_operator_gateway_info` now keeps one series per gateway. A
   version or edition change replaces the series instead of adding one.
 
