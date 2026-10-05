@@ -51,10 +51,10 @@ func ConflictKey(endpoint string) string {
 	return cleaned
 }
 
-// RouteClashDetail says why the route of the entry (method, path) is not
+// RouteClashDetail says why the route of the entry (method, endpoint) is not
 // served because owner already serves otherPath, which has the same route.
-func RouteClashDetail(method, path, otherPath, owner string) string {
-	if otherPath == path {
+func RouteClashDetail(method, endpoint, otherPath, owner string) string {
+	if otherPath == endpoint {
 		return "already defined by " + owner
 	}
 	return fmt.Sprintf("has the same route as %s %s in %s: paths that differ only in parameter names "+
