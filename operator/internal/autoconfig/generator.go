@@ -121,12 +121,21 @@ func (g *endpointGenerator) Generate(
 const maxNameLength = 253
 
 func endpointName(autoconfigName, operationID, method, path string) string {
-	var name string
 	if operationID != "" {
-		name = fmt.Sprintf("%s-%s", autoconfigName, SanitizeName(operationID))
-	} else {
-		name = fmt.Sprintf("%s-%s-%s", autoconfigName, strings.ToLower(method), sanitizePath(path))
+		return OperationEndpointName(autoconfigName, operationID)
 	}
+	return limitName(fmt.Sprintf("%s-%s-%s", autoconfigName, strings.ToLower(method), sanitizePath(path)))
+}
+
+// OperationEndpointName is the name of the KrakenDEndpoint generated for the
+// operation operationID of the AutoConfig autoconfigName: the AutoConfig name
+// and SanitizeName(operationID), cut to the Kubernetes name limit. Two
+// operations with one name share one generated endpoint.
+func OperationEndpointName(autoconfigName, operationID string) string {
+	return limitName(fmt.Sprintf("%s-%s", autoconfigName, SanitizeName(operationID)))
+}
+
+func limitName(name string) string {
 	if len(name) > maxNameLength {
 		name = name[:maxNameLength]
 	}
