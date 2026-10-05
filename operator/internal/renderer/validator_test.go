@@ -30,6 +30,8 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
@@ -602,5 +604,37 @@ func TestEditionFor(t *testing.T) {
 				t.Errorf("EditionFor = %s, want %s", got, tc.want)
 			}
 		})
+	}
+}
+
+// The config checker leaves PluginConfigMaps out of the render input it
+// gathers; that is sound only while they cannot reach the validated copy.
+func TestValidationCopy_PluginConfigMapsDoNotReachIt(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "ns"},
+		Spec:       v1alpha1.KrakenDGatewaySpec{Version: "2.13", Edition: v1alpha1.EditionEE},
+	}
+	in := RenderInput{Gateway: gw}
+	plain, err := New(Options{}).Render(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in.PluginConfigMaps = []corev1.ConfigMap{{ObjectMeta: metav1.ObjectMeta{Name: "plugins", Namespace: "ns"}}}
+	full, err := New(Options{}).Render(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, edition := range []v1alpha1.Edition{v1alpha1.EditionCE, v1alpha1.EditionEE} {
+		a, _, err := validationCopy(plain.JSON, edition)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _, err := validationCopy(full.JSON, edition)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(a) != string(b) {
+			t.Errorf("%s: validation copies differ:\n%s\n%s", edition, a, b)
+		}
 	}
 }
