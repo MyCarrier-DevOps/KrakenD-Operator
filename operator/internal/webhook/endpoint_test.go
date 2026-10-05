@@ -762,6 +762,7 @@ func TestEndpointAdmission_OnlyOperatorWritesToAutoConfigEndpointsSkipRenderChec
 		{"operator on an endpoint another kind controls", operatorUser, operatorUser, ownedEndpoint("KrakenDGateway", true), true},
 		{"exemption disabled", operatorUser, "", ownedEndpoint("KrakenDAutoConfig", true), true},
 		{"unset identity and an empty request username", "", "", ownedEndpoint("KrakenDAutoConfig", true), true},
+		{"username that only starts with the operator name", operatorUser + "-evil", operatorUser, ownedEndpoint("KrakenDAutoConfig", true), true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
