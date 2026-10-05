@@ -154,8 +154,12 @@ func (v *EndpointValidator) checkRender(
 	}
 	preexisting := admission.Warnings{fmt.Sprintf("gateway %s/%s already fails validation without this change: %s",
 		gw.Namespace, gw.Name, before.Summary(warningLimit))}
-	if _, err := v.Checker.CheckIsolated(ctx, gw, []v1alpha1.KrakenDEndpoint{*ep}); err != nil {
+	isoAfter, err := v.Checker.CheckIsolated(ctx, gw, []v1alpha1.KrakenDEndpoint{*ep})
+	if err != nil {
 		return nil, err
+	}
+	if !isoAfter.OK {
+		return nil, renderDenial(ep, isoAfter)
 	}
 	return preexisting, nil
 }
