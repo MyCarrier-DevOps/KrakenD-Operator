@@ -28,5 +28,6 @@ def report(kind): select(.v | length > 0) | "\(kind) \(.id): \(.v | unique | joi
 
 jq -r "$jq_lib"'
 .items[] | {id: "\(.metadata.namespace)/\(.metadata.name)", v: [
-  (if ((.spec.endpoints // []) | length) == 0 then "spec.endpoints is empty" else empty end)
+  (if ((.spec.endpoints // []) | length) == 0 then "spec.endpoints is empty" else empty end),
+  (if (.spec.gatewayRef.name // "") == "" then "spec.gatewayRef.name is empty" else empty end)
 ]} | report("KrakenDEndpoint")' "$work/endpoints.json"
