@@ -692,6 +692,12 @@ spec:
               message: periodic.interval of at least 30s is required when trigger
                 is Periodic
               rule: self.trigger != 'Periodic' || has(self.periodic)
+            - fieldPath: .additionalEndpointsBasePath
+              message: additionalEndpointsBasePath is mutually exclusive with urlTransform.addPathPrefix;
+                set only one
+              rule: '!(has(self.additionalEndpointsBasePath) && size(self.additionalEndpointsBasePath)
+                > 0 && has(self.urlTransform) && has(self.urlTransform.addPathPrefix)
+                && size(self.urlTransform.addPathPrefix) > 0)'
           status:
             description: KrakenDAutoConfigStatus defines the observed state of KrakenDAutoConfig.
             properties:
