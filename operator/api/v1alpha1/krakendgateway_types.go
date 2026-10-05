@@ -607,7 +607,7 @@ type RedisConnectionPool struct {
 	MinIdleConns int                       `json:"minIdleConns,omitempty"`
 	// +kubebuilder:validation:Pattern=`^[0-9]+(ns|ms|us|µs|s|m|h)$`
 	// +kubebuilder:validation:MaxLength=64
-	// +kubebuilder:validation:XValidation:rule="duration(self) >= duration('0s')",message="must be a duration that fits in 64 bits of nanoseconds"
+	// +kubebuilder:validation:XValidation:rule="!self.matches('^[0-9]+(ns|ms|us|µs|s|m|h)$') || duration(self) >= duration('0s')",message="must be a duration that fits in 64 bits of nanoseconds"
 	DialTimeout string `json:"dialTimeout,omitempty"`
 	// Deprecated: has no effect. KrakenD's redis connection pools have no such setting; it is not rendered.
 	ReadTimeout string `json:"readTimeout,omitempty"`
