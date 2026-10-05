@@ -28,12 +28,19 @@ const licenseKey = "LICENSE"
 // mounted from: spec.license.secretRef when set, otherwise the Secret an
 // enabled ExternalSecret syncs. ok is false when the spec names neither.
 func LicenseSecret(gw *v1alpha1.KrakenDGateway) (name, key string, ok bool) {
-	if lic := gw.Spec.License; lic != nil && lic.SecretRef != nil {
+	lic := gw.Spec.License
+	if lic == nil {
+		return "", "", false
+	}
+	if lic.SecretRef != nil {
 		key := lic.SecretRef.Key
 		if key == "" {
 			key = licenseKey
 		}
 		return lic.SecretRef.Name, key, true
+	}
+	if lic.ExternalSecret.Enabled {
+		return ExternalSecretName(gw), licenseKey, true
 	}
 	return "", "", false
 }
