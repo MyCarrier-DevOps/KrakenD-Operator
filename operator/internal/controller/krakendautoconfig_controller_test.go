@@ -4232,3 +4232,24 @@ func TestAutoConfigReconcile_ManyFailedWritesAreBoundedAndStatusWritten(t *testi
 		t.Errorf("expected the Warning event to carry the truncated message, got %d events", len(events))
 	}
 }
+
+func TestAutoConfigReconcile_OrphanGoneBeforeAdoptionIsNotAFailure(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	stale := ownedCopy(t, ac, generatedEndpoint("old", "/old"))
+	orphan := generatedEndpoint("orphan", "/orphan")
+	gone := apierrors.NewNotFound(
+		schema.GroupResource{Group: v1alpha1.GroupVersion.Group, Resource: "krakendendpoints"}, orphan.Name)
+	var ops []string
+	c := fakeClientBuilder().WithObjects(ac, cm, stale, orphan).WithStatusSubresource(ac).
+		WithInterceptorFuncs(recordEndpointWrites(&ops, map[string]error{orphan.Name: gone})).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("expected an orphan deleted before its adoption to be nothing to do, got %v", err)
+	}
+	if endpointExists(t, c, "test-ac-old") {
+		t.Error("expected the stale endpoint deleted: the vanished orphan is not a failure")
+	}
+}
