@@ -274,7 +274,7 @@ func (v *GatewayValidator) validate(gw, old *v1alpha1.KrakenDGateway) (admission
 	var warnings admission.Warnings
 
 	warnings = append(warnings, replicasWithAutoscalingWarning(gw)...)
-	warnings = append(warnings, openAPIOnCEWarning(gw)...)
+	warnings = append(warnings, openAPIOnCEWarning(old, gw)...)
 	warnings = append(warnings, redisPoolWarnings(gw)...)
 
 	if gw.Spec.OpenAPI != nil && gw.Spec.OpenAPI.Enabled {
@@ -370,12 +370,14 @@ func replicasWithAutoscalingWarning(gw *v1alpha1.KrakenDGateway) admission.Warni
 	}
 }
 
-// openAPIOnCEWarning warns when spec.openapi enables the export on a CE
-// gateway: the CE binary has no openapi command, so the operator runs no
-// export or serving there. It is a warning because the spec may already be
-// stored, and it takes effect again on an EE gateway.
-func openAPIOnCEWarning(gw *v1alpha1.KrakenDGateway) admission.Warnings {
-	if gw.Spec.Edition != v1alpha1.EditionCE || gw.Spec.OpenAPI == nil || !gw.Spec.OpenAPI.Enabled {
+// openAPIOnCEWarning warns when a CE gateway keeps an enabled spec.openapi
+// that was stored before admission refused it: the CE binary has no openapi
+// command, so the operator runs no export or serving there. A new or changed
+// one is rejected instead (eeFieldsOnCE), and it takes effect again on an EE
+// gateway.
+func openAPIOnCEWarning(old, gw *v1alpha1.KrakenDGateway) admission.Warnings {
+	if gw.Spec.Edition != v1alpha1.EditionCE || !openAPIExportEnabled(gw) ||
+		old == nil || old.Spec.Edition != v1alpha1.EditionCE || !openAPIExportEnabled(old) {
 		return nil
 	}
 	return admission.Warnings{
