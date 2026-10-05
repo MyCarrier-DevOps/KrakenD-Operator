@@ -1,30 +1,28 @@
 KrakenDEndpoint a/empty: spec.endpoints is empty
 KrakenDEndpoint a/nogw: spec.gatewayRef.name is empty
-KrakenDEndpoint a/dup: duplicate entry GET /x
-KrakenDEndpoint a/path: spec.endpoints[0].endpoint x
+KrakenDEndpoint a/dup: duplicate entry GET "/x"
+KrakenDEndpoint a/path: spec.endpoints[0].endpoint "x"
 KrakenDEndpoint a/no-backends: spec.endpoints[0].backends is empty
-KrakenDEndpoint a/timeout-pattern: spec.endpoints[0].timeout 3 seconds
+KrakenDEndpoint a/timeout-pattern: spec.endpoints[0].timeout "3 seconds"
 KrakenDEndpoint a/timeout-long: spec.endpoints[0].timeout is longer than 64 characters
-KrakenDEndpoint a/timeout-overflow: spec.endpoints[0].timeout 2562048h does not fit in 64 bits of nanoseconds
-KrakenDEndpoint a/cachettl-overflow: spec.endpoints[0].cacheTTL 9223372036854775808ns does not fit in 64 bits of nanoseconds
-KrakenDEndpoint a/output-encoding: spec.endpoints[0].outputEncoding jsn
-KrakenDEndpoint a/backend-encoding: spec.endpoints[0].backends[0].encoding jsn
-KrakenDEndpoint a/backend-sd: spec.endpoints[0].backends[0].sd foo
-KrakenDEndpoint a/backend-method: spec.endpoints[0].backends[0].method get
+KrakenDEndpoint a/timeout-overflow: spec.endpoints[0].timeout "2562048h" does not fit in 64 bits of nanoseconds
+KrakenDEndpoint a/cachettl-overflow: spec.endpoints[0].cacheTTL "9223372036854775808ns" does not fit in 64 bits of nanoseconds
+KrakenDEndpoint a/output-encoding: spec.endpoints[0].outputEncoding "jsn"
+KrakenDEndpoint a/backend-encoding: spec.endpoints[0].backends[0].encoding "jsn"
+KrakenDEndpoint a/backend-sd: spec.endpoints[0].backends[0].sd "foo"
+KrakenDEndpoint a/backend-method: spec.endpoints[0].backends[0].method "get"
 KrakenDEndpoint a/backend-policyref: spec.endpoints[0].backends[0].policyRef.name is empty
-KrakenDEndpoint a/path-linebreak: spec.endpoints[0].endpoint x
-/y
-KrakenDEndpoint a/timeout-newline: spec.endpoints[0].timeout 5s
-
+KrakenDEndpoint a/path-linebreak: spec.endpoints[0].endpoint "x\n/y"
+KrakenDEndpoint a/timeout-newline: spec.endpoints[0].timeout "5s\n"
 KrakenDEndpoint a/timeout-number: spec.endpoints[0].timeout 5
-KrakenDGateway a/timeout-pattern: spec.config.timeout 3 seconds
+KrakenDGateway a/timeout-pattern: spec.config.timeout "3 seconds"
 KrakenDGateway a/cachettl-long: spec.config.cacheTTL is longer than 64 characters
-KrakenDGateway a/dnscachettl-overflow: spec.config.dnsCacheTTL 99999999999s does not fit in 64 bits of nanoseconds
-KrakenDGateway a/cors-maxage: spec.config.cors.maxAge 12h0m
+KrakenDGateway a/dnscachettl-overflow: spec.config.dnsCacheTTL "99999999999s" does not fit in 64 bits of nanoseconds
+KrakenDGateway a/cors-maxage: spec.config.cors.maxAge "12h0m"
 KrakenDGateway a/port-range: spec.config.port 70000
-KrakenDGateway a/output-encoding: spec.config.outputEncoding jsn
-KrakenDGateway a/health-path: spec.config.router.healthPath h
-KrakenDGateway a/dialtimeout-overflow: spec.redis.connectionPool.dialTimeout 9223372036854775808ns does not fit in 64 bits of nanoseconds
+KrakenDGateway a/output-encoding: spec.config.outputEncoding "jsn"
+KrakenDGateway a/health-path: spec.config.router.healthPath "h"
+KrakenDGateway a/dialtimeout-overflow: spec.redis.connectionPool.dialTimeout "9223372036854775808ns" does not fit in 64 bits of nanoseconds
 KrakenDGateway a/ee-nolicense: EE without a license source
 KrakenDGateway a/ee-emptyname: EE license secretRef has an empty name
 KrakenDGateway a/ce-license: CE with a license source
@@ -36,9 +34,9 @@ KrakenDGateway a/job-script: spec.postRestartJob.script is empty
 KrakenDGateway a/redis-password: spec.redis.connectionPool.password is not supported yet
 KrakenDGateway a/redis-tls: spec.redis.connectionPool.tls is not supported yet
 KrakenDGateway a/df-password-ee: spec.dragonfly.authentication.passwordFromSecret is not supported yet with edition EE
-KrakenDGateway a/tmp-pattern: spec.postRestartJob.tmpSizeLimit lots
+KrakenDGateway a/tmp-pattern: spec.postRestartJob.tmpSizeLimit "lots"
 KrakenDGateway a/tmp-long: spec.postRestartJob.tmpSizeLimit is longer than 64 characters
-KrakenDGateway a/tmp-undecodable: spec.postRestartJob.tmpSizeLimit 1e9223372036854775808 is not a quantity Kubernetes can decode
+KrakenDGateway a/tmp-undecodable: spec.postRestartJob.tmpSizeLimit "1e9223372036854775808" is not a quantity Kubernetes can decode
 KrakenDGateway a/ce-ee-namespace: spec.config.extraConfig auth/api-keys is Enterprise-only on a CE gateway
 KrakenDGateway a/ce-redis: spec.redis is Enterprise-only on a CE gateway
 KrakenDGateway a/ce-documentation: spec.config.documentation is Enterprise-only on a CE gateway
@@ -52,50 +50,50 @@ KrakenDAutoConfig a/no-hostmapping: configMapRef without urlTransform.hostMappin
 KrakenDAutoConfig a/both-auth: both auth secrets set
 KrakenDAutoConfig a/interval-short: periodic.interval below 30s
 KrakenDAutoConfig a/no-periodic: trigger Periodic without a periodic block
-KrakenDAutoConfig a/interval-pattern: spec.periodic.interval 5 minutes
+KrakenDAutoConfig a/interval-pattern: spec.periodic.interval "5 minutes"
 KrakenDAutoConfig a/interval-long: spec.periodic.interval is longer than 32 characters
-KrakenDAutoConfig a/interval-overflow: spec.periodic.interval 2562048h does not fit in 64 bits of nanoseconds
-KrakenDAutoConfig a/basepath: spec.additionalEndpointsBasePath x
+KrakenDAutoConfig a/interval-overflow: spec.periodic.interval "2562048h" does not fit in 64 bits of nanoseconds
+KrakenDAutoConfig a/basepath: spec.additionalEndpointsBasePath "x"
 KrakenDAutoConfig a/basepath-prefix: additionalEndpointsBasePath with urlTransform.addPathPrefix
 KrakenDAutoConfig a/many-additional: more than 256 additionalEndpoints
-KrakenDAutoConfig a/dup-additional: duplicate additionalEndpoint GET /h
-KrakenDAutoConfig a/additional-path: spec.additionalEndpoints[0].endpoint h
+KrakenDAutoConfig a/dup-additional: duplicate additionalEndpoint GET "/h"
+KrakenDAutoConfig a/additional-path: spec.additionalEndpoints[0].endpoint "h"
 KrakenDAutoConfig a/mixed-shorthand: spec.additionalEndpoints[0] mixes backends with the shorthand
-KrakenDAutoConfig a/additional-timeout: spec.additionalEndpoints[0].timeout 30
-KrakenDAutoConfig a/additional-cachettl: spec.additionalEndpoints[0].cacheTTL 2562048h does not fit in 64 bits of nanoseconds
-KrakenDAutoConfig a/additional-output: spec.additionalEndpoints[0].outputEncoding jsn
-KrakenDAutoConfig a/additional-encoding: spec.additionalEndpoints[0].encoding jsn
-KrakenDAutoConfig a/additional-backend-sd: spec.additionalEndpoints[0].backends[0].sd foo
-KrakenDAutoConfig a/additional-backend-rest: spec.additionalEndpoints[0].backends[0].encoding jsn; spec.additionalEndpoints[0].backends[0].method get; spec.additionalEndpoints[0].backends[0].policyRef.name is empty
+KrakenDAutoConfig a/additional-timeout: spec.additionalEndpoints[0].timeout "30"
+KrakenDAutoConfig a/additional-cachettl: spec.additionalEndpoints[0].cacheTTL "2562048h" does not fit in 64 bits of nanoseconds
+KrakenDAutoConfig a/additional-output: spec.additionalEndpoints[0].outputEncoding "jsn"
+KrakenDAutoConfig a/additional-encoding: spec.additionalEndpoints[0].encoding "jsn"
+KrakenDAutoConfig a/additional-backend-sd: spec.additionalEndpoints[0].backends[0].sd "foo"
+KrakenDAutoConfig a/additional-backend-rest: spec.additionalEndpoints[0].backends[0].encoding "jsn"; spec.additionalEndpoints[0].backends[0].method "get"; spec.additionalEndpoints[0].backends[0].policyRef.name is empty
 KrakenDAutoConfig a/many-overrides: more than 1024 overrides
-KrakenDAutoConfig a/override-method: spec.overrides[0].method HEAD
+KrakenDAutoConfig a/override-method: spec.overrides[0].method "HEAD"
 KrakenDAutoConfig a/override-index: spec.overrides[0].backends index -1
-KrakenDAutoConfig a/override-timeout: spec.overrides[0].timeout 30
-KrakenDAutoConfig a/override-cachettl: spec.overrides[0].cacheTTL 2562047.9h does not fit in 64 bits of nanoseconds
+KrakenDAutoConfig a/override-timeout: spec.overrides[0].timeout "30"
+KrakenDAutoConfig a/override-cachettl: spec.overrides[0].cacheTTL "2562047.9h" does not fit in 64 bits of nanoseconds
 KrakenDAutoConfig a/override-calls: spec.overrides[0].concurrentCalls 0
-KrakenDAutoConfig a/override-output: spec.overrides[0].outputEncoding jsn
-KrakenDAutoConfig a/override-path: spec.overrides[0].endpoint orders
+KrakenDAutoConfig a/override-output: spec.overrides[0].outputEncoding "jsn"
+KrakenDAutoConfig a/override-path: spec.overrides[0].endpoint "orders"
 KrakenDAutoConfig a/override-policy: spec.overrides[0].policyRef.name is empty
-KrakenDAutoConfig a/override-collide: overrides collide: get_a, get-a
-KrakenDAutoConfig a/defaults-timeout: spec.defaults.endpoint.timeout 3 seconds
+KrakenDAutoConfig a/override-collide: overrides collide: "get_a", "get-a"
+KrakenDAutoConfig a/defaults-timeout: spec.defaults.endpoint.timeout "3 seconds"
 KrakenDAutoConfig a/defaults-cachettl: spec.defaults.endpoint.cacheTTL is longer than 64 characters
-KrakenDAutoConfig a/defaults-output: spec.defaults.endpoint.outputEncoding jsn
-KrakenDAutoConfig a/defaults-encoding: spec.defaults.backend.encoding jsn
-KrakenDAutoConfig a/defaults-sd: spec.defaults.backend.sd foo
+KrakenDAutoConfig a/defaults-output: spec.defaults.endpoint.outputEncoding "jsn"
+KrakenDAutoConfig a/defaults-encoding: spec.defaults.backend.encoding "jsn"
+KrakenDAutoConfig a/defaults-sd: spec.defaults.backend.sd "foo"
 KrakenDAutoConfig a/defaults-policy: spec.defaults.policyRef.name is empty
 KrakenDAutoConfig a/no-source: need exactly one of openapi.url or openapi.configMapRef
 KrakenDAutoConfig a/interval-trailing-dot: periodic.interval below 30s
-gateway a/routes: GET /orders/{id} (a/route-one) vs GET /orders/{name} (b/route-two)
-gateway a/routes-clean: GET /a//b (a/route-slash1) vs GET /a/b (a/route-slash2)
-gateway a/routes-dots: GET /d/./e/ (a/route-dots1) vs GET /d/x/../e/ (a/route-dots2)
-gateway a/routes-dup: GET /same (a/route-dup1) vs GET /same (a/route-dup2)
-gateway a/routes-gen2: GET /h/{id} (a/gen-a) vs GET /h/{name} (a/gen-b)
-gateway a/routes-self: GET /self/{id} (a/route-self) vs GET /self/{name} (a/route-self)
-KrakenDEndpoint a/hp-clash: GET /healthz is the health path of gateway a/hp
-KrakenDEndpoint a/hp-default-clash: GET /__health is the health path of gateway a/hp-default
-KrakenDEndpoint a/hp-raw-clash: GET /live is the health path of gateway a/hp-raw
-KrakenDEndpoint a/hp-rawnohp: GET /__health is the health path of gateway a/hp-rawnohp
-KrakenDEndpoint a/hp-rawstr: GET /__health is the health path of gateway a/hp-rawstr
+gateway a/routes: GET "/orders/{id}" (a/route-one) vs GET "/orders/{name}" (b/route-two)
+gateway a/routes-clean: GET "/a//b" (a/route-slash1) vs GET "/a/b" (a/route-slash2)
+gateway a/routes-dots: GET "/d/./e/" (a/route-dots1) vs GET "/d/x/../e/" (a/route-dots2)
+gateway a/routes-dup: GET "/same" (a/route-dup1) vs GET "/same" (a/route-dup2)
+gateway a/routes-gen2: GET "/h/{id}" (a/gen-a) vs GET "/h/{name}" (a/gen-b)
+gateway a/routes-self: GET "/self/{id}" (a/route-self) vs GET "/self/{name}" (a/route-self)
+KrakenDEndpoint a/hp-clash: GET "/healthz" is the health path of gateway a/hp
+KrakenDEndpoint a/hp-default-clash: GET "/__health" is the health path of gateway a/hp-default
+KrakenDEndpoint a/hp-raw-clash: GET "/live" is the health path of gateway a/hp-raw
+KrakenDEndpoint a/hp-rawnohp: GET "/__health" is the health path of gateway a/hp-rawnohp
+KrakenDEndpoint a/hp-rawstr: GET "/__health" is the health path of gateway a/hp-rawstr
 KrakenDBackendPolicy a/p-ee: Enterprise-only on CE gateway a/ce-gw: spec.raw backend/http/client
 KrakenDBackendPolicy b/p-other: Enterprise-only on CE gateway a/ce-gw: spec.raw auth/gcp
 KrakenDEndpoint a/ee-backend: Enterprise-only on CE gateway a/ce-gw: spec.endpoints[0].backends[0].extraConfig backend/http/client
