@@ -5042,3 +5042,40 @@ func TestAutoConfigReconcile_PrecheckHoldsANewShapeCollisionAndKeepsStaleInTheCh
 		t.Errorf("failedOperations = %+v", failed)
 	}
 }
+
+func TestAutoConfigReconcile_HoldsAStoredSameShapePairsLoserAndKeepsStale(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	// Both endpoints were written before the precheck existed; getB is the
+	// older, so the gateway serves it and getA never gets its route.
+	older, newer := generatedEndpoint("getB", "/h/{b}"), generatedEndpoint("getA", "/h/{a}")
+	servedB, servedA := ownedCopy(t, ac, older), ownedCopy(t, ac, newer)
+	servedB.CreationTimestamp = metav1.NewTime(time.Unix(1000, 0))
+	servedA.CreationTimestamp = metav1.NewTime(time.Unix(2000, 0))
+	stale := ownedCopy(t, ac, generatedEndpoint("old", "/old"))
+	g.output.Endpoints = []*v1alpha1.KrakenDEndpoint{newer, older}
+	var ops []string
+	c := fakeClientBuilder().WithObjects(ac, cm, servedA, servedB, stale, testGateway()).WithStatusSubresource(ac).
+		WithInterceptorFuncs(recordEndpointWrites(&ops, nil)).Build()
+	checker := &fakeChecker{}
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Checker = checker
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(ops) != 0 || len(checker.calls) != 0 {
+		t.Errorf("expected no writes, deletes or checks, got %v and %d checks", ops, len(checker.calls))
+	}
+	got := getAC(t, c, ac)
+	failed := got.Status.FailedOperations
+	if len(failed) != 1 || failed[0].Endpoint != "test-ac-geta" ||
+		failed[0].Reason != v1alpha1.ReasonConfigValidationFailed {
+		t.Errorf("failedOperations = %+v, want test-ac-geta held", failed)
+	}
+	cond := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionSynced)
+	if cond == nil || cond.Reason != v1alpha1.ReasonOperationsFailed {
+		t.Errorf("expected Synced False/OperationsFailed, got %+v", cond)
+	}
+}
