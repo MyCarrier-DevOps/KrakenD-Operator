@@ -373,5 +373,6 @@ func TestAutoConfigCRD_Rules(t *testing.T) {
 		{"periodic below 30s", autoconfigHead + `openapi: {url: "http://x"}, trigger: Periodic, periodic: {interval: 10s}}}`, "at least 30s"},
 		{"periodic interval not a duration", autoconfigHead + `openapi: {url: "http://x"}, trigger: Periodic, periodic: {interval: "5 minutes"}}}`, "spec.periodic.interval in body should match"},
 		{"periodic without interval", autoconfigHead + `openapi: {url: "http://x"}, trigger: Periodic}}`, "at least 30s"},
+		{"periodic interval overflows", autoconfigHead + `openapi: {url: "http://x"}, trigger: Periodic, periodic: {interval: "99999999999h"}}}`, "spec.periodic.interval"},
 	})
 }
