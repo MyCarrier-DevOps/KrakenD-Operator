@@ -1330,7 +1330,17 @@ broke decoding of the whole endpoint list.
 `router.healthPath` must start with `/`. The license, OpenAPI port, single PVC
 plugin source and post-restart script rules moved from the webhook to the CRD
 with the same messages; an Enterprise license `secretRef` now needs a
-non-empty name, and a gateway may list at most 32 plugin sources.
+non-empty name (a stored Enterprise gateway whose `secretRef.name` is empty can
+no longer have its spec edited until the name is set), and a gateway may list at
+most 32 plugin sources. `timeout`, `cacheTTL`, `dnsCacheTTL` and `dialTimeout`
+must also parse as a duration of at most 64 characters, and
+`postRestartJob.tmpSizeLimit` must be a quantity Kubernetes can decode: the
+patterns alone admitted values such as `99999999999h` and
+`1e99999999999999999999`, which the validator or the Go decode then rejected.
+Rule evaluation errors are not ratcheted, so a stored value that does not parse
+blocks every update to that object until it is fixed. The quantity fields of
+the embedded `resources` cannot carry per-field rules; keep the admission
+webhooks enabled, because their typed decode rejects such values.
 
 **Redis and Dragonfly credentials are rejected until they are supported.** The
 operator has never rendered `spec.redis.connectionPool.password` or `.tls`, so
