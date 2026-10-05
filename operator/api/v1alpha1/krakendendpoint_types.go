@@ -75,7 +75,9 @@ type EndpointEntry struct {
 	// +kubebuilder:validation:Pattern=`^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$`
 	Timeout *metav1.Duration `json:"timeout,omitempty"`
 
-	// CacheTTL overrides the global cache TTL.
+	// CacheTTL overrides the global cache TTL (a Go duration).
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:Pattern=`^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$`
 	CacheTTL *metav1.Duration `json:"cacheTTL,omitempty"`
 
 	// InputHeaders is the list of headers forwarded to backends.
