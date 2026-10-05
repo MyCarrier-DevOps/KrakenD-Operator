@@ -293,3 +293,22 @@ func TestGatewayCRD_Ratchets(t *testing.T) {
 			"spec.redis.connectionPool.dialTimeout"},
 	})
 }
+
+// The API server skips CEL when the schema reports a NotSupported, Required,
+// TooLong, TooMany or TypeInvalid error, so a case cannot rely on a rule that
+// the server would never evaluate.
+func TestValidateCRD_SkipsCELAfterABlockingSchemaError(t *testing.T) {
+	object := gatewayHead + `edition: EE, config: {outputEncoding: yaml}}}`
+	for name, errs := range map[string]field.ErrorList{
+		"create": validateCRD(t, gatewaysCRD, object),
+		"update": validateCRDUpdate(t, gatewaysCRD, object, gatewayHead+`edition: CE, config: {}}}`),
+	} {
+		msg := errs.ToAggregate().Error()
+		if strings.Contains(msg, "edition EE requires") {
+			t.Errorf("%s: CEL ran despite a blocking schema error: %v", name, errs)
+		}
+		if !strings.Contains(msg, "some validation rules were not checked") {
+			t.Errorf("%s: errors = %v, want the skipped-rules message", name, errs)
+		}
+	}
+}
