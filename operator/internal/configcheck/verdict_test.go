@@ -18,7 +18,9 @@ package configcheck
 
 import (
 	"fmt"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -41,6 +43,23 @@ func TestVerdictSummary_BoundsAtAFindingBoundary(t *testing.T) {
 	want := "ns/ep spec.endpoints[0]: m000; ns/ep spec.endpoints[0]: m001; ns/ep spec.endpoints[0]: m002 (+7 more)"
 	if got != want {
 		t.Errorf("summary = %q, want %q", got, want)
+	}
+}
+
+func TestVerdictSummary_KeepsAPrefixOfAnOversizedFirstFinding(t *testing.T) {
+	v := Verdict{Findings: []Finding{
+		{Index: -1, Message: strings.Repeat("é", 100)},
+		{Index: -1, Message: "second"},
+	}}
+
+	got := v.Summary(20)
+
+	// "gateway: " is 9 bytes; the 20th byte splits an "é".
+	if !strings.HasPrefix(got, "gateway: ééééé") || !strings.HasSuffix(got, " (+2 more)") {
+		t.Errorf("summary = %q, want a prefix of the first finding and the count", got)
+	}
+	if !utf8.ValidString(got) {
+		t.Errorf("summary = %q is not valid UTF-8", got)
 	}
 }
 
