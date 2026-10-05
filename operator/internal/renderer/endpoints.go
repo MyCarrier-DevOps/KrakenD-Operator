@@ -62,10 +62,14 @@ type flatEndpoint struct {
 	Source types.NamespacedName
 	// CreationTimestamp is used for conflict resolution (oldest wins).
 	CreationTimestampUnix int64
+	// Index is the entry's position in its KrakenDEndpoint's spec; the earlier
+	// entry wins between two entries of one KrakenDEndpoint.
+	Index int
 }
 
 // flattenEndpoints flattens all KrakenDEndpoint specs into individual entries,
-// detects conflicts (same path+method from different CRs), and returns the
+// detects conflicts (entries that register the same route for one method, from
+// one or several KrakenDEndpoints), and returns the
 // deduplicated list plus sets of conflicted and invalid endpoints.
 func flattenEndpoints(
 	endpoints []v1alpha1.KrakenDEndpoint,
@@ -74,7 +78,7 @@ func flattenEndpoints(
 	conflicted = make(map[types.NamespacedName][]EntryConflict)
 	invalid = make(map[types.NamespacedName]struct{})
 
-	// Group entries by (endpoint, method) to detect conflicts
+	// Group entries by (route shape, method) to detect conflicts
 	type entryGroup struct {
 		entries []flatEndpoint
 	}
@@ -104,7 +108,7 @@ func flattenEndpoints(
 			continue
 		}
 
-		for _, entry := range ep.Spec.Endpoints {
+		for idx, entry := range ep.Spec.Endpoints {
 			key := endpointKey{Endpoint: ConflictKey(entry.Endpoint), Method: entry.Method}
 			if groups[key] == nil {
 				groups[key] = &entryGroup{}
@@ -113,25 +117,30 @@ func flattenEndpoints(
 				Entry:                 entry,
 				Source:                nn,
 				CreationTimestampUnix: ep.CreationTimestamp.Unix(),
+				Index:                 idx,
 			})
 		}
 	}
 
-	// Resolve conflicts: for each group with entries from multiple CRs,
-	// keep the oldest CR's entry and mark the rest as conflicted.
-
+	// Resolve conflicts: for each group with more than one entry, keep the
+	// oldest KrakenDEndpoint's entry (the earlier spec entry within one
+	// KrakenDEndpoint) and mark the rest as conflicted.
 	for _, group := range groups {
 		if len(group.entries) <= 1 {
 			flat = append(flat, group.entries...)
 			continue
 		}
 
-		// Sort by creation timestamp (oldest first), then by name for determinism
+		// Sort by creation timestamp (oldest first), then by name, then by
+		// spec position for determinism
 		sort.Slice(group.entries, func(i, j int) bool {
 			if group.entries[i].CreationTimestampUnix != group.entries[j].CreationTimestampUnix {
 				return group.entries[i].CreationTimestampUnix < group.entries[j].CreationTimestampUnix
 			}
-			return group.entries[i].Source.String() < group.entries[j].Source.String()
+			if group.entries[i].Source != group.entries[j].Source {
+				return group.entries[i].Source.String() < group.entries[j].Source.String()
+			}
+			return group.entries[i].Index < group.entries[j].Index
 		})
 
 		// Keep the winner (oldest), mark the rest as conflicted
