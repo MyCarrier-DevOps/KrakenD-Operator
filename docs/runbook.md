@@ -459,6 +459,28 @@ validator itself failed. This is transient and `kubectl` does not retry it, so
 run the command again. Controllers and GitOps tools retry on their own. If it
 repeats, check the operator pod's CPU and memory.
 
+### A KrakenDBackendPolicy is stuck in `Terminating`
+
+**Symptom:** `kubectl delete krakendbackendpolicy` returns, but the policy stays
+with a `deletionTimestamp` and `kubectl describe` shows a `DeletionBlocked`
+warning event.
+
+**Cause:** the policy is still referenced. The finalizer
+`gateway.krakend.io/policy-protection` keeps it, and keeps it rendered, until no
+KrakenDEndpoint references it. List the referencing endpoints:
+
+```bash
+kubectl get krakendendpoints -A -o json | jq -r --arg ns <policy-namespace> --arg name <policy-name> \
+  '.items[] | . as $e | select([.spec.endpoints[].backends[].policyRef | select(. != null)
+     | select(.name == $name and ((.namespace // $e.metadata.namespace) == $ns))] | length > 0)
+   | "\(.metadata.namespace)/\(.metadata.name)"'
+```
+
+Remove or repoint those references and the deletion completes. If the operator
+is down, it completes when the operator is back. If the operator is gone for
+good, remove the finalizer by hand (the command is in the upgrade guide, under
+Rollback).
+
 ### The operator's AutoConfig writes skip the render check
 
 The operator's own writes to KrakenDEndpoints a KrakenDAutoConfig controls are
