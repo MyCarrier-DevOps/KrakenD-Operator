@@ -26,6 +26,7 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -108,9 +109,33 @@ func (c *Checker) CheckGatewayPolicy(ctx context.Context, gw *v1alpha1.KrakenDGa
 	return c.lint(ctx, in)
 }
 
-// LintPolicy lints policy on its own.
-func (c *Checker) LintPolicy(_ context.Context, _ *v1alpha1.KrakenDBackendPolicy) (Verdict, error) {
-	return Verdict{}, nil
+// LintPolicy lints policy on its own: one synthetic endpoint on a default CE
+// gateway, whose only backend references policy. It catches a bad policy
+// before anything references it.
+func (c *Checker) LintPolicy(ctx context.Context, policy *v1alpha1.KrakenDBackendPolicy) (Verdict, error) {
+	const name = "policy-lint"
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: policy.Namespace},
+		Spec:       v1alpha1.KrakenDGatewaySpec{Edition: v1alpha1.EditionCE},
+	}
+	ep := v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: policy.Namespace},
+		Spec: v1alpha1.KrakenDEndpointSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: name},
+			Endpoints: []v1alpha1.EndpointEntry{{
+				Endpoint: "/" + name, Method: "GET",
+				Backends: []v1alpha1.BackendSpec{{
+					Host: []string{"http://" + name}, URLPattern: "/",
+					PolicyRef: &v1alpha1.PolicyRef{Name: policy.Name},
+				}},
+			}},
+		},
+	}
+	return c.lint(ctx, renderer.RenderInput{
+		Gateway:   gw,
+		Endpoints: []v1alpha1.KrakenDEndpoint{ep},
+		Policies:  map[string]*v1alpha1.KrakenDBackendPolicy{policy.Namespace + "/" + policy.Name: policy},
+	})
 }
 
 func (c *Checker) lint(ctx context.Context, in renderer.RenderInput) (Verdict, error) {
