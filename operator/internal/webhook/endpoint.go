@@ -140,14 +140,14 @@ func (v *EndpointValidator) checkRender(
 ) (admission.Warnings, error) {
 	after, err := v.Checker.CheckGateway(ctx, gw, []v1alpha1.KrakenDEndpoint{*ep})
 	if err != nil {
-		return nil, err
+		return nil, checkErr(err)
 	}
 	if after.OK {
 		return nil, nil
 	}
 	before, err := v.Checker.CheckGateway(ctx, gw, nil)
 	if err != nil {
-		return nil, err
+		return nil, checkErr(err)
 	}
 	if before.OK {
 		return nil, renderDenial(ep, after)
@@ -156,7 +156,7 @@ func (v *EndpointValidator) checkRender(
 		gw.Namespace, gw.Name, before.Summary(warningLimit))}
 	isoAfter, err := v.Checker.CheckIsolated(ctx, gw, []v1alpha1.KrakenDEndpoint{*ep})
 	if err != nil {
-		return nil, err
+		return nil, checkErr(err)
 	}
 	if isoAfter.OK {
 		return preexisting, nil
@@ -166,7 +166,7 @@ func (v *EndpointValidator) checkRender(
 	}
 	isoBefore, err := v.Checker.CheckIsolated(ctx, gw, []v1alpha1.KrakenDEndpoint{*old})
 	if err != nil {
-		return nil, err
+		return nil, checkErr(err)
 	}
 	if isoBefore.OK {
 		return nil, renderDenial(ep, isoAfter)
