@@ -22,7 +22,6 @@ import (
 	"encoding/json"
 	stderrors "errors"
 	"fmt"
-	"maps"
 	"net/url"
 	"reflect"
 	"slices"
@@ -700,8 +699,23 @@ type endpointChanges struct {
 	created, updated, deleted int
 }
 
-func (c endpointChanges) total() int {
+func (c *endpointChanges) total() int {
 	return c.created + c.updated + c.deleted
+}
+
+// count tallies one CreateOrUpdate result.
+func (c *endpointChanges) count(op controllerutil.OperationResult) {
+	switch op {
+	case controllerutil.OperationResultCreated:
+		c.created++
+	case controllerutil.OperationResultUpdated:
+		c.updated++
+	case controllerutil.OperationResultNone,
+		controllerutil.OperationResultUpdatedStatus,
+		controllerutil.OperationResultUpdatedStatusOnly:
+		// None: already in the desired state. The status results come
+		// only from CreateOrPatch, never from CreateOrUpdate.
+	}
 }
 
 // syncResult is what a pipeline pass that reached its endpoint writes
@@ -816,35 +830,12 @@ func (r *KrakenDAutoConfigReconciler) reconcileEndpoints(
 		}
 	}
 
-	// Create or update desired endpoints
 	for _, ep := range writes {
-		existing := &v1alpha1.KrakenDEndpoint{ObjectMeta: metav1.ObjectMeta{
-			Name:      ep.Name,
-			Namespace: ep.Namespace,
-		}}
-		op, err := controllerutil.CreateOrUpdate(ctx, r.Client, existing, func() error {
-			if !maps.Equal(existing.Labels, ep.Labels) {
-				existing.Labels = ep.Labels
-			}
-			if !endpointSpecEqual(existing.Spec, ep.Spec) {
-				existing.Spec = ep.Spec
-			}
-			return controllerutil.SetControllerReference(ac, existing, r.Scheme)
-		})
+		op, err := r.writeEndpoint(ctx, ac, ep)
 		if err != nil {
-			return changes, fmt.Errorf("upserting endpoint %s: %w", ep.Name, err)
+			return changes, err
 		}
-		switch op {
-		case controllerutil.OperationResultCreated:
-			changes.created++
-		case controllerutil.OperationResultUpdated:
-			changes.updated++
-		case controllerutil.OperationResultNone,
-			controllerutil.OperationResultUpdatedStatus,
-			controllerutil.OperationResultUpdatedStatusOnly:
-			// None: already in the desired state. The status results come
-			// only from CreateOrPatch, never from CreateOrUpdate.
-		}
+		changes.count(op)
 	}
 
 	return changes, nil
