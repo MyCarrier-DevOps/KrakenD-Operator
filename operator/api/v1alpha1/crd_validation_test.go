@@ -296,6 +296,9 @@ func TestGatewayCRD_Ratchets(t *testing.T) {
 	const withPassword = `dragonfly: {enabled: true, authentication: {passwordFromSecret: {name: s, key: p}}}}}`
 	const storedPassword = gatewayHead + `edition: CE, config: {}, ` + pool + `password: {name: s, key: p}}}}}`
 	runCRDUpdateCases(t, gatewaysCRD, []crdUpdateCase{
+		{"stored timeout that is not a duration, another field edited",
+			gatewayHead + `edition: CE, replicas: 3, config: {timeout: "5 seconds"}}}`,
+			gatewayHead + `edition: CE, config: {timeout: "5 seconds"}}}`, ""},
 		{"CE gateway switches to EE without a license",
 			gatewayHead + `edition: EE, config: {}}}`, gatewayHead + `edition: CE, config: {}}}`, "edition EE requires"},
 		{"stored Dragonfly password on EE, another field edited", ee + `replicas: 3, ` + withPassword, ee + withPassword, ""},
