@@ -45,3 +45,4 @@ KrakenDGateway a/ce-openapi: spec.openapi.enabled is Enterprise-only on a CE gat
 KrakenDGateway a/ce-dragonfly: spec.dragonfly.enabled is Enterprise-only on a CE gateway
 KrakenDGateway a/ce-df-password: spec.dragonfly.enabled is Enterprise-only on a CE gateway
 KrakenDAutoConfig a/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: name longer than 63 characters
+KrakenDAutoConfig a/nogw: spec.gatewayRef.name is empty
