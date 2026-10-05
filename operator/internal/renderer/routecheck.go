@@ -53,6 +53,25 @@ type routeRefusal struct {
 	message string
 }
 
+// line renders the refusal as one lint-style line. A refusal of the gateway's
+// own route has no endpoint to point at, so it is not a pointer; r is the
+// route being registered.
+func (f routeRefusal) line(r ginRoute) string {
+	if f.index == gatewayRoute {
+		return fmt.Sprintf("- gateway route %s: %s", r.describe(), f.message)
+	}
+	return fmt.Sprintf("- at '/endpoints/%d/endpoint': %s", f.index, f.message)
+}
+
+// describe names the route's method and path; a route for every method reads
+// "any method".
+func (r ginRoute) describe() string {
+	if r.any {
+		return "any method " + r.path
+	}
+	return r.method + " " + r.path
+}
+
 // routedConfig is the part of a krakend.json the router reads.
 type routedConfig struct {
 	Debug       bool                       `json:"debug_endpoint"`
@@ -92,7 +111,7 @@ func routeConflicts(doc []byte) ([]string, error) {
 			continue
 		}
 		for _, f := range clashRefusals(accepted, r, refusal) {
-			lines = append(lines, fmt.Sprintf("- at '/endpoints/%d/endpoint': %s", f.index, f.message))
+			lines = append(lines, f.line(r))
 		}
 		// gin can leave its tree half-updated after refusing a route; rebuild it.
 		engine = engineWith(accepted)
@@ -193,7 +212,7 @@ func clashRefusals(accepted []ginRoute, r ginRoute, refusal string) []routeRefus
 			out[0].message = fmt.Sprintf("%s (%s %s is the gateway's own route)", refusal, a.method, a.path)
 		} else if a.index != r.index {
 			out = append(out, routeRefusal{index: a.index,
-				message: fmt.Sprintf("%s %s clashes with %s %s: %s", a.method, a.path, r.method, r.path, refusal)})
+				message: fmt.Sprintf("%s clashes with %s: %s", a.describe(), r.describe(), refusal)})
 		}
 		break
 	}
