@@ -756,6 +756,7 @@ func TestEndpointAdmission_OnlyOperatorWritesToAutoConfigEndpointsSkipRenderChec
 		wantCheck bool
 	}{
 		{"operator on an AutoConfig endpoint", operatorUser, operatorUser, ownedEndpoint("KrakenDAutoConfig", true), false},
+		{"another user on an AutoConfig endpoint", "alice", operatorUser, ownedEndpoint("KrakenDAutoConfig", true), true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
