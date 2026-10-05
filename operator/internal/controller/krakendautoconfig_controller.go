@@ -271,13 +271,32 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	return r.requeueResult(&ac), nil
 }
 
-// inScope returns the issues whose operations spec.filter keeps, so an
-// operation the user excluded is not reported.
+// inScope returns the issues whose operations spec.filter keeps, applying
+// the same rules the filter applies to entries, so an operation the user
+// excluded is neither reported nor holds anything back.
 func (r *KrakenDAutoConfigReconciler) inScope(
-	_ *v1alpha1.KrakenDAutoConfig,
+	ac *v1alpha1.KrakenDAutoConfig,
 	issues []autoconfig.OperationIssue,
 ) []autoconfig.OperationIssue {
-	return issues
+	if ac.Spec.Filter == nil || len(issues) == 0 {
+		return issues
+	}
+	entries := make([]v1alpha1.EndpointEntry, len(issues))
+	opIDs := make(map[string]string, len(issues))
+	tags := make(map[string][]string, len(issues))
+	for i, issue := range issues {
+		entries[i] = v1alpha1.EndpointEntry{Endpoint: issue.Path, Method: issue.Method}
+		key := issue.Path + ":" + issue.Method
+		opIDs[key] = issue.OperationID
+		tags[key] = issue.Tags
+	}
+	kept := map[string]bool{}
+	for _, e := range r.Filter.Apply(entries, tags, opIDs, *ac.Spec.Filter) {
+		kept[e.Endpoint+":"+e.Method] = true
+	}
+	return slices.DeleteFunc(slices.Clone(issues), func(i autoconfig.OperationIssue) bool {
+		return !kept[i.Path+":"+i.Method]
+	})
 }
 
 // SetupWithManager sets up the controller with the Manager.
