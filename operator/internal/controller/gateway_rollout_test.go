@@ -38,14 +38,37 @@ type servedGateway struct {
 	c  client.Client
 	r  *KrakenDGatewayReconciler
 	gw *v1alpha1.KrakenDGateway
+	// cached, while set, is what every read of the Deployment returns, as an
+	// informer cache does until it has seen the controller's own update.
+	cached *appsv1.Deployment
 }
 
 func serveGateway(t *testing.T) *servedGateway {
 	t.Helper()
-	gw := servingGateway("A", convergedImage)
-	c := fakeClientBuilder().WithObjects(gw, settledDeployment(gw, "A")).WithStatusSubresource(gw).
-		WithInterceptorFuncs(withGenerationBumps(interceptor.Funcs{})).Build()
-	return &servedGateway{c: c, r: newTestGatewayReconciler(c, renderOutput("A"), &mockValidator{}), gw: gw}
+	s := &servedGateway{gw: servingGateway("A", convergedImage)}
+	s.c = fakeClientBuilder().WithObjects(s.gw, settledDeployment(s.gw, "A")).WithStatusSubresource(s.gw).
+		WithInterceptorFuncs(withGenerationBumps(interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object,
+				opts ...client.GetOption,
+			) error {
+				if dep, ok := obj.(*appsv1.Deployment); ok && s.cached != nil {
+					s.cached.DeepCopyInto(dep)
+					return nil
+				}
+				return c.Get(ctx, key, obj, opts...)
+			},
+		})).Build()
+	s.r = newTestGatewayReconciler(s.c, renderOutput("A"), &mockValidator{})
+	return s
+}
+
+// reconcileWhileCacheLags reconciles with every Deployment read returning
+// the Deployment as it stands now.
+func (s *servedGateway) reconcileWhileCacheLags(t *testing.T) *v1alpha1.KrakenDGateway {
+	t.Helper()
+	s.cached = s.deployment(t)
+	defer func() { s.cached = nil }()
+	return s.reconcile(t)
 }
 
 // reconcile runs one reconcile pass and fails the test on an error.
@@ -108,13 +131,17 @@ func requireProgressing(t *testing.T, gw *v1alpha1.KrakenDGateway, want metav1.C
 	}
 }
 
+// limitCPU is a spec change that rolls the pods and changes no annotation the
+// operator tracks.
+func limitCPU(spec *v1alpha1.KrakenDGatewaySpec) {
+	spec.Resources = &corev1.ResourceRequirements{Limits: corev1.ResourceList{
+		corev1.ResourceCPU: resource.MustParse("500m"),
+	}}
+}
+
 func TestGatewayReconcile_TemplateOnlyChangeIsProgressingUntilTheDeploymentConverges(t *testing.T) {
 	s := serveGateway(t)
-	s.editSpec(t, func(spec *v1alpha1.KrakenDGatewaySpec) {
-		spec.Resources = &corev1.ResourceRequirements{Limits: corev1.ResourceList{
-			corev1.ResourceCPU: resource.MustParse("500m"),
-		}}
-	})
+	s.editSpec(t, limitCPU)
 
 	got := s.reconcile(t)
 	requireProgressing(t, got, metav1.ConditionTrue, false)
@@ -124,4 +151,13 @@ func TestGatewayReconcile_TemplateOnlyChangeIsProgressingUntilTheDeploymentConve
 
 	s.deploymentControllerObserves(t, settled)
 	requireProgressing(t, s.reconcile(t), metav1.ConditionFalse, true)
+}
+
+func TestGatewayReconcile_TemplateChangeIsProgressingWhileTheCacheLags(t *testing.T) {
+	s := serveGateway(t)
+	s.editSpec(t, limitCPU)
+
+	got := s.reconcileWhileCacheLags(t)
+
+	requireProgressing(t, got, metav1.ConditionTrue, false)
 }
