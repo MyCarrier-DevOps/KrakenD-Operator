@@ -2158,3 +2158,14 @@ func TestEvaluate_ConflictInHiddenLabelUnderEndpointFailsEvaluation(t *testing.T
 		t.Errorf("expected a whole-evaluation error naming _h, got %v", err)
 	}
 }
+
+func TestEvaluate_OverrideRemapsAFailedOperation(t *testing.T) {
+	// A HEAD operation that fails CUE and an override that remaps it to GET
+	// /v2/users: the failure belongs to the route the override gives it.
+	out := evaluateEmbedded(t, `{"paths":{"/legacy/users":{"head":{"operationId":"headUsers","responses":{"200":{}}}}}}`,
+		v1alpha1.OperationOverride{OperationID: "headUsers", Endpoint: "/v2/users", Method: "GET"})
+
+	if len(out.Failed) != 1 || out.Failed[0].Method != "GET" || out.Failed[0].Path != "/v2/users" {
+		t.Errorf("expected the failure at GET /v2/users, got %+v", out.Failed)
+	}
+}
