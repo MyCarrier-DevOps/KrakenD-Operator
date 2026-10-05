@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"k8s.io/apimachinery/pkg/types"
 
@@ -59,8 +60,11 @@ type Verdict struct {
 	Findings []Finding
 }
 
-// Summary joins the findings into one message of at most limit bytes, cut at
-// a finding boundary and ending with the number of findings left out.
+// Summary joins the findings into one message, cut at a finding boundary and
+// ending with the number of findings left out. The findings take at most limit
+// bytes; the count suffix follows them. When the first finding alone exceeds
+// limit, a prefix of it is kept, cut on a rune boundary, so the message always
+// carries a reason.
 func (v Verdict) Summary(limit int) string {
 	var b strings.Builder
 	for i, f := range v.Findings {
@@ -69,7 +73,16 @@ func (v Verdict) Summary(limit int) string {
 			s = "; " + s
 		}
 		if b.Len()+len(s) > limit {
-			fmt.Fprintf(&b, " (+%d more)", len(v.Findings)-i)
+			left := len(v.Findings) - i
+			if i == 0 {
+				cut := limit
+				for cut > 0 && !utf8.RuneStart(s[cut]) {
+					cut--
+				}
+				b.WriteString(s[:cut])
+				left--
+			}
+			fmt.Fprintf(&b, " (+%d more)", left)
 			break
 		}
 		b.WriteString(s)
