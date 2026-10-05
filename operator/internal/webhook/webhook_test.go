@@ -78,7 +78,7 @@ func TestGatewayValidator_ValidEE(t *testing.T) {
 			},
 		},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), gw)
 	if err != nil {
 		t.Errorf("expected no error, got %v", err)
@@ -94,7 +94,7 @@ func TestGatewayValidator_OpenAPIPortValid(t *testing.T) {
 			OpenAPI: &v1alpha1.OpenAPIExportSpec{Enabled: true, Port: 8090},
 		},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), gw)
 	if err != nil {
 		t.Errorf("expected no error, got %v", err)
@@ -183,7 +183,7 @@ func TestGatewayValidator_OpenAPIProbeRejected(t *testing.T) {
 		// readinessProbe is validated on the same terms.
 		{"readiness no handler", nil, &corev1.Probe{}, "", "readinessProbe"},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Checker: &scriptedChecker{}}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := v.ValidateCreate(context.Background(), gwWithProbes(tc.liveness, tc.readiness, tc.image))
@@ -227,7 +227,7 @@ func TestGatewayValidator_OpenAPIProbeAccepted(t *testing.T) {
 			GRPC: &corev1.GRPCAction{Port: 8090},
 		}}, nil, "ghcr.io/example/grpc-server:1.0"},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Checker: &scriptedChecker{}}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := v.ValidateCreate(context.Background(), gwWithProbes(tc.liveness, tc.readiness, tc.image)); err != nil {
@@ -248,7 +248,7 @@ func TestGatewayValidator_Update(t *testing.T) {
 	newGW := old.DeepCopy()
 	negative := resource.MustParse("-1Gi")
 	newGW.Spec.PostRestartJob = &v1alpha1.PostRestartJobSpec{Enabled: true, Script: "true", TmpSizeLimit: &negative}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Checker: &scriptedChecker{}}
 	_, err := v.ValidateUpdate(context.Background(), old, newGW)
 	if err == nil {
 		t.Error("expected error on update to a negative postRestartJob.tmpSizeLimit")
@@ -256,7 +256,7 @@ func TestGatewayValidator_Update(t *testing.T) {
 }
 
 func TestGatewayValidator_Delete(t *testing.T) {
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Checker: &scriptedChecker{}}
 	_, err := v.ValidateDelete(context.Background(), &v1alpha1.KrakenDGateway{})
 	if err != nil {
 		t.Errorf("expected no error, got %v", err)
@@ -281,7 +281,7 @@ func TestGatewayValidator_WorkingDirOutsideTmpWithROFSWarns(t *testing.T) {
 			},
 		},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Checker: &scriptedChecker{}}
 	warnings, err := v.ValidateCreate(context.Background(), gw)
 	if err != nil {
 		t.Fatalf("expected no error (this is a warning, not a rejection), got: %v", err)
@@ -314,7 +314,7 @@ func TestGatewayValidator_WorkingDirOutsideTmpWithROFSDisabledNoWarning(t *testi
 			},
 		},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Checker: &scriptedChecker{}}
 	warnings, err := v.ValidateCreate(context.Background(), gw)
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
@@ -340,7 +340,7 @@ func TestGatewayValidator_WorkingDirUnderTmpNoWarning(t *testing.T) {
 			},
 		},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Checker: &scriptedChecker{}}
 	warnings, err := v.ValidateCreate(context.Background(), gw)
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
@@ -371,7 +371,7 @@ func TestGatewayValidator_ContainerRunAsUserZeroRejected(t *testing.T) {
 			},
 		},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), gw)
 	if err == nil {
 		t.Fatal("expected rejection for container runAsUser:0 with no runAsNonRoot escape hatch")
@@ -415,7 +415,7 @@ func TestGatewayValidator_ContainerRunAsUserZeroWithPodRunAsNonRootFalseAllowed(
 			},
 		},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), gw)
 	if err != nil {
 		t.Fatalf("expected no error when podSecurityContext.runAsNonRoot:false is set, got: %v", err)
@@ -441,7 +441,7 @@ func TestGatewayValidator_ContainerRunAsUserZeroWithContainerRunAsNonRootFalseAl
 			},
 		},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), gw)
 	if err != nil {
 		t.Fatalf("expected no error when container securityContext.runAsNonRoot:false is set, got: %v", err)
@@ -472,7 +472,7 @@ func TestGatewayValidator_PodScopeRunAsUserZeroWithExplicitRunAsNonRootTrueRejec
 			},
 		},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), gw)
 	if err == nil {
 		t.Fatal("expected rejection for pod-scope runAsUser:0 with explicit podSecurityContext.runAsNonRoot:true")
@@ -516,7 +516,7 @@ func TestGatewayValidator_PodScopeRunAsUserZeroUnsetRunAsNonRootAllowed(t *testi
 			},
 		},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), gw)
 	if err != nil {
 		t.Fatalf("expected no rejection for pod-scope runAsUser:0 with runAsNonRoot unset "+
@@ -556,7 +556,7 @@ func TestGatewayValidator_PodScopeRunAsUserZeroContainerOptOutStillAllowedViaSel
 			},
 		},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), gw)
 	if err != nil {
 		t.Fatalf("expected postRestartJob pod-scope runAsUser:0 with a container-scope "+
@@ -598,7 +598,7 @@ func TestGatewayValidator_PodScopeRunAsUserZeroExplicitTrueContainerOptOutReject
 			},
 		},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), gw)
 	if err == nil {
 		t.Fatal("expected rejection: a container-scope runAsNonRoot:false opt-out must not " +
@@ -709,7 +709,7 @@ func TestGatewayValidator_EffectiveRunAsRootCrossScopePrecedence(t *testing.T) {
 					},
 				},
 			}
-			v := &GatewayValidator{}
+			v := &GatewayValidator{Checker: &scriptedChecker{}}
 			_, err := v.ValidateCreate(context.Background(), gw)
 			if tc.wantErr && err == nil {
 				t.Fatalf("expected rejection (%s), got no error", tc.reason)
@@ -747,7 +747,7 @@ func TestGatewayValidator_RunAsUserZeroRatchetUnchangedUpdateAllowed(t *testing.
 	// fields stay exactly as they were.
 	newGW.Spec.PostRestartJob.Script = "npm install -g rdme && echo done"
 
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Checker: &scriptedChecker{}}
 	_, err := v.ValidateUpdate(context.Background(), old, newGW)
 	if err != nil {
 		t.Fatalf("expected the pre-existing runAsUser:0 to be ratcheted (allowed) on an unrelated update, got: %v", err)
@@ -775,7 +775,7 @@ func TestGatewayValidator_RunAsUserZeroRatchetNewlyIntroducedUpdateRejected(t *t
 		RunAsUser: new(int64(0)),
 	}
 
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Checker: &scriptedChecker{}}
 	_, err := v.ValidateUpdate(context.Background(), old, newGW)
 	if err == nil {
 		t.Fatal("expected rejection: this update newly introduces runAsUser:0 with no escape hatch")
@@ -808,7 +808,7 @@ func TestGatewayValidator_RunAsUserZeroRatchetDisabledThenEnabledRejected(t *tes
 	newGW := old.DeepCopy()
 	newGW.Spec.PostRestartJob.Enabled = true
 
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Checker: &scriptedChecker{}}
 	_, err := v.ValidateUpdate(context.Background(), old, newGW)
 	if err == nil {
 		t.Fatal("expected rejection: enabling a previously-disabled spec must not ratchet off its stored runAsUser:0")
@@ -836,7 +836,7 @@ func TestGatewayValidator_DragonflyContainerRunAsUserZeroRejected(t *testing.T) 
 			},
 		},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), gw)
 	if err == nil {
 		t.Fatal("expected rejection for dragonfly container runAsUser:0 with no runAsNonRoot escape hatch")
@@ -886,7 +886,7 @@ func TestGatewayValidator_DragonflyContainerRunAsUserZeroWithPodRunAsNonRootFals
 			},
 		},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), gw)
 	if err != nil {
 		t.Fatalf("expected no error when podSecurityContext.runAsNonRoot:false is set, got: %v", err)
@@ -911,7 +911,7 @@ func TestGatewayValidator_DragonflyContainerRunAsUserZeroWithContainerRunAsNonRo
 			},
 		},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), gw)
 	if err != nil {
 		t.Fatalf("expected no error when container securityContext.runAsNonRoot:false is set, got: %v", err)
@@ -944,7 +944,7 @@ func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroWithExplicitRunAsNonRoot
 			},
 		},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), gw)
 	if err == nil {
 		t.Fatal("expected rejection for dragonfly pod-scope runAsUser:0 with explicit podSecurityContext.runAsNonRoot:true")
@@ -984,7 +984,7 @@ func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroUnsetRunAsNonRootRejecte
 			},
 		},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), gw)
 	if err == nil {
 		t.Fatal("expected rejection for dragonfly pod-scope runAsUser:0 with runAsNonRoot unset " +
@@ -1034,7 +1034,7 @@ func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroContainerOptOutRejected(
 			},
 		},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), gw)
 	if err == nil {
 		t.Fatal("expected rejection: a container-scope runAsNonRoot:false opt-out must not " +
@@ -1071,7 +1071,7 @@ func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroExplicitTrueContainerOpt
 			},
 		},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), gw)
 	if err == nil {
 		t.Fatal("expected rejection: a container-scope runAsNonRoot:false opt-out must not " +
@@ -1107,7 +1107,7 @@ func TestGatewayValidator_DragonflyRunAsUserZeroRatchetUnchangedUpdateAllowed(t 
 	// fields stay exactly as they were.
 	newGW.Spec.Dragonfly.Image = "docker.dragonflydb.io/dragonflydb/dragonfly:v1.25.2"
 
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Checker: &scriptedChecker{}}
 	_, err := v.ValidateUpdate(context.Background(), old, newGW)
 	if err != nil {
 		t.Fatalf("expected the pre-existing dragonfly runAsUser:0 to be ratcheted (allowed) on an unrelated update, got: %v", err)
@@ -1140,7 +1140,7 @@ func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroRatchetUnchangedUpdateAl
 	// stay exactly as they were.
 	newGW.Spec.Dragonfly.Image = "docker.dragonflydb.io/dragonflydb/dragonfly:v1.25.2"
 
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Checker: &scriptedChecker{}}
 	_, err := v.ValidateUpdate(context.Background(), old, newGW)
 	if err != nil {
 		t.Fatalf("expected the pre-existing grandfathered pod-scope dragonfly runAsUser:0 to be "+
@@ -1168,7 +1168,7 @@ func TestGatewayValidator_DragonflyRunAsUserZeroRatchetNewlyIntroducedUpdateReje
 		RunAsUser: new(int64(0)),
 	}
 
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Checker: &scriptedChecker{}}
 	_, err := v.ValidateUpdate(context.Background(), old, newGW)
 	if err == nil {
 		t.Fatal("expected rejection: this update newly introduces dragonfly runAsUser:0 with no escape hatch")
@@ -1200,7 +1200,7 @@ func TestGatewayValidator_DragonflyRunAsUserZeroRatchetDisabledThenEnabledReject
 	newGW := old.DeepCopy()
 	newGW.Spec.Dragonfly.Enabled = true
 
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Checker: &scriptedChecker{}}
 	_, err := v.ValidateUpdate(context.Background(), old, newGW)
 	if err == nil {
 		t.Fatal("expected rejection: enabling a previously-disabled dragonfly spec must not ratchet off its stored runAsUser:0")
@@ -1329,7 +1329,7 @@ func TestGatewayValidator_DragonflyEffectiveRunAsRootCrossScopePrecedence(t *tes
 					},
 				},
 			}
-			v := &GatewayValidator{}
+			v := &GatewayValidator{Checker: &scriptedChecker{}}
 			_, err := v.ValidateCreate(context.Background(), gw)
 			if tc.wantErr && err == nil {
 				t.Fatalf("expected rejection (%s), got no error", tc.reason)
@@ -1371,7 +1371,7 @@ func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroWithNonZeroContainerReje
 			},
 		},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), gw)
 	if err == nil {
 		t.Fatal("expected rejection: pod-scope runAsUser:0 with runAsNonRoot unset must be " +
@@ -1409,7 +1409,7 @@ func TestGatewayValidator_DragonflyContainerRootRecipeWithPodScopeRootStillAdmit
 			},
 		},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), gw)
 	if err != nil {
 		t.Fatalf("expected the documented container-root recipe "+
@@ -1434,7 +1434,7 @@ func TestGatewayValidator_NegativeTmpSizeLimitRejected(t *testing.T) {
 			},
 		},
 	}
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), gw)
 	if err == nil {
 		t.Fatal("expected rejection for negative tmpSizeLimit")
@@ -2061,7 +2061,7 @@ func TestGatewayValidator_WarnsWhenReplicasSetWithAutoscaling(t *testing.T) {
 			Autoscaling: &v1alpha1.AutoscalingSpec{MaxReplicas: 5},
 		},
 	}
-	warnings, err := (&GatewayValidator{}).ValidateCreate(context.Background(), gw)
+	warnings, err := (&GatewayValidator{Checker: &scriptedChecker{}}).ValidateCreate(context.Background(), gw)
 	if err != nil {
 		t.Fatalf("expected the combination to be admitted, got %v", err)
 	}
@@ -2078,7 +2078,7 @@ func TestGatewayValidator_NoReplicasWarningWithoutAutoscaling(t *testing.T) {
 			Replicas: ptr.To(int32(3)),
 		},
 	}
-	warnings, err := (&GatewayValidator{}).ValidateCreate(context.Background(), gw)
+	warnings, err := (&GatewayValidator{Checker: &scriptedChecker{}}).ValidateCreate(context.Background(), gw)
 	if err != nil || len(warnings) != 0 {
 		t.Errorf("warnings = %q, err = %v; want neither", warnings, err)
 	}
@@ -2100,7 +2100,7 @@ func TestGatewayValidator_WarnsWhenOpenAPIIsSetOnACEGateway(t *testing.T) {
 					Version: "2.13", Edition: v1alpha1.EditionCE, Config: v1alpha1.GatewayConfig{}, OpenAPI: tc.openapi,
 				},
 			}
-			warnings, err := (&GatewayValidator{}).ValidateCreate(context.Background(), gw)
+			warnings, err := (&GatewayValidator{Checker: &scriptedChecker{}}).ValidateCreate(context.Background(), gw)
 			if err != nil {
 				t.Fatalf("expected the gateway to be admitted, got %v", err)
 			}
@@ -2157,7 +2157,7 @@ func TestValidators_AdmitUpdatesToTerminatingObjects(t *testing.T) {
 		validate func() (admission.Warnings, error)
 	}{
 		{"gateway", func() (admission.Warnings, error) {
-			return (&GatewayValidator{}).ValidateUpdate(ctx, gw, unfinalized(gw))
+			return (&GatewayValidator{Checker: &scriptedChecker{}}).ValidateUpdate(ctx, gw, unfinalized(gw))
 		}},
 		{"endpoint", func() (admission.Warnings, error) {
 			return (&EndpointValidator{Client: fakeClient(), Checker: &scriptedChecker{}}).ValidateUpdate(ctx, ep, unfinalized(ep))
@@ -2189,7 +2189,7 @@ func TestGatewayValidator_RejectsSpecChangeOnTerminatingObject(t *testing.T) {
 	negative := resource.MustParse("-1Gi")
 	newGW.Spec.PostRestartJob = &v1alpha1.PostRestartJobSpec{Enabled: true, Script: "true", TmpSizeLimit: &negative}
 
-	_, err := (&GatewayValidator{}).ValidateUpdate(context.Background(), oldGW, newGW)
+	_, err := (&GatewayValidator{Checker: &scriptedChecker{}}).ValidateUpdate(context.Background(), oldGW, newGW)
 	if err == nil {
 		t.Fatal("a spec change to an invalid value on a terminating gateway was admitted; want it rejected")
 	}
@@ -2277,7 +2277,7 @@ func TestGatewayValidator_WarnsAboutRedisSettingsWithNoEffect(t *testing.T) {
 			}},
 		},
 	}
-	warnings, err := (&GatewayValidator{}).ValidateCreate(context.Background(), gw)
+	warnings, err := (&GatewayValidator{Checker: &scriptedChecker{}}).ValidateCreate(context.Background(), gw)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2315,7 +2315,7 @@ func TestGatewayAdmission_RatchetsStoredFieldErrors(t *testing.T) {
 		Host: "10.0.0.1", Path: "/", Port: intstr.FromInt32(8090)}}}, "")
 	edited := old.DeepCopy()
 	edited.Spec.Replicas = ptr.To[int32](3)
-	v := &GatewayValidator{}
+	v := &GatewayValidator{Checker: &scriptedChecker{}}
 
 	if resp := review(t, v, "alice", edited, old); !resp.Allowed {
 		t.Fatalf("unrelated edit denied: %+v", resp.Result)
@@ -2338,7 +2338,7 @@ func TestGatewayAdmission_UnchangedSpecIsNotValidated(t *testing.T) {
 	labeled := old.DeepCopy()
 	labeled.Labels = map[string]string{"team": "edge"}
 
-	resp := review(t, &GatewayValidator{}, "alice", labeled, old)
+	resp := review(t, &GatewayValidator{Checker: &scriptedChecker{}}, "alice", labeled, old)
 	if !resp.Allowed {
 		t.Errorf("label-only update denied: %+v", resp.Result)
 	}
@@ -2357,7 +2357,7 @@ func TestGatewayAdmission_ChangedProbeIsRechecked(t *testing.T) {
 	old := gwWithProbes(nil, probeAt("10.0.0.1"), "")
 	swapped := gwWithProbes(nil, probeAt("10.0.0.2"), "")
 
-	resp := review(t, &GatewayValidator{}, "alice", swapped, old)
+	resp := review(t, &GatewayValidator{Checker: &scriptedChecker{}}, "alice", swapped, old)
 	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity ||
 		resp.Result.Details.Causes[0].Field != "spec.openapi.readinessProbe.httpGet.host" {
 		t.Errorf("probe host 10.0.0.1 -> 10.0.0.2: %+v, want 422 on spec.openapi.readinessProbe.httpGet.host", resp.Result)
@@ -2371,14 +2371,14 @@ func TestGatewayAdmission_ChangedTerminationGracePeriodIsRechecked(t *testing.T)
 	old := gwWithProbes(nil, readinessWith(30), "")
 	changed := gwWithProbes(nil, readinessWith(60), "")
 
-	resp := review(t, &GatewayValidator{}, "alice", changed, old)
+	resp := review(t, &GatewayValidator{Checker: &scriptedChecker{}}, "alice", changed, old)
 	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity ||
 		resp.Result.Details.Causes[0].Field != "spec.openapi.readinessProbe.terminationGracePeriodSeconds" {
 		t.Errorf("readiness grace 30 -> 60: %+v, want 422 on its terminationGracePeriodSeconds", resp.Result)
 	}
 	scaled := old.DeepCopy()
 	scaled.Spec.Replicas = ptr.To[int32](3)
-	if resp := review(t, &GatewayValidator{}, "alice", scaled, old); !resp.Allowed {
+	if resp := review(t, &GatewayValidator{Checker: &scriptedChecker{}}, "alice", scaled, old); !resp.Allowed {
 		t.Errorf("unrelated edit with an unchanged probe denied: %+v", resp.Result)
 	}
 }
@@ -2431,7 +2431,7 @@ func TestGatewayAdmission_ChangedDragonflyRunAsStillUnacknowledgedIsRejected(t *
 	changed := old.DeepCopy()
 	changed.Spec.Dragonfly.PodSecurityContext.RunAsNonRoot = ptr.To(true)
 
-	resp := review(t, &GatewayValidator{}, "alice", changed, old)
+	resp := review(t, &GatewayValidator{Checker: &scriptedChecker{}}, "alice", changed, old)
 	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity {
 		t.Errorf("changed, still unacknowledged dragonfly runAsUser 0: %+v, want 422", resp.Result)
 	}
@@ -2451,7 +2451,7 @@ func TestGatewayAdmission_ChangedPostRestartRunAsStillUnacknowledgedIsRejected(t
 	changed := old.DeepCopy()
 	changed.Spec.PostRestartJob.SecurityContext.RunAsNonRoot = ptr.To(true)
 
-	resp := review(t, &GatewayValidator{}, "alice", changed, old)
+	resp := review(t, &GatewayValidator{Checker: &scriptedChecker{}}, "alice", changed, old)
 	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity {
 		t.Errorf("changed, still unacknowledged postRestartJob runAsUser 0: %+v, want 422", resp.Result)
 	}
