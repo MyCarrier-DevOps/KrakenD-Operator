@@ -25,7 +25,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
 	appsv1 "k8s.io/api/apps/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -34,6 +33,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
@@ -331,16 +331,35 @@ func setGatewaySeries(namespace, name string) {
 	reconcileDuration.WithLabelValues("gateway", namespace, name).Observe(0.1)
 }
 
-// remainingGatewaySeries deletes and counts the gateway's leftover series.
-func remainingGatewaySeries(namespace, name string) int {
-	gateway := prometheus.Labels{"namespace": namespace, "name": name}
-	n := endpointsPerGateway.DeletePartialMatch(gateway) +
-		gatewayInfo.DeletePartialMatch(gateway) +
-		dragonflyReady.DeletePartialMatch(gateway) +
-		licenseExpirySeconds.DeletePartialMatch(gateway)
-	return n + reconcileDuration.DeletePartialMatch(prometheus.Labels{
-		"controller": "gateway", "namespace": namespace, "name": name,
-	})
+// remainingGatewaySeries counts the gateway's series across the registry, so
+// a per-gateway metric that deleteGatewayMetrics forgets is caught without the
+// test listing it, then clears them. The autoconfig gauge shares the labels
+// but belongs to a different resource, so it is not the gateway's.
+func remainingGatewaySeries(t *testing.T, namespace, name string) int {
+	t.Helper()
+	families, err := ctrlmetrics.Registry.Gather()
+	if err != nil {
+		t.Fatalf("gathering metrics: %v", err)
+	}
+	n := 0
+	for _, family := range families {
+		if !strings.HasPrefix(family.GetName(), "krakend_operator_") ||
+			family.GetName() == "krakend_operator_autoconfig_synced" {
+			continue
+		}
+		for _, m := range family.GetMetric() {
+			labels := map[string]string{}
+			for _, l := range m.GetLabel() {
+				labels[l.GetName()] = l.GetValue()
+			}
+			if labels["namespace"] == namespace && labels["name"] == name &&
+				(labels["controller"] == "" || labels["controller"] == "gateway") {
+				n++
+			}
+		}
+	}
+	deleteGatewayMetrics(namespace, name)
+	return n
 }
 
 func TestGatewayReconcile_TerminatingGatewayIsLeftAlone(t *testing.T) {
@@ -367,7 +386,7 @@ func TestGatewayReconcile_TerminatingGatewayIsLeftAlone(t *testing.T) {
 	if len(*phases) != 0 {
 		t.Errorf("status written for a terminating gateway: %v", *phases)
 	}
-	if n := remainingGatewaySeries(gw.Namespace, gw.Name); n != 0 {
+	if n := remainingGatewaySeries(t, gw.Namespace, gw.Name); n != 0 {
 		t.Errorf("%d metric series left for a terminating gateway, want 0", n)
 	}
 }
@@ -383,7 +402,7 @@ func TestGatewayReconcile_DeletedGatewayDropsItsMetrics(t *testing.T) {
 	if err := reconcileGateway(t, r, gone); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if n := remainingGatewaySeries("deleted", "gone-gw"); n != 0 {
+	if n := remainingGatewaySeries(t, "deleted", "gone-gw"); n != 0 {
 		t.Errorf("%d metric series left for a deleted gateway, want 0", n)
 	}
 }
