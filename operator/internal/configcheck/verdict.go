@@ -64,9 +64,11 @@ type Verdict struct {
 	Rejection *renderer.ValidationError
 }
 
-// Rejected returns the verdict for rejection of out, the render of in.
+// Rejected returns the verdict for rejection of out, the render of in. The
+// findings name the entries of in's endpoints as they are now.
 func Rejected(rejection *renderer.ValidationError, in renderer.RenderInput, out *renderer.RenderOutput) Verdict {
-	return Verdict{}
+	atts := renderer.Attribute(out.JSON, out.Sources, rejection.Output)
+	return Verdict{Findings: findingsFrom(atts, out.JSON, in.Endpoints, rejection.Output), Rejection: rejection}
 }
 
 // Summary joins the findings into one message, cut at a finding boundary and
