@@ -120,6 +120,23 @@ func runCRDCases(t *testing.T, crdFile string, cases []crdCase) {
 	}
 }
 
+type crdUpdateCase struct {
+	name string
+	// object is the update and old the stored object it replaces.
+	object, old string
+	// rejects is a substring of the error the update must produce; "" means admitted.
+	rejects string
+}
+
+func runCRDUpdateCases(t *testing.T, crdFile string, cases []crdUpdateCase) {
+	t.Helper()
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			expectErrors(t, validateCRDUpdate(t, crdFile, tc.object, tc.old), tc.rejects)
+		})
+	}
+}
+
 // expectErrors requires errs to be empty when rejects is "" and otherwise to
 // contain rejects.
 func expectErrors(t *testing.T, errs field.ErrorList, rejects string) {
@@ -175,6 +192,24 @@ func TestEndpointCRD_Rules(t *testing.T) {
 		{"backend method", endpointHead + `[{endpoint: "/a", method: GET, backends: [{host: ["http://svc"], urlPattern: "/", method: get}]}]}}`, "Unsupported value: \"get\""},
 		{"empty gateway name", `{apiVersion: gateway.krakend.io/v1alpha1, kind: KrakenDEndpoint, metadata: {name: e}, spec: {gatewayRef: {name: ""}, endpoints: [{endpoint: "/a", method: GET, ` + okBackend + `}]}}`, "at least 1 chars long"},
 		{"empty policy name", endpointHead + `[{endpoint: "/a", method: GET, backends: [{host: ["http://svc"], urlPattern: "/", policyRef: {name: ""}}]}]}}`, "at least 1 chars long"},
+	})
+}
+
+func TestEndpointCRD_Ratchets(t *testing.T) {
+	const badPath = `{endpoint: "a/b", method: GET, ` + okBackend + `}`
+	const goodPath = `{endpoint: "/c", method: GET, ` + okBackend + `}`
+	const changedGood = `{endpoint: "/c", method: GET, backends: [{host: ["http://svc"], urlPattern: "/changed"}]}`
+	const badBackends = `backends: [{host: ["http://svc"], urlPattern: "/", method: get}, {host: ["http://svc"], urlPattern: "/ok"}]`
+	runCRDUpdateCases(t, endpointsCRD, []crdUpdateCase{
+		{"stored bad path, a different entry edited",
+			endpointHead + `[` + badPath + `, ` + changedGood + `]}}`,
+			endpointHead + `[` + badPath + `, ` + goodPath + `]}}`, ""},
+		{"stored bad backend, the entry's timeout edited",
+			endpointHead + `[{endpoint: "/a", method: GET, timeout: 5s, ` + badBackends + `}]}}`,
+			endpointHead + `[{endpoint: "/a", method: GET, ` + badBackends + `}]}}`, ""},
+		{"stored bad backend, a sibling backend edited",
+			endpointHead + `[{endpoint: "/a", method: GET, backends: [{host: ["http://svc"], urlPattern: "/", method: get}, {host: ["http://svc"], urlPattern: "/changed"}]}]}}`,
+			endpointHead + `[{endpoint: "/a", method: GET, ` + badBackends + `}]}}`, "Unsupported value: \"get\""},
 	})
 }
 
