@@ -80,6 +80,7 @@ func deleteGatewayMetrics(namespace, name string) {
 	gateway := prometheus.Labels{"namespace": namespace, "name": name}
 	endpointsPerGateway.DeletePartialMatch(gateway)
 	gatewayInfo.DeletePartialMatch(gateway)
+	gatewayConfigValid.DeletePartialMatch(gateway)
 	dragonflyReady.DeletePartialMatch(gateway)
 	licenseExpirySeconds.DeletePartialMatch(gateway)
 	reconcileDuration.DeletePartialMatch(prometheus.Labels{
