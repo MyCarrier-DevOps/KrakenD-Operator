@@ -1337,8 +1337,10 @@ must also parse as a duration of at most 64 characters, and
 `postRestartJob.tmpSizeLimit` must be a quantity Kubernetes can decode: the
 patterns alone admitted values such as `99999999999h` and
 `1e99999999999999999999`, which the validator or the Go decode then rejected.
-Rule evaluation errors are not ratcheted, so a stored value that does not parse
-blocks every update to that object until it is fixed. The quantity fields of
+Rule evaluation errors are not ratcheted, so a stored value that matches the
+pattern but overflows (a duration KrakenD never accepted) blocks every update to
+that object until it is fixed. A stored value that breaks the pattern, such as
+`5 seconds`, fails only the pattern and keeps ratcheting. The quantity fields of
 the embedded `resources` cannot carry per-field rules; keep the admission
 webhooks enabled, because their typed decode rejects such values.
 
@@ -1350,8 +1352,8 @@ updates, and the gateway webhook still warns about it.
 `dragonfly.authentication.passwordFromSecret` on an Enterprise gateway is
 rejected for the same reason: the Dragonfly instance requires the password and
 the rendered KrakenD pool has none. A gateway that already has it keeps being
-accepted on unrelated updates; adding it, or switching a gateway that has it to
-Enterprise, is rejected.
+accepted on unrelated updates; adding it, changing the stored password, or
+switching a gateway that has it to Enterprise, is rejected.
 
 ---
 
