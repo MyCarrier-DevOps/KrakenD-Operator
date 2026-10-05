@@ -19,6 +19,8 @@ package autoconfig
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
@@ -74,6 +76,7 @@ func (g *endpointGenerator) Generate(
 	seenKeys := map[string]string{}
 	seenOperationIDs := map[string]string{}
 	seenNames := map[string]string{}
+	missingSchemas := map[string]string{}
 	output := &GenerateOutput{}
 
 	for _, entry := range input.Entries {
@@ -96,6 +99,13 @@ func (g *endpointGenerator) Generate(
 		}
 		seenNames[name] = op
 
+		schemas, missing := SchemaClosure(entry, input.ComponentSchemas)
+		for _, ref := range missing {
+			if _, seen := missingSchemas[ref]; !seen {
+				missingSchemas[ref] = op
+			}
+		}
+
 		ep := &v1alpha1.KrakenDEndpoint{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      name,
@@ -108,10 +118,15 @@ func (g *endpointGenerator) Generate(
 			Spec: v1alpha1.KrakenDEndpointSpec{
 				GatewayRef:       input.GatewayRef,
 				Endpoints:        []v1alpha1.EndpointEntry{entry},
-				ComponentSchemas: input.ComponentSchemas,
+				ComponentSchemas: schemas,
 			},
 		}
 		output.Endpoints = append(output.Endpoints, ep)
+	}
+
+	for _, ref := range slices.Sorted(maps.Keys(missingSchemas)) {
+		output.Warnings = append(output.Warnings, fmt.Sprintf(
+			"schema reference %q (first used by %s) is not defined in components/schemas", ref, missingSchemas[ref]))
 	}
 
 	return output, nil
