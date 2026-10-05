@@ -138,6 +138,7 @@ func (e *cueEvaluator) Evaluate(_ context.Context, input CUEInput) (*CUEOutput, 
 
 	if input.URLTransform != nil {
 		applyURLTransform(output, input.URLTransform)
+		transformIssuePaths(output.Skipped, input.URLTransform)
 	}
 
 	applyFieldOverrides(output, input.Overrides)
@@ -273,6 +274,16 @@ func sortIssues(issues []OperationIssue) {
 		}
 		return strings.Compare(a.Method, b.Method)
 	})
+}
+
+// transformIssuePaths applies the URL transform's path strip/add-prefix to
+// the issues, so each carries the path its entry would have had.
+func transformIssuePaths(issues []OperationIssue, transform *v1alpha1.URLTransformSpec) {
+	for i := range issues {
+		entry := v1alpha1.EndpointEntry{Endpoint: issues[i].Path}
+		applyURLTransformToEntry(&entry, transform, nil)
+		issues[i].Path = entry.Endpoint
+	}
 }
 
 // applyDefaults applies CR-level EndpointDefaults to all entries. These replace
