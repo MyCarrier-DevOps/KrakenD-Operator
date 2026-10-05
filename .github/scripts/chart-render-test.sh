@@ -133,6 +133,13 @@ expect_equal "every kustomize webhook has timeoutSeconds 15" \
 	"$(grep -c '^  name: v.*kb.io' operator/config/webhook/manifests.yaml)" \
 	"$(grep -c 'timeoutSeconds: 15' operator/config/webhook/manifests.yaml)"
 
+# --- the chart refuses clusters below the Kubernetes 1.33 floor ---------
+if helm template t "$CHART" --kube-version 1.32.0 >/dev/null 2>&1; then
+	fail "a Kubernetes 1.32 cluster is refused"
+else
+	pass "a Kubernetes 1.32 cluster is refused"
+fi
+
 if [ "$failures" -gt 0 ]; then
 	printf '%d chart render test(s) failed\n' "$failures"
 	exit 1
