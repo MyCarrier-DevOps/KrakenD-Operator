@@ -266,7 +266,7 @@ func TestEndpointAdmission_NamesTheEndpointThatServesTheRoute(t *testing.T) {
 func TestEndpointAdmission_ServedEntryCanBeEditedBesideItsLoser(t *testing.T) {
 	served := testEndpoint("served", "/a/{id}")
 	served.CreationTimestamp = metav1.NewTime(time.Now().Add(-2 * time.Hour))
-	loser := testEndpoint("loser", "/a/{name}")
+	loser := testEndpoint("loser", "/a/{name}", "/c")
 	loser.CreationTimestamp = metav1.NewTime(time.Now().Add(-time.Hour))
 	edited := served.DeepCopy()
 	edited.Spec.Endpoints[0].Backends[0].URLPattern = "/v2"
@@ -277,8 +277,8 @@ func TestEndpointAdmission_ServedEntryCanBeEditedBesideItsLoser(t *testing.T) {
 	}
 
 	claiming := served.DeepCopy()
-	claiming.Spec.Endpoints = append(claiming.Spec.Endpoints, testEndpoint("x", "/a/{other}").Spec.Endpoints...)
+	claiming.Spec.Endpoints = append(claiming.Spec.Endpoints, testEndpoint("x", "/c").Spec.Endpoints...)
 	if resp := review(t, v, "alice", claiming, served); resp.Allowed {
-		t.Error("a new entry on a route the loser holds admitted")
+		t.Error("a new entry on a route another endpoint holds admitted")
 	}
 }
