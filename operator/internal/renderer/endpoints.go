@@ -49,7 +49,8 @@ func formatDuration(d time.Duration) string {
 	}
 }
 
-// endpointKey uniquely identifies a KrakenD endpoint by path and method.
+// endpointKey identifies the route a KrakenD endpoint registers: its method
+// and route shape, so paths that differ only in parameter names collide.
 type endpointKey struct {
 	Endpoint string
 	Method   string
@@ -104,7 +105,7 @@ func flattenEndpoints(
 		}
 
 		for _, entry := range ep.Spec.Endpoints {
-			key := endpointKey{Endpoint: entry.Endpoint, Method: entry.Method}
+			key := endpointKey{Endpoint: ConflictKey(entry.Endpoint), Method: entry.Method}
 			if groups[key] == nil {
 				groups[key] = &entryGroup{}
 			}
