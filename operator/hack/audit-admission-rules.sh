@@ -7,7 +7,11 @@
 # Usage: hack/audit-admission-rules.sh        read the current kube context
 #        hack/audit-admission-rules.sh DIR    read DIR/{endpoints,gateways,autoconfigs,backendpolicies}.json
 #
-# Prints one line per object or conflict; no output means nothing to fix.
+# Prints one line per object or conflict; no output means nothing to fix. Checks:
+#   KrakenDEndpoint / KrakenDGateway / KrakenDAutoConfig   the CRD schema and CEL rules
+#   gateway ns/name: A vs B                                 entries one gateway would route as one
+#   KrakenDEndpoint ...: ... health path of gateway ...    a GET on the gateway's health endpoint
+#   ... Enterprise-only on CE gateway ...                   extra_config KrakenD CE ignores
 set -euo pipefail
 
 # The CRD's endpoint path pattern, verbatim.
@@ -42,8 +46,9 @@ jq_opts=(-r --arg path_re "$endpoint_path_re" --arg go_re "$go_duration_re" --ar
 	--arg qty_re "$quantity_re" --slurpfile ee "$ee_only")
 
 jq_lib='
-# The API server anchors ^ and $ at the ends of the text only; Oniguruma also
-# anchors them at line breaks, so anchor the CRD pattern at the ends explicitly.
+# The API server anchors ^ and $ at the ends of the text only; Oniguruma lets $
+# match before a final line break, so anchor the CRD pattern at the ends
+# explicitly. A value that is not a string never matches.
 def crd_test($re): type == "string" and test($re | sub("^\\^"; "\\A") | sub("\\$$"; "\\z"));
 # Largest whole count of each unit that fits in 64 bits of nanoseconds, and the
 # nanoseconds in one.
