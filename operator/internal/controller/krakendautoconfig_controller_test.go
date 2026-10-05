@@ -2308,6 +2308,12 @@ func TestAutoConfigReconcile_IdenticalSecondPassWritesNothing(t *testing.T) {
 		Reason:    v1alpha1.ReasonDuplicateOperationId,
 		Message:   `operationId "listUsers" is already used by GET /api/users`,
 	})
+	// Unsupported methods come from the evaluator, not the generator.
+	ce.output.Skipped = []autoconfig.OperationIssue{{
+		Operation: autoconfig.Operation{Method: "HEAD", Path: "/api/users", OperationID: "headUsers"},
+		Reason:    v1alpha1.ReasonUnsupportedMethod,
+		Message:   "KrakenDEndpoint supports only GET, POST, PUT, PATCH, DELETE",
+	}}
 	var counts writeCounts
 	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).
 		WithInterceptorFuncs(countWrites(&counts)).Build()
@@ -2320,8 +2326,8 @@ func TestAutoConfigReconcile_IdenticalSecondPassWritesNothing(t *testing.T) {
 	}
 	first := getAC(t, c, ac)
 	drainEvents(rec)
-	if len(first.Status.Skipped) != 2 || len(first.Status.Warnings) != 2 {
-		t.Fatalf("first pass skipped = %+v, warnings = %q; want 2 of each", first.Status.Skipped, first.Status.Warnings)
+	if len(first.Status.Skipped) != 3 || len(first.Status.Warnings) != 2 {
+		t.Fatalf("first pass skipped = %+v, warnings = %q; want 3 skipped and 2 warnings", first.Status.Skipped, first.Status.Warnings)
 	}
 	counts = writeCounts{}
 
