@@ -2094,3 +2094,36 @@ func TestEvaluate_FailedMessageIsStableAcrossRuns(t *testing.T) {
 		t.Errorf("expected one message across runs, got %d: %v", len(messages), messages)
 	}
 }
+
+// evaluateWithCustomDefs evaluates specJSON against the embedded default
+// definitions plus custom definition files.
+func evaluateWithCustomDefs(specJSON string, custom map[string]string) (*CUEOutput, error) {
+	defs, err := EmbeddedCUEDefinitions()
+	if err != nil {
+		return nil, err
+	}
+	return NewCUEEvaluator().Evaluate(context.Background(), CUEInput{
+		SpecData:    []byte(specJSON),
+		SpecFormat:  v1alpha1.SpecFormatJSON,
+		DefaultDefs: defs,
+		CustomDefs:  custom,
+		ServiceName: "_spec",
+	})
+}
+
+const twoOperationSpec = `{"paths":{
+	"/a":{"get":{"operationId":"getA","responses":{"200":{"description":"OK"}}}},
+	"/b":{"get":{"operationId":"getB","responses":{"200":{"description":"OK"}}}}}}`
+
+func TestEvaluate_ErrorUnderEndpointPatternFailsEvaluation(t *testing.T) {
+	// A typo in a pattern constraint reaches every entry, and no one entry
+	// owns the error: dropping it would publish every endpoint without the
+	// validator.
+	_, err := evaluateWithCustomDefs(twoOperationSpec, map[string]string{
+		"custom.cue": `_authCfg: {x: 1}
+endpoint: [string]: extraConfig: "auth/validator": _authCgf`,
+	})
+	if err == nil || !strings.Contains(err.Error(), "_authCgf") {
+		t.Errorf("expected a whole-evaluation error naming _authCgf, got %v", err)
+	}
+}
