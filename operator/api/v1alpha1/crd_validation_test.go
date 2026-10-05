@@ -396,5 +396,10 @@ func TestAutoConfigCRD_Rules(t *testing.T) {
 		{"additional endpoint output encoding", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, additionalEndpoints: [{endpoint: /h, outputEncoding: jsn}]}}`, "Unsupported value: \"jsn\""},
 		{"additional endpoint shorthand encoding", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, additionalEndpoints: [{endpoint: /h, encoding: jsn}]}}`, "Unsupported value: \"jsn\""},
 		{"default backend encoding", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, defaults: {backend: {encoding: jsn}}}}`, "Unsupported value: \"jsn\""},
+		{"defaults timeout not a duration", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, defaults: {endpoint: {timeout: "5 seconds"}}}}`, "spec.defaults.endpoint.timeout in body should match"},
+		{"defaults cacheTTL not a duration", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, defaults: {endpoint: {cacheTTL: "1 minute"}}}}`, "spec.defaults.endpoint.cacheTTL in body should match"},
+		{"override cacheTTL not a duration", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, overrides: [{operationId: x, cacheTTL: "1d"}]}}`, "spec.overrides[0].cacheTTL in body should match"},
+		{"additional endpoint timeout not a duration", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, additionalEndpoints: [{endpoint: /h, timeout: "30"}]}}`, "spec.additionalEndpoints[0].timeout in body should match"},
+		{"additional endpoint cacheTTL not a duration", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, additionalEndpoints: [{endpoint: /h, cacheTTL: "1d"}]}}`, "spec.additionalEndpoints[0].cacheTTL in body should match"},
 	})
 }
