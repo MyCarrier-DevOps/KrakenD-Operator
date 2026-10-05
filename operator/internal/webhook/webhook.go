@@ -69,6 +69,8 @@ func terminatingWithUnchangedSpec(oldObj, newObj runtime.Object) bool {
 // PolicyValidator validates KrakenDBackendPolicy resources.
 type PolicyValidator struct {
 	client.Client
+	// Checker renders the policy alone and in every gateway that uses it.
+	Checker ConfigChecker
 }
 
 // ValidateCreate admits a new KrakenDBackendPolicy; the CRD schema enforces
