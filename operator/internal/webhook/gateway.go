@@ -1076,7 +1076,8 @@ func checkGatewayRender(
 		// The root is the verdict. Endpoints that named the gateway before it
 		// existed can still clash with it, and only they are to blame.
 		withEndpoints, err := chk.CheckGateway(ctx, gw, nil)
-		if err != nil { //nolint:nilerr // the check is advisory: the root already passed
+		if err != nil {
+			//nolint:nilerr // the check is advisory: the root already passed
 			return admission.Warnings{truncate("could not check the endpoints that already reference this gateway: "+
 				err.Error(), warningLimit)}, nil
 		}
