@@ -34,8 +34,9 @@ const (
 	maxStatusMessageLen = 256
 )
 
-// operationStatuses converts pipeline issues to status entries, sorted by
-// path then method.
+// operationStatuses converts pipeline issues to status entries, each message
+// truncated to maxStatusMessageLen bytes, in the order sortOperationStatuses
+// gives.
 func operationStatuses(issues []autoconfig.OperationIssue) []v1alpha1.OperationStatus {
 	out := make([]v1alpha1.OperationStatus, 0, len(issues))
 	for _, i := range issues {
