@@ -39,10 +39,8 @@ import (
 
 	gatewayv1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/autoconfig"
-	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
 	"github.com/mycarrier-devops/krakend-operator/internal/controller"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
-	licenseutil "github.com/mycarrier-devops/krakend-operator/internal/util/license"
 	webhooksetup "github.com/mycarrier-devops/krakend-operator/internal/webhook"
 	"k8s.io/utils/clock"
 	// +kubebuilder:scaffold:imports
@@ -229,19 +227,9 @@ func main() {
 
 	// One checker for the whole pod: its slots bound concurrent krakend
 	// executions across the gateway controller and the admission webhooks.
-	checker := configcheck.New(mgr.GetClient(), krakendRenderer, krakendValidator, configCheckSlots)
+	wired := wireValidation(mgr, krakendRenderer, krakendValidator)
 
-	if err := (&controller.KrakenDGatewayReconciler{
-		Client:    mgr.GetClient(),
-		Scheme:    mgr.GetScheme(),
-		Recorder:  mgr.GetEventRecorderFor("krakendgateway-controller"),
-		Renderer:  krakendRenderer,
-		Checker:   checker,
-		Clock:     clock.RealClock{},
-		APIReader: mgr.GetAPIReader(),
-
-		LicenseParser: licenseutil.NewX509LicenseParser(),
-	}).SetupWithManager(mgr); err != nil {
+	if err := wired.Gateway.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "KrakenDGateway")
 		os.Exit(1)
 	}
@@ -275,7 +263,7 @@ func main() {
 		os.Exit(1)
 	}
 	if err := registerWebhooks(mgr, enableWebhooks, func(m ctrl.Manager) error {
-		return webhooksetup.SetupWebhooks(m, checker)
+		return webhooksetup.SetupWebhooks(m, wired.Checker)
 	}); err != nil {
 		setupLog.Error(err, "unable to set up webhooks")
 		os.Exit(1)
