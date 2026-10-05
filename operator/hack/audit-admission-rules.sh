@@ -72,7 +72,8 @@ jq "${jq_opts[@]}" "$jq_lib"'
     ($e.outputEncoding // empty
       | enum_problem("\($p).outputEncoding"; ["json", "json-collection", "yaml", "fast-json", "xml", "negotiate", "string", "no-op"])),
     (($e.backends // []) | to_entries[] | .key as $j | .value as $b | "\($p).backends[\($j)]" as $q | (
-      ($b.encoding // empty | enum_problem("\($q).encoding"; ["json", "safejson", "fast-json", "xml", "rss", "string", "no-op", "yaml"]))
+      ($b.encoding // empty | enum_problem("\($q).encoding"; ["json", "safejson", "fast-json", "xml", "rss", "string", "no-op", "yaml"])),
+      ($b.sd // empty | enum_problem("\($q).sd"; ["static", "dns", "dns-shared"]))
     ))
   ))
 ]} | report("KrakenDEndpoint")' "$work/endpoints.json"
