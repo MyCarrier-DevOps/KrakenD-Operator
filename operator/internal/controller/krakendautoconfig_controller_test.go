@@ -3296,8 +3296,25 @@ func TestAutoConfigReconcile_FailedOperationHoldsItsEndpointAndStaleEndpoints(t 
 		Method: "GET", Path: "/b", OperationID: "getB",
 		Reason: v1alpha1.ReasonCUEEvaluationFailed, Message: `time: missing unit in duration "30"`,
 	}}
-	if got := getAC(t, c, ac).Status.FailedOperations; !slices.Equal(got, want) {
-		t.Errorf("failedOperations = %+v, want %+v", got, want)
+	updated := getAC(t, c, ac)
+	if !slices.Equal(updated.Status.FailedOperations, want) {
+		t.Errorf("failedOperations = %+v, want %+v", updated.Status.FailedOperations, want)
+	}
+	cond := meta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionSynced)
+	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != v1alpha1.ReasonOperationsFailed ||
+		!strings.Contains(cond.Message, "GET /b (getB): CUEEvaluationFailed") {
+		t.Errorf("expected Synced False/OperationsFailed naming GET /b, got %+v", cond)
+	}
+	if cond != nil && strings.Contains(cond.Message, "missing unit") {
+		t.Errorf("the condition carries CUE error text: %q", cond.Message)
+	}
+	if ready := meta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionReady); ready == nil ||
+		ready.Status != metav1.ConditionFalse || ready.Reason != v1alpha1.ReasonOperationsFailed ||
+		updated.Status.Phase != v1alpha1.AutoConfigPhaseError {
+		t.Errorf("expected Ready False/OperationsFailed and phase Error, got %+v, %q", ready, updated.Status.Phase)
+	}
+	if got := testutil.ToFloat64(autoConfigSynced.WithLabelValues(ac.Namespace, ac.Name)); got != 0 {
+		t.Errorf("synced gauge = %v, want 0", got)
 	}
 }
 
