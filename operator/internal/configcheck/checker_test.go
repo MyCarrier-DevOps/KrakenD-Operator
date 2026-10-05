@@ -374,3 +374,16 @@ func TestCheckGateway_AnEEGatewayInLicenseFallbackIsLintedAsCE(t *testing.T) {
 		t.Errorf("editions = %v, want one CE lint", v.editions)
 	}
 }
+
+// The gateway controller reports CE fallback for an EE gateway only, yet a
+// stale LicenseDegraded condition outlives an EE to CE switch until its next
+// reconcile. Admission must not strip a CE gateway's wildcard on that account.
+func TestCheckGateway_AStaleFallbackConditionDoesNotAffectACEGateway(t *testing.T) {
+	c := newChecker(realValidator(), endpoint("a", "/files/*"))
+
+	verdict, err := c.CheckGateway(context.Background(), degraded(gateway(v1alpha1.EditionCE)), nil)
+
+	if err != nil || verdict.OK {
+		t.Errorf("verdict = %+v, err = %v; want the CE wildcard entry linted and rejected", verdict, err)
+	}
+}
