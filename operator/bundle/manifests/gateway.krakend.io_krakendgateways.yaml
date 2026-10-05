@@ -346,6 +346,7 @@ spec:
                     type: object
                   timeout:
                     description: Timeout is the global request timeout (e.g. "3s").
+                    pattern: ^[0-9]+(ns|ms|us|µs|s|m|h)$
                     type: string
                 type: object
               dragonfly:
