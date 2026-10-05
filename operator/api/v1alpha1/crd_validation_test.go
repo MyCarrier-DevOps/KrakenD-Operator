@@ -40,6 +40,7 @@ import (
 const (
 	endpointsCRD = "gateway.krakend.io_krakendendpoints.yaml"
 	policiesCRD  = "gateway.krakend.io_krakendbackendpolicies.yaml"
+	gatewaysCRD  = "gateway.krakend.io_krakendgateways.yaml"
 )
 
 // validateCRD validates a create of objectYAML against crdFile.
@@ -224,5 +225,13 @@ func TestPolicyCRD_Minimums(t *testing.T) {
 		{"interval zero", policyHead + `{circuitBreaker: {maxErrors: 3, interval: 0, timeout: 10}}}`, "spec.circuitBreaker.interval"},
 		{"timeout zero", policyHead + `{circuitBreaker: {maxErrors: 3, interval: 60, timeout: 0}}}`, "spec.circuitBreaker.timeout"},
 		{"max rate zero", policyHead + `{rateLimit: {maxRate: 0}}}`, "spec.rateLimit.maxRate"},
+	})
+}
+
+const gatewayHead = `{apiVersion: gateway.krakend.io/v1alpha1, kind: KrakenDGateway, metadata: {name: g}, spec: {version: "2.13", `
+
+func TestGatewayCRD_Rules(t *testing.T) {
+	runCRDCases(t, gatewaysCRD, []crdCase{
+		{"timeout", gatewayHead + `edition: CE, config: {timeout: "3 seconds"}}}`, "spec.config.timeout"},
 	})
 }
