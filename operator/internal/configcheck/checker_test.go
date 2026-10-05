@@ -546,3 +546,20 @@ func TestCheckGatewayPolicy_KeepsTheOtherStoredPolicies(t *testing.T) {
 		t.Errorf("linted %s, want the candidate p and the stored q", v.seen[0])
 	}
 }
+
+func TestCheckGatewayPolicy_OverrideIsKeyedByNamespace(t *testing.T) {
+	stored := policy("p")
+	stored.Spec.Raw = &runtime.RawExtension{Raw: []byte(`{"stored/ns":{}}`)}
+	v := &fakeValidator{}
+	c := newChecker(v, withPolicy(endpoint("a", "/a"), "p"), stored)
+	candidate := stored.DeepCopy()
+	candidate.Namespace = "other"
+	candidate.Spec.Raw = &runtime.RawExtension{Raw: []byte(`{"candidate/ns":{}}`)}
+
+	if _, err := c.CheckGatewayPolicy(context.Background(), gateway(v1alpha1.EditionCE), candidate); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(v.seen[0], "stored/ns") || strings.Contains(v.seen[0], "candidate/ns") {
+		t.Errorf("linted %s, want ns/p untouched by other/p", v.seen[0])
+	}
+}
