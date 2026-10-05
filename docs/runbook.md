@@ -423,10 +423,38 @@ KrakenDEndpoint are always checked when an entry changes.
 Routes that share a parameterized prefix (`/users/{id}` and
 `/users/{id}/orders`) must use the same parameter name at that position, because
 KrakenD cannot route both otherwise. When they live in different
-KrakenDEndpoints there is no valid intermediate state: each rename is rejected
+KrakenDEndpoints there is no valid intermediate state: the gateway-wide check
+rejects each rename, with krakend's wildcard conflict on the renamed entry,
 until the other is done. Keep such routes in one KrakenDEndpoint and rename them
 in one apply, or delete the second KrakenDEndpoint, rename the first, then
 recreate the second with the new name.
+
+### Admission rejects an endpoint with a krakend finding
+
+**Symptom:** `kubectl apply` of a KrakenDEndpoint fails with `The
+KrakenDEndpoint "x" is invalid: spec.endpoints[1]: <message>`, where the
+message is what `krakend check` reported for that entry (for example `undefined
+output param`, or a wildcard conflict with a route of another endpoint).
+
+**Cause:** The write renders the gateway's config with the change, and that
+config failed validation although it passed before the change. The cause is on
+the offending entry; a finding about another endpoint or the gateway root is on
+`spec.endpoints` and names it (`team-a/orders spec.endpoints[0]: ...`,
+`gateway: ...`).
+
+**Resolution:** Fix the entry the cause names. If the denial blames another
+endpoint, fix or remove that endpoint's clashing route; your change is only the
+trigger. A gateway that already fails because of another object does not block
+the write: the change is judged with the gateway root alone and admitted with a
+warning `gateway <ns>/<name> already fails validation without this change`.
+Fix the object the warning names, because until then the controller keeps the
+gateway at its last-known-good config.
+
+**`500 Internal Error: validating the gateway config: ...`:** the check could
+not run: all three validation slots stayed busy for the 12 s budget, or the
+validator itself failed. This is transient and `kubectl` does not retry it, so
+run the command again. Controllers and GitOps tools retry on their own. If it
+repeats, check the operator pod's CPU and memory.
 
 ### AutoConfig not generating endpoints
 
@@ -482,16 +510,15 @@ regenerates — until the override is fixed and the resource re-syncs.
 ### `kubectl apply` rejected: `audience` must be a list of strings
 
 **Symptom:** `kubectl apply` (or a CI check running admission) rejects a
-`KrakenDAutoConfig` or `KrakenDEndpoint` with `documentation/openapi.audience
-must be a list of strings, e.g. ["internal"]`.
+`KrakenDAutoConfig` with `documentation/openapi.audience must be a list of
+strings, e.g. ["internal"]`.
 
-**Cause:** `extraConfig`'s `documentation/openapi.audience` — on an
+**Cause:** `extraConfig`'s `documentation/openapi.audience` — on the
 AutoConfig's `spec.overrides[]`, `spec.defaults.endpoint`, or
-`spec.additionalEndpoints[]`, or on a `KrakenDEndpoint`'s
-`spec.endpoints[]` — was set to something other than a list of strings (a
-YAML mapping is the usual mistake). Left unchecked, this would pass CRD and
-CUE validation unchanged but fail `krakend check -t -n -c`, blocking config
-updates for every service on that gateway, not just the one with the bad
+`spec.additionalEndpoints[]` — was set to something other than a list of
+strings (a YAML mapping is the usual mistake). Left unchecked, this would pass
+CRD and CUE validation unchanged but fail `krakend check -t -n -c`, blocking
+config updates for every service on that gateway, not just the one with the bad
 value.
 
 **Resolution:** Set `audience` to a list, e.g. `["internal"]` or `["public",
@@ -499,6 +526,12 @@ value.
 operation (not via `extraConfig`), the same list-of-strings requirement is
 enforced by the default CUE definitions at sync time, surfacing as
 `CUEEvaluationFailed` instead of an admission rejection.
+
+A `KrakenDEndpoint` gets the same message on `spec.endpoints[i].extraConfig`
+when an added or changed entry carries a malformed audience, on CE and EE
+gateways alike; set it to a list of strings. Every other finding on an entry
+is reported by the gateway-wide check, as in *Admission rejects an endpoint
+with a krakend finding*.
 
 ### Forcing an immediate AutoConfig reconcile
 
