@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -472,4 +473,29 @@ func TestInspectDeploymentStatus_ResetsRolloutFailedAvailabilityFromTheDeploymen
 			}
 		})
 	}
+}
+
+// reconcileOnStaleCache reconciles while every Deployment read returns snapshot,
+// an object read from the store earlier. It carries the resourceVersion of that
+// moment, so once the store has moved on the API server rejects the pass's
+// Deployment update with a Conflict. The pass returns that error.
+func (s *servedGateway) reconcileOnStaleCache(t *testing.T, snapshot *appsv1.Deployment) *v1alpha1.KrakenDGateway {
+	t.Helper()
+	s.cached = snapshot
+	defer func() { s.cached = nil }()
+	if err := reconcileGateway(t, s.r, s.gw); err == nil || !strings.Contains(err.Error(), "was modified") {
+		t.Fatalf("the pass must fail with a Conflict on the stale object, got: %v", err)
+	}
+	return getGateway(t, s.c, s.gw)
+}
+
+func TestGatewayReconcile_ConflictPassKeepsATemplateRolloutReported(t *testing.T) {
+	s := serveGateway(t)
+	before := s.deployment(t)
+	s.editSpec(t, limitCPU)
+	requireProgressing(t, s.reconcile(t), metav1.ConditionTrue, false)
+
+	got := s.reconcileOnStaleCache(t, before)
+
+	requireProgressing(t, got, metav1.ConditionTrue, false)
 }
