@@ -116,3 +116,15 @@ func TestRouteConflicts_AGatewayRouteRefusalIsNotAnEndpointPointer(t *testing.T)
 		})
 	}
 }
+
+func TestRouteConflicts_NamesAnyMethodGatewayRoutes(t *testing.T) {
+	doc := `{"echo_endpoint":true,"endpoints":[{"endpoint":"/__echo/x","method":"GET"}]}`
+
+	lines, err := routeConflicts([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lines) != 1 || !strings.Contains(lines[0], "(any method /__echo/*param is the gateway's own route)") {
+		t.Errorf("lines = %q, want the echo route named as an any-method route", lines)
+	}
+}
