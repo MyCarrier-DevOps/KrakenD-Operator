@@ -53,7 +53,7 @@ const (
 
 // KrakenDAutoConfigSpec defines the desired state of KrakenDAutoConfig.
 // +kubebuilder:validation:XValidation:rule="!has(self.openapi.configMapRef) || (has(self.urlTransform) && has(self.urlTransform.hostMapping) && size(self.urlTransform.hostMapping) > 0)",message="hostMapping is required when using configMapRef",fieldPath=".urlTransform.hostMapping"
-// +kubebuilder:validation:XValidation:rule="self.trigger != 'Periodic' || has(self.periodic)",message="periodic.interval of at least 30s is required when trigger is Periodic",fieldPath=".periodic"
+// +kubebuilder:validation:XValidation:rule="self.trigger != 'Periodic' || (has(self.periodic) && (!self.periodic.interval.matches('^(0|(([0-9]+([.][0-9]*)?|[.][0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$') || duration(self.periodic.interval) >= duration('30s')))",message="periodic.interval of at least 30s is required when trigger is Periodic",fieldPath=".periodic.interval"
 // +kubebuilder:validation:XValidation:rule="!(has(self.additionalEndpointsBasePath) && size(self.additionalEndpointsBasePath) > 0 && has(self.urlTransform) && has(self.urlTransform.addPathPrefix) && size(self.urlTransform.addPathPrefix) > 0)",message="additionalEndpointsBasePath is mutually exclusive with urlTransform.addPathPrefix; set only one",fieldPath=".additionalEndpointsBasePath"
 type KrakenDAutoConfigSpec struct {
 	// GatewayRef references the KrakenDGateway that generated endpoints belong to.
@@ -393,7 +393,6 @@ type PeriodicSpec struct {
 	// +kubebuilder:validation:Type=string
 	// +kubebuilder:validation:MaxLength=32
 	// +kubebuilder:validation:Pattern=`^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$`
-	// +kubebuilder:validation:XValidation:rule="!self.matches('^(0|(([0-9]+([.][0-9]*)?|[.][0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$') || duration(self) >= duration('30s')",message="periodic.interval must be at least 30s"
 	Interval metav1.Duration `json:"interval"`
 }
 
