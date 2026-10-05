@@ -53,13 +53,17 @@ func TestPolicyAdmission_Render(t *testing.T) {
 		verdicts []configcheck.Verdict
 		allowed  bool
 		calls    string
+		warning  string // a substring of the one warning expected; "" for none
 	}{
-		{"unreferenced, lints clean", nil, nil, nil, true, "policy"},
-		{"unreferenced, fails alone", nil, nil, []configcheck.Verdict{bad}, false, "policy"},
-		{"referenced, keeps its gateway passing", referencing(), nil, nil, true, "policy,gateway+policy"},
+		{"unreferenced, lints clean", nil, nil, nil, true, "policy", ""},
+		{"unreferenced, fails alone", nil, nil, []configcheck.Verdict{bad}, false, "policy", ""},
+		{"referenced, keeps its gateway passing", referencing(), nil, nil, true, "policy,gateway+policy", ""},
 		{"referenced, breaks its gateway", referencing(), testPolicy(`{}`),
 			[]configcheck.Verdict{{OK: true}, failing("uses-p", 0, "bad"), {OK: true}}, false,
-			"policy,gateway+policy,gateway"},
+			"policy,gateway+policy,gateway", ""},
+		{"referenced gateway already broken", referencing(), testPolicy(`{}`),
+			[]configcheck.Verdict{{OK: true}, failing("uses-p", 0, "bad"), failing("other", 0, "old")}, true,
+			"policy,gateway+policy,gateway", "gateway default/gw already fails validation"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -78,6 +82,12 @@ func TestPolicyAdmission_Render(t *testing.T) {
 			}
 			if got := strings.Join(chk.calls, ","); got != tt.calls {
 				t.Errorf("checks = %s, want %s", got, tt.calls)
+			}
+			if tt.warning == "" && len(resp.Warnings) != 0 {
+				t.Errorf("warnings = %q, want none", resp.Warnings)
+			}
+			if tt.warning != "" && (len(resp.Warnings) != 1 || !strings.Contains(resp.Warnings[0], tt.warning)) {
+				t.Errorf("warnings = %q, want one containing %q", resp.Warnings, tt.warning)
 			}
 		})
 	}
