@@ -81,7 +81,7 @@ spec:
                   properties:
                     backends:
                       description: Backends is the list of backend services for this
-                        endpoint.
+                        endpoint, at least one.
                       items:
                         description: BackendSpec defines a backend service target.
                         properties:
@@ -176,6 +176,7 @@ spec:
                         - host
                         - urlPattern
                         type: object
+                      minItems: 1
                       type: array
                     cacheTTL:
                       description: CacheTTL overrides the global cache TTL.
