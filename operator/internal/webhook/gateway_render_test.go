@@ -596,3 +596,21 @@ func TestGatewayAdmission_RatchetChecksTheNewGatewayAfterAndTheStoredOneBefore(t
 		})
 	}
 }
+
+// With no spec.version the image tag is empty unless spec.image is set, so the
+// warning says the version is unknown instead of quoting nothing.
+func TestGatewayAdmission_EmptyVersionWarningSaysTheVersionIsEmpty(t *testing.T) {
+	empty := testGateway()
+	empty.Spec.Version = ""
+
+	resp := review(t, &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}, "alice", empty, nil)
+
+	if len(resp.Warnings) != 1 {
+		t.Fatalf("warnings = %v, want the version warning", resp.Warnings)
+	}
+	w := resp.Warnings[0]
+	if !strings.HasPrefix(w, "spec.version is empty") || !strings.Contains(w, "spec.image") ||
+		strings.Contains(w, "spec.version :") {
+		t.Errorf("warning = %q, want it to say spec.version is empty and the image tag depends on spec.image", w)
+	}
+}
