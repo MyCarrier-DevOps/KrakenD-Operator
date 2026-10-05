@@ -36,7 +36,7 @@ make deploy IMG=ghcr.io/mycarrier-devops/krakend-operator:<new-version>
    kubectl get krakendgateways -A -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name,PHASE:.status.phase
    ```
 5. **Audit stored objects against the admission rules** (read-only: it only
-   runs `kubectl get`; needs `jq` 1.7 or later). Run it from a checkout of the
+   runs `kubectl get`; needs `jq` 1.7). Run it from a checkout of the
    operator repository, with `kubectl` pointing at the cluster you are
    upgrading:
    ```bash
