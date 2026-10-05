@@ -2609,3 +2609,21 @@ func TestAutoConfigAdmission_BoundsTheMissingPolicyRefWarnings(t *testing.T) {
 		t.Errorf("warnings = %v, want %d, then one counting the other 3", resp.Warnings, maxPolicyWarnings)
 	}
 }
+
+func TestAutoConfigAdmission_WarnsOnMissingAdditionalEndpointPolicyRefs(t *testing.T) {
+	ac := &v1alpha1.KrakenDAutoConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "ac", Namespace: "default"},
+		Spec: v1alpha1.KrakenDAutoConfigSpec{GatewayRef: v1alpha1.GatewayRef{Name: "gw"},
+			OpenAPI: v1alpha1.OpenAPISource{URL: "http://svc/openapi.json"}, Trigger: v1alpha1.TriggerOnChange,
+			AdditionalEndpoints: []v1alpha1.AdditionalEndpoint{{Endpoint: "/x", Method: "GET",
+				Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/x"},
+					{Host: []string{"http://svc"}, URLPattern: "/y",
+						PolicyRef: &v1alpha1.PolicyRef{Name: "gone", Namespace: "other"}}}}}},
+	}
+	resp := review(t, &AutoConfigValidator{Client: fakeClient(testGateway())}, "alice", ac, nil)
+	if len(resp.Warnings) != 1 ||
+		!strings.HasPrefix(resp.Warnings[0], "spec.additionalEndpoints[0].backends[1].policyRef") ||
+		!strings.Contains(resp.Warnings[0], "other/gone") {
+		t.Errorf("warnings = %v, want one naming the backend and other/gone", resp.Warnings)
+	}
+}
