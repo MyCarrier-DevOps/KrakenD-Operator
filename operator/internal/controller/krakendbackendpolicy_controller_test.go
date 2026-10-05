@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -582,5 +583,57 @@ func TestPolicyReconcile_AddsTheProtectionFinalizer(t *testing.T) {
 	}
 	if !controllerutil.ContainsFinalizer(&got, v1alpha1.PolicyProtectionFinalizer) {
 		t.Fatalf("finalizers = %v, want the protection finalizer", got.Finalizers)
+	}
+}
+
+func referencingEndpoint(name, policy string) *v1alpha1.KrakenDEndpoint {
+	return &v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+		Spec: v1alpha1.KrakenDEndpointSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: "gw"},
+			Endpoints: []v1alpha1.EndpointEntry{{
+				Endpoint: "/a", Method: "GET",
+				Backends: []v1alpha1.BackendSpec{{
+					Host: []string{"http://svc"}, URLPattern: "/",
+					PolicyRef: &v1alpha1.PolicyRef{Name: policy},
+				}},
+			}},
+		},
+	}
+}
+
+func TestPolicyReconcile_TerminatingPolicyIsHeldUntilUnreferenced(t *testing.T) {
+	policy := &v1alpha1.KrakenDBackendPolicy{ObjectMeta: metav1.ObjectMeta{
+		Name: "p", Namespace: "default", Finalizers: []string{v1alpha1.PolicyProtectionFinalizer},
+	}}
+	ref := referencingEndpoint("uses-p", "p")
+	c := fakeClientBuilder().WithObjects(policy, ref).WithStatusSubresource(policy).Build()
+	r := &KrakenDBackendPolicyReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
+	key := client.ObjectKeyFromObject(policy)
+	reconcile := func() {
+		t.Helper()
+		if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key}); err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+	}
+	var got v1alpha1.KrakenDBackendPolicy
+
+	if err := c.Delete(context.Background(), policy); err != nil {
+		t.Fatal(err)
+	}
+	reconcile()
+	if err := c.Get(context.Background(), key, &got); err != nil {
+		t.Fatalf("a referenced policy was removed: %v", err)
+	}
+	if got.Status.ReferencedBy != 1 {
+		t.Errorf("referencedBy = %d, want 1 while terminating", got.Status.ReferencedBy)
+	}
+
+	if err := c.Delete(context.Background(), ref); err != nil {
+		t.Fatal(err)
+	}
+	reconcile()
+	if err := c.Get(context.Background(), key, &got); !apierrors.IsNotFound(err) {
+		t.Errorf("unreferenced terminating policy: Get err = %v, want NotFound", err)
 	}
 }
