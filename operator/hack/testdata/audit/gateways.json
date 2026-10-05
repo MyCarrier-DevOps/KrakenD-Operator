@@ -27,5 +27,6 @@
  {"metadata":{"namespace":"a","name":"ce-openapi"},"spec":{"edition":"CE","config":{},"openapi":{"enabled":true}}},
  {"metadata":{"namespace":"a","name":"ce-dragonfly"},"spec":{"edition":"CE","config":{},"dragonfly":{"enabled":true}}},
  {"metadata":{"namespace":"a","name":"cors-overflow-ok"},"spec":{"edition":"CE","config":{"cors":{"maxAge":"99999999999h"}}}},
- {"metadata":{"namespace":"a","name":"ee-features"},"spec":{"edition":"EE","config":{"extraConfig":{"auth/api-keys":{"keys":[]}},"documentation":{"version":"1.0"}},"redis":{"connectionPool":{"addresses":["r"]}},"openapi":{"enabled":true},"dragonfly":{"enabled":true},"license":{"secretRef":{"name":"l","key":"k"}}}}
+ {"metadata":{"namespace":"a","name":"ee-features"},"spec":{"edition":"EE","config":{"extraConfig":{"auth/api-keys":{"keys":[]}},"documentation":{"version":"1.0"}},"redis":{"connectionPool":{"addresses":["r"]}},"openapi":{"enabled":true},"dragonfly":{"enabled":true},"license":{"secretRef":{"name":"l","key":"k"}}}},
+ {"metadata":{"namespace":"a","name":"ce-df-password"},"spec":{"edition":"CE","config":{},"dragonfly":{"enabled":true,"authentication":{"passwordFromSecret":{"name":"s","key":"p"}}}}}
 ]}
