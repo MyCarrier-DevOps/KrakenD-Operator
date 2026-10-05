@@ -35,9 +35,23 @@ jq_lib='
 # anchors them at line breaks, so anchor the CRD pattern at the ends explicitly.
 def crd_test($re): test($re | sub("^\\^"; "\\A") | sub("\\$$"; "\\z"));
 # Why a duration string breaks its CRD rules, or nothing: $re is its pattern.
+# True when a pattern-valid duration does not fit in 64 bits of nanoseconds,
+# which time.ParseDuration (and so the CRD duration() rule) rejects. Each
+# component is compared exactly, as digits, against the most its unit allows;
+# the sum is compared as a float, which is exact to within a microsecond.
+def unit_max: {"ns": "9223372036854775807", "us": "9223372036854775", "µs": "9223372036854775",
+  "μs": "9223372036854775", "ms": "9223372036854", "s": "9223372036", "m": "153722867", "h": "2562047"};
+def unit_ns: {"ns": 1, "us": 1e3, "µs": 1e3, "μs": 1e3, "ms": 1e6, "s": 1e9, "m": 6e10, "h": 3.6e12};
+def digits_exceed($max): sub("^0+(?=.)"; "") | (length > ($max | length)) or (length == ($max | length) and . > $max);
+def overflows:
+  [scan("([0-9]*)(\\.[0-9]*)?(ns|us|µs|μs|ms|s|m|h)")
+    | {int: (.[0] | if . == "" then "0" else . end), frac: (.[1] // ""), unit: .[2]}] as $parts
+  | any($parts[]; .int as $i | .unit as $u | $i | digits_exceed(unit_max[$u]))
+    or ([$parts[] | ((.int + .frac) | tonumber) * unit_ns[.unit]] | add // 0) > 9223372036854775807;
 def dur_problem($re; $max; $label):
   if crd_test($re) | not then "\($label) \(.)"
   elif length > $max then "\($label) is longer than \($max) characters"
+  elif overflows then "\($label) \(.) does not fit in 64 bits of nanoseconds"
   else empty end;
 def report(kind): select(.v | length > 0) | "\(kind) \(.id): \(.v | unique | join("; "))";
 '
