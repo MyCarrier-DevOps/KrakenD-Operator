@@ -17,10 +17,13 @@ limitations under the License.
 package controller
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"strings"
 	"testing"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/autoconfig"
@@ -136,5 +139,48 @@ func TestOperationLabel_OmitsAnUnknownMethod(t *testing.T) {
 	})
 	if want := "/users/{id} (getUser): CUEEvaluationFailed"; got != want {
 		t.Errorf("operationLabel = %q, want %q", got, want)
+	}
+}
+
+// A strip of /v1 puts /x and /v1/x on one route, and the generator keeps the
+// first of them. A rejected write of that endpoint is named by the operationId
+// its endpoint name was generated from, so the status and the object agree.
+func TestRejectedStatuses_NameAnOperationByTheIdItsEndpointWasGeneratedFrom(t *testing.T) {
+	defs, err := autoconfig.EmbeddedCUEDefinitions()
+	if err != nil {
+		t.Fatalf("loading definitions: %v", err)
+	}
+	spec := `{"paths":{` +
+		`"/x":{"get":{"operationId":"dup","responses":{"200":{"description":"OK"}}}},` +
+		`"/v1/x":{"get":{"operationId":"other","responses":{"200":{"description":"OK"}}}},` +
+		`"/z":{"get":{"operationId":"dup","responses":{"200":{"description":"OK"}}}}}}`
+	cue, err := autoconfig.NewCUEEvaluator().Evaluate(context.Background(), autoconfig.CUEInput{
+		SpecData: []byte(spec), SpecFormat: v1alpha1.SpecFormatJSON, DefaultDefs: defs, ServiceName: "_spec",
+		DefaultHost: "http://svc:8080", URLTransform: &v1alpha1.URLTransformSpec{StripPathPrefix: "/v1"},
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	ac := &v1alpha1.KrakenDAutoConfig{ObjectMeta: metav1.ObjectMeta{Name: "test-ac", Namespace: "default"}}
+	gen, err := autoconfig.NewGenerator().Generate(context.Background(), autoconfig.GenerateInput{
+		AutoConfig: ac, Entries: cue.Entries, OperationIDs: cue.OperationIDs,
+	})
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	rejected := map[string]rejection{}
+	for _, ep := range gen.Endpoints {
+		rejected[ep.Name] = rejection{endpoint: ep, reason: v1alpha1.ReasonEndpointRejected, message: "invalid"}
+	}
+
+	got := rejectedStatuses(rejected, cue.OperationIDs)
+
+	if len(got) != len(gen.Endpoints) {
+		t.Fatalf("rejectedStatuses = %+v, want one per generated endpoint", got)
+	}
+	for _, s := range got {
+		if s.OperationID == "" || autoconfig.OperationEndpointName(ac.Name, s.OperationID) != s.Endpoint {
+			t.Errorf("status %+v names an operationId that did not name its endpoint", s)
+		}
 	}
 }
