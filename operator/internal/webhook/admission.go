@@ -18,6 +18,7 @@ package webhook
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -61,6 +62,16 @@ func invalid(kind, name string, errs field.ErrorList) error {
 // on their own; kubectl prints it and exits.
 func unavailable(err error) error {
 	return apierrors.NewInternalError(err)
+}
+
+// checkErr is the admission error for a checker failure: the validator could
+// not run, so the request is not judged and the failure is transient. nil
+// stays nil.
+func checkErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	return unavailable(fmt.Errorf("validating the gateway config: %w", err))
 }
 
 // newErrors returns the errors in errs that old does not already have, matched
