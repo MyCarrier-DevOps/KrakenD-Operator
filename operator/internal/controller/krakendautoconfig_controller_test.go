@@ -38,6 +38,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -3392,6 +3393,39 @@ func TestAutoConfigReconcile_FailedOperationWithUnknownMethodKeepsEndpoint(t *te
 		t.Errorf("expected Synced False/CUEEvaluationFailed, got %+v", cond)
 	}
 	assertEndpointKept(t, c, existing.Name)
+}
+
+// invalidError is the 422 the API server answers a rejected endpoint with.
+func invalidError(name string) error {
+	return apierrors.NewInvalid(schema.GroupKind{Group: v1alpha1.GroupVersion.Group, Kind: "KrakenDEndpoint"},
+		name, field.ErrorList{field.Invalid(field.NewPath("spec", "endpoints").Index(0), "x", "rejected")})
+}
+
+func TestAutoConfigReconcile_InvalidEndpointIsHeldNotRetried(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	g.output.Endpoints = append(g.output.Endpoints, generatedEndpoint("getB", "/b"))
+	ce.output.OperationIDs["/b:GET"] = "getB"
+	var ops []string
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).
+		WithInterceptorFuncs(recordEndpointWrites(&ops, map[string]error{"test-ac-getb": invalidError("test-ac-getb")})).
+		Build()
+	r := newACReconciler(c, f, ce, fi, g)
+
+	result, err := reconcileAC(r, ac)
+
+	if err != nil || result.RequeueAfter != defaultResyncInterval {
+		t.Fatalf("expected no error and the resync requeue, got %v, %+v", err, result)
+	}
+	if !endpointExists(t, c, "test-ac-listusers") {
+		t.Error("expected the valid endpoint written")
+	}
+	failed := getAC(t, c, ac).Status.FailedOperations
+	if len(failed) != 1 || failed[0].Endpoint != "test-ac-getb" || failed[0].Reason != v1alpha1.ReasonEndpointRejected ||
+		failed[0].Method != "GET" || failed[0].Path != "/b" || failed[0].OperationID != "getB" {
+		t.Errorf("failedOperations = %+v", failed)
+	}
 }
 
 func TestAutoConfigReconcile_DereferencesParameterRefsBeforeEvaluation(t *testing.T) {
