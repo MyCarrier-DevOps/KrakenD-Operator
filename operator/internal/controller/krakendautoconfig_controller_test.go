@@ -3656,3 +3656,61 @@ func TestAutoConfigReconcile_GeneratorNoteAlreadyEmittedAsFetchNoteIsNotRepeated
 		t.Errorf("events carrying the note = %d, want 1", n)
 	}
 }
+
+// Upgrading rewrites an endpoint that carries every component schema once, to
+// its closure, and a pass after that writes nothing. It runs the real
+// generator against the mock fetcher and evaluator.
+func TestAutoConfigReconcile_UpgradeRewritesFullSchemaMapToClosureOnce(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	f, ce, fi, g := defaultMocks()
+	specJSON := []byte(`{"paths":{},"components":{"schemas":{` +
+		`"Pet":{"type":"object"},"Unused":{"type":"object"}}}}`)
+	f.result = &autoconfig.FetchResult{Data: specJSON}
+	ce.output.Entries[0].ExtraConfig = &runtime.RawExtension{
+		Raw: []byte(`{"documentation/openapi":{"response_definition":{"200":{"ref":"Pet"}}}}`),
+	}
+	var counts writeCounts
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).
+		WithInterceptorFuncs(countWrites(&counts)).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Generator = autoconfig.NewGenerator()
+	// fetchSpec rewrites the result's Data, so each pass gets its own copy.
+	reconcileOnce := func() {
+		t.Helper()
+		f.result = &autoconfig.FetchResult{Data: slices.Clone(specJSON)}
+		if _, err := reconcileAC(r, ac); err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+	}
+	endpoint := func() v1alpha1.KrakenDEndpoint {
+		t.Helper()
+		var list v1alpha1.KrakenDEndpointList
+		if err := c.List(context.Background(), &list, client.InNamespace(ac.Namespace)); err != nil || len(list.Items) != 1 {
+			t.Fatalf("listing endpoints: %v, %d items", err, len(list.Items))
+		}
+		return list.Items[0]
+	}
+
+	reconcileOnce()
+	old := endpoint()
+	old.Spec.ComponentSchemas = autoconfig.ExtractComponentSchemas(specJSON)
+	if err := c.Update(context.Background(), &old); err != nil {
+		t.Fatalf("storing the pre-upgrade endpoint: %v", err)
+	}
+	counts = writeCounts{}
+
+	reconcileOnce()
+	if counts.updates != 1 {
+		t.Errorf("the upgrade pass made %d endpoint updates, want 1", counts.updates)
+	}
+	if got := slices.Sorted(maps.Keys(endpoint().Spec.ComponentSchemas)); !slices.Equal(got, []string{"Pet"}) {
+		t.Errorf("schemas after the upgrade = %v, want [Pet]", got)
+	}
+	counts = writeCounts{}
+
+	reconcileOnce()
+	if counts != (writeCounts{}) {
+		t.Errorf("the pass after the upgrade wrote %+v, want no writes", counts)
+	}
+}
