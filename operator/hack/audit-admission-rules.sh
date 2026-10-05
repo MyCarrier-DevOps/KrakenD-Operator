@@ -183,6 +183,7 @@ jq "${jq_opts[@]}" "$jq_lib"'
     (if ($a.endpoint // "" | crd_test($path_re)) then empty else "\($p).endpoint \($a.endpoint)" end),
     (if (($a.backends // []) | length) > 0
         and ((($a.host // "") != "") or (($a.backendUrlPattern // "") != "") or (($a.encoding // "") != ""))
-     then "\($p) mixes backends with the shorthand" else empty end)
+     then "\($p) mixes backends with the shorthand" else empty end),
+    ($a.timeout // empty | dur_problem($go_re; 64; "\($p).timeout"))
   ))
 ]} | report("KrakenDAutoConfig")' "$work/autoconfigs.json"
