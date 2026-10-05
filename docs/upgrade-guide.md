@@ -1411,6 +1411,11 @@ slots with the gateway controller, and each webhook call stops its work after
 12 s. A request that cannot get a slot in time, or whose check cannot run, is
 answered `500 Internal Error`: a transient error that `kubectl` does not retry,
 so run the command again (controllers and GitOps tools retry on their own).
+A policy write is rendered in each gateway that uses it, one after another: 1 + N
+checks for N gateways, up to 2 + 2N when gateways already fail, which fits tens
+of gateways in the 12 s, and fewer while the controller holds slots. Past that
+size the `500` repeats on every retry: it is deterministic, not transient, so
+split the use of the policy across more policies.
 With the webhooks disabled the controller's check is the only protection: a
 config that fails it keeps the gateway at its last-known-good config.
 
@@ -1600,10 +1605,11 @@ is admitted. An entry's `documentation/openapi`
 **Policy writes are checked alone and in every gateway that uses them.** A
 KrakenDBackendPolicy whose `raw` (or typed fields) KrakenD rejects is refused on
 its own, before anything references it, unless the stored policy already failed
-the same way. A change to a policy that endpoints reference is rendered in each
+on its own too (then its gateways decide). A change to a policy that endpoints reference is rendered in each
 gateway of those endpoints and refused if it breaks one that passed
 (`breaks gateway ns/name: ...`); a gateway that already fails for another reason
-gets a warning instead. The denial lists at most 20 gateways and counts the rest.
+gets a warning instead. The denial lists at most 20 gateways and the warnings
+name at most 5, each counting the rest.
 A new or changed `raw` with Enterprise-only namespaces, for example `auth/gcp`, or
 Enterprise-only keys such as `proxy_address` in `backend/http/client`, is
 refused while a CE gateway uses the policy (`gateway ns/name runs CE, which
