@@ -1133,8 +1133,29 @@ func validateExtraConfigAudience(p *field.Path, ec *runtime.RawExtension) field.
 // +kubebuilder:webhook:path=/validate-gateway-krakend-io-v1alpha1-krakendbackendpolicy,mutating=false,failurePolicy=fail,sideEffects=None,groups=gateway.krakend.io,resources=krakendbackendpolicies,verbs=create;update;delete,versions=v1alpha1,name=vkrakendbackendpolicy.kb.io,admissionReviewVersions=v1,timeoutSeconds=15
 // +kubebuilder:webhook:path=/validate-gateway-krakend-io-v1alpha1-krakendautoconfig,mutating=false,failurePolicy=fail,sideEffects=None,groups=gateway.krakend.io,resources=krakendautoconfigs,verbs=create;update,versions=v1alpha1,name=vkrakendautoconfig.kb.io,admissionReviewVersions=v1,timeoutSeconds=15
 
+// Validators are the validating webhooks SetupWebhooks registers.
+type Validators struct {
+	Gateway    *GatewayValidator
+	Endpoint   *EndpointValidator
+	Policy     *PolicyValidator
+	AutoConfig *AutoConfigValidator
+}
+
+// NewValidators builds the validators over c. checker is the config checker
+// the gateway controller uses too, so the validators and the controller share
+// its validation slots.
+func NewValidators(c client.Client, _ ConfigChecker) Validators {
+	return Validators{
+		Gateway:    &GatewayValidator{Client: c},
+		Endpoint:   &EndpointValidator{Client: c},
+		Policy:     &PolicyValidator{Client: c},
+		AutoConfig: &AutoConfigValidator{Client: c},
+	}
+}
+
 // SetupWebhooks registers all validating webhooks with the manager.
 func SetupWebhooks(mgr ctrl.Manager) error {
+	validators := NewValidators(mgr.GetClient(), nil)
 	// Ensure field indexes are registered — needed for conflict detection
 	// and policy-delete validation even when running webhook-only.
 	if err := fieldindex.EnsureEndpointIndexes(mgr); err != nil {
@@ -1143,28 +1164,28 @@ func SetupWebhooks(mgr ctrl.Manager) error {
 
 	if err := ctrl.NewWebhookManagedBy(mgr).
 		For(&v1alpha1.KrakenDGateway{}).
-		WithValidator(&GatewayValidator{Client: mgr.GetClient()}).
+		WithValidator(validators.Gateway).
 		Complete(); err != nil {
 		return fmt.Errorf("setting up gateway webhook: %w", err)
 	}
 
 	if err := ctrl.NewWebhookManagedBy(mgr).
 		For(&v1alpha1.KrakenDEndpoint{}).
-		WithValidator(&EndpointValidator{Client: mgr.GetClient()}).
+		WithValidator(validators.Endpoint).
 		Complete(); err != nil {
 		return fmt.Errorf("setting up endpoint webhook: %w", err)
 	}
 
 	if err := ctrl.NewWebhookManagedBy(mgr).
 		For(&v1alpha1.KrakenDBackendPolicy{}).
-		WithValidator(&PolicyValidator{Client: mgr.GetClient()}).
+		WithValidator(validators.Policy).
 		Complete(); err != nil {
 		return fmt.Errorf("setting up policy webhook: %w", err)
 	}
 
 	if err := ctrl.NewWebhookManagedBy(mgr).
 		For(&v1alpha1.KrakenDAutoConfig{}).
-		WithValidator(&AutoConfigValidator{Client: mgr.GetClient()}).
+		WithValidator(validators.AutoConfig).
 		Complete(); err != nil {
 		return fmt.Errorf("setting up autoconfig webhook: %w", err)
 	}
