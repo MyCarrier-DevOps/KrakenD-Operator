@@ -611,6 +611,7 @@ spec:
                   required:
                   - operationId
                   type: object
+                maxItems: 1024
                 type: array
               periodic:
                 description: Periodic configures the polling interval when trigger
