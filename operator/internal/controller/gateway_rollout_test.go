@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
@@ -223,4 +224,54 @@ func TestGatewayReconcile_RolloutStaysReportedAfterAFailedStatusWrite(t *testing
 	}
 
 	requireProgressing(t, getGateway(t, s.c, s.gw), metav1.ConditionTrue, false)
+}
+
+// stuck puts the gateway in the state two passes of a Deployment that missed
+// its progress deadline leave behind: the Deployment reports
+// ProgressDeadlineExceeded for the generation it has observed, and the gateway
+// reports RolloutFailed.
+func (s *servedGateway) stuck(t *testing.T) {
+	t.Helper()
+	s.deploymentControllerObserves(t, func(st *appsv1.DeploymentStatus) {
+		st.Replicas, st.UpdatedReplicas, st.AvailableReplicas, st.ReadyReplicas = 2, 1, 1, 1
+		st.Conditions = []appsv1.DeploymentCondition{{
+			Type: appsv1.DeploymentProgressing, Status: corev1.ConditionFalse, Reason: "ProgressDeadlineExceeded",
+		}}
+	})
+	stored := getGateway(t, s.c, s.gw)
+	for _, cond := range []metav1.Condition{
+		{Type: v1alpha1.ConditionProgressing, Status: metav1.ConditionFalse, Reason: v1alpha1.ReasonRolloutFailed},
+		{Type: v1alpha1.ConditionAvailable, Status: metav1.ConditionFalse, Reason: v1alpha1.ReasonRolloutFailed},
+	} {
+		meta.SetStatusCondition(&stored.Status.Conditions, cond)
+	}
+	if err := s.c.Status().Update(context.Background(), stored); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGatewayReconcile_FixPushedDuringAStuckRolloutReadsDeployingNotError(t *testing.T) {
+	s := serveGateway(t)
+	s.stuck(t)
+	rec := s.r.Recorder.(*record.FakeRecorder)
+	s.r.Renderer = renderOutput("B") // the fix
+
+	for pass, name := range []string{"the pass that pushes the fix", "the pass before the Deployment controller observes it"} {
+		got := s.reconcile(t)
+		progressing := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionProgressing)
+		if progressing == nil || progressing.Status != metav1.ConditionTrue ||
+			progressing.Reason != v1alpha1.ReasonConfigDeployed {
+			t.Errorf("%s: Progressing = %+v, want True/%s", name, progressing, v1alpha1.ReasonConfigDeployed)
+		}
+		if got.Status.Phase != v1alpha1.PhaseDeploying {
+			t.Errorf("%s: phase = %s, want %s", name, got.Status.Phase, v1alpha1.PhaseDeploying)
+		}
+		if available := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionAvailable); available != nil &&
+			available.Reason == v1alpha1.ReasonRolloutFailed {
+			t.Errorf("%s: Available = %+v, want it no longer RolloutFailed", name, available)
+		}
+		if n := eventsWithReason(rec, v1alpha1.ReasonRolloutFailed); n != 0 {
+			t.Errorf("%s (pass %d): %d RolloutFailed events, want none for a rollout that replaced the failed one", name, pass, n)
+		}
+	}
 }
