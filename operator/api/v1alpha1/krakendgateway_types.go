@@ -304,6 +304,7 @@ type GatewayConfig struct {
 	Timeout string `json:"timeout,omitempty"`
 
 	// CacheTTL is the global cache TTL (e.g. "0s").
+	// +kubebuilder:validation:Pattern=`^[0-9]+(ns|ms|us|µs|s|m|h)$`
 	CacheTTL string `json:"cacheTTL,omitempty"`
 
 	// OutputEncoding selects the default response encoding: json, negotiate, no-op.
