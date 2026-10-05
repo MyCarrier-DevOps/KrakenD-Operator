@@ -38,5 +38,6 @@
  {"metadata":{"namespace":"a","name":"defaults-output"},"spec":{"gatewayRef":{"name":"gw"},"openapi":{"url":"http://x"},"trigger":"OnChange","defaults":{"endpoint":{"outputEncoding":"jsn"}}}},
  {"metadata":{"namespace":"a","name":"defaults-encoding"},"spec":{"gatewayRef":{"name":"gw"},"openapi":{"url":"http://x"},"trigger":"OnChange","defaults":{"backend":{"encoding":"jsn"}}}},
  {"metadata":{"namespace":"a","name":"defaults-sd"},"spec":{"gatewayRef":{"name":"gw"},"openapi":{"url":"http://x"},"trigger":"OnChange","defaults":{"backend":{"sd":"foo"}}}},
- {"metadata":{"namespace":"a","name":"defaults-policy"},"spec":{"gatewayRef":{"name":"gw"},"openapi":{"url":"http://x"},"trigger":"OnChange","defaults":{"policyRef":{"name":""}}}}
+ {"metadata":{"namespace":"a","name":"defaults-policy"},"spec":{"gatewayRef":{"name":"gw"},"openapi":{"url":"http://x"},"trigger":"OnChange","defaults":{"policyRef":{"name":""}}}},
+ {"metadata":{"namespace":"a","name":"no-source"},"spec":{"gatewayRef":{"name":"gw"},"openapi":{},"trigger":"OnChange"}}
 ]}
