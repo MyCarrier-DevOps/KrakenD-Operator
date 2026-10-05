@@ -20,6 +20,7 @@ package v1alpha1
 // When Namespace is empty the gateway is assumed to live in the same namespace
 // as the referencing resource.
 type GatewayRef struct {
+	// +kubebuilder:validation:MinLength=1
 	Name string `json:"name"`
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:MaxLength=63
