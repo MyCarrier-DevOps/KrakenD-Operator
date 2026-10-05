@@ -378,5 +378,6 @@ func TestAutoConfigCRD_Rules(t *testing.T) {
 		{"name too long", `{apiVersion: gateway.krakend.io/v1alpha1, kind: KrakenDAutoConfig, metadata: {name: ` + strings.Repeat("a", 64) + `}, spec: {gatewayRef: {name: gw}, openapi: {url: "http://x"}, trigger: OnChange}}`, "at most 63 characters"},
 		{"override method", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, overrides: [{operationId: x, method: HEAD}]}}`, "Unsupported value: \"HEAD\""},
 		{"override backend index", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, overrides: [{operationId: x, backends: [{index: -1}]}]}}`, "spec.overrides[0].backends[0].index"},
+		{"override duration", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, overrides: [{operationId: x, timeout: "30"}]}}`, "spec.overrides[0].timeout"},
 	})
 }
