@@ -39,9 +39,10 @@ import (
 //
 // baseURL is the main spec's URL. A relative reference resolves against the
 // URL of the document that contains it: baseURL for a ref in the main spec,
-// the fetched document's URL for a ref inside an external document. When the
-// source is a ConfigMap (no URL), external refs are left untouched;
-// ExternalRefs lists them for reporting.
+// the fetched document's URL for a ref inside an external document. When
+// called without a URL, external refs are left untouched and each is returned
+// as a "failed to resolve" warning. The controller does not call it for a
+// ConfigMap-sourced spec; it lists those refs with ExternalRefs instead.
 //
 // The returned JSON is always JSON (regardless of input format). External
 // documents fetched as YAML are converted to JSON before inlining.
@@ -434,7 +435,10 @@ func decodeSpec(data []byte) (map[string]any, error) {
 // ExternalRefs returns the distinct $refs in specData that point outside the
 // document (those not starting with "#"), sorted. Only a URL-sourced spec has
 // a base to resolve them against, so in a ConfigMap-sourced spec they stay
-// unresolved.
+// unresolved. $refs inside example payloads are data, not references, and are
+// skipped, apart from an examples entry that is itself a $ref. A schema
+// property literally named "example" or "examples" is taken for a payload
+// too, so an external ref below it goes unreported.
 func ExternalRefs(specData []byte) ([]string, error) {
 	root, err := decodeSpec(specData)
 	if err != nil {
