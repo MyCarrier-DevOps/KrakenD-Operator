@@ -40,8 +40,8 @@ import (
 // baseURL is the main spec's URL. A relative reference resolves against the
 // URL of the document that contains it: baseURL for a ref in the main spec,
 // the fetched document's URL for a ref inside an external document. When the
-// source is a ConfigMap (no URL), external refs are left untouched and a
-// warning is returned via the warnings slice.
+// source is a ConfigMap (no URL), external refs are left untouched;
+// ExternalRefs lists them for reporting.
 //
 // The returned JSON is always JSON (regardless of input format). External
 // documents fetched as YAML are converted to JSON before inlining.
