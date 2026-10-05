@@ -5178,3 +5178,27 @@ func TestEndpointsReadyCondition(t *testing.T) {
 		}
 	})
 }
+
+func TestAutoConfigReconcile_AggregatesEndpointReadiness(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	g.output.Endpoints = append(g.output.Endpoints, generatedEndpoint("getB", "/b"))
+	users := readyEndpoint(ownedCopy(t, ac, g.output.Endpoints[0]), metav1.ConditionTrue, "Ready")
+	b := readyEndpoint(ownedCopy(t, ac, g.output.Endpoints[1]), metav1.ConditionFalse, v1alpha1.ReasonEndpointConflict)
+	c := fakeClientBuilder().WithObjects(ac, cm, users, b).WithStatusSubresource(ac, users, b).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	updated := getAC(t, c, ac)
+	if updated.Status.ReadyEndpoints != 1 {
+		t.Errorf("readyEndpoints = %d, want 1", updated.Status.ReadyEndpoints)
+	}
+	cond := meta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionEndpointsReady)
+	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != v1alpha1.ReasonEndpointsNotReady ||
+		cond.Message != "1 of 2 endpoints not ready: test-ac-getb: EndpointConflict" {
+		t.Errorf("unexpected EndpointsReady %+v", cond)
+	}
+}
