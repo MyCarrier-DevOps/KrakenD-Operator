@@ -1352,3 +1352,55 @@ func TestScenario_DuplicateOperationIdOverrideIsAmbiguousAndNotApplied(t *testin
 		t.Errorf("published endpoint %s: the ambiguous override was applied", published.Endpoint)
 	}
 }
+
+// =========================================================================
+// Scenario: A path-prefix strip makes two operations share a route, and a
+// third operation outside that pair shares an operationId with one of them.
+// Expected: the override on the shared operationId is ambiguous, as it is
+// without the strip. The operationIds are counted per operation, not per
+// route, which the strip changes.
+// =========================================================================
+
+// stripPrefixCollisionSpec has /x (dup) and /v1/x (other), which a strip of
+// /v1 puts on one route, and /z (dup).
+var stripPrefixCollisionSpec = []byte(`{
+	"paths": {
+		"/x": {"get": {"operationId": "dup", "responses": {"200": {"description": "OK"}}}},
+		"/v1/x": {"get": {"operationId": "other", "responses": {"200": {"description": "OK"}}}},
+		"/z": {"get": {"operationId": "dup", "responses": {"200": {"description": "OK"}}}}
+	}
+}`)
+
+func evaluateStripPrefixCollision(t *testing.T, overrides ...v1alpha1.OperationOverride) *CUEOutput {
+	t.Helper()
+	defs, err := EmbeddedCUEDefinitions()
+	if err != nil {
+		t.Fatalf("loading defs: %v", err)
+	}
+	out, err := NewCUEEvaluator().Evaluate(context.Background(), CUEInput{
+		SpecData:     stripPrefixCollisionSpec,
+		SpecFormat:   v1alpha1.SpecFormatJSON,
+		DefaultDefs:  defs,
+		ServiceName:  "_spec",
+		DefaultHost:  "http://svc.dev.svc:8080",
+		URLTransform: &v1alpha1.URLTransformSpec{StripPathPrefix: "/v1"},
+		Overrides:    overrides,
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	return out
+}
+
+func TestScenario_StripPrefixRouteCollisionKeepsASharedOperationIdAmbiguous(t *testing.T) {
+	timeout := metav1.Duration{Duration: 42 * time.Second}
+
+	out := evaluateStripPrefixCollision(t, v1alpha1.OperationOverride{OperationID: "dup", Timeout: &timeout})
+
+	if len(out.UnmatchedOverrides) != 0 {
+		t.Errorf("UnmatchedOverrides = %v, want none", out.UnmatchedOverrides)
+	}
+	if !slices.Equal(out.AmbiguousOverrides, []string{"dup"}) {
+		t.Errorf("AmbiguousOverrides = %v, want [dup]: /x and /z both declare it", out.AmbiguousOverrides)
+	}
+}
