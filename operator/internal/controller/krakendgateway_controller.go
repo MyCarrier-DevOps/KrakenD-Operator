@@ -247,10 +247,15 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// Update final status
 	gw.Status.EndpointCount = int32(len(endpoints))
 	recordGatewayMetrics(&gw, len(endpoints))
-	// A pass that could not reconcile a child resource has not applied this
-	// generation, so the status keeps claiming the one it last applied.
+	// This generation is not applied while a child resource cannot be
+	// reconciled, nor while the Deployment is held because the applied
+	// config's ConfigMap cannot be published or verified although the render
+	// is the applied config. A rejected render, an unavailable validator and a
+	// missing plugin ConfigMap do not hold it back: they are verdicts on this
+	// generation that Ready already reports.
+	appliedHeld := isApplied(&gw, output, edition) && cfg.appliedConfigMap == ""
 	observed := gw.Generation
-	if infraErr != nil {
+	if infraErr != nil || appliedHeld {
 		observed = before.ObservedGeneration
 	}
 	setGatewayReadiness(&gw, observed)
