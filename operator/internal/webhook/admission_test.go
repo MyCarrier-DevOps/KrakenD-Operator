@@ -28,6 +28,7 @@ import (
 	authenticationv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
@@ -124,5 +125,28 @@ func TestAdmission_EndpointConflictListFailureIs500(t *testing.T) {
 	resp := review(t, &EndpointValidator{Client: c}, "alice", ep, nil)
 	if resp.Allowed || resp.Result.Code != http.StatusInternalServerError {
 		t.Errorf("response = %+v, want 500", resp.Result)
+	}
+}
+
+func TestNewErrors_KeepsOnlyErrorsTheOldObjectLacked(t *testing.T) {
+	p := field.NewPath("spec", "x")
+	stored := field.ErrorList{field.Invalid(p, "a", "bad"), field.Required(p.Child("y"), "")}
+	current := field.ErrorList{
+		field.Invalid(p, "a", "bad"),       // unchanged
+		field.Invalid(p, "b", "bad"),       // same field and type, a different value
+		field.Required(p.Child("y"), ""),   // unchanged
+		field.Required(p.Child("z"), ""),   // a new field
+		field.Forbidden(p.Child("y"), "n"), // a new type on a known field
+	}
+
+	got := newErrors(current, stored)
+
+	want := []string{current[1].Error(), current[3].Error(), current[4].Error()}
+	var have []string
+	for _, e := range got {
+		have = append(have, e.Error())
+	}
+	if !reflect.DeepEqual(have, want) {
+		t.Errorf("newErrors = %q, want %q", have, want)
 	}
 }
