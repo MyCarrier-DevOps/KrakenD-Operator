@@ -82,3 +82,4 @@ KrakenDAutoConfig a/defaults-output: spec.defaults.endpoint.outputEncoding jsn
 KrakenDAutoConfig a/defaults-encoding: spec.defaults.backend.encoding jsn
 KrakenDAutoConfig a/defaults-sd: spec.defaults.backend.sd foo
 KrakenDAutoConfig a/defaults-policy: spec.defaults.policyRef.name is empty
+KrakenDAutoConfig a/no-source: need exactly one of openapi.url or openapi.configMapRef
