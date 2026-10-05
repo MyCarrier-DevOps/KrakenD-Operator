@@ -459,6 +459,7 @@ func (v *markerValidator) Validate(_ context.Context, jsonData []byte, _ v1alpha
 func (v *markerValidator) Lint(ctx context.Context, jsonData []byte, edition v1alpha1.Edition) error {
 	return v.Validate(ctx, jsonData, edition)
 }
+
 // waitForNodes polls the Kubernetes API until all nodes report Ready.
 func waitForNodes(ctx context.Context, cfg *rest.Config) error {
 	clientset, err := k8sclient.NewForConfig(cfg)
