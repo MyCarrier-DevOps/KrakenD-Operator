@@ -81,20 +81,24 @@ func (v *PolicyValidator) ValidateCreate(ctx context.Context, obj runtime.Object
 	}
 	ctx, cancel := context.WithTimeout(ctx, admissionBudget)
 	defer cancel()
-	return checkPolicyRender(ctx, v.Client, v.Checker, policy)
+	return checkPolicyRender(ctx, v.Client, v.Checker, nil, policy)
 }
 
 // ValidateUpdate validates an updated KrakenDBackendPolicy.
 func (v *PolicyValidator) ValidateUpdate(
-	ctx context.Context, _, newObj runtime.Object,
+	ctx context.Context, oldObj, newObj runtime.Object,
 ) (admission.Warnings, error) {
 	policy, ok := newObj.(*v1alpha1.KrakenDBackendPolicy)
 	if !ok {
 		return nil, fmt.Errorf("expected KrakenDBackendPolicy, got %T", newObj)
 	}
+	old, ok := oldObj.(*v1alpha1.KrakenDBackendPolicy)
+	if !ok {
+		return nil, fmt.Errorf("expected KrakenDBackendPolicy, got %T", oldObj)
+	}
 	ctx, cancel := context.WithTimeout(ctx, admissionBudget)
 	defer cancel()
-	return checkPolicyRender(ctx, v.Client, v.Checker, policy)
+	return checkPolicyRender(ctx, v.Client, v.Checker, old, policy)
 }
 
 // ValidateDelete blocks deletion if the policy is still referenced by endpoints.

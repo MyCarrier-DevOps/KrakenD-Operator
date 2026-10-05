@@ -148,17 +148,30 @@ func gatewayRenderDenial(gw *v1alpha1.KrakenDGateway, verdict configcheck.Verdic
 	return invalid("KrakenDGateway", gw.Name, errs)
 }
 
-// checkPolicyRender validates policy on its own and refuses it when it fails.
+// checkPolicyRender validates policy on its own and in every gateway that
+// renders it. It rejects a request only for a pass-to-fail change: a policy
+// that already failed alone (old) is judged by its gateways, and a gateway
+// already failing without the change gets a warning instead.
 func checkPolicyRender(
-	ctx context.Context, c client.Reader, chk ConfigChecker, policy *v1alpha1.KrakenDBackendPolicy,
+	ctx context.Context, c client.Reader, chk ConfigChecker, old, policy *v1alpha1.KrakenDBackendPolicy,
 ) (admission.Warnings, error) {
 	alone, err := chk.LintPolicy(ctx, policy)
 	if err != nil {
 		return nil, checkErr(err)
 	}
 	if !alone.OK {
-		return nil, invalid("KrakenDBackendPolicy", policy.Name, field.ErrorList{field.Invalid(
-			field.NewPath("spec"), field.OmitValueType{}, "fails krakend check on its own: "+messages(alone))})
+		oldFailed := false
+		if old != nil {
+			oldAlone, err := chk.LintPolicy(ctx, old)
+			if err != nil {
+				return nil, checkErr(err)
+			}
+			oldFailed = !oldAlone.OK
+		}
+		if !oldFailed {
+			return nil, invalid("KrakenDBackendPolicy", policy.Name, field.ErrorList{field.Invalid(
+				field.NewPath("spec"), field.OmitValueType{}, "fails krakend check on its own: "+messages(alone))})
+		}
 	}
 	gateways, err := gatewaysUsing(ctx, c, policy)
 	if err != nil {
