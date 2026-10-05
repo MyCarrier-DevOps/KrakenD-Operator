@@ -377,3 +377,44 @@ func TestGatewayAdmission_EditionSwitchDenialIsBounded(t *testing.T) {
 		t.Errorf("cause is %d bytes, want it cut near %d", got, warningLimit)
 	}
 }
+
+func TestGatewayAdmission_CERejectsEnterpriseOnlyFields(t *testing.T) {
+	withFields := func(gw *v1alpha1.KrakenDGateway) *v1alpha1.KrakenDGateway {
+		gw.Spec.Redis = &v1alpha1.RedisSpec{
+			ConnectionPool: v1alpha1.RedisConnectionPool{Addresses: []string{"redis:6379"}},
+		}
+		return gw
+	}
+	all := []string{"spec.redis: Forbidden"}
+	tests := []struct {
+		name    string
+		gw, old *v1alpha1.KrakenDGateway
+		reject  []string // substrings of the denial; none means admitted
+	}{
+		{"created on CE", withFields(testGateway()), nil, all},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v := &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
+			var old runtime.Object
+			if tt.old != nil {
+				old = tt.old
+			}
+			resp := review(t, v, "alice", tt.gw, old)
+			if len(tt.reject) == 0 {
+				if !resp.Allowed {
+					t.Errorf("denied: %+v", resp.Result)
+				}
+				return
+			}
+			if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("response = %+v, want a 422 denial", resp.Result)
+			}
+			for _, want := range tt.reject {
+				if !strings.Contains(resp.Result.Message, want) {
+					t.Errorf("denial %q does not contain %q", resp.Result.Message, want)
+				}
+			}
+		})
+	}
+}
