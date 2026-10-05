@@ -210,7 +210,7 @@ func checkPolicyRender(
 	}
 	if omitted > 0 {
 		errs = append(errs, field.Invalid(field.NewPath("spec"), field.OmitValueType{},
-			fmt.Sprintf("the policy also fails %d more gateways", omitted)))
+			fmt.Sprintf("the policy is also refused on %d more gateways", omitted)))
 	}
 	return warnings, invalid("KrakenDBackendPolicy", policy.Name, errs)
 }
