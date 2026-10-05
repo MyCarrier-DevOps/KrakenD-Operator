@@ -2037,3 +2037,26 @@ func TestEvaluate_FailedOperationCarriesTransformedPath(t *testing.T) {
 		t.Errorf("expected the failed operation at /svc/b, got %+v", out.Failed)
 	}
 }
+
+func TestEvaluate_FailedOperationsAreSortedByTransformedPath(t *testing.T) {
+	defs, err := EmbeddedCUEDefinitions()
+	if err != nil {
+		t.Fatalf("loading defs: %v", err)
+	}
+	// Stripping /z reorders the paths: /z/a becomes /a and sorts before /b.
+	out, err := NewCUEEvaluator().Evaluate(context.Background(), CUEInput{
+		SpecData: []byte(`{"paths":{
+			"/b":{"get":{"operationId":"getB","responses":{"200":{}}}},
+			"/z/a":{"get":{"operationId":"getA","responses":{"200":{}}}}}}`),
+		SpecFormat:   v1alpha1.SpecFormatJSON,
+		DefaultDefs:  defs,
+		URLTransform: &v1alpha1.URLTransformSpec{StripPathPrefix: "/z"},
+		ServiceName:  "_spec",
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if len(out.Failed) != 2 || out.Failed[0].Path != "/a" || out.Failed[1].Path != "/b" {
+		t.Errorf("expected failed operations sorted /a, /b, got %+v", out.Failed)
+	}
+}
