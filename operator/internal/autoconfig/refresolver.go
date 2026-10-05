@@ -118,7 +118,8 @@ type refResolver struct {
 	resolving map[string]bool           // cycle detection: ref keys currently being resolved
 	resolved  map[string]string         // refKey -> sanitized name for already-resolved refs
 	warnings  []string
-	fatalErr  error // first fetch/decode failure; halts all further resolution
+	warned    map[string]bool // warnings already recorded, so each is reported once
+	fatalErr  error           // first fetch/decode failure; halts all further resolution
 }
 
 var sanitizeNameRE = regexp.MustCompile(`[^A-Za-z0-9_]+`)
@@ -144,6 +145,11 @@ func (r *refResolver) walk(node any, base string) {
 	}
 	switch v := node.(type) {
 	case map[string]any:
+		if ref, ok := v["$ref"].(string); ok && strings.HasPrefix(ref, "#") && base != r.baseURL {
+			r.warnOnce(fmt.Sprintf(
+				"$ref %q in %s is resolved against the main spec after inlining, not against %s",
+				ref, base, base))
+		}
 		if ref, ok := v["$ref"].(string); ok && ref != "" && !strings.HasPrefix(ref, "#") {
 			if localName, err := r.resolveExternal(ref, base); err == nil {
 				v["$ref"] = "#/components/schemas/" + localName
@@ -174,6 +180,18 @@ func (r *refResolver) walk(node any, base string) {
 			}
 		}
 	}
+}
+
+// warnOnce records msg as a warning unless it was already recorded.
+func (r *refResolver) warnOnce(msg string) {
+	if r.warned[msg] {
+		return
+	}
+	if r.warned == nil {
+		r.warned = map[string]bool{}
+	}
+	r.warned[msg] = true
+	r.warnings = append(r.warnings, msg)
 }
 
 // resolveExternal fetches the document ref (found in the document at base)
