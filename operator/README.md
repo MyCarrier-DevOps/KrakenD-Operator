@@ -68,9 +68,9 @@ kustomize manifests set the ones they need.
 username on each admission request. A KrakenDEndpoint write from that username
 skips the admission render check when a KrakenDAutoConfig is the endpoint's
 controller owner (`metadata.ownerReferences[].controller: true`). The check is
-skipped because the AutoConfig controller validates its whole desired set
-before it writes. Every other check still runs: schema, references, entry
-rules and duplicate routes. Writes from any other user, writes to endpoints
+skipped because the AutoConfig controller validates the endpoints it is about
+to write before it writes them. Every other check still runs: schema,
+references, the audience rule, the entry rules and duplicate routes. Writes from any other user, writes to endpoints
 without an AutoConfig controller, and every other kind get the full check.
 
 The Helm chart and `config/manager/manager.yaml` set `POD_NAMESPACE`
