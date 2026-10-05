@@ -9,6 +9,9 @@ import (
 	"strings"
 
 	"k8s.io/apimachinery/pkg/types"
+
+	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 )
 
 // Finding is one reason a config fails validation. Endpoint and Index name
@@ -55,4 +58,13 @@ func (v Verdict) Summary(limit int) string {
 		b.WriteString(s)
 	}
 	return b.String()
+}
+
+// findingsFrom converts the renderer's attributions, which name positions in the
+// rendered endpoints array, into findings that name the entry's position in
+// its KrakenDEndpoint's spec.endpoints. A rejection always has a finding:
+// when nothing was attributed, the trimmed output is one gateway finding.
+func findingsFrom(atts []renderer.Attribution, renderedJSON []byte,
+	endpoints []v1alpha1.KrakenDEndpoint, output string) []Finding {
+	return nil
 }

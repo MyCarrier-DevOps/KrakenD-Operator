@@ -4,7 +4,11 @@ import (
 	"strings"
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+
+	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 )
 
 func TestVerdictSummary_BoundsAtAFindingBoundary(t *testing.T) {
@@ -37,5 +41,41 @@ func TestFindingString(t *testing.T) {
 		if got := f.String(); got != want {
 			t.Errorf("String() = %q, want %q", got, want)
 		}
+	}
+}
+
+func TestFindingsFrom_NamesTheSpecEntry(t *testing.T) {
+	rendered := []byte(`{"endpoints":[{"endpoint":"/a","method":"GET"},{"endpoint":"/x","method":"GET"},{"endpoint":"/y","method":"POST"}]}`)
+	a, b := types.NamespacedName{Namespace: "ns", Name: "a"}, types.NamespacedName{Namespace: "ns", Name: "b"}
+	eps := []v1alpha1.KrakenDEndpoint{
+		{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "a"}, Spec: v1alpha1.KrakenDEndpointSpec{
+			Endpoints: []v1alpha1.EndpointEntry{{Endpoint: "/a", Method: "GET"}}}},
+		{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "b"}, Spec: v1alpha1.KrakenDEndpointSpec{
+			Endpoints: []v1alpha1.EndpointEntry{{Endpoint: "/y", Method: "POST"}, {Endpoint: "/x", Method: "GET"}}}},
+	}
+	atts := []renderer.Attribution{
+		{Endpoint: b, Index: 2, Message: "- at '/endpoints/2/extra_config': bad"},
+		{Endpoint: a, Index: 0, Message: "- at '/endpoints/0/endpoint': clash"},
+		{Index: -1, Message: "'timeout' time: unknown unit"},
+	}
+
+	got := findingsFrom(atts, rendered, eps, "raw output")
+
+	want := []Finding{
+		{Endpoint: b, Index: 0, Message: "- at '/endpoints/2/extra_config': bad"},
+		{Endpoint: a, Index: 0, Message: "- at '/endpoints/0/endpoint': clash"},
+		{Index: -1, Message: "'timeout' time: unknown unit"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("findings = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("finding %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+	if f := findingsFrom(nil, rendered, eps, "  ERROR something  "); len(f) != 1 || f[0].Index != -1 ||
+		f[0].Message != "ERROR something" {
+		t.Errorf("empty attribution = %+v, want one gateway finding carrying the output", f)
 	}
 }
