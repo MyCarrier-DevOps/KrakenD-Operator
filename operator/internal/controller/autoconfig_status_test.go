@@ -17,6 +17,8 @@ limitations under the License.
 package controller
 
 import (
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -48,5 +50,26 @@ func TestCapList_KeepsTheFirstTwentyItems(t *testing.T) {
 	}
 	if short := capList([]int{1, 2}); len(short) != 2 {
 		t.Errorf("capList(short) = %v, want it unchanged", short)
+	}
+}
+
+func TestSpecWarnings_AreDistinctSortedAndBounded(t *testing.T) {
+	got := specWarnings([]string{"b warning", "a warning", "b warning"})
+	if want := []string{"a warning", "b warning"}; !slices.Equal(got, want) {
+		t.Fatalf("specWarnings = %q, want %q", got, want)
+	}
+
+	long := specWarnings([]string{strings.Repeat("x", 1000)})
+	if len(long) != 1 || len(long[0]) > maxStatusMessageLen {
+		t.Fatalf("a long warning gave %q, want one entry of at most %d bytes", long, maxStatusMessageLen)
+	}
+
+	var many []string
+	for i := range 2 * maxStatusListLen {
+		many = append(many, fmt.Sprintf("warning %02d", i))
+	}
+	got = specWarnings(many)
+	if len(got) != maxStatusListLen || got[0] != "warning 00" {
+		t.Errorf("specWarnings kept %d entries %q, want %d starting at \"warning 00\"", len(got), got, maxStatusListLen)
 	}
 }
