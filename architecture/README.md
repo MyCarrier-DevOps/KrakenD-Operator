@@ -1348,12 +1348,15 @@ lists each lost entry and the KrakenDEndpoint that serves it. The gateway
 writes it in the same optimistic-lock status patch as `Accepted`.
 
 Admission stops new conflicts before the renderer sees them. The
-KrakenDEndpoint webhook rejects each changed entry whose route is new to the
-stored object and whose method and route shape another entry on the same
-gateway already has, including another
-entry of the same KrakenDEndpoint (`Duplicate value`, naming the owner and
-the clashing path; it names the endpoint the renderer serves). Endpoints with the same controller (two endpoints one
-KrakenDAutoConfig generated while it renames an operation) are exempt: the
+KrakenDEndpoint webhook rejects each changed entry whose method and route
+shape another entry on the same gateway already has (`Duplicate value`,
+naming the owner and the clashing path; it names the endpoint the renderer
+serves). Against other KrakenDEndpoints it checks only routes new to the
+stored object, so a stored conflict never blocks an edit to the body of the
+entry that is served. Same-shape entries inside one KrakenDEndpoint are always
+checked when an entry changes. Endpoints with the same controller (two
+endpoints one KrakenDAutoConfig generated while it renames an operation) are
+exempt: the
 renderer serves the older one until the AutoConfig deletes it, so same-shape
 entries of one AutoConfig are caught by no admission rule. Oldest-wins
 stays as the fallback for concurrent applies and for conflicts stored before
@@ -1994,7 +1997,7 @@ The operator should deploy a `ValidatingAdmissionWebhook` with `failurePolicy: F
 
 - **KrakenDEndpoint** — reject if `gatewayRef` references a non-existent KrakenDGateway
 - **KrakenDEndpoint** — reject if `policyRef` references a non-existent KrakenDBackendPolicy
-- **KrakenDEndpoint** — reject an entry whose route is new to the stored object and whose method and route shape (paths that differ only in parameter names or repeated slashes) another entry on the target gateway already has, in this or another KrakenDEndpoint (`Duplicate value`); endpoints with the same controller are exempt, and the renderer keeps oldest-wins as the fallback
+- **KrakenDEndpoint** — reject a changed entry whose method and route shape (paths that differ only in parameter names or repeated slashes) another entry on the target gateway already has, in this or another KrakenDEndpoint (`Duplicate value`); against other KrakenDEndpoints only routes new to the stored object are checked; endpoints with the same controller are exempt, and the renderer keeps oldest-wins as the fallback
 - **KrakenDGateway** — reject if `edition: EE` but neither `license.externalSecret.enabled=true` nor `license.secretRef` is set
 - **KrakenDGateway** — reject if both `license.externalSecret.enabled=true` and `license.secretRef` are set (mutually exclusive)
 - **KrakenDGateway** — reject if `edition: CE` and either `license.externalSecret.enabled=true` or `license.secretRef` is set (CE requires no license)
