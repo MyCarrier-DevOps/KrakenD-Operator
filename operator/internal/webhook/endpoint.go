@@ -537,12 +537,6 @@ func routeKey(e v1alpha1.EndpointEntry) string {
 // routeClash reports that e's route is already claimed by otherPath in owner.
 func routeClash(p *field.Path, e v1alpha1.EndpointEntry, otherPath, owner string) *field.Error {
 	err := field.Duplicate(p, e.Method+" "+e.Endpoint)
-	if otherPath == e.Endpoint {
-		err.Detail = "already defined by " + owner
-		return err
-	}
-	err.Detail = fmt.Sprintf("has the same route as %s %s in %s: paths that differ only in parameter names "+
-		"or repeated slashes cannot both be routed. Use the same parameter name, and keep routes that share "+
-		"a parameterized prefix in one KrakenDEndpoint so they can be renamed together", e.Method, otherPath, owner)
+	err.Detail = renderer.RouteClashDetail(e.Method, e.Endpoint, otherPath, owner)
 	return err
 }
