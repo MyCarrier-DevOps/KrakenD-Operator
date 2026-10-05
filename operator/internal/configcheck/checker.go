@@ -38,7 +38,7 @@ import (
 // ValidatorVersion is the KrakenD minor version of the krakend binary the
 // operator image pins (Dockerfile KRAKEND_IMAGE). Admission and the gateway
 // controller validate every gateway with it, whatever its spec.version.
-const ValidatorVersion = ""
+const ValidatorVersion = "2.13"
 
 // Checker renders gateway configs and validates them. Every validation holds
 // one of a fixed number of slots shared by all callers in the pod.
