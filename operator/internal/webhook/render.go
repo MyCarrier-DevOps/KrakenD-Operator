@@ -35,6 +35,14 @@ type renderChecks struct {
 	after, before, isoAfter, isoBefore func(context.Context) (configcheck.Verdict, error)
 }
 
+// bindCheck fixes the gateway and endpoints a check runs on.
+func bindCheck(
+	run func(context.Context, *v1alpha1.KrakenDGateway, []v1alpha1.KrakenDEndpoint) (configcheck.Verdict, error),
+	gw *v1alpha1.KrakenDGateway, eps []v1alpha1.KrakenDEndpoint,
+) func(context.Context) (configcheck.Verdict, error) {
+	return func(ctx context.Context) (configcheck.Verdict, error) { return run(ctx, gw, eps) }
+}
+
 // ratchetRender rejects a change only when it turns a passing config into a
 // failing one. It runs after, then before; when before fails too the failure
 // is a warning (preexisting words it from before's verdict) unless the change
@@ -89,10 +97,10 @@ func checkGatewayRender(
 		return nil, gatewayRenderDenial(gw, root)
 	}
 	return ratchetRender(ctx, renderChecks{
-		after:     func(ctx context.Context) (configcheck.Verdict, error) { return chk.CheckGateway(ctx, gw, nil) },
-		before:    func(ctx context.Context) (configcheck.Verdict, error) { return chk.CheckGateway(ctx, old, nil) },
-		isoAfter:  func(ctx context.Context) (configcheck.Verdict, error) { return chk.CheckIsolated(ctx, gw, nil) },
-		isoBefore: func(ctx context.Context) (configcheck.Verdict, error) { return chk.CheckIsolated(ctx, old, nil) },
+		after:     bindCheck(chk.CheckGateway, gw, nil),
+		before:    bindCheck(chk.CheckGateway, old, nil),
+		isoAfter:  bindCheck(chk.CheckIsolated, gw, nil),
+		isoBefore: bindCheck(chk.CheckIsolated, old, nil),
 	},
 		func(v configcheck.Verdict) error { return gatewayRenderDenial(gw, v) },
 		func(before configcheck.Verdict) string {
