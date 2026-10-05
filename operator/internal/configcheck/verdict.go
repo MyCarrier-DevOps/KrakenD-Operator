@@ -93,13 +93,20 @@ func (v Verdict) Summary(limit int) string {
 // findingsFrom converts the renderer's attributions, which name positions in the
 // rendered endpoints array, into findings that name the entry's position in
 // its KrakenDEndpoint's spec.endpoints. A rejection always has a finding:
-// when nothing was attributed, the trimmed output is one gateway finding.
+// when nothing was attributed, the output, one line per non-empty line joined
+// with "; ", is one gateway finding.
 //
 //nolint:unused // the Checker is the only caller and lands separately
 func findingsFrom(atts []renderer.Attribution, renderedJSON []byte,
 	endpoints []v1alpha1.KrakenDEndpoint, output string) []Finding {
 	if len(atts) == 0 {
-		msg := strings.TrimSpace(output)
+		var lines []string
+		for _, l := range strings.Split(output, "\n") {
+			if l = strings.TrimSpace(l); l != "" {
+				lines = append(lines, l)
+			}
+		}
+		msg := strings.Join(lines, "; ")
 		if msg == "" {
 			msg = "rejected with no output"
 		}
