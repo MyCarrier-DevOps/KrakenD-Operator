@@ -2714,8 +2714,11 @@ spec:
               message: 'dragonfly.authentication.passwordFromSecret is not supported
                 yet with edition EE: the operator renders KrakenD''s redis pool without
                 the password, so KrakenD could not authenticate'
+              optionalOldSelf: true
               rule: '!(self.edition == ''EE'' && has(self.dragonfly) && has(self.dragonfly.authentication)
-                && has(self.dragonfly.authentication.passwordFromSecret))'
+                && has(self.dragonfly.authentication.passwordFromSecret)) || (oldSelf.hasValue()
+                && oldSelf.value().edition == ''EE'' && has(oldSelf.value().dragonfly)
+                && has(oldSelf.value().dragonfly.authentication) && has(oldSelf.value().dragonfly.authentication.passwordFromSecret))'
           status:
             description: KrakenDGatewayStatus defines the observed state of KrakenDGateway.
             properties:
