@@ -211,11 +211,6 @@ func (f endpointFailuresError) Error() string {
 	return kerrors.NewAggregate(f.errs).Error()
 }
 
-// Unwrap exposes the failures to errors.Is and errors.As.
-func (f endpointFailuresError) Unwrap() []error {
-	return f.errs
-}
-
 // Summary names the first failures, as listed does.
 func (f endpointFailuresError) Summary() string {
 	messages := make([]string, len(f.errs))
