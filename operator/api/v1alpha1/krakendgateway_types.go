@@ -349,8 +349,9 @@ type CORSConfig struct {
 	AllowHeaders     []string `json:"allowHeaders,omitempty"`
 	ExposeHeaders    []string `json:"exposeHeaders,omitempty"`
 	AllowCredentials bool     `json:"allowCredentials,omitempty"`
-	MaxAge           string   `json:"maxAge,omitempty"`
-	Debug            bool     `json:"debug,omitempty"`
+	// +kubebuilder:validation:Pattern=`^[0-9]+(ns|ms|us|µs|s|m|h)$`
+	MaxAge string `json:"maxAge,omitempty"`
+	Debug  bool   `json:"debug,omitempty"`
 }
 
 // SecurityConfig configures HTTP security headers.
