@@ -27,6 +27,9 @@ import (
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 )
 
+// defaultHealthPath is where KrakenD serves its health endpoint unless told otherwise.
+const defaultHealthPath = "/__health"
+
 // reservedPathPattern matches the paths KrakenD reserves for its own
 // endpoints (lura's invalidPattern, less what the CRD pattern covers).
 var reservedPathPattern = regexp.MustCompile(`/__(debug|echo|health)(/.*)?$`)
@@ -51,31 +54,48 @@ func validateEntries(ep *v1alpha1.KrakenDEndpoint, changed []int, gw *v1alpha1.K
 	return errs
 }
 
+// routerOptions are the "router" extra_config keys that decide where the
+// health endpoint is served; the route check reads the same ones.
+type routerOptions struct {
+	HealthPath    string `json:"health_path"`
+	DisableHealth bool   `json:"disable_health"`
+	AutoOptions   bool   `json:"auto_options"`
+}
+
 // healthPath returns the path the gateway serves its health endpoint on, or
-// "" when it is disabled. A raw router block in spec.config.extraConfig
-// replaces the typed one, as the renderer merges them.
+// "" when it is disabled. It follows the route check: a raw router block in
+// spec.config.extraConfig replaces the typed one, and a block that does not
+// decode reads as the defaults.
 func healthPath(gw *v1alpha1.KrakenDGateway) string {
-	path := "/__health"
+	if block, ok := rawRouterBlock(gw); ok {
+		var opts routerOptions
+		if json.Unmarshal(block, &opts) != nil {
+			opts = routerOptions{}
+		}
+		switch {
+		case opts.DisableHealth:
+			return ""
+		case opts.HealthPath != "":
+			return opts.HealthPath
+		}
+		return defaultHealthPath
+	}
 	if r := gw.Spec.Config.Router; r != nil && r.HealthPath != "" {
-		path = r.HealthPath
+		return r.HealthPath
 	}
-	if gw.Spec.Config.ExtraConfig == nil {
-		return path
+	return defaultHealthPath
+}
+
+// rawRouterBlock returns the "router" entry of the gateway's raw extraConfig.
+func rawRouterBlock(gw *v1alpha1.KrakenDGateway) (json.RawMessage, bool) {
+	raw := gw.Spec.Config.ExtraConfig
+	if raw == nil {
+		return nil, false
 	}
-	var raw struct {
-		Router *struct {
-			HealthPath    string `json:"health_path"`
-			DisableHealth bool   `json:"disable_health"`
-		} `json:"router"`
+	var ec map[string]json.RawMessage
+	if json.Unmarshal(raw.Raw, &ec) != nil {
+		return nil, false
 	}
-	if json.Unmarshal(gw.Spec.Config.ExtraConfig.Raw, &raw) != nil || raw.Router == nil {
-		return path
-	}
-	if raw.Router.DisableHealth {
-		return ""
-	}
-	if raw.Router.HealthPath != "" {
-		return raw.Router.HealthPath
-	}
-	return "/__health"
+	block, ok := ec["router"]
+	return block, ok
 }
