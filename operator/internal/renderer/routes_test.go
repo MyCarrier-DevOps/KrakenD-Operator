@@ -17,6 +17,7 @@ limitations under the License.
 package renderer
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -53,5 +54,31 @@ func TestFlattenEndpoints_SameRouteShapeKeepsOldest(t *testing.T) {
 	}
 	if _, ok := conflicted[types.NamespacedName{Namespace: "ns", Name: "b"}]; !ok {
 		t.Errorf("conflicted = %v, want ns/b", conflicted)
+	}
+}
+
+func TestConflictKey(t *testing.T) {
+	tests := map[string]string{
+		"/a/{id}":       "/a/{}",
+		"/a/{name}":     "/a/{}",
+		"/a/{id}/b/{x}": "/a/{}/b/{}",
+		"/a/b{id}":      "/a/b{id}",
+		"/a/{id}.json":  "/a/{}.json",
+		"/a//b":         "/a/b",
+		"/a/":           "/a/",
+		"/a":            "/a",
+		"/*":            "/*",
+		"/a/*":          "/a/*",
+	}
+	for in, want := range tests {
+		if got := ConflictKey(in); got != want {
+			t.Errorf("ConflictKey(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestPathParams(t *testing.T) {
+	if got := PathParams("/a/{id}/b/{x-y}/c{z}"); !slices.Equal(got, []string{"id", "x-y"}) {
+		t.Errorf("PathParams = %v, want [id x-y]", got)
 	}
 }
