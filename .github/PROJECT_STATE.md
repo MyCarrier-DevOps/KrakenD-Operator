@@ -106,6 +106,7 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 - `EndpointValidator` — gatewayRef/policyRef existence checks, conflict warnings via List, rejects a non-list `documentation/openapi.audience` in `spec.endpoints[].extraConfig`
 - `PolicyValidator` — delete protection (blocks if referenced); the CircuitBreaker/RateLimit minimums are enforced by the CRD schema
 - `AutoConfigValidator` — gatewayRef existence (the source, hostMapping, interval, auth, base path and additional endpoint rules are enforced by the CRD), rejects a non-list `documentation/openapi.audience` in `spec.overrides[]`/`spec.defaults.endpoint`/`spec.additionalEndpoints[]` extraConfig
+- Updates are ratcheted: an unchanged spec is skipped, a `gatewayRef`/`policyRef` is checked only when added or changed, and a field rule rejects only errors the stored object did not have (`newErrors`); a changed gateway sidecar probe is rechecked in full, KrakenDEndpoint entries match on (endpoint, method) so a reorder is not a change, and moving to another gateway rechecks every entry. `EndpointValidator` lives in `endpoint.go`
 - `SetupWebhooks(mgr)` — registers all 4 validators via ctrl.NewWebhookManagedBy
 - All methods use runtime.Object with checked comma-ok type assertions
 - 28 unit tests, 84.3% webhook package coverage
