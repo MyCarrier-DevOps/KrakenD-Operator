@@ -428,16 +428,22 @@ func ExternalRefs(specData []byte) ([]string, error) {
 	walkJSON(root, func(key string, value any) bool {
 		if payload, own := examplePayload(key, value); payload {
 			for _, ref := range own {
-				if !strings.HasPrefix(ref, "#") {
+				if isExternalRef(ref) {
 					refs[ref] = struct{}{}
 				}
 			}
 			return false
 		}
-		if s, ok := value.(string); ok && key == "$ref" && !strings.HasPrefix(s, "#") {
+		if s, ok := value.(string); ok && key == "$ref" && isExternalRef(s) {
 			refs[s] = struct{}{}
 		}
 		return true
 	})
 	return slices.Sorted(maps.Keys(refs)), nil
+}
+
+// isExternalRef reports whether ref points outside the document: it is not
+// empty and does not start with "#".
+func isExternalRef(ref string) bool {
+	return ref != "" && !strings.HasPrefix(ref, "#")
 }
