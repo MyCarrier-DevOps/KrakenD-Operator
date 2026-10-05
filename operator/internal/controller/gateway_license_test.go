@@ -253,11 +253,12 @@ func TestGatewayReconcile_TerminatingLicensedGatewayGetsNoLicenseSeries(t *testi
 	c := fakeClientBuilder().WithObjects(gw, secret).WithStatusSubresource(gw).Build()
 	r := newTestGatewayReconciler(c, renderOutput("cs"), &mockValidator{})
 	r.LicenseParser = parser
+	t.Cleanup(func() { deleteGatewayMetrics(gw.Namespace, gw.Name) })
 
 	if err := reconcileGateway(t, r, gw); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if n := remainingGatewaySeries(t, gw.Namespace, gw.Name); n != 0 {
+	if n := gatewaySeriesCount(t, gw.Namespace, gw.Name); n != 0 {
 		t.Errorf("%d metric series for a terminating licensed gateway, want 0", n)
 	}
 }

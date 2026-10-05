@@ -332,11 +332,11 @@ func setGatewaySeries(namespace, name string) {
 	reconcileDuration.WithLabelValues("gateway", namespace, name).Observe(0.1)
 }
 
-// remainingGatewaySeries counts the gateway's series across the registry, so
-// a per-gateway metric that deleteGatewayMetrics forgets is caught without the
-// test listing it, then clears them. The autoconfig gauge shares the labels
-// but belongs to a different resource, so it is not the gateway's.
-func remainingGatewaySeries(t *testing.T, namespace, name string) int {
+// gatewaySeriesCount counts the gateway's series across the registry, so a
+// per-gateway metric that deleteGatewayMetrics forgets is caught without the
+// test listing it. The autoconfig gauge shares the labels but belongs to a
+// different resource, so it is not the gateway's.
+func gatewaySeriesCount(t *testing.T, namespace, name string) int {
 	t.Helper()
 	families, err := ctrlmetrics.Registry.Gather()
 	if err != nil {
@@ -359,7 +359,6 @@ func remainingGatewaySeries(t *testing.T, namespace, name string) int {
 			}
 		}
 	}
-	deleteGatewayMetrics(namespace, name)
 	return n
 }
 
@@ -370,6 +369,7 @@ func TestGatewayReconcile_TerminatingGatewayIsLeftAlone(t *testing.T) {
 	gw.DeletionTimestamp = &metav1.Time{Time: time.Now()}
 	c, phases := gatewayStatusWrites(gw)
 	setGatewaySeries(gw.Namespace, gw.Name)
+	t.Cleanup(func() { deleteGatewayMetrics(gw.Namespace, gw.Name) })
 	r := &KrakenDGatewayReconciler{
 		Client: c, APIReader: c, Scheme: testScheme(), Recorder: fakeRecorder(),
 		Renderer:  &mockRenderer{err: fmt.Errorf("a terminating gateway must not be rendered")},
@@ -387,13 +387,14 @@ func TestGatewayReconcile_TerminatingGatewayIsLeftAlone(t *testing.T) {
 	if len(*phases) != 0 {
 		t.Errorf("status written for a terminating gateway: %v", *phases)
 	}
-	if n := remainingGatewaySeries(t, gw.Namespace, gw.Name); n != 0 {
+	if n := gatewaySeriesCount(t, gw.Namespace, gw.Name); n != 0 {
 		t.Errorf("%d metric series left for a terminating gateway, want 0", n)
 	}
 }
 
 func TestGatewayReconcile_DeletedGatewayDropsItsMetrics(t *testing.T) {
 	setGatewaySeries("deleted", "gone-gw")
+	t.Cleanup(func() { deleteGatewayMetrics("deleted", "gone-gw") })
 	r := &KrakenDGatewayReconciler{
 		Client: fakeClientBuilder().Build(), Scheme: testScheme(), Recorder: fakeRecorder(),
 		Renderer: &mockRenderer{}, Validator: &mockValidator{},
@@ -403,7 +404,7 @@ func TestGatewayReconcile_DeletedGatewayDropsItsMetrics(t *testing.T) {
 	if err := reconcileGateway(t, r, gone); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if n := remainingGatewaySeries(t, "deleted", "gone-gw"); n != 0 {
+	if n := gatewaySeriesCount(t, "deleted", "gone-gw"); n != 0 {
 		t.Errorf("%d metric series left for a deleted gateway, want 0", n)
 	}
 }
