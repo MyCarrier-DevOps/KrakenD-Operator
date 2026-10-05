@@ -279,7 +279,9 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return r.handleEndpointError(ctx, &ac, err, warnings)
 	}
 	if len(outcome.transient) > 0 {
-		return r.handleEndpointError(ctx, &ac, kerrors.NewAggregate(outcome.transient), warnings)
+		// A race beside a real failure is part of the same failed pass.
+		failures := slices.Concat(outcome.transient, outcome.raced)
+		return r.handleEndpointError(ctx, &ac, kerrors.NewAggregate(failures), warnings)
 	}
 	if len(outcome.raced) > 0 {
 		return lostWriteRace(ctx, kerrors.NewAggregate(outcome.raced))
