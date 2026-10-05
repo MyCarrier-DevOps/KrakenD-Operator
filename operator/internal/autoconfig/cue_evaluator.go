@@ -214,10 +214,17 @@ func exportEndpointEntries(endpointsValue cue.Value, rootErrors map[string][]str
 	}
 
 	for iter.Next() {
-		delete(rootErrors, iter.Selector().String())
+		key := iter.Selector().String()
+		rootMsgs := rootErrors[key]
+		delete(rootErrors, key)
 		val := iter.Value()
 		op := entryOperation(iter.Selector().Unquoted(), val)
 		entry, err := decodeEntry(val)
+		// The root validation reports errors the entry alone does not, such
+		// as an unresolved reference: the entry's own error comes first.
+		if err == nil && len(rootMsgs) > 0 {
+			err = fmt.Errorf("%s", strings.Join(sortedUnique(rootMsgs), "; "))
+		}
 		if err != nil {
 			output.Failed = append(output.Failed, OperationIssue{
 				Operation: op, Reason: v1alpha1.ReasonCUEEvaluationFailed, Message: err.Error(),
@@ -254,14 +261,20 @@ func entryErrors(err error) map[string][]string {
 	return byEntry
 }
 
-// sortedMessages returns every message of byEntry, sorted.
+// sortedMessages returns every message of byEntry, sorted and distinct.
 func sortedMessages(byEntry map[string][]string) []string {
 	var all []string
 	for _, msgs := range byEntry {
 		all = append(all, msgs...)
 	}
-	slices.Sort(all)
-	return slices.Compact(all)
+	return sortedUnique(all)
+}
+
+// sortedUnique returns the distinct messages in sorted order.
+func sortedUnique(msgs []string) []string {
+	sorted := slices.Clone(msgs)
+	slices.Sort(sorted)
+	return slices.Compact(sorted)
 }
 
 // decodeEntry validates one endpoint entry as concrete and decodes it.
