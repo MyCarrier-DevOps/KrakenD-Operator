@@ -93,3 +93,26 @@ func TestRouteConflicts_ARefusalOnItsOwnBlamesNoNeighbour(t *testing.T) {
 		t.Errorf("lines = %q, want one line blaming endpoint 1, not the unrelated /ok", lines)
 	}
 }
+
+func TestRouteConflicts_AGatewayRouteRefusalIsNotAnEndpointPointer(t *testing.T) {
+	tests := []struct{ name, doc string }{
+		{"health path refused alone", `{"extra_config":{"router":{"health_path":"/h/*"}},"endpoints":[]}`},
+		{"debug route clashes with health path", `{"debug_endpoint":true,"extra_config":{"router":{"health_path":"/__debug/x"}},"endpoints":[]}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lines, err := routeConflicts([]byte(tt.doc))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(lines) == 0 {
+				t.Fatal("lines = none, want the gateway's route refused")
+			}
+			for _, l := range lines {
+				if strings.Contains(l, "/endpoints/-1") || !strings.HasPrefix(l, "- gateway route ") {
+					t.Errorf("line = %q, want a '- gateway route ...' line, not an endpoint pointer", l)
+				}
+			}
+		})
+	}
+}
