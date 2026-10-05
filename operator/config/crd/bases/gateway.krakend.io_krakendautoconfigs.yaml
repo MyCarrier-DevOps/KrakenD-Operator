@@ -909,6 +909,11 @@ spec:
                 - Synced
                 - Error
                 type: string
+              readyEndpoints:
+                description: |-
+                  ReadyEndpoints counts the KrakenDEndpoints this AutoConfig controls
+                  whose Ready condition is True for their current generation.
+                type: integer
               skipped:
                 description: |-
                   Skipped lists up to 20 operations the last sync generated no endpoint
