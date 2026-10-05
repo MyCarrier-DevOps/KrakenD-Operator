@@ -310,3 +310,17 @@ func TestCheckRendered_RunsTheFullCheckAsTheRendersEdition(t *testing.T) {
 		t.Errorf("calls = %v %v, want one CE validate for an EE gateway in fallback", v.calls, v.editions)
 	}
 }
+
+func TestCheckGateway_HealthPathClash(t *testing.T) {
+	gw := gateway(v1alpha1.EditionCE)
+	gw.Spec.Config.Router = &v1alpha1.RouterConfig{HealthPath: "/healthz"}
+	c := newChecker(realValidator(), endpoint("a", "/healthz"))
+
+	verdict, err := c.CheckGateway(context.Background(), gw, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verdict.OK || verdict.Findings[0].Index != 0 || !strings.Contains(verdict.Findings[0].Message, "the gateway's own route") {
+		t.Errorf("findings = %+v, want ns/a spec.endpoints[0] clashing with the health route", verdict.Findings)
+	}
+}
