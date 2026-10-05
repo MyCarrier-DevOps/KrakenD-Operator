@@ -146,5 +146,7 @@ jq "${jq_opts[@]}" "$jq_lib"'
   (if $s.edition == "CE" and $s.redis != null then "spec.redis is Enterprise-only on a CE gateway" else empty end),
   (if $s.edition == "CE" and $s.config.documentation != null
    then "spec.config.documentation is Enterprise-only on a CE gateway" else empty end),
-  (if $s.edition == "CE" and ($s.openapi.enabled // false) then "spec.openapi.enabled is Enterprise-only on a CE gateway" else empty end)
+  (if $s.edition == "CE" and ($s.openapi.enabled // false) then "spec.openapi.enabled is Enterprise-only on a CE gateway" else empty end),
+  (if $s.edition == "CE" and ($s.dragonfly.enabled // false)
+   then "spec.dragonfly.enabled is Enterprise-only on a CE gateway" else empty end)
 ]} | report("KrakenDGateway")' "$work/gateways.json"
