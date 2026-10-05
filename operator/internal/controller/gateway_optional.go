@@ -19,14 +19,17 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/resources"
 )
 
 // The third-party kinds a gateway creates when the matching feature is
@@ -116,4 +119,125 @@ func (r *KrakenDGatewayReconciler) deleteOptionalIfControlled(
 	u.SetName(name)
 	u.SetNamespace(gw.Namespace)
 	return r.deleteIfControlled(ctx, gw, u)
+}
+
+// applyOwned creates or updates obj, which gw controls, with what build sets.
+// kind names obj in the error.
+func (r *KrakenDGatewayReconciler) applyOwned(
+	ctx context.Context, gw *v1alpha1.KrakenDGateway, obj client.Object, kind string, build func(),
+) error {
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, obj, func() error {
+		build()
+		return controllerutil.SetControllerReference(gw, obj, r.Scheme)
+	}); err != nil {
+		return fmt.Errorf("reconciling %s: %w", kind, err)
+	}
+	return nil
+}
+
+// applyOptional creates or updates gw's child of the optional kind gvk, built
+// by build, when the CRD of that kind is installed, and returns it. applied is
+// false, with no error, when the CRD is not installed: there is nothing to
+// create.
+func (r *KrakenDGatewayReconciler) applyOptional(
+	ctx context.Context, gw *v1alpha1.KrakenDGateway, gvk schema.GroupVersionKind, name string,
+	build func(u *unstructured.Unstructured),
+) (u *unstructured.Unstructured, applied bool, err error) {
+	available, err := r.crdAvailable(gvk)
+	if err != nil {
+		return nil, false, fmt.Errorf("checking %s CRD: %w", gvk.Kind, err)
+	}
+	if !available {
+		return nil, false, nil
+	}
+	u = &unstructured.Unstructured{}
+	u.SetGroupVersionKind(gvk)
+	u.SetName(name)
+	u.SetNamespace(gw.Namespace)
+	if err := r.applyOwned(ctx, gw, u, strings.ToLower(gvk.Kind), func() { build(u) }); err != nil {
+		return nil, false, err
+	}
+	return u, true, nil
+}
+
+// reconcileDragonfly creates or updates the Dragonfly when it is enabled and
+// its CRD is installed, and removes the one gw controls when it is not.
+func (r *KrakenDGatewayReconciler) reconcileDragonfly(ctx context.Context, gw *v1alpha1.KrakenDGateway) error {
+	if gw.Spec.Dragonfly != nil && gw.Spec.Dragonfly.Enabled {
+		// Without the CRD there is nothing to create: detectDragonflyState
+		// reports DragonflyReady=False/CRDNotInstalled.
+		df, applied, err := r.applyOptional(ctx, gw, dragonflyGVK, resources.DragonflyName(gw),
+			func(u *unstructured.Unstructured) { resources.BuildDragonfly(u, gw) })
+		if applied {
+			r.recordDragonflyRunAsRootCondition(gw, df)
+		}
+		return err
+	}
+	// Dragonfly is deliberately off (unset or Enabled: false). Mirrors
+	// reconcilePostRestartJob's disabled/empty guard (the spec == nil ||
+	// !spec.Enabled branch) so `kubectl describe krakendgateway` does not
+	// keep showing a stale ConditionDragonflyRunAsRootUnacknowledged
+	// forever after the user disables Dragonfly. Deliberately NOT
+	// cleared when Dragonfly is enabled but the CRD is not yet installed —
+	// that is a transient/environmental state, not a deliberate disable,
+	// mirroring reconcilePostRestartJob's configChecksum == "" reasoning for
+	// not flickering conditions away during an in-progress/incomplete state.
+	meta.RemoveStatusCondition(&gw.Status.Conditions, v1alpha1.ConditionDragonflyRunAsRootUnacknowledged)
+	if err := r.deleteOptionalIfControlled(ctx, gw, dragonflyGVK, resources.DragonflyName(gw)); err != nil {
+		return err
+	}
+	meta.RemoveStatusCondition(&gw.Status.Conditions, v1alpha1.ConditionDragonflyReady)
+	gw.Status.DragonflyAddress = ""
+	dragonflyReady.DeleteLabelValues(gw.Namespace, gw.Name)
+	return nil
+}
+
+// reconcileExternalSecret creates or updates the license ExternalSecret when
+// license.externalSecret is enabled and its CRD is installed, and removes the
+// one gw controls when it is not.
+func (r *KrakenDGatewayReconciler) reconcileExternalSecret(ctx context.Context, gw *v1alpha1.KrakenDGateway) error {
+	if gw.Spec.License != nil && gw.Spec.License.ExternalSecret.Enabled {
+		// Without the CRD there is nothing to create: reconcileLicense reports
+		// LicenseSecretUnavailable=True/CRDNotInstalled.
+		_, _, err := r.applyOptional(ctx, gw, externalSecretGVK, resources.ExternalSecretName(gw),
+			func(u *unstructured.Unstructured) { resources.BuildExternalSecret(u, gw) })
+		return err
+	}
+	return r.deleteOptionalIfControlled(ctx, gw, externalSecretGVK, resources.ExternalSecretName(gw))
+}
+
+// reconcileVirtualService creates or updates the Istio VirtualService when
+// Istio is enabled and its CRD is installed, and removes the one gw controls
+// when it is not. IstioConfigured says which.
+func (r *KrakenDGatewayReconciler) reconcileVirtualService(ctx context.Context, gw *v1alpha1.KrakenDGateway) error {
+	if gw.Spec.Istio != nil && gw.Spec.Istio.Enabled {
+		_, applied, err := r.applyOptional(ctx, gw, virtualServiceGVK, gw.Name,
+			func(u *unstructured.Unstructured) { resources.BuildVirtualService(u, gw) })
+		switch {
+		case err != nil:
+			return err
+		case !applied:
+			r.setConditionWithEvent(gw, metav1.Condition{
+				Type:               v1alpha1.ConditionIstioConfigured,
+				Status:             metav1.ConditionFalse,
+				ObservedGeneration: gw.Generation,
+				Reason:             v1alpha1.ReasonCRDNotInstalled,
+				Message:            "Istio is enabled but the networking.istio.io VirtualService CRD is not installed in the cluster",
+			})
+		default:
+			r.setConditionWithEvent(gw, metav1.Condition{
+				Type:               v1alpha1.ConditionIstioConfigured,
+				Status:             metav1.ConditionTrue,
+				ObservedGeneration: gw.Generation,
+				Reason:             v1alpha1.ReasonIstioVSCreated,
+				Message:            "Istio VirtualService reconciled",
+			})
+		}
+		return nil
+	}
+	if err := r.deleteOptionalIfControlled(ctx, gw, virtualServiceGVK, gw.Name); err != nil {
+		return err
+	}
+	meta.RemoveStatusCondition(&gw.Status.Conditions, v1alpha1.ConditionIstioConfigured)
+	return nil
 }
