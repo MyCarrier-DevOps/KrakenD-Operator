@@ -2710,6 +2710,12 @@ spec:
               rule: '!has(self.openapi) || !self.openapi.enabled || ((has(self.openapi.port)
                 && self.openapi.port > 0) ? self.openapi.port : 8090) != ((has(self.config.port)
                 && self.config.port > 0) ? self.config.port : 8080)'
+            - fieldPath: .dragonfly.authentication.passwordFromSecret
+              message: 'dragonfly.authentication.passwordFromSecret is not supported
+                yet with edition EE: the operator renders KrakenD''s redis pool without
+                the password, so KrakenD could not authenticate'
+              rule: '!(self.edition == ''EE'' && has(self.dragonfly) && has(self.dragonfly.authentication)
+                && has(self.dragonfly.authentication.passwordFromSecret))'
           status:
             description: KrakenDGatewayStatus defines the observed state of KrakenDGateway.
             properties:
