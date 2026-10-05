@@ -2062,6 +2062,37 @@ func TestEvaluate_OverrideOnFailedOperationIsHeldNotUnmatched(t *testing.T) {
 	}
 }
 
+func TestEvaluate_FailedOperationCollidingAfterPrefixStripKeepsItsOperationID(t *testing.T) {
+	// /v1/x fails CUE and strips to /x, the route of getX. The failure keeps
+	// its own operationId, so an override on it is held with it, not reported
+	// as an operationId the spec lacks.
+	defs, err := EmbeddedCUEDefinitions()
+	if err != nil {
+		t.Fatalf("loading defs: %v", err)
+	}
+	out, err := NewCUEEvaluator().Evaluate(context.Background(), CUEInput{
+		SpecData: []byte(`{"paths":{` +
+			`"/x":{"get":{"operationId":"getX","responses":{"200":{"description":"OK"}}}},` +
+			`"/v1/x":{"get":{"operationId":"getXv1","responses":{"200":{}}}}}}`),
+		SpecFormat:   v1alpha1.SpecFormatJSON,
+		DefaultDefs:  defs,
+		ServiceName:  "_spec",
+		URLTransform: &v1alpha1.URLTransformSpec{StripPathPrefix: "/v1"},
+		Overrides:    []v1alpha1.OperationOverride{{OperationID: "getXv1"}},
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+
+	if len(out.Failed) != 1 || out.Failed[0].OperationID != "getXv1" || out.Failed[0].Path != "/x" {
+		t.Errorf("expected getXv1 failed at /x, got %+v", out.Failed)
+	}
+	if len(out.UnmatchedOverrides) != 0 || len(out.AmbiguousOverrides) != 0 {
+		t.Errorf("expected the override held with its operation, got unmatched %v, ambiguous %v",
+			out.UnmatchedOverrides, out.AmbiguousOverrides)
+	}
+}
+
 func TestEvaluate_FailedOperationCarriesTransformedPath(t *testing.T) {
 	defs, err := EmbeddedCUEDefinitions()
 	if err != nil {
