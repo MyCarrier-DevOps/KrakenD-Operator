@@ -4,5 +4,6 @@
  {"metadata":{"namespace":"a","name":"two-sources"},"spec":{"gatewayRef":{"name":"gw"},"openapi":{"url":"http://x","configMapRef":{"name":"c"}},"trigger":"OnChange","urlTransform":{"hostMapping":[{"from":"a","to":"b"}]}}},
  {"metadata":{"namespace":"a","name":"no-hostmapping"},"spec":{"gatewayRef":{"name":"gw"},"openapi":{"configMapRef":{"name":"c"}},"trigger":"OnChange"}},
  {"metadata":{"namespace":"a","name":"both-auth"},"spec":{"gatewayRef":{"name":"gw"},"openapi":{"url":"http://x","auth":{"bearerTokenSecret":{"name":"s"},"basicAuthSecret":{"name":"b"}}},"trigger":"OnChange"}},
- {"metadata":{"namespace":"a","name":"interval-short"},"spec":{"gatewayRef":{"name":"gw"},"openapi":{"url":"http://x"},"trigger":"Periodic","periodic":{"interval":"10s"}}}
+ {"metadata":{"namespace":"a","name":"interval-short"},"spec":{"gatewayRef":{"name":"gw"},"openapi":{"url":"http://x"},"trigger":"Periodic","periodic":{"interval":"10s"}}},
+ {"metadata":{"namespace":"a","name":"no-periodic"},"spec":{"gatewayRef":{"name":"gw"},"openapi":{"url":"http://x"},"trigger":"Periodic"}}
 ]}
