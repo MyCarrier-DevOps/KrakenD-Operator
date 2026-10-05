@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"slices"
 	"strings"
 
@@ -258,6 +259,9 @@ func (f endpointFailuresError) Summary() string {
 	return listed(messages)
 }
 
+// unattributedSummaryLimit bounds the findings text of a hold, in bytes.
+const unattributedSummaryLimit = 200
+
 // maxPrecheckRounds bounds the gateway config checks one reconcile runs to
 // attribute a failing check to operations.
 const maxPrecheckRounds = 5
@@ -324,13 +328,43 @@ func (r *KrakenDAutoConfigReconciler) precheck(
 		}
 		attributed := attributeFindings(verdict.Findings, candidates)
 		if len(attributed) == 0 {
-			return rejected, nil
+			return r.unattributedFailure(ctx, &gw, candidates, verdict, rejected)
 		}
 		maps.Copy(rejected, attributed)
 		candidates = slices.DeleteFunc(slices.Clone(candidates), func(ep *v1alpha1.KrakenDEndpoint) bool {
 			_, ok := attributed[ep.Name]
 			return ok
 		})
+	}
+	return rejected, nil
+}
+
+// unattributedFailure handles a failed check whose findings name no
+// candidate: gateway-root findings, or findings on endpoints outside this
+// sync. When the gateway fails the check without the candidates too, the
+// failure is not theirs and they are written. Otherwise the change as a whole
+// breaks the gateway, and every candidate is held with the check's bounded
+// summary.
+func (r *KrakenDAutoConfigReconciler) unattributedFailure(
+	ctx context.Context,
+	gw *v1alpha1.KrakenDGateway,
+	candidates []*v1alpha1.KrakenDEndpoint,
+	verdict configcheck.Verdict,
+	rejected map[string]rejection,
+) (map[string]rejection, error) {
+	baseline, err := r.Checker.CheckGateway(ctx, gw, nil)
+	if err != nil {
+		return nil, &validatorUnavailableError{err: err}
+	}
+	if !baseline.OK {
+		return rejected, nil
+	}
+	for _, ep := range candidates {
+		rejected[ep.Name] = rejection{
+			endpoint: ep, reason: v1alpha1.ReasonConfigValidationFailed,
+			message: "the change fails the gateway config check: " + verdict.Summary(unattributedSummaryLimit),
+			cause:   errors.New(verdict.Summary(math.MaxInt)),
+		}
 	}
 	return rejected, nil
 }
