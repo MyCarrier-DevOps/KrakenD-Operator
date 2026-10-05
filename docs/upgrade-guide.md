@@ -1268,8 +1268,12 @@ no longer has an effect: the build uses the pinned image.
 
 **Rejection messages name the entry.** The `ConfigValid` message and an
 endpoint's `Accepted=False/GatewayConfigRejected` message now name the entry
-that failed: `team-a/orders spec.endpoints[1]: <finding>`. When one finding
-blames several entries of an endpoint, its line lists them
+that failed. `ConfigValid` lists one line per finding, as
+`team-a/orders spec.endpoints[1]: <finding>`, `team-a/orders: <finding>` when
+the endpoint is known but no entry of it matches, or `gateway: <finding>`. An
+endpoint's `GatewayConfigRejected` message reads `... findings naming this
+endpoint: spec.endpoints[1]: <finding>`, with its findings joined by `; `. When
+one finding blames several entries of an endpoint, its line lists them
 (`spec.endpoints[0], spec.endpoints[1]: <finding>`). The gateway controller
 gathers, renders and validates through the same checker the admission
 webhooks use.
