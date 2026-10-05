@@ -256,3 +256,18 @@ jq "${jq_opts[@]}" --slurpfile gws "$work/gateways.json" "$jq_lib"'
 | (.spec.endpoints // [])[]
 | select(.method == "GET" and $health[$gw] != null and (.endpoint | conflict_key) == ($health[$gw] | conflict_key))
 | "KrakenDEndpoint \($e.metadata.namespace)/\($e.metadata.name): GET \(.endpoint) is the health path of gateway \($gw)"' "$work/endpoints.json"
+
+# Enterprise-only extra_config namespaces on CE gateways: krakend check accepts
+# them and KrakenD CE silently ignores them.
+jq "${jq_opts[@]}" --slurpfile gws "$work/gateways.json" "$jq_lib"'
+($ee[0].enterpriseOnly.endpoint - $ee[0].ceRenderDrops.endpoint) as $entry_ee
+| ($gws[0].items | map(select(.spec.edition == "CE") | {key: "\(.metadata.namespace)/\(.metadata.name)", value: true})
+  | from_entries) as $ce
+| [.items[] | . as $e
+  | "\(.spec.gatewayRef.namespace // .metadata.namespace)/\(.spec.gatewayRef.name)" as $gw
+  | select($ce[$gw])
+  | [(.spec.endpoints // []) | to_entries[] | .key as $i | .value as $en
+      | ($en.extraConfig | eeonly($entry_ee)[] | "spec.endpoints[\($i)].extraConfig \(.)")]
+  | select(length > 0)
+  | "KrakenDEndpoint \($e.metadata.namespace)/\($e.metadata.name): Enterprise-only on CE gateway \($gw): \(join(", "))"]
+| unique[]' "$work/endpoints.json"
