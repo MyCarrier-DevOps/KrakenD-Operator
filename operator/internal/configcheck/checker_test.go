@@ -23,6 +23,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -50,6 +51,18 @@ func (f *fakeValidator) Lint(_ context.Context, jsonData []byte, edition v1alpha
 func (f *fakeValidator) record(mode string, jsonData []byte, edition v1alpha1.Edition) error {
 	f.calls, f.editions, f.seen = append(f.calls, mode), append(f.editions, edition), append(f.seen, string(jsonData))
 	return nil
+}
+
+// okExecutor stands in for a krakend binary that accepts every config, so a
+// real KrakenDValidator runs its edition copy, EE rules and route check.
+type okExecutor struct{}
+
+func (okExecutor) Execute(context.Context, string, ...string) ([]byte, error) {
+	return []byte("Syntax OK!"), nil
+}
+
+func realValidator() renderer.Validator {
+	return renderer.NewValidator(renderer.ValidatorOptions{Executor: okExecutor{}, BinaryPath: "krakend"})
 }
 
 func newReader(objs ...client.Object) client.Reader {
@@ -128,5 +141,23 @@ func TestCheckGateway_EmptyReplacementRemovesTheEndpoint(t *testing.T) {
 	}
 	if strings.Contains(v.seen[0], "/stale") || strings.Contains(v.seen[0], "staleschema") || !strings.Contains(v.seen[0], "/kept") {
 		t.Errorf("linted %s, want /kept only", v.seen[0])
+	}
+}
+
+func TestCheckGateway_RouteClashAcrossEndpointsNamesBothEntries(t *testing.T) {
+	c := newChecker(realValidator(), endpoint("a", "/users/{id}"))
+
+	verdict, err := c.CheckGateway(context.Background(), gateway(v1alpha1.EditionCE),
+		[]v1alpha1.KrakenDEndpoint{*endpoint("b", "/other", "/users/{userId}/orders")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[types.NamespacedName]int{}
+	for _, f := range verdict.Findings {
+		got[f.Endpoint] = f.Index
+	}
+	a, b := types.NamespacedName{Namespace: "ns", Name: "a"}, types.NamespacedName{Namespace: "ns", Name: "b"}
+	if verdict.OK || len(got) != 2 || got[a] != 0 || got[b] != 1 {
+		t.Errorf("findings = %+v, want ns/a entry 0 and ns/b entry 1", verdict.Findings)
 	}
 }
