@@ -1508,3 +1508,39 @@ func TestScenario_RouteCollisionPublishesAndNamesTheOperationItServes(t *testing
 		})
 	}
 }
+
+// Without a route collision the endpoint names are the ones the route-keyed
+// ids always gave, so no live endpoint is renamed.
+func TestScenario_NoCollisionKeepsEndpointNames(t *testing.T) {
+	defs, err := EmbeddedCUEDefinitions()
+	if err != nil {
+		t.Fatalf("loading defs: %v", err)
+	}
+	spec := `{"paths": {
+		"/v1/x": {"get": {"operationId": "getX", "responses": {"200": {"description": "OK"}}},
+			"post": {"operationId": "Create_X", "responses": {"200": {"description": "OK"}}}},
+		"/v1/y": {"get": {"responses": {"200": {"description": "OK"}}}}}}`
+	out, err := NewCUEEvaluator().Evaluate(context.Background(), CUEInput{
+		SpecData: []byte(spec), SpecFormat: v1alpha1.SpecFormatJSON, DefaultDefs: defs, ServiceName: "_spec",
+		DefaultHost: "http://svc:8080", URLTransform: &v1alpha1.URLTransformSpec{StripPathPrefix: "/v1"},
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	ac := &v1alpha1.KrakenDAutoConfig{ObjectMeta: metav1.ObjectMeta{Name: "t", Namespace: "default"}}
+	gen, err := NewGenerator().Generate(context.Background(), GenerateInput{
+		AutoConfig: ac, Entries: out.Entries, OperationIDs: out.OperationIDs,
+	})
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+
+	var names []string
+	for _, ep := range gen.Endpoints {
+		names = append(names, ep.Name)
+	}
+	slices.Sort(names)
+	if want := []string{"t-create-x", "t-get-y", "t-getx"}; !slices.Equal(names, want) || len(out.Skipped)+len(gen.Skipped) != 0 {
+		t.Errorf("endpoint names = %v, skipped = %v %v, want %v and none skipped", names, out.Skipped, gen.Skipped, want)
+	}
+}
