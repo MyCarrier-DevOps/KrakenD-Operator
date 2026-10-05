@@ -941,3 +941,20 @@ func TestEndpointAdmission_UncachedRecheckErrorIsRetryable(t *testing.T) {
 		t.Errorf("response = %+v, want a retryable 500", resp.Result)
 	}
 }
+
+// The CE binary accepts an Enterprise-only namespace at backend level and
+// drops it, so a policy carrying one is judged where an endpoint newly
+// references it, not only when the policy itself changes.
+func TestEndpointAdmission_NewReferenceToAPolicyWithEEOnlyNamespacesOnACEGateway(t *testing.T) {
+	policy := testPolicy(`{"auth/gcp":{"audience":"https://a"}}`)
+	ep := testEndpoint("e", "/a")
+	ep.Spec.Endpoints[0].Backends[0].PolicyRef = &v1alpha1.PolicyRef{Name: "p"}
+	v := &EndpointValidator{Client: fakeClient(testGateway(), policy), Checker: &scriptedChecker{}}
+
+	causes := requireInvalid(t, review(t, v, "alice", ep, nil))
+
+	if len(causes) != 1 || causes[0].Field != "spec.endpoints[0].backends[0].policyRef" ||
+		!strings.Contains(causes[0].Message, "Enterprise-only") || !strings.Contains(causes[0].Message, "auth/gcp") {
+		t.Errorf("causes = %+v, want one on the backend's policyRef naming auth/gcp", causes)
+	}
+}
