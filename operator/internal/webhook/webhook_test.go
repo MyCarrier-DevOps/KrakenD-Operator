@@ -727,7 +727,7 @@ func TestGatewayValidator_PodScopeRunAsUserZeroContainerOptOutStillAllowedViaSel
 	if err != nil {
 		t.Fatalf("expected postRestartJob pod-scope runAsUser:0 with a container-scope "+
 			"runAsNonRoot:false opt-out to remain admitted via the pod-scope-unset self-heal "+
-			"carve-out (S1 must not change job-lane outcomes), got: %v", err)
+			"carve-out (the opt-out rule must not change job-lane outcomes), got: %v", err)
 	}
 }
 
@@ -768,8 +768,8 @@ func TestGatewayValidator_PodScopeRunAsUserZeroExplicitTrueContainerOptOutReject
 	_, err := v.ValidateCreate(context.Background(), gw)
 	if err == nil {
 		t.Fatal("expected rejection: a container-scope runAsNonRoot:false opt-out must not " +
-			"mask the pod scope's own explicit, self-contradictory runAsNonRoot:true (S1, " +
-			"pinning the 707166b job-lane behavior change)")
+			"mask the pod scope's own explicit, self-contradictory runAsNonRoot:true " +
+			"(pinning the 707166b job-lane behavior change)")
 	}
 	if !strings.Contains(err.Error(), "spec.postRestartJob.podSecurityContext.runAsUser") {
 		t.Errorf("expected the rejection to point at spec.postRestartJob.podSecurityContext.runAsUser, got: %v", err)
@@ -1204,7 +1204,7 @@ func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroContainerOptOutRejected(
 	_, err := v.ValidateCreate(context.Background(), gw)
 	if err == nil {
 		t.Fatal("expected rejection: a container-scope runAsNonRoot:false opt-out must not " +
-			"mask a pod-scope runAsUser:0 root request (S1)")
+			"mask a pod-scope runAsUser:0 root request")
 	}
 	if !strings.Contains(err.Error(), "runAsNonRoot") {
 		t.Errorf("expected error to mention runAsNonRoot, got: %v", err)
@@ -1241,7 +1241,7 @@ func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroExplicitTrueContainerOpt
 	_, err := v.ValidateCreate(context.Background(), gw)
 	if err == nil {
 		t.Fatal("expected rejection: a container-scope runAsNonRoot:false opt-out must not " +
-			"mask the pod scope's own explicit, self-contradictory runAsNonRoot:true (S1)")
+			"mask the pod scope's own explicit, self-contradictory runAsNonRoot:true")
 	}
 	if !strings.Contains(err.Error(), "runAsNonRoot") {
 		t.Errorf("expected error to mention runAsNonRoot, got: %v", err)
@@ -1424,7 +1424,7 @@ func TestGatewayValidator_DragonflyEffectiveRunAsRootCrossScopePrecedence(t *tes
 				RunAsNonRoot: new(true),
 			},
 			wantErr: true,
-			reason: "the independent pod-scope acknowledgment gate (C1) rejects the unacknowledged " +
+			reason: "the independent pod-scope acknowledgment gate rejects the unacknowledged " +
 				"pod.runAsUser:0 regardless of container.runAsUser:999's own non-root effective uid — " +
 				"other sidecars in the pod would still silently inherit the pod-scope root request",
 		},
@@ -1438,7 +1438,7 @@ func TestGatewayValidator_DragonflyEffectiveRunAsRootCrossScopePrecedence(t *tes
 				RunAsUser: new(int64(0)),
 			},
 			wantErr: true,
-			reason: "the independent pod-scope acknowledgment gate (C1) rejects the unacknowledged " +
+			reason: "the independent pod-scope acknowledgment gate rejects the unacknowledged " +
 				"pod.runAsUser:0 regardless of container.runAsUser:999's own non-root effective uid — " +
 				"a container-scope runAsNonRoot:true is not a pod-scope acknowledgment",
 		},
