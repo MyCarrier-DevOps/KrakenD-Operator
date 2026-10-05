@@ -275,3 +275,27 @@ func TestGatewayReconcile_FixPushedDuringAStuckRolloutReadsDeployingNotError(t *
 		}
 	}
 }
+
+// failDeploymentWrites makes every update of the gateway Deployment fail.
+func (s *servedGateway) failDeploymentWrites() {
+	s.r.Client = interceptor.NewClient(s.c.(client.WithWatch), interceptor.Funcs{
+		Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			if _, ok := obj.(*appsv1.Deployment); ok {
+				return errors.New("the Deployment update was rejected")
+			}
+			return c.Update(ctx, obj, opts...)
+		},
+	})
+}
+
+func TestGatewayReconcile_FailedDeploymentWriteLeavesProgressingAlone(t *testing.T) {
+	s := serveGateway(t)
+	s.failDeploymentWrites()
+	s.editSpec(t, func(spec *v1alpha1.KrakenDGatewaySpec) { spec.Image = "img:v2" })
+
+	if err := reconcileGateway(t, s.r, s.gw); err == nil {
+		t.Fatal("a rejected Deployment update must fail the pass")
+	}
+
+	requireProgressing(t, getGateway(t, s.c, s.gw), metav1.ConditionFalse, true)
+}
