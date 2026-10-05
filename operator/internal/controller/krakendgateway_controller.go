@@ -66,10 +66,9 @@ import (
 // Kubernetes resources.
 type KrakenDGatewayReconciler struct {
 	client.Client
-	Scheme    *runtime.Scheme
-	Recorder  record.EventRecorder
-	Renderer  renderer.Renderer
-	Validator renderer.Validator
+	Scheme   *runtime.Scheme
+	Recorder record.EventRecorder
+	Renderer renderer.Renderer
 	// Checker gathers the render inputs and validates the render, behind the
 	// slots every config check in the pod shares.
 	Checker ConfigChecker
