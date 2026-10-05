@@ -108,3 +108,27 @@ func TestGatewayAdmission_DenialAttributesFindings(t *testing.T) {
 		t.Errorf("spec cause = %q, want the endpoint finding naming default/ep spec.endpoints[2]", got)
 	}
 }
+
+// A root with hundreds of failures must not produce an unbounded denial.
+func TestGatewayAdmission_DenialCausesAreBounded(t *testing.T) {
+	var findings []configcheck.Finding
+	for i := 0; i < 3*maxEntryCauses; i++ {
+		findings = append(findings, configcheck.Finding{Index: -1, Message: strings.Repeat("x", 3*warningLimit)})
+	}
+	chk := &scriptedChecker{verdicts: []configcheck.Verdict{{Findings: findings}}}
+
+	resp := review(t, &GatewayValidator{Client: fakeClient(), Checker: chk}, "alice", testGateway(), nil)
+
+	if resp.Allowed || resp.Result.Details == nil {
+		t.Fatalf("response = %+v, want a denial with causes", resp.Result)
+	}
+	causes := resp.Result.Details.Causes
+	if len(causes) > maxEntryCauses+1 {
+		t.Errorf("%d causes, want at most %d", len(causes), maxEntryCauses+1)
+	}
+	for _, c := range causes {
+		if len(c.Message) > 2*warningLimit {
+			t.Errorf("cause on %s is %d bytes, want it cut near %d", c.Field, len(c.Message), warningLimit)
+		}
+	}
+}
