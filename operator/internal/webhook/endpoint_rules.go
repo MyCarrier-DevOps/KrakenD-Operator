@@ -23,7 +23,6 @@ import (
 	"slices"
 	"strings"
 
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
@@ -85,10 +84,10 @@ type pathDrops struct {
 // entryDrops lists, in order, what a CE render drops from the extraConfig of
 // an entry and of the entry's backends.
 func entryDrops(p *field.Path, e v1alpha1.EndpointEntry) []pathDrops {
-	found := []pathDrops{{p.Child("extraConfig"), eeOnlyNamespacesIn(e.ExtraConfig, renderer.LevelEndpoint)}}
+	found := []pathDrops{{p.Child("extraConfig"), renderer.EEOnlyNamespacesIn(e.ExtraConfig, renderer.LevelEndpoint)}}
 	for j, be := range e.Backends {
 		found = append(found, pathDrops{p.Child("backends").Index(j).Child("extraConfig"),
-			eeOnlyNamespacesIn(be.ExtraConfig, renderer.LevelBackend)})
+			renderer.EEOnlyNamespacesIn(be.ExtraConfig, renderer.LevelBackend)})
 	}
 	return found
 }
@@ -101,20 +100,6 @@ func validateEENamespaces(p *field.Path, e v1alpha1.EndpointEntry) field.ErrorLi
 		errs = append(errs, ceIgnores(d.path, d.drops)...)
 	}
 	return errs
-}
-
-// eeOnlyNamespacesIn returns what a CE render drops from the extra_config raw
-// at level. raw that is not a JSON object drops nothing; the render check
-// reports it.
-func eeOnlyNamespacesIn(raw *runtime.RawExtension, level renderer.NamespaceLevel) []renderer.CEDrop {
-	if raw == nil || raw.Raw == nil {
-		return nil
-	}
-	var ec map[string]json.RawMessage
-	if json.Unmarshal(raw.Raw, &ec) != nil {
-		return nil
-	}
-	return renderer.CEDrops(level, ec)
 }
 
 // ceIgnores reports each of drops on p. KrakenD CE accepts an Enterprise-only
