@@ -425,8 +425,10 @@ verdicts, such as an unavailable validator, do not increment it.
 ### Validation messages are capped at 4 KiB
 
 The `ConfigValid` condition message and the `ConfigValidationFailed` event
-now carry at most 4 KiB of krakend check output: the leading lines that fit,
-followed by `(output truncated, N more lines)`. The full output is logged by
+now carry at most 4 KiB: a summary line, then one line per finding, as many
+whole lines as fit, followed by `(output truncated, N more lines)`. Each line
+reads `namespace/name spec.endpoints[i]: <finding>`, or `gateway: <finding>`
+when it names no endpoint. The full output is logged by
 the operator as `validation rejected the rendered config`. Previously an
 output over the CRD's 32768-character limit (for example one bad key in a
 policy used by many backends) made the status write fail, so the rejection
@@ -849,8 +851,9 @@ you *which* KrakenDEndpoint to fix:
 
 - The gateway's `ConfigValid=False` message starts with the KrakenDEndpoints
   the findings name, for example `Rejected by krakend check; findings name
-  KrakenDEndpoint(s) team-a/orders.`, followed by the bounded `krakend check`
-  output.
+  KrakenDEndpoint(s) team-a/orders.`, followed by one line per finding,
+  `team-a/orders spec.endpoints[1]: <finding>` (`gateway: <finding>` when it
+  names no endpoint), bounded to 4 KiB.
 - Each named endpoint gets `Accepted=False` with reason
   `GatewayConfigRejected` and the findings that name it. Findings are mapped
   from `/endpoints/<i>/…` pointers and from `METHOD /path` or `path '…'` in
@@ -1262,6 +1265,18 @@ gateway controller validate every gateway with that binary, whatever its
 the operator image yourself, the build argument is now `KRAKEND_IMAGE`; the
 former `KRAKEND_VERSION` is gone, and passing `--build-arg KRAKEND_VERSION=...`
 no longer has an effect: the build uses the pinned image.
+
+**Rejection messages name the entry.** The `ConfigValid` message and an
+endpoint's `Accepted=False/GatewayConfigRejected` message now name the entry
+that failed: `team-a/orders spec.endpoints[1]: <finding>`. When one finding
+blames several entries of an endpoint, its line lists them
+(`spec.endpoints[0], spec.endpoints[1]: <finding>`). The gateway controller
+gathers, renders and validates through the same checker the admission
+webhooks use.
+
+**The operator's memory limit is 512Mi** (was 256Mi). Up to three `krakend
+check` runs share the container, each peaking near 110 MB. If you set
+`resources` in your own values or manifests, raise the limit.
 
 ---
 
