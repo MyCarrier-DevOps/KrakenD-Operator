@@ -21,7 +21,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"slices"
 
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -193,31 +192,35 @@ func (v *AutoConfigValidator) ValidateDelete(
 func (v *AutoConfigValidator) policyRefWarnings(
 	ctx context.Context, ac *v1alpha1.KrakenDAutoConfig,
 ) (admission.Warnings, error) {
-	refs := map[string]*v1alpha1.PolicyRef{}
+	type ref struct {
+		path string
+		ref  *v1alpha1.PolicyRef
+	}
+	var refs []ref
 	if ac.Spec.Defaults != nil && ac.Spec.Defaults.PolicyRef != nil {
-		refs["spec.defaults.policyRef"] = ac.Spec.Defaults.PolicyRef
+		refs = append(refs, ref{"spec.defaults.policyRef", ac.Spec.Defaults.PolicyRef})
 	}
 	for i, ov := range ac.Spec.Overrides {
 		if ov.PolicyRef != nil {
-			refs[fmt.Sprintf("spec.overrides[%d].policyRef", i)] = ov.PolicyRef
+			refs = append(refs, ref{fmt.Sprintf("spec.overrides[%d].policyRef", i), ov.PolicyRef})
 		}
 	}
 	for i, ae := range ac.Spec.AdditionalEndpoints {
 		for j, be := range ae.Backends {
 			if be.PolicyRef != nil {
-				refs[fmt.Sprintf("spec.additionalEndpoints[%d].backends[%d].policyRef", i, j)] = be.PolicyRef
+				refs = append(refs,
+					ref{fmt.Sprintf("spec.additionalEndpoints[%d].backends[%d].policyRef", i, j), be.PolicyRef})
 			}
 		}
 	}
 	var warnings admission.Warnings
-	for _, p := range slices.Sorted(maps.Keys(refs)) {
-		ref := refs[p]
-		key := types.NamespacedName{Namespace: ref.ResolvedNamespace(ac.Namespace), Name: ref.Name}
+	for _, r := range refs {
+		key := types.NamespacedName{Namespace: r.ref.ResolvedNamespace(ac.Namespace), Name: r.ref.Name}
 		err := v.Get(ctx, key, &v1alpha1.KrakenDBackendPolicy{})
 		switch {
 		case apierrors.IsNotFound(err):
 			warnings = append(warnings, fmt.Sprintf("%s: KrakenDBackendPolicy %s not found; "+
-				"generated endpoints that use it are rejected until it exists", p, key))
+				"generated endpoints that use it are rejected until it exists", r.path, key))
 		case err != nil:
 			return nil, fmt.Errorf("looking up policy %s: %w", key, err)
 		}
