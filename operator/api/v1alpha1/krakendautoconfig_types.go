@@ -268,6 +268,7 @@ type OperationOverride struct {
 	CacheTTL *metav1.Duration `json:"cacheTTL,omitempty"`
 
 	// OutputEncoding overrides the response encoding (e.g. "no-op", "json").
+	// +kubebuilder:validation:Enum=json;json-collection;yaml;fast-json;xml;negotiate;string;no-op
 	OutputEncoding string `json:"outputEncoding,omitempty"`
 
 	// ConcurrentCalls overrides the number of concurrent backend calls.
