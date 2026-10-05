@@ -258,18 +258,24 @@ jq "${jq_opts[@]}" --slurpfile gws "$work/gateways.json" "$jq_lib"'
 | "KrakenDEndpoint \($e.metadata.namespace)/\($e.metadata.name): GET \(.endpoint) is the health path of gateway \($gw)"' "$work/endpoints.json"
 
 # Enterprise-only extra_config namespaces on CE gateways: krakend check accepts
-# them and KrakenD CE silently ignores them.
-jq "${jq_opts[@]}" --slurpfile gws "$work/gateways.json" "$jq_lib"'
+# them and KrakenD CE silently ignores them. A policy counts when an endpoint of
+# a CE gateway references it.
+jq "${jq_opts[@]}" --slurpfile gws "$work/gateways.json" --slurpfile pols "$work/backendpolicies.json" "$jq_lib"'
 ($ee[0].enterpriseOnly.endpoint - $ee[0].ceRenderDrops.endpoint) as $entry_ee
 | ($gws[0].items | map(select(.spec.edition == "CE") | {key: "\(.metadata.namespace)/\(.metadata.name)", value: true})
   | from_entries) as $ce
+| ($pols[0].items | map({key: "\(.metadata.namespace)/\(.metadata.name)", value: .}) | from_entries) as $pol
 | [.items[] | . as $e
   | "\(.spec.gatewayRef.namespace // .metadata.namespace)/\(.spec.gatewayRef.name)" as $gw
   | select($ce[$gw])
-  | [(.spec.endpoints // []) | to_entries[] | .key as $i | .value as $en
+  | (([(.spec.endpoints // []) | to_entries[] | .key as $i | .value as $en
       | (($en.extraConfig | eeonly($entry_ee)[] | "spec.endpoints[\($i)].extraConfig \(.)"),
          (($en.backends // []) | to_entries[] | .key as $j | .value.extraConfig | eeonly($ee[0].enterpriseOnly.backend)[]
            | "spec.endpoints[\($i)].backends[\($j)].extraConfig \(.)"))]
   | select(length > 0)
-  | "KrakenDEndpoint \($e.metadata.namespace)/\($e.metadata.name): Enterprise-only on CE gateway \($gw): \(join(", "))"]
+  | "KrakenDEndpoint \($e.metadata.namespace)/\($e.metadata.name): Enterprise-only on CE gateway \($gw): \(join(", "))"),
+     ((.spec.endpoints // [])[] | (.backends // [])[] | .policyRef // empty
+      | "\(.namespace // $e.metadata.namespace)/\(.name)" as $key
+      | ($pol[$key] // empty) | (.spec.raw | eeonly($ee[0].enterpriseOnly.backend)) as $ns | select($ns | length > 0)
+      | "KrakenDBackendPolicy \($key): Enterprise-only on CE gateway \($gw): spec.raw \($ns | join(", "))"))]
 | unique[]' "$work/endpoints.json"
