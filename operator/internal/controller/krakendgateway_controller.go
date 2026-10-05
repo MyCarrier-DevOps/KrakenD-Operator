@@ -1408,12 +1408,12 @@ func (r *KrakenDGatewayReconciler) reconcilePostRestartJob(
 	}
 
 	// review id 3807285652 (#7): the Deployment-not-found / not-yet-converged
-	// early returns below (see postRestartRolloutDone)
-	// deliberately do NOT touch PostRestartJobSkipped/ROFS
-	// conditions, unlike the disabled/empty guard above. These describe an
-	// in-progress rollout, not a completed decision about this revision —
-	// clearing conditions here would make them flicker away and back every
-	// reconcile while a rollout is merely underway.
+	// early returns below (see postRestartRolloutDone) deliberately do NOT
+	// touch PostRestartJobSkipped/ROFS conditions, unlike the
+	// disabled/empty guard above. These describe an in-progress rollout, not
+	// a completed decision about this revision — clearing conditions here
+	// would make them flicker away and back every reconcile while a rollout
+	// is merely underway.
 	rolledOut, err := r.postRestartRolloutDone(ctx, gw, in)
 	if err != nil {
 		return err
@@ -1440,15 +1440,15 @@ func (r *KrakenDGatewayReconciler) reconcilePostRestartJob(
 		message := fmt.Sprintf("post-restart Job %s already exists for checksum %s", jobName, jobChecksum)
 		if postRestartJobFailed(existing) {
 			// This branch is reached when the checksum wasn't already
-			// recorded as this revision's (e.g. reconcileExistingPostRestart
-			// Revision's recreate path cleared it before a Delete that then
-			// failed transiently — review id 3807285616, #1b — leaving the
-			// OLD failed Job in place under this name; or a prior status
-			// write was lost before it could record a Job that had already
-			// run and failed). Either way, say so plainly instead of
-			// implying a healthy "created"/"exists" outcome for a Job that
-			// has not successfully completed — restoring the checksum here
-			// (above) means the next reconcile re-enters
+			// recorded as this revision's (e.g. the recreate path of
+			// reconcileExistingPostRestartRevision cleared it before a
+			// Delete that then failed transiently — review id 3807285616,
+			// #1b — leaving the OLD failed Job in place under this name; or
+			// a prior status write was lost before it could record a Job
+			// that had already run and failed). Either way, say so plainly
+			// instead of implying a healthy "created"/"exists" outcome for
+			// a Job that has not successfully completed — restoring the
+			// checksum here (above) means the next reconcile re-enters
 			// reconcileExistingPostRestartRevision, where the actual
 			// re-create/retry decision is (re-)evaluated.
 			message = fmt.Sprintf(
@@ -1540,11 +1540,13 @@ func (r *KrakenDGatewayReconciler) reconcilePostRestartJob(
 //     the same name, not a new name — see review id 3807285616 (#1) on
 //     this function's handling of that Delete-then-Create sequence not
 //     being atomic.
+//     A re-create runs the script again, so it first waits for the rollout
+//     to finish, as a first run does; until then nothing is touched.
 //
-// Every branch above also backfills the ROFS posture condition (review id
-// 3807285633, #3b) — not just create/re-create — so an already-run
-// gateway that never hits this function's create path again still carries
-// the posture signal.
+// Every branch above except a re-create still waiting for the rollout also
+// backfills the ROFS posture condition (review id 3807285633, #3b) — not
+// just create/re-create — so an already-run gateway that never hits this
+// function's create path again still carries the posture signal.
 func (r *KrakenDGatewayReconciler) reconcileExistingPostRestartRevision(
 	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
@@ -1748,14 +1750,17 @@ func (r *KrakenDGatewayReconciler) postRestartRolloutDone(
 // Correction (review id 3807285652, #7): "every branch" means every branch
 // reachable once postRestartJob is enabled/configured with script and
 // config checksum present AND the Deployment has converged on the applied
-// config, image and plugins — i.e. every branch of reconcileExistingPostRestartRevision plus
-// the create/already-exists branches of reconcilePostRestartJob. It does
-// NOT cover the disabled/unconfigured guard or the not-yet-converged early
+// config, image and plugins — i.e. every branch of
+// reconcileExistingPostRestartRevision that reaches a decision, plus the
+// create/already-exists branches of reconcilePostRestartJob. It does NOT
+// cover the disabled/unconfigured guard or the not-yet-converged early
 // returns in reconcilePostRestartJob, which precede any revision-specific
-// decision existing at all. The disabled/unconfigured guard instead
-// actively REMOVES this condition (and the ROFS one); the not-yet-converged
-// returns intentionally leave prior conditions untouched (see the comments
-// at each of those call sites).
+// decision existing at all, nor a failed Job's re-create while the rollout
+// is still running (reconcileExistingPostRestartRevision returns before it
+// decides). The disabled/unconfigured guard instead actively REMOVES this
+// condition (and the ROFS one); the not-yet-converged returns intentionally
+// leave prior conditions untouched (see the comments at each of those call
+// sites).
 func (r *KrakenDGatewayReconciler) setPostRestartJobSkippedCondition(
 	gw *v1alpha1.KrakenDGateway, status metav1.ConditionStatus, reason, message string,
 ) {
@@ -2124,12 +2129,12 @@ type gatewayReadiness struct {
 }
 
 // gatewayReadinessFor derives a gateway's Ready condition and phase from the
-// conditions the gateway controller and the license monitor maintain. The
-// first rule that applies wins: a rejected configuration, an expired license
-// without CE fallback, a missing plugin ConfigMap, a failed rollout, CE
-// fallback (the removed features first), no validated configuration yet, a
-// configuration that could not be validated, a rollout in progress, and a
-// Deployment not yet available. The gateway is Ready only when none applies.
+// conditions the gateway controller maintains. The first rule that applies
+// wins: a rejected configuration, an expired license without CE fallback, a
+// missing plugin ConfigMap, a failed rollout, CE fallback (the removed
+// features first), no validated configuration yet, a configuration that could
+// not be validated, a rollout in progress, and a Deployment not yet available.
+// The gateway is Ready only when none applies.
 // A configuration that could not be validated (the validator was unavailable)
 // makes Ready Unknown, not False, and leaves the phase at the serving phase:
 // the last applied configuration keeps serving.
