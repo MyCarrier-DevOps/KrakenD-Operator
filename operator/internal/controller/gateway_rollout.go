@@ -31,6 +31,8 @@ import (
 // step failed).
 type deploymentObservation struct {
 	dep *appsv1.Deployment
+	// created: this pass created the Deployment.
+	created bool
 	// templateChanged: this pass's write changed the pod template, judged by
 	// comparing the template read before the write with the server's response.
 	templateChanged bool
@@ -40,6 +42,12 @@ type deploymentObservation struct {
 // the rollout it started.
 type rolloutNote struct {
 	reason, message string
+}
+
+// rolloutInFlight reports whether the pass that reconciled the Deployment
+// started a rollout.
+func rolloutInFlight(obs deploymentObservation) bool {
+	return obs.created || obs.templateChanged
 }
 
 // raiseProgressing reports a rollout in progress. The reason is the one this
