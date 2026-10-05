@@ -5321,3 +5321,35 @@ func writesSince(now, before writeCounts) writeCounts {
 		statusUpdates: now.statusUpdates - before.statusUpdates,
 	}
 }
+
+func TestAutoConfigReconcile_HeldEndpointsCountTowardReadiness(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	// getB failed, so its last-good endpoint and the stale one stay; listusers
+	// is created by this pass.
+	ce.output.Failed = []autoconfig.OperationIssue{failedGetB()}
+	lastGood := readyEndpoint(ownedCopy(t, ac, generatedEndpoint("getB", "/b")),
+		metav1.ConditionFalse, v1alpha1.ReasonEndpointConflict)
+	stale := readyEndpoint(ownedCopy(t, ac, generatedEndpoint("old", "/old")), metav1.ConditionTrue, "Ready")
+	c := fakeClientBuilder().WithObjects(ac, cm, lastGood, stale).WithStatusSubresource(ac, lastGood, stale).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	updated := getAC(t, c, ac)
+	if updated.Status.ReadyEndpoints != 1 {
+		t.Errorf("readyEndpoints = %d, want 1 (the held stale endpoint)", updated.Status.ReadyEndpoints)
+	}
+	cond := meta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionEndpointsReady)
+	want := "2 of 3 endpoints not ready: test-ac-getb: EndpointConflict; test-ac-listusers: Pending"
+	if cond == nil || cond.Message != want {
+		t.Errorf("EndpointsReady = %+v, want message %q", cond, want)
+	}
+	// Synced is False for the held operation, and Ready names that first.
+	if ready := meta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionReady); ready == nil ||
+		ready.Status != metav1.ConditionFalse || ready.Reason != v1alpha1.ReasonOperationsFailed {
+		t.Errorf("expected Ready False/OperationsFailed, got %+v", ready)
+	}
+}
