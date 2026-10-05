@@ -32,6 +32,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/resources"
 )
 
 // servedGateway is a CE gateway serving config "A" whose Deployment has
@@ -350,4 +351,29 @@ func TestGatewayReconcile_HPAScaleDoesNotReportARollout(t *testing.T) {
 	}
 
 	requireProgressing(t, s.reconcile(t), metav1.ConditionFalse, true)
+}
+
+func TestGatewayReconcile_CommunityUpgradeRollReportsDeployingWithAnUnchangedRender(t *testing.T) {
+	s := serveGateway(t)
+	// The Deployment an earlier operator version left: it mounts the ConfigMap
+	// named after the gateway and carries no image annotation.
+	legacy := s.deployment(t)
+	delete(legacy.Spec.Template.Annotations, resources.ImageAnnotation)
+	for i, v := range legacy.Spec.Template.Spec.Volumes {
+		if v.ConfigMap != nil {
+			legacy.Spec.Template.Spec.Volumes[i].ConfigMap.Name = s.gw.Name
+		}
+	}
+	if err := s.c.Update(context.Background(), legacy); err != nil {
+		t.Fatal(err)
+	}
+	s.deploymentControllerObserves(t, settled)
+
+	got := s.reconcile(t)
+
+	requireProgressing(t, got, metav1.ConditionTrue, false)
+	if got.Status.Phase != v1alpha1.PhaseDeploying {
+		t.Errorf("phase = %s, want %s while the pods roll to the content-addressed ConfigMap",
+			got.Status.Phase, v1alpha1.PhaseDeploying)
+	}
 }
