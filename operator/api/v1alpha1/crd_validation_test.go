@@ -18,6 +18,7 @@ package v1alpha1
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -194,7 +195,16 @@ const endpointHead = `{apiVersion: gateway.krakend.io/v1alpha1, kind: KrakenDEnd
 const okBackend = `backends: [{host: ["http://svc"], urlPattern: "/"}]`
 
 func TestEndpointCRD_Rules(t *testing.T) {
+	entries := func(n int) string {
+		items := make([]string, n)
+		for i := range items {
+			items[i] = fmt.Sprintf(`{endpoint: "/e%d", method: GET, `, i) + okBackend + `}`
+		}
+		return endpointHead + `[` + strings.Join(items, ", ") + `]}}`
+	}
 	runCRDCases(t, endpointsCRD, []crdCase{
+		{"1024 entries", entries(1024), ""},
+		{"1025 entries", entries(1025), "must have at most 1024 items"},
 		{"valid", endpointHead + `[{endpoint: "/a/{id}", method: GET, timeout: "1m30s", cacheTTL: "0", ` + okBackend + `}]}}`, ""},
 		{"root wildcard", endpointHead + `[{endpoint: "/*", method: GET, ` + okBackend + `}]}}`, ""},
 		{"prefix wildcard", endpointHead + `[{endpoint: "/a/*", method: GET, ` + okBackend + `}]}}`, ""},
