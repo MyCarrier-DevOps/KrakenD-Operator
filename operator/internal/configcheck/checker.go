@@ -134,7 +134,7 @@ func (c *Checker) LintPolicy(ctx context.Context, policy *v1alpha1.KrakenDBacken
 	verdict, err := c.lint(ctx, renderer.RenderInput{
 		Gateway:   gw,
 		Endpoints: []v1alpha1.KrakenDEndpoint{ep},
-		Policies:  map[string]*v1alpha1.KrakenDBackendPolicy{policy.Namespace + "/" + policy.Name: policy},
+		Policies:  map[string]*v1alpha1.KrakenDBackendPolicy{policyKey(policy): policy},
 	})
 	// The synthetic endpoint is not something the caller created: its
 	// findings read as policy-level.
@@ -203,7 +203,7 @@ func (c *Checker) gather(ctx context.Context, gw *v1alpha1.KrakenDGateway, repla
 		return renderer.RenderInput{}, err
 	}
 	if override != nil {
-		policies[override.Namespace+"/"+override.Name] = override
+		policies[policyKey(override)] = override
 	}
 	return renderer.RenderInput{Gateway: gw, Endpoints: endpoints, Policies: policies, CEFallback: ceFallback(gw)}, nil
 }
@@ -255,6 +255,12 @@ func substitute(current, replace []v1alpha1.KrakenDEndpoint) []v1alpha1.KrakenDE
 		}
 	}
 	return out
+}
+
+// policyKey is the key policy is gathered under: the one a PolicyRef to it
+// resolves to.
+func policyKey(policy *v1alpha1.KrakenDBackendPolicy) string {
+	return (&v1alpha1.PolicyRef{Name: policy.Name}).PolicyKey(policy.Namespace)
 }
 
 func sortEndpoints(endpoints []v1alpha1.KrakenDEndpoint) {
