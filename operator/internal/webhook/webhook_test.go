@@ -2558,3 +2558,19 @@ func TestAutoConfigAdmission_RatchetsAStoredOverrideCollision(t *testing.T) {
 		t.Error("an override inserted above the colliding pair admitted: the error moved to a new index")
 	}
 }
+
+// Names are cut at 253 characters after the AutoConfig name is prefixed, so two
+// long operationIds can give one generated endpoint name.
+func TestAutoConfigAdmission_RejectsOverridesThatGenerateOneEndpointName(t *testing.T) {
+	long := strings.Repeat("x", 300)
+	ac := &v1alpha1.KrakenDAutoConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "ac", Namespace: "default"},
+		Spec: v1alpha1.KrakenDAutoConfigSpec{GatewayRef: v1alpha1.GatewayRef{Name: "gw"},
+			OpenAPI: v1alpha1.OpenAPISource{URL: "http://svc/openapi.json"}, Trigger: v1alpha1.TriggerOnChange,
+			Overrides: []v1alpha1.OperationOverride{{OperationID: long + "a"}, {OperationID: long + "b"}}},
+	}
+	resp := review(t, &AutoConfigValidator{Client: fakeClient(testGateway())}, "alice", ac, nil)
+	if resp.Allowed || resp.Result.Details.Causes[0].Field != "spec.overrides[1].operationId" {
+		t.Errorf("response = %+v, want a collision on spec.overrides[1].operationId", resp.Result)
+	}
+}
