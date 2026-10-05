@@ -33,6 +33,11 @@ import (
 // step failed).
 type deploymentObservation struct {
 	dep *appsv1.Deployment
+	// failed: the Deployment step failed (a rejected write, or a stale object
+	// that the API server answered with a Conflict). dep is nil like on a hold,
+	// but the cache then describes the Deployment from before the write, so
+	// nothing about the rollout can be judged from it.
+	failed bool
 	// created: this pass created the Deployment.
 	created bool
 	// templateChanged: this pass's write changed the pod template, judged by
