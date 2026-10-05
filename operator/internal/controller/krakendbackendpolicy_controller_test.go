@@ -673,3 +673,15 @@ func TestPolicyReconcile_StaleCacheDoesNotReleaseAReferencedPolicy(t *testing.T)
 		t.Fatalf("a policy referenced on the API server was released: %v", err)
 	}
 }
+
+func TestNamedReferrers_BoundsTheList(t *testing.T) {
+	var referrers []v1alpha1.KrakenDEndpoint
+	for _, n := range []string{"g", "c", "a", "f", "b", "e", "d"} {
+		referrers = append(referrers, *referencingEndpoint(n, "p"))
+	}
+
+	want := "default/a, default/b, default/c, default/d, default/e and 2 more"
+	if got := namedReferrers(referrers); got != want {
+		t.Errorf("namedReferrers = %q, want %q", got, want)
+	}
+}
