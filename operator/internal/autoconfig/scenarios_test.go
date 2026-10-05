@@ -1430,41 +1430,61 @@ func TestScenario_StripPrefixRouteCollisionAppliesAnOverrideToItsOwnOperation(t 
 	}
 }
 
-// collisionOrders are two specs in which a strip of the prefix puts the
-// operation "other" and the operation "dup" on the route GET /x. The entries
-// come out in key order, so the first spec lists "other" first and the second
-// lists "dup" first; the operation that publishes follows that order.
-var collisionOrders = map[string]string{
-	"stripped path sorts first": `{"paths": {
-		"/v1/x": {"get": {"operationId": "other", "responses": {"200": {"description": "OK"}}}},
-		"/x": {"get": {"operationId": "dup", "responses": {"200": {"description": "OK"}}}},
-		"/q": {"get": {"operationId": "dup", "responses": {"200": {"description": "OK"}}}}}}`,
-	"stripped path sorts last": `{"paths": {
-		"/z/x": {"get": {"operationId": "other", "responses": {"200": {"description": "OK"}}}},
-		"/x": {"get": {"operationId": "dup", "responses": {"200": {"description": "OK"}}}},
-		"/q": {"get": {"operationId": "dup", "responses": {"200": {"description": "OK"}}}}}}`,
+// routeCollisionCases are specs, with keys sorted as the fetch leaves them,
+// in which a strip of the prefix puts the operation "other" and an operation
+// "dup" on the route GET /x. CUE emits the entries in source order with the
+// first path moved to the end, so each spec fixes which of the two the
+// generator meets first and keeps: survivor is the backend path of the entry
+// that publishes on GET /x.
+var routeCollisionCases = map[string]struct {
+	prefix, spec, survivor string
+	routes                 []string
+}{
+	"dup survives": {
+		prefix: "/z", survivor: "/x", routes: []string{"/q", "/x"},
+		spec: `{"paths": {
+			"/q": {"get": {"operationId": "dup", "responses": {"200": {"description": "OK"}}}},
+			"/x": {"get": {"operationId": "dup", "responses": {"200": {"description": "OK"}}}},
+			"/z/x": {"get": {"operationId": "other", "responses": {"200": {"description": "OK"}}}}}}`,
+	},
+	"other survives": {
+		prefix: "/v1", survivor: "/v1/x", routes: []string{"/q", "/x"},
+		spec: `{"paths": {
+			"/q": {"get": {"operationId": "dup", "responses": {"200": {"description": "OK"}}}},
+			"/v1/x": {"get": {"operationId": "other", "responses": {"200": {"description": "OK"}}}},
+			"/x": {"get": {"operationId": "dup", "responses": {"200": {"description": "OK"}}}}}}`,
+	},
+	"the dropped operation's id is shared elsewhere": {
+		prefix: "/z", survivor: "/x", routes: []string{"/a", "/x"},
+		spec: `{"paths": {
+			"/a": {"get": {"operationId": "dup", "responses": {"200": {"description": "OK"}}}},
+			"/x": {"get": {"operationId": "dup", "responses": {"200": {"description": "OK"}}}},
+			"/z/x": {"get": {"operationId": "other", "responses": {"200": {"description": "OK"}}}}}}`,
+	},
 }
 
-// TestScenario_RouteCollisionPublishesAndNamesTheOperationItServes checks, in
-// both key orders, that the endpoint on a collided route is named for the
-// operation it serves, carries only that operation's override, and that the
-// skip names the operation that was dropped.
-func TestScenario_RouteCollisionPublishesAndNamesTheOperationItServes(t *testing.T) {
+// TestScenario_RouteCollisionKeepsEveryRouteServed pins what holds when a
+// strip of the path prefix puts two operations on one route: an override
+// lands only on the operation it names, every route stays served, and the
+// collision is reported as a duplicate skip.
+//
+// What does not hold: OperationIDs, the filter's lookups and the generator
+// are keyed by route, so the endpoint that publishes on the collided route
+// is named, labelled in status.failedOperations and matched by spec.filter
+// by the operationId the route was last rekeyed to, which may be the dropped
+// operation's. The operation that publishes is the first the evaluator emits.
+func TestScenario_RouteCollisionKeepsEveryRouteServed(t *testing.T) {
 	defs, err := EmbeddedCUEDefinitions()
 	if err != nil {
 		t.Fatalf("loading defs: %v", err)
 	}
 	timeout := metav1.Duration{Duration: 42 * time.Second}
-	for name, spec := range collisionOrders {
+	for name, tc := range routeCollisionCases {
 		t.Run(name, func(t *testing.T) {
-			prefix := "/v1"
-			if name == "stripped path sorts last" {
-				prefix = "/z"
-			}
 			out, err := NewCUEEvaluator().Evaluate(context.Background(), CUEInput{
-				SpecData: []byte(spec), SpecFormat: v1alpha1.SpecFormatJSON, DefaultDefs: defs, ServiceName: "_spec",
+				SpecData: []byte(tc.spec), SpecFormat: v1alpha1.SpecFormatJSON, DefaultDefs: defs, ServiceName: "_spec",
 				DefaultHost:  "http://svc.dev.svc:8080",
-				URLTransform: &v1alpha1.URLTransformSpec{StripPathPrefix: prefix},
+				URLTransform: &v1alpha1.URLTransformSpec{StripPathPrefix: tc.prefix},
 				Overrides:    []v1alpha1.OperationOverride{{OperationID: "other", Timeout: &timeout}},
 			})
 			if err != nil {
@@ -1478,32 +1498,32 @@ func TestScenario_RouteCollisionPublishesAndNamesTheOperationItServes(t *testing
 				t.Fatalf("generate: %v", err)
 			}
 
-			// The backend path tells the operations apart: the transform leaves it alone.
-			served := map[string]string{prefix + "/x": "other", "/x": "dup", "/q": "dup"}
-			var onRoute string
+			var routes []string
 			for _, ep := range gen.Endpoints {
 				e := ep.Spec.Endpoints[0]
-				op := served[e.Backends[0].URLPattern]
-				if want := OperationEndpointName("t", op); ep.Name != want {
-					t.Errorf("endpoint %s serves %s (backend %s), want it named %s", ep.Name, op, e.Backends[0].URLPattern, want)
+				routes = append(routes, e.Endpoint)
+				// The backend path tells the operations apart: the transform leaves it alone.
+				overridden := e.Timeout != nil && e.Timeout.Duration == 42*time.Second
+				if want := e.Backends[0].URLPattern == tc.prefix+"/x"; overridden != want {
+					t.Errorf("endpoint %s (backend %s) has timeout %v: only the operation other has an override",
+						ep.Name, e.Backends[0].URLPattern, e.Timeout)
 				}
-				hasOverride := e.Timeout != nil && e.Timeout.Duration == 42*time.Second
-				if hasOverride != (op == "other") {
-					t.Errorf("endpoint %s (%s) has timeout %v: only other has an override", ep.Name, op, e.Timeout)
-				}
-				if e.Endpoint == "/x" {
-					onRoute = op
+				if e.Endpoint == "/x" && e.Backends[0].URLPattern != tc.survivor {
+					t.Errorf("GET /x is served by backend %s, want %s", e.Backends[0].URLPattern, tc.survivor)
 				}
 			}
-			dropped := map[string]string{"other": "dup", "dup": "other"}[onRoute]
-			var skipped []string
+			slices.Sort(routes)
+			if !slices.Equal(routes, tc.routes) {
+				t.Errorf("published routes = %v, want %v", routes, tc.routes)
+			}
+			var dups []string
 			for _, s := range slices.Concat(out.Skipped, gen.Skipped) {
-				if s.Path == "/x" {
-					skipped = append(skipped, s.OperationID)
+				if s.Reason == v1alpha1.ReasonDuplicateOperationId && s.Path == "/x" {
+					dups = append(dups, s.Message)
 				}
 			}
-			if !slices.Equal(skipped, []string{dropped}) {
-				t.Errorf("GET /x serves %s; the skip names %v, want [%s]", onRoute, skipped, dropped)
+			if len(dups) != 1 || dups[0] != "same path and method as GET /x" {
+				t.Errorf("duplicate skips for GET /x = %q, want one 'same path and method as GET /x'", dups)
 			}
 		})
 	}
