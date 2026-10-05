@@ -158,6 +158,9 @@ func (v *GatewayValidator) admit(
 func (v *GatewayValidator) eeNamespacesOnCE(
 	_ context.Context, _, gw *v1alpha1.KrakenDGateway,
 ) (field.ErrorList, error) {
+	if gw.Spec.Edition != v1alpha1.EditionCE {
+		return nil, nil
+	}
 	return ceIgnores(field.NewPath("spec", "config", "extraConfig"),
 		eeOnlyNamespacesIn(gw.Spec.Config.ExtraConfig, renderer.LevelService)), nil
 }
