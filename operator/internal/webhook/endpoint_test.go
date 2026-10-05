@@ -1036,3 +1036,25 @@ func TestEndpointAdmission_OperatorWritesStillGetThePolicyNamespaceRule(t *testi
 		t.Errorf("causes = %+v, want one on the backend's policyRef", causes)
 	}
 }
+
+// A generated endpoint always lives in its AutoConfig's namespace, so an owner
+// reference with the same UID from another namespace is forged and does not
+// let its endpoint share a route.
+func TestEndpointAdmission_ControllerUIDFromAnotherNamespaceDoesNotShareARoute(t *testing.T) {
+	owned := func(name, namespace string) *v1alpha1.KrakenDEndpoint {
+		ep := testEndpoint(name, "/users/{id}")
+		ep.Namespace = namespace
+		ep.Spec.GatewayRef.Namespace = "default"
+		ep.OwnerReferences = []metav1.OwnerReference{{APIVersion: v1alpha1.GroupVersion.String(),
+			Kind: "KrakenDAutoConfig", Name: "pets", UID: "pets-uid", Controller: ptr.To(true)}}
+		return ep
+	}
+	v := &EndpointValidator{Client: fakeClient(testGateway(), owned("served", "default")), Checker: &scriptedChecker{}}
+
+	if resp := review(t, v, "alice", owned("forged", "team-b"), nil); resp.Allowed {
+		t.Error("a duplicate route behind a same-UID owner reference from another namespace admitted")
+	}
+	if resp := review(t, v, "alice", owned("sibling", "default"), nil); !resp.Allowed {
+		t.Errorf("a sibling of the same controller in its namespace denied: %+v", resp.Result)
+	}
+}
