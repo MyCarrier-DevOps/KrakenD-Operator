@@ -81,8 +81,8 @@ make deploy IMG=ghcr.io/mycarrier-devops/krakend-operator:<new-version>
      with the rest of the AutoConfig webhook rules.
    - A line naming an Enterprise-only namespace or field on a CE gateway is a
      feature KrakenD CE ignores today: remove it, or move the gateway to EE.
-     Only a changed entry, a changed root `extraConfig`, a changed policy
-     `raw`, a changed `spec.redis` or `spec.config.documentation`, or enabling
+     Only a changed entry, a new `policyRef` to such a policy, a changed root
+     `extraConfig`, a changed policy `raw`, a changed `spec.redis` or `spec.config.documentation`, or enabling
      `spec.openapi` or `spec.dragonfly`, is rejected; so is switching the
      gateway to CE while the last two are enabled. A stored use that stays
      keeps being accepted: editing the settings of a stored, enabled
@@ -1433,8 +1433,11 @@ broken root never blocks every new endpoint on its gateway. The entry rules run
 first, and a write they reject is not rendered. That includes the
 `documentation/openapi.audience` rule, which keeps rejecting a malformed
 audience on a changed entry on every gateway, because a CE render drops an
-entry's `documentation/openapi` and the render check would never see it. The
-checks run in the operator pod, three at a time for the whole pod, sharing those
+entry's `documentation/openapi` and the render check would never see it. While
+an Enterprise gateway is in CE fallback (its `LicenseDegraded` condition is
+true), admission judges the fallback render, which drops the Enterprise-only
+content, so such content in a write is first judged when the license returns.
+The checks run in the operator pod, three at a time for the whole pod, sharing those
 slots with the gateway controller, and each webhook call stops its work after
 12 s. A request that cannot get a slot in time, or whose check cannot run, is
 answered `500 Internal Error`: a transient error that `kubectl` does not retry,
@@ -1595,7 +1598,14 @@ namespace (for example `auth/api-keys` on an entry or `auth/gcp` on a backend),
 or the Enterprise-only keys of `backend/http/client` (a block with only
 `send_body_on_redirect`, which CE honors, is admitted). KrakenD CE accepts them
 in `krakend check` and then drops them silently, so a route that asks for
-API-key authentication was served without it. An entry's `documentation/openapi`
+API-key authentication was served without it. The same goes for a backend's
+`policyRef` on a CE gateway: it is rejected, at
+`spec.endpoints[i].backends[j].policyRef`, when the policy's `raw` carries such
+a namespace or key, because the policy's own check ran only when its `raw`
+changed. Only a reference the stored object did not already hold is judged (on a
+create, or a move to another gateway, every reference is), and the operator's
+own writes to AutoConfig endpoints, which inherit `defaults.policyRef`, are
+judged too. An entry's `documentation/openapi`
 is still admitted, because AutoConfig generates it on every endpoint and a CE
 render drops it. Only added or changed entries are checked, and moving the
 object to another gateway checks every entry again, so an entry stored before
@@ -1609,6 +1619,8 @@ variants the Enterprise binary allows.
 
 **Gateway writes are checked too.** A new KrakenDGateway's root config
 (`spec.config`, including `extraConfig`) must pass `krakend check` on its own.
+Endpoints that already reference the gateway and clash with that root do not
+block the create: a warning names them.
 An update is rejected if it turns the gateway's passing config, with its
 endpoints, into a failing one, for example a `router.healthPath` onto an
 existing route, or switching `edition: EE` to `CE` while `/prefix/*` endpoints
@@ -1620,8 +1632,9 @@ is a warning. A `spec.version` other than 2.13.x gets a warning when it is set
 or changed: validation uses the pinned 2.13 binary. **On a CE gateway,
 Enterprise-only namespaces are rejected** in `spec.config.extraConfig` when it
 is set or changed, and switching `edition: EE` to `CE` is rejected while the
-gateway's KrakenDEndpoints or their KrakenDBackendPolicies use one; the denial
-lists each object, field and namespace. So are the typed Enterprise fields
+gateway's KrakenDEndpoints or their KrakenDBackendPolicies use one, or any of
+its endpoints is a `/prefix/*` wildcard, even when the gateway's config already
+fails; the denial lists each object, field and namespace. So are the typed Enterprise fields
 `spec.redis`, `spec.config.documentation`, `spec.openapi.enabled: true` and
 `spec.dragonfly.enabled: true` on a CE gateway (`Forbidden`): `spec.redis` and
 `spec.config.documentation` when set or changed, the export and Dragonfly when
@@ -1650,7 +1663,9 @@ ignores it silently`); a policy that only sets keys CE honors, such as
 `send_body_on_redirect`, is admitted. A stored policy that already does this
 keeps accepting unrelated edits. The audit lists the stored ones.
 
-**Updates are ratcheted.** A metadata-only update is never validated. A
+**Updates are ratcheted.** The webhooks never validate a
+metadata-only update (the KrakenDAutoConfig name rule, which is a CRD rule, still
+runs on label, annotation and status writes). A
 reference (`gatewayRef`, `policyRef`) is checked only when it is added or
 changed. A field rule rejects an update only if the error is new, so an object
 stored before a rule existed keeps accepting unrelated edits. KrakenDEndpoint
@@ -1665,8 +1680,10 @@ the upgrade. `kubectl delete` of a policy that endpoints still reference now
 succeeds instead of being refused. The policy keeps serving (`deletionTimestamp`
 set, `status.referencedBy` above 0, and a `DeletionBlocked` warning event that
 names the endpoints) until the last referencing KrakenDEndpoint stops
-referencing it or is deleted, and then it disappears. A new reference to a
-terminating policy is rejected (`policy is being deleted`). The policy webhook
+referencing it or is deleted, and then it disappears. A reference to a
+terminating policy that the endpoint did not already hold is rejected
+(`policy is being deleted`); an endpoint that already references it keeps being
+accepted, because a stored reference is not checked again. The policy webhook
 is no longer registered for DELETE, in the Helm chart and in
 `operator/config/webhook/manifests.yaml`, so policy and namespace deletion are
 accepted without the webhook; they complete once the operator removes the
@@ -1682,7 +1699,10 @@ that agree up to the 253-character name limit collide the same way. The denial
 names the second entry (`spec.overrides[1].operationId`). A stored list that
 already does this keeps accepting edits that leave the colliding entries and
 their positions unchanged; inserting or removing an override above the pair
-shifts it to a new position and is rejected. The audit in the Pre-Upgrade
+shifts it to a new position and is rejected. A stored malformed
+`documentation/openapi.audience` is ratcheted the same way, by its position:
+inserting or removing an override or an additional endpoint above it gives it a
+new position and it is rejected until it is fixed. The audit in the Pre-Upgrade
 Checklist lists these lists. A `policyRef` in `defaults`, `overrides` or
 `additionalEndpoints` that names no existing policy now produces an admission
 warning (at most five, then a count), not a rejection: a release may create the
