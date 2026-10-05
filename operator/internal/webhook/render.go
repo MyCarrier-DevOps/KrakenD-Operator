@@ -70,15 +70,24 @@ func checkGatewayRender(
 // gatewayRenderDenial rejects gw: gateway-root findings on spec.config, the
 // endpoints the change breaks on spec. The renderer builds the root from
 // spec.config (timeout, extraConfig, router), so that is where a user looks.
+// The first maxEntryCauses root findings are causes of their own, cut to the
+// warning limit; the rest go on spec.config as a bounded summary.
 func gatewayRenderDenial(gw *v1alpha1.KrakenDGateway, verdict configcheck.Verdict) error {
 	var errs field.ErrorList
-	var endpoints configcheck.Verdict
+	var root, endpoints configcheck.Verdict
 	for _, f := range verdict.Findings {
-		if f.Endpoint.Name == "" {
-			errs = append(errs, field.Invalid(field.NewPath("spec", "config"), field.OmitValueType{}, f.Message))
-			continue
+		if f.Endpoint.Name != "" {
+			endpoints.Findings = append(endpoints.Findings, f)
+		} else if len(errs) < maxEntryCauses {
+			errs = append(errs, field.Invalid(field.NewPath("spec", "config"), field.OmitValueType{},
+				truncate(f.Message, warningLimit)))
+		} else {
+			root.Findings = append(root.Findings, f)
 		}
-		endpoints.Findings = append(endpoints.Findings, f)
+	}
+	if len(root.Findings) > 0 {
+		errs = append(errs, field.Invalid(field.NewPath("spec", "config"), field.OmitValueType{},
+			"more gateway config failures: "+root.Summary(warningLimit)))
 	}
 	if len(endpoints.Findings) > 0 {
 		errs = append(errs, field.Invalid(field.NewPath("spec"), field.OmitValueType{},
