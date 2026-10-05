@@ -519,12 +519,13 @@ func applyAdditionalEndpoints(
 }
 
 // fetchSpec fetches the OpenAPI spec and prepares it for evaluation: it
-// resolves external $refs (URL sources only) and strips upstream server
-// entries. A failure to fetch or decode the spec or an external $ref document
-// is returned and fails the sync closed. notes are the problems that do not
-// stop the sync (the $refs the resolver could not honour) for
-// status.warnings. A StripServers failure is logged and leaves the data as it
-// was.
+// resolves external $refs (URL sources only), strips upstream server entries
+// and dereferences parameter $refs. A failure to fetch or decode the spec or
+// an external $ref document is returned and fails the sync closed. notes are
+// the spec problems that do not stop the sync (the $refs the resolver could
+// not honour and the parameter $refs that do not resolve) for
+// status.warnings. A StripServers or parameter decode failure is logged and
+// leaves the data as it was.
 func (r *KrakenDAutoConfigReconciler) fetchSpec(
 	ctx context.Context,
 	ac *v1alpha1.KrakenDAutoConfig,
@@ -567,7 +568,14 @@ func (r *KrakenDAutoConfigReconciler) fetchSpec(
 	} else {
 		fetchResult.Data = stripped
 	}
-	return fetchResult, notes, nil
+
+	deref, paramNotes, derefErr := autoconfig.DereferenceParameters(fetchResult.Data)
+	if derefErr != nil {
+		log.Error(derefErr, "dereferencing parameter $refs failed, using the spec as is")
+	} else {
+		fetchResult.Data = deref
+	}
+	return fetchResult, append(notes, paramNotes...), nil
 }
 
 // autoConfigSpecChecksum builds the checksum the controller stores in
