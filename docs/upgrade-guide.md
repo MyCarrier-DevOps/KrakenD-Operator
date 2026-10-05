@@ -1278,6 +1278,13 @@ one finding blames several entries of an endpoint, its line lists them
 gathers, renders and validates through the same checker the admission
 webhooks use.
 
+**Admission denials are `422 Invalid` with one cause per rejected field.**
+`kubectl` prints `The KrakenDEndpoint "x" is invalid: spec.endpoints[1]: ...`
+instead of `403 Forbidden` with a single message. Scripts that matched
+`Forbidden` must match `is invalid`. A failed lookup or an unavailable
+validator is `500 Internal Error`, which `kubectl` and controllers retry. Each
+webhook call is limited to 15 s (`timeoutSeconds`).
+
 **The operator's memory limit is 512Mi** (was 256Mi). Up to three `krakend
 check` runs share the container, each peaking near 110 MB. If you set
 `resources` in your own values or manifests, raise the limit.
