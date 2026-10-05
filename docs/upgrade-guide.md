@@ -976,9 +976,9 @@ refuses unnamed wildcards. Validation of an EE config now works like this:
   not exist in EE: a backend `url_pattern` that references `{Wildcard}` on a
   wildcard endpoint is rejected, as EE would reject it.
 
-The config schema rejects a root `/*` endpoint in both editions (it needs a
-path segment before `/*`). It used to be dropped from validation, and is now
-rejected. Move such an endpoint to `/prefix/*`.
+The route check rejects a root `/*` endpoint in both editions (gin refuses an
+unnamed wildcard at the root, and EE does too). It used to be dropped from
+validation, and is now rejected. Move such an endpoint to `/prefix/*`.
 
 ### CE fallback is validated as CE, and the image follows the validated config
 
@@ -1243,6 +1243,14 @@ exact duplicates. Between two entries of one KrakenDEndpoint the earlier spec
 entry wins, and `status.conflicts[].winner` then names the endpoint itself.
 Admission rejects such pairs outright (below); this covers objects stored
 before the upgrade and concurrent applies.
+
+**Gateways with a health-path or `autoOptions` clash freeze instead of
+crash-looping.** The controller's route check now rejects them. Such a gateway
+keeps its last-known-good config with `ConfigValid=False`. Before this release
+the same render was published and new pods panicked at startup. The clashes
+are an endpoint on the gateway's custom `health_path` with a GET method, and
+endpoints that differ only in parameter names under different methods while
+`router.auto_options` is on.
 
 ---
 
