@@ -37,6 +37,7 @@ import (
 
 const (
 	endpointsCRD = "gateway.krakend.io_krakendendpoints.yaml"
+	policiesCRD  = "gateway.krakend.io_krakendbackendpolicies.yaml"
 )
 
 // validateCRD runs defaulting, the OpenAPI schema, list-type and CEL
@@ -138,5 +139,17 @@ func TestEndpointCRD_Rules(t *testing.T) {
 		{"backend method", endpointHead + `[{endpoint: "/a", method: GET, backends: [{host: ["http://svc"], urlPattern: "/", method: get}]}]}}`, "Unsupported value: \"get\""},
 		{"empty gateway name", `{apiVersion: gateway.krakend.io/v1alpha1, kind: KrakenDEndpoint, metadata: {name: e}, spec: {gatewayRef: {name: ""}, endpoints: [{endpoint: "/a", method: GET, ` + okBackend + `}]}}`, "at least 1 chars long"},
 		{"empty policy name", endpointHead + `[{endpoint: "/a", method: GET, backends: [{host: ["http://svc"], urlPattern: "/", policyRef: {name: ""}}]}]}}`, "at least 1 chars long"},
+	})
+}
+
+const policyHead = `{apiVersion: gateway.krakend.io/v1alpha1, kind: KrakenDBackendPolicy, metadata: {name: p, namespace: ns}, spec: `
+
+func TestPolicyCRD_Minimums(t *testing.T) {
+	runCRDCases(t, policiesCRD, []crdCase{
+		{"valid", policyHead + `{circuitBreaker: {maxErrors: 3, interval: 60, timeout: 10}, rateLimit: {maxRate: 5}}}`, ""},
+		{"max errors zero", policyHead + `{circuitBreaker: {maxErrors: 0, interval: 60, timeout: 10}}}`, "spec.circuitBreaker.maxErrors"},
+		{"interval zero", policyHead + `{circuitBreaker: {maxErrors: 3, interval: 0, timeout: 10}}}`, "spec.circuitBreaker.interval"},
+		{"timeout zero", policyHead + `{circuitBreaker: {maxErrors: 3, interval: 60, timeout: 0}}}`, "spec.circuitBreaker.timeout"},
+		{"max rate zero", policyHead + `{rateLimit: {maxRate: 0}}}`, "spec.rateLimit.maxRate"},
 	})
 }
