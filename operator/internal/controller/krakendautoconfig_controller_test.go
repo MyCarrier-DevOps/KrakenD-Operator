@@ -4770,12 +4770,14 @@ func TestAutoConfigReconcile_UnattributedCheckFailure(t *testing.T) {
 	otherEndpoint := configcheck.Verdict{Findings: []configcheck.Finding{{
 		Endpoint: types.NamespacedName{Namespace: "team-b", Name: "orders"}, Index: 0, Message: "wildcard conflict",
 	}}}
+	gatewayRoot := configcheck.Verdict{Findings: []configcheck.Finding{{Index: -1, Message: "'timeout' time: unknown unit"}}}
 	for name, tc := range map[string]struct {
 		failure, baseline configcheck.Verdict
 		wantWrite         bool
 	}{
 		"another endpoint, gateway already broken: write": {otherEndpoint, otherEndpoint, true},
 		"another endpoint, change breaks gateway: hold":   {otherEndpoint, configcheck.Verdict{OK: true}, false},
+		"gateway root, change breaks gateway: hold":       {gatewayRoot, configcheck.Verdict{OK: true}, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			cm := testCUEDefinitionsCM()
