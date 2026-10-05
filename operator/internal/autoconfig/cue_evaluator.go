@@ -58,6 +58,10 @@ type CUEOutput struct {
 	// the path and method their entry has after the URL transform and the
 	// overrides. They have no entry in Entries.
 	Skipped []OperationIssue
+	// Failed holds the operations whose entries failed CUE validation or
+	// could not be decoded (reason CUEEvaluationFailed), sorted by path then
+	// method. They have no entry in Entries.
+	Failed []OperationIssue
 }
 
 // CUEEvaluator evaluates CUE definitions against OpenAPI spec data.
