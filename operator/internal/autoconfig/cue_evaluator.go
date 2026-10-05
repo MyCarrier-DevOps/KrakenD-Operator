@@ -512,11 +512,21 @@ func applyFieldOverrides(output *CUEOutput, overrides []v1alpha1.OperationOverri
 			}
 		}
 	}
+	failedOpIDs := make(map[string]bool, len(output.Failed))
+	for _, failed := range output.Failed {
+		if failed.OperationID != "" {
+			failedOpIDs[failed.OperationID] = true
+		}
+	}
 
 	for _, ov := range overrides {
 		idx, ok := opIDIndex[ov.OperationID]
 		if !ok {
-			output.UnmatchedOverrides = append(output.UnmatchedOverrides, ov.OperationID)
+			// An override whose target failed evaluation is held with it,
+			// not unmatched.
+			if !failedOpIDs[ov.OperationID] {
+				output.UnmatchedOverrides = append(output.UnmatchedOverrides, ov.OperationID)
+			}
 			continue
 		}
 		entry := &output.Entries[idx]
