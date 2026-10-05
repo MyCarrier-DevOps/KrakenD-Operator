@@ -1488,6 +1488,29 @@ func TestAutoConfigReconcile_UnmatchedOverrideFailsSync(t *testing.T) {
 	}
 }
 
+func TestAutoConfigReconcile_AmbiguousOverrideFailsClosed(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	ac.Status.Phase = v1alpha1.AutoConfigPhasePending
+	f, ce, fi, g := defaultMocks()
+	ce.output.AmbiguousOverrides = []string{"getUsers"}
+	var counts writeCounts
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).
+		WithInterceptorFuncs(countWrites(&counts)).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+
+	if _, err := reconcileAC(r, ac); err == nil {
+		t.Fatal("expected an error for an OnChange trigger")
+	}
+	if counts.creates+counts.updates+counts.deletes != 0 {
+		t.Errorf("expected no endpoint writes, got %+v", counts)
+	}
+	cond := meta.FindStatusCondition(getAC(t, c, ac).Status.Conditions, v1alpha1.ConditionSynced)
+	if cond == nil || cond.Reason != v1alpha1.ReasonAmbiguousOverride || !strings.Contains(cond.Message, "getUsers") {
+		t.Errorf("expected Synced False/AmbiguousOverride naming getUsers, got %+v", cond)
+	}
+}
+
 func TestAutoConfigReconcile_UnmatchedOverrideKeepsExistingEndpoints(t *testing.T) {
 	cm := testCUEDefinitionsCM()
 	ac := testAutoConfig()
