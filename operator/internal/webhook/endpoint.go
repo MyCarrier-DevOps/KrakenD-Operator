@@ -267,17 +267,23 @@ func (v *EndpointValidator) validateRouteUniqueness(
 			}
 		}
 	}
+	keys := make([]string, len(ep.Spec.Endpoints))
+	entriesByKey := map[string][]int{}
+	for i, e := range ep.Spec.Endpoints {
+		keys[i] = routeKey(e)
+		entriesByKey[keys[i]] = append(entriesByKey[keys[i]], i)
+	}
 	var errs field.ErrorList
 	for _, i := range changed {
 		e := ep.Spec.Endpoints[i]
 		p := field.NewPath("spec", "endpoints").Index(i)
-		if c, ok := claims[routeKey(e)]; ok {
+		if c, ok := claims[keys[i]]; ok {
 			errs = append(errs, routeClash(p, e, c.endpoint, "KrakenDEndpoint "+c.owner))
 			continue
 		}
-		for j, other := range ep.Spec.Endpoints {
-			if j != i && routeKey(other) == routeKey(e) {
-				errs = append(errs, routeClash(p, e, other.Endpoint, fmt.Sprintf("spec.endpoints[%d]", j)))
+		for _, j := range entriesByKey[keys[i]] {
+			if j != i {
+				errs = append(errs, routeClash(p, e, ep.Spec.Endpoints[j].Endpoint, fmt.Sprintf("spec.endpoints[%d]", j)))
 				break
 			}
 		}
