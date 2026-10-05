@@ -145,7 +145,7 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// status.SpecChecksum unchanged, so each retry of a failing sync whose
 	// inputs changed emits them again.
 	warnings := &inputWarnings{inputsChanged: combinedChecksum != origStatus.SpecChecksum}
-	for _, note := range specNotes {
+	for _, note := range specWarnings(specNotes) {
 		warnings.add(v1alpha1.ReasonSpecWarning, note)
 	}
 
