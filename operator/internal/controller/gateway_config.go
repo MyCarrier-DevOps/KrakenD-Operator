@@ -301,21 +301,46 @@ func (r *KrakenDGatewayReconciler) liveReplicaSetConfigMaps(
 
 // rejectionsByEndpoint groups krakend check findings by the KrakenDEndpoint
 // they name. Findings that name no endpoint are reported on the gateway only.
+// One message that blames several entries of an endpoint is one line naming
+// all of them.
 func rejectionsByEndpoint(findings []configcheck.Finding) map[types.NamespacedName]string {
-	lines := map[types.NamespacedName][]string{}
+	type blame struct {
+		message string
+		entries []int
+	}
+	blames := map[types.NamespacedName][]*blame{}
 	for _, f := range findings {
-		line := f.Message
-		if f.Index >= 0 {
-			line = fmt.Sprintf("spec.endpoints[%d]: %s", f.Index, f.Message)
+		if f.Endpoint == (types.NamespacedName{}) {
+			continue
 		}
-		if f.Endpoint != (types.NamespacedName{}) && !slices.Contains(lines[f.Endpoint], line) {
-			lines[f.Endpoint] = append(lines[f.Endpoint], line)
+		list := blames[f.Endpoint]
+		i := slices.IndexFunc(list, func(b *blame) bool { return b.message == f.Message })
+		if i < 0 {
+			list = append(list, &blame{message: f.Message})
+			blames[f.Endpoint] = list
+			i = len(list) - 1
+		}
+		if f.Index >= 0 && !slices.Contains(list[i].entries, f.Index) {
+			list[i].entries = append(list[i].entries, f.Index)
 		}
 	}
-	out := make(map[types.NamespacedName]string, len(lines))
-	for nn, l := range lines {
+	out := make(map[types.NamespacedName]string, len(blames))
+	for nn, list := range blames {
+		lines := make([]string, 0, len(list))
+		for _, b := range list {
+			slices.Sort(b.entries)
+			where := make([]string, 0, len(b.entries))
+			for _, i := range b.entries {
+				where = append(where, fmt.Sprintf("spec.endpoints[%d]", i))
+			}
+			if len(where) > 0 {
+				lines = append(lines, strings.Join(where, ", ")+": "+b.message)
+			} else {
+				lines = append(lines, b.message)
+			}
+		}
 		out[nn] = truncateMessage("The gateway's newest config was rejected by krakend check and not applied; " +
-			"findings naming this endpoint: " + strings.Join(l, "; "))
+			"findings naming this endpoint: " + strings.Join(lines, "; "))
 	}
 	return out
 }
