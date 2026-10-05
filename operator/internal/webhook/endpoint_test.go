@@ -600,3 +600,31 @@ func TestEndpointAdmission_NoRenderCheckWithoutAGatewayOrAChange(t *testing.T) {
 		})
 	}
 }
+
+// A write the entry rules reject, a malformed audience included, is denied on
+// every edition without spending a validation slot.
+func TestEndpointAdmission_RuleViolationsSkipTheRenderCheck(t *testing.T) {
+	badAudience := testEndpoint("new", "/a")
+	badAudience.Spec.Endpoints[0].ExtraConfig = &runtime.RawExtension{
+		Raw: []byte(`{"documentation/openapi":{"audience":{"a":1}}}`),
+	}
+	tests := map[string]*v1alpha1.KrakenDEndpoint{
+		"malformed audience": badAudience,
+		"duplicate route":    testEndpoint("new", "/a/{id}", "/a/{name}"),
+	}
+	for name, ep := range tests {
+		t.Run(name, func(t *testing.T) {
+			chk := &scriptedChecker{}
+			v := &EndpointValidator{Client: fakeClient(testGateway()), Checker: chk}
+
+			resp := review(t, v, "alice", ep, nil)
+
+			if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity {
+				t.Errorf("response = %+v, want a 422 denial", resp.Result)
+			}
+			if len(chk.calls) != 0 {
+				t.Errorf("checks = %v, want none", chk.calls)
+			}
+		})
+	}
+}
