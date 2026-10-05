@@ -367,5 +367,6 @@ const autoconfigHead = `{apiVersion: gateway.krakend.io/v1alpha1, kind: KrakenDA
 func TestAutoConfigCRD_Rules(t *testing.T) {
 	runCRDCases(t, autoconfigsCRD, []crdCase{
 		{"valid", autoconfigHead + `openapi: {url: "http://svc/openapi.json"}, trigger: Periodic, periodic: {interval: 5m0s}, additionalEndpoints: [{endpoint: /health}]}}`, ""},
+		{"both sources", autoconfigHead + `openapi: {url: "http://x", configMapRef: {name: c}}, urlTransform: {hostMapping: [{from: a, to: b}]}, trigger: OnChange}}`, "exactly one of url or configMapRef"},
 	})
 }
