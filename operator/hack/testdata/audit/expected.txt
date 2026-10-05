@@ -84,6 +84,7 @@ KrakenDAutoConfig a/defaults-encoding: spec.defaults.backend.encoding jsn
 KrakenDAutoConfig a/defaults-sd: spec.defaults.backend.sd foo
 KrakenDAutoConfig a/defaults-policy: spec.defaults.policyRef.name is empty
 KrakenDAutoConfig a/no-source: need exactly one of openapi.url or openapi.configMapRef
+KrakenDAutoConfig a/interval-trailing-dot: periodic.interval below 30s
 gateway a/routes: GET /orders/{id} (a/route-one) vs GET /orders/{name} (b/route-two)
 gateway a/routes-clean: GET /a//b (a/route-slash1) vs GET /a/b (a/route-slash2)
 gateway a/routes-dots: GET /d/./e/ (a/route-dots1) vs GET /d/x/../e/ (a/route-dots2)
