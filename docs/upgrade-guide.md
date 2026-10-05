@@ -1296,7 +1296,7 @@ an already-invalid field unchanged is admitted, so objects stored before the
 upgrade keep accepting unrelated changes (labels, annotations, other fields);
 only a change *to* the violating field must fix it. The exception is a list
 without per-item keys: an entry's `backends` (an atomic list) and a
-KrakenDAutoConfig's `overrides[]`. Their items ratchet only while the whole
+KrakenDAutoConfig's `overrides[]` and `additionalEndpoints[].backends`. Their items ratchet only while the whole
 list is unchanged, so any edit to the list re-checks every item and a stored
 invalid sibling blocks it. Run the audit in the
 Pre-Upgrade Checklist to find such objects. The chart refuses clusters below
@@ -1348,12 +1348,16 @@ webhooks enabled, because their typed decode rejects such values.
 `configMapRef`, and `configMapRef` needs `urlTransform.hostMapping`. `trigger:
 Periodic` needs `periodic.interval` of **at least 30s** (previously any
 non-zero value; shorter intervals hot-looped the upstream), and the interval
-must be a Go duration. `bearerTokenSecret` and `basicAuthSecret` are mutually
+must be a Go duration. The floor applies only while the trigger is `Periodic`:
+an `OnChange` object may keep a short interval, but switching it to `Periodic`
+is rejected until the interval is raised. `bearerTokenSecret` and `basicAuthSecret` are mutually
 exclusive, and a name is at most 63 characters because it becomes a label value
 on the generated endpoints. An override `method` is one of GET, POST, PUT, PATCH
-or DELETE, `backends[].index` is 0 or more, and `spec.overrides` holds at most
-1024 items. `additionalEndpointsBasePath` and `additionalEndpoints[].endpoint`
-start with `/`, and `additionalEndpointsBasePath` stays mutually exclusive with
+or DELETE, `concurrentCalls` is 1 or more, `backends[].index` is 0 or more, and
+`spec.overrides` holds at most 1024 items. An override `endpoint` and an
+`additionalEndpoints[].endpoint` follow the KrakenDEndpoint path rule (start
+with `/`, no `*`, `?`, `&` or `%` except a trailing `/*`), and
+`additionalEndpointsBasePath` starts with `/`. The base path `additionalEndpointsBasePath` stays mutually exclusive with
 `urlTransform.addPathPrefix`. `additionalEndpoints` holds at most 256 items,
 unique on (endpoint, method), with `method` defaulting to `GET` (existing
 objects read back with `method: GET`), and an entry sets either `backends` or
@@ -1361,14 +1365,26 @@ the `host`/`backendUrlPattern`/`encoding` shorthand, not both. `timeout` and
 `cacheTTL` on `defaults.endpoint`, overrides and additional endpoints are Go
 durations that fit in 64 bits of nanoseconds, at most 64 characters. The
 `outputEncoding` of `defaults.endpoint`, overrides and additional endpoints, and
-the `encoding` of `defaults.backend` and of an additional endpoint's shorthand,
-must be values the KrakenDEndpoint schema accepts: a typo used to be admitted
+the `encoding` and `sd` of `defaults.backend` and the `encoding` of an
+additional endpoint's shorthand, must be values the KrakenDEndpoint schema accepts: a typo used to be admitted
 here and then fail every generated KrakenDEndpoint write. The webhook no longer
 checks these; a rejection now comes from the API server. A stored value that
-breaks one of these rules keeps being accepted on unrelated updates. The rules
-on `spec` itself (a source, `hostMapping`, Periodic needing a `periodic` block,
-the base path and `addPathPrefix` exclusivity) are re-checked on any change to
-the spec.
+breaks a field rule (a pattern, an enum, a minimum) keeps being accepted on
+unrelated updates. Four things are not ratcheted. The rules on `spec` itself (a
+source, `hostMapping`, the Periodic interval, the base path and `addPathPrefix`
+exclusivity) are re-checked on any change to the spec. The 63-character name
+rule runs on every write to the object, including label, annotation and status
+writes, because ratcheting compares the whole node and at the root that is the
+whole object; a stored object with a longer name can only be deleted and
+recreated. A duration that matches the pattern but overflows raises an
+evaluation error, which is never ratcheted. Within `overrides`, an atomic list,
+any edit re-checks every item, as for an entry's `backends`;
+`additionalEndpoints[].backends` is atomic in the same way.
+
+`additionalEndpoints` was an atomic list and is now a map list keyed on
+(endpoint, method), so server-side apply merges entries by key. Existing
+server-side apply managers get per-item ownership on their next apply, and no
+conflicts are reported until then.
 
 **Redis and Dragonfly credentials are rejected until they are supported.** The
 operator has never rendered `spec.redis.connectionPool.password` or `.tls`, so
