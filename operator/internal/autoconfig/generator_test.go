@@ -267,6 +267,9 @@ func TestGenerator_AttachesEachEndpointsSchemaClosure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generate: %v", err)
 	}
+	if len(out.Endpoints) != 3 {
+		t.Fatalf("generated %d endpoints, want 3", len(out.Endpoints))
+	}
 	want := map[string][]string{
 		"ac-getpets":   {"Address", "Owner", "Pet"},
 		"ac-geterrors": {"Error"},
