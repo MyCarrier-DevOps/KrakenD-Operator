@@ -187,8 +187,11 @@ spec:
                       minimum: 1
                       type: integer
                     endpoint:
-                      description: Endpoint is the public path exposed by KrakenD
-                        (e.g. "/api/v1/users").
+                      description: |-
+                        Endpoint is the public path exposed by KrakenD (e.g. "/api/v1/users").
+                        It starts with "/" and contains no "*", "?", "&" or "%", except a
+                        trailing "/*" wildcard (an Enterprise feature).
+                      pattern: ^(/\*|/[^*?&%]*(/\*)?)$
                       type: string
                     extraConfig:
                       description: ExtraConfig holds arbitrary endpoint-level extra_config
