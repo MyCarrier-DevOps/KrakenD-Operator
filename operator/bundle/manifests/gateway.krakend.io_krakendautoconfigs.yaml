@@ -271,6 +271,7 @@ spec:
                   scope AdditionalEndpoints under the application. When empty, the base is
                   derived from the generated endpoints' common parent directory. Must start
                   with "/".
+                pattern: ^/
                 type: string
               cue:
                 description: CUE configures optional custom CUE definitions for endpoint
