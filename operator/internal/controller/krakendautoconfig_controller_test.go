@@ -3958,3 +3958,35 @@ func TestAutoConfigReconcile_WritesBeforeDeletingStale(t *testing.T) {
 		t.Errorf("endpoint writes = %v, want %v", ops, want)
 	}
 }
+
+func TestAutoConfigReconcile_AttemptsEveryWriteAndKeepsStaleOnFailure(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	stale := ownedCopy(t, ac, generatedEndpoint("old", "/old"))
+	f, ce, fi, g := defaultMocks()
+	g.output.Endpoints = []*v1alpha1.KrakenDEndpoint{
+		generatedEndpoint("a", "/a"), generatedEndpoint("b", "/b"), generatedEndpoint("c", "/c"),
+	}
+	var ops []string
+	c := fakeClientBuilder().WithObjects(ac, cm, stale).WithStatusSubresource(ac).
+		WithInterceptorFuncs(recordEndpointWrites(&ops, map[string]error{"test-ac-b": errors.New("etcd timeout")})).
+		Build()
+	r := newACReconciler(c, f, ce, fi, g)
+
+	_, err := reconcileAC(r, ac)
+
+	if err == nil || !strings.Contains(err.Error(), "upserting endpoint test-ac-b: etcd timeout") {
+		t.Fatalf("expected the aggregated write error, got %v", err)
+	}
+	for name, want := range map[string]bool{
+		"test-ac-a": true, "test-ac-b": false, "test-ac-c": true, "test-ac-old": true,
+	} {
+		if got := endpointExists(t, c, name); got != want {
+			t.Errorf("endpoint %s exists = %v, want %v", name, got, want)
+		}
+	}
+	cond := meta.FindStatusCondition(getAC(t, c, ac).Status.Conditions, v1alpha1.ConditionSynced)
+	if cond == nil || cond.Reason != v1alpha1.ReasonEndpointReconcileFailed || !strings.Contains(cond.Message, "test-ac-b") {
+		t.Errorf("expected Synced False/EndpointReconcileFailed naming test-ac-b, got %+v", cond)
+	}
+}
