@@ -95,5 +95,8 @@ jq "${jq_opts[@]}" "$jq_lib"'
     | enum_problem("spec.config.outputEncoding"; ["json", "fast-json", "json-collection", "xml", "negotiate", "string", "no-op"])),
   ($s.config.router.healthPath // empty | select(crd_test("^/") | not) | "spec.config.router.healthPath \(.)"),
   ($s.redis.connectionPool.dialTimeout // empty
-    | dur_problem($one_re; 64; "spec.redis.connectionPool.dialTimeout"))
+    | dur_problem($one_re; 64; "spec.redis.connectionPool.dialTimeout")),
+  (($s.license.externalSecret.enabled // false) as $es | ($s.license.secretRef != null) as $sr | (
+    (if $s.edition == "EE" and ($es | not) and ($sr | not) then "EE without a license source" else empty end)
+  ))
 ]} | report("KrakenDGateway")' "$work/gateways.json"
