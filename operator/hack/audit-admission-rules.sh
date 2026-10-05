@@ -100,6 +100,7 @@ jq "${jq_opts[@]}" "$jq_lib"'
     (if $s.edition == "EE" and ($es | not) and ($sr | not) then "EE without a license source" else empty end),
     (if $s.edition == "EE" and ($es | not) and $sr and (($s.license.secretRef.name // "") == "")
      then "EE license secretRef has an empty name" else empty end),
-    (if $s.edition == "CE" and ($es or $sr) then "CE with a license source" else empty end)
+    (if $s.edition == "CE" and ($es or $sr) then "CE with a license source" else empty end),
+    (if $es and $sr then "both license sources set" else empty end)
   ))
 ]} | report("KrakenDGateway")' "$work/gateways.json"
