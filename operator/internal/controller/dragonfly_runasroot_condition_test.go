@@ -143,7 +143,7 @@ func TestRecordDragonflyRunAsRootCondition_NoRequest(t *testing.T) {
 		t.Errorf("expected reason %q, got %q", v1alpha1.ReasonDragonflyRunAsRootNoRequest, cond.Reason)
 	}
 	if cond.Reason == v1alpha1.ReasonDragonflyRunAsRootAcknowledged {
-		t.Error("NoRunAsRootRequest must be distinct from RunAsRootAcknowledged (D5b reason split)")
+		t.Error("NoRunAsRootRequest must be distinct from RunAsRootAcknowledged (the two False reasons are split)")
 	}
 }
 
