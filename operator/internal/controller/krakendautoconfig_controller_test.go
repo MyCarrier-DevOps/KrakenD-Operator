@@ -3834,3 +3834,12 @@ func TestAutoConfigReconcile_MergesManagedLabelsIntoExisting(t *testing.T) {
 		t.Errorf("expected no endpoint update, got %+v", counts)
 	}
 }
+
+func TestOwnedEndpointPredicate_PassesLabelChange(t *testing.T) {
+	old := generatedEndpoint("a", "/a")
+	relabelled := old.DeepCopy()
+	relabelled.Labels = nil
+	if !ownedEndpointPredicate().Update(event.UpdateEvent{ObjectOld: old, ObjectNew: relabelled}) {
+		t.Error("expected a label change to pass the Owns predicate")
+	}
+}
