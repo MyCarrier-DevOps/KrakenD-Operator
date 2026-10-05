@@ -5158,3 +5158,14 @@ func TestSummarizeReadiness(t *testing.T) {
 		t.Errorf("summarizeReadiness = %+v, want %+v", got, want)
 	}
 }
+
+func TestEndpointsReadyCondition(t *testing.T) {
+	t.Run("all ready", func(t *testing.T) {
+		got := endpointsReadyCondition(endpointReadiness{total: 2, ready: 2}, 3)
+		if got.Type != v1alpha1.ConditionEndpointsReady || got.Status != metav1.ConditionTrue ||
+			got.Reason != v1alpha1.ReasonAllEndpointsReady || got.ObservedGeneration != 3 ||
+			got.Message != "2 of 2 endpoints ready" {
+			t.Errorf("unexpected condition %+v", got)
+		}
+	})
+}
