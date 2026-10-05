@@ -31,7 +31,8 @@ import (
 // 2026-09-28), cross-checked with "Enterprise only." in the v2.13 schema
 // (https://www.krakend.io/schema/v2.13/krakend.json). The schema alone cannot
 // separate them: the CE and EE 2.13 binaries embed the same schema, so CE
-// lint accepts every namespace below and the CE runtime silently ignores it.
+// lint accepts every namespace in eeonly_namespaces.json and the CE runtime
+// silently ignores it.
 //
 // Not listed, because CE honors part of them: telemetry/opentelemetry at
 // endpoint and backend level (its proxy section is CE), and endpoint-level
