@@ -18,7 +18,6 @@ package autoconfig
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -35,8 +34,11 @@ const maxParameterRefDepth = 8
 // query strings and headers an endpoint forwards. External refs are left for
 // ResolveExternalRefs, which rewrites them to local ones before this runs.
 //
-// It returns specData unchanged when no parameter is a $ref. A decode error
-// returns specData unchanged with the error.
+// It returns specData unchanged when no parameter is a $ref. A ref it cannot
+// resolve is left in place and reported in warnings, in path and method
+// order; the operation that uses it then fails CUE evaluation instead of
+// silently forwarding nothing. A decode error returns specData unchanged
+// with the error.
 func DereferenceParameters(specData []byte) (out []byte, warnings []string, err error) {
 	root, err := decodeSpec(specData)
 	if err != nil {
@@ -52,11 +54,12 @@ func DereferenceParameters(specData []byte) (out []byte, warnings []string, err 
 		if !ok {
 			continue
 		}
-		if dereferenceList(root, item) {
+		if dereferenceList(root, item, path, &warnings) {
 			changed = true
 		}
 		for _, method := range httpMethods {
-			if op, ok := item[method].(map[string]any); ok && dereferenceList(root, op) {
+			if op, ok := item[method].(map[string]any); ok &&
+				dereferenceList(root, op, strings.ToUpper(method)+" "+path, &warnings) {
 				changed = true
 			}
 		}
@@ -72,8 +75,9 @@ func DereferenceParameters(specData []byte) (out []byte, warnings []string, err 
 }
 
 // dereferenceList dereferences the local $refs in holder's "parameters" list
-// in place, reporting whether it replaced any.
-func dereferenceList(root, holder map[string]any) bool {
+// in place, reporting whether it replaced any. where names holder in
+// warnings: the path for a path item, "METHOD /path" for an operation.
+func dereferenceList(root, holder map[string]any, where string, warnings *[]string) bool {
 	params, ok := holder["parameters"].([]any)
 	if !ok {
 		return false
@@ -86,6 +90,8 @@ func dereferenceList(root, holder map[string]any) bool {
 		}
 		target, err := resolveParameter(root, ref)
 		if err != nil {
+			*warnings = append(*warnings,
+				fmt.Sprintf("parameter $ref %q in %s cannot be resolved: %v", ref, where, err))
 			continue
 		}
 		params[i] = deepCloneJSON(target)
@@ -118,5 +124,5 @@ func resolveParameter(root map[string]any, ref string) (any, error) {
 		}
 		ref = next
 	}
-	return nil, errors.New("too many chained $refs")
+	return nil, fmt.Errorf("more than %d chained $refs", maxParameterRefDepth)
 }
