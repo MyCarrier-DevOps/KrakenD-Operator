@@ -2511,3 +2511,20 @@ func TestGatewayAdmission_ChangedProbeIsRechecked(t *testing.T) {
 		t.Errorf("probe host 10.0.0.1 -> 10.0.0.2: %+v, want 422 on spec.openapi.readinessProbe.httpGet.host", resp.Result)
 	}
 }
+
+func TestGatewayAdmission_ChangedTerminationGracePeriodIsRechecked(t *testing.T) {
+	readinessWith := func(grace int64) *corev1.Probe {
+		return &corev1.Probe{ProbeHandler: tcpHandler(), TerminationGracePeriodSeconds: ptr.To(grace)}
+	}
+	old := gwWithProbes(nil, readinessWith(30), "")
+	changed := gwWithProbes(nil, readinessWith(60), "")
+
+	resp := review(t, &GatewayValidator{}, "alice", changed, old)
+	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity ||
+		resp.Result.Details.Causes[0].Field != "spec.openapi.readinessProbe.terminationGracePeriodSeconds" {
+		t.Errorf("readiness grace 30 -> 60: %+v, want 422 on its terminationGracePeriodSeconds", resp.Result)
+	}
+	if resp := review(t, &GatewayValidator{}, "alice", old.DeepCopy(), old); !resp.Allowed {
+		t.Errorf("unchanged probe denied: %+v", resp.Result)
+	}
+}
