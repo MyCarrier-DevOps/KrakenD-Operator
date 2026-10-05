@@ -520,9 +520,7 @@ func routeCollisions(
 		for _, ep := range group[1:] {
 			e, winner := ep.Spec.Endpoints[0], survivor.Spec.Endpoints[0]
 			message := renderer.RouteClashDetail(e.Method, e.Endpoint, winner.Endpoint, survivor.Name)
-			collisions[ep.Name] = rejection{
-				endpoint: ep, reason: v1alpha1.ReasonConfigValidationFailed, message: message, cause: errors.New(message),
-			}
+			hold(collisions, []*v1alpha1.KrakenDEndpoint{ep}, message, errors.New(message))
 		}
 	}
 	return collisions
