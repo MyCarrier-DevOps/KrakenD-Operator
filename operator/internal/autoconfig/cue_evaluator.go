@@ -148,6 +148,8 @@ func (e *cueEvaluator) Evaluate(_ context.Context, input CUEInput) (*CUEOutput, 
 		applyURLTransform(output, input.URLTransform)
 		transformIssuePaths(output.Failed, input.URLTransform)
 	}
+	// Sorted once the paths are final: a prefix strip can reorder them.
+	sortIssues(output.Failed)
 
 	applyFieldOverrides(output, input.Overrides)
 	skipUnsupportedMethods(output)
@@ -229,7 +231,6 @@ func exportEndpointEntries(endpointsValue cue.Value) (*CUEOutput, error) {
 			output.Tags[entryKey] = op.Tags
 		}
 	}
-	sortIssues(output.Failed)
 	return output, nil
 }
 
