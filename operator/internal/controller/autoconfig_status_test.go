@@ -143,10 +143,12 @@ func TestOperationLabel_OmitsAnUnknownMethod(t *testing.T) {
 }
 
 // A strip of the prefix puts /x and the prefixed path on one route, and one of
-// the two operations publishes, whichever the key order puts first. A rejected
-// write of that endpoint is named by the operation it serves, so the status
-// and the object agree.
-func TestRejectedStatuses_NameAnOperationByTheOperationItsEndpointServes(t *testing.T) {
+// the two operations publishes. The generator names its endpoint by the
+// route-keyed operationId, which after the strip may be the dropped
+// operation's, and a rejected write is labelled with that same id: the status
+// and the object agree, though neither need name the operation the endpoint
+// serves.
+func TestRejectedStatuses_NameAnOperationByTheIdItsEndpointWasNamedFor(t *testing.T) {
 	defs, err := autoconfig.EmbeddedCUEDefinitions()
 	if err != nil {
 		t.Fatalf("loading definitions: %v", err)
@@ -178,11 +180,6 @@ func TestRejectedStatuses_NameAnOperationByTheOperationItsEndpointServes(t *test
 			for _, ep := range gen.Endpoints {
 				rejected[ep.Name] = rejection{endpoint: ep, reason: v1alpha1.ReasonEndpointRejected, message: "invalid"}
 			}
-			served := map[string]string{prefix + "/x": "other", "/x": "dup", "/q": "dup"}
-			byName := map[string]string{}
-			for _, ep := range gen.Endpoints {
-				byName[ep.Name] = served[ep.Spec.Endpoints[0].Backends[0].URLPattern]
-			}
 
 			got := rejectedStatuses(rejected, cue.OperationIDs)
 
@@ -190,9 +187,8 @@ func TestRejectedStatuses_NameAnOperationByTheOperationItsEndpointServes(t *test
 				t.Fatalf("rejectedStatuses = %+v, want one per generated endpoint", got)
 			}
 			for _, s := range got {
-				if s.OperationID != byName[s.Endpoint] {
-					t.Errorf("status of endpoint %s names operation %q, want %q (the one it serves)",
-						s.Endpoint, s.OperationID, byName[s.Endpoint])
+				if s.OperationID == "" || autoconfig.OperationEndpointName(ac.Name, s.OperationID) != s.Endpoint {
+					t.Errorf("status of endpoint %s names operationId %q, which did not name it", s.Endpoint, s.OperationID)
 				}
 			}
 		})
