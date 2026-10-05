@@ -267,6 +267,12 @@ spec:
                   required:
                   - endpoint
                   type: object
+                  x-kubernetes-validations:
+                  - message: backends and the host/backendUrlPattern/encoding shorthand
+                      are mutually exclusive
+                    rule: '!(has(self.backends) && size(self.backends) > 0 && ((has(self.host)
+                      && size(self.host) > 0) || (has(self.backendUrlPattern) && size(self.backendUrlPattern)
+                      > 0) || (has(self.encoding) && size(self.encoding) > 0)))'
                 maxItems: 256
                 type: array
                 x-kubernetes-list-map-keys:
