@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -175,12 +176,23 @@ func (v *EndpointValidator) checkRender(
 }
 
 // renderDenial rejects ep with one cause per entry of ep the verdict blames.
+// Findings about other objects or the gateway root go on spec.endpoints.
 func renderDenial(ep *v1alpha1.KrakenDEndpoint, verdict configcheck.Verdict) error {
+	self := types.NamespacedName{Namespace: ep.Namespace, Name: ep.Name}
 	var errs field.ErrorList
+	var others []string
 	for _, f := range verdict.Findings {
-		entry := ep.Spec.Endpoints[f.Index]
-		errs = append(errs, field.Invalid(field.NewPath("spec", "endpoints").Index(f.Index),
-			entry.Method+" "+entry.Endpoint, f.Message))
+		if f.Endpoint == self && f.Index >= 0 && f.Index < len(ep.Spec.Endpoints) {
+			entry := ep.Spec.Endpoints[f.Index]
+			errs = append(errs, field.Invalid(field.NewPath("spec", "endpoints").Index(f.Index),
+				entry.Method+" "+entry.Endpoint, f.Message))
+			continue
+		}
+		others = append(others, f.String())
+	}
+	if len(others) > 0 {
+		errs = append(errs, field.Invalid(field.NewPath("spec", "endpoints"), field.OmitValueType{},
+			"with this change the gateway's config fails krakend check: "+strings.Join(others, "; ")))
 	}
 	return invalid(kindEndpoint, ep.Name, errs)
 }
