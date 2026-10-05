@@ -75,7 +75,8 @@ jq "${jq_opts[@]}" "$jq_lib"'
       ($b.encoding // empty | enum_problem("\($q).encoding"; ["json", "safejson", "fast-json", "xml", "rss", "string", "no-op", "yaml"])),
       ($b.sd // empty | enum_problem("\($q).sd"; ["static", "dns", "dns-shared"])),
       ($b.method // empty
-        | enum_problem("\($q).method"; ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD", "CONNECT", "TRACE"]))
+        | enum_problem("\($q).method"; ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD", "CONNECT", "TRACE"])),
+      (if $b.policyRef != null and ($b.policyRef.name // "") == "" then "\($q).policyRef.name is empty" else empty end)
     ))
   ))
 ]} | report("KrakenDEndpoint")' "$work/endpoints.json"
