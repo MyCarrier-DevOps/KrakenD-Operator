@@ -97,6 +97,8 @@ jq "${jq_opts[@]}" "$jq_lib"'
   ($s.redis.connectionPool.dialTimeout // empty
     | dur_problem($one_re; 64; "spec.redis.connectionPool.dialTimeout")),
   (($s.license.externalSecret.enabled // false) as $es | ($s.license.secretRef != null) as $sr | (
-    (if $s.edition == "EE" and ($es | not) and ($sr | not) then "EE without a license source" else empty end)
+    (if $s.edition == "EE" and ($es | not) and ($sr | not) then "EE without a license source" else empty end),
+    (if $s.edition == "EE" and ($es | not) and $sr and (($s.license.secretRef.name // "") == "")
+     then "EE license secretRef has an empty name" else empty end)
   ))
 ]} | report("KrakenDGateway")' "$work/gateways.json"
