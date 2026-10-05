@@ -239,5 +239,6 @@ func TestGatewayCRD_Rules(t *testing.T) {
 		{"port above range", gatewayHead + `edition: CE, config: {port: 70000}}}`, "spec.config.port"},
 		{"port zero", gatewayHead + `edition: CE, config: {port: 0}}}`, "spec.config.port"},
 		{"output encoding", gatewayHead + `edition: CE, config: {outputEncoding: yaml}}}`, "Unsupported value: \"yaml\""},
+		{"health path", gatewayHead + `edition: CE, config: {router: {healthPath: healthz}}}}`, "spec.config.router.healthPath"},
 	})
 }
