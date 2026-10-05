@@ -4689,3 +4689,56 @@ func TestEndpointFailuresError_IsNeverClassifiedAsARace(t *testing.T) {
 		t.Error("expected a failed pass never to read as a lost race")
 	}
 }
+
+func endpointNames(eps []v1alpha1.KrakenDEndpoint) []string {
+	names := make([]string, len(eps))
+	for i := range eps {
+		names[i] = eps[i].Name
+	}
+	return names
+}
+
+func TestAutoConfigReconcile_PrecheckHoldsAttributedOperations(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	stale := ownedCopy(t, ac, generatedEndpoint("old", "/old"))
+	f, ce, fi, g := defaultMocks()
+	g.output.Endpoints = append(g.output.Endpoints, generatedEndpoint("getB", "/b"))
+	checker := &fakeChecker{verdicts: []configcheck.Verdict{{Findings: []configcheck.Finding{{
+		Endpoint: types.NamespacedName{Namespace: "default", Name: "test-ac-getb"}, Index: 0,
+		Message: "'timeout' time: unknown unit",
+	}}}}}
+	c := fakeClientBuilder().WithObjects(ac, cm, stale, testGateway()).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Checker = checker
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(checker.calls) != 2 {
+		t.Fatalf("expected 2 checks, got %d", len(checker.calls))
+	}
+	// Round 1 checks both candidates and models the stale endpoint gone.
+	if names := endpointNames(checker.calls[0]); !slices.Equal(names,
+		[]string{"test-ac-listusers", "test-ac-getb", "test-ac-old"}) {
+		t.Errorf("round 1 replace set = %v", names)
+	}
+	if old := checker.calls[0][2]; len(old.Spec.Endpoints) != 0 || old.Spec.ComponentSchemas != nil {
+		t.Errorf("expected an empty copy of the stale endpoint, got %+v", old.Spec)
+	}
+	// Round 2 re-checks what remains; test-ac-getb failed, so the stale
+	// endpoint stays and is not modelled gone.
+	if names := endpointNames(checker.calls[1]); !slices.Equal(names, []string{"test-ac-listusers"}) {
+		t.Errorf("round 2 replace set = %v", names)
+	}
+	if endpointExists(t, c, "test-ac-getb") || !endpointExists(t, c, "test-ac-listusers") ||
+		!endpointExists(t, c, "test-ac-old") {
+		t.Error("expected listusers written, getb not written, old kept")
+	}
+	failed := getAC(t, c, ac).Status.FailedOperations
+	if len(failed) != 1 || failed[0].Endpoint != "test-ac-getb" ||
+		failed[0].Reason != v1alpha1.ReasonConfigValidationFailed ||
+		failed[0].Message != "'timeout' time: unknown unit" {
+		t.Errorf("failedOperations = %+v", failed)
+	}
+}
