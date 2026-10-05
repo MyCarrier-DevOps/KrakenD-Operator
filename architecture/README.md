@@ -1374,6 +1374,14 @@ both endpoints of a clash, so attribution works as for any `krakend check`
 finding, and `krakend check` is not run. The check runs for both `Validate`
 (`krakend check -t -n`) and `Lint` (`krakend check -n`).
 
+The embedded binary is pinned by digest (`KRAKEND_IMAGE` in the operator's
+`Dockerfile`, KrakenD CE 2.13.11), and `configcheck.ValidatorVersion` names its
+minor version, 2.13. Admission and the gateway controller validate every gateway
+with that binary, whatever its `spec.version`. An integration test runs the
+pinned binary against the route check, including that the gin version in the
+binary equals the one in `go.mod`, so the pin, `ValidatorVersion` and gin change
+together.
+
 Alternatively, for environments where embedding the binary is impractical:
 
 - **Via init container** — a short-lived container running the check command against the mounted ConfigMap
