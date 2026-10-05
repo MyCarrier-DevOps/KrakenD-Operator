@@ -41,7 +41,19 @@ func unavailable(err error) error {
 	return apierrors.NewInternalError(err)
 }
 
-// newErrors returns the errors in errs that old does not already have.
+// newErrors returns the errors in errs that old does not already have, matched
+// on their full text (field, type, value and detail), so an update is rejected
+// only for problems it introduces.
 func newErrors(errs, old field.ErrorList) field.ErrorList {
-	return nil
+	existing := make(map[string]struct{}, len(old))
+	for _, e := range old {
+		existing[e.Error()] = struct{}{}
+	}
+	var fresh field.ErrorList
+	for _, e := range errs {
+		if _, ok := existing[e.Error()]; !ok {
+			fresh = append(fresh, e)
+		}
+	}
+	return fresh
 }
