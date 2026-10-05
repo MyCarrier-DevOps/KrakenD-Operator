@@ -65,3 +65,4 @@ KrakenDAutoConfig a/additional-cachettl: spec.additionalEndpoints[0].cacheTTL 25
 KrakenDAutoConfig a/additional-output: spec.additionalEndpoints[0].outputEncoding jsn
 KrakenDAutoConfig a/additional-encoding: spec.additionalEndpoints[0].encoding jsn
 KrakenDAutoConfig a/additional-backend-sd: spec.additionalEndpoints[0].backends[0].sd foo
+KrakenDAutoConfig a/additional-backend-rest: spec.additionalEndpoints[0].backends[0].encoding jsn; spec.additionalEndpoints[0].backends[0].method get; spec.additionalEndpoints[0].backends[0].policyRef.name is empty
