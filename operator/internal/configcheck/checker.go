@@ -19,6 +19,7 @@ package configcheck
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 
@@ -67,7 +68,13 @@ func (c *Checker) lint(ctx context.Context, in renderer.RenderInput) (Verdict, e
 // check runs validate on out as the edition in is for.
 func (c *Checker) check(ctx context.Context, in renderer.RenderInput, out *renderer.RenderOutput,
 	validate func(context.Context, []byte, v1alpha1.Edition) error) (Verdict, error) {
-	if err := validate(ctx, out.JSON, renderer.EditionFor(in.Gateway, in.CEFallback)); err != nil {
+	err := validate(ctx, out.JSON, renderer.EditionFor(in.Gateway, in.CEFallback))
+	var invalid *renderer.ValidationError
+	if errors.As(err, &invalid) {
+		atts := renderer.Attribute(out.JSON, out.Sources, invalid.Output)
+		return Verdict{Findings: findingsFrom(atts, out.JSON, in.Endpoints, invalid.Output)}, nil
+	}
+	if err != nil {
 		return Verdict{}, err
 	}
 	return Verdict{OK: true}, nil
