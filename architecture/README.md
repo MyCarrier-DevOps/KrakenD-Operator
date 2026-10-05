@@ -1525,10 +1525,10 @@ operator read. It tracks the mounted license, so it is present for every EE gate
 Changing the license in the Secret changes the annotation, rolls the
 Deployment (`Progressing=True`, reason `DeploymentUpdated`, or
 `ConfigDeployed` when a config applied during a plugin ConfigMap hold rolls
-out with it) and holds `Ready` until the new pods are available. When the Secret cannot be read, the
-annotation the Deployment already carries is kept, so nothing rolls. The
-post-restart Job's identity does not include the license, so a renewal does
-not re-run it.
+out with it) and holds `Ready` until the new pods are available. When the
+Secret cannot be read, the annotation the Deployment already carries is
+kept, so nothing rolls. The post-restart Job's identity does not include the
+license, so a renewal does not re-run it.
 
 A config ConfigMap is garbage-collected once nothing can mount it. The
 operator keeps the three most recently created revisions, the applied one
