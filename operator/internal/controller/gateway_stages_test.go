@@ -2614,3 +2614,82 @@ func TestGatewayReconcile_HeldForPluginConfigMapReportsNoDeploymentUpdate(t *tes
 		t.Errorf("Deployment image = %s, want it left at %s while held", image, convergedImage)
 	}
 }
+
+func TestGatewayReconcile_ReleasingThePluginHoldReportsTheDeferredConfigRolloutOnce(t *testing.T) {
+	gw := servingGateway("A", convergedImage)
+	live := makeConvergedDeployment(gw, "A")
+	gw.Spec.Plugins = &v1alpha1.PluginsSpec{Sources: []v1alpha1.PluginSource{
+		{ConfigMapRef: &v1alpha1.ConfigMapKeyRef{Name: "plugins-a", Key: "auth.so"}},
+	}}
+	var stale *appsv1.Deployment
+	c := fakeClientBuilder().WithObjects(gw, live).WithStatusSubresource(gw).WithInterceptorFuncs(interceptor.Funcs{
+		Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			if dep, ok := obj.(*appsv1.Deployment); ok {
+				dep.Generation++ // the API server bumps it on a spec change
+			}
+			return c.Update(ctx, obj, opts...)
+		},
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object,
+			opts ...client.GetOption,
+		) error {
+			if dep, ok := obj.(*appsv1.Deployment); ok && stale != nil {
+				stale.DeepCopyInto(dep)
+				return nil
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	}).Build()
+	r := newTestGatewayReconciler(c, renderOutput("B"), &mockValidator{})
+	rec := fakeRecorder()
+	r.Recorder = rec
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile while held: %v", err)
+	}
+	if applied := getGateway(t, c, gw).Status.ConfigChecksum; applied != "B" {
+		t.Fatalf("applied config = %q, want B applied while the Deployment is held", applied)
+	}
+	events := drainEvents(rec)
+
+	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "plugins-a", Namespace: gw.Namespace},
+		BinaryData: map[string][]byte{"auth.so": []byte("plugin")}}
+	if err := c.Create(context.Background(), cm); err != nil {
+		t.Fatal(err)
+	}
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile releasing the hold: %v", err)
+	}
+	got := getGateway(t, c, gw)
+	progressing := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionProgressing)
+	if progressing == nil || progressing.Status != metav1.ConditionTrue ||
+		progressing.Reason != v1alpha1.ReasonConfigDeployed {
+		t.Errorf("Progressing = %+v, want True/%s once the hold lifts and the applied config rolls out",
+			progressing, v1alpha1.ReasonConfigDeployed)
+	}
+	if ready := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionReady); ready == nil ||
+		ready.Status != metav1.ConditionFalse || got.Status.Phase != v1alpha1.PhaseDeploying {
+		t.Errorf("Ready = %+v, phase = %s, want False and %s while the new pods roll",
+			ready, got.Status.Phase, v1alpha1.PhaseDeploying)
+	}
+	events = append(events, drainEvents(rec)...)
+
+	var rolled appsv1.Deployment
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(gw), &rolled); err != nil {
+		t.Fatal(err)
+	}
+	stale = live.DeepCopy() // the cache still shows the Deployment from before the update
+	stale.ResourceVersion = rolled.ResourceVersion
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile on a stale read: %v", err)
+	}
+	events = append(events, drainEvents(rec)...)
+	n := 0
+	for _, ev := range events {
+		if strings.Contains(ev, v1alpha1.ReasonConfigDeployed) {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("ConfigDeployed events = %d (%q), want exactly one, on the reconcile that lifts the hold", n, events)
+	}
+}
