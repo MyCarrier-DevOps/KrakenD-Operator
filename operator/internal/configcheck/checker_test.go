@@ -525,4 +525,7 @@ func TestLintPolicy_RendersThePolicyOnASyntheticBackend(t *testing.T) {
 	if len(v.seen) != 1 || !strings.Contains(v.seen[0], "qos/circuit-breakr") {
 		t.Errorf("linted %v, want the policy's raw block", v.seen)
 	}
+	if v.calls[0] != "lint" || v.editions[0] != v1alpha1.EditionCE {
+		t.Errorf("ran %s for %s, want lint for CE", v.calls[0], v.editions[0])
+	}
 }
