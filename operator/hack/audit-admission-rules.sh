@@ -92,6 +92,12 @@ def output_encodings: ["json", "json-collection", "yaml", "fast-json", "xml", "n
 def backend_encodings: ["json", "safejson", "fast-json", "xml", "rss", "string", "no-op", "yaml"];
 def discoveries: ["static", "dns", "dns-shared"];
 def backend_methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD", "CONNECT", "TRACE"];
+# The rules of a backend entry of a KrakenDEndpoint or an AutoConfig, at path $q.
+def backend_problems($q):
+  (.encoding // empty | enum_problem("\($q).encoding"; backend_encodings)),
+  (.sd // empty | enum_problem("\($q).sd"; discoveries)),
+  (.method // empty | enum_problem("\($q).method"; backend_methods)),
+  (if .policyRef != null and (.policyRef.name // "") == "" then "\($q).policyRef.name is empty" else empty end);
 def report(kind): select(.v | length > 0) | "\(kind) \(.id): \(.v | unique | join("; "))";
 '
 
@@ -108,13 +114,7 @@ jq "${jq_opts[@]}" "$jq_lib"'
     ($e.cacheTTL // empty | dur_problem($go_re; 64; "\($p).cacheTTL")),
     ($e.outputEncoding // empty
       | enum_problem("\($p).outputEncoding"; output_encodings)),
-    (($e.backends // []) | to_entries[] | .key as $j | .value as $b | "\($p).backends[\($j)]" as $q | (
-      ($b.encoding // empty | enum_problem("\($q).encoding"; backend_encodings)),
-      ($b.sd // empty | enum_problem("\($q).sd"; discoveries)),
-      ($b.method // empty
-        | enum_problem("\($q).method"; backend_methods)),
-      (if $b.policyRef != null and ($b.policyRef.name // "") == "" then "\($q).policyRef.name is empty" else empty end)
-    ))
+    (($e.backends // []) | to_entries[] | .key as $j | .value | backend_problems("\($p).backends[\($j)]"))
   ))
 ]} | report("KrakenDEndpoint")' "$work/endpoints.json"
 
