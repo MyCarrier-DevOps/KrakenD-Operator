@@ -41,6 +41,7 @@ jq "${jq_opts[@]}" "$jq_lib"'
   ((.spec.endpoints // []) | group_by([.endpoint, .method])[] | select(length > 1)
     | "duplicate entry \(.[0].method) \(.[0].endpoint)"),
   ((.spec.endpoints // []) | to_entries[] | .key as $i | .value as $e | "spec.endpoints[\($i)]" as $p | (
-    (if ($e.endpoint // "" | crd_test($path_re)) then empty else "\($p).endpoint \($e.endpoint)" end)
+    (if ($e.endpoint // "" | crd_test($path_re)) then empty else "\($p).endpoint \($e.endpoint)" end),
+    (if (($e.backends // []) | length) == 0 then "\($p).backends is empty" else empty end)
   ))
 ]} | report("KrakenDEndpoint")' "$work/endpoints.json"
