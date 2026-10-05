@@ -110,10 +110,13 @@ func checkGatewayRender(
 		if !root.OK {
 			return nil, gatewayRenderDenial(gw, root)
 		}
-		if _, err := chk.CheckGateway(ctx, gw, nil); err != nil {
+		// The root is the verdict. Endpoints that named the gateway before it
+		// existed can still clash with it, and only they are to blame.
+		withEndpoints, err := chk.CheckGateway(ctx, gw, nil)
+		if err != nil || withEndpoints.OK {
 			return nil, checkErr(err)
 		}
-		return nil, nil
+		return admission.Warnings{fmt.Sprintf("with the endpoints that already reference this gateway, its config fails validation: %s", withEndpoints.Summary(warningLimit))}, nil
 	}
 	return ratchetRender(ctx, renderChecks{
 		after:     bindCheck(chk.CheckGateway, gw, nil),
