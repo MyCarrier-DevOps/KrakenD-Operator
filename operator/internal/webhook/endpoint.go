@@ -361,7 +361,7 @@ func (v *EndpointValidator) validatePolicyNamespaces(
 			} else if err != nil {
 				return nil, fmt.Errorf("looking up policy %s: %w", key, err)
 			}
-			if drops := eeOnlyNamespacesIn(policy.Spec.Raw, renderer.LevelBackend); len(drops) > 0 {
+			if drops := renderer.EEOnlyNamespacesIn(policy.Spec.Raw, renderer.LevelBackend); len(drops) > 0 {
 				p := field.NewPath("spec", "endpoints").Index(i).Child("backends").Index(j).Child("policyRef")
 				errs = append(errs, field.Invalid(p, be.PolicyRef.Name, fmt.Sprintf(
 					"policy %s carries Enterprise-only extra_config (%s): the gateway runs CE, which ignores it silently",
