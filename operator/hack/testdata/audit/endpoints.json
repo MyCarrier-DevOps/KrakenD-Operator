@@ -28,5 +28,7 @@
  {"metadata":{"namespace":"a","name":"route-dots1"},"spec":{"gatewayRef":{"name":"routes-dots"},"endpoints":[{"endpoint":"/d/./e/","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}]}]}},
  {"metadata":{"namespace":"a","name":"route-dots2"},"spec":{"gatewayRef":{"name":"routes-dots"},"endpoints":[{"endpoint":"/d/x/../e/","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}]}]}},
  {"metadata":{"namespace":"a","name":"route-trail1"},"spec":{"gatewayRef":{"name":"routes-trail"},"endpoints":[{"endpoint":"/t/","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}]}]}},
- {"metadata":{"namespace":"a","name":"route-trail2"},"spec":{"gatewayRef":{"name":"routes-trail"},"endpoints":[{"endpoint":"/t","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}]}]}}
+ {"metadata":{"namespace":"a","name":"route-trail2"},"spec":{"gatewayRef":{"name":"routes-trail"},"endpoints":[{"endpoint":"/t","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}]}]}},
+ {"metadata":{"namespace":"a","name":"gen-old","ownerReferences":[{"apiVersion":"gateway.krakend.io/v1alpha1","kind":"KrakenDAutoConfig","name":"ac","uid":"u-1","controller":true}]},"spec":{"gatewayRef":{"name":"routes-gen"},"endpoints":[{"endpoint":"/g/{id}","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}]}]}},
+ {"metadata":{"namespace":"a","name":"gen-new","ownerReferences":[{"apiVersion":"gateway.krakend.io/v1alpha1","kind":"KrakenDAutoConfig","name":"ac","uid":"u-1","controller":true}]},"spec":{"gatewayRef":{"name":"routes-gen"},"endpoints":[{"endpoint":"/g/{name}","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}]}]}}
 ]}
