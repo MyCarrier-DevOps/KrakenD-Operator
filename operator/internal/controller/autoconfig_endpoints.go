@@ -25,6 +25,7 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	kerrors "k8s.io/apimachinery/pkg/util/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
@@ -193,4 +194,29 @@ func (o *endpointOutcome) record(err error) {
 		return
 	}
 	o.transient = append(o.transient, err)
+}
+
+// endpointFailures is every failure of one endpoint pass. Error is the whole
+// list, for the log and the returned error; Summary names the first few and
+// counts the rest, for the status and the event.
+type endpointFailures struct {
+	errs []error
+}
+
+func (f endpointFailures) Error() string {
+	return kerrors.NewAggregate(f.errs).Error()
+}
+
+// Unwrap exposes the failures to errors.Is and errors.As.
+func (f endpointFailures) Unwrap() []error {
+	return f.errs
+}
+
+// Summary names the first failures, as listed does.
+func (f endpointFailures) Summary() string {
+	messages := make([]string, len(f.errs))
+	for i, err := range f.errs {
+		messages[i] = err.Error()
+	}
+	return listed(messages)
 }
