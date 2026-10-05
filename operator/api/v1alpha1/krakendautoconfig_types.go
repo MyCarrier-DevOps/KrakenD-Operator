@@ -219,6 +219,7 @@ type EndpointDefaults struct {
 // Method, Allow, and Mapping are per-backend and set via overrides.
 type BackendDefaults struct {
 	// Encoding sets the default backend response encoding (e.g. "json", "safejson", "no-op").
+	// +kubebuilder:validation:Enum=json;safejson;fast-json;xml;rss;string;no-op;yaml
 	Encoding string `json:"encoding,omitempty"`
 
 	// SD sets the default service discovery provider (e.g. "static", "dns").
