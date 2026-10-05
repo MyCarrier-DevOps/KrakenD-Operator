@@ -1144,10 +1144,12 @@ type Validators struct {
 // NewValidators builds the validators over c. checker is the config checker
 // the gateway controller uses too, so the validators and the controller share
 // its validation slots.
+// operatorUsername is the username of the operator's own requests; see
+// EndpointValidator.OperatorUsername.
 func NewValidators(c client.Client, checker ConfigChecker, operatorUsername string) Validators {
 	return Validators{
 		Gateway:    &GatewayValidator{Client: c},
-		Endpoint:   &EndpointValidator{Client: c, Checker: checker},
+		Endpoint:   &EndpointValidator{Client: c, Checker: checker, OperatorUsername: operatorUsername},
 		Policy:     &PolicyValidator{Client: c},
 		AutoConfig: &AutoConfigValidator{Client: c},
 	}
