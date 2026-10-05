@@ -17,6 +17,8 @@ limitations under the License.
 package main
 
 import (
+	"os"
+
 	ctrl "sigs.k8s.io/controller-runtime"
 )
 
@@ -45,5 +47,9 @@ func webhookCertWatchNeeded(enabled bool, certPath string) bool {
 // variables the manifests set from the downward API, or "" when either is
 // unset, which disables the AutoConfig write exemption.
 func defaultOperatorUsername() string {
-	return ""
+	ns, sa := os.Getenv("POD_NAMESPACE"), os.Getenv("POD_SERVICE_ACCOUNT")
+	if ns == "" || sa == "" {
+		return ""
+	}
+	return "system:serviceaccount:" + ns + ":" + sa
 }
