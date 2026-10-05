@@ -47,6 +47,11 @@ func TestLicenseSecret(t *testing.T) {
 			license:  &v1alpha1.LicenseConfig{SecretRef: secretRef("lic", "")},
 			wantName: "lic", wantKey: "LICENSE", wantOK: true,
 		},
+		{
+			name:     "an enabled ExternalSecret",
+			license:  &v1alpha1.LicenseConfig{ExternalSecret: v1alpha1.ExternalSecretLicenseConfig{Enabled: true}},
+			wantName: "gw-license", wantKey: "LICENSE", wantOK: true,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
