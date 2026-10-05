@@ -42,30 +42,45 @@ make deploy IMG=ghcr.io/mycarrier-devops/krakend-operator:<new-version>
    ```bash
    operator/hack/audit-admission-rules.sh
    ```
-   It prints one line per object or conflict, and nothing when there is
-   nothing to fix. Fix or knowingly accept each line before upgrading. What a
-   listed object blocks depends on the rule it breaks:
+   It prints one line per object or conflict. No output means none of the
+   checks found anything; it does not cover reserved `/__debug`, `/__echo` and
+   `/__health` paths, unnamed `/*` wildcards on CE gateways, unknown
+   `urlPattern` placeholders or cross-method `auto_options` clashes. Fix or
+   knowingly accept each line before upgrading. What a listed object blocks
+   depends on the rule it breaks:
    - A stored value that breaks a field rule (a pattern, an enum, a minimum, a
-     length, or a `tmpSizeLimit` Kubernetes cannot decode) keeps being accepted
-     on unrelated updates; only a change to that field must fix it. Items of a list without per-item keys (an entry's
-     `backends`, a KrakenDAutoConfig's `overrides` and
-     `additionalEndpoints[].backends`) are re-checked on any edit to that list.
+     length, a `tmpSizeLimit` outside the allowed forms, or an endpoint
+     `timeout` or `cacheTTL` that is not a duration) keeps being accepted on
+     unrelated updates; only a change to that field must fix it. Items of a
+     list without per-item keys (an entry's `backends`, a KrakenDAutoConfig's
+     `overrides` and `additionalEndpoints[].backends`) are re-checked on any
+     edit to that list.
    - A duration that matches its pattern but does not fit in 64 bits of
      nanoseconds raises an evaluation error that is never ratcheted: every
-     update to the object is rejected until it is fixed. On a KrakenDEndpoint the same holds for any
-     `timeout` or `cacheTTL` that is not a Go duration (`3 seconds`, `30`),
-     because its rule has no pattern guard.
-   - A rule written on `spec` itself (the Enterprise license sources, the
-     OpenAPI port, a KrakenDAutoConfig's source, `hostMapping`, Periodic
-     interval, and base path rules) is re-checked on any change to the spec.
+     update to the object is rejected until it is fixed.
+   - A rule written on `spec` itself (the Enterprise license sources and the
+     OpenAPI port of a gateway; a KrakenDAutoConfig's `hostMapping`, Periodic
+     interval and base path rules) is re-checked on any change to the spec. A
+     KrakenDAutoConfig's source and auth rules sit on `spec.openapi`, so they
+     are re-checked only when `spec.openapi` changes.
    - A KrakenDAutoConfig name over 63 characters is rejected on every write,
      including label, annotation and status writes; the object can only be
      deleted and recreated.
-   - A listed route conflict is rejected on the next change to either
-     endpoint, and an endpoint on its gateway's health path on the next change
-     to that endpoint.
+   - A `passwordFromSecret` on an Enterprise gateway keeps being accepted
+     until you change the value or the edition.
+   - A `duplicate entry` or `duplicate additionalEndpoint` line does not block
+     writes: list-type uniqueness is skipped when the stored object already
+     fails it, and server-side apply tolerates live duplicates. Remove the
+     duplicate before it fails a fresh apply.
+   - A listed route conflict is rejected when either conflicting entry is
+     added or changed, or its object moves to another gateway; the same holds
+     for an endpoint on its gateway's health path. `overrides collide` ratchets
+     with the rest of the AutoConfig webhook rules.
    - A line naming an Enterprise-only namespace or field on a CE gateway is a
      feature KrakenD CE ignores today: remove it, or move the gateway to EE.
+     Only a changed entry, a changed root `extraConfig`, a changed policy
+     `raw` or a changed typed field is rejected; a stored use that stays
+     unchanged keeps being accepted.
 
 ---
 
@@ -1323,20 +1338,18 @@ check` runs share the container, each peaking near 110 MB. If you set
 
 **Kubernetes 1.33 or later is required.** The CRDs now carry schema rules and
 CEL validation. Kubernetes 1.33 ratchets CRD validation: an update that leaves
-an already-invalid field unchanged is admitted, so objects stored before the
-upgrade keep accepting unrelated changes (labels, annotations, other fields);
-only a change *to* the violating field must fix it. The exception is a list
-without per-item keys: an entry's `backends` (an atomic list) and a
-KrakenDAutoConfig's `overrides[]` and `additionalEndpoints[].backends`. Their items ratchet only while the whole
-list is unchanged, so any edit to the list re-checks every item and a stored
-invalid sibling blocks it. Run the audit in the
-Pre-Upgrade Checklist to find such objects. The chart refuses clusters below
+an already-invalid field unchanged is admitted, so most field rules (patterns,
+enums, minimums, lengths) let objects stored before the upgrade keep accepting
+unrelated changes. The exceptions are listed in the Pre-Upgrade Checklist:
+rules on a whole `spec`, evaluation errors, atomic lists, and the
+KrakenDAutoConfig name rule. Run the audit in the Pre-Upgrade Checklist to find
+such objects. The chart refuses clusters below
 1.33 (`kubeVersion`), and the OLM bundle's `minKubeVersion` is 1.33.0. With
 Helm, use 3.18 or later: older releases default `helm template` and `helm lint`
 to Kubernetes capabilities below 1.33 and refuse the chart unless given
 `--kube-version`.
 
-**KrakenDEndpoint schema.** `spec.endpoints` needs at least one entry and each
+**KrakenDEndpoint schema.** `spec.endpoints` needs one to 1024 entries and each
 (endpoint, method) pair at most once; every entry needs a backend; `endpoint`
 must start with `/` and contain no `*`, `?`, `&` or `%` except a trailing `/*`;
 `timeout` and `cacheTTL` must be Go durations (`30s`, `1m30s`); `outputEncoding`,
@@ -1352,7 +1365,9 @@ from the webhook.
 A KrakenDEndpoint `timeout` or `cacheTTL` must also parse as a duration that
 fits in 64 bits of nanoseconds and be at most 64 characters: a value such as
 `2562048h` matched the pattern but overflowed, and one stored object like it
-broke decoding of the whole endpoint list.
+broke decoding of the whole endpoint list. The rule applies only to values that
+match the pattern, so a stored non-duration (`3 seconds`) fails the pattern
+alone and keeps ratcheting.
 
 **KrakenDGateway schema.** `config.timeout`, `cacheTTL`, `dnsCacheTTL`,
 `cors.maxAge` and `redis.connectionPool.dialTimeout` must be KrakenD durations
@@ -1365,8 +1380,11 @@ non-empty name (a stored Enterprise gateway whose `secretRef.name` is empty can
 no longer have its spec edited until the name is set), and a gateway may list at
 most 32 plugin sources. `timeout`, `cacheTTL`, `dnsCacheTTL` and `dialTimeout`
 must also parse as a duration of at most 64 characters, and
-`postRestartJob.tmpSizeLimit` must be a quantity Kubernetes can decode: the
-patterns alone admitted values such as `99999999999h` and
+`postRestartJob.tmpSizeLimit` must be a quantity Kubernetes can decode, with a
+binary or decimal SI suffix or an `e`/`E` exponent of at most two digits
+(`100Mi`, `1.5Gi`, `500M`, `129e6`, `128974848`); a longer exponent is refused
+before it is parsed, because parsing one such as `1e2147483648` takes seconds.
+The patterns alone admitted values such as `99999999999h` and
 `1e99999999999999999999`, which the validator or the Go decode then rejected.
 Rule evaluation errors are not ratcheted, so a stored value that matches the
 pattern but overflows (a duration KrakenD never accepted) blocks every update to
