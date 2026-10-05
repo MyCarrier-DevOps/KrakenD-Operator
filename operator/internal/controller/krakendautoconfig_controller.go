@@ -201,6 +201,15 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return r.handleSyncedFailure(ctx, &ac, v1alpha1.ReasonUnmatchedOverride, unmatchedErr, warnings)
 	}
 
+	// An override whose operationId several operations share would land on
+	// only one of them; fail closed as for an unmatched one.
+	if len(cueOutput.AmbiguousOverrides) > 0 {
+		ambiguousErr := fmt.Errorf(
+			"spec.overrides reference operationIds that more than one operation declares: %s",
+			strings.Join(cueOutput.AmbiguousOverrides, ", "))
+		return r.handleSyncedFailure(ctx, &ac, v1alpha1.ReasonAmbiguousOverride, ambiguousErr, warnings)
+	}
+
 	// Apply filters
 	filtered := cueOutput.Entries
 	if ac.Spec.Filter != nil {
