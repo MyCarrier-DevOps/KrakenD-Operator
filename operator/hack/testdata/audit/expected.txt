@@ -84,5 +84,6 @@ KrakenDAutoConfig a/defaults-sd: spec.defaults.backend.sd foo
 KrakenDAutoConfig a/defaults-policy: spec.defaults.policyRef.name is empty
 KrakenDAutoConfig a/no-source: need exactly one of openapi.url or openapi.configMapRef
 gateway a/routes: GET /orders/{id} (a/route-one) vs GET /orders/{name} (b/route-two)
+gateway a/routes-clean: GET /a//b (a/route-slash1) vs GET /a/b (a/route-slash2)
 gateway a/routes-dup: GET /same (a/route-dup1) vs GET /same (a/route-dup2)
 gateway a/routes-self: GET /self/{id} (a/route-self) vs GET /self/{name} (a/route-self)
