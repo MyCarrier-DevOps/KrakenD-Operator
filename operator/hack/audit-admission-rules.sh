@@ -169,5 +169,6 @@ jq "${jq_opts[@]}" "$jq_lib"'
   (if $s.trigger == "Periodic"
       and ($s.periodic.interval // "" | crd_test($go_re) and (overflows | not) and duration_ns < 3e10)
    then "periodic.interval below 30s" else empty end),
-  (if $s.trigger == "Periodic" and $s.periodic == null then "trigger Periodic without a periodic block" else empty end)
+  (if $s.trigger == "Periodic" and $s.periodic == null then "trigger Periodic without a periodic block" else empty end),
+  ($s.periodic.interval // empty | dur_shape_problem($go_re; 32; "spec.periodic.interval"))
 ]} | report("KrakenDAutoConfig")' "$work/autoconfigs.json"
