@@ -169,6 +169,7 @@ spec:
                               to apply.
                             properties:
                               name:
+                                minLength: 1
                                 type: string
                               namespace:
                                 maxLength: 63

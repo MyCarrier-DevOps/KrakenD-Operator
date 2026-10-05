@@ -167,6 +167,7 @@ spec:
                               to apply.
                             properties:
                               name:
+                                minLength: 1
                                 type: string
                               namespace:
                                 maxLength: 63
@@ -383,6 +384,7 @@ spec:
                       to all backends.
                     properties:
                       name:
+                        minLength: 1
                         type: string
                       namespace:
                         maxLength: 63
@@ -574,6 +576,7 @@ spec:
                       description: PolicyRef overrides the backend policy reference.
                       properties:
                         name:
+                          minLength: 1
                           type: string
                         namespace:
                           maxLength: 63
