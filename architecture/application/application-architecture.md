@@ -1026,7 +1026,7 @@ func (r *KrakenDGatewayReconciler) policyToGateways(
     // whatever their namespace
     var endpoints v1alpha1.KrakenDEndpointList
     if err := r.List(ctx, &endpoints, client.MatchingFields{
-        EndpointPolicyIndex: obj.GetNamespace() + "/" + obj.GetName(),
+        fieldindex.EndpointPolicy: obj.GetNamespace() + "/" + obj.GetName(),
     }); err != nil {
         return nil
     }
@@ -1184,7 +1184,7 @@ func (r *KrakenDEndpointReconciler) gatewayToEndpoints(
 ) []reconcile.Request {
     var endpoints v1alpha1.KrakenDEndpointList
     if err := r.List(ctx, &endpoints,
-        client.MatchingFields{EndpointGatewayIndex: obj.GetNamespace() + "/" + obj.GetName()},
+        client.MatchingFields{fieldindex.EndpointGateway: obj.GetNamespace() + "/" + obj.GetName()},
     ); err != nil {
         return nil
     }
@@ -1228,7 +1228,7 @@ type KrakenDBackendPolicyReconciler struct {
 flowchart TD
     A[Fetch KrakenDBackendPolicy] --> B{Found?}
     B -->|No| Z[Return]
-    B -->|Yes| C[List KrakenDEndpoints through the<br/>EndpointPolicyIndex field index]
+    B -->|Yes| C[List KrakenDEndpoints through the<br/>fieldindex.EndpointPolicy field index]
     C --> D[Count the endpoints where any<br/>backend references this policy]
     D --> P{deletionTimestamp set?}
     P -->|No| Q[Add the protection finalizer if missing]
@@ -1248,17 +1248,17 @@ flowchart TD
 
 `Ready` replaces the earlier `PolicyValid` condition, which is removed from policies written by earlier versions. It is `False` when `circuitBreaker.maxErrors`, `interval` or `timeout` is not positive (`InvalidCircuitBreaker`) or `rateLimit.maxRate` is not positive (`InvalidRateLimit`), and `True` otherwise. Events fire on transitions only: a `Warning` with the invalid reason when `Ready` becomes `False` or changes reason, and a `Normal` `Ready` when it recovers.
 
-The policy controller's reconciliation is straightforward. The `referencedBy` count is the number of `KrakenDEndpoint` resources the `EndpointPolicyIndex` field index returns for the policy's `namespace/name`: those with at least one `backend[].policyRef` that resolves to this policy, in any namespace. The important cross-controller interaction is through the gateway controller's `policyToGateways` mapper, which uses the same index: when a policy is updated, all gateways with endpoints referencing that policy are re-queued for re-rendering.
+The policy controller's reconciliation is straightforward. The `referencedBy` count is the number of `KrakenDEndpoint` resources the `fieldindex.EndpointPolicy` field index returns for the policy's `namespace/name`: those with at least one `backend[].policyRef` that resolves to this policy, in any namespace. The important cross-controller interaction is through the gateway controller's `policyToGateways` mapper, which uses the same index: when a policy is updated, all gateways with endpoints referencing that policy are re-queued for re-rendering.
 
 ### Protection finalizer
 
-Every policy that is not being deleted carries the finalizer `gateway.krakend.io/policy-protection` (`v1alpha1.PolicyProtectionFinalizer`), added with an `Update` of the object (RBAC: `update` on `krakendbackendpolicies`). Deleting a policy is always accepted, because the policy webhook is not registered for DELETE. A terminating policy that endpoints still reference keeps serving: the controller keeps reporting `referencedBy`, emits a `DeletionBlocked` warning event that names up to five referencing endpoints, and leaves the finalizer. The endpoint watch enqueues the policy when its last reference is deleted or repointed, and the controller then removes the finalizer. The cached index can lag a reference created a moment ago, so before it releases a policy its cache shows unreferenced the controller lists the endpoints through `APIReader` (a field index exists only in the cache, so it filters the list with `EndpointPolicyKeys`). Admission rejects a new reference to a terminating policy. Admission narrows the matching race. The endpoint webhook reads a policy through the cache at the start of the request, and the render check that follows can take seconds (up to the 12 s budget with slot waits), so after the check the validator re-reads each newly referenced policy through the manager's uncached reader (`EndpointValidator.APIReader`) and refuses the write when the policy is missing or terminating (an uncached read error is a retryable 500). The residual window runs from that uncached read until the endpoint is persisted, plus the controller's own release check: a reference persisted after the controller's uncached list but admitted before the deletion was visible there. The endpoint then reports `PolicyNotFound` and drops out of the render. A policy is also unprotected until its first reconcile adds the finalizer, including during an upgrade rollout, where the new webhook configuration drops DELETE before the new leader has added finalizers.
+Every policy that is not being deleted carries the finalizer `gateway.krakend.io/policy-protection` (`v1alpha1.PolicyProtectionFinalizer`), added with an `Update` of the object (RBAC: `update` on `krakendbackendpolicies`). Deleting a policy is always accepted, because the policy webhook is not registered for DELETE. A terminating policy that endpoints still reference keeps serving: the controller keeps reporting `referencedBy`, emits a `DeletionBlocked` warning event that names up to five referencing endpoints, and leaves the finalizer. The endpoint watch enqueues the policy when its last reference is deleted or repointed, and the controller then removes the finalizer. The cached index can lag a reference created a moment ago, so before it releases a policy its cache shows unreferenced the controller lists the endpoints through `APIReader` (a field index exists only in the cache, so it filters the list with `fieldindex.EndpointPolicyKeys`). Admission rejects a new reference to a terminating policy. Admission narrows the matching race. The endpoint webhook reads a policy through the cache at the start of the request, and the render check that follows can take seconds (up to the 12 s budget with slot waits), so after the check the validator re-reads each newly referenced policy through the manager's uncached reader (`EndpointValidator.APIReader`) and refuses the write when the policy is missing or terminating (an uncached read error is a retryable 500). The residual window runs from that uncached read until the endpoint is persisted, plus the controller's own release check: a reference persisted after the controller's uncached list but admitted before the deletion was visible there. The endpoint then reports `PolicyNotFound` and drops out of the render. A policy is also unprotected until its first reconcile adds the finalizer, including during an upgrade rollout, where the new webhook configuration drops DELETE before the new leader has added finalizers.
 
 ### SetupWithManager
 
 ```go
 func (r *KrakenDBackendPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
-    if err := EnsureEndpointIndexes(mgr); err != nil {
+    if err := fieldindex.EnsureEndpointIndexes(mgr); err != nil {
         return err
     }
     return ctrl.NewControllerManagedBy(mgr).
