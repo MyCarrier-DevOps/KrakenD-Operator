@@ -49,6 +49,24 @@ func New(reader client.Reader, r renderer.Renderer, v renderer.Validator, slots 
 	return &Checker{reader: reader, renderer: r, validator: v, slots: make(chan struct{}, max(slots, 1))}
 }
 
+// Gather returns the render input the gateway controller publishes gw from:
+// the endpoints that reference gw, with replace substituted or added by
+// namespace/name, sorted by namespace/name; the policies they reference; and
+// CE fallback as gw's status records it. PluginConfigMaps and Dragonfly are
+// left unset.
+func (c *Checker) Gather(ctx context.Context, gw *v1alpha1.KrakenDGateway,
+	replace []v1alpha1.KrakenDEndpoint) (renderer.RenderInput, error) {
+	return renderer.RenderInput{}, nil
+}
+
+// CheckRendered validates out, rendered from in, with the full check the
+// gateway controller publishes behind (Validator.Validate: krakend check -t -n
+// after the route check).
+func (c *Checker) CheckRendered(ctx context.Context, in renderer.RenderInput,
+	out *renderer.RenderOutput) (Verdict, error) {
+	return Verdict{}, nil
+}
+
 // CheckGateway lints gw's config: its current endpoints with replace
 // substituted or added by namespace/name.
 func (c *Checker) CheckGateway(ctx context.Context, gw *v1alpha1.KrakenDGateway,

@@ -289,3 +289,24 @@ func TestCheckGateway_MissingPolicyLeavesTheEndpointOut(t *testing.T) {
 		t.Errorf("linted %s, want /b only", v.seen[0])
 	}
 }
+
+func TestCheckRendered_RunsTheFullCheckAsTheRendersEdition(t *testing.T) {
+	v := &fakeValidator{}
+	c := newChecker(v, endpoint("a", "/a"))
+	ee := gateway(v1alpha1.EditionEE)
+	in, err := c.Gather(context.Background(), ee, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in.CEFallback = true // the controller's fresh license verdict
+	out, err := renderer.New(renderer.Options{}).Render(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verdict, err := c.CheckRendered(context.Background(), in, out); err != nil || !verdict.OK {
+		t.Fatalf("verdict = %+v, err = %v", verdict, err)
+	}
+	if len(v.calls) != 1 || v.calls[0] != "validate" || v.editions[0] != v1alpha1.EditionCE {
+		t.Errorf("calls = %v %v, want one CE validate for an EE gateway in fallback", v.calls, v.editions)
+	}
+}
