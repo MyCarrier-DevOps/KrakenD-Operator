@@ -32,6 +32,7 @@ import (
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
 	"github.com/mycarrier-devops/krakend-operator/internal/fieldindex"
+	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 )
 
 // renderChecks are the four checks of the verdict ratchet, each over a
@@ -177,10 +178,19 @@ func checkPolicyRender(
 	if err != nil {
 		return nil, unavailable(err)
 	}
+	// krakend check accepts Enterprise-only namespaces, and KrakenD CE then
+	// ignores them silently.
+	drops := eeOnlyNamespacesIn(policy.Spec.Raw, renderer.LevelBackend)
 	var errs field.ErrorList
 	var warnings admission.Warnings
 	for i := range gateways {
 		gw := &gateways[i]
+		if gw.Spec.Edition == v1alpha1.EditionCE && len(drops) > 0 {
+			errs = append(errs, field.Invalid(field.NewPath("spec", "raw"), describeDrops(drops),
+				fmt.Sprintf("Enterprise-only extra_config: gateway %s/%s runs CE, which ignores it silently",
+					gw.Namespace, gw.Name)))
+			continue
+		}
 		w, err := ratchetRender(ctx, renderChecks{
 			after:  bindPolicyCheck(chk.CheckGatewayPolicy, gw, policy),
 			before: bindCheck(chk.CheckGateway, gw, nil),
@@ -200,6 +210,20 @@ func checkPolicyRender(
 		warnings = append(warnings, w...)
 	}
 	return warnings, invalid("KrakenDBackendPolicy", policy.Name, errs)
+}
+
+// describeDrops lists what a CE render drops: a namespace, with the keys CE
+// does not honor when it honors the rest of the block.
+func describeDrops(drops []renderer.CEDrop) string {
+	parts := make([]string, 0, len(drops))
+	for _, d := range drops {
+		if len(d.Keys) > 0 {
+			parts = append(parts, fmt.Sprintf("%s (%s)", d.Namespace, strings.Join(d.Keys, ", ")))
+			continue
+		}
+		parts = append(parts, d.Namespace)
+	}
+	return strings.Join(parts, ", ")
 }
 
 // errPolicyBreaksGateway tells checkPolicyRender's loop that a gateway's
