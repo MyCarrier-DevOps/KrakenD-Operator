@@ -115,8 +115,7 @@ func (v *GatewayValidator) ValidateUpdate(
 		return nil, nil
 	}
 	warnings, errs := v.validate(gw, old)
-	_, stored := v.validate(old, nil)
-	return warnings, invalid("KrakenDGateway", gw.Name, newErrors(errs, stored))
+	return warnings, invalid("KrakenDGateway", gw.Name, newErrors(errs, v.storedErrors(gw, old)))
 }
 
 // ValidateDelete is required by admission.CustomValidator. The gateway webhook
@@ -188,6 +187,34 @@ func (v *GatewayValidator) validate(gw, old *v1alpha1.KrakenDGateway) (admission
 	}
 
 	return warnings, errs
+}
+
+// storedErrors returns the errors old already has, leaving out those under a
+// sidecar probe the update changed: an error such as Forbidden carries no
+// value, so it would read the same for the new probe and hide a real problem.
+func (v *GatewayValidator) storedErrors(gw, old *v1alpha1.KrakenDGateway) field.ErrorList {
+	_, stored := v.validate(old, nil)
+	oaPath := field.NewPath("spec", "openapi")
+	oldLiveness, oldReadiness := sidecarProbes(old)
+	liveness, readiness := sidecarProbes(gw)
+	var changed []string
+	if !equality.Semantic.DeepEqual(oldLiveness, liveness) {
+		changed = append(changed, oaPath.Child("livenessProbe").String())
+	}
+	if !equality.Semantic.DeepEqual(oldReadiness, readiness) {
+		changed = append(changed, oaPath.Child("readinessProbe").String())
+	}
+	return slices.DeleteFunc(stored, func(e *field.Error) bool {
+		return slices.ContainsFunc(changed, func(p string) bool { return strings.HasPrefix(e.Field, p) })
+	})
+}
+
+// sidecarProbes returns the OpenAPI sidecar's liveness and readiness probes.
+func sidecarProbes(gw *v1alpha1.KrakenDGateway) (liveness, readiness *corev1.Probe) {
+	if gw.Spec.OpenAPI == nil {
+		return nil, nil
+	}
+	return gw.Spec.OpenAPI.LivenessProbe, gw.Spec.OpenAPI.ReadinessProbe
 }
 
 // replicasWithAutoscalingWarning warns when spec.replicas is set together
