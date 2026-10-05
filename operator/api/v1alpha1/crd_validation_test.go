@@ -241,5 +241,6 @@ func TestGatewayCRD_Rules(t *testing.T) {
 		{"output encoding", gatewayHead + `edition: CE, config: {outputEncoding: yaml}}}`, "Unsupported value: \"yaml\""},
 		{"health path", gatewayHead + `edition: CE, config: {router: {healthPath: healthz}}}}`, "spec.config.router.healthPath"},
 		{"EE needs a license", gatewayHead + `edition: EE, config: {}}}`, "edition EE requires"},
+		{"EE with secretRef", gatewayHead + `edition: EE, config: {}, license: {secretRef: {name: l, key: k}}}}`, ""},
 	})
 }
