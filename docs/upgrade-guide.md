@@ -1282,8 +1282,9 @@ webhooks use.
 `kubectl` prints `The KrakenDEndpoint "x" is invalid: spec.endpoints[1]: ...`
 instead of `403 Forbidden` with a single message. Scripts that matched
 `Forbidden` must match `is invalid`. A failed lookup or an unavailable
-validator is `500 Internal Error`, which `kubectl` and controllers retry. Each
-webhook call is limited to 15 s (`timeoutSeconds`).
+validator is `500 Internal Error`, a transient server error: retry the
+request; controllers and GitOps tools retry on their own. Each webhook call is
+now limited to 15 s (`timeoutSeconds`; it was the 10 s default).
 
 **The operator's memory limit is 512Mi** (was 256Mi). Up to three `krakend
 check` runs share the container, each peaking near 110 MB. If you set
