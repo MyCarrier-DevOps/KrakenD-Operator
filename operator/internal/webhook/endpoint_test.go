@@ -65,7 +65,7 @@ func TestEndpointAdmission_RatchetsUnchangedEntriesAcrossReorder(t *testing.T) {
 	edited := old.DeepCopy()
 	edited.Spec.Endpoints[0], edited.Spec.Endpoints[1] = edited.Spec.Endpoints[1], edited.Spec.Endpoints[0]
 	edited.Spec.Endpoints[0].Backends[0].URLPattern = "/v2" // /good changes, /bad only moves
-	v := &EndpointValidator{Client: fakeClient(testGateway())}
+	v := &EndpointValidator{Client: fakeClient(testGateway()), Checker: &scriptedChecker{}}
 
 	if resp := review(t, v, "alice", edited, old); !resp.Allowed {
 		t.Fatalf("reorder plus unrelated edit denied: %+v", resp.Result)
@@ -85,7 +85,7 @@ func TestEndpointAdmission_UnchangedReferencesAreNotRechecked(t *testing.T) {
 	old.Spec.Endpoints[0].Backends[0].PolicyRef = &v1alpha1.PolicyRef{Name: "gone"}
 	edited := old.DeepCopy()
 	edited.Spec.Endpoints = append(edited.Spec.Endpoints, testEndpoint("x", "/b").Spec.Endpoints...)
-	v := &EndpointValidator{Client: fakeClient()} // neither the gateway nor the policy exists any more
+	v := &EndpointValidator{Client: fakeClient(), Checker: &scriptedChecker{}} // neither the gateway nor the policy exists any more
 
 	if resp := review(t, v, "alice", edited, old); !resp.Allowed {
 		t.Errorf("edit with unchanged dangling refs denied: %+v", resp.Result)
@@ -112,7 +112,7 @@ func TestEndpointAdmission_MovingToAnotherGatewayRechecksEveryEntry(t *testing.T
 	}
 	other := testGateway()
 	other.Name = "other"
-	v := &EndpointValidator{Client: fakeClient(testGateway(), other)}
+	v := &EndpointValidator{Client: fakeClient(testGateway(), other), Checker: &scriptedChecker{}}
 
 	moved := old.DeepCopy()
 	moved.Spec.GatewayRef.Name = "other"
@@ -136,7 +136,7 @@ func TestEndpointAdmission_MovingToAnotherNamespaceRechecksEveryEntry(t *testing
 	}
 	elsewhere := testGateway()
 	elsewhere.Namespace = "edge"
-	v := &EndpointValidator{Client: fakeClient(testGateway(), elsewhere)}
+	v := &EndpointValidator{Client: fakeClient(testGateway(), elsewhere), Checker: &scriptedChecker{}}
 
 	moved := old.DeepCopy()
 	moved.Spec.GatewayRef.Namespace = "edge"
@@ -158,7 +158,7 @@ func TestEndpointAdmission_RejectsRouteClaimedByAnotherEndpoint(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			v := &EndpointValidator{Client: fakeClient(testGateway(), testEndpoint("other", tt.existing))}
+			v := &EndpointValidator{Client: fakeClient(testGateway(), testEndpoint("other", tt.existing)), Checker: &scriptedChecker{}}
 			resp := review(t, v, "alice", testEndpoint("new", "/ok", tt.candidate), nil)
 			if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity {
 				t.Fatalf("response = %+v, want 422", resp.Result)
@@ -173,7 +173,7 @@ func TestEndpointAdmission_RejectsRouteClaimedByAnotherEndpoint(t *testing.T) {
 }
 
 func TestEndpointAdmission_RouteClashInsideOneEndpoint(t *testing.T) {
-	v := &EndpointValidator{Client: fakeClient(testGateway())}
+	v := &EndpointValidator{Client: fakeClient(testGateway()), Checker: &scriptedChecker{}}
 	resp := review(t, v, "alice", testEndpoint("new", "/a/{id}", "/a/{name}"), nil)
 	if resp.Allowed || len(resp.Result.Details.Causes) != 2 {
 		t.Errorf("response = %+v, want both entries rejected", resp.Result)
@@ -184,7 +184,7 @@ func TestEndpointAdmission_StoredClashDoesNotBlockOtherEdits(t *testing.T) {
 	old := testEndpoint("new", "/users/{name}", "/b")
 	edited := old.DeepCopy()
 	edited.Spec.Endpoints[1].Backends[0].URLPattern = "/v2"
-	v := &EndpointValidator{Client: fakeClient(testGateway(), testEndpoint("other", "/users/{id}"), old)}
+	v := &EndpointValidator{Client: fakeClient(testGateway(), testEndpoint("other", "/users/{id}"), old), Checker: &scriptedChecker{}}
 	if resp := review(t, v, "alice", edited, old); !resp.Allowed {
 		t.Errorf("edit of an unrelated entry denied: %+v", resp.Result)
 	}
@@ -200,7 +200,7 @@ func TestEndpointAdmission_SameControllerMayShareARoute(t *testing.T) {
 			Kind: "KrakenDAutoConfig", Name: "pets", UID: uid, Controller: ptr.To(true)}}
 		return ep
 	}
-	v := &EndpointValidator{Client: fakeClient(testGateway(), owned("pets-getuser", "pets-uid"))}
+	v := &EndpointValidator{Client: fakeClient(testGateway(), owned("pets-getuser", "pets-uid")), Checker: &scriptedChecker{}}
 
 	if resp := review(t, v, "alice", owned("pets-getuserbyid", "pets-uid"), nil); !resp.Allowed {
 		t.Errorf("same-controller route denied: %+v", resp.Result)
@@ -214,7 +214,7 @@ func TestEndpointAdmission_DuplicateAcrossNamespacesOnOneGateway(t *testing.T) {
 	other := testEndpoint("other", "/a")
 	other.Namespace = "team-b"
 	other.Spec.GatewayRef.Namespace = "default"
-	v := &EndpointValidator{Client: fakeClient(testGateway(), other)}
+	v := &EndpointValidator{Client: fakeClient(testGateway(), other), Checker: &scriptedChecker{}}
 	resp := review(t, v, "alice", testEndpoint("new", "/a"), nil)
 	if resp.Allowed || resp.Result.Details == nil || len(resp.Result.Details.Causes) != 1 ||
 		!strings.Contains(resp.Result.Details.Causes[0].Message, "team-b/other") {
@@ -227,7 +227,7 @@ func TestEndpointAdmission_SameRouteOnAnotherGatewayIsAdmitted(t *testing.T) {
 	other.Spec.GatewayRef.Name = "elsewhere"
 	elsewhere := testGateway()
 	elsewhere.Name = "elsewhere"
-	v := &EndpointValidator{Client: fakeClient(testGateway(), elsewhere, other)}
+	v := &EndpointValidator{Client: fakeClient(testGateway(), elsewhere, other), Checker: &scriptedChecker{}}
 	if resp := review(t, v, "alice", testEndpoint("new", "/a"), nil); !resp.Allowed {
 		t.Errorf("route of another gateway denied: %+v", resp.Result)
 	}
@@ -277,7 +277,7 @@ func TestEndpointAdmission_NamesTheEndpointThatServesTheRoute(t *testing.T) {
 				for _, c := range tt.claimants {
 					objs = append(objs, c)
 				}
-				v := &EndpointValidator{Client: fakeClientBuilderWith(funcs, objs...)}
+				v := &EndpointValidator{Client: fakeClientBuilderWith(funcs, objs...), Checker: &scriptedChecker{}}
 				resp := review(t, v, "alice", testEndpoint("new", "/a/{z}"), nil)
 				c := resp.Result.Details
 				if resp.Allowed || c == nil || len(c.Causes) != 1 || !strings.Contains(c.Causes[0].Message, tt.want) {
@@ -298,7 +298,7 @@ func TestEndpointAdmission_ServedEntryCanBeEditedBesideItsLoser(t *testing.T) {
 	loser.CreationTimestamp = metav1.NewTime(time.Now().Add(-time.Hour))
 	edited := served.DeepCopy()
 	edited.Spec.Endpoints[0].Backends[0].URLPattern = "/v2"
-	v := &EndpointValidator{Client: fakeClient(testGateway(), served, loser)}
+	v := &EndpointValidator{Client: fakeClient(testGateway(), served, loser), Checker: &scriptedChecker{}}
 
 	if resp := review(t, v, "alice", edited, served); !resp.Allowed {
 		t.Errorf("edit of the served entry denied: %+v", resp.Result)
@@ -319,7 +319,7 @@ func TestEndpointAdmission_MovingOntoATakenRouteIsADuplicate(t *testing.T) {
 	other.Name = "other"
 	holder := testEndpoint("holder", "/a")
 	holder.Spec.GatewayRef.Name = "other"
-	v := &EndpointValidator{Client: fakeClient(testGateway(), other, old, holder)}
+	v := &EndpointValidator{Client: fakeClient(testGateway(), other, old, holder), Checker: &scriptedChecker{}}
 
 	moved := old.DeepCopy()
 	moved.Spec.GatewayRef.Name = "other"
@@ -342,7 +342,7 @@ func TestEndpointAdmission_MovingOntoACEGatewayChecksEntryRulesAndRoutes(t *test
 	ce.Name = "other"
 	holder := testEndpoint("holder", "/a")
 	holder.Spec.GatewayRef.Name = "other"
-	v := &EndpointValidator{Client: fakeClient(ee, ce, old, holder)}
+	v := &EndpointValidator{Client: fakeClient(ee, ce, old, holder), Checker: &scriptedChecker{}}
 
 	moved := old.DeepCopy()
 	moved.Spec.GatewayRef.Name = "other"
@@ -377,7 +377,7 @@ func TestEndpointAdmission_MovingOntoACEGatewayChecksEntryRulesAndRoutes(t *test
 func TestEndpointAdmission_StoredEEOnlyNamespaceDoesNotBlockOtherEdits(t *testing.T) {
 	old := testEndpoint("e", "/stored", "/edited")
 	old.Spec.Endpoints[0].ExtraConfig = &runtime.RawExtension{Raw: []byte(`{"auth/api-keys":{"roles":["a"]}}`)}
-	v := &EndpointValidator{Client: fakeClient(testGateway(), old)}
+	v := &EndpointValidator{Client: fakeClient(testGateway(), old), Checker: &scriptedChecker{}}
 
 	edited := old.DeepCopy()
 	edited.Spec.Endpoints[1].Backends[0].URLPattern = "/v2"
@@ -403,7 +403,7 @@ func TestEndpointAdmission_UpdateAddingAnEntryWithAStoredRouteKeyIsRejected(t *t
 		t.Run(tt.name, func(t *testing.T) {
 			old := testEndpoint("e", tt.stored)
 			edited := testEndpoint("e", tt.stored, tt.added)
-			v := &EndpointValidator{Client: fakeClient(testGateway(), old)}
+			v := &EndpointValidator{Client: fakeClient(testGateway(), old), Checker: &scriptedChecker{}}
 			resp := review(t, v, "alice", edited, old)
 			c := resp.Result.Details
 			if resp.Allowed || c == nil || len(c.Causes) == 0 || c.Causes[0].Type != metav1.CauseTypeFieldValueDuplicate {
