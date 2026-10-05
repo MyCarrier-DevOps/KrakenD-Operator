@@ -5002,3 +5002,43 @@ func TestRouteCollisions_AStaleEndpointTakesNoPart(t *testing.T) {
 		t.Errorf("routeCollisions = %+v, want none", got)
 	}
 }
+
+func TestAutoConfigReconcile_PrecheckHoldsANewShapeCollisionAndKeepsStaleInTheCheck(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	// getB is served already; getA shares its route shape and is new.
+	served := ownedCopy(t, ac, generatedEndpoint("getB", "/h/{b}"))
+	served.CreationTimestamp = metav1.NewTime(time.Unix(1000, 0))
+	stale := ownedCopy(t, ac, generatedEndpoint("old", "/old"))
+	g.output.Endpoints = []*v1alpha1.KrakenDEndpoint{
+		generatedEndpoint("getA", "/h/{a}"), generatedEndpoint("getB", "/h/{b}"), generatedEndpoint("getC", "/c"),
+	}
+	checker := &fakeChecker{}
+	c := fakeClientBuilder().WithObjects(ac, cm, served, stale, testGateway()).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Checker = checker
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if endpointExists(t, c, "test-ac-geta") || !endpointExists(t, c, "test-ac-getc") ||
+		!endpointExists(t, c, "test-ac-old") {
+		t.Error("expected getA held, getC written and the stale endpoint kept")
+	}
+	// The held collision keeps the stale endpoint: the check does not replace
+	// it with an empty copy, so it stays as it is. The held endpoint is not
+	// checked.
+	if len(checker.calls) != 1 {
+		t.Fatalf("expected 1 check, got %d", len(checker.calls))
+	}
+	if names := endpointNames(checker.calls[0]); !slices.Equal(names, []string{"test-ac-getc"}) {
+		t.Errorf("replace set = %v, want only test-ac-getc (no empty copy of the stale endpoint)", names)
+	}
+	failed := getAC(t, c, ac).Status.FailedOperations
+	if len(failed) != 1 || failed[0].Endpoint != "test-ac-geta" ||
+		failed[0].Reason != v1alpha1.ReasonConfigValidationFailed ||
+		!strings.HasPrefix(failed[0].Message, "has the same route as GET /h/{b} in test-ac-getb: ") {
+		t.Errorf("failedOperations = %+v", failed)
+	}
+}
