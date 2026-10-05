@@ -113,6 +113,25 @@ func (r *KrakenDBackendPolicyReconciler) Reconcile(ctx context.Context, req ctrl
 	return ctrl.Result{}, nil
 }
 
+// SetupWithManager sets up the controller with the Manager.
+func (r *KrakenDBackendPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if err := fieldindex.EnsureEndpointIndexes(mgr); err != nil {
+		return err
+	}
+
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&v1alpha1.KrakenDBackendPolicy{},
+			builder.WithPredicates(predicate.GenerationChangedPredicate{}),
+		).
+		Watches(
+			&v1alpha1.KrakenDEndpoint{},
+			r.endpointPolicyHandler(),
+			builder.WithPredicates(policyEndpointPredicate()),
+		).
+		Named("krakendbackendpolicy").
+		Complete(r)
+}
+
 // maxNamedReferrers bounds the endpoints named in the deletion-blocked event.
 const maxNamedReferrers = 5
 
@@ -180,25 +199,6 @@ func (r *KrakenDBackendPolicyReconciler) referencedOnServer(
 		}
 	}
 	return false, nil
-}
-
-// SetupWithManager sets up the controller with the Manager.
-func (r *KrakenDBackendPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	if err := fieldindex.EnsureEndpointIndexes(mgr); err != nil {
-		return err
-	}
-
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&v1alpha1.KrakenDBackendPolicy{},
-			builder.WithPredicates(predicate.GenerationChangedPredicate{}),
-		).
-		Watches(
-			&v1alpha1.KrakenDEndpoint{},
-			r.endpointPolicyHandler(),
-			builder.WithPredicates(policyEndpointPredicate()),
-		).
-		Named("krakendbackendpolicy").
-		Complete(r)
 }
 
 // endpointPolicyHandler returns an EventHandler that enqueues policies
