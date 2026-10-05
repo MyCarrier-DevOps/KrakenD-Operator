@@ -53,6 +53,10 @@ type CUEOutput struct {
 	// UnmatchedOverrides holds the operationIds from spec.overrides that
 	// matched no generated entry, in override order.
 	UnmatchedOverrides []string
+	// Skipped holds the operations whose method the KrakenDEndpoint API does
+	// not accept (reason UnsupportedMethod), sorted by path then method. They
+	// have no entry in Entries.
+	Skipped []OperationIssue
 }
 
 // CUEEvaluator evaluates CUE definitions against OpenAPI spec data.
