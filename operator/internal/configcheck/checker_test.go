@@ -32,6 +32,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/fieldindex"
@@ -76,11 +77,15 @@ func realValidator() renderer.Validator {
 	return renderer.NewValidator(renderer.ValidatorOptions{Executor: okExecutor{}, BinaryPath: "krakend"})
 }
 
-func newReader(objs ...client.Object) client.Reader {
+func newScheme() *runtime.Scheme {
 	s := runtime.NewScheme()
 	_ = clientgoscheme.AddToScheme(s)
 	_ = v1alpha1.AddToScheme(s)
-	return fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).
+	return s
+}
+
+func newReader(objs ...client.Object) client.Reader {
+	return fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(objs...).
 		WithIndex(&v1alpha1.KrakenDEndpoint{}, fieldindex.EndpointGateway, fieldindex.EndpointGatewayKeys).
 		WithIndex(&v1alpha1.KrakenDEndpoint{}, fieldindex.EndpointPolicy, fieldindex.EndpointPolicyKeys).
 		Build()
@@ -450,5 +455,41 @@ func TestNew_FewerThanOneSlotMeansOne(t *testing.T) {
 
 	if err != nil || !verdict.OK {
 		t.Fatalf("verdict = %+v, err = %v; want OK", verdict, err)
+	}
+}
+
+// cacheReader answers List the way the manager's cache does: with the shared
+// stored object itself when UnsafeDisableDeepCopy is set, otherwise with a
+// deep copy.
+func cacheReader(shared *v1alpha1.KrakenDEndpoint) client.Reader {
+	return fake.NewClientBuilder().WithScheme(newScheme()).WithInterceptorFuncs(interceptor.Funcs{
+		List: func(_ context.Context, _ client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			var o client.ListOptions
+			o.ApplyOptions(opts)
+			item := shared.DeepCopy()
+			if o.UnsafeDisableDeepCopy != nil && *o.UnsafeDisableDeepCopy {
+				cp := *shared // shares the slices and maps, like a cached object
+				item = &cp
+			}
+			list.(*v1alpha1.KrakenDEndpointList).Items = []v1alpha1.KrakenDEndpoint{*item}
+			return nil
+		},
+	}).Build()
+}
+
+// The gateway controller writes to the endpoints it gathered, so what Gather
+// returns must not be the cache's own objects.
+func TestGather_ReturnsCopiesTheCallerMayMutate(t *testing.T) {
+	shared := endpoint("a", "/a")
+	c := New(cacheReader(shared), renderer.New(renderer.Options{}), &fakeValidator{}, 1)
+
+	in, err := c.Gather(context.Background(), gateway(v1alpha1.EditionCE), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in.Endpoints[0].Spec.Endpoints[0].Endpoint = "/mutated"
+
+	if got := shared.Spec.Endpoints[0].Endpoint; got != "/a" {
+		t.Errorf("the shared object now holds %q, want /a", got)
 	}
 }
