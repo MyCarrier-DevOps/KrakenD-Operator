@@ -3233,3 +3233,23 @@ func TestAutoConfigReconcile_ReportsUnsupportedMethodsInScope(t *testing.T) {
 		})
 	}
 }
+
+func TestAutoConfigReconcile_InScopeJudgesEachOperationOnItsOwn(t *testing.T) {
+	// After a stripPathPrefix two operations can share a path and method.
+	ac := testAutoConfig()
+	ac.Spec.Filter = &v1alpha1.FilterSpec{ExcludeOperationIds: []string{"headZ"}}
+	var issues []autoconfig.OperationIssue
+	for _, id := range []string{"headZ", "headV1"} {
+		issues = append(issues, autoconfig.OperationIssue{
+			Operation: autoconfig.Operation{Method: "HEAD", Path: "/z", OperationID: id},
+			Reason:    v1alpha1.ReasonUnsupportedMethod,
+		})
+	}
+	r := &KrakenDAutoConfigReconciler{Filter: autoconfig.NewFilter()}
+
+	got := r.inScope(ac, issues)
+
+	if len(got) != 1 || got[0].OperationID != "headV1" {
+		t.Errorf("in scope = %+v, want only headV1", got)
+	}
+}
