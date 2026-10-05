@@ -417,11 +417,12 @@ func (r *KrakenDAutoConfigReconciler) handleSyncedFailure(
 	return ctrl.Result{}, syncErr
 }
 
-// handleEndpointError fails the sync with EndpointReconcileFailed for
-// endpointErr: a failed list, or the endpointFailuresError of one pass, which can
-// hold transient write, raced (beside a transient one), adoption and delete
-// errors. A pass whose only failures are raced never gets here; it requeues
-// quietly. The error is returned for every trigger, so controller-runtime
+// handleEndpointError fails the sync for endpointErr: with ValidatorUnavailable
+// when the gateway config check could not run, otherwise with
+// EndpointReconcileFailed, for a failed list or the endpointFailuresError of
+// one pass, which can hold transient write, raced (beside a transient one),
+// adoption and delete errors. A pass whose only failures are raced never gets
+// here; it requeues quietly. The error is returned for every trigger, so controller-runtime
 // retries it with backoff: these errors are transient, and a periodic
 // trigger would otherwise wait a whole interval.
 func (r *KrakenDAutoConfigReconciler) handleEndpointError(
@@ -437,7 +438,7 @@ func (r *KrakenDAutoConfigReconciler) handleEndpointError(
 	if f, ok := endpointErr.(interface{ Summary() string }); ok {
 		message = "reconciling endpoints: " + f.Summary()
 	}
-	if err := r.recordSyncedFailure(ctx, ac, v1alpha1.ReasonEndpointReconcileFailed, message, warnings); err != nil {
+	if err := r.recordSyncedFailure(ctx, ac, endpointFailureReason(endpointErr), message, warnings); err != nil {
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{}, syncErr
