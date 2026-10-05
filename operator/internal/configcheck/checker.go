@@ -175,8 +175,7 @@ func (c *Checker) check(ctx context.Context, in renderer.RenderInput, out *rende
 	}()
 	var invalid *renderer.ValidationError
 	if errors.As(err, &invalid) {
-		atts := renderer.Attribute(out.JSON, out.Sources, invalid.Output)
-		return Verdict{Findings: findingsFrom(atts, out.JSON, in.Endpoints, invalid.Output)}, nil
+		return Rejected(invalid, in, out), nil
 	}
 	if err != nil {
 		return Verdict{}, err
