@@ -202,14 +202,36 @@ func CEDrops(level NamespaceLevel, ec map[string]json.RawMessage) []CEDrop {
 			continue
 		}
 		var keys map[string]json.RawMessage
-		if honored, partly := ceHonoredKeys[level][ns]; partly && json.Unmarshal(block, &keys) == nil {
-			if !slices.ContainsFunc(slices.Collect(maps.Keys(keys)), func(k string) bool { return !honored[k] }) {
-				continue
-			}
+		if json.Unmarshal(block, &keys) != nil {
+			drops = append(drops, CEDrop{Namespace: ns}) // not a block: the render check reports it
+			continue
 		}
-		drops = append(drops, CEDrop{Namespace: ns})
+		partly, dropped := ceDroppedKeys(level, ns, slices.Collect(maps.Keys(keys)))
+		switch {
+		case !partly:
+			drops = append(drops, CEDrop{Namespace: ns})
+		case len(dropped) > 0:
+			drops = append(drops, CEDrop{Namespace: ns, Keys: dropped})
+		}
 	}
 	return drops
+}
+
+// ceDroppedKeys decides what a CE render drops from the block of namespace ns
+// that has keys. partly is false when CE honors nothing of ns, so the whole
+// namespace goes. Otherwise dropped lists, sorted, the keys CE does not honor.
+func ceDroppedKeys(level NamespaceLevel, ns string, keys []string) (partly bool, dropped []string) {
+	honored, partly := ceHonoredKeys[level][ns]
+	if !partly {
+		return false, nil
+	}
+	for _, k := range keys {
+		if !honored[k] {
+			dropped = append(dropped, k)
+		}
+	}
+	slices.Sort(dropped)
+	return true, dropped
 }
 
 // ceHonoredKeys are, per level and Enterprise-listed namespace, the keys KrakenD
