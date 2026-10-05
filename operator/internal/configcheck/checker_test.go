@@ -563,3 +563,17 @@ func TestCheckGatewayPolicy_OverrideIsKeyedByNamespace(t *testing.T) {
 		t.Errorf("linted %s, want ns/p untouched by other/p", v.seen[0])
 	}
 }
+
+func TestCheckGatewayPolicy_CandidateFillsAMissingPolicy(t *testing.T) {
+	v := &fakeValidator{}
+	c := newChecker(v, withPolicy(endpoint("a", "/a"), "p"))
+	candidate := policy("p")
+	candidate.Spec.Raw = &runtime.RawExtension{Raw: []byte(`{"candidate/ns":{}}`)}
+
+	if _, err := c.CheckGatewayPolicy(context.Background(), gateway(v1alpha1.EditionCE), candidate); err != nil {
+		t.Fatal(err)
+	}
+	if len(v.seen) != 1 || !strings.Contains(v.seen[0], "candidate/ns") {
+		t.Errorf("linted %v, want the endpoint rendered with the created policy", v.seen)
+	}
+}
