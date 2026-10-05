@@ -2499,6 +2499,9 @@ spec:
                       Defaults to the gateway's ServiceAccount.
                     type: string
                   tmpSizeLimit:
+                    allOf:
+                    - pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    - pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?[0-9]{1,2}))?$
                     anyOf:
                     - type: integer
                     - type: string
@@ -2514,7 +2517,6 @@ spec:
                       rejected by the validating webhook. The suffix is a binary (Ki..Ei) or
                       decimal (n..E) SI suffix, or an e/E exponent of at most two digits:
                       larger exponents are refused before they are parsed.
-                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                     x-kubernetes-int-or-string: true
                     x-kubernetes-validations:
                     - message: must be a quantity of at most 64 characters that Kubernetes
