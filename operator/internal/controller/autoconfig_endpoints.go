@@ -449,11 +449,12 @@ func checkSet(
 	return set
 }
 
-// attributeFindings maps each candidate a finding's Endpoint names to its
-// first finding. Finding.Index is the entry's position in that endpoint's
-// spec.endpoints, or -1 when unknown; a generated endpoint has one entry, so
-// either value means its single operation. A gateway-root finding (empty
-// Endpoint) names no candidate.
+// attributeFindings maps each candidate a finding's Endpoint names to a
+// rejection carrying that endpoint's least finding message, so the hold reads
+// the same whatever order the findings arrive in. Finding.Index is the entry's
+// position in that endpoint's spec.endpoints, or -1 when unknown; a generated
+// endpoint has one entry, so either value means its single operation. A
+// gateway-root finding (empty Endpoint) names no candidate.
 func attributeFindings(
 	findings []configcheck.Finding,
 	candidates []*v1alpha1.KrakenDEndpoint,
@@ -468,7 +469,7 @@ func attributeFindings(
 		if !ok {
 			continue
 		}
-		if _, seen := attributed[ep.Name]; !seen {
+		if prev, seen := attributed[ep.Name]; !seen || f.Message < prev.message {
 			attributed[ep.Name] = rejection{
 				endpoint: ep, reason: v1alpha1.ReasonConfigValidationFailed,
 				message: f.Message, cause: errors.New(f.String()),
