@@ -597,7 +597,8 @@ type RedisConnectionPool struct {
 	Password     *corev1.SecretKeySelector `json:"password,omitempty"`
 	PoolSize     int                       `json:"poolSize,omitempty"`
 	MinIdleConns int                       `json:"minIdleConns,omitempty"`
-	DialTimeout  string                    `json:"dialTimeout,omitempty"`
+	// +kubebuilder:validation:Pattern=`^[0-9]+(ns|ms|us|µs|s|m|h)$`
+	DialTimeout string `json:"dialTimeout,omitempty"`
 	// Deprecated: has no effect. KrakenD's redis connection pools have no such setting; it is not rendered.
 	ReadTimeout string `json:"readTimeout,omitempty"`
 	// Deprecated: has no effect. KrakenD's redis connection pools have no such setting; it is not rendered.
