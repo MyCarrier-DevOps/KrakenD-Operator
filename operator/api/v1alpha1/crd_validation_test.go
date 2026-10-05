@@ -257,3 +257,19 @@ func TestGatewayCRD_Rules(t *testing.T) {
 		{"redis tls", gatewayHead + `edition: CE, config: {}, redis: {connectionPool: {addresses: ["redis:6379"], tls: {enabled: true}}}}}`, "tls is not supported yet"},
 	})
 }
+
+func TestGatewayCRD_Ratchets(t *testing.T) {
+	const pool = `redis: {connectionPool: {addresses: ["redis:6379"], `
+	const storedPassword = gatewayHead + `edition: CE, config: {}, ` + pool + `password: {name: s, key: p}}}}}`
+	runCRDUpdateCases(t, gatewaysCRD, []crdUpdateCase{
+		{"stored redis password, another field edited",
+			gatewayHead + `edition: CE, config: {}, replicas: 3, ` + pool + `password: {name: s, key: p}}}}}`,
+			storedPassword, ""},
+		{"stored redis password, password changed",
+			gatewayHead + `edition: CE, config: {}, ` + pool + `password: {name: s, key: other}}}}}`,
+			storedPassword, "password is not supported yet"},
+		{"stored redis tls, another field edited",
+			gatewayHead + `edition: CE, config: {}, replicas: 3, ` + pool + `tls: {enabled: true}}}}}`,
+			gatewayHead + `edition: CE, config: {}, ` + pool + `tls: {enabled: true}}}}}`, ""},
+	})
+}
