@@ -84,12 +84,17 @@ func (v *PolicyValidator) ValidateCreate(ctx context.Context, obj runtime.Object
 	return checkPolicyRender(ctx, v.Client, v.Checker, policy)
 }
 
-// ValidateUpdate admits an updated KrakenDBackendPolicy; the CRD schema
-// enforces its field rules.
+// ValidateUpdate validates an updated KrakenDBackendPolicy.
 func (v *PolicyValidator) ValidateUpdate(
-	context.Context, runtime.Object, runtime.Object,
+	ctx context.Context, _, newObj runtime.Object,
 ) (admission.Warnings, error) {
-	return nil, nil
+	policy, ok := newObj.(*v1alpha1.KrakenDBackendPolicy)
+	if !ok {
+		return nil, fmt.Errorf("expected KrakenDBackendPolicy, got %T", newObj)
+	}
+	ctx, cancel := context.WithTimeout(ctx, admissionBudget)
+	defer cancel()
+	return checkPolicyRender(ctx, v.Client, v.Checker, policy)
 }
 
 // ValidateDelete blocks deletion if the policy is still referenced by endpoints.
