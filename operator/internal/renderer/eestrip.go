@@ -183,3 +183,17 @@ func EEOnlyNamespaces(level NamespaceLevel) []string {
 	}
 	return names
 }
+
+// CEDrop is an Enterprise-only use in an extra_config that a CE render drops.
+// Keys is empty when the whole namespace goes, and lists the dropped keys when
+// CE honors the rest of the block.
+type CEDrop struct {
+	Namespace string
+	Keys      []string
+}
+
+// CEDrops returns what a CE render drops from the extra_config ec at level, in
+// namespace order.
+func CEDrops(_ NamespaceLevel, _ map[string]json.RawMessage) []CEDrop {
+	return nil
+}

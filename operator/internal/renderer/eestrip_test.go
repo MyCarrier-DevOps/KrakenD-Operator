@@ -329,3 +329,26 @@ func TestRender_CEFallbackKeepsSourcesAlignedAcrossCRs(t *testing.T) {
 		t.Errorf("StrippedEEFeatures = %+v, want %+v", out.StrippedEEFeatures, wantStripped)
 	}
 }
+
+func TestCEDrops(t *testing.T) {
+	tests := []struct {
+		name  string
+		level NamespaceLevel
+		raw   string
+		want  []CEDrop
+	}{
+		{"whole namespace", LevelEndpoint, `{"auth/api-keys":{"roles":["a"]},"qos/ratelimit/router":{"max_rate":1}}`,
+			[]CEDrop{{Namespace: "auth/api-keys"}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var ec map[string]json.RawMessage
+			if err := json.Unmarshal([]byte(tt.raw), &ec); err != nil {
+				t.Fatal(err)
+			}
+			if got := CEDrops(tt.level, ec); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("CEDrops = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
