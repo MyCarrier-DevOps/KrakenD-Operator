@@ -179,25 +179,35 @@ func (v *EndpointValidator) checkRender(
 	return preexisting, nil
 }
 
-// renderDenial rejects ep with one cause per entry of ep the verdict blames.
-// Findings about other objects or the gateway root go on spec.endpoints.
+// renderDenial rejects ep with one cause per entry of ep the verdict blames,
+// its findings joined and cut to the warning limit. Findings about other
+// objects or the gateway root go on spec.endpoints, as a bounded summary.
 func renderDenial(ep *v1alpha1.KrakenDEndpoint, verdict configcheck.Verdict) error {
 	self := types.NamespacedName{Namespace: ep.Namespace, Name: ep.Name}
-	var errs field.ErrorList
-	var others []string
+	byEntry := map[int][]string{}
+	var blamed []int
+	var others []configcheck.Finding
 	for _, f := range verdict.Findings {
-		if f.Endpoint == self && f.Index >= 0 && f.Index < len(ep.Spec.Endpoints) {
-			entry := ep.Spec.Endpoints[f.Index]
-			errs = append(errs, field.Invalid(field.NewPath("spec", "endpoints").Index(f.Index),
-				entry.Method+" "+entry.Endpoint, f.Message))
+		if f.Endpoint != self || f.Index < 0 || f.Index >= len(ep.Spec.Endpoints) {
+			others = append(others, f)
 			continue
 		}
-		others = append(others, f.String())
+		if _, ok := byEntry[f.Index]; !ok {
+			blamed = append(blamed, f.Index)
+		}
+		byEntry[f.Index] = append(byEntry[f.Index], f.Message)
+	}
+	slices.Sort(blamed)
+	var errs field.ErrorList
+	for _, i := range blamed {
+		entry := ep.Spec.Endpoints[i]
+		errs = append(errs, field.Invalid(field.NewPath("spec", "endpoints").Index(i),
+			entry.Method+" "+entry.Endpoint, truncate(strings.Join(byEntry[i], "; "), warningLimit)))
 	}
 	if len(others) > 0 {
 		errs = append(errs, field.Invalid(field.NewPath("spec", "endpoints"), field.OmitValueType{},
 			"with this change the gateway's config fails krakend check: "+
-				truncate(strings.Join(others, "; "), warningLimit)))
+				configcheck.Verdict{Findings: others}.Summary(warningLimit)))
 	}
 	return invalid(kindEndpoint, ep.Name, errs)
 }
