@@ -156,5 +156,7 @@ jq "${jq_opts[@]}" "$jq_lib"'
   (if (.metadata.name | length) > 63 then "name longer than 63 characters" else empty end),
   (if ($s.gatewayRef.name // "") == "" then "spec.gatewayRef.name is empty" else empty end),
   (if (($s.openapi.url // "") != "") == ($s.openapi.configMapRef != null)
-   then "need exactly one of openapi.url or openapi.configMapRef" else empty end)
+   then "need exactly one of openapi.url or openapi.configMapRef" else empty end),
+  (if $s.openapi.configMapRef != null and (($s.urlTransform.hostMapping // []) | length) == 0
+   then "configMapRef without urlTransform.hostMapping" else empty end)
 ]} | report("KrakenDAutoConfig")' "$work/autoconfigs.json"
