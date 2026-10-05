@@ -70,3 +70,4 @@ KrakenDAutoConfig a/many-overrides: more than 1024 overrides
 KrakenDAutoConfig a/override-method: spec.overrides[0].method HEAD
 KrakenDAutoConfig a/override-index: spec.overrides[0].backends index -1
 KrakenDAutoConfig a/override-timeout: spec.overrides[0].timeout 30
+KrakenDAutoConfig a/override-cachettl: spec.overrides[0].cacheTTL 2562047.9h does not fit in 64 bits of nanoseconds
