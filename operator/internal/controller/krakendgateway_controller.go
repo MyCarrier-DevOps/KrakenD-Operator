@@ -540,8 +540,10 @@ func (r *KrakenDGatewayReconciler) inspectDeploymentStatus(
 	gw.Status.ReadyReplicas = dep.Status.ReadyReplicas
 
 	// A progress deadline is honoured only while it describes the current
-	// rollout; otherwise the Available it caused is reset.
-	if failedRolloutApplies(dep) {
+	// rollout (the Deployment controller has observed the latest spec and, on
+	// a pass that reconciled the Deployment, the template is the wanted one);
+	// otherwise the Available it caused is reset.
+	if failedRolloutApplies(dep) && (obs.dep == nil || templateRunsWant(dep, want)) {
 		r.setConditionWithEvent(gw, metav1.Condition{
 			Type:               v1alpha1.ConditionProgressing,
 			Status:             metav1.ConditionFalse,
