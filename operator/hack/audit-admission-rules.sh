@@ -111,5 +111,6 @@ jq "${jq_opts[@]}" "$jq_lib"'
    then "more than one PVC plugin source" else empty end),
   (if (($s.plugins.sources // []) | length) > 32 then "more than 32 plugin sources" else empty end),
   (if ($s.postRestartJob.enabled // false) and (($s.postRestartJob.script // "") == "")
-   then "spec.postRestartJob.script is empty" else empty end)
+   then "spec.postRestartJob.script is empty" else empty end),
+  (if $s.redis.connectionPool.password != null then "spec.redis.connectionPool.password is not supported yet" else empty end)
 ]} | report("KrakenDGateway")' "$work/gateways.json"
