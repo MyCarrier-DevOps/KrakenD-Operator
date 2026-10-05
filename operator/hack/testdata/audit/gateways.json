@@ -41,5 +41,6 @@
  {"metadata":{"namespace":"a","name":"hp-rawstr"},"spec":{"edition":"CE","config":{"router":{"healthPath":"/healthz2"},"extraConfig":{"router":"x"}}}},
  {"metadata":{"namespace":"a","name":"hp-badtype1"},"spec":{"edition":"CE","config":{"extraConfig":{"router":{"health_path":"/live","auto_options":"yes"}}}}},
  {"metadata":{"namespace":"a","name":"hp-badtype2"},"spec":{"edition":"CE","config":{"extraConfig":{"router":{"disable_health":true,"health_path":5}}}}},
- {"metadata":{"namespace":"a","name":"hp-badtype3"},"spec":{"edition":"CE","config":{"extraConfig":{"router":{"disable_health":"yes","health_path":"/live"}}}}}
+ {"metadata":{"namespace":"a","name":"hp-badtype3"},"spec":{"edition":"CE","config":{"extraConfig":{"router":{"disable_health":"yes","health_path":"/live"}}}}},
+ {"metadata":{"namespace":"a","name":"hp-case"},"spec":{"edition":"CE","config":{"extraConfig":{"router":{"Health_Path":"/live"}}}}}
 ]}
