@@ -5208,6 +5208,10 @@ func TestAutoConfigReconcile_AggregatesEndpointReadiness(t *testing.T) {
 		cond.Message != "1 of 2 endpoints not ready: test-ac-getb: EndpointConflict" {
 		t.Errorf("unexpected EndpointsReady %+v", cond)
 	}
+	ready := meta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionReady)
+	if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != v1alpha1.ReasonEndpointsNotReady {
+		t.Errorf("expected Ready False/EndpointsNotReady while an endpoint is not ready, got %+v", ready)
+	}
 }
 
 func TestOwnedEndpointPredicate_PassesReadinessChangesOnly(t *testing.T) {
