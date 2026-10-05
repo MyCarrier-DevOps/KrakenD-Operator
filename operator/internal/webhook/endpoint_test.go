@@ -372,6 +372,26 @@ func TestEndpointAdmission_MovingOntoACEGatewayChecksEntryRulesAndRoutes(t *test
 	}
 }
 
+// An Enterprise-only namespace stored on an entry of a CE gateway does not
+// block an edit to another entry, but a new use of it does.
+func TestEndpointAdmission_StoredEEOnlyNamespaceDoesNotBlockOtherEdits(t *testing.T) {
+	old := testEndpoint("e", "/stored", "/edited")
+	old.Spec.Endpoints[0].ExtraConfig = &runtime.RawExtension{Raw: []byte(`{"auth/api-keys":{"roles":["a"]}}`)}
+	v := &EndpointValidator{Client: fakeClient(testGateway(), old)}
+
+	edited := old.DeepCopy()
+	edited.Spec.Endpoints[1].Backends[0].URLPattern = "/v2"
+	if resp := review(t, v, "alice", edited, old); !resp.Allowed {
+		t.Errorf("edit of an unrelated entry denied: %+v", resp.Result)
+	}
+
+	added := edited.DeepCopy()
+	added.Spec.Endpoints[1].ExtraConfig = old.Spec.Endpoints[0].ExtraConfig
+	if resp := review(t, v, "alice", added, old); resp.Allowed {
+		t.Error("a new use of the namespace on the edited entry admitted")
+	}
+}
+
 // Same-shape entries inside one KrakenDEndpoint are checked whenever an entry
 // changes, even when the new entry has the route key of a stored one.
 func TestEndpointAdmission_UpdateAddingAnEntryWithAStoredRouteKeyIsRejected(t *testing.T) {
