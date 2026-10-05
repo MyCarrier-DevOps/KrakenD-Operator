@@ -98,6 +98,8 @@ func TestValidateEntries(t *testing.T) {
 		{"entirely EE-only backend namespace on CE", testGateway(),
 			withExtra("", `{"auth/gcp":{"audience":"https://a"}}`),
 			`spec.endpoints[0].backends[0].extraConfig: Invalid value: "auth/gcp": Enterprise-only extra_config namespace`},
+		{"null client block on CE", testGateway(), withExtra("", `{"backend/http/client":null}`),
+			`Invalid value: "backend/http/client"`},
 		{"EE-only client key beside a CE-honored one", testGateway(),
 			withExtra("", `{"backend/http/client":{"send_body_on_redirect":true,"proxy_address":"http://p"}}`),
 			`Invalid value: "backend/http/client": Enterprise-only keys (proxy_address)`},
