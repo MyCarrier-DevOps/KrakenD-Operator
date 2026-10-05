@@ -437,6 +437,10 @@ type KrakenDAutoConfigStatus struct {
 	LastSyncTime       *metav1.Time `json:"lastSyncTime,omitempty"`
 	SpecChecksum       string       `json:"specChecksum,omitempty"`
 	GeneratedEndpoints int          `json:"generatedEndpoints,omitempty"`
+	// ReadyEndpoints counts the KrakenDEndpoints this AutoConfig controls
+	// whose Ready condition is True for their current generation.
+	// +optional
+	ReadyEndpoints int `json:"readyEndpoints,omitempty"`
 	// SkippedOperations counts the operations the last sync generated no
 	// endpoint for by rule (see skipped), including any beyond the 20 listed.
 	SkippedOperations int `json:"skippedOperations,omitempty"`
