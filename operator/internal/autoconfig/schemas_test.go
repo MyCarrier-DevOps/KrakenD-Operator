@@ -199,3 +199,22 @@ func TestSchemaClosure_TerminatesOnCycles(t *testing.T) {
 		t.Errorf("unresolved = %v, want none", unresolved)
 	}
 }
+
+// An "examples" entry that is a $ref points at an Example Object under
+// components/examples, which is not a schema, so the closure neither attaches
+// nor reports it.
+func TestSchemaClosure_IgnoresRefsToExampleObjects(t *testing.T) {
+	components := map[string]runtime.RawExtension{
+		"Pet": {Raw: []byte(`{"type":"object","examples":{"fido":{"$ref":"#/components/examples/Fido"}}}`)},
+	}
+	entry := docEntry("/pets", `{"response_definition":{"200":{"ref":"Pet"}}}`)
+
+	closure, unresolved := SchemaClosure(entry, components)
+
+	if got, want := slices.Sorted(maps.Keys(closure)), []string{"Pet"}; !slices.Equal(got, want) {
+		t.Errorf("closure = %v, want %v", got, want)
+	}
+	if len(unresolved) != 0 {
+		t.Errorf("unresolved = %v, want none", unresolved)
+	}
+}
