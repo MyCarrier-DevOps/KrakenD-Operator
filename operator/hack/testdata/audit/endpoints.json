@@ -9,5 +9,6 @@
  {"metadata":{"namespace":"a","name":"timeout-overflow"},"spec":{"gatewayRef":{"name":"gw"},"endpoints":[{"endpoint":"/x","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}],"timeout":"2562048h"}]}},
  {"metadata":{"namespace":"a","name":"cachettl-overflow"},"spec":{"gatewayRef":{"name":"gw"},"endpoints":[{"endpoint":"/x","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}],"cacheTTL":"9223372036854775808ns"}]}},
  {"metadata":{"namespace":"a","name":"output-encoding"},"spec":{"gatewayRef":{"name":"gw"},"endpoints":[{"endpoint":"/x","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}],"outputEncoding":"jsn"}]}},
- {"metadata":{"namespace":"a","name":"backend-encoding"},"spec":{"gatewayRef":{"name":"gw"},"endpoints":[{"endpoint":"/x","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u","encoding":"jsn"}]}]}}
+ {"metadata":{"namespace":"a","name":"backend-encoding"},"spec":{"gatewayRef":{"name":"gw"},"endpoints":[{"endpoint":"/x","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u","encoding":"jsn"}]}]}},
+ {"metadata":{"namespace":"a","name":"backend-sd"},"spec":{"gatewayRef":{"name":"gw"},"endpoints":[{"endpoint":"/x","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u","sd":"foo"}]}]}}
 ]}
