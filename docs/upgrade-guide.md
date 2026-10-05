@@ -46,14 +46,13 @@ make deploy IMG=ghcr.io/mycarrier-devops/krakend-operator:<new-version>
    nothing to fix. Fix or knowingly accept each line before upgrading. What a
    listed object blocks depends on the rule it breaks:
    - A stored value that breaks a field rule (a pattern, an enum, a minimum, a
-     length) keeps being accepted on unrelated updates; only a change to that
-     field must fix it. Items of a list without per-item keys (an entry's
+     length, or a `tmpSizeLimit` Kubernetes cannot decode) keeps being accepted
+     on unrelated updates; only a change to that field must fix it. Items of a list without per-item keys (an entry's
      `backends`, a KrakenDAutoConfig's `overrides` and
      `additionalEndpoints[].backends`) are re-checked on any edit to that list.
    - A duration that matches its pattern but does not fit in 64 bits of
-     nanoseconds, or a `tmpSizeLimit` Kubernetes cannot decode, raises an
-     evaluation error that is never ratcheted: every update to the object is
-     rejected until it is fixed. On a KrakenDEndpoint the same holds for any
+     nanoseconds raises an evaluation error that is never ratcheted: every
+     update to the object is rejected until it is fixed. On a KrakenDEndpoint the same holds for any
      `timeout` or `cacheTTL` that is not a Go duration (`3 seconds`, `30`),
      because its rule has no pattern guard.
    - A rule written on `spec` itself (the Enterprise license sources, the
