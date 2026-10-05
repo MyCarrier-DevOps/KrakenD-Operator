@@ -2330,6 +2330,37 @@ func TestAutoConfigReconcile_IdenticalSecondPassWritesNothing(t *testing.T) {
 	}
 }
 
+func TestAutoConfigReconcile_SharedBrokenRefEmitsOneSpecWarning(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).Build()
+	f, ce, fi, g := defaultMocks()
+	// Two operations reference the same missing pointer.
+	spec := []byte(`{"paths":{` +
+		`"/x":{"get":{"responses":{"200":{"$ref":"common.json#/Missing"}}}},` +
+		`"/y":{"get":{"responses":{"200":{"$ref":"common.json#/Missing"}}}}}}`)
+	f.result = &autoconfig.FetchResult{Data: spec}
+	f.byURL = map[string]mockFetchOutcome{
+		"https://example.com/common.json": {result: &autoconfig.FetchResult{Data: []byte(`{}`)}},
+	}
+	rec := fakeRecorder()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Recorder = rec
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	n := 0
+	for _, ev := range drainEvents(rec) {
+		if strings.HasPrefix(ev, "Warning "+v1alpha1.ReasonSpecWarning+" ") {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("SpecWarning events = %d, want 1 for one distinct warning", n)
+	}
+}
+
 func TestAutoConfigPredicate_IgnoresStatusOnlyUpdate(t *testing.T) {
 	old := &v1alpha1.KrakenDAutoConfig{
 		ObjectMeta: metav1.ObjectMeta{
