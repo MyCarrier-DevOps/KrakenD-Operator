@@ -39,6 +39,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
 // mockRenderer implements renderer.Renderer for testing.
@@ -224,7 +225,7 @@ func TestGatewayReconcile_ChecksumUnchanged(t *testing.T) {
 	}
 
 	c := fakeClientBuilder().
-		WithObjects(gw).
+		WithObjects(gw, settledDeployment(gw, "samechecksum")).
 		WithStatusSubresource(gw).
 		Build()
 
@@ -1687,7 +1688,7 @@ func TestGatewayReconcile_RevertToAppliedConfigClearsRejection(t *testing.T) {
 				Message: "Deployment rollout completed successfully", ObservedGeneration: 2, LastTransitionTime: now},
 		},
 	}
-	c := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).Build()
+	c := fakeClientBuilder().WithObjects(gw, settledDeployment(gw, "good")).WithStatusSubresource(gw).Build()
 	// The spec was reverted: the render equals the configuration that is still applied.
 	r := acceptanceReconciler(c, fakeRecorder(), &renderer.RenderOutput{
 		JSON: []byte(`{"version":3}`), Checksum: "good",
@@ -1761,6 +1762,25 @@ func convergedGatewayAt(checksum string) *v1alpha1.KrakenDGateway {
 	return gw
 }
 
+// settledDeployment is gw's Deployment as the controller builds it for the
+// applied config checksum (a CE render running convergedImage), with every
+// replica updated and available and its generation observed. Reconciling the
+// gateway against it writes nothing.
+func settledDeployment(gw *v1alpha1.KrakenDGateway, checksum string) *appsv1.Deployment {
+	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace, Generation: 1}}
+	resources.BuildDeployment(dep, gw, resources.DeploymentInputs{
+		ConfigMapName: resources.ConfigMapName(gw, checksum), ConfigChecksum: checksum,
+		Image: convergedImage, CERender: true,
+	})
+	if err := controllerutil.SetControllerReference(gw, dep, testScheme()); err != nil {
+		panic(err)
+	}
+	dep.Status = appsv1.DeploymentStatus{
+		ObservedGeneration: 1, Replicas: 1, UpdatedReplicas: 1, AvailableReplicas: 1, ReadyReplicas: 1,
+	}
+	return dep
+}
+
 func TestGatewayReconcile_ConfigChangeNotReadyWhileOldStatusLingers(t *testing.T) {
 	gw := convergedGatewayAt("cs-old")
 	// The update just applied bumped the Deployment's generation, but its
@@ -1832,7 +1852,7 @@ func TestGatewayReconcile_NotReadyWhenDeploymentLosesAvailability(t *testing.T) 
 	gw := convergedGatewayAt("cs1")
 	// Every replica is crash-looping: the rollout is long finished, but the
 	// Deployment no longer has its minimum available replicas.
-	dep := makeConvergedDeployment(gw, "cs1")
+	dep := settledDeployment(gw, "cs1")
 	dep.Status.AvailableReplicas = 0
 	dep.Status.Conditions = []appsv1.DeploymentCondition{{
 		Type: appsv1.DeploymentAvailable, Status: corev1.ConditionFalse,
