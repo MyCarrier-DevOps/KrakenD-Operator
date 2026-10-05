@@ -416,8 +416,8 @@ func skipRouteCollisions(output *CUEOutput) {
 				Operation: Operation{
 					Method: entry.Method, Path: entry.Endpoint, OperationID: output.entryOperationIDs[i],
 				},
-				Reason:    v1alpha1.ReasonDuplicateOperationId,
-				Message:   "same path and method as " + by,
+				Reason:  v1alpha1.ReasonDuplicateOperationId,
+				Message: "same path and method as " + by,
 			})
 			continue
 		}
