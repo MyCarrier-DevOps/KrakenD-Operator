@@ -168,7 +168,7 @@ func applyOverrides(cueCtx *cue.Context, unified cue.Value, input CUEInput) cue.
 	for _, override := range input.Overrides {
 		if override.ExtraConfig != nil && override.ExtraConfig.Raw != nil {
 			key := SanitizeName(override.OperationID)
-			overrideCUE := fmt.Sprintf("_overrides: %s: _\n_overrides: %s: %s", key, key, override.ExtraConfig.Raw)
+			overrideCUE := fmt.Sprintf("_overrides: %q: _\n_overrides: %q: %s", key, key, override.ExtraConfig.Raw)
 			val := cueCtx.CompileString(overrideCUE, cue.Filename("override-"+key+".cue"))
 			unified = unified.Unify(val)
 		}
