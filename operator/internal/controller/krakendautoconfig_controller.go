@@ -33,6 +33,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	kerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
 	utilclock "k8s.io/utils/clock"
@@ -94,7 +95,7 @@ type KrakenDAutoConfigReconciler struct {
 // runs the whole pipeline, so owned endpoints converge to the desired state
 // while the AutoConfig syncs successfully. While it is in Error, existing
 // endpoints are left as they are: a failed sync stops before touching them,
-// or, for an endpoint write, at that endpoint. A successful reconcile that
+// and a failed endpoint write keeps every stale endpoint. A successful reconcile that
 // finds nothing to change writes nothing.
 func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
@@ -273,9 +274,15 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	// Diff and reconcile endpoints
-	changes, err := r.reconcileEndpoints(ctx, &ac, genOutput.Endpoints)
+	outcome, err := r.reconcileEndpoints(ctx, &ac, genOutput.Endpoints)
 	if err != nil {
 		return r.handleEndpointError(ctx, &ac, err, warnings)
+	}
+	if len(outcome.transient) > 0 {
+		return r.handleEndpointError(ctx, &ac, kerrors.NewAggregate(outcome.transient), warnings)
+	}
+	if len(outcome.raced) > 0 {
+		return lostWriteRace(ctx, kerrors.NewAggregate(outcome.raced))
 	}
 
 	if err := r.recordSync(ctx, &ac, origStatus, syncResult{
@@ -283,7 +290,7 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		generated: len(genOutput.Endpoints),
 		skipped:   operationStatuses(skippedOps),
 		warnings:  specWarnings(specNotes),
-		changes:   changes,
+		changes:   outcome.changes,
 	}, warnings); err != nil {
 		return statusWriteFailure(ctx, err)
 	}
@@ -397,13 +404,14 @@ func (r *KrakenDAutoConfigReconciler) handleSyncedFailure(
 	return ctrl.Result{}, syncErr
 }
 
-// handleEndpointError handles a failed endpoint write. One rejected with a
-// Conflict or an AlreadyExists lost a race with a newer copy of the endpoint
-// than this reconcile read; it requeues quietly after conflictRequeueDelay.
-// Any other error fails the sync with EndpointReconcileFailed and is returned
-// for every trigger, so controller-runtime retries it with exponential
-// backoff: endpoint write failures are usually transient, and a periodic
-// trigger would otherwise wait a whole interval.
+// handleEndpointError handles a reconcileEndpoints error, or the aggregate
+// of the transient endpoint write errors one pass collected. A Conflict or
+// an AlreadyExists lost a race with a newer copy of the endpoint than this
+// reconcile read; it requeues quietly after conflictRequeueDelay. Any other
+// error fails the sync with EndpointReconcileFailed and is returned for
+// every trigger, so controller-runtime retries it with backoff: these errors
+// are transient, and a periodic trigger would otherwise wait a whole
+// interval.
 func (r *KrakenDAutoConfigReconciler) handleEndpointError(
 	ctx context.Context,
 	ac *v1alpha1.KrakenDAutoConfig,
@@ -814,39 +822,44 @@ func autoConfigStatusChanged(orig, cur *v1alpha1.KrakenDAutoConfigStatus) bool {
 }
 
 // reconcileEndpoints converges the KrakenDEndpoints ac controls to desired.
-// It writes the endpoints that are missing or differ first, and only then
-// deletes the ones no longer desired, so a failed write never takes a route
-// off the gateway.
+// It writes the endpoints that are missing or differ first, attempting every
+// one whatever fails, and only then, when no write failed, deletes the ones
+// no longer desired, so a failure never takes a route off the gateway. An
+// error means the pass could not continue: listing or deleting failed.
 func (r *KrakenDAutoConfigReconciler) reconcileEndpoints(
 	ctx context.Context,
 	ac *v1alpha1.KrakenDAutoConfig,
 	desired []*v1alpha1.KrakenDEndpoint,
-) (endpointChanges, error) {
-	var changes endpointChanges
+) (endpointOutcome, error) {
+	var outcome endpointOutcome
 	controlled, err := r.claimEndpoints(ctx, ac)
 	if err != nil {
-		return changes, err
+		return outcome, err
 	}
 	writes, stale := planEndpoints(controlled, desired)
 	for _, ep := range writes {
 		op, err := r.writeEndpoint(ctx, ac, ep)
 		if err != nil {
-			return changes, err
+			outcome.record(err)
+			continue
 		}
-		changes.count(op)
+		outcome.changes.count(op)
+	}
+	if outcome.failed() {
+		return outcome, nil
 	}
 
 	for i := range stale {
 		deleted, err := r.deleteEndpoint(ctx, &stale[i])
 		if err != nil {
-			return changes, err
+			return outcome, err
 		}
 		if deleted {
-			changes.deleted++
+			outcome.changes.deleted++
 		}
 	}
 
-	return changes, nil
+	return outcome, nil
 }
 
 // endpointSpecEqual reports whether a and b serialize to the same JSON value.
