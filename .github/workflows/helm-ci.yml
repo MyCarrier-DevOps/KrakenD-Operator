@@ -20,7 +20,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: azure/setup-helm@v5
       - name: Lint Helm chart
-        run: helm lint charts/krakend-operator
+        run: helm lint charts/krakend-operator --kube-version 1.33.0
 
   template:
     name: Helm Template
@@ -29,6 +29,6 @@ jobs:
       - uses: actions/checkout@v6
       - uses: azure/setup-helm@v5
       - name: Template Helm chart
-        run: helm template test charts/krakend-operator > /dev/null
+        run: helm template test charts/krakend-operator --kube-version 1.33.0 > /dev/null
       - name: Chart render tests
         run: bash .github/scripts/chart-render-test.sh
