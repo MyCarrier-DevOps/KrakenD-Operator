@@ -4131,3 +4131,28 @@ func TestAutoConfigReconcile_FailureMessageOrderIsStable(t *testing.T) {
 		t.Errorf("error = %v, want %q", err, want)
 	}
 }
+
+func TestAutoConfigReconcile_RaceMixedWithRealErrorFailsListingBoth(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	g.output.Endpoints = []*v1alpha1.KrakenDEndpoint{generatedEndpoint("a", "/a"), generatedEndpoint("b", "/b")}
+	var ops []string
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).
+		WithInterceptorFuncs(recordEndpointWrites(&ops, map[string]error{
+			"test-ac-a": conflictError("krakendendpoints", "test-ac-a"),
+			"test-ac-b": errors.New("etcd timeout"),
+		})).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+
+	result, err := reconcileAC(r, ac)
+
+	if err == nil || result.RequeueAfter != 0 {
+		t.Fatalf("expected a backoff error, got %+v, %v", result, err)
+	}
+	for _, want := range []string{"upserting endpoint test-ac-a", "upserting endpoint test-ac-b: etcd timeout"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("expected the error to list %q, got %v", want, err)
+		}
+	}
+}
