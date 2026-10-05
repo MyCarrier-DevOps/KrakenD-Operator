@@ -2562,3 +2562,25 @@ func TestAutoConfigAdmission_RatchetsGatewayRefAndFields(t *testing.T) {
 		t.Error("a different malformed audience admitted")
 	}
 }
+
+// The runAs errors carry the same text for every violating shape, so a stored
+// one must not hide a changed securityContext that still violates the rule.
+func TestGatewayAdmission_ChangedDragonflyRunAsStillUnacknowledgedIsRejected(t *testing.T) {
+	old := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Dragonfly: &v1alpha1.DragonflySpec{
+				Enabled:            true,
+				PodSecurityContext: &corev1.PodSecurityContext{RunAsUser: ptr.To(int64(0))},
+			},
+		},
+	}
+	changed := old.DeepCopy()
+	changed.Spec.Dragonfly.PodSecurityContext.RunAsNonRoot = ptr.To(true)
+
+	resp := review(t, &GatewayValidator{}, "alice", changed, old)
+	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity {
+		t.Errorf("changed, still unacknowledged dragonfly runAsUser 0: %+v, want 422", resp.Result)
+	}
+}
