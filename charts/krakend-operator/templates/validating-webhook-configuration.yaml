@@ -10,6 +10,7 @@ metadata:
     cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ include "krakend-operator.fullname" . }}-serving-cert
   {{- end }}
 webhooks:
+  # Keep in sync with the +kubebuilder:webhook markers in operator/internal/webhook/webhook.go.
   - name: vkrakendgateway.kb.io
     admissionReviewVersions:
       - v1
@@ -33,6 +34,7 @@ webhooks:
         resources:
           - krakendgateways
     sideEffects: None
+    timeoutSeconds: 15
   - name: vkrakendendpoint.kb.io
     admissionReviewVersions:
       - v1
@@ -56,6 +58,7 @@ webhooks:
         resources:
           - krakendendpoints
     sideEffects: None
+    timeoutSeconds: 15
   - name: vkrakendbackendpolicy.kb.io
     admissionReviewVersions:
       - v1
@@ -80,6 +83,7 @@ webhooks:
         resources:
           - krakendbackendpolicies
     sideEffects: None
+    timeoutSeconds: 15
   - name: vkrakendautoconfig.kb.io
     admissionReviewVersions:
       - v1
@@ -103,4 +107,5 @@ webhooks:
         resources:
           - krakendautoconfigs
     sideEffects: None
+    timeoutSeconds: 15
 {{- end }}
