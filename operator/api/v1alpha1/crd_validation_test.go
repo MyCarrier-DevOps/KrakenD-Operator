@@ -392,5 +392,6 @@ func TestAutoConfigCRD_Rules(t *testing.T) {
 		{"additional endpoint timeout overflows", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, additionalEndpoints: [{endpoint: /h, timeout: "2562048h"}]}}`, "spec.additionalEndpoints[0].timeout"},
 		{"additional endpoint cacheTTL overflows", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, additionalEndpoints: [{endpoint: /h, cacheTTL: "99999999999s"}]}}`, "spec.additionalEndpoints[0].cacheTTL"},
 		{"defaults output encoding", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, defaults: {endpoint: {outputEncoding: jsn}}}}`, "Unsupported value: \"jsn\""},
+		{"override output encoding", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, overrides: [{operationId: x, outputEncoding: jsn}]}}`, "Unsupported value: \"jsn\""},
 	})
 }
