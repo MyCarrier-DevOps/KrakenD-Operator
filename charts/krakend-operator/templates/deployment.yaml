@@ -32,6 +32,11 @@ spec:
         - name: manager
           image: {{ include "krakend-operator.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: POD_SERVICE_ACCOUNT
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.serviceAccountName
           command:
             - /manager
           args:
