@@ -85,7 +85,8 @@ type KrakenDGatewayReconciler struct {
 
 // ConfigChecker gathers a gateway's render inputs and validates what they
 // render to. The gateway controller owns this port; configcheck.Checker is
-// its implementation.
+// its implementation. A verdict that is not OK always carries its Rejection:
+// validateConfig remembers it, and rebuilds the findings from it later.
 type ConfigChecker interface {
 	Gather(ctx context.Context, gw *v1alpha1.KrakenDGateway,
 		replace []v1alpha1.KrakenDEndpoint) (renderer.RenderInput, error)
