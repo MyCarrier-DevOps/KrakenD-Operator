@@ -407,6 +407,15 @@ spec:
                       outputEncoding:
                         description: OutputEncoding sets the default response encoding
                           (e.g. "json", "no-op").
+                        enum:
+                        - json
+                        - json-collection
+                        - yaml
+                        - fast-json
+                        - xml
+                        - negotiate
+                        - string
+                        - no-op
                         type: string
                       timeout:
                         description: Timeout sets the default endpoint timeout.
