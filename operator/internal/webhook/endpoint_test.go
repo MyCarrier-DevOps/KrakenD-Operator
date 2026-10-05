@@ -207,13 +207,28 @@ func TestEndpointAdmission_SameControllerMayShareARoute(t *testing.T) {
 			Kind: "KrakenDAutoConfig", Name: "pets", UID: uid, Controller: ptr.To(true)}}
 		return ep
 	}
-	v := &EndpointValidator{Client: fakeClient(testGateway(), owned("pets-getuser", "pets-uid")), Checker: &scriptedChecker{}}
+	// The operator's own writes skip the render check but not route uniqueness,
+	// so a rename must not deadlock on the old endpoint.
+	for _, user := range []string{"alice", operatorUser} {
+		t.Run(user, func(t *testing.T) {
+			chk := &scriptedChecker{}
+			v := &EndpointValidator{Client: fakeClient(testGateway(), owned("pets-getuser", "pets-uid")),
+				Checker: chk, OperatorUsername: operatorUser}
 
-	if resp := review(t, v, "alice", owned("pets-getuserbyid", "pets-uid"), nil); !resp.Allowed {
-		t.Errorf("same-controller route denied: %+v", resp.Result)
-	}
-	if resp := review(t, v, "alice", owned("other-getuser", "other-uid"), nil); resp.Allowed {
-		t.Error("another controller's duplicate route admitted")
+			if resp := review(t, v, user, owned("pets-getuserbyid", "pets-uid"), nil); !resp.Allowed {
+				t.Errorf("same-controller route denied: %+v", resp.Result)
+			}
+			resp := review(t, v, user, owned("other-getuser", "other-uid"), nil)
+			if resp.Allowed || resp.Result.Details == nil || len(resp.Result.Details.Causes) != 1 ||
+				!strings.Contains(resp.Result.Details.Causes[0].Message,
+					"already defined by KrakenDEndpoint default/pets-getuser") {
+				t.Errorf("another controller's duplicate route: response = %+v, want a duplicate naming pets-getuser",
+					resp.Result)
+			}
+			if user == operatorUser && len(chk.calls) != 0 {
+				t.Errorf("render check ran for the operator's writes: %v", chk.calls)
+			}
+		})
 	}
 }
 
