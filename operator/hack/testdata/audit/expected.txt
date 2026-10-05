@@ -57,3 +57,4 @@ KrakenDAutoConfig a/interval-overflow: spec.periodic.interval 2562048h does not 
 KrakenDAutoConfig a/basepath: spec.additionalEndpointsBasePath x
 KrakenDAutoConfig a/basepath-prefix: additionalEndpointsBasePath with urlTransform.addPathPrefix
 KrakenDAutoConfig a/many-additional: more than 256 additionalEndpoints
+KrakenDAutoConfig a/dup-additional: duplicate additionalEndpoint GET /h
