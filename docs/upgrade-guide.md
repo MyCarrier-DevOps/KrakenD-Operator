@@ -1296,9 +1296,9 @@ an already-invalid field unchanged is admitted, so objects stored before the
 upgrade keep accepting unrelated changes (labels, annotations, other fields);
 only a change *to* the violating field must fix it. The exception is a list
 without per-item keys: an entry's `backends` (an atomic list) and a
-KrakenDAutoConfig's `overrides[]` and `additionalEndpoints[]`. Their items
-ratchet only while the whole list is unchanged, so any edit to the list
-re-checks every item and a stored invalid sibling blocks it. Run the audit in the
+KrakenDAutoConfig's `overrides[]`. Their items ratchet only while the whole
+list is unchanged, so any edit to the list re-checks every item and a stored
+invalid sibling blocks it. Run the audit in the
 Pre-Upgrade Checklist to find such objects. The chart refuses clusters below
 1.33 (`kubeVersion`), and the OLM bundle's `minKubeVersion` is 1.33.0. With
 Helm, use 3.18 or later: older releases default `helm template` and `helm lint`
@@ -1343,6 +1343,32 @@ that object until it is fixed. A stored value that breaks the pattern, such as
 `5 seconds`, fails only the pattern and keeps ratcheting. The quantity fields of
 the embedded `resources` cannot carry per-field rules; keep the admission
 webhooks enabled, because their typed decode rejects such values.
+
+**KrakenDAutoConfig schema.** `spec.openapi` needs exactly one of `url` or
+`configMapRef`, and `configMapRef` needs `urlTransform.hostMapping`. `trigger:
+Periodic` needs `periodic.interval` of **at least 30s** (previously any
+non-zero value; shorter intervals hot-looped the upstream), and the interval
+must be a Go duration. `bearerTokenSecret` and `basicAuthSecret` are mutually
+exclusive, and a name is at most 63 characters because it becomes a label value
+on the generated endpoints. An override `method` is one of GET, POST, PUT, PATCH
+or DELETE, `backends[].index` is 0 or more, and `spec.overrides` holds at most
+1024 items. `additionalEndpointsBasePath` and `additionalEndpoints[].endpoint`
+start with `/`, and `additionalEndpointsBasePath` stays mutually exclusive with
+`urlTransform.addPathPrefix`. `additionalEndpoints` holds at most 256 items,
+unique on (endpoint, method), with `method` defaulting to `GET` (existing
+objects read back with `method: GET`), and an entry sets either `backends` or
+the `host`/`backendUrlPattern`/`encoding` shorthand, not both. `timeout` and
+`cacheTTL` on `defaults.endpoint`, overrides and additional endpoints are Go
+durations that fit in 64 bits of nanoseconds, at most 64 characters. The
+`outputEncoding` of `defaults.endpoint`, overrides and additional endpoints, and
+the `encoding` of `defaults.backend` and of an additional endpoint's shorthand,
+must be values the KrakenDEndpoint schema accepts: a typo used to be admitted
+here and then fail every generated KrakenDEndpoint write. The webhook no longer
+checks these; a rejection now comes from the API server. A stored value that
+breaks one of these rules keeps being accepted on unrelated updates. The rules
+on `spec` itself (a source, `hostMapping`, Periodic needing a `periodic` block,
+the base path and `addPathPrefix` exclusivity) are re-checked on any change to
+the spec.
 
 **Redis and Dragonfly credentials are rejected until they are supported.** The
 operator has never rendered `spec.redis.connectionPool.password` or `.tls`, so
