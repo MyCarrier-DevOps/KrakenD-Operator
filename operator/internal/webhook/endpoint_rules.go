@@ -85,10 +85,10 @@ func validateEENamespaces(p *field.Path, e v1alpha1.EndpointEntry) field.ErrorLi
 	return errs
 }
 
-// eeOnlyNamespacesIn returns the namespaces of the extra_config raw that only
-// KrakenD Enterprise implements at level, in name order. raw that is not a
-// JSON object has none; the render check reports it.
-func eeOnlyNamespacesIn(raw *runtime.RawExtension, level renderer.NamespaceLevel) []string {
+// eeOnlyNamespacesIn returns what a CE render drops from the extra_config raw
+// at level. raw that is not a JSON object drops nothing; the render check
+// reports it.
+func eeOnlyNamespacesIn(raw *runtime.RawExtension, level renderer.NamespaceLevel) []renderer.CEDrop {
 	if raw == nil || raw.Raw == nil {
 		return nil
 	}
@@ -96,23 +96,21 @@ func eeOnlyNamespacesIn(raw *runtime.RawExtension, level renderer.NamespaceLevel
 	if json.Unmarshal(raw.Raw, &ec) != nil {
 		return nil
 	}
-	var found []string
-	for _, ns := range renderer.EEOnlyNamespaces(level) {
-		if _, ok := ec[ns]; ok {
-			found = append(found, ns)
-		}
-	}
-	return found
+	return renderer.CEDrops(level, ec)
 }
 
-// ceIgnores reports each Enterprise-only namespace in names on p. KrakenD CE
-// accepts such a namespace in krakend check and then ignores it, so an entry
-// that asks for API-key authentication would be served without any.
-func ceIgnores(p *field.Path, names []string) field.ErrorList {
+// ceIgnores reports each of drops on p. KrakenD CE accepts an Enterprise-only
+// namespace in krakend check and then drops it, so an entry that asks for
+// API-key authentication would be served without any.
+func ceIgnores(p *field.Path, drops []renderer.CEDrop) field.ErrorList {
 	var errs field.ErrorList
-	for _, ns := range names {
-		errs = append(errs, field.Invalid(p, ns,
-			"Enterprise-only extra_config namespace: the gateway runs CE, which ignores it silently"))
+	for _, d := range drops {
+		msg := "Enterprise-only extra_config namespace: the gateway runs CE, which drops it silently"
+		if len(d.Keys) > 0 {
+			msg = fmt.Sprintf("Enterprise-only keys (%s): the gateway runs CE, which drops them silently",
+				strings.Join(d.Keys, ", "))
+		}
+		errs = append(errs, field.Invalid(p, d.Namespace, msg))
 	}
 	return errs
 }
