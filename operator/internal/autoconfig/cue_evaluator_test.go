@@ -2152,7 +2152,7 @@ func TestEvaluate_ConflictInHiddenLabelUnderEndpointFailsEvaluation(t *testing.T
 	_, err := evaluateWithCustomDefs(twoOperationSpec, map[string]string{
 		"a.cue": `endpoint: _h: t: "1s"`,
 		"b.cue": `endpoint: _h: t: "2s"`,
-		"c.cue": `endpoint: "/b:GET": timeout: *_h.t | "3s"`,
+		"c.cue": `endpoint: "/b:GET": timeout: *endpoint._h.t | "3s"`,
 	})
 	if err == nil || !strings.Contains(err.Error(), "_h") {
 		t.Errorf("expected a whole-evaluation error naming _h, got %v", err)
