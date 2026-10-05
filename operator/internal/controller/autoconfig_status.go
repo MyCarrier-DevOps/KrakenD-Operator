@@ -192,7 +192,11 @@ func endpointNotReadyReason(ep *v1alpha1.KrakenDEndpoint) string {
 	}
 }
 
-// endpointsReadyCondition is implemented once a test demands it.
+// endpointsReadyCondition is the EndpointsReady condition for r.
 func endpointsReadyCondition(r endpointReadiness, generation int64) metav1.Condition {
-	return metav1.Condition{}
+	return metav1.Condition{
+		Type: v1alpha1.ConditionEndpointsReady, Status: metav1.ConditionTrue, ObservedGeneration: generation,
+		Reason:  v1alpha1.ReasonAllEndpointsReady,
+		Message: fmt.Sprintf("%d of %d endpoints ready", r.ready, r.total),
+	}
 }
