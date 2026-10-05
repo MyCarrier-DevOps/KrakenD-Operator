@@ -86,11 +86,7 @@ func (v Verdict) Summary(limit int) string {
 		if b.Len()+len(s) > limit {
 			left := len(v.Findings) - i
 			if i == 0 {
-				cut := limit
-				for cut > 0 && !utf8.RuneStart(s[cut]) {
-					cut--
-				}
-				b.WriteString(s[:cut])
+				b.WriteString(Truncate(s, limit))
 				left--
 			}
 			if left == 0 {
@@ -103,6 +99,19 @@ func (v Verdict) Summary(limit int) string {
 		b.WriteString(s)
 	}
 	return b.String()
+}
+
+// Truncate returns the longest prefix of s that is at most limit bytes and
+// ends on a rune boundary, so a cut never leaves half a character.
+func Truncate(s string, limit int) string {
+	if len(s) <= limit {
+		return s
+	}
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
 }
 
 // findingsFrom converts the renderer's attributions, which name positions in the
