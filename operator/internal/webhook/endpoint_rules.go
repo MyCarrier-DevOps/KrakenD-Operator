@@ -40,6 +40,11 @@ var reservedPathPattern = regexp.MustCompile(`/__(debug|echo|health)(/.*)?$`)
 // urlPattern (lura's simpleURLKeysPattern).
 var urlPlaceholderPattern = regexp.MustCompile(`\{([\w\-.:/]+)\}`)
 
+// sequentialParamPattern matches placeholders KrakenD fills from earlier
+// backend responses or the JWT instead of the path (lura's
+// sequentialParamsPattern).
+var sequentialParamPattern = regexp.MustCompile(`^(resp\d+_.+)?(JWT\.([\w\-.:/]+))?$`)
+
 // validateEntries applies the entry rules KrakenD enforces that admission can
 // decide from the entry and its gateway, to the entries at positions changed.
 func validateEntries(ep *v1alpha1.KrakenDEndpoint, changed []int, gw *v1alpha1.KrakenDGateway) field.ErrorList {
@@ -65,14 +70,14 @@ func validateEntries(ep *v1alpha1.KrakenDEndpoint, changed []int, gw *v1alpha1.K
 	return errs
 }
 
-// validatePlaceholders rejects backend urlPattern placeholders that are not a
-// parameter of the endpoint path.
+// validatePlaceholders rejects backend urlPattern placeholders that are
+// neither a parameter of the endpoint path nor filled by KrakenD itself.
 func validatePlaceholders(p *field.Path, e v1alpha1.EndpointEntry) field.ErrorList {
 	var errs field.ErrorList
 	params := renderer.PathParams(e.Endpoint)
 	for j, be := range e.Backends {
 		for _, m := range urlPlaceholderPattern.FindAllStringSubmatch(be.URLPattern, -1) {
-			if slices.Contains(params, m[1]) {
+			if sequentialParamPattern.MatchString(m[1]) || slices.Contains(params, m[1]) {
 				continue
 			}
 			errs = append(errs, field.Invalid(p.Child("backends").Index(j).Child("urlPattern"), be.URLPattern,
