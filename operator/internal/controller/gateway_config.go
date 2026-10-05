@@ -659,12 +659,3 @@ func (r *KrakenDGatewayReconciler) setPluginsResolved(gw *v1alpha1.KrakenDGatewa
 		})
 	}
 }
-
-// findingsOfAttributions names no spec entry.
-func findingsOfAttributions(atts []renderer.Attribution) []configcheck.Finding {
-	out := make([]configcheck.Finding, 0, len(atts))
-	for _, a := range atts {
-		out = append(out, configcheck.Finding{Endpoint: a.Endpoint, Index: -1, Message: a.Message})
-	}
-	return out
-}
