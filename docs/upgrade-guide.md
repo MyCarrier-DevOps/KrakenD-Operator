@@ -82,8 +82,9 @@ make deploy IMG=ghcr.io/mycarrier-devops/krakend-operator:<new-version>
    - A line naming an Enterprise-only namespace or field on a CE gateway is a
      feature KrakenD CE ignores today: remove it, or move the gateway to EE.
      Only a changed entry, a new `policyRef` to such a policy, a changed root
-     `extraConfig`, a changed policy `raw`, a changed `spec.redis` or `spec.config.documentation`, or enabling
-     `spec.openapi` or `spec.dragonfly`, is rejected; so is switching the
+     `extraConfig`, a changed policy `raw`, a changed `spec.redis` or
+     `spec.config.documentation`, or enabling `spec.openapi` or
+     `spec.dragonfly`, is rejected; so is switching the
      gateway to CE while the last two are enabled. A stored use that stays
      keeps being accepted: editing the settings of a stored, enabled
      `spec.openapi` or `spec.dragonfly` on a CE gateway only warns, and turning
