@@ -1546,7 +1546,7 @@ func TestPolicyValidator_Valid(t *testing.T) {
 			RateLimit:      &v1alpha1.RateLimitSpec{MaxRate: 100},
 		},
 	}
-	v := &PolicyValidator{}
+	v := &PolicyValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), p)
 	if err != nil {
 		t.Errorf("expected no error, got %v", err)
@@ -1570,7 +1570,7 @@ func TestPolicyValidator_DeleteBlocked(t *testing.T) {
 			},
 		},
 	}
-	v := &PolicyValidator{Client: fakeClient(p, ep)}
+	v := &PolicyValidator{Client: fakeClient(p, ep), Checker: &scriptedChecker{}}
 	_, err := v.ValidateDelete(context.Background(), p)
 	if err == nil {
 		t.Error("expected error: policy referenced")
@@ -1584,7 +1584,7 @@ func TestPolicyValidator_DeleteAllowed(t *testing.T) {
 	p := &v1alpha1.KrakenDBackendPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: "my-policy", Namespace: "default"},
 	}
-	v := &PolicyValidator{Client: fakeClient(p)}
+	v := &PolicyValidator{Client: fakeClient(p), Checker: &scriptedChecker{}}
 	_, err := v.ValidateDelete(context.Background(), p)
 	if err != nil {
 		t.Errorf("expected no error, got %v", err)
@@ -1793,7 +1793,7 @@ func TestPolicyValidator_DeleteBlockedCrossNamespace(t *testing.T) {
 			},
 		},
 	}
-	v := &PolicyValidator{Client: fakeClient(p, ep)}
+	v := &PolicyValidator{Client: fakeClient(p, ep), Checker: &scriptedChecker{}}
 	_, err := v.ValidateDelete(context.Background(), p)
 	if err == nil {
 		t.Error("expected error: cross-ns policy still referenced")
@@ -2199,7 +2199,8 @@ func TestValidators_AdmitUpdatesToTerminatingObjects(t *testing.T) {
 			return (&EndpointValidator{Client: fakeClient(), Checker: &scriptedChecker{}}).ValidateUpdate(ctx, ep, unfinalized(ep))
 		}},
 		{"policy", func() (admission.Warnings, error) {
-			return (&PolicyValidator{}).ValidateUpdate(ctx, policy, unfinalized(policy))
+			return (&PolicyValidator{Client: fakeClient(), Checker: &scriptedChecker{}}).
+				ValidateUpdate(ctx, policy, unfinalized(policy))
 		}},
 		{"autoconfig", func() (admission.Warnings, error) {
 			return (&AutoConfigValidator{Client: fakeClient()}).ValidateUpdate(ctx, ac, unfinalized(ac))
