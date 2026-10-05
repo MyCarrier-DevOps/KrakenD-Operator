@@ -45,9 +45,14 @@ type rolloutNote struct {
 }
 
 // rolloutInFlight reports whether the pass that reconciled the Deployment
-// started a rollout.
+// started, or sees, a rollout: it created the Deployment, its write changed
+// the pod template, or old pods remain beside updated ones. A replica change
+// alone is not a rollout, and neither is a generation the Deployment
+// controller has not observed yet: a scale (an HPA's included) bumps the
+// generation without touching the pod template.
 func rolloutInFlight(obs deploymentObservation) bool {
-	return obs.created || obs.templateChanged
+	dep := obs.dep
+	return dep != nil && (obs.created || obs.templateChanged || dep.Status.UpdatedReplicas < dep.Status.Replicas)
 }
 
 // raiseProgressing reports a rollout in progress. The reason is the one this
