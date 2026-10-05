@@ -216,3 +216,43 @@ func TestGatewayAdmission_WarnsOnAnotherKrakenDMinor(t *testing.T) {
 		t.Errorf("unchanged version warned again: %v", resp.Warnings)
 	}
 }
+
+func TestGatewayAdmission_CERejectsEnterpriseOnlyNamespaces(t *testing.T) {
+	withRoot := func(gw *v1alpha1.KrakenDGateway, raw string) *v1alpha1.KrakenDGateway {
+		gw.Spec.Config.ExtraConfig = &runtime.RawExtension{Raw: []byte(raw)}
+		return gw
+	}
+	apiKeys := `{"auth/api-keys":{"keys":[]}}`
+	tests := []struct {
+		name    string
+		gw, old *v1alpha1.KrakenDGateway
+		reject  []string // substrings of the denial; none means admitted
+	}{
+		{"CE root with an EE namespace", withRoot(testGateway(), apiKeys), nil,
+			[]string{`spec.config.extraConfig: Invalid value: "auth/api-keys"`}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v := &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
+			var old runtime.Object
+			if tt.old != nil {
+				old = tt.old
+			}
+			resp := review(t, v, "alice", tt.gw, old)
+			if len(tt.reject) == 0 {
+				if !resp.Allowed {
+					t.Errorf("denied: %+v", resp.Result)
+				}
+				return
+			}
+			if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("response = %+v, want a 422 denial", resp.Result)
+			}
+			for _, want := range tt.reject {
+				if !strings.Contains(resp.Result.Message, want) {
+					t.Errorf("denial %q does not contain %q", resp.Result.Message, want)
+				}
+			}
+		})
+	}
+}
