@@ -264,8 +264,11 @@ func TestGatewayCRD_Rules(t *testing.T) {
 
 func TestGatewayCRD_Ratchets(t *testing.T) {
 	const pool = `redis: {connectionPool: {addresses: ["redis:6379"], `
+	const ee = gatewayHead + `edition: EE, config: {}, license: {secretRef: {name: l, key: k}}, `
+	const withPassword = `dragonfly: {enabled: true, authentication: {passwordFromSecret: {name: s, key: p}}}}}`
 	const storedPassword = gatewayHead + `edition: CE, config: {}, ` + pool + `password: {name: s, key: p}}}}}`
 	runCRDUpdateCases(t, gatewaysCRD, []crdUpdateCase{
+		{"stored Dragonfly password on EE, another field edited", ee + `replicas: 3, ` + withPassword, ee + withPassword, ""},
 		{"stored redis password, another field edited",
 			gatewayHead + `edition: CE, config: {}, replicas: 3, ` + pool + `password: {name: s, key: p}}}}}`,
 			storedPassword, ""},
