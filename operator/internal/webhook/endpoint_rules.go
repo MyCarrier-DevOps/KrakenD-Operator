@@ -17,11 +17,13 @@ limitations under the License.
 package webhook
 
 import (
+	"fmt"
 	"regexp"
 
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 )
 
 // reservedPathPattern matches the paths KrakenD reserves for its own
@@ -30,8 +32,9 @@ var reservedPathPattern = regexp.MustCompile(`/__(debug|echo|health)(/.*)?$`)
 
 // validateEntries applies the entry rules KrakenD enforces that admission can
 // decide from the entry and its gateway, to the entries at positions changed.
-func validateEntries(ep *v1alpha1.KrakenDEndpoint, changed []int, _ *v1alpha1.KrakenDGateway) field.ErrorList {
+func validateEntries(ep *v1alpha1.KrakenDEndpoint, changed []int, gw *v1alpha1.KrakenDGateway) field.ErrorList {
 	var errs field.ErrorList
+	health := healthPath(gw)
 	for _, i := range changed {
 		e := ep.Spec.Endpoints[i]
 		p := field.NewPath("spec", "endpoints").Index(i)
@@ -39,6 +42,19 @@ func validateEntries(ep *v1alpha1.KrakenDEndpoint, changed []int, _ *v1alpha1.Kr
 			errs = append(errs, field.Invalid(p.Child("endpoint"), e.Endpoint,
 				"paths under /__debug, /__echo and /__health are reserved by KrakenD"))
 		}
+		if e.Method == "GET" && health != "" && renderer.ConflictKey(e.Endpoint) == renderer.ConflictKey(health) {
+			errs = append(errs, field.Invalid(p.Child("endpoint"), e.Endpoint,
+				fmt.Sprintf("GET %s is the gateway's health endpoint (spec.config.router.healthPath)", health)))
+		}
 	}
 	return errs
+}
+
+// healthPath returns the path the gateway serves its health endpoint on, or
+// "" when it is disabled.
+func healthPath(gw *v1alpha1.KrakenDGateway) string {
+	if r := gw.Spec.Config.Router; r != nil && r.HealthPath != "" {
+		return r.HealthPath
+	}
+	return "/__health"
 }
