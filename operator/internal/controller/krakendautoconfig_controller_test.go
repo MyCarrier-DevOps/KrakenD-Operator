@@ -3276,3 +3276,28 @@ func TestAutoConfigReconcile_FailedOperationsAreListedSortedAndCapped(t *testing
 		t.Errorf("Synced = %+v, want message %q", cond, want)
 	}
 }
+
+func TestAutoConfigReconcile_RemappedFailedOperationInFilterFailsClosed(t *testing.T) {
+	// A HEAD operation that fails CUE is remapped by an override to GET
+	// /v2/users: the failure carries that route, so the include filter keeps
+	// it and the sync fails closed instead of deleting the existing
+	// /v2/users endpoint as stale.
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	ac.Spec.Filter = &v1alpha1.FilterSpec{IncludePaths: []string{"/v2/*"}}
+	f, ce, _, g := defaultMocks()
+	stale := staleOwnedEndpoint(t, ac, g)
+	c := fakeClientBuilder().WithObjects(ac, cm, stale).WithStatusSubresource(ac).Build()
+	ce.output.Failed = []autoconfig.OperationIssue{{
+		Operation: autoconfig.Operation{Method: "GET", Path: "/v2/users", OperationID: "headUsers"},
+		Reason:    v1alpha1.ReasonCUEEvaluationFailed,
+		Message:   "boom",
+	}}
+	r := newACReconciler(c, f, ce, &mockFilter{}, g)
+	r.Filter = autoconfig.NewFilter()
+
+	if _, err := reconcileAC(r, ac); err == nil {
+		t.Fatal("expected an error for an OnChange trigger")
+	}
+	assertEndpointKept(t, c, stale.Name)
+}
