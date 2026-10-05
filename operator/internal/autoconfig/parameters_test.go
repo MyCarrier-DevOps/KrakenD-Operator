@@ -109,3 +109,31 @@ func TestDereferenceParameters_ResolvesRefRewrittenFromExternalDocument(t *testi
 		t.Errorf("inputQueryStrings = %v, want [limit]", qs)
 	}
 }
+
+func TestDereferenceParameters_IsDeterministic(t *testing.T) {
+	var paths []string
+	for _, p := range []string{"/a", "/b", "/c", "/d", "/e", "/f", "/g", "/h"} {
+		paths = append(paths, `"`+p+`":{"get":{"parameters":[{"$ref":"#/components/parameters/Limit"},`+
+			`{"$ref":"#/components/parameters/Missing"}]}}`)
+	}
+	spec := []byte(`{"paths":{` + strings.Join(paths, ",") + `},` +
+		`"components":{"parameters":{"Limit":{"name":"limit","in":"query","schema":{"type":"integer"}}}}}`)
+
+	firstOut, firstWarnings, err := DereferenceParameters(spec)
+	if err != nil {
+		t.Fatalf("DereferenceParameters: %v", err)
+	}
+	if !slices.IsSorted(firstWarnings) || len(firstWarnings) != 8 {
+		t.Errorf("warnings = %q, want 8 in path order", firstWarnings)
+	}
+	for range 20 {
+		out, warnings, err := DereferenceParameters(spec)
+		if err != nil || !bytes.Equal(out, firstOut) || !slices.Equal(warnings, firstWarnings) {
+			t.Fatalf("a repeat pass differs: err=%v\nout=%s\nwant=%s\nwarnings=%q", err, out, firstOut, warnings)
+		}
+	}
+	again, _, err := DereferenceParameters(firstOut)
+	if err != nil || !bytes.Equal(again, firstOut) {
+		t.Errorf("a second pass over the output changed it: err=%v", err)
+	}
+}
