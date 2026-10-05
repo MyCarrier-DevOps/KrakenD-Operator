@@ -28,6 +28,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -618,5 +619,26 @@ func TestGatewayAdmission_EmptyVersionWarningSaysTheVersionIsEmpty(t *testing.T)
 	if !strings.HasPrefix(w, "spec.version is empty") || !strings.Contains(w, "spec.image") ||
 		strings.Contains(w, "spec.version :") {
 		t.Errorf("warning = %q, want it to say spec.version is empty and the image tag depends on spec.image", w)
+	}
+}
+
+// Endpoints that clash with a new gateway's root are named in one warning,
+// which stays bounded however many there are.
+func TestGatewayAdmission_CreateWarningIsBounded(t *testing.T) {
+	var findings []configcheck.Finding
+	for i := 0; i < 3*maxEntryCauses; i++ {
+		findings = append(findings, configcheck.Finding{
+			Endpoint: types.NamespacedName{Namespace: "default", Name: "ep"}, Index: i,
+			Message: strings.Repeat("é", 3*warningLimit)})
+	}
+	chk := &scriptedChecker{verdicts: []configcheck.Verdict{{OK: true}, {Findings: findings}}}
+
+	resp := review(t, &GatewayValidator{Client: fakeClient(), Checker: chk}, "alice", testGateway(), nil)
+
+	if !resp.Allowed || len(resp.Warnings) != 1 {
+		t.Fatalf("response = %+v, warnings = %v, want admitted with one warning", resp.Result, resp.Warnings)
+	}
+	if w := resp.Warnings[0]; len(w) > 2*warningLimit || !utf8.ValidString(w) {
+		t.Errorf("warning is %d bytes (valid UTF-8: %v), want it bounded by the warning limit", len(w), utf8.ValidString(w))
 	}
 }
