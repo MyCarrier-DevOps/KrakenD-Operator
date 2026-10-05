@@ -117,3 +117,15 @@ func TestOperationLabel_OmitsAMissingOperationID(t *testing.T) {
 		t.Errorf("operationLabel = %q, want %q", got, want)
 	}
 }
+
+func TestOperationLabel_BoundsALongOperationName(t *testing.T) {
+	got := operationLabel(v1alpha1.OperationStatus{
+		Method: "GET", Path: "/" + strings.Repeat("p", 1000), OperationID: "getB",
+		Reason: v1alpha1.ReasonCUEEvaluationFailed,
+	})
+	suffix := ": " + v1alpha1.ReasonCUEEvaluationFailed
+	if !strings.HasSuffix(got, suffix) || len(got) > maxStatusMessageLen+len(suffix) {
+		t.Errorf("operationLabel is %d bytes, want the reason after at most %d bytes of name: %.60s...",
+			len(got), maxStatusMessageLen, got)
+	}
+}
