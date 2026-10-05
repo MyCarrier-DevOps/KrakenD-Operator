@@ -2593,3 +2593,19 @@ func TestAutoConfigAdmission_WarnsOnMissingPolicyRefsInFieldOrder(t *testing.T) 
 		t.Errorf("warnings = %v, want them in the order of the overrides", resp.Warnings)
 	}
 }
+
+func TestAutoConfigAdmission_BoundsTheMissingPolicyRefWarnings(t *testing.T) {
+	ac := &v1alpha1.KrakenDAutoConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "ac", Namespace: "default"},
+		Spec: v1alpha1.KrakenDAutoConfigSpec{GatewayRef: v1alpha1.GatewayRef{Name: "gw"},
+			OpenAPI: v1alpha1.OpenAPISource{URL: "http://svc/openapi.json"}, Trigger: v1alpha1.TriggerOnChange},
+	}
+	for i := range 8 {
+		ac.Spec.Overrides = append(ac.Spec.Overrides, v1alpha1.OperationOverride{
+			OperationID: fmt.Sprintf("op%d", i), PolicyRef: &v1alpha1.PolicyRef{Name: "gone"}})
+	}
+	resp := review(t, &AutoConfigValidator{Client: fakeClient(testGateway())}, "alice", ac, nil)
+	if len(resp.Warnings) != maxPolicyWarnings+1 || !strings.HasPrefix(resp.Warnings[maxPolicyWarnings], "3 more") {
+		t.Errorf("warnings = %v, want %d, then one counting the other 3", resp.Warnings, maxPolicyWarnings)
+	}
+}
