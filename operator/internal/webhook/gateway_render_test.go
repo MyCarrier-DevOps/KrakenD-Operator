@@ -385,6 +385,10 @@ func TestGatewayAdmission_CERejectsEnterpriseOnlyFields(t *testing.T) {
 		}
 		return gw
 	}
+	edited := func(gw *v1alpha1.KrakenDGateway) *v1alpha1.KrakenDGateway {
+		gw.Spec.Replicas = ptr.To[int32](2)
+		return gw
+	}
 	ee := func() *v1alpha1.KrakenDGateway {
 		gw := testGateway()
 		gw.Spec.Edition = v1alpha1.EditionEE
@@ -398,6 +402,7 @@ func TestGatewayAdmission_CERejectsEnterpriseOnlyFields(t *testing.T) {
 	}{
 		{"created on CE", withFields(testGateway()), nil, all},
 		{"created on EE", withFields(ee()), nil, nil},
+		{"unchanged on CE", edited(withFields(testGateway())), withFields(testGateway()), nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
