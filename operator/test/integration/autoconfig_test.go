@@ -325,6 +325,72 @@ func TestAutoConfig_SpecConfigMapChangePropagates(t *testing.T) {
 	})
 }
 
+// setSpec replaces the fixture spec ConfigMap's document.
+func setSpec(t *testing.T, ac *v1alpha1.KrakenDAutoConfig, spec string) {
+	t.Helper()
+	var cm corev1.ConfigMap
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: specConfigMapName, Namespace: ac.Namespace}, &cm); err != nil {
+		t.Fatal(err)
+	}
+	cm.Data[specConfigMapKey] = spec
+	if err := k8sClient.Update(ctx, &cm); err != nil {
+		t.Fatalf("update spec configmap: %v", err)
+	}
+}
+
+func TestAutoConfig_FailedOperationKeepsLastGoodEndpoint(t *testing.T) {
+	ac := newSyncedAutoConfig(t)
+	owners, err := getOwnedEndpoint(ac, "pets-listowners")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// /owners gains a timeout without a unit (it fails export), and /toys
+	// is added.
+	setSpec(t, ac, `{"openapi":"3.0.3","info":{"title":"pets","version":"1"},"paths":{`+
+		`"/pets":{"get":{"operationId":"listPets","responses":{"200":{"description":"OK"}}}},`+
+		`"/owners":{"get":{"operationId":"listOwners","timeout":"30","responses":{"200":{"description":"OK"}}}},`+
+		`"/toys":{"get":{"operationId":"listToys","responses":{"200":{"description":"OK"}}}}}}`)
+
+	eventuallyWithin(t, 30*time.Second, func() error {
+		var cur v1alpha1.KrakenDAutoConfig
+		if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(ac), &cur); err != nil {
+			return err
+		}
+		cond := meta.FindStatusCondition(cur.Status.Conditions, v1alpha1.ConditionSynced)
+		if cond == nil || cond.Reason != v1alpha1.ReasonOperationsFailed {
+			return fmt.Errorf("waiting for Synced=OperationsFailed, got %+v", cond)
+		}
+		if len(cur.Status.FailedOperations) != 1 || cur.Status.FailedOperations[0].OperationID != "listOwners" {
+			return fmt.Errorf("unexpected failedOperations %+v", cur.Status.FailedOperations)
+		}
+		_, err := getOwnedEndpoint(ac, "pets-listtoys")
+		return err
+	})
+	held, err := getOwnedEndpoint(ac, "pets-listowners")
+	if err != nil || held.UID != owners.UID || held.Generation != owners.Generation {
+		t.Fatalf("expected pets-listowners held unchanged, got %v %+v", err, held)
+	}
+
+	// Fixed, and /pets removed: the stale-delete resumes.
+	setSpec(t, ac, `{"openapi":"3.0.3","info":{"title":"pets","version":"1"},"paths":{`+
+		`"/owners":{"get":{"operationId":"listOwners","responses":{"200":{"description":"OK"}}}},`+
+		`"/toys":{"get":{"operationId":"listToys","responses":{"200":{"description":"OK"}}}}}}`)
+	eventuallyWithin(t, 30*time.Second, func() error {
+		if _, err := getOwnedEndpoint(ac, "pets-listpets"); err == nil {
+			return fmt.Errorf("pets-listpets not deleted yet")
+		}
+		var cur v1alpha1.KrakenDAutoConfig
+		if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(ac), &cur); err != nil {
+			return err
+		}
+		if !meta.IsStatusConditionTrue(cur.Status.Conditions, v1alpha1.ConditionSynced) {
+			return fmt.Errorf("waiting for Synced=True")
+		}
+		return nil
+	})
+}
+
 func TestAutoConfig_ForcedReconcileInSteadyStateWritesNothing(t *testing.T) {
 	ac := newSyncedAutoConfig(t)
 
