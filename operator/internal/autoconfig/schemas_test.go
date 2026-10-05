@@ -162,3 +162,22 @@ func TestSchemaClosure_ReportsUnresolvableRefs(t *testing.T) {
 		t.Errorf("unresolved = %v, want %v", unresolved, want)
 	}
 }
+
+// A schema property may be named "example" or "examples". Its value is a
+// schema, so a $ref there is a real reference, unlike an example payload.
+func TestSchemaClosure_SeesRefsUnderPropertiesNamedExample(t *testing.T) {
+	components := petSchemas()
+	components["Odd"] = runtime.RawExtension{Raw: []byte(`{"type":"object","properties":{` +
+		`"example":{"$ref":"#/components/schemas/Address","example":{"$ref":"#/components/schemas/Unused"}},` +
+		`"examples":{"type":"array","items":{"$ref":"#/components/schemas/Owner"}}}}`)}
+	entry := docEntry("/odd", `{"response_definition":{"200":{"ref":"Odd"}}}`)
+
+	closure, unresolved := SchemaClosure(entry, components)
+
+	if got, want := slices.Sorted(maps.Keys(closure)), []string{"Address", "Odd", "Owner"}; !slices.Equal(got, want) {
+		t.Errorf("closure = %v, want %v", got, want)
+	}
+	if len(unresolved) != 0 {
+		t.Errorf("unresolved = %v, want none", unresolved)
+	}
+}
