@@ -1871,6 +1871,7 @@ re-reads and retries.
 | `krakend_operator_endpoint_count` | Gauge | Number of KrakenDEndpoints per gateway |
 | `krakend_operator_reconcile_duration_seconds` | Histogram | Reconciliation loop latency |
 | `krakend_operator_dragonfly_ready` | Gauge | 1 if Dragonfly is ready, 0 otherwise |
+| `krakend_operator_gateway_config_valid` | Gauge | 1 while the gateway's newest config passed validation, 0 otherwise (labels: `namespace`, `name`); removed when the gateway is deleted |
 | `krakend_operator_autoconfig_synced` | Gauge | 1 after a `KrakenDAutoConfig`'s last reconcile synced successfully, 0 while it is failing (labels: `namespace`, `name`); the series is removed when the AutoConfig is deleted |
 
 Per-gateway series (`namespace`, `name` labels) are removed when the gateway is deleted or starts terminating.
