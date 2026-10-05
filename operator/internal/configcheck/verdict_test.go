@@ -172,3 +172,13 @@ func TestFindingsFrom_OutputIsOneLine(t *testing.T) {
 		t.Errorf("findings = %+v, want the lines joined with \"; \"", got)
 	}
 }
+
+func TestVerdictSummary_MarksASingleCutFindingTruncated(t *testing.T) {
+	v := Verdict{Findings: []Finding{{Index: -1, Message: strings.Repeat("x", 100)}}}
+
+	got := v.Summary(20)
+
+	if !strings.HasSuffix(got, " (truncated)") || strings.Contains(got, "+0") {
+		t.Errorf("summary = %q, want it to end with \" (truncated)\"", got)
+	}
+}
