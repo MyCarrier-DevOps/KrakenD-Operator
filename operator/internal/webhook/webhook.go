@@ -76,7 +76,7 @@ type GatewayValidator struct {
 }
 
 // ValidateCreate validates a new KrakenDGateway. There is no "old" object on
-// Create, so the runAsUser:0 ratchet (review id 3807285627, #2) never
+// Create, so the runAsUser:0 ratchet never
 // applies here — a brand-new CR gets the hard reject unconditionally.
 func (v *GatewayValidator) ValidateCreate(
 	_ context.Context,
@@ -90,11 +90,11 @@ func (v *GatewayValidator) ValidateCreate(
 	return warnings, err
 }
 
-// ValidateUpdate validates an updated KrakenDGateway. review id 3807285627
-// (#2): the old (stored) object is now threaded through to validate so the
-// runAsUser:0 reject can be RATCHETED — a CR accepted by an older operator
-// version (before the round-2 reject existed) must not start failing every
-// unrelated update just because ValidateUpdate re-validates the whole spec.
+// ValidateUpdate validates an updated KrakenDGateway. The old (stored) object
+// is threaded through to validate so the runAsUser:0 reject can be RATCHETED —
+// a CR accepted by an older operator version (before that reject existed) must
+// not start failing every unrelated update just because ValidateUpdate
+// re-validates the whole spec.
 func (v *GatewayValidator) ValidateUpdate(
 	_ context.Context,
 	oldObj runtime.Object,
@@ -126,7 +126,7 @@ func (v *GatewayValidator) ValidateDelete(
 
 // validate runs all admission checks for gw. old is the previously-stored
 // object on an Update (nil on Create) — see validatePostRestartJob's
-// ratchet handling (review id 3807285627, #2).
+// ratchet handling.
 func (v *GatewayValidator) validate(gw, old *v1alpha1.KrakenDGateway) (admission.Warnings, error) {
 	var errs field.ErrorList
 	var warnings admission.Warnings
@@ -308,10 +308,8 @@ func redisPoolWarnings(gw *v1alpha1.KrakenDGateway) admission.Warnings {
 
 // validatePostRestartJob validates spec.postRestartJob when enabled. Split
 // out of GatewayValidator.validate to keep that function's cyclomatic
-// complexity in check (gocyclo) as this block grew with round-2 review
-// fixes (ids 3805157408 #1, 3805157457 #5, 3805157497 #9) and round-3
-// fixes (ids 3807285627 #2, 3807285645 #6). old is the previously-stored
-// spec on an Update (nil on Create).
+// complexity in check (gocyclo) as this block grew. old is the
+// previously-stored spec on an Update (nil on Create).
 func validatePostRestartJob(
 	prj *v1alpha1.PostRestartJobSpec, old *v1alpha1.PostRestartJobSpec,
 ) (field.ErrorList, admission.Warnings) {
@@ -331,7 +329,7 @@ func validatePostRestartJob(
 
 	errs = append(errs, validatePostRestartRunAsRoot(prj, old)...)
 
-	// review id 3805157457 (#5): a negative tmpSizeLimit is nonsensical
+	// A negative tmpSizeLimit is nonsensical
 	// (emptyDir SizeLimit is a cap, not a delta) and, more importantly,
 	// silently means "no cap" to the kubelet in a way that looks like the
 	// opposite of the user's intent — reject it outright rather than let it
@@ -355,7 +353,7 @@ func validatePostRestartJob(
 // Review id 3807285645 (#6): collapses what were three separate outcomes
 // into one rule. Previously:
 //  1. container-scope runAsUser: 0 (with runAsNonRoot unset everywhere) —
-//     rejected at admission (review id 3805157408, round 2 #1).
+//     rejected at admission.
 //  2. pod-scope runAsUser: 0 (with runAsNonRoot unset everywhere) — not
 //     rejected, but self-healed at build time: job.go's
 //     mergePodSecurityContext drops the inherited runAsNonRoot: true
@@ -454,7 +452,7 @@ const (
 //
 // Split into three helpers to keep this function's cyclomatic complexity in
 // check (gocyclo), mirroring validatePostRestartJob above: the checks grew from
-// one to eight over time (ids 3865173791, 3870072741).
+// one to eight over time.
 //
 // defaultSidecarImage must be computed from resources.EffectiveOpenAPISidecarImage,
 // never from a raw `SidecarImage == ""` test.
@@ -611,7 +609,7 @@ func validateProbeReachability(p *field.Path, probe *corev1.Probe, defaultSideca
 
 // validateRunAsRootConflict is the scope-agnostic core shared by
 // validatePostRestartRunAsRoot and validateDragonflyRunAsRoot (DRY
-// extraction, fix-round review 1, change #3). It rejects a spec whose
+// extraction). It rejects a spec whose
 // kubelet-EFFECTIVE {runAsUser, runAsNonRoot} pair for the container
 // resolves to {0, true} — the pair the kubelet rejects at container start
 // (CreateContainerConfigError), hanging the pod Pending.
@@ -622,9 +620,8 @@ func validateProbeReachability(p *field.Path, probe *corev1.Probe, defaultSideca
 // different JSON field names for the container-level securityContext
 // (`securityContext` vs `containerSecurityContext`), so the caller builds
 // the full path rather than this helper deriving it from a shared base.
-// Sanctioned error-path fix (fix-round review 1): the emitted field.Invalid
-// now uses whichever of the two paths matches WHERE the effective uid0 was
-// resolved from (effectiveRunAsRoot's fromContainer) — a pod-scope
+// The emitted field.Invalid uses whichever of the two paths matches WHERE the
+// effective uid0 was resolved from (effectiveRunAsRoot's fromContainer) — a pod-scope
 // rejection now points at podPath instead of always pointing at
 // containerPath, a field the user may never have set. This changes only the
 // postRestartJob pod-scope rejection's error path string; the
@@ -757,7 +754,7 @@ func effectiveRunAsRoot(
 // validateRunAsRootConflict inspects (container runAsUser/runAsNonRoot, pod
 // runAsUser/runAsNonRoot) are identical between the new and old
 // container/pod securityContext pair — the scope-agnostic ratchet condition
-// for review id 3807285627 (#2), replacing the former
+// for the update ratchet, replacing the former
 // securityContextRunAsFieldsUnchanged (postRestartJob) and
 // dragonflySecurityContextRunAsFieldsUnchanged (Dragonfly), which duplicated
 // this same field-by-field comparison per scope. old{Container,Pod} may
@@ -830,7 +827,7 @@ func boolPtrEqual(a, b *bool) bool {
 // admission hole validatePostRestartRunAsRoot closes for postRestartJob now
 // also exists here.
 //
-// Fix-round review 1, change #2: unlike postRestartJob, dragonfly's
+// Unlike postRestartJob, dragonfly's
 // container-scope default PINS RunAsUser/RunAsGroup/RunAsNonRoot (matching
 // the dfly image's built-in uid), and container-scope security-context
 // fields always override pod-scope per-field at the kubelet — so
@@ -841,8 +838,8 @@ func boolPtrEqual(a, b *bool) bool {
 // self-heal (allowPodScopeUnsetSelfHeal: true, see
 // validatePostRestartRunAsRoot) — the Dragonfly pod-scope-unset case is
 // REJECTED at admission for any NEW or CHANGED spec (allowPodScopeUnsetSelfHeal:
-// false below). This is an admission-time decision only: fix-round review 2
-// separately restored a build-time fixup in mergeDragonflyPodSecurityContext
+// false below). This is an admission-time decision only: the builder
+// separately keeps a build-time fixup in mergeDragonflyPodSecurityContext
 // (internal/resources/dragonfly.go) — not as an admission self-heal, but to
 // keep GRANDFATHERED specs (ratchet-exempted on Update, or reaching the
 // builder via a bypassed webhook) rendering at the same main-branch parity
@@ -889,8 +886,7 @@ func validateDragonflyRunAsRoot(df, old *v1alpha1.DragonflySpec) field.ErrorList
 
 // validatePostRestartWorkingDir returns a non-empty warning string when
 // spec.postRestartJob.workingDir is overridden outside the writable /tmp
-// emptyDir mount while readOnlyRootFilesystem is effectively true (review
-// id 3804144425 #4) — the container still starts fine, so this is not
+// emptyDir mount while readOnlyRootFilesystem is effectively true — the container still starts fine, so this is not
 // otherwise caught until the script runs. A warning (not a hard error,
 // since it's a legitimate configuration if the image provides its own
 // writable directory there) nudges the user toward the documented escape
@@ -910,7 +906,7 @@ func validatePostRestartWorkingDir(prj *v1alpha1.PostRestartJobSpec) string {
 		return ""
 	}
 
-	// review id 3805157497 (#9): "use an absolute path under /tmp" is not a
+	// "use an absolute path under /tmp" is not a
 	// sufficient remedy on its own — readOnlyRootFilesystem applies to the
 	// ENTIRE container filesystem, not just workingDir. Moving the script's
 	// CWD under /tmp only fixes relative-path writes issued from the
