@@ -2581,13 +2581,18 @@ spec:
                           connection pools have no such setting; it is not rendered.'
                         type: string
                       tls:
-                        description: RedisTLSConfig configures TLS for Redis connections.
+                        description: TLS is not rendered yet; setting or changing
+                          it is rejected.
                         properties:
                           enabled:
                             type: boolean
                           secretName:
                             type: string
                         type: object
+                        x-kubernetes-validations:
+                        - message: 'tls is not supported yet: the operator has never
+                            rendered it, so KrakenD would connect without it'
+                          rule: "false"
                       writeTimeout:
                         description: 'Deprecated: has no effect. KrakenD''s redis
                           connection pools have no such setting; it is not rendered.'
