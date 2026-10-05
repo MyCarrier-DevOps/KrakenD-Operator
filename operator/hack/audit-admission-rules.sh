@@ -2,12 +2,17 @@
 # Lists stored KrakenD objects that violate the admission rules introduced with
 # complete admission: the CRD schema and CEL rules, and the rules the webhooks
 # add (route conflicts between KrakenDEndpoints of one gateway, Enterprise-only
-# extra_config namespaces on CE gateways). Read-only: it only runs `kubectl get`.
+# extra_config namespaces on CE gateways). Read-only: it only runs `kubectl get`
+# and keeps a temporary copy of the objects (mode 0700) that is removed on exit.
 #
 # Usage: hack/audit-admission-rules.sh        read the current kube context
 #        hack/audit-admission-rules.sh DIR    read DIR/{endpoints,gateways,autoconfigs,backendpolicies}.json
 #
-# Prints one line per object or conflict; no output means nothing to fix. Checks:
+# Prints one line per object or conflict. No output means none of the checks
+# below found anything, not that every rule is covered: reserved /__debug,
+# /__echo and /__health paths, unnamed /* wildcards on CE gateways, unknown
+# urlPattern placeholders and cross-method auto_options clashes are not checked.
+# Checks:
 #   KrakenDEndpoint / KrakenDGateway / KrakenDAutoConfig   the CRD schema and CEL rules
 #   gateway ns/name: A vs B                                 entries one gateway would route as one
 #   KrakenDEndpoint ...: ... health path of gateway ...    a GET on the gateway's health endpoint
@@ -65,7 +70,9 @@ def duration_ns: [duration_parts[] | ((.int + .frac) | tonumber) * unit_ns[.unit
 # True when a pattern-valid duration does not fit in 64 bits of nanoseconds,
 # which time.ParseDuration (and so the CRD duration() rule) rejects. Each
 # component is compared exactly, as digits, against the most its unit allows;
-# the sum is compared as a float, which is exact to within a microsecond.
+# the sum of several components or of a fraction is compared as a float, which
+# is exact only to about a microsecond near the 292-year limit. A value of one
+# whole unit is exact.
 def overflows:
   any(duration_parts[]; .int as $i | .unit as $u | $i | digits_exceed(unit_max[$u]))
   or duration_ns > 9223372036854775807;
@@ -258,8 +265,8 @@ jq "${jq_opts[@]}" "$jq_lib"'
       and ($a.owner == $b.owner or $a.ctrl == null or $a.ctrl != $b.ctrl))] | length > 0)
 | "gateway \(.[0].gw): \([.[] | "\(.route) (\(.owner))"] | join(" vs "))"' "$work/endpoints.json"
 
-# GET on a gateway health path: krakend check accepts it and the KrakenD runtime
-# panics on it.
+# GET on a gateway health path: krakend check accepts it, and the controller's
+# route check rejects the render, so the gateway keeps its last applied config.
 jq "${jq_opts[@]}" --slurpfile gws "$work/gateways.json" "$jq_lib"'
 ($gws[0].items | map({key: "\(.metadata.namespace)/\(.metadata.name)", value: health_path}) | from_entries) as $health
 | .items[] | . as $e
