@@ -18,6 +18,7 @@ package autoconfig
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -111,18 +112,29 @@ func localRef(node any) (string, bool) {
 }
 
 // resolveParameter follows ref, and any $ref the target is itself, to a
-// parameter object.
-func resolveParameter(root map[string]any, ref string) (any, error) {
+// parameter object. Only targets under #/components/ resolve (external refs
+// are rewritten into it), so a ref cannot pull in the paths being rewritten;
+// the final target must have a string name and in.
+func resolveParameter(root map[string]any, ref string) (map[string]any, error) {
 	for range maxParameterRefDepth {
+		if !strings.HasPrefix(ref, "#/components/") {
+			return nil, errors.New("only local #/components/ targets are dereferenced")
+		}
 		target, err := pointerLookup(root, strings.TrimPrefix(ref, "#"))
 		if err != nil {
 			return nil, err
 		}
-		next, isRef := localRef(target)
-		if !isRef {
-			return target, nil
+		obj, _ := target.(map[string]any)
+		if next, isRef := obj["$ref"].(string); isRef {
+			ref = next
+			continue
 		}
-		ref = next
+		_, hasName := obj["name"].(string)
+		_, hasIn := obj["in"].(string)
+		if !hasName || !hasIn {
+			return nil, errors.New("target is not a parameter object")
+		}
+		return obj, nil
 	}
 	return nil, fmt.Errorf("more than %d chained $refs", maxParameterRefDepth)
 }
