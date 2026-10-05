@@ -214,16 +214,22 @@ func (v *AutoConfigValidator) policyRefWarnings(
 		}
 	}
 	var warnings admission.Warnings
+	unwarned := 0
 	for _, r := range refs {
 		key := types.NamespacedName{Namespace: r.ref.ResolvedNamespace(ac.Namespace), Name: r.ref.Name}
 		err := v.Get(ctx, key, &v1alpha1.KrakenDBackendPolicy{})
 		switch {
-		case apierrors.IsNotFound(err):
+		case apierrors.IsNotFound(err) && len(warnings) < maxPolicyWarnings:
 			warnings = append(warnings, fmt.Sprintf("%s: KrakenDBackendPolicy %s not found; "+
 				"generated endpoints that use it are rejected until it exists", r.path, key))
+		case apierrors.IsNotFound(err):
+			unwarned++
 		case err != nil:
 			return nil, fmt.Errorf("looking up policy %s: %w", key, err)
 		}
+	}
+	if unwarned > 0 {
+		warnings = append(warnings, fmt.Sprintf("%d more policyRefs name no existing KrakenDBackendPolicy", unwarned))
 	}
 	return warnings, nil
 }
