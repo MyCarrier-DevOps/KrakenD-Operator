@@ -20,7 +20,7 @@ import (
 	"context"
 	"fmt"
 
-	apiequality "k8s.io/apimachinery/pkg/api/equality"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -70,7 +70,7 @@ func (v *EndpointValidator) ValidateUpdate(
 	if !ok {
 		return nil, fmt.Errorf("expected KrakenDEndpoint, got %T", oldObj)
 	}
-	if apiequality.Semantic.DeepEqual(old.Spec, ep.Spec) {
+	if equality.Semantic.DeepEqual(old.Spec, ep.Spec) {
 		return nil, nil
 	}
 	return v.admit(ctx, old, ep)
@@ -209,7 +209,7 @@ func changedEntries(old, ep *v1alpha1.KrakenDEndpoint) []int {
 	}
 	var changed []int
 	for i, e := range ep.Spec.Endpoints {
-		if s, ok := stored[e.Method+" "+e.Endpoint]; ok && apiequality.Semantic.DeepEqual(s, e) {
+		if s, ok := stored[e.Method+" "+e.Endpoint]; ok && equality.Semantic.DeepEqual(s, e) {
 			continue
 		}
 		changed = append(changed, i)
