@@ -274,7 +274,9 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "KrakenDAutoConfig")
 		os.Exit(1)
 	}
-	if err := registerWebhooks(mgr, enableWebhooks, webhooksetup.SetupWebhooks); err != nil {
+	if err := registerWebhooks(mgr, enableWebhooks, func(m ctrl.Manager) error {
+		return webhooksetup.SetupWebhooks(m, checker)
+	}); err != nil {
 		setupLog.Error(err, "unable to set up webhooks")
 		os.Exit(1)
 	}

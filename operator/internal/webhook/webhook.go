@@ -1144,18 +1144,20 @@ type Validators struct {
 // NewValidators builds the validators over c. checker is the config checker
 // the gateway controller uses too, so the validators and the controller share
 // its validation slots.
-func NewValidators(c client.Client, _ ConfigChecker) Validators {
+func NewValidators(c client.Client, checker ConfigChecker) Validators {
 	return Validators{
 		Gateway:    &GatewayValidator{Client: c},
-		Endpoint:   &EndpointValidator{Client: c},
+		Endpoint:   &EndpointValidator{Client: c, Checker: checker},
 		Policy:     &PolicyValidator{Client: c},
 		AutoConfig: &AutoConfigValidator{Client: c},
 	}
 }
 
-// SetupWebhooks registers all validating webhooks with the manager.
-func SetupWebhooks(mgr ctrl.Manager) error {
-	validators := NewValidators(mgr.GetClient(), nil)
+// SetupWebhooks registers all validating webhooks with the manager. checker
+// is the config checker the gateway controller uses too, so both share its
+// validation slots.
+func SetupWebhooks(mgr ctrl.Manager, checker ConfigChecker) error {
+	validators := NewValidators(mgr.GetClient(), checker)
 	// Ensure field indexes are registered — needed for conflict detection
 	// and policy-delete validation even when running webhook-only.
 	if err := fieldindex.EnsureEndpointIndexes(mgr); err != nil {
