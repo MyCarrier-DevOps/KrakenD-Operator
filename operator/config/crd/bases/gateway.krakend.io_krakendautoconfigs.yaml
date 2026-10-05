@@ -639,6 +639,15 @@ spec:
                     outputEncoding:
                       description: OutputEncoding overrides the response encoding
                         (e.g. "no-op", "json").
+                      enum:
+                      - json
+                      - json-collection
+                      - yaml
+                      - fast-json
+                      - xml
+                      - negotiate
+                      - string
+                      - no-op
                       type: string
                     policyRef:
                       description: PolicyRef overrides the backend policy reference.
