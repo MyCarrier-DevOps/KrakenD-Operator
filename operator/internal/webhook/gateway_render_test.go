@@ -17,12 +17,17 @@ limitations under the License.
 package webhook
 
 import (
+	"net/http"
 	"strings"
 	"testing"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
 )
+
+func rootFailure(msg string) configcheck.Verdict {
+	return configcheck.Verdict{Findings: []configcheck.Finding{{Index: -1, Message: msg}}}
+}
 
 func TestGatewayAdmission_Render(t *testing.T) {
 	tests := []struct {
@@ -33,6 +38,8 @@ func TestGatewayAdmission_Render(t *testing.T) {
 		calls    string
 	}{
 		{"create checks the root alone", nil, nil, true, "isolated"},
+		{"create with a failing root", nil,
+			[]configcheck.Verdict{rootFailure("'timeout' time: unknown unit")}, false, "isolated"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -41,6 +48,9 @@ func TestGatewayAdmission_Render(t *testing.T) {
 			resp := review(t, v, "alice", testGateway(), nil)
 			if resp.Allowed != tt.allowed {
 				t.Errorf("allowed = %v, want %v (%+v)", resp.Allowed, tt.allowed, resp.Result)
+			}
+			if !tt.allowed && resp.Result.Code != http.StatusUnprocessableEntity {
+				t.Errorf("code = %d, want 422", resp.Result.Code)
 			}
 			if got := strings.Join(chk.calls, ","); got != tt.calls {
 				t.Errorf("checks = %s, want %s", got, tt.calls)
