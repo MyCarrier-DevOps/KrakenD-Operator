@@ -870,13 +870,14 @@ func autoConfigStatusChanged(orig, cur *v1alpha1.KrakenDAutoConfigStatus) bool {
 }
 
 // reconcileEndpoints converges the KrakenDEndpoints ac controls to desired.
-// It adopts label-matched orphans, writes every endpoint that is missing or
-// differs (attempting all of them, whatever fails), and only then, when held
-// is false and nothing failed, deletes the endpoints no longer desired, so a
-// failure never takes a route off the gateway (make-before-break). held is
-// true when some operation failed before generation: its endpoint is not in
-// desired and must not be deleted. An error means the pass could not start:
-// listing failed.
+// It adopts label-matched orphans, runs the gateway config check over the
+// endpoints it would write, writes every endpoint that passes (attempting all
+// of them, whatever fails), and only then, when held is false and nothing
+// failed, deletes the endpoints no longer desired, so a failure never takes a
+// route off the gateway (make-before-break). held is true when some operation
+// failed before generation: its endpoint is not in desired and must not be
+// deleted. An error means the pass could not start: listing failed or the
+// config check could not run.
 func (r *KrakenDAutoConfigReconciler) reconcileEndpoints(
 	ctx context.Context,
 	ac *v1alpha1.KrakenDAutoConfig,
@@ -889,7 +890,15 @@ func (r *KrakenDAutoConfigReconciler) reconcileEndpoints(
 		return outcome, err
 	}
 	writes, stale := planEndpoints(controlled, desired)
+	checked, err := r.precheck(ctx, ac, writes, stale, held || outcome.failed())
+	if err != nil {
+		return outcome, err
+	}
+	maps.Copy(outcome.rejected, checked)
 	for _, ep := range writes {
+		if _, ok := outcome.rejected[ep.Name]; ok {
+			continue
+		}
 		op, err := r.writeEndpoint(ctx, ac, ep)
 		if err != nil {
 			outcome.record(ep, err)
