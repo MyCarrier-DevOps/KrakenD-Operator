@@ -19,9 +19,11 @@ package webhook
 import (
 	"context"
 
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
 )
 
 // checkGatewayRender validates gw's config. A new gateway must render on its
@@ -29,8 +31,22 @@ import (
 func checkGatewayRender(
 	ctx context.Context, chk ConfigChecker, _, gw *v1alpha1.KrakenDGateway,
 ) (admission.Warnings, error) {
-	_, err := chk.CheckIsolated(ctx, gw, nil)
-	return nil, checkErr(err)
+	root, err := chk.CheckIsolated(ctx, gw, nil)
+	if err != nil || root.OK {
+		return nil, checkErr(err)
+	}
+	return nil, gatewayRenderDenial(gw, root)
+}
+
+// gatewayRenderDenial rejects gw: gateway-root findings on spec.config. The
+// renderer builds the root from spec.config (timeout, extraConfig, router), so
+// that is where a user looks.
+func gatewayRenderDenial(gw *v1alpha1.KrakenDGateway, verdict configcheck.Verdict) error {
+	var errs field.ErrorList
+	for _, f := range verdict.Findings {
+		errs = append(errs, field.Invalid(field.NewPath("spec", "config"), field.OmitValueType{}, f.Message))
+	}
+	return invalid("KrakenDGateway", gw.Name, errs)
 }
 
 // versionWarning warns, when spec.version is set or changed, that gw runs a
