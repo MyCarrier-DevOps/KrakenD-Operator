@@ -401,6 +401,7 @@ func TestAutoConfigCRD_Rules(t *testing.T) {
 		{"override cacheTTL not a duration", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, overrides: [{operationId: x, cacheTTL: "1d"}]}}`, "spec.overrides[0].cacheTTL in body should match"},
 		{"additional endpoint timeout not a duration", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, additionalEndpoints: [{endpoint: /h, timeout: "30"}]}}`, "spec.additionalEndpoints[0].timeout in body should match"},
 		{"additional endpoint cacheTTL not a duration", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, additionalEndpoints: [{endpoint: /h, cacheTTL: "1d"}]}}`, "spec.additionalEndpoints[0].cacheTTL in body should match"},
+		{"additional endpoint empty", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, additionalEndpoints: [{endpoint: ""}]}}`, "spec.additionalEndpoints[0].endpoint"},
 	})
 }
 
