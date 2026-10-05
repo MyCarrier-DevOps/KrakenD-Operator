@@ -3776,9 +3776,14 @@ func TestAutoConfigReconcile_AdoptsLabelledOrphansAndLeavesOthers(t *testing.T) 
 	if endpointExists(t, c, orphanStale.Name) {
 		t.Errorf("expected the undesired labelled orphan %s adopted and deleted", orphanStale.Name)
 	}
-	for _, name := range []string{foreign.Name, oneLabel.Name} {
-		if !endpointExists(t, c, name) {
-			t.Errorf("expected %s untouched", name)
+	for _, want := range []*v1alpha1.KrakenDEndpoint{foreign, oneLabel} {
+		var got v1alpha1.KrakenDEndpoint
+		if err := c.Get(context.Background(), client.ObjectKeyFromObject(want), &got); err != nil {
+			t.Errorf("expected %s kept: %v", want.Name, err)
+			continue
+		}
+		if !equality.Semantic.DeepEqual(got.OwnerReferences, want.OwnerReferences) || !maps.Equal(got.Labels, want.Labels) {
+			t.Errorf("%s changed: owners %+v labels %v", want.Name, got.OwnerReferences, got.Labels)
 		}
 	}
 }
