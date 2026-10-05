@@ -73,10 +73,15 @@ type PolicyValidator struct {
 	Checker ConfigChecker
 }
 
-// ValidateCreate admits a new KrakenDBackendPolicy; the CRD schema enforces
-// its field rules.
-func (v *PolicyValidator) ValidateCreate(context.Context, runtime.Object) (admission.Warnings, error) {
-	return nil, nil
+// ValidateCreate validates a new KrakenDBackendPolicy.
+func (v *PolicyValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
+	policy, ok := obj.(*v1alpha1.KrakenDBackendPolicy)
+	if !ok {
+		return nil, fmt.Errorf("expected KrakenDBackendPolicy, got %T", obj)
+	}
+	ctx, cancel := context.WithTimeout(ctx, admissionBudget)
+	defer cancel()
+	return checkPolicyRender(ctx, v.Checker, policy)
 }
 
 // ValidateUpdate admits an updated KrakenDBackendPolicy; the CRD schema
