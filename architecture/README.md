@@ -286,10 +286,11 @@ spec:
             storage: "10Gi"
         # storageClassName: ""         # default storage class
     args: []                           # additional Dragonfly server flags
-    authentication:                    # secures Dragonfly; rejected on EE gateways (not rendered into KrakenD's pool)
-      passwordFromSecret:
-        name: dragonfly-auth
-        key: password
+    # authentication is rejected on EE gateways, because the operator does not render the password into KrakenD's pool:
+    # authentication:
+    #   passwordFromSecret:
+    #     name: dragonfly-auth
+    #     key: password
     # --- OR skip CR creation (use external Redis/Dragonfly via redis.connectionPool) ---
     # enabled: false
 
@@ -297,18 +298,19 @@ spec:
   redis:
     connectionPool:
       addresses: []                    # user-set for external Redis only; when dragonfly.enabled=true, operator derives address internally — leave empty
-      password:                          # rejected when set or changed: never rendered
-        secretRef:
-          name: ""
-          key: ""
+      # password and tls are rejected when set or changed, because the operator has never rendered them:
+      # password:
+      #   secretRef:
+      #     name: ""
+      #     key: ""
       poolSize: 50
       minIdleConns: 10
       dialTimeout: "5s"
       readTimeout: "3s"                # deprecated: no effect, KrakenD's redis pools have no such setting
       writeTimeout: "3s"               # deprecated: no effect, KrakenD's redis pools have no such setting
-      tls:                             # rejected when set or changed: never rendered
-        enabled: false
-        secretName: ""               # Opaque Secret containing ca.crt, tls.crt, tls.key (cert-manager adds ca.crt automatically; create manually if not using cert-manager)
+      # tls:
+      #   enabled: false
+      #   secretName: ""               # Opaque Secret containing ca.crt, tls.crt, tls.key (cert-manager adds ca.crt automatically; create manually if not using cert-manager)
 
   # --- Istio Integration ---
   istio:
@@ -396,9 +398,9 @@ status:
 
 **Schema rules.** The CRD enforces what the object alone decides, as it does for KrakenDEndpoint, so the API server rejects a violation before any webhook runs:
 
-- `config.timeout`, `cacheTTL`, `dnsCacheTTL`, `cors.maxAge` and `redis.connectionPool.dialTimeout` are KrakenD durations (one integer and one unit). `config.port` is 1-65535, `config.outputEncoding` an enum of KrakenD 2.13's values, and `router.healthPath` starts with `/`.
+- `config.timeout`, `cacheTTL`, `dnsCacheTTL`, `cors.maxAge` and `redis.connectionPool.dialTimeout` are KrakenD durations (one integer and one unit). `timeout`, `cacheTTL`, `dnsCacheTTL` and `dialTimeout` also carry a CEL duration-parse rule and `MaxLength` 64, because the pattern admits values such as `99999999999h` that KrakenD rejects. `postRestartJob.tmpSizeLimit` carries `isQuantity` and a 64-character bound, because the quantity pattern admits values such as `1e99999999999999999999` that Go's quantity decode rejects. `config.port` is 1-65535, `config.outputEncoding` an enum of KrakenD 2.13's values, and `router.healthPath` starts with `/`.
 - CEL rules on the spec: an Enterprise gateway needs `license.externalSecret.enabled` or a `license.secretRef` with a non-empty name, a Community gateway has neither, the two sources are mutually exclusive, and the OpenAPI port differs from the listen port (defaults 8090 and 8080). At most one plugin source uses a PVC, and `plugins.sources` holds at most 32 items, which also bounds the rule's cost. An enabled `postRestartJob` needs a script.
-- `redis.connectionPool.password` and `.tls` are rejected when set or changed, because the operator has never rendered them. `dragonfly.authentication.passwordFromSecret` is rejected on an Enterprise gateway for the same reason. The Dragonfly rule reads `edition`, so it uses `optionalOldSelf` to admit an update whose stored object already had the password on an Enterprise gateway; the field-level rules rely on native ratcheting.
+- `redis.connectionPool.password` and `.tls` are rejected when set or changed, because the operator has never rendered them. `dragonfly.authentication.passwordFromSecret` is rejected on an Enterprise gateway for the same reason. The Dragonfly rule reads `edition`, so it uses `optionalOldSelf` to admit an update whose stored object already had the same password on an Enterprise gateway (a changed password is rejected); the field-level rules rely on native ratcheting.
 
 The webhook keeps what needs the default-image context or quantity arithmetic: the probe rules, the runAs ratchets, the `tmpSizeLimit` sign check and the warnings.
 
@@ -525,7 +527,7 @@ status:
 - `timeout` and `cacheTTL` match Go's `time.ParseDuration` grammar without a sign. A malformed value would otherwise break decoding of the whole `KrakenDEndpointList` in every informer. A CEL rule also requires that they parse as a duration that fits in 64 bits of nanoseconds, with a `maxLength` of 64: the pattern alone admits overflowing values such as `2562048h`.
 - `outputEncoding`, a backend's `encoding`, `sd` and `method` are enums taken from KrakenD 2.13's own schema. `gatewayRef.name` and `policyRef.name` have a minimum length of 1.
 
-Kubernetes 1.33 is the supported floor because it ratchets CRD validation: an update that leaves an already-invalid field unchanged is admitted, so objects stored before a rule existed keep accepting unrelated changes. A list without per-item keys is the exception: an entry's `backends` (atomic), and the AutoConfig `overrides[]` and `additionalEndpoints[]`, ratchet only while the whole list is unchanged, so any edit to the list re-checks every item. Rules that need other objects (reference existence, cross-object conflicts, the rendered configuration) stay in the webhooks.
+Kubernetes 1.33 is the supported floor because it ratchets CRD validation: an update that leaves an already-invalid field unchanged is admitted, so objects stored before a rule existed keep accepting unrelated changes. A list without per-item keys is the exception: an entry's `backends` (atomic), and the AutoConfig `overrides[]` and `additionalEndpoints[]`, ratchet only while the whole list is unchanged, so any edit to the list re-checks every item. CEL evaluation errors are never ratcheted either: a stored `timeout` or `cacheTTL` that does not parse as a duration (for example an overflowing value) fails the rule on every update to that object until it is corrected. Rules that need other objects (reference existence, cross-object conflicts, the rendered configuration) stay in the webhooks.
 
 ### 3.3 KrakenDBackendPolicy
 
