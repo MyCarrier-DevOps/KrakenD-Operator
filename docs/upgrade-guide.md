@@ -377,9 +377,11 @@ malformed value (e.g. a YAML mapping) passed both checks unchanged and only
 surfaced as a `krakend check -t -n -c` failure, which blocks config updates for
 every service on that gateway — not just the one with the bad value.
 
-Updates are ratcheted (see *Complete admission*): an object stored with a
-non-list or `null` audience accepts every update that leaves that value
-unchanged; only a change to it must fix it.
+Updates are ratcheted (see *Complete admission*): a `KrakenDEndpoint` stored
+with a non-list or `null` audience accepts every update that leaves the entry
+carrying it unchanged, on the same gateway; a `KrakenDAutoConfig` accepts every
+update that leaves the value unchanged at the same list position. Only an
+update that touches it must fix it.
 
 The operation-level CUE rule lives in the embedded default CUE definitions. A
 namespace's `krakend-cue-definitions` ConfigMap replaces those defaults, so it
