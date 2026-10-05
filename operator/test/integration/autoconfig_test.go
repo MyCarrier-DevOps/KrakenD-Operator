@@ -29,6 +29,7 @@ import (
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -403,6 +404,56 @@ func TestAutoConfig_RestoresStrippedLabelPromptly(t *testing.T) {
 		}
 		if cur.Labels["gateway.krakend.io/autoconfig"] != ac.Name {
 			return fmt.Errorf("label not restored yet: %v", cur.Labels)
+		}
+		return nil
+	})
+}
+
+func TestAutoConfig_AdoptsAndRemovesALabelledOrphan(t *testing.T) {
+	ac := newSyncedAutoConfig(t)
+	// An endpoint recreated from an old generated manifest: both managed
+	// labels, no controller, and no longer generated.
+	template, err := getOwnedEndpoint(ac, initialEndpointNames[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	orphan := &v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pets-gone",
+			Namespace: ac.Namespace,
+			Labels:    maps.Clone(template.Labels),
+		},
+		Spec: *template.Spec.DeepCopy(),
+	}
+	orphan.Spec.Endpoints[0].Endpoint = "/gone"
+	if err := k8sClient.Create(ctx, orphan); err != nil {
+		t.Fatalf("create orphan: %v", err)
+	}
+
+	// Nothing watches an endpoint without a controller, so force a reconcile
+	// the way the steady-state test does: an annotation change passes the
+	// AutoConfig watch predicate. The adoption write goes through the
+	// endpoint webhook.
+	var cur v1alpha1.KrakenDAutoConfig
+	if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(ac), &cur); err != nil {
+		t.Fatal(err)
+	}
+	forced := cur.DeepCopy()
+	if forced.Annotations == nil {
+		forced.Annotations = map[string]string{}
+	}
+	forced.Annotations["krakend.io/resync"] = strconv.FormatInt(time.Now().Unix(), 10)
+	if err := k8sClient.Patch(ctx, forced, client.MergeFrom(cur.DeepCopy())); err != nil {
+		t.Fatalf("annotate autoconfig: %v", err)
+	}
+
+	eventuallyWithin(t, 30*time.Second, func() error {
+		err := k8sClient.Get(ctx, client.ObjectKeyFromObject(orphan), &v1alpha1.KrakenDEndpoint{})
+		if err == nil {
+			return fmt.Errorf("orphan %s not yet removed", orphan.Name)
+		}
+		if !apierrors.IsNotFound(err) {
+			return err
 		}
 		return nil
 	})
