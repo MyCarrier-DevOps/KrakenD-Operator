@@ -82,7 +82,7 @@ func TestGatewayReconcile_NotFound(t *testing.T) {
 		Scheme:    testScheme(),
 		Recorder:  fakeRecorder(),
 		Renderer:  &mockRenderer{},
-		Validator: &mockValidator{},
+		Validator: &mockValidator{}, Checker: newTestChecker(c, &mockValidator{}),
 	}
 
 	result, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -163,7 +163,7 @@ func TestGatewayReconcile_FullPipeline(t *testing.T) {
 		Scheme:    testScheme(),
 		Recorder:  fakeRecorder(),
 		Renderer:  mockRend,
-		Validator: &mockValidator{},
+		Validator: &mockValidator{}, Checker: newTestChecker(c, &mockValidator{}),
 	}
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -244,7 +244,7 @@ func TestGatewayReconcile_ChecksumUnchanged(t *testing.T) {
 		Scheme:    testScheme(),
 		Recorder:  fakeRecorder(),
 		Renderer:  mockRend,
-		Validator: &mockValidator{},
+		Validator: &mockValidator{}, Checker: newTestChecker(c, &mockValidator{}),
 	}
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -291,7 +291,12 @@ func TestGatewayReconcile_ValidationFailure(t *testing.T) {
 				Output: "invalid config line 5",
 				Err:    fmt.Errorf("exit code 1"),
 			},
-		},
+		}, Checker: newTestChecker(c, &mockValidator{
+			validateErr: &renderer.ValidationError{
+				Output: "invalid config line 5",
+				Err:    fmt.Errorf("exit code 1"),
+			},
+		}),
 	}
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -324,7 +329,7 @@ func TestGatewayReconcile_RenderError(t *testing.T) {
 		Scheme:    testScheme(),
 		Recorder:  fakeRecorder(),
 		Renderer:  &mockRenderer{err: fmt.Errorf("render boom")},
-		Validator: &mockValidator{},
+		Validator: &mockValidator{}, Checker: newTestChecker(c, &mockValidator{}),
 	}
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -621,7 +626,7 @@ func TestGatewayReconcile_GathersPolicies(t *testing.T) {
 		Scheme:    testScheme(),
 		Recorder:  fakeRecorder(),
 		Renderer:  capturingRend,
-		Validator: &mockValidator{},
+		Validator: &mockValidator{}, Checker: newTestChecker(c, &mockValidator{}),
 	}
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -686,7 +691,7 @@ func TestGatewayReconcile_WithPluginConfigMaps(t *testing.T) {
 		Scheme:    testScheme(),
 		Recorder:  fakeRecorder(),
 		Renderer:  capturingRend,
-		Validator: &mockValidator{},
+		Validator: &mockValidator{}, Checker: newTestChecker(c, &mockValidator{}),
 	}
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -727,7 +732,7 @@ func TestGatewayReconcile_WithHPA(t *testing.T) {
 		Scheme:    testScheme(),
 		Recorder:  fakeRecorder(),
 		Renderer:  mockRend,
-		Validator: &mockValidator{},
+		Validator: &mockValidator{}, Checker: newTestChecker(c, &mockValidator{}),
 	}
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -787,7 +792,7 @@ func TestGatewayReconcile_MissingPolicySkipped(t *testing.T) {
 		Scheme:    testScheme(),
 		Recorder:  fakeRecorder(),
 		Renderer:  capturingRend,
-		Validator: &mockValidator{},
+		Validator: &mockValidator{}, Checker: newTestChecker(c, &mockValidator{}),
 	}
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -869,7 +874,7 @@ func TestGatewayReconcile_WithDragonflyEnabled(t *testing.T) {
 		Scheme:    testScheme(),
 		Recorder:  fakeRecorder(),
 		Renderer:  capturingRend,
-		Validator: &mockValidator{},
+		Validator: &mockValidator{}, Checker: newTestChecker(c, &mockValidator{}),
 	}
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -1050,7 +1055,7 @@ func TestGatewayReconcile_CrossNamespaceEndpoints(t *testing.T) {
 		Scheme:    testScheme(),
 		Recorder:  fakeRecorder(),
 		Renderer:  capturingRend,
-		Validator: &mockValidator{},
+		Validator: &mockValidator{}, Checker: newTestChecker(c, &mockValidator{}),
 	}
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -1114,7 +1119,7 @@ func TestGatewayReconcile_CrossNamespacePolicies(t *testing.T) {
 		Scheme:    testScheme(),
 		Recorder:  fakeRecorder(),
 		Renderer:  capturingRend,
-		Validator: &mockValidator{},
+		Validator: &mockValidator{}, Checker: newTestChecker(c, &mockValidator{}),
 	}
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -1171,7 +1176,7 @@ func TestGatewayReconcile_AutoscaledReplicasAreNotReset(t *testing.T) {
 		Renderer: &mockRenderer{output: &renderer.RenderOutput{
 			JSON: []byte(`{"version":3}`), Checksum: "cs",
 		}},
-		Validator: &mockValidator{},
+		Validator: &mockValidator{}, Checker: newTestChecker(c, &mockValidator{}),
 	}
 
 	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(gw)}); err != nil {
@@ -1216,7 +1221,7 @@ func acceptanceReconciler(
 ) *KrakenDGatewayReconciler {
 	return &KrakenDGatewayReconciler{
 		Client: c, Scheme: testScheme(), Recorder: rec,
-		Renderer: &mockRenderer{output: output}, Validator: &mockValidator{}, APIReader: c,
+		Renderer: &mockRenderer{output: output}, Validator: &mockValidator{}, Checker: newTestChecker(c, &mockValidator{}), APIReader: c,
 	}
 }
 
@@ -1367,6 +1372,7 @@ func TestGatewayReconcile_AcceptedNotWrittenWhenValidationFails(t *testing.T) {
 	r.Validator = &mockValidator{validateErr: &renderer.ValidationError{
 		Output: "invalid config line 5", Err: fmt.Errorf("exit code 1"),
 	}}
+	r.Checker = newTestChecker(r.Client, r.Validator)
 
 	// Other tests cover the gateway's own status on a rejection; only the endpoint side is checked here.
 	_ = reconcileGateway(t, r, gw)
@@ -1755,6 +1761,7 @@ func TestGatewayReconcile_ValidationFailureAdvancesObservedGeneration(t *testing
 	r.Validator = &mockValidator{validateErr: &renderer.ValidationError{
 		Output: "invalid config line 5", Err: fmt.Errorf("exit code 1"),
 	}}
+	r.Checker = newTestChecker(r.Client, r.Validator)
 
 	if err := reconcileGateway(t, r, gw); err != nil {
 		t.Fatalf("a rejection is persistent and must not be retried: %v", err)
