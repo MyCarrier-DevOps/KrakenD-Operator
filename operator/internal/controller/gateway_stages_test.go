@@ -32,6 +32,7 @@ import (
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -106,6 +107,38 @@ func staleDeploymentReads(stale *appsv1.Deployment) interceptor.Funcs {
 			return c.Get(ctx, key, obj, opts...)
 		},
 	}
+}
+
+// withGenerationBumps adds to funcs what the API server does to a Deployment
+// that the fake client does not: a new one starts at generation 1, and an
+// update that changes its spec bumps metadata.generation by one. An update of
+// the status alone, or one that writes the spec back unchanged, leaves it. The
+// Deployment controller has not observed a bumped generation until a test sets
+// status.observedGeneration. funcs must not set Create or Update.
+func withGenerationBumps(funcs interceptor.Funcs) interceptor.Funcs {
+	funcs.Create = func(
+		ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption,
+	) error {
+		if dep, ok := obj.(*appsv1.Deployment); ok && dep.Generation == 0 {
+			dep.Generation = 1
+		}
+		return c.Create(ctx, obj, opts...)
+	}
+	funcs.Update = func(
+		ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption,
+	) error {
+		if dep, ok := obj.(*appsv1.Deployment); ok {
+			var stored appsv1.Deployment
+			if err := c.Get(ctx, client.ObjectKeyFromObject(dep), &stored); err == nil {
+				dep.Generation = stored.Generation
+				if !equality.Semantic.DeepEqual(stored.Spec, dep.Spec) {
+					dep.Generation++
+				}
+			}
+		}
+		return c.Update(ctx, obj, opts...)
+	}
+	return funcs
 }
 
 // rollingGateway is servingGateway with a config rollout still reported as
@@ -2640,23 +2673,18 @@ func TestGatewayReconcile_ReleasingThePluginHoldReportsTheDeferredConfigRolloutO
 		{ConfigMapRef: &v1alpha1.ConfigMapKeyRef{Name: "plugins-a", Key: "auth.so"}},
 	}}
 	var stale *appsv1.Deployment
-	c := fakeClientBuilder().WithObjects(gw, live).WithStatusSubresource(gw).WithInterceptorFuncs(interceptor.Funcs{
-		Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
-			if dep, ok := obj.(*appsv1.Deployment); ok {
-				dep.Generation++ // the API server bumps it on a spec change
-			}
-			return c.Update(ctx, obj, opts...)
-		},
-		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object,
-			opts ...client.GetOption,
-		) error {
-			if dep, ok := obj.(*appsv1.Deployment); ok && stale != nil {
-				stale.DeepCopyInto(dep)
-				return nil
-			}
-			return c.Get(ctx, key, obj, opts...)
-		},
-	}).Build()
+	c := fakeClientBuilder().WithObjects(gw, live).WithStatusSubresource(gw).WithInterceptorFuncs(
+		withGenerationBumps(interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object,
+				opts ...client.GetOption,
+			) error {
+				if dep, ok := obj.(*appsv1.Deployment); ok && stale != nil {
+					stale.DeepCopyInto(dep)
+					return nil
+				}
+				return c.Get(ctx, key, obj, opts...)
+			},
+		})).Build()
 	r := newTestGatewayReconciler(c, renderOutput("B"), &mockValidator{})
 	rec := fakeRecorder()
 	r.Recorder = rec
