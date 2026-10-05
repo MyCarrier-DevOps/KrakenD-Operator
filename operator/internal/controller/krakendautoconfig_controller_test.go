@@ -3509,7 +3509,9 @@ func TestAutoConfigReconcile_ManyExternalRefsStayBoundedAndQuiet(t *testing.T) {
 	for i := range 3 * maxStatusListLen {
 		refs = append(refs, fmt.Sprintf(`"/p%03d":{"get":{"responses":{"200":{"$ref":"other.json#/R%03d"}}}}`, i, i))
 	}
-	f.result = &autoconfig.FetchResult{Data: []byte(`{"paths":{` + strings.Join(refs, ",") + `}}`)}
+	rawSpec := []byte(`{"paths":{` + strings.Join(refs, ",") + `}}`)
+	// fetchSpec rewrites the result's Data, so each pass gets its own copy.
+	f.result = &autoconfig.FetchResult{Data: rawSpec}
 	var counts writeCounts
 	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).
 		WithInterceptorFuncs(countWrites(&counts)).Build()
@@ -3538,7 +3540,9 @@ func TestAutoConfigReconcile_ManyExternalRefsStayBoundedAndQuiet(t *testing.T) {
 	}
 	counts = writeCounts{}
 
-	if _, err := reconcileAC(r, first); err != nil {
+	f.result = &autoconfig.FetchResult{Data: rawSpec}
+
+	if _, err := reconcileAC(r, ac); err != nil {
 		t.Fatalf("second reconcile: %v", err)
 	}
 	if counts != (writeCounts{}) {
