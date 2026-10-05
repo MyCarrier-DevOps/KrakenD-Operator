@@ -1296,6 +1296,24 @@ entry wins, and `status.conflicts[].winner` then names the endpoint itself.
 Admission rejects such pairs outright (below); this covers objects stored
 before the upgrade and concurrent applies.
 
+**Duplicate routes are rejected.** A KrakenDEndpoint entry whose method and
+path another KrakenDEndpoint on the same gateway already defines is rejected
+(`Duplicate value: "GET /users": already defined by KrakenDEndpoint
+ns/name`). Until now it was admitted with a warning, then reported as
+`EndpointConflict`/`PartiallyAccepted` with `status.conflicts` and not served.
+So is an entry whose path differs from another only in parameter names
+(`/users/{id}` and `/users/{name}`) or in repeated slashes, on the same method,
+including two entries of one KrakenDEndpoint. Only added or changed entries are
+checked, so a conflict stored before the upgrade does not block unrelated
+edits; the pre-upgrade audit lists them. After the upgrade, the newer
+endpoint of such a stored pair keeps listing the lost entry in
+`status.conflicts` (`Accepted=False/EndpointConflict` when it has no other
+entry, otherwise `Accepted=True/PartiallyAccepted`). Endpoints with the same
+controller (two endpoints one KrakenDAutoConfig generated, while it renames an
+operation) may share a route: the renderer serves the older one until the
+AutoConfig deletes it. Renaming a path parameter across several routes needs
+them in one KrakenDEndpoint; see the runbook.
+
 **Gateways with a health-path or `autoOptions` clash freeze instead of
 crash-looping.** The controller's route check now rejects them. Such a gateway
 keeps its last-known-good config with `ConfigValid=False`. Before this release
