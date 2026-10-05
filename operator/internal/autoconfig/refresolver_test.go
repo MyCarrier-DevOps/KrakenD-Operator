@@ -486,7 +486,9 @@ func TestSanitizeRefName_EmptyFragment(t *testing.T) {
 func TestResolveExternalRefs_ReportsLocalRefInFetchedDocument(t *testing.T) {
 	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"content":{"application/json":` +
 		`{"schema":{"$ref":"common.json#/Pet"}}}}}}}}}`)
-	common := []byte(`{"Pet":{"properties":{"owner":{"$ref":"#/Owner"}}},"Owner":{"type":"string"}}`)
+	// Two refs to Owner are one warning.
+	common := []byte(`{"Pet":{"properties":{"owner":{"$ref":"#/Owner"},"previous":{"$ref":"#/Owner"}}},` +
+		`"Owner":{"type":"string"}}`)
 	fetcher := &stubFetcher{docs: map[string][]byte{"https://api.example.com/common.json": common}}
 
 	_, warnings, err := ResolveExternalRefs(context.Background(), main,
