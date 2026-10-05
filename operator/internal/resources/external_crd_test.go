@@ -197,7 +197,7 @@ func TestBuildDragonfly_SecurityContextOverride(t *testing.T) {
 }
 
 // TestBuildDragonfly_ContainerScopeRunAsUserPinsSurvivePodScopeOverride
-// covers review round 3, C5: a containerSecurityContext override that sets
+// covers a containerSecurityContext override that sets
 // an unrelated field (allowPrivilegeEscalation) WITHOUT its own runAsUser,
 // combined with a podSecurityContext override that sets runAsUser/runAsGroup
 // to a non-default value, must still emit the hardened runAsUser/runAsGroup:
@@ -858,12 +858,10 @@ func TestExternalSecretGVR(t *testing.T) {
 	}
 }
 
-// TestDragonflyRunAsRootUnacknowledged covers review round 3, C2: the
-// discriminator behind the DragonflyRunAsRootUnacknowledged status
-// condition (renamed review round 4, D5), exercised
-// directly against rendered-map shapes (as unstructured.NestedMap would
-// return them off a built Dragonfly CR) rather than through a full
-// reconcile.
+// TestDragonflyRunAsRootUnacknowledged covers the discriminator behind the
+// DragonflyRunAsRootUnacknowledged status condition, exercised directly
+// against rendered-map shapes (as unstructured.NestedMap would return them off
+// a built Dragonfly CR) rather than through a full reconcile.
 func TestDragonflyRunAsRootUnacknowledged(t *testing.T) {
 	tests := []struct {
 		name      string
