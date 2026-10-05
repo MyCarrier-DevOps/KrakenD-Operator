@@ -45,6 +45,9 @@ type ConfigChecker interface {
 		replace []v1alpha1.KrakenDEndpoint) (configcheck.Verdict, error)
 	CheckIsolated(ctx context.Context, gw *v1alpha1.KrakenDGateway,
 		eps []v1alpha1.KrakenDEndpoint) (configcheck.Verdict, error)
+	CheckGatewayPolicy(ctx context.Context, gw *v1alpha1.KrakenDGateway,
+		policy *v1alpha1.KrakenDBackendPolicy) (configcheck.Verdict, error)
+	LintPolicy(ctx context.Context, policy *v1alpha1.KrakenDBackendPolicy) (configcheck.Verdict, error)
 }
 
 // invalid is the admission error for field errors: 422 Invalid with one
