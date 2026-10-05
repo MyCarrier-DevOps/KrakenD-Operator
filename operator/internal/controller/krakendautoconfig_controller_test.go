@@ -1945,10 +1945,16 @@ func TestAutoConfigReconcile_FailureStatusConflictKeepsFailureResult(t *testing.
 				WithInterceptorFuncs(funcs).
 				Build()
 			f, ce, fi, g := defaultMocks()
-			// The generator skips a duplicate and the inputs changed: the
-			// warning must not be recorded by a reconcile whose status write
-			// then conflicts.
-			g.output.Skipped = []autoconfig.OperationIssue{duplicateListUsers()}
+			// The resolver warns about a missing external pointer, a warning
+			// buffered before every failure below but the fetch's, and the
+			// inputs changed: it must not be recorded by a reconcile whose
+			// status write then conflicts.
+			f.result = &autoconfig.FetchResult{
+				Data: []byte(`{"paths":{"/x":{"get":{"responses":{"200":{"$ref":"common.json#/Missing"}}}}}}`),
+			}
+			f.byURL = map[string]mockFetchOutcome{
+				"https://example.com/common.json": {result: &autoconfig.FetchResult{Data: []byte(`{}`)}},
+			}
 			if tt.fail != nil {
 				tt.fail(f, ce)
 			}
