@@ -209,7 +209,7 @@ func clashRefusals(accepted []ginRoute, r ginRoute, refusal string) []routeRefus
 			continue
 		}
 		if a.index == gatewayRoute {
-			out[0].message = fmt.Sprintf("%s (%s %s is the gateway's own route)", refusal, a.method, a.path)
+			out[0].message = fmt.Sprintf("%s (%s is the gateway's own route)", refusal, a.describe())
 		} else if a.index != r.index {
 			out = append(out, routeRefusal{index: a.index,
 				message: fmt.Sprintf("%s clashes with %s: %s", a.describe(), r.describe(), refusal)})
