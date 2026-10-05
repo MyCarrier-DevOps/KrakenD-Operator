@@ -311,6 +311,7 @@ type GatewayConfig struct {
 	OutputEncoding string `json:"outputEncoding,omitempty"`
 
 	// DNSCacheTTL is the DNS lookup cache duration (e.g. "30s").
+	// +kubebuilder:validation:Pattern=`^[0-9]+(ns|ms|us|µs|s|m|h)$`
 	DNSCacheTTL string `json:"dnsCacheTTL,omitempty"`
 
 	// EchoEndpoint enables the /__echo/ endpoint for debugging.
