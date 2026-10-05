@@ -49,6 +49,9 @@ func TestValidateEntries(t *testing.T) {
 		{"raw health path", rawRouter, testEndpoint("e", "/live"), "health endpoint"},
 		{"health disabled", rawRouterBlock(`{"disable_health":true,"health_path":"/healthz"}`),
 			testEndpoint("e", "/healthz"), ""},
+		// A raw router block replaces the typed one, so the typed healthPath is gone.
+		{"raw router replaces the typed one", rawRouterBlock(`{"auto_options":true}`),
+			testEndpoint("e", "/healthz"), ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
