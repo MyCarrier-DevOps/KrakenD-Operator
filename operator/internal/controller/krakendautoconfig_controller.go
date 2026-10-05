@@ -118,19 +118,9 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	origStatus := ac.Status.DeepCopy()
 
-	fetchResult, err := r.Fetcher.Fetch(ctx, autoconfig.FetchSource{
-		URL:               ac.Spec.OpenAPI.URL,
-		ConfigMapRef:      ac.Spec.OpenAPI.ConfigMapRef,
-		Auth:              ac.Spec.OpenAPI.Auth,
-		AllowClusterLocal: ac.Spec.OpenAPI.AllowClusterLocal,
-		Namespace:         ac.Namespace,
-	})
+	fetchResult, specNotes, err := r.fetchSpec(ctx, &ac)
 	if err != nil {
 		return r.handleFetchError(ctx, &ac, err)
-	}
-
-	if postErr := r.postProcessSpec(ctx, &ac, fetchResult); postErr != nil {
-		return r.handleFetchError(ctx, &ac, postErr)
 	}
 
 	// Recompute checksum from the final (possibly resolved / stripped) data
@@ -155,9 +145,9 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// status.SpecChecksum unchanged, so each retry of a failing sync whose
 	// inputs changed emits them again.
 	warnings := &inputWarnings{inputsChanged: combinedChecksum != origStatus.SpecChecksum}
-	// specNotes are the problems in the spec or the AutoConfig that do not
-	// stop the sync, for status.warnings.
-	var specNotes []string
+	for _, note := range specNotes {
+		warnings.add(v1alpha1.ReasonSpecWarning, note)
+	}
 
 	// Load CUE definitions: prefer ConfigMap, fall back to embedded defaults
 	defaultDefs, err := r.loadCUEDefinitions(ctx, ac.Namespace, defaultCUEDefinitionsConfigMap)
@@ -491,23 +481,33 @@ func applyAdditionalEndpoints(
 	return filtered, notes, nil
 }
 
-// postProcessSpec resolves external $refs and strips upstream server entries
-// from the fetched spec data, updating fetchResult.Data in place. A failure
-// to fetch or decode an external $ref document, or to decode the spec itself,
-// is fatal and returned to the caller, which fails the sync closed;
-// deterministic ref issues (pointer not found, cycles, name collisions) are
-// only logged as warnings.
-// StripServers failures are logged and left as a no-op, keeping the raw spec.
-func (r *KrakenDAutoConfigReconciler) postProcessSpec(
+// fetchSpec fetches the OpenAPI spec and prepares it for evaluation: it
+// resolves external $refs (URL sources only) and strips upstream server
+// entries. A failure to fetch or decode the spec or an external $ref document
+// is returned and fails the sync closed. notes are the problems that do not
+// stop the sync (the $refs the resolver could not honour) for
+// status.warnings. A StripServers failure is logged and leaves the data as it
+// was.
+func (r *KrakenDAutoConfigReconciler) fetchSpec(
 	ctx context.Context,
 	ac *v1alpha1.KrakenDAutoConfig,
-	fetchResult *autoconfig.FetchResult,
-) error {
+) (*autoconfig.FetchResult, []string, error) {
 	log := logf.FromContext(ctx)
+	fetchResult, err := r.Fetcher.Fetch(ctx, autoconfig.FetchSource{
+		URL:               ac.Spec.OpenAPI.URL,
+		ConfigMapRef:      ac.Spec.OpenAPI.ConfigMapRef,
+		Auth:              ac.Spec.OpenAPI.Auth,
+		AllowClusterLocal: ac.Spec.OpenAPI.AllowClusterLocal,
+		Namespace:         ac.Namespace,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
 
+	var notes []string
 	// Resolve external $refs (only possible with HTTP sources).
 	if ac.Spec.OpenAPI.URL != "" {
-		resolved, warnings, resolveErr := autoconfig.ResolveExternalRefs(
+		resolved, refNotes, resolveErr := autoconfig.ResolveExternalRefs(
 			ctx, fetchResult.Data, ac.Spec.OpenAPI.URL, r.Fetcher,
 			autoconfig.FetchSource{
 				Auth:              ac.Spec.OpenAPI.Auth,
@@ -516,12 +516,10 @@ func (r *KrakenDAutoConfigReconciler) postProcessSpec(
 			},
 		)
 		if resolveErr != nil {
-			return resolveErr
+			return nil, nil, resolveErr
 		}
 		fetchResult.Data = resolved
-		for _, w := range warnings {
-			log.V(1).Info("ref resolver warning", "warning", w)
-		}
+		notes = append(notes, refNotes...)
 	}
 
 	// Strip upstream `servers` entries: the KrakenD gateway is the
@@ -532,7 +530,7 @@ func (r *KrakenDAutoConfigReconciler) postProcessSpec(
 	} else {
 		fetchResult.Data = stripped
 	}
-	return nil
+	return fetchResult, notes, nil
 }
 
 // autoConfigSpecChecksum builds the checksum the controller stores in
@@ -593,8 +591,8 @@ func (r *KrakenDAutoConfigReconciler) loadCUEDefinitions(
 }
 
 // inputWarnings collects the Warning events about one reconcile's inputs —
-// CUEEvaluationWarning, DuplicateOperationId and AdditionalEndpointOverride —
-// and holds them until the reconcile's terminal status write succeeds. A
+// CUEEvaluationWarning, DuplicateOperationId, AdditionalEndpointOverride and
+// SpecWarning — and holds them until the reconcile's terminal status write succeeds. A
 // reconcile that read a stale AutoConfig and then loses that write to a
 // conflict records none of them; its retry records them if they still
 // apply. Warnings are collected only when inputsChanged.
