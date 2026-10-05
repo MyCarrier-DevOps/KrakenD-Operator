@@ -218,7 +218,9 @@ func (o *endpointOutcome) record(ep *v1alpha1.KrakenDEndpoint, err error) {
 	case apierrors.IsConflict(err) || apierrors.IsAlreadyExists(err):
 		o.raced = append(o.raced, err)
 	case apierrors.IsInvalid(err) || errors.As(err, &owned):
-		o.rejected[ep.Name] = rejection{endpoint: ep, reason: v1alpha1.ReasonEndpointRejected, message: message, cause: err}
+		o.rejected[ep.Name] = rejection{
+			endpoint: ep, reason: v1alpha1.ReasonEndpointRejected, message: message, cause: err,
+		}
 	default:
 		o.transient = append(o.transient, err)
 	}
