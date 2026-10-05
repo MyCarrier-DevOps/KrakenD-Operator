@@ -19,6 +19,9 @@ go_duration_re='^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$'
 # The CRD pattern of the gateway duration fields (one integer and one unit), verbatim.
 single_unit_re='^[0-9]+(ns|ms|us|µs|s|m|h)$'
 
+# The CRD pattern of a resource quantity, verbatim.
+quantity_re='^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$'
+
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
@@ -31,7 +34,8 @@ for kind in endpoints gateways autoconfigs backendpolicies; do
 	fi
 done
 
-jq_opts=(-r --arg path_re "$endpoint_path_re" --arg go_re "$go_duration_re" --arg one_re "$single_unit_re")
+jq_opts=(-r --arg path_re "$endpoint_path_re" --arg go_re "$go_duration_re" --arg one_re "$single_unit_re"
+	--arg qty_re "$quantity_re")
 
 jq_lib='
 # The API server anchors ^ and $ at the ends of the text only; Oniguruma also
@@ -58,6 +62,11 @@ def dur_problem($re; $max; $label):
   else empty end;
 # Why a value is outside an enum: $set lists the values the CRD allows.
 def enum_problem($label; $set): select(IN($set[]) | not) | "\($label) \(.)";
+# Why a quantity breaks its CRD rules, or nothing; a number is always valid.
+def quantity_problem($label):
+  if type != "string" then empty
+  elif crd_test($qty_re) | not then "\($label) \(.)"
+  else empty end;
 def report(kind): select(.v | length > 0) | "\(kind) \(.id): \(.v | unique | join("; "))";
 '
 
@@ -115,5 +124,6 @@ jq "${jq_opts[@]}" "$jq_lib"'
   (if $s.redis.connectionPool.password != null then "spec.redis.connectionPool.password is not supported yet" else empty end),
   (if $s.redis.connectionPool.tls != null then "spec.redis.connectionPool.tls is not supported yet" else empty end),
   (if $s.edition == "EE" and $s.dragonfly.authentication.passwordFromSecret != null
-   then "spec.dragonfly.authentication.passwordFromSecret is not supported yet with edition EE" else empty end)
+   then "spec.dragonfly.authentication.passwordFromSecret is not supported yet with edition EE" else empty end),
+  ($s.postRestartJob.tmpSizeLimit // empty | quantity_problem("spec.postRestartJob.tmpSizeLimit"))
 ]} | report("KrakenDGateway")' "$work/gateways.json"
