@@ -56,7 +56,7 @@ func New(reader client.Reader, r renderer.Renderer, v renderer.Validator, slots 
 // left unset.
 func (c *Checker) Gather(ctx context.Context, gw *v1alpha1.KrakenDGateway,
 	replace []v1alpha1.KrakenDEndpoint) (renderer.RenderInput, error) {
-	return renderer.RenderInput{}, nil
+	return c.gather(ctx, gw, replace)
 }
 
 // CheckRendered validates out, rendered from in, with the full check the
