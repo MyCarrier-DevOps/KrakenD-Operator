@@ -5,6 +5,8 @@
 package configcheck
 
 import (
+	"fmt"
+
 	"k8s.io/apimachinery/pkg/types"
 )
 
@@ -20,7 +22,13 @@ type Finding struct {
 
 // String renders f for status messages and admission responses.
 func (f Finding) String() string {
-	return ""
+	if f.Endpoint.Name == "" {
+		return "gateway: " + f.Message
+	}
+	if f.Index < 0 {
+		return fmt.Sprintf("%s: %s", f.Endpoint, f.Message)
+	}
+	return fmt.Sprintf("%s spec.endpoints[%d]: %s", f.Endpoint, f.Index, f.Message)
 }
 
 // Verdict is the outcome of a check. OK is false when the config is invalid;
