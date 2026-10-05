@@ -57,6 +57,8 @@ func TestRouteConflicts_MirrorsTheRuntimeRouter(t *testing.T) {
 		{"health path is GET only", `{"extra_config":{"router":{"health_path":"/healthz"}},"endpoints":[{"endpoint":"/healthz","method":"POST"}]}`, ""},
 		{"health disabled", `{"extra_config":{"router":{"disable_health":true}},"endpoints":[{"endpoint":"/__health","method":"GET"}]}`, ""},
 		{"auto options joins methods", `{"extra_config":{"router":{"auto_options":true}},"endpoints":[{"endpoint":"/a/{id}","method":"GET"},{"endpoint":"/a/{name}","method":"POST"}]}`, "conflicts with existing wildcard"},
+		{"auto options registers one route per path", `{"extra_config":{"router":{"auto_options":true}},"endpoints":[{"endpoint":"/a","method":"GET"},{"endpoint":"/a","method":"POST"}]}`, ""},
+		{"auto options cleans the path first", `{"extra_config":{"router":{"auto_options":true}},"endpoints":[{"endpoint":"a","method":"GET"},{"endpoint":"/a","method":"POST"}]}`, ""},
 		{"echo beside root parameter", `{"echo_endpoint":true,"endpoints":[{"endpoint":"/{x}","method":"GET"}]}`, ""},
 	}
 	for _, tt := range tests {
