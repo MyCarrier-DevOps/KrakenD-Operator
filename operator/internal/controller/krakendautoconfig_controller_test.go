@@ -2297,6 +2297,44 @@ func TestAutoConfigReconcile_ResolverWarningsPersistAndEmitOnce(t *testing.T) {
 	}
 }
 
+func TestAutoConfigReconcile_IdenticalSecondPassWritesNothing(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac, f, ce, fi, g := skippedAndWarnedAutoConfig()
+	// A second warning, from the resolver, so the list has more than one
+	// entry to order.
+	f.result = &autoconfig.FetchResult{
+		Data: []byte(`{"paths":{"/x":{"get":{"responses":{"200":{"$ref":"common.json#/Missing"}}}}}}`),
+	}
+	f.byURL = map[string]mockFetchOutcome{
+		"https://example.com/common.json": {result: &autoconfig.FetchResult{Data: []byte(`{}`)}},
+	}
+	g.output.Skipped = append(g.output.Skipped, autoconfig.OperationIssue{
+		Operation: autoconfig.Operation{Method: "GET", Path: "/v1/users", OperationID: "listUsers"},
+		Reason:    v1alpha1.ReasonDuplicateOperationId,
+		Message:   `operationId "listUsers" is already used by GET /api/users`,
+	})
+	var counts writeCounts
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).
+		WithInterceptorFuncs(countWrites(&counts)).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+	first := getAC(t, c, ac)
+	if len(first.Status.Skipped) != 2 || len(first.Status.Warnings) != 2 {
+		t.Fatalf("first pass skipped = %+v, warnings = %q; want 2 of each", first.Status.Skipped, first.Status.Warnings)
+	}
+	counts = writeCounts{}
+
+	if _, err := reconcileAC(r, first); err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+	if counts != (writeCounts{}) {
+		t.Errorf("an identical second pass wrote %+v, want no writes", counts)
+	}
+}
+
 func TestAutoConfigPredicate_IgnoresStatusOnlyUpdate(t *testing.T) {
 	old := &v1alpha1.KrakenDAutoConfig{
 		ObjectMeta: metav1.ObjectMeta{
