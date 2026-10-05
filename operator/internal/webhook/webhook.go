@@ -419,14 +419,11 @@ func validatePostRestartRunAsRoot(prj, old *v1alpha1.PostRestartJobSpec) field.E
 		// "Keep the builder fixup" in this function's original doc, now
 		// captured by this true argument).
 		true,
-		// Review round 3, C3: the previous text unconditionally told the user
-		// a container-scope runAsNonRoot: false "also" acknowledges root,
-		// which is only true when the effective uid0 came from the container
-		// scope in the first place (see validateRunAsRootConflict's
-		// containerOptsOut/podOptsOut asymmetry) — for a pod-scope-originated
-		// rejection it was simply wrong advice. This text is self-qualifying
-		// instead of path-specific, so it stays truthful regardless of
-		// whether it is emitted at containerPath or podPath.
+		// A container-scope runAsNonRoot: false acknowledges root only when the
+		// effective uid 0 came from the container scope (see
+		// validateRunAsRootConflict's containerOptsOut/podOptsOut asymmetry),
+		// so this text is self-qualifying instead of path-specific and stays
+		// truthful whether it is emitted at containerPath or podPath.
 		"runAsUser: 0 conflicts with the hardened runAsNonRoot: true default (kubelet "+
 			"pod-level runAsNonRoot defaults to true and is inherited unless overridden). "+
 			"Set spec.postRestartJob.podSecurityContext.runAsNonRoot: false to acknowledge "+
@@ -457,7 +454,7 @@ const (
 //
 // Split into three helpers to keep this function's cyclomatic complexity in
 // check (gocyclo), mirroring validatePostRestartJob above: the checks grew from
-// one to eight across review rounds (ids 3865173791, 3870072741).
+// one to eight over time (ids 3865173791, 3870072741).
 //
 // defaultSidecarImage must be computed from resources.EffectiveOpenAPISidecarImage,
 // never from a raw `SidecarImage == ""` test.
@@ -656,17 +653,17 @@ func validateProbeReachability(p *field.Path, probe *corev1.Probe, defaultSideca
 // The update-ratchet (runAsFieldsUnchanged) still grandfathers an unchanged
 // old spec for both scopes.
 //
-// Review round 3, C1: for the Dragonfly lane only (allowPodScopeUnsetSelfHeal
-// == false), a POD-SCOPE root request is independently gated regardless of
-// what effectiveRunAsRoot resolves for the primary container. Before this
-// gate, a non-zero container.RunAsUser (e.g. Dragonfly's own uid:999 pin)
-// made effectiveRunAsRoot report "not root" — correctly, for THAT one
-// container — and the whole function returned early, silently admitting a
-// podSecurityContext.runAsUser: 0 that still renders on the shared pod-level
-// securityContext every OTHER container/sidecar in the pod inherits when it
-// sets nothing of its own. This gate closes that hole without touching
-// effectiveRunAsRoot's own (still correct, for the primary container)
-// precedence rules.
+// For the Dragonfly lane only (allowPodScopeUnsetSelfHeal == false), a
+// POD-SCOPE root request is independently gated regardless of what
+// effectiveRunAsRoot resolves for the primary container. A non-zero
+// container.RunAsUser (e.g. Dragonfly's own uid:999 pin) makes
+// effectiveRunAsRoot report "not root" — correctly, for THAT one container —
+// and without this gate the whole function would return early, silently
+// admitting a podSecurityContext.runAsUser: 0 that still renders on the
+// shared pod-level securityContext every OTHER container/sidecar in the pod
+// inherits when it sets nothing of its own. This gate closes that hole
+// without touching effectiveRunAsRoot's own (still correct, for the primary
+// container) precedence rules.
 func validateRunAsRootConflict(
 	container *corev1.SecurityContext, pod *corev1.PodSecurityContext,
 	oldContainer *corev1.SecurityContext, oldPod *corev1.PodSecurityContext,
@@ -866,19 +863,15 @@ func validateDragonflyRunAsRoot(df, old *v1alpha1.DragonflySpec) field.ErrorList
 		field.NewPath("spec", "dragonfly", "containerSecurityContext", "runAsUser"),
 		field.NewPath("spec", "dragonfly", "podSecurityContext", "runAsUser"),
 		false,
-		// Review round 3, C6: the previous text unconditionally claimed "the
-		// Dragonfly pod will hang Pending", which is only true for a
-		// container-scope-originated violation — a pod-scope-only
-		// runAsUser: 0 never changes the dragonfly container's own effective
-		// uid at all (the container-scope 999 pin always wins per-field), so
-		// it silently roots OTHER containers/sidecars instead of hanging.
-		// It also unconditionally offered a container-scope
-		// runAsNonRoot: false as an acknowledgment, which (per the
-		// containerOptsOut/podOptsOut asymmetry) only actually works for a
-		// container-scope-originated violation. This text is rewritten to be
-		// self-qualifying per shape rather than path-specific, so it stays
-		// truthful regardless of whether it is emitted at containerPath or
-		// podPath.
+		// A Dragonfly pod hangs Pending only for a container-scope-originated
+		// violation: a pod-scope-only runAsUser: 0 never changes the dragonfly
+		// container's own effective uid (the container-scope 999 pin always
+		// wins per-field), so it silently roots OTHER containers/sidecars
+		// instead. A container-scope runAsNonRoot: false acknowledgment works
+		// (per the containerOptsOut/podOptsOut asymmetry) only for a
+		// container-scope-originated violation. This text is therefore
+		// self-qualifying per shape rather than path-specific, and stays
+		// truthful whether it is emitted at containerPath or podPath.
 		"runAsUser: 0 is requested without a runAsNonRoot: false that acknowledges it. An "+
 			"unacknowledged container-scope runAsUser: 0 renders either the kubelet-invalid "+
 			"{runAsUser: 0, runAsNonRoot: true} pair (CreateContainerConfigError) or a "+
