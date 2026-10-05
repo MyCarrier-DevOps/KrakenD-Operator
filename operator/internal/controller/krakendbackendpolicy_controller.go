@@ -37,6 +37,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/fieldindex"
 )
 
 // KrakenDBackendPolicyReconciler reconciles a KrakenDBackendPolicy object.
@@ -71,7 +72,7 @@ func (r *KrakenDBackendPolicyReconciler) Reconcile(ctx context.Context, req ctrl
 	// Count how many endpoints reference this policy using the field index
 	var endpoints v1alpha1.KrakenDEndpointList
 	if err := r.List(ctx, &endpoints,
-		client.MatchingFields{EndpointPolicyIndex: policy.Namespace + "/" + policy.Name},
+		client.MatchingFields{fieldindex.EndpointPolicy: policy.Namespace + "/" + policy.Name},
 	); err != nil {
 		return ctrl.Result{}, fmt.Errorf("listing endpoints: %w", err)
 	}
@@ -103,7 +104,7 @@ func (r *KrakenDBackendPolicyReconciler) Reconcile(ctx context.Context, req ctrl
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *KrakenDBackendPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	if err := EnsureEndpointIndexes(mgr); err != nil {
+	if err := fieldindex.EnsureEndpointIndexes(mgr); err != nil {
 		return err
 	}
 

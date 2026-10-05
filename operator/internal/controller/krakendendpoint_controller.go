@@ -38,6 +38,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/fieldindex"
 )
 
 // KrakenDEndpointReconciler reconciles a KrakenDEndpoint object.
@@ -98,20 +99,9 @@ func (r *KrakenDEndpointReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	return ctrl.Result{}, nil
 }
 
-// Field index keys for efficient watch-to-reconcile mapping.
-const (
-	// EndpointGatewayIndex is the field index key for looking up endpoints
-	// by their gateway reference. Exported for use by the webhook package.
-	EndpointGatewayIndex = ".spec.gatewayRef.namespacedName"
-
-	// EndpointPolicyIndex is the field index key for looking up endpoints
-	// by their policy references. Exported for use by the webhook package.
-	EndpointPolicyIndex = ".spec.endpoints.backends.policyRef.namespacedName"
-)
-
 // SetupWithManager sets up the controller with the Manager.
 func (r *KrakenDEndpointReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	if err := EnsureEndpointIndexes(mgr); err != nil {
+	if err := fieldindex.EnsureEndpointIndexes(mgr); err != nil {
 		return err
 	}
 
@@ -205,7 +195,7 @@ func (r *KrakenDEndpointReconciler) gatewayToEndpoints(
 	log := logf.FromContext(ctx)
 	var endpoints v1alpha1.KrakenDEndpointList
 	if err := r.List(ctx, &endpoints,
-		client.MatchingFields{EndpointGatewayIndex: obj.GetNamespace() + "/" + obj.GetName()},
+		client.MatchingFields{fieldindex.EndpointGateway: obj.GetNamespace() + "/" + obj.GetName()},
 	); err != nil {
 		log.Error(err, "failed to list endpoints for gateway mapping", "gateway", obj.GetName())
 		return nil
@@ -230,7 +220,7 @@ func (r *KrakenDEndpointReconciler) policyToEndpoints(
 	indexKey := obj.GetNamespace() + "/" + obj.GetName()
 	var endpoints v1alpha1.KrakenDEndpointList
 	if err := r.List(ctx, &endpoints,
-		client.MatchingFields{EndpointPolicyIndex: indexKey},
+		client.MatchingFields{fieldindex.EndpointPolicy: indexKey},
 	); err != nil {
 		log.Error(err, "failed to list endpoints for policy mapping", "policy", obj.GetName())
 		return nil

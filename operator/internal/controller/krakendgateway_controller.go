@@ -54,6 +54,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/fieldindex"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 	"github.com/mycarrier-devops/krakend-operator/internal/resources"
 	"github.com/mycarrier-devops/krakend-operator/internal/util/hash"
@@ -141,7 +142,7 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	var endpointList v1alpha1.KrakenDEndpointList
 	indexKey := gw.Namespace + "/" + gw.Name
 	if err := r.List(ctx, &endpointList,
-		client.MatchingFields{EndpointGatewayIndex: indexKey},
+		client.MatchingFields{fieldindex.EndpointGateway: indexKey},
 	); err != nil {
 		return ctrl.Result{}, fmt.Errorf("listing endpoints: %w", err)
 	}
@@ -301,7 +302,7 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 // eventually work, just not on-demand. Keep this in mind before adding a
 // predicate to the primary watch.
 func (r *KrakenDGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	if err := EnsureEndpointIndexes(mgr); err != nil {
+	if err := fieldindex.EnsureEndpointIndexes(mgr); err != nil {
 		return err
 	}
 
@@ -1960,7 +1961,7 @@ func (r *KrakenDGatewayReconciler) policyToGateways(
 	indexKey := obj.GetNamespace() + "/" + obj.GetName()
 	var endpoints v1alpha1.KrakenDEndpointList
 	if err := r.List(ctx, &endpoints,
-		client.MatchingFields{EndpointPolicyIndex: indexKey},
+		client.MatchingFields{fieldindex.EndpointPolicy: indexKey},
 	); err != nil {
 		log.Error(err, "policyToGateways: index lookup failed, gateway may not reconcile",
 			"policy", obj.GetName(), "namespace", obj.GetNamespace())

@@ -39,7 +39,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
-	"github.com/mycarrier-devops/krakend-operator/internal/controller"
+	"github.com/mycarrier-devops/krakend-operator/internal/fieldindex"
 	"github.com/mycarrier-devops/krakend-operator/internal/resources"
 )
 
@@ -1056,7 +1056,7 @@ func (v *EndpointValidator) validate(
 	gwKey := ep.Spec.GatewayRef.ResolvedNamespace(ep.Namespace) + "/" + ep.Spec.GatewayRef.Name
 	var existing v1alpha1.KrakenDEndpointList
 	if err := v.List(ctx, &existing,
-		client.MatchingFields{controller.EndpointGatewayIndex: gwKey},
+		client.MatchingFields{fieldindex.EndpointGateway: gwKey},
 	); err != nil {
 		errs = append(errs, field.InternalError(
 			field.NewPath("spec", "gatewayRef"),
@@ -1132,7 +1132,7 @@ func (v *PolicyValidator) ValidateDelete(
 	var endpoints v1alpha1.KrakenDEndpointList
 	indexKey := policy.Namespace + "/" + policy.Name
 	if err := v.List(ctx, &endpoints,
-		client.MatchingFields{controller.EndpointPolicyIndex: indexKey},
+		client.MatchingFields{fieldindex.EndpointPolicy: indexKey},
 	); err != nil {
 		return nil, fmt.Errorf("listing endpoints: %w", err)
 	}
@@ -1435,7 +1435,7 @@ func validateExtraConfigAudience(p *field.Path, ec *runtime.RawExtension) field.
 func SetupWebhooks(mgr ctrl.Manager) error {
 	// Ensure field indexes are registered — needed for conflict detection
 	// and policy-delete validation even when running webhook-only.
-	if err := controller.EnsureEndpointIndexes(mgr); err != nil {
+	if err := fieldindex.EnsureEndpointIndexes(mgr); err != nil {
 		return fmt.Errorf("registering endpoint indexes: %w", err)
 	}
 
