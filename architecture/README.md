@@ -1420,7 +1420,8 @@ finding, and `krakend check` is not run. The check runs for both `Validate`
 The embedded binary is pinned by digest (`KRAKEND_IMAGE` in the operator's
 `Dockerfile`, KrakenD CE 2.13.11), and `configcheck.ValidatorVersion` names its
 minor version, 2.13. Admission and the gateway controller validate every gateway
-with that binary, whatever its `spec.version`. An integration test runs the
+with that binary, whatever its `spec.version`; admission warns when a gateway's
+`spec.version` is another minor. An integration test runs the
 pinned binary against the route check, including that the gin version in the
 binary equals the one in `go.mod`, so the pin, `ValidatorVersion` and gin change
 together.
@@ -2031,6 +2032,8 @@ The operator should deploy a `ValidatingAdmissionWebhook` with `failurePolicy: F
 - **KrakenDGateway** — reject if `edition: EE` but neither `license.externalSecret.enabled=true` nor `license.secretRef` is set
 - **KrakenDGateway** — reject if both `license.externalSecret.enabled=true` and `license.secretRef` are set (mutually exclusive)
 - **KrakenDGateway** — reject if `edition: CE` and either `license.externalSecret.enabled=true` or `license.secretRef` is set (CE requires no license)
+- **KrakenDGateway** — render the gateway's config and validate it the way the endpoint check does (`checkGatewayRender` in `internal/webhook/render.go`, over the same `ConfigChecker`). A create must pass with the gateway root alone (`CheckIsolated`). An update is rejected only when the gateway, with its endpoints, passed before (`CheckGateway` on the stored object) and fails after. When it already failed before, the root alone is judged against the stored root and the existing failure is a warning. The denial puts root findings on `spec.config` (at most 20 causes, each cut to a bounded length, the rest folded into a bounded summary) and findings about endpoints, which a gateway write can break without owning them, on `spec`. A `spec.version` whose minor differs from `configcheck.ValidatorVersion` gets a warning when set or changed
+- **KrakenDGateway** — on a CE gateway, reject what KrakenD CE accepts in `krakend check` and then ignores: what a CE render drops from `spec.config.extraConfig` (`renderer.CEDrops`, when it is new, changed or newly on CE), the typed fields `spec.redis`, `spec.config.documentation`, `spec.openapi.enabled` and `spec.dragonfly.enabled` (`eeFieldsOnCE`, `Forbidden`), and an `edition: EE` to `CE` switch while the gateway's KrakenDEndpoints or the KrakenDBackendPolicies they reference use an Enterprise-only namespace (`eeNamespacesInUse`, listing each object, field and namespace within a bounded message). Each rule ratchets: a stored, unchanged value on a CE gateway is not judged again, and the switch judges every such field the gateway keeps. A stored `spec.openapi` that stays on a CE gateway warns instead
 - **KrakenDGateway (DELETE)** — not registered: deleting a gateway needs no validation, and with `failurePolicy: Fail` a registration would make gateway and namespace deletion depend on a reachable operator
 - **KrakenDBackendPolicy** — validate field ranges (e.g., `circuitBreaker.maxErrors > 0`)
 - **KrakenDBackendPolicy (DELETE)** — reject deletion if any KrakenDEndpoint references this policy via `policyRef`; emit a descriptive error listing the referencing endpoints
