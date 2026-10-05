@@ -326,6 +326,16 @@ func TestGatewayCRD_RejectsHugeQuantityExponentsFast(t *testing.T) {
 	expectErrors(t, validateWithin(t, 5*time.Second, job+`"1e2147483648"}}}`), "spec.postRestartJob.tmpSizeLimit")
 }
 
+func TestGatewayCRD_TmpSizeLimitForms(t *testing.T) {
+	const job = gatewayHead + `edition: CE, config: {}, postRestartJob: {enabled: true, script: x, tmpSizeLimit: `
+	for _, q := range []string{`"100Mi"`, `"1Gi"`, `"500M"`, `"1.5Gi"`, `128974848`, `"129e6"`, `"0"`, `"1E3"`, `"1e-3"`, `"1e99"`} {
+		expectErrors(t, validateWithin(t, 5*time.Second, job+q+`}}}`), "")
+	}
+	for _, q := range []string{`"1e100"`, `"1e999999999"`, `"1e-100000000"`, `"1e1.5"`, `"1e5."`} {
+		expectErrors(t, validateWithin(t, 5*time.Second, job+q+`}}}`), "spec.postRestartJob.tmpSizeLimit")
+	}
+}
+
 func TestGatewayCRD_Ratchets(t *testing.T) {
 	const pool = `redis: {connectionPool: {addresses: ["redis:6379"], `
 	const ee = gatewayHead + `edition: EE, config: {}, license: {secretRef: {name: l, key: k}}, `
