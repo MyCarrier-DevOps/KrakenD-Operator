@@ -88,6 +88,10 @@ type KrakenDAutoConfigSpec struct {
 	// spec (e.g. health/liveness probes). They are synthesized into full
 	// endpoints and rendered alongside the spec-derived ones.
 	// +optional
+	// +listType=map
+	// +listMapKey=endpoint
+	// +listMapKey=method
+	// +kubebuilder:validation:MaxItems=256
 	AdditionalEndpoints []AdditionalEndpoint `json:"additionalEndpoints,omitempty"`
 
 	// AdditionalEndpointsBasePath overrides the auto-derived base path used to
@@ -316,6 +320,7 @@ type AdditionalEndpoint struct {
 
 	// Method is the HTTP method. Defaults to GET.
 	// +kubebuilder:validation:Enum=GET;POST;PUT;PATCH;DELETE
+	// +kubebuilder:default=GET
 	// +optional
 	Method string `json:"method,omitempty"`
 
