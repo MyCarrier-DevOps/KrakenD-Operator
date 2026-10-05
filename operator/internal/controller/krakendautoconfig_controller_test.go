@@ -3203,9 +3203,11 @@ func TestNewAutoConfigRateLimiter_CapsBackoffAtResyncInterval(t *testing.T) {
 
 func TestAutoConfigReconcile_ReportsUnsupportedMethodsInScope(t *testing.T) {
 	head := autoconfig.OperationIssue{
-		Operation: autoconfig.Operation{Method: "HEAD", Path: "/api/users", OperationID: "headUsers"},
-		Reason:    v1alpha1.ReasonUnsupportedMethod,
-		Message:   "KrakenDEndpoint supports only GET, POST, PUT, PATCH, DELETE",
+		Operation: autoconfig.Operation{
+			Method: "HEAD", Path: "/api/users", OperationID: "headUsers", Tags: []string{"internal"},
+		},
+		Reason:  v1alpha1.ReasonUnsupportedMethod,
+		Message: "KrakenDEndpoint supports only GET, POST, PUT, PATCH, DELETE",
 	}
 	for name, tc := range map[string]struct {
 		filter *v1alpha1.FilterSpec
@@ -3213,6 +3215,9 @@ func TestAutoConfigReconcile_ReportsUnsupportedMethodsInScope(t *testing.T) {
 	}{
 		"reported":               {filter: nil, want: 1},
 		"excluded by the filter": {filter: &v1alpha1.FilterSpec{IncludeMethods: []string{"GET"}}, want: 0},
+		"excluded by operationId": {
+			filter: &v1alpha1.FilterSpec{ExcludeOperationIds: []string{"headUsers"}}, want: 0,
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			cm := testCUEDefinitionsCM()
