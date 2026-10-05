@@ -180,7 +180,8 @@ spec:
                       minItems: 1
                       type: array
                     cacheTTL:
-                      description: CacheTTL overrides the global cache TTL.
+                      description: CacheTTL overrides the global cache TTL (a Go duration).
+                      pattern: ^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$
                       type: string
                     concurrentCalls:
                       description: |-
