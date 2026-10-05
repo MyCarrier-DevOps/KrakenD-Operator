@@ -7,5 +7,6 @@
  {"metadata":{"namespace":"a","name":"timeout-pattern"},"spec":{"gatewayRef":{"name":"gw"},"endpoints":[{"endpoint":"/x","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}],"timeout":"3 seconds"}]}},
  {"metadata":{"namespace":"a","name":"timeout-long"},"spec":{"gatewayRef":{"name":"gw"},"endpoints":[{"endpoint":"/x","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}],"timeout":"0000000000000000000000000000000000000000000000000000000000000001s"}]}},
  {"metadata":{"namespace":"a","name":"timeout-overflow"},"spec":{"gatewayRef":{"name":"gw"},"endpoints":[{"endpoint":"/x","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}],"timeout":"2562048h"}]}},
- {"metadata":{"namespace":"a","name":"cachettl-overflow"},"spec":{"gatewayRef":{"name":"gw"},"endpoints":[{"endpoint":"/x","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}],"cacheTTL":"9223372036854775808ns"}]}}
+ {"metadata":{"namespace":"a","name":"cachettl-overflow"},"spec":{"gatewayRef":{"name":"gw"},"endpoints":[{"endpoint":"/x","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}],"cacheTTL":"9223372036854775808ns"}]}},
+ {"metadata":{"namespace":"a","name":"output-encoding"},"spec":{"gatewayRef":{"name":"gw"},"endpoints":[{"endpoint":"/x","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}],"outputEncoding":"jsn"}]}}
 ]}
