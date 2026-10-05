@@ -104,7 +104,7 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 ### Webhook Validators (`internal/webhook/`)
 - `GatewayValidator` — EE requires license, CE forbids license, mutually exclusive sources, max 1 PVC
 - `EndpointValidator` — gatewayRef/policyRef existence checks, conflict warnings via List, rejects a non-list `documentation/openapi.audience` in `spec.endpoints[].extraConfig`
-- `PolicyValidator` — CircuitBreaker/RateLimit validation, delete protection (blocks if referenced)
+- `PolicyValidator` — delete protection (blocks if referenced); the CircuitBreaker/RateLimit minimums are enforced by the CRD schema
 - `AutoConfigValidator` — gatewayRef existence, mutually exclusive OpenAPI sources, configMapRef requires hostMapping, Periodic requires interval, mutually exclusive auth, rejects a non-list `documentation/openapi.audience` in `spec.overrides[]`/`spec.defaults.endpoint`/`spec.additionalEndpoints[]` extraConfig
 - `SetupWebhooks(mgr)` — registers all 4 validators via ctrl.NewWebhookManagedBy
 - All methods use runtime.Object with checked comma-ok type assertions
@@ -116,6 +116,7 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 - Renderer conflict keys use the route shape; same-shape paths resolve oldest-wins instead of failing the gateway.
 - The validator binary is pinned by digest (`Dockerfile` `KRAKEND_IMAGE`, KrakenD CE 2.13.11, `configcheck.ValidatorVersion`); `TestConfigCheckParity` checks, against the pinned binary, that admission's `krakend check -n` plus the route check rejects the route-conflict classes `krakend check -t -n` rejects (and the clashes `-t` misses). The operator image build is fixed to copy all of `cmd/`.
 - The gateway controller gathers and validates through the shared `configcheck.Checker` (`Gather`, `CheckRendered`: route check, then `krakend check -t -n`); `cmd/main.go` builds one checker with `configCheckSlots = 3` for the whole pod. `ConfigValid` and an endpoint's `GatewayConfigRejected` message name the entry (`namespace/name spec.endpoints[i]: …`), and the rejection memo keeps the raw rejection so a reorder never leaves a stale index. The operator memory limit is 512Mi.
+- Kubernetes 1.33 is the floor (chart `kubeVersion`, CSV `minKubeVersion`, docs; Helm 3.18+). The KrakenDEndpoint CRD enforces its object-decidable rules in the schema: `spec.endpoints` is a map list keyed on (endpoint, method) with `MinItems=1`, backends `MinItems=1`, an endpoint path pattern, Go-duration patterns on `timeout`/`cacheTTL`, enums on `outputEncoding` and backend `encoding`/`sd`/`method`, and `MinLength=1` on `gatewayRef.name`/`policyRef.name`. The webhook's duplicate-entry loop and `validatePolicyFields` are gone. `api/v1alpha1/crd_validation_test.go` validates objects against the generated CRDs as the API server does; `TestCRD_EndpointRules` proves the rules on K3s 1.32, below the floor.
 
 ### 2026-09-28 — Conformance gateway reconcile correctness
 - **Gateway reconcile correctness** — config stage / infrastructure stage split; immutable content-addressed config ConfigMaps with GC; render attribution (`RenderOutput.Sources`, `Accepted=False/GatewayConfigRejected`); per-entry conflicts (`PartiallyAccepted`, `status.conflicts`); EE wildcard validation by the EE router's rules; validation and image keyed on (checksum, edition) with `status.configEdition`; CE fallback strips and lists Enterprise-only features (`CEFallbackApplied`, `EEFeaturesStripped`); Redis pool rendered under KrakenD's `redis` namespace; license evaluation folded into the gateway reconcile; optional kinds watched when installed at startup; disabled features' resources deleted; `CRDNotInstalled`, `PluginsResolved`; `gateway_config_valid` metric; `Progressing` derived from the Deployment the pass reconciled (created, template written, template not the wanted one, old pods beside updated ones) instead of from change detection, with `RolloutFailed` honoured only for the current rollout; every independent child attempted and the errors joined, with `observedGeneration` held back while a child fails or the applied config's ConfigMap cannot be published; `rolling_restarts_total` counts template writes. Updated `architecture/README.md`, `architecture/application/application-architecture.md`, `docs/upgrade-guide.md`, `docs/runbook.md`.
@@ -282,7 +283,7 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 - `bundle.Dockerfile` for OLM bundle image builds
 
 ### Helm Chart (`charts/krakend-operator/`)
-- `Chart.yaml` with kubeVersion >=1.28 constraint
+- `Chart.yaml` with kubeVersion >=1.33 constraint
 - Templated: Deployment, ClusterRole/Binding, leader-election Role/Binding, ServiceAccount, metrics Service
 - Webhook infrastructure: ValidatingWebhookConfiguration (4 webhooks), webhook Service, cert-manager Issuer+Certificate, cert volume mount in Deployment
 - Webhooks enabled by default (`webhooks.enabled=true`, `webhooks.certManager.enabled=true`); can be disabled or used with external CA bundle
