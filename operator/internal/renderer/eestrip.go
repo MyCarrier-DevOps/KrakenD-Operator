@@ -39,7 +39,8 @@ import (
 // security/cors (undocumented). backend/http/client is listed although CE
 // honors its send_body_on_redirect: its EE settings (client_tls,
 // proxy_address, no_redirect) change where and how a backend is reached, and
-// dropping them must be visible.
+// dropping them must be visible. A CE render drops only those keys of it
+// (ceHonoredKeys).
 //
 //go:embed eeonly_namespaces.json
 var eeOnlyNamespacesFile []byte
