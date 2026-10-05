@@ -1992,3 +1992,20 @@ func TestEvaluate_UndecodableEntryFailsOnlyItsOperation(t *testing.T) {
 		t.Errorf("expected getB failed with the duration error, got %+v", out.Failed)
 	}
 }
+
+func TestEvaluate_ErrorOutsideEntriesFailsEvaluation(t *testing.T) {
+	defs, err := EmbeddedCUEDefinitions()
+	if err != nil {
+		t.Fatalf("loading defs: %v", err)
+	}
+	_, err = NewCUEEvaluator().Evaluate(context.Background(), CUEInput{
+		SpecData:    []byte(`{"paths":{"/a":{"get":{"operationId":"getA","responses":{"200":{"description":"OK"}}}}}}`),
+		SpecFormat:  v1alpha1.SpecFormatJSON,
+		DefaultDefs: defs,
+		CustomDefs:  map[string]string{"custom.cue": `_defaultTimeout: "5s"`},
+		ServiceName: "_spec",
+	})
+	if err == nil || !strings.Contains(err.Error(), "_defaultTimeout") {
+		t.Errorf("expected a whole-evaluation error naming _defaultTimeout, got %v", err)
+	}
+}
