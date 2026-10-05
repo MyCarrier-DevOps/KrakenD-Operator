@@ -481,3 +481,20 @@ func TestSanitizeRefName_EmptyFragment(t *testing.T) {
 		t.Errorf("expected doc basename in name, got %q", name)
 	}
 }
+
+func TestResolveExternalRefs_ReportsLocalRefInFetchedDocument(t *testing.T) {
+	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"content":{"application/json":` +
+		`{"schema":{"$ref":"common.json#/Pet"}}}}}}}}}`)
+	common := []byte(`{"Pet":{"properties":{"owner":{"$ref":"#/Owner"}}},"Owner":{"type":"string"}}`)
+	fetcher := &stubFetcher{docs: map[string][]byte{"https://api.example.com/common.json": common}}
+
+	_, warnings, err := ResolveExternalRefs(context.Background(), main,
+		"https://api.example.com/openapi.json", fetcher, FetchSource{})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	want := `$ref "#/Owner" in https://api.example.com/common.json is resolved against the main spec`
+	if len(warnings) != 1 || !strings.Contains(warnings[0], want) {
+		t.Errorf("warnings = %q, want one containing %q", warnings, want)
+	}
+}
