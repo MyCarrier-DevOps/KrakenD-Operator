@@ -1963,3 +1963,21 @@ func TestEvaluate_OverrideMethodToSupportedGeneratesTheEntry(t *testing.T) {
 		t.Errorf("skipped = %+v, want none", out.Skipped)
 	}
 }
+
+func TestEvaluate_OverrideMethodToUnsupportedIsSkipped(t *testing.T) {
+	// A stored override from before admission rejected such methods.
+	out := evaluateEmbedded(t, `{"paths":{"/a":{"get":{"operationId":"getA",`+
+		`"responses":{"200":{"description":"OK"}}}}}}`,
+		v1alpha1.OperationOverride{OperationID: "getA", Method: "HEAD"})
+
+	if len(out.Entries) != 0 {
+		t.Errorf("entries = %+v, want none", out.Entries)
+	}
+	if len(out.Skipped) != 1 || out.Skipped[0].Method != "HEAD" || out.Skipped[0].OperationID != "getA" ||
+		out.Skipped[0].Reason != v1alpha1.ReasonUnsupportedMethod {
+		t.Errorf("skipped = %+v, want HEAD /a getA UnsupportedMethod", out.Skipped)
+	}
+	if _, ok := out.OperationIDs["/a:HEAD"]; ok {
+		t.Errorf("operationIds still lists the skipped entry: %v", out.OperationIDs)
+	}
+}
