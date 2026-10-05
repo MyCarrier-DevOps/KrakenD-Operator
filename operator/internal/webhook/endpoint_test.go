@@ -901,3 +901,25 @@ func TestEndpointAdmission_NewReferenceToATerminatingPolicyIsRejected(t *testing
 		t.Errorf("an unchanged reference blocked an unrelated edit: %+v", resp.Result)
 	}
 }
+
+// The cache shows the policy live, the API server shows it terminating: the
+// deletion landed while the request was being checked.
+func TestEndpointAdmission_UncachedRecheckRefusesAPolicyDeletedMeanwhile(t *testing.T) {
+	now := metav1.Now()
+	live := &v1alpha1.KrakenDBackendPolicy{ObjectMeta: metav1.ObjectMeta{Name: "going", Namespace: "default"}}
+	going := &v1alpha1.KrakenDBackendPolicy{ObjectMeta: metav1.ObjectMeta{
+		Name: "going", Namespace: "default", DeletionTimestamp: &now,
+		Finalizers: []string{v1alpha1.PolicyProtectionFinalizer},
+	}}
+	ep := testEndpoint("new", "/a")
+	ep.Spec.Endpoints[0].Backends[0].PolicyRef = &v1alpha1.PolicyRef{Name: "going"}
+	v := &EndpointValidator{
+		Client: fakeClient(testGateway(), live), APIReader: fakeClient(going), Checker: &scriptedChecker{},
+	}
+
+	resp := review(t, v, "alice", ep, nil)
+
+	if resp.Allowed || !strings.Contains(resp.Result.Details.Causes[0].Message, "being deleted") {
+		t.Errorf("response = %+v, want the reference refused as being deleted", resp.Result)
+	}
+}
