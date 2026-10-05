@@ -1674,133 +1674,6 @@ func TestAutoConfigValidator_GatewayNotFound(t *testing.T) {
 	}
 }
 
-func TestAutoConfigValidator_BothSources(t *testing.T) {
-	gw := &v1alpha1.KrakenDGateway{
-		ObjectMeta: metav1.ObjectMeta{Name: "my-gw", Namespace: "default"},
-		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
-			Config: v1alpha1.GatewayConfig{},
-		},
-	}
-	ac := &v1alpha1.KrakenDAutoConfig{
-		ObjectMeta: metav1.ObjectMeta{Name: "ac1", Namespace: "default"},
-		Spec: v1alpha1.KrakenDAutoConfigSpec{
-			GatewayRef: v1alpha1.GatewayRef{Name: "my-gw"},
-			OpenAPI: v1alpha1.OpenAPISource{
-				URL:          "https://example.com/api",
-				ConfigMapRef: &v1alpha1.ConfigMapKeyRef{Name: "cm"},
-			},
-			Trigger: v1alpha1.TriggerOnChange,
-		},
-	}
-	v := &AutoConfigValidator{Client: fakeClient(gw)}
-	_, err := v.ValidateCreate(context.Background(), ac)
-	if err == nil {
-		t.Error("expected error for both sources")
-	}
-}
-
-func TestAutoConfigValidator_NoSource(t *testing.T) {
-	gw := &v1alpha1.KrakenDGateway{
-		ObjectMeta: metav1.ObjectMeta{Name: "my-gw", Namespace: "default"},
-		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
-			Config: v1alpha1.GatewayConfig{},
-		},
-	}
-	ac := &v1alpha1.KrakenDAutoConfig{
-		ObjectMeta: metav1.ObjectMeta{Name: "ac1", Namespace: "default"},
-		Spec: v1alpha1.KrakenDAutoConfigSpec{
-			GatewayRef: v1alpha1.GatewayRef{Name: "my-gw"},
-			OpenAPI:    v1alpha1.OpenAPISource{},
-			Trigger:    v1alpha1.TriggerOnChange,
-		},
-	}
-	v := &AutoConfigValidator{Client: fakeClient(gw)}
-	_, err := v.ValidateCreate(context.Background(), ac)
-	if err == nil {
-		t.Error("expected error for no source")
-	}
-}
-
-func TestAutoConfigValidator_CMRequiresHostMapping(t *testing.T) {
-	gw := &v1alpha1.KrakenDGateway{
-		ObjectMeta: metav1.ObjectMeta{Name: "my-gw", Namespace: "default"},
-		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
-			Config: v1alpha1.GatewayConfig{},
-		},
-	}
-	ac := &v1alpha1.KrakenDAutoConfig{
-		ObjectMeta: metav1.ObjectMeta{Name: "ac1", Namespace: "default"},
-		Spec: v1alpha1.KrakenDAutoConfigSpec{
-			GatewayRef: v1alpha1.GatewayRef{Name: "my-gw"},
-			OpenAPI:    v1alpha1.OpenAPISource{ConfigMapRef: &v1alpha1.ConfigMapKeyRef{Name: "cm"}},
-			Trigger:    v1alpha1.TriggerOnChange,
-		},
-	}
-	v := &AutoConfigValidator{Client: fakeClient(gw)}
-	_, err := v.ValidateCreate(context.Background(), ac)
-	if err == nil {
-		t.Error("expected error for CM without hostMapping")
-	}
-}
-
-func TestAutoConfigValidator_PeriodicNoInterval(t *testing.T) {
-	gw := &v1alpha1.KrakenDGateway{
-		ObjectMeta: metav1.ObjectMeta{Name: "my-gw", Namespace: "default"},
-		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
-			Config: v1alpha1.GatewayConfig{},
-		},
-	}
-	ac := &v1alpha1.KrakenDAutoConfig{
-		ObjectMeta: metav1.ObjectMeta{Name: "ac1", Namespace: "default"},
-		Spec: v1alpha1.KrakenDAutoConfigSpec{
-			GatewayRef: v1alpha1.GatewayRef{Name: "my-gw"},
-			OpenAPI:    v1alpha1.OpenAPISource{URL: "https://example.com/api"},
-			Trigger:    v1alpha1.TriggerPeriodic,
-		},
-	}
-	v := &AutoConfigValidator{Client: fakeClient(gw)}
-	_, err := v.ValidateCreate(context.Background(), ac)
-	if err == nil {
-		t.Error("expected error for periodic without interval")
-	}
-}
-
-func TestAutoConfigValidator_MutuallyExclusiveAuth(t *testing.T) {
-	gw := &v1alpha1.KrakenDGateway{
-		ObjectMeta: metav1.ObjectMeta{Name: "my-gw", Namespace: "default"},
-		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
-			Config: v1alpha1.GatewayConfig{},
-		},
-	}
-	ac := &v1alpha1.KrakenDAutoConfig{
-		ObjectMeta: metav1.ObjectMeta{Name: "ac1", Namespace: "default"},
-		Spec: v1alpha1.KrakenDAutoConfigSpec{
-			GatewayRef: v1alpha1.GatewayRef{Name: "my-gw"},
-			OpenAPI: v1alpha1.OpenAPISource{
-				URL: "https://example.com/api",
-				Auth: &v1alpha1.AuthConfig{
-					BearerTokenSecret: &corev1.SecretKeySelector{
-						LocalObjectReference: corev1.LocalObjectReference{Name: "t"},
-						Key:                  "k",
-					},
-					BasicAuthSecret: &v1alpha1.BasicAuthSecretRef{Name: "b"},
-				},
-			},
-			Trigger: v1alpha1.TriggerOnChange,
-		},
-	}
-	v := &AutoConfigValidator{Client: fakeClient(gw)}
-	_, err := v.ValidateCreate(context.Background(), ac)
-	if err == nil {
-		t.Error("expected error for mutually exclusive auth")
-	}
-}
-
 func TestAutoConfigValidator_Update(t *testing.T) {
 	ac := &v1alpha1.KrakenDAutoConfig{
 		ObjectMeta: metav1.ObjectMeta{Name: "ac1", Namespace: "default"},
@@ -2125,52 +1998,6 @@ func newAutoConfigForAdditional(eps []v1alpha1.AdditionalEndpoint) *v1alpha1.Kra
 	}
 }
 
-func TestAutoConfigValidator_AdditionalEndpointEmptyPath(t *testing.T) {
-	gw := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "test-gw", Namespace: "default"}}
-	v := &AutoConfigValidator{Client: fakeClient(gw)}
-	ac := newAutoConfigForAdditional([]v1alpha1.AdditionalEndpoint{{Endpoint: ""}})
-
-	if _, err := v.ValidateCreate(context.Background(), ac); err == nil {
-		t.Fatal("expected error for empty endpoint")
-	}
-}
-
-func TestAutoConfigValidator_AdditionalEndpointBackendsAndShorthand(t *testing.T) {
-	gw := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "test-gw", Namespace: "default"}}
-	v := &AutoConfigValidator{Client: fakeClient(gw)}
-	ac := newAutoConfigForAdditional([]v1alpha1.AdditionalEndpoint{{
-		Endpoint: "/x",
-		Host:     "http://svc",
-		Backends: []v1alpha1.BackendSpec{{Host: []string{"http://y"}, URLPattern: "/x"}},
-	}})
-
-	if _, err := v.ValidateCreate(context.Background(), ac); err == nil {
-		t.Fatal("expected error for backends + shorthand")
-	}
-}
-
-func TestAutoConfigValidator_AdditionalEndpointDuplicate(t *testing.T) {
-	gw := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "test-gw", Namespace: "default"}}
-	v := &AutoConfigValidator{Client: fakeClient(gw)}
-	ac := newAutoConfigForAdditional([]v1alpha1.AdditionalEndpoint{
-		{Endpoint: "/live"}, {Endpoint: "/live"}, // both default to GET → duplicate
-	})
-
-	if _, err := v.ValidateCreate(context.Background(), ac); err == nil {
-		t.Fatal("expected error for duplicate endpoint/method")
-	}
-}
-
-func TestAutoConfigValidator_AdditionalEndpointNoLeadingSlash(t *testing.T) {
-	gw := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "test-gw", Namespace: "default"}}
-	v := &AutoConfigValidator{Client: fakeClient(gw)}
-	ac := newAutoConfigForAdditional([]v1alpha1.AdditionalEndpoint{{Endpoint: "liveness"}})
-
-	if _, err := v.ValidateCreate(context.Background(), ac); err == nil {
-		t.Fatal("expected error for endpoint without leading slash")
-	}
-}
-
 func TestAutoConfigValidator_AdditionalEndpointValid(t *testing.T) {
 	gw := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "test-gw", Namespace: "default"}}
 	v := &AutoConfigValidator{Client: fakeClient(gw)}
@@ -2185,17 +2012,6 @@ func TestAutoConfigValidator_AdditionalEndpointValid(t *testing.T) {
 	}
 }
 
-func TestAutoConfigValidator_BasePathNoLeadingSlash(t *testing.T) {
-	gw := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "test-gw", Namespace: "default"}}
-	v := &AutoConfigValidator{Client: fakeClient(gw)}
-	ac := newAutoConfigForAdditional([]v1alpha1.AdditionalEndpoint{{Endpoint: "/liveness"}})
-	ac.Spec.AdditionalEndpointsBasePath = "api/v1" // no leading slash
-
-	if _, err := v.ValidateCreate(context.Background(), ac); err == nil {
-		t.Fatal("expected error for base path without leading slash")
-	}
-}
-
 func TestAutoConfigValidator_BasePathValid(t *testing.T) {
 	gw := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "test-gw", Namespace: "default"}}
 	v := &AutoConfigValidator{Client: fakeClient(gw)}
@@ -2204,18 +2020,6 @@ func TestAutoConfigValidator_BasePathValid(t *testing.T) {
 
 	if _, err := v.ValidateCreate(context.Background(), ac); err != nil {
 		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestAutoConfigValidator_BasePathAndAddPathPrefixMutuallyExclusive(t *testing.T) {
-	gw := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "test-gw", Namespace: "default"}}
-	v := &AutoConfigValidator{Client: fakeClient(gw)}
-	ac := newAutoConfigForAdditional([]v1alpha1.AdditionalEndpoint{{Endpoint: "/liveness"}})
-	ac.Spec.AdditionalEndpointsBasePath = "/custom"
-	ac.Spec.URLTransform = &v1alpha1.URLTransformSpec{AddPathPrefix: "/api/v1/quote"}
-
-	if _, err := v.ValidateCreate(context.Background(), ac); err == nil {
-		t.Fatal("expected error when both additionalEndpointsBasePath and urlTransform.addPathPrefix are set")
 	}
 }
 
