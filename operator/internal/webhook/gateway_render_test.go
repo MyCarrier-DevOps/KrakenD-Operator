@@ -24,6 +24,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -220,6 +221,26 @@ func TestGatewayAdmission_WarnsOnAnotherKrakenDMinor(t *testing.T) {
 	labeled.Spec.Replicas = ptr.To[int32](2)
 	if resp := review(t, v, "alice", labeled, other); len(resp.Warnings) != 0 {
 		t.Errorf("unchanged version warned again: %v", resp.Warnings)
+	}
+	bumped := testGateway()
+	bumped.Spec.Version = "2.12"
+	if resp := review(t, v, "alice", bumped, testGateway()); len(resp.Warnings) != 1 {
+		t.Errorf("version changed to 2.12: warnings = %v, want the version warning", resp.Warnings)
+	}
+}
+
+// The CRD does not bound spec.version, so the warning must not echo it whole.
+func TestGatewayAdmission_VersionWarningIsBounded(t *testing.T) {
+	long := testGateway()
+	long.Spec.Version = strings.Repeat("é", 5*warningLimit)
+
+	resp := review(t, &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}, "alice", long, nil)
+
+	if len(resp.Warnings) != 1 {
+		t.Fatalf("warnings = %v, want the version warning", resp.Warnings)
+	}
+	if w := resp.Warnings[0]; len(w) > 4*versionEchoLimit || !utf8.ValidString(w) {
+		t.Errorf("warning is %d bytes (valid UTF-8: %v), want it bounded", len(w), utf8.ValidString(w))
 	}
 }
 
