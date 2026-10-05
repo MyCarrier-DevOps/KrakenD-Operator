@@ -26,6 +26,7 @@ import (
 	"net/url"
 	"reflect"
 	"slices"
+	"strconv"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -43,6 +44,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	crcontroller "sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -376,10 +378,33 @@ func autoConfigPredicate() predicate.Predicate {
 
 // ownedEndpointPredicate gates the Owns(KrakenDEndpoint) watch. It passes
 // spec changes (generation bumps), label changes (label drift an external
-// actor made) and deletes, which the AutoConfig repairs; status updates
-// alone do not re-enqueue the owning AutoConfig.
+// actor made) and deletes, which the AutoConfig repairs, and changes to an
+// endpoint's readiness, which it aggregates into EndpointsReady. Other
+// status updates do not re-enqueue the owning AutoConfig.
 func ownedEndpointPredicate() predicate.Predicate {
-	return predicate.Or(predicate.GenerationChangedPredicate{}, predicate.LabelChangedPredicate{})
+	return predicate.Or(
+		predicate.GenerationChangedPredicate{},
+		predicate.LabelChangedPredicate{},
+		predicate.Funcs{UpdateFunc: func(e event.UpdateEvent) bool {
+			return endpointReadinessKey(e.ObjectOld) != endpointReadinessKey(e.ObjectNew)
+		}},
+	)
+}
+
+// endpointReadinessKey is what the Owns predicate compares to tell a
+// readiness change: the observed generation and the Ready condition's
+// status and reason. The condition's message is left out, so a message-only
+// status write does not re-enqueue the AutoConfig.
+func endpointReadinessKey(obj client.Object) string {
+	ep, ok := obj.(*v1alpha1.KrakenDEndpoint)
+	if !ok {
+		return ""
+	}
+	key := strconv.FormatInt(ep.Status.ObservedGeneration, 10)
+	if c := meta.FindStatusCondition(ep.Status.Conditions, v1alpha1.ConditionReady); c != nil {
+		key += "/" + string(c.Status) + "/" + c.Reason
+	}
+	return key
 }
 
 // handleFetchError fails the sync on a spec fetch failure (including an
