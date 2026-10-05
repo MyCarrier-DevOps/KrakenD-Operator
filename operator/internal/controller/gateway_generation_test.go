@@ -172,3 +172,78 @@ func TestGatewayReconcile_AnAppliedConfigThatCannotBePublishedKeepsObservedGener
 			got.Status.ObservedGeneration)
 	}
 }
+
+func TestGatewayReconcile_ObservedGenerationCatchesUpOnceTheErrorClears(t *testing.T) {
+	gw := newerSpecGateway()
+	c := fakeClientBuilder().WithObjects(gw, settledDeployment(gw, "A"), foreignConfigMap(gw, "A")).
+		WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderOutput("A"), &mockValidator{})
+	if err := reconcileGateway(t, r, gw); err == nil {
+		t.Fatal("a foreign ConfigMap at the applied config's name must fail the pass")
+	}
+	if got := getGateway(t, c, gw).Status.ObservedGeneration; got != 1 {
+		t.Fatalf("observedGeneration = %d while the error persists, want 1", got)
+	}
+
+	if err := c.Delete(context.Background(), foreignConfigMap(gw, "A")); err != nil {
+		t.Fatal(err)
+	}
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile once the foreign ConfigMap is gone: %v", err)
+	}
+
+	got := getGateway(t, c, gw)
+	ready := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionReady)
+	if got.Status.ObservedGeneration != 2 || ready == nil || ready.ObservedGeneration != 2 {
+		t.Errorf("observedGeneration = %d, Ready = %+v, want both at 2 once the error clears",
+			got.Status.ObservedGeneration, ready)
+	}
+}
+
+func TestGatewayReconcile_AVerdictOnThisGenerationDoesNotHoldObservedGenerationBack(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(gw *v1alpha1.KrakenDGateway, r *KrakenDGatewayReconciler) []client.Object
+	}{
+		{
+			name: "rejected render with the applied config's ConfigMap missing",
+			setup: func(gw *v1alpha1.KrakenDGateway, r *KrakenDGatewayReconciler) []client.Object {
+				r.Renderer = renderOutput("B")
+				r.Validator = &countingValidator{err: rejectedBy("- at '/endpoints/0/endpoint': bad")}
+				return nil
+			},
+		},
+		{
+			name: "validator unavailable",
+			setup: func(gw *v1alpha1.KrakenDGateway, r *KrakenDGatewayReconciler) []client.Object {
+				r.Renderer = renderOutput("B")
+				r.Validator = &countingValidator{err: errors.New("fork/exec krakend: no such file or directory")}
+				return nil
+			},
+		},
+		{
+			name: "plugin ConfigMap missing",
+			setup: func(gw *v1alpha1.KrakenDGateway, r *KrakenDGatewayReconciler) []client.Object {
+				gw.Spec.Plugins = &v1alpha1.PluginsSpec{Sources: []v1alpha1.PluginSource{
+					{ConfigMapRef: &v1alpha1.ConfigMapKeyRef{Name: "plugins-a", Key: "auth.so"}},
+				}}
+				return nil
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gw := newerSpecGateway()
+			r := newTestGatewayReconciler(nil, renderOutput("A"), &mockValidator{})
+			tc.setup(gw, r)
+			c := fakeClientBuilder().WithObjects(gw, settledDeployment(gw, "A")).WithStatusSubresource(gw).Build()
+			r.Client, r.APIReader = c, c
+
+			_ = reconcileGateway(t, r, gw) // the unavailable validator fails the pass; the others do not
+
+			if got := getGateway(t, c, gw).Status.ObservedGeneration; got != 2 {
+				t.Errorf("observedGeneration = %d, want 2: the verdict is on this generation", got)
+			}
+		})
+	}
+}
