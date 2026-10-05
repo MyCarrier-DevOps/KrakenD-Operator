@@ -572,3 +572,31 @@ func TestEndpointAdmission_DenialQuotingOtherFindingsIsBounded(t *testing.T) {
 			len(msg), utf8.ValidString(msg), warningLimit)
 	}
 }
+
+func TestEndpointAdmission_NoRenderCheckWithoutAGatewayOrAChange(t *testing.T) {
+	old := testEndpoint("e", "/a")
+	labeled := old.DeepCopy()
+	labeled.Labels = map[string]string{"x": "y"}
+	edited := old.DeepCopy()
+	edited.Spec.Endpoints[0].Backends[0].URLPattern = "/v2"
+	tests := []struct {
+		name     string
+		objs     []client.Object
+		endpoint *v1alpha1.KrakenDEndpoint
+	}{
+		{"metadata only", []client.Object{testGateway()}, labeled},
+		{"gateway gone", nil, edited},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			chk := &scriptedChecker{}
+			v := &EndpointValidator{Client: fakeClient(tt.objs...), Checker: chk}
+			if resp := review(t, v, "alice", tt.endpoint, old); !resp.Allowed {
+				t.Errorf("denied: %+v", resp.Result)
+			}
+			if len(chk.calls) != 0 {
+				t.Errorf("checks = %v, want none", chk.calls)
+			}
+		})
+	}
+}
