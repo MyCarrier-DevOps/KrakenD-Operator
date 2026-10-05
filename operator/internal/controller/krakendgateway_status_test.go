@@ -111,7 +111,7 @@ func TestGatewayReconcile_SteadyStateWritesNoStatus(t *testing.T) {
 	c, phases := gatewayStatusWrites(gw)
 	r := &KrakenDGatewayReconciler{
 		Client: c, APIReader: c, Scheme: testScheme(), Recorder: fakeRecorder(),
-		Renderer: renderOutput("good"), Validator: &mockValidator{},
+		Renderer: renderOutput("good"), Validator: &mockValidator{}, Checker: newTestChecker(c, &mockValidator{}),
 	}
 
 	if err := reconcileGateway(t, r, gw); err != nil {
@@ -139,7 +139,7 @@ func TestGatewayReconcile_RejectedRenderIsNotRevalidated(t *testing.T) {
 	validator := &countingValidator{err: rejectedBy("bad endpoint")}
 	r := &KrakenDGatewayReconciler{
 		Client: c, APIReader: c, Scheme: testScheme(), Recorder: recorder,
-		Renderer: renderOutput("bad"), Validator: validator,
+		Renderer: renderOutput("bad"), Validator: validator, Checker: newTestChecker(c, validator),
 	}
 
 	for i := range 3 {
@@ -166,7 +166,7 @@ func TestGatewayReconcile_EditionModeFlipRevalidatesSameRender(t *testing.T) {
 	validator := &countingValidator{err: rejectedBy("wildcards must be named")}
 	r := &KrakenDGatewayReconciler{
 		Client: c, APIReader: c, Scheme: testScheme(), Recorder: fakeRecorder(),
-		Renderer: renderOutput("same"), Validator: validator,
+		Renderer: renderOutput("same"), Validator: validator, Checker: newTestChecker(c, validator),
 		Clock: clocktesting.NewFakeClock(testNow), LicenseParser: &mockLicenseParser{err: errors.New("no license in this test")},
 	}
 	if err := reconcileGateway(t, r, gw); err != nil {
@@ -198,7 +198,7 @@ func TestGatewayReconcile_RememberedRejectionRestoresOverwrittenStatus(t *testin
 	validator := &countingValidator{err: rejectedBy("bad endpoint")}
 	r := &KrakenDGatewayReconciler{
 		Client: c, APIReader: c, Scheme: testScheme(), Recorder: fakeRecorder(),
-		Renderer: renderOutput("bad"), Validator: validator,
+		Renderer: renderOutput("bad"), Validator: validator, Checker: newTestChecker(c, validator),
 	}
 	if err := reconcileGateway(t, r, gw); err != nil {
 		t.Fatal(err)
@@ -244,7 +244,7 @@ func TestGatewayReconcile_ValidatorUnavailableIsRetried(t *testing.T) {
 	validator := &countingValidator{err: fmt.Errorf("running krakend check: %w", fs.ErrNotExist)}
 	r := &KrakenDGatewayReconciler{
 		Client: c, APIReader: c, Scheme: testScheme(), Recorder: fakeRecorder(),
-		Renderer: renderOutput("new"), Validator: validator,
+		Renderer: renderOutput("new"), Validator: validator, Checker: newTestChecker(c, validator),
 	}
 
 	if err := reconcileGateway(t, r, gw); err == nil {
@@ -284,7 +284,7 @@ func TestGatewayReconcile_ValidationMessageIsBounded(t *testing.T) {
 	huge := strings.Repeat(line+"\n", 1000)
 	r := &KrakenDGatewayReconciler{
 		APIReader: c, Client: c, Scheme: testScheme(), Recorder: recorder,
-		Renderer: renderOutput("bad"), Validator: &countingValidator{err: rejectedBy(huge)},
+		Renderer: renderOutput("bad"), Validator: &countingValidator{err: rejectedBy(huge)}, Checker: newTestChecker(c, &countingValidator{err: rejectedBy(huge)}),
 	}
 	if err := reconcileGateway(t, r, gw); err != nil {
 		t.Fatal(err)
@@ -314,7 +314,7 @@ func TestGatewayReconcile_OversizedRejectionWarnsOnce(t *testing.T) {
 	huge := strings.Repeat("ERROR at '/endpoints/0': additional properties not allowed\n", 1000)
 	r := &KrakenDGatewayReconciler{
 		APIReader: c, Client: c, Scheme: testScheme(), Recorder: recorder,
-		Renderer: renderOutput("bad"), Validator: &countingValidator{err: rejectedBy(huge)},
+		Renderer: renderOutput("bad"), Validator: &countingValidator{err: rejectedBy(huge)}, Checker: newTestChecker(c, &countingValidator{err: rejectedBy(huge)}),
 	}
 	for range 2 {
 		if err := reconcileGateway(t, r, gw); err != nil {
@@ -403,7 +403,7 @@ func TestGatewayReconcile_TerminatingGatewayIsLeftAlone(t *testing.T) {
 	r := &KrakenDGatewayReconciler{
 		Client: c, APIReader: c, Scheme: testScheme(), Recorder: fakeRecorder(),
 		Renderer:  &mockRenderer{err: fmt.Errorf("a terminating gateway must not be rendered")},
-		Validator: &mockValidator{},
+		Validator: &mockValidator{}, Checker: newTestChecker(c, &mockValidator{}),
 	}
 
 	if err := reconcileGateway(t, r, gw); err != nil {
@@ -459,7 +459,7 @@ func TestGatewayReconcile_RevertAfterUnavailableValidatorClearsRetrying(t *testi
 	validator := &countingValidator{err: fmt.Errorf("running krakend check: %w", fs.ErrNotExist)}
 	r := &KrakenDGatewayReconciler{
 		Client: c, APIReader: c, Scheme: testScheme(), Recorder: fakeRecorder(),
-		Renderer: renderOutput("new"), Validator: validator,
+		Renderer: renderOutput("new"), Validator: validator, Checker: newTestChecker(c, validator),
 	}
 	if err := reconcileGateway(t, r, gw); err == nil {
 		t.Fatal("expected an error, so the reconcile is retried with backoff")
