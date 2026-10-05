@@ -43,3 +43,4 @@ KrakenDGateway a/ce-redis: spec.redis is Enterprise-only on a CE gateway
 KrakenDGateway a/ce-documentation: spec.config.documentation is Enterprise-only on a CE gateway
 KrakenDGateway a/ce-openapi: spec.openapi.enabled is Enterprise-only on a CE gateway
 KrakenDGateway a/ce-dragonfly: spec.dragonfly.enabled is Enterprise-only on a CE gateway
+KrakenDGateway a/ce-df-password: spec.dragonfly.enabled is Enterprise-only on a CE gateway
