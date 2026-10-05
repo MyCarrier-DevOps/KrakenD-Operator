@@ -346,6 +346,9 @@ type AdditionalEndpoint struct {
 // PeriodicSpec configures the polling interval for periodic triggers.
 type PeriodicSpec struct {
 	// Interval is the polling interval; at least 30s.
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:MaxLength=32
+	// +kubebuilder:validation:Pattern=`^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$`
 	// +kubebuilder:validation:XValidation:rule="!self.matches('^(0|(([0-9]+([.][0-9]*)?|[.][0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$') || duration(self) >= duration('30s')",message="periodic.interval must be at least 30s"
 	Interval metav1.Duration `json:"interval"`
 }
