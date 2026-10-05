@@ -67,8 +67,11 @@ func TestValidateEntries(t *testing.T) {
 			testEndpoint("e", "/healthz"), ""},
 		{"unnamed wildcard on CE", testGateway(), testEndpoint("e", "/files/*"), "Enterprise feature"},
 		{"unnamed wildcard on EE", ee, testEndpoint("e", "/files/*"), ""},
+		{"placeholder from the path", testGateway(), withPattern("/a/{id}", "/u/{id}"), ""},
 		{"placeholder not in the path", testGateway(), withPattern("/a/{id}", "/u/{other}"), "placeholder {other}"},
+		{"mid-segment braces are no parameter", testGateway(), withPattern("/a/b{id}", "/u/{id}"), "placeholder {id}"},
 		{"sequential placeholder", testGateway(), withPattern("/a", "/u/{resp0_id}"), ""},
+		{"JWT placeholder", testGateway(), withPattern("/a", "/u/{JWT.sub}"), ""},
 		{"only GET collides with the health endpoint", custom, post, ""},
 		// A raw router block replaces the typed one, so the typed healthPath is gone.
 		{"raw router replaces the typed one", rawRouterBlock(`{"auto_options":true}`),
