@@ -1864,6 +1864,9 @@ func (v *recordingValidator) Validate(_ context.Context, _ []byte, edition v1alp
 	return v.err
 }
 
+func (v *recordingValidator) Lint(ctx context.Context, jsonData []byte, edition v1alpha1.Edition) error {
+	return v.Validate(ctx, jsonData, edition)
+}
 func TestGatewayReconcile_CEFallbackFlipRevalidatesTheSameRender(t *testing.T) {
 	gw, secret, parser := licensedEEGateway(testNow.Add(-time.Minute), true) // expired, falls back
 	const config = `{"version":3,"name":"same-bytes-in-both-editions"}`
