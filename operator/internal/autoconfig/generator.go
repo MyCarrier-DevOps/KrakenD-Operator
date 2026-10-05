@@ -48,6 +48,10 @@ type GenerateOutput struct {
 	// Skipped holds the entries dropped as duplicates of an earlier entry
 	// (reason DuplicateOperationId), in entry order.
 	Skipped []OperationIssue
+	// Warnings reports, once per reference and sorted, each schema reference
+	// in a generated entry's documentation that ComponentSchemas cannot
+	// satisfy.
+	Warnings []string
 }
 
 // Generator wraps endpoint entries in KrakenDEndpoint CRs with metadata and labels.

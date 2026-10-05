@@ -18,13 +18,13 @@ package autoconfig
 
 import (
 	"context"
-	"encoding/json"
+	"maps"
 	"reflect"
+	"slices"
 	"testing"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 )
 
 func TestGenerator_BasicGeneration(t *testing.T) {
@@ -250,37 +250,35 @@ func TestSanitizePath(t *testing.T) {
 	}
 }
 
-func TestGenerator_ComponentSchemasAttached(t *testing.T) {
-	g := NewGenerator()
-	ac := &v1alpha1.KrakenDAutoConfig{
-		ObjectMeta: metav1.ObjectMeta{Name: "ac", Namespace: "default"},
-	}
-	entries := []v1alpha1.EndpointEntry{
-		{Endpoint: "/api/users", Method: "GET", Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/users"}}},
-		{Endpoint: "/api/orders", Method: "POST", Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/orders"}}},
-	}
-	schemas := map[string]runtime.RawExtension{
-		"user":  {Raw: json.RawMessage(`{"type":"object"}`)},
-		"order": {Raw: json.RawMessage(`{"type":"object"}`)},
-	}
-
-	out, err := g.Generate(context.Background(), GenerateInput{
-		AutoConfig:       ac,
-		Entries:          entries,
-		OperationIDs:     map[string]string{"/api/users:GET": "listUsers", "/api/orders:POST": "createOrder"},
+func TestGenerator_AttachesEachEndpointsSchemaClosure(t *testing.T) {
+	ac := &v1alpha1.KrakenDAutoConfig{ObjectMeta: metav1.ObjectMeta{Name: "ac", Namespace: "default"}}
+	out, err := NewGenerator().Generate(context.Background(), GenerateInput{
+		AutoConfig: ac,
+		Entries: []v1alpha1.EndpointEntry{
+			docEntry("/pets", `{"response_definition":{"200":{"ref":"Pet"}}}`),
+			docEntry("/errors", `{"response_definition":{"500":{"ref":"Error"},"404":{"ref":"Ghost"}}}`),
+			{Endpoint: "/health", Method: "GET", Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}}}},
+		},
+		OperationIDs:     map[string]string{"/pets:GET": "getPets", "/errors:GET": "getErrors", "/health:GET": "health"},
 		GatewayRef:       v1alpha1.GatewayRef{Name: "gw"},
-		ComponentSchemas: schemas,
+		ComponentSchemas: petSchemas(),
 	})
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("generate: %v", err)
+	}
+	want := map[string][]string{
+		"ac-getpets":   {"Address", "Owner", "Pet"},
+		"ac-geterrors": {"Error"},
+		"ac-health":    nil,
 	}
 	for _, ep := range out.Endpoints {
-		if len(ep.Spec.ComponentSchemas) != 2 {
-			t.Errorf("endpoint %s: expected 2 component schemas, got %d", ep.Name, len(ep.Spec.ComponentSchemas))
+		if got := slices.Sorted(maps.Keys(ep.Spec.ComponentSchemas)); !slices.Equal(got, want[ep.Name]) {
+			t.Errorf("%s: component schemas %v, want %v", ep.Name, got, want[ep.Name])
 		}
-		if _, ok := ep.Spec.ComponentSchemas["user"]; !ok {
-			t.Errorf("endpoint %s: missing 'user' schema", ep.Name)
-		}
+	}
+	wantWarnings := []string{`schema reference "Ghost" (first used by GET /errors) is not defined in components/schemas`}
+	if !slices.Equal(out.Warnings, wantWarnings) {
+		t.Errorf("Warnings = %q, want %q", out.Warnings, wantWarnings)
 	}
 }
 
