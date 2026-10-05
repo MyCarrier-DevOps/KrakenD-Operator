@@ -377,3 +377,31 @@ func TestGatewayReconcile_CommunityUpgradeRollReportsDeployingWithAnUnchangedRen
 			got.Status.Phase, v1alpha1.PhaseDeploying)
 	}
 }
+
+func TestInspectDeploymentStatus_ATemplateThatIsNotTheWantedOneIsARollout(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(dep *appsv1.Deployment)
+	}{
+		{
+			name: "annotations of another config",
+			mutate: func(dep *appsv1.Deployment) {
+				dep.Spec.Template.Annotations[resources.PostRestartJobChecksumAnnotation] = "B"
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gw := convergedGatewayAt("A")
+			dep := makeConvergedDeployment(gw, "A")
+			tc.mutate(dep)
+			r := &KrakenDGatewayReconciler{Client: fakeClientBuilder().Build(), Scheme: testScheme(), Recorder: fakeRecorder()}
+
+			r.inspectDeploymentStatus(context.Background(), gw, convergedInputs("A"), deploymentObservation{dep: dep}, nil)
+
+			if progressing := meta.FindStatusCondition(gw.Status.Conditions, v1alpha1.ConditionProgressing); !condTrue(progressing) {
+				t.Errorf("Progressing = %+v, want True: the Deployment's template is not the wanted one", progressing)
+			}
+		})
+	}
+}
