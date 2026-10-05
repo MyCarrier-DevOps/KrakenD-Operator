@@ -192,6 +192,7 @@ jq "${jq_opts[@]}" "$jq_lib"'
     ($a.timeout // empty | dur_problem($go_re; 64; "\($p).timeout")),
     ($a.cacheTTL // empty | dur_problem($go_re; 64; "\($p).cacheTTL")),
     ($a.outputEncoding // empty | enum_problem("\($p).outputEncoding"; output_encodings)),
-    ($a.encoding // empty | enum_problem("\($p).encoding"; backend_encodings))
+    ($a.encoding // empty | enum_problem("\($p).encoding"; backend_encodings)),
+    (($a.backends // []) | to_entries[] | .key as $j | .value | backend_problems("\($p).backends[\($j)]"))
   ))
 ]} | report("KrakenDAutoConfig")' "$work/autoconfigs.json"
