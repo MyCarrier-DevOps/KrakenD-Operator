@@ -473,3 +473,37 @@ func TestEndpointAdmission_PassToFailIsRejectedAs422NamingTheEntry(t *testing.T)
 		t.Errorf("check ran with %s of its budget left, want a deadline within %s", chk.deadlines[0], admissionBudget)
 	}
 }
+
+func TestEndpointAdmission_BrokenGatewayFallsBackToIsolation(t *testing.T) {
+	broken := failing("other", 0, "broken elsewhere")
+	tests := []struct {
+		name     string
+		old      *v1alpha1.KrakenDEndpoint
+		verdicts []configcheck.Verdict
+		allowed  bool
+		calls    string
+	}{
+		{"candidate fine alone", nil, []configcheck.Verdict{broken, broken, {OK: true}}, true,
+			"gateway+candidate,gateway,isolated"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			chk := &scriptedChecker{verdicts: tt.verdicts}
+			v := &EndpointValidator{Client: fakeClient(testGateway()), Checker: chk}
+			var old runtime.Object
+			if tt.old != nil {
+				old = tt.old
+			}
+			resp := review(t, v, "alice", testEndpoint("new", "/a"), old)
+			if resp.Allowed != tt.allowed {
+				t.Errorf("allowed = %v, want %v (%+v)", resp.Allowed, tt.allowed, resp.Result)
+			}
+			if tt.allowed && (len(resp.Warnings) != 1 || !strings.Contains(resp.Warnings[0], "broken elsewhere")) {
+				t.Errorf("warnings = %v, want the pre-existing failure", resp.Warnings)
+			}
+			if got := strings.Join(chk.calls, ","); got != tt.calls {
+				t.Errorf("checks = %s, want %s", got, tt.calls)
+			}
+		})
+	}
+}
