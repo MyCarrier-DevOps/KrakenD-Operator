@@ -20,12 +20,20 @@ import (
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 )
 
+// licenseKey is the key of the license in the Secret an ExternalSecret syncs,
+// and the key a Secret reference that names none is read from.
+const licenseKey = "LICENSE"
+
 // LicenseSecret is the Secret and key the gateway's license is read from and
 // mounted from: spec.license.secretRef when set, otherwise the Secret an
 // enabled ExternalSecret syncs. ok is false when the spec names neither.
 func LicenseSecret(gw *v1alpha1.KrakenDGateway) (name, key string, ok bool) {
 	if lic := gw.Spec.License; lic != nil && lic.SecretRef != nil {
-		return lic.SecretRef.Name, lic.SecretRef.Key, true
+		key := lic.SecretRef.Key
+		if key == "" {
+			key = licenseKey
+		}
+		return lic.SecretRef.Name, key, true
 	}
 	return "", "", false
 }
