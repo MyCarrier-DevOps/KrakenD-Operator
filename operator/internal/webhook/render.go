@@ -28,6 +28,52 @@ import (
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
 )
 
+// renderChecks are the four checks of the verdict ratchet, each over a
+// proposed change: the gateway with it, and without it, then the same two on
+// the isolated baseline used when the gateway already fails.
+type renderChecks struct {
+	after, before, isoAfter, isoBefore func(context.Context) (configcheck.Verdict, error)
+}
+
+// ratchetRender rejects a change only when it turns a passing config into a
+// failing one. It runs after, then before; when before fails too the failure
+// is a warning (preexisting words it from before's verdict) unless the change
+// fails on the isolated baseline where its own baseline passed. A check that
+// cannot run is a 500 with no warning: the request is not judged. deny builds
+// the rejection from a failing verdict.
+func ratchetRender(
+	ctx context.Context, c renderChecks, deny func(configcheck.Verdict) error,
+	preexisting func(before configcheck.Verdict) string,
+) (admission.Warnings, error) {
+	after, err := c.after(ctx)
+	if err != nil || after.OK {
+		return nil, checkErr(err)
+	}
+	before, err := c.before(ctx)
+	if err != nil {
+		return nil, checkErr(err)
+	}
+	if before.OK {
+		return nil, deny(after)
+	}
+	warning := admission.Warnings{preexisting(before)}
+	isoAfter, err := c.isoAfter(ctx)
+	if err != nil {
+		return nil, checkErr(err)
+	}
+	if isoAfter.OK {
+		return warning, nil
+	}
+	isoBefore, err := c.isoBefore(ctx)
+	if err != nil {
+		return nil, checkErr(err)
+	}
+	if isoBefore.OK {
+		return nil, deny(isoAfter)
+	}
+	return warning, nil
+}
+
 // checkGatewayRender validates gw's config. A new gateway must render on its
 // own. An update is rejected only when it turns a passing config (the root
 // with its endpoints) into a failing one; when the config already fails, only
@@ -42,31 +88,16 @@ func checkGatewayRender(
 		}
 		return nil, gatewayRenderDenial(gw, root)
 	}
-	after, err := chk.CheckGateway(ctx, gw, nil)
-	if err != nil || after.OK {
-		return nil, checkErr(err)
-	}
-	before, err := chk.CheckGateway(ctx, old, nil)
-	if err != nil {
-		return nil, checkErr(err)
-	}
-	if before.OK {
-		return nil, gatewayRenderDenial(gw, after)
-	}
-	preexisting := admission.Warnings{"the gateway's config already fails validation: " +
-		before.Summary(warningLimit)}
-	rootAfter, err := chk.CheckIsolated(ctx, gw, nil)
-	if err != nil || rootAfter.OK {
-		return preexisting, checkErr(err)
-	}
-	rootBefore, err := chk.CheckIsolated(ctx, old, nil)
-	if err != nil {
-		return nil, checkErr(err)
-	}
-	if rootBefore.OK {
-		return nil, gatewayRenderDenial(gw, rootAfter)
-	}
-	return preexisting, nil
+	return ratchetRender(ctx, renderChecks{
+		after:     func(ctx context.Context) (configcheck.Verdict, error) { return chk.CheckGateway(ctx, gw, nil) },
+		before:    func(ctx context.Context) (configcheck.Verdict, error) { return chk.CheckGateway(ctx, old, nil) },
+		isoAfter:  func(ctx context.Context) (configcheck.Verdict, error) { return chk.CheckIsolated(ctx, gw, nil) },
+		isoBefore: func(ctx context.Context) (configcheck.Verdict, error) { return chk.CheckIsolated(ctx, old, nil) },
+	},
+		func(v configcheck.Verdict) error { return gatewayRenderDenial(gw, v) },
+		func(before configcheck.Verdict) string {
+			return "the gateway's config already fails validation: " + before.Summary(warningLimit)
+		})
 }
 
 // gatewayRenderDenial rejects gw: gateway-root findings on spec.config, the
