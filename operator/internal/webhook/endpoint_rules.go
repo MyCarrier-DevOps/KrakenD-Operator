@@ -30,9 +30,6 @@ import (
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 )
 
-// defaultHealthPath is where KrakenD serves its health endpoint unless told otherwise.
-const defaultHealthPath = "/__health"
-
 // reservedPathPattern matches the paths KrakenD reserves for its own
 // endpoints (lura's invalidPattern, less what the CRD pattern covers).
 var reservedPathPattern = regexp.MustCompile(`/__(debug|echo|health)(/.*)?$`)
@@ -136,36 +133,17 @@ func validatePlaceholders(p *field.Path, e v1alpha1.EndpointEntry) field.ErrorLi
 	return errs
 }
 
-// routerOptions are the "router" extra_config keys that decide where the
-// health endpoint is served; the route check reads the same ones.
-type routerOptions struct {
-	HealthPath    string `json:"health_path"`
-	DisableHealth bool   `json:"disable_health"`
-	AutoOptions   bool   `json:"auto_options"`
-}
-
 // healthPath returns the path the gateway serves its health endpoint on, or
 // "" when it is disabled. It follows the route check: a raw router block in
-// spec.config.extraConfig replaces the typed one, and a block that does not
-// decode reads as the defaults.
+// spec.config.extraConfig replaces the typed one.
 func healthPath(gw *v1alpha1.KrakenDGateway) string {
 	if block, ok := rawRouterBlock(gw); ok {
-		var opts routerOptions
-		if json.Unmarshal(block, &opts) != nil {
-			opts = routerOptions{}
-		}
-		switch {
-		case opts.DisableHealth:
-			return ""
-		case opts.HealthPath != "":
-			return opts.HealthPath
-		}
-		return defaultHealthPath
+		return renderer.ParseRouterOptions(block).HealthRoute()
 	}
 	if r := gw.Spec.Config.Router; r != nil && r.HealthPath != "" {
 		return r.HealthPath
 	}
-	return defaultHealthPath
+	return renderer.DefaultHealthPath
 }
 
 // rawRouterBlock returns the "router" entry of the gateway's raw extraConfig.
