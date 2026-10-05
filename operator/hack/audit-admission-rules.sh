@@ -10,6 +10,9 @@
 # Prints one line per object or conflict; no output means nothing to fix.
 set -euo pipefail
 
+# The CRD's endpoint path pattern, verbatim.
+endpoint_path_re='^(/\*|/[^*?&%]*(/\*)?)$'
+
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
@@ -22,14 +25,22 @@ for kind in endpoints gateways autoconfigs backendpolicies; do
 	fi
 done
 
+jq_opts=(-r --arg path_re "$endpoint_path_re")
+
 jq_lib='
+# The API server anchors ^ and $ at the ends of the text only; Oniguruma also
+# anchors them at line breaks, so anchor the CRD pattern at the ends explicitly.
+def crd_test($re): test($re | sub("^\\^"; "\\A") | sub("\\$$"; "\\z"));
 def report(kind): select(.v | length > 0) | "\(kind) \(.id): \(.v | unique | join("; "))";
 '
 
-jq -r "$jq_lib"'
+jq "${jq_opts[@]}" "$jq_lib"'
 .items[] | {id: "\(.metadata.namespace)/\(.metadata.name)", v: [
   (if ((.spec.endpoints // []) | length) == 0 then "spec.endpoints is empty" else empty end),
   (if (.spec.gatewayRef.name // "") == "" then "spec.gatewayRef.name is empty" else empty end),
   ((.spec.endpoints // []) | group_by([.endpoint, .method])[] | select(length > 1)
-    | "duplicate entry \(.[0].method) \(.[0].endpoint)")
+    | "duplicate entry \(.[0].method) \(.[0].endpoint)"),
+  ((.spec.endpoints // []) | to_entries[] | .key as $i | .value as $e | "spec.endpoints[\($i)]" as $p | (
+    (if ($e.endpoint // "" | crd_test($path_re)) then empty else "\($p).endpoint \($e.endpoint)" end)
+  ))
 ]} | report("KrakenDEndpoint")' "$work/endpoints.json"
