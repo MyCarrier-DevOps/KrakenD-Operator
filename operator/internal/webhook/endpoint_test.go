@@ -797,3 +797,14 @@ func TestEndpointAdmission_OperatorWritesStillGetTheDuplicateCheck(t *testing.T)
 		t.Error("an operator write duplicating a hand-written route was admitted")
 	}
 }
+
+// Nor does it skip the entry rules: an Enterprise-only namespace on a CE
+// gateway is refused whoever writes it.
+func TestEndpointAdmission_OperatorWritesStillGetTheEntryRules(t *testing.T) {
+	ep := ownedEndpoint("KrakenDAutoConfig", true)
+	ep.Spec.Endpoints[0].ExtraConfig = &runtime.RawExtension{Raw: []byte(`{"auth/api-keys":{"roles":["a"]}}`)}
+	v := &EndpointValidator{Client: fakeClient(testGateway()), Checker: &scriptedChecker{}, OperatorUsername: operatorUser}
+	if resp := review(t, v, operatorUser, ep, nil); resp.Allowed {
+		t.Error("an operator write with an Enterprise-only namespace on a CE gateway was admitted")
+	}
+}
