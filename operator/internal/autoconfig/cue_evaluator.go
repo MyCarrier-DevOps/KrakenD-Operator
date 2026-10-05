@@ -582,11 +582,15 @@ func applyFieldOverrides(output *CUEOutput, overrides []v1alpha1.OperationOverri
 	// occurrence wins: the generator publishes only the first entry for a
 	// duplicate operationId, so the override must land on that one.
 	opIDIndex := make(map[string]int, len(output.Entries))
+	count := make(map[string]int, len(output.Entries))
 	for i := range output.Entries {
 		key := output.Entries[i].Endpoint + ":" + output.Entries[i].Method
 		if opID, ok := output.OperationIDs[key]; ok {
 			if _, seen := opIDIndex[opID]; !seen {
 				opIDIndex[opID] = i
+			}
+			if opID != "" {
+				count[opID]++
 			}
 		}
 	}
@@ -598,6 +602,9 @@ func applyFieldOverrides(output *CUEOutput, overrides []v1alpha1.OperationOverri
 	}
 
 	for _, ov := range overrides {
+		if count[ov.OperationID] > 1 {
+			output.AmbiguousOverrides = append(output.AmbiguousOverrides, ov.OperationID)
+		}
 		idx, ok := opIDIndex[ov.OperationID]
 		if !ok {
 			// An override whose target failed evaluation is held with it,
