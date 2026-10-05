@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1901,5 +1902,27 @@ func TestCUEEvaluator_OverridesKeyedBySanitizedOperationID(t *testing.T) {
 	be := out.Entries[0].Backends[0]
 	if be.ExtraConfig == nil || !strings.Contains(string(be.ExtraConfig.Raw), `"auth/validator"`) {
 		t.Errorf("expected the definition to find the override by the sanitized operationId, got %v", be.ExtraConfig)
+	}
+}
+
+func TestEvaluate_UnsupportedMethodsAreSkippedAndReported(t *testing.T) {
+	out := evaluateEmbedded(t, `{"paths":{"/a":{
+		"get":{"operationId":"getA","responses":{"200":{"description":"OK"}}},
+		"head":{"operationId":"headA","responses":{"200":{"description":"OK"}}},
+		"options":{"responses":{"200":{"description":"OK"}}},
+		"trace":{"operationId":"traceA","responses":{"200":{"description":"OK"}}}}}}`)
+
+	if len(out.Entries) != 1 || out.Entries[0].Method != "GET" {
+		t.Fatalf("expected only the GET entry, got %+v", out.Entries)
+	}
+	var got []string
+	for _, s := range out.Skipped {
+		if s.Reason != v1alpha1.ReasonUnsupportedMethod {
+			t.Errorf("skipped %s %s: reason %q", s.Method, s.Path, s.Reason)
+		}
+		got = append(got, s.Method+" "+s.Path+" "+s.OperationID)
+	}
+	if want := []string{"HEAD /a headA", "OPTIONS /a ", "TRACE /a traceA"}; !slices.Equal(got, want) {
+		t.Errorf("skipped = %q, want %q", got, want)
 	}
 }
