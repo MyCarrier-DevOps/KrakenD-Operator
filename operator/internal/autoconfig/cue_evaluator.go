@@ -594,10 +594,9 @@ func applyFieldOverrides(output *CUEOutput, overrides []v1alpha1.OperationOverri
 			}
 		}
 	}
-	failedOpIDs := make(map[string]bool, len(output.Failed))
 	for _, failed := range output.Failed {
 		if failed.OperationID != "" {
-			failedOpIDs[failed.OperationID] = true
+			count[failed.OperationID]++
 		}
 	}
 
@@ -609,7 +608,7 @@ func applyFieldOverrides(output *CUEOutput, overrides []v1alpha1.OperationOverri
 		if !ok {
 			// An override whose target failed evaluation is held with it,
 			// not unmatched, and moves it to the route it gives the entry.
-			if !failedOpIDs[ov.OperationID] {
+			if count[ov.OperationID] == 0 {
 				output.UnmatchedOverrides = append(output.UnmatchedOverrides, ov.OperationID)
 			}
 			remapFailed(output.Failed, ov)
