@@ -5250,3 +5250,74 @@ func TestAutoConfigReconcile_ReadyWhenEveryEndpointIsReady(t *testing.T) {
 		t.Errorf("readyEndpoints = %d, want 1", updated.Status.ReadyEndpoints)
 	}
 }
+
+// The steady-state loop: the AutoConfig writes its endpoints, the endpoint
+// controller reports on them, the readiness change re-enqueues the
+// AutoConfig, which writes its status once more, and nothing after that.
+func TestAutoConfigReconcile_ReadinessSettlesAfterOneStatusWrite(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	var counts writeCounts
+	c := fakeClientBuilder().WithObjects(ac, cm).
+		WithStatusSubresource(ac, &v1alpha1.KrakenDEndpoint{}).
+		WithInterceptorFuncs(countWrites(&counts)).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+	if counts.creates != 1 || counts.statusUpdates != 1 {
+		t.Fatalf("first pass wrote %+v, want one endpoint create and one status write", counts)
+	}
+	cond := meta.FindStatusCondition(getAC(t, c, ac).Status.Conditions, v1alpha1.ConditionEndpointsReady)
+	if cond == nil || cond.Status != metav1.ConditionFalse {
+		t.Fatalf("expected EndpointsReady False after the create, got %+v", cond)
+	}
+
+	// Nothing changes while the endpoint controller has not reported.
+	before := counts
+	if _, err := reconcileAC(r, getAC(t, c, ac)); err != nil {
+		t.Fatalf("pending reconcile: %v", err)
+	}
+	if counts != before {
+		t.Fatalf("a pass over a still-Pending endpoint wrote %+v more, want none", writesSince(counts, before))
+	}
+
+	// The endpoint controller reports Ready.
+	var ep v1alpha1.KrakenDEndpoint
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(g.output.Endpoints[0]), &ep); err != nil {
+		t.Fatalf("getting the endpoint: %v", err)
+	}
+	if err := c.Status().Update(context.Background(), readyEndpoint(&ep, metav1.ConditionTrue, "Ready")); err != nil {
+		t.Fatalf("reporting readiness: %v", err)
+	}
+	before = counts
+	if _, err := reconcileAC(r, getAC(t, c, ac)); err != nil {
+		t.Fatalf("ready reconcile: %v", err)
+	}
+	if got := writesSince(counts, before); got != (writeCounts{statusUpdates: 1}) {
+		t.Fatalf("the readiness transition wrote %+v, want exactly one status write", got)
+	}
+	if !meta.IsStatusConditionTrue(getAC(t, c, ac).Status.Conditions, v1alpha1.ConditionReady) {
+		t.Fatal("expected Ready True once the endpoint is ready")
+	}
+
+	before = counts
+	if _, err := reconcileAC(r, getAC(t, c, ac)); err != nil {
+		t.Fatalf("settled reconcile: %v", err)
+	}
+	if counts != before {
+		t.Errorf("a settled pass wrote %+v more, want none", writesSince(counts, before))
+	}
+}
+
+// writesSince is the writes counted in now beyond those in before.
+func writesSince(now, before writeCounts) writeCounts {
+	return writeCounts{
+		creates:       now.creates - before.creates,
+		updates:       now.updates - before.updates,
+		deletes:       now.deletes - before.deletes,
+		statusUpdates: now.statusUpdates - before.statusUpdates,
+	}
+}
