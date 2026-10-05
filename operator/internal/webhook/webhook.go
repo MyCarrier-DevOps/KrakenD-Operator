@@ -189,7 +189,8 @@ func (v *GatewayValidator) eeNamespacesOnCE(
 
 // eeNamespacesInUse lists, sorted, each Enterprise-only namespace in gw's
 // endpoints and in the policies they reference, as "<kind> <ns>/<name>
-// <field> <namespace>".
+// <field> <namespace>", followed by ": <keys>" when CE honors the rest of the
+// block.
 func (v *GatewayValidator) eeNamespacesInUse(ctx context.Context, gw *v1alpha1.KrakenDGateway) ([]string, error) {
 	var eps v1alpha1.KrakenDEndpointList
 	byGateway := client.MatchingFields{fieldindex.EndpointGateway: gw.Namespace + "/" + gw.Name}
@@ -201,9 +202,11 @@ func (v *GatewayValidator) eeNamespacesInUse(ctx context.Context, gw *v1alpha1.K
 	for i := range eps.Items {
 		ep := &eps.Items[i]
 		for j, e := range ep.Spec.Endpoints {
-			for _, fe := range validateEENamespaces(field.NewPath("spec", "endpoints").Index(j), e) {
-				uses = append(uses, fmt.Sprintf("KrakenDEndpoint %s/%s %s %v",
-					ep.Namespace, ep.Name, fe.Field, fe.BadValue))
+			for _, pd := range entryDrops(field.NewPath("spec", "endpoints").Index(j), e) {
+				for _, d := range pd.drops {
+					uses = append(uses, fmt.Sprintf("KrakenDEndpoint %s/%s %s %s",
+						ep.Namespace, ep.Name, pd.path, droppedLabel(d)))
+				}
 			}
 			for _, be := range e.Backends {
 				if be.PolicyRef != nil {
@@ -222,11 +225,20 @@ func (v *GatewayValidator) eeNamespacesInUse(ctx context.Context, gw *v1alpha1.K
 			return nil, fmt.Errorf("getting policy %s: %w", key, err)
 		}
 		for _, d := range eeOnlyNamespacesIn(p.Spec.Raw, renderer.LevelBackend) {
-			uses = append(uses, fmt.Sprintf("KrakenDBackendPolicy %s spec.raw %s", key, d.Namespace))
+			uses = append(uses, fmt.Sprintf("KrakenDBackendPolicy %s spec.raw %s", key, droppedLabel(d)))
 		}
 	}
 	slices.Sort(uses)
 	return uses, nil
+}
+
+// droppedLabel names what a CE render drops: the namespace, or for a partly
+// honored block the namespace and the keys it drops.
+func droppedLabel(d renderer.CEDrop) string {
+	if len(d.Keys) == 0 {
+		return d.Namespace
+	}
+	return d.Namespace + ": " + strings.Join(d.Keys, ", ")
 }
 
 // eeFieldsOnCE refuses, on a CE gateway, the typed fields that configure
