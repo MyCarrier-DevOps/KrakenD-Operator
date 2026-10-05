@@ -62,7 +62,11 @@ func validateEntries(ep *v1alpha1.KrakenDEndpoint, changed []int, gw *v1alpha1.K
 			errs = append(errs, field.Invalid(p.Child("endpoint"), e.Endpoint,
 				fmt.Sprintf("GET %s is the gateway's health endpoint (spec.config.router)", health)))
 		}
-		if gw.Spec.Edition == v1alpha1.EditionCE && strings.HasSuffix(e.Endpoint, "/*") {
+		if e.Endpoint == "/*" {
+			errs = append(errs, field.Invalid(p.Child("endpoint"), e.Endpoint,
+				"a root wildcard (/*) is not accepted by KrakenD in any edition; use /prefix/* on an Enterprise gateway"))
+		}
+		if gw.Spec.Edition == v1alpha1.EditionCE && renderer.IsEEWildcard(e.Endpoint) {
 			errs = append(errs, field.Invalid(p.Child("endpoint"), e.Endpoint,
 				"unnamed wildcards (/*) are an Enterprise feature; the gateway runs CE"))
 		}
