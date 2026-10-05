@@ -485,6 +485,8 @@ func TestEndpointAdmission_BrokenGatewayFallsBackToIsolation(t *testing.T) {
 	}{
 		{"candidate fine alone", nil, []configcheck.Verdict{broken, broken, {OK: true}}, true,
 			"gateway+candidate,gateway,isolated"},
+		{"create failing alone", nil, []configcheck.Verdict{broken, broken, failing("new", 0, "bad")}, false,
+			"gateway+candidate,gateway,isolated"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
