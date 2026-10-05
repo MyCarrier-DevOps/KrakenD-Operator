@@ -130,6 +130,7 @@ jq "${jq_opts[@]}" "$jq_lib"'
 .items[] | {id: "\(.metadata.namespace)/\(.metadata.name)", v: [
   (if ((.spec.endpoints // []) | length) == 0 then "spec.endpoints is empty" else empty end),
   (if (.spec.gatewayRef.name // "") == "" then "spec.gatewayRef.name is empty" else empty end),
+  (if ((.spec.endpoints // []) | length) > 1024 then "more than 1024 entries" else empty end),
   ((.spec.endpoints // []) | group_by([.endpoint, .method])[] | select(length > 1)
     | "duplicate entry \(.[0].method) \(.[0].endpoint | tojson)"),
   ((.spec.endpoints // []) | to_entries[] | .key as $i | .value as $e | "spec.endpoints[\($i)]" as $p | (
