@@ -1975,6 +1975,8 @@ The operator should deploy a `ValidatingAdmissionWebhook` with `failurePolicy: F
 
 > **Responses:** a rejected field is `422 Invalid` with one status cause per field error, so `kubectl` prints each rejected path. A failed lookup (a gateway, a policy or the endpoint list) is `500 Internal Error`, a transient server error (retry the request; controllers and GitOps tools retry on their own); it is never reported as a rejected field. Every webhook sets `timeoutSeconds: 15`. The webhook configuration in `config/webhook/manifests.yaml` is generated from the `+kubebuilder:webhook` markers in `internal/webhook/webhook.go`, and the Helm chart template carries the same values.
 
+> **Ratchet:** an update is judged only on what it changes. An unchanged spec skips every rule. A reference (`gatewayRef`, `policyRef`) is checked only when it is added or changed. A field rule rejects the update only for an error the stored object did not have, matched on the error's field, type, value and detail. A sidecar probe that changed is checked in full, because an error without a value (`Forbidden`) would otherwise read the same before and after. KrakenDEndpoint entries are matched on (endpoint, method), so a reorder is not a change, and a move to another gateway puts every entry through the new gateway's rules.
+
 - **KrakenDEndpoint** — reject if `gatewayRef` references a non-existent KrakenDGateway
 - **KrakenDEndpoint** — reject if `policyRef` references a non-existent KrakenDBackendPolicy
 - **KrakenDEndpoint** — warn (but allow) if an endpoint path+method already exists on the target gateway (conflict detection)
