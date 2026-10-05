@@ -269,8 +269,11 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 	specNotes = append(specNotes, genOutput.Warnings...)
 
-	// Warn about duplicate operations the generator skipped
-	for _, dup := range genOutput.Skipped {
+	// Warn about duplicate operations the evaluator or the generator skipped
+	for _, dup := range skippedOps {
+		if dup.Reason != v1alpha1.ReasonDuplicateOperationId {
+			continue
+		}
 		warnings.add(v1alpha1.ReasonDuplicateOperationId, fmt.Sprintf("Duplicate operation %s %s skipped: %s",
 			dup.Method, dup.Path, dup.Message))
 	}
