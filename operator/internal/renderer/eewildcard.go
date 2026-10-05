@@ -82,6 +82,9 @@ func eeWildcardFindings(ctx context.Context, endpoints []any) ([]string, error) 
 		if !IsEEWildcard(w.path) {
 			continue
 		}
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("wildcard check did not finish: %w", err)
+		}
 		prefix := strings.TrimSuffix(w.path, "*")
 		for _, o := range routes {
 			if o.index == w.index || o.method != w.method ||
