@@ -75,8 +75,8 @@ def dur_shape_problem($re; $max; $label):
   else empty end;
 # The same, plus the overflow the CRD duration() rule rejects.
 def dur_problem($re; $max; $label):
-  dur_shape_problem($re; $max; $label)
-  // if overflows then "\($label) \(tojson) does not fit in 64 bits of nanoseconds" else empty end;
+  dur_shape_problem($re; $max; $label),
+  (select(crd_test($re) and overflows) | "\($label) \(tojson) does not fit in 64 bits of nanoseconds");
 # Why a value is outside an enum: $set lists the values the CRD allows.
 def enum_problem($label; $set): select(IN($set[]) | not) | "\($label) \(tojson)";
 # True for a pattern-valid quantity that resource.ParseQuantity rejects, which
