@@ -519,10 +519,11 @@ func (c claim) servedBefore(o claim) bool {
 }
 
 // sameController reports whether a and b have the same controller owner, for
-// example two endpoints one KrakenDAutoConfig generated.
+// example two endpoints one KrakenDAutoConfig generated. A controller shares
+// its namespace with what it generates, so objects of two namespaces never do.
 func sameController(a, b metav1.Object) bool {
 	ca, cb := metav1.GetControllerOf(a), metav1.GetControllerOf(b)
-	return ca != nil && cb != nil && ca.UID == cb.UID
+	return ca != nil && cb != nil && ca.UID == cb.UID && a.GetNamespace() == b.GetNamespace()
 }
 
 func routeKey(e v1alpha1.EndpointEntry) string {
