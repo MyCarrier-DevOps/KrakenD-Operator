@@ -288,7 +288,7 @@ type PostRestartJobSpec struct {
 	// enforces a limit for positive quantities); a negative value is
 	// rejected by the validating webhook.
 	// +optional
-	// +kubebuilder:validation:XValidation:rule="type(self) == int || isQuantity(self)",message="must be a quantity that Kubernetes can decode"
+	// +kubebuilder:validation:XValidation:rule="type(self) == int || (size(self) <= 64 && isQuantity(self))",message="must be a quantity of at most 64 characters that Kubernetes can decode"
 	TmpSizeLimit *resource.Quantity `json:"tmpSizeLimit,omitempty"`
 }
 
