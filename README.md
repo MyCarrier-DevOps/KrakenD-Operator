@@ -8,7 +8,7 @@ Kubernetes operator for managing [KrakenD API Gateway](https://www.krakend.io) i
 - **KrakenDEndpoint** — Define API endpoints with backend routing, header forwarding, and query string configuration
 - **KrakenDBackendPolicy** — Reusable policies for rate limiting, circuit breaking, and HTTP caching
 - **KrakenDAutoConfig** — Automatically generate endpoints from OpenAPI/Swagger specifications
-- **License Management** — Enterprise Edition license monitoring with expiry warnings and Community Edition fallback
+- **License Management** — Enterprise Edition license tracking with expiry warnings and Community Edition fallback
 - **Dragonfly Integration** — Optional DragonflyDB-based response caching
 - **Istio Integration** — Optional VirtualService generation for mesh routing
 - **External Secrets** — ExternalSecret integration for license management
