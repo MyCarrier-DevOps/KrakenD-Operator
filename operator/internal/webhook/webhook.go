@@ -966,14 +966,17 @@ func (v *AutoConfigValidator) ValidateCreate(
 	if !ok {
 		return nil, fmt.Errorf("expected KrakenDAutoConfig, got %T", obj)
 	}
-	errs, err := v.validate(ctx, ac)
+	errs, err := v.validateGatewayRef(ctx, ac)
 	if err != nil {
 		return nil, unavailable(err)
 	}
+	errs = append(errs, validateFields(ac)...)
 	return nil, invalid("KrakenDAutoConfig", ac.Name, errs)
 }
 
-// ValidateUpdate validates an updated KrakenDAutoConfig.
+// ValidateUpdate validates an updated KrakenDAutoConfig. The gateway
+// reference is checked only when it changes, and a field rule rejects the
+// update only for errors the stored object did not already have.
 func (v *AutoConfigValidator) ValidateUpdate(
 	ctx context.Context,
 	oldObj runtime.Object,
@@ -986,10 +989,22 @@ func (v *AutoConfigValidator) ValidateUpdate(
 	if !ok {
 		return nil, fmt.Errorf("expected KrakenDAutoConfig, got %T", newObj)
 	}
-	errs, err := v.validate(ctx, ac)
-	if err != nil {
-		return nil, unavailable(err)
+	old, ok := oldObj.(*v1alpha1.KrakenDAutoConfig)
+	if !ok {
+		return nil, fmt.Errorf("expected KrakenDAutoConfig, got %T", oldObj)
 	}
+	if equality.Semantic.DeepEqual(old.Spec, ac.Spec) {
+		return nil, nil
+	}
+	var errs field.ErrorList
+	if old.Spec.GatewayRef != ac.Spec.GatewayRef {
+		refErrs, err := v.validateGatewayRef(ctx, ac)
+		if err != nil {
+			return nil, unavailable(err)
+		}
+		errs = refErrs
+	}
+	errs = append(errs, newErrors(validateFields(ac), validateFields(old))...)
 	return nil, invalid("KrakenDAutoConfig", ac.Name, errs)
 }
 
@@ -1001,7 +1016,8 @@ func (v *AutoConfigValidator) ValidateDelete(
 	return nil, nil
 }
 
-func (v *AutoConfigValidator) validate(
+// validateGatewayRef checks that the gateway ac references exists.
+func (v *AutoConfigValidator) validateGatewayRef(
 	ctx context.Context,
 	ac *v1alpha1.KrakenDAutoConfig,
 ) (field.ErrorList, error) {
@@ -1026,6 +1042,12 @@ func (v *AutoConfigValidator) validate(
 		}
 	}
 
+	return errs, nil
+}
+
+// validateFields runs the field rules for ac.
+func validateFields(ac *v1alpha1.KrakenDAutoConfig) field.ErrorList {
+	var errs field.ErrorList
 	for i, ov := range ac.Spec.Overrides {
 		errs = append(errs, validateExtraConfigAudience(
 			field.NewPath("spec", "overrides").Index(i).Child("extraConfig"),
@@ -1042,7 +1064,7 @@ func (v *AutoConfigValidator) validate(
 
 	errs = append(errs, validateAdditionalEndpoints(ac)...)
 
-	return errs, nil
+	return errs
 }
 
 // validateAdditionalEndpoints validates the audience in each additional
