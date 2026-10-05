@@ -23,6 +23,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
@@ -128,5 +129,25 @@ func TestPolicyAdmission_TerminatingPolicyWithBrokenSpecChangeIsRefused(t *testi
 	}
 	if got := strings.Join(chk.calls, ","); got != "policy,policy" {
 		t.Errorf("checks = %s, want policy,policy", got)
+	}
+}
+
+func TestPolicyAdmission_DenialIsBounded(t *testing.T) {
+	huge := configcheck.Verdict{}
+	for range 1000 {
+		huge.Findings = append(huge.Findings, configcheck.Finding{
+			Endpoint: types.NamespacedName{Namespace: "default", Name: "uses-p"}, Index: 0,
+			Message: "- at '/endpoints/0/backend/0/extra_config': additional properties 'qos/circuit-breakr' not allowed"})
+	}
+	v := &PolicyValidator{Client: fakeClient(referencing()...),
+		Checker: &scriptedChecker{verdicts: []configcheck.Verdict{{OK: true}, huge, {OK: true}}}}
+
+	resp := review(t, v, "alice", testPolicy(`{"qos/circuit-breakr":{}}`), testPolicy(`{}`))
+
+	if resp.Allowed {
+		t.Fatal("admitted a policy that breaks its gateway")
+	}
+	if n := len(resp.Result.Message); n > 4*warningLimit {
+		t.Errorf("denial is %d bytes, want it bounded near %d", n, warningLimit)
 	}
 }
