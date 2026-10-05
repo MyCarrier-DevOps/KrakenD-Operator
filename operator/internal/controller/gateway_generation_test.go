@@ -216,7 +216,8 @@ func TestGatewayReconcile_AVerdictOnThisGenerationDoesNotHoldObservedGenerationB
 		{
 			name: "validator unavailable",
 			setup: func(*v1alpha1.KrakenDGateway) (renderer.Renderer, renderer.Validator) {
-				return renderOutput("B"), &countingValidator{err: errors.New("fork/exec krakend: no such file or directory")}
+				return renderOutput("B"),
+					&countingValidator{err: errors.New("fork/exec krakend: no such file or directory")}
 			},
 		},
 		{
