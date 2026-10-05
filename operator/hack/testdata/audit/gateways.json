@@ -19,5 +19,6 @@
  {"metadata":{"namespace":"a","name":"redis-tls"},"spec":{"edition":"EE","config":{},"redis":{"connectionPool":{"addresses":["r"],"tls":{"enabled":true}}},"license":{"secretRef":{"name":"l","key":"k"}}}},
  {"metadata":{"namespace":"a","name":"df-password-ee"},"spec":{"edition":"EE","config":{},"dragonfly":{"enabled":true,"authentication":{"passwordFromSecret":{"name":"s","key":"p"}}},"license":{"secretRef":{"name":"l","key":"k"}}}},
  {"metadata":{"namespace":"a","name":"tmp-pattern"},"spec":{"edition":"CE","config":{},"postRestartJob":{"tmpSizeLimit":"lots"}}},
- {"metadata":{"namespace":"a","name":"tmp-long"},"spec":{"edition":"CE","config":{},"postRestartJob":{"tmpSizeLimit":"0.00000000000000000000000000000000000000000000000000000000000000000000001"}}}
+ {"metadata":{"namespace":"a","name":"tmp-long"},"spec":{"edition":"CE","config":{},"postRestartJob":{"tmpSizeLimit":"0.00000000000000000000000000000000000000000000000000000000000000000000001"}}},
+ {"metadata":{"namespace":"a","name":"tmp-undecodable"},"spec":{"edition":"CE","config":{},"postRestartJob":{"tmpSizeLimit":"1e9223372036854775808"}}}
 ]}
