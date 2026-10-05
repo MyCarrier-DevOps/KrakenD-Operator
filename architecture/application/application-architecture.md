@@ -1123,9 +1123,6 @@ type KrakenDEndpointReconciler struct {
     client.Client
     Scheme   *runtime.Scheme
     Recorder record.EventRecorder
-    // APIReader reads uncached; the finalizer is released only after it
-    // confirms that no endpoint references the policy.
-    APIReader client.Reader
 }
 ```
 
@@ -1219,6 +1216,9 @@ type KrakenDBackendPolicyReconciler struct {
     client.Client
     Scheme   *runtime.Scheme
     Recorder record.EventRecorder
+    // APIReader reads uncached; the finalizer is released only after it
+    // confirms that no endpoint references the policy.
+    APIReader client.Reader
 }
 ```
 
@@ -1235,7 +1235,7 @@ flowchart TD
     P -->|Yes, still referenced| R[Emit a DeletionBlocked event, keep the policy]
     P -->|Yes, no cached reference| S[List endpoints uncached]
     S -->|Still unreferenced| T[Remove the finalizer, return]
-    S -->|Referenced| R
+    S -->|Referenced| U[Keep the policy, no event]
     Q --> E[Update status.referencedBy]
     R --> E
     E --> F{Validate policy fields}
@@ -1252,7 +1252,7 @@ The policy controller's reconciliation is straightforward. The `referencedBy` co
 
 ### Protection finalizer
 
-Every policy that is not being deleted carries the finalizer `gateway.krakend.io/policy-protection` (`v1alpha1.PolicyProtectionFinalizer`), added with an `Update` of the object (RBAC: `update` on `krakendbackendpolicies`). Deleting a policy is always accepted, because the policy webhook is not registered for DELETE. A terminating policy that endpoints still reference keeps serving: the controller keeps reporting `referencedBy`, emits a `DeletionBlocked` warning event that names up to five referencing endpoints, and leaves the finalizer. The endpoint watch enqueues the policy when its last reference is deleted or repointed, and the controller then removes the finalizer. The cached index can lag a reference created a moment ago, so before it releases a policy its cache shows unreferenced the controller lists the endpoints through `APIReader` (a field index exists only in the cache, so it filters the list with `EndpointPolicyKeys`). Admission rejects a new reference to a terminating policy. A reference created after the controller's uncached list but admitted before the webhook saw the deletion is possible only inside a window of milliseconds; the endpoint then reports `PolicyNotFound`.
+Every policy that is not being deleted carries the finalizer `gateway.krakend.io/policy-protection` (`v1alpha1.PolicyProtectionFinalizer`), added with an `Update` of the object (RBAC: `update` on `krakendbackendpolicies`). Deleting a policy is always accepted, because the policy webhook is not registered for DELETE. A terminating policy that endpoints still reference keeps serving: the controller keeps reporting `referencedBy`, emits a `DeletionBlocked` warning event that names up to five referencing endpoints, and leaves the finalizer. The endpoint watch enqueues the policy when its last reference is deleted or repointed, and the controller then removes the finalizer. The cached index can lag a reference created a moment ago, so before it releases a policy its cache shows unreferenced the controller lists the endpoints through `APIReader` (a field index exists only in the cache, so it filters the list with `EndpointPolicyKeys`). Admission rejects a new reference to a terminating policy. Admission narrows the matching race. The endpoint webhook reads a policy through the cache at the start of the request, and the render check that follows can take seconds (up to the 12 s budget with slot waits), so after the check the validator re-reads each newly referenced policy through the manager's uncached reader (`EndpointValidator.APIReader`) and refuses the write when the policy is missing or terminating (an uncached read error is a retryable 500). The residual window runs from that uncached read until the endpoint is persisted, plus the controller's own release check: a reference persisted after the controller's uncached list but admitted before the deletion was visible there. The endpoint then reports `PolicyNotFound` and drops out of the render. A policy is also unprotected until its first reconcile adds the finalizer, including during an upgrade rollout, where the new webhook configuration drops DELETE before the new leader has added finalizers.
 
 ### SetupWithManager
 
