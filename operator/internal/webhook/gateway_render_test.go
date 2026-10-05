@@ -436,3 +436,27 @@ func TestGatewayAdmission_CERejectsEnterpriseOnlyFields(t *testing.T) {
 		})
 	}
 }
+
+// A new or changed spec.openapi on a CE gateway is rejected; its denial must
+// not also carry the warning for a stored one.
+func TestGatewayAdmission_RejectedOpenAPIOnCEDoesNotAlsoWarn(t *testing.T) {
+	enabled := testGateway()
+	enabled.Spec.OpenAPI = &v1alpha1.OpenAPIExportSpec{Enabled: true}
+	v := &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
+
+	for name, old := range map[string]*v1alpha1.KrakenDGateway{"created": nil, "added": testGateway()} {
+		t.Run(name, func(t *testing.T) {
+			var oldObj runtime.Object
+			if old != nil {
+				oldObj = old
+			}
+			resp := review(t, v, "alice", enabled, oldObj)
+			if resp.Allowed {
+				t.Fatal("admitted, want a denial")
+			}
+			if len(resp.Warnings) != 0 {
+				t.Errorf("warnings = %v, want none on a denial", resp.Warnings)
+			}
+		})
+	}
+}
