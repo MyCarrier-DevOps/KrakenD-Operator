@@ -153,5 +153,6 @@ jq "${jq_opts[@]}" "$jq_lib"'
 
 jq "${jq_opts[@]}" "$jq_lib"'
 .items[] | .spec as $s | {id: "\(.metadata.namespace)/\(.metadata.name)", v: [
-  (if (.metadata.name | length) > 63 then "name longer than 63 characters" else empty end)
+  (if (.metadata.name | length) > 63 then "name longer than 63 characters" else empty end),
+  (if ($s.gatewayRef.name // "") == "" then "spec.gatewayRef.name is empty" else empty end)
 ]} | report("KrakenDAutoConfig")' "$work/autoconfigs.json"
