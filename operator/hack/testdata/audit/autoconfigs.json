@@ -1,5 +1,6 @@
 {"items":[
  {"metadata":{"namespace":"a","name":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"spec":{"gatewayRef":{"name":"gw"},"openapi":{"url":"http://x"},"trigger":"OnChange"}},
  {"metadata":{"namespace":"a","name":"nogw"},"spec":{"gatewayRef":{"name":""},"openapi":{"url":"http://x"},"trigger":"OnChange"}},
- {"metadata":{"namespace":"a","name":"two-sources"},"spec":{"gatewayRef":{"name":"gw"},"openapi":{"url":"http://x","configMapRef":{"name":"c"}},"trigger":"OnChange","urlTransform":{"hostMapping":[{"from":"a","to":"b"}]}}}
+ {"metadata":{"namespace":"a","name":"two-sources"},"spec":{"gatewayRef":{"name":"gw"},"openapi":{"url":"http://x","configMapRef":{"name":"c"}},"trigger":"OnChange","urlTransform":{"hostMapping":[{"from":"a","to":"b"}]}}},
+ {"metadata":{"namespace":"a","name":"no-hostmapping"},"spec":{"gatewayRef":{"name":"gw"},"openapi":{"configMapRef":{"name":"c"}},"trigger":"OnChange"}}
 ]}
