@@ -353,8 +353,10 @@ func (v *EndpointValidator) validatePolicyNamespaces(
 				continue
 			}
 			policy := &v1alpha1.KrakenDBackendPolicy{}
-			key := types.NamespacedName{Name: be.PolicyRef.Name, Namespace: be.PolicyRef.ResolvedNamespace(ep.Namespace)}
-			if err := v.Client.Get(ctx, key, policy); apierrors.IsNotFound(err) {
+			key := types.NamespacedName{
+				Name: be.PolicyRef.Name, Namespace: be.PolicyRef.ResolvedNamespace(ep.Namespace),
+			}
+			if err := v.Get(ctx, key, policy); apierrors.IsNotFound(err) {
 				continue
 			} else if err != nil {
 				return nil, fmt.Errorf("looking up policy %s: %w", key, err)
@@ -363,7 +365,9 @@ func (v *EndpointValidator) validatePolicyNamespaces(
 				p := field.NewPath("spec", "endpoints").Index(i).Child("backends").Index(j).Child("policyRef")
 				errs = append(errs, field.Invalid(p, be.PolicyRef.Name, fmt.Sprintf(
 					"policy %s carries Enterprise-only extra_config (%s): the gateway runs CE, which ignores it silently",
-					key, describeDrops(drops))))
+					key,
+					describeDrops(drops),
+				)))
 			}
 		}
 	}
