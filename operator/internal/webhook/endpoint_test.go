@@ -532,3 +532,26 @@ func TestEndpointAdmission_ValidatorUnavailableIs500(t *testing.T) {
 		t.Errorf("message = %q, want it to say the validation could not run", resp.Result.Message)
 	}
 }
+
+// A finding about another object or the gateway root has no entry of the
+// candidate to point at: the denial carries it on spec.endpoints.
+func TestEndpointAdmission_FindingsBeyondTheCandidateGoOnTheEndpointsField(t *testing.T) {
+	after := configcheck.Verdict{Findings: []configcheck.Finding{
+		{Endpoint: types.NamespacedName{Namespace: "default", Name: "other"}, Index: 0, Message: "clashes"},
+		{Index: -1, Message: "bad root"},
+	}}
+	v := &EndpointValidator{Client: fakeClient(testGateway()), Checker: &scriptedChecker{
+		verdicts: []configcheck.Verdict{after},
+	}}
+
+	resp := review(t, v, "alice", testEndpoint("new", "/a"), nil)
+
+	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("response = %+v, want a 422 denial", resp.Result)
+	}
+	causes := resp.Result.Details.Causes
+	if len(causes) != 1 || causes[0].Field != "spec.endpoints" ||
+		!strings.Contains(causes[0].Message, "default/other spec.endpoints[0]: clashes; gateway: bad root") {
+		t.Errorf("causes = %+v, want one on spec.endpoints naming both findings", causes)
+	}
+}
