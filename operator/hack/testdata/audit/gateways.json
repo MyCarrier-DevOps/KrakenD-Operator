@@ -25,5 +25,6 @@
  {"metadata":{"namespace":"a","name":"ce-redis"},"spec":{"edition":"CE","config":{},"redis":{"connectionPool":{"addresses":["r"]}}}},
  {"metadata":{"namespace":"a","name":"ce-documentation"},"spec":{"edition":"CE","config":{"documentation":{"version":"1.0"}}}},
  {"metadata":{"namespace":"a","name":"ce-openapi"},"spec":{"edition":"CE","config":{},"openapi":{"enabled":true}}},
- {"metadata":{"namespace":"a","name":"ce-dragonfly"},"spec":{"edition":"CE","config":{},"dragonfly":{"enabled":true}}}
+ {"metadata":{"namespace":"a","name":"ce-dragonfly"},"spec":{"edition":"CE","config":{},"dragonfly":{"enabled":true}}},
+ {"metadata":{"namespace":"a","name":"cors-overflow-ok"},"spec":{"edition":"CE","config":{"cors":{"maxAge":"99999999999h"}}}}
 ]}
