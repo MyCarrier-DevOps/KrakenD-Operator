@@ -3228,3 +3228,31 @@ func TestAutoConfigReconcile_FailedOperationOutsideFilterDoesNotFail(t *testing.
 		t.Errorf("expected Synced True, got %+v", cond)
 	}
 }
+
+func TestAutoConfigReconcile_FailedOperationsAreListedSortedAndCapped(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).Build()
+	f, ce, fi, g := defaultMocks()
+	// Seven failures in reverse order: the message names the first five by
+	// path, then counts the rest, whatever order the evaluator reports them.
+	for i := 7; i >= 1; i-- {
+		ce.output.Failed = append(ce.output.Failed, autoconfig.OperationIssue{
+			Operation: autoconfig.Operation{Method: "GET", Path: fmt.Sprintf("/p%d", i), OperationID: fmt.Sprintf("op%d", i)},
+			Reason:    v1alpha1.ReasonCUEEvaluationFailed,
+			Message:   "boom",
+		})
+	}
+	r := newACReconciler(c, f, ce, fi, g)
+
+	if _, err := reconcileAC(r, ac); err == nil {
+		t.Fatal("expected an error for an OnChange trigger")
+	}
+	want := "operations failed CUE evaluation: GET /p1 (op1): CUEEvaluationFailed; GET /p2 (op2): CUEEvaluationFailed; " +
+		"GET /p3 (op3): CUEEvaluationFailed; GET /p4 (op4): CUEEvaluationFailed; GET /p5 (op5): CUEEvaluationFailed; " +
+		"and 2 more"
+	cond := meta.FindStatusCondition(getAC(t, c, ac).Status.Conditions, v1alpha1.ConditionSynced)
+	if cond == nil || cond.Message != want {
+		t.Errorf("Synced = %+v, want message %q", cond, want)
+	}
+}
