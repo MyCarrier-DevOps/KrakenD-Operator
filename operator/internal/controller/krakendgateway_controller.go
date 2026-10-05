@@ -424,7 +424,9 @@ func (r *KrakenDGatewayReconciler) gatherPluginConfigMaps(
 		key := types.NamespacedName{Name: src.ConfigMapRef.Name, Namespace: gw.Namespace}
 		if err := r.Get(ctx, key, &cm); err != nil {
 			if errors.IsNotFound(err) {
-				missing = append(missing, src.ConfigMapRef.Name)
+				if !slices.Contains(missing, src.ConfigMapRef.Name) {
+					missing = append(missing, src.ConfigMapRef.Name)
+				}
 				continue
 			}
 			return nil, nil, fmt.Errorf("getting plugin configmap %s: %w", key, err)
