@@ -2810,14 +2810,14 @@ func TestGatewayReconciler_CreatesOwnedResources(t *testing.T) {
 | Endpoint conflict → oldest wins; a loser of every entry gets Accepted=False (EndpointConflict), a loser of some gets Accepted=True (PartiallyAccepted); status.conflicts names the lost entries | Conflict detection logic across endpoints[] entries |
 | Policy update → all gateways with referencing endpoints re-queued → ConfigMap updated | `policyToGateways` mapper, namespace-scoped list, re-render |
 | Policy delete while an endpoint references it → held Terminating with a `DeletionBlocked` event, then released when the last reference goes | Protection finalizer, endpoint watch, uncached confirmation before release |
-| Policy create/update with invalid field ranges rejected | Webhook CREATE/UPDATE validation |
+| Policy create/update with out-of-range fields rejected | CRD schema minimums, enforced by the API server |
 | Config validation failure → Error phase, no Deployment update | Validation pipeline, error handling |
 | License expiry → CE fallback (image + config change) | License evaluation inside the gateway reconcile |
 | EE recovery → restored image + full config | License restoration flow |
 | Gateway deletion → orphaned endpoints marked Detached | Endpoint controller gateway watch, Detached phase |
 | AutoConfig create → generated endpoints | AutoConfig pipeline end-to-end |
 | AutoConfig periodic re-sync | RequeueAfter behavior |
-| Webhook rejects invalid CRs | All webhook validation rules |
+| Admission rejects invalid CRs | CRD schema and CEL rules, and the webhook rules: references, route uniqueness, entry rules, render checks |
 
 ### End-to-End Tests
 
