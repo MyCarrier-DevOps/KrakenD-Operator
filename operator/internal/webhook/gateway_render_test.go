@@ -560,3 +560,39 @@ func TestGatewayAdmission_UnavailableCheckCarriesNoWarning(t *testing.T) {
 		t.Errorf("warnings = %v, want none with the error", warnings)
 	}
 }
+
+// The ratchet judges the new gateway after, and the stored one before: a
+// check handed the wrong gateway would compare the change with itself.
+func TestGatewayAdmission_RatchetChecksTheNewGatewayAfterAndTheStoredOneBefore(t *testing.T) {
+	broken := failing("ep", 0, "broken elsewhere")
+	tests := []struct {
+		name         string
+		fromEdition  v1alpha1.Edition
+		toEdition    v1alpha1.Edition
+		wantGateways string
+	}{
+		{"same edition", v1alpha1.EditionCE, v1alpha1.EditionCE, "CE/5s,CE/3s,CE/5s,CE/3s"},
+		{"Enterprise to Community", v1alpha1.EditionEE, v1alpha1.EditionCE, "CE/5s,EE/3s,CE/5s,EE/3s"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			old := testGateway()
+			old.Spec.Edition, old.Spec.Config.Timeout = tt.fromEdition, "3s"
+			edited := old.DeepCopy()
+			edited.Spec.Edition, edited.Spec.Config.Timeout = tt.toEdition, "5s"
+			// The gateway fails with and without the change, and its root fails
+			// only with it: all four checks run.
+			chk := &scriptedChecker{verdicts: []configcheck.Verdict{broken, broken, rootFailure("bad"), {OK: true}}}
+
+			resp := review(t, &GatewayValidator{Client: fakeClient(), Checker: chk}, "alice", edited, old)
+
+			if resp.Allowed {
+				t.Fatalf("response = %+v, want a denial", resp.Result)
+			}
+			if got := strings.Join(chk.gateways, ","); got != tt.wantGateways {
+				t.Errorf("checks were handed gateways %s, want %s (after, before, isolated after, isolated before)",
+					got, tt.wantGateways)
+			}
+		})
+	}
+}
