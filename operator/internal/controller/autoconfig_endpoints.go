@@ -179,6 +179,8 @@ func (r *KrakenDAutoConfigReconciler) writeEndpoint(
 type rejection struct {
 	endpoint        *v1alpha1.KrakenDEndpoint
 	reason, message string
+	// cause is the full error, for the log: message is cut for the status.
+	cause error
 }
 
 // endpointOutcome is what one reconcileEndpoints call did and could not do.
@@ -210,7 +212,7 @@ func (o *endpointOutcome) record(ep *v1alpha1.KrakenDEndpoint, err error) {
 	case apierrors.IsConflict(err) || apierrors.IsAlreadyExists(err):
 		o.raced = append(o.raced, err)
 	case apierrors.IsInvalid(err) || errors.As(err, &owned):
-		o.rejected[ep.Name] = rejection{endpoint: ep, reason: v1alpha1.ReasonEndpointRejected, message: err.Error()}
+		o.rejected[ep.Name] = rejection{endpoint: ep, reason: v1alpha1.ReasonEndpointRejected, message: err.Error(), cause: err}
 	default:
 		o.transient = append(o.transient, err)
 	}
