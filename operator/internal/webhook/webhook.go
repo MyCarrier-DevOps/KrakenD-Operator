@@ -1136,51 +1136,6 @@ func (v *AutoConfigValidator) validate(
 		}
 	}
 
-	hasURL := ac.Spec.OpenAPI.URL != ""
-	hasCM := ac.Spec.OpenAPI.ConfigMapRef != nil
-	if hasURL && hasCM {
-		errs = append(errs, field.Invalid(
-			field.NewPath("spec", "openapi"),
-			"both",
-			"url and configMapRef are mutually exclusive",
-		))
-	}
-	if !hasURL && !hasCM {
-		errs = append(errs, field.Required(
-			field.NewPath("spec", "openapi"),
-			"one of url or configMapRef is required",
-		))
-	}
-
-	if hasCM && !hasURL {
-		if ac.Spec.URLTransform == nil || len(ac.Spec.URLTransform.HostMapping) == 0 {
-			errs = append(errs, field.Required(
-				field.NewPath("spec", "urlTransform", "hostMapping"),
-				"hostMapping is required when using configMapRef",
-			))
-		}
-	}
-
-	if ac.Spec.Trigger == v1alpha1.TriggerPeriodic {
-		if ac.Spec.Periodic == nil || ac.Spec.Periodic.Interval.Duration == 0 {
-			errs = append(errs, field.Required(
-				field.NewPath("spec", "periodic", "interval"),
-				"interval is required when trigger is Periodic",
-			))
-		}
-	}
-
-	if ac.Spec.OpenAPI.Auth != nil {
-		if ac.Spec.OpenAPI.Auth.BearerTokenSecret != nil &&
-			ac.Spec.OpenAPI.Auth.BasicAuthSecret != nil {
-			errs = append(errs, field.Invalid(
-				field.NewPath("spec", "openapi", "auth"),
-				"both",
-				"bearerTokenSecret and basicAuthSecret are mutually exclusive",
-			))
-		}
-	}
-
 	for i, ov := range ac.Spec.Overrides {
 		errs = append(errs, validateExtraConfigAudience(
 			field.NewPath("spec", "overrides").Index(i).Child("extraConfig"),
@@ -1200,56 +1155,14 @@ func (v *AutoConfigValidator) validate(
 	return errs, nil
 }
 
-// validateAdditionalEndpoints validates the additionalEndpoints field and the
-// additionalEndpointsBasePath field of a KrakenDAutoConfig.
+// validateAdditionalEndpoints validates the audience in each additional
+// endpoint's extraConfig; the CRD enforces the rest.
 func validateAdditionalEndpoints(ac *v1alpha1.KrakenDAutoConfig) field.ErrorList {
 	var errs field.ErrorList
-
-	if ac.Spec.AdditionalEndpointsBasePath != "" &&
-		!strings.HasPrefix(ac.Spec.AdditionalEndpointsBasePath, "/") {
-		errs = append(errs, field.Invalid(
-			field.NewPath("spec", "additionalEndpointsBasePath"),
-			ac.Spec.AdditionalEndpointsBasePath,
-			"must start with '/'"))
-	}
-
-	if ac.Spec.AdditionalEndpointsBasePath != "" &&
-		ac.Spec.URLTransform != nil && ac.Spec.URLTransform.AddPathPrefix != "" {
-		errs = append(errs, field.Invalid(
-			field.NewPath("spec", "additionalEndpointsBasePath"),
-			ac.Spec.AdditionalEndpointsBasePath,
-			"is mutually exclusive with spec.urlTransform.addPathPrefix; set only one"))
-	}
-
-	seenAdditional := make(map[string]struct{}, len(ac.Spec.AdditionalEndpoints))
 	for i, ae := range ac.Spec.AdditionalEndpoints {
-		p := field.NewPath("spec", "additionalEndpoints").Index(i)
-
-		if ae.Endpoint == "" {
-			errs = append(errs, field.Required(p.Child("endpoint"), "endpoint is required"))
-		} else if !strings.HasPrefix(ae.Endpoint, "/") {
-			errs = append(errs, field.Invalid(p.Child("endpoint"), ae.Endpoint,
-				"endpoint must start with '/'"))
-		}
-
-		if len(ae.Backends) > 0 && (ae.Host != "" || ae.BackendURLPattern != "" || ae.Encoding != "") {
-			errs = append(errs, field.Invalid(p, "both",
-				"backends and the host/backendUrlPattern/encoding shorthand are mutually exclusive"))
-		}
-
-		method := ae.Method
-		if method == "" {
-			method = "GET"
-		}
-		key := method + " " + ae.Endpoint
-		if _, dup := seenAdditional[key]; dup {
-			errs = append(errs, field.Duplicate(p, key))
-		}
-		seenAdditional[key] = struct{}{}
-
-		errs = append(errs, validateExtraConfigAudience(p.Child("extraConfig"), ae.ExtraConfig)...)
+		errs = append(errs, validateExtraConfigAudience(
+			field.NewPath("spec", "additionalEndpoints").Index(i).Child("extraConfig"), ae.ExtraConfig)...)
 	}
-
 	return errs
 }
 
