@@ -148,8 +148,8 @@ func TestDereferenceParameters_UnresolvableRefStillFailsTheOperation(t *testing.
 		t.Fatalf("DereferenceParameters: %v", err)
 	}
 	got := evaluateEmbedded(t, string(out))
-	if len(got.Entries) != 1 || len(got.Failed) != 1 {
-		t.Errorf("entries=%d failed=%v, want 1 entry and 1 failed operation", len(got.Entries), got.Failed)
+	if len(got.Entries) != 1 || len(got.Failed) != 1 || got.Failed[0].OperationID != "bad" {
+		t.Errorf("entries=%d failed=%+v, want 1 entry and operation bad failed", len(got.Entries), got.Failed)
 	}
 }
 
