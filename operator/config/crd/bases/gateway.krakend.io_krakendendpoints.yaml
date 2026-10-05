@@ -75,7 +75,7 @@ spec:
                 type: object
               endpoints:
                 description: |-
-                  Endpoints is the list of endpoint definitions, at least one. Each
+                  Endpoints is the list of endpoint definitions, one to 1024. Each
                   (endpoint, method) pair appears at most once.
                 items:
                   description: EndpointEntry defines a single KrakenD endpoint.
@@ -279,6 +279,7 @@ spec:
                   - endpoint
                   - method
                   type: object
+                maxItems: 1024
                 minItems: 1
                 type: array
                 x-kubernetes-list-map-keys:
