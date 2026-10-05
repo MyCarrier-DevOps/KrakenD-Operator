@@ -46,10 +46,11 @@ func wireValidation(mgr ctrl.Manager, r renderer.Renderer, v renderer.Validator)
 			Scheme:        mgr.GetScheme(),
 			Recorder:      mgr.GetEventRecorderFor("krakendgateway-controller"),
 			Renderer:      r,
+			Checker:       checker,
 			Clock:         clock.RealClock{},
 			APIReader:     mgr.GetAPIReader(),
 			LicenseParser: licenseutil.NewX509LicenseParser(),
 		},
-		Validators: webhooksetup.NewValidators(mgr.GetClient(), nil),
+		Validators: webhooksetup.NewValidators(mgr.GetClient(), checker),
 	}
 }
