@@ -95,14 +95,14 @@ def quantity_problem($label):
   elif length > 64 then "\($label) is longer than 64 characters"
   else empty end;
 # The keys of an extra_config object that are in $names.
-def eeonly($names): [(. // {}) | keys[] | select(IN($names[]))];
-# The Enterprise-only namespaces of a backend extra_config that a CE render
-# drops: for a namespace CE partly honors, only when the block holds a key CE
-# does not honor (renderer.CEDrops).
-def backend_eeonly:
+# The Enterprise-only namespaces of $names in an extra_config at $level that a
+# CE render drops: for a namespace CE partly honors (ceHonoredKeys at that
+# level), only when the block holds a key CE does not honor, or is not an
+# object (renderer.CEDrops).
+def eeonly($level; $names):
   (. // {}) as $ec
-  | [$ec | keys[] | select(IN($ee[0].enterpriseOnly.backend[])) | . as $ns
-    | ($ee[0].ceHonoredKeys.backend[$ns]) as $honored
+  | [$ec | keys[] | select(IN($names[])) | . as $ns
+    | ($ee[0].ceHonoredKeys[$level][$ns]) as $honored
     | select($honored == null or ($ec[$ns] | type) != "object"
         or ([$ec[$ns] | keys[] | select(IN($honored[]) | not)] | length > 0))];
 # The values the endpoint and AutoConfig enum fields allow.
@@ -201,7 +201,7 @@ jq "${jq_opts[@]}" "$jq_lib"'
   (if $s.edition == "EE" and $s.dragonfly.authentication.passwordFromSecret != null
    then "spec.dragonfly.authentication.passwordFromSecret is not supported yet with edition EE" else empty end),
   ($s.postRestartJob.tmpSizeLimit // empty | quantity_problem("spec.postRestartJob.tmpSizeLimit")),
-  (if $s.edition == "CE" then ($s.config.extraConfig | eeonly($ee[0].enterpriseOnly.service))[]
+  (if $s.edition == "CE" then ($s.config.extraConfig | eeonly("service"; $ee[0].enterpriseOnly.service))[]
      | "spec.config.extraConfig \(.) is Enterprise-only on a CE gateway" else empty end),
   (if $s.edition == "CE" and $s.redis != null then "spec.redis is Enterprise-only on a CE gateway" else empty end),
   (if $s.edition == "CE" and $s.config.documentation != null
@@ -304,13 +304,13 @@ jq "${jq_opts[@]}" --slurpfile gws "$work/gateways.json" --slurpfile pols "$work
   | "\(.spec.gatewayRef.namespace // .metadata.namespace)/\(.spec.gatewayRef.name)" as $gw
   | select($ce[$gw])
   | (([(.spec.endpoints // []) | to_entries[] | .key as $i | .value as $en
-      | (($en.extraConfig | eeonly($entry_ee)[] | "spec.endpoints[\($i)].extraConfig \(.)"),
-         (($en.backends // []) | to_entries[] | .key as $j | .value.extraConfig | backend_eeonly[]
+      | (($en.extraConfig | eeonly("endpoint"; $entry_ee)[] | "spec.endpoints[\($i)].extraConfig \(.)"),
+         (($en.backends // []) | to_entries[] | .key as $j | .value.extraConfig | eeonly("backend"; $ee[0].enterpriseOnly.backend)[]
            | "spec.endpoints[\($i)].backends[\($j)].extraConfig \(.)"))]
   | select(length > 0)
   | "KrakenDEndpoint \($e.metadata.namespace)/\($e.metadata.name): Enterprise-only on CE gateway \($gw): \(join(", "))"),
      ((.spec.endpoints // [])[] | (.backends // [])[] | .policyRef // empty
       | "\(.namespace // $e.metadata.namespace)/\(.name)" as $key
-      | ($pol[$key] // empty) | (.spec.raw | backend_eeonly) as $ns | select($ns | length > 0)
+      | ($pol[$key] // empty) | (.spec.raw | eeonly("backend"; $ee[0].enterpriseOnly.backend)) as $ns | select($ns | length > 0)
       | "KrakenDBackendPolicy \($key): Enterprise-only on CE gateway \($gw): spec.raw \($ns | join(", "))"))]
 | unique[]' "$work/endpoints.json"
