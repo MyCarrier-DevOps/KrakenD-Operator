@@ -148,7 +148,7 @@ func TestRecordDragonflyRunAsRootCondition_NoRequest(t *testing.T) {
 }
 
 // TestReconcileInfrastructure_DragonflyDisabledClearsStaleRunAsRootCondition
-// covers D3/D2(iv): when Dragonfly is deliberately off
+// covers the disable case: when Dragonfly is deliberately off
 // (gw.Spec.Dragonfly == nil or Enabled: false), a stale
 // ConditionDragonflyRunAsRootUnacknowledged left over from a prior reconcile
 // (while Dragonfly WAS enabled) must be removed — mirroring
