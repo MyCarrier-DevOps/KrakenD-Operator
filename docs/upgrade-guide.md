@@ -1031,8 +1031,8 @@ and an orphaned VirtualService kept claiming its hosts.
   replica count until the hold ends. It is held when no config has been
   applied yet, when the applied config's ConfigMap is missing while a newer
   render is rejected, and when a plugin ConfigMap is missing. If
-  `spec.replicas` is unset that is one pod, so set `spec.replicas` before upgrading or before
-  removing `spec.autoscaling`. Setting `spec.replicas` while
+  `spec.replicas` is unset that is one pod, so set `spec.replicas` before
+  upgrading or before removing `spec.autoscaling`. Setting `spec.replicas` while
   `spec.autoscaling` is still set gives the expected admission warning
   "spec.replicas is ignored while spec.autoscaling is set: the
   HorizontalPodAutoscaler manages the replica count".
@@ -1084,8 +1084,10 @@ reported while it is held. The Service, PDB, HPA, Dragonfly, ExternalSecret
 and VirtualService are still reconciled.
 Previously the operator rolled out a pod template that mounted the missing
 ConfigMap, and new pods hung in `ContainerCreating`. Creating the ConfigMap
-releases the hold and rolls out the applied config, which is then reported
-as `Progressing=True` with reason `ConfigDeployed`, with its event.
+releases the hold. When a config was applied during the hold, or the
+gateway has no Deployment yet, that config rolls out and is reported as
+`Progressing=True` with reason `ConfigDeployed`, with its event; otherwise
+nothing rolls, unless the plugin bytes changed (`DeploymentUpdated`).
 `PluginsResolved` exists only while the gateway has ConfigMap plugin
 sources.
 
