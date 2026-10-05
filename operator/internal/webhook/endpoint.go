@@ -130,14 +130,17 @@ func (v *EndpointValidator) admit(
 	if gw == nil {
 		return nil, nil
 	}
-	return v.checkRender(ctx, old, ep, gw)
+	return v.checkRender(ctx, stored, ep, gw)
 }
 
 // checkRender renders ep's gateway with ep and rejects the request only when
 // that turns a passing config into a failing one. When the gateway already
-// fails without ep, ep is judged in isolation: the gateway root plus ep alone.
+// fails without ep, ep is judged in isolation: the gateway root plus ep alone,
+// against the root plus stored alone, the stored object on an update that
+// stays on its gateway and nil otherwise (a create, or a move to another
+// gateway), where the baseline is the root by itself.
 func (v *EndpointValidator) checkRender(
-	ctx context.Context, old, ep *v1alpha1.KrakenDEndpoint, gw *v1alpha1.KrakenDGateway,
+	ctx context.Context, stored, ep *v1alpha1.KrakenDEndpoint, gw *v1alpha1.KrakenDGateway,
 ) (admission.Warnings, error) {
 	after, err := v.Checker.CheckGateway(ctx, gw, []v1alpha1.KrakenDEndpoint{*ep})
 	if err != nil {
@@ -163,8 +166,8 @@ func (v *EndpointValidator) checkRender(
 		return preexisting, nil
 	}
 	var baseline []v1alpha1.KrakenDEndpoint
-	if old != nil {
-		baseline = []v1alpha1.KrakenDEndpoint{*old}
+	if stored != nil {
+		baseline = []v1alpha1.KrakenDEndpoint{*stored}
 	}
 	isoBefore, err := v.Checker.CheckIsolated(ctx, gw, baseline)
 	if err != nil {
