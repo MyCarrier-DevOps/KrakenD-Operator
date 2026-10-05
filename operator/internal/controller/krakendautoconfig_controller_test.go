@@ -4877,7 +4877,7 @@ func TestAutoConfigReconcile_PrecheckHoldsWhatTheRoundsLeftUnchecked(t *testing.
 		t.Fatalf("failedOperations = %+v, want all %d held", failed, len(names))
 	}
 	for _, f := range failed {
-		if f.Endpoint == "test-ac-g" && f.Message != "not written: the gateway config check still failed after 5 rounds" {
+		if f.Endpoint == "test-ac-g" && f.Message != "not checked: 5 other operations failed the gateway config check first" {
 			t.Errorf("message of the unchecked endpoint = %q", f.Message)
 		}
 	}
