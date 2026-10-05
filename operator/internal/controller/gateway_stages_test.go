@@ -2711,3 +2711,24 @@ func TestGatewayReconcile_ReleasingThePluginHoldReportsTheDeferredConfigRolloutO
 		t.Errorf("ConfigDeployed events = %d (%q), want exactly one, on the reconcile that lifts the hold", n, events)
 	}
 }
+
+func TestGatewayReconcile_MissingPluginConfigMapIsNamedOnce(t *testing.T) {
+	gw := reconciledGateway()
+	gw.Spec.Plugins = &v1alpha1.PluginsSpec{Sources: []v1alpha1.PluginSource{
+		{ConfigMapRef: &v1alpha1.ConfigMapKeyRef{Name: "plugins-a", Key: "auth.so"}},
+		{ConfigMapRef: &v1alpha1.ConfigMapKeyRef{Name: "plugins-a", Key: "rate.so"}},
+	}}
+	c := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderOutput("new"), &mockValidator{})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	cond := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionPluginsResolved)
+	if cond == nil {
+		t.Fatal("PluginsResolved is not set")
+	}
+	if n := strings.Count(cond.Message, "plugins-a"); n != 1 {
+		t.Errorf("PluginsResolved message names plugins-a %d times, want once: %q", n, cond.Message)
+	}
+}
