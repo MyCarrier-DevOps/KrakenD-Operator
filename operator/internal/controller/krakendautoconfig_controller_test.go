@@ -3575,3 +3575,47 @@ func TestAutoConfigReconcile_GeneratorWarningsPersistAndEmit(t *testing.T) {
 		t.Errorf("expected a SpecWarning event, got %v", events)
 	}
 }
+
+func TestAutoConfigReconcile_ManyUnresolvedSchemaRefsStayBoundedAndQuiet(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	f, ce, fi, g := defaultMocks()
+	for i := range 3 * maxStatusListLen {
+		g.output.Warnings = append(g.output.Warnings, fmt.Sprintf(
+			"schema reference %q (first used by GET /api/users) is not defined in components/schemas",
+			fmt.Sprintf("Ghost%03d", i)))
+	}
+	var counts writeCounts
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).
+		WithInterceptorFuncs(countWrites(&counts)).Build()
+	rec := fakeRecorder()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Recorder = rec
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+	if got := len(getAC(t, c, ac).Status.Warnings); got != maxStatusListLen {
+		t.Errorf("status warnings = %d, want %d", got, maxStatusListLen)
+	}
+	specWarningEvents := 0
+	for _, ev := range drainEvents(rec) {
+		if strings.HasPrefix(ev, "Warning "+v1alpha1.ReasonSpecWarning+" ") {
+			specWarningEvents++
+		}
+	}
+	if specWarningEvents != maxStatusListLen {
+		t.Errorf("SpecWarning events = %d, want %d", specWarningEvents, maxStatusListLen)
+	}
+	counts = writeCounts{}
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+	if counts != (writeCounts{}) {
+		t.Errorf("an identical second pass wrote %+v, want no writes", counts)
+	}
+	if events := drainEvents(rec); len(events) != 0 {
+		t.Errorf("an identical second pass emitted %v, want no events", events)
+	}
+}
