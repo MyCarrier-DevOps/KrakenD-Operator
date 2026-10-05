@@ -2691,7 +2691,8 @@ spec:
             type: object
             x-kubernetes-validations:
             - fieldPath: .license
-              message: edition EE requires license.externalSecret.enabled or license.secretRef
+              message: edition EE requires license.externalSecret.enabled or a license.secretRef
+                with a non-empty name
               rule: self.edition != 'EE' || (has(self.license) && ((has(self.license.externalSecret)
                 && has(self.license.externalSecret.enabled) && self.license.externalSecret.enabled)
                 || (has(self.license.secretRef) && size(self.license.secretRef.name)
