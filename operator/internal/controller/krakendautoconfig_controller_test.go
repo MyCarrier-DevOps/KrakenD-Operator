@@ -1492,10 +1492,22 @@ func TestAutoConfigReconcile_AmbiguousOverrideFailsClosed(t *testing.T) {
 	cm := testCUEDefinitionsCM()
 	ac := testAutoConfig()
 	ac.Status.Phase = v1alpha1.AutoConfigPhasePending
+	// An endpoint this AutoConfig owns that the sync would delete as stale
+	// if it got that far: it must be kept.
+	staleEP := ownedCopy(t, ac, &v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-ac-old-endpoint", Namespace: "default"},
+		Spec: v1alpha1.KrakenDEndpointSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: "test-gw"},
+			Endpoints: []v1alpha1.EndpointEntry{{
+				Endpoint: "/api/old", Method: "GET",
+				Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/old"}},
+			}},
+		},
+	})
 	f, ce, fi, g := defaultMocks()
 	ce.output.AmbiguousOverrides = []string{"getUsers"}
 	var counts writeCounts
-	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).
+	c := fakeClientBuilder().WithObjects(ac, cm, staleEP).WithStatusSubresource(ac).
 		WithInterceptorFuncs(countWrites(&counts)).Build()
 	r := newACReconciler(c, f, ce, fi, g)
 
@@ -1505,8 +1517,11 @@ func TestAutoConfigReconcile_AmbiguousOverrideFailsClosed(t *testing.T) {
 	if counts.creates+counts.updates+counts.deletes != 0 {
 		t.Errorf("expected no endpoint writes, got %+v", counts)
 	}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(staleEP), &v1alpha1.KrakenDEndpoint{}); err != nil {
+		t.Errorf("expected the owned endpoint to be kept: %v", err)
+	}
 	cond := meta.FindStatusCondition(getAC(t, c, ac).Status.Conditions, v1alpha1.ConditionSynced)
-	if cond == nil || cond.Reason != v1alpha1.ReasonAmbiguousOverride || !strings.Contains(cond.Message, "getUsers") {
+	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != v1alpha1.ReasonAmbiguousOverride || !strings.Contains(cond.Message, "getUsers") {
 		t.Errorf("expected Synced False/AmbiguousOverride naming getUsers, got %+v", cond)
 	}
 }
