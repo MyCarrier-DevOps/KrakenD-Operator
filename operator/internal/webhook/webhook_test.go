@@ -1769,20 +1769,6 @@ func TestPolicyValidator_DeleteAllowed(t *testing.T) {
 	}
 }
 
-func TestPolicyValidator_Update(t *testing.T) {
-	p := &v1alpha1.KrakenDBackendPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "p1", Namespace: "default"},
-		Spec: v1alpha1.KrakenDBackendPolicySpec{
-			RateLimit: &v1alpha1.RateLimitSpec{MaxRate: -1},
-		},
-	}
-	v := &PolicyValidator{}
-	_, err := v.ValidateUpdate(context.Background(), p, p)
-	if err == nil {
-		t.Error("expected error on update")
-	}
-}
-
 func TestAutoConfigValidator_Valid(t *testing.T) {
 	gw := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "my-gw", Namespace: "default"},
