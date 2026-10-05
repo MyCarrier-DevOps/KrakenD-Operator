@@ -256,7 +256,9 @@ jq "${jq_opts[@]}" "$jq_lib"'
     ($o.endpoint // empty | select(crd_test($path_re) | not) | "\($p).endpoint \(tojson)"),
     (if $o.policyRef != null and ($o.policyRef.name // "") == "" then "\($p).policyRef.name is empty" else empty end)
   )),
-  (($s.overrides // []) | group_by(.operationId | ascii_downcase | gsub("[^a-z0-9-]"; "-") | gsub("^-+|-+$"; ""))[]
+  # The override key is autoconfig.SanitizeName: Go lowercases U+212A and U+0130 to ASCII, jq does not.
+  (($s.overrides // []) | group_by(.operationId | gsub("\u212a"; "k") | gsub("\u0130"; "i") | ascii_downcase
+      | gsub("[^a-z0-9-]"; "-") | gsub("^-+|-+$"; ""))[]
     | select(length > 1) | "overrides collide: \([.[].operationId | tojson] | join(", "))"),
   ($s.defaults.endpoint.timeout // empty | dur_problem($go_re; 64; "spec.defaults.endpoint.timeout")),
   ($s.defaults.endpoint.cacheTTL // empty | dur_problem($go_re; 64; "spec.defaults.endpoint.cacheTTL")),
