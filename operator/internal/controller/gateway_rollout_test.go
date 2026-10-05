@@ -161,3 +161,29 @@ func TestGatewayReconcile_TemplateChangeIsProgressingWhileTheCacheLags(t *testin
 
 	requireProgressing(t, got, metav1.ConditionTrue, false)
 }
+
+func TestGatewayReconcile_RecreatedDeploymentIsDeployingNotReadyAndNotError(t *testing.T) {
+	s := serveGateway(t)
+	if err := s.c.Delete(context.Background(), s.deployment(t)); err != nil {
+		t.Fatal(err)
+	}
+
+	got := s.reconcile(t)
+	requireProgressing(t, got, metav1.ConditionTrue, false)
+	if got.Status.Phase != v1alpha1.PhaseDeploying {
+		t.Errorf("phase = %s on the pass that recreates the Deployment, want %s", got.Status.Phase, v1alpha1.PhaseDeploying)
+	}
+
+	// The Deployment controller has observed it and its pod is not available yet.
+	s.deploymentControllerObserves(t, func(st *appsv1.DeploymentStatus) {
+		st.Replicas, st.UpdatedReplicas = 1, 1
+		st.Conditions = []appsv1.DeploymentCondition{{
+			Type: appsv1.DeploymentAvailable, Status: corev1.ConditionFalse, Reason: "MinimumReplicasUnavailable",
+		}}
+	})
+	got = s.reconcile(t)
+	requireProgressing(t, got, metav1.ConditionTrue, false)
+	if got.Status.Phase != v1alpha1.PhaseDeploying {
+		t.Errorf("phase = %s while the new Deployment starts, want %s", got.Status.Phase, v1alpha1.PhaseDeploying)
+	}
+}
