@@ -17,6 +17,7 @@ limitations under the License.
 package renderer
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -123,7 +124,7 @@ const DefaultHealthPath = "/__health"
 // registers the same endpoints in the same gin version), plus the routes -t
 // never registers and the runtime panics on: the health endpoint and the
 // auto_options routes.
-func routeConflicts(doc []byte) ([]string, error) {
+func routeConflicts(ctx context.Context, doc []byte) ([]string, error) {
 	var cfg routedConfig
 	if err := json.Unmarshal(doc, &cfg); err != nil {
 		var typeErr *json.UnmarshalTypeError

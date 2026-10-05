@@ -17,6 +17,7 @@ limitations under the License.
 package renderer
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -63,7 +64,7 @@ func rewriteEEWildcards(endpoints []any) bool {
 //     (eeWildcardBackendFindings).
 //
 // Every finding is a lint-pointer line, so Attribute maps it like any other.
-func eeWildcardFindings(endpoints []any) []string {
+func eeWildcardFindings(ctx context.Context, endpoints []any) ([]string, error) {
 	type route struct {
 		index        int
 		method, path string
@@ -98,7 +99,7 @@ func eeWildcardFindings(endpoints []any) []string {
 	findings = append(findings, eeWildcardParamFindings(endpoints)...)
 	findings = append(findings, eeWildcardBackendFindings(endpoints)...)
 	sort.Strings(findings)
-	return findings
+	return findings, nil
 }
 
 // eeWildcardParamFindings rejects a backend url_pattern that references

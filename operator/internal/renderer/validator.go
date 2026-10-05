@@ -105,14 +105,14 @@ func (v *KrakenDValidator) Lint(ctx context.Context, jsonData []byte, edition v1
 func (v *KrakenDValidator) validate(
 	ctx context.Context, jsonData []byte, edition v1alpha1.Edition, flags ...string,
 ) error {
-	doc, findings, err := validationCopy(jsonData, edition)
+	doc, findings, err := validationCopy(ctx, jsonData, edition)
 	if err != nil {
 		return fmt.Errorf("preparing validation copy: %w", err)
 	}
 	if len(findings) > 0 {
 		return &ValidationError{Output: strings.Join(findings, "\n"), Err: errEEWildcardRule}
 	}
-	conflicts, err := routeConflicts(doc)
+	conflicts, err := routeConflicts(ctx, doc)
 	if err != nil {
 		return fmt.Errorf("checking routes: %w", err)
 	}
@@ -205,7 +205,7 @@ func classifyCheckError(ctx context.Context, output []byte, err error) error {
 // schemas, so nothing is stripped: for an EE render, each wildcard endpoint is
 // rewritten to a parameter route and every endpoint stays at its index.
 // Non-nil findings are a verdict reached without running krakend check.
-func validationCopy(jsonData []byte, edition v1alpha1.Edition) (doc []byte, findings []string, err error) {
+func validationCopy(ctx context.Context, jsonData []byte, edition v1alpha1.Edition) (doc []byte, findings []string, err error) {
 	var config map[string]any
 	if err := json.Unmarshal(jsonData, &config); err != nil {
 		return nil, nil, fmt.Errorf("unmarshaling config for validation copy: %w", err)
@@ -215,7 +215,11 @@ func validationCopy(jsonData []byte, edition v1alpha1.Edition) (doc []byte, find
 	if !ok || edition != v1alpha1.EditionEE {
 		return jsonData, nil, nil
 	}
-	if findings = eeWildcardFindings(endpoints); len(findings) > 0 {
+	findings, err = eeWildcardFindings(ctx, endpoints)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(findings) > 0 {
 		return nil, findings, nil
 	}
 	if !rewriteEEWildcards(endpoints) {

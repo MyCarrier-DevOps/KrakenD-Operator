@@ -17,6 +17,7 @@ limitations under the License.
 package renderer
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -27,7 +28,7 @@ func TestRouteConflicts_ParameterClashNamesBothEndpoints(t *testing.T) {
 		{"endpoint":"/users/{id}","method":"GET"},
 		{"endpoint":"/users/{userId}/orders","method":"GET"}]}`
 
-	lines, err := routeConflicts([]byte(doc))
+	lines, err := routeConflicts(context.Background(), []byte(doc))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +66,7 @@ func TestRouteConflicts_MirrorsTheRuntimeRouter(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			lines, err := routeConflicts([]byte(tt.doc))
+			lines, err := routeConflicts(context.Background(), []byte(tt.doc))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -92,7 +93,7 @@ func TestRouteConflicts_ARefusalOnItsOwnBlamesNoNeighbour(t *testing.T) {
 		{"endpoint":"/ok","method":"GET"},
 		{"endpoint":"/a/*","method":"GET"}]}`
 
-	lines, err := routeConflicts([]byte(doc))
+	lines, err := routeConflicts(context.Background(), []byte(doc))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +109,7 @@ func TestRouteConflicts_AGatewayRouteRefusalIsNotAnEndpointPointer(t *testing.T)
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			lines, err := routeConflicts([]byte(tt.doc))
+			lines, err := routeConflicts(context.Background(), []byte(tt.doc))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -127,7 +128,7 @@ func TestRouteConflicts_AGatewayRouteRefusalIsNotAnEndpointPointer(t *testing.T)
 func TestRouteConflicts_NamesAnyMethodGatewayRoutes(t *testing.T) {
 	doc := `{"echo_endpoint":true,"endpoints":[{"endpoint":"/__echo/x","method":"GET"}]}`
 
-	lines, err := routeConflicts([]byte(doc))
+	lines, err := routeConflicts(context.Background(), []byte(doc))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +140,7 @@ func TestRouteConflicts_NamesAnyMethodGatewayRoutes(t *testing.T) {
 func TestRouteConflicts_ATypeMismatchIsLeftToTheSchemaLint(t *testing.T) {
 	doc := `{"debug_endpoint":"yes","endpoints":[{"endpoint":"/a","method":"GET"}]}`
 
-	lines, err := routeConflicts([]byte(doc))
+	lines, err := routeConflicts(context.Background(), []byte(doc))
 	if err != nil || len(lines) != 0 {
 		t.Errorf("routeConflicts = %q, %v, want no lines and no error (krakend check reports the type)", lines, err)
 	}

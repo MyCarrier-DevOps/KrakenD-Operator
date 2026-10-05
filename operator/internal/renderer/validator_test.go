@@ -115,7 +115,7 @@ func TestValidationError_Unwrap(t *testing.T) {
 
 func TestValidationCopy_CEIsUnchanged(t *testing.T) {
 	input := []byte(`{"version":3,"endpoints":[{"endpoint":"/api"},{"endpoint":"/*"}]}`)
-	out, _, err := validationCopy(input, v1alpha1.EditionCE)
+	out, _, err := validationCopy(context.Background(), input, v1alpha1.EditionCE)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestValidationCopy_CEIsUnchanged(t *testing.T) {
 
 func TestValidationCopy_NoEndpoints(t *testing.T) {
 	input := []byte(`{"version":3}`)
-	out, _, err := validationCopy(input, v1alpha1.EditionEE)
+	out, _, err := validationCopy(context.Background(), input, v1alpha1.EditionEE)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestValidationCopy_NoEndpoints(t *testing.T) {
 
 func TestValidationCopy_EmptyEndpointsArray(t *testing.T) {
 	input := []byte(`{"endpoints":[],"version":3}`)
-	out, _, err := validationCopy(input, v1alpha1.EditionEE)
+	out, _, err := validationCopy(context.Background(), input, v1alpha1.EditionEE)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestValidationCopy_EmptyEndpointsArray(t *testing.T) {
 }
 
 func TestValidationCopy_InvalidJSON(t *testing.T) {
-	_, _, err := validationCopy([]byte(`{invalid`), v1alpha1.EditionEE)
+	_, _, err := validationCopy(context.Background(), []byte(`{invalid`), v1alpha1.EditionEE)
 	if err == nil {
 		t.Fatal("expected error for invalid JSON")
 	}
@@ -163,7 +163,7 @@ func TestValidationCopy_InvalidJSON(t *testing.T) {
 func TestValidationCopy_ValidatesTheRedisNamespace(t *testing.T) {
 	input := []byte(`{"version":3,"extra_config":{"redis":{"connection_pools":[{"name":"default","address":"r:6379"}]}}}`)
 	for _, edition := range []v1alpha1.Edition{v1alpha1.EditionCE, v1alpha1.EditionEE} {
-		out, findings, err := validationCopy(input, edition)
+		out, findings, err := validationCopy(context.Background(), input, edition)
 		if err != nil || len(findings) != 0 {
 			t.Fatalf("%s: validationCopy = %v, %v", edition, findings, err)
 		}
@@ -635,11 +635,11 @@ func TestValidationCopy_PluginConfigMapsDoNotReachIt(t *testing.T) {
 		t.Fatal("the ConfigMaps did not reach the plugin checksum, so this test guards nothing")
 	}
 	for _, edition := range []v1alpha1.Edition{v1alpha1.EditionCE, v1alpha1.EditionEE} {
-		a, _, err := validationCopy(plain.JSON, edition)
+		a, _, err := validationCopy(context.Background(), plain.JSON, edition)
 		if err != nil {
 			t.Fatal(err)
 		}
-		b, _, err := validationCopy(full.JSON, edition)
+		b, _, err := validationCopy(context.Background(), full.JSON, edition)
 		if err != nil {
 			t.Fatal(err)
 		}
