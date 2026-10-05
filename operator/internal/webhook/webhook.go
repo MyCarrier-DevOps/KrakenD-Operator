@@ -1430,6 +1430,11 @@ func validateExtraConfigAudience(p *field.Path, ec *runtime.RawExtension) field.
 	return errs
 }
 
+// +kubebuilder:webhook:path=/validate-gateway-krakend-io-v1alpha1-krakendgateway,mutating=false,failurePolicy=fail,sideEffects=None,groups=gateway.krakend.io,resources=krakendgateways,verbs=create;update,versions=v1alpha1,name=vkrakendgateway.kb.io,admissionReviewVersions=v1,timeoutSeconds=15
+// +kubebuilder:webhook:path=/validate-gateway-krakend-io-v1alpha1-krakendendpoint,mutating=false,failurePolicy=fail,sideEffects=None,groups=gateway.krakend.io,resources=krakendendpoints,verbs=create;update,versions=v1alpha1,name=vkrakendendpoint.kb.io,admissionReviewVersions=v1,timeoutSeconds=15
+// +kubebuilder:webhook:path=/validate-gateway-krakend-io-v1alpha1-krakendbackendpolicy,mutating=false,failurePolicy=fail,sideEffects=None,groups=gateway.krakend.io,resources=krakendbackendpolicies,verbs=create;update;delete,versions=v1alpha1,name=vkrakendbackendpolicy.kb.io,admissionReviewVersions=v1,timeoutSeconds=15
+// +kubebuilder:webhook:path=/validate-gateway-krakend-io-v1alpha1-krakendautoconfig,mutating=false,failurePolicy=fail,sideEffects=None,groups=gateway.krakend.io,resources=krakendautoconfigs,verbs=create;update,versions=v1alpha1,name=vkrakendautoconfig.kb.io,admissionReviewVersions=v1,timeoutSeconds=15
+
 // SetupWebhooks registers all validating webhooks with the manager.
 func SetupWebhooks(mgr ctrl.Manager) error {
 	// Ensure field indexes are registered — needed for conflict detection
