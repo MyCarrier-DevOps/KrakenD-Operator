@@ -20,6 +20,7 @@ package integration
 
 import (
 	"context"
+	"debug/buildinfo"
 	"errors"
 	"fmt"
 	"io"
@@ -103,6 +104,16 @@ func pinnedKrakenD(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return wrapper
+}
+
+// moduleVersion returns the version of the module at path in info, or "".
+func moduleVersion(info *buildinfo.BuildInfo, path string) string {
+	for _, dep := range info.Deps {
+		if dep.Path == path {
+			return dep.Version
+		}
+	}
+	return ""
 }
 
 type parityCase struct {
@@ -201,6 +212,23 @@ func TestConfigCheckParity(t *testing.T) {
 		out, err := exec.Command(bin, "version").CombinedOutput()
 		if err != nil || !strings.Contains(string(out), "KrakenD Version: "+configcheck.ValidatorVersion+".") {
 			t.Fatalf("krakend version = %q (%v), want %s.x", out, err, configcheck.ValidatorVersion)
+		}
+	})
+
+	t.Run("gin version matches the route check", func(t *testing.T) {
+		const ginPath = "github.com/gin-gonic/gin"
+		binInfo, err := buildinfo.ReadFile(filepath.Join(filepath.Dir(bin), "krakend.bin"))
+		if err != nil {
+			t.Fatalf("reading the krakend build info: %v", err)
+		}
+		// go list reports the version the route check is compiled with; a test
+		// binary carries no module list of its own.
+		own, err := exec.Command("go", "list", "-m", "-f", "{{.Version}}", ginPath).Output()
+		if err != nil {
+			t.Fatalf("go list -m %s: %v", ginPath, err)
+		}
+		if got, want := moduleVersion(binInfo, ginPath), strings.TrimSpace(string(own)); got == "" || got != want {
+			t.Fatalf("krakend is built with gin %q, the route check with %q", got, want)
 		}
 	})
 
