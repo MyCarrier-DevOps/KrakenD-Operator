@@ -102,6 +102,7 @@ func TestValidateEntries(t *testing.T) {
 		// render drops it, so it is not refused.
 		{"entry documentation on CE", testGateway(),
 			withExtra(`{"documentation/openapi":{"audience":["public"]}}`, ""), ""},
+		{"root wildcard on EE", ee, testEndpoint("e", "/*"), "root wildcard"},
 		{"only GET collides with the health endpoint", custom, post, ""},
 		// A raw router block replaces the typed one, so the typed healthPath is gone.
 		{"raw router replaces the typed one", rawRouterBlock(`{"auto_options":true}`),
