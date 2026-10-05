@@ -203,6 +203,7 @@ jq "${jq_opts[@]}" "$jq_lib"'
     ($o.cacheTTL // empty | dur_problem($go_re; 64; "\($p).cacheTTL")),
     ($o.concurrentCalls // empty | select(. < 1) | "\($p).concurrentCalls \(.)"),
     ($o.outputEncoding // empty | enum_problem("\($p).outputEncoding"; output_encodings)),
-    ($o.endpoint // empty | select(crd_test($path_re) | not) | "\($p).endpoint \(.)")
+    ($o.endpoint // empty | select(crd_test($path_re) | not) | "\($p).endpoint \(.)"),
+    (if $o.policyRef != null and ($o.policyRef.name // "") == "" then "\($p).policyRef.name is empty" else empty end)
   ))
 ]} | report("KrakenDAutoConfig")' "$work/autoconfigs.json"
