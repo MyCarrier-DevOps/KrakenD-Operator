@@ -95,6 +95,7 @@ type KrakenDAutoConfigSpec struct {
 }
 
 // OpenAPISource defines the location of an OpenAPI spec.
+// +kubebuilder:validation:XValidation:rule="(has(self.url) && size(self.url) > 0) != has(self.configMapRef)",message="exactly one of url or configMapRef is required"
 type OpenAPISource struct {
 	// URL is the HTTP(S) URL to fetch the OpenAPI spec from.
 	URL string `json:"url,omitempty"`
