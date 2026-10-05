@@ -1590,6 +1590,18 @@ func TestGatewayReadinessFor(t *testing.T) {
 			valid, available, settled,
 			c("PluginsResolved", metav1.ConditionFalse, "ConfigMapNotFound"),
 		}, metav1.ConditionFalse, "ConfigMapNotFound", v1alpha1.PhaseError},
+		{"a rejected configuration outranks a missing plugin ConfigMap", []metav1.Condition{
+			c("ConfigValid", metav1.ConditionFalse, "ConfigValidationFailed"), available, settled,
+			c("PluginsResolved", metav1.ConditionFalse, "ConfigMapNotFound"),
+		}, metav1.ConditionFalse, "ConfigValidationFailed", v1alpha1.PhaseError},
+		{"a missing plugin ConfigMap outranks an unavailable validator", []metav1.Condition{
+			c("ConfigValid", metav1.ConditionUnknown, "ValidatorUnavailable"), available, settled,
+			c("PluginsResolved", metav1.ConditionFalse, "ConfigMapNotFound"),
+		}, metav1.ConditionFalse, "ConfigMapNotFound", v1alpha1.PhaseError},
+		{"a missing plugin ConfigMap outranks an unavailable Deployment", []metav1.Condition{
+			valid, c("Available", metav1.ConditionFalse, "RolloutFailed"),
+			c("PluginsResolved", metav1.ConditionFalse, "ConfigMapNotFound"),
+		}, metav1.ConditionFalse, "ConfigMapNotFound", v1alpha1.PhaseError},
 		{"deployment not available yet", []metav1.Condition{valid, settled},
 			metav1.ConditionFalse, "AwaitingAvailability", v1alpha1.PhaseDeploying},
 		{"validator unavailable while serving",
