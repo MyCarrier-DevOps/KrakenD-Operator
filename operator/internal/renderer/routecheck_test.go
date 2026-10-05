@@ -18,6 +18,7 @@ package renderer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -143,5 +144,16 @@ func TestRouteConflicts_ATypeMismatchIsLeftToTheSchemaLint(t *testing.T) {
 	lines, err := routeConflicts(context.Background(), []byte(doc))
 	if err != nil || len(lines) != 0 {
 		t.Errorf("routeConflicts = %q, %v, want no lines and no error (krakend check reports the type)", lines, err)
+	}
+}
+
+func TestRouteConflicts_ACancelledContextIsAnErrorNotAVerdict(t *testing.T) {
+	doc := `{"endpoints":[{"endpoint":"/a","method":"GET"},{"endpoint":"/a","method":"GET"}]}`
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	lines, err := routeConflicts(ctx, []byte(doc))
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("routeConflicts = %q, %v, want the context error so the caller reports unavailable", lines, err)
 	}
 }
