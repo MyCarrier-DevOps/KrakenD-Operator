@@ -79,7 +79,6 @@ webhooks:
         operations:
           - CREATE
           - UPDATE
-          - DELETE
         resources:
           - krakendbackendpolicies
     sideEffects: None
