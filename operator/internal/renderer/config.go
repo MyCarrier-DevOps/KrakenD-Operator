@@ -88,7 +88,7 @@ func (r *krakendRenderer) Render(input RenderInput) (*RenderOutput, error) {
 	}
 	if input.CEFallback {
 		stripped = append(stripped,
-			stripNamespaces(gatewayEC, eeOnlyServiceNamespaces, StrippedEEFeature{}, "extra_config")...)
+			stripNamespaces(gatewayEC, LevelService, eeOnlyServiceNamespaces, StrippedEEFeature{}, "extra_config")...)
 	}
 
 	if len(gatewayEC) > 0 {

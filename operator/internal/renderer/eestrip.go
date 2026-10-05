@@ -97,23 +97,42 @@ func dropCEInertNamespaces(ep map[string]any) {
 	}
 }
 
-// stripNamespaces deletes, in place, ec's keys that are in eeOnly, and returns
-// one feature per deleted key, labelled "<where> <key>" and sorted.
+// stripNamespaces deletes, in place, what a CE render drops from ec at level:
+// the keys of eeOnly, or only the Enterprise-only keys of a block CE partly
+// honors. It returns one feature per affected namespace, labelled
+// "<where> <key>" and sorted.
 func stripNamespaces(
-	ec map[string]any, eeOnly map[string]struct{}, base StrippedEEFeature, where string,
+	ec map[string]any, level NamespaceLevel, eeOnly map[string]struct{}, base StrippedEEFeature, where string,
 ) []StrippedEEFeature {
 	var out []StrippedEEFeature
 	for k := range ec {
 		if _, ok := eeOnly[k]; !ok {
 			continue
 		}
+		if block, isBlock := ec[k].(map[string]any); isBlock {
+			if partly, dropped := ceDroppedKeys(level, k, slices.Collect(maps.Keys(block))); partly {
+				if len(dropped) == 0 {
+					continue
+				}
+				for _, key := range dropped {
+					delete(block, key)
+				}
+				if len(block) > 0 {
+					out = append(out, featureOf(base, where, k))
+					continue
+				}
+			}
+		}
 		delete(ec, k)
-		f := base
-		f.Feature = where + " " + k
-		out = append(out, f)
+		out = append(out, featureOf(base, where, k))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Feature < out[j].Feature })
 	return out
+}
+
+func featureOf(base StrippedEEFeature, where, key string) StrippedEEFeature {
+	base.Feature = where + " " + key
+	return base
 }
 
 // stripEndpointEEFeatures removes, in place, the Enterprise-only namespaces of
@@ -122,7 +141,7 @@ func stripEndpointEEFeatures(ep map[string]any, fe flatEndpoint) []StrippedEEFea
 	base := StrippedEEFeature{Source: fe.Source, Method: fe.Entry.Method, Endpoint: fe.Entry.Endpoint}
 	var out []StrippedEEFeature
 	if ec, ok := ep["extra_config"].(map[string]any); ok {
-		out = append(out, stripNamespaces(ec, eeOnlyEndpointNamespaces, base, "extra_config")...)
+		out = append(out, stripNamespaces(ec, LevelEndpoint, eeOnlyEndpointNamespaces, base, "extra_config")...)
 		if len(ec) == 0 {
 			delete(ep, "extra_config")
 		}
@@ -141,7 +160,7 @@ func stripEndpointEEFeatures(ep map[string]any, fe flatEndpoint) []StrippedEEFea
 			continue
 		}
 		where := fmt.Sprintf("backend[%d] extra_config", i)
-		out = append(out, stripNamespaces(ec, eeOnlyBackendNamespaces, base, where)...)
+		out = append(out, stripNamespaces(ec, LevelBackend, eeOnlyBackendNamespaces, base, where)...)
 		if len(ec) == 0 {
 			delete(bm, "extra_config")
 		}
