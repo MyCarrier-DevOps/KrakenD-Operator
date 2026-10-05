@@ -580,6 +580,9 @@ func TestEndpointAdmission_DenialQuotingOtherFindingsIsBounded(t *testing.T) {
 
 	resp := review(t, v, "alice", testEndpoint("new", "/a"), nil)
 
+	if resp.Result.Details == nil || len(resp.Result.Details.Causes) == 0 {
+		t.Fatalf("response = %+v, want a denial with causes", resp.Result)
+	}
 	msg := resp.Result.Details.Causes[0].Message
 	if len(msg) > 200+warningLimit || !utf8.ValidString(msg) {
 		t.Errorf("cause is %d bytes (valid UTF-8: %v), want at most %d bytes of findings, cut on a rune boundary",
@@ -700,5 +703,36 @@ func TestEndpointAdmission_FindingsOnManyEntriesAreCappedAtTwentyCauses(t *testi
 	}
 	if len(last.Message) > 200+warningLimit {
 		t.Errorf("summary is %d bytes, want at most %d", len(last.Message), 200+warningLimit)
+	}
+}
+
+// A check that cannot run at any step of the ratchet is a transient 500, never
+// a verdict.
+func TestEndpointAdmission_ARatchetStepThatCannotRunIs500(t *testing.T) {
+	broken := failing("other", 0, "broken elsewhere")
+	old := testEndpoint("new", "/old")
+	tests := []struct {
+		name     string
+		failCall int
+		verdicts []configcheck.Verdict
+	}{
+		{"the gateway without the change", 2, []configcheck.Verdict{failing("new", 0, "bad")}},
+		{"the candidate alone", 3, []configcheck.Verdict{broken, broken}},
+		{"the stored entries alone", 4, []configcheck.Verdict{broken, broken, failing("new", 0, "bad")}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			chk := &scriptedChecker{verdicts: tt.verdicts, err: errors.New("validator exploded"), failCall: tt.failCall}
+			v := &EndpointValidator{Client: fakeClient(testGateway()), Checker: chk}
+
+			resp := review(t, v, "alice", testEndpoint("new", "/a"), old)
+
+			if resp.Allowed || resp.Result.Code != http.StatusInternalServerError {
+				t.Errorf("response = %+v, want 500", resp.Result)
+			}
+			if len(chk.calls) != tt.failCall {
+				t.Errorf("ran %d checks, want it to stop at check %d", len(chk.calls), tt.failCall)
+			}
+		})
 	}
 }
