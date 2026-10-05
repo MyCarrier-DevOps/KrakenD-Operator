@@ -736,3 +736,37 @@ func TestEndpointAdmission_ARatchetStepThatCannotRunIs500(t *testing.T) {
 		})
 	}
 }
+
+const operatorUser = "system:serviceaccount:krakend-system:krakend-operator"
+
+// ownedEndpoint is a generated endpoint whose owner reference points at kind.
+func ownedEndpoint(kind string, controller bool) *v1alpha1.KrakenDEndpoint {
+	ep := testEndpoint("gen", "/a")
+	ep.OwnerReferences = []metav1.OwnerReference{{APIVersion: v1alpha1.GroupVersion.String(),
+		Kind: kind, Name: "owner", UID: "owner-uid", Controller: ptr.To(controller)}}
+	return ep
+}
+
+func TestEndpointAdmission_OnlyOperatorWritesToAutoConfigEndpointsSkipRenderCheck(t *testing.T) {
+	tests := []struct {
+		name      string
+		username  string
+		configure string // OperatorUsername
+		ep        *v1alpha1.KrakenDEndpoint
+		wantCheck bool
+	}{
+		{"operator on an AutoConfig endpoint", operatorUser, operatorUser, ownedEndpoint("KrakenDAutoConfig", true), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			chk := &scriptedChecker{}
+			v := &EndpointValidator{Client: fakeClient(testGateway()), Checker: chk, OperatorUsername: tt.configure}
+			if resp := review(t, v, tt.username, tt.ep, nil); !resp.Allowed {
+				t.Fatalf("denied: %+v", resp.Result)
+			}
+			if ran := len(chk.calls) > 0; ran != tt.wantCheck {
+				t.Errorf("render check ran = %v, want %v", ran, tt.wantCheck)
+			}
+		})
+	}
+}

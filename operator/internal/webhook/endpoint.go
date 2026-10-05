@@ -43,6 +43,11 @@ const kindEndpoint = "KrakenDEndpoint"
 type EndpointValidator struct {
 	client.Client
 	Checker ConfigChecker
+	// OperatorUsername is the username the operator's own API requests carry.
+	// Its writes to endpoints a KrakenDAutoConfig controls skip the render
+	// check (the AutoConfig controller checks its whole desired set first);
+	// empty disables the exemption.
+	OperatorUsername string
 }
 
 // ValidateCreate validates a new KrakenDEndpoint.
