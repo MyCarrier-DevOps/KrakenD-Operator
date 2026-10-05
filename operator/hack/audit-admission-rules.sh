@@ -98,6 +98,16 @@ def backend_problems($q):
   (.sd // empty | enum_problem("\($q).sd"; discoveries)),
   (.method // empty | enum_problem("\($q).method"; backend_methods)),
   (if .policyRef != null and (.policyRef.name // "") == "" then "\($q).policyRef.name is empty" else empty end);
+# The route KrakenD registers for an endpoint path: parameter names erased and
+# the path cleaned the way its router cleans it (renderer.ConflictKey).
+def clean_path:
+  split("/") | reduce .[] as $seg ([];
+    if $seg == "" or $seg == "." then .
+    elif $seg == ".." then .[:-1]
+    else . + [$seg] end) | "/" + join("/");
+def conflict_key:
+  gsub("/\\{[a-zA-Z0-9_-]+\\}"; "/{}") | . as $shape | clean_path as $clean
+  | if ($shape | endswith("/")) and ($clean | endswith("/") | not) then $clean + "/" else $clean end;
 def report(kind): select(.v | length > 0) | "\(kind) \(.id): \(.v | unique | join("; "))";
 '
 
@@ -225,6 +235,6 @@ jq "${jq_opts[@]}" "$jq_lib"'
   | "\(.spec.gatewayRef.namespace // .metadata.namespace)/\(.spec.gatewayRef.name)" as $gw
   | (.spec.endpoints // [])[]
   | {gw: $gw, owner: "\($o.metadata.namespace)/\($o.metadata.name)",
-     key: "\(.method) \(.endpoint | gsub("/\\{[a-zA-Z0-9_-]+\\}"; "/{}"))", route: "\(.method) \(.endpoint)"}]
+     key: "\(.method) \(.endpoint | conflict_key)", route: "\(.method) \(.endpoint)"}]
 | group_by([.gw, .key])[] | select((unique_by([.owner, .route]) | length) > 1)
 | "gateway \(.[0].gw): \([.[] | "\(.route) (\(.owner))"] | join(" vs "))"' "$work/endpoints.json"
