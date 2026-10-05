@@ -3843,3 +3843,37 @@ func TestOwnedEndpointPredicate_PassesLabelChange(t *testing.T) {
 		t.Error("expected a label change to pass the Owns predicate")
 	}
 }
+
+func TestAutoConfigReconcile_NeverTouchesAnotherNamespacesEndpoints(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	// A labelled orphan in another namespace is not adopted.
+	orphan := generatedEndpoint("elsewhere", "/elsewhere")
+	orphan.Namespace = "other"
+	// An endpoint there carrying a controller reference with this
+	// AutoConfig's UID is a forgery: owner references do not cross
+	// namespaces, so it is neither listed nor deleted as stale.
+	forged := generatedEndpoint("forged", "/forged")
+	forged.Namespace = "other"
+	forged.OwnerReferences = []metav1.OwnerReference{{
+		APIVersion: v1alpha1.GroupVersion.String(), Kind: "KrakenDAutoConfig", Name: ac.Name, UID: ac.UID,
+		Controller: ptr.To(true),
+	}}
+	c := fakeClientBuilder().WithObjects(ac, cm, orphan, forged).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	for _, want := range []*v1alpha1.KrakenDEndpoint{orphan, forged} {
+		var got v1alpha1.KrakenDEndpoint
+		if err := c.Get(context.Background(), client.ObjectKeyFromObject(want), &got); err != nil {
+			t.Errorf("expected %s/%s kept: %v", want.Namespace, want.Name, err)
+			continue
+		}
+		if !equality.Semantic.DeepEqual(got.OwnerReferences, want.OwnerReferences) {
+			t.Errorf("%s/%s owner references changed: %+v", want.Namespace, want.Name, got.OwnerReferences)
+		}
+	}
+}
