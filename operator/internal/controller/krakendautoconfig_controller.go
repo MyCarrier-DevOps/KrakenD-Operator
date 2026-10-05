@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	stderrors "errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"reflect"
 	"slices"
@@ -293,6 +294,13 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		changes:   outcome.changes,
 	}, warnings); err != nil {
 		return statusWriteFailure(ctx, err)
+	}
+	if !slices.Equal(origStatus.FailedOperations, ac.Status.FailedOperations) {
+		// The status keeps a cut message: the full cause is logged once per
+		// change of the failed list.
+		for _, name := range slices.Sorted(maps.Keys(outcome.rejected)) {
+			log.Info("endpoint rejected; holding it", "endpoint", name, "error", outcome.rejected[name].cause.Error())
+		}
 	}
 
 	log.V(1).Info("autoconfig reconciled",
