@@ -2520,6 +2520,11 @@ spec:
                 required:
                 - enabled
                 type: object
+                x-kubernetes-validations:
+                - fieldPath: .script
+                  message: script is required when postRestartJob is enabled
+                  rule: '!self.enabled || (has(self.script) && size(self.script) >
+                    0)'
               redis:
                 description: Redis configures the connection pool to an external Redis/Dragonfly.
                 properties:
