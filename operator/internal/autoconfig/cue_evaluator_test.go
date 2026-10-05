@@ -787,13 +787,13 @@ func TestApplyFieldOverrides_Endpoint(t *testing.T) {
 func TestApplyFieldOverrides_Method(t *testing.T) {
 	out := testOutputWithEntries()
 	applyFieldOverrides(out, []v1alpha1.OperationOverride{
-		{OperationID: "listUsers", Method: "HEAD"},
+		{OperationID: "listUsers", Method: "PATCH"},
 	})
 
-	if out.Entries[0].Method != "HEAD" {
-		t.Errorf("expected method HEAD, got %s", out.Entries[0].Method)
+	if out.Entries[0].Method != "PATCH" {
+		t.Errorf("expected method PATCH, got %s", out.Entries[0].Method)
 	}
-	if out.OperationIDs["/api/users:HEAD"] != "listUsers" {
+	if out.OperationIDs["/api/users:PATCH"] != "listUsers" {
 		t.Errorf("expected OperationIDs to be remapped for method, got %v", out.OperationIDs)
 	}
 }
@@ -919,7 +919,7 @@ func TestApplyFieldOverrides_CombinedOverrides(t *testing.T) {
 		{
 			OperationID: "listUsers",
 			Endpoint:    "/api/v3/users",
-			Method:      "OPTIONS",
+			Method:      "PUT",
 			Timeout:     &timeout,
 			CacheTTL:    &cacheTTL,
 			PolicyRef:   policyRef,
@@ -931,8 +931,8 @@ func TestApplyFieldOverrides_CombinedOverrides(t *testing.T) {
 	if entry.Endpoint != "/api/v3/users" {
 		t.Errorf("endpoint = %s, want /api/v3/users", entry.Endpoint)
 	}
-	if entry.Method != "OPTIONS" {
-		t.Errorf("method = %s, want OPTIONS", entry.Method)
+	if entry.Method != "PUT" {
+		t.Errorf("method = %s, want PUT", entry.Method)
 	}
 	if entry.Timeout == nil || entry.Timeout.Duration != 60*time.Second {
 		t.Errorf("timeout = %v, want 60s", entry.Timeout)
@@ -955,7 +955,7 @@ func TestApplyFieldOverrides_CombinedOverrides(t *testing.T) {
 		t.Error("qos/ratelimit/router should be preserved from original")
 	}
 	// Keys should be remapped
-	if out.OperationIDs["/api/v3/users:OPTIONS"] != "listUsers" {
+	if out.OperationIDs["/api/v3/users:PUT"] != "listUsers" {
 		t.Errorf("OperationIDs not remapped: %v", out.OperationIDs)
 	}
 }
