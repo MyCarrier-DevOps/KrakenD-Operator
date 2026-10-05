@@ -523,6 +523,7 @@ func TestExternalRefs_IgnoresExamplePayloads(t *testing.T) {
 		{"examples entry value", `{"examples":{"e":{"value":{"$ref":"data"}}}}`, nil},
 		{"examples entry reference", `{"examples":{"e":{"$ref":"common.yaml#/components/examples/E"}}}`,
 			[]string{"common.yaml#/components/examples/E"}},
+		{"empty ref", `{"a":{"$ref":""}}`, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -531,7 +532,7 @@ func TestExternalRefs_IgnoresExamplePayloads(t *testing.T) {
 				t.Fatalf("ExternalRefs: %v", err)
 			}
 			if !slices.Equal(refs, tc.want) {
-				t.Errorf("refs = %v, want %v", refs, tc.want)
+				t.Errorf("refs = %q, want %q", refs, tc.want)
 			}
 		})
 	}
