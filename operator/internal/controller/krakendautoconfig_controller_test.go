@@ -1511,6 +1511,26 @@ func TestAutoConfigReconcile_AmbiguousOverrideFailsClosed(t *testing.T) {
 	}
 }
 
+func TestAutoConfigReconcile_UnmatchedOverrideMessageNamesAtMostFive(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	ac.Status.Phase = v1alpha1.AutoConfigPhasePending
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).Build()
+	f, ce, fi, g := defaultMocks()
+	ce.output.UnmatchedOverrides = []string{"a", "b", "c", "d", "e", "f", "g"}
+	r := newACReconciler(c, f, ce, fi, g)
+
+	if _, err := reconcileAC(r, ac); err == nil {
+		t.Fatal("expected an error for an OnChange trigger")
+	}
+	cond := meta.FindStatusCondition(getAC(t, c, ac).Status.Conditions, v1alpha1.ConditionSynced)
+	want := "spec.overrides reference operationIds or backend indexes not present in the OpenAPI spec: " +
+		"a; b; c; d; e; and 2 more"
+	if cond == nil || cond.Message != want {
+		t.Errorf("Synced condition = %+v, want message %q", cond, want)
+	}
+}
+
 func TestAutoConfigReconcile_UnmatchedOverrideKeepsExistingEndpoints(t *testing.T) {
 	cm := testCUEDefinitionsCM()
 	ac := testAutoConfig()
