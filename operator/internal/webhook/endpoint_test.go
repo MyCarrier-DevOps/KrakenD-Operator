@@ -233,33 +233,58 @@ func TestEndpointAdmission_SameRouteOnAnotherGatewayIsAdmitted(t *testing.T) {
 	}
 }
 
-// Two endpoints claim the route: the denial names the one the renderer serves,
-// the oldest, whatever order the informer lists them in.
+// Two claimants hold the route: the denial names the one the renderer serves,
+// whatever order the informer lists them in.
 func TestEndpointAdmission_NamesTheEndpointThatServesTheRoute(t *testing.T) {
-	served := testEndpoint("z-served", "/a/{id}")
-	served.CreationTimestamp = metav1.NewTime(time.Now().Add(-2 * time.Hour))
-	lost := testEndpoint("a-lost", "/a/{name}")
-	lost.CreationTimestamp = metav1.NewTime(time.Now().Add(-time.Hour))
-	for name, reverse := range map[string]bool{"listed in order": false, "listed reversed": true} {
-		t.Run(name, func(t *testing.T) {
-			funcs := interceptor.Funcs{List: func(ctx context.Context, c client.WithWatch, l client.ObjectList,
-				opts ...client.ListOption) error {
-				if err := c.List(ctx, l, opts...); err != nil {
-					return err
+	at := func(ep *v1alpha1.KrakenDEndpoint, age time.Duration) *v1alpha1.KrakenDEndpoint {
+		ep.CreationTimestamp = metav1.NewTime(time.Unix(1_700_000_000, 0).Add(-age))
+		return ep
+	}
+	in := func(ep *v1alpha1.KrakenDEndpoint, namespace string) *v1alpha1.KrakenDEndpoint {
+		ep.Namespace = namespace
+		ep.Spec.GatewayRef.Namespace = "default"
+		return ep
+	}
+	tests := []struct {
+		name      string
+		claimants []*v1alpha1.KrakenDEndpoint
+		want      string
+	}{
+		{"older timestamp", []*v1alpha1.KrakenDEndpoint{
+			at(testEndpoint("z-served", "/a/{id}"), 2*time.Hour), at(testEndpoint("a-lost", "/a/{name}"), time.Hour),
+		}, "same route as GET /a/{id} in KrakenDEndpoint default/z-served"},
+		{"same timestamp, lower namespace and name", []*v1alpha1.KrakenDEndpoint{
+			at(in(testEndpoint("z", "/a/{id}"), "alpha"), 0), at(in(testEndpoint("a", "/a/{name}"), "beta"), 0),
+		}, "same route as GET /a/{id} in KrakenDEndpoint alpha/z"},
+		{"one endpoint holding two clashing entries", []*v1alpha1.KrakenDEndpoint{
+			at(testEndpoint("multi", "/a/{first}", "/a/{second}"), time.Hour),
+		}, "has the same route as GET /a/{first} in KrakenDEndpoint default/multi"},
+	}
+	for _, tt := range tests {
+		for name, reverse := range map[string]bool{"listed in order": false, "listed reversed": true} {
+			t.Run(tt.name+"/"+name, func(t *testing.T) {
+				funcs := interceptor.Funcs{List: func(ctx context.Context, c client.WithWatch, l client.ObjectList,
+					opts ...client.ListOption) error {
+					if err := c.List(ctx, l, opts...); err != nil {
+						return err
+					}
+					if eps, ok := l.(*v1alpha1.KrakenDEndpointList); ok && reverse {
+						slices.Reverse(eps.Items)
+					}
+					return nil
+				}}
+				objs := []client.Object{testGateway()}
+				for _, c := range tt.claimants {
+					objs = append(objs, c)
 				}
-				if eps, ok := l.(*v1alpha1.KrakenDEndpointList); ok && reverse {
-					slices.Reverse(eps.Items)
+				v := &EndpointValidator{Client: fakeClientBuilderWith(funcs, objs...)}
+				resp := review(t, v, "alice", testEndpoint("new", "/a/{z}"), nil)
+				c := resp.Result.Details
+				if resp.Allowed || c == nil || len(c.Causes) != 1 || !strings.Contains(c.Causes[0].Message, tt.want) {
+					t.Errorf("response = %+v, want a denial containing %q", resp.Result, tt.want)
 				}
-				return nil
-			}}
-			v := &EndpointValidator{Client: fakeClientBuilderWith(funcs, testGateway(), served, lost)}
-			resp := review(t, v, "alice", testEndpoint("new", "/a/{id}"), nil)
-			c := resp.Result.Details.Causes
-			const want = "already defined by KrakenDEndpoint default/z-served"
-			if resp.Allowed || len(c) != 1 || !strings.Contains(c[0].Message, want) {
-				t.Errorf("response = %+v, want a duplicate naming default/z-served", resp.Result)
-			}
-		})
+			})
+		}
 	}
 }
 
