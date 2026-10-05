@@ -310,6 +310,7 @@ func TestEndpointAdmission_MovingOntoATakenRouteIsADuplicate(t *testing.T) {
 func TestEndpointAdmission_UpdateAddingAnEntryWithAStoredRouteKeyIsRejected(t *testing.T) {
 	tests := []struct{ name, stored, added string }{
 		{"parameter name", "/users/{id}", "/users/{name}"},
+		{"repeated slashes", "/a/b", "/a//b"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
