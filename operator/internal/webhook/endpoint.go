@@ -111,6 +111,7 @@ func (v *EndpointValidator) admit(
 			field.NewPath("spec", "endpoints").Index(i).Child("extraConfig"), ep.Spec.Endpoints[i].ExtraConfig)...)
 	}
 	if gw != nil {
+		errs = append(errs, validateEntries(ep, changed, gw)...)
 		dupErrs, err := v.validateRouteUniqueness(ctx, ep, stored, changed, gw)
 		if err != nil {
 			return nil, unavailable(err)
