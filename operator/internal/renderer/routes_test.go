@@ -18,6 +18,7 @@ package renderer
 
 import (
 	"fmt"
+	"reflect"
 	"slices"
 	"testing"
 	"time"
@@ -53,8 +54,15 @@ func TestFlattenEndpoints_SameRouteShapeKeepsOldest(t *testing.T) {
 	if len(flat) != 1 || flat[0].Entry.Endpoint != "/users/{id}" {
 		t.Fatalf("flat = %+v, want only the older /users/{id}", flat)
 	}
-	if _, ok := conflicted[types.NamespacedName{Namespace: "ns", Name: "b"}]; !ok {
-		t.Errorf("conflicted = %v, want ns/b", conflicted)
+	want := map[types.NamespacedName][]EntryConflict{
+		{Namespace: "ns", Name: "b"}: {{
+			Endpoint: "/users/{name}",
+			Method:   "GET",
+			Winner:   types.NamespacedName{Namespace: "ns", Name: "a"},
+		}},
+	}
+	if !reflect.DeepEqual(conflicted, want) {
+		t.Errorf("conflicted = %+v, want %+v", conflicted, want)
 	}
 }
 
