@@ -115,9 +115,9 @@ func TestEndpointAdmission_MovingToAnotherGatewayRechecksEveryEntry(t *testing.T
 		t.Errorf("unchanged entry moved to another gateway: %+v, want 422 on spec.endpoints[0].extraConfig", resp.Result)
 	}
 
-	relabeled := old.DeepCopy()
-	relabeled.Spec.Endpoints = append(relabeled.Spec.Endpoints, testEndpoint("x", "/ok").Spec.Endpoints...)
-	if resp := review(t, v, "alice", relabeled, old); !resp.Allowed {
+	withNewEntry := old.DeepCopy()
+	withNewEntry.Spec.Endpoints = append(withNewEntry.Spec.Endpoints, testEndpoint("x", "/ok").Spec.Endpoints...)
+	if resp := review(t, v, "alice", withNewEntry, old); !resp.Allowed {
 		t.Errorf("unrelated edit on the same gateway denied: %+v", resp.Result)
 	}
 }
