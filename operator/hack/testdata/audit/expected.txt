@@ -48,3 +48,4 @@ KrakenDAutoConfig a/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 KrakenDAutoConfig a/nogw: spec.gatewayRef.name is empty
 KrakenDAutoConfig a/two-sources: need exactly one of openapi.url or openapi.configMapRef
 KrakenDAutoConfig a/no-hostmapping: configMapRef without urlTransform.hostMapping
+KrakenDAutoConfig a/both-auth: both auth secrets set
