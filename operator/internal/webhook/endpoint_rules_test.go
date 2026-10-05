@@ -114,3 +114,13 @@ func TestValidateEntries(t *testing.T) {
 		})
 	}
 }
+
+// An entry stored with an Enterprise-only namespace does not block edits to
+// the endpoint's other entries.
+func TestValidateEntries_EEOnlyNamespacesRatchet(t *testing.T) {
+	ep := testEndpoint("e", "/stored", "/edited")
+	ep.Spec.Endpoints[0].ExtraConfig = &runtime.RawExtension{Raw: []byte(`{"auth/api-keys":{"roles":["a"]}}`)}
+	if errs := validateEntries(ep, []int{1}, testGateway()); len(errs) != 0 {
+		t.Errorf("errors = %v, want none: entry 0 is unchanged", errs)
+	}
+}
