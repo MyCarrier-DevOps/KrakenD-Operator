@@ -37,6 +37,8 @@ func testPolicy(raw string) *v1alpha1.KrakenDBackendPolicy {
 }
 
 func TestPolicyAdmission_Render(t *testing.T) {
+	bad := failing("policy-lint", 0,
+		"- at '/endpoints/0/backend/0/extra_config': additional properties 'qos/circuit-breakr' not allowed")
 	tests := []struct {
 		name     string
 		objs     []client.Object
@@ -46,6 +48,7 @@ func TestPolicyAdmission_Render(t *testing.T) {
 		calls    string
 	}{
 		{"unreferenced, lints clean", nil, nil, nil, true, "policy"},
+		{"unreferenced, fails alone", nil, nil, []configcheck.Verdict{bad}, false, "policy"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
