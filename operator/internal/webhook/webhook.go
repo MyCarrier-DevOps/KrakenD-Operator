@@ -1153,11 +1153,10 @@ func NewValidators(c client.Client, checker ConfigChecker) Validators {
 	}
 }
 
-// SetupWebhooks registers all validating webhooks with the manager. checker
-// is the config checker the gateway controller uses too, so both share its
-// validation slots.
-func SetupWebhooks(mgr ctrl.Manager, checker ConfigChecker) error {
-	validators := NewValidators(mgr.GetClient(), checker)
+// SetupWebhooks registers all validating webhooks with the manager. validators
+// come from NewValidators, built over the config checker the gateway
+// controller uses too, so both share its validation slots.
+func SetupWebhooks(mgr ctrl.Manager, validators Validators) error {
 	// Ensure field indexes are registered — needed for conflict detection
 	// and policy-delete validation even when running webhook-only.
 	if err := fieldindex.EnsureEndpointIndexes(mgr); err != nil {

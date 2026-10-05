@@ -263,7 +263,7 @@ func main() {
 		os.Exit(1)
 	}
 	if err := registerWebhooks(mgr, enableWebhooks, func(m ctrl.Manager) error {
-		return webhooksetup.SetupWebhooks(m, wired.Checker)
+		return webhooksetup.SetupWebhooks(m, wired.Validators)
 	}); err != nil {
 		setupLog.Error(err, "unable to set up webhooks")
 		os.Exit(1)
