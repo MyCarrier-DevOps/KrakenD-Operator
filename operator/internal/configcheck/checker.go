@@ -70,9 +70,12 @@ func (c *Checker) CheckRendered(ctx context.Context, in renderer.RenderInput,
 }
 
 // CheckGateway lints gw's config: its current endpoints with replace
-// substituted or added by namespace/name.
+// substituted or added by namespace/name. A replace entry without
+// spec.endpoints means that endpoint is removed: it renders nothing.
 func (c *Checker) CheckGateway(ctx context.Context, gw *v1alpha1.KrakenDGateway,
 	replace []v1alpha1.KrakenDEndpoint) (Verdict, error) {
+	// Nothing read here leaves the Checker and the renderer never mutates its
+	// inputs, so the cache's objects can be used without copying them.
 	in, err := c.gather(ctx, gw, replace, client.UnsafeDisableDeepCopy)
 	if err != nil {
 		return Verdict{}, err
