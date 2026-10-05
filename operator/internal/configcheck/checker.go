@@ -52,8 +52,10 @@ func New(reader client.Reader, r renderer.Renderer, v renderer.Validator, slots 
 // Gather returns the render input the gateway controller publishes gw from:
 // the endpoints that reference gw, with replace substituted or added by
 // namespace/name, sorted by namespace/name; the policies they reference; and
-// CE fallback as gw's status records it. PluginConfigMaps and Dragonfly are
-// left unset.
+// CE fallback as gw's status records it. PluginConfigMaps are left unset: they
+// do not reach the validated config. Dragonfly is left unset too, so a Redis
+// block that only a Dragonfly address would add to the controller's render is
+// not part of what is checked here.
 func (c *Checker) Gather(ctx context.Context, gw *v1alpha1.KrakenDGateway,
 	replace []v1alpha1.KrakenDEndpoint) (renderer.RenderInput, error) {
 	return c.gather(ctx, gw, replace)
