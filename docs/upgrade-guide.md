@@ -379,8 +379,9 @@ bad value.
 
 A `KrakenDEndpoint` gets the same rule on `spec.endpoints[].extraConfig`, with
 the same message, for every added or changed entry, on CE and EE gateways
-alike. Every other finding on an entry is reported by the gateway-wide check
-described under *Complete admission*, as `spec.endpoints[i]: <finding>`.
+alike. What `krakend check` finds in an entry is reported by the gateway-wide
+check described under *Complete admission*, as `spec.endpoints[i]: <finding>`;
+the entry rules and the duplicate-route check report their own causes.
 
 Updates are ratcheted (see *Complete admission*): a `KrakenDEndpoint` stored
 with a non-list or `null` audience accepts every update that leaves the entry
@@ -1383,9 +1384,12 @@ what the controller's `krakend check -t -n` finds. The write is rejected only
 when the gateway's config passed before the change and fails after it, with one
 cause per offending entry (`spec.endpoints[1]: <finding>`); a finding about
 another endpoint or the gateway root is reported on `spec.endpoints`. If the
-gateway already fails because of another object, the change is judged with the
-gateway root alone: it is admitted with a warning that names the existing
-failure, unless it fails there when it did not before. The entry rules run
+gateway already fails without the change (because of another object, or of the
+endpoint's own stored version), the change is judged with the gateway root
+alone: it is admitted with a warning that names the existing failure, unless
+the candidate fails with the root alone when its stored version did not. For a
+create, or a move to another gateway, the baseline is the root by itself, so a
+broken root never blocks every new endpoint on its gateway. The entry rules run
 first, and a write they reject is not rendered. That includes the
 `documentation/openapi.audience` rule, which keeps rejecting a malformed
 audience on a changed entry on every gateway, because a CE render drops an
