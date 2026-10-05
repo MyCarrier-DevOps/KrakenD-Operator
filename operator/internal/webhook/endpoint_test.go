@@ -18,6 +18,7 @@ package webhook
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"slices"
 	"strings"
@@ -513,5 +514,21 @@ func TestEndpointAdmission_BrokenGatewayFallsBackToIsolation(t *testing.T) {
 				t.Errorf("checks = %s, want %s", got, tt.calls)
 			}
 		})
+	}
+}
+
+// A checker that cannot get a slot in time is a transient 500: the request is
+// not judged, and clients retry.
+func TestEndpointAdmission_ValidatorUnavailableIs500(t *testing.T) {
+	v := &EndpointValidator{Client: fakeClient(testGateway()),
+		Checker: &scriptedChecker{err: errors.New("waiting for a validation slot: context deadline exceeded")}}
+
+	resp := review(t, v, "alice", testEndpoint("new", "/a"), nil)
+
+	if resp.Allowed || resp.Result.Code != http.StatusInternalServerError {
+		t.Errorf("response = %+v, want 500", resp.Result)
+	}
+	if !strings.Contains(resp.Result.Message, "validating the gateway config") {
+		t.Errorf("message = %q, want it to say the validation could not run", resp.Result.Message)
 	}
 }
