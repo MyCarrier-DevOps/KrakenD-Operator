@@ -651,6 +651,10 @@ spec:
               rule: '!has(self.openapi.configMapRef) || (has(self.urlTransform) &&
                 has(self.urlTransform.hostMapping) && size(self.urlTransform.hostMapping)
                 > 0)'
+            - fieldPath: .periodic
+              message: periodic.interval of at least 30s is required when trigger
+                is Periodic
+              rule: self.trigger != 'Periodic' || has(self.periodic)
           status:
             description: KrakenDAutoConfigStatus defines the observed state of KrakenDAutoConfig.
             properties:
