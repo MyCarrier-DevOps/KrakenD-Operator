@@ -1597,6 +1597,20 @@ has no effect, and the Dragonfly instance runs for nothing); turning either off
 is admitted. An entry's `documentation/openapi`
 (which AutoConfig generates) is not refused: a CE render drops it.
 
+**Policy writes are checked alone and in every gateway that uses them.** A
+KrakenDBackendPolicy whose `raw` (or typed fields) KrakenD rejects is refused on
+its own, before anything references it, unless the stored policy already failed
+the same way. A change to a policy that endpoints reference is rendered in each
+gateway of those endpoints and refused if it breaks one that passed
+(`breaks gateway ns/name: ...`); a gateway that already fails for another reason
+gets a warning instead. The denial lists at most 20 gateways and counts the rest.
+A new or changed `raw` with Enterprise-only namespaces, for example `auth/gcp`, or
+Enterprise-only keys such as `proxy_address` in `backend/http/client`, is
+refused while a CE gateway uses the policy (`gateway ns/name runs CE, which
+ignores it silently`); a policy that only sets keys CE honors, such as
+`send_body_on_redirect`, is admitted. A stored policy that already does this
+keeps accepting unrelated edits. The audit lists the stored ones.
+
 **Updates are ratcheted.** A metadata-only update is never validated. A
 reference (`gatewayRef`, `policyRef`) is checked only when it is added or
 changed. A field rule rejects an update only if the error is new, so an object
