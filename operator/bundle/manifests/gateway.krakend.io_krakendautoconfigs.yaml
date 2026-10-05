@@ -233,7 +233,7 @@ spec:
                       description: Endpoint is the public path KrakenD exposes (e.g.
                         "/liveness").
                       minLength: 1
-                      pattern: ^/
+                      pattern: ^(/\*|/[^*?&%]*(/\*)?)$
                       type: string
                     extraConfig:
                       description: ExtraConfig holds endpoint-level extra_config JSON.
