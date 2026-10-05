@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	apiextensions "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -303,6 +304,26 @@ func TestGatewayCRD_Rules(t *testing.T) {
 		{"fractional exponent tmpSizeLimit", gatewayHead + `edition: CE, config: {}, postRestartJob: {enabled: true, script: x, tmpSizeLimit: "1.5e3.5"}}}`, "spec.postRestartJob.tmpSizeLimit"},
 		{"long tmpSizeLimit", gatewayHead + `edition: CE, config: {}, postRestartJob: {enabled: true, script: x, tmpSizeLimit: "0.00000000000000000000000000000000000000000000000000000000000000000000001"}}}`, "at most 64 characters"},
 	})
+}
+
+// validateWithin fails the test when validating the gateway takes longer than
+// the budget: a pathological quantity must be refused before it is parsed.
+func validateWithin(t *testing.T, budget time.Duration, object string) field.ErrorList {
+	t.Helper()
+	done := make(chan field.ErrorList, 1)
+	go func() { done <- validateCRD(t, gatewaysCRD, object) }()
+	select {
+	case errs := <-done:
+		return errs
+	case <-time.After(budget):
+		t.Fatalf("validation did not finish within %s", budget)
+		return nil
+	}
+}
+
+func TestGatewayCRD_RejectsHugeQuantityExponentsFast(t *testing.T) {
+	const job = gatewayHead + `edition: CE, config: {}, postRestartJob: {enabled: true, script: x, tmpSizeLimit: `
+	expectErrors(t, validateWithin(t, 5*time.Second, job+`"1e2147483648"}}}`), "spec.postRestartJob.tmpSizeLimit")
 }
 
 func TestGatewayCRD_Ratchets(t *testing.T) {
