@@ -561,8 +561,9 @@ To audit a saved snapshot instead, point it at a directory holding
 operator/hack/audit-admission-rules.sh ./snapshot
 ```
 
-No output means none of the checks found anything. It does not check reserved
-`/__debug`, `/__echo` and `/__health` paths, unnamed `/*` wildcards on CE
+No output means none of the checks found anything. It does not check other
+reserved paths under `/__debug`, `/__echo` and `/__health` (a GET on the
+gateway's own health path is reported), unnamed `/*` wildcards on CE
 gateways, unknown `urlPattern` placeholders or cross-method `auto_options`
 clashes; admission rejects those. The lines are:
 
