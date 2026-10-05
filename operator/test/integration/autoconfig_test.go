@@ -93,38 +93,30 @@ func openAPISpec(t *testing.T, operations map[string]string) string {
 	return string(raw)
 }
 
-// newSyncedAutoConfig creates a gateway, a spec ConfigMap and an OnChange
-// AutoConfig sourcing that ConfigMap in a fresh namespace, and waits until the
-// AutoConfig is Synced and Ready and every generated endpoint is Active.
-func newSyncedAutoConfig(t *testing.T) *v1alpha1.KrakenDAutoConfig {
+// createReconciledGateway creates a CE gateway in ns with createGateway and
+// waits until the gateway controller has seen it. Generated endpoints look
+// their gateway up in the manager's cache, so this lets them go straight to
+// Active.
+func createReconciledGateway(t *testing.T, ns, name string) *v1alpha1.KrakenDGateway {
 	t.Helper()
-	ns := testNamespace(t)
-
-	gw := &v1alpha1.KrakenDGateway{
-		ObjectMeta: metav1.ObjectMeta{Name: "gw-autoconfig", Namespace: ns},
-		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.9",
-			Edition: v1alpha1.EditionCE,
-			Config:  v1alpha1.GatewayConfig{},
-		},
-	}
-	if err := k8sClient.Create(ctx, gw); err != nil {
-		t.Fatalf("create gateway: %v", err)
-	}
-
-	// Generated endpoints look their gateway up in the manager's cache; wait
-	// until the gateway controller has seen it so they go straight to Active.
+	key := createGateway(t, ns, name)
+	gw := &v1alpha1.KrakenDGateway{}
 	eventually(t, func() error {
-		var cur v1alpha1.KrakenDGateway
-		if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(gw), &cur); err != nil {
+		if err := k8sClient.Get(ctx, key, gw); err != nil {
 			return err
 		}
-		if cur.Status.Phase == "" {
+		if gw.Status.Phase == "" {
 			return fmt.Errorf("gateway not yet reconciled")
 		}
 		return nil
 	})
+	return gw
+}
 
+// createPetsAutoConfig creates the pets spec ConfigMap and an OnChange
+// AutoConfig sourcing it for the named gateway in ns.
+func createPetsAutoConfig(t *testing.T, ns, gatewayName string) *v1alpha1.KrakenDAutoConfig {
+	t.Helper()
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Name: specConfigMapName, Namespace: ns},
 		Data:       map[string]string{specConfigMapKey: openAPISpec(t, initialOperations)},
@@ -132,11 +124,10 @@ func newSyncedAutoConfig(t *testing.T) *v1alpha1.KrakenDAutoConfig {
 	if err := k8sClient.Create(ctx, cm); err != nil {
 		t.Fatalf("create spec configmap: %v", err)
 	}
-
 	ac := &v1alpha1.KrakenDAutoConfig{
 		ObjectMeta: metav1.ObjectMeta{Name: autoConfigName, Namespace: ns},
 		Spec: v1alpha1.KrakenDAutoConfigSpec{
-			GatewayRef: v1alpha1.GatewayRef{Name: gw.Name},
+			GatewayRef: v1alpha1.GatewayRef{Name: gatewayName},
 			OpenAPI: v1alpha1.OpenAPISource{
 				ConfigMapRef: &v1alpha1.ConfigMapKeyRef{Name: specConfigMapName, Key: specConfigMapKey},
 			},
@@ -153,6 +144,17 @@ func newSyncedAutoConfig(t *testing.T) *v1alpha1.KrakenDAutoConfig {
 	if err := k8sClient.Create(ctx, ac); err != nil {
 		t.Fatalf("create autoconfig: %v", err)
 	}
+	return ac
+}
+
+// newSyncedAutoConfig creates a gateway, a spec ConfigMap and an OnChange
+// AutoConfig sourcing that ConfigMap in a fresh namespace, and waits until the
+// AutoConfig is Synced and Ready and every generated endpoint is Active.
+func newSyncedAutoConfig(t *testing.T) *v1alpha1.KrakenDAutoConfig {
+	t.Helper()
+	ns := testNamespace(t)
+	gw := createReconciledGateway(t, ns, "gw-autoconfig")
+	ac := createPetsAutoConfig(t, ns, gw.Name)
 
 	eventually(t, func() error {
 		var cur v1alpha1.KrakenDAutoConfig
