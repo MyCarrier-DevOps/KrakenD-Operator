@@ -794,45 +794,30 @@ func autoConfigStatusChanged(orig, cur *v1alpha1.KrakenDAutoConfigStatus) bool {
 		!conditionsEqual(orig.Conditions, cur.Conditions)
 }
 
+// reconcileEndpoints converges the KrakenDEndpoints ac controls to desired.
 func (r *KrakenDAutoConfigReconciler) reconcileEndpoints(
 	ctx context.Context,
 	ac *v1alpha1.KrakenDAutoConfig,
 	desired []*v1alpha1.KrakenDEndpoint,
 ) (endpointChanges, error) {
 	var changes endpointChanges
-
-	// Build set of desired endpoint names
-	desiredNames := map[string]struct{}{}
-	for _, ep := range desired {
-		desiredNames[ep.Name] = struct{}{}
+	controlled, err := r.claimEndpoints(ctx, ac)
+	if err != nil {
+		return changes, err
 	}
-
-	// List existing generated endpoints owned by this autoconfig
-	var existing v1alpha1.KrakenDEndpointList
-	if err := r.List(ctx, &existing,
-		client.InNamespace(ac.Namespace),
-		client.MatchingLabels{autoconfig.LabelAutoConfig: ac.Name},
-	); err != nil {
-		return changes, fmt.Errorf("listing existing endpoints: %w", err)
-	}
-
-	// Delete endpoints that are no longer desired
-	for i := range existing.Items {
-		if _, ok := desiredNames[existing.Items[i].Name]; ok {
-			continue
-		}
-		err := r.Delete(ctx, &existing.Items[i])
-		if errors.IsNotFound(err) {
-			continue
-		}
+	writes, stale := planEndpoints(controlled, desired)
+	for i := range stale {
+		deleted, err := r.deleteEndpoint(ctx, &stale[i])
 		if err != nil {
-			return changes, fmt.Errorf("deleting endpoint %s: %w", existing.Items[i].Name, err)
+			return changes, err
 		}
-		changes.deleted++
+		if deleted {
+			changes.deleted++
+		}
 	}
 
 	// Create or update desired endpoints
-	for _, ep := range desired {
+	for _, ep := range writes {
 		existing := &v1alpha1.KrakenDEndpoint{ObjectMeta: metav1.ObjectMeta{
 			Name:      ep.Name,
 			Namespace: ep.Namespace,
