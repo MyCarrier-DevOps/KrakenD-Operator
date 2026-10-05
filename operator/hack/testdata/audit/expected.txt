@@ -72,3 +72,4 @@ KrakenDAutoConfig a/override-index: spec.overrides[0].backends index -1
 KrakenDAutoConfig a/override-timeout: spec.overrides[0].timeout 30
 KrakenDAutoConfig a/override-cachettl: spec.overrides[0].cacheTTL 2562047.9h does not fit in 64 bits of nanoseconds
 KrakenDAutoConfig a/override-calls: spec.overrides[0].concurrentCalls 0
+KrakenDAutoConfig a/override-output: spec.overrides[0].outputEncoding jsn
