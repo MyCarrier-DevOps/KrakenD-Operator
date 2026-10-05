@@ -137,5 +137,6 @@ func TestEndpointCRD_Rules(t *testing.T) {
 		{"service discovery", endpointHead + `[{endpoint: "/a", method: GET, backends: [{host: ["http://svc"], urlPattern: "/", sd: consul}]}]}}`, "Unsupported value: \"consul\""},
 		{"backend method", endpointHead + `[{endpoint: "/a", method: GET, backends: [{host: ["http://svc"], urlPattern: "/", method: get}]}]}}`, "Unsupported value: \"get\""},
 		{"empty gateway name", `{apiVersion: gateway.krakend.io/v1alpha1, kind: KrakenDEndpoint, metadata: {name: e}, spec: {gatewayRef: {name: ""}, endpoints: [{endpoint: "/a", method: GET, ` + okBackend + `}]}}`, "at least 1 chars long"},
+		{"empty policy name", endpointHead + `[{endpoint: "/a", method: GET, backends: [{host: ["http://svc"], urlPattern: "/", policyRef: {name: ""}}]}]}}`, "at least 1 chars long"},
 	})
 }
