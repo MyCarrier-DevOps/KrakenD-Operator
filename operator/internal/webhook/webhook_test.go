@@ -1462,7 +1462,7 @@ func TestEndpointValidator_Valid(t *testing.T) {
 			},
 		},
 	}
-	v := &EndpointValidator{Client: fakeClient(gw)}
+	v := &EndpointValidator{Client: fakeClient(gw), Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), ep)
 	if err != nil {
 		t.Errorf("expected no error, got %v", err)
@@ -1477,7 +1477,7 @@ func TestEndpointValidator_GatewayNotFound(t *testing.T) {
 			Endpoints:  []v1alpha1.EndpointEntry{},
 		},
 	}
-	v := &EndpointValidator{Client: fakeClient()}
+	v := &EndpointValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), ep)
 	if err == nil {
 		t.Error("expected error for missing gateway")
@@ -1505,7 +1505,7 @@ func TestEndpointValidator_PolicyNotFound(t *testing.T) {
 			},
 		},
 	}
-	v := &EndpointValidator{Client: fakeClient(gw)}
+	v := &EndpointValidator{Client: fakeClient(gw), Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), ep)
 	if err == nil {
 		t.Error("expected error for missing policy")
@@ -1522,7 +1522,7 @@ func TestEndpointValidator_Update(t *testing.T) {
 	}
 	old := ep.DeepCopy()
 	old.Spec.GatewayRef.Name = "previous"
-	v := &EndpointValidator{Client: fakeClient()}
+	v := &EndpointValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
 	_, err := v.ValidateUpdate(context.Background(), old, ep)
 	if err == nil {
 		t.Error("expected error on update to a missing gateway")
@@ -1530,7 +1530,7 @@ func TestEndpointValidator_Update(t *testing.T) {
 }
 
 func TestEndpointValidator_Delete(t *testing.T) {
-	v := &EndpointValidator{}
+	v := &EndpointValidator{Checker: &scriptedChecker{}}
 	_, err := v.ValidateDelete(context.Background(), &v1alpha1.KrakenDEndpoint{})
 	if err != nil {
 		t.Errorf("expected no error, got %v", err)
@@ -1656,7 +1656,7 @@ func TestAutoConfigValidator_Delete(t *testing.T) {
 }
 
 func TestEndpointValidator_DeleteNoOp(t *testing.T) {
-	v := &EndpointValidator{}
+	v := &EndpointValidator{Checker: &scriptedChecker{}}
 	_, err := v.ValidateDelete(context.Background(), &v1alpha1.KrakenDEndpoint{})
 	if err != nil {
 		t.Errorf("expected no error, got %v", err)
@@ -1683,7 +1683,7 @@ func TestEndpointValidator_CrossNamespaceGatewayValid(t *testing.T) {
 			},
 		},
 	}
-	v := &EndpointValidator{Client: fakeClient(gw)}
+	v := &EndpointValidator{Client: fakeClient(gw), Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), ep)
 	if err != nil {
 		t.Errorf("expected no error for cross-ns gateway, got %v", err)
@@ -1706,7 +1706,7 @@ func TestEndpointValidator_CrossNamespaceGatewayNotFound(t *testing.T) {
 			Endpoints:  []v1alpha1.EndpointEntry{},
 		},
 	}
-	v := &EndpointValidator{Client: fakeClient(gw)}
+	v := &EndpointValidator{Client: fakeClient(gw), Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), ep)
 	if err == nil {
 		t.Error("expected error for gateway in wrong namespace")
@@ -1740,7 +1740,7 @@ func TestEndpointValidator_CrossNamespacePolicyValid(t *testing.T) {
 			},
 		},
 	}
-	v := &EndpointValidator{Client: fakeClient(gw, pol)}
+	v := &EndpointValidator{Client: fakeClient(gw, pol), Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), ep)
 	if err != nil {
 		t.Errorf("expected no error for cross-ns policy, got %v", err)
@@ -1768,7 +1768,7 @@ func TestEndpointValidator_CrossNamespacePolicyNotFound(t *testing.T) {
 			},
 		},
 	}
-	v := &EndpointValidator{Client: fakeClient(gw)}
+	v := &EndpointValidator{Client: fakeClient(gw), Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), ep)
 	if err == nil {
 		t.Error("expected error for cross-ns policy not found")
@@ -1958,7 +1958,7 @@ func TestEndpointValidator_EndpointAudienceMustBeList(t *testing.T) {
 			},
 		},
 	}
-	v := &EndpointValidator{Client: fakeClient(gw)}
+	v := &EndpointValidator{Client: fakeClient(gw), Checker: &scriptedChecker{}}
 	_, err := v.ValidateCreate(context.Background(), ep)
 	if err == nil {
 		t.Fatal("expected error for non-list endpoint audience")
@@ -2160,7 +2160,7 @@ func TestValidators_AdmitUpdatesToTerminatingObjects(t *testing.T) {
 			return (&GatewayValidator{}).ValidateUpdate(ctx, gw, unfinalized(gw))
 		}},
 		{"endpoint", func() (admission.Warnings, error) {
-			return (&EndpointValidator{Client: fakeClient()}).ValidateUpdate(ctx, ep, unfinalized(ep))
+			return (&EndpointValidator{Client: fakeClient(), Checker: &scriptedChecker{}}).ValidateUpdate(ctx, ep, unfinalized(ep))
 		}},
 		{"policy", func() (admission.Warnings, error) {
 			return (&PolicyValidator{}).ValidateUpdate(ctx, policy, unfinalized(policy))
@@ -2204,7 +2204,7 @@ func TestEndpointValidator_RejectsSpecChangeOnTerminatingObject(t *testing.T) {
 	newEP := oldEP.DeepCopy()
 	newEP.Spec.GatewayRef.Name = "missing-gw"
 
-	_, err := (&EndpointValidator{Client: fakeClient(gw)}).ValidateUpdate(context.Background(), oldEP, newEP)
+	_, err := (&EndpointValidator{Client: fakeClient(gw), Checker: &scriptedChecker{}}).ValidateUpdate(context.Background(), oldEP, newEP)
 	if err == nil {
 		t.Fatal("a spec change to an invalid value on a terminating endpoint was admitted; want it rejected")
 	}
