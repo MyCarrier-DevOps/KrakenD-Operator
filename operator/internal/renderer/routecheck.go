@@ -182,6 +182,9 @@ func engineWith(routes []ginRoute) *gin.Engine {
 // clashes with it, that route too, so both endpoints are named.
 func clashRefusals(accepted []ginRoute, r ginRoute, refusal string) []routeRefusal {
 	out := []routeRefusal{{index: r.index, message: refusal}}
+	if registerRoute(gin.New(), r) != "" {
+		return out // r is refused on its own, so no accepted route is to blame
+	}
 	for _, a := range accepted {
 		if registerRoute(engineWith([]ginRoute{a}), r) == "" {
 			continue
