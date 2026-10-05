@@ -2509,3 +2509,25 @@ func TestAutoConfigAdmission_WarnsOnMissingPolicyRefs(t *testing.T) {
 		t.Errorf("warnings = %v, want one naming spec.defaults.policyRef", resp.Warnings)
 	}
 }
+
+func TestAutoConfigAdmission_UpdateWarnsOnMissingPolicyRefsOnlyWhenTheSpecChanges(t *testing.T) {
+	old := &v1alpha1.KrakenDAutoConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "ac", Namespace: "default"},
+		Spec: v1alpha1.KrakenDAutoConfigSpec{GatewayRef: v1alpha1.GatewayRef{Name: "gw"},
+			OpenAPI: v1alpha1.OpenAPISource{URL: "http://svc/openapi.json"}, Trigger: v1alpha1.TriggerOnChange},
+	}
+	v := &AutoConfigValidator{Client: fakeClient(testGateway())}
+
+	unchanged := old.DeepCopy()
+	unchanged.Labels = map[string]string{"a": "b"}
+	unchanged.Spec.Defaults = &v1alpha1.Defaults{PolicyRef: &v1alpha1.PolicyRef{Name: "gone"}}
+	unchangedOld := unchanged.DeepCopy()
+	if resp := review(t, v, "alice", unchanged, unchangedOld); len(resp.Warnings) != 0 {
+		t.Errorf("an update that leaves the spec alone warned: %v", resp.Warnings)
+	}
+
+	resp := review(t, v, "alice", unchanged, old)
+	if !resp.Allowed || len(resp.Warnings) != 1 || !strings.Contains(resp.Warnings[0], "gone") {
+		t.Errorf("response = %+v, warnings = %v, want one naming the missing policy", resp.Result, resp.Warnings)
+	}
+}
