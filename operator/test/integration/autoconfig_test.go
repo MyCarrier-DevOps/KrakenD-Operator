@@ -619,4 +619,31 @@ func TestAutoConfig_EndpointsReadyFollowsChildReadiness(t *testing.T) {
 		}
 		return nil
 	})
+
+	// Settled: the AutoConfig and its endpoints are not written again. A
+	// readiness write that re-enqueued the AutoConfig into another write
+	// would show here long before the 5-minute resync.
+	watched := []client.Object{
+		ac,
+		&v1alpha1.KrakenDEndpoint{ObjectMeta: metav1.ObjectMeta{Name: "pets-listpets", Namespace: ns}},
+		&v1alpha1.KrakenDEndpoint{ObjectMeta: metav1.ObjectMeta{Name: "pets-listowners", Namespace: ns}},
+	}
+	versions := make([]string, len(watched))
+	for i, obj := range watched {
+		if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(obj), obj); err != nil {
+			t.Fatalf("get %s: %v", obj.GetName(), err)
+		}
+		versions[i] = obj.GetResourceVersion()
+	}
+	consistently(t, 10*time.Second, func() error {
+		for i, obj := range watched {
+			if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(obj), obj); err != nil {
+				return err
+			}
+			if obj.GetResourceVersion() != versions[i] {
+				return fmt.Errorf("%s was written again after readiness settled", obj.GetName())
+			}
+		}
+		return nil
+	})
 }
