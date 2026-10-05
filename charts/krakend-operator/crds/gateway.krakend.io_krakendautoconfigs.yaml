@@ -486,6 +486,10 @@ spec:
                         type: object
                         x-kubernetes-map-type: atomic
                     type: object
+                    x-kubernetes-validations:
+                    - message: bearerTokenSecret and basicAuthSecret are mutually
+                        exclusive
+                      rule: '!(has(self.bearerTokenSecret) && has(self.basicAuthSecret))'
                   configMapRef:
                     description: ConfigMapRef references a ConfigMap key containing
                       the OpenAPI spec.
