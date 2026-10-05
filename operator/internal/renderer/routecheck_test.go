@@ -128,3 +128,12 @@ func TestRouteConflicts_NamesAnyMethodGatewayRoutes(t *testing.T) {
 		t.Errorf("lines = %q, want the echo route named as an any-method route", lines)
 	}
 }
+
+func TestRouteConflicts_ATypeMismatchIsLeftToTheSchemaLint(t *testing.T) {
+	doc := `{"debug_endpoint":"yes","endpoints":[{"endpoint":"/a","method":"GET"}]}`
+
+	lines, err := routeConflicts([]byte(doc))
+	if err != nil || len(lines) != 0 {
+		t.Errorf("routeConflicts = %q, %v, want no lines and no error (krakend check reports the type)", lines, err)
+	}
+}
