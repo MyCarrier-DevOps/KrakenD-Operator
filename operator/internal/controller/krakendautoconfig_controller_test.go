@@ -4814,7 +4814,11 @@ func TestAutoConfigReconcile_UnattributedCheckFailure(t *testing.T) {
 			if got := endpointExists(t, c, "test-ac-listusers"); got != tc.wantWrite {
 				t.Errorf("endpoint written = %v, want %v", got, tc.wantWrite)
 			}
-			if !tc.wantWrite {
+			if tc.wantWrite {
+				if failed := getAC(t, c, ac).Status.FailedOperations; len(failed) != 0 {
+					t.Errorf("failedOperations = %+v, want none for a write", failed)
+				}
+			} else {
 				failed := getAC(t, c, ac).Status.FailedOperations
 				if len(failed) != 1 ||
 					!strings.HasPrefix(failed[0].Message, "the change fails the gateway config check: ") {
@@ -5035,7 +5039,15 @@ func TestAutoConfigReconcile_PrecheckHoldsANewShapeCollisionAndKeepsStaleInTheCh
 	g.output.Endpoints = []*v1alpha1.KrakenDEndpoint{
 		generatedEndpoint("getA", "/h/{a}"), generatedEndpoint("getB", "/h/{b}"), generatedEndpoint("getC", "/c"),
 	}
-	checker := &fakeChecker{}
+	// The check would fail the clashing endpoint if it were put to it.
+	checker := &fakeChecker{judge: func(replace []v1alpha1.KrakenDEndpoint) configcheck.Verdict {
+		if slices.Contains(endpointNames(replace), "test-ac-geta") {
+			return configcheck.Verdict{Findings: []configcheck.Finding{{
+				Endpoint: types.NamespacedName{Namespace: "default", Name: "test-ac-geta"}, Index: 0, Message: "clash",
+			}}}
+		}
+		return configcheck.Verdict{OK: true}
+	}}
 	c := fakeClientBuilder().WithObjects(ac, cm, served, stale, testGateway()).WithStatusSubresource(ac).Build()
 	r := newACReconciler(c, f, ce, fi, g)
 	r.Checker = checker
