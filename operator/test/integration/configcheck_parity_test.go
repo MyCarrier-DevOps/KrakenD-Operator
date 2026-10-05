@@ -153,6 +153,8 @@ func parityCases() []parityCase {
 			parityEndpoint("a", time.Hour, "GET", "/a//b"), parityEndpoint("b", 0, "GET", "/a/b")}, true},
 		{"trailing slash is a distinct route", ce, []*v1alpha1.KrakenDEndpoint{
 			parityEndpoint("a", time.Hour, "GET", "/b"), parityEndpoint("b", 0, "GET", "/b/")}, true},
+		{"parameter names across methods without auto options", ce, []*v1alpha1.KrakenDEndpoint{
+			parityEndpoint("a", time.Hour, "GET", "/a/{id}"), parityEndpoint("b", 0, "POST", "/a/{name}")}, true},
 		{"unnamed wildcard on CE", ce, []*v1alpha1.KrakenDEndpoint{parityEndpoint("a", 0, "GET", "/files/*")}, false},
 		{"unnamed wildcard on EE", parityGateway(v1alpha1.EditionEE, nil),
 			[]*v1alpha1.KrakenDEndpoint{parityEndpoint("a", 0, "GET", "/files/*")}, true},
