@@ -33,6 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
 )
 
 func testGateway() *v1alpha1.KrakenDGateway {
@@ -448,5 +449,27 @@ func TestEndpointAdmission_RouteCheckStopsWhenTheBudgetEnds(t *testing.T) {
 
 	if !apierrors.IsInternalError(err) {
 		t.Errorf("err = %v, want a 500 internal error", err)
+	}
+}
+
+func TestEndpointAdmission_PassToFailIsRejectedAs422NamingTheEntry(t *testing.T) {
+	chk := &scriptedChecker{verdicts: []configcheck.Verdict{failing("new", 1, "undefined output param 'x'")}}
+	v := &EndpointValidator{Client: fakeClient(testGateway()), Checker: chk}
+
+	resp := review(t, v, "alice", testEndpoint("new", "/a", "/b"), nil)
+
+	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("response = %+v, want a 422 denial", resp.Result)
+	}
+	causes := resp.Result.Details.Causes
+	if len(causes) != 1 || causes[0].Field != "spec.endpoints[1]" ||
+		!strings.Contains(causes[0].Message, "undefined output param") {
+		t.Errorf("causes = %+v, want one on spec.endpoints[1]", causes)
+	}
+	if strings.Join(chk.calls, ",") != "gateway+candidate,gateway" {
+		t.Errorf("checks = %v, want the candidate's config then the current one", chk.calls)
+	}
+	if chk.deadlines[0] <= 0 || chk.deadlines[0] > admissionBudget {
+		t.Errorf("check ran with %s of its budget left, want a deadline within %s", chk.deadlines[0], admissionBudget)
 	}
 }
