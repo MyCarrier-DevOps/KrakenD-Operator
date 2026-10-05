@@ -2992,17 +2992,21 @@ func TestMain(m *testing.M) {
 Multi-stage build that embeds the KrakenD CE binary for config validation:
 
 ```dockerfile
+# KrakenD CE image the validator binary comes from, pinned by digest so every
+# build validates with the same binary. Change it together with
+# ValidatorVersion in internal/configcheck and the gin version in go.mod.
+ARG KRAKEND_IMAGE=docker.io/library/krakend:2.13.11@sha256:26eb32dbb0e679c62170b21b4efb0729dc00262afd98fe6210110dbbbdd6425f
+
 # Stage 1: Build operator binary
 FROM golang:1.26-alpine AS builder
 WORKDIR /workspace
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o manager cmd/main.go
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o manager ./cmd
 
 # Stage 2: Extract KrakenD CE binary for config validation
-ARG KRAKEND_VERSION=2.13
-FROM krakend:${KRAKEND_VERSION} AS krakend
+FROM ${KRAKEND_IMAGE} AS krakend
 
 # Stage 3: Final distroless image
 FROM gcr.io/distroless/static:nonroot
