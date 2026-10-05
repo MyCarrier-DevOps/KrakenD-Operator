@@ -33,6 +33,10 @@ import (
 // earlier lets the validator answer with a clear, transient error.
 const admissionBudget = 12 * time.Second
 
+// warningLimit bounds, in bytes, a verdict's summary quoted in a warning or a
+// denial.
+const warningLimit = 1024
+
 // ConfigChecker renders a gateway's config with a proposed change and
 // validates it. *configcheck.Checker implements it.
 type ConfigChecker interface {
