@@ -263,7 +263,7 @@ jq "${jq_opts[@]}" "$jq_lib"'
 | group_by([.gw, .key])[] | select(. as $g | [$g[] as $a | $g[] as $b
     | select(($a.owner != $b.owner or $a.route != $b.route)
       and ($a.owner == $b.owner or $a.ctrl == null or $a.ctrl != $b.ctrl))] | length > 0)
-| "gateway \(.[0].gw): \([.[] | "\(.route) (\(.owner))"] | join(" vs "))"' "$work/endpoints.json"
+| "gateway \(.[0].gw | tojson): \([.[] | "\(.route) (\(.owner))"] | join(" vs "))"' "$work/endpoints.json"
 
 # GET on a gateway health path: krakend check accepts it, and the controller's
 # route check rejects the render, so the gateway keeps its last applied config.
