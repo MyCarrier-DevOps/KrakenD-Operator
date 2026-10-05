@@ -153,6 +153,7 @@ func versionWarning(gw, old *v1alpha1.KrakenDGateway) admission.Warnings {
 	if len(parts) >= 2 && parts[0]+"."+parts[1] == configcheck.ValidatorVersion {
 		return nil
 	}
+	version := truncate(gw.Spec.Version, versionEchoLimit)
 	return admission.Warnings{fmt.Sprintf("spec.version %s: configs are validated with KrakenD %s; "+
-		"the checks may not match what %s accepts", gw.Spec.Version, configcheck.ValidatorVersion, gw.Spec.Version)}
+		"the checks may not match what %s accepts", version, configcheck.ValidatorVersion, version)}
 }
