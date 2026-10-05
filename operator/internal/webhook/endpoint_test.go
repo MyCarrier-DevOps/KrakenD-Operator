@@ -304,3 +304,23 @@ func TestEndpointAdmission_MovingOntoATakenRouteIsADuplicate(t *testing.T) {
 		t.Errorf("response = %+v, want a Duplicate on the unchanged entry", resp.Result)
 	}
 }
+
+// Same-shape entries inside one KrakenDEndpoint are checked whenever an entry
+// changes, even when the new entry has the route key of a stored one.
+func TestEndpointAdmission_UpdateAddingAnEntryWithAStoredRouteKeyIsRejected(t *testing.T) {
+	tests := []struct{ name, stored, added string }{
+		{"parameter name", "/users/{id}", "/users/{name}"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			old := testEndpoint("e", tt.stored)
+			edited := testEndpoint("e", tt.stored, tt.added)
+			v := &EndpointValidator{Client: fakeClient(testGateway(), old)}
+			resp := review(t, v, "alice", edited, old)
+			c := resp.Result.Details
+			if resp.Allowed || c == nil || len(c.Causes) == 0 || c.Causes[0].Type != metav1.CauseTypeFieldValueDuplicate {
+				t.Errorf("response = %+v, want a Duplicate on the added entry", resp.Result)
+			}
+		})
+	}
+}
