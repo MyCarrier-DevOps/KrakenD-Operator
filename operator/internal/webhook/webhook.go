@@ -193,7 +193,7 @@ func (v *GatewayValidator) validate(gw, old *v1alpha1.KrakenDGateway) (admission
 // sidecar probe the update changed: an error such as Forbidden carries no
 // value, so it would read the same for the new probe and hide a real problem.
 func (v *GatewayValidator) storedErrors(gw, old *v1alpha1.KrakenDGateway) field.ErrorList {
-	_, stored := v.validate(old, nil)
+	_, stored := v.validate(old, old)
 	oaPath := field.NewPath("spec", "openapi")
 	oldLiveness, oldReadiness := sidecarProbes(old)
 	liveness, readiness := sidecarProbes(gw)
