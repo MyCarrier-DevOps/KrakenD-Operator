@@ -368,6 +368,7 @@ type AdditionalEndpoint struct {
 	InputQueryStrings []string `json:"inputQueryStrings,omitempty"`
 	// OutputEncoding overrides the endpoint response encoding.
 	// +optional
+	// +kubebuilder:validation:Enum=json;json-collection;yaml;fast-json;xml;negotiate;string;no-op
 	OutputEncoding string `json:"outputEncoding,omitempty"`
 	// ConcurrentCalls sets the number of concurrent backend calls.
 	// +kubebuilder:validation:Minimum=1
