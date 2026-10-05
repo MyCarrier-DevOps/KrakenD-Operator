@@ -153,7 +153,10 @@ func resolveParameter(root map[string]any, ref string) (map[string]any, error) {
 		if err != nil {
 			return nil, err
 		}
-		obj, _ := target.(map[string]any)
+		obj, isObj := target.(map[string]any)
+		if !isObj {
+			return nil, errors.New("target is not a parameter object")
+		}
 		if next, isRef := obj["$ref"].(string); isRef {
 			ref = next
 			continue
