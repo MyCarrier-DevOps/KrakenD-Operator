@@ -577,3 +577,23 @@ func TestCheckGatewayPolicy_CandidateFillsAMissingPolicy(t *testing.T) {
 		t.Errorf("linted %v, want the endpoint rendered with the created policy", v.seen)
 	}
 }
+
+func TestLintPolicy_FindingsDoNotNameTheSyntheticEndpoint(t *testing.T) {
+	v := &fakeValidator{err: &renderer.ValidationError{
+		Output: "ERROR linting the configuration file:\tjsonschema validation failed with 'file:///etc/krakend/schema.json#'\n" +
+			"- at '/endpoints/0/backend/0/extra_config': additional properties 'qos/circuit-breakr' not allowed\n",
+		Err: errors.New("exit status 1"),
+	}}
+	c := newChecker(v)
+
+	verdict, err := c.LintPolicy(context.Background(), policy("p"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verdict.OK || len(verdict.Findings) != 1 {
+		t.Fatalf("findings = %+v, want one", verdict.Findings)
+	}
+	if f := verdict.Findings[0]; f.Endpoint != (types.NamespacedName{}) || f.Index != -1 || strings.Contains(f.String(), "policy-lint") {
+		t.Errorf("finding = %+v (%s), want no endpoint and index -1", f, f)
+	}
+}
