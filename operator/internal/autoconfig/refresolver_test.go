@@ -520,6 +520,7 @@ func TestExternalRefs_IgnoresExamplePayloads(t *testing.T) {
 		want []string
 	}{
 		{"example value", `{"example":{"$ref":"not-a-ref.json"}}`, nil},
+		{"examples entry value", `{"examples":{"e":{"value":{"$ref":"data"}}}}`, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
