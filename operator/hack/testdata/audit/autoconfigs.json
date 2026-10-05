@@ -34,5 +34,6 @@
  {"metadata":{"namespace":"a","name":"override-policy"},"spec":{"gatewayRef":{"name":"gw"},"openapi":{"url":"http://x"},"trigger":"OnChange","overrides":[{"operationId":"x","policyRef":{"name":""}}]}},
  {"metadata":{"namespace":"a","name":"override-collide"},"spec":{"gatewayRef":{"name":"gw"},"openapi":{"url":"http://x"},"trigger":"OnChange","overrides":[{"operationId":"get_a"},{"operationId":"get-a"}]}},
  {"metadata":{"namespace":"a","name":"defaults-timeout"},"spec":{"gatewayRef":{"name":"gw"},"openapi":{"url":"http://x"},"trigger":"OnChange","defaults":{"endpoint":{"timeout":"3 seconds"}}}},
- {"metadata":{"namespace":"a","name":"defaults-cachettl"},"spec":{"gatewayRef":{"name":"gw"},"openapi":{"url":"http://x"},"trigger":"OnChange","defaults":{"endpoint":{"cacheTTL":"0000000000000000000000000000000000000000000000000000000000000001s"}}}}
+ {"metadata":{"namespace":"a","name":"defaults-cachettl"},"spec":{"gatewayRef":{"name":"gw"},"openapi":{"url":"http://x"},"trigger":"OnChange","defaults":{"endpoint":{"cacheTTL":"0000000000000000000000000000000000000000000000000000000000000001s"}}}},
+ {"metadata":{"namespace":"a","name":"defaults-output"},"spec":{"gatewayRef":{"name":"gw"},"openapi":{"url":"http://x"},"trigger":"OnChange","defaults":{"endpoint":{"outputEncoding":"jsn"}}}}
 ]}
