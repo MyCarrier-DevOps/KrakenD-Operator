@@ -237,7 +237,10 @@ type OperationOverride struct {
 	// +kubebuilder:validation:Enum=GET;POST;PUT;PATCH;DELETE
 	Method string `json:"method,omitempty"`
 
-	// Timeout overrides the endpoint timeout.
+	// Timeout overrides the endpoint timeout (a Go duration).
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern=`^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$`
 	Timeout *metav1.Duration `json:"timeout,omitempty"`
 
 	// CacheTTL overrides the endpoint cache TTL.
