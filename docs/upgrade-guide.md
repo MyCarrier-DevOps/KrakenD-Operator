@@ -558,8 +558,8 @@ kubectl patch <kind>/<name> -n <ns> --subresource=status --type=json \
   `Ready`. Replace alerts or health checks on `Available` with `Ready`.
 - `phase` is derived from `Ready`: `True` → `Active`; `Unknown` → `Pending`;
   `GatewayNotFound` → `Detached`; `EndpointConflict` and `PartiallyAccepted` →
-  `Conflicted`; any other `False` reason → `Invalid`. This ends the flip-flop in which a
-  conflicted endpoint alternated between `Conflicted` and `Active`.
+  `Conflicted`; any other `False` reason → `Invalid`. This ends the flip-flop
+  in which a conflicted endpoint alternated between `Conflicted` and `Active`.
 - `Ready=Unknown` with reason `Pending` ("Waiting for the gateway to accept
   generation N") means the gateway has not yet accepted this generation. That
   is normal for a moment after every change; it persists while the gateway's
