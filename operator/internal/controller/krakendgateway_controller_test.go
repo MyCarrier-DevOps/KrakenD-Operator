@@ -453,6 +453,30 @@ func TestGatewayMapper_LicenseSecretToGateway_ExternalSecret(t *testing.T) {
 	}
 }
 
+func TestGatewayMapper_LicenseSecretToGateway_OnlyTheSecretTheGatewayReads(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw1", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.7.0",
+			Edition: v1alpha1.EditionEE,
+			License: &v1alpha1.LicenseConfig{
+				SecretRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: "my-license"},
+					Key:                  "key",
+				},
+				ExternalSecret: v1alpha1.ExternalSecretLicenseConfig{Enabled: true},
+			},
+		},
+	}
+	// The reference wins, so the Secret an ExternalSecret syncs is never read or mounted.
+	unread := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "gw1-license", Namespace: "default"}}
+	r := &KrakenDGatewayReconciler{Client: fakeClientBuilder().WithObjects(gw).Build(), Scheme: testScheme()}
+
+	if requests := r.licenseSecretToGateway(context.Background(), unread); len(requests) != 0 {
+		t.Errorf("requests = %v, want none for a Secret the gateway neither reads nor mounts", requests)
+	}
+}
+
 func TestGatewayMapper_LicenseSecretToGateway_NoMatch(t *testing.T) {
 	gw := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "gw1", Namespace: "default"},
