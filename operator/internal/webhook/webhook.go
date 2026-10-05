@@ -73,6 +73,7 @@ func terminatingWithUnchangedSpec(oldObj, newObj runtime.Object) bool {
 // GatewayValidator validates KrakenDGateway resources.
 type GatewayValidator struct {
 	client.Client
+	Checker ConfigChecker
 }
 
 // ValidateCreate validates a new KrakenDGateway. There is no "old" object on
