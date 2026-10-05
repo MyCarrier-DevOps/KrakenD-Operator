@@ -1567,10 +1567,12 @@ func TestEndpointValidator_Update(t *testing.T) {
 			Endpoints:  []v1alpha1.EndpointEntry{},
 		},
 	}
+	old := ep.DeepCopy()
+	old.Spec.GatewayRef.Name = "previous"
 	v := &EndpointValidator{Client: fakeClient()}
-	_, err := v.ValidateUpdate(context.Background(), ep, ep)
+	_, err := v.ValidateUpdate(context.Background(), old, ep)
 	if err == nil {
-		t.Error("expected error on update")
+		t.Error("expected error on update to a missing gateway")
 	}
 }
 
