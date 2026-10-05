@@ -192,7 +192,7 @@ func checkPolicyRender(
 		}
 		w, err := ratchetRender(ctx, renderChecks{
 			after:  bindPolicyCheck(chk.CheckGatewayPolicy, gw, policy),
-			before: bindCheck(chk.CheckGateway, gw, nil),
+			before: policyBaseline(chk, gw, old),
 		},
 			func(after configcheck.Verdict) error {
 				cause(field.Invalid(field.NewPath("spec"), field.OmitValueType{},
@@ -232,6 +232,18 @@ func describeDrops(drops []renderer.CEDrop) string {
 // errPolicyBreaksGateway tells checkPolicyRender's loop that a gateway's
 // ratchet denied the policy; the cause itself is already collected.
 var errPolicyBreaksGateway = errors.New("policy breaks gateway")
+
+// policyBaseline is the check of gw without the change: with the stored policy
+// as the update read it (old), not whatever the cache holds now. A create has
+// no stored policy, so gw is rendered as it stands.
+func policyBaseline(
+	chk ConfigChecker, gw *v1alpha1.KrakenDGateway, old *v1alpha1.KrakenDBackendPolicy,
+) func(context.Context) (configcheck.Verdict, error) {
+	if old == nil {
+		return bindCheck(chk.CheckGateway, gw, nil)
+	}
+	return bindPolicyCheck(chk.CheckGatewayPolicy, gw, old)
+}
 
 // bindPolicyCheck fixes the gateway and the policy a check runs on.
 func bindPolicyCheck(
