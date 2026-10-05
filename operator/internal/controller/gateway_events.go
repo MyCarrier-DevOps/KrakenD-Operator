@@ -29,7 +29,9 @@ import (
 // or changes reason while False, and a Normal event when it turns True again.
 // A steady state emits nothing.
 func (r *KrakenDGatewayReconciler) setConditionWithEvent(gw *v1alpha1.KrakenDGateway, cond metav1.Condition) {
-	prev := copyCondition(meta.FindStatusCondition(gw.Status.Conditions, cond.Type))
+	// meta.SetStatusCondition updates the stored condition in place, so the
+	// previous value is copied first. DeepCopy of a nil condition is nil.
+	prev := meta.FindStatusCondition(gw.Status.Conditions, cond.Type).DeepCopy()
 	meta.SetStatusCondition(&gw.Status.Conditions, cond)
 	recordConditionTransition(r.Recorder, gw, prev, cond)
 }
@@ -39,20 +41,10 @@ func (r *KrakenDGatewayReconciler) setConditionWithEvent(gw *v1alpha1.KrakenDGat
 // records a Warning, with the condition's reason and message, when the
 // condition turns True or changes reason while True.
 func (r *KrakenDGatewayReconciler) setProblemCondition(gw *v1alpha1.KrakenDGateway, cond metav1.Condition) {
-	prev := copyCondition(meta.FindStatusCondition(gw.Status.Conditions, cond.Type))
+	prev := meta.FindStatusCondition(gw.Status.Conditions, cond.Type).DeepCopy()
 	meta.SetStatusCondition(&gw.Status.Conditions, cond)
 	if cond.Status == metav1.ConditionTrue &&
 		(prev == nil || prev.Status != metav1.ConditionTrue || prev.Reason != cond.Reason) {
 		r.Recorder.Event(gw, corev1.EventTypeWarning, cond.Reason, cond.Message)
 	}
-}
-
-// copyCondition returns a copy of c, or nil. meta.SetStatusCondition updates
-// the stored condition in place, so the previous value must be copied first.
-func copyCondition(c *metav1.Condition) *metav1.Condition {
-	if c == nil {
-		return nil
-	}
-	cp := *c
-	return &cp
 }
