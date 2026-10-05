@@ -600,7 +600,9 @@ spec:
                       - name
                       type: object
                     timeout:
-                      description: Timeout overrides the endpoint timeout.
+                      description: Timeout overrides the endpoint timeout (a Go duration).
+                      maxLength: 64
+                      pattern: ^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$
                       type: string
                   required:
                   - operationId
