@@ -75,9 +75,9 @@ type CUEEvaluator interface {
 // OPTIONS and TRACE operations) is skipped, not generated.
 var supportedMethods = []string{"GET", "POST", "PUT", "PATCH", "DELETE"}
 
-// skippedMethods are the methods the default definitions emit that the
-// KrakenDEndpoint API rejects. A failed operation is skipped, not held, only
-// when its method is known to be one of these.
+// skippedMethods are the standard HTTP methods the KrakenDEndpoint API
+// rejects; the default definitions emit all but CONNECT. A failed operation
+// is skipped, not held, only when its method is known to be one of these.
 var skippedMethods = []string{"HEAD", "OPTIONS", "TRACE", "CONNECT"}
 
 // NewCUEEvaluator returns a CUEEvaluator implementation.
