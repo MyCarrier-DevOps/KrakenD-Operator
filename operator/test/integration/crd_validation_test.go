@@ -136,15 +136,19 @@ func TestCRD_GatewayDragonflyPasswordRatchets(t *testing.T) {
 	if err := k8sClient.Create(ctx, g); err != nil {
 		t.Fatalf("a Community gateway with a Dragonfly password was rejected: %v", err)
 	}
+	// Patch rather than Update: the gateway reconciler writes status between
+	// the calls, which would fail an Update with a Conflict before validation.
 	replicas := int32(3)
+	base := g.DeepCopy()
 	g.Spec.Replicas = &replicas
-	if err := k8sClient.Update(ctx, g); err != nil {
+	if err := k8sClient.Patch(ctx, g, client.MergeFrom(base)); err != nil {
 		t.Errorf("an unrelated edit of a Community gateway with a Dragonfly password was rejected: %v", err)
 	}
+	base = g.DeepCopy()
 	g.Spec.Edition = v1alpha1.EditionEE
 	g.Spec.License = &v1alpha1.LicenseConfig{SecretRef: &corev1.SecretKeySelector{
 		LocalObjectReference: corev1.LocalObjectReference{Name: "l"}, Key: "k"}}
-	err := k8sClient.Update(ctx, g)
+	err := k8sClient.Patch(ctx, g, client.MergeFrom(base))
 	if !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "passwordFromSecret is not supported yet") {
 		t.Errorf("switch to Enterprise: err = %v, want Invalid containing the Dragonfly password message", err)
 	}
