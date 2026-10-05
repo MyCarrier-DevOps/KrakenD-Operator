@@ -245,9 +245,11 @@ func droppedLabel(d renderer.CEDrop) string {
 // features only KrakenD Enterprise has: KrakenD CE ignores the redis
 // connection pools and documentation/openapi, the CE binary has no openapi
 // command for the OpenAPI export, and Dragonfly exists to back the redis
-// pools. A value already stored on a CE gateway and left unchanged
-// is not judged again; a gateway switching from EE to CE is judged on every
-// such field it keeps.
+// pools. spec.redis and spec.config.documentation are judged when set or
+// changed; spec.openapi and spec.dragonfly are keyed on enabled: enabling one
+// is refused, and editing the settings of one stored enabled on CE is admitted
+// with a warning (openAPIOnCEWarning, dragonflyOnCEWarning). A gateway
+// switching from EE to CE is judged on every such field it keeps.
 func eeFieldsOnCE(old, gw *v1alpha1.KrakenDGateway) field.ErrorList {
 	if gw.Spec.Edition != v1alpha1.EditionCE {
 		return nil
