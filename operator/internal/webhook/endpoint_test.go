@@ -668,3 +668,37 @@ func TestEndpointAdmission_ManyFindingsOnOneEntryMakeOneBoundedCause(t *testing.
 			c.Field, len(c.Message), utf8.ValidString(c.Message), warningLimit)
 	}
 }
+
+// Findings on more entries than the denial lists are folded into the summary
+// on spec.endpoints, which names how many it left out.
+func TestEndpointAdmission_FindingsOnManyEntriesAreCappedAtTwentyCauses(t *testing.T) {
+	var paths []string
+	var findings []configcheck.Finding
+	for i := 0; i < 30; i++ {
+		paths = append(paths, fmt.Sprintf("/e%d", i))
+		findings = append(findings, configcheck.Finding{
+			Endpoint: types.NamespacedName{Namespace: "default", Name: "new"}, Index: i,
+			Message: strings.Repeat("x", 100),
+		})
+	}
+	v := &EndpointValidator{Client: fakeClient(testGateway()), Checker: &scriptedChecker{
+		verdicts: []configcheck.Verdict{{Findings: findings}},
+	}}
+
+	resp := review(t, v, "alice", testEndpoint("new", paths...), nil)
+
+	if resp.Allowed || resp.Result.Details == nil {
+		t.Fatalf("response = %+v, want a denial", resp.Result)
+	}
+	causes := resp.Result.Details.Causes
+	if len(causes) != 21 {
+		t.Fatalf("got %d causes, want 20 entries plus one summary", len(causes))
+	}
+	last := causes[20]
+	if last.Field != "spec.endpoints" || !strings.Contains(last.Message, "default/new spec.endpoints[20]") {
+		t.Errorf("last cause = %+v, want the summary on spec.endpoints starting at entry 20", last)
+	}
+	if len(last.Message) > 200+warningLimit {
+		t.Errorf("summary is %d bytes, want at most %d", len(last.Message), 200+warningLimit)
+	}
+}
