@@ -19,6 +19,7 @@ package webhook
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -351,5 +352,28 @@ func TestGatewayAdmission_EditionSwitchLookupsRunUnderTheAdmissionBudget(t *test
 		if d <= 0 || d > admissionBudget {
 			t.Errorf("the %s ran with %s left, want a deadline within %s", what, d, admissionBudget)
 		}
+	}
+}
+
+// A gateway with hundreds of endpoints using EE namespaces must not produce an
+// unbounded denial.
+func TestGatewayAdmission_EditionSwitchDenialIsBounded(t *testing.T) {
+	var objs []client.Object
+	for i := range 300 {
+		ep := testEndpoint(fmt.Sprintf("keys-%d", i), "/k")
+		ep.Spec.Endpoints[0].ExtraConfig = &runtime.RawExtension{Raw: []byte(`{"auth/api-keys":{"roles":["a"]}}`)}
+		objs = append(objs, ep)
+	}
+	old := testGateway()
+	old.Spec.Edition = v1alpha1.EditionEE
+	v := &GatewayValidator{Client: fakeClient(objs...), Checker: &scriptedChecker{}}
+
+	resp := review(t, v, "alice", testGateway(), old)
+
+	if resp.Allowed || resp.Result.Details == nil || len(resp.Result.Details.Causes) != 1 {
+		t.Fatalf("response = %+v, want a denial with one cause", resp.Result)
+	}
+	if got := len(resp.Result.Details.Causes[0].Message); got > 2*warningLimit {
+		t.Errorf("cause is %d bytes, want it cut near %d", got, warningLimit)
 	}
 }
