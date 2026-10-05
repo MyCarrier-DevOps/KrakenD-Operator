@@ -133,7 +133,8 @@ func (v *EndpointValidator) admit(
 }
 
 // checkRender renders ep's gateway with ep and rejects the request only when
-// that turns a passing config into a failing one.
+// that turns a passing config into a failing one. When the gateway already
+// fails without ep, ep is judged in isolation: the gateway root plus ep alone.
 func (v *EndpointValidator) checkRender(
 	ctx context.Context, ep *v1alpha1.KrakenDEndpoint, gw *v1alpha1.KrakenDGateway,
 ) (admission.Warnings, error) {
@@ -151,7 +152,12 @@ func (v *EndpointValidator) checkRender(
 	if before.OK {
 		return nil, renderDenial(ep, after)
 	}
-	return nil, nil
+	preexisting := admission.Warnings{fmt.Sprintf("gateway %s/%s already fails validation without this change: %s",
+		gw.Namespace, gw.Name, before.Summary(warningLimit))}
+	if _, err := v.Checker.CheckIsolated(ctx, gw, []v1alpha1.KrakenDEndpoint{*ep}); err != nil {
+		return nil, err
+	}
+	return preexisting, nil
 }
 
 // renderDenial rejects ep with one cause per entry of ep the verdict blames.
