@@ -179,12 +179,18 @@ func (v *EndpointValidator) checkRender(
 	return preexisting, nil
 }
 
+// maxEntryCauses is how many entries of the candidate a denial lists as causes
+// of their own.
+const maxEntryCauses = 20
+
 // renderDenial rejects ep with one cause per entry of ep the verdict blames,
-// its findings joined and cut to the warning limit. Findings about other
-// objects or the gateway root go on spec.endpoints, as a bounded summary.
+// its findings joined and cut to the warning limit, for the first
+// maxEntryCauses entries. Findings about other objects or the gateway root, and
+// those of the entries beyond the limit, go on spec.endpoints as a bounded
+// summary that counts what it leaves out.
 func renderDenial(ep *v1alpha1.KrakenDEndpoint, verdict configcheck.Verdict) error {
 	self := types.NamespacedName{Namespace: ep.Namespace, Name: ep.Name}
-	byEntry := map[int][]string{}
+	byEntry := map[int][]configcheck.Finding{}
 	var blamed []int
 	var others []configcheck.Finding
 	for _, f := range verdict.Findings {
@@ -195,14 +201,24 @@ func renderDenial(ep *v1alpha1.KrakenDEndpoint, verdict configcheck.Verdict) err
 		if _, ok := byEntry[f.Index]; !ok {
 			blamed = append(blamed, f.Index)
 		}
-		byEntry[f.Index] = append(byEntry[f.Index], f.Message)
+		byEntry[f.Index] = append(byEntry[f.Index], f)
 	}
 	slices.Sort(blamed)
 	var errs field.ErrorList
-	for _, i := range blamed {
+	for n, i := range blamed {
+		if n == maxEntryCauses {
+			for _, rest := range blamed[n:] {
+				others = append(others, byEntry[rest]...)
+			}
+			break
+		}
+		var messages []string
+		for _, f := range byEntry[i] {
+			messages = append(messages, f.Message)
+		}
 		entry := ep.Spec.Endpoints[i]
 		errs = append(errs, field.Invalid(field.NewPath("spec", "endpoints").Index(i),
-			entry.Method+" "+entry.Endpoint, truncate(strings.Join(byEntry[i], "; "), warningLimit)))
+			entry.Method+" "+entry.Endpoint, truncate(strings.Join(messages, "; "), warningLimit)))
 	}
 	if len(others) > 0 {
 		errs = append(errs, field.Invalid(field.NewPath("spec", "endpoints"), field.OmitValueType{},
