@@ -381,6 +381,40 @@ func TestGatewayReconcile_ConfigValidListsEachFindingOnItsOwnLine(t *testing.T) 
 	}
 }
 
+func TestGatewayReconcile_RememberedRejectionNamesTheEntryAsOrderedNow(t *testing.T) {
+	gw := testGateway()
+	a, b := entriesEndpoint("a", "/a"), entriesEndpoint("b", "/y", "/x")
+	validator := &countingValidator{err: rejectedBy("- at '/endpoints/1/extra_config': bad")}
+	c := fakeClientBuilder().WithObjects(gw, a, b).WithStatusSubresource(gw, a, b).Build()
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}), validator)
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+
+	// The rendered entries are sorted, so reordering b's entries renders the
+	// same config: the rejection is remembered, and /x is now b's entry 0.
+	var stored v1alpha1.KrakenDEndpoint
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(b), &stored); err != nil {
+		t.Fatal(err)
+	}
+	stored.Spec.Endpoints[0], stored.Spec.Endpoints[1] = stored.Spec.Endpoints[1], stored.Spec.Endpoints[0]
+	if err := c.Update(context.Background(), &stored); err != nil {
+		t.Fatal(err)
+	}
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+
+	if validator.calls != 1 {
+		t.Fatalf("krakend check ran %d times, want 1: the second reconcile renders the same config", validator.calls)
+	}
+	cond := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionConfigValid)
+	if cond == nil || !strings.Contains(cond.Message, "default/b spec.endpoints[0]:") ||
+		strings.Contains(cond.Message, "spec.endpoints[1]") {
+		t.Errorf("ConfigValid = %+v, want the finding on spec.endpoints[0]", cond)
+	}
+}
+
 func TestGatewayReconcile_RenderError(t *testing.T) {
 	gw := testGateway()
 	gw.Status.Phase = v1alpha1.PhasePending
