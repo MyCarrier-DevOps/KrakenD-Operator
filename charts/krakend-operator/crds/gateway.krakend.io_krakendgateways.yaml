@@ -2542,6 +2542,7 @@ spec:
                           type: string
                         type: array
                       dialTimeout:
+                        pattern: ^[0-9]+(ns|ms|us|µs|s|m|h)$
                         type: string
                       minIdleConns:
                         type: integer
