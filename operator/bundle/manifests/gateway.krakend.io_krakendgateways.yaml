@@ -167,8 +167,15 @@ spec:
                       config.
                     type: string
                   outputEncoding:
-                    description: 'OutputEncoding selects the default response encoding:
-                      json, negotiate, no-op.'
+                    description: OutputEncoding selects the default response encoding.
+                    enum:
+                    - json
+                    - fast-json
+                    - json-collection
+                    - xml
+                    - negotiate
+                    - string
+                    - no-op
                     type: string
                   port:
                     description: Port is the KrakenD listen port (default 8080).
