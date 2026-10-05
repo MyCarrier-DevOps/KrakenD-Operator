@@ -25,3 +25,17 @@ func TestVerdictSummary_BoundsAtAFindingBoundary(t *testing.T) {
 		t.Errorf("summary = %q", s)
 	}
 }
+
+func TestFindingString(t *testing.T) {
+	ep := types.NamespacedName{Namespace: "ns", Name: "ep"}
+	tests := map[string]Finding{
+		"ns/ep spec.endpoints[2]: bad": {Endpoint: ep, Index: 2, Message: "bad"},
+		"ns/ep: bad":                   {Endpoint: ep, Index: -1, Message: "bad"},
+		"gateway: bad":                 {Index: -1, Message: "bad"},
+	}
+	for want, f := range tests {
+		if got := f.String(); got != want {
+			t.Errorf("String() = %q, want %q", got, want)
+		}
+	}
+}
