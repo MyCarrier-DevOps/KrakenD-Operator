@@ -1476,6 +1476,25 @@ the rendered KrakenD pool has none. A gateway that already has it keeps being
 accepted on unrelated updates; adding it, changing the stored password, or
 switching a gateway that has it to Enterprise, is rejected.
 
+**Entry rules KrakenD enforces are checked at admission.** A KrakenDEndpoint
+entry is rejected, with the exact field, when its path is `/__debug`,
+`/__echo` or `/__health` or lies under one of them; when it is a `GET` on the
+gateway's health path (`spec.config.router.healthPath`, or the `router` block
+of `spec.config.extraConfig`, which replaces the typed one: `disable_health`
+frees the path); when it is a `/prefix/*` wildcard and the gateway runs CE
+(Enterprise gateways accept them, and a root `/*` is rejected in both
+editions); or when a backend `urlPattern` placeholder is neither a parameter
+of the endpoint path, `respN_...` nor `JWT....`. **On a CE gateway,
+Enterprise-only `extra_config` namespaces are rejected** in an entry's or
+backend's `extraConfig` (for example `auth/api-keys` on an entry or
+`backend/http/client` on a backend): KrakenD CE accepts them in `krakend check`
+and then ignores them silently, so a route that asks for API-key authentication
+was served without it. An entry's `documentation/openapi` is still admitted,
+because AutoConfig generates it on every endpoint and a CE render drops it.
+Only added or changed entries are checked, and moving the object to another
+gateway checks every entry again, so an entry stored before the upgrade does not
+block unrelated edits. The pre-upgrade audit lists stored uses.
+
 **Updates are ratcheted.** A metadata-only update is never validated. A
 reference (`gatewayRef`, `policyRef`) is checked only when it is added or
 changed. A field rule rejects an update only if the error is new, so an object
