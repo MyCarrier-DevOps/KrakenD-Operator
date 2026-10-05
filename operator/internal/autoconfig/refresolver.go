@@ -415,5 +415,21 @@ func decodeSpec(data []byte) (map[string]any, error) {
 	return out, nil
 }
 
-// ExternalRefs is implemented in the next step.
-func ExternalRefs(specData []byte) ([]string, error) { return nil, nil }
+// ExternalRefs returns the distinct $refs in specData that point outside the
+// document (those not starting with "#"), sorted. Only a URL-sourced spec has
+// a base to resolve them against, so in a ConfigMap-sourced spec they stay
+// unresolved.
+func ExternalRefs(specData []byte) ([]string, error) {
+	root, err := decodeSpec(specData)
+	if err != nil {
+		return nil, fmt.Errorf("decoding spec: %w", err)
+	}
+	refs := map[string]struct{}{}
+	walkJSON(root, func(key string, value any) bool {
+		if s, ok := value.(string); ok && key == "$ref" && !strings.HasPrefix(s, "#") {
+			refs[s] = struct{}{}
+		}
+		return true
+	})
+	return slices.Sorted(maps.Keys(refs)), nil
+}
