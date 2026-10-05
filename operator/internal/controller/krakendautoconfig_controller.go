@@ -271,6 +271,20 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	return r.requeueResult(&ac), nil
 }
 
+// SetupWithManager sets up the controller with the Manager.
+func (r *KrakenDAutoConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&v1alpha1.KrakenDAutoConfig{}, builder.WithPredicates(autoConfigPredicate())).
+		Owns(&v1alpha1.KrakenDEndpoint{}, builder.WithPredicates(ownedEndpointPredicate())).
+		Watches(
+			&corev1.ConfigMap{},
+			handler.EnqueueRequestsFromMapFunc(r.configMapToAutoConfigs),
+		).
+		WithOptions(crcontroller.Options{RateLimiter: newAutoConfigRateLimiter()}).
+		Named("krakendautoconfig").
+		Complete(r)
+}
+
 // inScope returns the issues whose operations spec.filter keeps, applying
 // the same rules the filter applies to entries, so an operation the user
 // excluded is neither reported nor holds anything back.
@@ -297,20 +311,6 @@ func (r *KrakenDAutoConfigReconciler) inScope(
 	return slices.DeleteFunc(slices.Clone(issues), func(i autoconfig.OperationIssue) bool {
 		return !kept[i.Path+":"+i.Method]
 	})
-}
-
-// SetupWithManager sets up the controller with the Manager.
-func (r *KrakenDAutoConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&v1alpha1.KrakenDAutoConfig{}, builder.WithPredicates(autoConfigPredicate())).
-		Owns(&v1alpha1.KrakenDEndpoint{}, builder.WithPredicates(ownedEndpointPredicate())).
-		Watches(
-			&corev1.ConfigMap{},
-			handler.EnqueueRequestsFromMapFunc(r.configMapToAutoConfigs),
-		).
-		WithOptions(crcontroller.Options{RateLimiter: newAutoConfigRateLimiter()}).
-		Named("krakendautoconfig").
-		Complete(r)
 }
 
 // autoConfigPredicate gates the primary KrakenDAutoConfig watch. Status-only
