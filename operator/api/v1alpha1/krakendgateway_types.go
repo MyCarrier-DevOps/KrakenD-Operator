@@ -309,7 +309,8 @@ type GatewayConfig struct {
 	// +kubebuilder:validation:Pattern=`^[0-9]+(ns|ms|us|µs|s|m|h)$`
 	CacheTTL string `json:"cacheTTL,omitempty"`
 
-	// OutputEncoding selects the default response encoding: json, negotiate, no-op.
+	// OutputEncoding selects the default response encoding.
+	// +kubebuilder:validation:Enum=json;fast-json;json-collection;xml;negotiate;string;no-op
 	OutputEncoding string `json:"outputEncoding,omitempty"`
 
 	// DNSCacheTTL is the DNS lookup cache duration (e.g. "30s").
