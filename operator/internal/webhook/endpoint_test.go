@@ -1067,3 +1067,29 @@ func TestRouteCheckRefusalLimitExceedsTheListedCausesByOne(t *testing.T) {
 		t.Errorf("renderer.MaxRouteRefusals = %d, want maxEntryCauses+1 = %d", renderer.MaxRouteRefusals, maxEntryCauses+1)
 	}
 }
+
+// A move re-judges a stored policy reference, which the reference rule does
+// not fetch again, so a failing policy lookup there is the rule's own: 500.
+func TestEndpointAdmission_PolicyLookupErrorOnAMoveIsRetryable(t *testing.T) {
+	ee := testGateway()
+	ee.Name = "ee"
+	ee.Spec.Edition = v1alpha1.EditionEE
+	old := testEndpoint("e", "/a")
+	old.Spec.GatewayRef.Name = "ee"
+	old.Spec.Endpoints[0].Backends[0].PolicyRef = &v1alpha1.PolicyRef{Name: "p"}
+	broken := fakeClientBuilderWith(interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch,
+		key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+		if _, ok := obj.(*v1alpha1.KrakenDBackendPolicy); ok {
+			return errors.New("api server unreachable")
+		}
+		return c.Get(ctx, key, obj, opts...)
+	}}, testGateway(), ee, old)
+	moved := old.DeepCopy()
+	moved.Spec.GatewayRef.Name = "gw"
+
+	resp := review(t, &EndpointValidator{Client: broken, Checker: &scriptedChecker{}}, "alice", moved, old)
+
+	if resp.Allowed || resp.Result.Code != http.StatusInternalServerError {
+		t.Errorf("response = %+v, want 500", resp.Result)
+	}
+}
