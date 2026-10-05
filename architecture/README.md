@@ -1347,6 +1347,19 @@ them is `Accepted=False/EndpointConflict`. In both cases `status.conflicts`
 lists each lost entry and the KrakenDEndpoint that serves it. The gateway
 writes it in the same optimistic-lock status patch as `Accepted`.
 
+Admission stops new conflicts before the renderer sees them. The
+KrakenDEndpoint webhook rejects each added or changed entry whose method and
+route shape another entry on the same gateway already has, including another
+entry of the same KrakenDEndpoint (`Duplicate value`, naming the owner and
+the clashing path). Endpoints with the same controller (two endpoints one
+KrakenDAutoConfig generated while it renames an operation) are exempt: the
+renderer serves the older one until the AutoConfig deletes it. Oldest-wins
+stays as the fallback for concurrent applies and for conflicts stored before
+the rule. Routes that share a parameterized prefix (`/users/{id}` and
+`/users/{id}/orders`) must name the parameter alike. When they live in
+different KrakenDEndpoints no intermediate state is valid, so keep them in one
+KrakenDEndpoint and rename them in one apply.
+
 ### Deterministic Ordering
 
 To ensure consistent JSON output (and avoid unnecessary rolling restarts from non-semantic changes), the operator:
@@ -1979,7 +1992,7 @@ The operator should deploy a `ValidatingAdmissionWebhook` with `failurePolicy: F
 
 - **KrakenDEndpoint** — reject if `gatewayRef` references a non-existent KrakenDGateway
 - **KrakenDEndpoint** — reject if `policyRef` references a non-existent KrakenDBackendPolicy
-- **KrakenDEndpoint** — warn (but allow) if an endpoint path+method already exists on the target gateway (conflict detection)
+- **KrakenDEndpoint** — reject an added or changed entry whose method and route shape (paths that differ only in parameter names or repeated slashes) another entry on the target gateway already has, in this or another KrakenDEndpoint (`Duplicate value`); endpoints with the same controller are exempt, and the renderer keeps oldest-wins as the fallback
 - **KrakenDGateway** — reject if `edition: EE` but neither `license.externalSecret.enabled=true` nor `license.secretRef` is set
 - **KrakenDGateway** — reject if both `license.externalSecret.enabled=true` and `license.secretRef` are set (mutually exclusive)
 - **KrakenDGateway** — reject if `edition: CE` and either `license.externalSecret.enabled=true` or `license.secretRef` is set (CE requires no license)
