@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -133,7 +134,11 @@ func (v *AutoConfigValidator) ValidateCreate(
 		return nil, unavailable(err)
 	}
 	errs = append(errs, validateFields(ac)...)
-	return nil, invalid("KrakenDAutoConfig", ac.Name, errs)
+	warnings, err := v.policyRefWarnings(ctx, ac)
+	if err != nil {
+		return nil, unavailable(err)
+	}
+	return warnings, invalid("KrakenDAutoConfig", ac.Name, errs)
 }
 
 // ValidateUpdate validates an updated KrakenDAutoConfig. The gateway
@@ -176,6 +181,44 @@ func (v *AutoConfigValidator) ValidateDelete(
 	_ runtime.Object,
 ) (admission.Warnings, error) {
 	return nil, nil
+}
+
+// policyRefWarnings warns about each policyRef that names no existing policy.
+// They are warnings, not errors: a release may create the policy after the
+// AutoConfig, and the generated endpoints are rejected until it exists.
+func (v *AutoConfigValidator) policyRefWarnings(
+	ctx context.Context, ac *v1alpha1.KrakenDAutoConfig,
+) (admission.Warnings, error) {
+	refs := map[string]*v1alpha1.PolicyRef{}
+	if ac.Spec.Defaults != nil && ac.Spec.Defaults.PolicyRef != nil {
+		refs["spec.defaults.policyRef"] = ac.Spec.Defaults.PolicyRef
+	}
+	for i, ov := range ac.Spec.Overrides {
+		if ov.PolicyRef != nil {
+			refs[fmt.Sprintf("spec.overrides[%d].policyRef", i)] = ov.PolicyRef
+		}
+	}
+	for i, ae := range ac.Spec.AdditionalEndpoints {
+		for j, be := range ae.Backends {
+			if be.PolicyRef != nil {
+				refs[fmt.Sprintf("spec.additionalEndpoints[%d].backends[%d].policyRef", i, j)] = be.PolicyRef
+			}
+		}
+	}
+	var warnings admission.Warnings
+	for _, p := range slices.Sorted(maps.Keys(refs)) {
+		ref := refs[p]
+		key := types.NamespacedName{Namespace: ref.ResolvedNamespace(ac.Namespace), Name: ref.Name}
+		err := v.Get(ctx, key, &v1alpha1.KrakenDBackendPolicy{})
+		switch {
+		case apierrors.IsNotFound(err):
+			warnings = append(warnings, fmt.Sprintf("%s: KrakenDBackendPolicy %s not found; "+
+				"generated endpoints that use it are rejected until it exists", p, key))
+		case err != nil:
+			return nil, fmt.Errorf("looking up policy %s: %w", key, err)
+		}
+	}
+	return warnings, nil
 }
 
 // validateGatewayRef checks that the gateway ac references exists.
