@@ -82,8 +82,9 @@ make deploy IMG=ghcr.io/mycarrier-devops/krakend-operator:<new-version>
    - A line naming an Enterprise-only namespace or field on a CE gateway is a
      feature KrakenD CE ignores today: remove it, or move the gateway to EE.
      Only a changed entry, a changed root `extraConfig`, a changed policy
-     `raw` or a changed typed field is rejected; a stored use that stays
-     unchanged keeps being accepted.
+     `raw` or a changed typed field (`spec.redis`, `spec.config.documentation`,
+     `spec.openapi.enabled` or `spec.dragonfly.enabled`) is rejected; a stored
+     use that stays unchanged keeps being accepted.
 
 ---
 
@@ -1130,7 +1131,8 @@ CE-edition gateway with `spec.openapi` enabled also rolls once, because its
 pod template loses the export init container and the `openapi-serve`
 sidecar (and its Service loses the `openapi` port); those pods could not have
 started the export, which needs the Enterprise binary. The admission webhook
-now warns about `spec.openapi` on a CE gateway.
+warns about a stored, unchanged `spec.openapi` on a CE gateway; a new or
+changed one is rejected.
 
 ### Redis and Dragonfly connection pools are now actually configured
 
@@ -1562,6 +1564,29 @@ render, Enterprise included, with the embedded CE `krakend` binary, so these
 checks also refuse features only the Enterprise binary accepts, such as
 `{input_headers.X}` and `{input_query_strings.x}` placeholders and reserved-path
 variants the Enterprise binary allows.
+
+**Gateway writes are checked too.** A new KrakenDGateway's root config
+(`spec.config`, including `extraConfig`) must pass `krakend check` on its own.
+An update is rejected if it turns the gateway's passing config, with its
+endpoints, into a failing one, for example a `router.healthPath` onto an
+existing route, or switching `edition: EE` to `CE` while `/prefix/*` endpoints
+exist. The denial puts the root findings on `spec.config` (at most 20, each cut
+to a bounded length) and the endpoints the change breaks, which can belong to
+other objects, on `spec`. When the gateway's config already fails, the update
+is judged on the root alone, against the stored root, and the existing failure
+is a warning. A `spec.version` other than 2.13.x gets a warning when it is set
+or changed: validation uses the pinned 2.13 binary. **On a CE gateway,
+Enterprise-only namespaces are rejected** in `spec.config.extraConfig` when it
+is set or changed, and switching `edition: EE` to `CE` is rejected while the
+gateway's KrakenDEndpoints or their KrakenDBackendPolicies use one; the denial
+lists each object, field and namespace. So are the typed Enterprise fields
+`spec.redis`, `spec.config.documentation`, `spec.openapi.enabled: true` and
+`spec.dragonfly.enabled: true` on a CE gateway (`Forbidden`), when set, changed,
+or kept through an EE to CE switch: CE ignores the first two, the CE binary
+cannot run the OpenAPI export, so a CE gateway runs without it, and a CE
+gateway has no Redis connection pools to use Dragonfly. A stored, unchanged
+use on a CE gateway keeps being accepted. An entry's `documentation/openapi`
+(which AutoConfig generates) is not refused: a CE render drops it.
 
 **Updates are ratcheted.** A metadata-only update is never validated. A
 reference (`gatewayRef`, `policyRef`) is checked only when it is added or
