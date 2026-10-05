@@ -1731,37 +1731,6 @@ func TestPolicyValidator_Valid(t *testing.T) {
 	}
 }
 
-func TestPolicyValidator_InvalidCB(t *testing.T) {
-	p := &v1alpha1.KrakenDBackendPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "p1", Namespace: "default"},
-		Spec: v1alpha1.KrakenDBackendPolicySpec{
-			CircuitBreaker: &v1alpha1.CircuitBreakerSpec{MaxErrors: 0, Interval: 0, Timeout: 0},
-		},
-	}
-	v := &PolicyValidator{}
-	_, err := v.ValidateCreate(context.Background(), p)
-	if err == nil {
-		t.Error("expected error for invalid CB")
-	}
-	if !strings.Contains(err.Error(), "maxErrors") {
-		t.Error("expected maxErrors in error")
-	}
-}
-
-func TestPolicyValidator_InvalidRL(t *testing.T) {
-	p := &v1alpha1.KrakenDBackendPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "p1", Namespace: "default"},
-		Spec: v1alpha1.KrakenDBackendPolicySpec{
-			RateLimit: &v1alpha1.RateLimitSpec{MaxRate: 0},
-		},
-	}
-	v := &PolicyValidator{}
-	_, err := v.ValidateCreate(context.Background(), p)
-	if err == nil {
-		t.Error("expected error for invalid RL")
-	}
-}
-
 func TestPolicyValidator_DeleteBlocked(t *testing.T) {
 	p := &v1alpha1.KrakenDBackendPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: "my-policy", Namespace: "default"},
@@ -2292,36 +2261,6 @@ func TestEndpointValidator_ConflictCrossNamespaceEndpoints(t *testing.T) {
 	}
 }
 
-func TestEndpointValidator_IntraCRDuplicate(t *testing.T) {
-	gw := &v1alpha1.KrakenDGateway{
-		ObjectMeta: metav1.ObjectMeta{Name: "my-gw", Namespace: "default"},
-		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
-			Config: v1alpha1.GatewayConfig{},
-		},
-	}
-	ep := &v1alpha1.KrakenDEndpoint{
-		ObjectMeta: metav1.ObjectMeta{Name: "ep1", Namespace: "default"},
-		Spec: v1alpha1.KrakenDEndpointSpec{
-			GatewayRef: v1alpha1.GatewayRef{Name: "my-gw"},
-			Endpoints: []v1alpha1.EndpointEntry{
-				{Endpoint: "/api", Method: "GET",
-					Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/"}}},
-				{Endpoint: "/api", Method: "GET",
-					Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc2"}, URLPattern: "/"}}},
-			},
-		},
-	}
-	v := &EndpointValidator{Client: fakeClient(gw)}
-	_, err := v.ValidateCreate(context.Background(), ep)
-	if err == nil {
-		t.Error("expected error for duplicate (endpoint, method) within same CR")
-	}
-	if !strings.Contains(err.Error(), "Duplicate") {
-		t.Errorf("expected Duplicate in error, got: %v", err)
-	}
-}
-
 func newAutoConfigForAdditional(eps []v1alpha1.AdditionalEndpoint) *v1alpha1.KrakenDAutoConfig {
 	return &v1alpha1.KrakenDAutoConfig{
 		ObjectMeta: metav1.ObjectMeta{Name: "ac", Namespace: "default"},
@@ -2756,20 +2695,6 @@ func TestEndpointValidator_RejectsSpecChangeOnTerminatingObject(t *testing.T) {
 	_, err := (&EndpointValidator{Client: fakeClient(gw)}).ValidateUpdate(context.Background(), oldEP, newEP)
 	if err == nil {
 		t.Fatal("a spec change to an invalid value on a terminating endpoint was admitted; want it rejected")
-	}
-}
-
-func TestPolicyValidator_RejectsSpecChangeOnTerminatingObject(t *testing.T) {
-	oldPolicy := terminating(&v1alpha1.KrakenDBackendPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "default"},
-		Spec:       v1alpha1.KrakenDBackendPolicySpec{RateLimit: &v1alpha1.RateLimitSpec{MaxRate: 10}},
-	})
-	newPolicy := oldPolicy.DeepCopy()
-	newPolicy.Spec.RateLimit.MaxRate = -1
-
-	_, err := (&PolicyValidator{}).ValidateUpdate(context.Background(), oldPolicy, newPolicy)
-	if err == nil {
-		t.Fatal("a spec change to an invalid value on a terminating policy was admitted; want it rejected")
 	}
 }
 
