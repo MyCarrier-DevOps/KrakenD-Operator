@@ -537,3 +537,33 @@ func TestLint_DeadlineIsTransient(t *testing.T) {
 		t.Fatalf("err = %v, want a transient deadline error", err)
 	}
 }
+
+func TestValidate_RouteCheckRunsOnTheEditionsCopy(t *testing.T) {
+	doc := []byte(`{"version":3,"endpoints":[{"endpoint":"/files/*","method":"GET"},{"endpoint":"/other","method":"GET"}]}`)
+	for _, mode := range []string{"validate", "lint"} {
+		run := func(v *KrakenDValidator, edition v1alpha1.Edition) error {
+			if mode == "lint" {
+				return v.Lint(context.Background(), doc, edition)
+			}
+			return v.Validate(context.Background(), doc, edition)
+		}
+		t.Run(mode, func(t *testing.T) {
+			ee := &recordingExecutor{}
+			if err := run(NewValidator(ValidatorOptions{Executor: ee, BinaryPath: "krakend"}), v1alpha1.EditionEE); err != nil {
+				t.Errorf("EE: %v, want valid (the copy routes /files/{Wildcard})", err)
+			}
+			if ee.args == nil {
+				t.Error("EE: krakend check did not run")
+			}
+			ce := &recordingExecutor{}
+			err := run(NewValidator(ValidatorOptions{Executor: ce, BinaryPath: "krakend"}), v1alpha1.EditionCE)
+			var valErr *ValidationError
+			if !errors.As(err, &valErr) || !strings.Contains(valErr.Output, "- at '/endpoints/0/endpoint': wildcards must be named") {
+				t.Errorf("CE: err = %v, want the unnamed wildcard refused at endpoint 0", err)
+			}
+			if ce.args != nil {
+				t.Errorf("CE: krakend check ran with %q after the route check refused the config", ce.args)
+			}
+		})
+	}
+}
