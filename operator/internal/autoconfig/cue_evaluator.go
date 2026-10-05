@@ -650,7 +650,12 @@ func applyFieldOverrides(output *CUEOutput, overrides []v1alpha1.OperationOverri
 			}
 		}
 		for _, bo := range ov.Backends {
-			if bo.Index >= 0 && bo.Index < len(entry.Backends) && bo.ExtraConfig != nil {
+			if bo.Index < 0 || bo.Index >= len(entry.Backends) {
+				output.UnmatchedOverrides = append(output.UnmatchedOverrides,
+					fmt.Sprintf("%s backends[%d]", ov.OperationID, bo.Index))
+				continue
+			}
+			if bo.ExtraConfig != nil {
 				entry.Backends[bo.Index].ExtraConfig = &runtime.RawExtension{
 					Raw: append([]byte(nil), bo.ExtraConfig.Raw...),
 				}
