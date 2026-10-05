@@ -2,3 +2,4 @@ KrakenDEndpoint a/empty: spec.endpoints is empty
 KrakenDEndpoint a/nogw: spec.gatewayRef.name is empty
 KrakenDEndpoint a/dup: duplicate entry GET /x
 KrakenDEndpoint a/path: spec.endpoints[0].endpoint x
+KrakenDEndpoint a/no-backends: spec.endpoints[0].backends is empty
