@@ -954,21 +954,25 @@ flowchart TD
 | `Pending` | No configuration has been validated or rolled out yet |
 | `Rendering` | No longer written by the operator; kept only for status values persisted by older versions |
 | `Validating` | No longer written by the operator; kept only for status values persisted by older versions |
-| `Deploying` | A rollout is in progress (`Progressing=True`), or the Deployment is not yet available |
+| `Deploying` | A rollout is in progress (`Progressing=True`: the Deployment was created, its pod template was written, or old pods remain beside updated ones), or the Deployment is not yet available |
 | `Running` | Config valid, the applied config rolled out to every replica, the Deployment available, and no license condition degrading it |
 | `Degraded` | CE fallback is active (`CEFallbackApplied` or `LicenseDegraded` is `True`) |
 | `Error` | Config validation failed, a plugin ConfigMap is missing (`PluginsResolved=False`), the rollout failed or the Deployment lost availability (`Available=False`), or the license expired with `fallbackToCE=false` |
 
 A configuration that could not be validated because the validator was unavailable leaves `Ready` Unknown with reason `ValidatorUnavailable` and keeps the serving phase.
 
+`Progressing` follows the Deployment, not the detection of a change. `inspectDeploymentStatus` reads the Deployment that this pass's `CreateOrUpdate` returned (never the cache) and raises `Progressing=True` when the pass created it, its write changed the pod template (compared with the server's response), the template is not the wanted one (annotations, mounted ConfigMap), or `updatedReplicas < replicas`. A generation the Deployment controller has not observed is not a signal, because an HPA scale bumps it without touching the template. `Progressing` is lowered to `RolloutComplete` only once `deploymentConverged` holds, which includes `observedGeneration >= generation`. The reason is the one change detection chose (`ConfigDeployed` or `DeploymentUpdated`, with its event), else the reason already reported, else `DeploymentUpdated`; `reportConfigRollout` and `noteRollout` supply only the event, message and reason. `ProgressDeadlineExceeded` counts (`Progressing=False`, `Available=False`, both `RolloutFailed`) only while it describes the current rollout: the Deployment has observed its latest generation and carries the wanted template. Otherwise an `Available=False`/`RolloutFailed` left by an earlier pass is reset (to `True` when the Deployment reports itself available, otherwise removed), so a fix pushed during a stuck rollout reads `Deploying` and fires no second `RolloutFailed` event. A pass that holds the Deployment raises nothing and leaves `Progressing` as it was.
+
+`status.observedGeneration` and `Ready`'s `observedGeneration` hold their previous value on a pass that returns an infrastructure error (the stage attempts every independent child and joins the errors, so one failing child cannot starve the rest; the post-restart Job, ConfigMap collection and the deletion of an unwanted HPA wait for the Deployment step) and on a pass that holds the Deployment although the render is the applied config (its ConfigMap cannot be published or verified). A rejected render, an unavailable validator and a missing plugin ConfigMap do not hold it back. The status is otherwise written in full, and the returned error requeues the gateway.
+
 ### Watch Triggers
 
 | Source | Event | Controller Action |
 |---|---|---|
 | KrakenDGateway | Create/Update/Delete | Full reconcile |
-| Owned Deployment | Update (status change) | Update replicas/readyReplicas. A rollout counts as converged only when the Deployment has observed its latest generation, its pod template carries the applied config checksum, and replicas, updated replicas and available replicas all equal the desired count; then `Progressing=False` and `Available=True`. A Deployment `Available=False` outside a rollout is mirrored into the gateway's `Available` condition. On `ProgressDeadlineExceeded`: `Progressing=False`, `Available=False`, emit `RolloutFailed`. `Ready` and the phase are re-derived from the conditions |
+| Owned Deployment | Update (status change) | Update replicas/readyReplicas. A rollout counts as converged only when the Deployment has observed its latest generation, its pod template carries the applied config checksum and mounts the applied config's ConfigMap, and replicas, updated replicas and available replicas all equal the desired count; then `Progressing=False` and `Available=True`. A Deployment `Available=False` outside a rollout is mirrored into the gateway's `Available` condition. On `ProgressDeadlineExceeded` for the current rollout: `Progressing=False`, `Available=False`, emit `RolloutFailed`. `Ready` and the phase are re-derived from the conditions |
 | Owned Service | Update | Reconcile to correct drift |
-| Owned ConfigMap | Update/Delete | Reconcile to correct drift; a deleted config ConfigMap is published again from the render when the render is the applied config (`publishApplied`); while a newer render is rejected, `appliedConfigMapName` can only re-seed it from the old `<gateway>` ConfigMap when that holds exactly the applied config, otherwise no ConfigMap holds it and the Deployment is held |
+| Owned ConfigMap | Update/Delete | Reconcile to correct drift; a deleted config ConfigMap is published again from the render when the render is the applied config (`publishApplied`); while a newer render is rejected or could not be judged, `appliedConfigMapName` can only re-seed it from the old `<gateway>` ConfigMap when that holds exactly the applied config, otherwise no ConfigMap holds it and the Deployment is held |
 | Owned Dragonfly CR | Status update | Update `DragonflyReady` condition on gateway; emit `DragonflyNotReady` Warning event on phase regression. Watched when the Dragonfly CRD existed at operator startup |
 | Owned HPA | Update | Reconcile to correct drift |
 | Owned Job (post-restart) | Update | Reconcile the post-restart Job decision |
@@ -1384,7 +1388,7 @@ flowchart TD
     A[Gateway reconcile, edition=EE] --> C[Read license Secret]
     C --> D{Secret readable<br/>and parseable?}
     D -->|No| E[Set LicenseSecretUnavailable=True,<br/>emit LicenseSecretMissing once;<br/>LicenseValid=Unknown unless the last known<br/>expiry is in the safety buffer or past,<br/>then apply that stage;<br/>otherwise keep the last fallback decision;<br/>keep the deployed license checksum;<br/>requeue at the next boundary, at most 5 minutes]
-    D -->|Yes| F[Set licenseExpiry and the<br/>license_expiry_seconds metric]
+    D -->|Yes| F[Set licenseExpiry and the<br/>krakend_operator_license_expiry_seconds metric]
     F --> G{Stage}
     G -->|Valid| M[LicenseValid=True LicenseOK]
     G -->|ExpiringSoon| L[LicenseValid=True LicenseExpiringSoon,<br/>emit LicenseExpiringSoon on entering]
@@ -2738,7 +2742,7 @@ var (
 
     rollingRestarts = prometheus.NewCounter(prometheus.CounterOpts{
         Name: "krakend_operator_rolling_restarts_total",
-        Help: "Rolling deployments triggered",
+        Help: "Deployment writes that changed the pod template, rolling the pods (not creations)",
     })
 
     licenseExpirySeconds = prometheus.NewGaugeVec(prometheus.GaugeOpts{
@@ -2785,7 +2789,7 @@ var (
 |---|---|---|
 | `config_renders_total` | `KrakenDGatewayReconciler.Reconcile` | After calling `Renderer.Render` |
 | `config_validation_failures_total` | `KrakenDGatewayReconciler.validateConfig` | Once for each rejected (render, edition) input, when `Validator.Validate` returns `ValidationError`; a remembered rejection is not counted again |
-| `rolling_restarts_total` | `KrakenDGatewayReconciler.reportConfigRollout`, `markDeploymentUpdate` | When a new config is applied, or an image, plugin or license change starts a rollout |
+| `rolling_restarts_total` | `KrakenDGatewayReconciler.reconcileDeployment` | Once per Deployment write that changed the pod template, judged by comparing the template read before the write with the server's response. A creation does not count, and drift in the template that the write reverts does |
 | `license_expiry_seconds` | `KrakenDGatewayReconciler.reconcileLicense` | After parsing the license certificate (from the last known expiry while the license is unreadable); the series is removed with the gateway, and when the gateway is not EE |
 | `endpoints` | `recordGatewayMetrics` | At the end of each reconcile, from the endpoints listed for the gateway |
 | `reconcile_duration_seconds` | `KrakenDGatewayReconciler.Reconcile` | `defer` at top of Reconcile, observing total duration |
