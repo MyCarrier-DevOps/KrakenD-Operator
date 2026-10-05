@@ -34,6 +34,7 @@ import (
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
@@ -793,9 +794,20 @@ func TestEndpointAdmission_OperatorWritesStillGetTheDuplicateCheck(t *testing.T)
 	chk := &scriptedChecker{}
 	v := &EndpointValidator{Client: fakeClient(testGateway(), testEndpoint("hand", "/users/{id}")),
 		Checker: chk, OperatorUsername: operatorUser}
-	if resp := review(t, v, operatorUser, ep, nil); resp.Allowed {
-		t.Error("an operator write duplicating a hand-written route was admitted")
+	resp := review(t, v, operatorUser, ep, nil)
+	causes := requireInvalid(t, resp)
+	if len(causes) != 1 || causes[0].Type != metav1.CauseTypeFieldValueDuplicate {
+		t.Errorf("causes = %+v, want one Duplicate cause", causes)
 	}
+}
+
+// requireInvalid fails unless resp is a 422 denial, and returns its causes.
+func requireInvalid(t *testing.T, resp admission.Response) []metav1.StatusCause {
+	t.Helper()
+	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("response = %+v, want 422", resp.Result)
+	}
+	return resp.Result.Details.Causes
 }
 
 // Nor does it skip the entry rules: an Enterprise-only namespace on a CE
@@ -804,7 +816,9 @@ func TestEndpointAdmission_OperatorWritesStillGetTheEntryRules(t *testing.T) {
 	ep := ownedEndpoint("KrakenDAutoConfig", true)
 	ep.Spec.Endpoints[0].ExtraConfig = &runtime.RawExtension{Raw: []byte(`{"auth/api-keys":{"roles":["a"]}}`)}
 	v := &EndpointValidator{Client: fakeClient(testGateway()), Checker: &scriptedChecker{}, OperatorUsername: operatorUser}
-	if resp := review(t, v, operatorUser, ep, nil); resp.Allowed {
-		t.Error("an operator write with an Enterprise-only namespace on a CE gateway was admitted")
+	causes := requireInvalid(t, review(t, v, operatorUser, ep, nil))
+	if len(causes) != 1 || !strings.Contains(causes[0].Field, "spec.endpoints[0]") ||
+		!strings.Contains(causes[0].Message, "auth/api-keys") {
+		t.Errorf("causes = %+v, want one on spec.endpoints[0] naming auth/api-keys", causes)
 	}
 }
