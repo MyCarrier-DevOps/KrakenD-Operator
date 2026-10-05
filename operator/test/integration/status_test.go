@@ -49,7 +49,10 @@ func TestStatusPatch_MergePatchReplacesConditionsUnlessLocked(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "ep-premise", Namespace: ns},
 		Spec: v1alpha1.KrakenDEndpointSpec{
 			GatewayRef: v1alpha1.GatewayRef{Name: "no-such-gateway"},
-			Endpoints:  []v1alpha1.EndpointEntry{},
+			Endpoints: []v1alpha1.EndpointEntry{{
+				Endpoint: "/premise", Method: "GET",
+				Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/"}},
+			}},
 		},
 	}
 	if err := k8sClient.Create(ctx, ep); err != nil {
