@@ -4012,3 +4012,33 @@ func TestAutoConfigReconcile_RacedWriteDoesNotStopOtherWrites(t *testing.T) {
 		t.Error("expected test-ac-b written despite the race on test-ac-a")
 	}
 }
+
+func TestAutoConfigReconcile_FailedDeleteDoesNotStopOtherDeletes(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	c := fakeClientBuilder().WithObjects(ac, cm,
+		ownedCopy(t, ac, generatedEndpoint("old1", "/old1")), ownedCopy(t, ac, generatedEndpoint("old2", "/old2")),
+	).WithStatusSubresource(ac).WithInterceptorFuncs(interceptor.Funcs{
+		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			if obj.GetName() == "test-ac-old1" {
+				return errors.New("etcd timeout")
+			}
+			return c.Delete(ctx, obj, opts...)
+		},
+	}).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+
+	_, err := reconcileAC(r, ac)
+
+	if err == nil || !strings.Contains(err.Error(), "deleting endpoint test-ac-old1: etcd timeout") {
+		t.Fatalf("expected the delete error, got %v", err)
+	}
+	if endpointExists(t, c, "test-ac-old2") {
+		t.Error("expected test-ac-old2 deleted despite the failed delete of test-ac-old1")
+	}
+	cond := meta.FindStatusCondition(getAC(t, c, ac).Status.Conditions, v1alpha1.ConditionSynced)
+	if cond == nil || cond.Reason != v1alpha1.ReasonEndpointReconcileFailed {
+		t.Errorf("expected Synced False/EndpointReconcileFailed, got %+v", cond)
+	}
+}
