@@ -18,6 +18,7 @@ package webhook
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"k8s.io/apimachinery/pkg/types"
@@ -28,22 +29,27 @@ import (
 
 // scriptedChecker answers each check with the next verdict of its script (OK
 // once the script runs out), or with err, and records which checks ran and
-// how much of its deadline each call had left.
+// how much of its deadline each call had left and which endpoint entries it
+// was handed ("ns/name[METHOD /path ...]"; "-" for none). err fails the call
+// numbered failCall (1-based; 0 means the first).
 type scriptedChecker struct {
 	verdicts  []configcheck.Verdict
 	err       error
+	failCall  int
 	calls     []string
 	deadlines []time.Duration
+	args      []string
 }
 
-func (s *scriptedChecker) next(ctx context.Context, call string) (configcheck.Verdict, error) {
+func (s *scriptedChecker) next(ctx context.Context, call string, eps []v1alpha1.KrakenDEndpoint) (configcheck.Verdict, error) {
 	s.calls = append(s.calls, call)
+	s.args = append(s.args, describe(eps))
 	if d, ok := ctx.Deadline(); ok {
 		s.deadlines = append(s.deadlines, time.Until(d))
 	} else {
 		s.deadlines = append(s.deadlines, 0)
 	}
-	if s.err != nil {
+	if s.err != nil && len(s.calls) >= max(s.failCall, 1) {
 		return configcheck.Verdict{}, s.err
 	}
 	if len(s.verdicts) == 0 {
@@ -58,15 +64,15 @@ func (s *scriptedChecker) CheckGateway(
 	ctx context.Context, _ *v1alpha1.KrakenDGateway, replace []v1alpha1.KrakenDEndpoint,
 ) (configcheck.Verdict, error) {
 	if len(replace) > 0 {
-		return s.next(ctx, "gateway+candidate")
+		return s.next(ctx, "gateway+candidate", replace)
 	}
-	return s.next(ctx, "gateway")
+	return s.next(ctx, "gateway", replace)
 }
 
 func (s *scriptedChecker) CheckIsolated(
-	ctx context.Context, _ *v1alpha1.KrakenDGateway, _ []v1alpha1.KrakenDEndpoint,
+	ctx context.Context, _ *v1alpha1.KrakenDGateway, eps []v1alpha1.KrakenDEndpoint,
 ) (configcheck.Verdict, error) {
-	return s.next(ctx, "isolated")
+	return s.next(ctx, "isolated", eps)
 }
 
 // failing is a verdict that blames entry index of default/ep.
@@ -74,4 +80,20 @@ func failing(ep string, index int, msg string) configcheck.Verdict {
 	return configcheck.Verdict{Findings: []configcheck.Finding{{
 		Endpoint: types.NamespacedName{Namespace: "default", Name: ep}, Index: index, Message: msg,
 	}}}
+}
+
+// describe lists the entries of eps as "ns/name[METHOD /path ...]", "-" for none.
+func describe(eps []v1alpha1.KrakenDEndpoint) string {
+	if len(eps) == 0 {
+		return "-"
+	}
+	var out []string
+	for _, ep := range eps {
+		var entries []string
+		for _, e := range ep.Spec.Endpoints {
+			entries = append(entries, e.Method+" "+e.Endpoint)
+		}
+		out = append(out, ep.Namespace+"/"+ep.Name+"["+strings.Join(entries, " ")+"]")
+	}
+	return strings.Join(out, ",")
 }
