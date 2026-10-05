@@ -97,6 +97,13 @@ func (c *Checker) CheckIsolated(ctx context.Context, gw *v1alpha1.KrakenDGateway
 	})
 }
 
+// CheckGatewayPolicy lints gw's config with policy in place of the stored
+// policy of the same namespace/name.
+func (c *Checker) CheckGatewayPolicy(_ context.Context, _ *v1alpha1.KrakenDGateway,
+	_ *v1alpha1.KrakenDBackendPolicy) (Verdict, error) {
+	return Verdict{}, nil
+}
+
 func (c *Checker) lint(ctx context.Context, in renderer.RenderInput) (Verdict, error) {
 	out, err := c.renderer.Render(in)
 	if err != nil {

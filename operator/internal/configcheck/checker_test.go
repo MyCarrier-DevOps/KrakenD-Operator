@@ -493,3 +493,22 @@ func TestGather_ReturnsCopiesTheCallerMayMutate(t *testing.T) {
 		t.Errorf("the shared object now holds %q, want /a", got)
 	}
 }
+
+func TestCheckGatewayPolicy_RendersTheCandidatePolicy(t *testing.T) {
+	stored := policy("p")
+	stored.Spec.Raw = &runtime.RawExtension{Raw: []byte(`{"stored/ns":{}}`)}
+	v := &fakeValidator{}
+	c := newChecker(v, withPolicy(endpoint("a", "/a"), "p"), stored)
+	candidate := stored.DeepCopy()
+	candidate.Spec.Raw = &runtime.RawExtension{Raw: []byte(`{"candidate/ns":{}}`)}
+
+	if _, err := c.CheckGatewayPolicy(context.Background(), gateway(v1alpha1.EditionCE), candidate); err != nil {
+		t.Fatal(err)
+	}
+	if len(v.seen) != 1 {
+		t.Fatalf("lint ran %d times, want 1", len(v.seen))
+	}
+	if !strings.Contains(v.seen[0], "candidate/ns") || strings.Contains(v.seen[0], "stored/ns") {
+		t.Errorf("linted %s, want the candidate policy only", v.seen[0])
+	}
+}
