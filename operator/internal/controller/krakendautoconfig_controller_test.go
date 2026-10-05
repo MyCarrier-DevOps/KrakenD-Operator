@@ -5154,9 +5154,9 @@ func TestSummarizeReadiness(t *testing.T) {
 	updated.Generation = 2 // changed since the endpoint controller last reported
 	gone := readyEndpoint(generatedEndpoint("c", "/c"), metav1.ConditionTrue, "Ready")
 
+	created := *generatedEndpoint("d", "/d") // no status yet
 	got := summarizeReadiness(
-		[]v1alpha1.KrakenDEndpoint{*a, *updated, *gone},
-		map[string]bool{"test-ac-d": true},
+		[]v1alpha1.KrakenDEndpoint{*a, *updated, *gone, created},
 		map[string]bool{"test-ac-c": true},
 	)
 

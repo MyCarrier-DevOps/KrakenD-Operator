@@ -167,12 +167,13 @@ func (r *KrakenDAutoConfigReconciler) deleteEndpoint(
 // writeEndpoint creates or updates ep's live copy: it merges ep's labels into
 // the existing ones, sets its spec and makes ac its controller. An endpoint
 // of that name controlled by another object fails with
-// controllerutil.AlreadyOwnedError.
+// controllerutil.AlreadyOwnedError. It returns the endpoint as the API server
+// holds it after the write, status included.
 func (r *KrakenDAutoConfigReconciler) writeEndpoint(
 	ctx context.Context,
 	ac *v1alpha1.KrakenDAutoConfig,
 	ep *v1alpha1.KrakenDEndpoint,
-) (controllerutil.OperationResult, error) {
+) (controllerutil.OperationResult, *v1alpha1.KrakenDEndpoint, error) {
 	live := &v1alpha1.KrakenDEndpoint{ObjectMeta: metav1.ObjectMeta{Name: ep.Name, Namespace: ep.Namespace}}
 	op, err := controllerutil.CreateOrUpdate(ctx, r.Client, live, func() error {
 		if live.Labels == nil {
@@ -185,9 +186,9 @@ func (r *KrakenDAutoConfigReconciler) writeEndpoint(
 		return controllerutil.SetControllerReference(ac, live, r.Scheme)
 	})
 	if err != nil {
-		return op, fmt.Errorf("upserting endpoint %s: %w", ep.Name, err)
+		return op, nil, fmt.Errorf("upserting endpoint %s: %w", ep.Name, err)
 	}
-	return op, nil
+	return op, live, nil
 }
 
 // rejection is why an endpoint was not written.

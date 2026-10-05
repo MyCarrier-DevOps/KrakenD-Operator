@@ -916,7 +916,7 @@ func autoConfigStatusChanged(orig, cur *v1alpha1.KrakenDAutoConfigStatus) bool {
 // deleted. An error means the pass could not start: listing failed or the
 // config check could not run. The outcome's readiness summarizes the
 // endpoints ac controls afterwards: held ones keep their last-good endpoint,
-// and an endpoint this pass wrote counts as Pending.
+// and a written one is judged from the object its write returned.
 func (r *KrakenDAutoConfigReconciler) reconcileEndpoints(
 	ctx context.Context,
 	ac *v1alpha1.KrakenDAutoConfig,
@@ -942,20 +942,25 @@ func (r *KrakenDAutoConfigReconciler) reconcileEndpoints(
 		return outcome, err
 	}
 	maps.Copy(outcome.rejected, checked)
-	written := map[string]bool{}
+	// What ac controls once the writes are in: a written endpoint is judged
+	// from the object the write returned, so one that was created or whose
+	// spec changed reads Pending, and one that only gained a controller or
+	// labels keeps the readiness its endpoint controller last reported.
+	after := make(map[string]v1alpha1.KrakenDEndpoint, len(controlled)+len(writes))
+	for _, ep := range controlled {
+		after[ep.Name] = ep
+	}
 	for _, ep := range writes {
 		if _, ok := outcome.rejected[ep.Name]; ok {
 			continue // held by the config check
 		}
-		op, err := r.writeEndpoint(ctx, ac, ep)
+		op, live, err := r.writeEndpoint(ctx, ac, ep)
 		if err != nil {
 			outcome.record(ep, err)
 			continue
 		}
 		outcome.changes.count(op)
-		if op != controllerutil.OperationResultNone {
-			written[ep.Name] = true
-		}
+		after[ep.Name] = *live
 	}
 
 	gone := map[string]bool{}
@@ -972,7 +977,7 @@ func (r *KrakenDAutoConfigReconciler) reconcileEndpoints(
 			gone[stale[i].Name] = true
 		}
 	}
-	outcome.readiness = summarizeReadiness(controlled, written, gone)
+	outcome.readiness = summarizeReadiness(slices.Collect(maps.Values(after)), gone)
 	return outcome, nil
 }
 

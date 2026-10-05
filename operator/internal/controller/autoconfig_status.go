@@ -147,32 +147,25 @@ type endpointReadiness struct {
 const endpointPending = "Pending"
 
 // summarizeReadiness summarizes the endpoints the AutoConfig controls after
-// a reconcile: the controlled ones it listed, plus those it created, minus
-// those it deleted. One it created or updated in this reconcile is Pending:
-// the endpoint controller has not seen that generation yet.
-func summarizeReadiness(controlled []v1alpha1.KrakenDEndpoint, written, deleted map[string]bool) endpointReadiness {
-	byName := make(map[string]*v1alpha1.KrakenDEndpoint, len(controlled))
-	names := map[string]bool{}
-	for i := range controlled {
-		byName[controlled[i].Name] = &controlled[i]
-		names[controlled[i].Name] = true
-	}
-	maps.Copy(names, written)
+// a reconcile: controlled as the reconcile left them (a written one as the
+// write returned it), minus those it deleted. An endpoint whose current
+// generation the endpoint controller has not reported on, a new one or one
+// whose spec just changed, is Pending.
+func summarizeReadiness(controlled []v1alpha1.KrakenDEndpoint, deleted map[string]bool) endpointReadiness {
 	var r endpointReadiness
-	for _, name := range slices.Sorted(maps.Keys(names)) {
-		if deleted[name] {
+	for _, ep := range slices.SortedFunc(slices.Values(controlled), func(a, b v1alpha1.KrakenDEndpoint) int {
+		return strings.Compare(a.Name, b.Name)
+	}) {
+		if deleted[ep.Name] {
 			continue
 		}
 		r.total++
-		reason := endpointPending
-		if ep := byName[name]; ep != nil && !written[name] {
-			reason = endpointNotReadyReason(ep)
-		}
+		reason := endpointNotReadyReason(&ep)
 		if reason == "" {
 			r.ready++
 			continue
 		}
-		r.notReady = append(r.notReady, name+": "+reason)
+		r.notReady = append(r.notReady, ep.Name+": "+reason)
 	}
 	return r
 }
