@@ -583,3 +583,22 @@ func TestValidate_EERootWildcardIsRefusedByTheRouteCheck(t *testing.T) {
 		t.Errorf("krakend check ran %d time(s) after the route check refused the config", len(exec.checked))
 	}
 }
+
+func TestEditionFor(t *testing.T) {
+	cases := []struct {
+		name       string
+		edition    v1alpha1.Edition
+		ceFallback bool
+		want       v1alpha1.Edition
+	}{
+		{"EE gateway", v1alpha1.EditionEE, false, v1alpha1.EditionEE},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gw := &v1alpha1.KrakenDGateway{Spec: v1alpha1.KrakenDGatewaySpec{Edition: tc.edition}}
+			if got := EditionFor(gw, tc.ceFallback); got != tc.want {
+				t.Errorf("EditionFor = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}

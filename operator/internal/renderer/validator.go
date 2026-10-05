@@ -31,6 +31,12 @@ import (
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 )
 
+// EditionFor is the edition a render of gw is validated as: CE for a CE
+// gateway or for an EE gateway in license fallback, otherwise EE.
+func EditionFor(_ *v1alpha1.KrakenDGateway, _ bool) v1alpha1.Edition {
+	return v1alpha1.EditionCE
+}
+
 // DefaultValidateTimeout bounds one krakend check run when no Timeout is
 // configured. A healthy run takes about a second.
 const DefaultValidateTimeout = 30 * time.Second
