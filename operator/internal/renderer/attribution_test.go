@@ -83,6 +83,12 @@ func TestAttribute_MapsKrakendCheckOutputToSources(t *testing.T) {
 			wantIndex: []int{0},
 		},
 		{
+			name:      "route check stop notice",
+			rendered:  `{"endpoints":[{"endpoint":"/ok","method":"GET"}]}`,
+			output:    "- at '/endpoints/0/endpoint': handlers are already registered for path '/ok'\n- route check stopped after 21 refused routes\n",
+			wantIndex: []int{-1, 0},
+		},
+		{
 			name:      "non-endpoint lint pointer",
 			rendered:  `{"endpoints":[{"endpoint":"/ok","method":"GET"}]}`,
 			output:    "- at '/extra_config/router/return_error_msg': got string, want boolean\n",
