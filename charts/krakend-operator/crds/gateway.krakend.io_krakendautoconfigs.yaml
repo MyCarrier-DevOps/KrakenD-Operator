@@ -712,10 +712,6 @@ spec:
                     maxLength: 32
                     pattern: ^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$
                     type: string
-                    x-kubernetes-validations:
-                    - message: periodic.interval must be at least 30s
-                      rule: '!self.matches(''^(0|(([0-9]+([.][0-9]*)?|[.][0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$'')
-                        || duration(self) >= duration(''30s'')'
                 required:
                 - interval
                 type: object
@@ -759,10 +755,11 @@ spec:
               rule: '!has(self.openapi.configMapRef) || (has(self.urlTransform) &&
                 has(self.urlTransform.hostMapping) && size(self.urlTransform.hostMapping)
                 > 0)'
-            - fieldPath: .periodic
+            - fieldPath: .periodic.interval
               message: periodic.interval of at least 30s is required when trigger
                 is Periodic
-              rule: self.trigger != 'Periodic' || has(self.periodic)
+              rule: self.trigger != 'Periodic' || (has(self.periodic) && (!self.periodic.interval.matches('^(0|(([0-9]+([.][0-9]*)?|[.][0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$')
+                || duration(self.periodic.interval) >= duration('30s')))
             - fieldPath: .additionalEndpointsBasePath
               message: additionalEndpointsBasePath is mutually exclusive with urlTransform.addPathPrefix;
                 set only one
