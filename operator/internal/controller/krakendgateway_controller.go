@@ -558,6 +558,12 @@ func (r *KrakenDGatewayReconciler) inspectDeploymentStatus(
 	gw.Status.Replicas = dep.Status.Replicas
 	gw.Status.ReadyReplicas = dep.Status.ReadyReplicas
 
+	// A failed Deployment step leaves Progressing and Available as they were:
+	// the cached Deployment is from before the write the step could not make.
+	if obs.failed {
+		return
+	}
+
 	// A progress deadline is honoured only while it describes the current
 	// rollout (the Deployment controller has observed the latest spec and, on
 	// a pass that reconciled the Deployment, the template is the wanted one);
@@ -1150,7 +1156,7 @@ func (r *KrakenDGatewayReconciler) reconcileDeploymentUnlessHeld(
 	default:
 		obs, err = r.reconcileDeployment(ctx, gw, in)
 		if err != nil {
-			return deploymentObservation{}, nil, err
+			return deploymentObservation{failed: true}, nil, err
 		}
 		gcErr = r.collectConfigMaps(ctx, gw, in.configMapName)
 	}
