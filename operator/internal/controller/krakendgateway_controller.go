@@ -1232,16 +1232,15 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 			r.recordDragonflyRunAsRootCondition(gw, df)
 		}
 	} else {
-		// Review round 4, D3: Dragonfly is deliberately off (unset or
-		// Enabled: false) — mirrors reconcilePostRestartJob's
-		// disabled/empty guard (see the spec == nil || !spec.Enabled branch
-		// above, ~line 855) so `kubectl describe krakendgateway` does not
+		// Dragonfly is deliberately off (unset or Enabled: false). Mirrors
+		// reconcilePostRestartJob's disabled/empty guard (the spec == nil ||
+		// !spec.Enabled branch) so `kubectl describe krakendgateway` does not
 		// keep showing a stale ConditionDragonflyRunAsRootUnacknowledged
 		// forever after the user disables Dragonfly. Deliberately NOT
 		// cleared when Dragonfly is enabled but !dfAvailable (CRD not yet
 		// installed) — that is a transient/environmental state, not a
 		// deliberate disable, mirroring reconcilePostRestartJob's
-		// configChecksum == "" reasoning (~line 870) for not flickering
+		// configChecksum == "" reasoning for not flickering
 		// conditions away during an in-progress/incomplete state.
 		meta.RemoveStatusCondition(&gw.Status.Conditions, v1alpha1.ConditionDragonflyRunAsRootUnacknowledged)
 		if err := r.deleteOptionalIfControlled(ctx, gw, dragonflyGVK, resources.DragonflyName(gw)); err != nil {
