@@ -670,7 +670,7 @@ sequenceDiagram
     Op->>K8s: Get KrakenDGateway spec
 
     Note over Op: Render Pipeline
-    Op->>Op: 1. Detect endpoint path+method conflicts
+    Op->>Op: 1. Detect route conflicts (method and route shape)
 
     opt Conflicts found
         Note over Op: Conflicting entries are excluded from render.<br/>Older endpoint (by creationTimestamp) wins.<br/>Equal timestamps: lower lexicographic name wins.<br/>The losing KrakenDEndpoint's other entries are still rendered,<br/>and status.conflicts names what it lost.
@@ -1254,7 +1254,7 @@ The operator renders the final `krakend.json` from CRD state through a determini
 ```mermaid
 flowchart TD
     A[Collect KrakenDGateway spec] --> B[List all KrakenDEndpoints<br/>matching gatewayRef]
-    B --> BA[Detect endpoint path+method<br/>conflicts across all endpoints]
+    B --> BA[Detect route conflicts<br/>keyed on method and route shape]
     BA --> BB{conflicts?}
     BB -->|Yes| BC[Record each lost entry<br/>PartiallyAccepted or EndpointConflict<br/>Emit Warning Events]
     BB -->|No| C
@@ -1321,8 +1321,12 @@ gateway status is written once, after both stages.
 
 ### Conflict reporting
 
-Conflicts are resolved per route entry, keyed on the method and the route shape (`renderer.ConflictKey`: parameter names erased and the path cleaned), not the literal path, so `/users/{id}` and `/users/{name}` are one route: the oldest
-KrakenDEndpoint's entry is rendered. A KrakenDEndpoint that lost some but not
+Conflicts are resolved per route entry, keyed on the method and the route
+shape (`renderer.ConflictKey`: parameter names erased and the path cleaned),
+not the literal path, so `/users/{id}` and `/users/{name}` are one route. The
+oldest KrakenDEndpoint's entry is rendered, and between two entries of one
+KrakenDEndpoint the earlier spec entry is (the winner is then the endpoint
+itself). A KrakenDEndpoint that lost some but not
 all of its entries is `Accepted=True/PartiallyAccepted`; one that lost all of
 them is `Accepted=False/EndpointConflict`. In both cases `status.conflicts`
 lists each lost entry and the KrakenDEndpoint that serves it. The gateway
@@ -1900,8 +1904,8 @@ status or reason. A steady state emits no events. `ConfigValidationFailed` and
 | A plugin ConfigMap is missing and the Deployment is held (on the transition only) | Warning | `ConfigMapNotFound` |
 | Every plugin ConfigMap exists again | Normal | `ConfigMapsFound` |
 | The applied config is the CE-fallback render (on the transition only; the message lists the Enterprise-only features removed, or says it uses none) | Warning | `EEFeaturesStripped` |
-| Endpoint newly loses all its entries to a path+method conflict (on the transition only) | Warning | `EndpointConflict` |
-| Endpoint newly loses some of its entries to a path+method conflict (on the transition only) | Warning | `PartiallyAccepted` |
+| Endpoint newly loses all its entries to a route conflict (on the transition only) | Warning | `EndpointConflict` |
+| Endpoint newly loses some of its entries to a route conflict (on the transition only) | Warning | `PartiallyAccepted` |
 | Previously conflicted (fully or partly) endpoint included again | Normal | `Accepted` |
 | Endpoint's gateway does not exist (`ResolvedRefs` False) | Warning | `GatewayNotFound` |
 | Endpoint references a policy that does not exist (`ResolvedRefs` False) | Warning | `PolicyNotFound` |
@@ -2264,7 +2268,7 @@ All generated endpoints carry the label `gateway.krakend.io/auto-generated: "tru
 
 - Generated endpoints are standard `KrakenDEndpoint` resources and participate in the normal conflict detection pipeline (§5)
 - If a manually-created `KrakenDEndpoint` conflicts with a generated one, the standard tie-breaking rules apply (older by `creationTimestamp` wins)
-- Users can override generated endpoints by creating manual endpoints with the same path+method — the manual endpoint wins if it was created first
+- Users can override generated endpoints by creating manual endpoints with the same method and route shape — the manual endpoint wins if it was created first
 - To exclude specific operations from auto-generation, use the `filter.excludeOperationIds` or `filter.excludePaths` fields
 
 ### Runtime Model
