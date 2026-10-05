@@ -18,6 +18,7 @@ package controller
 
 import (
 	"cmp"
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -46,7 +47,11 @@ func operationLabel(v1alpha1.OperationStatus) string {
 // listed joins the first maxConditionListed items, noting how many more
 // there are.
 func listed(items []string) string {
-	return strings.Join(items, "; ")
+	if len(items) <= maxConditionListed {
+		return strings.Join(items, "; ")
+	}
+	return fmt.Sprintf("%s; and %d more", strings.Join(items[:maxConditionListed], "; "),
+		len(items)-maxConditionListed)
 }
 
 // operationStatuses converts pipeline issues to status entries, each message
