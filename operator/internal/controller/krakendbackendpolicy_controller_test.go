@@ -27,11 +27,13 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 func TestPolicyReconcile_NotFound(t *testing.T) {
@@ -683,5 +685,22 @@ func TestNamedReferrers_BoundsTheList(t *testing.T) {
 	want := "default/a, default/b, default/c, default/d, default/e and 2 more"
 	if got := namedReferrers(referrers); got != want {
 		t.Errorf("namedReferrers = %q, want %q", got, want)
+	}
+}
+
+func TestEndpointPolicyHandler_DeletedEndpointEnqueuesItsPolicy(t *testing.T) {
+	q := workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[reconcile.Request]())
+	defer q.ShutDown()
+	r := &KrakenDBackendPolicyReconciler{}
+
+	r.endpointPolicyHandler().Delete(context.Background(),
+		event.DeleteEvent{Object: referencingEndpoint("uses-p", "p")}, q)
+
+	if q.Len() != 1 {
+		t.Fatalf("queue length = %d, want 1", q.Len())
+	}
+	got, _ := q.Get()
+	if want := (types.NamespacedName{Name: "p", Namespace: "default"}); got.NamespacedName != want {
+		t.Errorf("enqueued %v, want %v", got.NamespacedName, want)
 	}
 }
