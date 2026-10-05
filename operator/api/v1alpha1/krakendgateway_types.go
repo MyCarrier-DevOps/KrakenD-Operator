@@ -591,7 +591,9 @@ type RedisSpec struct {
 
 // RedisConnectionPool holds Redis connection pool parameters.
 type RedisConnectionPool struct {
-	Addresses    []string                  `json:"addresses"`
+	Addresses []string `json:"addresses"`
+	// Password is not rendered yet; setting or changing it is rejected.
+	// +kubebuilder:validation:XValidation:rule="false",message="password is not supported yet: the operator has never rendered it, so KrakenD would connect without it"
 	Password     *corev1.SecretKeySelector `json:"password,omitempty"`
 	PoolSize     int                       `json:"poolSize,omitempty"`
 	MinIdleConns int                       `json:"minIdleConns,omitempty"`
