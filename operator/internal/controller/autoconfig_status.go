@@ -23,6 +23,9 @@ import (
 	"slices"
 	"strings"
 
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/autoconfig"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
@@ -139,7 +142,52 @@ type endpointReadiness struct {
 	notReady []string
 }
 
-// summarizeReadiness is implemented once a test demands it.
+// endpointPending is the not-ready reason of an endpoint whose current
+// generation the endpoint controller has not reported on yet.
+const endpointPending = "Pending"
+
+// summarizeReadiness summarizes the endpoints the AutoConfig controls after
+// a reconcile: the controlled ones it listed, plus those it created, minus
+// those it deleted. One it created or updated in this reconcile is Pending:
+// the endpoint controller has not seen that generation yet.
 func summarizeReadiness(controlled []v1alpha1.KrakenDEndpoint, written, deleted map[string]bool) endpointReadiness {
-	return endpointReadiness{}
+	byName := make(map[string]*v1alpha1.KrakenDEndpoint, len(controlled))
+	names := map[string]bool{}
+	for i := range controlled {
+		byName[controlled[i].Name] = &controlled[i]
+		names[controlled[i].Name] = true
+	}
+	maps.Copy(names, written)
+	var r endpointReadiness
+	for _, name := range slices.Sorted(maps.Keys(names)) {
+		if deleted[name] {
+			continue
+		}
+		r.total++
+		reason := endpointPending
+		if ep := byName[name]; ep != nil && !written[name] {
+			reason = endpointNotReadyReason(ep)
+		}
+		if reason == "" {
+			r.ready++
+			continue
+		}
+		r.notReady = append(r.notReady, name+": "+reason)
+	}
+	return r
+}
+
+// endpointNotReadyReason returns "" when ep's Ready condition is True for its
+// current generation, otherwise why it is not ready: the condition's reason,
+// or Pending while the endpoint controller has not observed this generation.
+func endpointNotReadyReason(ep *v1alpha1.KrakenDEndpoint) string {
+	cond := meta.FindStatusCondition(ep.Status.Conditions, v1alpha1.ConditionReady)
+	switch {
+	case ep.Status.ObservedGeneration != ep.Generation || cond == nil:
+		return endpointPending
+	case cond.Status != metav1.ConditionTrue:
+		return cond.Reason
+	default:
+		return ""
+	}
 }
