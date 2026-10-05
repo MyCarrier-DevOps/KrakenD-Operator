@@ -162,6 +162,7 @@ const (
 	ReasonAdditionalEndpointOverride    = "AdditionalEndpointOverride"
 	ReasonAdditionalEndpointScopeFailed = "AdditionalEndpointScopeFailed"
 	ReasonUnmatchedOverride             = "UnmatchedOverride"
+	ReasonAmbiguousOverride             = "AmbiguousOverride"
 	ReasonEndpointReconcileFailed       = "EndpointReconcileFailed"
 	ReasonPostRestartJobAlreadyRun      = "PostRestartJobAlreadyRun"
 	ReasonPostRestartJobCreated         = "PostRestartJobCreated"
