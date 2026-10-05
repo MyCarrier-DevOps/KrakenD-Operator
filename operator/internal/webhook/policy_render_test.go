@@ -134,6 +134,9 @@ func TestPolicyAdmission_TerminatingPolicyWithBrokenSpecChangeIsRefused(t *testi
 	if got := strings.Join(chk.calls, ","); got != "policy,policy" {
 		t.Errorf("checks = %s, want policy,policy", got)
 	}
+	if got := strings.Join(chk.args, " "); got != `policy:{"qos/circuit-breakr":{}} policy:{}` {
+		t.Errorf("checks received %s, want the new policy then the stored one", got)
+	}
 }
 
 func TestPolicyAdmission_DenialIsBounded(t *testing.T) {
@@ -242,5 +245,62 @@ func TestPolicyAdmission_DenialListsABoundedNumberOfGateways(t *testing.T) {
 	}
 	if last := causes[len(causes)-1].Message; !strings.Contains(last, "20 more gateways") {
 		t.Errorf("last cause = %q, want it to count the 20 gateways left out", last)
+	}
+}
+
+// referencingGateways returns a CE gateway per name and an endpoint on each
+// that references policy p.
+func referencingGateways(names ...string) []client.Object {
+	var objs []client.Object
+	for _, name := range names {
+		gw := testGateway()
+		gw.Name = name
+		ep := testEndpoint("uses-p-"+name, "/a")
+		ep.Spec.GatewayRef.Name = name
+		ep.Spec.Endpoints[0].Backends[0].PolicyRef = &v1alpha1.PolicyRef{Name: "p"}
+		objs = append(objs, gw, ep)
+	}
+	return objs
+}
+
+// Each gateway is judged on its own, with the new policy after and the stored
+// one before: the breaking gateway is the one cause, the failing one a warning.
+func TestPolicyAdmission_JudgesEachGatewayWithTheRightPolicy(t *testing.T) {
+	const stored, changed = `{}`, `{"x":{}}`
+	chk := &scriptedChecker{verdicts: []configcheck.Verdict{
+		{OK: true},                  // the new policy alone
+		failing("e", 0, "bad"),      // gw-a with the new policy
+		{OK: true},                  // gw-a with the stored policy
+		{OK: true},                  // gw-b with the new policy
+		failing("e", 0, "bad"),      // gw-c with the new policy
+		failing("e", 0, "old fail"), // gw-c with the stored policy
+	}}
+	v := &PolicyValidator{Client: fakeClient(referencingGateways("gw-a", "gw-b", "gw-c")...), Checker: chk}
+
+	resp := review(t, v, "alice", testPolicy(changed), testPolicy(stored))
+
+	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("response = %+v, want 422", resp.Result)
+	}
+	causes := resp.Result.Details.Causes
+	if len(causes) != 1 || !strings.Contains(causes[0].Message, "breaks gateway default/gw-a") {
+		t.Errorf("causes = %+v, want one naming gateway default/gw-a", causes)
+	}
+	if len(resp.Warnings) != 1 || !strings.Contains(resp.Warnings[0], "gateway default/gw-c already fails") {
+		t.Errorf("warnings = %q, want one naming gateway default/gw-c", resp.Warnings)
+	}
+	wantArgs := []string{
+		"policy:" + changed,
+		"default/gw-a:" + changed, "default/gw-a:" + stored,
+		"default/gw-b:" + changed,
+		"default/gw-c:" + changed, "default/gw-c:" + stored,
+	}
+	if got := strings.Join(chk.args, " "); got != strings.Join(wantArgs, " ") {
+		t.Errorf("checks received %s, want %s", got, strings.Join(wantArgs, " "))
+	}
+	for i, d := range chk.deadlines {
+		if d <= 0 || d > admissionBudget {
+			t.Errorf("check %d had %s left, want a deadline within %s", i, d, admissionBudget)
+		}
 	}
 }
