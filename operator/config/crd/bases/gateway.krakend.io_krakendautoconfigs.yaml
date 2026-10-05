@@ -103,6 +103,15 @@ spec:
                             type: boolean
                           encoding:
                             description: Encoding selects the backend response encoding.
+                            enum:
+                            - json
+                            - safejson
+                            - fast-json
+                            - xml
+                            - rss
+                            - string
+                            - no-op
+                            - yaml
                             type: string
                           extraConfig:
                             description: ExtraConfig holds arbitrary backend-level
