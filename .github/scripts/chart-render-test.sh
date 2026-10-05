@@ -134,8 +134,21 @@ expect_equal "every kustomize webhook has timeoutSeconds 15" \
 	"$(grep -c 'timeoutSeconds: 15' operator/config/webhook/manifests.yaml)"
 
 # --- the operator knows its own username (AutoConfig write exemption) ------
-expect_contains "the manager gets POD_SERVICE_ACCOUNT from the downward API" "fieldPath: spec.serviceAccountName"
-expect_contains "the manager gets POD_NAMESPACE from the downward API" "fieldPath: metadata.namespace"
+# env_field NAME: the downward API fieldPath of env var NAME, read from stdin.
+env_field() {
+	awk -v name="$1" '$1 == "-" && $2 == "name:" && $3 == name { found = 1; next }
+		found && $1 == "fieldPath:" { print $2; exit }
+		found && $1 == "-" { exit }'
+}
+chart_deployment=$(render --show-only templates/deployment.yaml)
+expect_equal "the chart sets POD_SERVICE_ACCOUNT from spec.serviceAccountName" "spec.serviceAccountName" \
+	"$(env_field POD_SERVICE_ACCOUNT <<<"$chart_deployment")"
+expect_equal "the chart sets POD_NAMESPACE from metadata.namespace" "metadata.namespace" \
+	"$(env_field POD_NAMESPACE <<<"$chart_deployment")"
+expect_equal "kustomize sets POD_SERVICE_ACCOUNT from spec.serviceAccountName" "spec.serviceAccountName" \
+	"$(env_field POD_SERVICE_ACCOUNT <operator/config/manager/manager.yaml)"
+expect_equal "kustomize sets POD_NAMESPACE from metadata.namespace" "metadata.namespace" \
+	"$(env_field POD_NAMESPACE <operator/config/manager/manager.yaml)"
 
 # --- the chart refuses clusters below the Kubernetes 1.33 floor ---------
 if floor_err=$(helm template t "$CHART" --kube-version 1.32.0 2>&1 >/dev/null); then
