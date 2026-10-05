@@ -2432,7 +2432,7 @@ func TestGatewayAdmission_ChangedPostRestartRunAsStillUnacknowledgedIsRejected(t
 func TestNewValidators_HandTheCheckerToTheEndpointValidator(t *testing.T) {
 	chk := &scriptedChecker{}
 
-	v := NewValidators(fakeClient(), chk, "")
+	v := NewValidators(fakeClient(), fakeClient(), chk, "")
 
 	if v.Endpoint.Checker != ConfigChecker(chk) {
 		t.Errorf("the endpoint validator's checker = %v, want the one passed in", v.Endpoint.Checker)
@@ -2442,7 +2442,7 @@ func TestNewValidators_HandTheCheckerToTheEndpointValidator(t *testing.T) {
 func TestNewValidators_HandTheCheckerToThePolicyValidator(t *testing.T) {
 	chk := &scriptedChecker{}
 
-	v := NewValidators(fakeClient(), chk, "")
+	v := NewValidators(fakeClient(), fakeClient(), chk, "")
 
 	if v.Policy.Checker != ConfigChecker(chk) {
 		t.Errorf("the policy validator's checker = %v, want the one passed in", v.Policy.Checker)

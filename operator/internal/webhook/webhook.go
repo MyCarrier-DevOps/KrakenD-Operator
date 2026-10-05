@@ -302,15 +302,18 @@ type Validators struct {
 	AutoConfig *AutoConfigValidator
 }
 
-// NewValidators builds the validators over c. checker is the config checker
-// the gateway controller uses too, so the validators and the controller share
-// its validation slots.
+// NewValidators builds the validators over c. apiReader reads uncached; see
+// EndpointValidator.APIReader. checker is the config checker the gateway
+// controller uses too, so the validators and the controller share its
+// validation slots.
 // operatorUsername is the username of the operator's own requests; see
 // EndpointValidator.OperatorUsername.
-func NewValidators(c client.Client, checker ConfigChecker, operatorUsername string) Validators {
+func NewValidators(
+	c client.Client, apiReader client.Reader, checker ConfigChecker, operatorUsername string,
+) Validators {
 	return Validators{
 		Gateway:    &GatewayValidator{Client: c, Checker: checker},
-		Endpoint:   &EndpointValidator{Client: c, Checker: checker, OperatorUsername: operatorUsername},
+		Endpoint:   &EndpointValidator{Client: c, APIReader: apiReader, Checker: checker, OperatorUsername: operatorUsername},
 		Policy:     &PolicyValidator{Client: c, Checker: checker},
 		AutoConfig: &AutoConfigValidator{Client: c},
 	}
@@ -320,8 +323,8 @@ func NewValidators(c client.Client, checker ConfigChecker, operatorUsername stri
 // come from NewValidators, built over the config checker the gateway
 // controller uses too, so both share its validation slots.
 func SetupWebhooks(mgr ctrl.Manager, validators Validators) error {
-	// Ensure field indexes are registered — needed for conflict detection
-	// and policy-delete validation even when running webhook-only.
+	// Ensure field indexes are registered — needed for the duplicate-route
+	// check and the policy fan-out even when running webhook-only.
 	if err := fieldindex.EnsureEndpointIndexes(mgr); err != nil {
 		return fmt.Errorf("registering endpoint indexes: %w", err)
 	}

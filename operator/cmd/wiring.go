@@ -53,6 +53,6 @@ func wireValidation(
 			APIReader:     mgr.GetAPIReader(),
 			LicenseParser: licenseutil.NewX509LicenseParser(),
 		},
-		Validators: webhooksetup.NewValidators(mgr.GetClient(), checker, operatorUsername),
+		Validators: webhooksetup.NewValidators(mgr.GetClient(), mgr.GetAPIReader(), checker, operatorUsername),
 	}
 }
