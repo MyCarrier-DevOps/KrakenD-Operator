@@ -84,7 +84,8 @@ func (v *PolicyValidator) ValidateCreate(ctx context.Context, obj runtime.Object
 	return checkPolicyRender(ctx, v.Client, v.Checker, nil, policy)
 }
 
-// ValidateUpdate validates an updated KrakenDBackendPolicy.
+// ValidateUpdate validates an updated KrakenDBackendPolicy. An update that
+// leaves the spec alone, such as the protection finalizer, is never validated.
 func (v *PolicyValidator) ValidateUpdate(
 	ctx context.Context, oldObj, newObj runtime.Object,
 ) (admission.Warnings, error) {
@@ -95,6 +96,9 @@ func (v *PolicyValidator) ValidateUpdate(
 	old, ok := oldObj.(*v1alpha1.KrakenDBackendPolicy)
 	if !ok {
 		return nil, fmt.Errorf("expected KrakenDBackendPolicy, got %T", oldObj)
+	}
+	if equality.Semantic.DeepEqual(old.Spec, policy.Spec) {
+		return nil, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, admissionBudget)
 	defer cancel()
