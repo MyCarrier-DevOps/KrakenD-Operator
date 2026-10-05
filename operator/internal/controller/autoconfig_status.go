@@ -37,6 +37,9 @@ func operationStatuses(_ []autoconfig.OperationIssue) []v1alpha1.OperationStatus
 
 // capList returns at most maxStatusListLen items of s.
 func capList[T any](s []T) []T {
+	if len(s) > maxStatusListLen {
+		return s[:maxStatusListLen]
+	}
 	return s
 }
 
