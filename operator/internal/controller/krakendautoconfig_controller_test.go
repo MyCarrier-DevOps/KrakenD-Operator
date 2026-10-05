@@ -4096,3 +4096,38 @@ func TestAutoConfigReconcile_DesiredOrphanIsReownedWithOneWrite(t *testing.T) {
 		t.Errorf("expected the orphan re-owned with the desired spec, got %+v", got)
 	}
 }
+
+func TestAutoConfigReconcile_FailureMessageOrderIsStable(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	failing := map[string]error{
+		"test-ac-a": errors.New("boom"), "test-ac-b": errors.New("boom"), "test-ac-c": errors.New("boom"),
+	}
+	var ops []string
+	funcs := recordEndpointWrites(&ops, failing)
+	// A cache lists in no particular order: hand back the labelled list reversed.
+	funcs.List = func(
+		ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption,
+	) error {
+		if err := c.List(ctx, list, opts...); err != nil {
+			return err
+		}
+		if eps, ok := list.(*v1alpha1.KrakenDEndpointList); ok {
+			slices.Reverse(eps.Items)
+		}
+		return nil
+	}
+	c := fakeClientBuilder().WithObjects(ac, cm,
+		generatedEndpoint("a", "/a"), generatedEndpoint("b", "/b"), generatedEndpoint("c", "/c"),
+	).WithStatusSubresource(ac).WithInterceptorFuncs(funcs).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+
+	_, err := reconcileAC(r, ac)
+
+	want := "reconciling endpoints: [adopting endpoint test-ac-a: boom, " +
+		"adopting endpoint test-ac-b: boom, adopting endpoint test-ac-c: boom]"
+	if err == nil || err.Error() != want {
+		t.Errorf("error = %v, want %q", err, want)
+	}
+}
