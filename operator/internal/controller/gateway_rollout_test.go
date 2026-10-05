@@ -499,3 +499,30 @@ func TestGatewayReconcile_ConflictPassKeepsATemplateRolloutReported(t *testing.T
 
 	requireProgressing(t, got, metav1.ConditionTrue, false)
 }
+
+func TestGatewayReconcile_ConflictPassAfterAFixKeepsDeployingAndFiresNoSecondRolloutFailed(t *testing.T) {
+	s := serveGateway(t)
+	s.stuck(t)
+	stuckCache := s.deployment(t)
+	rec := s.r.Recorder.(*record.FakeRecorder)
+	s.r.Renderer = renderOutput("B") // the fix
+	s.reconcile(t)
+	drainEvents(rec)
+
+	got := s.reconcileOnStaleCache(t, stuckCache)
+
+	progressing := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionProgressing)
+	if progressing == nil || progressing.Status != metav1.ConditionTrue {
+		t.Errorf("Progressing = %+v, want True", progressing)
+	}
+	if got.Status.Phase != v1alpha1.PhaseDeploying {
+		t.Errorf("phase = %s, want %s", got.Status.Phase, v1alpha1.PhaseDeploying)
+	}
+	if available := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionAvailable); available != nil &&
+		available.Reason == v1alpha1.ReasonRolloutFailed {
+		t.Errorf("Available = %+v, want it no longer RolloutFailed", available)
+	}
+	if n := eventsWithReason(rec, v1alpha1.ReasonRolloutFailed); n != 0 {
+		t.Errorf("%d RolloutFailed events on the Conflict pass, want none", n)
+	}
+}
