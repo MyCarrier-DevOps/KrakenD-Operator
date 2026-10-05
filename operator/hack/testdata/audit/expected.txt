@@ -31,3 +31,4 @@ KrakenDGateway a/both-license: both license sources set
 KrakenDGateway a/openapi-port: spec.openapi.port equals the gateway port
 KrakenDGateway a/two-pvc: more than one PVC plugin source
 KrakenDGateway a/many-plugins: more than 32 plugin sources
+KrakenDGateway a/job-script: spec.postRestartJob.script is empty
