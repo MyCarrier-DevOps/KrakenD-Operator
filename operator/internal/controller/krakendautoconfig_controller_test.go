@@ -3475,3 +3475,27 @@ func TestAutoConfigReconcile_ReportsExternalRefsInConfigMapSpec(t *testing.T) {
 		t.Errorf("warnings = %q, want [%q]", got, externalRefNote)
 	}
 }
+
+func TestAutoConfigReconcile_SpecNotesEmittedBeforeUnmatchedFailure(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	f, ce, fi, g := defaultMocks()
+	configMapSpecWithExternalRef(ac, f)
+	ce.output.UnmatchedOverrides = []string{"WebhookStatus"}
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).Build()
+	rec := fakeRecorder()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Recorder = rec
+
+	if _, err := reconcileAC(r, ac); err == nil {
+		t.Fatal("expected error for OnChange trigger, got nil")
+	}
+	wantNote := "Warning " + v1alpha1.ReasonSpecWarning + " " + externalRefNote
+	wantUnmatched := "Warning UnmatchedOverride spec.overrides reference operationIds or backend indexes " +
+		"not present in the OpenAPI spec: WebhookStatus"
+	events := drainEvents(rec)
+	noteIdx, unmatchedIdx := slices.Index(events, wantNote), slices.Index(events, wantUnmatched)
+	if noteIdx < 0 || unmatchedIdx < 0 || noteIdx > unmatchedIdx {
+		t.Errorf("expected %q before %q, got %v", wantNote, wantUnmatched, events)
+	}
+}
