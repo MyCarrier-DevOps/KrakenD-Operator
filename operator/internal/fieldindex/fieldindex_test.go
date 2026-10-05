@@ -18,15 +18,31 @@ package fieldindex
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 )
+
+func TestEndpointControllerKeys(t *testing.T) {
+	owned := &v1alpha1.KrakenDEndpoint{ObjectMeta: metav1.ObjectMeta{OwnerReferences: []metav1.OwnerReference{
+		{UID: "other", Name: "x", Kind: "ConfigMap", APIVersion: "v1"},
+		{UID: "ac-uid", Name: "ac", Kind: "KrakenDAutoConfig", APIVersion: "gateway.krakend.io/v1alpha1",
+			Controller: ptr.To(true)},
+	}}}
+	if got := EndpointControllerKeys(owned); !slices.Equal(got, []string{"ac-uid"}) {
+		t.Errorf("controlled: %v, want [ac-uid]", got)
+	}
+	if got := EndpointControllerKeys(&v1alpha1.KrakenDEndpoint{}); got != nil {
+		t.Errorf("uncontrolled: %v, want nil", got)
+	}
+}
 
 func TestEnsureEndpointIndexes_Sequential(t *testing.T) {
 	resetIndexRegistry()

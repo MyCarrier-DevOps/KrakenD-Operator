@@ -35,6 +35,11 @@ const (
 
 	// EndpointPolicy indexes KrakenDEndpoints by "namespace/name" of every policy they reference.
 	EndpointPolicy = ".spec.endpoints.backends.policyRef.namespacedName"
+
+	// EndpointController indexes KrakenDEndpoints by the UID of their
+	// controller owner reference, so a KrakenDAutoConfig lists the endpoints
+	// it controls whatever their labels say.
+	EndpointController = ".metadata.ownerReferences.controller.uid"
 )
 
 // EndpointGatewayKeys returns the EndpointGateway index value of obj.
@@ -69,6 +74,10 @@ func EndpointPolicyKeys(obj client.Object) []string {
 	}
 	return refs
 }
+
+// EndpointControllerKeys returns the EndpointController index value of obj:
+// the UID of its controller owner reference, if it has one.
+func EndpointControllerKeys(obj client.Object) []string { return nil }
 
 // registration tracks one in-flight or completed index registration attempt
 // for a specific field indexer.
