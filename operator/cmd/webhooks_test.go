@@ -79,3 +79,16 @@ func TestWebhookCertWatchNeeded(t *testing.T) {
 		})
 	}
 }
+
+func TestDefaultOperatorUsername(t *testing.T) {
+	tests := []struct{ ns, sa, want string }{
+		{"krakend-system", "krakend-operator", "system:serviceaccount:krakend-system:krakend-operator"},
+	}
+	for _, tt := range tests {
+		t.Setenv("POD_NAMESPACE", tt.ns)
+		t.Setenv("POD_SERVICE_ACCOUNT", tt.sa)
+		if got := defaultOperatorUsername(); got != tt.want {
+			t.Errorf("POD_NAMESPACE=%q POD_SERVICE_ACCOUNT=%q: got %q, want %q", tt.ns, tt.sa, got, tt.want)
+		}
+	}
+}

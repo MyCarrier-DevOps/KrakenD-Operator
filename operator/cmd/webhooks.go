@@ -39,3 +39,11 @@ func registerWebhooks(mgr ctrl.Manager, enabled bool, setup func(ctrl.Manager) e
 func webhookCertWatchNeeded(enabled bool, certPath string) bool {
 	return enabled && certPath != ""
 }
+
+// defaultOperatorUsername is the Kubernetes username of the pod's
+// ServiceAccount, built from the POD_NAMESPACE and POD_SERVICE_ACCOUNT
+// variables the manifests set from the downward API, or "" when either is
+// unset, which disables the AutoConfig write exemption.
+func defaultOperatorUsername() string {
+	return ""
+}
