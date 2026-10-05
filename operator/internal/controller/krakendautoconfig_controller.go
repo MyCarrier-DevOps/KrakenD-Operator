@@ -219,17 +219,7 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	skippedOps := r.inScope(&ac, cueOutput.Skipped)
-
-	// Until endpoints of failed operations can be held individually, an
-	// in-scope failed operation fails the whole sync closed, as a CUE
-	// evaluation error did before.
-	if failedOps := r.inScope(&ac, cueOutput.Failed); len(failedOps) > 0 {
-		labels := make([]string, 0, len(failedOps))
-		for _, s := range operationStatuses(failedOps) {
-			labels = append(labels, operationLabel(s))
-		}
-		return r.handleCUEError(ctx, &ac, fmt.Errorf("operations failed CUE evaluation: %s", listed(labels)), warnings)
-	}
+	failedOps := r.inScope(&ac, cueOutput.Failed)
 
 	filtered, replaced, scopeErr := applyAdditionalEndpoints(&ac, filtered, warnings)
 	specNotes = append(specNotes, replaced...)
@@ -274,7 +264,7 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	// Diff and reconcile endpoints
-	outcome, err := r.reconcileEndpoints(ctx, &ac, genOutput.Endpoints)
+	outcome, err := r.reconcileEndpoints(ctx, &ac, genOutput.Endpoints, len(failedOps) > 0)
 	if err != nil {
 		return r.handleEndpointError(ctx, &ac, err, warnings)
 	}
@@ -287,11 +277,14 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return lostWriteRace(ctx, kerrors.NewAggregate(outcome.raced))
 	}
 
+	failed := append(operationStatuses(failedOps), rejectedStatuses(outcome.rejected, cueOutput.OperationIDs)...)
+	sortOperationStatuses(failed)
+
 	if err := r.recordSync(ctx, &ac, origStatus, syncResult{
 		checksum:  combinedChecksum,
 		generated: len(genOutput.Endpoints),
 		skipped:   operationStatuses(skippedOps),
-		failed:    rejectedStatuses(outcome.rejected, cueOutput.OperationIDs),
+		failed:    failed,
 		warnings:  specWarnings(specNotes),
 		changes:   outcome.changes,
 	}, warnings); err != nil {
@@ -302,6 +295,7 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		"phase", ac.Status.Phase,
 		"endpoints", len(genOutput.Endpoints),
 		"skipped", len(skippedOps),
+		"failed", len(failed),
 	)
 
 	return r.requeueResult(&ac), nil
@@ -835,14 +829,18 @@ func autoConfigStatusChanged(orig, cur *v1alpha1.KrakenDAutoConfigStatus) bool {
 }
 
 // reconcileEndpoints converges the KrakenDEndpoints ac controls to desired.
-// It writes the endpoints that are missing or differ first, attempting every
-// one whatever fails, and only then, when nothing failed, deletes the ones
-// no longer desired, so a failure never takes a route off the gateway. An
-// error means the pass could not start: listing failed.
+// It adopts label-matched orphans, writes every endpoint that is missing or
+// differs (attempting all of them, whatever fails), and only then, when held
+// is false and nothing failed, deletes the endpoints no longer desired, so a
+// failure never takes a route off the gateway (make-before-break). held is
+// true when some operation failed before generation: its endpoint is not in
+// desired and must not be deleted. An error means the pass could not start:
+// listing failed.
 func (r *KrakenDAutoConfigReconciler) reconcileEndpoints(
 	ctx context.Context,
 	ac *v1alpha1.KrakenDAutoConfig,
 	desired []*v1alpha1.KrakenDEndpoint,
+	held bool,
 ) (endpointOutcome, error) {
 	outcome := endpointOutcome{rejected: map[string]rejection{}}
 	controlled, err := r.claimEndpoints(ctx, ac, desired, &outcome)
@@ -858,7 +856,7 @@ func (r *KrakenDAutoConfigReconciler) reconcileEndpoints(
 		}
 		outcome.changes.count(op)
 	}
-	if outcome.failed() {
+	if held || outcome.failed() {
 		return outcome, nil
 	}
 
