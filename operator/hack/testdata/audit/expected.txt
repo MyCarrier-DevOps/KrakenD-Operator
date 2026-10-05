@@ -1,1 +1,2 @@
 KrakenDEndpoint a/empty: spec.endpoints is empty
+KrakenDEndpoint a/nogw: spec.gatewayRef.name is empty
