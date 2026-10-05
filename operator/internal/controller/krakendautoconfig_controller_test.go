@@ -252,11 +252,13 @@ func newACReconciler(
 }
 
 // fakeChecker is an AutoConfigChecker that returns verdicts in order, then
-// passes; err, when set, is returned by every call. calls records each
+// passes; err, when set, is returned by every call, and judge, when set,
+// decides every call's verdict from its replace set. calls records each
 // call's replace set.
 type fakeChecker struct {
 	verdicts []configcheck.Verdict
 	err      error
+	judge    func(replace []v1alpha1.KrakenDEndpoint) configcheck.Verdict
 	calls    [][]v1alpha1.KrakenDEndpoint
 }
 
@@ -268,6 +270,9 @@ func (f *fakeChecker) CheckGateway(
 	f.calls = append(f.calls, replace)
 	if f.err != nil {
 		return configcheck.Verdict{}, f.err
+	}
+	if f.judge != nil {
+		return f.judge(replace), nil
 	}
 	if len(f.verdicts) == 0 {
 		return configcheck.Verdict{OK: true}, nil
@@ -2328,12 +2333,27 @@ func TestAutoConfigReconcile_IdenticalSecondPassWritesNothing(t *testing.T) {
 		Reason:    v1alpha1.ReasonCUEEvaluationFailed,
 		Message:   "boom",
 	}, failedGetB()}
+	// A third endpoint the gateway config check holds on every pass, for two
+	// reasons that arrive in the opposite order on the second pass.
+	g.output.Endpoints = append(g.output.Endpoints, generatedEndpoint("getC", "/c"))
+	reasons := []configcheck.Finding{{
+		Endpoint: types.NamespacedName{Namespace: "default", Name: "test-ac-getc"}, Index: 0, Message: "first reason",
+	}, {
+		Endpoint: types.NamespacedName{Namespace: "default", Name: "test-ac-getc"}, Index: 0, Message: "second reason",
+	}}
+	checker := &fakeChecker{judge: func(replace []v1alpha1.KrakenDEndpoint) configcheck.Verdict {
+		if slices.Contains(endpointNames(replace), "test-ac-getc") {
+			return configcheck.Verdict{Findings: slices.Clone(reasons)}
+		}
+		return configcheck.Verdict{OK: true}
+	}}
 	var counts writeCounts
-	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).
+	c := fakeClientBuilder().WithObjects(ac, cm, testGateway()).WithStatusSubresource(ac).
 		WithInterceptorFuncs(countWrites(&counts)).Build()
 	rec := fakeRecorder()
 	r := newACReconciler(c, f, ce, fi, g)
 	r.Recorder = rec
+	r.Checker = checker
 
 	if _, err := reconcileAC(r, ac); err != nil {
 		t.Fatalf("first reconcile: %v", err)
@@ -2343,13 +2363,14 @@ func TestAutoConfigReconcile_IdenticalSecondPassWritesNothing(t *testing.T) {
 	if len(first.Status.Skipped) != 3 || len(first.Status.Warnings) != 2 {
 		t.Fatalf("first pass skipped = %+v, warnings = %q; want 3 skipped and 2 warnings", first.Status.Skipped, first.Status.Warnings)
 	}
-	if len(first.Status.FailedOperations) != 2 {
-		t.Fatalf("first pass failedOperations = %+v, want 2", first.Status.FailedOperations)
+	if len(first.Status.FailedOperations) != 3 {
+		t.Fatalf("first pass failedOperations = %+v, want 3", first.Status.FailedOperations)
 	}
 	// The same issues arrive in the opposite order.
 	slices.Reverse(ce.output.Skipped)
 	slices.Reverse(ce.output.Failed)
 	slices.Reverse(g.output.Skipped)
+	slices.Reverse(reasons)
 	counts = writeCounts{}
 
 	if _, err := reconcileAC(r, first); err != nil {
