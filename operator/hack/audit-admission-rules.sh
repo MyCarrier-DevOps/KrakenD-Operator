@@ -212,5 +212,6 @@ jq "${jq_opts[@]}" "$jq_lib"'
   ($s.defaults.endpoint.cacheTTL // empty | dur_problem($go_re; 64; "spec.defaults.endpoint.cacheTTL")),
   ($s.defaults.endpoint.outputEncoding // empty
     | enum_problem("spec.defaults.endpoint.outputEncoding"; output_encodings)),
-  ($s.defaults.backend.encoding // empty | enum_problem("spec.defaults.backend.encoding"; backend_encodings))
+  ($s.defaults.backend.encoding // empty | enum_problem("spec.defaults.backend.encoding"; backend_encodings)),
+  ($s.defaults.backend.sd // empty | enum_problem("spec.defaults.backend.sd"; discoveries))
 ]} | report("KrakenDAutoConfig")' "$work/autoconfigs.json"
