@@ -23,8 +23,9 @@ go_duration_re='^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$'
 # The CRD pattern of the gateway duration fields (one integer and one unit), verbatim.
 single_unit_re='^[0-9]+(ns|ms|us|µs|s|m|h)$'
 
-# The CRD pattern of a resource quantity, verbatim.
-quantity_re='^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$'
+# The CRD pattern of tmpSizeLimit, verbatim: a quantity whose exponent has at
+# most two digits, so Kubernetes is never asked to parse a pathological one.
+quantity_re='^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?[0-9]{1,2}))?$'
 
 # The Enterprise-only extra_config namespaces per level, which the renderer
 # strips from a CE render and admission rejects on a CE gateway.
@@ -79,19 +80,11 @@ def dur_problem($re; $max; $label):
   (select(crd_test($re) and overflows) | "\($label) \(tojson) does not fit in 64 bits of nanoseconds");
 # Why a value is outside an enum: $set lists the values the CRD allows.
 def enum_problem($label; $set): select(IN($set[]) | not) | "\($label) \(tojson)";
-# True for a pattern-valid quantity that resource.ParseQuantity rejects, which
-# the CRD isQuantity() rule rejects too: an exponent with a fraction, or one
-# outside the range of a 64-bit integer.
-def quantity_undecodable:
-  ([capture("[eE](?<sign>[+-]?)(?<exp>[0-9.]+)$")] | .[0]) as $e
-  | $e != null and (($e.exp | contains("."))
-    or ($e.exp | digits_exceed(if $e.sign == "-" then "9223372036854775808" else "9223372036854775807" end)));
 # Why a quantity breaks its CRD rules, or nothing; a number is always valid.
 def quantity_problem($label):
   if type != "string" then empty
   elif crd_test($qty_re) | not then "\($label) \(tojson)"
   elif length > 64 then "\($label) is longer than 64 characters"
-  elif quantity_undecodable then "\($label) \(tojson) is not a quantity Kubernetes can decode"
   else empty end;
 # The keys of an extra_config object that are in $names.
 def eeonly($names): [(. // {}) | keys[] | select(IN($names[]))];
