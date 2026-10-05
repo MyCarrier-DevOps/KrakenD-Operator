@@ -99,8 +99,6 @@ func (v Verdict) Summary(limit int) string {
 // its KrakenDEndpoint's spec.endpoints. A rejection always has a finding:
 // when nothing was attributed, the output, one line per non-empty line joined
 // with "; ", is one gateway finding.
-//
-//nolint:unused // the Checker is the only caller and lands separately
 func findingsFrom(atts []renderer.Attribution, renderedJSON []byte,
 	endpoints []v1alpha1.KrakenDEndpoint, output string) []Finding {
 	if len(atts) == 0 {
