@@ -146,3 +146,13 @@ func TestFindingsFrom_LeavesTheIndexOpenWithoutAnExactMatch(t *testing.T) {
 		}
 	}
 }
+
+func TestFindingsFrom_ABlameWithoutAnEndpointIsAGatewayFinding(t *testing.T) {
+	rendered := []byte(`{"endpoints":[{"endpoint":"/a","method":"GET"}]}`)
+
+	got := findingsFrom([]renderer.Attribution{{Index: 3, Message: "bad"}}, rendered, nil, "")
+
+	if len(got) != 1 || got[0].Index != -1 || got[0].String() != "gateway: bad" {
+		t.Errorf("findings = %+v, want one gateway finding", got)
+	}
+}
