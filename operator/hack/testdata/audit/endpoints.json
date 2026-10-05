@@ -53,5 +53,7 @@
  {"metadata":{"namespace":"a","name":"hp-rawnohp"},"spec":{"gatewayRef":{"name":"hp-rawnohp"},"endpoints":[{"endpoint":"/healthz","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}]},{"endpoint":"/__health","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}]}]}},
  {"metadata":{"namespace":"a","name":"hp-rawstr"},"spec":{"gatewayRef":{"name":"hp-rawstr"},"endpoints":[{"endpoint":"/__health","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}]}]}},
  {"metadata":{"namespace":"a","name":"forge-1"},"spec":{"gatewayRef":{"name":"g\nforged"},"endpoints":[{"endpoint":"/f/{x}","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}]}]}},
- {"metadata":{"namespace":"a","name":"forge-2"},"spec":{"gatewayRef":{"name":"g\nforged"},"endpoints":[{"endpoint":"/f/{id}","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}]}]}}
+ {"metadata":{"namespace":"a","name":"forge-2"},"spec":{"gatewayRef":{"name":"g\nforged"},"endpoints":[{"endpoint":"/f/{id}","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}]}]}},
+ {"metadata":{"namespace":"a","name":"hp-badtype1"},"spec":{"gatewayRef":{"name":"hp-badtype1"},"endpoints":[{"endpoint":"/live","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}]},{"endpoint":"/__health","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}]}]}},
+ {"metadata":{"namespace":"a","name":"hp-badtype2"},"spec":{"gatewayRef":{"name":"hp-badtype2"},"endpoints":[{"endpoint":"/__health","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}]}]}}
 ]}
