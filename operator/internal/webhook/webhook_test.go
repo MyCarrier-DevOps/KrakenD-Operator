@@ -2481,7 +2481,8 @@ func TestAutoConfigAdmission_OverrideOperationIDs(t *testing.T) {
 				}
 				return
 			}
-			if resp.Allowed || resp.Result.Details.Causes[0].Field != "spec.overrides[1].operationId" ||
+			if resp.Allowed || resp.Result.Details == nil || len(resp.Result.Details.Causes) == 0 ||
+				resp.Result.Details.Causes[0].Field != "spec.overrides[1].operationId" ||
 				!strings.Contains(resp.Result.Details.Causes[0].Message, tt.reject) {
 				t.Errorf("response = %+v, want %q on spec.overrides[1].operationId", resp.Result, tt.reject)
 			}
@@ -2570,7 +2571,8 @@ func TestAutoConfigAdmission_RejectsOverridesThatGenerateOneEndpointName(t *test
 			Overrides: []v1alpha1.OperationOverride{{OperationID: long + "a"}, {OperationID: long + "b"}}},
 	}
 	resp := review(t, &AutoConfigValidator{Client: fakeClient(testGateway())}, "alice", ac, nil)
-	if resp.Allowed || resp.Result.Details.Causes[0].Field != "spec.overrides[1].operationId" {
+	if resp.Allowed || resp.Result.Details == nil || len(resp.Result.Details.Causes) == 0 ||
+		resp.Result.Details.Causes[0].Field != "spec.overrides[1].operationId" {
 		t.Errorf("response = %+v, want a collision on spec.overrides[1].operationId", resp.Result)
 	}
 }
