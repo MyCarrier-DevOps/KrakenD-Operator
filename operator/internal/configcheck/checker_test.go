@@ -18,6 +18,7 @@ package configcheck
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -33,8 +34,10 @@ import (
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 )
 
-// fakeValidator records which mode ran, for which edition, and on which config.
+// fakeValidator records which mode ran, for which edition, and on which config,
+// and answers with err.
 type fakeValidator struct {
+	err      error
 	calls    []string
 	editions []v1alpha1.Edition
 	seen     []string
@@ -50,7 +53,7 @@ func (f *fakeValidator) Lint(_ context.Context, jsonData []byte, edition v1alpha
 
 func (f *fakeValidator) record(mode string, jsonData []byte, edition v1alpha1.Edition) error {
 	f.calls, f.editions, f.seen = append(f.calls, mode), append(f.editions, edition), append(f.seen, string(jsonData))
-	return nil
+	return f.err
 }
 
 // okExecutor stands in for a krakend binary that accepts every config, so a
@@ -159,5 +162,24 @@ func TestCheckGateway_RouteClashAcrossEndpointsNamesBothEntries(t *testing.T) {
 	a, b := types.NamespacedName{Namespace: "ns", Name: "a"}, types.NamespacedName{Namespace: "ns", Name: "b"}
 	if verdict.OK || len(got) != 2 || got[a] != 0 || got[b] != 1 {
 		t.Errorf("findings = %+v, want ns/a entry 0 and ns/b entry 1", verdict.Findings)
+	}
+}
+
+func TestCheckGateway_AttributesLintOutputToTheSpecEntry(t *testing.T) {
+	v := &fakeValidator{err: &renderer.ValidationError{
+		Output: "ERROR linting the configuration file:\tjsonschema validation failed with 'file:///etc/krakend/schema.json#'\n" +
+			"- at '/endpoints/1/extra_config': additional properties 'qos/circuit-breakr' not allowed\n",
+		Err: errors.New("exit status 1"),
+	}}
+	c := newChecker(v, endpoint("a", "/a"), endpoint("b", "/y", "/x"))
+
+	verdict, err := c.CheckGateway(context.Background(), gateway(v1alpha1.EditionCE), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Rendered order is /a, /x, /y: index 1 is b's /x, which is b's spec.endpoints[1].
+	b := types.NamespacedName{Namespace: "ns", Name: "b"}
+	if verdict.OK || len(verdict.Findings) != 1 || verdict.Findings[0].Endpoint != b || verdict.Findings[0].Index != 1 {
+		t.Errorf("findings = %+v, want ns/b spec.endpoints[1]", verdict.Findings)
 	}
 }
