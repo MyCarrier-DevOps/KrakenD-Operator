@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -430,5 +431,22 @@ func TestEndpointAdmission_RouteCheckListRunsUnderTheAdmissionBudget(t *testing.
 
 	if left <= 0 || left > admissionBudget {
 		t.Errorf("the endpoint List ran with %s left, want a deadline within %s", left, admissionBudget)
+	}
+}
+
+// A request that runs out of budget while the route check walks the gateway's
+// endpoints is a transient 500, not a verdict on the endpoint.
+func TestEndpointAdmission_RouteCheckStopsWhenTheBudgetEnds(t *testing.T) {
+	v := &EndpointValidator{
+		Client:  fakeClient(testGateway(), testEndpoint("other", "/b")),
+		Checker: &scriptedChecker{},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := v.ValidateCreate(ctx, testEndpoint("new", "/a"))
+
+	if !apierrors.IsInternalError(err) {
+		t.Errorf("err = %v, want a 500 internal error", err)
 	}
 }
