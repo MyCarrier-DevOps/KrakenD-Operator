@@ -539,13 +539,9 @@ func (r *KrakenDGatewayReconciler) inspectDeploymentStatus(
 	gw.Status.Replicas = dep.Status.Replicas
 	gw.Status.ReadyReplicas = dep.Status.ReadyReplicas
 
-	// Check for ProgressDeadlineExceeded.
-	for _, c := range dep.Status.Conditions {
-		if c.Type != appsv1.DeploymentProgressing ||
-			c.Status != corev1.ConditionFalse ||
-			c.Reason != "ProgressDeadlineExceeded" {
-			continue
-		}
+	// A progress deadline is honoured only while it describes the current
+	// rollout; otherwise the Available it caused is reset.
+	if failedRolloutApplies(dep) {
 		r.setConditionWithEvent(gw, metav1.Condition{
 			Type:               v1alpha1.ConditionProgressing,
 			Status:             metav1.ConditionFalse,
@@ -562,6 +558,7 @@ func (r *KrakenDGatewayReconciler) inspectDeploymentStatus(
 		})
 		return
 	}
+	resetRolloutFailedAvailability(gw, dep)
 
 	converged := deploymentConverged(dep, want)
 	switch {
