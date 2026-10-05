@@ -5377,3 +5377,29 @@ func TestAutoConfigReconcile_DeletedEndpointsLeaveTheReadinessCount(t *testing.T
 			updated.Status.ReadyEndpoints, cond)
 	}
 }
+
+func TestOwnedEndpointPredicate_PassesEachReadinessField(t *testing.T) {
+	base := generatedEndpoint("a", "/a")
+	base.Generation = 2
+	base.Status.ObservedGeneration = 2
+	base.Status.Conditions = []metav1.Condition{{
+		Type: v1alpha1.ConditionReady, Status: metav1.ConditionFalse, Reason: v1alpha1.ReasonEndpointConflict,
+	}}
+	tests := []struct {
+		name   string
+		change func(ep *v1alpha1.KrakenDEndpoint)
+	}{
+		{"observed generation", func(ep *v1alpha1.KrakenDEndpoint) { ep.Status.ObservedGeneration = 1 }},
+		{"ready status", func(ep *v1alpha1.KrakenDEndpoint) { ep.Status.Conditions[0].Status = metav1.ConditionTrue }},
+		{"ready reason", func(ep *v1alpha1.KrakenDEndpoint) { ep.Status.Conditions[0].Reason = v1alpha1.ReasonPending }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			changed := base.DeepCopy()
+			tt.change(changed)
+			if !ownedEndpointPredicate().Update(event.UpdateEvent{ObjectOld: base, ObjectNew: changed}) {
+				t.Errorf("expected a change of the %s to pass", tt.name)
+			}
+		})
+	}
+}
