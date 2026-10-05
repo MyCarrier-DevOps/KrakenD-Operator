@@ -394,5 +394,6 @@ func TestAutoConfigCRD_Rules(t *testing.T) {
 		{"defaults output encoding", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, defaults: {endpoint: {outputEncoding: jsn}}}}`, "Unsupported value: \"jsn\""},
 		{"override output encoding", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, overrides: [{operationId: x, outputEncoding: jsn}]}}`, "Unsupported value: \"jsn\""},
 		{"additional endpoint output encoding", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, additionalEndpoints: [{endpoint: /h, outputEncoding: jsn}]}}`, "Unsupported value: \"jsn\""},
+		{"additional endpoint shorthand encoding", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, additionalEndpoints: [{endpoint: /h, encoding: jsn}]}}`, "Unsupported value: \"jsn\""},
 	})
 }
