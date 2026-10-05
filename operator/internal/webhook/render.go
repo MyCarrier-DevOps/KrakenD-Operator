@@ -150,6 +150,10 @@ func gatewayRenderDenial(gw *v1alpha1.KrakenDGateway, verdict configcheck.Verdic
 	return invalid("KrakenDGateway", gw.Name, errs)
 }
 
+// maxPolicyWarnings is how many gateways that already fail a policy change
+// names in warnings; the rest are counted in one more.
+const maxPolicyWarnings = 5
+
 // checkPolicyRender validates policy on its own and in every gateway that
 // renders it. It rejects a request only for a pass-to-fail change: a policy
 // that already failed alone (old) is judged by its gateways, and a gateway
@@ -172,7 +176,7 @@ func checkPolicyRender(
 	}
 	var errs field.ErrorList
 	var warnings admission.Warnings
-	omitted := 0
+	omitted, unwarned := 0, 0
 	// cause records a gateway the policy cannot go to; past maxEntryCauses the
 	// rest are only counted.
 	cause := func(e *field.Error) {
@@ -206,11 +210,20 @@ func checkPolicyRender(
 		if err != nil && !errors.Is(err, errPolicyBreaksGateway) {
 			return nil, err
 		}
-		warnings = append(warnings, w...)
+		switch {
+		case len(w) == 0:
+		case len(warnings) < maxPolicyWarnings:
+			warnings = append(warnings, w...)
+		default:
+			unwarned++
+		}
 	}
 	if omitted > 0 {
 		errs = append(errs, field.Invalid(field.NewPath("spec"), field.OmitValueType{},
 			fmt.Sprintf("the policy is also refused on %d more gateways", omitted)))
+	}
+	if unwarned > 0 {
+		warnings = append(warnings, fmt.Sprintf("%d more gateways already fail validation", unwarned))
 	}
 	return warnings, invalid("KrakenDBackendPolicy", policy.Name, errs)
 }
