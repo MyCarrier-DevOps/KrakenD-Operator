@@ -284,6 +284,7 @@ func TestGatewayCRD_Rules(t *testing.T) {
 		{"overflowing cacheTTL", gatewayHead + `edition: CE, config: {cacheTTL: "99999999999h"}}}`, "spec.config.cacheTTL"},
 		{"overflowing dnsCacheTTL", gatewayHead + `edition: CE, config: {dnsCacheTTL: "99999999999h"}}}`, "spec.config.dnsCacheTTL"},
 		{"overflowing redis dial timeout", gatewayHead + `edition: CE, config: {}, redis: {connectionPool: {addresses: ["redis:6379"], dialTimeout: "99999999999h"}}}}`, "spec.redis.connectionPool.dialTimeout"},
+		{"overflowing tmpSizeLimit", gatewayHead + `edition: CE, config: {}, postRestartJob: {enabled: true, script: x, tmpSizeLimit: "1e99999999999999999999"}}}`, "spec.postRestartJob.tmpSizeLimit"},
 	})
 }
 
