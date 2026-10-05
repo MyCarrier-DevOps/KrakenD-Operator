@@ -525,7 +525,8 @@ func applyAdditionalEndpoints(
 // an external $ref document, or a parameter expansion past the body size
 // limit, is returned and fails the sync closed. notes are
 // the spec problems that do not stop the sync (the $refs the resolver could
-// not honour and the parameter $refs that do not resolve) for
+// not honour, the external $refs of a ConfigMap-sourced spec, which nothing
+// can fetch, and the parameter $refs that do not resolve) for
 // status.warnings. A StripServers or parameter decode failure is logged and
 // leaves the data as it was.
 func (r *KrakenDAutoConfigReconciler) fetchSpec(
