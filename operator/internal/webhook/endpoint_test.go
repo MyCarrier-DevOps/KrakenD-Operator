@@ -330,6 +330,37 @@ func TestEndpointAdmission_MovingOntoATakenRouteIsADuplicate(t *testing.T) {
 	}
 }
 
+// Moving an unchanged endpoint onto a CE gateway judges its entry afresh: it
+// carries an Enterprise-only namespace and duplicates a route another endpoint
+// serves there, and both are reported.
+func TestEndpointAdmission_MovingOntoACEGatewayChecksEntryRulesAndRoutes(t *testing.T) {
+	ee := testGateway()
+	ee.Spec.Edition = v1alpha1.EditionEE
+	old := testEndpoint("e", "/a")
+	old.Spec.Endpoints[0].ExtraConfig = &runtime.RawExtension{Raw: []byte(`{"auth/api-keys":{"roles":["a"]}}`)}
+	ce := testGateway()
+	ce.Name = "other"
+	holder := testEndpoint("holder", "/a")
+	holder.Spec.GatewayRef.Name = "other"
+	v := &EndpointValidator{Client: fakeClient(ee, ce, old, holder)}
+
+	moved := old.DeepCopy()
+	moved.Spec.GatewayRef.Name = "other"
+	resp := review(t, v, "alice", moved, old)
+	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("response = %+v, want 422", resp.Result)
+	}
+	var fields []string
+	for _, c := range resp.Result.Details.Causes {
+		fields = append(fields, c.Field)
+	}
+	slices.Sort(fields)
+	want := []string{"spec.endpoints[0]", "spec.endpoints[0].extraConfig"}
+	if !slices.Equal(fields, want) {
+		t.Errorf("cause fields = %v, want %v: the duplicate route and the EE-only namespace", fields, want)
+	}
+}
+
 // Same-shape entries inside one KrakenDEndpoint are checked whenever an entry
 // changes, even when the new entry has the route key of a stored one.
 func TestEndpointAdmission_UpdateAddingAnEntryWithAStoredRouteKeyIsRejected(t *testing.T) {
