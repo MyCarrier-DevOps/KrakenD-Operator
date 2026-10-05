@@ -75,6 +75,18 @@ func (s *scriptedChecker) CheckIsolated(
 	return s.next(ctx, "isolated", eps)
 }
 
+func (s *scriptedChecker) CheckGatewayPolicy(
+	ctx context.Context, _ *v1alpha1.KrakenDGateway, _ *v1alpha1.KrakenDBackendPolicy,
+) (configcheck.Verdict, error) {
+	return s.next(ctx, "gateway+policy", nil)
+}
+
+func (s *scriptedChecker) LintPolicy(
+	ctx context.Context, _ *v1alpha1.KrakenDBackendPolicy,
+) (configcheck.Verdict, error) {
+	return s.next(ctx, "policy", nil)
+}
+
 // failing is a verdict that blames entry index of default/ep.
 func failing(ep string, index int, msg string) configcheck.Verdict {
 	return configcheck.Verdict{Findings: []configcheck.Finding{{
