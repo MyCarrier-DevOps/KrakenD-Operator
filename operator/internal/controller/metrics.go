@@ -37,7 +37,7 @@ var (
 
 	rollingRestarts = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "krakend_operator_rolling_restarts_total",
-		Help: "Rolling deployments triggered",
+		Help: "Deployment writes that changed the pod template, rolling the pods (not creations)",
 	})
 
 	licenseExpirySeconds = prometheus.NewGaugeVec(prometheus.GaugeOpts{
