@@ -301,6 +301,7 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		failed:    failed,
 		warnings:  specWarnings(specNotes),
 		changes:   outcome.changes,
+		readiness: outcome.readiness,
 	}, warnings); err != nil {
 		return statusWriteFailure(ctx, err)
 	}
@@ -771,6 +772,8 @@ type syncResult struct {
 	// status lists the first maxStatusListLen.
 	warnings []string
 	changes  endpointChanges
+	// readiness summarizes the endpoints the AutoConfig controls afterwards.
+	readiness endpointReadiness
 }
 
 // recordSync records a sync that reached its endpoint writes: the combined
@@ -798,12 +801,14 @@ func (r *KrakenDAutoConfigReconciler) recordSync(
 		ac.Status.LastSyncTime = &now
 	}
 	ac.Status.GeneratedEndpoints = res.generated
+	ac.Status.ReadyEndpoints = res.readiness.ready
 	ac.Status.SkippedOperations = len(res.skipped)
 	ac.Status.Skipped = capList(res.skipped)
 	ac.Status.FailedOperations = capList(res.failed)
 	ac.Status.Warnings = capList(res.warnings)
 	synced := syncedCondition(res, ac.Generation)
 	meta.SetStatusCondition(&ac.Status.Conditions, synced)
+	meta.SetStatusCondition(&ac.Status.Conditions, endpointsReadyCondition(res.readiness, ac.Generation))
 	setAutoConfigReadiness(ac)
 	statusChanged := autoConfigStatusChanged(orig, &ac.Status)
 	if statusChanged {
@@ -867,6 +872,7 @@ func autoConfigStatusChanged(orig, cur *v1alpha1.KrakenDAutoConfigStatus) bool {
 		orig.ObservedGeneration != cur.ObservedGeneration ||
 		orig.SpecChecksum != cur.SpecChecksum ||
 		orig.GeneratedEndpoints != cur.GeneratedEndpoints ||
+		orig.ReadyEndpoints != cur.ReadyEndpoints ||
 		orig.SkippedOperations != cur.SkippedOperations ||
 		!slices.Equal(orig.Skipped, cur.Skipped) ||
 		!slices.Equal(orig.FailedOperations, cur.FailedOperations) ||
@@ -883,7 +889,9 @@ func autoConfigStatusChanged(orig, cur *v1alpha1.KrakenDAutoConfigStatus) bool {
 // route off the gateway (make-before-break). held is true when some operation
 // failed before generation: its endpoint is not in desired and must not be
 // deleted. An error means the pass could not start: listing failed or the
-// config check could not run.
+// config check could not run. The outcome's readiness summarizes the
+// endpoints ac controls afterwards: held ones keep their last-good endpoint,
+// and an endpoint this pass wrote counts as Pending.
 func (r *KrakenDAutoConfigReconciler) reconcileEndpoints(
 	ctx context.Context,
 	ac *v1alpha1.KrakenDAutoConfig,
@@ -909,6 +917,7 @@ func (r *KrakenDAutoConfigReconciler) reconcileEndpoints(
 		return outcome, err
 	}
 	maps.Copy(outcome.rejected, checked)
+	written := map[string]bool{}
 	for _, ep := range writes {
 		if _, ok := outcome.rejected[ep.Name]; ok {
 			continue // held by the config check
@@ -919,22 +928,26 @@ func (r *KrakenDAutoConfigReconciler) reconcileEndpoints(
 			continue
 		}
 		outcome.changes.count(op)
-	}
-	if held || outcome.failed() {
-		return outcome, nil
-	}
-
-	for i := range stale {
-		deleted, err := r.deleteEndpoint(ctx, &stale[i])
-		if err != nil {
-			outcome.record(&stale[i], err)
-			continue
-		}
-		if deleted {
-			outcome.changes.deleted++
+		if op != controllerutil.OperationResultNone {
+			written[ep.Name] = true
 		}
 	}
 
+	gone := map[string]bool{}
+	if !held && !outcome.failed() {
+		for i := range stale {
+			deleted, err := r.deleteEndpoint(ctx, &stale[i])
+			if err != nil {
+				outcome.record(&stale[i], err)
+				continue
+			}
+			if deleted {
+				outcome.changes.deleted++
+			}
+			gone[stale[i].Name] = true
+		}
+	}
+	outcome.readiness = summarizeReadiness(controlled, written, gone)
 	return outcome, nil
 }
 
