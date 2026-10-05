@@ -71,7 +71,7 @@ func ResolveExternalRefs(
 		source:  source,
 		docs:    map[string]map[string]any{},
 	}
-	resolver.walk(root, baseURL)
+	resolver.walk(root, baseURL, false)
 	if resolver.fatalErr != nil {
 		return nil, resolver.warnings, fmt.Errorf("resolving external $refs: %w", resolver.fatalErr)
 	}
@@ -139,16 +139,16 @@ func (e *fatalRefError) Unwrap() error { return e.err }
 // external $ref with a local one. Once a fatal error (a failed fetch or decode
 // of an external document) has been recorded, walk stops descending so no
 // further refs are resolved and no further documents are fetched.
-func (r *refResolver) walk(node any, base string) {
+// inExample is set below an example payload: refs there are still rewritten,
+// but a local one is not warned about, since example data is not a reference.
+func (r *refResolver) walk(node any, base string, inExample bool) {
 	if r.fatalErr != nil {
 		return
 	}
 	switch v := node.(type) {
 	case map[string]any:
-		if ref, ok := v["$ref"].(string); ok && strings.HasPrefix(ref, "#") && base != r.baseURL {
-			r.warnOnce(fmt.Sprintf(
-				"$ref %q in %s is resolved against the main spec after inlining, not against %s",
-				ref, base, base))
+		if ref, ok := v["$ref"].(string); ok && !inExample {
+			r.warnLocalRef(ref, base)
 		}
 		if ref, ok := v["$ref"].(string); ok && ref != "" && !strings.HasPrefix(ref, "#") {
 			if localName, err := r.resolveExternal(ref, base); err == nil {
@@ -167,18 +167,34 @@ func (r *refResolver) walk(node any, base string) {
 		// Sorted keys make the walk order, and so the first failing ref
 		// and its error, deterministic.
 		for _, k := range slices.Sorted(maps.Keys(v)) {
-			r.walk(v[k], base)
+			payload, own := examplePayload(k, v[k])
+			if payload && !inExample {
+				for _, ref := range own {
+					r.warnLocalRef(ref, base)
+				}
+			}
+			r.walk(v[k], base, inExample || payload)
 			if r.fatalErr != nil {
 				return
 			}
 		}
 	case []any:
 		for _, child := range v {
-			r.walk(child, base)
+			r.walk(child, base, inExample)
 			if r.fatalErr != nil {
 				return
 			}
 		}
+	}
+}
+
+// warnLocalRef warns that a "#/" ref in a fetched document is resolved against
+// the main spec once the document's subtree is inlined into it.
+func (r *refResolver) warnLocalRef(ref, base string) {
+	if strings.HasPrefix(ref, "#") && base != r.baseURL {
+		r.warnOnce(fmt.Sprintf(
+			"$ref %q in %s is resolved against the main spec after inlining, not against %s",
+			ref, base, base))
 	}
 }
 
@@ -257,7 +273,7 @@ func (r *refResolver) resolveExternal(ref, base string) (string, error) {
 
 	// Walk the cloned node so nested external refs are resolved, relative to
 	// the document they appear in.
-	r.walk(target, absolute)
+	r.walk(target, absolute, false)
 
 	if r.inlined == nil {
 		r.inlined = map[string]any{}
