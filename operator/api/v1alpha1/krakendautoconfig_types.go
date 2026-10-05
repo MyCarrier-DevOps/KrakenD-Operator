@@ -249,6 +249,7 @@ type OperationOverride struct {
 	OperationID string `json:"operationId"`
 
 	// Endpoint overrides the generated endpoint path.
+	// +kubebuilder:validation:Pattern=`^(/\*|/[^*?&%]*(/\*)?)$`
 	Endpoint string `json:"endpoint,omitempty"`
 
 	// Method overrides the HTTP method.
