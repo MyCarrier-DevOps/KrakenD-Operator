@@ -267,7 +267,11 @@ func (v *EndpointValidator) gatewayFor(
 	return nil, field.ErrorList{field.NotFound(refPath, refValue)}, nil
 }
 
-// validatePolicyRefs checks the policies ep references that old does not.
+// validatePolicyRefs checks the policies ep references that old does not. The
+// ratchet keys on policy identity: a new backend that references a policy the
+// stored object already references elsewhere is not re-checked. A referenced
+// policy cannot be deleted (its protection finalizer holds it), so the gap
+// only matters for stored references that already dangle.
 func (v *EndpointValidator) validatePolicyRefs(
 	ctx context.Context, old, ep *v1alpha1.KrakenDEndpoint,
 ) (field.ErrorList, error) {
@@ -310,6 +314,8 @@ func (v *EndpointValidator) policyRefError(
 		return field.ErrorList{field.NotFound(p.Child("name"), ref.Name)}, nil
 	case err != nil:
 		return nil, fmt.Errorf("looking up policy %s/%s: %w", polNS, ref.Name, err)
+	case !policy.DeletionTimestamp.IsZero():
+		return field.ErrorList{field.Invalid(p.Child("name"), ref.Name, "policy is being deleted")}, nil
 	}
 	return nil, nil
 }
