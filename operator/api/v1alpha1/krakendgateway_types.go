@@ -311,7 +311,7 @@ type GatewayConfig struct {
 	// Timeout is the global request timeout (e.g. "3s").
 	// +kubebuilder:validation:Pattern=`^[0-9]+(ns|ms|us|µs|s|m|h)$`
 	// +kubebuilder:validation:MaxLength=64
-	// +kubebuilder:validation:XValidation:rule="duration(self) >= duration('0s')",message="must be a duration that fits in 64 bits of nanoseconds"
+	// +kubebuilder:validation:XValidation:rule="!self.matches('^[0-9]+(ns|ms|us|µs|s|m|h)$') || duration(self) >= duration('0s')",message="must be a duration that fits in 64 bits of nanoseconds"
 	Timeout string `json:"timeout,omitempty"`
 
 	// CacheTTL is the global cache TTL (e.g. "0s").
