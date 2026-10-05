@@ -112,3 +112,19 @@ func TestFindingsFrom_NamesTheSpecEntry(t *testing.T) {
 		t.Errorf("empty attribution = %+v, want one gateway finding carrying the output", f)
 	}
 }
+
+func TestFindingsFrom_NamesTheWinnerOfTwoSameShapeEntries(t *testing.T) {
+	rendered := []byte(`{"endpoints":[{"endpoint":"/a","method":"GET"}]}`)
+	a := types.NamespacedName{Namespace: "ns", Name: "a"}
+	eps := []v1alpha1.KrakenDEndpoint{
+		{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "a"}, Spec: v1alpha1.KrakenDEndpointSpec{
+			Endpoints: []v1alpha1.EndpointEntry{{Endpoint: "/z", Method: "GET"}, {Endpoint: "/a", Method: "GET"},
+				{Endpoint: "/a", Method: "GET"}}}},
+	}
+
+	got := findingsFrom([]renderer.Attribution{{Endpoint: a, Index: 0, Message: "bad"}}, rendered, eps, "")
+
+	if len(got) != 1 || got[0].Index != 1 {
+		t.Errorf("findings = %+v, want one finding on spec.endpoints[1], the earlier of the pair", got)
+	}
+}
