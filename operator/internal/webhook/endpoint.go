@@ -150,6 +150,11 @@ func (v *EndpointValidator) check(
 	}
 	if gw != nil {
 		errs = append(errs, validateEntries(ep, changed, gw)...)
+		polErrs, err := v.validatePolicyNamespaces(ctx, stored, ep, gw)
+		if err != nil {
+			return nil, unavailable(err)
+		}
+		errs = append(errs, polErrs...)
 		dupErrs, err := v.validateRouteUniqueness(ctx, ep, stored, changed, gw)
 		if err != nil {
 			return nil, unavailable(err)
@@ -319,6 +324,47 @@ func (v *EndpointValidator) validatePolicyRefs(
 				return nil, err
 			}
 			errs = append(errs, refErrs...)
+		}
+	}
+	return errs, nil
+}
+
+// validatePolicyNamespaces rejects a backend's reference to a policy whose raw
+// carries what a CE render drops, on a CE gateway. Only references stored does
+// not already hold are judged, and stored is nil on a create or a move to
+// another gateway, so every reference is. A policy that does not exist is
+// reported by the reference rule.
+func (v *EndpointValidator) validatePolicyNamespaces(
+	ctx context.Context, stored, ep *v1alpha1.KrakenDEndpoint, gw *v1alpha1.KrakenDGateway,
+) (field.ErrorList, error) {
+	if gw.Spec.Edition != v1alpha1.EditionCE {
+		return nil, nil
+	}
+	held := map[string]bool{}
+	if stored != nil {
+		for _, key := range fieldindex.EndpointPolicyKeys(stored) {
+			held[key] = true
+		}
+	}
+	var errs field.ErrorList
+	for i, entry := range ep.Spec.Endpoints {
+		for j, be := range entry.Backends {
+			if be.PolicyRef == nil || held[be.PolicyRef.PolicyKey(ep.Namespace)] {
+				continue
+			}
+			policy := &v1alpha1.KrakenDBackendPolicy{}
+			key := types.NamespacedName{Name: be.PolicyRef.Name, Namespace: be.PolicyRef.ResolvedNamespace(ep.Namespace)}
+			if err := v.Client.Get(ctx, key, policy); apierrors.IsNotFound(err) {
+				continue
+			} else if err != nil {
+				return nil, fmt.Errorf("looking up policy %s: %w", key, err)
+			}
+			if drops := eeOnlyNamespacesIn(policy.Spec.Raw, renderer.LevelBackend); len(drops) > 0 {
+				p := field.NewPath("spec", "endpoints").Index(i).Child("backends").Index(j).Child("policyRef")
+				errs = append(errs, field.Invalid(p, be.PolicyRef.Name, fmt.Sprintf(
+					"policy %s carries Enterprise-only extra_config (%s): the gateway runs CE, which ignores it silently",
+					key, describeDrops(drops))))
+			}
 		}
 	}
 	return errs, nil
