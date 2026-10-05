@@ -138,6 +138,10 @@ func gatewayRenderDenial(gw *v1alpha1.KrakenDGateway, verdict configcheck.Verdic
 	return invalid("KrakenDGateway", gw.Name, errs)
 }
 
+// versionEchoLimit bounds, in bytes, the spec.version a warning quotes: the
+// CRD does not bound it.
+const versionEchoLimit = 64
+
 // versionWarning warns, when spec.version is set or changed, that gw runs a
 // KrakenD minor version other than the one admission and the controller
 // validate with: their checks may not match what that version accepts.
