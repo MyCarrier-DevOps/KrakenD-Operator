@@ -592,6 +592,7 @@ func TestEditionFor(t *testing.T) {
 		want       v1alpha1.Edition
 	}{
 		{"EE gateway", v1alpha1.EditionEE, false, v1alpha1.EditionEE},
+		{"EE gateway in CE fallback", v1alpha1.EditionEE, true, v1alpha1.EditionCE},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
