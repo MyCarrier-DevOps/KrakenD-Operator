@@ -76,83 +76,88 @@ flowchart TD
 
 ```go
 mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
-    Scheme:                  scheme,
-    Metrics:                 metricsserver.Options{BindAddress: metricsAddr},
-    HealthProbeBindAddress:  probeAddr,
-    LeaderElection:          true,
-    LeaderElectionID:        "krakend-operator-leader",
-    LeaderElectionNamespace: leaderElectionNamespace,
+    Scheme:                 scheme,
+    Metrics:                metricsServerOptions,
+    WebhookServer:          webhookServer,
+    HealthProbeBindAddress: probeAddr,
+    LeaderElection:         enableLeaderElection, // --leader-elect, off by default
+    LeaderElectionID:       "krakend-operator-leader",
 })
 ```
 
 ### Shared Dependency Wiring
 
-All controllers receive their dependencies via struct fields set in `main.go`. There is no service locator or dependency injection container.
+All controllers and validators receive their dependencies via struct fields set in `cmd/`. There is no service locator or dependency injection container. `main.go` builds the renderer and the validator, then hands them to `wireValidation` (`wiring.go`), which builds the one `configcheck.Checker` of the pod and every part that holds it:
 
 ```go
-clock := utilclock.RealClock{}
-recorder := mgr.GetEventRecorderFor("krakend-operator")
-httpClient := buildSafeHTTPClient()
-
-fetcher := autoconfig.NewHTTPFetcher(httpClient)
-cueEval := autoconfig.NewCUEEvaluator()
-filter := autoconfig.NewFilter()
-generator := autoconfig.NewGenerator()
-
 rend := renderer.New(renderer.Options{})
 val := renderer.NewValidator(renderer.ValidatorOptions{
     Executor:   renderer.NewKrakenDExecutor("/usr/local/bin/krakend"),
     BinaryPath: "/usr/local/bin/krakend",
 })
 
-// One checker for the whole pod: its slots bound concurrent krakend
-// executions across the gateway controller and the admission webhooks.
-checker := configcheck.New(mgr.GetClient(), rend, val, configCheckSlots) // configCheckSlots = 3
-
-gatewayCtrl := &controller.KrakenDGatewayReconciler{
-    Client:        mgr.GetClient(),
-    Scheme:        mgr.GetScheme(),
-    Recorder:      recorder,
-    Renderer:      rend,
-    Checker:       checker,
-    Clock:         clock,
-    APIReader:     mgr.GetAPIReader(),
-    LicenseParser: licenseutil.NewX509LicenseParser(),
-}
-
-autoconfigCtrl := &controller.KrakenDAutoConfigReconciler{
-    Client:       mgr.GetClient(),
-    Scheme:       mgr.GetScheme(),
-    Recorder:     recorder,
-    Fetcher:      fetcher,
-    CUEEvaluator: cueEval,
-    Filter:       filter,
-    Generator:    generator,
-    Clock:        clock,
-}
-
-policyCtrl := &controller.KrakenDBackendPolicyReconciler{
-    Client:   mgr.GetClient(),
-    Scheme:   mgr.GetScheme(),
-    Recorder: recorder,
-}
-
-endpointCtrl := &controller.KrakenDEndpointReconciler{
-    Client:   mgr.GetClient(),
-    Scheme:   mgr.GetScheme(),
-    Recorder: recorder,
-}
-
-// Register all controllers
-for _, ctrl := range []interface{ SetupWithManager(ctrl.Manager) error }{
-    gatewayCtrl, endpointCtrl, policyCtrl, autoconfigCtrl,
-} {
-    if err := ctrl.SetupWithManager(mgr); err != nil {
-        setupLog.Error(err, "unable to create controller")
-        os.Exit(1)
+// wireValidation builds one checker for the whole pod: its slots bound
+// concurrent krakend executions across the gateway controller and the
+// admission webhooks, so they must share it.
+func wireValidation(
+    mgr ctrl.Manager, r renderer.Renderer, v renderer.Validator, operatorUsername string,
+) validation {
+    checker := configcheck.New(mgr.GetClient(), r, v, configCheckSlots) // configCheckSlots = 3
+    return validation{
+        Checker: checker,
+        Gateway: &controller.KrakenDGatewayReconciler{
+            Client:        mgr.GetClient(),
+            Scheme:        mgr.GetScheme(),
+            Recorder:      mgr.GetEventRecorderFor("krakendgateway-controller"),
+            Renderer:      r,
+            Checker:       checker,
+            Clock:         clock.RealClock{},
+            APIReader:     mgr.GetAPIReader(),
+            LicenseParser: licenseutil.NewX509LicenseParser(),
+        },
+        Validators: webhooksetup.NewValidators(mgr.GetClient(), mgr.GetAPIReader(), checker, operatorUsername),
     }
 }
 ```
+
+`operatorUsername` is the `--operator-username` flag, which defaults to the pod's ServiceAccount (`system:serviceaccount:$POD_NAMESPACE:$POD_SERVICE_ACCOUNT`) and is empty when either variable is unset. The remaining controllers take the manager's client, scheme and a recorder, plus what they need:
+
+```go
+wired := wireValidation(mgr, rend, val, operatorUsername)
+
+wired.Gateway.SetupWithManager(mgr)
+
+(&controller.KrakenDEndpointReconciler{
+    Client:   mgr.GetClient(),
+    Scheme:   mgr.GetScheme(),
+    Recorder: mgr.GetEventRecorderFor("krakendendpoint-controller"),
+}).SetupWithManager(mgr)
+
+(&controller.KrakenDBackendPolicyReconciler{
+    Client:    mgr.GetClient(),
+    Scheme:    mgr.GetScheme(),
+    Recorder:  mgr.GetEventRecorderFor("krakendbackendpolicy-controller"),
+    APIReader: mgr.GetAPIReader(), // releases the protection finalizer only after an uncached list
+}).SetupWithManager(mgr)
+
+(&controller.KrakenDAutoConfigReconciler{
+    Client:       mgr.GetClient(),
+    Scheme:       mgr.GetScheme(),
+    Recorder:     mgr.GetEventRecorderFor("krakendautoconfig-controller"),
+    Fetcher:      autoconfig.NewFetcher(mgr.GetClient()),
+    CUEEvaluator: autoconfig.NewCUEEvaluator(),
+    Filter:       autoconfig.NewFilter(),
+    Generator:    autoconfig.NewGenerator(),
+    Clock:        clock.RealClock{},
+}).SetupWithManager(mgr)
+
+// Registers the four validators only when --enable-webhooks is true (the default).
+registerWebhooks(mgr, enableWebhooks, func(m ctrl.Manager) error {
+    return webhooksetup.SetupWebhooks(m, wired.Validators)
+})
+```
+
+Each `SetupWithManager` returns an error that `main` logs before it exits with status 1.
 
 ### Scheme Registration
 
