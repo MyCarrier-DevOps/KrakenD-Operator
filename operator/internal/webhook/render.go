@@ -78,12 +78,13 @@ func gatewayRenderDenial(gw *v1alpha1.KrakenDGateway, verdict configcheck.Verdic
 	var errs field.ErrorList
 	var root, endpoints configcheck.Verdict
 	for _, f := range verdict.Findings {
-		if f.Endpoint.Name != "" {
+		switch {
+		case f.Endpoint.Name != "":
 			endpoints.Findings = append(endpoints.Findings, f)
-		} else if len(errs) < maxEntryCauses {
+		case len(errs) < maxEntryCauses:
 			errs = append(errs, field.Invalid(field.NewPath("spec", "config"), field.OmitValueType{},
 				truncate(f.Message, warningLimit)))
-		} else {
+		default:
 			root.Findings = append(root.Findings, f)
 		}
 	}
