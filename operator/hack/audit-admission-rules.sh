@@ -117,10 +117,19 @@ def conflict_key:
   gsub("/\\{[a-zA-Z0-9_-]+\\}"; "/{}") | . as $shape | clean_path as $clean
   | if ($shape | endswith("/")) and ($clean | endswith("/") | not) then $clean + "/" else $clean end;
 # The path a gateway serves its health endpoint on, or null when it is disabled.
+# A raw router block replaces the typed one whole (the renderer merges raw
+# extra_config last), and the route check reads health_path only from the
+# merged block; a block that is not an object counts as empty.
 def health_path:
-  (.spec.config.extraConfig.router // {}) as $r
-  | if $r.disable_health == true then null
-    else ([$r.health_path, .spec.config.router.healthPath] | map(select(. != null and . != "")) | .[0]) // "/__health" end;
+  (.spec.config.extraConfig // {}) as $x
+  | if ($x | type) != "object" or ($x | has("router") | not)
+    then (.spec.config.router.healthPath // "" | if . == "" then "/__health" else . end)
+    else $x.router as $r
+      | if ($r | type) != "object" then "/__health"
+        elif $r.disable_health == true then null
+        elif ($r.health_path | type) == "string" and $r.health_path != "" then $r.health_path
+        else "/__health" end
+    end;
 def report(kind): select(.v | length > 0) | "\(kind) \(.id): \(.v | unique | join("; "))";
 '
 
