@@ -1,0 +1,1 @@
+KrakenDEndpoint a/empty: spec.endpoints is empty
