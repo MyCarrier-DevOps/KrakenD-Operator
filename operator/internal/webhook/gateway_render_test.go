@@ -17,6 +17,7 @@ limitations under the License.
 package webhook
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -26,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
@@ -293,5 +295,26 @@ func TestGatewayAdmission_CERejectsEnterpriseOnlyNamespaces(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// An EE to CE switch that cannot list the gateway's endpoints is not judged:
+// a transient 500.
+func TestGatewayAdmission_EditionSwitchLookupFailureIs500(t *testing.T) {
+	funcs := interceptor.Funcs{List: func(context.Context, client.WithWatch, client.ObjectList,
+		...client.ListOption) error {
+		return errors.New("cache not synced")
+	}}
+	old := testGateway()
+	old.Spec.Edition = v1alpha1.EditionEE
+	v := &GatewayValidator{Client: fakeClientBuilderWith(funcs), Checker: &scriptedChecker{}}
+
+	resp := review(t, v, "alice", testGateway(), old)
+
+	if resp.Allowed || resp.Result.Code != http.StatusInternalServerError {
+		t.Errorf("response = %+v, want 500", resp.Result)
+	}
+	if !strings.Contains(resp.Result.Message, "listing the endpoints of gateway default/gw") {
+		t.Errorf("message = %q, want it to name the failed lookup", resp.Result.Message)
 	}
 }
