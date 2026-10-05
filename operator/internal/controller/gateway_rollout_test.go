@@ -326,3 +326,28 @@ func TestGatewayReconcile_RollingRestartsCountsOnlyTheWriteThatChangedTheTemplat
 		t.Errorf("rollingRestarts rose by %v after a pass that wrote nothing, want it still 1", got)
 	}
 }
+
+func TestGatewayReconcile_HPAScaleDoesNotReportARollout(t *testing.T) {
+	s := serveGateway(t)
+	s.editSpec(t, func(spec *v1alpha1.KrakenDGatewaySpec) {
+		spec.Autoscaling = &v1alpha1.AutoscalingSpec{MaxReplicas: 5}
+	})
+	// The autoscaler takes over spec.replicas; the gateway settles on it.
+	s.reconcile(t)
+	s.deploymentControllerObserves(t, settled)
+	requireProgressing(t, s.reconcile(t), metav1.ConditionFalse, true)
+
+	// The autoscaler scales up. A change to spec.replicas bumps the Deployment
+	// generation, and the Deployment controller has not observed it yet.
+	scaled := s.deployment(t)
+	scaled.Spec.Replicas = new(int32(3))
+	if err := s.c.Update(context.Background(), scaled); err != nil {
+		t.Fatal(err)
+	}
+	if dep := s.deployment(t); dep.Generation <= dep.Status.ObservedGeneration {
+		t.Fatalf("generation %d, observed %d: the scale must outrun the Deployment controller",
+			dep.Generation, dep.Status.ObservedGeneration)
+	}
+
+	requireProgressing(t, s.reconcile(t), metav1.ConditionFalse, true)
+}
