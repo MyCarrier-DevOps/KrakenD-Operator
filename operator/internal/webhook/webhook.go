@@ -224,7 +224,23 @@ func validateFields(ac *v1alpha1.KrakenDAutoConfig) field.ErrorList {
 	}
 
 	errs = append(errs, validateAdditionalEndpoints(ac)...)
+	errs = append(errs, validateOverrideIDs(ac.Spec.Overrides)...)
 
+	return errs
+}
+
+// validateOverrideIDs rejects overrides that target the same operation: an
+// operationId listed twice.
+func validateOverrideIDs(overrides []v1alpha1.OperationOverride) field.ErrorList {
+	var errs field.ErrorList
+	seen := map[string]struct{}{}
+	for i, ov := range overrides {
+		if _, dup := seen[ov.OperationID]; dup {
+			errs = append(errs, field.Duplicate(
+				field.NewPath("spec", "overrides").Index(i).Child("operationId"), ov.OperationID))
+		}
+		seen[ov.OperationID] = struct{}{}
+	}
 	return errs
 }
 
