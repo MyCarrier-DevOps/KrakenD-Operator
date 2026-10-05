@@ -341,10 +341,10 @@ func (r *KrakenDAutoConfigReconciler) precheck(
 	}
 
 	candidates := writes
+	failedByCheck := 0
 	for round := 0; len(candidates) > 0; round++ {
 		if round == maxPrecheckRounds {
-			message := fmt.Sprintf("not written: the gateway config check still failed after %d rounds",
-				maxPrecheckRounds)
+			message := fmt.Sprintf("not checked: %d other operations failed the gateway config check first", failedByCheck)
 			hold(rejected, candidates, message, errors.New(message))
 			return rejected, nil
 		}
@@ -360,6 +360,7 @@ func (r *KrakenDAutoConfigReconciler) precheck(
 			return r.unattributedFailure(ctx, &gw, candidates, verdict, rejected)
 		}
 		maps.Copy(rejected, attributed)
+		failedByCheck += len(attributed)
 		candidates = slices.DeleteFunc(slices.Clone(candidates), func(ep *v1alpha1.KrakenDEndpoint) bool {
 			_, ok := attributed[ep.Name]
 			return ok
