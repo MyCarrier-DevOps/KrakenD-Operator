@@ -260,6 +260,7 @@ func TestGatewayCRD_Rules(t *testing.T) {
 		{"redis pool", gatewayHead + `edition: CE, config: {}, redis: {connectionPool: {addresses: ["redis:6379"], poolSize: 10, dialTimeout: 5s}}}}`, ""},
 		{"Dragonfly password on EE", gatewayHead + `edition: EE, config: {}, license: {secretRef: {name: l, key: k}}, dragonfly: {enabled: true, authentication: {passwordFromSecret: {name: s, key: p}}}}}`, "passwordFromSecret is not supported yet with edition EE"},
 		{"Dragonfly password on CE", gatewayHead + `edition: CE, config: {}, dragonfly: {enabled: true, authentication: {passwordFromSecret: {name: s, key: p}}}}}`, ""},
+		{"openapi explicit non-default port clash", gatewayHead + `edition: CE, config: {port: 9090}, openapi: {enabled: true, port: 9090}}}`, "openapi port must differ"},
 	})
 }
 
