@@ -223,6 +223,7 @@ type BackendDefaults struct {
 	Encoding string `json:"encoding,omitempty"`
 
 	// SD sets the default service discovery provider (e.g. "static", "dns").
+	// +kubebuilder:validation:Enum=static;dns;dns-shared
 	SD string `json:"sd,omitempty"`
 
 	// SDScheme sets the default service discovery scheme (e.g. "http", "https").
