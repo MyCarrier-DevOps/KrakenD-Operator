@@ -50,6 +50,7 @@ const (
 // +kubebuilder:validation:XValidation:rule="self.edition != 'EE' || (has(self.license) && ((has(self.license.externalSecret) && has(self.license.externalSecret.enabled) && self.license.externalSecret.enabled) || (has(self.license.secretRef) && size(self.license.secretRef.name) > 0)))",message="edition EE requires license.externalSecret.enabled or license.secretRef",fieldPath=".license"
 // +kubebuilder:validation:XValidation:rule="self.edition != 'CE' || !has(self.license) || !((has(self.license.externalSecret) && has(self.license.externalSecret.enabled) && self.license.externalSecret.enabled) || has(self.license.secretRef))",message="CE edition does not require license configuration",fieldPath=".license"
 // +kubebuilder:validation:XValidation:rule="!has(self.license) || !(has(self.license.externalSecret) && has(self.license.externalSecret.enabled) && self.license.externalSecret.enabled && has(self.license.secretRef))",message="externalSecret and secretRef are mutually exclusive",fieldPath=".license"
+// +kubebuilder:validation:XValidation:rule="!has(self.openapi) || !self.openapi.enabled || ((has(self.openapi.port) && self.openapi.port > 0) ? self.openapi.port : 8090) != ((has(self.config.port) && self.config.port > 0) ? self.config.port : 8080)",message="openapi port must differ from the gateway listen port",fieldPath=".openapi.port"
 type KrakenDGatewaySpec struct {
 	// Version is the KrakenD version to deploy (e.g. "2.13").
 	Version string `json:"version"`
