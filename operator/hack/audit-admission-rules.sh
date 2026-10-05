@@ -158,5 +158,7 @@ jq "${jq_opts[@]}" "$jq_lib"'
   (if (($s.openapi.url // "") != "") == ($s.openapi.configMapRef != null)
    then "need exactly one of openapi.url or openapi.configMapRef" else empty end),
   (if $s.openapi.configMapRef != null and (($s.urlTransform.hostMapping // []) | length) == 0
-   then "configMapRef without urlTransform.hostMapping" else empty end)
+   then "configMapRef without urlTransform.hostMapping" else empty end),
+  (if $s.openapi.auth.bearerTokenSecret != null and $s.openapi.auth.basicAuthSecret != null
+   then "both auth secrets set" else empty end)
 ]} | report("KrakenDAutoConfig")' "$work/autoconfigs.json"
