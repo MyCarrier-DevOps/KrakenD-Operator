@@ -133,5 +133,6 @@ func TestEndpointCRD_Rules(t *testing.T) {
 		{"not a duration", endpointHead + `[{endpoint: "/a", method: GET, timeout: "3 seconds", ` + okBackend + `}]}}`, "spec.endpoints[0].timeout"},
 		{"negative duration", endpointHead + `[{endpoint: "/a", method: GET, cacheTTL: "-1s", ` + okBackend + `}]}}`, "spec.endpoints[0].cacheTTL"},
 		{"output encoding", endpointHead + `[{endpoint: "/a", method: GET, outputEncoding: jsn, ` + okBackend + `}]}}`, "Unsupported value: \"jsn\""},
+		{"backend encoding", endpointHead + `[{endpoint: "/a", method: GET, backends: [{host: ["http://svc"], urlPattern: "/", encoding: jsn}]}]}}`, "Unsupported value: \"jsn\""},
 	})
 }
