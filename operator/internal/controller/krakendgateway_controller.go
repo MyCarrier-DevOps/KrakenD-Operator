@@ -754,7 +754,6 @@ func (r *KrakenDGatewayReconciler) noteRollout(
 func (r *KrakenDGatewayReconciler) reportConfigRollout(gw *v1alpha1.KrakenDGateway) *rolloutNote {
 	r.Recorder.Event(gw, corev1.EventTypeNormal, v1alpha1.ReasonConfigDeployed,
 		fmt.Sprintf("Configuration updated, checksum: %s", gw.Status.ConfigChecksum))
-	rollingRestarts.Inc()
 	return &rolloutNote{reason: v1alpha1.ReasonConfigDeployed, message: "Configuration updated, rolling deployment"}
 }
 
@@ -772,7 +771,6 @@ func (r *KrakenDGatewayReconciler) markDeploymentUpdate(
 	if !imageChanged && !pluginChanged && !licenseChanged {
 		return nil
 	}
-	rollingRestarts.Inc()
 	return &rolloutNote{reason: "DeploymentUpdated", message: "Deployment updated for image, plugin or license change"}
 }
 
@@ -1353,6 +1351,9 @@ func (r *KrakenDGatewayReconciler) reconcileDeployment(
 	// built template differs from the stored one on every pass.
 	changed := result == controllerutil.OperationResultUpdated &&
 		!equality.Semantic.DeepEqual(before, &dep.Spec.Template)
+	if changed {
+		rollingRestarts.Inc()
+	}
 	return deploymentObservation{
 		dep: dep, created: result == controllerutil.OperationResultCreated, templateChanged: changed,
 	}, nil
