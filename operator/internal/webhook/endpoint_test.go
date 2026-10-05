@@ -17,14 +17,19 @@ limitations under the License.
 package webhook
 
 import (
+	"context"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 )
@@ -222,5 +227,35 @@ func TestEndpointAdmission_SameRouteOnAnotherGatewayIsAdmitted(t *testing.T) {
 	v := &EndpointValidator{Client: fakeClient(testGateway(), elsewhere, other)}
 	if resp := review(t, v, "alice", testEndpoint("new", "/a"), nil); !resp.Allowed {
 		t.Errorf("route of another gateway denied: %+v", resp.Result)
+	}
+}
+
+// Two endpoints claim the route: the denial names the one the renderer serves,
+// the oldest, whatever order the informer lists them in.
+func TestEndpointAdmission_NamesTheEndpointThatServesTheRoute(t *testing.T) {
+	served := testEndpoint("z-served", "/a/{id}")
+	served.CreationTimestamp = metav1.NewTime(time.Now().Add(-2 * time.Hour))
+	lost := testEndpoint("a-lost", "/a/{name}")
+	lost.CreationTimestamp = metav1.NewTime(time.Now().Add(-time.Hour))
+	for name, reverse := range map[string]bool{"listed in order": false, "listed reversed": true} {
+		t.Run(name, func(t *testing.T) {
+			funcs := interceptor.Funcs{List: func(ctx context.Context, c client.WithWatch, l client.ObjectList,
+				opts ...client.ListOption) error {
+				if err := c.List(ctx, l, opts...); err != nil {
+					return err
+				}
+				if eps, ok := l.(*v1alpha1.KrakenDEndpointList); ok && reverse {
+					slices.Reverse(eps.Items)
+				}
+				return nil
+			}}
+			v := &EndpointValidator{Client: fakeClientBuilderWith(funcs, testGateway(), served, lost)}
+			resp := review(t, v, "alice", testEndpoint("new", "/a/{id}"), nil)
+			c := resp.Result.Details.Causes
+			const want = "already defined by KrakenDEndpoint default/z-served"
+			if resp.Allowed || len(c) != 1 || !strings.Contains(c[0].Message, want) {
+				t.Errorf("response = %+v, want a duplicate naming default/z-served", resp.Result)
+			}
+		})
 	}
 }
