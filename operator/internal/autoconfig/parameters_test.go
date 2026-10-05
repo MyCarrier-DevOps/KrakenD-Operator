@@ -212,3 +212,21 @@ func TestDereferenceParameters_ResolvesParameterUnderComponentsSchemas(t *testin
 		t.Errorf("entries = %+v, want one forwarding [limit]", entries)
 	}
 }
+
+func TestDereferenceParameters_RejectsExpansionBeyondTheBodyLimit(t *testing.T) {
+	big := strings.Repeat("x", 1<<20)
+	var ops []string
+	for i := range 12 {
+		ops = append(ops, fmt.Sprintf(`"/p%d":{"get":{"parameters":[{"$ref":"#/components/parameters/Big"}]}}`, i))
+	}
+	spec := []byte(`{"paths":{` + strings.Join(ops, ",") + `},"components":{"parameters":{` +
+		`"Big":{"name":"big","in":"query","description":"` + big + `"}}}}`)
+
+	out, _, err := DereferenceParameters(spec)
+	if err == nil {
+		t.Fatalf("expected an error, got %d bytes of output", len(out))
+	}
+	if !bytes.Equal(out, spec) {
+		t.Errorf("expected the input back on error, got %d bytes", len(out))
+	}
+}
