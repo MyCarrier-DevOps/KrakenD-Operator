@@ -545,14 +545,14 @@ func TestGatewayValidator_ContainerRunAsUserZeroRejected(t *testing.T) {
 	if !strings.Contains(err.Error(), "runAsNonRoot") {
 		t.Errorf("expected error to mention runAsNonRoot, got: %v", err)
 	}
-	// C4(ii): field.Path assertion on a container-path rejection — kills the
+	// field.Path assertion on a container-path rejection — kills the
 	// mutant of transposed containerPath/podPath arguments at the
 	// validateRunAsRootConflict call site.
 	if !strings.Contains(err.Error(), "spec.postRestartJob.securityContext.runAsUser") {
 		t.Errorf("expected the container-path rejection to point at "+
 			"spec.postRestartJob.securityContext.runAsUser, got: %v", err)
 	}
-	// C3: the scope-distinguishing clause must be present so a container-path
+	// The scope-distinguishing clause must be present so a container-path
 	// rejection doesn't misleadingly suggest a container-scope opt-out is a
 	// universal acknowledgment.
 	if !strings.Contains(err.Error(), "only acknowledges a container-scope runAsUser: 0") {
@@ -646,14 +646,14 @@ func TestGatewayValidator_PodScopeRunAsUserZeroWithExplicitRunAsNonRootTrueRejec
 	if !strings.Contains(err.Error(), "runAsNonRoot") {
 		t.Errorf("expected error to mention runAsNonRoot, got: %v", err)
 	}
-	// C4(ii): field.Path assertion on a pod-path rejection — kills the mutant
+	// field.Path assertion on a pod-path rejection — kills the mutant
 	// of transposed containerPath/podPath arguments at the
 	// validateRunAsRootConflict call site.
 	if !strings.Contains(err.Error(), "spec.postRestartJob.podSecurityContext.runAsUser") {
 		t.Errorf("expected the pod-path rejection to point at "+
 			"spec.postRestartJob.podSecurityContext.runAsUser, got: %v", err)
 	}
-	// C3: the scope-distinguishing clause must be present so a pod-path
+	// The scope-distinguishing clause must be present so a pod-path
 	// rejection doesn't misleadingly suggest a container-scope opt-out would
 	// have sufficed.
 	if !strings.Contains(err.Error(), "only acknowledges a container-scope runAsUser: 0") {
@@ -691,8 +691,8 @@ func TestGatewayValidator_PodScopeRunAsUserZeroUnsetRunAsNonRootAllowed(t *testi
 }
 
 // TestGatewayValidator_PodScopeRunAsUserZeroContainerOptOutStillAllowedViaSelfHeal
-// pins fix-round review 2's S1 change (the container-scope opt-out no
-// longer unconditionally short-circuits validateRunAsRootConflict) for the
+// pins that the container-scope opt-out no longer unconditionally
+// short-circuits validateRunAsRootConflict, for the
 // postRestartJob (job) lane specifically: a pod-scope runAsUser:0 combined
 // with a CONTAINER-scope runAsNonRoot:false (container runAsUser left
 // unset) must remain ADMITTED — but now via the SAME pod-scope-unset
@@ -703,7 +703,7 @@ func TestGatewayValidator_PodScopeRunAsUserZeroUnsetRunAsNonRootAllowed(t *testi
 // container-scope runAsNonRoot:false does not itself trigger
 // containerAssertsTrue/podAssertsTrue (neither is true), so the self-heal
 // condition still evaluates true and the outcome is unchanged from before
-// S1 — see webhook.go's validateRunAsRootConflict doc for the full trace.
+// the opt-out rule was tightened — see webhook.go's validateRunAsRootConflict doc for the full trace.
 func TestGatewayValidator_PodScopeRunAsUserZeroContainerOptOutStillAllowedViaSelfHeal(t *testing.T) {
 	gw := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
@@ -737,12 +737,12 @@ func TestGatewayValidator_PodScopeRunAsUserZeroContainerOptOutStillAllowedViaSel
 // runAsNonRoot:false} (no container-scope runAsUser) must be REJECTED at
 // spec.postRestartJob.podSecurityContext.runAsUser: the pod scope's own
 // EXPLICIT runAsNonRoot:true means the pod-scope-unset self-heal carve-out
-// (allowPodScopeUnsetSelfHeal) does not apply, and — per the S1 fix shared
+// (allowPodScopeUnsetSelfHeal) does not apply, and — per the opt-out rule shared
 // with Dragonfly via validateRunAsRootConflict — a container-scope opt-out
 // only acknowledges a root request that itself came from the container
 // scope (fromContainer), which is false here (the container never sets its
 // own runAsUser). Before 707166b this combination was ADMITTED (the
-// pre-S1 `containerOptsOut || podOptsOut` logic accepted a container-scope
+// earlier `containerOptsOut || podOptsOut` logic accepted a container-scope
 // opt-out unconditionally, regardless of which scope produced the root
 // request).
 func TestGatewayValidator_PodScopeRunAsUserZeroExplicitTrueContainerOptOutRejected_JobLane(t *testing.T) {
@@ -1010,14 +1010,14 @@ func TestGatewayValidator_DragonflyContainerRunAsUserZeroRejected(t *testing.T) 
 	if !strings.Contains(err.Error(), "runAsNonRoot") {
 		t.Errorf("expected error to mention runAsNonRoot, got: %v", err)
 	}
-	// C4(ii): field.Path assertion on a container-path rejection — kills the
+	// field.Path assertion on a container-path rejection — kills the
 	// mutant of transposed containerPath/podPath arguments at the
 	// validateRunAsRootConflict call site.
 	if !strings.Contains(err.Error(), "spec.dragonfly.containerSecurityContext.runAsUser") {
 		t.Errorf("expected the container-path rejection to point at "+
 			"spec.dragonfly.containerSecurityContext.runAsUser, got: %v", err)
 	}
-	// C6: the scope-distinguishing clause must be present so a container-path
+	// The scope-distinguishing clause must be present so a container-path
 	// rejection doesn't misleadingly suggest a pod-scope-only fix is required
 	// when a container-scope opt-out (together with the container's own
 	// runAsUser:0) would suffice.
@@ -1165,7 +1165,7 @@ func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroUnsetRunAsNonRootRejecte
 		t.Errorf("expected the sanctioned error-path fix to point at "+
 			"spec.dragonfly.podSecurityContext.runAsUser (the field the user actually set), got: %v", err)
 	}
-	// C6: the scope-distinguishing clause must be present so a pod-path
+	// The scope-distinguishing clause must be present so a pod-path
 	// rejection doesn't misleadingly suggest a container-scope opt-out alone
 	// would acknowledge this pod-scope-originated request.
 	if !strings.Contains(err.Error(), "acknowledges only a container-scope runAsUser: 0") {
@@ -1174,9 +1174,9 @@ func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroUnsetRunAsNonRootRejecte
 }
 
 // TestGatewayValidator_DragonflyPodScopeRunAsUserZeroContainerOptOutRejected
-// covers fix-round review 2, S1 (security-important): before this fix, a
-// CONTAINER-scope runAsNonRoot:false (with no container-scope runAsUser at
-// all) could mask a POD-scope root request — validateRunAsRootConflict's old
+// covers a security-important rule: a CONTAINER-scope runAsNonRoot:false
+// (with no container-scope runAsUser at all) must not mask a POD-scope root
+// request — validateRunAsRootConflict's old
 // `containerOptsOut || podOptsOut` accepted a container-scope opt-out
 // unconditionally, even though the effective uid0 came from the POD scope
 // (fromContainer: false) and the container never asked to run as root
@@ -1214,7 +1214,7 @@ func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroContainerOptOutRejected(
 }
 
 // TestGatewayValidator_DragonflyPodScopeRunAsUserZeroExplicitTrueContainerOptOutRejected
-// covers the self-contradictory variant of S1: pod scope explicitly asserts
+// covers the self-contradictory variant of that rule: pod scope explicitly asserts
 // runAsNonRoot:true (a hard, explicit acknowledgment that root is NOT
 // wanted) while root is requested via pod-scope runAsUser:0, and a
 // container-scope runAsNonRoot:false tries to opt out on the pod's behalf.
