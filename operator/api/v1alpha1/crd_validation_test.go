@@ -114,3 +114,15 @@ func TestGeneratedCRDsAreValid(t *testing.T) {
 		}
 	}
 }
+
+const endpointHead = `{apiVersion: gateway.krakend.io/v1alpha1, kind: KrakenDEndpoint, metadata: {name: e, namespace: ns}, spec: {gatewayRef: {name: gw}, endpoints: `
+const okBackend = `backends: [{host: ["http://svc"], urlPattern: "/"}]`
+
+func TestEndpointCRD_Rules(t *testing.T) {
+	runCRDCases(t, endpointsCRD, []crdCase{
+		{"valid", endpointHead + `[{endpoint: "/a/{id}", method: GET, timeout: "1m30s", cacheTTL: "0", ` + okBackend + `}]}}`, ""},
+		{"root wildcard", endpointHead + `[{endpoint: "/*", method: GET, ` + okBackend + `}]}}`, ""},
+		{"prefix wildcard", endpointHead + `[{endpoint: "/a/*", method: GET, ` + okBackend + `}]}}`, ""},
+		{"no leading slash", endpointHead + `[{endpoint: "a/b", method: GET, ` + okBackend + `}]}}`, "should match"},
+	})
+}
