@@ -301,11 +301,11 @@ func validateOverrideIDs(acName string, overrides []v1alpha1.OperationOverride) 
 		case !seen:
 			first[name] = ov.OperationID
 		case prev == ov.OperationID:
-			errs = append(errs, field.Duplicate(p, truncate(ov.OperationID, versionEchoLimit)))
+			errs = append(errs, field.Duplicate(p, truncate(ov.OperationID, echoLimit)))
 		default:
-			errs = append(errs, field.Invalid(p, truncate(ov.OperationID, versionEchoLimit),
+			errs = append(errs, field.Invalid(p, truncate(ov.OperationID, echoLimit),
 				fmt.Sprintf("collides with operationId %q: both generate the endpoint %q",
-					truncate(prev, versionEchoLimit), truncate(name, versionEchoLimit))))
+					truncate(prev, echoLimit), truncate(name, echoLimit))))
 		}
 	}
 	return errs

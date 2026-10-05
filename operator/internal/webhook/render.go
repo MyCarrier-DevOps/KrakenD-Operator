@@ -344,10 +344,6 @@ func gatewaysUsing(
 	return gateways, nil
 }
 
-// versionEchoLimit bounds, in bytes, the spec.version a warning quotes: the
-// CRD does not bound it.
-const versionEchoLimit = 64
-
 // versionWarning warns, when spec.version is set or changed, that gw runs a
 // KrakenD minor version other than the one admission and the controller
 // validate with: their checks may not match what that version accepts.
@@ -364,7 +360,7 @@ func versionWarning(gw, old *v1alpha1.KrakenDGateway) admission.Warnings {
 	if len(parts) >= 2 && parts[0]+"."+parts[1] == configcheck.ValidatorVersion {
 		return nil
 	}
-	version := truncate(gw.Spec.Version, versionEchoLimit)
+	version := truncate(gw.Spec.Version, echoLimit)
 	return admission.Warnings{fmt.Sprintf("spec.version %s: configs are validated with KrakenD %s; "+
 		"the checks may not match what %s accepts", version, configcheck.ValidatorVersion, version)}
 }

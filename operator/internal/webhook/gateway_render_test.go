@@ -242,7 +242,7 @@ func TestGatewayAdmission_VersionWarningIsBounded(t *testing.T) {
 	if len(resp.Warnings) != 1 {
 		t.Fatalf("warnings = %v, want the version warning", resp.Warnings)
 	}
-	if w := resp.Warnings[0]; len(w) > 4*versionEchoLimit || !utf8.ValidString(w) {
+	if w := resp.Warnings[0]; len(w) > 4*echoLimit || !utf8.ValidString(w) {
 		t.Errorf("warning is %d bytes (valid UTF-8: %v), want it bounded", len(w), utf8.ValidString(w))
 	}
 }

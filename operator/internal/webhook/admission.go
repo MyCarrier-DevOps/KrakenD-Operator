@@ -102,3 +102,7 @@ func newErrors(errs, old field.ErrorList) field.ErrorList {
 	}
 	return fresh
 }
+
+// echoLimit bounds, in bytes, a user-supplied name a message quotes, such as a
+// spec.version or an operationId: the CRDs do not bound them.
+const echoLimit = 64
