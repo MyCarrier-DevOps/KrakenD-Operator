@@ -105,12 +105,16 @@ val := renderer.NewValidator(renderer.ValidatorOptions{
     BinaryPath: "/usr/local/bin/krakend",
 })
 
+// One checker for the whole pod: its slots bound concurrent krakend
+// executions across the gateway controller and the admission webhooks.
+checker := configcheck.New(mgr.GetClient(), rend, val, configCheckSlots) // configCheckSlots = 3
+
 gatewayCtrl := &controller.KrakenDGatewayReconciler{
     Client:        mgr.GetClient(),
     Scheme:        mgr.GetScheme(),
     Recorder:      recorder,
     Renderer:      rend,
-    Validator:     val,
+    Checker:       checker,
     Clock:         clock,
     APIReader:     mgr.GetAPIReader(),
     LicenseParser: licenseutil.NewX509LicenseParser(),
@@ -884,11 +888,13 @@ The gateway controller is the primary reconciler. It orchestrates the full rende
 ```go
 type KrakenDGatewayReconciler struct {
     client.Client
-    Scheme    *runtime.Scheme
-    Recorder  record.EventRecorder
-    Renderer  renderer.Renderer
-    Validator renderer.Validator
-    Clock     clock.Clock
+    Scheme   *runtime.Scheme
+    Recorder record.EventRecorder
+    Renderer renderer.Renderer
+    // Checker gathers the render inputs and validates the render, behind the
+    // slots every config check in the pod shares
+    Checker ConfigChecker
+    Clock   clock.Clock
     // APIReader reads uncached from the API server (ReplicaSets for config GC)
     APIReader client.Reader
     // LicenseParser reads EE license certificates
@@ -896,6 +902,14 @@ type KrakenDGatewayReconciler struct {
 
     // rejections remembers each gateway's last rejected validation input
     rejections rejectionMemo
+}
+
+// ConfigChecker is the controller's port to configcheck.Checker.
+type ConfigChecker interface {
+    Gather(ctx context.Context, gw *v1alpha1.KrakenDGateway,
+        replace []v1alpha1.KrakenDEndpoint) (renderer.RenderInput, error)
+    CheckRendered(ctx context.Context, in renderer.RenderInput,
+        out *renderer.RenderOutput) (configcheck.Verdict, error)
 }
 ```
 
@@ -907,15 +921,15 @@ The `Reconcile` method follows the pipeline described in operator architecture �
 flowchart TD
     A[Fetch KrakenDGateway] --> B{Found and<br/>not terminating?}
     B -->|No| Z[Forget the gateway<br/>metrics and rejection memo<br/>Return]
-    B -->|Yes| C[List KrakenDEndpoints by gatewayRef,<br/>fetch referenced KrakenDBackendPolicies]
-    C --> C2[reconcileLicense: License* conditions<br/>and the CE fallback verdict]
+    B -->|Yes| C[Checker.Gather: list KrakenDEndpoints by gatewayRef,<br/>fetch referenced KrakenDBackendPolicies]
+    C --> C2[reconcileLicense: License* conditions<br/>and the CE fallback verdict,<br/>which replaces the one Gather read from status]
     C2 --> C3[Gather plugin ConfigMaps, set PluginsResolved,<br/>detect the Dragonfly state]
     C3 --> F[Call Renderer.Render for the edition:<br/>CE for a CE gateway or a CE fallback, else EE.<br/>The renderer detects conflicts internally]
     F --> G{Render and edition<br/>are the applied config?}
     G -->|Yes| H[ConfigValid=True,<br/>republish the ConfigMap if it is missing]
     G -->|No| J1{Same render and edition<br/>already rejected?}
     J1 -->|Yes| L[ConfigValid=False,<br/>Warning event only if the verdict changed,<br/>keep the applied config]
-    J1 -->|No| J[Validate as the render's edition:<br/>EE wildcard rules in Go; only if they<br/>find nothing, krakend check -t -n -c on the copy]
+    J1 -->|No| J[Checker.CheckRendered as the render's edition,<br/>holding one of the pod's 3 slots:<br/>route check, then krakend check -t -n -c on the copy]
     J --> K{Verdict?}
     K -->|Rejected| L
     K -->|Unavailable| L2[Set ConfigValid=Unknown<br/>reason ValidatorUnavailable,<br/>Ready Unknown, keep applied config,<br/>one Warning event on entering;<br/>the error is returned after the infrastructure stage]
@@ -933,11 +947,11 @@ flowchart TD
 
 **Endpoint conflict detection** — The renderer (§10) iterates all `KrakenDEndpoint` resources for the gateway and flattens their `spec.endpoints[]` arrays. It groups entries by `(route shape, method)` across all CRs, where the route shape (`ConflictKey`) erases parameter names, so `/users/{id}` and `/users/{name}` collide. When multiple entries share a route shape and method, all but the oldest `KrakenDEndpoint`'s entry (by `creationTimestamp`) are excluded from the rendered config; between two entries of one `KrakenDEndpoint` the earlier spec entry wins. The renderer returns `ConflictedEndpoints` and `InvalidEndpoints` in `RenderOutput`. The gateway controller then writes its `Accepted` condition on each endpoint of the render, but only for a render that is the gateway's applied configuration (validated now, or unchanged since) and only when the verdict changes: `True` (`Accepted`) for an included endpoint, `True` (`PartiallyAccepted`) for one that lost some but not all of its routes, `False` (`EndpointConflict`) for one that lost all of them, and no `Accepted` condition for one excluded by a missing policy. `RenderOutput.EntryConflicts` names each lost entry and the `KrakenDEndpoint` that serves it (the endpoint itself when an earlier entry of its own won), and the gateway controller writes them to `status.conflicts` in the same optimistic-lock patch as `Accepted`. Only the conflicting entries are dropped; the losing endpoint's other entries are still rendered. A `Warning` event with reason `EndpointConflict` is emitted when an endpoint becomes fully conflicted, a `Warning` event with reason `PartiallyAccepted` when it becomes partly conflicted (from `Accepted`, from no condition, or from `EndpointConflict`), and a `Normal` `Accepted` event when it is served whole again.
 
-**Policy resolution** — The controller fetches all referenced `KrakenDBackendPolicy` resources before calling `Renderer.Render`, populating `RenderInput.Policies`. The renderer itself has no Kubernetes client dependency — all inputs are passed as parameters. If a policy referenced by a `policyRef` does not exist in the map, the renderer reports the owning endpoint in `InvalidEndpoints` and excludes it from the rendered config; the endpoint controller reports the cause through `ResolvedRefs`.
+**Policy resolution** — The controller gathers all referenced `KrakenDBackendPolicy` resources through `Checker.Gather` before calling `Renderer.Render`, populating `RenderInput.Policies`. The renderer itself has no Kubernetes client dependency — all inputs are passed as parameters. If a policy referenced by a `policyRef` does not exist in the map, the renderer reports the owning endpoint in `InvalidEndpoints` and excludes it from the rendered config; the endpoint controller reports the cause through `ResolvedRefs`.
 
-**CE fallback determination** — Before calling `Renderer.Render`, the controller calls `reconcileLicense`, which evaluates the license stage and returns the `ceFallback` verdict (the stage decision; while the license is unreadable, the stage judged from the last known expiry in `status.licenseExpiry` once that is inside the safety buffer or past, otherwise the last recorded decision). The verdict is passed as `RenderInput.CEFallback`, which makes the renderer strip every Enterprise-only feature (wildcard endpoints and Enterprise-only `extra_config`). The image does not follow the verdict directly: `appliedImage` takes it from the applied config's edition (see "Image follows the applied edition" below).
+**CE fallback determination** — Before calling `Renderer.Render`, the controller calls `reconcileLicense`, which evaluates the license stage and returns the `ceFallback` verdict (the stage decision; while the license is unreadable, the stage judged from the last known expiry in `status.licenseExpiry` once that is inside the safety buffer or past, otherwise the last recorded decision). The verdict replaces the `CEFallback` that `Checker.Gather` read from status (`in.CEFallback`) and is passed on as `RenderInput.CEFallback`, which makes the renderer strip every Enterprise-only feature (wildcard endpoints and Enterprise-only `extra_config`). The image does not follow the verdict directly: `appliedImage` takes it from the applied config's edition (see "Image follows the applied edition" below).
 
-**Applied config** — The config stage (`reconcileConfig`) is the only code that decides the applied config. `status.configChecksum` is the checksum of the render the gateway serves and `status.configEdition` the edition it was validated for. A render that is not the applied one (a different checksum, or the same checksum for another edition) is validated as the edition it was rendered for; a verdict is deterministic for (checksum, edition), so a rejected input is remembered per gateway and not validated again until an input changes. Only a passing render is published and recorded as applied. A rejected render (`ConfigValid=False`) or one that could not be judged (`ConfigValid=Unknown`) leaves the applied config in place, and the infrastructure stage still runs, so the other resources keep converging and an image, plugin or license change still rolls. A `GatewayConfigRejected` verdict is written on each endpoint the rejection names (see `Attribute`, §10).
+**Applied config** — The config stage (`reconcileConfig`) is the only code that decides the applied config. `status.configChecksum` is the checksum of the render the gateway serves and `status.configEdition` the edition it was validated for. A render that is not the applied one (a different checksum, or the same checksum for another edition) is validated as the edition it was rendered for; a verdict is deterministic for (checksum, edition), so a rejected input is remembered per gateway and not validated again until an input changes. The memo keeps the validator's raw rejection; each time it answers, the findings are rebuilt from it against the current endpoints (`configcheck.Rejected`), so the `spec.endpoints[i]` indices in the messages are never stale. Only a passing render is published and recorded as applied. A rejected render (`ConfigValid=False`) or one that could not be judged (`ConfigValid=Unknown`) leaves the applied config in place, and the infrastructure stage still runs, so the other resources keep converging and an image, plugin or license change still rolls. A `GatewayConfigRejected` verdict is written on each endpoint the rejection names (see `Attribute`, §10).
 
 **Content-addressed config ConfigMaps** — `publishConfig` creates the ConfigMap `<gateway>-config-<10 hex of the checksum>`. It is immutable, owned by the gateway and carries the checksum in an annotation; an existing one is verified, never updated. The Deployment mounts the applied config's ConfigMap by name, so a config change is a pod-template change and rolls like any other. `collectConfigMaps` deletes the gateway's config ConfigMaps that nothing can still mount: it keeps the applied one, the most recent revisions (three in all), and every ConfigMap that a live ReplicaSet of the Deployment mounts (ReplicaSets are read through `APIReader`, never cached). The ConfigMap an earlier operator version kept under the gateway's own name is seeded into the new name when the first render after an upgrade is rejected, and collected on the same terms.
 
@@ -2637,7 +2651,8 @@ All external dependencies are abstracted behind interfaces, injected via struct 
 | Interface | Package | Purpose | Production Implementation |
 |---|---|---|---|
 | `Renderer` | `internal/renderer` | Build `krakend.json` from CRD state | `renderer.configRenderer` |
-| `Validator` | `internal/renderer` | Validate rendered config via `krakend check -t -n -c` | `renderer.KrakenDValidator` |
+| `Validator` | `internal/renderer` | Validate rendered config via `krakend check -t -n -c` (`Validate`) or lint it with `krakend check -n` (`Lint`) | `renderer.KrakenDValidator` |
+| `ConfigChecker` | `internal/controller` | Gather a gateway's render inputs and validate the render, behind the pod's shared validation slots | `configcheck.Checker` |
 | `CommandExecutor` | `internal/renderer` | Execute shell commands (krakend check) | `renderer.KrakenDExecutor` |
 | `Fetcher` | `internal/autoconfig` | Fetch OpenAPI specs (HTTP + ConfigMap) | `autoconfig.httpFetcher` |
 | `CUEEvaluator` | `internal/autoconfig` | Evaluate CUE definitions + OpenAPI spec → `EndpointEntry` objects | `autoconfig.cueEvaluator` |
@@ -2790,7 +2805,7 @@ var (
 | Metric | Instrumented In | When |
 |---|---|---|
 | `krakend_operator_config_renders_total` | `KrakenDGatewayReconciler.Reconcile` | After calling `Renderer.Render` |
-| `krakend_operator_config_validation_failures_total` | `KrakenDGatewayReconciler.validateConfig` | Once for each rejected (render, edition) input, when `Validator.Validate` returns `ValidationError`; a remembered rejection is not counted again |
+| `krakend_operator_config_validation_failures_total` | `KrakenDGatewayReconciler.validateConfig` | Once for each rejected (render, edition) input, when `Checker.CheckRendered` returns a rejected verdict (`ValidationError`); a remembered rejection is not counted again |
 | `krakend_operator_rolling_restarts_total` | `KrakenDGatewayReconciler.reconcileDeployment` | Once per Deployment write that changed the pod template, judged by comparing the template read before the write with the server's response. A creation does not count, and drift in the template that the write reverts does |
 | `krakend_operator_license_expiry_seconds` | `KrakenDGatewayReconciler.reconcileLicense` | After parsing the license certificate (from the last known expiry while the license is unreadable); the series is removed with the gateway, and when the gateway is not EE |
 | `krakend_operator_endpoints` | `recordGatewayMetrics` | At the end of each reconcile, from the endpoints listed for the gateway |
