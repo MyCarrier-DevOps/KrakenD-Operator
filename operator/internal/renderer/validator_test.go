@@ -591,6 +591,7 @@ func TestEditionFor(t *testing.T) {
 		ceFallback bool
 		want       v1alpha1.Edition
 	}{
+		{"CE gateway", v1alpha1.EditionCE, false, v1alpha1.EditionCE},
 		{"EE gateway", v1alpha1.EditionEE, false, v1alpha1.EditionEE},
 		{"EE gateway in CE fallback", v1alpha1.EditionEE, true, v1alpha1.EditionCE},
 	}
