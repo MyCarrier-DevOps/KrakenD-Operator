@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -154,20 +155,76 @@ func (v *GatewayValidator) admit(
 }
 
 // eeNamespacesOnCE rejects Enterprise-only extra_config namespaces that a CE
-// gateway would accept and then silently ignore, in spec.config.extraConfig
-// when it is new, changed or newly on CE.
+// gateway would accept and then silently ignore: in spec.config.extraConfig
+// when it is new, changed or newly on CE, and, when the gateway switches to CE,
+// in its endpoints and the policies they reference, which their own webhooks
+// admitted while the gateway ran EE.
 func (v *GatewayValidator) eeNamespacesOnCE(
-	_ context.Context, old, gw *v1alpha1.KrakenDGateway,
+	ctx context.Context, old, gw *v1alpha1.KrakenDGateway,
 ) (field.ErrorList, error) {
 	if gw.Spec.Edition != v1alpha1.EditionCE {
 		return nil, nil
 	}
-	if old != nil && old.Spec.Edition == v1alpha1.EditionCE &&
-		equality.Semantic.DeepEqual(old.Spec.Config.ExtraConfig, gw.Spec.Config.ExtraConfig) {
-		return nil, nil
+	var errs field.ErrorList
+	if old == nil || old.Spec.Edition != v1alpha1.EditionCE ||
+		!equality.Semantic.DeepEqual(old.Spec.Config.ExtraConfig, gw.Spec.Config.ExtraConfig) {
+		errs = ceIgnores(field.NewPath("spec", "config", "extraConfig"),
+			eeOnlyNamespacesIn(gw.Spec.Config.ExtraConfig, renderer.LevelService))
 	}
-	return ceIgnores(field.NewPath("spec", "config", "extraConfig"),
-		eeOnlyNamespacesIn(gw.Spec.Config.ExtraConfig, renderer.LevelService)), nil
+	if old == nil || old.Spec.Edition != v1alpha1.EditionEE {
+		return errs, nil
+	}
+	uses, err := v.eeNamespacesInUse(ctx, gw)
+	if err != nil {
+		return nil, err
+	}
+	if len(uses) > 0 {
+		errs = append(errs, field.Invalid(field.NewPath("spec", "edition"), string(gw.Spec.Edition),
+			"CE silently ignores the Enterprise-only extra_config namespaces these objects use: "+
+				truncate(strings.Join(uses, "; "), warningLimit)))
+	}
+	return errs, nil
+}
+
+// eeNamespacesInUse lists, sorted, each Enterprise-only namespace in gw's
+// endpoints and in the policies they reference, as "<kind> <ns>/<name>
+// <field> <namespace>".
+func (v *GatewayValidator) eeNamespacesInUse(ctx context.Context, gw *v1alpha1.KrakenDGateway) ([]string, error) {
+	var eps v1alpha1.KrakenDEndpointList
+	byGateway := client.MatchingFields{fieldindex.EndpointGateway: gw.Namespace + "/" + gw.Name}
+	if err := v.List(ctx, &eps, byGateway); err != nil {
+		return nil, fmt.Errorf("listing the endpoints of gateway %s/%s: %w", gw.Namespace, gw.Name, err)
+	}
+	var uses []string
+	policies := map[string]bool{}
+	for i := range eps.Items {
+		ep := &eps.Items[i]
+		for j, e := range ep.Spec.Endpoints {
+			for _, fe := range validateEENamespaces(field.NewPath("spec", "endpoints").Index(j), e) {
+				uses = append(uses, fmt.Sprintf("KrakenDEndpoint %s/%s %s %v", ep.Namespace, ep.Name, fe.Field, fe.BadValue))
+			}
+			for _, be := range e.Backends {
+				if be.PolicyRef != nil {
+					policies[be.PolicyRef.PolicyKey(ep.Namespace)] = true
+				}
+			}
+		}
+	}
+	for _, key := range slices.Sorted(maps.Keys(policies)) {
+		ns, name, _ := strings.Cut(key, "/")
+		var p v1alpha1.KrakenDBackendPolicy
+		if err := v.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &p); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return nil, fmt.Errorf("getting policy %s: %w", key, err)
+		}
+		for _, d := range eeOnlyNamespacesIn(p.Spec.Raw, renderer.LevelBackend) {
+			uses = append(uses, fmt.Sprintf("KrakenDBackendPolicy %s spec.raw %s", key, d.Namespace))
+		}
+	}
+	slices.Sort(uses)
+	return uses, nil
 }
 
 // validate runs all admission checks for gw. old is the previously-stored
