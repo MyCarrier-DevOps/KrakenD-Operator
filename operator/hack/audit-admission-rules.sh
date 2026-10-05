@@ -120,13 +120,13 @@ def conflict_key:
 # The path a gateway serves its health endpoint on, or null when it is disabled.
 # A raw router block replaces the typed one whole (the renderer merges raw
 # extra_config last), and the route check reads health_path only from the
-# merged block; a block that is not an object, or has a key of the wrong type,
-# counts as empty.
+# merged block, which the Go decoder matches to its keys regardless of case; a
+# block that is not an object, or has a key of the wrong type, counts as empty.
 def health_path:
   (.spec.config.extraConfig // {}) as $x
   | if ($x | type) != "object" or ($x | has("router") | not)
     then (.spec.config.router.healthPath // "" | if . == "" then "/__health" else . end)
-    else $x.router as $r
+    else ($x.router | if type == "object" then with_entries(.key |= ascii_downcase) else . end) as $r
       | if ($r | type) != "object" or (($r.health_path // "") | type) != "string"
            or (($r.disable_health // false) | type) != "boolean" or (($r.auto_options // false) | type) != "boolean"
         then "/__health"
