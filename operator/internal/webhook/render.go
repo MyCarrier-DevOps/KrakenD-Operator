@@ -157,23 +157,8 @@ func gatewayRenderDenial(gw *v1alpha1.KrakenDGateway, verdict configcheck.Verdic
 func checkPolicyRender(
 	ctx context.Context, c client.Reader, chk ConfigChecker, old, policy *v1alpha1.KrakenDBackendPolicy,
 ) (admission.Warnings, error) {
-	alone, err := chk.LintPolicy(ctx, policy)
-	if err != nil {
-		return nil, checkErr(err)
-	}
-	if !alone.OK {
-		oldFailed := false
-		if old != nil {
-			oldAlone, err := chk.LintPolicy(ctx, old)
-			if err != nil {
-				return nil, checkErr(err)
-			}
-			oldFailed = !oldAlone.OK
-		}
-		if !oldFailed {
-			return nil, invalid("KrakenDBackendPolicy", policy.Name, field.ErrorList{field.Invalid(
-				field.NewPath("spec"), field.OmitValueType{}, "fails krakend check on its own: "+messages(alone))})
-		}
+	if err := lintPolicyAlone(ctx, chk, old, policy); err != nil {
+		return nil, err
 	}
 	gateways, err := gatewaysUsing(ctx, c, policy)
 	if err != nil {
@@ -254,6 +239,26 @@ func bindPolicyCheck(
 	gw *v1alpha1.KrakenDGateway, policy *v1alpha1.KrakenDBackendPolicy,
 ) func(context.Context) (configcheck.Verdict, error) {
 	return func(ctx context.Context) (configcheck.Verdict, error) { return run(ctx, gw, policy) }
+}
+
+// lintPolicyAlone refuses policy when it fails krakend check on its own,
+// unless the stored policy (old, nil on a create) already failed too: then its
+// gateways decide.
+func lintPolicyAlone(
+	ctx context.Context, chk ConfigChecker, old, policy *v1alpha1.KrakenDBackendPolicy,
+) error {
+	alone, err := chk.LintPolicy(ctx, policy)
+	if err != nil || alone.OK {
+		return checkErr(err)
+	}
+	if old != nil {
+		oldAlone, err := chk.LintPolicy(ctx, old)
+		if err != nil || !oldAlone.OK {
+			return checkErr(err)
+		}
+	}
+	return invalid("KrakenDBackendPolicy", policy.Name, field.ErrorList{field.Invalid(
+		field.NewPath("spec"), field.OmitValueType{}, "fails krakend check on its own: "+messages(alone))})
 }
 
 // messages joins a verdict's messages without their locations: a policy's
