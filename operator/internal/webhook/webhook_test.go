@@ -18,6 +18,7 @@ package webhook
 
 import (
 	"context"
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
@@ -2491,5 +2492,22 @@ func TestGatewayAdmission_UnchangedSpecIsNotValidated(t *testing.T) {
 	}
 	if len(resp.Warnings) != 0 {
 		t.Errorf("label-only update warned: %q", resp.Warnings)
+	}
+}
+
+// An error without a value (Forbidden) reads the same before and after a
+// change, so a probe that changed is judged again whatever the stored one said.
+func TestGatewayAdmission_ChangedProbeIsRechecked(t *testing.T) {
+	probeAt := func(host string) *corev1.Probe {
+		return &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{
+			Host: host, Path: "/", Port: intstr.FromInt32(8090)}}}
+	}
+	old := gwWithProbes(nil, probeAt("10.0.0.1"), "")
+	swapped := gwWithProbes(nil, probeAt("10.0.0.2"), "")
+
+	resp := review(t, &GatewayValidator{}, "alice", swapped, old)
+	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity ||
+		resp.Result.Details.Causes[0].Field != "spec.openapi.readinessProbe.httpGet.host" {
+		t.Errorf("probe host 10.0.0.1 -> 10.0.0.2: %+v, want 422 on spec.openapi.readinessProbe.httpGet.host", resp.Result)
 	}
 }
