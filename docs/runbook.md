@@ -393,9 +393,13 @@ they read `Pending` until one is applied.
 ### Endpoint shows `Accepted` reason `PartiallyAccepted`
 
 Some of this endpoint's entries are served; the ones in `status.conflicts`
-are not, because an older KrakenDEndpoint (`winner`) serves the same path and
-method. Remove the duplicate entry from one of the two, or move it to the
-KrakenDEndpoint that should own it.
+are not, because an older KrakenDEndpoint (`winner`) serves the same method
+and route. Paths that differ only in parameter names are the same route, so
+the winner may serve a differently named parameter path (for example
+`/users/{id}` wins over `/users/{name}`). When `winner` is the endpoint itself,
+an earlier entry of the same KrakenDEndpoint serves the route. Remove the
+duplicate entry from one of the two, or move it to the KrakenDEndpoint that
+should own it.
 
 ### AutoConfig not generating endpoints
 
