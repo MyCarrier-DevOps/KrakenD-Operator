@@ -362,6 +362,32 @@ func gatewaySeriesCount(t *testing.T, namespace, name string) int {
 	return n
 }
 
+// gatewayInfoVersions lists the version label of each gateway_info series the
+// gateway has.
+func gatewayInfoVersions(t *testing.T, namespace, name string) []string {
+	t.Helper()
+	families, err := ctrlmetrics.Registry.Gather()
+	if err != nil {
+		t.Fatalf("gathering metrics: %v", err)
+	}
+	var versions []string
+	for _, family := range families {
+		if family.GetName() != "krakend_operator_gateway_info" {
+			continue
+		}
+		for _, m := range family.GetMetric() {
+			labels := map[string]string{}
+			for _, l := range m.GetLabel() {
+				labels[l.GetName()] = l.GetValue()
+			}
+			if labels["namespace"] == namespace && labels["name"] == name {
+				versions = append(versions, labels["version"])
+			}
+		}
+	}
+	return versions
+}
+
 func TestGatewayReconcile_TerminatingGatewayIsLeftAlone(t *testing.T) {
 	gw := testGateway()
 	gw.Namespace = "terminating"
