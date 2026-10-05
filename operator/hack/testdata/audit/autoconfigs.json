@@ -9,5 +9,6 @@
  {"metadata":{"namespace":"a","name":"interval-pattern"},"spec":{"gatewayRef":{"name":"gw"},"openapi":{"url":"http://x"},"trigger":"OnChange","periodic":{"interval":"5 minutes"}}},
  {"metadata":{"namespace":"a","name":"interval-long"},"spec":{"gatewayRef":{"name":"gw"},"openapi":{"url":"http://x"},"trigger":"OnChange","periodic":{"interval":"00000000000000000000000000000001m"}}},
  {"metadata":{"namespace":"a","name":"interval-overflow"},"spec":{"gatewayRef":{"name":"gw"},"openapi":{"url":"http://x"},"trigger":"Periodic","periodic":{"interval":"2562048h"}}},
- {"metadata":{"namespace":"a","name":"interval-onchange-overflow"},"spec":{"gatewayRef":{"name":"gw"},"openapi":{"url":"http://x"},"trigger":"OnChange","periodic":{"interval":"2562048h"}}}
+ {"metadata":{"namespace":"a","name":"interval-onchange-overflow"},"spec":{"gatewayRef":{"name":"gw"},"openapi":{"url":"http://x"},"trigger":"OnChange","periodic":{"interval":"2562048h"}}},
+ {"metadata":{"namespace":"a","name":"good-interval"},"spec":{"gatewayRef":{"name":"gw"},"openapi":{"url":"http://x"},"trigger":"Periodic","periodic":{"interval":"30s"}}}
 ]}
