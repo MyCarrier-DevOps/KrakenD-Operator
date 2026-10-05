@@ -387,5 +387,6 @@ func TestAutoConfigCRD_Rules(t *testing.T) {
 		{"base path with prefix", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, additionalEndpointsBasePath: /a, urlTransform: {addPathPrefix: /b}}}`, "mutually exclusive with urlTransform.addPathPrefix"},
 		{"additional endpoint slash", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, additionalEndpoints: [{endpoint: health}]}}`, "spec.additionalEndpoints[0].endpoint"},
 		{"additional endpoint duplicate after defaulting", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, additionalEndpoints: [{endpoint: /h}, {endpoint: /h, method: GET}]}}`, "Duplicate value"},
+		{"too many additional endpoints", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, additionalEndpoints: [` + strings.Repeat(`{endpoint: /h}, `, 257) + `]}}`, "Too many: 257: must have at most 256 items"},
 	})
 }
