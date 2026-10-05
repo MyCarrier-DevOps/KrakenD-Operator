@@ -17,8 +17,10 @@ limitations under the License.
 package controller
 
 import (
+	"cmp"
 	"maps"
 	"slices"
+	"strings"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/autoconfig"
@@ -34,8 +36,32 @@ const (
 
 // operationStatuses converts pipeline issues to status entries, sorted by
 // path then method.
-func operationStatuses(_ []autoconfig.OperationIssue) []v1alpha1.OperationStatus {
-	return nil
+func operationStatuses(issues []autoconfig.OperationIssue) []v1alpha1.OperationStatus {
+	out := make([]v1alpha1.OperationStatus, 0, len(issues))
+	for _, i := range issues {
+		out = append(out, v1alpha1.OperationStatus{
+			Method: i.Method, Path: i.Path, OperationID: i.OperationID,
+			Reason: i.Reason, Message: truncate(i.Message, maxStatusMessageLen),
+		})
+	}
+	sortOperationStatuses(out)
+	return out
+}
+
+// sortOperationStatuses orders entries by path, method, endpoint, operationId,
+// reason and message, so the same set always lists in the same order and an
+// unchanged sync writes no status.
+func sortOperationStatuses(s []v1alpha1.OperationStatus) {
+	slices.SortFunc(s, func(a, b v1alpha1.OperationStatus) int {
+		return cmp.Or(
+			strings.Compare(a.Path, b.Path),
+			strings.Compare(a.Method, b.Method),
+			strings.Compare(a.Endpoint, b.Endpoint),
+			strings.Compare(a.OperationID, b.OperationID),
+			strings.Compare(a.Reason, b.Reason),
+			strings.Compare(a.Message, b.Message),
+		)
+	})
 }
 
 // capList returns at most maxStatusListLen items of s.
