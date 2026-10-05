@@ -66,7 +66,8 @@ Metrics are exposed on port **8443** (HTTPS). Key metrics:
   labels:
     severity: critical
 
-# A gateway's newest config is rejected (it keeps serving the last applied one)
+# A gateway's newest config is rejected or could not be validated (it keeps
+# serving the last applied one)
 - alert: KrakenDGatewayConfigRejected
   expr: krakend_operator_gateway_config_valid == 0
   for: 15m
