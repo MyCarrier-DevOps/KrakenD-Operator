@@ -2117,6 +2117,36 @@ func TestGatewayValidator_WarnsWhenOpenAPIIsStoredOnACEGateway(t *testing.T) {
 	}
 }
 
+// A CE gateway keeps an enabled Dragonfly only when it was stored before
+// admission refused it and the update leaves it enabled; that is the case that
+// warns.
+func TestGatewayValidator_WarnsWhenDragonflyIsStoredOnACEGateway(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		dragonfly *v1alpha1.DragonflySpec
+		want      int
+	}{
+		{"enabled", &v1alpha1.DragonflySpec{Enabled: true}, 1},
+		{"disabled", &v1alpha1.DragonflySpec{Enabled: false}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			old := testGateway()
+			old.Spec.Dragonfly = tc.dragonfly
+			gw := old.DeepCopy()
+			gw.Spec.Replicas = ptr.To(int32(2))
+			warnings, err := (&GatewayValidator{Checker: &scriptedChecker{}}).ValidateUpdate(context.Background(), old, gw)
+			if err != nil {
+				t.Fatalf("expected the gateway to be admitted, got %v", err)
+			}
+			if len(warnings) != tc.want ||
+				(tc.want == 1 && !strings.Contains(warnings[0], "spec.dragonfly.enabled has no effect on CE gateways")) {
+				t.Errorf("warnings = %q, want %d saying spec.dragonfly.enabled has no effect on CE gateways",
+					warnings, tc.want)
+			}
+		})
+	}
+}
+
 // terminating marks obj as being deleted, the state in which the API server
 // sends finalizer-removal UPDATEs.
 func terminating[T metav1.Object](obj T) T {
