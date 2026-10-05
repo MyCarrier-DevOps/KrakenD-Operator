@@ -313,11 +313,11 @@ func TestGatewayCRD_Ratchets(t *testing.T) {
 			gatewayHead + `edition: CE, config: {}, replicas: 3, ` + pool + `tls: {enabled: true}}}}}`,
 			gatewayHead + `edition: CE, config: {}, ` + pool + `tls: {enabled: true}}}}}`, ""},
 		{"stored bad dial timeout, another field edited",
-			gatewayHead + `edition: CE, config: {}, replicas: 3, ` + pool + `dialTimeout: "5 seconds"}}}}`,
-			gatewayHead + `edition: CE, config: {}, ` + pool + `dialTimeout: "5 seconds"}}}}`, ""},
+			gatewayHead + `edition: CE, config: {}, replicas: 3, ` + pool + `dialTimeout: "1h30m"}}}}`,
+			gatewayHead + `edition: CE, config: {}, ` + pool + `dialTimeout: "1h30m"}}}}`, ""},
 		{"stored bad dial timeout, dial timeout changed",
-			gatewayHead + `edition: CE, config: {}, ` + pool + `dialTimeout: "6 seconds"}}}}`,
-			gatewayHead + `edition: CE, config: {}, ` + pool + `dialTimeout: "5 seconds"}}}}`,
+			gatewayHead + `edition: CE, config: {}, ` + pool + `dialTimeout: "2h30m"}}}}`,
+			gatewayHead + `edition: CE, config: {}, ` + pool + `dialTimeout: "1h30m"}}}}`,
 			"spec.redis.connectionPool.dialTimeout"},
 	})
 }
