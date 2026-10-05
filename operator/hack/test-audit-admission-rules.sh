@@ -17,6 +17,26 @@ for var in endpoint_path_re go_duration_re single_unit_re quantity_re; do
 		exit 1
 	}
 done
+# Every CRD field the audit checks must carry the pattern the audit applies to
+# it: the number of fields of that name carrying the pattern is pinned.
+pattern_of() { sed -n "s/^$1='\\(.*\\)'\$/\\1/p" "$here/audit-admission-rules.sh"; }
+for pin in "endpoints timeout 1 go_duration_re" "endpoints cacheTTL 1 go_duration_re" "endpoints endpoint 1 endpoint_path_re" \
+	"autoconfigs timeout 3 go_duration_re" "autoconfigs cacheTTL 3 go_duration_re" "autoconfigs interval 1 go_duration_re" \
+	"autoconfigs endpoint 2 endpoint_path_re" "gateways timeout 1 single_unit_re" "gateways cacheTTL 1 single_unit_re" \
+	"gateways dnsCacheTTL 1 single_unit_re" "gateways maxAge 1 single_unit_re" "gateways dialTimeout 1 single_unit_re" \
+	"gateways tmpSizeLimit 1 quantity_re"; do
+	read -r kind key count var <<<"$pin"
+	got="$(awk -v key="$key" -v want="$(pattern_of "$var")" '
+		{ line = $0; sub(/^ +/, "", line); match($0, /^ */); indent = RLENGTH }
+		inside && indent <= keyindent { inside = 0 }
+		line == key ":" { inside = 1; keyindent = indent; counted = 0 }
+		inside && !counted && (line == "pattern: " want || line == "- pattern: " want) { n++; counted = 1 }
+		END { print n + 0 }' "$crds/gateway.krakend.io_krakend$kind.yaml")"
+	[[ "$got" == "$count" ]] || {
+		echo "$got $key fields of the $kind CRD carry $var, want $count" >&2
+		exit 1
+	}
+done
 while IFS= read -r list; do
 	items="$(grep -o '"[^"]*"' <<<"$list" | tr -d '"' | sed 's/^/- /' | tr '\n' ' ')"
 	grep -qE -- "enum: ${items}[a-zA-Z]" <<<"$flat" || {
