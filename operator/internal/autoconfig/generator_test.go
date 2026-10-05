@@ -143,6 +143,57 @@ func TestGenerator_DuplicateOperationID(t *testing.T) {
 	}
 }
 
+func TestGenerator_SkipsEntriesThatShareARouteOrAName(t *testing.T) {
+	backends := []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/x"}}
+	tests := []struct {
+		name    string
+		entries []v1alpha1.EndpointEntry
+		opIDs   map[string]string
+		want    OperationIssue
+	}{
+		{
+			name: "same path and method",
+			entries: []v1alpha1.EndpointEntry{
+				{Endpoint: "/v1/users", Method: "GET", Backends: backends},
+				{Endpoint: "/v1/users", Method: "GET", Backends: backends},
+			},
+			want: OperationIssue{
+				Operation: Operation{Method: "GET", Path: "/v1/users"},
+				Reason:    v1alpha1.ReasonDuplicateOperationId,
+				Message:   "same path and method as GET /v1/users",
+			},
+		},
+		{
+			name: "same endpoint name",
+			entries: []v1alpha1.EndpointEntry{
+				{Endpoint: "/a", Method: "GET", Backends: backends},
+				{Endpoint: "/b", Method: "GET", Backends: backends},
+			},
+			opIDs: map[string]string{"/a:GET": "getUser", "/b:GET": "GETUSER"},
+			want: OperationIssue{
+				Operation: Operation{Method: "GET", Path: "/b", OperationID: "GETUSER"},
+				Reason:    v1alpha1.ReasonDuplicateOperationId,
+				Message:   `endpoint name "ac-getuser" is already used by GET /a`,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ac := &v1alpha1.KrakenDAutoConfig{ObjectMeta: metav1.ObjectMeta{Name: "ac", Namespace: "default"}}
+			out, err := NewGenerator().Generate(context.Background(), GenerateInput{
+				AutoConfig: ac, Entries: tt.entries, OperationIDs: tt.opIDs,
+				GatewayRef: v1alpha1.GatewayRef{Name: "gw"},
+			})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(out.Endpoints) != 1 || !reflect.DeepEqual(out.Skipped, []OperationIssue{tt.want}) {
+				t.Errorf("endpoints = %d, Skipped = %+v, want 1 and %+v", len(out.Endpoints), out.Skipped, tt.want)
+			}
+		})
+	}
+}
+
 func TestGenerator_MultipleEntries(t *testing.T) {
 	g := NewGenerator()
 	ac := &v1alpha1.KrakenDAutoConfig{
