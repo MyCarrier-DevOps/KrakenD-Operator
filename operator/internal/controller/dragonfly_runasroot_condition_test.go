@@ -28,10 +28,9 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
-// These tests cover review round 4, D2/D5: the
-// ConditionDragonflyRunAsRootUnacknowledged status condition's three
-// possible states (True/RunAsRootUnacknowledged,
-// False/RunAsRootAcknowledged, False/NoRunAsRootRequest) and D3's
+// These tests cover the ConditionDragonflyRunAsRootUnacknowledged status
+// condition's three possible states (True/RunAsRootUnacknowledged,
+// False/RunAsRootAcknowledged, False/NoRunAsRootRequest) and its
 // disable-clears behavior. (i)-(iii) exercise
 // recordDragonflyRunAsRootCondition directly against a BUILT Dragonfly CR
 // (resources.BuildDragonfly) — the webhook is not in the reconcile path, so
