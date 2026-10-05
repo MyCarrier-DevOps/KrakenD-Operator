@@ -32,6 +32,7 @@ import (
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/autoconfig"
+	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
 	"github.com/mycarrier-devops/krakend-operator/internal/controller"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 	licenseutil "github.com/mycarrier-devops/krakend-operator/internal/util/license"
@@ -175,13 +176,16 @@ func runTests(m *testing.M) int {
 	}
 
 	// Wire up the Gateway controller with a real renderer and the marker
-	// validator (the krakend binary is not available here).
+	// validator (the krakend binary is not available here), behind one config
+	// checker.
+	krakendRenderer := renderer.New(renderer.Options{})
+	checker := configcheck.New(mgr.GetClient(), krakendRenderer, suiteValidator, 1)
 	if err := (&controller.KrakenDGatewayReconciler{
 		Client:    mgr.GetClient(),
 		Scheme:    scheme,
 		Recorder:  mgr.GetEventRecorderFor("krakendgateway-controller"),
-		Renderer:  renderer.New(renderer.Options{}),
-		Validator: suiteValidator,
+		Renderer:  krakendRenderer,
+		Checker:   checker,
 		APIReader: mgr.GetAPIReader(),
 		Clock:     clock.RealClock{},
 
