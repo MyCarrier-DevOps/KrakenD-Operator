@@ -259,3 +259,26 @@ func TestEndpointAdmission_NamesTheEndpointThatServesTheRoute(t *testing.T) {
 		})
 	}
 }
+
+// A newer endpoint stored with the same route as an older one is the loser.
+// Editing the served entry's body is not a new claim on the route, and the
+// owner of the served entry must not be blocked by its loser.
+func TestEndpointAdmission_ServedEntryCanBeEditedBesideItsLoser(t *testing.T) {
+	served := testEndpoint("served", "/a/{id}")
+	served.CreationTimestamp = metav1.NewTime(time.Now().Add(-2 * time.Hour))
+	loser := testEndpoint("loser", "/a/{name}")
+	loser.CreationTimestamp = metav1.NewTime(time.Now().Add(-time.Hour))
+	edited := served.DeepCopy()
+	edited.Spec.Endpoints[0].Backends[0].URLPattern = "/v2"
+	v := &EndpointValidator{Client: fakeClient(testGateway(), served, loser)}
+
+	if resp := review(t, v, "alice", edited, served); !resp.Allowed {
+		t.Errorf("edit of the served entry denied: %+v", resp.Result)
+	}
+
+	claiming := served.DeepCopy()
+	claiming.Spec.Endpoints = append(claiming.Spec.Endpoints, testEndpoint("x", "/a/{other}").Spec.Endpoints...)
+	if resp := review(t, v, "alice", claiming, served); resp.Allowed {
+		t.Error("a new entry on a route the loser holds admitted")
+	}
+}
