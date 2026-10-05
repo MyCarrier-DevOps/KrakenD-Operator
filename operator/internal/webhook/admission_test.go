@@ -68,7 +68,7 @@ func TestAdmission_FieldErrorsAre422WithCauses(t *testing.T) {
 			Endpoints: []v1alpha1.EndpointEntry{{Endpoint: "/a", Method: "GET",
 				Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/"}}}}},
 	}
-	resp := review(t, &EndpointValidator{Client: fakeClient()}, "alice", ep, nil)
+	resp := review(t, &EndpointValidator{Client: fakeClient(), Checker: &scriptedChecker{}}, "alice", ep, nil)
 
 	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("response = %+v, want 422", resp.Result)
@@ -89,7 +89,7 @@ func TestAdmission_LookupFailuresAre500(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "e", Namespace: "default"},
 		Spec:       v1alpha1.KrakenDEndpointSpec{GatewayRef: v1alpha1.GatewayRef{Name: "gw"}},
 	}
-	resp := review(t, &EndpointValidator{Client: c}, "alice", ep, nil)
+	resp := review(t, &EndpointValidator{Client: c, Checker: &scriptedChecker{}}, "alice", ep, nil)
 	if resp.Allowed || resp.Result.Code != http.StatusInternalServerError {
 		t.Errorf("response = %+v, want 500", resp.Result)
 	}
@@ -122,7 +122,7 @@ func TestAdmission_EndpointConflictListFailureIs500(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "e", Namespace: "default"},
 		Spec:       v1alpha1.KrakenDEndpointSpec{GatewayRef: v1alpha1.GatewayRef{Name: "gw"}},
 	}
-	resp := review(t, &EndpointValidator{Client: c}, "alice", ep, nil)
+	resp := review(t, &EndpointValidator{Client: c, Checker: &scriptedChecker{}}, "alice", ep, nil)
 	if resp.Allowed || resp.Result.Code != http.StatusInternalServerError {
 		t.Errorf("response = %+v, want 500", resp.Result)
 	}
