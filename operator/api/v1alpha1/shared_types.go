@@ -88,6 +88,11 @@ const (
 	// render removed. Only the gateway controller writes it.
 	ConditionCEFallbackApplied = "CEFallbackApplied"
 
+	// ConditionEndpointsReady reports whether every KrakenDEndpoint a
+	// KrakenDAutoConfig controls is Ready. Only the AutoConfig controller
+	// writes it.
+	ConditionEndpointsReady = "EndpointsReady"
+
 	// ConditionPostRestartJobReadOnlyRootFilesystem is an informational
 	// condition (review id 3805157497, #9) set unconditionally whenever a
 	// post-restart Job is created (or re-created), reporting the Job
@@ -166,6 +171,8 @@ const (
 	ReasonEndpointReconcileFailed       = "EndpointReconcileFailed"
 	ReasonEndpointRejected              = "EndpointRejected"
 	ReasonOperationsFailed              = "OperationsFailed"
+	ReasonAllEndpointsReady             = "AllEndpointsReady"
+	ReasonEndpointsNotReady             = "EndpointsNotReady"
 	ReasonPostRestartJobAlreadyRun      = "PostRestartJobAlreadyRun"
 	ReasonPostRestartJobCreated         = "PostRestartJobCreated"
 	// ReasonPostRestartJobAdopted covers the "Job for this revision's
