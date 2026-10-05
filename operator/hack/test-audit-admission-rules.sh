@@ -19,7 +19,7 @@ for var in endpoint_path_re go_duration_re single_unit_re quantity_re; do
 done
 while IFS= read -r list; do
 	items="$(grep -o '"[^"]*"' <<<"$list" | tr -d '"' | sed 's/^/- /' | tr '\n' ' ')"
-	grep -qF -- "enum: $items" <<<"$flat" || {
+	grep -qE -- "enum: ${items}[a-zA-Z]" <<<"$flat" || {
 		echo "no CRD enum matches the audit's list: $list" >&2
 		exit 1
 	}
