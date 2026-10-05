@@ -315,6 +315,8 @@ type GatewayConfig struct {
 
 	// CacheTTL is the global cache TTL (e.g. "0s").
 	// +kubebuilder:validation:Pattern=`^[0-9]+(ns|ms|us|µs|s|m|h)$`
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:XValidation:rule="duration(self) >= duration('0s')",message="must be a duration that fits in 64 bits of nanoseconds"
 	CacheTTL string `json:"cacheTTL,omitempty"`
 
 	// OutputEncoding selects the default response encoding.
