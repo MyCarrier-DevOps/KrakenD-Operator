@@ -25,7 +25,6 @@ import (
 	"net/url"
 	"reflect"
 	"slices"
-	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -191,13 +190,14 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return r.handleCUEError(ctx, &ac, err, warnings)
 	}
 
-	// An override whose operationId matched no generated entry must fail
-	// closed rather than be silently dropped: overrides can carry
-	// security-relevant config (e.g. auth/validator).
+	// An override whose operationId matched no generated entry, or whose
+	// backend index is out of range, must fail closed rather than be
+	// silently dropped: overrides can carry security-relevant config (e.g.
+	// auth/validator).
 	if len(cueOutput.UnmatchedOverrides) > 0 {
 		unmatchedErr := fmt.Errorf(
 			"spec.overrides reference operationIds or backend indexes not present in the OpenAPI spec: %s",
-			strings.Join(cueOutput.UnmatchedOverrides, ", "))
+			listed(cueOutput.UnmatchedOverrides))
 		return r.handleSyncedFailure(ctx, &ac, v1alpha1.ReasonUnmatchedOverride, unmatchedErr, warnings)
 	}
 
@@ -206,7 +206,7 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	if len(cueOutput.AmbiguousOverrides) > 0 {
 		ambiguousErr := fmt.Errorf(
 			"spec.overrides reference operationIds that more than one operation declares: %s",
-			strings.Join(cueOutput.AmbiguousOverrides, ", "))
+			listed(cueOutput.AmbiguousOverrides))
 		return r.handleSyncedFailure(ctx, &ac, v1alpha1.ReasonAmbiguousOverride, ambiguousErr, warnings)
 	}
 
