@@ -416,3 +416,20 @@ func TestInspectDeploymentStatus_ATemplateThatIsNotTheWantedOneIsARollout(t *tes
 		})
 	}
 }
+
+func TestInspectDeploymentStatus_AMissedDeadlineOfAnotherTemplateIsNotTheCurrentRollout(t *testing.T) {
+	gw := convergedGatewayAt("A")
+	dep := makeConvergedDeployment(gw, "B") // the template of a config that is no longer wanted
+	dep.Generation, dep.Status.ObservedGeneration = 2, 2
+	dep.Status.Conditions = []appsv1.DeploymentCondition{{
+		Type: appsv1.DeploymentProgressing, Status: corev1.ConditionFalse, Reason: "ProgressDeadlineExceeded",
+	}}
+	r := &KrakenDGatewayReconciler{Client: fakeClientBuilder().Build(), Scheme: testScheme(), Recorder: fakeRecorder()}
+
+	r.inspectDeploymentStatus(context.Background(), gw, convergedInputs("A"), deploymentObservation{dep: dep}, nil)
+
+	progressing := meta.FindStatusCondition(gw.Status.Conditions, v1alpha1.ConditionProgressing)
+	if progressing == nil || progressing.Status != metav1.ConditionTrue {
+		t.Errorf("Progressing = %+v, want True: the deadline judged a template that is not the wanted one", progressing)
+	}
+}
