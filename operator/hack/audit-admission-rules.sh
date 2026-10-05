@@ -29,5 +29,7 @@ def report(kind): select(.v | length > 0) | "\(kind) \(.id): \(.v | unique | joi
 jq -r "$jq_lib"'
 .items[] | {id: "\(.metadata.namespace)/\(.metadata.name)", v: [
   (if ((.spec.endpoints // []) | length) == 0 then "spec.endpoints is empty" else empty end),
-  (if (.spec.gatewayRef.name // "") == "" then "spec.gatewayRef.name is empty" else empty end)
+  (if (.spec.gatewayRef.name // "") == "" then "spec.gatewayRef.name is empty" else empty end),
+  ((.spec.endpoints // []) | group_by([.endpoint, .method])[] | select(length > 1)
+    | "duplicate entry \(.[0].method) \(.[0].endpoint)")
 ]} | report("KrakenDEndpoint")' "$work/endpoints.json"
