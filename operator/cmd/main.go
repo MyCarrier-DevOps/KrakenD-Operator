@@ -233,6 +233,12 @@ func main() {
 	// One checker for the whole pod: its slots bound concurrent krakend
 	// executions across the gateway controller and the admission webhooks.
 	wired := wireValidation(mgr, krakendRenderer, krakendValidator, operatorUsername)
+	if operatorUsername == "" {
+		setupLog.Info("no operator username: every KrakenDEndpoint write gets the admission render check")
+	} else {
+		setupLog.Info("admission skips the render check for AutoConfig endpoint writes from",
+			"username", operatorUsername)
+	}
 
 	if err := wired.Gateway.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "KrakenDGateway")
