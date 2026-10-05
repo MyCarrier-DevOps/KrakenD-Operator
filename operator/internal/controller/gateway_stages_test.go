@@ -69,6 +69,7 @@ func newTestGatewayReconciler(
 		Recorder:  fakeRecorder(),
 		Renderer:  rend,
 		Validator: val,
+		Checker:   newTestChecker(c, val),
 		Clock:     clocktesting.NewFakeClock(testNow),
 		APIReader: c,
 
