@@ -642,3 +642,16 @@ func TestGatewayAdmission_CreateWarningIsBounded(t *testing.T) {
 		t.Errorf("warning is %d bytes (valid UTF-8: %v), want it bounded by the warning limit", len(w), utf8.ValidString(w))
 	}
 }
+
+// The check of the endpoints that already name a new gateway is advisory: when
+// it cannot run, the create is admitted with a warning, not refused.
+func TestGatewayAdmission_CreateAdmitsWhenTheEndpointCheckCannotRun(t *testing.T) {
+	chk := &scriptedChecker{err: errors.New("no validation slot in time"), failCall: 2}
+
+	resp := review(t, &GatewayValidator{Client: fakeClient(), Checker: chk}, "alice", testGateway(), nil)
+
+	if !resp.Allowed || len(resp.Warnings) != 1 ||
+		!strings.Contains(resp.Warnings[0], "could not check the endpoints that already reference this gateway") {
+		t.Errorf("response = %+v, warnings = %v, want admitted with a could-not-check warning", resp.Result, resp.Warnings)
+	}
+}
