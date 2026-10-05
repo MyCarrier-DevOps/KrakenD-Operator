@@ -118,7 +118,7 @@ func BuildDragonfly(df *unstructured.Unstructured, gw *v1alpha1.KrakenDGateway) 
 // rendered `containerSecurityContext`/`podSecurityContext` maps (as read off
 // the object via unstructured.NestedMap, i.e. AFTER BuildDragonfly's
 // mergeDragonfly{Container,Pod}SecurityContext fixups have already run) carry
-// an unacknowledged root request — review round 3, C2. Reading the BUILT
+// an unacknowledged root request. Reading the BUILT
 // maps rather than the raw v1alpha1.DragonflySpec means this can never drift
 // from what the merge/fixup logic actually produced, the same reasoning
 // recordPostRestartJobROFSCondition applies to the Job (internal/controller/
@@ -158,7 +158,7 @@ func DragonflyRunAsRootUnacknowledged(containerMap, podMap map[string]interface{
 
 // DragonflyRunAsRootRequested reports whether either the container map or
 // the pod map carries a runAsUser: 0 request, regardless of whether it is
-// acknowledged — review round 4, D5b. Distinguishing "a root request exists
+// acknowledged. Distinguishing "a root request exists
 // (acknowledged or not)" from "no root request was ever made" lets the
 // caller (recordDragonflyRunAsRootCondition, internal/controller/
 // krakendgateway_controller.go) report a third False-state reason
