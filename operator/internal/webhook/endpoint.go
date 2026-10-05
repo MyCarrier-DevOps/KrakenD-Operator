@@ -174,41 +174,22 @@ func autoConfigController(ep *v1alpha1.KrakenDEndpoint) bool {
 func (v *EndpointValidator) checkRender(
 	ctx context.Context, stored, ep *v1alpha1.KrakenDEndpoint, gw *v1alpha1.KrakenDGateway,
 ) (admission.Warnings, error) {
-	after, err := v.Checker.CheckGateway(ctx, gw, []v1alpha1.KrakenDEndpoint{*ep})
-	if err != nil {
-		return nil, checkErr(err)
-	}
-	if after.OK {
-		return nil, nil
-	}
-	before, err := v.Checker.CheckGateway(ctx, gw, nil)
-	if err != nil {
-		return nil, checkErr(err)
-	}
-	if before.OK {
-		return nil, renderDenial(ep, after)
-	}
-	preexisting := admission.Warnings{fmt.Sprintf("gateway %s/%s already fails validation without this change: %s",
-		gw.Namespace, gw.Name, before.Summary(warningLimit))}
-	isoAfter, err := v.Checker.CheckIsolated(ctx, gw, []v1alpha1.KrakenDEndpoint{*ep})
-	if err != nil {
-		return nil, checkErr(err)
-	}
-	if isoAfter.OK {
-		return preexisting, nil
-	}
 	var baseline []v1alpha1.KrakenDEndpoint
 	if stored != nil {
 		baseline = []v1alpha1.KrakenDEndpoint{*stored}
 	}
-	isoBefore, err := v.Checker.CheckIsolated(ctx, gw, baseline)
-	if err != nil {
-		return nil, checkErr(err)
-	}
-	if isoBefore.OK {
-		return nil, renderDenial(ep, isoAfter)
-	}
-	return preexisting, nil
+	candidate := []v1alpha1.KrakenDEndpoint{*ep}
+	return ratchetRender(ctx, renderChecks{
+		after:     bindCheck(v.Checker.CheckGateway, gw, candidate),
+		before:    bindCheck(v.Checker.CheckGateway, gw, nil),
+		isoAfter:  bindCheck(v.Checker.CheckIsolated, gw, candidate),
+		isoBefore: bindCheck(v.Checker.CheckIsolated, gw, baseline),
+	},
+		func(verdict configcheck.Verdict) error { return renderDenial(ep, verdict) },
+		func(before configcheck.Verdict) string {
+			return fmt.Sprintf("gateway %s/%s already fails validation without this change: %s",
+				gw.Namespace, gw.Name, before.Summary(warningLimit))
+		})
 }
 
 // maxEntryCauses is how many entries of the candidate a denial lists as causes
