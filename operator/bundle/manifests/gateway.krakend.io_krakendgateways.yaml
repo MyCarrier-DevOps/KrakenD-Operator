@@ -86,6 +86,7 @@ spec:
                 properties:
                   cacheTTL:
                     description: CacheTTL is the global cache TTL (e.g. "0s").
+                    pattern: ^[0-9]+(ns|ms|us|µs|s|m|h)$
                     type: string
                   cors:
                     description: CORS configures Cross-Origin Resource Sharing headers.
