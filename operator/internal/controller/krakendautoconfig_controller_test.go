@@ -3418,6 +3418,65 @@ func TestAutoConfigReconcile_FailedOperationKeepsSpecAndGeneratorNotes(t *testin
 	}
 }
 
+func TestAutoConfigReconcile_RejectedEndpointKeepsStaleEndpoints(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	g.output.Endpoints = append(g.output.Endpoints, generatedEndpoint("getB", "/b"))
+	stale := ownedCopy(t, ac, generatedEndpoint("old", "/old"))
+	var ops []string
+	c := fakeClientBuilder().WithObjects(ac, cm, stale).WithStatusSubresource(ac).
+		WithInterceptorFuncs(recordEndpointWrites(&ops, map[string]error{"test-ac-getb": invalidError("test-ac-getb")})).
+		Build()
+	r := newACReconciler(c, f, ce, fi, g)
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if !endpointExists(t, c, "test-ac-old") {
+		t.Error("expected the stale endpoint kept while an endpoint is rejected")
+	}
+	if !endpointExists(t, c, "test-ac-listusers") {
+		t.Error("expected the healthy endpoint written")
+	}
+	if slices.Contains(ops, "delete test-ac-old") {
+		t.Errorf("expected no delete, got %v", ops)
+	}
+}
+
+func TestAutoConfigReconcile_TransientWriteErrorTakesPrecedenceOverHeldOperations(t *testing.T) {
+	tests := map[string]struct {
+		failed   []autoconfig.OperationIssue
+		rejected map[string]error
+	}{
+		"a failed operation":  {failed: []autoconfig.OperationIssue{failedGetB()}},
+		"a rejected endpoint": {rejected: map[string]error{"test-ac-getb": invalidError("test-ac-getb")}},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			cm := testCUEDefinitionsCM()
+			ac := syncedAutoConfig(cm)
+			f, ce, fi, g := defaultMocks()
+			g.output.Endpoints = append(g.output.Endpoints, generatedEndpoint("getB", "/b"))
+			ce.output.Failed = tt.failed
+			errFor := map[string]error{"test-ac-listusers": apierrors.NewInternalError(errors.New("boom"))}
+			maps.Copy(errFor, tt.rejected)
+			var ops []string
+			c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).
+				WithInterceptorFuncs(recordEndpointWrites(&ops, errFor)).Build()
+			r := newACReconciler(c, f, ce, fi, g)
+
+			if _, err := reconcileAC(r, ac); err == nil {
+				t.Fatal("expected the transient write error to be returned for backoff")
+			}
+			cond := meta.FindStatusCondition(getAC(t, c, ac).Status.Conditions, v1alpha1.ConditionSynced)
+			if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != v1alpha1.ReasonEndpointReconcileFailed {
+				t.Errorf("expected Synced False/EndpointReconcileFailed, got %+v", cond)
+			}
+		})
+	}
+}
+
 func TestAutoConfigReconcile_FailedOperationsAreListedSortedAndCapped(t *testing.T) {
 	cm := testCUEDefinitionsCM()
 	ac := syncedAutoConfig(cm)
