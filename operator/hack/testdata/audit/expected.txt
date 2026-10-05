@@ -51,3 +51,4 @@ KrakenDAutoConfig a/no-hostmapping: configMapRef without urlTransform.hostMappin
 KrakenDAutoConfig a/both-auth: both auth secrets set
 KrakenDAutoConfig a/interval-short: periodic.interval below 30s
 KrakenDAutoConfig a/no-periodic: trigger Periodic without a periodic block
+KrakenDAutoConfig a/interval-pattern: spec.periodic.interval 5 minutes
