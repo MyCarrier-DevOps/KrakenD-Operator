@@ -125,8 +125,12 @@ spec:
                   dnsCacheTTL:
                     description: DNSCacheTTL is the DNS lookup cache duration (e.g.
                       "30s").
+                    maxLength: 64
                     pattern: ^[0-9]+(ns|ms|us|µs|s|m|h)$
                     type: string
+                    x-kubernetes-validations:
+                    - message: must be a duration that fits in 64 bits of nanoseconds
+                      rule: duration(self) >= duration('0s')
                   documentation:
                     description: Documentation configures gateway-level OpenAPI documentation.
                     properties:
