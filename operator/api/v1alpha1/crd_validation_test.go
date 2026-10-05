@@ -370,5 +370,6 @@ func TestAutoConfigCRD_Rules(t *testing.T) {
 		{"both sources", autoconfigHead + `openapi: {url: "http://x", configMapRef: {name: c}}, urlTransform: {hostMapping: [{from: a, to: b}]}, trigger: OnChange}}`, "exactly one of url or configMapRef"},
 		{"no source", autoconfigHead + `openapi: {}, trigger: OnChange}}`, "exactly one of url or configMapRef"},
 		{"configMap without hostMapping", autoconfigHead + `openapi: {configMapRef: {name: c}}, trigger: OnChange}}`, "hostMapping is required"},
+		{"periodic below 30s", autoconfigHead + `openapi: {url: "http://x"}, trigger: Periodic, periodic: {interval: 10s}}}`, "at least 30s"},
 	})
 }
