@@ -192,7 +192,8 @@ func renderDenial(ep *v1alpha1.KrakenDEndpoint, verdict configcheck.Verdict) err
 	}
 	if len(others) > 0 {
 		errs = append(errs, field.Invalid(field.NewPath("spec", "endpoints"), field.OmitValueType{},
-			"with this change the gateway's config fails krakend check: "+strings.Join(others, "; ")))
+			"with this change the gateway's config fails krakend check: "+
+				truncate(strings.Join(others, "; "), warningLimit)))
 	}
 	return invalid(kindEndpoint, ep.Name, errs)
 }
