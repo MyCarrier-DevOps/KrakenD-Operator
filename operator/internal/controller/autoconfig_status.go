@@ -94,11 +94,11 @@ func sortOperationStatuses(s []v1alpha1.OperationStatus) {
 
 // rejectedStatuses converts rejected endpoint writes to status entries,
 // naming each operation by its endpoint's single entry and opIDs (keyed by
-// "path:METHOD").
+// "path:METHOD"). The entries are in no particular order: the caller sorts the
+// whole failed list once.
 func rejectedStatuses(rejected map[string]rejection, opIDs map[string]string) []v1alpha1.OperationStatus {
 	out := make([]v1alpha1.OperationStatus, 0, len(rejected))
-	for _, name := range slices.Sorted(maps.Keys(rejected)) {
-		rej := rejected[name]
+	for name, rej := range rejected {
 		s := v1alpha1.OperationStatus{
 			Endpoint: name, Reason: rej.reason, Message: configcheck.TruncateEllipsis(rej.message, maxStatusMessageLen),
 		}
@@ -108,7 +108,6 @@ func rejectedStatuses(rejected map[string]rejection, opIDs map[string]string) []
 		}
 		out = append(out, s)
 	}
-	sortOperationStatuses(out)
 	return out
 }
 
