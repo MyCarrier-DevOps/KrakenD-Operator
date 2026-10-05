@@ -97,7 +97,7 @@ type registration struct {
 // registrations.
 var registry sync.Map // map[client.FieldIndexer]*registration
 
-// EnsureEndpointIndexes registers field indexes for KrakenDEndpoint lookups.
+// EnsureEndpointIndexes registers every endpoint field index.
 // It is safe to call from multiple controllers and the webhook package sharing
 // the same manager; indexes are registered exactly once per manager instance.
 func EnsureEndpointIndexes(mgr ctrl.Manager) error {
@@ -129,6 +129,11 @@ func register(indexer client.FieldIndexer) error {
 		context.Background(), &v1alpha1.KrakenDEndpoint{}, EndpointPolicy, EndpointPolicyKeys,
 	); err != nil {
 		return fmt.Errorf("indexing %s: %w", EndpointPolicy, err)
+	}
+	if err := indexer.IndexField(
+		context.Background(), &v1alpha1.KrakenDEndpoint{}, EndpointController, EndpointControllerKeys,
+	); err != nil {
+		return fmt.Errorf("indexing %s: %w", EndpointController, err)
 	}
 	return nil
 }
