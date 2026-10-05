@@ -53,3 +53,4 @@ KrakenDAutoConfig a/interval-short: periodic.interval below 30s
 KrakenDAutoConfig a/no-periodic: trigger Periodic without a periodic block
 KrakenDAutoConfig a/interval-pattern: spec.periodic.interval 5 minutes
 KrakenDAutoConfig a/interval-long: spec.periodic.interval is longer than 32 characters
+KrakenDAutoConfig a/interval-overflow: spec.periodic.interval 2562048h does not fit in 64 bits of nanoseconds
