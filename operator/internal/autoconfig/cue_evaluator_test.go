@@ -1867,7 +1867,10 @@ func TestEvaluate_OverrideExtraConfigWithNonIdentifierOperationID(t *testing.T) 
 			if len(out.Entries) != 1 {
 				t.Fatalf("expected 1 entry, got %d", len(out.Entries))
 			}
-			if !strings.Contains(string(out.Entries[0].ExtraConfig.Raw), `"auth/validator"`) {
+			// These rows pin that the injected label compiles; the entry is
+			// merged by the evaluator, not by a CUE lookup.
+			if out.Entries[0].ExtraConfig == nil ||
+				!strings.Contains(string(out.Entries[0].ExtraConfig.Raw), `"auth/validator"`) {
 				t.Errorf("expected the override's auth/validator, got %s", out.Entries[0].ExtraConfig.Raw)
 			}
 		})
@@ -1892,8 +1895,11 @@ func TestCUEEvaluator_OverridesKeyedBySanitizedOperationID(t *testing.T) {
 	if len(out.Entries) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(out.Entries))
 	}
+	if len(out.Entries[0].Backends) == 0 {
+		t.Fatal("expected a backend")
+	}
 	be := out.Entries[0].Backends[0]
 	if be.ExtraConfig == nil || !strings.Contains(string(be.ExtraConfig.Raw), `"auth/validator"`) {
-		t.Errorf("expected the definition to find the override by the sanitized operationId, got %+v", be.ExtraConfig)
+		t.Errorf("expected the definition to find the override by the sanitized operationId, got %v", be.ExtraConfig)
 	}
 }
