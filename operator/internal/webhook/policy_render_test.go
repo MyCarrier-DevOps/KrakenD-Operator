@@ -57,6 +57,9 @@ func TestPolicyAdmission_Render(t *testing.T) {
 		{"unreferenced, lints clean", nil, nil, nil, true, "policy"},
 		{"unreferenced, fails alone", nil, nil, []configcheck.Verdict{bad}, false, "policy"},
 		{"referenced, keeps its gateway passing", referencing(), nil, nil, true, "policy,gateway+policy"},
+		{"referenced, breaks its gateway", referencing(), testPolicy(`{}`),
+			[]configcheck.Verdict{{OK: true}, failing("uses-p", 0, "bad"), {OK: true}}, false,
+			"policy,gateway+policy,gateway"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
