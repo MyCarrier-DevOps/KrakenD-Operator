@@ -1469,7 +1469,7 @@ func TestAutoConfigReconcile_UnmatchedOverrideFailsSync(t *testing.T) {
 	if cond.Reason != v1alpha1.ReasonUnmatchedOverride {
 		t.Errorf("expected reason %s, got %s", v1alpha1.ReasonUnmatchedOverride, cond.Reason)
 	}
-	wantMsg := "spec.overrides reference operationIds not present in the OpenAPI spec: WebhookStatus, WebhookDocuments"
+	wantMsg := "spec.overrides reference operationIds or backend indexes not present in the OpenAPI spec: WebhookStatus, WebhookDocuments"
 	if cond.Message != wantMsg {
 		t.Errorf("expected message %q, got %q", wantMsg, cond.Message)
 	}
