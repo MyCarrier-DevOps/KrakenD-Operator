@@ -86,8 +86,12 @@ spec:
                 properties:
                   cacheTTL:
                     description: CacheTTL is the global cache TTL (e.g. "0s").
+                    maxLength: 64
                     pattern: ^[0-9]+(ns|ms|us|µs|s|m|h)$
                     type: string
+                    x-kubernetes-validations:
+                    - message: must be a duration that fits in 64 bits of nanoseconds
+                      rule: duration(self) >= duration('0s')
                   cors:
                     description: CORS configures Cross-Origin Resource Sharing headers.
                     properties:
