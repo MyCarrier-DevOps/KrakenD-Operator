@@ -24,6 +24,9 @@
       "security/policies", "telemetry/logging", "validation/response-json-schema", "workflow"
     ]
   },
+  "ceHonoredKeys": {
+    "backend": {"backend/http/client": ["send_body_on_redirect"]}
+  },
   "ceRenderDrops": {
     "endpoint": ["documentation/openapi"]
   }
