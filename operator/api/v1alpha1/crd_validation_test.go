@@ -402,6 +402,7 @@ func TestAutoConfigCRD_Rules(t *testing.T) {
 		{"additional endpoint timeout not a duration", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, additionalEndpoints: [{endpoint: /h, timeout: "30"}]}}`, "spec.additionalEndpoints[0].timeout in body should match"},
 		{"additional endpoint cacheTTL not a duration", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, additionalEndpoints: [{endpoint: /h, cacheTTL: "1d"}]}}`, "spec.additionalEndpoints[0].cacheTTL in body should match"},
 		{"additional endpoint empty", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, additionalEndpoints: [{endpoint: ""}]}}`, "spec.additionalEndpoints[0].endpoint"},
+		{"OnChange with a short interval", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, periodic: {interval: 10s}}}`, ""},
 	})
 }
 
@@ -443,5 +444,8 @@ func TestAutoConfigCRD_Ratchets(t *testing.T) {
 		{"stored base path with addPathPrefix, an unrelated field edited",
 			autoconfigHead + src + `additionalEndpointsBasePath: /a, urlTransform: {addPathPrefix: /b}, filter: {includeTags: [x]}}}`,
 			autoconfigHead + src + `additionalEndpointsBasePath: /a, urlTransform: {addPathPrefix: /b}}}`, "mutually exclusive with urlTransform.addPathPrefix"},
+		{"stored OnChange interval below 30s, trigger switched to Periodic",
+			autoconfigHead + `openapi: {url: "http://x"}, trigger: Periodic, periodic: {interval: 10s}}}`,
+			autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, periodic: {interval: 10s}}}`, "at least 30s"},
 	})
 }
