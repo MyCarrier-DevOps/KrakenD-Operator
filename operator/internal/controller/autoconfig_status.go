@@ -129,3 +129,17 @@ func specWarnings(warnings []string) []string {
 	}
 	return slices.Sorted(maps.Keys(set))
 }
+
+// endpointReadiness summarizes the Ready condition of the endpoints an
+// AutoConfig controls.
+type endpointReadiness struct {
+	total, ready int
+	// notReady names each endpoint that is not ready and why
+	// ("name: Reason"), sorted by name.
+	notReady []string
+}
+
+// summarizeReadiness is implemented once a test demands it.
+func summarizeReadiness(controlled []v1alpha1.KrakenDEndpoint, written, deleted map[string]bool) endpointReadiness {
+	return endpointReadiness{}
+}
