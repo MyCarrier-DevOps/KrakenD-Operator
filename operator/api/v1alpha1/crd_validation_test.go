@@ -383,5 +383,6 @@ func TestAutoConfigCRD_Rules(t *testing.T) {
 		{"override cacheTTL overflows", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, overrides: [{operationId: x, cacheTTL: "99999999999s"}]}}`, "spec.overrides[0].cacheTTL"},
 		{"defaults timeout overflows", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, defaults: {endpoint: {timeout: "2562048h"}}}}`, "spec.defaults.endpoint.timeout"},
 		{"defaults cacheTTL overflows", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, defaults: {endpoint: {cacheTTL: "99999999999s"}}}}`, "spec.defaults.endpoint.cacheTTL"},
+		{"base path slash", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, additionalEndpointsBasePath: api}}`, "spec.additionalEndpointsBasePath"},
 	})
 }
