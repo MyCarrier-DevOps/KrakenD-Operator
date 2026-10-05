@@ -104,10 +104,16 @@ func checkGatewayRender(
 ) (admission.Warnings, error) {
 	if old == nil {
 		root, err := chk.CheckIsolated(ctx, gw, nil)
-		if err != nil || root.OK {
+		if err != nil {
 			return nil, checkErr(err)
 		}
-		return nil, gatewayRenderDenial(gw, root)
+		if !root.OK {
+			return nil, gatewayRenderDenial(gw, root)
+		}
+		if _, err := chk.CheckGateway(ctx, gw, nil); err != nil {
+			return nil, checkErr(err)
+		}
+		return nil, nil
 	}
 	return ratchetRender(ctx, renderChecks{
 		after:     bindCheck(chk.CheckGateway, gw, nil),
