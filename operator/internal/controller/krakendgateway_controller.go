@@ -600,14 +600,12 @@ func (r *KrakenDGatewayReconciler) inspectDeploymentStatus(
 }
 
 // deploymentConverged reports whether dep has finished rolling out want: its
-// pod template carries the applied config, image, plugins and license (compared through
-// annotations, since admission can rewrite the container image), it has observed
-// its latest spec, and every replica is updated and available. The cache can
-// still hold the Deployment from before an update, or one whose status
-// describes the previous ReplicaSet, so the replica counts alone are not
-// proof.
+// pod template is the wanted one (templateRunsWant), it has observed its
+// latest spec, and every replica is updated and available. The cache can still
+// hold the Deployment from before an update, or one whose status describes the
+// previous ReplicaSet, so the replica counts alone are not proof.
 func deploymentConverged(dep *appsv1.Deployment, want infraInputs) bool {
-	if !templateAnnotationsMatch(dep, want) {
+	if !templateRunsWant(dep, want) {
 		return false
 	}
 	desired := int32(1)

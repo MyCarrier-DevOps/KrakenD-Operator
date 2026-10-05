@@ -62,19 +62,21 @@ type rolloutNote struct {
 // reconciles again on the observation.
 func rolloutInFlight(obs deploymentObservation, want infraInputs) bool {
 	dep := obs.dep
-	return dep != nil && (obs.created || obs.templateChanged || !templateAnnotationsMatch(dep, want) ||
+	return dep != nil && (obs.created || obs.templateChanged || !templateRunsWant(dep, want) ||
 		dep.Status.UpdatedReplicas < dep.Status.Replicas)
 }
 
-// templateAnnotationsMatch reports whether dep's pod template annotations
-// carry the applied config, image, plugins and license. They are compared
-// through annotations because admission can rewrite the container image.
-func templateAnnotationsMatch(dep *appsv1.Deployment, want infraInputs) bool {
+// templateRunsWant reports whether dep's pod template carries the applied
+// config, image, plugins and license, and mounts the applied config's
+// ConfigMap. The first four are compared through annotations because
+// admission can rewrite the container image.
+func templateRunsWant(dep *appsv1.Deployment, want infraInputs) bool {
 	annotations := dep.Spec.Template.Annotations
 	return annotations[resources.PostRestartJobChecksumAnnotation] == want.appliedChecksum &&
 		annotations[resources.PluginChecksumAnnotation] == want.pluginChecksum &&
 		annotations[resources.ImageAnnotation] == want.image &&
-		annotations[resources.LicenseChecksumAnnotation] == want.licenseChecksum
+		annotations[resources.LicenseChecksumAnnotation] == want.licenseChecksum &&
+		resources.MountedConfigMapName(&dep.Spec.Template.Spec) == want.configMapName
 }
 
 // raiseProgressing reports a rollout in progress. The reason is the one this
