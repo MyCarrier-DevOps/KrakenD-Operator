@@ -20,7 +20,9 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -84,27 +86,8 @@ func (r *KrakenDBackendPolicyReconciler) Reconcile(ctx context.Context, req ctrl
 
 	refCount := len(endpoints.Items)
 
-	if policy.DeletionTimestamp.IsZero() {
-		if controllerutil.AddFinalizer(&policy, v1alpha1.PolicyProtectionFinalizer) {
-			if err := r.Update(ctx, &policy); err != nil {
-				return ctrl.Result{}, fmt.Errorf("adding policy-protection finalizer: %w", err)
-			}
-		}
-	} else if refCount == 0 {
-		// The cache can lag a reference created a moment ago, so confirm on
-		// the API server before the policy goes.
-		referenced, err := r.referencedOnServer(ctx, &policy)
-		if err != nil {
-			return ctrl.Result{}, err
-		}
-		if !referenced {
-			if controllerutil.RemoveFinalizer(&policy, v1alpha1.PolicyProtectionFinalizer) {
-				if err := r.Update(ctx, &policy); err != nil {
-					return ctrl.Result{}, fmt.Errorf("removing policy-protection finalizer: %w", err)
-				}
-			}
-			return ctrl.Result{}, nil
-		}
+	if done, err := r.reconcileProtection(ctx, &policy, endpoints.Items); done || err != nil {
+		return ctrl.Result{}, err
 	}
 
 	policy.Status.ReferencedBy = refCount
@@ -128,6 +111,56 @@ func (r *KrakenDBackendPolicyReconciler) Reconcile(ctx context.Context, req ctrl
 
 	log.V(1).Info("policy reconciled", "referencedBy", refCount)
 	return ctrl.Result{}, nil
+}
+
+// maxNamedReferrers bounds the endpoints named in the deletion-blocked event.
+const maxNamedReferrers = 5
+
+// reconcileProtection keeps the protection finalizer on a policy that is not
+// being deleted, and releases it from one that is once nothing references it.
+// done reports that the policy is gone, so the caller has nothing left to write.
+func (r *KrakenDBackendPolicyReconciler) reconcileProtection(
+	ctx context.Context, policy *v1alpha1.KrakenDBackendPolicy, referrers []v1alpha1.KrakenDEndpoint,
+) (done bool, err error) {
+	if policy.DeletionTimestamp.IsZero() {
+		if controllerutil.AddFinalizer(policy, v1alpha1.PolicyProtectionFinalizer) {
+			if err := r.Update(ctx, policy); err != nil {
+				return false, fmt.Errorf("adding policy-protection finalizer: %w", err)
+			}
+		}
+		return false, nil
+	}
+	if len(referrers) > 0 {
+		r.Recorder.Event(policy, corev1.EventTypeWarning, v1alpha1.ReasonPolicyDeletionBlocked,
+			"policy is being deleted but is still referenced by "+namedReferrers(referrers)+
+				"; deletion completes when the last reference is removed")
+		return false, nil
+	}
+	// The cache can lag a reference created a moment ago, so confirm on the
+	// API server before the policy goes.
+	referenced, err := r.referencedOnServer(ctx, policy)
+	if err != nil || referenced {
+		return false, err
+	}
+	if controllerutil.RemoveFinalizer(policy, v1alpha1.PolicyProtectionFinalizer) {
+		if err := r.Update(ctx, policy); err != nil {
+			return false, fmt.Errorf("removing policy-protection finalizer: %w", err)
+		}
+	}
+	return true, nil
+}
+
+// namedReferrers lists up to maxNamedReferrers endpoints as "namespace/name".
+func namedReferrers(referrers []v1alpha1.KrakenDEndpoint) string {
+	names := make([]string, 0, len(referrers))
+	for i := range referrers {
+		names = append(names, referrers[i].Namespace+"/"+referrers[i].Name)
+	}
+	slices.Sort(names)
+	if len(names) <= maxNamedReferrers {
+		return strings.Join(names, ", ")
+	}
+	return fmt.Sprintf("%s and %d more", strings.Join(names[:maxNamedReferrers], ", "), len(names)-maxNamedReferrers)
 }
 
 // referencedOnServer reports whether any endpoint references policy, reading
