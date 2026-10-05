@@ -133,6 +133,9 @@ expect_equal "every kustomize webhook has timeoutSeconds 15" \
 	"$(grep -c '^  name: v.*kb.io' operator/config/webhook/manifests.yaml)" \
 	"$(grep -c 'timeoutSeconds: 15' operator/config/webhook/manifests.yaml)"
 
+# --- the operator knows its own username (AutoConfig write exemption) ------
+expect_contains "the manager gets POD_SERVICE_ACCOUNT from the downward API" "fieldPath: spec.serviceAccountName"
+
 # --- the chart refuses clusters below the Kubernetes 1.33 floor ---------
 if floor_err=$(helm template t "$CHART" --kube-version 1.32.0 2>&1 >/dev/null); then
 	fail "a Kubernetes 1.32 cluster is refused"
