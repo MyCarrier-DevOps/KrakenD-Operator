@@ -30,6 +30,7 @@ import (
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/fieldindex"
+	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 )
 
 const kindEndpoint = "KrakenDEndpoint"
@@ -229,29 +230,43 @@ func (v *EndpointValidator) validateRouteUniqueness(
 		client.MatchingFields{fieldindex.EndpointGateway: gw.Namespace + "/" + gw.Name}); err != nil {
 		return nil, fmt.Errorf("listing endpoints of gateway %s/%s: %w", gw.Namespace, gw.Name, err)
 	}
-	claims := map[string]string{}
+	type claim struct{ owner, endpoint string }
+	claims := map[string]claim{}
 	for i := range list.Items {
 		other := &list.Items[i]
 		if other.Namespace == ep.Namespace && other.Name == ep.Name {
 			continue
 		}
 		for _, e := range other.Spec.Endpoints {
-			claims[routeKey(e)] = "KrakenDEndpoint " + other.Namespace + "/" + other.Name
+			claims[routeKey(e)] = claim{
+				owner: "KrakenDEndpoint " + other.Namespace + "/" + other.Name, endpoint: e.Endpoint,
+			}
 		}
 	}
 	var errs field.ErrorList
 	for _, i := range changed {
 		e := ep.Spec.Endpoints[i]
-		if owner, ok := claims[routeKey(e)]; ok {
+		if c, ok := claims[routeKey(e)]; ok {
 			p := field.NewPath("spec", "endpoints").Index(i)
-			err := field.Duplicate(p, e.Method+" "+e.Endpoint)
-			err.Detail = "already defined by " + owner
-			errs = append(errs, err)
+			errs = append(errs, routeClash(p, e, c.endpoint, c.owner))
 		}
 	}
 	return errs, nil
 }
 
 func routeKey(e v1alpha1.EndpointEntry) string {
-	return e.Method + " " + e.Endpoint
+	return e.Method + " " + renderer.ConflictKey(e.Endpoint)
+}
+
+// routeClash reports that e's route is already claimed by otherPath in owner.
+func routeClash(p *field.Path, e v1alpha1.EndpointEntry, otherPath, owner string) *field.Error {
+	err := field.Duplicate(p, e.Method+" "+e.Endpoint)
+	if otherPath == e.Endpoint {
+		err.Detail = "already defined by " + owner
+		return err
+	}
+	err.Detail = fmt.Sprintf("has the same route as %s %s in %s: paths that differ only in parameter names "+
+		"cannot both be routed. Use the same parameter name, and keep routes that share a parameterized "+
+		"prefix in one KrakenDEndpoint so they can be renamed together", e.Method, otherPath, owner)
+	return err
 }
