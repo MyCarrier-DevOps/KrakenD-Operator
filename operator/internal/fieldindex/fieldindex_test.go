@@ -51,20 +51,20 @@ func TestEnsureEndpointIndexes_Sequential(t *testing.T) {
 	indexer := &stubIndexer{}
 	mgr := &stubManager{indexer: indexer}
 
-	// First call registers both indexes (2 IndexField calls).
+	// First call registers every index (3 IndexField calls).
 	if err := EnsureEndpointIndexes(mgr); err != nil {
 		t.Fatalf("first call failed: %v", err)
 	}
-	if indexer.callCount() != 2 {
-		t.Fatalf("expected 2 IndexField calls after first call, got %d", indexer.callCount())
+	if indexer.callCount() != 3 {
+		t.Fatalf("expected 3 IndexField calls after first call, got %d", indexer.callCount())
 	}
 
 	// Second call should be a no-op (idempotent — returns from cache).
 	if err := EnsureEndpointIndexes(mgr); err != nil {
 		t.Fatalf("second (idempotent) call failed: %v", err)
 	}
-	if indexer.callCount() != 2 {
-		t.Errorf("expected still 2 IndexField calls after idempotent call, got %d", indexer.callCount())
+	if indexer.callCount() != 3 {
+		t.Errorf("expected still 3 IndexField calls after idempotent call, got %d", indexer.callCount())
 	}
 }
 
@@ -96,9 +96,9 @@ func TestEnsureEndpointIndexes_ConcurrentCallers(t *testing.T) {
 	}
 
 	// register should have been called exactly once
-	// (2 IndexField calls) regardless of how many goroutines raced.
-	if indexer.callCount() != 2 {
-		t.Errorf("expected exactly 2 IndexField calls (one registration), got %d", indexer.callCount())
+	// (3 IndexField calls) regardless of how many goroutines raced.
+	if indexer.callCount() != 3 {
+		t.Errorf("expected exactly 3 IndexField calls (one registration), got %d", indexer.callCount())
 	}
 }
 
