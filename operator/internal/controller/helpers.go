@@ -19,7 +19,6 @@ package controller
 import (
 	"fmt"
 	"strings"
-	"unicode/utf8"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -30,6 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
 )
 
 // setReadyCondition sets the Ready condition on conds, stamped with the
@@ -117,24 +117,12 @@ func truncateMessage(msg string) string {
 		kept++
 	}
 	if kept == 0 {
-		b.WriteString(truncateAtRune(lines[0], budget))
+		b.WriteString(configcheck.Truncate(lines[0], budget))
 		b.WriteByte('\n')
 		kept = 1
 	}
 	fmt.Fprintf(&b, "(output truncated, %d more lines)", len(lines)-kept)
 	return b.String()
-}
-
-// truncateAtRune returns the longest prefix of s that is at most n bytes and
-// does not split a UTF-8 sequence.
-func truncateAtRune(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	for n > 0 && !utf8.RuneStart(s[n]) {
-		n--
-	}
-	return s[:n]
 }
 
 // recordConditionTransition emits an event when next is a transition from
