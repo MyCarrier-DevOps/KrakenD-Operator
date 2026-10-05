@@ -175,5 +175,6 @@ jq "${jq_opts[@]}" "$jq_lib"'
      else dur_shape_problem($go_re; 32; "spec.periodic.interval") end),
   ($s.additionalEndpointsBasePath // empty | select(crd_test("^/") | not) | "spec.additionalEndpointsBasePath \(.)"),
   (if ($s.additionalEndpointsBasePath // "") != "" and ($s.urlTransform.addPathPrefix // "") != ""
-   then "additionalEndpointsBasePath with urlTransform.addPathPrefix" else empty end)
+   then "additionalEndpointsBasePath with urlTransform.addPathPrefix" else empty end),
+  (if (($s.additionalEndpoints // []) | length) > 256 then "more than 256 additionalEndpoints" else empty end)
 ]} | report("KrakenDAutoConfig")' "$work/autoconfigs.json"
