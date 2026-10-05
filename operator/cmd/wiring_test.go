@@ -53,7 +53,7 @@ func (m stubManager) GetEventRecorderFor(string) record.EventRecorder {
 func TestWireValidation_SharesOneCheckerBetweenControllerAndWebhooks(t *testing.T) {
 	mgr := stubManager{client: fake.NewClientBuilder().Build()}
 
-	w := wireValidation(mgr, renderer.New(renderer.Options{}), nil)
+	w := wireValidation(mgr, renderer.New(renderer.Options{}), nil, "")
 
 	if w.Checker == nil {
 		t.Fatal("wireValidation built no checker")
@@ -70,5 +70,18 @@ func TestWireValidation_SharesOneCheckerBetweenControllerAndWebhooks(t *testing.
 func TestConfigCheckSlots(t *testing.T) {
 	if configCheckSlots != 3 {
 		t.Errorf("configCheckSlots = %d, want 3", configCheckSlots)
+	}
+}
+
+// The endpoint validator trusts the username wireValidation is given, and
+// only that one.
+func TestWireValidation_EndpointValidatorTrustsTheGivenOperatorUsername(t *testing.T) {
+	mgr := stubManager{client: fake.NewClientBuilder().Build()}
+	const operator = "system:serviceaccount:krakend-system:krakend-operator"
+
+	w := wireValidation(mgr, renderer.New(renderer.Options{}), nil, operator)
+
+	if got := w.Validators.Endpoint.OperatorUsername; got != operator {
+		t.Errorf("endpoint validator's OperatorUsername = %q, want %q", got, operator)
 	}
 }

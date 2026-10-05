@@ -72,6 +72,7 @@ func main() {
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var enableWebhooks bool
+	var operatorUsername string
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -93,6 +94,10 @@ func main() {
 	flag.BoolVar(&enableWebhooks, "enable-webhooks", true,
 		"Serve the validating admission webhooks. With false the webhook server does not start "+
 			"and invalid objects are caught only at render time.")
+	flag.StringVar(&operatorUsername, "operator-username", defaultOperatorUsername(),
+		"Username of the operator's own API requests. Its writes to KrakenDEndpoints a KrakenDAutoConfig "+
+			"controls skip the admission render check. Defaults to the pod's ServiceAccount "+
+			"(system:serviceaccount:$POD_NAMESPACE:$POD_SERVICE_ACCOUNT); empty disables the exemption.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -227,7 +232,7 @@ func main() {
 
 	// One checker for the whole pod: its slots bound concurrent krakend
 	// executions across the gateway controller and the admission webhooks.
-	wired := wireValidation(mgr, krakendRenderer, krakendValidator)
+	wired := wireValidation(mgr, krakendRenderer, krakendValidator, operatorUsername)
 
 	if err := wired.Gateway.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "KrakenDGateway")

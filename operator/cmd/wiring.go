@@ -37,7 +37,9 @@ type validation struct {
 // wireValidation builds the pod's one config checker and the parts that use
 // it. The checker's slots bound concurrent krakend executions across the
 // gateway controller and the admission webhooks, so they must share it.
-func wireValidation(mgr ctrl.Manager, r renderer.Renderer, v renderer.Validator) validation {
+func wireValidation(
+	mgr ctrl.Manager, r renderer.Renderer, v renderer.Validator, operatorUsername string,
+) validation {
 	checker := configcheck.New(mgr.GetClient(), r, v, configCheckSlots)
 	return validation{
 		Checker: checker,
@@ -51,6 +53,6 @@ func wireValidation(mgr ctrl.Manager, r renderer.Renderer, v renderer.Validator)
 			APIReader:     mgr.GetAPIReader(),
 			LicenseParser: licenseutil.NewX509LicenseParser(),
 		},
-		Validators: webhooksetup.NewValidators(mgr.GetClient(), checker),
+		Validators: webhooksetup.NewValidators(mgr.GetClient(), checker, operatorUsername),
 	}
 }
