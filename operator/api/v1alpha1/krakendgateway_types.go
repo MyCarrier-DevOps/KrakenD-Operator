@@ -601,8 +601,10 @@ type RedisConnectionPool struct {
 	// Deprecated: has no effect. KrakenD's redis connection pools have no such setting; it is not rendered.
 	ReadTimeout string `json:"readTimeout,omitempty"`
 	// Deprecated: has no effect. KrakenD's redis connection pools have no such setting; it is not rendered.
-	WriteTimeout string          `json:"writeTimeout,omitempty"`
-	TLS          *RedisTLSConfig `json:"tls,omitempty"`
+	WriteTimeout string `json:"writeTimeout,omitempty"`
+	// TLS is not rendered yet; setting or changing it is rejected.
+	// +kubebuilder:validation:XValidation:rule="false",message="tls is not supported yet: the operator has never rendered it, so KrakenD would connect without it"
+	TLS *RedisTLSConfig `json:"tls,omitempty"`
 }
 
 // RedisTLSConfig configures TLS for Redis connections.
