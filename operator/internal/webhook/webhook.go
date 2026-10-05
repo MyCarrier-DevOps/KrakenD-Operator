@@ -80,15 +80,14 @@ type GatewayValidator struct {
 // Create, so the runAsUser:0 ratchet never
 // applies here — a brand-new CR gets the hard reject unconditionally.
 func (v *GatewayValidator) ValidateCreate(
-	_ context.Context,
+	ctx context.Context,
 	obj runtime.Object,
 ) (admission.Warnings, error) {
 	gw, ok := obj.(*v1alpha1.KrakenDGateway)
 	if !ok {
 		return nil, fmt.Errorf("expected KrakenDGateway, got %T", obj)
 	}
-	warnings, errs := v.validate(gw, nil)
-	return warnings, invalid("KrakenDGateway", gw.Name, errs)
+	return v.admit(ctx, nil, gw)
 }
 
 // ValidateUpdate validates an updated KrakenDGateway. An unchanged spec is not
@@ -97,7 +96,7 @@ func (v *GatewayValidator) ValidateCreate(
 // start failing every unrelated update. The old object is also threaded
 // through to validate so the runAsUser:0 reject can be ratcheted.
 func (v *GatewayValidator) ValidateUpdate(
-	_ context.Context,
+	ctx context.Context,
 	oldObj runtime.Object,
 	newObj runtime.Object,
 ) (admission.Warnings, error) {
@@ -115,8 +114,7 @@ func (v *GatewayValidator) ValidateUpdate(
 	if equality.Semantic.DeepEqual(old.Spec, gw.Spec) {
 		return nil, nil
 	}
-	warnings, errs := v.validate(gw, old)
-	return warnings, invalid("KrakenDGateway", gw.Name, newErrors(errs, v.storedErrors(gw, old)))
+	return v.admit(ctx, old, gw)
 }
 
 // ValidateDelete is required by admission.CustomValidator. The gateway webhook
@@ -126,6 +124,27 @@ func (v *GatewayValidator) ValidateDelete(
 	_ runtime.Object,
 ) (admission.Warnings, error) {
 	return nil, nil
+}
+
+// admit runs every rule against gw within the admission budget, then renders
+// its config. old is the stored object on an update and nil on a create; an
+// update is rejected only for field errors the stored object did not already
+// have.
+func (v *GatewayValidator) admit(
+	ctx context.Context, old, gw *v1alpha1.KrakenDGateway,
+) (admission.Warnings, error) {
+	ctx, cancel := context.WithTimeout(ctx, admissionBudget)
+	defer cancel()
+
+	warnings, errs := v.validate(gw, old)
+	if old != nil {
+		errs = newErrors(errs, v.storedErrors(gw, old))
+	}
+	if len(errs) > 0 {
+		return warnings, invalid("KrakenDGateway", gw.Name, errs)
+	}
+	renderWarnings, err := checkGatewayRender(ctx, v.Checker, old, gw)
+	return append(append(warnings, renderWarnings...), versionWarning(gw, old)...), err
 }
 
 // validate runs all admission checks for gw. old is the previously-stored
@@ -1149,7 +1168,7 @@ type Validators struct {
 // EndpointValidator.OperatorUsername.
 func NewValidators(c client.Client, checker ConfigChecker, operatorUsername string) Validators {
 	return Validators{
-		Gateway:    &GatewayValidator{Client: c},
+		Gateway:    &GatewayValidator{Client: c, Checker: checker},
 		Endpoint:   &EndpointValidator{Client: c, Checker: checker, OperatorUsername: operatorUsername},
 		Policy:     &PolicyValidator{Client: c},
 		AutoConfig: &AutoConfigValidator{Client: c},
