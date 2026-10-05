@@ -312,8 +312,10 @@ func NewValidators(
 	c client.Client, apiReader client.Reader, checker ConfigChecker, operatorUsername string,
 ) Validators {
 	return Validators{
-		Gateway:    &GatewayValidator{Client: c, Checker: checker},
-		Endpoint:   &EndpointValidator{Client: c, APIReader: apiReader, Checker: checker, OperatorUsername: operatorUsername},
+		Gateway: &GatewayValidator{Client: c, Checker: checker},
+		Endpoint: &EndpointValidator{
+			Client: c, APIReader: apiReader, Checker: checker, OperatorUsername: operatorUsername,
+		},
 		Policy:     &PolicyValidator{Client: c, Checker: checker},
 		AutoConfig: &AutoConfigValidator{Client: c},
 	}
