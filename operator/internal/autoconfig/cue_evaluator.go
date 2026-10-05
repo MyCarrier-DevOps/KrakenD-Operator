@@ -146,11 +146,13 @@ func (e *cueEvaluator) Evaluate(_ context.Context, input CUEInput) (*CUEOutput, 
 		applyURLTransform(output, input.URLTransform)
 		transformIssuePaths(output.Failed, input.URLTransform)
 	}
-	// Sorted once the paths are final: a prefix strip can reorder them.
-	sortIssues(output.Failed)
 
 	applyFieldOverrides(output, input.Overrides)
 	skipUnsupportedMethods(output)
+	// Sorted once the paths and methods are final: a prefix strip or an
+	// override can reorder them.
+	sortIssues(output.Failed)
+	sortIssues(output.Skipped)
 
 	return output, nil
 }
@@ -356,7 +358,6 @@ func skipUnsupportedMethods(output *CUEOutput) {
 		delete(output.Tags, key)
 	}
 	output.Entries = kept
-	sortIssues(output.Skipped)
 }
 
 // applyDefaults applies CR-level EndpointDefaults to all entries. These replace
@@ -571,10 +572,11 @@ func applyFieldOverrides(output *CUEOutput, overrides []v1alpha1.OperationOverri
 		idx, ok := opIDIndex[ov.OperationID]
 		if !ok {
 			// An override whose target failed evaluation is held with it,
-			// not unmatched.
+			// not unmatched, and moves it to the route it gives the entry.
 			if !failedOpIDs[ov.OperationID] {
 				output.UnmatchedOverrides = append(output.UnmatchedOverrides, ov.OperationID)
 			}
+			remapFailed(output.Failed, ov)
 			continue
 		}
 		entry := &output.Entries[idx]
@@ -631,6 +633,22 @@ func applyFieldOverrides(output *CUEOutput, overrides []v1alpha1.OperationOverri
 				delete(output.Tags, oldKey)
 				output.Tags[newKey] = tags
 			}
+		}
+	}
+}
+
+// remapFailed gives every failed operation of ov the endpoint and method the
+// override sets, so the failure is judged where the operation would publish.
+func remapFailed(failed []OperationIssue, ov v1alpha1.OperationOverride) {
+	for i := range failed {
+		if failed[i].OperationID == "" || failed[i].OperationID != ov.OperationID {
+			continue
+		}
+		if ov.Endpoint != "" {
+			failed[i].Path = ov.Endpoint
+		}
+		if ov.Method != "" {
+			failed[i].Method = ov.Method
 		}
 	}
 }
