@@ -5403,3 +5403,25 @@ func TestOwnedEndpointPredicate_PassesEachReadinessField(t *testing.T) {
 		})
 	}
 }
+
+func TestAutoConfigReconcile_AdoptedReadyEndpointStaysReady(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	// A desired orphan whose spec and labels already match and which the
+	// endpoint controller reported Ready: adopting it changes metadata only,
+	// so the endpoint controller reports nothing new.
+	orphan := readyEndpoint(g.output.Endpoints[0], metav1.ConditionTrue, "Ready")
+	c := fakeClientBuilder().WithObjects(ac, cm, orphan).WithStatusSubresource(ac, orphan).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	updated := getAC(t, c, ac)
+	cond := meta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionEndpointsReady)
+	if updated.Status.ReadyEndpoints != 1 || cond == nil || cond.Status != metav1.ConditionTrue {
+		t.Errorf("readyEndpoints = %d, EndpointsReady = %+v, want 1 and True after one pass",
+			updated.Status.ReadyEndpoints, cond)
+	}
+}
