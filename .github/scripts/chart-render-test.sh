@@ -116,7 +116,13 @@ expect_equal "the kustomize gateway webhook is not registered for DELETE" \
 	"CREATE UPDATE " "$(manifest_operations vkrakendgateway.kb.io operator/config/webhook/manifests.yaml)"
 
 # --- three concurrent krakend validations fit in the operator's limit ------
-expect_contains "the operator memory limit is 512Mi" "memory: 512Mi"
+memory_limit() {
+	render --show-only templates/deployment.yaml "$@" |
+		awk '$1 == "limits:" { in_limits = 1 } in_limits && $1 == "memory:" { print $2; exit }'
+}
+expect_equal "the operator memory limit is 512Mi" "512Mi" "$(memory_limit)"
+expect_equal "a memory request does not stand in for the limit" "1Gi" \
+	"$(memory_limit --set resources.limits.memory=1Gi --set resources.requests.memory=512Mi)"
 
 if [ "$failures" -gt 0 ]; then
 	printf '%d chart render test(s) failed\n' "$failures"
