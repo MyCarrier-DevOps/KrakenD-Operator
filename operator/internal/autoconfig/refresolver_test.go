@@ -523,6 +523,7 @@ func TestExternalRefs_IgnoresExamplePayloads(t *testing.T) {
 		{"examples entry value", `{"examples":{"e":{"value":{"$ref":"data"}}}}`, nil},
 		{"examples entry reference", `{"examples":{"e":{"$ref":"common.yaml#/components/examples/E"}}}`,
 			[]string{"common.yaml#/components/examples/E"}},
+		{"examples array", `{"examples":[{"$ref":"data.json"}]}`, nil},
 		{"empty ref", `{"a":{"$ref":""}}`, nil},
 	}
 	for _, tc := range cases {
