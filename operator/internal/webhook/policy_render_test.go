@@ -154,6 +154,8 @@ func TestPolicyAdmission_DenialIsBounded(t *testing.T) {
 
 func TestPolicyAdmission_RejectsEnterpriseOnlyRawOnACEGateway(t *testing.T) {
 	const proxy = `{"backend/http/client":{"proxy_address":"http://p"}}`
+	onEE := referencing()
+	onEE[0].(*v1alpha1.KrakenDGateway).Spec.Edition = v1alpha1.EditionEE
 	cached := testPolicy(proxy)
 	cached.Spec.Cache = &v1alpha1.CacheSpec{Shared: true}
 	tests := []struct {
@@ -165,6 +167,11 @@ func TestPolicyAdmission_RejectsEnterpriseOnlyRawOnACEGateway(t *testing.T) {
 		calls   string
 	}{
 		{"new raw on a CE gateway", referencing(), testPolicy(proxy), nil, false, "policy"},
+		{"new raw on an EE gateway", onEE, testPolicy(proxy), nil, true, "policy,gateway+policy"},
+		{"new raw, nothing references the policy", nil, testPolicy(proxy), nil, true, "policy"},
+		{"new raw the CE render honors", referencing(),
+			testPolicy(`{"backend/http/client":{"send_body_on_redirect":true}}`), nil, true,
+			"policy,gateway+policy"},
 		{"raw unchanged, another field edited", referencing(), cached, testPolicy(proxy), true,
 			"policy,gateway+policy"},
 	}
