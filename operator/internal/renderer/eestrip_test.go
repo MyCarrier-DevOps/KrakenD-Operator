@@ -109,6 +109,37 @@ func TestRender_CEFallbackStripsEEOnlyFeaturesAndListsThem(t *testing.T) {
 	}
 }
 
+// CE honors send_body_on_redirect, so a CE-fallback render drops only the
+// other keys of a backend's client block.
+func TestRender_CEFallbackKeepsTheKeysCEHonors(t *testing.T) {
+	in := eeFeatureInput(true)
+	in.Endpoints[0].Spec.Endpoints[1].Backends[0].ExtraConfig = &runtime.RawExtension{Raw: []byte(
+		`{"backend/http/client":{"send_body_on_redirect":true,"proxy_address":"http://proxy"}}`)}
+	out, err := New(Options{}).Render(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Endpoints []struct {
+			Backend []struct {
+				ExtraConfig map[string]map[string]any `json:"extra_config"`
+			} `json:"backend"`
+		} `json:"endpoints"`
+	}
+	if err := json.Unmarshal(out.JSON, &doc); err != nil {
+		t.Fatal(err)
+	}
+	client := doc.Endpoints[0].Backend[0].ExtraConfig["backend/http/client"]
+	if _, ok := client["send_body_on_redirect"]; !ok || len(client) != 1 {
+		t.Errorf("client block = %v, want only send_body_on_redirect", client)
+	}
+	want := StrippedEEFeature{Source: types.NamespacedName{Namespace: "ns", Name: "a"}, Method: "GET",
+		Endpoint: "/users", Feature: "backend[0] extra_config backend/http/client"}
+	if !slices.Contains(out.StrippedEEFeatures, want) {
+		t.Errorf("StrippedEEFeatures = %+v, want %+v listed", out.StrippedEEFeatures, want)
+	}
+}
+
 func TestRender_WithoutFallbackKeepsEEFeatures(t *testing.T) {
 	out, err := New(Options{}).Render(eeFeatureInput(false))
 	if err != nil {
