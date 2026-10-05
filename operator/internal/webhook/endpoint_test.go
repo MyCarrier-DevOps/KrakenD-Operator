@@ -923,3 +923,21 @@ func TestEndpointAdmission_UncachedRecheckRefusesAPolicyDeletedMeanwhile(t *test
 		t.Errorf("response = %+v, want the reference refused as being deleted", resp.Result)
 	}
 }
+func TestEndpointAdmission_UncachedRecheckErrorIsRetryable(t *testing.T) {
+	live := &v1alpha1.KrakenDBackendPolicy{ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "default"}}
+	broken := fakeClientBuilderWith(interceptor.Funcs{Get: func(context.Context, client.WithWatch,
+		client.ObjectKey, client.Object, ...client.GetOption) error {
+		return errors.New("api server unreachable")
+	}})
+	ep := testEndpoint("new", "/a")
+	ep.Spec.Endpoints[0].Backends[0].PolicyRef = &v1alpha1.PolicyRef{Name: "p"}
+	v := &EndpointValidator{
+		Client: fakeClient(testGateway(), live), APIReader: broken, Checker: &scriptedChecker{},
+	}
+
+	resp := review(t, v, "alice", ep, nil)
+
+	if resp.Allowed || resp.Result.Code != http.StatusInternalServerError {
+		t.Errorf("response = %+v, want a retryable 500", resp.Result)
+	}
+}
