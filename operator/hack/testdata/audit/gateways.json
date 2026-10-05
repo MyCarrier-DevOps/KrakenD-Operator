@@ -6,5 +6,6 @@
  {"metadata":{"namespace":"a","name":"port-range"},"spec":{"edition":"CE","config":{"port":70000}}},
  {"metadata":{"namespace":"a","name":"output-encoding"},"spec":{"edition":"CE","config":{"outputEncoding":"jsn"}}},
  {"metadata":{"namespace":"a","name":"health-path"},"spec":{"edition":"CE","config":{"router":{"healthPath":"h"}}}},
- {"metadata":{"namespace":"a","name":"dialtimeout-overflow"},"spec":{"edition":"EE","config":{},"redis":{"connectionPool":{"addresses":["r"],"dialTimeout":"9223372036854775808ns"}},"license":{"secretRef":{"name":"l","key":"k"}}}}
+ {"metadata":{"namespace":"a","name":"dialtimeout-overflow"},"spec":{"edition":"EE","config":{},"redis":{"connectionPool":{"addresses":["r"],"dialTimeout":"9223372036854775808ns"}},"license":{"secretRef":{"name":"l","key":"k"}}}},
+ {"metadata":{"namespace":"a","name":"ee-nolicense"},"spec":{"edition":"EE","config":{}}}
 ]}
