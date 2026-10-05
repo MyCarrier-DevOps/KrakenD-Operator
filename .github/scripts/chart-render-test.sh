@@ -9,7 +9,7 @@ failures=0
 workdir=$(mktemp -d)
 trap 'rm -rf "$workdir"' EXIT
 
-render() { helm template t "$CHART" --namespace krakend-operator-system "$@"; }
+render() { helm template t "$CHART" --namespace krakend-operator-system --kube-version 1.33.0 "$@"; }
 
 pass() { printf 'ok   %s\n' "$1"; }
 fail() {
