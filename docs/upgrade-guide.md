@@ -191,8 +191,10 @@ make deploy IMG=ghcr.io/mycarrier-devops/krakend-operator:<previous-version>
 > the finalizer `gateway.krakend.io/policy-protection` on every
 > KrakenDBackendPolicy. An older operator does not know it, so a policy that is
 > deleted afterwards stays `Terminating` for good, and so does a namespace that
-> holds one. Remove the finalizer from every policy before you roll back, or
-> after you uninstall the operator while policies remain:
+> holds one. Roll back first, then remove the finalizer from every policy: the
+> current operator re-adds it on any reconcile, so removing it before the older
+> operator runs does not last. Run the same command after you uninstall the
+> operator while policies remain. It is idempotent:
 >
 > ```bash
 > kubectl get krakendbackendpolicies -A -o json \
@@ -208,6 +210,10 @@ make deploy IMG=ghcr.io/mycarrier-devops/krakend-operator:<previous-version>
 >
 > The `test` operation makes a patch fail, rather than remove another
 > finalizer, if the list changed in the meantime.
+>
+> Removing the finalizer from a policy that is already `Terminating` and still
+> referenced deletes it at once: its endpoints then report `PolicyNotFound` and
+> drop out of the render. Repoint those endpoints first (the runbook lists them).
 
 ---
 
@@ -1660,7 +1666,7 @@ is no longer registered for DELETE, in the Helm chart and in
 `operator/config/webhook/manifests.yaml`, so policy and namespace deletion are
 accepted without the webhook; they complete once the operator removes the
 finalizer. If the operator is down, a policy deletion waits until it is back.
-To roll back or uninstall, remove the finalizer first (see Rollback).
+A policy is unprotected until the operator's first reconcile adds the finalizer, which includes the upgrade rollout: the new webhook configuration drops DELETE before the new leader has added finalizers. To roll back or uninstall, remove the finalizer (see [Rollback](#rollback)).
 
 ---
 
