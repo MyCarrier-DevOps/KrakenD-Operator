@@ -195,7 +195,6 @@ func defaultMocks() (*mockFetcher, *mockCUEEvaluator, *mockFilter, *mockGenerato
 						},
 					},
 				},
-				SkippedOperations: 0,
 			},
 		}
 }
@@ -1784,7 +1783,6 @@ func TestAutoConfigReconcile_SyncStatusConflictRequeuesQuietly(t *testing.T) {
 		Build()
 	f, ce, fi, g := defaultMocks()
 	ce.output.Warnings = []string{"skipping /x:GET: boom"}
-	g.output.Duplicates = []string{"listUsers"}
 	g.output.Skipped = []autoconfig.OperationIssue{duplicateListUsers()}
 	rec := fakeRecorder()
 	r := newACReconciler(c, f, ce, fi, g)
@@ -2074,7 +2072,6 @@ func TestAutoConfigReconcile_SteadyStateSuppressesInputWarningEvents(t *testing.
 		Build()
 	f, ce, fi, g := defaultMocks()
 	ce.output.Warnings = []string{"skipping /x:GET: boom"}
-	g.output.Duplicates = []string{"listUsers"}
 	g.output.Skipped = []autoconfig.OperationIssue{duplicateListUsers()}
 	rec := fakeRecorder()
 	r := &KrakenDAutoConfigReconciler{
@@ -2109,7 +2106,6 @@ func TestAutoConfigReconcile_ChangedInputsEmitsInputWarningEvents(t *testing.T) 
 		Build()
 	f, ce, fi, g := defaultMocks()
 	ce.output.Warnings = []string{"skipping /x:GET: boom"}
-	g.output.Duplicates = []string{"listUsers"}
 	g.output.Skipped = []autoconfig.OperationIssue{duplicateListUsers()}
 	rec := fakeRecorder()
 	r := &KrakenDAutoConfigReconciler{
@@ -2144,7 +2140,6 @@ func TestAutoConfigReconcile_InputWarningEventsPrecedeEndpointsGenerated(t *test
 		Build()
 	f, ce, fi, g := defaultMocks()
 	ce.output.Warnings = []string{"skipping /x:GET: boom"}
-	g.output.Duplicates = []string{"listUsers"}
 	g.output.Skipped = []autoconfig.OperationIssue{duplicateListUsers()}
 	rec := fakeRecorder()
 	r := newACReconciler(c, f, ce, fi, g)
