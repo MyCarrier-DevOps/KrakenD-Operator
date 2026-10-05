@@ -194,6 +194,12 @@ type CEDrop struct {
 
 // CEDrops returns what a CE render drops from the extra_config ec at level, in
 // namespace order.
-func CEDrops(_ NamespaceLevel, _ map[string]json.RawMessage) []CEDrop {
-	return nil
+func CEDrops(level NamespaceLevel, ec map[string]json.RawMessage) []CEDrop {
+	var drops []CEDrop
+	for _, ns := range EEOnlyNamespaces(level) {
+		if _, ok := ec[ns]; ok {
+			drops = append(drops, CEDrop{Namespace: ns})
+		}
+	}
+	return drops
 }
