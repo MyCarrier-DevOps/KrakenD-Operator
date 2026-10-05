@@ -82,7 +82,11 @@ func (v Verdict) Summary(limit int) string {
 				b.WriteString(s[:cut])
 				left--
 			}
-			fmt.Fprintf(&b, " (+%d more)", left)
+			if left == 0 {
+				b.WriteString(" (truncated)")
+			} else {
+				fmt.Fprintf(&b, " (+%d more)", left)
+			}
 			break
 		}
 		b.WriteString(s)
