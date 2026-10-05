@@ -35,6 +35,7 @@ func TestGatewayAdmission_Render(t *testing.T) {
 	old := testGateway()
 	edited := old.DeepCopy()
 	edited.Spec.Config.Timeout = "5s"
+	broken := failing("ep", 0, "broken elsewhere")
 	tests := []struct {
 		name     string
 		old      *v1alpha1.KrakenDGateway
@@ -46,6 +47,7 @@ func TestGatewayAdmission_Render(t *testing.T) {
 		{"create with a failing root", nil,
 			[]configcheck.Verdict{rootFailure("'timeout' time: unknown unit")}, false, "isolated"},
 		{"update keeps it passing", old, nil, true, "gateway"},
+		{"update breaks it", old, []configcheck.Verdict{broken, {OK: true}}, false, "gateway,gateway"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
