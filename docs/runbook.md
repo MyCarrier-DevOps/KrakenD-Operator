@@ -108,7 +108,7 @@ kept for compatibility; alert and gate on `Ready` instead.
 | the serving phase (`Pending` before any rollout, `Deploying` while a rollout is in progress or the Deployment is not available, `Running` otherwise) | `Unknown`, reason `ValidatorUnavailable` | The validator could not run; the last applied configuration keeps serving and validation is retried with backoff |
 | `Deploying` | `False` | A rollout is in progress, or the Deployment has not reported available replicas yet |
 | `Running` | `True` | Configuration applied, the Deployment is available and the applied config is rolled out to all replicas |
-| `Degraded` | `False` | EE license expired or in the pre-expiry window; running on CE (`LicenseDegraded=True`, `CEFallbackApplied=True`) |
+| `Degraded` | `False` | EE license expired or in the pre-expiry window; running on CE (`LicenseDegraded=True` or `CEFallbackApplied=True`; only `LicenseDegraded` until the CE render is applied) |
 | `Error` | `False` | Configuration rejected (`ConfigValid=False`), a plugin ConfigMap missing (`PluginsResolved=False`), rollout failed or the Deployment lost availability (`Available=False`), or license expired without CE fallback |
 
 `Rendering` and `Validating` stay in the CRD enum only so stored objects keep
