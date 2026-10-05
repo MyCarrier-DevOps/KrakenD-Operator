@@ -87,6 +87,13 @@ func TestValidateEntries(t *testing.T) {
 		{"EE-only backend namespace on CE", testGateway(),
 			withExtra("", `{"backend/http/client":{"proxy_address":"http://p"}}`),
 			`spec.endpoints[0].backends[0].extraConfig: Invalid value: "backend/http/client"`},
+		{"CE namespaces on CE", testGateway(), withExtra(`{"qos/ratelimit/router":{"max_rate":1}}`,
+			`{"qos/circuit-breaker":{"interval":1,"timeout":1,"max_errors":1}}`), ""},
+		{"EE-only namespaces on EE", ee, withExtra(`{"auth/api-keys":{}}`, `{"backend/http/client":{}}`), ""},
+		// AutoConfig generates documentation/openapi on every endpoint, and a CE
+		// render drops it, so it is not refused.
+		{"entry documentation on CE", testGateway(),
+			withExtra(`{"documentation/openapi":{"audience":["public"]}}`, ""), ""},
 		{"only GET collides with the health endpoint", custom, post, ""},
 		// A raw router block replaces the typed one, so the typed healthPath is gone.
 		{"raw router replaces the typed one", rawRouterBlock(`{"auto_options":true}`),
