@@ -125,6 +125,8 @@ expect_equal "a memory request does not stand in for the limit" "1Gi" \
 	"$(memory_limit --set resources.limits.memory=1Gi --set resources.requests.memory=512Mi)"
 
 # --- every webhook call is bounded by an explicit timeout ------------------
+expect_equal "every chart webhook has timeoutSeconds 15" "4" \
+	"$(render --show-only templates/validating-webhook-configuration.yaml | grep -c 'timeoutSeconds: 15')"
 expect_equal "every kustomize webhook has timeoutSeconds 15" "4" \
 	"$(grep -c 'timeoutSeconds: 15' operator/config/webhook/manifests.yaml)"
 
