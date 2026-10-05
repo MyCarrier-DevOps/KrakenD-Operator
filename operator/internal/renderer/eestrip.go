@@ -225,7 +225,7 @@ func CEDrops(level NamespaceLevel, ec map[string]json.RawMessage) []CEDrop {
 			continue
 		}
 		var keys map[string]json.RawMessage
-		if json.Unmarshal(block, &keys) != nil {
+		if json.Unmarshal(block, &keys) != nil || keys == nil {
 			drops = append(drops, CEDrop{Namespace: ns}) // not a block: the render check reports it
 			continue
 		}
