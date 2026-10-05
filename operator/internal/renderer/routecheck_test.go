@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRouteConflicts_ParameterClashNamesBothEndpoints(t *testing.T) {
@@ -155,5 +156,37 @@ func TestRouteConflicts_ACancelledContextIsAnErrorNotAVerdict(t *testing.T) {
 	lines, err := routeConflicts(ctx, []byte(doc))
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("routeConflicts = %q, %v, want the context error so the caller reports unavailable", lines, err)
+	}
+}
+
+func TestRouteConflicts_StopsAfterTheFirstRefusedRoutes(t *testing.T) {
+	const others, refused = 10000, 1024
+	var b strings.Builder
+	b.WriteString(`{"endpoints":[`)
+	for i := 0; i < others; i++ {
+		fmt.Fprintf(&b, `{"endpoint":"/r%d","method":"GET"},`, i)
+	}
+	for i := 0; i < refused; i++ {
+		fmt.Fprintf(&b, `{"endpoint":"/r%d","method":"GET"},`, others-1)
+	}
+	doc := strings.TrimSuffix(b.String(), ",") + `]}`
+
+	start := time.Now()
+	lines, err := routeConflicts(context.Background(), []byte(doc))
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Each refusal names the refused route and the one it clashes with.
+	if want := 2*maxRouteRefusals + 1; len(lines) != want {
+		t.Fatalf("%d lines, want %d: %d refusals and the stop notice", len(lines), want, maxRouteRefusals)
+	}
+	wantNotice := fmt.Sprintf("- route check stopped after %d refused routes", maxRouteRefusals)
+	if last := lines[len(lines)-1]; last != wantNotice {
+		t.Errorf("last line = %q, want %q", last, wantNotice)
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("took %v, want the work bounded by the refusal limit, not by the %d refused entries", elapsed, refused)
 	}
 }

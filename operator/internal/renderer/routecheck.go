@@ -118,6 +118,11 @@ func (o RouterOptions) HealthRoute() string {
 // otherwise.
 const DefaultHealthPath = "/__health"
 
+// maxRouteRefusals is how many refused routes the route check reports before
+// it stops. Every refusal costs a rebuild of the engine, so the work stays
+// bounded however many routes a config refuses.
+const maxRouteRefusals = 21
+
 // routeConflicts registers every route of doc in a gin engine, in the order
 // the KrakenD runtime does, and returns one lint-pointer line per refused
 // registration. It catches everything `krakend check -t` catches (-t
