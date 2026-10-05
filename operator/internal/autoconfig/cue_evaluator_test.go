@@ -871,6 +871,15 @@ func TestApplyFieldOverrides_SharedOperationIDIsAmbiguous(t *testing.T) {
 	}
 }
 
+func TestApplyFieldOverrides_OperationIDSharedWithFailedOperationIsAmbiguous(t *testing.T) {
+	out := testOutputWithEntries()
+	out.Failed = []OperationIssue{{Operation: Operation{Method: "GET", Path: "/v2/users", OperationID: "listUsers"}}}
+	applyFieldOverrides(out, []v1alpha1.OperationOverride{{OperationID: "listUsers"}})
+	if !slices.Equal(out.AmbiguousOverrides, []string{"listUsers"}) {
+		t.Errorf("AmbiguousOverrides = %v, want [listUsers]", out.AmbiguousOverrides)
+	}
+}
+
 func TestApplyFieldOverrides_NonExistentOperationID(t *testing.T) {
 	out := testOutputWithEntries()
 	timeout := metav1.Duration{Duration: 30 * time.Second}
