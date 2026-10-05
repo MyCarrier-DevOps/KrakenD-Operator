@@ -97,7 +97,7 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 - Evaluated in the gateway reconcile; single writer of License* conditions
 - `license.Window` computes the stage and the next boundary; the gateway requeues at it, at least every 5 min
 - Events on transitions; no writes to the KrakenDGateway object
-- Handles expiry (with/without fallback-to-CE) and the 1 h safety buffer; events fire on condition transitions only
+- Handles expiry (with/without fallback-to-CE) and the 1 h safety buffer
 - Recovery detection: clears degraded/expired conditions and emits `LicenseRestored`
 - `readLicenseSecret` — supports both SecretRef and ExternalSecret convention (`{name}-license`)
 
