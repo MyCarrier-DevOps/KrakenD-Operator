@@ -5353,3 +5353,27 @@ func TestAutoConfigReconcile_HeldEndpointsCountTowardReadiness(t *testing.T) {
 		t.Errorf("expected Ready False/OperationsFailed, got %+v", ready)
 	}
 }
+
+func TestAutoConfigReconcile_DeletedEndpointsLeaveTheReadinessCount(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	users := readyEndpoint(ownedCopy(t, ac, g.output.Endpoints[0]), metav1.ConditionTrue, "Ready")
+	stale := readyEndpoint(staleOwnedEndpoint(t, ac, g), metav1.ConditionTrue, "Ready")
+	c := fakeClientBuilder().WithObjects(ac, cm, users, stale).WithStatusSubresource(ac, users, stale).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if endpointExists(t, c, "test-ac-stale") {
+		t.Fatal("expected the stale endpoint deleted")
+	}
+	updated := getAC(t, c, ac)
+	cond := meta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionEndpointsReady)
+	if updated.Status.ReadyEndpoints != 1 || cond == nil || cond.Status != metav1.ConditionTrue ||
+		cond.Message != "1 of 1 endpoints ready" {
+		t.Errorf("readyEndpoints = %d, EndpointsReady = %+v, want 1 and \"1 of 1 endpoints ready\"",
+			updated.Status.ReadyEndpoints, cond)
+	}
+}
