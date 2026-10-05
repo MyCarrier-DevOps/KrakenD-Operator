@@ -17,5 +17,6 @@
  {"metadata":{"namespace":"a","name":"dup-additional"},"spec":{"gatewayRef":{"name":"gw"},"openapi":{"url":"http://x"},"trigger":"OnChange","additionalEndpoints":[{"endpoint":"/h"},{"endpoint":"/h","method":"GET"}]}},
  {"metadata":{"namespace":"a","name":"additional-path"},"spec":{"gatewayRef":{"name":"gw"},"openapi":{"url":"http://x"},"trigger":"OnChange","additionalEndpoints":[{"endpoint":"h"}]}},
  {"metadata":{"namespace":"a","name":"mixed-shorthand"},"spec":{"gatewayRef":{"name":"gw"},"openapi":{"url":"http://x"},"trigger":"OnChange","additionalEndpoints":[{"endpoint":"/h","host":"http://h","backends":[{"host":["x"],"urlPattern":"/"}]}]}},
- {"metadata":{"namespace":"a","name":"additional-timeout"},"spec":{"gatewayRef":{"name":"gw"},"openapi":{"url":"http://x"},"trigger":"OnChange","additionalEndpoints":[{"endpoint":"/h","timeout":"30"}]}}
+ {"metadata":{"namespace":"a","name":"additional-timeout"},"spec":{"gatewayRef":{"name":"gw"},"openapi":{"url":"http://x"},"trigger":"OnChange","additionalEndpoints":[{"endpoint":"/h","timeout":"30"}]}},
+ {"metadata":{"namespace":"a","name":"additional-cachettl"},"spec":{"gatewayRef":{"name":"gw"},"openapi":{"url":"http://x"},"trigger":"OnChange","additionalEndpoints":[{"endpoint":"/h","cacheTTL":"2562048h"}]}}
 ]}
