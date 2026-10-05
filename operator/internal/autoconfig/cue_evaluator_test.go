@@ -862,6 +862,15 @@ func TestApplyFieldOverrides_BackendIndexOutOfBounds(t *testing.T) {
 	}
 }
 
+func TestApplyFieldOverrides_SharedOperationIDIsAmbiguous(t *testing.T) {
+	out := testOutputWithEntries()
+	out.OperationIDs["/api/orders:POST"] = "listUsers"
+	applyFieldOverrides(out, []v1alpha1.OperationOverride{{OperationID: "listUsers"}, {OperationID: "ghost"}})
+	if !slices.Equal(out.AmbiguousOverrides, []string{"listUsers"}) {
+		t.Errorf("AmbiguousOverrides = %v, want [listUsers]", out.AmbiguousOverrides)
+	}
+}
+
 func TestApplyFieldOverrides_NonExistentOperationID(t *testing.T) {
 	out := testOutputWithEntries()
 	timeout := metav1.Duration{Duration: 30 * time.Second}
