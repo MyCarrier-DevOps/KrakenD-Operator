@@ -941,7 +941,10 @@ func (v *EndpointValidator) ValidateCreate(
 	if !ok {
 		return nil, fmt.Errorf("expected KrakenDEndpoint, got %T", obj)
 	}
-	errs, warnings := v.validate(ctx, ep)
+	errs, warnings, err := v.validate(ctx, ep)
+	if err != nil {
+		return nil, unavailable(err)
+	}
 	return warnings, invalid("KrakenDEndpoint", ep.Name, errs)
 }
 
@@ -958,7 +961,10 @@ func (v *EndpointValidator) ValidateUpdate(
 	if !ok {
 		return nil, fmt.Errorf("expected KrakenDEndpoint, got %T", newObj)
 	}
-	errs, warnings := v.validate(ctx, ep)
+	errs, warnings, err := v.validate(ctx, ep)
+	if err != nil {
+		return nil, unavailable(err)
+	}
 	return warnings, invalid("KrakenDEndpoint", ep.Name, errs)
 }
 
@@ -973,7 +979,7 @@ func (v *EndpointValidator) ValidateDelete(
 func (v *EndpointValidator) validate(
 	ctx context.Context,
 	ep *v1alpha1.KrakenDEndpoint,
-) (field.ErrorList, admission.Warnings) {
+) (field.ErrorList, admission.Warnings, error) {
 	var errs field.ErrorList
 	var warnings admission.Warnings
 
@@ -992,11 +998,7 @@ func (v *EndpointValidator) validate(
 			}
 			errs = append(errs, field.NotFound(refPath, refValue))
 		} else {
-			errs = append(errs, field.InternalError(
-				field.NewPath("spec", "gatewayRef"),
-				fmt.Errorf("looking up gateway: %w", err),
-			))
-			return errs, warnings
+			return nil, warnings, fmt.Errorf("looking up gateway: %w", err)
 		}
 	}
 
@@ -1029,11 +1031,7 @@ func (v *EndpointValidator) validate(
 							refValue,
 						))
 					} else {
-						errs = append(errs, field.InternalError(
-							policyPath,
-							fmt.Errorf("looking up policy: %w", err),
-						))
-						return errs, warnings
+						return nil, warnings, fmt.Errorf("looking up policy %s: %w", policyPath, err)
 					}
 				}
 			}
@@ -1058,11 +1056,7 @@ func (v *EndpointValidator) validate(
 	if err := v.List(ctx, &existing,
 		client.MatchingFields{fieldindex.EndpointGateway: gwKey},
 	); err != nil {
-		errs = append(errs, field.InternalError(
-			field.NewPath("spec", "gatewayRef"),
-			fmt.Errorf("listing endpoints for conflict check: %w", err),
-		))
-		return errs, warnings
+		return nil, warnings, fmt.Errorf("listing endpoints for conflict check: %w", err)
 	}
 	for _, newEntry := range ep.Spec.Endpoints {
 		for _, other := range existing.Items {
@@ -1083,7 +1077,7 @@ func (v *EndpointValidator) validate(
 		}
 	}
 
-	return errs, warnings
+	return errs, warnings, nil
 }
 
 // PolicyValidator validates KrakenDBackendPolicy resources.
@@ -1134,7 +1128,7 @@ func (v *PolicyValidator) ValidateDelete(
 	if err := v.List(ctx, &endpoints,
 		client.MatchingFields{fieldindex.EndpointPolicy: indexKey},
 	); err != nil {
-		return nil, fmt.Errorf("listing endpoints: %w", err)
+		return nil, unavailable(fmt.Errorf("listing endpoints: %w", err))
 	}
 
 	var references []string
@@ -1209,7 +1203,11 @@ func (v *AutoConfigValidator) ValidateCreate(
 	if !ok {
 		return nil, fmt.Errorf("expected KrakenDAutoConfig, got %T", obj)
 	}
-	return nil, invalid("KrakenDAutoConfig", ac.Name, v.validate(ctx, ac))
+	errs, err := v.validate(ctx, ac)
+	if err != nil {
+		return nil, unavailable(err)
+	}
+	return nil, invalid("KrakenDAutoConfig", ac.Name, errs)
 }
 
 // ValidateUpdate validates an updated KrakenDAutoConfig.
@@ -1225,7 +1223,11 @@ func (v *AutoConfigValidator) ValidateUpdate(
 	if !ok {
 		return nil, fmt.Errorf("expected KrakenDAutoConfig, got %T", newObj)
 	}
-	return nil, invalid("KrakenDAutoConfig", ac.Name, v.validate(ctx, ac))
+	errs, err := v.validate(ctx, ac)
+	if err != nil {
+		return nil, unavailable(err)
+	}
+	return nil, invalid("KrakenDAutoConfig", ac.Name, errs)
 }
 
 // ValidateDelete is a no-op for autoconfigs.
@@ -1239,7 +1241,7 @@ func (v *AutoConfigValidator) ValidateDelete(
 func (v *AutoConfigValidator) validate(
 	ctx context.Context,
 	ac *v1alpha1.KrakenDAutoConfig,
-) field.ErrorList {
+) (field.ErrorList, error) {
 	var errs field.ErrorList
 
 	gw := &v1alpha1.KrakenDGateway{}
@@ -1257,10 +1259,7 @@ func (v *AutoConfigValidator) validate(
 			}
 			errs = append(errs, field.NotFound(refPath, refValue))
 		} else {
-			return field.ErrorList{field.InternalError(
-				field.NewPath("spec", "gatewayRef"),
-				fmt.Errorf("looking up gateway: %w", err),
-			)}
+			return nil, fmt.Errorf("looking up gateway: %w", err)
 		}
 	}
 
@@ -1325,7 +1324,7 @@ func (v *AutoConfigValidator) validate(
 
 	errs = append(errs, validateAdditionalEndpoints(ac)...)
 
-	return errs
+	return errs, nil
 }
 
 // validateAdditionalEndpoints validates the additionalEndpoints field and the
