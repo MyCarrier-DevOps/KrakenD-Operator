@@ -101,7 +101,8 @@ type KrakenDAutoConfigReconciler struct {
 // server rejects, is held at its last-good endpoint instead: the healthy
 // operations still converge, no stale endpoint is deleted, and Synced is False
 // with reason OperationsFailed without an error, since retrying a
-// deterministic failure with backoff gains nothing. A successful reconcile that finds nothing to change writes nothing.
+// deterministic failure with backoff gains nothing. A successful reconcile
+// that finds nothing to change writes nothing.
 func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
