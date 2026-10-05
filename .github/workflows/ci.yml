@@ -39,6 +39,9 @@ jobs:
         run: |
           go test -race -coverprofile=coverage.out -covermode=atomic ./internal/... ./api/... ./cmd/...
           go tool cover -func=coverage.out
+      - name: Test the admission audit
+        working-directory: operator
+        run: make test-audit
       - name: Check coverage threshold
         uses: vladopajic/go-test-coverage@v2
         with:
