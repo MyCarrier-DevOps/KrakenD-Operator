@@ -140,7 +140,7 @@ make deploy IMG=ghcr.io/mycarrier-devops/krakend-operator:<previous-version>
 
 | Operator Version | Kubernetes | KrakenD CE | Go |
 |---|---|---|---|
-| 0.x (alpha) | 1.28+ | 2.13+ | 1.26+ |
+| 0.x (alpha) | 1.33+ | 2.13+ | 1.26+ |
 
 ---
 
@@ -1289,6 +1289,30 @@ now limited to 15 s (`timeoutSeconds`; it was the 10 s default).
 **The operator's memory limit is 512Mi** (was 256Mi). Up to three `krakend
 check` runs share the container, each peaking near 110 MB. If you set
 `resources` in your own values or manifests, raise the limit.
+
+**Kubernetes 1.33 or later is required.** The CRDs now carry schema rules and
+CEL validation. Kubernetes 1.33 ratchets CRD validation: an update that leaves
+an already-invalid field unchanged is admitted, so objects stored before the
+upgrade keep accepting unrelated changes (labels, annotations, other fields);
+only a change *to* the violating field must fix it. Run the audit in the
+Pre-Upgrade Checklist to find such objects. The chart refuses clusters below
+1.33 (`kubeVersion`), and the OLM bundle's `minKubeVersion` is 1.33.0. With
+Helm, use 3.18 or later: older releases default `helm template` and `helm lint`
+to Kubernetes capabilities below 1.33 and refuse the chart unless given
+`--kube-version`.
+
+**KrakenDEndpoint schema.** `spec.endpoints` needs at least one entry and each
+(endpoint, method) pair at most once; every entry needs a backend; `endpoint`
+must start with `/` and contain no `*`, `?`, `&` or `%` except a trailing `/*`;
+`timeout` and `cacheTTL` must be Go durations (`30s`, `1m30s`); `outputEncoding`,
+a backend's `encoding`, `sd` and `method` must be values KrakenD 2.13 accepts;
+`gatewayRef.name` and `policyRef.name` must be non-empty (this also applies to
+the same references on a KrakenDAutoConfig). `spec.endpoints` is now a map list
+keyed on (endpoint, method), so server-side apply merges entries instead of
+replacing the list. The webhook's duplicate-entry and policy field checks were
+removed: the schema enforces them, and a rejection now comes from the API
+server (`Duplicate value`, `should be greater than or equal to 1`) rather than
+from the webhook.
 
 ---
 
