@@ -101,6 +101,7 @@ KrakenDEndpoint a/hp-rawstr: GET "/__health" is the health path of gateway a/hp-
 KrakenDEndpoint a/hp-badtype1: GET "/__health" is the health path of gateway a/hp-badtype1
 KrakenDEndpoint a/hp-badtype2: GET "/__health" is the health path of gateway a/hp-badtype2
 KrakenDEndpoint a/hp-badtype3: GET "/__health" is the health path of gateway a/hp-badtype3
+KrakenDEndpoint a/hp-case: GET "/live" is the health path of gateway a/hp-case
 KrakenDBackendPolicy a/p-ee: Enterprise-only on CE gateway a/ce-gw: spec.raw backend/http/client
 KrakenDBackendPolicy b/p-other: Enterprise-only on CE gateway a/ce-gw: spec.raw auth/gcp
 KrakenDEndpoint a/ee-backend: Enterprise-only on CE gateway a/ce-gw: spec.endpoints[0].backends[0].extraConfig backend/http/client
