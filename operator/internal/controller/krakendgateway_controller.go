@@ -908,8 +908,8 @@ func gatewayStatusChanged(before, after *v1alpha1.KrakenDGatewayStatus) bool {
 // endpointAccepted returns the gateway's verdict on ep for the render that is
 // now its applied configuration:
 //   - True/Accepted when every entry of ep is included;
-//   - True/PartiallyAccepted when an older KrakenDEndpoint won some but not
-//     all of its (endpoint, method) pairs;
+//   - True/PartiallyAccepted when an older KrakenDEndpoint (or an earlier
+//     entry of ep itself) won some but not all of its routes;
 //   - False/EndpointConflict when it won all of them;
 //   - reason EEFeaturesStripped when a CE-fallback render removed Enterprise-only
 //     features from it (False when nothing of it is served).
@@ -945,14 +945,15 @@ func endpointAccepted(gw *v1alpha1.KrakenDGateway, ep *v1alpha1.KrakenDEndpoint,
 		cond.Reason = v1alpha1.ReasonPartiallyAccepted
 		cond.Message = fmt.Sprintf(
 			"%d of %d entries are served on gateway %s/%s; status.conflicts lists the entries an older "+
-				"KrakenDEndpoint serves", served, total, gw.Namespace, gw.Name)
+				"KrakenDEndpoint, or an earlier entry of this one, serves", served, total, gw.Namespace, gw.Name)
 		noteStripped(cond, stripped)
 		return acceptance{condition: cond, conflicts: endpointConflicts(lost)}
 	}
 	cond.Status = metav1.ConditionFalse
 	cond.Reason = v1alpha1.ReasonEndpointConflict
 	cond.Message = fmt.Sprintf(
-		"Entries conflict with an older KrakenDEndpoint on gateway %s/%s; the conflicting entries are not served",
+		"Entries conflict with an older KrakenDEndpoint, or an earlier entry of this one, on gateway %s/%s; "+
+			"the conflicting entries are not served",
 		gw.Namespace, gw.Name)
 	noteStripped(cond, stripped)
 	return acceptance{condition: cond, conflicts: endpointConflicts(lost)}
