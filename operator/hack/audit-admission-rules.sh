@@ -291,8 +291,11 @@ jq "${jq_opts[@]}" "$jq_lib"'
 
 # Two endpoints one AutoConfig controls that share a route (the same method and
 # path shape): the gateway serves only one, so the AutoConfig controller holds
-# every other as ConfigValidationFailed (Synced False, OperationsFailed) and
-# keeps its stale endpoints until the pair is resolved.
+# every other it still generates as ConfigValidationFailed (Synced False,
+# OperationsFailed) and keeps its stale endpoints until the pair is resolved.
+# The audit cannot tell a stale endpoint from a generated one: a pair where one
+# is the old endpoint of an operation being renamed is not held, and the old one
+# is deleted once the new one is written.
 jq "${jq_opts[@]}" "$jq_lib"'
 [.items[] | . as $o
   | ([$o.metadata.ownerReferences // [] | .[] | select(.controller == true and .kind == "KrakenDAutoConfig")][0]) as $ref
@@ -303,7 +306,7 @@ jq "${jq_opts[@]}" "$jq_lib"'
      owner: "\($o.metadata.namespace)/\($o.metadata.name)",
      key: "\(.method) \(.endpoint | conflict_key)", route: "\(.method) \(.endpoint | tojson)"}]
 | group_by([.ac, .uid, .gw, .key])[] | select([.[].owner] | unique | length > 1)
-| "KrakenDAutoConfig \(.[0].ac): endpoints share a route and the operator holds all but the one the gateway serves: \([.[] | "\(.route) (\(.owner))"] | join(" vs "))"' "$work/endpoints.json"
+| "KrakenDAutoConfig \(.[0].ac): endpoints share a route and the operator holds all but the one the gateway serves, unless one of them is a rename in flight: \([.[] | "\(.route) (\(.owner))"] | join(" vs "))"' "$work/endpoints.json"
 
 # GET on a gateway health path: krakend check accepts it, and the controller's
 # route check rejects the render, so the gateway keeps its last applied config.
