@@ -1303,11 +1303,12 @@ ns/name`). Until now it was admitted with a warning, then reported as
 `EndpointConflict`/`PartiallyAccepted` with `status.conflicts` and not served.
 So is an entry whose path differs from another only in parameter names
 (`/users/{id}` and `/users/{name}`) or in repeated slashes, on the same method,
-including two entries of one KrakenDEndpoint. Only an entry whose route is new
-to the stored object is checked (or every entry, when the object moves to
-another gateway), so a conflict stored before the upgrade does not block
-unrelated edits, including edits to the body of the entry that is served; the
-pre-upgrade audit lists them. The denial names the endpoint the renderer
+including two entries of one KrakenDEndpoint. Against other KrakenDEndpoints
+only a route new to the stored object is checked (every entry, when the object
+moves to another gateway), so a conflict stored before the upgrade does not
+block unrelated edits, including edits to the body of the entry that is
+served; same-shape entries inside one KrakenDEndpoint are always checked when
+an entry changes. The pre-upgrade audit lists stored conflicts. The denial names the endpoint the renderer
 serves. After the upgrade, the newer
 endpoint of such a stored pair keeps listing the lost entry in
 `status.conflicts` (`Accepted=False/EndpointConflict` when it has no other
