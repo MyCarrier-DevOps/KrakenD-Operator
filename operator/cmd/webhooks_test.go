@@ -83,6 +83,7 @@ func TestWebhookCertWatchNeeded(t *testing.T) {
 func TestDefaultOperatorUsername(t *testing.T) {
 	tests := []struct{ ns, sa, want string }{
 		{"krakend-system", "krakend-operator", "system:serviceaccount:krakend-system:krakend-operator"},
+		{"krakend-system", "", ""},
 		{"", "krakend-operator", ""},
 	}
 	for _, tt := range tests {
