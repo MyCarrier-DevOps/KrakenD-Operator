@@ -1038,19 +1038,6 @@ func (v *EndpointValidator) validate(
 		}
 	}
 
-	// Detect duplicate (endpoint, method) pairs within this CR.
-	seenPaths := make(map[string]struct{})
-	for i, entry := range ep.Spec.Endpoints {
-		key := entry.Method + " " + entry.Endpoint
-		if _, dup := seenPaths[key]; dup {
-			errs = append(errs, field.Duplicate(
-				field.NewPath("spec", "endpoints").Index(i),
-				key,
-			))
-		}
-		seenPaths[key] = struct{}{}
-	}
-
 	gwKey := ep.Spec.GatewayRef.ResolvedNamespace(ep.Namespace) + "/" + ep.Spec.GatewayRef.Name
 	var existing v1alpha1.KrakenDEndpointList
 	if err := v.List(ctx, &existing,
@@ -1085,32 +1072,18 @@ type PolicyValidator struct {
 	client.Client
 }
 
-// ValidateCreate validates a new KrakenDBackendPolicy.
-func (v *PolicyValidator) ValidateCreate(
-	_ context.Context,
-	obj runtime.Object,
-) (admission.Warnings, error) {
-	policy, ok := obj.(*v1alpha1.KrakenDBackendPolicy)
-	if !ok {
-		return nil, fmt.Errorf("expected KrakenDBackendPolicy, got %T", obj)
-	}
-	return nil, invalid("KrakenDBackendPolicy", policy.Name, validatePolicyFields(policy))
+// ValidateCreate admits a new KrakenDBackendPolicy; the CRD schema enforces
+// its field rules.
+func (v *PolicyValidator) ValidateCreate(context.Context, runtime.Object) (admission.Warnings, error) {
+	return nil, nil
 }
 
-// ValidateUpdate validates an updated KrakenDBackendPolicy.
+// ValidateUpdate admits an updated KrakenDBackendPolicy; the CRD schema
+// enforces its field rules.
 func (v *PolicyValidator) ValidateUpdate(
-	_ context.Context,
-	oldObj runtime.Object,
-	newObj runtime.Object,
+	context.Context, runtime.Object, runtime.Object,
 ) (admission.Warnings, error) {
-	if terminatingWithUnchangedSpec(oldObj, newObj) {
-		return nil, nil
-	}
-	policy, ok := newObj.(*v1alpha1.KrakenDBackendPolicy)
-	if !ok {
-		return nil, fmt.Errorf("expected KrakenDBackendPolicy, got %T", newObj)
-	}
-	return nil, invalid("KrakenDBackendPolicy", policy.Name, validatePolicyFields(policy))
+	return nil, nil
 }
 
 // ValidateDelete blocks deletion if the policy is still referenced by endpoints.
@@ -1147,46 +1120,6 @@ func (v *PolicyValidator) ValidateDelete(
 		})
 	}
 	return nil, nil
-}
-
-func validatePolicyFields(policy *v1alpha1.KrakenDBackendPolicy) field.ErrorList {
-	var errs field.ErrorList
-
-	if policy.Spec.CircuitBreaker != nil {
-		if policy.Spec.CircuitBreaker.MaxErrors <= 0 {
-			errs = append(errs, field.Invalid(
-				field.NewPath("spec", "circuitBreaker", "maxErrors"),
-				policy.Spec.CircuitBreaker.MaxErrors,
-				"must be greater than 0",
-			))
-		}
-		if policy.Spec.CircuitBreaker.Interval <= 0 {
-			errs = append(errs, field.Invalid(
-				field.NewPath("spec", "circuitBreaker", "interval"),
-				policy.Spec.CircuitBreaker.Interval,
-				"must be greater than 0",
-			))
-		}
-		if policy.Spec.CircuitBreaker.Timeout <= 0 {
-			errs = append(errs, field.Invalid(
-				field.NewPath("spec", "circuitBreaker", "timeout"),
-				policy.Spec.CircuitBreaker.Timeout,
-				"must be greater than 0",
-			))
-		}
-	}
-
-	if policy.Spec.RateLimit != nil {
-		if policy.Spec.RateLimit.MaxRate <= 0 {
-			errs = append(errs, field.Invalid(
-				field.NewPath("spec", "rateLimit", "maxRate"),
-				policy.Spec.RateLimit.MaxRate,
-				"must be greater than 0",
-			))
-		}
-	}
-
-	return errs
 }
 
 // AutoConfigValidator validates KrakenDAutoConfig resources.
