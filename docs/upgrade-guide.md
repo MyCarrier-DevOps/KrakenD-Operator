@@ -1472,7 +1472,12 @@ enums, minimums, lengths) let objects stored before the upgrade keep accepting
 unrelated changes. The exceptions are listed in the Pre-Upgrade Checklist:
 rules on a whole `spec`, evaluation errors, atomic lists, and the
 KrakenDAutoConfig name rule. Run the audit in the Pre-Upgrade Checklist to find
-such objects. The chart refuses clusters below
+such objects. These rules left the webhook for the CRDs (duplicate entries,
+policy minimums, and the license, OpenAPI port, PVC and script rules), and Helm
+does not upgrade CRDs, so with the old CRDs still installed nothing enforces
+them: run the audit, then apply the new CRDs as described in [CRDs: apply them
+before upgrading the operator](#crds-apply-them-before-upgrading-the-operator),
+then upgrade the operator. The chart refuses clusters below
 1.33 (`kubeVersion`), and the OLM bundle's `minKubeVersion` is 1.33.0. With
 Helm, use 3.18 or later: older releases default `helm template` and `helm lint`
 to Kubernetes capabilities below 1.33 and refuse the chart unless given
