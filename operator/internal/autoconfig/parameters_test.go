@@ -74,3 +74,12 @@ func TestDereferenceParameters_LeavesSpecWithoutRefsByteIdentical(t *testing.T) 
 		t.Errorf("got %s, %v, %v; want the input unchanged", out, warnings, err)
 	}
 }
+
+func TestDereferenceParameters_ReportsRefCycle(t *testing.T) {
+	spec := []byte(`{"paths":{"/a":{"get":{"parameters":[{"$ref":"#/components/parameters/A"}]}}},
+		"components":{"parameters":{"A":{"$ref":"#/components/parameters/B"},"B":{"$ref":"#/components/parameters/A"}}}}`)
+	_, warnings, err := DereferenceParameters(spec)
+	if err != nil || len(warnings) != 1 || !strings.Contains(warnings[0], "chained $refs") {
+		t.Errorf("warnings = %q, err = %v", warnings, err)
+	}
+}
