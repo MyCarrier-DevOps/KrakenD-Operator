@@ -53,6 +53,13 @@ func TestLicenseSecret(t *testing.T) {
 			wantName: "gw-license", wantKey: "LICENSE", wantOK: true,
 		},
 		{
+			name: "a Secret reference with no name, whatever else is enabled",
+			license: &v1alpha1.LicenseConfig{
+				SecretRef:      secretRef("", "cert"),
+				ExternalSecret: v1alpha1.ExternalSecretLicenseConfig{Enabled: true},
+			},
+		},
+		{
 			name: "a Secret reference and an enabled ExternalSecret: the reference wins",
 			license: &v1alpha1.LicenseConfig{
 				SecretRef:      secretRef("lic", "cert"),
