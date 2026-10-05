@@ -249,6 +249,18 @@ func TestConfigCheckParity(t *testing.T) {
 		}
 	})
 
+	// Endpoint admission judges a candidate against the gateway root alone
+	// when the root's own stored endpoints are the failing part.
+	t.Run("a healthy gateway root with no endpoints lints OK", func(t *testing.T) {
+		verdict, err := policyChecker.CheckIsolated(ctx, parityGateway(v1alpha1.EditionCE, nil), nil)
+		if err != nil {
+			t.Fatalf("CheckIsolated: %v", err)
+		}
+		if !verdict.OK {
+			t.Fatalf("a gateway root with no endpoints is refused by the real binary: %+v", verdict.Findings)
+		}
+	})
+
 	t.Run("LintPolicy refuses a policy the binary rejects", func(t *testing.T) {
 		policy := &v1alpha1.KrakenDBackendPolicy{
 			ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "parity"},
