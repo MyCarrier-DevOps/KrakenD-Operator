@@ -1087,12 +1087,13 @@ func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroExplicitTrueContainerOpt
 // securityContext.runAsUser:0 with no runAsNonRoot escape hatch — as
 // accepted before this reject existed — must not start failing on an
 // UNRELATED update as long as the relevant securityContext fields are
-// unchanged from the stored spec.
+// unchanged from the stored spec. The stored gateway runs CE, where an enabled
+// Dragonfly is no longer accepted when new: a legacy one keeps its ratchets.
 func TestGatewayValidator_DragonflyRunAsUserZeroRatchetUnchangedUpdateAllowed(t *testing.T) {
 	old := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
 		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionEE,
+			Version: "2.13", Edition: v1alpha1.EditionCE,
 			Config: v1alpha1.GatewayConfig{},
 			Dragonfly: &v1alpha1.DragonflySpec{
 				Enabled: true,
