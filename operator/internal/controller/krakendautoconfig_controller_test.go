@@ -5100,3 +5100,27 @@ func TestAutoConfigReconcile_HoldsAStoredSameShapePairsLoserAndKeepsStale(t *tes
 		t.Errorf("expected Synced False/OperationsFailed, got %+v", cond)
 	}
 }
+
+func TestAutoConfigReconcile_ARouteCollisionTheEvaluatorSkippedWarnsOfADuplicate(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).Build()
+	f, ce, fi, g := defaultMocks()
+	ce.output.Skipped = []autoconfig.OperationIssue{{
+		Operation: autoconfig.Operation{Method: "GET", Path: "/api/users", OperationID: "dup"},
+		Reason:    v1alpha1.ReasonDuplicateOperationId,
+		Message:   "same path and method as GET /api/users",
+	}}
+	rec := fakeRecorder()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Recorder = rec
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	events := drainEvents(rec)
+	want := "Warning DuplicateOperationId Duplicate operation GET /api/users skipped: same path and method as GET /api/users"
+	if !slices.Contains(events, want) {
+		t.Errorf("events = %v, want %q", events, want)
+	}
+}
