@@ -25,14 +25,18 @@ import (
 const licenseKey = "LICENSE"
 
 // LicenseSecret is the Secret and key the gateway's license is read from and
-// mounted from: spec.license.secretRef when set, otherwise the Secret an
-// enabled ExternalSecret syncs. ok is false when the spec names neither.
+// mounted from: spec.license.secretRef when set, otherwise the Secret an enabled
+// ExternalSecret syncs. ok is false when the spec names neither, and for a
+// reference with no name, which names no Secret and does not fall through.
 func LicenseSecret(gw *v1alpha1.KrakenDGateway) (name, key string, ok bool) {
 	lic := gw.Spec.License
 	if lic == nil {
 		return "", "", false
 	}
 	if lic.SecretRef != nil {
+		if lic.SecretRef.Name == "" {
+			return "", "", false
+		}
 		key := lic.SecretRef.Key
 		if key == "" {
 			key = licenseKey
