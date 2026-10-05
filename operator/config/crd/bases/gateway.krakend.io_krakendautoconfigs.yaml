@@ -377,7 +377,13 @@ spec:
                         type: string
                       timeout:
                         description: Timeout sets the default endpoint timeout.
+                        maxLength: 64
+                        pattern: ^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$
                         type: string
+                        x-kubernetes-validations:
+                        - message: must be a duration that fits in 64 bits of nanoseconds
+                          rule: '!self.matches(''^(0|(([0-9]+([.][0-9]*)?|[.][0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$'')
+                            || duration(self) >= duration(''0s'')'
                     type: object
                   policyRef:
                     description: PolicyRef sets the default KrakenDBackendPolicy applied
