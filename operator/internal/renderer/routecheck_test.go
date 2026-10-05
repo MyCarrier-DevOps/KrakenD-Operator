@@ -77,3 +77,17 @@ func TestRouteConflicts_MirrorsTheRuntimeRouter(t *testing.T) {
 		})
 	}
 }
+
+func TestRouteConflicts_ARefusalOnItsOwnBlamesNoNeighbour(t *testing.T) {
+	doc := `{"extra_config":{"router":{"disable_health":true}},"endpoints":[
+		{"endpoint":"/ok","method":"GET"},
+		{"endpoint":"/a/*","method":"GET"}]}`
+
+	lines, err := routeConflicts([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lines) != 1 || !strings.HasPrefix(lines[0], "- at '/endpoints/1/endpoint': ") {
+		t.Errorf("lines = %q, want one line blaming endpoint 1, not the unrelated /ok", lines)
+	}
+}
