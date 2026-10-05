@@ -18,7 +18,6 @@ package webhook
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
@@ -90,13 +89,9 @@ func ratchetRender(
 // describeDrops lists what a CE render drops: a namespace, with the keys CE
 // does not honor when it honors the rest of the block.
 func describeDrops(drops []renderer.CEDrop) string {
-	parts := make([]string, 0, len(drops))
-	for _, d := range drops {
-		if len(d.Keys) > 0 {
-			parts = append(parts, fmt.Sprintf("%s (%s)", d.Namespace, strings.Join(d.Keys, ", ")))
-			continue
-		}
-		parts = append(parts, d.Namespace)
+	parts := make([]string, len(drops))
+	for i, d := range drops {
+		parts[i] = d.String()
 	}
 	return strings.Join(parts, ", ")
 }
