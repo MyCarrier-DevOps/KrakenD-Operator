@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 )
 
@@ -563,5 +564,23 @@ func TestPolicyEndpointPredicate_DropsStatusOnlyUpdates(t *testing.T) {
 	}
 	if !p.Create(event.CreateEvent{Object: old}) || !p.Delete(event.DeleteEvent{Object: old}) {
 		t.Error("endpoint creates and deletes must recount references")
+	}
+}
+
+func TestPolicyReconcile_AddsTheProtectionFinalizer(t *testing.T) {
+	policy := &v1alpha1.KrakenDBackendPolicy{ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "default"}}
+	c := fakeClientBuilder().WithObjects(policy).WithStatusSubresource(policy).Build()
+	r := &KrakenDBackendPolicyReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(policy)}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	var got v1alpha1.KrakenDBackendPolicy
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(policy), &got); err != nil {
+		t.Fatal(err)
+	}
+	if !controllerutil.ContainsFinalizer(&got, v1alpha1.PolicyProtectionFinalizer) {
+		t.Fatalf("finalizers = %v, want the protection finalizer", got.Finalizers)
 	}
 }
