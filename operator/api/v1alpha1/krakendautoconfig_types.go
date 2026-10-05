@@ -340,6 +340,7 @@ type AdditionalEndpoint struct {
 	// Encoding sets the synthesized backend's encoding. "no-op" also sets the
 	// endpoint output encoding to no-op unless OutputEncoding is set. Ignored when Backends is set.
 	// +optional
+	// +kubebuilder:validation:Enum=json;safejson;fast-json;xml;rss;string;no-op;yaml
 	Encoding string `json:"encoding,omitempty"`
 
 	// Backends, when set, is used verbatim; Host/BackendURLPattern/Encoding are ignored.
