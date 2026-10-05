@@ -40,7 +40,27 @@ func walkJSON(node any, visit func(key string, value any) bool) {
 
 // examplePayload reports whether value, the member key of an object, is
 // example data rather than part of the spec's structure, and returns the
-// $refs that are real references inside it.
+// $refs that are real references inside it. The payload is the value of an
+// "example" key and the content of an "examples" key, except that each entry
+// of an "examples" object may itself be a $ref to an Example Object. A schema
+// property literally named "example" or "examples" is taken for a payload too.
 func examplePayload(key string, value any) (isPayload bool, refs []string) {
-	return key == "example" || key == "examples", nil
+	switch key {
+	case "example":
+		return true, nil
+	case "examples":
+		entries, ok := value.(map[string]any)
+		if !ok {
+			return true, nil
+		}
+		for _, name := range slices.Sorted(maps.Keys(entries)) {
+			if entry, ok := entries[name].(map[string]any); ok {
+				if ref, ok := entry["$ref"].(string); ok {
+					refs = append(refs, ref)
+				}
+			}
+		}
+		return true, refs
+	}
+	return false, nil
 }
