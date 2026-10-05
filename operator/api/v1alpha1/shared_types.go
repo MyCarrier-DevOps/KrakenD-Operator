@@ -40,6 +40,7 @@ func (r *GatewayRef) ResolvedNamespace(fallback string) string {
 // When Namespace is empty the policy is assumed to live in the same namespace
 // as the referencing resource.
 type PolicyRef struct {
+	// +kubebuilder:validation:MinLength=1
 	Name string `json:"name"`
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:MaxLength=63
