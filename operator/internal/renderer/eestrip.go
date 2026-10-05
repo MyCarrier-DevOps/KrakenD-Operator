@@ -23,6 +23,7 @@ import (
 	"maps"
 	"slices"
 	"sort"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/runtime"
 )
@@ -221,6 +222,9 @@ type CEDrop struct {
 // String names the drop: the namespace, followed by the dropped keys when CE
 // honors the rest of the block.
 func (d CEDrop) String() string {
+	if len(d.Keys) > 0 {
+		return fmt.Sprintf("%s (%s)", d.Namespace, strings.Join(d.Keys, ", "))
+	}
 	return d.Namespace
 }
 
