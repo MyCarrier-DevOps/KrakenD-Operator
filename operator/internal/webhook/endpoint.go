@@ -235,16 +235,19 @@ func (v *EndpointValidator) validateRouteUniqueness(
 		client.MatchingFields{fieldindex.EndpointGateway: gw.Namespace + "/" + gw.Name}); err != nil {
 		return nil, fmt.Errorf("listing endpoints of gateway %s/%s: %w", gw.Namespace, gw.Name, err)
 	}
-	type claim struct{ owner, endpoint string }
 	claims := map[string]claim{}
 	for i := range list.Items {
 		other := &list.Items[i]
 		if other.Namespace == ep.Namespace && other.Name == ep.Name || sameController(ep, other) {
 			continue
 		}
-		for _, e := range other.Spec.Endpoints {
-			claims[routeKey(e)] = claim{
-				owner: "KrakenDEndpoint " + other.Namespace + "/" + other.Name, endpoint: e.Endpoint,
+		for idx, e := range other.Spec.Endpoints {
+			c := claim{
+				owner: other.Namespace + "/" + other.Name, endpoint: e.Endpoint,
+				created: other.CreationTimestamp.Unix(), index: idx,
+			}
+			if prev, ok := claims[routeKey(e)]; !ok || c.servedBefore(prev) {
+				claims[routeKey(e)] = c
 			}
 		}
 	}
@@ -253,7 +256,7 @@ func (v *EndpointValidator) validateRouteUniqueness(
 		e := ep.Spec.Endpoints[i]
 		p := field.NewPath("spec", "endpoints").Index(i)
 		if c, ok := claims[routeKey(e)]; ok {
-			errs = append(errs, routeClash(p, e, c.endpoint, c.owner))
+			errs = append(errs, routeClash(p, e, c.endpoint, "KrakenDEndpoint "+c.owner))
 			continue
 		}
 		for j, other := range ep.Spec.Endpoints {
@@ -264,6 +267,26 @@ func (v *EndpointValidator) validateRouteUniqueness(
 		}
 	}
 	return errs, nil
+}
+
+// claim is an entry of another KrakenDEndpoint that holds a route.
+type claim struct {
+	owner, endpoint string // owner is namespace/name
+	created         int64
+	index           int
+}
+
+// servedBefore reports whether c wins the route over o in the renderer's
+// order: the older KrakenDEndpoint, then the lower name, then the earlier
+// entry. Admission names the winner, whatever order the informer lists in.
+func (c claim) servedBefore(o claim) bool {
+	if c.created != o.created {
+		return c.created < o.created
+	}
+	if c.owner != o.owner {
+		return c.owner < o.owner
+	}
+	return c.index < o.index
 }
 
 // sameController reports whether a and b have the same controller owner, for
