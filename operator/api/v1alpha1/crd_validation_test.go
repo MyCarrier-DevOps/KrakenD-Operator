@@ -282,6 +282,7 @@ func TestGatewayCRD_Rules(t *testing.T) {
 		{"openapi with distinct ports", gatewayHead + `edition: CE, config: {}, openapi: {enabled: true}}}`, ""},
 		{"overflowing timeout", gatewayHead + `edition: CE, config: {timeout: "99999999999h"}}}`, "spec.config.timeout"},
 		{"overflowing cacheTTL", gatewayHead + `edition: CE, config: {cacheTTL: "99999999999h"}}}`, "spec.config.cacheTTL"},
+		{"overflowing dnsCacheTTL", gatewayHead + `edition: CE, config: {dnsCacheTTL: "99999999999h"}}}`, "spec.config.dnsCacheTTL"},
 	})
 }
 
