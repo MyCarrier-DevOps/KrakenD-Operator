@@ -339,6 +339,8 @@ func TestCEDrops(t *testing.T) {
 	}{
 		{"whole namespace", LevelEndpoint, `{"auth/api-keys":{"roles":["a"]},"qos/ratelimit/router":{"max_rate":1}}`,
 			[]CEDrop{{Namespace: "auth/api-keys"}}},
+		// CE honors send_body_on_redirect, so a block with nothing else drops nothing.
+		{"CE-honored keys only", LevelBackend, `{"backend/http/client":{"send_body_on_redirect":true}}`, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
