@@ -92,6 +92,7 @@ gateway a/routes-self: GET /self/{id} (a/route-self) vs GET /self/{name} (a/rout
 KrakenDEndpoint a/hp-clash: GET /healthz is the health path of gateway a/hp
 KrakenDEndpoint a/hp-default-clash: GET /__health is the health path of gateway a/hp-default
 KrakenDEndpoint a/hp-raw-clash: GET /live is the health path of gateway a/hp-raw
+KrakenDBackendPolicy a/p-ee: Enterprise-only on CE gateway a/ce-gw: spec.raw backend/http/client
 KrakenDEndpoint a/ee-backend: Enterprise-only on CE gateway a/ce-gw: spec.endpoints[0].backends[0].extraConfig backend/http/client
 KrakenDEndpoint a/ee-both: Enterprise-only on CE gateway a/ce-gw: spec.endpoints[0].extraConfig auth/api-keys, spec.endpoints[0].backends[0].extraConfig backend/http/client
 KrakenDEndpoint a/ee-entry: Enterprise-only on CE gateway a/ce-gw: spec.endpoints[0].extraConfig auth/api-keys
