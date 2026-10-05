@@ -138,12 +138,26 @@ func gatewayRenderDenial(gw *v1alpha1.KrakenDGateway, verdict configcheck.Verdic
 	return invalid("KrakenDGateway", gw.Name, errs)
 }
 
-// checkPolicyRender validates policy on its own.
+// checkPolicyRender validates policy on its own and refuses it when it fails.
 func checkPolicyRender(
 	ctx context.Context, chk ConfigChecker, policy *v1alpha1.KrakenDBackendPolicy,
 ) (admission.Warnings, error) {
-	_, err := chk.LintPolicy(ctx, policy)
-	return nil, checkErr(err)
+	alone, err := chk.LintPolicy(ctx, policy)
+	if err != nil || alone.OK {
+		return nil, checkErr(err)
+	}
+	return nil, invalid("KrakenDBackendPolicy", policy.Name, field.ErrorList{field.Invalid(
+		field.NewPath("spec"), field.OmitValueType{}, "fails krakend check on its own: "+messages(alone))})
+}
+
+// messages joins a verdict's messages without their locations: a policy's
+// lint findings point into a synthetic endpoint the user never wrote.
+func messages(v configcheck.Verdict) string {
+	parts := make([]string, 0, len(v.Findings))
+	for _, f := range v.Findings {
+		parts = append(parts, f.Message)
+	}
+	return truncate(strings.Join(parts, "; "), warningLimit)
 }
 
 // versionEchoLimit bounds, in bytes, the spec.version a warning quotes: the
