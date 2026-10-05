@@ -639,6 +639,7 @@ spec:
                       type: integer
                     endpoint:
                       description: Endpoint overrides the generated endpoint path.
+                      pattern: ^(/\*|/[^*?&%]*(/\*)?)$
                       type: string
                     extraConfig:
                       description: ExtraConfig overrides the endpoint extra_config.
