@@ -826,7 +826,7 @@ func TestGatewayValidator_DragonflyContainerRunAsUserZeroRejected(t *testing.T) 
 	gw := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
 		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Version: "2.13", Edition: v1alpha1.EditionEE,
 			Config: v1alpha1.GatewayConfig{},
 			Dragonfly: &v1alpha1.DragonflySpec{
 				Enabled: true,
@@ -873,7 +873,7 @@ func TestGatewayValidator_DragonflyContainerRunAsUserZeroWithPodRunAsNonRootFals
 	gw := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
 		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Version: "2.13", Edition: v1alpha1.EditionEE,
 			Config: v1alpha1.GatewayConfig{},
 			Dragonfly: &v1alpha1.DragonflySpec{
 				Enabled: true,
@@ -900,7 +900,7 @@ func TestGatewayValidator_DragonflyContainerRunAsUserZeroWithContainerRunAsNonRo
 	gw := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
 		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Version: "2.13", Edition: v1alpha1.EditionEE,
 			Config: v1alpha1.GatewayConfig{},
 			Dragonfly: &v1alpha1.DragonflySpec{
 				Enabled: true,
@@ -933,7 +933,7 @@ func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroWithExplicitRunAsNonRoot
 	gw := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
 		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Version: "2.13", Edition: v1alpha1.EditionEE,
 			Config: v1alpha1.GatewayConfig{},
 			Dragonfly: &v1alpha1.DragonflySpec{
 				Enabled: true,
@@ -974,7 +974,7 @@ func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroUnsetRunAsNonRootRejecte
 	gw := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
 		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Version: "2.13", Edition: v1alpha1.EditionEE,
 			Config: v1alpha1.GatewayConfig{},
 			Dragonfly: &v1alpha1.DragonflySpec{
 				Enabled: true,
@@ -1021,7 +1021,7 @@ func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroContainerOptOutRejected(
 	gw := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
 		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Version: "2.13", Edition: v1alpha1.EditionEE,
 			Config: v1alpha1.GatewayConfig{},
 			Dragonfly: &v1alpha1.DragonflySpec{
 				Enabled: true,
@@ -1057,7 +1057,7 @@ func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroExplicitTrueContainerOpt
 	gw := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
 		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Version: "2.13", Edition: v1alpha1.EditionEE,
 			Config: v1alpha1.GatewayConfig{},
 			Dragonfly: &v1alpha1.DragonflySpec{
 				Enabled: true,
@@ -1092,7 +1092,7 @@ func TestGatewayValidator_DragonflyRunAsUserZeroRatchetUnchangedUpdateAllowed(t 
 	old := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
 		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Version: "2.13", Edition: v1alpha1.EditionEE,
 			Config: v1alpha1.GatewayConfig{},
 			Dragonfly: &v1alpha1.DragonflySpec{
 				Enabled: true,
@@ -1125,7 +1125,7 @@ func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroRatchetUnchangedUpdateAl
 	old := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
 		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Version: "2.13", Edition: v1alpha1.EditionEE,
 			Config: v1alpha1.GatewayConfig{},
 			Dragonfly: &v1alpha1.DragonflySpec{
 				Enabled: true,
@@ -1156,7 +1156,7 @@ func TestGatewayValidator_DragonflyRunAsUserZeroRatchetNewlyIntroducedUpdateReje
 	old := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
 		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Version: "2.13", Edition: v1alpha1.EditionEE,
 			Config: v1alpha1.GatewayConfig{},
 			Dragonfly: &v1alpha1.DragonflySpec{
 				Enabled: true,
@@ -1187,7 +1187,7 @@ func TestGatewayValidator_DragonflyRunAsUserZeroRatchetDisabledThenEnabledReject
 	old := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
 		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Version: "2.13", Edition: v1alpha1.EditionEE,
 			Config: v1alpha1.GatewayConfig{},
 			Dragonfly: &v1alpha1.DragonflySpec{
 				Enabled: false,
@@ -1320,7 +1320,7 @@ func TestGatewayValidator_DragonflyEffectiveRunAsRootCrossScopePrecedence(t *tes
 			gw := &v1alpha1.KrakenDGateway{
 				ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
 				Spec: v1alpha1.KrakenDGatewaySpec{
-					Version: "2.13", Edition: v1alpha1.EditionCE,
+					Version: "2.13", Edition: v1alpha1.EditionEE,
 					Config: v1alpha1.GatewayConfig{},
 					Dragonfly: &v1alpha1.DragonflySpec{
 						Enabled:                  true,
@@ -1358,7 +1358,7 @@ func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroWithNonZeroContainerReje
 	gw := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
 		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Version: "2.13", Edition: v1alpha1.EditionEE,
 			Config: v1alpha1.GatewayConfig{},
 			Dragonfly: &v1alpha1.DragonflySpec{
 				Enabled: true,
@@ -1395,7 +1395,7 @@ func TestGatewayValidator_DragonflyContainerRootRecipeWithPodScopeRootStillAdmit
 	gw := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
 		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Version: "2.13", Edition: v1alpha1.EditionEE,
 			Config: v1alpha1.GatewayConfig{},
 			Dragonfly: &v1alpha1.DragonflySpec{
 				Enabled: true,
@@ -2426,7 +2426,7 @@ func TestGatewayAdmission_ChangedDragonflyRunAsStillUnacknowledgedIsRejected(t *
 	old := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
 		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Version: "2.13", Edition: v1alpha1.EditionEE,
 			Dragonfly: &v1alpha1.DragonflySpec{
 				Enabled:            true,
 				PodSecurityContext: &corev1.PodSecurityContext{RunAsUser: ptr.To(int64(0))},
