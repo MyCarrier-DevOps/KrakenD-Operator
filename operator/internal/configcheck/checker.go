@@ -60,7 +60,9 @@ func (c *Checker) CheckGateway(ctx context.Context, gw *v1alpha1.KrakenDGateway,
 // CheckIsolated lints gw's root config with eps as its only endpoints.
 func (c *Checker) CheckIsolated(ctx context.Context, gw *v1alpha1.KrakenDGateway,
 	eps []v1alpha1.KrakenDEndpoint) (Verdict, error) {
-	return c.CheckGateway(ctx, gw, eps)
+	endpoints := slices.Clone(eps)
+	sortEndpoints(endpoints)
+	return c.lint(ctx, renderer.RenderInput{Gateway: gw, Endpoints: endpoints, CEFallback: ceFallback(gw)})
 }
 
 func (c *Checker) lint(ctx context.Context, in renderer.RenderInput) (Verdict, error) {
