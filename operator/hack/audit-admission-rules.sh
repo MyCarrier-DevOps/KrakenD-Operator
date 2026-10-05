@@ -66,6 +66,7 @@ def enum_problem($label; $set): select(IN($set[]) | not) | "\($label) \(.)";
 def quantity_problem($label):
   if type != "string" then empty
   elif crd_test($qty_re) | not then "\($label) \(.)"
+  elif length > 64 then "\($label) is longer than 64 characters"
   else empty end;
 def report(kind): select(.v | length > 0) | "\(kind) \(.id): \(.v | unique | join("; "))";
 '
