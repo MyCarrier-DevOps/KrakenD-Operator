@@ -4042,3 +4042,30 @@ func TestAutoConfigReconcile_FailedDeleteDoesNotStopOtherDeletes(t *testing.T) {
 		t.Errorf("expected Synced False/EndpointReconcileFailed, got %+v", cond)
 	}
 }
+
+func TestAutoConfigReconcile_AdoptionFailureStillWritesAndKeepsStale(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	stale := ownedCopy(t, ac, generatedEndpoint("old", "/old"))
+	orphan := generatedEndpoint("orphan", "/orphan")
+	var ops []string
+	c := fakeClientBuilder().WithObjects(ac, cm, stale, orphan).WithStatusSubresource(ac).
+		WithInterceptorFuncs(recordEndpointWrites(&ops, map[string]error{"test-ac-orphan": errors.New("etcd timeout")})).
+		Build()
+	r := newACReconciler(c, f, ce, fi, g)
+
+	_, err := reconcileAC(r, ac)
+
+	if err == nil || !strings.Contains(err.Error(), "adopting endpoint test-ac-orphan: etcd timeout") {
+		t.Fatalf("expected the adoption error, got %v", err)
+	}
+	if !endpointExists(t, c, "test-ac-listusers") {
+		t.Error("expected the desired endpoint written despite the failed adoption")
+	}
+	for _, name := range []string{"test-ac-old", "test-ac-orphan"} {
+		if !endpointExists(t, c, name) {
+			t.Errorf("expected %s kept: a failed adoption must not delete anything", name)
+		}
+	}
+}
