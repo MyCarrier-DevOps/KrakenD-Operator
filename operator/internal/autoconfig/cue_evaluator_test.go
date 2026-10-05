@@ -1947,3 +1947,19 @@ func TestEvaluate_SkippedOperationsCarryTheTransformedPath(t *testing.T) {
 		t.Errorf("skipped = %+v, want one entry at /api/a", out.Skipped)
 	}
 }
+
+func TestEvaluate_OverrideMethodToSupportedGeneratesTheEntry(t *testing.T) {
+	out := evaluateEmbedded(t, `{"paths":{"/a":{"head":{"operationId":"headA",`+
+		`"responses":{"200":{"description":"OK"}}}}}}`,
+		v1alpha1.OperationOverride{OperationID: "headA", Method: "GET"})
+
+	if len(out.UnmatchedOverrides) != 0 {
+		t.Errorf("unmatched overrides = %q, want none", out.UnmatchedOverrides)
+	}
+	if len(out.Entries) != 1 || out.Entries[0].Method != "GET" {
+		t.Errorf("entries = %+v, want one GET entry", out.Entries)
+	}
+	if len(out.Skipped) != 0 {
+		t.Errorf("skipped = %+v, want none", out.Skipped)
+	}
+}
