@@ -379,11 +379,11 @@ pass, continuously, until the input was fixed. Now:
   operator restart.
 - `ConfigValidationFailed` fires when the verdict or its message changes,
   not on every reconcile.
-- `config_validation_failures_total` counts each rejected input once, not
+- `krakend_operator_config_validation_failures_total` counts each rejected input once, not
   once per reconcile. A lasting rejection no longer keeps the counter rising.
   An alert on its rate, such as the runbook's former
   `KrakenDConfigValidationFailures`
-  (`rate(config_validation_failures_total[5m]) > 0` for 10 minutes),
+  (`rate(krakend_operator_config_validation_failures_total[5m]) > 0` for 10 minutes),
   therefore no longer fires for a single lasting rejection. The runbook now
   alerts per gateway on `krakend_operator_gateway_config_valid`
   (`KrakenDGatewayConfigRejected`; see "Metrics" under "Gateway reconcile
@@ -405,7 +405,7 @@ full, or the validation copy cannot be prepared), the gateway now reports
 config, and retries with exponential backoff. Previously such failures were
 reported as an invalid config (and re-run in a status-write loop).
 
-`config_validation_failures_total` counts only a fresh verdict from the
+`krakend_operator_config_validation_failures_total` counts only a fresh verdict from the
 validator (`krakend check`, or the EE wildcard rules applied before it).
 Failures to prepare the validation copy and other errors that are not
 verdicts, such as an unavailable validator, do not increment it.
@@ -665,9 +665,9 @@ so a deleted Deployment stayed deleted. Reconciliation now has two stages:
 - **Infrastructure stage:** always runs and deploys the applied config. A
   rejected or unjudged render changes nothing the pods see. Every other spec
   change (replicas, image, resources, probes) and drift correction proceed
-  as usual. The Deployment is left as it is in two cases only: no ConfigMap
-  holds the applied config (it was deleted while a newer render is
-  rejected), and a plugin ConfigMap is missing.
+  as usual. The Deployment is left as it is in three cases only: no config has
+  been applied yet, no ConfigMap holds the applied config (it was deleted
+  while a newer render is rejected), and a plugin ConfigMap is missing.
 
 Until a first config has passed validation, the Deployment is not created.
 The ServiceAccount, Service and PDB are, and so are the HPA, Dragonfly,
@@ -814,7 +814,7 @@ immediately.
 - `LicenseExpiringSoon`, `LicenseFallbackCE`, `LicenseExpiredNoFallback`,
   `LicenseSecretMissing` and `LicenseRestored` events fire once per
   transition. `LicenseExpiringSoon` is no longer repeated every 24 hours.
-- The `license_expiry_seconds` series of a deleted or terminating gateway is
+- The `krakend_operator_license_expiry_seconds` series of a deleted or terminating gateway is
   removed and not recreated.
 - An EE gateway whose license cannot be read or parsed reports
   `LicenseValid=Unknown` (reason `LicenseSecretMissing`) next to
@@ -826,7 +826,7 @@ immediately.
   `LicenseExpired`) instead of `Unknown`. With no known expiry, or one still
   ahead of the buffer, it keeps its last fallback decision.
 - A gateway switched from EE to CE loses its `License*` conditions,
-  `status.licenseExpiry` and `license_expiry_seconds` series, so a stale
+  `status.licenseExpiry` and `krakend_operator_license_expiry_seconds` series, so a stale
   `LicenseExpired=True` no longer holds it at phase `Error`.
 - Turning `fallbackToCE` off while the license is expired emits one
   `LicenseExpiredNoFallback` event as the gateway goes from `Degraded` to
@@ -1117,7 +1117,7 @@ sources.
   the gateway's newest config passed validation, 0 while it is rejected or
   could not be checked. Like the other per-gateway series, it is removed when
   the gateway is deleted. Alert on it instead of the unlabelled
-  `config_validation_failures_total`: the runbook's
+  `krakend_operator_config_validation_failures_total`: the runbook's
   `KrakenDConfigValidationFailures` rule is replaced by
   `KrakenDGatewayConfigRejected` (`krakend_operator_gateway_config_valid == 0`
   for 15 minutes).
