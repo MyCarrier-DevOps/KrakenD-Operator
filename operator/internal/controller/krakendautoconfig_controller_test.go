@@ -5124,3 +5124,20 @@ func TestAutoConfigReconcile_ARouteCollisionTheEvaluatorSkippedWarnsOfADuplicate
 		t.Errorf("events = %v, want %q", events, want)
 	}
 }
+
+func TestAttributeFindings_CauseCarriesEveryFindingInOrder(t *testing.T) {
+	a := generatedEndpoint("a", "/a")
+	key := types.NamespacedName{Namespace: "default", Name: "test-ac-a"}
+
+	got := attributeFindings([]configcheck.Finding{
+		{Endpoint: key, Index: 0, Message: "zeta"},
+		{Endpoint: key, Index: -1, Message: "alpha"},
+	}, []*v1alpha1.KrakenDEndpoint{a})
+
+	if want := "default/test-ac-a spec.endpoints[0]: zeta; default/test-ac-a: alpha"; got["test-ac-a"].cause.Error() != want {
+		t.Errorf("cause = %v, want %q", got["test-ac-a"].cause, want)
+	}
+	if got["test-ac-a"].message != "alpha" {
+		t.Errorf("message = %q, want the least finding, alpha", got["test-ac-a"].message)
+	}
+}
