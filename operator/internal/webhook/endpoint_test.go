@@ -72,3 +72,26 @@ func TestEndpointAdmission_RatchetsUnchangedEntriesAcrossReorder(t *testing.T) {
 		t.Errorf("edit of the violating entry: %+v, want 422 on spec.endpoints[1].extraConfig", resp.Result)
 	}
 }
+
+func TestEndpointAdmission_UnchangedReferencesAreNotRechecked(t *testing.T) {
+	old := testEndpoint("e", "/a")
+	old.Spec.Endpoints[0].Backends[0].PolicyRef = &v1alpha1.PolicyRef{Name: "gone"}
+	edited := old.DeepCopy()
+	edited.Spec.Endpoints = append(edited.Spec.Endpoints, testEndpoint("x", "/b").Spec.Endpoints...)
+	v := &EndpointValidator{Client: fakeClient()} // neither the gateway nor the policy exists any more
+
+	if resp := review(t, v, "alice", edited, old); !resp.Allowed {
+		t.Errorf("edit with unchanged dangling refs denied: %+v", resp.Result)
+	}
+
+	newRef := edited.DeepCopy()
+	newRef.Spec.Endpoints[1].Backends[0].PolicyRef = &v1alpha1.PolicyRef{Name: "missing"}
+	if resp := review(t, v, "alice", newRef, old); resp.Allowed {
+		t.Error("new reference to a missing policy admitted")
+	}
+	moved := edited.DeepCopy()
+	moved.Spec.GatewayRef.Name = "other"
+	if resp := review(t, v, "alice", moved, old); resp.Allowed {
+		t.Error("gatewayRef changed to a missing gateway admitted")
+	}
+}
