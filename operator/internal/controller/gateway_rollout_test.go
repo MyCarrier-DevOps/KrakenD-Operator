@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -186,4 +187,40 @@ func TestGatewayReconcile_RecreatedDeploymentIsDeployingNotReadyAndNotError(t *t
 	if got.Status.Phase != v1alpha1.PhaseDeploying {
 		t.Errorf("phase = %s while the new Deployment starts, want %s", got.Status.Phase, v1alpha1.PhaseDeploying)
 	}
+}
+
+func TestGatewayReconcile_RolloutStaysReportedAfterAFailedStatusWrite(t *testing.T) {
+	s := settleLicensedGateway(t)
+	failGatewayStatus := true
+	s.r.Client = interceptor.NewClient(s.c.(client.WithWatch), interceptor.Funcs{
+		SubResourceUpdate: func(
+			ctx context.Context, c client.Client, sub string, obj client.Object, opts ...client.SubResourceUpdateOption,
+		) error {
+			if _, ok := obj.(*v1alpha1.KrakenDGateway); ok && failGatewayStatus {
+				return errors.New("the status write failed")
+			}
+			return c.SubResource(sub).Update(ctx, obj, opts...)
+		},
+	})
+	s.setLicenseBytes(t, "renewed certificate")
+
+	if err := reconcileGateway(t, s.r, s.gw); err == nil {
+		t.Fatal("the failed status write must fail the pass")
+	}
+	// The write that rolls the pods to the renewed license went through; the
+	// Deployment controller has observed it and is surging a new pod.
+	dep := s.deployment(t)
+	dep.Status = appsv1.DeploymentStatus{
+		ObservedGeneration: dep.Generation, Replicas: 2, UpdatedReplicas: 1, AvailableReplicas: 2, ReadyReplicas: 2,
+	}
+	if err := s.c.Status().Update(context.Background(), dep); err != nil {
+		t.Fatal(err)
+	}
+
+	failGatewayStatus = false
+	if err := reconcileGateway(t, s.r, s.gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	requireProgressing(t, getGateway(t, s.c, s.gw), metav1.ConditionTrue, false)
 }
