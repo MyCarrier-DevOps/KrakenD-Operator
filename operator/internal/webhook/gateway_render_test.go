@@ -258,6 +258,7 @@ func TestGatewayAdmission_CERejectsEnterpriseOnlyNamespaces(t *testing.T) {
 			`spec.edition: Invalid value: "CE"`,
 			"KrakenDEndpoint default/keys spec.endpoints[0].extraConfig auth/api-keys",
 			"KrakenDBackendPolicy default/p spec.raw backend/http/client"}},
+		{"EE to CE with nothing Enterprise-only", []client.Object{testEndpoint("plain", "/p")}, testGateway(), ee(), nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
