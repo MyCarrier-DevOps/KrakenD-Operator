@@ -243,3 +243,24 @@ func TestTruncate_CutsOnARuneBoundary(t *testing.T) {
 		})
 	}
 }
+
+func TestTruncateEllipsis_NeverExceedsTheLimit(t *testing.T) {
+	tests := []struct {
+		name, in string
+		limit    int
+		want     string
+	}{
+		{"fits is unchanged", "abcdef", 6, "abcdef"},
+		{"cut is marked", "abcdefg", 6, "abc..."},
+		{"never splits a rune", "aéééé", 7, "aé..."},
+		{"limit under the marker", "abcdef", 2, "ab"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := TruncateEllipsis(tt.in, tt.limit)
+			if got != tt.want || len(got) > tt.limit || !utf8.ValidString(got) {
+				t.Errorf("TruncateEllipsis(%q, %d) = %q, want %q", tt.in, tt.limit, got, tt.want)
+			}
+		})
+	}
+}
