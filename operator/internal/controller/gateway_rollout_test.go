@@ -85,7 +85,7 @@ func (s *servedGateway) deploymentControllerObserves(t *testing.T, edit func(st 
 	if edit != nil {
 		edit(&dep.Status)
 	}
-	if err := s.c.Update(context.Background(), dep); err != nil {
+	if err := s.c.Status().Update(context.Background(), dep); err != nil {
 		t.Fatal(err)
 	}
 }
