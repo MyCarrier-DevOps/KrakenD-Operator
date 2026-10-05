@@ -2311,12 +2311,15 @@ func TestAutoConfigReconcile_IdenticalSecondPassWritesNothing(t *testing.T) {
 	var counts writeCounts
 	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).
 		WithInterceptorFuncs(countWrites(&counts)).Build()
+	rec := fakeRecorder()
 	r := newACReconciler(c, f, ce, fi, g)
+	r.Recorder = rec
 
 	if _, err := reconcileAC(r, ac); err != nil {
 		t.Fatalf("first reconcile: %v", err)
 	}
 	first := getAC(t, c, ac)
+	drainEvents(rec)
 	if len(first.Status.Skipped) != 2 || len(first.Status.Warnings) != 2 {
 		t.Fatalf("first pass skipped = %+v, warnings = %q; want 2 of each", first.Status.Skipped, first.Status.Warnings)
 	}
@@ -2327,6 +2330,9 @@ func TestAutoConfigReconcile_IdenticalSecondPassWritesNothing(t *testing.T) {
 	}
 	if counts != (writeCounts{}) {
 		t.Errorf("an identical second pass wrote %+v, want no writes", counts)
+	}
+	if events := drainEvents(rec); len(events) != 0 {
+		t.Errorf("an identical second pass emitted %v, want no events", events)
 	}
 }
 
