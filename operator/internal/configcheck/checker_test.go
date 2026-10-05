@@ -109,3 +109,24 @@ func TestCheckGateway_LintsCurrentEndpointsWithTheCandidate(t *testing.T) {
 		t.Errorf("config still holds the replaced entry: %s", v.seen[0])
 	}
 }
+
+// The AutoConfig controller passes an entry-less copy of a stale endpoint to
+// model its deletion. It must render nothing: not its paths, not its
+// component schemas.
+func TestCheckGateway_EmptyReplacementRemovesTheEndpoint(t *testing.T) {
+	stale := endpoint("stale", "/stale")
+	stale.Spec.ComponentSchemas = map[string]runtime.RawExtension{"staleschema": {Raw: []byte(`{"type":"object"}`)}}
+	v := &fakeValidator{}
+	c := newChecker(v, stale, endpoint("kept", "/kept"))
+	removal := stale.DeepCopy()
+	removal.Spec.Endpoints = nil
+
+	verdict, err := c.CheckGateway(context.Background(), gateway(v1alpha1.EditionEE), []v1alpha1.KrakenDEndpoint{*removal})
+
+	if err != nil || !verdict.OK {
+		t.Fatalf("verdict = %+v, err = %v; want OK", verdict, err)
+	}
+	if strings.Contains(v.seen[0], "/stale") || strings.Contains(v.seen[0], "staleschema") || !strings.Contains(v.seen[0], "/kept") {
+		t.Errorf("linted %s, want /kept only", v.seen[0])
+	}
+}
