@@ -462,11 +462,16 @@ repeats, check the operator pod's CPU and memory.
 ### The operator's AutoConfig writes skip the render check
 
 The operator's own writes to KrakenDEndpoints a KrakenDAutoConfig controls are
-not rendered at admission, because the AutoConfig controller validates its
-whole set first. To confirm the exemption is active, look for the startup log
+not rendered at admission, because the AutoConfig controller validates the
+endpoints it is about to write first. The audience, entry and duplicate-route
+rules still apply to them. With webhooks enabled, the operator logs a startup
 line `admission skips the render check for AutoConfig endpoint writes from`
-with the username `system:serviceaccount:<namespace>:<serviceaccount>` of the
-operator pod. If the log says `no operator username`, the pod lacks
+with the username it is configured to trust, normally
+`system:serviceaccount:<namespace>:<serviceaccount>` of the operator pod. The
+line confirms the configured username, not that the operator's API client
+authenticates as it: if the client runs under a different identity, the skip
+simply does not apply and every write is rendered. If the log says
+`no operator username`, the pod lacks
 `POD_NAMESPACE` or `POD_SERVICE_ACCOUNT` (a custom deployment) and no write is
 trusted: set `--operator-username` to the pod's ServiceAccount username.
 Disabling the exemption is safe but costs one `krakend check` per generated
