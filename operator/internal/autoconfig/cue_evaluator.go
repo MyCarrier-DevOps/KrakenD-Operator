@@ -25,6 +25,7 @@ import (
 
 	"cuelang.org/go/cue"
 	"cuelang.org/go/cue/cuecontext"
+	cueerrors "cuelang.org/go/cue/errors"
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/yaml"
@@ -118,7 +119,9 @@ func (e *cueEvaluator) Evaluate(_ context.Context, input CUEInput) (*CUEOutput, 
 
 	unified = applyOverrides(cueCtx, unified, input)
 
-	if err := unified.Validate(cue.Concrete(true)); err != nil {
+	// Errors inside one endpoint entry fail only that operation (see
+	// exportEndpointEntries); any other error fails the whole evaluation.
+	if err := unified.Validate(cue.Concrete(true)); err != nil && !onlyEntryErrors(err) {
 		return nil, fmt.Errorf("CUE evaluation failed: %w", err)
 	}
 
@@ -193,6 +196,8 @@ func applyOverrides(cueCtx *cue.Context, unified cue.Value, input CUEInput) cue.
 
 // exportEndpointEntries decodes every entry of the endpoint struct, whatever
 // its method: skipUnsupportedMethods partitions them once overrides applied.
+// An entry that fails concrete validation or does not decode into an
+// EndpointEntry is recorded in Failed and does not stop the other entries.
 func exportEndpointEntries(endpointsValue cue.Value) (*CUEOutput, error) {
 	output := &CUEOutput{
 		OperationIDs: make(map[string]string),
@@ -205,17 +210,13 @@ func exportEndpointEntries(endpointsValue cue.Value) (*CUEOutput, error) {
 	}
 
 	for iter.Next() {
-		key := iter.Selector().String()
 		val := iter.Value()
 		op := entryOperation(iter.Selector().Unquoted(), val)
-		var entry v1alpha1.EndpointEntry
-		jsonBytes, err := val.MarshalJSON()
+		entry, err := decodeEntry(val)
 		if err != nil {
-			output.Warnings = append(output.Warnings, fmt.Sprintf("skipping %s: %v", key, err))
-			continue
-		}
-		if err := json.Unmarshal(jsonBytes, &entry); err != nil {
-			output.Warnings = append(output.Warnings, fmt.Sprintf("skipping %s: %v", key, err))
+			output.Failed = append(output.Failed, OperationIssue{
+				Operation: op, Reason: v1alpha1.ReasonCUEEvaluationFailed, Message: err.Error(),
+			})
 			continue
 		}
 		output.Entries = append(output.Entries, entry)
@@ -227,7 +228,35 @@ func exportEndpointEntries(endpointsValue cue.Value) (*CUEOutput, error) {
 			output.Tags[entryKey] = op.Tags
 		}
 	}
+	sortIssues(output.Failed)
 	return output, nil
+}
+
+// onlyEntryErrors reports whether every error in err lies inside one entry of
+// the endpoint struct, at a path endpoint.<key>.<...>.
+func onlyEntryErrors(err error) bool {
+	for _, e := range cueerrors.Errors(err) {
+		if p := e.Path(); len(p) < 2 || p[0] != "endpoint" {
+			return false
+		}
+	}
+	return true
+}
+
+// decodeEntry validates one endpoint entry as concrete and decodes it.
+func decodeEntry(val cue.Value) (v1alpha1.EndpointEntry, error) {
+	var entry v1alpha1.EndpointEntry
+	if err := val.Validate(cue.Concrete(true)); err != nil {
+		return entry, err
+	}
+	jsonBytes, err := val.MarshalJSON()
+	if err != nil {
+		return entry, err
+	}
+	if err := json.Unmarshal(jsonBytes, &entry); err != nil {
+		return entry, err
+	}
+	return entry, nil
 }
 
 // entryOperation identifies the entry labelled key by its own endpoint and
