@@ -45,27 +45,30 @@ jq_lib='
 # The API server anchors ^ and $ at the ends of the text only; Oniguruma also
 # anchors them at line breaks, so anchor the CRD pattern at the ends explicitly.
 def crd_test($re): test($re | sub("^\\^"; "\\A") | sub("\\$$"; "\\z"));
-# Why a duration string breaks its CRD rules, or nothing: $re is its pattern.
-# True when a pattern-valid duration does not fit in 64 bits of nanoseconds,
-# which time.ParseDuration (and so the CRD duration() rule) rejects. Each
-# component is compared exactly, as digits, against the most its unit allows;
-# the sum is compared as a float, which is exact to within a microsecond.
+# Largest whole count of each unit that fits in 64 bits of nanoseconds, and the
+# nanoseconds in one.
 def unit_max: {"ns": "9223372036854775807", "us": "9223372036854775", "µs": "9223372036854775",
   "μs": "9223372036854775", "ms": "9223372036854", "s": "9223372036", "m": "153722867", "h": "2562047"};
 def unit_ns: {"ns": 1, "us": 1e3, "µs": 1e3, "μs": 1e3, "ms": 1e6, "s": 1e9, "m": 6e10, "h": 3.6e12};
 def digits_exceed($max): sub("^0+(?=.)"; "") | (length > ($max | length)) or (length == ($max | length) and . > $max);
-def duration_ns:
+# The components of a pattern-valid duration: whole part, fraction and unit.
+def duration_parts:
   [scan("([0-9]*)(\\.[0-9]*)?(ns|us|µs|μs|ms|s|m|h)")
-    | ((if .[0] == "" then "0" else .[0] end) + (.[1] // "") | tonumber) * unit_ns[.[2]]] | add // 0;
+    | {int: (.[0] | if . == "" then "0" else . end), frac: (.[1] // ""), unit: .[2]}];
+def duration_ns: [duration_parts[] | ((.int + .frac) | tonumber) * unit_ns[.unit]] | add // 0;
+# True when a pattern-valid duration does not fit in 64 bits of nanoseconds,
+# which time.ParseDuration (and so the CRD duration() rule) rejects. Each
+# component is compared exactly, as digits, against the most its unit allows;
+# the sum is compared as a float, which is exact to within a microsecond.
 def overflows:
-  [scan("([0-9]*)(\\.[0-9]*)?(ns|us|µs|μs|ms|s|m|h)")
-    | {int: (.[0] | if . == "" then "0" else . end), frac: (.[1] // ""), unit: .[2]}] as $parts
-  | any($parts[]; .int as $i | .unit as $u | $i | digits_exceed(unit_max[$u]))
-    or ([$parts[] | ((.int + .frac) | tonumber) * unit_ns[.unit]] | add // 0) > 9223372036854775807;
+  any(duration_parts[]; .int as $i | .unit as $u | $i | digits_exceed(unit_max[$u]))
+  or duration_ns > 9223372036854775807;
+# Why a duration breaks the pattern or maxLength ($max) of its field, or nothing.
 def dur_shape_problem($re; $max; $label):
   if crd_test($re) | not then "\($label) \(.)"
   elif length > $max then "\($label) is longer than \($max) characters"
   else empty end;
+# The same, plus the overflow the CRD duration() rule rejects.
 def dur_problem($re; $max; $label):
   dur_shape_problem($re; $max; $label)
   // if overflows then "\($label) \(.) does not fit in 64 bits of nanoseconds" else empty end;
