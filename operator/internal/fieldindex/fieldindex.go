@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"sync"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -77,7 +78,12 @@ func EndpointPolicyKeys(obj client.Object) []string {
 
 // EndpointControllerKeys returns the EndpointController index value of obj:
 // the UID of its controller owner reference, if it has one.
-func EndpointControllerKeys(obj client.Object) []string { return nil }
+func EndpointControllerKeys(obj client.Object) []string {
+	if ref := metav1.GetControllerOf(obj); ref != nil {
+		return []string{string(ref.UID)}
+	}
+	return nil
+}
 
 // registration tracks one in-flight or completed index registration attempt
 // for a specific field indexer.
