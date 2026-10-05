@@ -412,3 +412,23 @@ func TestEndpointAdmission_UpdateAddingAnEntryWithAStoredRouteKeyIsRejected(t *t
 		})
 	}
 }
+
+// Every lookup of an admission request runs under the admission budget, so a
+// slow cache read ends with a clear error before the API server's timeout.
+func TestEndpointAdmission_RouteCheckListRunsUnderTheAdmissionBudget(t *testing.T) {
+	var left time.Duration
+	funcs := interceptor.Funcs{List: func(ctx context.Context, c client.WithWatch, l client.ObjectList,
+		opts ...client.ListOption) error {
+		if d, ok := ctx.Deadline(); ok {
+			left = time.Until(d)
+		}
+		return c.List(ctx, l, opts...)
+	}}
+	v := &EndpointValidator{Client: fakeClientBuilderWith(funcs, testGateway()), Checker: &scriptedChecker{}}
+
+	review(t, v, "alice", testEndpoint("new", "/a"), nil)
+
+	if left <= 0 || left > admissionBudget {
+		t.Errorf("the endpoint List ran with %s left, want a deadline within %s", left, admissionBudget)
+	}
+}
