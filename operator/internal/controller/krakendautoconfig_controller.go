@@ -891,6 +891,14 @@ func (r *KrakenDAutoConfigReconciler) reconcileEndpoints(
 		return outcome, err
 	}
 	writes, stale := planEndpoints(controlled, desired)
+	// An endpoint that loses its route to another is held whether or not it
+	// would be written. The holds go in before the check, so it sees the stale
+	// endpoints as they stay and checks only the endpoints still to be written.
+	maps.Copy(outcome.rejected, routeCollisions(desired, controlled))
+	writes = slices.DeleteFunc(slices.Clone(writes), func(ep *v1alpha1.KrakenDEndpoint) bool {
+		_, ok := outcome.rejected[ep.Name]
+		return ok
+	})
 	checked, err := r.precheck(ctx, ac, writes, stale, held || outcome.failed())
 	if err != nil {
 		return outcome, err
@@ -898,7 +906,7 @@ func (r *KrakenDAutoConfigReconciler) reconcileEndpoints(
 	maps.Copy(outcome.rejected, checked)
 	for _, ep := range writes {
 		if _, ok := outcome.rejected[ep.Name]; ok {
-			continue
+			continue // held by the config check
 		}
 		op, err := r.writeEndpoint(ctx, ac, ep)
 		if err != nil {
