@@ -58,3 +58,4 @@ KrakenDAutoConfig a/basepath: spec.additionalEndpointsBasePath x
 KrakenDAutoConfig a/basepath-prefix: additionalEndpointsBasePath with urlTransform.addPathPrefix
 KrakenDAutoConfig a/many-additional: more than 256 additionalEndpoints
 KrakenDAutoConfig a/dup-additional: duplicate additionalEndpoint GET /h
+KrakenDAutoConfig a/additional-path: spec.additionalEndpoints[0].endpoint h
