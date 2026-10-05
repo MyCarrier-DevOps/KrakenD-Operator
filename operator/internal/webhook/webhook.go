@@ -230,7 +230,7 @@ func (v *GatewayValidator) eeNamespacesInUse(ctx context.Context, gw *v1alpha1.K
 
 // eeFieldsOnCE refuses, on a CE gateway, the typed fields that configure
 // features only KrakenD Enterprise has: KrakenD CE ignores the redis
-// connection pools. A value already stored on a CE gateway and left unchanged
+// connection pools and documentation/openapi. A value already stored on a CE gateway and left unchanged
 // is not judged again; a gateway switching from EE to CE is judged on every
 // such field it keeps.
 func eeFieldsOnCE(old, gw *v1alpha1.KrakenDGateway) field.ErrorList {
@@ -247,6 +247,9 @@ func eeFieldsOnCE(old, gw *v1alpha1.KrakenDGateway) field.ErrorList {
 		{field.NewPath("spec", "redis"), gw.Spec.Redis != nil,
 			wasCE && equality.Semantic.DeepEqual(old.Spec.Redis, gw.Spec.Redis),
 			"the redis connection pools are an Enterprise feature; KrakenD CE ignores them"},
+		{field.NewPath("spec", "config", "documentation"), gw.Spec.Config.Documentation != nil,
+			wasCE && equality.Semantic.DeepEqual(old.Spec.Config.Documentation, gw.Spec.Config.Documentation),
+			"documentation/openapi is an Enterprise feature; KrakenD CE ignores it"},
 	} {
 		if f.set && !f.kept {
 			errs = append(errs, field.Forbidden(f.path, f.what+" (the gateway runs CE)"))
