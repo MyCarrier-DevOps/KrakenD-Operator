@@ -80,10 +80,19 @@ func (r *KrakenDBackendPolicyReconciler) Reconcile(ctx context.Context, req ctrl
 
 	refCount := len(endpoints.Items)
 
-	if policy.DeletionTimestamp.IsZero() && controllerutil.AddFinalizer(&policy, v1alpha1.PolicyProtectionFinalizer) {
-		if err := r.Update(ctx, &policy); err != nil {
-			return ctrl.Result{}, fmt.Errorf("adding policy-protection finalizer: %w", err)
+	if policy.DeletionTimestamp.IsZero() {
+		if controllerutil.AddFinalizer(&policy, v1alpha1.PolicyProtectionFinalizer) {
+			if err := r.Update(ctx, &policy); err != nil {
+				return ctrl.Result{}, fmt.Errorf("adding policy-protection finalizer: %w", err)
+			}
 		}
+	} else if refCount == 0 {
+		if controllerutil.RemoveFinalizer(&policy, v1alpha1.PolicyProtectionFinalizer) {
+			if err := r.Update(ctx, &policy); err != nil {
+				return ctrl.Result{}, fmt.Errorf("removing policy-protection finalizer: %w", err)
+			}
+		}
+		return ctrl.Result{}, nil
 	}
 
 	policy.Status.ReferencedBy = refCount
