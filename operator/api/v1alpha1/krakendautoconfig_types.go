@@ -447,6 +447,15 @@ type KrakenDAutoConfigStatus struct {
 	// +optional
 	// +listType=atomic
 	Skipped []OperationStatus `json:"skipped,omitempty"`
+	// FailedOperations lists up to 20 operations the last sync could not
+	// converge: they failed CUE evaluation (CUEEvaluationFailed), the gateway
+	// config check (ConfigValidationFailed), or the API server rejected their
+	// endpoint (EndpointRejected). Each keeps the endpoint it had, if any,
+	// and while any is listed no stale endpoint is deleted. Synced is False
+	// with reason OperationsFailed while this list is not empty.
+	// +optional
+	// +listType=atomic
+	FailedOperations []OperationStatus `json:"failedOperations,omitempty"`
 	// Warnings lists up to 20 problems in the OpenAPI spec or the AutoConfig
 	// that do not stop a sync, such as unresolved or colliding schema
 	// references, which leave the published documentation wrong.
