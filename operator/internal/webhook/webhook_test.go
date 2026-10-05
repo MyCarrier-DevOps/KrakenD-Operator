@@ -2531,3 +2531,30 @@ func TestAutoConfigAdmission_UpdateWarnsOnMissingPolicyRefsOnlyWhenTheSpecChange
 		t.Errorf("response = %+v, warnings = %v, want one naming the missing policy", resp.Result, resp.Warnings)
 	}
 }
+
+func TestAutoConfigAdmission_RatchetsAStoredOverrideCollision(t *testing.T) {
+	stored := func(ids ...string) *v1alpha1.KrakenDAutoConfig {
+		a := &v1alpha1.KrakenDAutoConfig{
+			ObjectMeta: metav1.ObjectMeta{Name: "ac", Namespace: "default"},
+			Spec: v1alpha1.KrakenDAutoConfigSpec{GatewayRef: v1alpha1.GatewayRef{Name: "gw"},
+				OpenAPI: v1alpha1.OpenAPISource{URL: "http://svc/openapi.json"}, Trigger: v1alpha1.TriggerOnChange},
+		}
+		for _, id := range ids {
+			a.Spec.Overrides = append(a.Spec.Overrides, v1alpha1.OperationOverride{OperationID: id})
+		}
+		return a
+	}
+	v := &AutoConfigValidator{Client: fakeClient(testGateway())}
+	old := stored("get_a", "get-a")
+
+	edited := old.DeepCopy()
+	edited.Spec.Filter = &v1alpha1.FilterSpec{IncludeTags: []string{"public"}}
+	if resp := review(t, v, "alice", edited, old); !resp.Allowed {
+		t.Errorf("unrelated edit of an object with a stored collision denied: %+v", resp.Result)
+	}
+
+	shifted := stored("getB", "get_a", "get-a")
+	if resp := review(t, v, "alice", shifted, old); resp.Allowed {
+		t.Error("an override inserted above the colliding pair admitted: the error moved to a new index")
+	}
+}
