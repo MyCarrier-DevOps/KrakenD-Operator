@@ -180,6 +180,9 @@ jq "${jq_opts[@]}" "$jq_lib"'
   (($s.additionalEndpoints // []) | map(.method //= "GET") | group_by([.endpoint, .method])[] | select(length > 1)
     | "duplicate additionalEndpoint \(.[0].method) \(.[0].endpoint)"),
   (($s.additionalEndpoints // []) | to_entries[] | .key as $i | .value as $a | "spec.additionalEndpoints[\($i)]" as $p | (
-    (if ($a.endpoint // "" | crd_test($path_re)) then empty else "\($p).endpoint \($a.endpoint)" end)
+    (if ($a.endpoint // "" | crd_test($path_re)) then empty else "\($p).endpoint \($a.endpoint)" end),
+    (if (($a.backends // []) | length) > 0
+        and ((($a.host // "") != "") or (($a.backendUrlPattern // "") != "") or (($a.encoding // "") != ""))
+     then "\($p) mixes backends with the shorthand" else empty end)
   ))
 ]} | report("KrakenDAutoConfig")' "$work/autoconfigs.json"
