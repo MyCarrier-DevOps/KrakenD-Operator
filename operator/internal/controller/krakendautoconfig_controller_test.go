@@ -4208,8 +4208,10 @@ func TestAutoConfigReconcile_ManyFailedWritesAreBoundedAndStatusWritten(t *testi
 	r := newACReconciler(c, f, ce, fi, g)
 	r.Recorder = rec
 
-	if _, err := reconcileAC(r, ac); err == nil {
-		t.Fatal("expected the aggregated write error to be returned")
+	_, err := reconcileAC(r, ac)
+
+	if err == nil || !strings.Contains(err.Error(), "test-ac-op199") {
+		t.Fatalf("expected the returned error to carry every failure, got %v", err)
 	}
 
 	if len(ops) != 200 {
@@ -4221,6 +4223,9 @@ func TestAutoConfigReconcile_ManyFailedWritesAreBoundedAndStatusWritten(t *testi
 		cond.Reason != v1alpha1.ReasonEndpointReconcileFailed || len(cond.Message) > maxConditionMessageBytes {
 		t.Fatalf("expected phase Error and a Synced message within %d bytes, got %q %+v",
 			maxConditionMessageBytes, got.Status.Phase, cond)
+	}
+	if n := strings.Count(cond.Message, "upserting endpoint"); n != 5 || !strings.HasSuffix(cond.Message, "; and 195 more") {
+		t.Errorf("expected 5 failures named and a tail of 195 more, got %d in %q", n, cond.Message)
 	}
 	events := drainEvents(rec)
 	if want := "Warning EndpointReconcileFailed " + cond.Message; !slices.Contains(events, want) {
