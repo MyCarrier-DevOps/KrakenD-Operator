@@ -42,6 +42,11 @@ func TestLicenseSecret(t *testing.T) {
 			license:  &v1alpha1.LicenseConfig{SecretRef: secretRef("lic", "cert")},
 			wantName: "lic", wantKey: "cert", wantOK: true,
 		},
+		{
+			name:     "a Secret reference that names no key",
+			license:  &v1alpha1.LicenseConfig{SecretRef: secretRef("lic", "")},
+			wantName: "lic", wantKey: "LICENSE", wantOK: true,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
