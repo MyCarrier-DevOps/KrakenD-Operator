@@ -41,7 +41,10 @@ const maxConditionListed = 5
 // operationLabel names an operation in a condition message:
 // "METHOD /path (operationId): Reason".
 func operationLabel(s v1alpha1.OperationStatus) string {
-	label := s.Method + " " + s.Path
+	label := s.Path
+	if s.Method != "" {
+		label = s.Method + " " + label
+	}
 	if s.OperationID != "" {
 		label += " (" + s.OperationID + ")"
 	}
