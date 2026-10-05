@@ -2258,6 +2258,45 @@ func TestAutoConfigReconcile_ListContentAloneRewritesStatus(t *testing.T) {
 	}
 }
 
+func TestAutoConfigReconcile_ResolverWarningsPersistAndEmitOnce(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).Build()
+	f, ce, fi, g := defaultMocks()
+	// The external document lacks the referenced pointer: a resolver warning.
+	spec := []byte(`{"paths":{"/x":{"get":{"responses":{"200":{"$ref":"common.json#/Missing"}}}}}}`)
+	f.result = &autoconfig.FetchResult{Data: spec}
+	f.byURL = map[string]mockFetchOutcome{
+		"https://example.com/common.json": {result: &autoconfig.FetchResult{Data: []byte(`{}`)}},
+	}
+	rec := fakeRecorder()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Recorder = rec
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	want := `failed to resolve external $ref "common.json#/Missing": pointer segment "Missing" not found`
+	updated := getAC(t, c, ac)
+	if !slices.Equal(updated.Status.Warnings, []string{want}) {
+		t.Errorf("warnings = %q, want [%q]", updated.Status.Warnings, want)
+	}
+	if events := drainEvents(rec); !slices.Contains(events, "Warning "+v1alpha1.ReasonSpecWarning+" "+want) {
+		t.Errorf("expected a SpecWarning event, got %v", events)
+	}
+
+	// Unchanged inputs: the warning stays in status, no new event.
+	if _, err := reconcileAC(r, updated); err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+	if events := drainEvents(rec); hasEventReason(events, v1alpha1.ReasonSpecWarning) {
+		t.Errorf("expected no SpecWarning event for unchanged inputs, got %v", events)
+	}
+	if got := getAC(t, c, ac).Status.Warnings; !slices.Equal(got, []string{want}) {
+		t.Errorf("warnings after resync = %q", got)
+	}
+}
+
 func TestAutoConfigPredicate_IgnoresStatusOnlyUpdate(t *testing.T) {
 	old := &v1alpha1.KrakenDAutoConfig{
 		ObjectMeta: metav1.ObjectMeta{
