@@ -512,7 +512,15 @@ func (r *KrakenDGatewayReconciler) detectDragonflyState(
 // inspectDeploymentStatus reads the owned Deployment's status and updates
 // the gateway's replica counts, Available and Progressing conditions based on
 // rollout health; the phase is derived from them. want is what the
-// infrastructure stage just deployed.
+// infrastructure stage just deployed, obs what its Deployment step saw, and
+// note the reason this pass's change detection chose for a rollout it started.
+//
+// Progressing follows the Deployment, not the detection of a change: it is
+// raised from obs (the object CreateOrUpdate left behind, never the cache) and
+// lowered once the Deployment has converged, so a rollout stays reported
+// across a failed status write and a lagging cache. A pass that did not
+// reconcile the Deployment (held, or the step failed) starts no rollout, so
+// it never raises Progressing; it reads the cached Deployment for the rest.
 func (r *KrakenDGatewayReconciler) inspectDeploymentStatus(
 	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
