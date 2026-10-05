@@ -22,8 +22,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
-	"sort"
-	"strings"
 
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -108,39 +106,10 @@ func (v *PolicyValidator) ValidateUpdate(
 	return checkPolicyRender(ctx, v.Client, v.Checker, old, policy)
 }
 
-// ValidateDelete blocks deletion if the policy is still referenced by endpoints.
-func (v *PolicyValidator) ValidateDelete(
-	ctx context.Context,
-	obj runtime.Object,
-) (admission.Warnings, error) {
-	policy, ok := obj.(*v1alpha1.KrakenDBackendPolicy)
-	if !ok {
-		return nil, fmt.Errorf("expected KrakenDBackendPolicy, got %T", obj)
-	}
-
-	var endpoints v1alpha1.KrakenDEndpointList
-	indexKey := policy.Namespace + "/" + policy.Name
-	if err := v.List(ctx, &endpoints,
-		client.MatchingFields{fieldindex.EndpointPolicy: indexKey},
-	); err != nil {
-		return nil, unavailable(fmt.Errorf("listing endpoints: %w", err))
-	}
-
-	var references []string
-	for _, ep := range endpoints.Items {
-		references = append(references, ep.Namespace+"/"+ep.Name)
-	}
-	sort.Strings(references)
-
-	if len(references) > 0 {
-		return nil, invalid("KrakenDBackendPolicy", policy.Name, field.ErrorList{
-			field.Forbidden(
-				field.NewPath("metadata", "name"),
-				fmt.Sprintf("policy is referenced by endpoints: %s",
-					strings.Join(references, ", ")),
-			),
-		})
-	}
+// ValidateDelete is required by admission.CustomValidator. The policy webhook is
+// not registered for DELETE: the policy-protection finalizer keeps a referenced
+// policy until nothing references it.
+func (v *PolicyValidator) ValidateDelete(context.Context, runtime.Object) (admission.Warnings, error) {
 	return nil, nil
 }
 
@@ -322,7 +291,7 @@ func validateExtraConfigAudience(p *field.Path, ec *runtime.RawExtension) field.
 
 // +kubebuilder:webhook:path=/validate-gateway-krakend-io-v1alpha1-krakendgateway,mutating=false,failurePolicy=fail,sideEffects=None,groups=gateway.krakend.io,resources=krakendgateways,verbs=create;update,versions=v1alpha1,name=vkrakendgateway.kb.io,admissionReviewVersions=v1,timeoutSeconds=15
 // +kubebuilder:webhook:path=/validate-gateway-krakend-io-v1alpha1-krakendendpoint,mutating=false,failurePolicy=fail,sideEffects=None,groups=gateway.krakend.io,resources=krakendendpoints,verbs=create;update,versions=v1alpha1,name=vkrakendendpoint.kb.io,admissionReviewVersions=v1,timeoutSeconds=15
-// +kubebuilder:webhook:path=/validate-gateway-krakend-io-v1alpha1-krakendbackendpolicy,mutating=false,failurePolicy=fail,sideEffects=None,groups=gateway.krakend.io,resources=krakendbackendpolicies,verbs=create;update;delete,versions=v1alpha1,name=vkrakendbackendpolicy.kb.io,admissionReviewVersions=v1,timeoutSeconds=15
+// +kubebuilder:webhook:path=/validate-gateway-krakend-io-v1alpha1-krakendbackendpolicy,mutating=false,failurePolicy=fail,sideEffects=None,groups=gateway.krakend.io,resources=krakendbackendpolicies,verbs=create;update,versions=v1alpha1,name=vkrakendbackendpolicy.kb.io,admissionReviewVersions=v1,timeoutSeconds=15
 // +kubebuilder:webhook:path=/validate-gateway-krakend-io-v1alpha1-krakendautoconfig,mutating=false,failurePolicy=fail,sideEffects=None,groups=gateway.krakend.io,resources=krakendautoconfigs,verbs=create;update,versions=v1alpha1,name=vkrakendautoconfig.kb.io,admissionReviewVersions=v1,timeoutSeconds=15
 
 // Validators are the validating webhooks SetupWebhooks registers.
