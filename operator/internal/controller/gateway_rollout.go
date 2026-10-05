@@ -18,6 +18,7 @@ package controller
 
 import (
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -73,4 +74,38 @@ func raiseProgressing(gw *v1alpha1.KrakenDGateway, note *rolloutNote) {
 		Reason:             reason,
 		Message:            message,
 	})
+}
+
+// failedRolloutApplies reports whether a ProgressDeadlineExceeded on dep
+// describes the rollout it is running now: the Deployment controller has
+// observed the latest spec. The deadline condition outlives the rollout it
+// judged until the controller starts the next one.
+func failedRolloutApplies(dep *appsv1.Deployment) bool {
+	c := findDeploymentCondition(dep, appsv1.DeploymentProgressing)
+	return c != nil && c.Status == corev1.ConditionFalse && c.Reason == "ProgressDeadlineExceeded" &&
+		dep.Status.ObservedGeneration >= dep.Generation
+}
+
+// resetRolloutFailedAvailability clears the Available=False/RolloutFailed an
+// earlier pass wrote once the failure no longer describes the Deployment. It
+// becomes True when the Deployment reports itself available, and is removed
+// otherwise: a False Available outranks a rollout in progress in the derived
+// Ready, so a rollout that replaced the failed one would read as an error.
+func resetRolloutFailedAvailability(gw *v1alpha1.KrakenDGateway, dep *appsv1.Deployment) {
+	cur := meta.FindStatusCondition(gw.Status.Conditions, v1alpha1.ConditionAvailable)
+	if cur == nil || cur.Status != metav1.ConditionFalse || cur.Reason != v1alpha1.ReasonRolloutFailed {
+		return
+	}
+	if depAvailable := findDeploymentCondition(dep, appsv1.DeploymentAvailable); depAvailable != nil &&
+		depAvailable.Status == corev1.ConditionTrue {
+		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+			Type:               v1alpha1.ConditionAvailable,
+			Status:             metav1.ConditionTrue,
+			ObservedGeneration: gw.Generation,
+			Reason:             "DeploymentAvailable",
+			Message:            "All replicas are available",
+		})
+		return
+	}
+	meta.RemoveStatusCondition(&gw.Status.Conditions, v1alpha1.ConditionAvailable)
 }
