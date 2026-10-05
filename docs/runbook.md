@@ -42,7 +42,7 @@ on). Key metrics:
 |---|---|---|
 | `config_renders_total` | Counter | Total config renders |
 | `config_validation_failures_total` | Counter | Config validation failures |
-| `rolling_restarts_total` | Counter | Rolling restarts triggered |
+| `rolling_restarts_total` | Counter | Deployment writes that changed the pod template, once per write (a creation does not count; drift in the template the operator reverts does) |
 | `license_expiry_seconds` | Gauge | Seconds until license expiry (per gateway) |
 | `endpoints` | Gauge | Number of endpoints (per gateway) |
 | `dragonfly_ready` | Gauge | Dragonfly readiness (1/0 per gateway) |
@@ -108,7 +108,7 @@ kept for compatibility; alert and gate on `Ready` instead.
 | the serving phase (`Pending` before any rollout, `Deploying` while a rollout is in progress or the Deployment is not available, `Running` otherwise) | `Unknown`, reason `ValidatorUnavailable` | The validator could not run; the last applied configuration keeps serving and validation is retried with backoff |
 | `Deploying` | `False` | A rollout is in progress, or the Deployment has not reported available replicas yet |
 | `Running` | `True` | Configuration applied, the Deployment is available and the applied config is rolled out to all replicas |
-| `Degraded` | `False` | EE license expired or in the pre-expiry window; running on CE (`LicenseDegraded=True` or `CEFallbackApplied=True`; only `LicenseDegraded` until the CE render is applied) |
+| `Degraded` | `False` | EE license expired or in the pre-expiry window; falling back to or running on CE (`LicenseDegraded=True` or `CEFallbackApplied=True`; only `LicenseDegraded` until the CE render is applied) |
 | `Error` | `False` | Configuration rejected (`ConfigValid=False`), a plugin ConfigMap missing (`PluginsResolved=False`), rollout failed or the Deployment lost availability (`Available=False`), or license expired without CE fallback |
 
 `Rendering` and `Validating` stay in the CRD enum only so stored objects keep
@@ -128,7 +128,7 @@ pod eviction) makes the Deployment report `Available=False`
 | `ConfigValid` | `True`: the rendered config passed `krakend check`. `False` (`ConfigValidationFailed`): rejected; the last applied config keeps serving. `Unknown` (`ValidatorUnavailable`): krakend check could not run; retried with backoff |
 | `PluginsResolved` | `True` (`ConfigMapsFound`) when every plugin ConfigMap exists; `False` (`ConfigMapNotFound`) naming the missing ones while the Deployment is held. Absent without ConfigMap plugin sources |
 | `Available` | The Deployment is available; `False` when it loses its minimum replicas (for example all pods crash-looping) or its rollout fails |
-| `Progressing` | Config rollout in progress; stays `True` until the Deployment has observed the change and every replica is updated and available |
+| `Progressing` | A rollout is in progress: the Deployment was created, its pod template was written (a config, image, plugin or license change, but also resources, probes or drift the operator reverted), or old pods remain beside updated ones. It stays `True` until the Deployment has observed the change and every replica is updated and available. A replica change alone (an HPA scale) does not raise it |
 | `DragonflyReady` | DragonflyDB instance is operational |
 | `IstioConfigured` | VirtualService has been reconciled |
 | `LicenseValid` | EE license state: `True` (`LicenseOK`), `True` (`LicenseExpiringSoon`) inside the warning window, `False` (`LicensePreExpiry`, `LicenseExpired`), or `Unknown` (`LicenseSecretMissing`) while the license cannot be read, unless the last known expiry is already inside the safety buffer or past |
@@ -267,6 +267,8 @@ kubectl describe deploy <name>-krakend
   `krakend` container's HTTP probe on `/healthz`, and (when
   `spec.openapi.enabled: true`) the `openapi-serve` sidecar's TCP probe on the
   openapi port. `kubectl describe pod` names the container that failed.
+- A Deployment that was deleted and is being recreated reads `Deploying` until
+  its pods are available.
 - `ProgressDeadlineExceeded` — sets `Available=False`/`RolloutFailed` (phase `Error`) with a `RolloutFailed` event; the gateway returns to `Running` once the rollout recovers
 
 ### Gateway stuck in `Error`
@@ -286,11 +288,39 @@ kubectl get events --field-selector involvedObject.name=<name> --sort-by='.lastT
   and other resources are still reconciled. Only the rejected render waits for
   a fix.
 - License expired without CE fallback (`LicenseExpired=True`, `Ready` reason `LicenseExpiredNoFallback`) — renew the license or set `fallbackToCE: true`. A missing license Secret (`LicenseSecretUnavailable=True`) does not change `Ready` or the phase
-- Rollout timeout — check Deployment events
+- Rollout timeout (`Progressing=False`, `Available=False`, reason `RolloutFailed`) — check
+  Deployment events. `RolloutFailed` describes the current rollout only: once
+  you push a fix, the gateway reads `Deploying` until the new rollout
+  converges or misses its own deadline, and a second `RolloutFailed` event
+  means the new rollout failed too.
 - `PluginsResolved=False`, reason `ConfigMapNotFound` — a plugin ConfigMap is
   missing; the Deployment is held until it exists. Create it in the gateway's
   namespace. A config applied during the hold (or a new gateway's first
   config) then rolls out; otherwise nothing rolls.
+
+### `observedGeneration` stays behind `metadata.generation`
+
+**Symptom:** `kubectl get krakendgateway <name> -o jsonpath='{.metadata.generation} {.status.observedGeneration}'`
+prints two different numbers for more than a pass or two, and the operator log
+shows an error for the gateway. Flux and kstatus report the gateway as in
+progress.
+
+**Meaning:** the operator could not apply the whole spec, so it does not
+claim the new generation (the `Ready` condition's `observedGeneration` stays
+behind with it). The status is otherwise current, and the gateway is retried
+with backoff.
+
+**Common causes** (the log line names the object):
+- A child resource was rejected, for example an HPA, VirtualService,
+  ExternalSecret or Dragonfly refused by an admission webhook. Every other
+  child is still reconciled.
+- Old config ConfigMaps could not be deleted.
+- A ConfigMap that is not the gateway's sits at `<gateway>-config-<hash>`, the
+  name of the applied config. The Deployment is held, so spec changes such as
+  `spec.replicas` are not applied. Rename or delete that ConfigMap.
+
+A rejected config, an unavailable validator and a missing plugin ConfigMap
+do not hold it back; their conditions say why.
 
 ### Installed Istio, External Secrets or Dragonfly after the operator
 
