@@ -19,6 +19,7 @@ package autoconfig
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"testing"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
@@ -132,11 +133,13 @@ func TestGenerator_DuplicateOperationID(t *testing.T) {
 	if len(out.Endpoints) != 1 {
 		t.Errorf("expected 1 endpoint (duplicate skipped), got %d", len(out.Endpoints))
 	}
-	if out.SkippedOperations != 1 {
-		t.Errorf("expected 1 skipped, got %d", out.SkippedOperations)
-	}
-	if len(out.Duplicates) != 1 || out.Duplicates[0] != "listUsers" {
-		t.Errorf("expected duplicate listUsers, got %v", out.Duplicates)
+	want := []OperationIssue{{
+		Operation: Operation{Method: "GET", Path: "/v2/users", OperationID: "listUsers"},
+		Reason:    v1alpha1.ReasonDuplicateOperationId,
+		Message:   `operationId "listUsers" is already used by GET /v1/users`,
+	}}
+	if !reflect.DeepEqual(out.Skipped, want) {
+		t.Errorf("Skipped = %+v, want %+v", out.Skipped, want)
 	}
 }
 
