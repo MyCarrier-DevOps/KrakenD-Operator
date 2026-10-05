@@ -33,6 +33,7 @@ import (
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
@@ -48,11 +49,17 @@ func testScheme() *runtime.Scheme {
 
 // fakeClient builds a fake client with both endpoint field indexes registered.
 func fakeClient(objs ...client.Object) client.Client {
+	return fakeClientBuilderWith(interceptor.Funcs{}, objs...)
+}
+
+// fakeClientBuilderWith is fakeClient with interceptors.
+func fakeClientBuilderWith(funcs interceptor.Funcs, objs ...client.Object) client.Client {
 	return fake.NewClientBuilder().
 		WithScheme(testScheme()).
 		WithObjects(objs...).
 		WithIndex(&v1alpha1.KrakenDEndpoint{}, fieldindex.EndpointGateway, fieldindex.EndpointGatewayKeys).
 		WithIndex(&v1alpha1.KrakenDEndpoint{}, fieldindex.EndpointPolicy, fieldindex.EndpointPolicyKeys).
+		WithInterceptorFuncs(funcs).
 		Build()
 }
 
