@@ -33,7 +33,10 @@ import (
 
 // EditionFor is the edition a render of gw is validated as: CE for a CE
 // gateway or for an EE gateway in license fallback, otherwise EE.
-func EditionFor(_ *v1alpha1.KrakenDGateway, _ bool) v1alpha1.Edition {
+func EditionFor(gw *v1alpha1.KrakenDGateway, _ bool) v1alpha1.Edition {
+	if gw.Spec.Edition == v1alpha1.EditionEE {
+		return v1alpha1.EditionEE
+	}
 	return v1alpha1.EditionCE
 }
 
