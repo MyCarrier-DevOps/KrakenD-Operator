@@ -9,5 +9,6 @@
  {"metadata":{"namespace":"a","name":"dialtimeout-overflow"},"spec":{"edition":"EE","config":{},"redis":{"connectionPool":{"addresses":["r"],"dialTimeout":"9223372036854775808ns"}},"license":{"secretRef":{"name":"l","key":"k"}}}},
  {"metadata":{"namespace":"a","name":"ee-nolicense"},"spec":{"edition":"EE","config":{}}},
  {"metadata":{"namespace":"a","name":"ee-emptyname"},"spec":{"edition":"EE","config":{},"license":{"secretRef":{"name":"","key":"k"}}}},
- {"metadata":{"namespace":"a","name":"ce-license"},"spec":{"edition":"CE","config":{},"license":{"secretRef":{"name":"l","key":"k"}}}}
+ {"metadata":{"namespace":"a","name":"ce-license"},"spec":{"edition":"CE","config":{},"license":{"secretRef":{"name":"l","key":"k"}}}},
+ {"metadata":{"namespace":"a","name":"both-license"},"spec":{"edition":"EE","config":{},"license":{"externalSecret":{"enabled":true},"secretRef":{"name":"l","key":"k"}}}}
 ]}
