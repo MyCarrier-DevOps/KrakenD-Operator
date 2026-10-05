@@ -22,6 +22,9 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/autoconfig"
 )
 
 func TestTruncate_BoundsBytesAndMarksTheCut(t *testing.T) {
@@ -71,5 +74,32 @@ func TestSpecWarnings_AreDistinctSortedAndBounded(t *testing.T) {
 	got = specWarnings(many)
 	if len(got) != maxStatusListLen || got[0] != "warning 00" {
 		t.Errorf("specWarnings kept %d entries %q, want %d starting at \"warning 00\"", len(got), got, maxStatusListLen)
+	}
+}
+
+func TestOperationStatuses_AreSortedAndTheirMessagesBounded(t *testing.T) {
+	issue := func(method, path, opID, msg string) autoconfig.OperationIssue {
+		return autoconfig.OperationIssue{
+			Operation: autoconfig.Operation{Method: method, Path: path, OperationID: opID},
+			Reason:    v1alpha1.ReasonDuplicateOperationId,
+			Message:   msg,
+		}
+	}
+	got := operationStatuses([]autoconfig.OperationIssue{
+		issue("POST", "/b", "createB", "m"),
+		issue("GET", "/b", "z", "same route"),
+		issue("GET", "/b", "a", "same route"),
+		issue("GET", "/a", "getA", strings.Repeat("x", 1000)),
+	})
+	var order []string
+	for _, s := range got {
+		order = append(order, s.Method+" "+s.Path+" "+s.OperationID)
+	}
+	want := []string{"GET /a getA", "GET /b a", "GET /b z", "POST /b createB"}
+	if !slices.Equal(order, want) {
+		t.Fatalf("order = %q, want %q", order, want)
+	}
+	if first := got[0]; len(first.Message) > maxStatusMessageLen || first.Reason != v1alpha1.ReasonDuplicateOperationId {
+		t.Errorf("entry = %+v, want a message of at most %d bytes and the issue's reason", first, maxStatusMessageLen)
 	}
 }
