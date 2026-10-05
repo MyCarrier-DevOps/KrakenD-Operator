@@ -65,7 +65,13 @@ func (c *Checker) CheckIsolated(ctx context.Context, gw *v1alpha1.KrakenDGateway
 	eps []v1alpha1.KrakenDEndpoint) (Verdict, error) {
 	endpoints := slices.Clone(eps)
 	sortEndpoints(endpoints)
-	return c.lint(ctx, renderer.RenderInput{Gateway: gw, Endpoints: endpoints, CEFallback: ceFallback(gw)})
+	policies, err := c.policiesFor(ctx, endpoints)
+	if err != nil {
+		return Verdict{}, err
+	}
+	return c.lint(ctx, renderer.RenderInput{
+		Gateway: gw, Endpoints: endpoints, Policies: policies, CEFallback: ceFallback(gw),
+	})
 }
 
 func (c *Checker) lint(ctx context.Context, in renderer.RenderInput) (Verdict, error) {
