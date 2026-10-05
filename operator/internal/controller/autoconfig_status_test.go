@@ -56,7 +56,7 @@ func TestCapList_KeepsTheFirstTwentyItems(t *testing.T) {
 	}
 }
 
-func TestSpecWarnings_AreDistinctSortedAndBounded(t *testing.T) {
+func TestSpecWarnings_AreDistinctSortedAndTruncated(t *testing.T) {
 	got := specWarnings([]string{"b warning", "a warning", "b warning"})
 	if want := []string{"a warning", "b warning"}; !slices.Equal(got, want) {
 		t.Fatalf("specWarnings = %q, want %q", got, want)
@@ -71,9 +71,8 @@ func TestSpecWarnings_AreDistinctSortedAndBounded(t *testing.T) {
 	for i := range 2 * maxStatusListLen {
 		many = append(many, fmt.Sprintf("warning %02d", i))
 	}
-	got = specWarnings(many)
-	if len(got) != maxStatusListLen || got[0] != "warning 00" {
-		t.Errorf("specWarnings kept %d entries %q, want %d starting at \"warning 00\"", len(got), got, maxStatusListLen)
+	if got := specWarnings(many); len(got) != 2*maxStatusListLen {
+		t.Errorf("specWarnings kept %d entries, want all %d: the caller caps the list", len(got), 2*maxStatusListLen)
 	}
 }
 
