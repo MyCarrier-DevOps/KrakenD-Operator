@@ -413,7 +413,9 @@ func skipRouteCollisions(output *CUEOutput) {
 		key := entry.Endpoint + ":" + entry.Method
 		if by, taken := first[key]; taken {
 			output.Skipped = append(output.Skipped, OperationIssue{
-				Operation: Operation{Method: entry.Method, Path: entry.Endpoint, OperationID: output.entryOperationIDs[i]},
+				Operation: Operation{
+					Method: entry.Method, Path: entry.Endpoint, OperationID: output.entryOperationIDs[i],
+				},
 				Reason:    v1alpha1.ReasonDuplicateOperationId,
 				Message:   "same path and method as " + by,
 			})
