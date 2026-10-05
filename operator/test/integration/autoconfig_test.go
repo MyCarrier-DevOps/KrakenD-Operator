@@ -567,3 +567,56 @@ func TestAutoConfig_AdoptsAndRemovesALabelledOrphan(t *testing.T) {
 		return nil
 	})
 }
+
+// endpointsReady returns ac's EndpointsReady condition, or an error until it
+// exists.
+func endpointsReady(ac *v1alpha1.KrakenDAutoConfig) (*metav1.Condition, error) {
+	var cur v1alpha1.KrakenDAutoConfig
+	if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(ac), &cur); err != nil {
+		return nil, err
+	}
+	cond := meta.FindStatusCondition(cur.Status.Conditions, v1alpha1.ConditionEndpointsReady)
+	if cond == nil {
+		return nil, fmt.Errorf("no EndpointsReady condition yet")
+	}
+	return cond, nil
+}
+
+func TestAutoConfig_EndpointsReadyFollowsChildReadiness(t *testing.T) {
+	ns := testNamespace(t)
+	gw := createReconciledGateway(t, ns, "gw-ready")
+	// An older hand-written endpoint claims GET /pets, so the generated
+	// pets-listpets starts out conflicted.
+	createEndpoint(t, ns, "manual-pets", gw.Name, "/pets")
+	manual := &v1alpha1.KrakenDEndpoint{ObjectMeta: metav1.ObjectMeta{Name: "manual-pets", Namespace: ns}}
+	ac := createPetsAutoConfig(t, ns, gw.Name)
+
+	eventually(t, func() error {
+		cond, err := endpointsReady(ac)
+		if err != nil {
+			return err
+		}
+		if cond.Status != metav1.ConditionFalse ||
+			!strings.Contains(cond.Message, "pets-listpets: "+v1alpha1.ReasonEndpointConflict) {
+			return fmt.Errorf("waiting for EndpointsReady False naming pets-listpets conflicted, got %+v", cond)
+		}
+		return nil
+	})
+
+	if err := k8sClient.Delete(ctx, manual); err != nil {
+		t.Fatalf("delete manual endpoint: %v", err)
+	}
+	// Nothing the AutoConfig watches changes except pets-listpets' Ready
+	// condition: only the Owns predicate's readiness clause reconciles the
+	// AutoConfig before the 5-minute resync.
+	eventuallyWithin(t, 30*time.Second, func() error {
+		cond, err := endpointsReady(ac)
+		if err != nil {
+			return err
+		}
+		if cond.Status != metav1.ConditionTrue {
+			return fmt.Errorf("waiting for EndpointsReady True, got %+v", cond)
+		}
+		return nil
+	})
+}
