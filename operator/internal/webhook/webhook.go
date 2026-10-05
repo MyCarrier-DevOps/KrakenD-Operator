@@ -81,7 +81,7 @@ func (v *PolicyValidator) ValidateCreate(ctx context.Context, obj runtime.Object
 	}
 	ctx, cancel := context.WithTimeout(ctx, admissionBudget)
 	defer cancel()
-	return checkPolicyRender(ctx, v.Checker, policy)
+	return checkPolicyRender(ctx, v.Client, v.Checker, policy)
 }
 
 // ValidateUpdate admits an updated KrakenDBackendPolicy; the CRD schema

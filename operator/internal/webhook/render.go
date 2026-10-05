@@ -19,13 +19,18 @@ package webhook
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
+	"github.com/mycarrier-devops/krakend-operator/internal/fieldindex"
 )
 
 // renderChecks are the four checks of the verdict ratchet, each over a
@@ -140,14 +145,26 @@ func gatewayRenderDenial(gw *v1alpha1.KrakenDGateway, verdict configcheck.Verdic
 
 // checkPolicyRender validates policy on its own and refuses it when it fails.
 func checkPolicyRender(
-	ctx context.Context, chk ConfigChecker, policy *v1alpha1.KrakenDBackendPolicy,
+	ctx context.Context, c client.Reader, chk ConfigChecker, policy *v1alpha1.KrakenDBackendPolicy,
 ) (admission.Warnings, error) {
 	alone, err := chk.LintPolicy(ctx, policy)
-	if err != nil || alone.OK {
+	if err != nil {
 		return nil, checkErr(err)
 	}
-	return nil, invalid("KrakenDBackendPolicy", policy.Name, field.ErrorList{field.Invalid(
-		field.NewPath("spec"), field.OmitValueType{}, "fails krakend check on its own: "+messages(alone))})
+	if !alone.OK {
+		return nil, invalid("KrakenDBackendPolicy", policy.Name, field.ErrorList{field.Invalid(
+			field.NewPath("spec"), field.OmitValueType{}, "fails krakend check on its own: "+messages(alone))})
+	}
+	gateways, err := gatewaysUsing(ctx, c, policy)
+	if err != nil {
+		return nil, unavailable(err)
+	}
+	for i := range gateways {
+		if _, err := chk.CheckGatewayPolicy(ctx, &gateways[i], policy); err != nil {
+			return nil, checkErr(err)
+		}
+	}
+	return nil, nil
 }
 
 // messages joins a verdict's messages without their locations: a policy's
@@ -158,6 +175,43 @@ func messages(v configcheck.Verdict) string {
 		parts = append(parts, f.Message)
 	}
 	return truncate(strings.Join(parts, "; "), warningLimit)
+}
+
+// gatewaysUsing returns the gateways of the endpoints that reference policy,
+// each once, sorted by namespace/name. Gateways that no longer exist are
+// skipped.
+func gatewaysUsing(
+	ctx context.Context, c client.Reader, policy *v1alpha1.KrakenDBackendPolicy,
+) ([]v1alpha1.KrakenDGateway, error) {
+	var eps v1alpha1.KrakenDEndpointList
+	if err := c.List(ctx, &eps, client.UnsafeDisableDeepCopy,
+		client.MatchingFields{fieldindex.EndpointPolicy: policy.Namespace + "/" + policy.Name}); err != nil {
+		return nil, fmt.Errorf("listing endpoints that reference policy %s/%s: %w", policy.Namespace, policy.Name, err)
+	}
+	keys := map[types.NamespacedName]struct{}{}
+	for i := range eps.Items {
+		ep := &eps.Items[i]
+		keys[types.NamespacedName{
+			Namespace: ep.Spec.GatewayRef.ResolvedNamespace(ep.Namespace), Name: ep.Spec.GatewayRef.Name,
+		}] = struct{}{}
+	}
+	sorted := make([]types.NamespacedName, 0, len(keys))
+	for k := range keys {
+		sorted = append(sorted, k)
+	}
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].String() < sorted[j].String() })
+	gateways := make([]v1alpha1.KrakenDGateway, 0, len(sorted))
+	for _, key := range sorted {
+		var gw v1alpha1.KrakenDGateway
+		if err := c.Get(ctx, key, &gw); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return nil, fmt.Errorf("getting gateway %s: %w", key, err)
+		}
+		gateways = append(gateways, gw)
+	}
+	return gateways, nil
 }
 
 // versionEchoLimit bounds, in bytes, the spec.version a warning quotes: the
