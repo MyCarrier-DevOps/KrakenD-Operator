@@ -1256,12 +1256,12 @@ method's paths in one tree (for example `GET /users/{id}` with
 
 **The validator binary is pinned by digest.** The operator image takes its
 `krakend` binary from KrakenD CE 2.13.11, referenced by digest in the
-`Dockerfile` (`KRAKEND_IMAGE`), instead of the floating `krakend:2.13` tag.
-Admission and the gateway controller validate every gateway with that binary,
-whatever its `spec.version`, and the validator changes only when the pin does.
-An integration test (`TestConfigCheckParity`) runs the pinned binary against
-the route check to confirm that admission's `krakend check -n` plus the route
-check rejects everything `krakend check -t -n` rejects.
+`Dockerfile`, instead of the floating `krakend:2.13` tag. Admission and the
+gateway controller validate every gateway with that binary, whatever its
+`spec.version`, and the validator changes only when the pin does. If you build
+the operator image yourself, the build argument is now `KRAKEND_IMAGE`; the
+former `KRAKEND_VERSION` is gone, and passing `--build-arg KRAKEND_VERSION=...`
+no longer has an effect: the build uses the pinned image.
 
 ---
 
