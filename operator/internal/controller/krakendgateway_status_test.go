@@ -326,6 +326,7 @@ func TestGatewayReconcile_OversizedRejectionWarnsOnce(t *testing.T) {
 func setGatewaySeries(namespace, name string) {
 	endpointsPerGateway.WithLabelValues(namespace, name).Set(4)
 	gatewayInfo.WithLabelValues(namespace, name, "CE", "2.7.0").Set(1)
+	gatewayConfigValid.WithLabelValues(namespace, name).Set(1)
 	dragonflyReady.WithLabelValues(namespace, name).Set(1)
 	licenseExpirySeconds.WithLabelValues(namespace, name).Set(100)
 	reconcileDuration.WithLabelValues("gateway", namespace, name).Observe(0.1)
