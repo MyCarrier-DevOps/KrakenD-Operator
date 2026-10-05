@@ -25,6 +25,7 @@ package autoconfig
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 
@@ -1289,12 +1290,12 @@ func TestScenario_BackendDefaultsScalarFieldsSurviveOverride(t *testing.T) {
 // =========================================================================
 // Scenario: Two operations share an operationId (invalid, but seen in real
 // specs) and the user overrides that operationId.
-// Expected: The generator publishes only the first entry for a duplicate
-// operationId, so the override must land on that published endpoint — not
-// on the duplicate the generator skips, which would drop it silently.
+// Expected: The override is reported as ambiguous and applied to neither
+// operation, since it would land on only one of them; the caller fails the
+// sync closed.
 // =========================================================================
 
-func TestScenario_DuplicateOperationIdOverrideAppliedToPublishedEndpoint(t *testing.T) {
+func TestScenario_DuplicateOperationIdOverrideIsAmbiguousAndNotApplied(t *testing.T) {
 	defs, err := EmbeddedCUEDefinitions()
 	if err != nil {
 		t.Fatalf("loading defs: %v", err)
@@ -1325,6 +1326,9 @@ func TestScenario_DuplicateOperationIdOverrideAppliedToPublishedEndpoint(t *test
 	if len(out.UnmatchedOverrides) != 0 {
 		t.Errorf("expected no UnmatchedOverrides, got %v", out.UnmatchedOverrides)
 	}
+	if !slices.Equal(out.AmbiguousOverrides, []string{"dup"}) {
+		t.Errorf("AmbiguousOverrides = %v, want [dup]", out.AmbiguousOverrides)
+	}
 
 	ac := &v1alpha1.KrakenDAutoConfig{
 		ObjectMeta: metav1.ObjectMeta{Name: "dup-svc", Namespace: "default"},
@@ -1344,8 +1348,7 @@ func TestScenario_DuplicateOperationIdOverrideAppliedToPublishedEndpoint(t *test
 	}
 
 	published := genOut.Endpoints[0].Spec.Endpoints[0]
-	if published.Timeout == nil || published.Timeout.Duration != 42*time.Second {
-		t.Errorf("published endpoint %s: timeout = %v, want 42s from the override",
-			published.Endpoint, published.Timeout)
+	if published.Timeout != nil && published.Timeout.Duration == 42*time.Second {
+		t.Errorf("published endpoint %s: the ambiguous override was applied", published.Endpoint)
 	}
 }
