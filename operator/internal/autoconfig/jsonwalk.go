@@ -42,5 +42,5 @@ func walkJSON(node any, visit func(key string, value any) bool) {
 // example data rather than part of the spec's structure, and returns the
 // $refs that are real references inside it.
 func examplePayload(key string, value any) (isPayload bool, refs []string) {
-	return key == "example", nil
+	return key == "example" || key == "examples", nil
 }
