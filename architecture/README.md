@@ -1958,6 +1958,8 @@ The operator should deploy a `ValidatingAdmissionWebhook` with `failurePolicy: F
 
 > **Deletion:** updates to an object that is being deleted (it has a `deletionTimestamp`) are admitted when they don't change its spec (for example, removing a finalizer); a spec change is still validated. Rejecting a finalizer removal would leave the object stuck in `Terminating`.
 
+> **Responses:** a rejected field is `422 Invalid` with one status cause per field error, so `kubectl` prints each rejected path. A failed lookup (a gateway, a policy or the endpoint list) is `500 Internal Error`, which clients retry; it is never reported as a rejected field. Every webhook sets `timeoutSeconds: 15`. The webhook configuration in `config/webhook/manifests.yaml` is generated from the `+kubebuilder:webhook` markers in `internal/webhook/webhook.go`, and the Helm chart template carries the same values.
+
 - **KrakenDEndpoint** — reject if `gatewayRef` references a non-existent KrakenDGateway
 - **KrakenDEndpoint** — reject if `policyRef` references a non-existent KrakenDBackendPolicy
 - **KrakenDEndpoint** — warn (but allow) if an endpoint path+method already exists on the target gateway (conflict detection)
