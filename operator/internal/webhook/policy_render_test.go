@@ -223,17 +223,13 @@ func TestPolicyAdmission_NamesWhatACEGatewayDrops(t *testing.T) {
 }
 
 func TestPolicyAdmission_DenialListsABoundedNumberOfGateways(t *testing.T) {
-	objs := []client.Object{}
+	names := make([]string, 2*maxEntryCauses)
 	verdicts := []configcheck.Verdict{{OK: true}}
-	for i := range 2 * maxEntryCauses {
-		gw := testGateway()
-		gw.Name = fmt.Sprintf("gw-%02d", i)
-		ep := testEndpoint(fmt.Sprintf("uses-p-%02d", i), "/a")
-		ep.Spec.GatewayRef.Name = gw.Name
-		ep.Spec.Endpoints[0].Backends[0].PolicyRef = &v1alpha1.PolicyRef{Name: "p"}
-		objs = append(objs, gw, ep)
+	for i := range names {
+		names[i] = fmt.Sprintf("gw-%02d", i)
 		verdicts = append(verdicts, failing("e", 0, "bad"), configcheck.Verdict{OK: true})
 	}
+	objs := referencingGateways(names...)
 	v := &PolicyValidator{Client: fakeClient(objs...), Checker: &scriptedChecker{verdicts: verdicts}}
 
 	resp := review(t, v, "alice", testPolicy(`{"x":{}}`), testPolicy(`{}`))
@@ -245,7 +241,7 @@ func TestPolicyAdmission_DenialListsABoundedNumberOfGateways(t *testing.T) {
 	if len(causes) > maxEntryCauses+1 {
 		t.Errorf("%d causes, want at most %d and a summary of the rest", len(causes), maxEntryCauses+1)
 	}
-	if last := causes[len(causes)-1].Message; !strings.Contains(last, "20 more gateways") {
+	if last := causes[len(causes)-1].Message; !strings.Contains(last, "refused on 20 more gateways") {
 		t.Errorf("last cause = %q, want it to count the 20 gateways left out", last)
 	}
 }
