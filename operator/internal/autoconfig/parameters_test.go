@@ -230,3 +230,14 @@ func TestDereferenceParameters_RejectsExpansionBeyondTheBodyLimit(t *testing.T) 
 		t.Errorf("expected the input back on error, got %d bytes", len(out))
 	}
 }
+
+func TestDereferenceParameters_PathLevelWarningNamesEveryOperation(t *testing.T) {
+	spec := []byte(`{"paths":{"/pets":{"parameters":[{"$ref":"#/components/parameters/Nope"}],` +
+		`"get":{"operationId":"listPets"}}}}`)
+	_, warnings, err := DereferenceParameters(spec)
+	if err != nil || len(warnings) != 1 ||
+		!strings.Contains(warnings[0], `"#/components/parameters/Nope" in /pets`) ||
+		!strings.Contains(warnings[0], "every operation on /pets") {
+		t.Errorf("warnings = %q, err = %v", warnings, err)
+	}
+}
