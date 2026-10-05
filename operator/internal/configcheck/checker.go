@@ -17,11 +17,16 @@ limitations under the License.
 package configcheck
 
 import (
+	"cmp"
 	"context"
+	"fmt"
+	"slices"
 
+	"k8s.io/apimachinery/pkg/api/meta"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/fieldindex"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 )
 
@@ -42,7 +47,74 @@ func New(reader client.Reader, r renderer.Renderer, v renderer.Validator, slots 
 
 // CheckGateway lints gw's config: its current endpoints with replace
 // substituted or added by namespace/name.
-func (c *Checker) CheckGateway(_ context.Context, _ *v1alpha1.KrakenDGateway,
-	_ []v1alpha1.KrakenDEndpoint) (Verdict, error) {
-	return Verdict{}, nil
+func (c *Checker) CheckGateway(ctx context.Context, gw *v1alpha1.KrakenDGateway,
+	replace []v1alpha1.KrakenDEndpoint) (Verdict, error) {
+	in, err := c.gather(ctx, gw, replace, client.UnsafeDisableDeepCopy)
+	if err != nil {
+		return Verdict{}, err
+	}
+	return c.lint(ctx, in)
+}
+
+func (c *Checker) lint(ctx context.Context, in renderer.RenderInput) (Verdict, error) {
+	out, err := c.renderer.Render(in)
+	if err != nil {
+		return Verdict{}, fmt.Errorf("rendering config: %w", err)
+	}
+	return c.check(ctx, in, out, c.validator.Lint)
+}
+
+// check runs validate on out as the edition in is for.
+func (c *Checker) check(ctx context.Context, in renderer.RenderInput, out *renderer.RenderOutput,
+	validate func(context.Context, []byte, v1alpha1.Edition) error) (Verdict, error) {
+	if err := validate(ctx, out.JSON, renderer.EditionFor(in.Gateway, in.CEFallback)); err != nil {
+		return Verdict{}, err
+	}
+	return Verdict{OK: true}, nil
+}
+
+// gather lists gw's endpoints and applies replace.
+func (c *Checker) gather(ctx context.Context, gw *v1alpha1.KrakenDGateway, replace []v1alpha1.KrakenDEndpoint,
+	opts ...client.ListOption) (renderer.RenderInput, error) {
+	var list v1alpha1.KrakenDEndpointList
+	opts = append(opts, client.MatchingFields{fieldindex.EndpointGateway: gw.Namespace + "/" + gw.Name})
+	if err := c.reader.List(ctx, &list, opts...); err != nil {
+		return renderer.RenderInput{}, fmt.Errorf("listing endpoints of gateway %s/%s: %w", gw.Namespace, gw.Name, err)
+	}
+	endpoints := substitute(list.Items, replace)
+	sortEndpoints(endpoints)
+	return renderer.RenderInput{Gateway: gw, Endpoints: endpoints, CEFallback: ceFallback(gw)}, nil
+}
+
+// substitute returns current with each replace entry in place of the endpoint
+// with the same namespace/name, or appended when there is none.
+func substitute(current, replace []v1alpha1.KrakenDEndpoint) []v1alpha1.KrakenDEndpoint {
+	out := slices.Clone(current)
+	for _, r := range replace {
+		i := slices.IndexFunc(out, func(e v1alpha1.KrakenDEndpoint) bool {
+			return e.Namespace == r.Namespace && e.Name == r.Name
+		})
+		if i >= 0 {
+			out[i] = r
+		} else {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func sortEndpoints(endpoints []v1alpha1.KrakenDEndpoint) {
+	slices.SortFunc(endpoints, func(a, b v1alpha1.KrakenDEndpoint) int {
+		if c := cmp.Compare(a.Namespace, b.Namespace); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.Name, b.Name)
+	})
+}
+
+// ceFallback reads CE fallback from gw's status. The gateway controller
+// overrides it with its own in-reconcile license verdict; admission sees the
+// last one recorded.
+func ceFallback(gw *v1alpha1.KrakenDGateway) bool {
+	return meta.IsStatusConditionTrue(gw.Status.Conditions, v1alpha1.ConditionLicenseDegraded)
 }
