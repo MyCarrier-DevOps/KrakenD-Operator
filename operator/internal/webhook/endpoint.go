@@ -102,17 +102,19 @@ func (v *EndpointValidator) admit(
 	if movedGateway(old, ep) {
 		stored = nil // another gateway judges every entry afresh
 	}
-	for _, i := range changedEntries(stored, ep) {
+	changed := changedEntries(stored, ep)
+	for _, i := range changed {
 		errs = append(errs, validateExtraConfigAudience(
 			field.NewPath("spec", "endpoints").Index(i).Child("extraConfig"), ep.Spec.Endpoints[i].ExtraConfig)...)
 	}
-	var warnings admission.Warnings
 	if gw != nil {
-		if warnings, err = v.conflictWarnings(ctx, ep, gw); err != nil {
+		dupErrs, err := v.validateRouteUniqueness(ctx, ep, changed, gw)
+		if err != nil {
 			return nil, unavailable(err)
 		}
+		errs = append(errs, dupErrs...)
 	}
-	return warnings, invalid(kindEndpoint, ep.Name, errs)
+	return nil, invalid(kindEndpoint, ep.Name, errs)
 }
 
 // gatewayFor returns ep's gateway, or nil when there is none to check
@@ -217,34 +219,39 @@ func changedEntries(old, ep *v1alpha1.KrakenDEndpoint) []int {
 	return changed
 }
 
-// conflictWarnings warns about entries another KrakenDEndpoint on gw already
-// defines. Replaced by a rejection in the next change.
-func (v *EndpointValidator) conflictWarnings(
-	ctx context.Context, ep *v1alpha1.KrakenDEndpoint, gw *v1alpha1.KrakenDGateway,
-) (admission.Warnings, error) {
-	gwKey := gw.Namespace + "/" + gw.Name
-	var existing v1alpha1.KrakenDEndpointList
-	if err := v.List(ctx, &existing, client.MatchingFields{fieldindex.EndpointGateway: gwKey}); err != nil {
-		return nil, fmt.Errorf("listing endpoints for conflict check: %w", err)
+// validateRouteUniqueness rejects each changed entry whose route another
+// KrakenDEndpoint on the same gateway already claims.
+func (v *EndpointValidator) validateRouteUniqueness(
+	ctx context.Context, ep *v1alpha1.KrakenDEndpoint, changed []int, gw *v1alpha1.KrakenDGateway,
+) (field.ErrorList, error) {
+	var list v1alpha1.KrakenDEndpointList
+	if err := v.List(ctx, &list, client.UnsafeDisableDeepCopy,
+		client.MatchingFields{fieldindex.EndpointGateway: gw.Namespace + "/" + gw.Name}); err != nil {
+		return nil, fmt.Errorf("listing endpoints of gateway %s/%s: %w", gw.Namespace, gw.Name, err)
 	}
-	var warnings admission.Warnings
-	for _, newEntry := range ep.Spec.Endpoints {
-		for _, other := range existing.Items {
-			if other.Name == ep.Name && other.Namespace == ep.Namespace {
-				continue
-			}
-			for _, otherEntry := range other.Spec.Endpoints {
-				if otherEntry.Endpoint == newEntry.Endpoint &&
-					otherEntry.Method == newEntry.Method {
-					warnings = append(warnings, fmt.Sprintf(
-						"endpoint %s %s already exists on gateway %s "+
-							"(defined by %s/%s) — conflict resolved by creationTimestamp",
-						newEntry.Method, newEntry.Endpoint,
-						gwKey, other.Namespace, other.Name,
-					))
-				}
-			}
+	claims := map[string]string{}
+	for i := range list.Items {
+		other := &list.Items[i]
+		if other.Namespace == ep.Namespace && other.Name == ep.Name {
+			continue
+		}
+		for _, e := range other.Spec.Endpoints {
+			claims[routeKey(e)] = "KrakenDEndpoint " + other.Namespace + "/" + other.Name
 		}
 	}
-	return warnings, nil
+	var errs field.ErrorList
+	for _, i := range changed {
+		e := ep.Spec.Endpoints[i]
+		if owner, ok := claims[routeKey(e)]; ok {
+			p := field.NewPath("spec", "endpoints").Index(i)
+			err := field.Duplicate(p, e.Method+" "+e.Endpoint)
+			err.Detail = "already defined by " + owner
+			errs = append(errs, err)
+		}
+	}
+	return errs, nil
+}
+
+func routeKey(e v1alpha1.EndpointEntry) string {
+	return e.Method + " " + e.Endpoint
 }
