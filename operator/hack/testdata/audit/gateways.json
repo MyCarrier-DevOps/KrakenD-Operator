@@ -1,3 +1,4 @@
 {"items":[
- {"metadata":{"namespace":"a","name":"timeout-pattern"},"spec":{"edition":"CE","config":{"timeout":"3 seconds"}}}
+ {"metadata":{"namespace":"a","name":"timeout-pattern"},"spec":{"edition":"CE","config":{"timeout":"3 seconds"}}},
+ {"metadata":{"namespace":"a","name":"cachettl-long"},"spec":{"edition":"CE","config":{"cacheTTL":"0000000000000000000000000000000000000000000000000000000000000001s"}}}
 ]}
