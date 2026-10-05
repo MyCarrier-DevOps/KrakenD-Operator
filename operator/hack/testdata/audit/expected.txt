@@ -23,3 +23,4 @@ KrakenDGateway a/cors-maxage: spec.config.cors.maxAge 12h0m
 KrakenDGateway a/port-range: spec.config.port 70000
 KrakenDGateway a/output-encoding: spec.config.outputEncoding jsn
 KrakenDGateway a/health-path: spec.config.router.healthPath h
+KrakenDGateway a/dialtimeout-overflow: spec.redis.connectionPool.dialTimeout 9223372036854775808ns does not fit in 64 bits of nanoseconds
