@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	stderrors "errors"
 	"fmt"
 	"maps"
 	"net/url"
@@ -521,7 +522,8 @@ func applyAdditionalEndpoints(
 // fetchSpec fetches the OpenAPI spec and prepares it for evaluation: it
 // resolves external $refs (URL sources only), strips upstream server entries
 // and dereferences parameter $refs. A failure to fetch or decode the spec or
-// an external $ref document is returned and fails the sync closed. notes are
+// an external $ref document, or a parameter expansion past the body size
+// limit, is returned and fails the sync closed. notes are
 // the spec problems that do not stop the sync (the $refs the resolver could
 // not honour and the parameter $refs that do not resolve) for
 // status.warnings. A StripServers or parameter decode failure is logged and
@@ -562,17 +564,22 @@ func (r *KrakenDAutoConfigReconciler) fetchSpec(
 
 	// Strip upstream `servers` entries: the KrakenD gateway is the
 	// externally-visible server, so upstream URLs must not bleed into
-	// generated documentation or endpoint configuration.
-	if stripped, stripErr := autoconfig.StripServers(fetchResult.Data); stripErr != nil {
+	// generated documentation or endpoint configuration. A spec that cannot
+	// be decoded fails evaluation later, so it is not processed further.
+	stripped, stripErr := autoconfig.StripServers(fetchResult.Data)
+	if stripErr != nil {
 		log.Error(stripErr, "stripping upstream servers failed, using raw spec")
-	} else {
-		fetchResult.Data = stripped
+		return fetchResult, notes, nil
 	}
+	fetchResult.Data = stripped
 
 	deref, paramNotes, derefErr := autoconfig.DereferenceParameters(fetchResult.Data)
-	if derefErr != nil {
+	switch {
+	case stderrors.Is(derefErr, autoconfig.ErrParameterRefsTooLarge):
+		return nil, nil, derefErr
+	case derefErr != nil:
 		log.Error(derefErr, "dereferencing parameter $refs failed, using the spec as is")
-	} else {
+	default:
 		fetchResult.Data = deref
 	}
 	return fetchResult, append(notes, paramNotes...), nil
