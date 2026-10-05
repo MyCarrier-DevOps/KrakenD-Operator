@@ -221,3 +221,15 @@ func TestCheck_ReleasesTheSlotWhenDone(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckIsolated_UsesOnlyTheGivenEndpoints(t *testing.T) {
+	v := &fakeValidator{}
+	c := newChecker(v, endpoint("a", "/stored"))
+	if _, err := c.CheckIsolated(context.Background(), gateway(v1alpha1.EditionCE),
+		[]v1alpha1.KrakenDEndpoint{*endpoint("b", "/alone")}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(v.seen[0], "/stored") || !strings.Contains(v.seen[0], "/alone") {
+		t.Errorf("linted %s, want only /alone", v.seen[0])
+	}
+}
