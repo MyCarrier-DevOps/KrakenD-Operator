@@ -261,6 +261,9 @@ func (v *EndpointValidator) validateRouteUniqueness(
 	}
 	claims := map[string]claim{}
 	for i := range list.Items {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("checking routes of gateway %s/%s: %w", gw.Namespace, gw.Name, err)
+		}
 		other := &list.Items[i]
 		if other.Namespace == ep.Namespace && other.Name == ep.Name || sameController(ep, other) {
 			continue
