@@ -345,6 +345,11 @@ func versionWarning(gw, old *v1alpha1.KrakenDGateway) admission.Warnings {
 	if old != nil && old.Spec.Version == gw.Spec.Version {
 		return nil
 	}
+	if gw.Spec.Version == "" {
+		return admission.Warnings{fmt.Sprintf("spec.version is empty: the image tag is empty unless spec.image "+
+			"(and spec.ceImage for the CE fallback) is set, so the KrakenD version is unknown; "+
+			"configs are validated with KrakenD %s", configcheck.ValidatorVersion)}
+	}
 	parts := strings.SplitN(strings.TrimPrefix(gw.Spec.Version, "v"), ".", 3)
 	if len(parts) >= 2 && parts[0]+"."+parts[1] == configcheck.ValidatorVersion {
 		return nil
