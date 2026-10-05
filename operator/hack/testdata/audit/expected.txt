@@ -26,3 +26,4 @@ KrakenDGateway a/health-path: spec.config.router.healthPath h
 KrakenDGateway a/dialtimeout-overflow: spec.redis.connectionPool.dialTimeout 9223372036854775808ns does not fit in 64 bits of nanoseconds
 KrakenDGateway a/ee-nolicense: EE without a license source
 KrakenDGateway a/ee-emptyname: EE license secretRef has an empty name
+KrakenDGateway a/ce-license: CE with a license source
