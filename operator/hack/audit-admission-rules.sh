@@ -198,6 +198,7 @@ jq "${jq_opts[@]}" "$jq_lib"'
   )),
   (($s.overrides // []) | to_entries[] | .key as $i | .value as $o | "spec.overrides[\($i)]" as $p | (
     ($o.method // empty | enum_problem("\($p).method"; ["GET", "POST", "PUT", "PATCH", "DELETE"])),
-    (($o.backends // [])[] | select(.index < 0) | "\($p).backends index \(.index)")
+    (($o.backends // [])[] | select(.index < 0) | "\($p).backends index \(.index)"),
+    ($o.timeout // empty | dur_problem($go_re; 64; "\($p).timeout"))
   ))
 ]} | report("KrakenDAutoConfig")' "$work/autoconfigs.json"
