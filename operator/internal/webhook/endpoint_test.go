@@ -490,6 +490,9 @@ func TestEndpointAdmission_BrokenGatewayFallsBackToIsolation(t *testing.T) {
 		{"update newly failing alone", testEndpoint("new", "/old"),
 			[]configcheck.Verdict{broken, broken, failing("new", 0, "bad"), {OK: true}}, false,
 			"gateway+candidate,gateway,isolated,isolated"},
+		{"update already failing alone", testEndpoint("new", "/old"),
+			[]configcheck.Verdict{broken, broken, failing("new", 0, "bad"), failing("new", 0, "bad")}, true,
+			"gateway+candidate,gateway,isolated,isolated"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
