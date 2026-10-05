@@ -213,3 +213,14 @@ func TestEndpointAdmission_DuplicateAcrossNamespacesOnOneGateway(t *testing.T) {
 		t.Errorf("response = %+v, want a duplicate naming team-b/other", resp.Result)
 	}
 }
+
+func TestEndpointAdmission_SameRouteOnAnotherGatewayIsAdmitted(t *testing.T) {
+	other := testEndpoint("other", "/a")
+	other.Spec.GatewayRef.Name = "elsewhere"
+	elsewhere := testGateway()
+	elsewhere.Name = "elsewhere"
+	v := &EndpointValidator{Client: fakeClient(testGateway(), elsewhere, other)}
+	if resp := review(t, v, "alice", testEndpoint("new", "/a"), nil); !resp.Allowed {
+		t.Errorf("route of another gateway denied: %+v", resp.Result)
+	}
+}
