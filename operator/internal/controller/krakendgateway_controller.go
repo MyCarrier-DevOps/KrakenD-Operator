@@ -1990,18 +1990,7 @@ func (r *KrakenDGatewayReconciler) licenseSecretToGateway(
 	var requests []reconcile.Request
 	for i := range gateways.Items {
 		gw := &gateways.Items[i]
-		if gw.Spec.License == nil {
-			continue
-		}
-		if gw.Spec.License.SecretRef != nil &&
-			gw.Spec.License.SecretRef.Name == obj.GetName() {
-			requests = append(requests, reconcile.Request{
-				NamespacedName: types.NamespacedName{Name: gw.Name, Namespace: gw.Namespace},
-			})
-			continue
-		}
-		if gw.Spec.License.ExternalSecret.Enabled &&
-			obj.GetName() == gw.Name+"-license" {
+		if name, _, ok := resources.LicenseSecret(gw); ok && name == obj.GetName() {
 			requests = append(requests, reconcile.Request{
 				NamespacedName: types.NamespacedName{Name: gw.Name, Namespace: gw.Namespace},
 			})
