@@ -519,3 +519,14 @@ func TestLint_RunsOfflineLintWithoutTheRouterTest(t *testing.T) {
 		t.Fatalf("args = %q, want [check -n -c <file>]", rec.args)
 	}
 }
+
+func TestLint_ExitStatusIsAVerdict(t *testing.T) {
+	v := NewValidator(ValidatorOptions{
+		Executor: &mockExecutor{output: []byte("ERROR linting"), err: exitError(t, 1)}, BinaryPath: "krakend",
+	})
+	err := v.Lint(context.Background(), []byte(`{"version":3}`), v1alpha1.EditionCE)
+	var valErr *ValidationError
+	if !errors.As(err, &valErr) || valErr.Output != "ERROR linting" {
+		t.Fatalf("err = %v, want *ValidationError carrying the output", err)
+	}
+}
