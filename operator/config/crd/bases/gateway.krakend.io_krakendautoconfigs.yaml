@@ -346,7 +346,13 @@ spec:
                     properties:
                       cacheTTL:
                         description: CacheTTL sets the default endpoint cache TTL.
+                        maxLength: 64
+                        pattern: ^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$
                         type: string
+                        x-kubernetes-validations:
+                        - message: must be a duration that fits in 64 bits of nanoseconds
+                          rule: '!self.matches(''^(0|(([0-9]+([.][0-9]*)?|[.][0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$'')
+                            || duration(self) >= duration(''0s'')'
                       concurrentCalls:
                         description: |-
                           ConcurrentCalls sets the default number of concurrent backend calls.
