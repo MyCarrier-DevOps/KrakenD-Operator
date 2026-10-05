@@ -54,8 +54,9 @@ type CUEOutput struct {
 	// matched no generated entry, in override order.
 	UnmatchedOverrides []string
 	// Skipped holds the operations whose method the KrakenDEndpoint API does
-	// not accept (reason UnsupportedMethod), sorted by path then method. They
-	// have no entry in Entries.
+	// not accept (reason UnsupportedMethod), sorted by path then method, with
+	// the path and method their entry has after the URL transform and the
+	// overrides. They have no entry in Entries.
 	Skipped []OperationIssue
 }
 
@@ -138,10 +139,10 @@ func (e *cueEvaluator) Evaluate(_ context.Context, input CUEInput) (*CUEOutput, 
 
 	if input.URLTransform != nil {
 		applyURLTransform(output, input.URLTransform)
-		transformIssuePaths(output.Skipped, input.URLTransform)
 	}
 
 	applyFieldOverrides(output, input.Overrides)
+	skipUnsupportedMethods(output)
 
 	return output, nil
 }
@@ -186,9 +187,8 @@ func applyOverrides(cueCtx *cue.Context, unified cue.Value, input CUEInput) cue.
 	return unified
 }
 
-// exportEndpointEntries decodes every entry of the endpoint struct. An entry
-// whose method the KrakenDEndpoint API does not accept is recorded in
-// Skipped instead.
+// exportEndpointEntries decodes every entry of the endpoint struct, whatever
+// its method: skipUnsupportedMethods partitions them once overrides applied.
 func exportEndpointEntries(endpointsValue cue.Value) (*CUEOutput, error) {
 	output := &CUEOutput{
 		OperationIDs: make(map[string]string),
@@ -204,15 +204,6 @@ func exportEndpointEntries(endpointsValue cue.Value) (*CUEOutput, error) {
 		key := iter.Selector().String()
 		val := iter.Value()
 		op := entryOperation(iter.Selector().Unquoted(), val)
-		if !slices.Contains(supportedMethods, op.Method) {
-			output.Skipped = append(output.Skipped, OperationIssue{
-				Operation: op,
-				Reason:    v1alpha1.ReasonUnsupportedMethod,
-				Message:   "KrakenDEndpoint supports only " + strings.Join(supportedMethods, ", "),
-			})
-			continue
-		}
-
 		var entry v1alpha1.EndpointEntry
 		jsonBytes, err := val.MarshalJSON()
 		if err != nil {
@@ -232,7 +223,6 @@ func exportEndpointEntries(endpointsValue cue.Value) (*CUEOutput, error) {
 			output.Tags[entryKey] = op.Tags
 		}
 	}
-	sortIssues(output.Skipped)
 	return output, nil
 }
 
@@ -276,14 +266,30 @@ func sortIssues(issues []OperationIssue) {
 	})
 }
 
-// transformIssuePaths applies the URL transform's path strip/add-prefix to
-// the issues, so each carries the path its entry would have had.
-func transformIssuePaths(issues []OperationIssue, transform *v1alpha1.URLTransformSpec) {
-	for i := range issues {
-		entry := v1alpha1.EndpointEntry{Endpoint: issues[i].Path}
-		applyURLTransformToEntry(&entry, transform, nil)
-		issues[i].Path = entry.Endpoint
+// skipUnsupportedMethods moves every entry whose final method the
+// KrakenDEndpoint API does not accept from Entries to Skipped, so an override
+// that changes the method decides whether the operation is generated.
+func skipUnsupportedMethods(output *CUEOutput) {
+	kept := output.Entries[:0]
+	for _, entry := range output.Entries {
+		if slices.Contains(supportedMethods, entry.Method) {
+			kept = append(kept, entry)
+			continue
+		}
+		key := entry.Endpoint + ":" + entry.Method
+		output.Skipped = append(output.Skipped, OperationIssue{
+			Operation: Operation{
+				Method: entry.Method, Path: entry.Endpoint,
+				OperationID: output.OperationIDs[key], Tags: output.Tags[key],
+			},
+			Reason:  v1alpha1.ReasonUnsupportedMethod,
+			Message: "KrakenDEndpoint supports only " + strings.Join(supportedMethods, ", "),
+		})
+		delete(output.OperationIDs, key)
+		delete(output.Tags, key)
 	}
+	output.Entries = kept
+	sortIssues(output.Skipped)
 }
 
 // applyDefaults applies CR-level EndpointDefaults to all entries. These replace
