@@ -209,5 +209,7 @@ jq "${jq_opts[@]}" "$jq_lib"'
   (($s.overrides // []) | group_by(.operationId | ascii_downcase | gsub("[^a-z0-9-]"; "-") | gsub("^-+|-+$"; ""))[]
     | select(length > 1) | "overrides collide: \([.[].operationId] | join(", "))"),
   ($s.defaults.endpoint.timeout // empty | dur_problem($go_re; 64; "spec.defaults.endpoint.timeout")),
-  ($s.defaults.endpoint.cacheTTL // empty | dur_problem($go_re; 64; "spec.defaults.endpoint.cacheTTL"))
+  ($s.defaults.endpoint.cacheTTL // empty | dur_problem($go_re; 64; "spec.defaults.endpoint.cacheTTL")),
+  ($s.defaults.endpoint.outputEncoding // empty
+    | enum_problem("spec.defaults.endpoint.outputEncoding"; output_encodings))
 ]} | report("KrakenDAutoConfig")' "$work/autoconfigs.json"
