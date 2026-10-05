@@ -284,7 +284,8 @@ func (v *EndpointValidator) validateRouteUniqueness(
 		}
 		for _, j := range entriesByKey[keys[i]] {
 			if j != i {
-				errs = append(errs, routeClash(p, e, ep.Spec.Endpoints[j].Endpoint, fmt.Sprintf("spec.endpoints[%d]", j)))
+				owner := fmt.Sprintf("spec.endpoints[%d]", j)
+				errs = append(errs, routeClash(p, e, ep.Spec.Endpoints[j].Endpoint, owner))
 				break
 			}
 		}
