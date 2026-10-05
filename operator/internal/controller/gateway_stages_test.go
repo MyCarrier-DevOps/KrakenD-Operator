@@ -2850,3 +2850,38 @@ func TestGatewayReconcile_UnjudgedConfigReportsInvalidGauge(t *testing.T) {
 		t.Errorf("gateway_config_valid = %v while the config is unjudged, want 0", got)
 	}
 }
+
+func TestEndpointAccepted_MessageAllowsTheWinnerToBeAnEarlierEntryOfTheSameEndpoint(t *testing.T) {
+	gw := reconciledGateway()
+	ep := testEndpoint("ep", "/a/{id}")
+	key := client.ObjectKeyFromObject(ep)
+	for _, tc := range []struct {
+		name       string
+		twoEntries bool
+		wantReason string
+	}{
+		{"every entry lost", false, v1alpha1.ReasonEndpointConflict},
+		{"some entries lost", true, v1alpha1.ReasonPartiallyAccepted},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ep := ep.DeepCopy()
+			if tc.twoEntries {
+				ep.Spec.Endpoints = append(ep.Spec.Endpoints, ep.Spec.Endpoints[0])
+				ep.Spec.Endpoints[1].Endpoint = "/orders"
+			}
+			rv := renderVerdicts{
+				conflicted: map[types.NamespacedName]struct{}{key: {}},
+				lost: map[types.NamespacedName][]renderer.EntryConflict{
+					key: {{Endpoint: "/a/{id}", Method: "GET", Winner: key}},
+				},
+			}
+
+			cond := endpointAccepted(gw, ep, rv).condition
+
+			if cond.Reason != tc.wantReason || !strings.Contains(cond.Message, "an earlier entry of this one") {
+				t.Errorf("Accepted = %+v, want %s saying an earlier entry of the same KrakenDEndpoint may win",
+					cond, tc.wantReason)
+			}
+		})
+	}
+}
