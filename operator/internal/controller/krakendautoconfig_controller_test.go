@@ -3488,6 +3488,64 @@ func TestAutoConfigReconcile_TransientWriteErrorTakesPrecedenceOverHeldOperation
 	}
 }
 
+func TestAutoConfigReconcile_IdenticalPassWithRejectedEndpointsWritesNoStatus(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	// Six endpoints the API server rejects with a message longer than the
+	// status keeps: the list is deterministic, bounded and unchanged on the
+	// next identical pass.
+	errFor := map[string]error{}
+	for i := range 6 {
+		opID := fmt.Sprintf("op%d", i)
+		ep := generatedEndpoint(opID, fmt.Sprintf("/r%d", i))
+		g.output.Endpoints = append(g.output.Endpoints, ep)
+		ce.output.OperationIDs[fmt.Sprintf("/r%d:GET", i)] = opID
+		errFor[ep.Name] = apierrors.NewInvalid(schema.GroupKind{Group: v1alpha1.GroupVersion.Group, Kind: "KrakenDEndpoint"},
+			ep.Name, field.ErrorList{field.Invalid(field.NewPath("spec", "endpoints").Index(0), strings.Repeat("v", 400), "rejected")})
+	}
+	var ops []string
+	var statusUpdates int
+	funcs := recordEndpointWrites(&ops, errFor)
+	funcs.SubResourceUpdate = func(
+		ctx context.Context, c client.Client, sub string, obj client.Object, opts ...client.SubResourceUpdateOption,
+	) error {
+		statusUpdates++
+		return c.SubResource(sub).Update(ctx, obj, opts...)
+	}
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).WithInterceptorFuncs(funcs).Build()
+	rec := fakeRecorder()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Recorder = rec
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+	first := getAC(t, c, ac)
+	drainEvents(rec)
+	if len(first.Status.FailedOperations) != 6 {
+		t.Fatalf("failedOperations = %+v, want 6", first.Status.FailedOperations)
+	}
+	for _, op := range first.Status.FailedOperations {
+		if len(op.Message) > 256 {
+			t.Errorf("message of %s is %d bytes, want at most 256", op.Endpoint, len(op.Message))
+		}
+	}
+	statusUpdates = 0
+
+	result, err := reconcileAC(r, first)
+
+	if err != nil || result.RequeueAfter != defaultResyncInterval {
+		t.Fatalf("second reconcile: %v, %+v", err, result)
+	}
+	if statusUpdates != 0 {
+		t.Errorf("an identical second pass wrote status %d times, want none", statusUpdates)
+	}
+	if events := drainEvents(rec); len(events) != 0 {
+		t.Errorf("an identical second pass emitted %v, want no events", events)
+	}
+}
+
 func TestAutoConfigReconcile_FailedOperationsAreListedSortedAndCapped(t *testing.T) {
 	cm := testCUEDefinitionsCM()
 	ac := syncedAutoConfig(cm)
