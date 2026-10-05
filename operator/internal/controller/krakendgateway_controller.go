@@ -748,24 +748,17 @@ func (r *KrakenDGatewayReconciler) noteRollout(
 	return nil
 }
 
-// reportConfigRollout reports the rollout the infrastructure stage starts for
-// a newly applied config.
+// reportConfigRollout records the event for the rollout the infrastructure
+// stage starts for a newly applied config and returns the reason and message
+// to show for it. The Progressing condition itself follows the Deployment.
 func (r *KrakenDGatewayReconciler) reportConfigRollout(gw *v1alpha1.KrakenDGateway) *rolloutNote {
-	note := &rolloutNote{reason: v1alpha1.ReasonConfigDeployed, message: "Configuration updated, rolling deployment"}
-	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
-		Type:               v1alpha1.ConditionProgressing,
-		Status:             metav1.ConditionTrue,
-		ObservedGeneration: gw.Generation,
-		Reason:             note.reason,
-		Message:            note.message,
-	})
 	r.Recorder.Event(gw, corev1.EventTypeNormal, v1alpha1.ReasonConfigDeployed,
 		fmt.Sprintf("Configuration updated, checksum: %s", gw.Status.ConfigChecksum))
 	rollingRestarts.Inc()
-	return note
+	return &rolloutNote{reason: v1alpha1.ReasonConfigDeployed, message: "Configuration updated, rolling deployment"}
 }
 
-// markDeploymentUpdate reports the rollout the infrastructure stage is about
+// markDeploymentUpdate describes the rollout the infrastructure stage is about
 // to start for an image, plugin or license change when no new config was
 // applied. It returns nil when none changed.
 func (r *KrakenDGatewayReconciler) markDeploymentUpdate(
@@ -779,16 +772,8 @@ func (r *KrakenDGatewayReconciler) markDeploymentUpdate(
 	if !imageChanged && !pluginChanged && !licenseChanged {
 		return nil
 	}
-	note := &rolloutNote{reason: "DeploymentUpdated", message: "Deployment updated for image, plugin or license change"}
-	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
-		Type:               v1alpha1.ConditionProgressing,
-		Status:             metav1.ConditionTrue,
-		ObservedGeneration: gw.Generation,
-		Reason:             note.reason,
-		Message:            note.message,
-	})
 	rollingRestarts.Inc()
-	return note
+	return &rolloutNote{reason: "DeploymentUpdated", message: "Deployment updated for image, plugin or license change"}
 }
 
 // validateConfig checks the render as the given edition. When the validator
