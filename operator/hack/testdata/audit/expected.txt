@@ -22,3 +22,4 @@ KrakenDGateway a/dnscachettl-overflow: spec.config.dnsCacheTTL 99999999999s does
 KrakenDGateway a/cors-maxage: spec.config.cors.maxAge 12h0m
 KrakenDGateway a/port-range: spec.config.port 70000
 KrakenDGateway a/output-encoding: spec.config.outputEncoding jsn
+KrakenDGateway a/health-path: spec.config.router.healthPath h
