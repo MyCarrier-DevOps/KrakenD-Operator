@@ -10,3 +10,4 @@ KrakenDEndpoint a/cachettl-overflow: spec.endpoints[0].cacheTTL 9223372036854775
 KrakenDEndpoint a/output-encoding: spec.endpoints[0].outputEncoding jsn
 KrakenDEndpoint a/backend-encoding: spec.endpoints[0].backends[0].encoding jsn
 KrakenDEndpoint a/backend-sd: spec.endpoints[0].backends[0].sd foo
+KrakenDEndpoint a/backend-method: spec.endpoints[0].backends[0].method get
