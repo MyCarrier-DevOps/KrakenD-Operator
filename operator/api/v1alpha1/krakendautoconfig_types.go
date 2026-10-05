@@ -182,6 +182,10 @@ type EndpointDefaults struct {
 	Timeout *metav1.Duration `json:"timeout,omitempty"`
 
 	// CacheTTL sets the default endpoint cache TTL.
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:XValidation:rule="!self.matches('^(0|(([0-9]+([.][0-9]*)?|[.][0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$') || duration(self) >= duration('0s')",message="must be a duration that fits in 64 bits of nanoseconds"
+	// +kubebuilder:validation:Pattern=`^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$`
 	CacheTTL *metav1.Duration `json:"cacheTTL,omitempty"`
 
 	// OutputEncoding sets the default response encoding (e.g. "json", "no-op").
