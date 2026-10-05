@@ -530,3 +530,13 @@ func TestLint_ExitStatusIsAVerdict(t *testing.T) {
 		t.Fatalf("err = %v, want *ValidationError carrying the output", err)
 	}
 }
+
+func TestLint_DeadlineIsTransient(t *testing.T) {
+	bin := fakeKrakenD(t, "exec sleep 5")
+	v := NewValidator(ValidatorOptions{Executor: NewKrakenDExecutor(bin), BinaryPath: bin, Timeout: 200 * time.Millisecond})
+	err := v.Lint(context.Background(), []byte(`{"version":3}`), v1alpha1.EditionCE)
+	var valErr *ValidationError
+	if errors.As(err, &valErr) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want a transient deadline error", err)
+	}
+}
