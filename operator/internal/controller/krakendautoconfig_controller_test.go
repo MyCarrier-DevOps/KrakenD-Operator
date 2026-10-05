@@ -3580,6 +3580,14 @@ func TestAutoConfigReconcile_ManyUnresolvedSchemaRefsStayBoundedAndQuiet(t *test
 	cm := testCUEDefinitionsCM()
 	ac := testAutoConfig()
 	f, ce, fi, g := defaultMocks()
+	configMapSpecWithExternalRef(ac, f)
+	var refs []string
+	for i := range 15 {
+		refs = append(refs, fmt.Sprintf(`"/p%03d":{"get":{"responses":{"200":{"$ref":"other.json#/R%03d"}}}}`, i, i))
+	}
+	rawSpec := []byte(`{"paths":{` + strings.Join(refs, ",") + `}}`)
+	// fetchSpec rewrites the result's Data, so each pass gets its own copy.
+	f.result = &autoconfig.FetchResult{Data: rawSpec}
 	for i := range 3 * maxStatusListLen {
 		g.output.Warnings = append(g.output.Warnings, fmt.Sprintf(
 			"schema reference %q (first used by GET /api/users) is not defined in components/schemas",
@@ -3598,16 +3606,19 @@ func TestAutoConfigReconcile_ManyUnresolvedSchemaRefsStayBoundedAndQuiet(t *test
 	if got := len(getAC(t, c, ac).Status.Warnings); got != maxStatusListLen {
 		t.Errorf("status warnings = %d, want %d", got, maxStatusListLen)
 	}
-	specWarningEvents := 0
+	// A pass emits at most maxStatusListLen warning events in all, fetch
+	// notes first, so the failure event of a failing pass keeps its budget.
+	warningEvents := 0
 	for _, ev := range drainEvents(rec) {
-		if strings.HasPrefix(ev, "Warning "+v1alpha1.ReasonSpecWarning+" ") {
-			specWarningEvents++
+		if strings.HasPrefix(ev, "Warning ") {
+			warningEvents++
 		}
 	}
-	if specWarningEvents != maxStatusListLen {
-		t.Errorf("SpecWarning events = %d, want %d", specWarningEvents, maxStatusListLen)
+	if warningEvents != maxStatusListLen {
+		t.Errorf("warning events = %d, want %d", warningEvents, maxStatusListLen)
 	}
 	counts = writeCounts{}
+	f.result = &autoconfig.FetchResult{Data: rawSpec}
 
 	if _, err := reconcileAC(r, ac); err != nil {
 		t.Fatalf("second reconcile: %v", err)
