@@ -90,11 +90,11 @@ func (v *GatewayValidator) ValidateCreate(
 	return warnings, invalid("KrakenDGateway", gw.Name, errs)
 }
 
-// ValidateUpdate validates an updated KrakenDGateway. The old (stored) object
-// is threaded through to validate so the runAsUser:0 reject can be RATCHETED —
-// a CR accepted by an older operator version (before that reject existed) must
-// not start failing every unrelated update just because ValidateUpdate
-// re-validates the whole spec.
+// ValidateUpdate validates an updated KrakenDGateway. An unchanged spec is not
+// validated, and a rule rejects an update only for errors the stored object did
+// not already have, so a CR accepted by an older operator version does not
+// start failing every unrelated update. The old object is also threaded
+// through to validate so the runAsUser:0 reject can be ratcheted.
 func (v *GatewayValidator) ValidateUpdate(
 	_ context.Context,
 	oldObj runtime.Object,
@@ -111,8 +111,12 @@ func (v *GatewayValidator) ValidateUpdate(
 	if !ok {
 		return nil, fmt.Errorf("expected KrakenDGateway, got %T", oldObj)
 	}
+	if equality.Semantic.DeepEqual(old.Spec, gw.Spec) {
+		return nil, nil
+	}
 	warnings, errs := v.validate(gw, old)
-	return warnings, invalid("KrakenDGateway", gw.Name, errs)
+	_, stored := v.validate(old, nil)
+	return warnings, invalid("KrakenDGateway", gw.Name, newErrors(errs, stored))
 }
 
 // ValidateDelete is required by admission.CustomValidator. The gateway webhook
@@ -147,11 +151,10 @@ func (v *GatewayValidator) validate(gw, old *v1alpha1.KrakenDGateway) (admission
 		// HPA and post-restart Job freeze. Rejecting the input up front is the only
 		// place the user gets told.
 		//
-		// Fail-closed with no update ratchet, unlike the postRestartJob and
-		// dragonfly ratchets: those grandfather stored values that still WORK,
-		// whereas an API-server-invalid probe has no working stored state to
-		// protect. The check reads only the new object, so the correcting update
-		// always passes.
+		// Like every field rule, these reject an update only for errors it
+		// introduces: a probe stored before the rules existed does not block
+		// unrelated edits, and the check reads only the new object, so the
+		// correcting update always passes.
 		effectiveImage := resources.EffectiveOpenAPISidecarImage(gw.Spec.OpenAPI)
 		defaultSidecar := effectiveImage == resources.DefaultOpenAPISidecarImage
 		oaPath := field.NewPath("spec", "openapi")
