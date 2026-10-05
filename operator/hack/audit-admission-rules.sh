@@ -54,6 +54,9 @@ def unit_max: {"ns": "9223372036854775807", "us": "9223372036854775", "µs": "92
   "μs": "9223372036854775", "ms": "9223372036854", "s": "9223372036", "m": "153722867", "h": "2562047"};
 def unit_ns: {"ns": 1, "us": 1e3, "µs": 1e3, "μs": 1e3, "ms": 1e6, "s": 1e9, "m": 6e10, "h": 3.6e12};
 def digits_exceed($max): sub("^0+(?=.)"; "") | (length > ($max | length)) or (length == ($max | length) and . > $max);
+def duration_ns:
+  [scan("([0-9]*)(\\.[0-9]*)?(ns|us|µs|μs|ms|s|m|h)")
+    | ((if .[0] == "" then "0" else .[0] end) + (.[1] // "") | tonumber) * unit_ns[.[2]]] | add // 0;
 def overflows:
   [scan("([0-9]*)(\\.[0-9]*)?(ns|us|µs|μs|ms|s|m|h)")
     | {int: (.[0] | if . == "" then "0" else . end), frac: (.[1] // ""), unit: .[2]}] as $parts
@@ -160,5 +163,8 @@ jq "${jq_opts[@]}" "$jq_lib"'
   (if $s.openapi.configMapRef != null and (($s.urlTransform.hostMapping // []) | length) == 0
    then "configMapRef without urlTransform.hostMapping" else empty end),
   (if $s.openapi.auth.bearerTokenSecret != null and $s.openapi.auth.basicAuthSecret != null
-   then "both auth secrets set" else empty end)
+   then "both auth secrets set" else empty end),
+  (if $s.trigger == "Periodic"
+      and ($s.periodic.interval // "" | crd_test($go_re) and (overflows | not) and duration_ns < 3e10)
+   then "periodic.interval below 30s" else empty end)
 ]} | report("KrakenDAutoConfig")' "$work/autoconfigs.json"
