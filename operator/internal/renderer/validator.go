@@ -91,7 +91,8 @@ func (v *KrakenDValidator) Lint(ctx context.Context, jsonData []byte, edition v1
 }
 
 // validate prepares the edition's copy of jsonData, applies the rules checked
-// in Go, and runs krakend check with flags on the copy.
+// in Go (the EE router rule, then the route check) and runs krakend check with
+// flags on the copy.
 func (v *KrakenDValidator) validate(
 	ctx context.Context, jsonData []byte, edition v1alpha1.Edition, flags ...string,
 ) error {
@@ -101,6 +102,13 @@ func (v *KrakenDValidator) validate(
 	}
 	if len(findings) > 0 {
 		return &ValidationError{Output: strings.Join(findings, "\n"), Err: errEEWildcardRule}
+	}
+	conflicts, err := routeConflicts(doc)
+	if err != nil {
+		return fmt.Errorf("checking routes: %w", err)
+	}
+	if len(conflicts) > 0 {
+		return &ValidationError{Output: strings.Join(conflicts, "\n"), Err: errRouteConflict}
 	}
 	return v.check(ctx, doc, flags...)
 }
