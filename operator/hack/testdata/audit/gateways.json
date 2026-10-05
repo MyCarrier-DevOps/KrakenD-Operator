@@ -24,5 +24,6 @@
  {"metadata":{"namespace":"a","name":"ce-ee-namespace"},"spec":{"edition":"CE","config":{"extraConfig":{"auth/api-keys":{"keys":[]},"security/cors":{"allow_origins":["*"]}}}}},
  {"metadata":{"namespace":"a","name":"ce-redis"},"spec":{"edition":"CE","config":{},"redis":{"connectionPool":{"addresses":["r"]}}}},
  {"metadata":{"namespace":"a","name":"ce-documentation"},"spec":{"edition":"CE","config":{"documentation":{"version":"1.0"}}}},
- {"metadata":{"namespace":"a","name":"ce-openapi"},"spec":{"edition":"CE","config":{},"openapi":{"enabled":true}}}
+ {"metadata":{"namespace":"a","name":"ce-openapi"},"spec":{"edition":"CE","config":{},"openapi":{"enabled":true}}},
+ {"metadata":{"namespace":"a","name":"ce-dragonfly"},"spec":{"edition":"CE","config":{},"dragonfly":{"enabled":true}}}
 ]}
