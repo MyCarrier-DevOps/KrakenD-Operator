@@ -90,5 +90,7 @@ jq "${jq_opts[@]}" "$jq_lib"'
   ($s.config.cacheTTL // empty | dur_problem($one_re; 64; "spec.config.cacheTTL")),
   ($s.config.dnsCacheTTL // empty | dur_problem($one_re; 64; "spec.config.dnsCacheTTL")),
   ($s.config.cors.maxAge // empty | select(crd_test($one_re) | not) | "spec.config.cors.maxAge \(.)"),
-  ($s.config.port // empty | select(. < 1 or . > 65535) | "spec.config.port \(.)")
+  ($s.config.port // empty | select(. < 1 or . > 65535) | "spec.config.port \(.)"),
+  ($s.config.outputEncoding // empty
+    | enum_problem("spec.config.outputEncoding"; ["json", "fast-json", "json-collection", "xml", "negotiate", "string", "no-op"]))
 ]} | report("KrakenDGateway")' "$work/gateways.json"
