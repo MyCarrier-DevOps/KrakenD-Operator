@@ -230,6 +230,7 @@ func TestGatewayAdmission_CERejectsEnterpriseOnlyNamespaces(t *testing.T) {
 	}{
 		{"CE root with an EE namespace", withRoot(testGateway(), apiKeys), nil,
 			[]string{`spec.config.extraConfig: Invalid value: "auth/api-keys"`}},
+		{"CE root with CE namespaces", withRoot(testGateway(), `{"security/cors":{"allow_origins":["*"]}}`), nil, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
