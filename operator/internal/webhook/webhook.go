@@ -40,6 +40,7 @@ import (
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/fieldindex"
+	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 	"github.com/mycarrier-devops/krakend-operator/internal/resources"
 )
 
@@ -140,11 +141,25 @@ func (v *GatewayValidator) admit(
 	if old != nil {
 		errs = newErrors(errs, v.storedErrors(gw, old))
 	}
+	eeErrs, err := v.eeNamespacesOnCE(ctx, old, gw)
+	if err != nil {
+		return warnings, unavailable(err)
+	}
+	errs = append(errs, eeErrs...)
 	if len(errs) > 0 {
 		return warnings, invalid("KrakenDGateway", gw.Name, errs)
 	}
 	renderWarnings, err := checkGatewayRender(ctx, v.Checker, old, gw)
 	return append(append(warnings, renderWarnings...), versionWarning(gw, old)...), err
+}
+
+// eeNamespacesOnCE rejects Enterprise-only extra_config namespaces that a CE
+// gateway would accept and then silently ignore, in spec.config.extraConfig.
+func (v *GatewayValidator) eeNamespacesOnCE(
+	_ context.Context, _, gw *v1alpha1.KrakenDGateway,
+) (field.ErrorList, error) {
+	return ceIgnores(field.NewPath("spec", "config", "extraConfig"),
+		eeOnlyNamespacesIn(gw.Spec.Config.ExtraConfig, renderer.LevelService)), nil
 }
 
 // validate runs all admission checks for gw. old is the previously-stored
