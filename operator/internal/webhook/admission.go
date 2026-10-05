@@ -35,7 +35,8 @@ func invalid(kind, name string, errs field.ErrorList) error {
 }
 
 // unavailable is the admission error for a failed lookup or an unavailable
-// validator: 500, which clients retry.
+// validator: 500, a transient server error. Controllers and GitOps tools retry
+// on their own; kubectl prints it and exits.
 func unavailable(err error) error {
 	return apierrors.NewInternalError(err)
 }
