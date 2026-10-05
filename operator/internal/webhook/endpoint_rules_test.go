@@ -49,6 +49,10 @@ func TestValidateEntries(t *testing.T) {
 		{"raw health path", rawRouter, testEndpoint("e", "/live"), "health endpoint"},
 		{"health disabled", rawRouterBlock(`{"disable_health":true,"health_path":"/healthz"}`),
 			testEndpoint("e", "/healthz"), ""},
+		// A router block that does not decode is read as the defaults, as the
+		// route check reads it: health on /__health, whatever its other keys say.
+		{"wrongly typed router key", rawRouterBlock(`{"health_path":"/live","auto_options":"yes"}`),
+			testEndpoint("e", "/live"), ""},
 		// A raw router block replaces the typed one, so the typed healthPath is gone.
 		{"raw router replaces the typed one", rawRouterBlock(`{"auto_options":true}`),
 			testEndpoint("e", "/healthz"), ""},
