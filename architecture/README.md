@@ -300,9 +300,8 @@ spec:
       addresses: []                    # user-set for external Redis only; when dragonfly.enabled=true, operator derives address internally — leave empty
       # password and tls are rejected when set or changed, because the operator has never rendered them:
       # password:
-      #   secretRef:
-      #     name: ""
-      #     key: ""
+      #   name: ""
+      #   key: ""
       poolSize: 50
       minIdleConns: 10
       dialTimeout: "5s"
@@ -527,7 +526,7 @@ status:
 - `timeout` and `cacheTTL` match Go's `time.ParseDuration` grammar without a sign. A malformed value would otherwise break decoding of the whole `KrakenDEndpointList` in every informer. A CEL rule also requires that they parse as a duration that fits in 64 bits of nanoseconds, with a `maxLength` of 64: the pattern alone admits overflowing values such as `2562048h`.
 - `outputEncoding`, a backend's `encoding`, `sd` and `method` are enums taken from KrakenD 2.13's own schema. `gatewayRef.name` and `policyRef.name` have a minimum length of 1.
 
-Kubernetes 1.33 is the supported floor because it ratchets CRD validation: an update that leaves an already-invalid field unchanged is admitted, so objects stored before a rule existed keep accepting unrelated changes. A list without per-item keys is the exception: an entry's `backends` (atomic), and the AutoConfig `overrides[]` and `additionalEndpoints[]`, ratchet only while the whole list is unchanged, so any edit to the list re-checks every item. CEL evaluation errors are never ratcheted either: a stored `timeout` or `cacheTTL` that does not parse as a duration (for example an overflowing value) fails the rule on every update to that object until it is corrected. Rules that need other objects (reference existence, cross-object conflicts, the rendered configuration) stay in the webhooks.
+Kubernetes 1.33 is the supported floor because it ratchets CRD validation: an update that leaves an already-invalid field unchanged is admitted, so objects stored before a rule existed keep accepting unrelated changes. A list without per-item keys is the exception: an entry's `backends` (atomic), and the AutoConfig `overrides[]` and `additionalEndpoints[]`, ratchet only while the whole list is unchanged, so any edit to the list re-checks every item. CEL evaluation errors are never ratcheted either: a stored duration that matches the pattern but overflows (for example `2562048h`) fails its parse rule on every update to that object until it is corrected. On the gateway's string durations the parse rule applies only to pattern-valid values, so a stored value that breaks the pattern still ratchets. Rules that need other objects (reference existence, cross-object conflicts, the rendered configuration) stay in the webhooks.
 
 ### 3.3 KrakenDBackendPolicy
 
@@ -836,10 +835,7 @@ spec:
       resources:
         requests:
           storage: "10Gi"
-  authentication:
-    passwordFromSecret:
-      name: dragonfly-auth
-      key: password
+  # authentication is omitted: a gateway that renders KrakenD's EE pool cannot set passwordFromSecret
   args: []                             # populated from spec.dragonfly.args
 ```
 
