@@ -3185,8 +3185,14 @@ func TestAutoConfigReadiness(t *testing.T) {
 			metav1.ConditionFalse, "UnmatchedOverride", v1alpha1.AutoConfigPhaseError},
 		{"synced",
 			[]metav1.Condition{c("SpecAvailable", metav1.ConditionTrue, "SpecFetched"),
-				c("Synced", metav1.ConditionTrue, "Synced")},
+				c("Synced", metav1.ConditionTrue, "Synced"),
+				c("EndpointsReady", metav1.ConditionTrue, "AllEndpointsReady")},
 			metav1.ConditionTrue, "Ready", v1alpha1.AutoConfigPhaseSynced},
+		{"endpoints not ready",
+			[]metav1.Condition{c("SpecAvailable", metav1.ConditionTrue, "SpecFetched"),
+				c("Synced", metav1.ConditionTrue, "Synced"),
+				c("EndpointsReady", metav1.ConditionFalse, "EndpointsNotReady")},
+			metav1.ConditionFalse, "EndpointsNotReady", v1alpha1.AutoConfigPhaseSynced},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
