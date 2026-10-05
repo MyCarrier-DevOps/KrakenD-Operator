@@ -95,3 +95,29 @@ func TestEndpointAdmission_UnchangedReferencesAreNotRechecked(t *testing.T) {
 		t.Error("gatewayRef changed to a missing gateway admitted")
 	}
 }
+
+// Moving an endpoint to another gateway puts every stored entry in front of
+// that gateway's rules, so an unchanged entry is judged again.
+func TestEndpointAdmission_MovingToAnotherGatewayRechecksEveryEntry(t *testing.T) {
+	old := testEndpoint("e", "/bad")
+	old.Spec.Endpoints[0].ExtraConfig = &runtime.RawExtension{
+		Raw: []byte(`{"documentation/openapi":{"audience":{"a":1}}}`),
+	}
+	other := testGateway()
+	other.Name = "other"
+	v := &EndpointValidator{Client: fakeClient(testGateway(), other)}
+
+	moved := old.DeepCopy()
+	moved.Spec.GatewayRef.Name = "other"
+	resp := review(t, v, "alice", moved, old)
+	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity ||
+		!strings.Contains(resp.Result.Details.Causes[0].Field, "spec.endpoints[0].extraConfig") {
+		t.Errorf("unchanged entry moved to another gateway: %+v, want 422 on spec.endpoints[0].extraConfig", resp.Result)
+	}
+
+	relabeled := old.DeepCopy()
+	relabeled.Spec.Endpoints = append(relabeled.Spec.Endpoints, testEndpoint("x", "/ok").Spec.Endpoints...)
+	if resp := review(t, v, "alice", relabeled, old); !resp.Allowed {
+		t.Errorf("unrelated edit on the same gateway denied: %+v", resp.Result)
+	}
+}
