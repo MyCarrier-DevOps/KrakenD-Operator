@@ -400,6 +400,27 @@ type PeriodicSpec struct {
 	Interval metav1.Duration `json:"interval"`
 }
 
+// OperationStatus reports one OpenAPI operation the AutoConfig skipped or
+// could not converge.
+type OperationStatus struct {
+	// Method is the operation's HTTP method, upper case.
+	Method string `json:"method"`
+	// Path is the gateway path the operation's endpoint has, or would have.
+	Path string `json:"path"`
+	// OperationID is the operation's operationId, when it declares one.
+	// +optional
+	OperationID string `json:"operationId,omitempty"`
+	// Endpoint is the KrakenDEndpoint generated for the operation, when the
+	// problem concerns that object.
+	// +optional
+	Endpoint string `json:"endpoint,omitempty"`
+	// Reason is a CamelCase code for why the operation is listed.
+	Reason string `json:"reason"`
+	// Message explains Reason, truncated to 256 bytes.
+	// +optional
+	Message string `json:"message,omitempty"`
+}
+
 // KrakenDAutoConfigStatus defines the observed state of KrakenDAutoConfig.
 type KrakenDAutoConfigStatus struct {
 	// Phase is derived from the Synced condition and kept for compatibility;
@@ -416,7 +437,22 @@ type KrakenDAutoConfigStatus struct {
 	LastSyncTime       *metav1.Time `json:"lastSyncTime,omitempty"`
 	SpecChecksum       string       `json:"specChecksum,omitempty"`
 	GeneratedEndpoints int          `json:"generatedEndpoints,omitempty"`
-	SkippedOperations  int          `json:"skippedOperations,omitempty"`
+	// SkippedOperations counts the operations the last sync generated no
+	// endpoint for by rule (see skipped), including any beyond the 20 listed.
+	SkippedOperations int `json:"skippedOperations,omitempty"`
+	// Skipped lists up to 20 operations the last sync generated no endpoint
+	// for by rule: an HTTP method KrakenDEndpoint does not accept
+	// (UnsupportedMethod), or a duplicate of an earlier operation
+	// (DuplicateOperationId).
+	// +optional
+	// +listType=atomic
+	Skipped []OperationStatus `json:"skipped,omitempty"`
+	// Warnings lists up to 20 problems in the OpenAPI spec or the AutoConfig
+	// that do not stop a sync, such as unresolved or colliding schema
+	// references, which leave the published documentation wrong.
+	// +optional
+	// +listType=atomic
+	Warnings []string `json:"warnings,omitempty"`
 	// Conditions are keyed by type. Ready is the summary condition.
 	// +listType=map
 	// +listMapKey=type
