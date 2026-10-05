@@ -36,7 +36,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
-	"github.com/mycarrier-devops/krakend-operator/internal/controller"
+	"github.com/mycarrier-devops/krakend-operator/internal/fieldindex"
 )
 
 func testScheme() *runtime.Scheme {
@@ -46,53 +46,13 @@ func testScheme() *runtime.Scheme {
 	return s
 }
 
+// fakeClient builds a fake client with both endpoint field indexes registered.
 func fakeClient(objs ...client.Object) client.Client {
 	return fake.NewClientBuilder().
 		WithScheme(testScheme()).
 		WithObjects(objs...).
-		WithIndex(&v1alpha1.KrakenDEndpoint{}, controller.EndpointGatewayIndex,
-			func(obj client.Object) []string {
-				ep, ok := obj.(*v1alpha1.KrakenDEndpoint)
-				if !ok {
-					return nil
-				}
-				ns := ep.Spec.GatewayRef.ResolvedNamespace(ep.Namespace)
-				return []string{ns + "/" + ep.Spec.GatewayRef.Name}
-			},
-		).
-		Build()
-}
-
-// fakeClientWithPolicyIndex builds a fake client with the endpoint-policy
-// field index registered, required for PolicyValidator.ValidateDelete.
-func fakeClientWithPolicyIndex(objs ...client.Object) client.Client {
-	return fake.NewClientBuilder().
-		WithScheme(testScheme()).
-		WithObjects(objs...).
-		WithIndex(&v1alpha1.KrakenDEndpoint{}, controller.EndpointPolicyIndex,
-			func(obj client.Object) []string {
-				ep, ok := obj.(*v1alpha1.KrakenDEndpoint)
-				if !ok {
-					return nil
-				}
-				var refs []string
-				seen := make(map[string]struct{})
-				for _, entry := range ep.Spec.Endpoints {
-					for _, be := range entry.Backends {
-						if be.PolicyRef == nil {
-							continue
-						}
-						key := be.PolicyRef.PolicyKey(ep.Namespace)
-						if _, ok := seen[key]; ok {
-							continue
-						}
-						seen[key] = struct{}{}
-						refs = append(refs, key)
-					}
-				}
-				return refs
-			},
-		).
+		WithIndex(&v1alpha1.KrakenDEndpoint{}, fieldindex.EndpointGateway, fieldindex.EndpointGatewayKeys).
+		WithIndex(&v1alpha1.KrakenDEndpoint{}, fieldindex.EndpointPolicy, fieldindex.EndpointPolicyKeys).
 		Build()
 }
 
@@ -1812,7 +1772,7 @@ func TestPolicyValidator_DeleteBlocked(t *testing.T) {
 			},
 		},
 	}
-	v := &PolicyValidator{Client: fakeClientWithPolicyIndex(p, ep)}
+	v := &PolicyValidator{Client: fakeClient(p, ep)}
 	_, err := v.ValidateDelete(context.Background(), p)
 	if err == nil {
 		t.Error("expected error: policy referenced")
@@ -1826,7 +1786,7 @@ func TestPolicyValidator_DeleteAllowed(t *testing.T) {
 	p := &v1alpha1.KrakenDBackendPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: "my-policy", Namespace: "default"},
 	}
-	v := &PolicyValidator{Client: fakeClientWithPolicyIndex(p)}
+	v := &PolicyValidator{Client: fakeClient(p)}
 	_, err := v.ValidateDelete(context.Background(), p)
 	if err != nil {
 		t.Errorf("expected no error, got %v", err)
@@ -2226,7 +2186,7 @@ func TestPolicyValidator_DeleteBlockedCrossNamespace(t *testing.T) {
 			},
 		},
 	}
-	v := &PolicyValidator{Client: fakeClientWithPolicyIndex(p, ep)}
+	v := &PolicyValidator{Client: fakeClient(p, ep)}
 	_, err := v.ValidateDelete(context.Background(), p)
 	if err == nil {
 		t.Error("expected error: cross-ns policy still referenced")
