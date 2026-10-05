@@ -621,6 +621,7 @@ type IstioSpec struct {
 }
 
 // PluginsSpec configures KrakenD plugin sources.
+// +kubebuilder:validation:XValidation:rule="self.sources.filter(s, has(s.persistentVolumeClaimRef)).size() <= 1",message="only one PVC plugin source is supported",fieldPath=".sources"
 type PluginsSpec struct {
 	// +kubebuilder:validation:MaxItems=32
 	Sources []PluginSource `json:"sources"`
