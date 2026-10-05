@@ -58,7 +58,7 @@ func New(reader client.Reader, r renderer.Renderer, v renderer.Validator, slots 
 // not part of what is checked here.
 func (c *Checker) Gather(ctx context.Context, gw *v1alpha1.KrakenDGateway,
 	replace []v1alpha1.KrakenDEndpoint) (renderer.RenderInput, error) {
-	return c.gather(ctx, gw, replace)
+	return c.gather(ctx, gw, replace, nil)
 }
 
 // CheckRendered validates out, rendered from in, with the full check the
@@ -76,7 +76,7 @@ func (c *Checker) CheckGateway(ctx context.Context, gw *v1alpha1.KrakenDGateway,
 	replace []v1alpha1.KrakenDEndpoint) (Verdict, error) {
 	// Nothing read here leaves the Checker and the renderer never mutates its
 	// inputs, so the cache's objects can be used without copying them.
-	in, err := c.gather(ctx, gw, replace, client.UnsafeDisableDeepCopy)
+	in, err := c.gather(ctx, gw, replace, nil, client.UnsafeDisableDeepCopy)
 	if err != nil {
 		return Verdict{}, err
 	}
@@ -99,9 +99,13 @@ func (c *Checker) CheckIsolated(ctx context.Context, gw *v1alpha1.KrakenDGateway
 
 // CheckGatewayPolicy lints gw's config with policy in place of the stored
 // policy of the same namespace/name.
-func (c *Checker) CheckGatewayPolicy(_ context.Context, _ *v1alpha1.KrakenDGateway,
-	_ *v1alpha1.KrakenDBackendPolicy) (Verdict, error) {
-	return Verdict{}, nil
+func (c *Checker) CheckGatewayPolicy(ctx context.Context, gw *v1alpha1.KrakenDGateway,
+	policy *v1alpha1.KrakenDBackendPolicy) (Verdict, error) {
+	in, err := c.gather(ctx, gw, nil, policy, client.UnsafeDisableDeepCopy)
+	if err != nil {
+		return Verdict{}, err
+	}
+	return c.lint(ctx, in)
 }
 
 func (c *Checker) lint(ctx context.Context, in renderer.RenderInput) (Verdict, error) {
@@ -146,9 +150,11 @@ func (c *Checker) acquire(ctx context.Context) error {
 	}
 }
 
-// gather lists gw's endpoints, applies replace, and gathers their policies.
+// gather lists gw's endpoints, applies replace, and gathers their policies,
+// with override (when not nil) in place of the stored policy of the same
+// namespace/name.
 func (c *Checker) gather(ctx context.Context, gw *v1alpha1.KrakenDGateway, replace []v1alpha1.KrakenDEndpoint,
-	opts ...client.ListOption) (renderer.RenderInput, error) {
+	override *v1alpha1.KrakenDBackendPolicy, opts ...client.ListOption) (renderer.RenderInput, error) {
 	var list v1alpha1.KrakenDEndpointList
 	opts = append(opts, client.MatchingFields{fieldindex.EndpointGateway: gw.Namespace + "/" + gw.Name})
 	if err := c.reader.List(ctx, &list, opts...); err != nil {
@@ -159,6 +165,9 @@ func (c *Checker) gather(ctx context.Context, gw *v1alpha1.KrakenDGateway, repla
 	policies, err := c.policiesFor(ctx, endpoints)
 	if err != nil {
 		return renderer.RenderInput{}, err
+	}
+	if override != nil {
+		policies[override.Namespace+"/"+override.Name] = override
 	}
 	return renderer.RenderInput{Gateway: gw, Endpoints: endpoints, Policies: policies, CEFallback: ceFallback(gw)}, nil
 }
