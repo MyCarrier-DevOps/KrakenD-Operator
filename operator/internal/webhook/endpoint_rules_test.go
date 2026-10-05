@@ -24,6 +24,8 @@ import (
 )
 
 func TestValidateEntries(t *testing.T) {
+	custom := testGateway()
+	custom.Spec.Config.Router = &v1alpha1.RouterConfig{HealthPath: "/healthz"}
 	tests := []struct {
 		name   string
 		gw     *v1alpha1.KrakenDGateway
@@ -34,6 +36,7 @@ func TestValidateEntries(t *testing.T) {
 		{"reserved health", testGateway(), testEndpoint("e", "/__health"), "reserved by KrakenD"},
 		{"reserved below debug", testGateway(), testEndpoint("e", "/x/__debug/y"), "reserved by KrakenD"},
 		{"not reserved", testGateway(), testEndpoint("e", "/__other"), ""},
+		{"custom health path", custom, testEndpoint("e", "/healthz"), "health endpoint"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
