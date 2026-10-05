@@ -205,5 +205,7 @@ jq "${jq_opts[@]}" "$jq_lib"'
     ($o.outputEncoding // empty | enum_problem("\($p).outputEncoding"; output_encodings)),
     ($o.endpoint // empty | select(crd_test($path_re) | not) | "\($p).endpoint \(.)"),
     (if $o.policyRef != null and ($o.policyRef.name // "") == "" then "\($p).policyRef.name is empty" else empty end)
-  ))
+  )),
+  (($s.overrides // []) | group_by(.operationId | ascii_downcase | gsub("[^a-z0-9-]"; "-") | gsub("^-+|-+$"; ""))[]
+    | select(length > 1) | "overrides collide: \([.[].operationId] | join(", "))")
 ]} | report("KrakenDAutoConfig")' "$work/autoconfigs.json"
