@@ -234,3 +234,30 @@ func TestSchemaClosure_AttachesTheRootOfAPointerIntoASchema(t *testing.T) {
 		t.Errorf("unresolved = %v, want none", unresolved)
 	}
 }
+
+func TestSchemaClosure_PointerIntoASchemaVariants(t *testing.T) {
+	tests := []struct {
+		name           string
+		ref            string
+		wantClosure    []string
+		wantUnresolved []string
+	}{
+		{"property pointer", "#/components/schemas/Pet/properties/id", []string{"Address", "Owner", "Pet"}, nil},
+		{"escaped name", "#/components/schemas/Pet~1Cat/properties/id", nil, []string{"Pet/Cat"}},
+		{"missing root", "#/components/schemas/Ghost/$defs/Tag", nil, []string{"Ghost"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			entry := docEntry("/pets", `{"response_definition":{"200":{"example_schema":{"$ref":"`+tt.ref+`"}}}}`)
+
+			closure, unresolved := SchemaClosure(entry, petSchemas())
+
+			if got := slices.Sorted(maps.Keys(closure)); !slices.Equal(got, tt.wantClosure) {
+				t.Errorf("closure = %v, want %v", got, tt.wantClosure)
+			}
+			if !slices.Equal(unresolved, tt.wantUnresolved) {
+				t.Errorf("unresolved = %v, want %v", unresolved, tt.wantUnresolved)
+			}
+		})
+	}
+}
