@@ -245,11 +245,12 @@ func TestGatewayValidator_Update(t *testing.T) {
 		},
 	}
 	newGW := old.DeepCopy()
-	newGW.Spec.Edition = v1alpha1.EditionEE
+	negative := resource.MustParse("-1Gi")
+	newGW.Spec.PostRestartJob = &v1alpha1.PostRestartJobSpec{Enabled: true, Script: "true", TmpSizeLimit: &negative}
 	v := &GatewayValidator{}
 	_, err := v.ValidateUpdate(context.Background(), old, newGW)
 	if err == nil {
-		t.Error("expected error on update to EE without license")
+		t.Error("expected error on update to a negative postRestartJob.tmpSizeLimit")
 	}
 }
 
