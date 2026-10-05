@@ -108,6 +108,7 @@ type BackendSpec struct {
 	URLPattern string `json:"urlPattern"`
 
 	// Method overrides the endpoint method for this backend.
+	// +kubebuilder:validation:Enum=GET;POST;PUT;PATCH;DELETE;OPTIONS;HEAD;CONNECT;TRACE
 	Method string `json:"method,omitempty"`
 
 	// Encoding selects the backend response encoding.
