@@ -385,5 +385,6 @@ func TestAutoConfigCRD_Rules(t *testing.T) {
 		{"defaults cacheTTL overflows", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, defaults: {endpoint: {cacheTTL: "99999999999s"}}}}`, "spec.defaults.endpoint.cacheTTL"},
 		{"base path slash", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, additionalEndpointsBasePath: api}}`, "spec.additionalEndpointsBasePath"},
 		{"base path with prefix", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, additionalEndpointsBasePath: /a, urlTransform: {addPathPrefix: /b}}}`, "mutually exclusive with urlTransform.addPathPrefix"},
+		{"additional endpoint slash", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, additionalEndpoints: [{endpoint: health}]}}`, "spec.additionalEndpoints[0].endpoint"},
 	})
 }
