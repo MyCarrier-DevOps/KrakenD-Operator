@@ -6,3 +6,4 @@ KrakenDEndpoint a/no-backends: spec.endpoints[0].backends is empty
 KrakenDEndpoint a/timeout-pattern: spec.endpoints[0].timeout 3 seconds
 KrakenDEndpoint a/timeout-long: spec.endpoints[0].timeout is longer than 64 characters
 KrakenDEndpoint a/timeout-overflow: spec.endpoints[0].timeout 2562048h does not fit in 64 bits of nanoseconds
+KrakenDEndpoint a/cachettl-overflow: spec.endpoints[0].cacheTTL 9223372036854775808ns does not fit in 64 bits of nanoseconds
