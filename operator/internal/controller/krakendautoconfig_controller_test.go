@@ -3882,3 +3882,27 @@ func TestAutoConfigReconcile_NeverTouchesAnotherNamespacesEndpoints(t *testing.T
 		}
 	}
 }
+
+func TestAutoConfigReconcile_DoesNotAdoptATerminatingOrphan(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	terminating := generatedEndpoint("dying", "/dying")
+	terminating.Finalizers = []string{"test/hold"}
+	c := fakeClientBuilder().WithObjects(ac, cm, terminating).WithStatusSubresource(ac).Build()
+	if err := c.Delete(context.Background(), terminating); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	r := newACReconciler(c, f, ce, fi, g)
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	var got v1alpha1.KrakenDEndpoint
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(terminating), &got); err != nil {
+		t.Fatalf("expected the terminating endpoint kept: %v", err)
+	}
+	if got.DeletionTimestamp.IsZero() || len(got.OwnerReferences) != 0 {
+		t.Errorf("expected a terminating endpoint left alone, got %+v", got.ObjectMeta)
+	}
+}
