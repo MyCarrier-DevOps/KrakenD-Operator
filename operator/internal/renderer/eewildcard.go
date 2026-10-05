@@ -66,8 +66,8 @@ func rewriteEEWildcards(endpoints []any) bool {
 // Every finding is a lint-pointer line, so Attribute maps it like any other.
 func eeWildcardFindings(ctx context.Context, endpoints []any) ([]string, error) {
 	type route struct {
-		index        int
-		method, path string
+		index               int
+		method, path, shape string
 	}
 	routes := make([]route, 0, len(endpoints))
 	for i, ep := range endpoints {
@@ -75,7 +75,8 @@ func eeWildcardFindings(ctx context.Context, endpoints []any) ([]string, error) 
 		if !ok {
 			continue
 		}
-		routes = append(routes, route{index: i, method: endpointMethod(m), path: stringField(m, "endpoint")})
+		path := stringField(m, "endpoint")
+		routes = append(routes, route{index: i, method: endpointMethod(m), path: path, shape: routeShape(path)})
 	}
 	var findings []string
 	for _, w := range routes {
@@ -86,9 +87,9 @@ func eeWildcardFindings(ctx context.Context, endpoints []any) ([]string, error) 
 			return nil, fmt.Errorf("wildcard check did not finish: %w", err)
 		}
 		prefix := strings.TrimSuffix(w.path, "*")
+		prefixShape := routeShape(prefix)
 		for _, o := range routes {
-			if o.index == w.index || o.method != w.method ||
-				!strings.HasPrefix(routeShape(o.path), routeShape(prefix)) {
+			if o.index == w.index || o.method != w.method || !strings.HasPrefix(o.shape, prefixShape) {
 				continue
 			}
 			findings = append(findings,
