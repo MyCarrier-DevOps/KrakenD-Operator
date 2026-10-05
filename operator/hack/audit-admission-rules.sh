@@ -70,6 +70,9 @@ jq "${jq_opts[@]}" "$jq_lib"'
     ($e.timeout // empty | dur_problem($go_re; 64; "\($p).timeout")),
     ($e.cacheTTL // empty | dur_problem($go_re; 64; "\($p).cacheTTL")),
     ($e.outputEncoding // empty
-      | enum_problem("\($p).outputEncoding"; ["json", "json-collection", "yaml", "fast-json", "xml", "negotiate", "string", "no-op"]))
+      | enum_problem("\($p).outputEncoding"; ["json", "json-collection", "yaml", "fast-json", "xml", "negotiate", "string", "no-op"])),
+    (($e.backends // []) | to_entries[] | .key as $j | .value as $b | "\($p).backends[\($j)]" as $q | (
+      ($b.encoding // empty | enum_problem("\($q).encoding"; ["json", "safejson", "fast-json", "xml", "rss", "string", "no-op", "yaml"]))
+    ))
   ))
 ]} | report("KrakenDEndpoint")' "$work/endpoints.json"
