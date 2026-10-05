@@ -216,6 +216,17 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	skippedOps := r.inScope(&ac, cueOutput.Skipped)
 
+	// Until endpoints of failed operations can be held individually, an
+	// in-scope failed operation fails the whole sync closed, as a CUE
+	// evaluation error did before.
+	if failedOps := r.inScope(&ac, cueOutput.Failed); len(failedOps) > 0 {
+		labels := make([]string, 0, len(failedOps))
+		for _, s := range operationStatuses(failedOps) {
+			labels = append(labels, operationLabel(s))
+		}
+		return r.handleCUEError(ctx, &ac, fmt.Errorf("operations failed CUE evaluation: %s", listed(labels)), warnings)
+	}
+
 	filtered, replaced, scopeErr := applyAdditionalEndpoints(&ac, filtered, warnings)
 	specNotes = append(specNotes, replaced...)
 	if scopeErr != nil {
