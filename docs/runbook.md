@@ -34,7 +34,9 @@ curl -s http://localhost:8081/readyz   # {"status":"ok"}
 
 ## Prometheus Metrics
 
-Metrics are exposed on port **8443** (HTTPS). Key metrics:
+Metrics are exposed on port **8443** (HTTPS). Every name below carries the
+`krakend_operator_` prefix (`krakend_operator_license_expiry_seconds`, and so
+on). Key metrics:
 
 | Metric | Type | Description |
 |---|---|---|
@@ -54,14 +56,14 @@ Metrics are exposed on port **8443** (HTTPS). Key metrics:
 ```yaml
 # License expiring within 7 days
 - alert: KrakenDLicenseExpiringSoon
-  expr: license_expiry_seconds < 604800
+  expr: krakend_operator_license_expiry_seconds < 604800
   for: 1h
   labels:
     severity: warning
 
 # License expired
 - alert: KrakenDLicenseExpired
-  expr: license_expiry_seconds <= 0
+  expr: krakend_operator_license_expiry_seconds <= 0
   for: 5m
   labels:
     severity: critical
@@ -76,7 +78,7 @@ Metrics are exposed on port **8443** (HTTPS). Key metrics:
 
 # Reconcile taking too long
 - alert: KrakenDSlowReconcile
-  expr: histogram_quantile(0.99, rate(reconcile_duration_seconds_bucket[5m])) > 30
+  expr: histogram_quantile(0.99, rate(krakend_operator_reconcile_duration_seconds_bucket[5m])) > 30
   for: 15m
   labels:
     severity: warning
@@ -106,11 +108,17 @@ kept for compatibility; alert and gate on `Ready` instead.
 | the serving phase (`Pending` before any rollout, `Deploying` while a rollout is in progress or the Deployment is not available, `Running` otherwise) | `Unknown`, reason `ValidatorUnavailable` | The validator could not run; the last applied configuration keeps serving and validation is retried with backoff |
 | `Deploying` | `False` | A rollout is in progress, or the Deployment has not reported available replicas yet |
 | `Running` | `True` | Configuration applied, the Deployment is available and the applied config is rolled out to all replicas |
-| `Degraded` | `False` | EE license expired or in the pre-expiry window; running on CE (`LicenseDegraded=True`) |
+| `Degraded` | `False` | EE license expired or in the pre-expiry window; running on CE (`LicenseDegraded=True`, `CEFallbackApplied=True`) |
 | `Error` | `False` | Configuration rejected (`ConfigValid=False`), a plugin ConfigMap missing (`PluginsResolved=False`), rollout failed or the Deployment lost availability (`Available=False`), or license expired without CE fallback |
 
 `Rendering` and `Validating` stay in the CRD enum only so stored objects keep
 validating; the operator does not write them.
+
+The Deployment rolls with `maxUnavailable: 0`, so any replica that stops being
+available outside a rollout (an HPA scale-up whose new pod is not ready yet, a
+pod eviction) makes the Deployment report `Available=False`
+(`MinimumReplicasUnavailable`). The gateway mirrors it: `Ready` is briefly
+`False` and the phase `Error` until the replica is available again.
 
 ### Common Conditions
 
@@ -270,17 +278,19 @@ kubectl get events --field-selector involvedObject.name=<name> --sort-by='.lastT
 ```
 
 **Common causes:**
-- Config validation failure — check the `ConfigValid` condition message. It carries at most 4 KiB of krakend check output; the full output is in the operator log, message `krakend check rejected the rendered config`.
+- Config validation failure — check the `ConfigValid` condition message. It
+  carries at most 4 KiB of krakend check output; the full output is in the
+  operator log, message `validation rejected the rendered config`. The gateway
+  keeps serving the last applied config (`status.configChecksum`), and its
+  Deployment (unless a plugin ConfigMap is missing, which holds it), Service
+  and other resources are still reconciled. Only the rejected render waits for
+  a fix.
 - License expired without CE fallback (`LicenseExpired=True`, `Ready` reason `LicenseExpiredNoFallback`) — renew the license or set `fallbackToCE: true`. A missing license Secret (`LicenseSecretUnavailable=True`) does not change `Ready` or the phase
 - Rollout timeout — check Deployment events
 - `PluginsResolved=False`, reason `ConfigMapNotFound` — a plugin ConfigMap is
   missing; the Deployment is held until it exists. Create it in the gateway's
   namespace. A config applied during the hold (or a new gateway's first
   config) then rolls out; otherwise nothing rolls.
-- Config validation failure — the gateway keeps serving the last applied
-  config (`status.configChecksum`), and its Deployment (unless a plugin
-  ConfigMap is missing, which holds it), Service and other resources are
-  still reconciled. Only the rejected render waits for a fix.
 
 ### Installed Istio, External Secrets or Dragonfly after the operator
 
@@ -309,7 +319,7 @@ rollout completes, or until a rejected render is fixed.
 
 ### Gateway reports `ValidatorUnavailable`
 
-**Symptom:** `ConfigValid` is `Unknown` with reason `ValidatorUnavailable`; the gateway keeps serving its last applied config and new changes are not rolled out.
+**Symptom:** `ConfigValid` is `Unknown` with reason `ValidatorUnavailable`; the gateway keeps serving its last applied config and a new config is not rolled out (image, plugin and license changes still roll).
 
 **Diagnosis:** the condition message carries the cause. `no such file or directory` means the operator image lacks `/usr/local/bin/krakend`; `context deadline exceeded` means a run exceeded 30 seconds (check the operator pod's CPU throttling and memory); `signal: killed` without `context deadline exceeded` means the process was killed, usually by memory pressure on the operator container (a timeout's message also ends in `signal: killed`); `creating temp file` or `writing config to temp file` means the operator's temp directory is unwritable or full; `preparing validation copy` means the validation copy of the rendered config could not be built.
 
@@ -450,7 +460,7 @@ window (`spec.license.expiryWarningDays`, default 30):
 
 1. `LicenseValid` stays `True` with reason `LicenseExpiringSoon`
 2. One `LicenseExpiringSoon` warning event is emitted
-3. The `license_expiry_seconds` metric keeps decreasing
+3. The `krakend_operator_license_expiry_seconds` metric keeps decreasing
 
 **Resolution:** renew the license and update the Kubernetes Secret. The
 gateway reconciles on the Secret change and sets `LicenseValid` back to
