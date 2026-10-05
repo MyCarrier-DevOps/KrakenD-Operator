@@ -116,6 +116,7 @@ type OpenAPISource struct {
 }
 
 // AuthConfig configures authentication for OpenAPI spec fetching.
+// +kubebuilder:validation:XValidation:rule="!(has(self.bearerTokenSecret) && has(self.basicAuthSecret))",message="bearerTokenSecret and basicAuthSecret are mutually exclusive"
 type AuthConfig struct {
 	// BearerTokenSecret references a Secret key containing a bearer token.
 	BearerTokenSecret *corev1.SecretKeySelector `json:"bearerTokenSecret,omitempty"`
