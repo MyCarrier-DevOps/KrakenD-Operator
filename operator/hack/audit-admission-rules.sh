@@ -88,5 +88,6 @@ jq "${jq_opts[@]}" "$jq_lib"'
 .items[] | .spec as $s | {id: "\(.metadata.namespace)/\(.metadata.name)", v: [
   ($s.config.timeout // empty | dur_problem($one_re; 64; "spec.config.timeout")),
   ($s.config.cacheTTL // empty | dur_problem($one_re; 64; "spec.config.cacheTTL")),
-  ($s.config.dnsCacheTTL // empty | dur_problem($one_re; 64; "spec.config.dnsCacheTTL"))
+  ($s.config.dnsCacheTTL // empty | dur_problem($one_re; 64; "spec.config.dnsCacheTTL")),
+  ($s.config.cors.maxAge // empty | select(crd_test($one_re) | not) | "spec.config.cors.maxAge \(.)")
 ]} | report("KrakenDGateway")' "$work/gateways.json"
