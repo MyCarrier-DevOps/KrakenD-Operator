@@ -187,6 +187,28 @@ make deploy IMG=ghcr.io/mycarrier-devops/krakend-operator:<previous-version>
 > - `status.configEdition` is dropped. The CRD keeps the field, but the older
 >   operator does not write it, and its next status write removes it.
 
+> **Downgrading the operator past *Complete admission*.** The operator now puts
+> the finalizer `gateway.krakend.io/policy-protection` on every
+> KrakenDBackendPolicy. An older operator does not know it, so a policy that is
+> deleted afterwards stays `Terminating` for good, and so does a namespace that
+> holds one. Remove the finalizer from every policy before you roll back, or
+> after you uninstall the operator while policies remain:
+>
+> ```bash
+> kubectl get krakendbackendpolicies -A -o json \
+>   | jq -r '.items[] | .metadata as $m
+>       | ($m.finalizers // [] | index("gateway.krakend.io/policy-protection")) as $i
+>       | select($i != null) | "\($m.namespace) \($m.name) \($i)"' \
+>   | while read -r ns name i; do
+>       kubectl patch krakendbackendpolicy "$name" -n "$ns" --type=json -p "[
+>         {\"op\":\"test\",\"path\":\"/metadata/finalizers/$i\",\"value\":\"gateway.krakend.io/policy-protection\"},
+>         {\"op\":\"remove\",\"path\":\"/metadata/finalizers/$i\"}]"
+>     done
+> ```
+>
+> The `test` operation makes a patch fail, rather than remove another
+> finalizer, if the list changed in the meantime.
+
 ---
 
 ## Version Compatibility
@@ -1624,6 +1646,21 @@ stored before a rule existed keeps accepting unrelated edits. KrakenDEndpoint
 entries are matched by (endpoint, method), so reordering `spec.endpoints`
 changes nothing, and moving the object to another gateway checks every entry
 again. A gateway's sidecar probe that changes is always checked again.
+
+**Deleting a referenced policy is accepted and completes once nothing
+references it.** Every KrakenDBackendPolicy gets the finalizer
+`gateway.krakend.io/policy-protection` on the operator's first reconcile after
+the upgrade. `kubectl delete` of a policy that endpoints still reference now
+succeeds instead of being refused. The policy keeps serving (`deletionTimestamp`
+set, `status.referencedBy` above 0, and a `DeletionBlocked` warning event that
+names the endpoints) until the last referencing KrakenDEndpoint stops
+referencing it or is deleted, and then it disappears. A new reference to a
+terminating policy is rejected (`policy is being deleted`). The policy webhook
+is no longer registered for DELETE, in the Helm chart and in
+`operator/config/webhook/manifests.yaml`, so policy and namespace deletion are
+accepted without the webhook; they complete once the operator removes the
+finalizer. If the operator is down, a policy deletion waits until it is back.
+To roll back or uninstall, remove the finalizer first (see Rollback).
 
 ---
 
