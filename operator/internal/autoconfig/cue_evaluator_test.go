@@ -331,10 +331,9 @@ func TestNormalizeToJSON_AutoDetect(t *testing.T) {
 	}
 }
 
-func TestCUEEvaluator_Overrides(t *testing.T) {
-	eval := NewCUEEvaluator()
-	defs := map[string]string{
-		"main.cue": `
+// overrideLookupDefs is a custom definition that reads _overrides by the
+// operationId.
+const overrideLookupDefs = `
 import "strings"
 
 _spec: _
@@ -349,6 +348,12 @@ endpoint: {
 				"backends": [{
 					"host": ["http://svc"]
 					"url_pattern": path
+					// The entry-level extraConfig is also merged from the
+					// override by the evaluator, so the backend carries the
+					// observable result of the lookup.
+					if _overrides[strings.ToLower(op.operationId)] != _|_ {
+						"extraConfig": _overrides[strings.ToLower(op.operationId)]
+					}
 				}]
 				// SanitizeName lowercases operationId
 				if _overrides[strings.ToLower(op.operationId)] != _|_ {
@@ -359,8 +364,11 @@ endpoint: {
 		}
 	}
 }
-`,
-	}
+`
+
+func TestCUEEvaluator_Overrides(t *testing.T) {
+	eval := NewCUEEvaluator()
+	defs := map[string]string{"main.cue": overrideLookupDefs}
 
 	specJSON := []byte(`{
 		"paths": {
@@ -1855,5 +1863,29 @@ func TestEvaluate_OverrideExtraConfigWithNonIdentifierOperationID(t *testing.T) 
 				t.Errorf("expected the override's auth/validator, got %s", out.Entries[0].ExtraConfig.Raw)
 			}
 		})
+	}
+}
+
+func TestCUEEvaluator_OverridesKeyedBySanitizedOperationID(t *testing.T) {
+	spec := `{"paths":{"/a":{"get":{"operationId":"get_a"}}}}`
+	out, err := NewCUEEvaluator().Evaluate(context.Background(), CUEInput{
+		SpecData:    []byte(spec),
+		SpecFormat:  v1alpha1.SpecFormatJSON,
+		DefaultDefs: map[string]string{"main.cue": overrideLookupDefs},
+		Overrides: []v1alpha1.OperationOverride{{
+			OperationID: "get_a",
+			ExtraConfig: &runtime.RawExtension{Raw: []byte(`{"auth/validator":{"alg":"RS256"}}`)},
+		}},
+		ServiceName: "_spec",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(out.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(out.Entries))
+	}
+	be := out.Entries[0].Backends[0]
+	if be.ExtraConfig == nil || !strings.Contains(string(be.ExtraConfig.Raw), `"auth/validator"`) {
+		t.Errorf("expected the definition to find the override by the sanitized operationId, got %+v", be.ExtraConfig)
 	}
 }
