@@ -94,6 +94,7 @@ type KrakenDAutoConfigSpec struct {
 	// derived from the generated endpoints' common parent directory. Must start
 	// with "/".
 	// +optional
+	// +kubebuilder:validation:Pattern=`^/`
 	AdditionalEndpointsBasePath string `json:"additionalEndpointsBasePath,omitempty"`
 }
 
