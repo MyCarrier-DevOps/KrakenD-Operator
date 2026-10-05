@@ -44,6 +44,16 @@ func TestValidateEntries(t *testing.T) {
 		ep.Spec.Endpoints[0].Backends[0].URLPattern = pattern
 		return ep
 	}
+	withExtra := func(entry, backend string) *v1alpha1.KrakenDEndpoint {
+		ep := testEndpoint("e", "/a")
+		if entry != "" {
+			ep.Spec.Endpoints[0].ExtraConfig = &runtime.RawExtension{Raw: []byte(entry)}
+		}
+		if backend != "" {
+			ep.Spec.Endpoints[0].Backends[0].ExtraConfig = &runtime.RawExtension{Raw: []byte(backend)}
+		}
+		return ep
+	}
 	tests := []struct {
 		name   string
 		gw     *v1alpha1.KrakenDGateway
@@ -72,6 +82,8 @@ func TestValidateEntries(t *testing.T) {
 		{"mid-segment braces are no parameter", testGateway(), withPattern("/a/b{id}", "/u/{id}"), "placeholder {id}"},
 		{"sequential placeholder", testGateway(), withPattern("/a", "/u/{resp0_id}"), ""},
 		{"JWT placeholder", testGateway(), withPattern("/a", "/u/{JWT.sub}"), ""},
+		{"EE-only entry namespace on CE", testGateway(), withExtra(`{"auth/api-keys":{"roles":["a"]}}`, ""),
+			`spec.endpoints[0].extraConfig: Invalid value: "auth/api-keys"`},
 		{"only GET collides with the health endpoint", custom, post, ""},
 		// A raw router block replaces the typed one, so the typed healthPath is gone.
 		{"raw router replaces the typed one", rawRouterBlock(`{"auto_options":true}`),
