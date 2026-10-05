@@ -1981,3 +1981,23 @@ func TestEvaluate_OverrideMethodToUnsupportedIsSkipped(t *testing.T) {
 		t.Errorf("operationIds still lists the skipped entry: %v", out.OperationIDs)
 	}
 }
+
+func TestEvaluate_InvalidEntryFailsOnlyItsOperation(t *testing.T) {
+	// A response without a description fails concrete validation for its
+	// entry only.
+	out := evaluateEmbedded(t, `{"paths":{
+		"/a":{"get":{"operationId":"getA","responses":{"200":{"description":"OK"}}}},
+		"/b":{"get":{"operationId":"getB","tags":["b"],"responses":{"200":{}}}}}}`)
+
+	if len(out.Entries) != 1 || out.Entries[0].Endpoint != "/a" {
+		t.Fatalf("expected only the /a entry, got %+v", out.Entries)
+	}
+	if len(out.Failed) != 1 {
+		t.Fatalf("expected 1 failed operation, got %+v", out.Failed)
+	}
+	f := out.Failed[0]
+	if f.Method != "GET" || f.Path != "/b" || f.OperationID != "getB" || !slices.Equal(f.Tags, []string{"b"}) ||
+		f.Reason != v1alpha1.ReasonCUEEvaluationFailed || !strings.Contains(f.Message, "description") {
+		t.Errorf("unexpected failed operation %+v", f)
+	}
+}
