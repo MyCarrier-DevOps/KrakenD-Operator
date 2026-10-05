@@ -96,7 +96,8 @@ func ratchetRender(
 }
 
 // checkGatewayRender validates gw's config. A new gateway must render on its
-// own. An update is rejected only when it turns a passing config (the root
+// own; the endpoints that already reference it only draw a warning when they
+// clash with it. An update is rejected only when it turns a passing config (the root
 // with its endpoints) into a failing one; when the config already fails, only
 // the root alone is judged.
 func checkGatewayRender(
