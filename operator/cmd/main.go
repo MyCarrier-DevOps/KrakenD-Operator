@@ -253,9 +253,10 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.KrakenDBackendPolicyReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("krakendbackendpolicy-controller"),
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		Recorder:  mgr.GetEventRecorderFor("krakendbackendpolicy-controller"),
+		APIReader: mgr.GetAPIReader(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "KrakenDBackendPolicy")
 		os.Exit(1)
