@@ -41,3 +41,4 @@ KrakenDGateway a/tmp-undecodable: spec.postRestartJob.tmpSizeLimit 1e92233720368
 KrakenDGateway a/ce-ee-namespace: spec.config.extraConfig auth/api-keys is Enterprise-only on a CE gateway
 KrakenDGateway a/ce-redis: spec.redis is Enterprise-only on a CE gateway
 KrakenDGateway a/ce-documentation: spec.config.documentation is Enterprise-only on a CE gateway
+KrakenDGateway a/ce-openapi: spec.openapi.enabled is Enterprise-only on a CE gateway
