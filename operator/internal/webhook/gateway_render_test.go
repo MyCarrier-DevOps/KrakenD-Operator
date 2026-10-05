@@ -80,3 +80,31 @@ func TestGatewayAdmission_Render(t *testing.T) {
 		})
 	}
 }
+
+// A gateway write can break endpoints it does not own: each cause goes on the
+// field the user edits, and the endpoints it breaks are named.
+func TestGatewayAdmission_DenialAttributesFindings(t *testing.T) {
+	old := testGateway()
+	edited := old.DeepCopy()
+	edited.Spec.Config.Timeout = "5s"
+	after := failing("ep", 2, "bad regexp")
+	after.Findings = append(after.Findings, rootFailure("'timeout' time: unknown unit").Findings...)
+	chk := &scriptedChecker{verdicts: []configcheck.Verdict{after, {OK: true}}}
+
+	resp := review(t, &GatewayValidator{Client: fakeClient(), Checker: chk}, "alice", edited, old)
+
+	if resp.Allowed || resp.Result.Details == nil {
+		t.Fatalf("response = %+v, want a denial with causes", resp.Result)
+	}
+	causes := map[string]string{}
+	for _, c := range resp.Result.Details.Causes {
+		causes[c.Field] = c.Message
+	}
+	if got := causes["spec.config"]; !strings.Contains(got, "unknown unit") || strings.Contains(got, "bad regexp") {
+		t.Errorf("spec.config cause = %q, want the root finding alone", got)
+	}
+	if got := causes["spec"]; !strings.Contains(got, "default/ep spec.endpoints[2]: bad regexp") ||
+		strings.Contains(got, "unknown unit") {
+		t.Errorf("spec cause = %q, want the endpoint finding naming default/ep spec.endpoints[2]", got)
+	}
+}
