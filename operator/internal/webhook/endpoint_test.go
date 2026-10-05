@@ -163,3 +163,11 @@ func TestEndpointAdmission_RejectsRouteClaimedByAnotherEndpoint(t *testing.T) {
 		})
 	}
 }
+
+func TestEndpointAdmission_RouteClashInsideOneEndpoint(t *testing.T) {
+	v := &EndpointValidator{Client: fakeClient(testGateway())}
+	resp := review(t, v, "alice", testEndpoint("new", "/a/{id}", "/a/{name}"), nil)
+	if resp.Allowed || len(resp.Result.Details.Causes) != 2 {
+		t.Errorf("response = %+v, want both entries rejected", resp.Result)
+	}
+}
