@@ -736,7 +736,7 @@ func (r *KrakenDAutoConfigReconciler) reconcileEndpoints(
 	var existing v1alpha1.KrakenDEndpointList
 	if err := r.List(ctx, &existing,
 		client.InNamespace(ac.Namespace),
-		client.MatchingLabels{"gateway.krakend.io/autoconfig": ac.Name},
+		client.MatchingLabels{autoconfig.LabelAutoConfig: ac.Name},
 	); err != nil {
 		return changes, fmt.Errorf("listing existing endpoints: %w", err)
 	}
