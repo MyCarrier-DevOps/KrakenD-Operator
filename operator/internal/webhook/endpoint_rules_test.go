@@ -35,6 +35,8 @@ func TestValidateEntries(t *testing.T) {
 		gw.Spec.Config.ExtraConfig = &runtime.RawExtension{Raw: []byte(`{"router":` + block + `}`)}
 		return gw
 	}
+	post := testEndpoint("e", "/healthz")
+	post.Spec.Endpoints[0].Method = "POST"
 	tests := []struct {
 		name   string
 		gw     *v1alpha1.KrakenDGateway
@@ -53,6 +55,10 @@ func TestValidateEntries(t *testing.T) {
 		// route check reads it: health on /__health, whatever its other keys say.
 		{"wrongly typed router key", rawRouterBlock(`{"health_path":"/live","auto_options":"yes"}`),
 			testEndpoint("e", "/live"), ""},
+		{"null router block reads as defaults", rawRouterBlock(`null`), testEndpoint("e", "/healthz"), ""},
+		{"empty raw health_path reads as default", rawRouterBlock(`{"health_path":""}`),
+			testEndpoint("e", "/healthz"), ""},
+		{"only GET collides with the health endpoint", custom, post, ""},
 		// A raw router block replaces the typed one, so the typed healthPath is gone.
 		{"raw router replaces the typed one", rawRouterBlock(`{"auto_options":true}`),
 			testEndpoint("e", "/healthz"), ""},
