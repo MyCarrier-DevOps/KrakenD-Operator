@@ -266,6 +266,11 @@ func TestGatewayAdmission_CERejectsEnterpriseOnlyNamespaces(t *testing.T) {
 		{"CE root with CE namespaces", nil, withRoot(testGateway(), `{"security/cors":{"allow_origins":["*"]}}`), nil, nil},
 		{"EE root with an EE namespace", nil, withRoot(ee(), apiKeys), nil, nil},
 		{"unchanged CE root", nil, edited(withRoot(testGateway(), apiKeys)), withRoot(testGateway(), apiKeys), nil},
+		{"CE root changed while it keeps an EE namespace", nil,
+			withRoot(testGateway(), `{"auth/api-keys":{"keys":["x"]}}`), withRoot(testGateway(), apiKeys),
+			[]string{`spec.config.extraConfig: Invalid value: "auth/api-keys"`}},
+		{"EE to CE keeping an EE namespace in the root", nil, withRoot(testGateway(), apiKeys), withRoot(ee(), apiKeys),
+			[]string{`spec.config.extraConfig: Invalid value: "auth/api-keys"`}},
 		{"EE to CE with EE namespaces in use", []client.Object{keys, proxy}, testGateway(), ee(), []string{
 			`spec.edition: Invalid value: "CE"`,
 			"KrakenDEndpoint default/keys spec.endpoints[0].extraConfig auth/api-keys",
