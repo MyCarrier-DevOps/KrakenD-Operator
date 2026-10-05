@@ -2455,3 +2455,22 @@ func TestGatewayValidator_WarnsAboutRedisSettingsWithNoEffect(t *testing.T) {
 		t.Errorf("CE Dragonfly password warnings = %q, want none", w)
 	}
 }
+
+// A probe stored before the probe rules existed must not block other edits.
+func TestGatewayAdmission_RatchetsStoredFieldErrors(t *testing.T) {
+	old := gwWithProbes(nil, &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{
+		Host: "10.0.0.1", Path: "/", Port: intstr.FromInt32(8090)}}}, "")
+	edited := old.DeepCopy()
+	edited.Spec.Replicas = ptr.To[int32](3)
+	v := &GatewayValidator{}
+
+	if resp := review(t, v, "alice", edited, old); !resp.Allowed {
+		t.Fatalf("unrelated edit denied: %+v", resp.Result)
+	}
+	worse := edited.DeepCopy()
+	worse.Spec.PostRestartJob = &v1alpha1.PostRestartJobSpec{Enabled: true, Script: "true",
+		TmpSizeLimit: ptr.To(resource.MustParse("-1"))}
+	if resp := review(t, v, "alice", worse, old); resp.Allowed {
+		t.Error("newly introduced negative tmpSizeLimit admitted")
+	}
+}
