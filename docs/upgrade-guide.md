@@ -1670,14 +1670,19 @@ A policy is unprotected until the operator's first reconcile adds the finalizer,
 
 **AutoConfig overrides.** Two `spec.overrides` for the same `operationId`, or
 for operationIds that differ only in case or in `_`, `-` and other punctuation
-(`get_a` and `get-a`), are rejected: the override engine keys overrides on the
-sanitized operationId and could not keep them apart. The denial names the
-second entry (`spec.overrides[1].operationId`). A stored list that already does
-this keeps accepting edits that add no new collision, and the audit in the
-Pre-Upgrade Checklist lists it. A `policyRef` in `defaults`, `overrides` or
+(`get_a` and `get-a`), are rejected: the generator names each endpoint from the
+AutoConfig name and the sanitized operationId, so both operations map to one
+`KrakenDEndpoint` name and it keeps only the first. Two very long operationIds
+that agree up to the 253-character name limit collide the same way. The denial
+names the second entry (`spec.overrides[1].operationId`). A stored list that
+already does this keeps accepting edits that leave the colliding entries and
+their positions unchanged; inserting or removing an override above the pair
+shifts it to a new position and is rejected. The audit in the Pre-Upgrade
+Checklist lists these lists. A `policyRef` in `defaults`, `overrides` or
 `additionalEndpoints` that names no existing policy now produces an admission
-warning, not a rejection: a release may create the policy after the
-AutoConfig, and the generated endpoints are rejected until it exists.
+warning (at most five, then a count), not a rejection: a release may create the
+policy after the AutoConfig, and the generated endpoints are rejected until it
+exists.
 
 ---
 
