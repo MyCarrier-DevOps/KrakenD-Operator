@@ -233,5 +233,6 @@ const gatewayHead = `{apiVersion: gateway.krakend.io/v1alpha1, kind: KrakenDGate
 func TestGatewayCRD_Rules(t *testing.T) {
 	runCRDCases(t, gatewaysCRD, []crdCase{
 		{"timeout", gatewayHead + `edition: CE, config: {timeout: "3 seconds"}}}`, "spec.config.timeout"},
+		{"cacheTTL", gatewayHead + `edition: CE, config: {cacheTTL: "1 minute"}}}`, "spec.config.cacheTTL"},
 	})
 }
