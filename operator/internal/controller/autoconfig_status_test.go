@@ -86,3 +86,9 @@ func TestOperationStatuses_AreSortedAndTheirMessagesBounded(t *testing.T) {
 		t.Errorf("entry = %+v, want a message of at most %d bytes and the issue's reason", first, maxStatusMessageLen)
 	}
 }
+
+func TestListed_JoinsAtMostFiveItems(t *testing.T) {
+	if got, want := listed([]string{"a", "b", "c", "d", "e"}), "a; b; c; d; e"; got != want {
+		t.Errorf("listed = %q, want %q", got, want)
+	}
+}
