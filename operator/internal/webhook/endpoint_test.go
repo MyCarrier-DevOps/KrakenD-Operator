@@ -1021,3 +1021,18 @@ func TestEndpointAdmission_PolicyEEOnlyNamespacesOnMovesNewReferencesAndStoredOn
 		}
 	})
 }
+
+// The operator's own writes skip the render check, not this rule: an
+// AutoConfig endpoint inheriting defaults.policyRef reaches a CE gateway too.
+func TestEndpointAdmission_OperatorWritesStillGetThePolicyNamespaceRule(t *testing.T) {
+	ep := ownedEndpoint("KrakenDAutoConfig", true)
+	ep.Spec.Endpoints[0].Backends[0].PolicyRef = &v1alpha1.PolicyRef{Name: "p"}
+	v := &EndpointValidator{Client: fakeClient(testGateway(), testPolicy(`{"auth/gcp":{"audience":"https://a"}}`)),
+		Checker: &scriptedChecker{}, OperatorUsername: operatorUser}
+
+	causes := requireInvalid(t, review(t, v, operatorUser, ep, nil))
+
+	if len(causes) != 1 || causes[0].Field != "spec.endpoints[0].backends[0].policyRef" {
+		t.Errorf("causes = %+v, want one on the backend's policyRef", causes)
+	}
+}
