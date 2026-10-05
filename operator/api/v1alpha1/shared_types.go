@@ -155,6 +155,7 @@ const (
 	ReasonOperationFiltered             = "OperationFiltered"
 	ReasonMissingOperationId            = "MissingOperationId"
 	ReasonDuplicateOperationId          = "DuplicateOperationId"
+	ReasonUnsupportedMethod             = "UnsupportedMethod"
 	ReasonRolloutFailed                 = "RolloutFailed"
 	ReasonCUEEvaluationFailed           = "CUEEvaluationFailed"
 	ReasonCUEEvaluationWarning          = "CUEEvaluationWarning"
