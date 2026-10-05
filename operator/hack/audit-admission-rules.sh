@@ -119,13 +119,16 @@ def conflict_key:
 # The path a gateway serves its health endpoint on, or null when it is disabled.
 # A raw router block replaces the typed one whole (the renderer merges raw
 # extra_config last), and the route check reads health_path only from the
-# merged block; a block that is not an object counts as empty.
+# merged block; a block that is not an object, or has a key of the wrong type,
+# counts as empty.
 def health_path:
   (.spec.config.extraConfig // {}) as $x
   | if ($x | type) != "object" or ($x | has("router") | not)
     then (.spec.config.router.healthPath // "" | if . == "" then "/__health" else . end)
     else $x.router as $r
-      | if ($r | type) != "object" then "/__health"
+      | if ($r | type) != "object" or (($r.health_path // "") | type) != "string"
+           or (($r.disable_health // false) | type) != "boolean" or (($r.auto_options // false) | type) != "boolean"
+        then "/__health"
         elif $r.disable_health == true then null
         elif ($r.health_path | type) == "string" and $r.health_path != "" then $r.health_path
         else "/__health" end
