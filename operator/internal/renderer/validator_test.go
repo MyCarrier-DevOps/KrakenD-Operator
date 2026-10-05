@@ -567,3 +567,19 @@ func TestValidate_RouteCheckRunsOnTheEditionsCopy(t *testing.T) {
 		})
 	}
 }
+
+func TestValidate_EERootWildcardIsRefusedByTheRouteCheck(t *testing.T) {
+	exec := &capturingExecutor{}
+	v := NewValidator(ValidatorOptions{Executor: exec, BinaryPath: "krakend"})
+	rendered := []byte(`{"version":3,"endpoints":[{"endpoint":"/ok","method":"GET"},{"endpoint":"/*","method":"GET"}]}`)
+
+	err := v.Validate(context.Background(), rendered, v1alpha1.EditionEE)
+	var verr *ValidationError
+	if !errors.As(err, &verr) || !errors.Is(err, errRouteConflict) ||
+		!strings.HasPrefix(verr.Output, "- at '/endpoints/1/endpoint': ") {
+		t.Fatalf("Validate = %v, want a route-conflict verdict blaming endpoint 1", err)
+	}
+	if len(exec.checked) != 0 {
+		t.Errorf("krakend check ran %d time(s) after the route check refused the config", len(exec.checked))
+	}
+}
