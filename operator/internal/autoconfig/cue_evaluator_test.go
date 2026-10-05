@@ -2145,3 +2145,16 @@ func TestEvaluate_RootErrorOnEntryFailsThatEntry(t *testing.T) {
 		t.Errorf("expected getB failed with the root error, got %+v", out.Failed)
 	}
 }
+
+func TestEvaluate_ConflictInHiddenLabelUnderEndpointFailsEvaluation(t *testing.T) {
+	// The entry falls back to its default through a disjunction, so it
+	// decodes, while the conflict in the hidden label belongs to no entry.
+	_, err := evaluateWithCustomDefs(twoOperationSpec, map[string]string{
+		"a.cue": `endpoint: _h: t: "1s"`,
+		"b.cue": `endpoint: _h: t: "2s"`,
+		"c.cue": `endpoint: "/b:GET": timeout: *_h.t | "3s"`,
+	})
+	if err == nil || !strings.Contains(err.Error(), "_h") {
+		t.Errorf("expected a whole-evaluation error naming _h, got %v", err)
+	}
+}
