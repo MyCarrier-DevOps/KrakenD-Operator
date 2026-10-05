@@ -207,5 +207,6 @@ jq "${jq_opts[@]}" "$jq_lib"'
     (if $o.policyRef != null and ($o.policyRef.name // "") == "" then "\($p).policyRef.name is empty" else empty end)
   )),
   (($s.overrides // []) | group_by(.operationId | ascii_downcase | gsub("[^a-z0-9-]"; "-") | gsub("^-+|-+$"; ""))[]
-    | select(length > 1) | "overrides collide: \([.[].operationId] | join(", "))")
+    | select(length > 1) | "overrides collide: \([.[].operationId] | join(", "))"),
+  ($s.defaults.endpoint.timeout // empty | dur_problem($go_re; 64; "spec.defaults.endpoint.timeout"))
 ]} | report("KrakenDAutoConfig")' "$work/autoconfigs.json"
