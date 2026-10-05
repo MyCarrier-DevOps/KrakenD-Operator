@@ -529,3 +529,20 @@ func TestLintPolicy_RendersThePolicyOnASyntheticBackend(t *testing.T) {
 		t.Errorf("ran %s for %s, want lint for CE", v.calls[0], v.editions[0])
 	}
 }
+
+func TestCheckGatewayPolicy_KeepsTheOtherStoredPolicies(t *testing.T) {
+	p, q := policy("p"), policy("q")
+	p.Spec.Raw = &runtime.RawExtension{Raw: []byte(`{"stored-p/ns":{}}`)}
+	q.Spec.Raw = &runtime.RawExtension{Raw: []byte(`{"stored-q/ns":{}}`)}
+	v := &fakeValidator{}
+	c := newChecker(v, withPolicy(endpoint("a", "/a"), "p"), withPolicy(endpoint("b", "/b"), "q"), p, q)
+	candidate := p.DeepCopy()
+	candidate.Spec.Raw = &runtime.RawExtension{Raw: []byte(`{"candidate/ns":{}}`)}
+
+	if _, err := c.CheckGatewayPolicy(context.Background(), gateway(v1alpha1.EditionCE), candidate); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(v.seen[0], "stored-q/ns") || !strings.Contains(v.seen[0], "candidate/ns") {
+		t.Errorf("linted %s, want the candidate p and the stored q", v.seen[0])
+	}
+}
