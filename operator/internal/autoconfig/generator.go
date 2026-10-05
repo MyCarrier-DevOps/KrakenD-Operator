@@ -47,11 +47,7 @@ type GenerateOutput struct {
 	Endpoints []*v1alpha1.KrakenDEndpoint
 	// Skipped holds the entries dropped as duplicates of an earlier entry
 	// (reason DuplicateOperationId), in entry order.
-	Skipped           []OperationIssue
-	SkippedOperations int
-	// Duplicates holds the identifiers that caused deduplication skips.
-	// Each entry may be a path:method key, an operationId, or a generated name.
-	Duplicates []string
+	Skipped []OperationIssue
 }
 
 // Generator wraps endpoint entries in KrakenDEndpoint CRs with metadata and labels.
@@ -82,9 +78,7 @@ func (g *endpointGenerator) Generate(
 		name := endpointName(ac.Name, opID, entry.Method, entry.Endpoint)
 		op := entry.Method + " " + entry.Endpoint
 
-		if ident, dup := duplicateOf(key, opID, name, seenKeys, seenOperationIDs, seenNames); dup != "" {
-			output.SkippedOperations++
-			output.Duplicates = append(output.Duplicates, ident)
+		if dup := duplicateOf(key, opID, name, seenKeys, seenOperationIDs, seenNames); dup != "" {
 			output.Skipped = append(output.Skipped, OperationIssue{
 				Operation: Operation{Method: entry.Method, Path: entry.Endpoint, OperationID: opID},
 				Reason:    v1alpha1.ReasonDuplicateOperationId,
@@ -120,23 +114,19 @@ func (g *endpointGenerator) Generate(
 }
 
 // duplicateOf returns why an entry duplicates one generated before it (the
-// same path and method, operationId, or endpoint name), with the identifier
-// that collided, or "" when it does not. Each seen map records the operation
-// ("METHOD /path") that claimed it.
-func duplicateOf(
-	key, opID, name string,
-	seenKeys, seenOperationIDs, seenNames map[string]string,
-) (ident, why string) {
+// same path and method, operationId, or endpoint name), or "" when it does
+// not. Each seen map records the operation ("METHOD /path") that claimed it.
+func duplicateOf(key, opID, name string, seenKeys, seenOperationIDs, seenNames map[string]string) string {
 	if by, ok := seenKeys[key]; ok {
-		return key, fmt.Sprintf("same path and method as %s", by)
+		return fmt.Sprintf("same path and method as %s", by)
 	}
 	if by, ok := seenOperationIDs[opID]; ok && opID != "" {
-		return opID, fmt.Sprintf("operationId %q is already used by %s", opID, by)
+		return fmt.Sprintf("operationId %q is already used by %s", opID, by)
 	}
 	if by, ok := seenNames[name]; ok {
-		return name, fmt.Sprintf("endpoint name %q is already used by %s", name, by)
+		return fmt.Sprintf("endpoint name %q is already used by %s", name, by)
 	}
-	return "", ""
+	return ""
 }
 
 // maxNameLength is the Kubernetes DNS-1123 subdomain name limit.
