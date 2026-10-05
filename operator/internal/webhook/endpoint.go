@@ -88,11 +88,14 @@ func (v *EndpointValidator) ValidateDelete(
 	return nil, nil
 }
 
-// admit runs every rule against ep. old is the stored object on an update and
-// nil on a create.
+// admit runs every rule against ep within the admission budget. old is the
+// stored object on an update and nil on a create.
 func (v *EndpointValidator) admit(
 	ctx context.Context, old, ep *v1alpha1.KrakenDEndpoint,
 ) (admission.Warnings, error) {
+	ctx, cancel := context.WithTimeout(ctx, admissionBudget)
+	defer cancel()
+
 	gw, errs, err := v.gatewayFor(ctx, old, ep)
 	if err != nil {
 		return nil, unavailable(err)
