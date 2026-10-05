@@ -65,55 +65,6 @@ func terminatingWithUnchangedSpec(oldObj, newObj runtime.Object) bool {
 	return equality.Semantic.DeepEqual(oldMap["spec"], newMap["spec"])
 }
 
-// PolicyValidator validates KrakenDBackendPolicy resources.
-type PolicyValidator struct {
-	client.Client
-	// Checker renders the policy alone and in every gateway that uses it.
-	Checker ConfigChecker
-}
-
-// ValidateCreate validates a new KrakenDBackendPolicy.
-func (v *PolicyValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
-	policy, ok := obj.(*v1alpha1.KrakenDBackendPolicy)
-	if !ok {
-		return nil, fmt.Errorf("expected KrakenDBackendPolicy, got %T", obj)
-	}
-	ctx, cancel := context.WithTimeout(ctx, admissionBudget)
-	defer cancel()
-	return checkPolicyRender(ctx, v.Client, v.Checker, nil, policy)
-}
-
-// ValidateUpdate validates an updated KrakenDBackendPolicy. An update that
-// leaves the spec alone, such as the protection finalizer, is never validated.
-func (v *PolicyValidator) ValidateUpdate(
-	ctx context.Context, oldObj, newObj runtime.Object,
-) (admission.Warnings, error) {
-	if terminatingWithUnchangedSpec(oldObj, newObj) {
-		return nil, nil
-	}
-	policy, ok := newObj.(*v1alpha1.KrakenDBackendPolicy)
-	if !ok {
-		return nil, fmt.Errorf("expected KrakenDBackendPolicy, got %T", newObj)
-	}
-	old, ok := oldObj.(*v1alpha1.KrakenDBackendPolicy)
-	if !ok {
-		return nil, fmt.Errorf("expected KrakenDBackendPolicy, got %T", oldObj)
-	}
-	if equality.Semantic.DeepEqual(old.Spec, policy.Spec) {
-		return nil, nil
-	}
-	ctx, cancel := context.WithTimeout(ctx, admissionBudget)
-	defer cancel()
-	return checkPolicyRender(ctx, v.Client, v.Checker, old, policy)
-}
-
-// ValidateDelete is required by admission.CustomValidator. The policy webhook is
-// not registered for DELETE: the policy-protection finalizer keeps a referenced
-// policy until nothing references it.
-func (v *PolicyValidator) ValidateDelete(context.Context, runtime.Object) (admission.Warnings, error) {
-	return nil, nil
-}
-
 // AutoConfigValidator validates KrakenDAutoConfig resources.
 type AutoConfigValidator struct {
 	client.Client
