@@ -70,15 +70,15 @@ def overflows:
   or duration_ns > 9223372036854775807;
 # Why a duration breaks the pattern or maxLength ($max) of its field, or nothing.
 def dur_shape_problem($re; $max; $label):
-  if crd_test($re) | not then "\($label) \(.)"
+  if crd_test($re) | not then "\($label) \(tojson)"
   elif length > $max then "\($label) is longer than \($max) characters"
   else empty end;
 # The same, plus the overflow the CRD duration() rule rejects.
 def dur_problem($re; $max; $label):
   dur_shape_problem($re; $max; $label)
-  // if overflows then "\($label) \(.) does not fit in 64 bits of nanoseconds" else empty end;
+  // if overflows then "\($label) \(tojson) does not fit in 64 bits of nanoseconds" else empty end;
 # Why a value is outside an enum: $set lists the values the CRD allows.
-def enum_problem($label; $set): select(IN($set[]) | not) | "\($label) \(.)";
+def enum_problem($label; $set): select(IN($set[]) | not) | "\($label) \(tojson)";
 # True for a pattern-valid quantity that resource.ParseQuantity rejects, which
 # the CRD isQuantity() rule rejects too: an exponent with a fraction, or one
 # outside the range of a 64-bit integer.
@@ -89,9 +89,9 @@ def quantity_undecodable:
 # Why a quantity breaks its CRD rules, or nothing; a number is always valid.
 def quantity_problem($label):
   if type != "string" then empty
-  elif crd_test($qty_re) | not then "\($label) \(.)"
+  elif crd_test($qty_re) | not then "\($label) \(tojson)"
   elif length > 64 then "\($label) is longer than 64 characters"
-  elif quantity_undecodable then "\($label) \(.) is not a quantity Kubernetes can decode"
+  elif quantity_undecodable then "\($label) \(tojson) is not a quantity Kubernetes can decode"
   else empty end;
 # The keys of an extra_config object that are in $names.
 def eeonly($names): [(. // {}) | keys[] | select(IN($names[]))];
@@ -138,9 +138,9 @@ jq "${jq_opts[@]}" "$jq_lib"'
   (if ((.spec.endpoints // []) | length) == 0 then "spec.endpoints is empty" else empty end),
   (if (.spec.gatewayRef.name // "") == "" then "spec.gatewayRef.name is empty" else empty end),
   ((.spec.endpoints // []) | group_by([.endpoint, .method])[] | select(length > 1)
-    | "duplicate entry \(.[0].method) \(.[0].endpoint)"),
+    | "duplicate entry \(.[0].method) \(.[0].endpoint | tojson)"),
   ((.spec.endpoints // []) | to_entries[] | .key as $i | .value as $e | "spec.endpoints[\($i)]" as $p | (
-    (if ($e.endpoint // "" | crd_test($path_re)) then empty else "\($p).endpoint \($e.endpoint)" end),
+    (if ($e.endpoint // "" | crd_test($path_re)) then empty else "\($p).endpoint \($e.endpoint | tojson)" end),
     (if (($e.backends // []) | length) == 0 then "\($p).backends is empty" else empty end),
     ($e.timeout // empty | dur_problem($go_re; 64; "\($p).timeout")),
     ($e.cacheTTL // empty | dur_problem($go_re; 64; "\($p).cacheTTL")),
@@ -155,11 +155,11 @@ jq "${jq_opts[@]}" "$jq_lib"'
   ($s.config.timeout // empty | dur_problem($one_re; 64; "spec.config.timeout")),
   ($s.config.cacheTTL // empty | dur_problem($one_re; 64; "spec.config.cacheTTL")),
   ($s.config.dnsCacheTTL // empty | dur_problem($one_re; 64; "spec.config.dnsCacheTTL")),
-  ($s.config.cors.maxAge // empty | select(crd_test($one_re) | not) | "spec.config.cors.maxAge \(.)"),
+  ($s.config.cors.maxAge // empty | select(crd_test($one_re) | not) | "spec.config.cors.maxAge \(tojson)"),
   ($s.config.port // empty | select(. < 1 or . > 65535) | "spec.config.port \(.)"),
   ($s.config.outputEncoding // empty
     | enum_problem("spec.config.outputEncoding"; ["json", "fast-json", "json-collection", "xml", "negotiate", "string", "no-op"])),
-  ($s.config.router.healthPath // empty | select(crd_test("^/") | not) | "spec.config.router.healthPath \(.)"),
+  ($s.config.router.healthPath // empty | select(crd_test("^/") | not) | "spec.config.router.healthPath \(tojson)"),
   ($s.redis.connectionPool.dialTimeout // empty
     | dur_problem($one_re; 64; "spec.redis.connectionPool.dialTimeout")),
   (($s.license.externalSecret.enabled // false) as $es | ($s.license.secretRef != null) as $sr | (
@@ -210,15 +210,15 @@ jq "${jq_opts[@]}" "$jq_lib"'
   ($s.periodic.interval // empty | if $s.trigger == "Periodic"
      then dur_problem($go_re; 32; "spec.periodic.interval")
      else dur_shape_problem($go_re; 32; "spec.periodic.interval") end),
-  ($s.additionalEndpointsBasePath // empty | select(crd_test("^/") | not) | "spec.additionalEndpointsBasePath \(.)"),
+  ($s.additionalEndpointsBasePath // empty | select(crd_test("^/") | not) | "spec.additionalEndpointsBasePath \(tojson)"),
   (if ($s.additionalEndpointsBasePath // "") != "" and ($s.urlTransform.addPathPrefix // "") != ""
    then "additionalEndpointsBasePath with urlTransform.addPathPrefix" else empty end),
   (if (($s.additionalEndpoints // []) | length) > 256 then "more than 256 additionalEndpoints" else empty end),
   (($s.additionalEndpoints // []) | map(.method //= "GET") | group_by([.endpoint, .method])[] | select(length > 1)
-    | "duplicate additionalEndpoint \(.[0].method) \(.[0].endpoint)"),
+    | "duplicate additionalEndpoint \(.[0].method) \(.[0].endpoint | tojson)"),
   (if (($s.overrides // []) | length) > 1024 then "more than 1024 overrides" else empty end),
   (($s.additionalEndpoints // []) | to_entries[] | .key as $i | .value as $a | "spec.additionalEndpoints[\($i)]" as $p | (
-    (if ($a.endpoint // "" | crd_test($path_re)) then empty else "\($p).endpoint \($a.endpoint)" end),
+    (if ($a.endpoint // "" | crd_test($path_re)) then empty else "\($p).endpoint \($a.endpoint | tojson)" end),
     (if (($a.backends // []) | length) > 0
         and ((($a.host // "") != "") or (($a.backendUrlPattern // "") != "") or (($a.encoding // "") != ""))
      then "\($p) mixes backends with the shorthand" else empty end),
@@ -235,11 +235,11 @@ jq "${jq_opts[@]}" "$jq_lib"'
     ($o.cacheTTL // empty | dur_problem($go_re; 64; "\($p).cacheTTL")),
     ($o.concurrentCalls // empty | select(. < 1) | "\($p).concurrentCalls \(.)"),
     ($o.outputEncoding // empty | enum_problem("\($p).outputEncoding"; output_encodings)),
-    ($o.endpoint // empty | select(crd_test($path_re) | not) | "\($p).endpoint \(.)"),
+    ($o.endpoint // empty | select(crd_test($path_re) | not) | "\($p).endpoint \(tojson)"),
     (if $o.policyRef != null and ($o.policyRef.name // "") == "" then "\($p).policyRef.name is empty" else empty end)
   )),
   (($s.overrides // []) | group_by(.operationId | ascii_downcase | gsub("[^a-z0-9-]"; "-") | gsub("^-+|-+$"; ""))[]
-    | select(length > 1) | "overrides collide: \([.[].operationId] | join(", "))"),
+    | select(length > 1) | "overrides collide: \([.[].operationId | tojson] | join(", "))"),
   ($s.defaults.endpoint.timeout // empty | dur_problem($go_re; 64; "spec.defaults.endpoint.timeout")),
   ($s.defaults.endpoint.cacheTTL // empty | dur_problem($go_re; 64; "spec.defaults.endpoint.cacheTTL")),
   ($s.defaults.endpoint.outputEncoding // empty
@@ -257,7 +257,7 @@ jq "${jq_opts[@]}" "$jq_lib"'
   | "\(.spec.gatewayRef.namespace // .metadata.namespace)/\(.spec.gatewayRef.name)" as $gw
   | (.spec.endpoints // [])[]
   | {gw: $gw, owner: "\($o.metadata.namespace)/\($o.metadata.name)",
-     key: "\(.method) \(.endpoint | conflict_key)", route: "\(.method) \(.endpoint)",
+     key: "\(.method) \(.endpoint | conflict_key)", route: "\(.method) \(.endpoint | tojson)",
      ctrl: ([$o.metadata.ownerReferences // [] | .[] | select(.controller == true) | .uid][0])}]
 | group_by([.gw, .key])[] | select(. as $g | [$g[] as $a | $g[] as $b
     | select(($a.owner != $b.owner or $a.route != $b.route)
@@ -272,7 +272,7 @@ jq "${jq_opts[@]}" --slurpfile gws "$work/gateways.json" "$jq_lib"'
 | "\(.spec.gatewayRef.namespace // .metadata.namespace)/\(.spec.gatewayRef.name)" as $gw
 | (.spec.endpoints // [])[]
 | select(.method == "GET" and $health[$gw] != null and (.endpoint | conflict_key) == ($health[$gw] | conflict_key))
-| "KrakenDEndpoint \($e.metadata.namespace)/\($e.metadata.name): GET \(.endpoint) is the health path of gateway \($gw)"' "$work/endpoints.json"
+| "KrakenDEndpoint \($e.metadata.namespace)/\($e.metadata.name): GET \(.endpoint | tojson) is the health path of gateway \($gw)"' "$work/endpoints.json"
 
 # Enterprise-only extra_config namespaces on CE gateways: krakend check accepts
 # them and KrakenD CE silently ignores them. A policy counts when an endpoint of
