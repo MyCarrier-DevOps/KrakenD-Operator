@@ -62,7 +62,8 @@ type EndpointEntry struct {
 	// +kubebuilder:validation:Enum=GET;POST;PUT;PATCH;DELETE
 	Method string `json:"method"`
 
-	// Backends is the list of backend services for this endpoint.
+	// Backends is the list of backend services for this endpoint, at least one.
+	// +kubebuilder:validation:MinItems=1
 	Backends []BackendSpec `json:"backends"`
 
 	// Timeout overrides the global endpoint timeout.
