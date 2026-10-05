@@ -4927,3 +4927,23 @@ func TestAutoConfigReconcile_PrecheckHoldsEnterpriseOnlyNamespacesOnACEGateway(t
 		t.Errorf("failedOperations = %+v", failed)
 	}
 }
+
+func TestAutoConfigReconcile_PrecheckWritesBackendKeysCEHonors(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	g.output.Endpoints[0].Spec.Endpoints[0].Backends[0].ExtraConfig = &runtime.RawExtension{Raw: []byte(
+		`{"backend/http/client":{"send_body_on_redirect":true}}`)}
+	c := fakeClientBuilder().WithObjects(ac, cm, testGateway()).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if !endpointExists(t, c, "test-ac-listusers") {
+		t.Error("expected the endpoint written: CE honors send_body_on_redirect, as the webhook admits it")
+	}
+	if failed := getAC(t, c, ac).Status.FailedOperations; len(failed) != 0 {
+		t.Errorf("failedOperations = %+v, want none", failed)
+	}
+}
