@@ -67,13 +67,22 @@ func checkGatewayRender(
 	return preexisting, nil
 }
 
-// gatewayRenderDenial rejects gw: gateway-root findings on spec.config. The
-// renderer builds the root from spec.config (timeout, extraConfig, router), so
-// that is where a user looks.
+// gatewayRenderDenial rejects gw: gateway-root findings on spec.config, the
+// endpoints the change breaks on spec. The renderer builds the root from
+// spec.config (timeout, extraConfig, router), so that is where a user looks.
 func gatewayRenderDenial(gw *v1alpha1.KrakenDGateway, verdict configcheck.Verdict) error {
 	var errs field.ErrorList
+	var endpoints configcheck.Verdict
 	for _, f := range verdict.Findings {
-		errs = append(errs, field.Invalid(field.NewPath("spec", "config"), field.OmitValueType{}, f.Message))
+		if f.Endpoint.Name == "" {
+			errs = append(errs, field.Invalid(field.NewPath("spec", "config"), field.OmitValueType{}, f.Message))
+			continue
+		}
+		endpoints.Findings = append(endpoints.Findings, f)
+	}
+	if len(endpoints.Findings) > 0 {
+		errs = append(errs, field.Invalid(field.NewPath("spec"), field.OmitValueType{},
+			"with this change these endpoints fail krakend check: "+endpoints.Summary(warningLimit)))
 	}
 	return invalid("KrakenDGateway", gw.Name, errs)
 }
