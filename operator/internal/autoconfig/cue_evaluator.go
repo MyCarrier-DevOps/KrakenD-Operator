@@ -56,7 +56,8 @@ type CUEOutput struct {
 	// for a backend index out of range.
 	UnmatchedOverrides []string
 	// AmbiguousOverrides holds the operationIds from spec.overrides that
-	// more than one operation declares, in override order.
+	// more than one operation declares, in override order. Such an override
+	// is not applied: the caller must not use Entries while this is non-empty.
 	AmbiguousOverrides []string
 	// Skipped holds the operations whose method the KrakenDEndpoint API does
 	// not accept (reason UnsupportedMethod), sorted by path then method, with
@@ -578,9 +579,10 @@ func applyFieldOverrides(output *CUEOutput, overrides []v1alpha1.OperationOverri
 		return
 	}
 
-	// Build operationID → entry index lookup in Entries order, first
-	// occurrence wins: the generator publishes only the first entry for a
-	// duplicate operationId, so the override must land on that one.
+	// Build operationID → entry index lookup, and how many operations
+	// (entries and failed ones) declare each operationId. An override on an
+	// operationId declared more than once is ambiguous and is not applied, so
+	// the index only serves operationIds declared once.
 	opIDIndex := make(map[string]int, len(output.Entries))
 	count := make(map[string]int, len(output.Entries))
 	for i := range output.Entries {
@@ -603,6 +605,7 @@ func applyFieldOverrides(output *CUEOutput, overrides []v1alpha1.OperationOverri
 	for _, ov := range overrides {
 		if count[ov.OperationID] > 1 {
 			output.AmbiguousOverrides = append(output.AmbiguousOverrides, ov.OperationID)
+			continue
 		}
 		idx, ok := opIDIndex[ov.OperationID]
 		if !ok {
