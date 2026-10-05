@@ -2473,7 +2473,9 @@ Go project layout following [Standard Go Project Layout](https://github.com/gola
 │   │   │   ├── fetcher.go                      # OpenAPI spec fetcher (HTTP + ConfigMap sources)
 │   │   │   ├── cue_evaluator.go                # CUE evaluation engine (cuelang.org/go/cue)
 │   │   │   ├── filter.go                       # Include/exclude filter engine
-│   │   │   └── generator.go                    # EndpointEntry → KrakenDEndpoint CRD renderer
+│   │   │   ├── generator.go                    # EndpointEntry → KrakenDEndpoint CRD renderer
+│   │   │   └── cue/
+│   │   │       └── defaults.cue                # Built-in default CUE definitions (embedded; the krakend-cue-definitions ConfigMap overrides them)
 │   │   ├── renderer/
 │   │   │   ├── config.go                       # KrakenD JSON config builder
 │   │   │   ├── endpoints.go                    # Endpoint array builder
@@ -2512,22 +2514,26 @@ Go project layout following [Standard Go Project Layout](https://github.com/gola
 │   ├── config/
 │   │   ├── crd/
 │   │   │   └── bases/                          # Generated CRD YAML manifests
-│   │   ├── cue/
-│   │   │   └── defaults/                       # Default CUE transformation definitions (deployed as ConfigMap by Helm)
-│   │   │       ├── endpoints.cue               # Core transformation: OpenAPI paths → KrakenDEndpointSpec CRDs
-│   │   │       ├── schema.cue                  # KrakenDEndpointSpec output schema constraints
-│   │   │       └── defaults.cue                # Default rate limits, headers, timeouts, policyRef, extraConfig
-│   │   ├── rbac/                               # RBAC manifests
-│   │   ├── webhook/                            # Webhook manifests (ValidatingWebhookConfiguration)
+│   │   ├── certmanager/                        # Webhook serving certificate
+│   │   ├── default/                            # Default kustomization and its patches
 │   │   ├── manager/                            # Operator Deployment manifests
-│   │   └── samples/                            # Example CR YAML files
+│   │   ├── manifests/                          # OLM bundle base (ClusterServiceVersion)
+│   │   ├── network-policy/                     # Metrics traffic policy
+│   │   ├── prometheus/                         # ServiceMonitor
+│   │   ├── rbac/                               # RBAC manifests
+│   │   ├── samples/                            # Example CR YAML files
+│   │   ├── scorecard/                          # Operator scorecard config
+│   │   └── webhook/                            # Webhook manifests (ValidatingWebhookConfiguration)
 │   ├── hack/
 │   │   ├── audit-admission-rules.sh            # Read-only pre-upgrade audit of stored objects against the admission rules
 │   │   ├── test-audit-admission-rules.sh       # Runs the audit against its fixtures (make test-audit)
-│   │   └── testdata/audit/                     # Audit fixtures and expected output
+│   │   ├── testdata/audit/                     # Audit fixtures and expected output
+│   │   ├── gen-third-party-notices.sh          # Generates THIRD-PARTY-NOTICES
+│   │   └── notices/                            # KrakenD CE and musl notice texts that gen-third-party-notices.sh includes
 │   ├── test/
 │   │   ├── e2e/                                # End-to-end tests
-│   │   └── integration/                        # Integration tests against an ephemeral K3s cluster (build tag integration)
+│   │   ├── integration/                        # Integration tests against an ephemeral K3s cluster (build tag integration)
+│   │   └── utils/                              # Shared helpers for the tests
 │   ├── go.mod
 │   ├── go.sum
 │   ├── Makefile
