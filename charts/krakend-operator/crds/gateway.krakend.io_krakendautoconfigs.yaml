@@ -356,6 +356,15 @@ spec:
                       encoding:
                         description: Encoding sets the default backend response encoding
                           (e.g. "json", "safejson", "no-op").
+                        enum:
+                        - json
+                        - safejson
+                        - fast-json
+                        - xml
+                        - rss
+                        - string
+                        - no-op
+                        - yaml
                         type: string
                       extraConfig:
                         description: |-
