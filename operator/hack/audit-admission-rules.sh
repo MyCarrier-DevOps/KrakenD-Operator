@@ -226,5 +226,5 @@ jq "${jq_opts[@]}" "$jq_lib"'
   | (.spec.endpoints // [])[]
   | {gw: $gw, owner: "\($o.metadata.namespace)/\($o.metadata.name)",
      key: "\(.method) \(.endpoint | gsub("/\\{[a-zA-Z0-9_-]+\\}"; "/{}"))", route: "\(.method) \(.endpoint)"}]
-| group_by([.gw, .key])[] | select(([.[].owner] | unique | length) > 1)
+| group_by([.gw, .key])[] | select((unique_by([.owner, .route]) | length) > 1)
 | "gateway \(.[0].gw): \([.[] | "\(.route) (\(.owner))"] | join(" vs "))"' "$work/endpoints.json"
