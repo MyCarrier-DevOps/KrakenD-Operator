@@ -115,6 +115,7 @@ type BackendSpec struct {
 	Encoding string `json:"encoding,omitempty"`
 
 	// SD selects the service discovery provider (e.g. "static", "dns").
+	// +kubebuilder:validation:Enum=static;dns;dns-shared
 	SD string `json:"sd,omitempty"`
 
 	// SDScheme sets the service discovery scheme (e.g. "http", "https").
