@@ -316,6 +316,45 @@ func TestGatewayReconcile_ValidationFailure(t *testing.T) {
 	}
 }
 
+func TestGatewayReconcile_RejectionNamesTheSpecEntry(t *testing.T) {
+	gw := testGateway()
+	entry := func(path string) v1alpha1.EndpointEntry {
+		return v1alpha1.EndpointEntry{Endpoint: path, Method: "GET",
+			Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/"}}}
+	}
+	a := &v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "a", Namespace: "default"},
+		Spec: v1alpha1.KrakenDEndpointSpec{GatewayRef: v1alpha1.GatewayRef{Name: gw.Name},
+			Endpoints: []v1alpha1.EndpointEntry{entry("/a")}},
+	}
+	b := &v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "b", Namespace: "default"},
+		Spec: v1alpha1.KrakenDEndpointSpec{GatewayRef: v1alpha1.GatewayRef{Name: gw.Name},
+			Endpoints: []v1alpha1.EndpointEntry{entry("/y"), entry("/x")}},
+	}
+	// The rendered order is /a, /x, /y: endpoints/1 is b's /x, its spec.endpoints[1].
+	rejecting := &mockValidator{validateErr: &renderer.ValidationError{
+		Output: "- at '/endpoints/1/extra_config': additional properties 'qos/circuit-breakr' not allowed",
+		Err:    fmt.Errorf("exit status 1"),
+	}}
+	c := fakeClientBuilder().WithObjects(gw, a, b).WithStatusSubresource(gw, a, b).Build()
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}), rejecting)
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+
+	var got v1alpha1.KrakenDEndpoint
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(b), &got); err != nil {
+		t.Fatal(err)
+	}
+	acc := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionAccepted)
+	if acc == nil || acc.Reason != v1alpha1.ReasonGatewayConfigRejected ||
+		!strings.Contains(acc.Message, "spec.endpoints[1]:") {
+		t.Errorf("b Accepted = %+v, want GatewayConfigRejected naming spec.endpoints[1]", acc)
+	}
+}
+
 func TestGatewayReconcile_RenderError(t *testing.T) {
 	gw := testGateway()
 	gw.Status.Phase = v1alpha1.PhasePending
