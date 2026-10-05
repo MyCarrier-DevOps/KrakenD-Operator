@@ -138,6 +138,14 @@ func gatewayRenderDenial(gw *v1alpha1.KrakenDGateway, verdict configcheck.Verdic
 	return invalid("KrakenDGateway", gw.Name, errs)
 }
 
+// checkPolicyRender validates policy on its own.
+func checkPolicyRender(
+	ctx context.Context, chk ConfigChecker, policy *v1alpha1.KrakenDBackendPolicy,
+) (admission.Warnings, error) {
+	_, err := chk.LintPolicy(ctx, policy)
+	return nil, checkErr(err)
+}
+
 // versionEchoLimit bounds, in bytes, the spec.version a warning quotes: the
 // CRD does not bound it.
 const versionEchoLimit = 64
