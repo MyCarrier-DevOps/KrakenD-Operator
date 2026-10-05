@@ -197,3 +197,18 @@ func TestDereferenceParameters_WarnsOnRefsToNonParameters(t *testing.T) {
 		})
 	}
 }
+
+func TestDereferenceParameters_ResolvesParameterUnderComponentsSchemas(t *testing.T) {
+	spec := []byte(`{"paths":{"/a":{"get":{"operationId":"a","parameters":[` +
+		`{"$ref":"#/components/schemas/common_components_parameters_Limit"}],` +
+		`"responses":{"200":{"description":"OK"}}}}},` +
+		`"components":{"schemas":{"common_components_parameters_Limit":{"name":"limit","in":"query"}}}}`)
+	out, warnings, err := DereferenceParameters(spec)
+	if err != nil || len(warnings) != 0 {
+		t.Fatalf("DereferenceParameters: err=%v warnings=%v", err, warnings)
+	}
+	entries := evaluateEmbedded(t, string(out)).Entries
+	if len(entries) != 1 || !slices.Equal(entries[0].InputQueryStrings, []string{"limit"}) {
+		t.Errorf("entries = %+v, want one forwarding [limit]", entries)
+	}
+}
