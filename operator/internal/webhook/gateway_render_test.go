@@ -222,6 +222,11 @@ func TestGatewayAdmission_CERejectsEnterpriseOnlyNamespaces(t *testing.T) {
 		gw.Spec.Config.ExtraConfig = &runtime.RawExtension{Raw: []byte(raw)}
 		return gw
 	}
+	ee := func() *v1alpha1.KrakenDGateway {
+		gw := testGateway()
+		gw.Spec.Edition = v1alpha1.EditionEE
+		return gw
+	}
 	apiKeys := `{"auth/api-keys":{"keys":[]}}`
 	tests := []struct {
 		name    string
@@ -231,6 +236,7 @@ func TestGatewayAdmission_CERejectsEnterpriseOnlyNamespaces(t *testing.T) {
 		{"CE root with an EE namespace", withRoot(testGateway(), apiKeys), nil,
 			[]string{`spec.config.extraConfig: Invalid value: "auth/api-keys"`}},
 		{"CE root with CE namespaces", withRoot(testGateway(), `{"security/cors":{"allow_origins":["*"]}}`), nil, nil},
+		{"EE root with an EE namespace", withRoot(ee(), apiKeys), nil, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
