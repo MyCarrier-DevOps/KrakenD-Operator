@@ -21,7 +21,9 @@ import (
 	"testing"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
 	"github.com/mycarrier-devops/krakend-operator/internal/fieldindex"
+	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
@@ -47,6 +49,12 @@ func fakeClientBuilder() *fake.ClientBuilder {
 		WithScheme(testScheme()).
 		WithIndex(&v1alpha1.KrakenDEndpoint{}, fieldindex.EndpointGateway, fieldindex.EndpointGatewayKeys).
 		WithIndex(&v1alpha1.KrakenDEndpoint{}, fieldindex.EndpointPolicy, fieldindex.EndpointPolicyKeys)
+}
+
+// newTestChecker returns a config checker reading through c and validating
+// with v, as main wires it.
+func newTestChecker(c client.Client, v renderer.Validator) *configcheck.Checker {
+	return configcheck.New(c, renderer.New(renderer.Options{}), v, 1)
 }
 
 func fakeRecorder() *record.FakeRecorder {
