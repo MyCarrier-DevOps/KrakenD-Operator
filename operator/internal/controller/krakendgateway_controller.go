@@ -17,7 +17,6 @@ limitations under the License.
 package controller
 
 import (
-	"cmp"
 	"context"
 	stderrors "errors"
 	"fmt"
@@ -152,29 +151,13 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// Status as read, so each write below happens only when it changes.
 	before := gw.Status.DeepCopy()
 
-	// Gather endpoints via field index
-	var endpointList v1alpha1.KrakenDEndpointList
-	indexKey := gw.Namespace + "/" + gw.Name
-	if err := r.List(ctx, &endpointList,
-		client.MatchingFields{fieldindex.EndpointGateway: indexKey},
-	); err != nil {
-		return ctrl.Result{}, fmt.Errorf("listing endpoints: %w", err)
-	}
-	endpoints := endpointList.Items
-
-	// Sort endpoints to keep processing and rendered output deterministic.
-	slices.SortFunc(endpoints, func(a, b v1alpha1.KrakenDEndpoint) int {
-		if c := cmp.Compare(a.Namespace, b.Namespace); c != 0 {
-			return c
-		}
-		return cmp.Compare(a.Name, b.Name)
-	})
-
-	// Gather referenced policies
-	policies, err := r.gatherPolicies(ctx, endpoints)
+	// Gather the endpoints and the policies they reference, in the order the
+	// render is deterministic for.
+	in, err := r.Checker.Gather(ctx, &gw, nil)
 	if err != nil {
-		return ctrl.Result{}, err
+		return ctrl.Result{}, fmt.Errorf("gathering render inputs: %w", err)
 	}
+	endpoints := in.Endpoints
 
 	// Read the deployed license first: a failed read must not follow license
 	// transitions (and their events) that the returned error would discard.
@@ -185,6 +168,7 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// The license decides whether this gateway renders and runs CE.
 	lic := r.reconcileLicense(ctx, &gw)
 	ceFallback := lic.ceFallback
+	in.CEFallback = ceFallback // this reconcile's license verdict, fresher than status
 	edition := renderer.EditionFor(&gw, ceFallback)
 	licenseChecksum := lic.checksumFor(deployed.license)
 
@@ -197,17 +181,11 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	r.setPluginsResolved(&gw, missingPlugins)
 
 	// Detect Dragonfly state
-	dragonflyState := r.detectDragonflyState(ctx, &gw)
+	in.Dragonfly = r.detectDragonflyState(ctx, &gw)
+	in.PluginConfigMaps = pluginConfigMaps
 
 	// Render configuration
-	output, err := r.Renderer.Render(renderer.RenderInput{
-		Gateway:          &gw,
-		Endpoints:        endpoints,
-		Policies:         policies,
-		CEFallback:       ceFallback,
-		Dragonfly:        dragonflyState,
-		PluginConfigMaps: pluginConfigMaps,
-	})
+	output, err := r.Renderer.Render(in)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("rendering config: %w", err)
 	}
@@ -221,7 +199,7 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		gw.Status.ConfigEdition = appliedKey(&gw, edition).edition
 	}
 	appliedBefore := appliedKey(&gw, edition)
-	cfg, configErr := r.reconcileConfig(ctx, &gw, before, output, edition)
+	cfg, configErr := r.reconcileConfig(ctx, &gw, before, in, output, edition)
 	r.reconcileCEFallbackCondition(&gw, output, edition)
 	image := appliedImage(&gw, edition)
 	configChanged := appliedKey(&gw, edition) != appliedBefore ||
@@ -384,44 +362,6 @@ func (r *KrakenDGatewayReconciler) crdAvailable(gvk schema.GroupVersionKind) (bo
 		return false, fmt.Errorf("checking CRD availability for %s: %w", gvk, err)
 	}
 	return ok, nil
-}
-
-// gatherPolicies fetches all unique KrakenDBackendPolicy resources referenced
-// by the given endpoints. Each policy is looked up in the namespace resolved
-// from the PolicyRef (explicit namespace or endpoint namespace as fallback).
-// The returned map is keyed by "namespace/name" for full disambiguation.
-func (r *KrakenDGatewayReconciler) gatherPolicies(
-	ctx context.Context,
-	endpoints []v1alpha1.KrakenDEndpoint,
-) (map[string]*v1alpha1.KrakenDBackendPolicy, error) {
-	policies := make(map[string]*v1alpha1.KrakenDBackendPolicy)
-	for _, ep := range endpoints {
-		for _, entry := range ep.Spec.Endpoints {
-			for _, be := range entry.Backends {
-				if be.PolicyRef == nil {
-					continue
-				}
-				mapKey := be.PolicyRef.PolicyKey(ep.Namespace)
-				if _, ok := policies[mapKey]; ok {
-					continue
-				}
-				var policy v1alpha1.KrakenDBackendPolicy
-				key := types.NamespacedName{
-					Name:      be.PolicyRef.Name,
-					Namespace: be.PolicyRef.ResolvedNamespace(ep.Namespace),
-				}
-				if err := r.Get(ctx, key, &policy); err != nil {
-					if errors.IsNotFound(err) {
-						// Missing policy — renderer will mark endpoint as invalid
-						continue
-					}
-					return nil, fmt.Errorf("getting policy %s: %w", key, err)
-				}
-				policies[mapKey] = &policy
-			}
-		}
-	}
-	return policies, nil
 }
 
 // gatherPluginConfigMaps fetches ConfigMaps referenced by plugin sources and
@@ -709,6 +649,7 @@ func (r *KrakenDGatewayReconciler) reconcileConfig(
 	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
 	before *v1alpha1.KrakenDGatewayStatus,
+	in renderer.RenderInput,
 	output *renderer.RenderOutput,
 	edition v1alpha1.Edition,
 ) (configResult, error) {
@@ -720,7 +661,7 @@ func (r *KrakenDGatewayReconciler) reconcileConfig(
 		setConfigApplied(gw)
 		return r.publishApplied(ctx, gw, output)
 	}
-	rejections, err := r.validateAndApply(ctx, gw, before, output, edition)
+	rejections, err := r.validateAndApply(ctx, gw, before, in, output, edition)
 	if isApplied(gw, output, edition) {
 		return configResult{appliedConfigMap: resources.ConfigMapName(gw, output.Checksum)}, nil
 	}
@@ -737,18 +678,17 @@ func (r *KrakenDGatewayReconciler) validateAndApply(
 	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
 	before *v1alpha1.KrakenDGatewayStatus,
+	in renderer.RenderInput,
 	output *renderer.RenderOutput,
 	edition v1alpha1.Edition,
 ) (map[types.NamespacedName]string, error) {
-	err := r.validateConfig(ctx, gw, output, edition)
-	var rejected *renderer.ValidationError
+	verdict, err := r.validateConfig(ctx, gw, in, output, edition)
 	switch {
-	case stderrors.As(err, &rejected):
-		findings := findingsOfAttributions(renderer.Attribute(output.JSON, output.Sources, rejected.Output))
-		r.handleValidationError(gw, before, rejected, rejectionSummary(findings))
-		return rejectionsByEndpoint(findings), nil
 	case err != nil:
 		return nil, r.handleValidatorUnavailable(gw, before, err)
+	case !verdict.OK:
+		r.handleValidationError(gw, before, rejectionMessage(verdict.Findings))
+		return rejectionsByEndpoint(verdict.Findings), nil
 	}
 	// Publish before recording the checksum as applied: status must never
 	// name a config that no ConfigMap holds.
@@ -814,31 +754,35 @@ func (r *KrakenDGatewayReconciler) markDeploymentUpdate(
 // already rejected this exact render for this edition on this gateway, the
 // remembered rejection is returned without running krakend check again: a
 // verdict is deterministic for (render, edition), so a CE-fallback flip
-// re-validates.
+// re-validates. The findings are rebuilt from the remembered rejection each
+// time: the memo key covers neither the order of a KrakenDEndpoint's entries
+// nor the rendered entries' sources, which the findings name.
 func (r *KrakenDGatewayReconciler) validateConfig(
-	ctx context.Context, gw *v1alpha1.KrakenDGateway, output *renderer.RenderOutput, edition v1alpha1.Edition,
-) error {
+	ctx context.Context, gw *v1alpha1.KrakenDGateway, in renderer.RenderInput,
+	output *renderer.RenderOutput, edition v1alpha1.Edition,
+) (configcheck.Verdict, error) {
 	key := client.ObjectKeyFromObject(gw)
 	input := hash.CombineHex(output.Checksum, string(edition))
-	if rejected := r.rejections.lookup(key, input); rejected != nil {
-		return rejected
+	if rejection := r.rejections.lookup(key, input); rejection != nil {
+		return configcheck.Rejected(rejection, in, output), nil
 	}
-	err := r.Validator.Validate(ctx, output.JSON, edition)
-	var rejected *renderer.ValidationError
+	verdict, err := r.Checker.CheckRendered(ctx, in, output)
 	switch {
-	case err == nil:
+	case err != nil:
+		// The validator could not judge the render: nothing to remember.
+	case verdict.OK:
 		r.rejections.forget(key)
-	case stderrors.As(err, &rejected):
+	default:
 		configValidationFailures.Inc()
-		r.rejections.remember(key, input, rejected)
-		logf.FromContext(ctx).Error(err, "validation rejected the rendered config")
+		r.rejections.remember(key, input, verdict.Rejection)
+		logf.FromContext(ctx).Error(verdict.Rejection, "validation rejected the rendered config")
 	}
-	return err
+	return verdict, err
 }
 
 // handleValidationError records a rejected configuration: ConfigValid=False
-// with the validator's output (bounded by truncateMessage to 4 KiB; the full
-// output is in the log). The Warning event fires only when the recorded
+// with message (bounded by truncateMessage to 4 KiB; the full output is in
+// the log). The Warning event fires only when the recorded
 // verdict changes, so a gateway that keeps rendering the same rejected config
 // stays quiet. The applied config is left alone; the status, with the derived
 // Ready and phase, is written at the end of Reconcile after the
@@ -847,10 +791,9 @@ func (r *KrakenDGatewayReconciler) validateConfig(
 func (r *KrakenDGatewayReconciler) handleValidationError(
 	gw *v1alpha1.KrakenDGateway,
 	before *v1alpha1.KrakenDGatewayStatus,
-	rejected *renderer.ValidationError,
-	summary string,
+	message string,
 ) {
-	message := truncateMessage(summary + "\n" + rejected.Error())
+	message = truncateMessage(message)
 	prev := meta.FindStatusCondition(before.Conditions, v1alpha1.ConditionConfigValid)
 	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
 		Type:               v1alpha1.ConditionConfigValid,
