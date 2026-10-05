@@ -440,3 +440,15 @@ func TestCheck_RunsAtMostTheConfiguredNumberOfValidationsAtOnce(t *testing.T) {
 		t.Errorf("peak concurrent validations = %d, want 2", got)
 	}
 }
+
+func TestNew_FewerThanOneSlotMeansOne(t *testing.T) {
+	c := New(newReader(endpoint("a", "/a")), renderer.New(renderer.Options{}), &fakeValidator{}, 0)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	verdict, err := c.CheckGateway(ctx, gateway(v1alpha1.EditionCE), nil)
+
+	if err != nil || !verdict.OK {
+		t.Fatalf("verdict = %+v, err = %v; want OK", verdict, err)
+	}
+}
