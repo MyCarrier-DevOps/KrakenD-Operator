@@ -164,3 +164,11 @@ func TestFindingsFrom_EmptyOutputStillGivesAReason(t *testing.T) {
 		t.Errorf("findings = %+v, want one gateway finding saying the output was empty", got)
 	}
 }
+
+func TestFindingsFrom_OutputIsOneLine(t *testing.T) {
+	got := findingsFrom(nil, nil, nil, "first\n\n  second \r\nthird\n")
+
+	if len(got) != 1 || got[0].Message != "first; second; third" {
+		t.Errorf("findings = %+v, want the lines joined with \"; \"", got)
+	}
+}
