@@ -2526,8 +2526,10 @@ func TestGatewayAdmission_ChangedTerminationGracePeriodIsRechecked(t *testing.T)
 		resp.Result.Details.Causes[0].Field != "spec.openapi.readinessProbe.terminationGracePeriodSeconds" {
 		t.Errorf("readiness grace 30 -> 60: %+v, want 422 on its terminationGracePeriodSeconds", resp.Result)
 	}
-	if resp := review(t, &GatewayValidator{}, "alice", old.DeepCopy(), old); !resp.Allowed {
-		t.Errorf("unchanged probe denied: %+v", resp.Result)
+	scaled := old.DeepCopy()
+	scaled.Spec.Replicas = ptr.To[int32](3)
+	if resp := review(t, &GatewayValidator{}, "alice", scaled, old); !resp.Allowed {
+		t.Errorf("unrelated edit with an unchanged probe denied: %+v", resp.Result)
 	}
 }
 
