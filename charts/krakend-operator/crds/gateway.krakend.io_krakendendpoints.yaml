@@ -153,6 +153,16 @@ spec:
                           method:
                             description: Method overrides the endpoint method for
                               this backend.
+                            enum:
+                            - GET
+                            - POST
+                            - PUT
+                            - PATCH
+                            - DELETE
+                            - OPTIONS
+                            - HEAD
+                            - CONNECT
+                            - TRACE
                             type: string
                           policyRef:
                             description: PolicyRef references a KrakenDBackendPolicy
