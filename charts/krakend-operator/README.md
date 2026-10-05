@@ -4,8 +4,8 @@ Installs the [KrakenD Operator](https://github.com/MyCarrier-DevOps/KrakenD-Oper
 
 ## Prerequisites
 
-- Kubernetes 1.28+
-- Helm 3.x
+- Kubernetes 1.33+
+- Helm 3.18 or later (older releases default `helm template` and `helm lint` to Kubernetes capabilities below 1.33 and refuse the chart's `kubeVersion` unless given `--kube-version`)
 
 ## Install
 
