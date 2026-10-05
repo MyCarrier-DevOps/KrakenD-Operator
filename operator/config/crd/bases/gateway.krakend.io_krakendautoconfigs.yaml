@@ -248,6 +248,7 @@ spec:
                         type: string
                       type: array
                     method:
+                      default: GET
                       description: Method is the HTTP method. Defaults to GET.
                       enum:
                       - GET
@@ -266,7 +267,12 @@ spec:
                   required:
                   - endpoint
                   type: object
+                maxItems: 256
                 type: array
+                x-kubernetes-list-map-keys:
+                - endpoint
+                - method
+                x-kubernetes-list-type: map
               additionalEndpointsBasePath:
                 description: |-
                   AdditionalEndpointsBasePath overrides the auto-derived base path used to
