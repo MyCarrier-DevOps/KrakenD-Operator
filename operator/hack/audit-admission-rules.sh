@@ -53,6 +53,8 @@ def dur_problem($re; $max; $label):
   elif length > $max then "\($label) is longer than \($max) characters"
   elif overflows then "\($label) \(.) does not fit in 64 bits of nanoseconds"
   else empty end;
+# Why a value is outside an enum: $set lists the values the CRD allows.
+def enum_problem($label; $set): select(IN($set[]) | not) | "\($label) \(.)";
 def report(kind): select(.v | length > 0) | "\(kind) \(.id): \(.v | unique | join("; "))";
 '
 
@@ -66,6 +68,8 @@ jq "${jq_opts[@]}" "$jq_lib"'
     (if ($e.endpoint // "" | crd_test($path_re)) then empty else "\($p).endpoint \($e.endpoint)" end),
     (if (($e.backends // []) | length) == 0 then "\($p).backends is empty" else empty end),
     ($e.timeout // empty | dur_problem($go_re; 64; "\($p).timeout")),
-    ($e.cacheTTL // empty | dur_problem($go_re; 64; "\($p).cacheTTL"))
+    ($e.cacheTTL // empty | dur_problem($go_re; 64; "\($p).cacheTTL")),
+    ($e.outputEncoding // empty
+      | enum_problem("\($p).outputEncoding"; ["json", "json-collection", "yaml", "fast-json", "xml", "negotiate", "string", "no-op"]))
   ))
 ]} | report("KrakenDEndpoint")' "$work/endpoints.json"
