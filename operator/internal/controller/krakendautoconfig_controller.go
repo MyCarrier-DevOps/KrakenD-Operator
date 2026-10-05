@@ -814,6 +814,9 @@ func autoConfigStatusChanged(orig, cur *v1alpha1.KrakenDAutoConfigStatus) bool {
 }
 
 // reconcileEndpoints converges the KrakenDEndpoints ac controls to desired.
+// It writes the endpoints that are missing or differ first, and only then
+// deletes the ones no longer desired, so a failed write never takes a route
+// off the gateway.
 func (r *KrakenDAutoConfigReconciler) reconcileEndpoints(
 	ctx context.Context,
 	ac *v1alpha1.KrakenDAutoConfig,
@@ -825,6 +828,14 @@ func (r *KrakenDAutoConfigReconciler) reconcileEndpoints(
 		return changes, err
 	}
 	writes, stale := planEndpoints(controlled, desired)
+	for _, ep := range writes {
+		op, err := r.writeEndpoint(ctx, ac, ep)
+		if err != nil {
+			return changes, err
+		}
+		changes.count(op)
+	}
+
 	for i := range stale {
 		deleted, err := r.deleteEndpoint(ctx, &stale[i])
 		if err != nil {
@@ -833,14 +844,6 @@ func (r *KrakenDAutoConfigReconciler) reconcileEndpoints(
 		if deleted {
 			changes.deleted++
 		}
-	}
-
-	for _, ep := range writes {
-		op, err := r.writeEndpoint(ctx, ac, ep)
-		if err != nil {
-			return changes, err
-		}
-		changes.count(op)
 	}
 
 	return changes, nil
