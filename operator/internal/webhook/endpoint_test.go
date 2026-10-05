@@ -24,6 +24,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -553,5 +554,21 @@ func TestEndpointAdmission_FindingsBeyondTheCandidateGoOnTheEndpointsField(t *te
 	if len(causes) != 1 || causes[0].Field != "spec.endpoints" ||
 		!strings.Contains(causes[0].Message, "default/other spec.endpoints[0]: clashes; gateway: bad root") {
 		t.Errorf("causes = %+v, want one on spec.endpoints naming both findings", causes)
+	}
+}
+
+// A finding quoted in a denial is cut to the warning limit, on a rune boundary.
+func TestEndpointAdmission_DenialQuotingOtherFindingsIsBounded(t *testing.T) {
+	after := configcheck.Verdict{Findings: []configcheck.Finding{{Index: -1, Message: strings.Repeat("é", 2000)}}}
+	v := &EndpointValidator{Client: fakeClient(testGateway()), Checker: &scriptedChecker{
+		verdicts: []configcheck.Verdict{after},
+	}}
+
+	resp := review(t, v, "alice", testEndpoint("new", "/a"), nil)
+
+	msg := resp.Result.Details.Causes[0].Message
+	if len(msg) > 200+warningLimit || !utf8.ValidString(msg) {
+		t.Errorf("cause is %d bytes (valid UTF-8: %v), want at most %d bytes of findings, cut on a rune boundary",
+			len(msg), utf8.ValidString(msg), warningLimit)
 	}
 }
