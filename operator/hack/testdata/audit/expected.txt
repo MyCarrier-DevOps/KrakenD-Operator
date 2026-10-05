@@ -89,3 +89,4 @@ gateway a/routes-dots: GET /d/./e/ (a/route-dots1) vs GET /d/x/../e/ (a/route-do
 gateway a/routes-dup: GET /same (a/route-dup1) vs GET /same (a/route-dup2)
 gateway a/routes-gen2: GET /h/{id} (a/gen-a) vs GET /h/{name} (a/gen-b)
 gateway a/routes-self: GET /self/{id} (a/route-self) vs GET /self/{name} (a/route-self)
+KrakenDEndpoint a/hp-clash: GET /healthz is the health path of gateway a/hp
