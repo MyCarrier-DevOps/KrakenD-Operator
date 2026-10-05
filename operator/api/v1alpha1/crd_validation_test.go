@@ -380,5 +380,6 @@ func TestAutoConfigCRD_Rules(t *testing.T) {
 		{"override backend index", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, overrides: [{operationId: x, backends: [{index: -1}]}]}}`, "spec.overrides[0].backends[0].index"},
 		{"override duration", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, overrides: [{operationId: x, timeout: "30"}]}}`, "spec.overrides[0].timeout"},
 		{"override timeout overflows", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, overrides: [{operationId: x, timeout: "2562048h"}]}}`, "spec.overrides[0].timeout"},
+		{"override cacheTTL overflows", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, overrides: [{operationId: x, cacheTTL: "99999999999s"}]}}`, "spec.overrides[0].cacheTTL"},
 	})
 }
