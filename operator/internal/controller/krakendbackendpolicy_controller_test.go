@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 )
@@ -608,7 +609,7 @@ func TestPolicyReconcile_TerminatingPolicyIsHeldUntilUnreferenced(t *testing.T) 
 	}}
 	ref := referencingEndpoint("uses-p", "p")
 	c := fakeClientBuilder().WithObjects(policy, ref).WithStatusSubresource(policy).Build()
-	r := &KrakenDBackendPolicyReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
+	r := &KrakenDBackendPolicyReconciler{Client: c, APIReader: c, Scheme: testScheme(), Recorder: fakeRecorder()}
 	key := client.ObjectKeyFromObject(policy)
 	reconcile := func() {
 		t.Helper()
@@ -635,5 +636,30 @@ func TestPolicyReconcile_TerminatingPolicyIsHeldUntilUnreferenced(t *testing.T) 
 	reconcile()
 	if err := c.Get(context.Background(), key, &got); !apierrors.IsNotFound(err) {
 		t.Errorf("unreferenced terminating policy: Get err = %v, want NotFound", err)
+	}
+}
+
+// A reference the cache has not seen yet must keep the policy: the finalizer is
+// only released after an uncached list finds no reference.
+func TestPolicyReconcile_StaleCacheDoesNotReleaseAReferencedPolicy(t *testing.T) {
+	policy := &v1alpha1.KrakenDBackendPolicy{ObjectMeta: metav1.ObjectMeta{
+		Name: "p", Namespace: "default", Finalizers: []string{v1alpha1.PolicyProtectionFinalizer},
+	}}
+	cached := fakeClientBuilder().WithObjects(policy).WithStatusSubresource(policy).Build()
+	// The API server's view has no field index, as a real one has none for a CRD.
+	live := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(referencingEndpoint("just-created", "p")).Build()
+	r := &KrakenDBackendPolicyReconciler{Client: cached, APIReader: live, Scheme: testScheme(), Recorder: fakeRecorder()}
+	key := client.ObjectKeyFromObject(policy)
+	if err := cached.Delete(context.Background(), policy); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	var got v1alpha1.KrakenDBackendPolicy
+	if err := cached.Get(context.Background(), key, &got); err != nil {
+		t.Fatalf("a policy referenced on the API server was released: %v", err)
 	}
 }

@@ -47,6 +47,9 @@ type KrakenDBackendPolicyReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
+	// APIReader reads uncached; the finalizer is released only after it
+	// confirms that no endpoint references the policy.
+	APIReader client.Reader
 }
 
 // +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendbackendpolicies,verbs=get;list;watch;create;update;patch;delete
