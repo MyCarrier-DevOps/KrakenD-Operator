@@ -2488,3 +2488,24 @@ func TestAutoConfigAdmission_OverrideOperationIDs(t *testing.T) {
 		})
 	}
 }
+
+func TestAutoConfigAdmission_WarnsOnMissingPolicyRefs(t *testing.T) {
+	ac := &v1alpha1.KrakenDAutoConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "ac", Namespace: "default"},
+		Spec: v1alpha1.KrakenDAutoConfigSpec{GatewayRef: v1alpha1.GatewayRef{Name: "gw"},
+			OpenAPI: v1alpha1.OpenAPISource{URL: "http://svc/openapi.json"}, Trigger: v1alpha1.TriggerOnChange,
+			Defaults: &v1alpha1.Defaults{PolicyRef: &v1alpha1.PolicyRef{Name: "missing-default"}},
+			Overrides: []v1alpha1.OperationOverride{
+				{OperationID: "getA", PolicyRef: &v1alpha1.PolicyRef{Name: "present"}}},
+		},
+	}
+	present := &v1alpha1.KrakenDBackendPolicy{ObjectMeta: metav1.ObjectMeta{Name: "present", Namespace: "default"}}
+	resp := review(t, &AutoConfigValidator{Client: fakeClient(testGateway(), present)}, "alice", ac, nil)
+	if !resp.Allowed {
+		t.Fatalf("denied: %+v", resp.Result)
+	}
+	if len(resp.Warnings) != 1 || !strings.Contains(resp.Warnings[0], "spec.defaults.policyRef") ||
+		!strings.Contains(resp.Warnings[0], "missing-default") {
+		t.Errorf("warnings = %v, want one naming spec.defaults.policyRef", resp.Warnings)
+	}
+}
