@@ -213,6 +213,11 @@ test: manifests generate fmt vet ## Run unit tests.
 test-integration: manifests generate fmt vet ## Run integration tests in an ephemeral K3s cluster via testcontainers.
 	go test -tags=integration -v -timeout 15m ./test/integration/
 
+# The admission audit's fixtures run offline; they need bash, jq and diff.
+.PHONY: test-audit
+test-audit: ## Run the admission audit against its fixtures.
+	bash hack/test-audit-admission-rules.sh
+
 # E2E tests use testcontainers-go with an ephemeral K3s cluster.
 # No external cluster setup is required.
 .PHONY: test-e2e
