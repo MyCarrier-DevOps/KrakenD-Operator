@@ -35,3 +35,4 @@ KrakenDGateway a/job-script: spec.postRestartJob.script is empty
 KrakenDGateway a/redis-password: spec.redis.connectionPool.password is not supported yet
 KrakenDGateway a/redis-tls: spec.redis.connectionPool.tls is not supported yet
 KrakenDGateway a/df-password-ee: spec.dragonfly.authentication.passwordFromSecret is not supported yet with edition EE
+KrakenDGateway a/tmp-pattern: spec.postRestartJob.tmpSizeLimit lots
