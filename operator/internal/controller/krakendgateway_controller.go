@@ -167,12 +167,11 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	deployedLicense := deployed.license
 	// The license decides whether this gateway renders and runs CE.
 	lic := r.reconcileLicense(ctx, &gw)
 	ceFallback := lic.ceFallback
 	edition := renderEdition(&gw, ceFallback)
-	licenseChecksum := lic.checksumFor(deployedLicense)
+	licenseChecksum := lic.checksumFor(deployed.license)
 
 	// Gather plugin ConfigMaps
 	pluginConfigMaps, missingPlugins, err := r.gatherPluginConfigMaps(ctx, &gw)
@@ -210,17 +209,9 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	cfg, configErr := r.reconcileConfig(ctx, &gw, before, output, edition)
 	r.reconcileCEFallbackCondition(&gw, output, edition)
 	image := appliedImage(&gw, edition)
-	// A held Deployment (no ConfigMap holds the applied config, or a plugin
-	// ConfigMap is missing) starts no rollout, so none is reported.
-	switch {
-	case len(missingPlugins) > 0:
-	case appliedKey(&gw, edition) != appliedBefore,
+	configChanged := appliedKey(&gw, edition) != appliedBefore ||
 		// The hold just lifted: the config applied meanwhile starts rolling now.
-		pluginsHeldBefore && cfg.appliedConfigMap != "" && deployed.config != gw.Status.ConfigChecksum:
-		r.reportConfigRollout(&gw)
-	case cfg.appliedConfigMap != "":
-		r.markDeploymentUpdate(&gw, image, output.PluginChecksum, licenseChecksum != deployedLicense)
-	}
+		pluginsHeldBefore && cfg.appliedConfigMap != "" && deployed.config != gw.Status.ConfigChecksum
 
 	// Accepted: the applied render sets every endpoint's verdict. On a pass
 	// that applies nothing (a rejected render, or a validator that could not
@@ -249,8 +240,9 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		heldBecause:     cfg.heldBecause,
 		missingPlugins:  missingPlugins,
 	}
-	infraErr := r.reconcileInfrastructure(ctx, &gw, infra)
-	r.inspectDeploymentStatus(ctx, &gw, infra)
+	note := r.noteRollout(&gw, infra, deployed, configChanged)
+	obs, infraErr := r.reconcileInfrastructure(ctx, &gw, infra)
+	r.inspectDeploymentStatus(ctx, &gw, infra, obs, note)
 
 	// Update final status
 	gw.Status.EndpointCount = int32(len(endpoints))
@@ -525,6 +517,8 @@ func (r *KrakenDGatewayReconciler) inspectDeploymentStatus(
 	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
 	want infraInputs,
+	obs deploymentObservation,
+	note *rolloutNote,
 ) {
 	log := logf.FromContext(ctx)
 	var dep appsv1.Deployment
@@ -732,43 +726,65 @@ func markConfigApplied(gw *v1alpha1.KrakenDGateway, checksum string, edition v1a
 	setConfigApplied(gw)
 }
 
+// noteRollout reports the rollout the infrastructure stage starts for a change
+// this pass detected, and returns the reason and message chosen for it. It
+// returns nil when the pass detects no change, including while the Deployment
+// is held: a held Deployment starts no rollout.
+func (r *KrakenDGatewayReconciler) noteRollout(
+	gw *v1alpha1.KrakenDGateway, in infraInputs, deployed deployedChecksums, configChanged bool,
+) *rolloutNote {
+	switch {
+	case len(in.missingPlugins) > 0:
+		return nil
+	case configChanged:
+		return r.reportConfigRollout(gw)
+	case in.configMapName != "":
+		return r.markDeploymentUpdate(gw, in.image, in.pluginChecksum, in.licenseChecksum != deployed.license)
+	}
+	return nil
+}
+
 // reportConfigRollout reports the rollout the infrastructure stage starts for
 // a newly applied config.
-func (r *KrakenDGatewayReconciler) reportConfigRollout(gw *v1alpha1.KrakenDGateway) {
+func (r *KrakenDGatewayReconciler) reportConfigRollout(gw *v1alpha1.KrakenDGateway) *rolloutNote {
+	note := &rolloutNote{reason: v1alpha1.ReasonConfigDeployed, message: "Configuration updated, rolling deployment"}
 	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
 		Type:               v1alpha1.ConditionProgressing,
 		Status:             metav1.ConditionTrue,
 		ObservedGeneration: gw.Generation,
-		Reason:             v1alpha1.ReasonConfigDeployed,
-		Message:            "Configuration updated, rolling deployment",
+		Reason:             note.reason,
+		Message:            note.message,
 	})
 	r.Recorder.Event(gw, corev1.EventTypeNormal, v1alpha1.ReasonConfigDeployed,
 		fmt.Sprintf("Configuration updated, checksum: %s", gw.Status.ConfigChecksum))
 	rollingRestarts.Inc()
+	return note
 }
 
 // markDeploymentUpdate reports the rollout the infrastructure stage is about
 // to start for an image, plugin or license change when no new config was
-// applied.
+// applied. It returns nil when none changed.
 func (r *KrakenDGatewayReconciler) markDeploymentUpdate(
 	gw *v1alpha1.KrakenDGateway, image, pluginChecksum string, licenseChanged bool,
-) {
+) *rolloutNote {
 	if gw.Status.ConfigChecksum == "" {
-		return
+		return nil
 	}
 	imageChanged := image != gw.Status.ActiveImage
 	pluginChanged := pluginChecksum != "" && pluginChecksum != gw.Status.PluginChecksum
 	if !imageChanged && !pluginChanged && !licenseChanged {
-		return
+		return nil
 	}
+	note := &rolloutNote{reason: "DeploymentUpdated", message: "Deployment updated for image, plugin or license change"}
 	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
 		Type:               v1alpha1.ConditionProgressing,
 		Status:             metav1.ConditionTrue,
 		ObservedGeneration: gw.Generation,
-		Reason:             "DeploymentUpdated",
-		Message:            "Deployment updated for image, plugin or license change",
+		Reason:             note.reason,
+		Message:            note.message,
 	})
 	rollingRestarts.Inc()
+	return note
 }
 
 // validateConfig checks the render as the given edition. When the validator
@@ -1111,7 +1127,7 @@ func (r *KrakenDGatewayReconciler) reconcileDeploymentUnlessHeld(
 	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
 	in infraInputs,
-) (gcErr, err error) {
+) (obs deploymentObservation, gcErr, err error) {
 	switch {
 	case in.appliedChecksum == "":
 		// Nothing has passed validation yet: a Deployment would have
@@ -1130,12 +1146,13 @@ func (r *KrakenDGatewayReconciler) reconcileDeploymentUnlessHeld(
 		// (FailedMount). Leave the Deployment as it is; PluginsResolved
 		// names the ConfigMaps, and their creation reconciles the gateway.
 	default:
-		if err := r.reconcileDeployment(ctx, gw, in); err != nil {
-			return nil, err
+		obs, err = r.reconcileDeployment(ctx, gw, in)
+		if err != nil {
+			return deploymentObservation{}, nil, err
 		}
 		gcErr = r.collectConfigMaps(ctx, gw, in.configMapName)
 	}
-	return gcErr, nil
+	return obs, gcErr, nil
 }
 
 // reconcileInfrastructure is the infrastructure stage. It creates or updates
@@ -1146,7 +1163,7 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
 	in infraInputs,
-) error {
+) (deploymentObservation, error) {
 	// ServiceAccount
 	sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{
 		Name: gw.Name, Namespace: gw.Namespace,
@@ -1155,7 +1172,7 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 		resources.BuildServiceAccount(sa, gw)
 		return controllerutil.SetControllerReference(gw, sa, r.Scheme)
 	}); err != nil {
-		return fmt.Errorf("reconciling serviceaccount: %w", err)
+		return deploymentObservation{}, fmt.Errorf("reconciling serviceaccount: %w", err)
 	}
 
 	// Service
@@ -1166,7 +1183,7 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 		resources.BuildService(svc, gw, in.ceRender)
 		return controllerutil.SetControllerReference(gw, svc, r.Scheme)
 	}); err != nil {
-		return fmt.Errorf("reconciling service: %w", err)
+		return deploymentObservation{}, fmt.Errorf("reconciling service: %w", err)
 	}
 
 	// PodDisruptionBudget
@@ -1177,12 +1194,12 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 		resources.BuildPDB(pdb, gw)
 		return controllerutil.SetControllerReference(gw, pdb, r.Scheme)
 	}); err != nil {
-		return fmt.Errorf("reconciling pdb: %w", err)
+		return deploymentObservation{}, fmt.Errorf("reconciling pdb: %w", err)
 	}
 
-	gcErr, err := r.reconcileDeploymentUnlessHeld(ctx, gw, in)
+	obs, gcErr, err := r.reconcileDeploymentUnlessHeld(ctx, gw, in)
 	if err != nil {
-		return err
+		return deploymentObservation{}, err
 	}
 
 	// HPA (only if autoscaling is configured; otherwise one the gateway
@@ -1195,26 +1212,26 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 			resources.BuildHPA(hpa, gw)
 			return controllerutil.SetControllerReference(gw, hpa, r.Scheme)
 		}); err != nil {
-			return fmt.Errorf("reconciling hpa: %w", err)
+			return deploymentObservation{}, fmt.Errorf("reconciling hpa: %w", err)
 		}
 	} else if err := r.deleteIfControlled(ctx, gw, &autoscalingv2.HorizontalPodAutoscaler{
 		ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace},
 	}); err != nil {
-		return err
+		return deploymentObservation{}, err
 	}
 
 	// Post-restart Job (only if enabled, and only after the Deployment has
 	// rolled out the applied config, image and plugins). Jobs are idempotent by name so each
 	// unique config revision produces exactly one Job.
 	if err := r.reconcilePostRestartJob(ctx, gw, in); err != nil {
-		return err
+		return deploymentObservation{}, err
 	}
 
 	// Dragonfly (only if enabled AND CRD is installed)
 	if gw.Spec.Dragonfly != nil && gw.Spec.Dragonfly.Enabled {
 		dfAvailable, dfErr := r.crdAvailable(dragonflyGVK)
 		if dfErr != nil {
-			return fmt.Errorf("checking Dragonfly CRD: %w", dfErr)
+			return deploymentObservation{}, fmt.Errorf("checking Dragonfly CRD: %w", dfErr)
 		}
 		// Without the CRD there is nothing to create: detectDragonflyState
 		// reports DragonflyReady=False/CRDNotInstalled.
@@ -1227,7 +1244,7 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 				resources.BuildDragonfly(df, gw)
 				return controllerutil.SetControllerReference(gw, df, r.Scheme)
 			}); err != nil {
-				return fmt.Errorf("reconciling dragonfly: %w", err)
+				return deploymentObservation{}, fmt.Errorf("reconciling dragonfly: %w", err)
 			}
 			r.recordDragonflyRunAsRootCondition(gw, df)
 		}
@@ -1244,7 +1261,7 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 		// conditions away during an in-progress/incomplete state.
 		meta.RemoveStatusCondition(&gw.Status.Conditions, v1alpha1.ConditionDragonflyRunAsRootUnacknowledged)
 		if err := r.deleteOptionalIfControlled(ctx, gw, dragonflyGVK, resources.DragonflyName(gw)); err != nil {
-			return err
+			return deploymentObservation{}, err
 		}
 		meta.RemoveStatusCondition(&gw.Status.Conditions, v1alpha1.ConditionDragonflyReady)
 		gw.Status.DragonflyAddress = ""
@@ -1255,7 +1272,7 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 	if gw.Spec.License != nil && gw.Spec.License.ExternalSecret.Enabled {
 		esAvailable, esErr := r.crdAvailable(externalSecretGVK)
 		if esErr != nil {
-			return fmt.Errorf("checking ExternalSecret CRD: %w", esErr)
+			return deploymentObservation{}, fmt.Errorf("checking ExternalSecret CRD: %w", esErr)
 		}
 		// Without the CRD there is nothing to create: reconcileLicense reports
 		// LicenseSecretUnavailable=True/CRDNotInstalled.
@@ -1268,18 +1285,18 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 				resources.BuildExternalSecret(es, gw)
 				return controllerutil.SetControllerReference(gw, es, r.Scheme)
 			}); err != nil {
-				return fmt.Errorf("reconciling externalsecret: %w", err)
+				return deploymentObservation{}, fmt.Errorf("reconciling externalsecret: %w", err)
 			}
 		}
 	} else if err := r.deleteOptionalIfControlled(ctx, gw, externalSecretGVK, resources.ExternalSecretName(gw)); err != nil {
-		return err
+		return deploymentObservation{}, err
 	}
 
 	// VirtualService (only if Istio is enabled AND CRD is installed)
 	if gw.Spec.Istio != nil && gw.Spec.Istio.Enabled {
 		vsAvailable, vsErr := r.crdAvailable(virtualServiceGVK)
 		if vsErr != nil {
-			return fmt.Errorf("checking VirtualService CRD: %w", vsErr)
+			return deploymentObservation{}, fmt.Errorf("checking VirtualService CRD: %w", vsErr)
 		}
 		if !vsAvailable {
 			r.setConditionWithEvent(gw, metav1.Condition{
@@ -1298,7 +1315,7 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 				resources.BuildVirtualService(vs, gw)
 				return controllerutil.SetControllerReference(gw, vs, r.Scheme)
 			}); err != nil {
-				return fmt.Errorf("reconciling virtualservice: %w", err)
+				return deploymentObservation{}, fmt.Errorf("reconciling virtualservice: %w", err)
 			}
 			r.setConditionWithEvent(gw, metav1.Condition{
 				Type:               v1alpha1.ConditionIstioConfigured,
@@ -1310,19 +1327,19 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 		}
 	} else {
 		if err := r.deleteOptionalIfControlled(ctx, gw, virtualServiceGVK, gw.Name); err != nil {
-			return err
+			return deploymentObservation{}, err
 		}
 		meta.RemoveStatusCondition(&gw.Status.Conditions, v1alpha1.ConditionIstioConfigured)
 	}
 
-	return gcErr
+	return obs, gcErr
 }
 
 // reconcileDeployment converges the gateway Deployment on the applied config
 // and records what it now runs.
 func (r *KrakenDGatewayReconciler) reconcileDeployment(
 	ctx context.Context, gw *v1alpha1.KrakenDGateway, in infraInputs,
-) error {
+) (deploymentObservation, error) {
 	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace}}
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, dep, func() error {
 		resources.BuildDeployment(dep, gw, resources.DeploymentInputs{
@@ -1335,11 +1352,11 @@ func (r *KrakenDGatewayReconciler) reconcileDeployment(
 		})
 		return controllerutil.SetControllerReference(gw, dep, r.Scheme)
 	}); err != nil {
-		return fmt.Errorf("reconciling deployment: %w", err)
+		return deploymentObservation{}, fmt.Errorf("reconciling deployment: %w", err)
 	}
 	gw.Status.ActiveImage = in.image
 	gw.Status.PluginChecksum = in.pluginChecksum
-	return nil
+	return deploymentObservation{dep: dep}, nil
 }
 
 // reconcilePostRestartJob creates a Job to run the user-provided bash script

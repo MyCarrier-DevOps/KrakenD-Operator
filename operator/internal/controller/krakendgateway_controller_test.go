@@ -893,7 +893,7 @@ func TestInspectDeploymentStatus_ProgressDeadlineExceeded(t *testing.T) {
 		Recorder: fakeRecorder(),
 	}
 
-	r.inspectDeploymentStatus(context.Background(), gw, convergedInputs(gw.Status.ConfigChecksum))
+	r.inspectDeploymentStatus(context.Background(), gw, convergedInputs(gw.Status.ConfigChecksum), deploymentObservation{}, nil)
 
 	if a := meta.FindStatusCondition(gw.Status.Conditions, v1alpha1.ConditionAvailable); a == nil ||
 		a.Status != metav1.ConditionFalse || a.Reason != v1alpha1.ReasonRolloutFailed {
@@ -941,7 +941,7 @@ func TestInspectDeploymentStatus_RolloutConverged(t *testing.T) {
 		Recorder: fakeRecorder(),
 	}
 
-	r.inspectDeploymentStatus(context.Background(), gw, convergedInputs(gw.Status.ConfigChecksum))
+	r.inspectDeploymentStatus(context.Background(), gw, convergedInputs(gw.Status.ConfigChecksum), deploymentObservation{}, nil)
 
 	if gw.Status.Replicas != 3 {
 		t.Errorf("expected Replicas=3, got %d", gw.Status.Replicas)
@@ -965,7 +965,7 @@ func TestInspectDeploymentStatus_DeploymentNotFound(t *testing.T) {
 		Recorder: fakeRecorder(),
 	}
 
-	r.inspectDeploymentStatus(context.Background(), gw, convergedInputs(gw.Status.ConfigChecksum))
+	r.inspectDeploymentStatus(context.Background(), gw, convergedInputs(gw.Status.ConfigChecksum), deploymentObservation{}, nil)
 
 	if gw.Status.Replicas != 0 {
 		t.Errorf("expected Replicas=0 (unchanged), got %d", gw.Status.Replicas)
@@ -1820,7 +1820,7 @@ func TestInspectDeploymentStatus_StalePodTemplateIsNotConverged(t *testing.T) {
 	c := fakeClientBuilder().WithObjects(gw, dep).Build()
 	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
 
-	r.inspectDeploymentStatus(context.Background(), gw, convergedInputs(gw.Status.ConfigChecksum))
+	r.inspectDeploymentStatus(context.Background(), gw, convergedInputs(gw.Status.ConfigChecksum), deploymentObservation{}, nil)
 
 	progressing := meta.FindStatusCondition(gw.Status.Conditions, v1alpha1.ConditionProgressing)
 	if progressing == nil || progressing.Status != metav1.ConditionTrue {
@@ -1840,7 +1840,7 @@ func TestInspectDeploymentStatus_SurplusOldReplicasAreNotConverged(t *testing.T)
 	c := fakeClientBuilder().WithObjects(gw, dep).Build()
 	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
 
-	r.inspectDeploymentStatus(context.Background(), gw, convergedInputs(gw.Status.ConfigChecksum))
+	r.inspectDeploymentStatus(context.Background(), gw, convergedInputs(gw.Status.ConfigChecksum), deploymentObservation{}, nil)
 
 	progressing := meta.FindStatusCondition(gw.Status.Conditions, v1alpha1.ConditionProgressing)
 	if progressing == nil || progressing.Status != metav1.ConditionTrue {

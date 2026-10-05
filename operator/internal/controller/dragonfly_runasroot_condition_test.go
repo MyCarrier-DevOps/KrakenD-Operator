@@ -170,7 +170,7 @@ func TestReconcileInfrastructure_DragonflyDisabledClearsStaleRunAsRootCondition(
 	r := &KrakenDGatewayReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder()}
 
 	in := infraInputs{appliedChecksum: "abc123", image: "krakend/krakend-ce:2.7.0"}
-	if err := r.reconcileInfrastructure(context.Background(), gw, in); err != nil {
+	if _, err := r.reconcileInfrastructure(context.Background(), gw, in); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
