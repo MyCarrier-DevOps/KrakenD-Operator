@@ -1840,7 +1840,7 @@ func evaluateEmbedded(t *testing.T, specJSON string, overrides ...v1alpha1.Opera
 func TestEvaluate_OverrideExtraConfigWithNonIdentifierOperationID(t *testing.T) {
 	// SanitizeName maps "_" to "-", and a leading digit is not a CUE
 	// identifier: the override label must be quoted.
-	for _, opID := range []string{"get_a"} {
+	for _, opID := range []string{"get_a", "get-a"} {
 		t.Run(opID, func(t *testing.T) {
 			spec := fmt.Sprintf(`{"paths":{"/a":{"get":{"operationId":%q,`+
 				`"responses":{"200":{"description":"OK"}}}}}}`, opID)
