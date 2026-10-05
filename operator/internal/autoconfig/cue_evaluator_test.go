@@ -2300,3 +2300,31 @@ func TestEvaluate_FailedOperationWithLabelMethodStaysFailed(t *testing.T) {
 		t.Errorf("expected listUsers failed and nothing skipped, got failed %+v skipped %+v", out.Failed, out.Skipped)
 	}
 }
+
+func TestEvaluate_EntryOperationIDsStayInStepWithEntries(t *testing.T) {
+	defs, err := EmbeddedCUEDefinitions()
+	if err != nil {
+		t.Fatalf("loading defs: %v", err)
+	}
+	spec := `{"paths": {
+		"/a": {"get": {"operationId": "getA", "responses": {"200": {"description": "OK"}}}},
+		"/b": {"head": {"operationId": "headB", "responses": {"200": {"description": "OK"}}}},
+		"/c": {"get": {"operationId": "getC", "responses": {"200": {"description": "OK"}}}}}}`
+
+	out, err := NewCUEEvaluator().Evaluate(context.Background(), CUEInput{
+		SpecData: []byte(spec), SpecFormat: v1alpha1.SpecFormatJSON, DefaultDefs: defs, ServiceName: "_spec",
+		DefaultHost: "http://svc:8080",
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+
+	if len(out.Entries) != 2 || len(out.entryOperationIDs) != 2 {
+		t.Fatalf("entries = %d, entryOperationIDs = %v, want 2 of each", len(out.Entries), out.entryOperationIDs)
+	}
+	for i, e := range out.Entries {
+		if got, want := out.entryOperationIDs[i], out.OperationIDs[e.Endpoint+":"+e.Method]; got != want {
+			t.Errorf("entry %s has entryOperationIDs[%d] = %q, want %q", e.Endpoint, i, got, want)
+		}
+	}
+}
