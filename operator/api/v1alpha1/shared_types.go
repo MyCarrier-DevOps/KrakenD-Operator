@@ -196,6 +196,10 @@ const (
 	// backoff.
 	ReasonValidatorUnavailable = "ValidatorUnavailable"
 
+	// ReasonPolicyDeletionBlocked is the event reason for a KrakenDBackendPolicy
+	// that is being deleted while a KrakenDEndpoint still references it.
+	ReasonPolicyDeletionBlocked = "DeletionBlocked"
+
 	// ResolvedRefs reasons.
 	ReasonRefsResolved    = "RefsResolved"
 	ReasonGatewayNotFound = "GatewayNotFound"
