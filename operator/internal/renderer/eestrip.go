@@ -17,6 +17,8 @@ limitations under the License.
 package renderer
 
 import (
+	_ "embed"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"slices"
@@ -37,38 +39,39 @@ import (
 // honors its send_body_on_redirect: its EE settings (client_tls,
 // proxy_address, no_redirect) change where and how a backend is reached, and
 // dropping them must be visible.
-var (
-	eeOnlyServiceNamespaces = namespaceSet(
-		"ai/mcp", "auth/api-keys", "auth/basic", "documentation/openapi", "documentation/postman",
-		"governance/processors", "governance/quota", "grpc", "modifier/request-body-extractor",
-		"modifier/response-headers", "qos/ratelimit/service", "qos/ratelimit/service/redis",
-		"qos/ratelimit/tiered", "redis", "server/static-filesystem", "server/virtualhost",
-		"telemetry/moesif", "telemetry/newrelic", "telemetry/opentelemetry-security",
-	)
-	eeOnlyEndpointNamespaces = namespaceSet(
-		"ai/mcp", "auth/api-keys", "auth/basic", "documentation/openapi", "documentation/postman",
-		"governance/quota", "modifier/jmespath", "modifier/request-body-extractor",
-		"modifier/request-body-extractor/early", "modifier/request-body-generator", "modifier/response-body",
-		"modifier/response-body-generator", "plugin/middleware", "qos/ratelimit/router/redis",
-		"qos/ratelimit/tiered", "security/policies", "validation/response-json-schema", "websocket",
-	)
-	eeOnlyBackendNamespaces = namespaceSet(
-		"ai/llm", "auth/aws-sigv4", "auth/gcp", "auth/ntlm", "backend/conditional", "backend/grpc",
-		"backend/http/client", "backend/pubsub/publisher/kafka", "backend/pubsub/subscriber/kafka",
-		"backend/soap", "backend/static-filesystem", "governance/quota", "modifier/body-generator",
-		"modifier/jmespath", "modifier/request-body-generator", "modifier/response-body",
-		"modifier/response-body-generator", "plugin/middleware", "qos/circuit-breaker/http",
-		"security/policies", "telemetry/logging", "validation/response-json-schema", "workflow",
-	)
-)
+//
+//go:embed eeonly_namespaces.json
+var eeOnlyNamespacesFile []byte
 
-// ceDroppedEndpointNamespaces are the Enterprise-only entry namespaces every
-// CE render (CE edition or CE fallback) drops without listing them:
-// documentation/openapi, which AutoConfig generates on every endpoint and
-// only KrakenD Enterprise publishes. Dropping it changes nothing the gateway
-// serves, so EEOnlyNamespaces leaves it out, admission does not reject it,
-// and a CE fallback does not report it per endpoint.
-var ceDroppedEndpointNamespaces = namespaceSet("documentation/openapi")
+// eeOnlyData is eeonly_namespaces.json: per NamespaceLevel, the namespaces
+// only KrakenD Enterprise implements, and those of them every CE render drops
+// without listing them. hack/audit-admission-rules.sh reads the same file, so
+// the audit, admission and both CE renders judge one list.
+type eeOnlyData struct {
+	EnterpriseOnly map[NamespaceLevel][]string `json:"enterpriseOnly"`
+	CERenderDrops  map[NamespaceLevel][]string `json:"ceRenderDrops"`
+}
+
+var eeOnlyLists = func() eeOnlyData {
+	var lists eeOnlyData
+	if err := json.Unmarshal(eeOnlyNamespacesFile, &lists); err != nil {
+		panic("renderer: eeonly_namespaces.json: " + err.Error())
+	}
+	return lists
+}()
+
+var (
+	eeOnlyServiceNamespaces  = namespaceSet(eeOnlyLists.EnterpriseOnly[LevelService]...)
+	eeOnlyEndpointNamespaces = namespaceSet(eeOnlyLists.EnterpriseOnly[LevelEndpoint]...)
+	eeOnlyBackendNamespaces  = namespaceSet(eeOnlyLists.EnterpriseOnly[LevelBackend]...)
+	// ceDroppedEndpointNamespaces are the Enterprise-only entry namespaces
+	// every CE render (CE edition or CE fallback) drops without listing them:
+	// documentation/openapi, which AutoConfig generates on every endpoint and
+	// only KrakenD Enterprise publishes. Dropping it changes nothing the
+	// gateway serves, so EEOnlyNamespaces leaves it out, admission does not
+	// reject it, and a CE fallback does not report it per endpoint.
+	ceDroppedEndpointNamespaces = namespaceSet(eeOnlyLists.CERenderDrops[LevelEndpoint]...)
+)
 
 func namespaceSet(names ...string) map[string]struct{} {
 	set := make(map[string]struct{}, len(names))
