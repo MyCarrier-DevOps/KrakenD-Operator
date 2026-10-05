@@ -38,5 +38,7 @@
  {"metadata":{"namespace":"a","name":"ce-gw"},"spec":{"edition":"CE","config":{}}},
  {"metadata":{"namespace":"a","name":"ee-gw"},"spec":{"edition":"EE","config":{},"license":{"secretRef":{"name":"l","key":"k"}}}},
  {"metadata":{"namespace":"a","name":"hp-rawnohp"},"spec":{"edition":"CE","config":{"router":{"healthPath":"/healthz"},"extraConfig":{"router":{"auto_options":true}}}}},
- {"metadata":{"namespace":"a","name":"hp-rawstr"},"spec":{"edition":"CE","config":{"router":{"healthPath":"/healthz2"},"extraConfig":{"router":"x"}}}}
+ {"metadata":{"namespace":"a","name":"hp-rawstr"},"spec":{"edition":"CE","config":{"router":{"healthPath":"/healthz2"},"extraConfig":{"router":"x"}}}},
+ {"metadata":{"namespace":"a","name":"hp-badtype1"},"spec":{"edition":"CE","config":{"extraConfig":{"router":{"health_path":"/live","auto_options":"yes"}}}}},
+ {"metadata":{"namespace":"a","name":"hp-badtype2"},"spec":{"edition":"CE","config":{"extraConfig":{"router":{"disable_health":true,"health_path":5}}}}}
 ]}
