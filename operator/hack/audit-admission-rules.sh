@@ -87,6 +87,11 @@ def quantity_problem($label):
   else empty end;
 # The keys of an extra_config object that are in $names.
 def eeonly($names): [(. // {}) | keys[] | select(IN($names[]))];
+# The values the endpoint and AutoConfig enum fields allow.
+def output_encodings: ["json", "json-collection", "yaml", "fast-json", "xml", "negotiate", "string", "no-op"];
+def backend_encodings: ["json", "safejson", "fast-json", "xml", "rss", "string", "no-op", "yaml"];
+def discoveries: ["static", "dns", "dns-shared"];
+def backend_methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD", "CONNECT", "TRACE"];
 def report(kind): select(.v | length > 0) | "\(kind) \(.id): \(.v | unique | join("; "))";
 '
 
@@ -102,12 +107,12 @@ jq "${jq_opts[@]}" "$jq_lib"'
     ($e.timeout // empty | dur_problem($go_re; 64; "\($p).timeout")),
     ($e.cacheTTL // empty | dur_problem($go_re; 64; "\($p).cacheTTL")),
     ($e.outputEncoding // empty
-      | enum_problem("\($p).outputEncoding"; ["json", "json-collection", "yaml", "fast-json", "xml", "negotiate", "string", "no-op"])),
+      | enum_problem("\($p).outputEncoding"; output_encodings)),
     (($e.backends // []) | to_entries[] | .key as $j | .value as $b | "\($p).backends[\($j)]" as $q | (
-      ($b.encoding // empty | enum_problem("\($q).encoding"; ["json", "safejson", "fast-json", "xml", "rss", "string", "no-op", "yaml"])),
-      ($b.sd // empty | enum_problem("\($q).sd"; ["static", "dns", "dns-shared"])),
+      ($b.encoding // empty | enum_problem("\($q).encoding"; backend_encodings)),
+      ($b.sd // empty | enum_problem("\($q).sd"; discoveries)),
       ($b.method // empty
-        | enum_problem("\($q).method"; ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD", "CONNECT", "TRACE"])),
+        | enum_problem("\($q).method"; backend_methods)),
       (if $b.policyRef != null and ($b.policyRef.name // "") == "" then "\($q).policyRef.name is empty" else empty end)
     ))
   ))
