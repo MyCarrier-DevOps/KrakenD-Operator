@@ -18,6 +18,7 @@ package autoconfig
 
 import (
 	"bytes"
+	"context"
 	"slices"
 	"strings"
 	"testing"
@@ -81,5 +82,30 @@ func TestDereferenceParameters_ReportsRefCycle(t *testing.T) {
 	_, warnings, err := DereferenceParameters(spec)
 	if err != nil || len(warnings) != 1 || !strings.Contains(warnings[0], "chained $refs") {
 		t.Errorf("warnings = %q, err = %v", warnings, err)
+	}
+}
+
+func TestDereferenceParameters_ResolvesRefRewrittenFromExternalDocument(t *testing.T) {
+	main := []byte(`{"paths":{"/pets":{"get":{"operationId":"listPets",` +
+		`"parameters":[{"$ref":"common.json#/components/parameters/Limit"}],` +
+		`"responses":{"200":{"description":"OK"}}}}}}`)
+	common := []byte(`{"components":{"parameters":{"Limit":{"name":"limit","in":"query"}}}}`)
+	fetcher := &stubFetcher{docs: map[string][]byte{"https://api.example.com/common.json": common}}
+	resolved, _, err := ResolveExternalRefs(context.Background(), main,
+		"https://api.example.com/openapi.json", fetcher, FetchSource{})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+
+	out, warnings, err := DereferenceParameters(resolved)
+	if err != nil || len(warnings) != 0 {
+		t.Fatalf("DereferenceParameters: err=%v warnings=%v", err, warnings)
+	}
+	entries := evaluateEmbedded(t, string(out)).Entries
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries, want 1", len(entries))
+	}
+	if qs := entries[0].InputQueryStrings; !slices.Equal(qs, []string{"limit"}) {
+		t.Errorf("inputQueryStrings = %v, want [limit]", qs)
 	}
 }
