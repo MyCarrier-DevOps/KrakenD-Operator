@@ -732,8 +732,7 @@ func TestGatewayValidator_PodScopeRunAsUserZeroContainerOptOutStillAllowedViaSel
 }
 
 // TestGatewayValidator_PodScopeRunAsUserZeroExplicitTrueContainerOptOutRejected_JobLane
-// covers review round 3, C4(i): pins the 707166b behavior change for the
-// postRestartJob (job) lane. podSecurityContext{runAsUser:0,
+// pins the 707166b behavior change for the postRestartJob (job) lane. podSecurityContext{runAsUser:0,
 // runAsNonRoot:true} combined with a container-scope securityContext{
 // runAsNonRoot:false} (no container-scope runAsUser) must be REJECTED at
 // spec.postRestartJob.podSecurityContext.runAsUser: the pod scope's own
@@ -775,14 +774,14 @@ func TestGatewayValidator_PodScopeRunAsUserZeroExplicitTrueContainerOptOutReject
 	if !strings.Contains(err.Error(), "spec.postRestartJob.podSecurityContext.runAsUser") {
 		t.Errorf("expected the rejection to point at spec.postRestartJob.podSecurityContext.runAsUser, got: %v", err)
 	}
-	// Review round 4, D4a: this shape's rejection message is load-bearing —
-	// it is the ONLY message text the user ever sees when the pod scope's
-	// own explicit runAsNonRoot:true blocks a container-scope opt-out that
-	// would otherwise short-circuit the check. Without the "Unless the Job
-	// container carries its own runAsNonRoot: false" qualifier, the message
-	// would read as an unconditional promise that a container-scope opt-out
-	// always works — which S1 (the fix pinned by this very test) made
-	// false for exactly this shape. Asserting the substring here means a
+	// This shape's rejection message is load-bearing — it is the ONLY
+	// message text the user ever sees when the pod scope's own explicit
+	// runAsNonRoot:true blocks a container-scope opt-out that would otherwise
+	// short-circuit the check. Without the "Unless the Job container carries
+	// its own runAsNonRoot: false" qualifier, the message would read as an
+	// unconditional promise that a container-scope opt-out always works —
+	// which the behavior pinned by this very test made false for exactly
+	// this shape. Asserting the substring here means a
 	// future edit that drops or waters down that qualifier fails this test,
 	// not just a manual doc review.
 	if !strings.Contains(err.Error(), "Unless the Job container carries its own runAsNonRoot: false") {
@@ -1389,23 +1388,21 @@ func TestGatewayValidator_DragonflyRunAsUserZeroRatchetDisabledThenEnabledReject
 // row below sets runAsUser at BOTH scopes to different values, so the
 // admit/reject outcome flips depending on which scope effectively wins.
 //
-// Review round 3, C1: the first two rows below used to assert ADMITTED —
-// "container.runAsUser:999 must win over pod.runAsUser:0" was true for
-// effectiveRunAsRoot's OWN precedence (the primary container's effective uid
-// really is 999, non-root), but that is no longer the whole admission
-// picture: the independent pod-scope acknowledgment gate added in
-// validateRunAsRootConflict now separately rejects the unacknowledged
+// The first two rows below are rejection tests: "container.runAsUser:999 must
+// win over pod.runAsUser:0" holds for effectiveRunAsRoot's OWN precedence (the
+// primary container's effective uid really is 999, non-root), but that is not
+// the whole admission picture: the independent pod-scope acknowledgment gate
+// in validateRunAsRootConflict separately rejects the unacknowledged
 // pod-scope runAsUser:0, because that value is still rendered on the shared
 // pod-level securityContext every OTHER container/sidecar in the pod
 // inherits when it sets nothing of its own — a hole the primary container's
-// own non-root effective uid does nothing to close. They are rewritten
-// below as rejection tests. Cross-scope-precedence coverage (the CONTAINER
-// side of the precedence — a container-scope root request winning over a
-// SAFE pod-scope value) is still fully exercised by the two container-root
-// rows further down, which this change does not affect (see
+// own non-root effective uid does nothing to close. Cross-scope-precedence
+// coverage (the CONTAINER side of the precedence — a container-scope root
+// request winning over a SAFE pod-scope value) is exercised by the two
+// container-root rows further down (see
 // TestGatewayValidator_DragonflyPodScopeRunAsUserZeroWithNonZeroContainerRejected
 // and TestGatewayValidator_DragonflyContainerRootRecipeWithPodScopeRootStillAdmitted
-// below for the two new C1-specific tests).
+// below for the two pod-scope gate tests).
 func TestGatewayValidator_DragonflyEffectiveRunAsRootCrossScopePrecedence(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -1413,7 +1410,7 @@ func TestGatewayValidator_DragonflyEffectiveRunAsRootCrossScopePrecedence(t *tes
 		pod       *corev1.PodSecurityContext
 		wantErr   bool
 		reason    string
-		// wantDetail (review round 4, D4c), when non-empty, asserts the
+		// wantDetail, when non-empty, asserts the
 		// rejection message contains this substring — an empty wantDetail
 		// skips the check for rows where the message's exact conditional
 		// wording isn't load-bearing to this table's purpose.
@@ -1518,9 +1515,9 @@ func TestGatewayValidator_DragonflyEffectiveRunAsRootCrossScopePrecedence(t *tes
 }
 
 // TestGatewayValidator_DragonflyPodScopeRunAsUserZeroWithNonZeroContainerRejected
-// covers review round 3, C1's headline case directly (the reject-test the
-// review asked for by shape: c{999}+p{0} unset): a pod-scope runAsUser:0
-// with runAsNonRoot left unset must be REJECTED even when the container
+// covers the pod-scope gate's headline case directly (c{999}+p{0} unset): a
+// pod-scope runAsUser:0 with runAsNonRoot left unset must be REJECTED even
+// when the container
 // scope sets its own non-zero, non-root runAsUser (999) — the container's
 // own safety does nothing to acknowledge the pod-scope root request that is
 // still rendered on the shared pod-level securityContext for any OTHER
@@ -1554,7 +1551,7 @@ func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroWithNonZeroContainerReje
 }
 
 // TestGatewayValidator_DragonflyContainerRootRecipeWithPodScopeRootStillAdmitted
-// covers review round 3, C1's documented carve-out: the container-root
+// covers the pod-scope gate's documented carve-out: the container-root
 // recipe c{runAsUser:0,runAsNonRoot:false}+p{runAsUser:0} must remain
 // ADMITTED — the pod-scope gate's "unless the container scope carries its
 // own runAsUser: 0" clause routes this shape through the existing
