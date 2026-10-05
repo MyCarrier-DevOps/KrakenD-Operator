@@ -752,14 +752,16 @@ type syncResult struct {
 }
 
 // recordSync records a sync that reached its endpoint writes: the combined
-// checksum, the endpoint counts and lists, and the Synced condition, with
-// the Ready, phase and observedGeneration derived from it. LastSyncTime and
-// the EndpointsGenerated event mark a sync that changed something: new
-// inputs (a different combined checksum) or endpoint writes, so a
-// steady-state reconcile leaves both alone. Status is written only when it
-// differs from orig, the status read at the start of the reconcile. The
-// buffered input warnings are recorded once that write succeeds, before
-// EndpointsGenerated.
+// checksum, the endpoint counts and lists, and the Synced condition (True, or
+// False with reason OperationsFailed while res.failed is not empty) with the
+// Ready, phase and observedGeneration derived from it. The synced gauge
+// follows Synced. LastSyncTime and the EndpointsGenerated event mark a sync
+// that changed something: new inputs (a different combined checksum) or
+// endpoint writes, so a steady-state reconcile leaves both alone. Status is
+// written only when it differs from orig, the status read at the start of the
+// reconcile, and an OperationsFailed Warning event is recorded only with such
+// a write. The buffered input warnings are recorded once that write succeeds,
+// before EndpointsGenerated.
 func (r *KrakenDAutoConfigReconciler) recordSync(
 	ctx context.Context,
 	ac *v1alpha1.KrakenDAutoConfig,
@@ -781,7 +783,8 @@ func (r *KrakenDAutoConfigReconciler) recordSync(
 	synced := syncedCondition(res, ac.Generation)
 	meta.SetStatusCondition(&ac.Status.Conditions, synced)
 	setAutoConfigReadiness(ac)
-	if autoConfigStatusChanged(orig, &ac.Status) {
+	statusChanged := autoConfigStatusChanged(orig, &ac.Status)
+	if statusChanged {
 		if err := r.Status().Update(ctx, ac); err != nil {
 			return fmt.Errorf("updating final status: %w", err)
 		}
@@ -793,6 +796,9 @@ func (r *KrakenDAutoConfigReconciler) recordSync(
 	autoConfigSynced.WithLabelValues(ac.Namespace, ac.Name).Set(gauge)
 
 	warnings.emit(r.Recorder, ac)
+	if statusChanged && synced.Status != metav1.ConditionTrue {
+		r.Recorder.Event(ac, "Warning", v1alpha1.ReasonOperationsFailed, synced.Message)
+	}
 	if changed {
 		r.Recorder.Eventf(ac, "Normal", v1alpha1.ReasonEndpointsGenerated,
 			"Generated %d endpoints (%d created, %d updated, %d deleted, %d skipped)",
