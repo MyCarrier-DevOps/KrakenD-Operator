@@ -74,9 +74,11 @@ func validateCRDUpdate(t *testing.T, crdFile, objectYAML, oldYAML string) field.
 	if oldYAML == "" {
 		errs := apiservervalidation.ValidateCustomResource(nil, obj, schemaValidator)
 		errs = append(errs, listtype.ValidateListSetsAndMaps(nil, structural, obj)...)
-		celErrs, _ := celValidator.Validate(
-			context.Background(), nil, structural, obj, nil, celconfig.RuntimeCELCostBudget)
-		return append(errs, celErrs...)
+		return withCEL(errs, func() field.ErrorList {
+			celErrs, _ := celValidator.Validate(
+				context.Background(), nil, structural, obj, nil, celconfig.RuntimeCELCostBudget)
+			return celErrs
+		})
 	}
 
 	old := defaultedObject(t, structural, oldYAML)
@@ -86,9 +88,25 @@ func validateCRDUpdate(t *testing.T, crdFile, objectYAML, oldYAML string) field.
 	if len(listtype.ValidateListSetsAndMaps(nil, structural, old)) == 0 {
 		errs = append(errs, listtype.ValidateListSetsAndMaps(nil, structural, obj)...)
 	}
-	celErrs, _ := celValidator.Validate(context.Background(), nil, structural, obj, old,
-		celconfig.RuntimeCELCostBudget, cel.WithRatcheting(corr))
-	return append(errs, celErrs...)
+	return withCEL(errs, func() field.ErrorList {
+		celErrs, _ := celValidator.Validate(context.Background(), nil, structural, obj, old,
+			celconfig.RuntimeCELCostBudget, cel.WithRatcheting(corr))
+		return celErrs
+	})
+}
+
+// withCEL appends the CEL errors to errs, unless errs holds an error that makes
+// the API server skip CEL (the server's hasBlockingErr).
+func withCEL(errs field.ErrorList, celErrors func() field.ErrorList) field.ErrorList {
+	for _, err := range errs {
+		switch err.Type {
+		case field.ErrorTypeNotSupported, field.ErrorTypeRequired, field.ErrorTypeTooLong,
+			field.ErrorTypeTooMany, field.ErrorTypeTypeInvalid:
+			return append(errs, field.Invalid(nil, nil, "some validation rules were not checked because "+
+				"the object was invalid; correct the existing errors to complete validation"))
+		}
+	}
+	return append(errs, celErrors()...)
 }
 
 func defaultedObject(t *testing.T, structural *schema.Structural, objectYAML string) map[string]any {
