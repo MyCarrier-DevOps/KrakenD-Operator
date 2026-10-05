@@ -21,6 +21,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -298,4 +299,30 @@ func TestGatewayReconcile_FailedDeploymentWriteLeavesProgressingAlone(t *testing
 	}
 
 	requireProgressing(t, getGateway(t, s.c, s.gw), metav1.ConditionFalse, true)
+}
+
+func TestGatewayReconcile_RollingRestartsCountsOnlyTheWriteThatChangedTheTemplate(t *testing.T) {
+	s := serveGateway(t)
+	s.editSpec(t, func(spec *v1alpha1.KrakenDGatewaySpec) { spec.Image = "img:v2" })
+	base := testutil.ToFloat64(rollingRestarts)
+	restarts := func() float64 { return testutil.ToFloat64(rollingRestarts) - base }
+
+	s.failDeploymentWrites()
+	if err := reconcileGateway(t, s.r, s.gw); err == nil {
+		t.Fatal("a rejected Deployment update must fail the pass")
+	}
+	if got := restarts(); got != 0 {
+		t.Errorf("rollingRestarts rose by %v on a pass whose Deployment write failed, want 0", got)
+	}
+
+	s.r.Client = s.c
+	s.reconcile(t)
+	if got := restarts(); got != 1 {
+		t.Errorf("rollingRestarts rose by %v after the write that rolled the pods, want 1", got)
+	}
+
+	s.reconcile(t)
+	if got := restarts(); got != 1 {
+		t.Errorf("rollingRestarts rose by %v after a pass that wrote nothing, want it still 1", got)
+	}
 }
