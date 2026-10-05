@@ -512,3 +512,24 @@ func TestExternalRefs_ListsDistinctNonLocalRefs(t *testing.T) {
 		t.Errorf("refs = %v, want %v", refs, want)
 	}
 }
+
+func TestExternalRefs_IgnoresExamplePayloads(t *testing.T) {
+	cases := []struct {
+		name string
+		spec string
+		want []string
+	}{
+		{"example value", `{"example":{"$ref":"not-a-ref.json"}}`, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			refs, err := ExternalRefs([]byte(tc.spec))
+			if err != nil {
+				t.Fatalf("ExternalRefs: %v", err)
+			}
+			if !slices.Equal(refs, tc.want) {
+				t.Errorf("refs = %v, want %v", refs, tc.want)
+			}
+		})
+	}
+}
