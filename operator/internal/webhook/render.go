@@ -29,8 +29,12 @@ import (
 // checkGatewayRender validates gw's config. A new gateway must render on its
 // own.
 func checkGatewayRender(
-	ctx context.Context, chk ConfigChecker, _, gw *v1alpha1.KrakenDGateway,
+	ctx context.Context, chk ConfigChecker, old, gw *v1alpha1.KrakenDGateway,
 ) (admission.Warnings, error) {
+	if old != nil {
+		_, err := chk.CheckGateway(ctx, gw, nil)
+		return nil, checkErr(err)
+	}
 	root, err := chk.CheckIsolated(ctx, gw, nil)
 	if err != nil || root.OK {
 		return nil, checkErr(err)
