@@ -111,6 +111,7 @@ type BackendSpec struct {
 	Method string `json:"method,omitempty"`
 
 	// Encoding selects the backend response encoding.
+	// +kubebuilder:validation:Enum=json;safejson;fast-json;xml;rss;string;no-op;yaml
 	Encoding string `json:"encoding,omitempty"`
 
 	// SD selects the service discovery provider (e.g. "static", "dns").
