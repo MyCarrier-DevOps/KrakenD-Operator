@@ -339,7 +339,7 @@ func NewValidators(c client.Client, checker ConfigChecker, operatorUsername stri
 	return Validators{
 		Gateway:    &GatewayValidator{Client: c, Checker: checker},
 		Endpoint:   &EndpointValidator{Client: c, Checker: checker, OperatorUsername: operatorUsername},
-		Policy:     &PolicyValidator{Client: c},
+		Policy:     &PolicyValidator{Client: c, Checker: checker},
 		AutoConfig: &AutoConfigValidator{Client: c},
 	}
 }
