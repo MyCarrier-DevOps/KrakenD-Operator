@@ -195,5 +195,8 @@ jq "${jq_opts[@]}" "$jq_lib"'
     ($a.outputEncoding // empty | enum_problem("\($p).outputEncoding"; output_encodings)),
     ($a.encoding // empty | enum_problem("\($p).encoding"; backend_encodings)),
     (($a.backends // []) | to_entries[] | .key as $j | .value | backend_problems("\($p).backends[\($j)]"))
+  )),
+  (($s.overrides // []) | to_entries[] | .key as $i | .value as $o | "spec.overrides[\($i)]" as $p | (
+    ($o.method // empty | enum_problem("\($p).method"; ["GET", "POST", "PUT", "PATCH", "DELETE"]))
   ))
 ]} | report("KrakenDAutoConfig")' "$work/autoconfigs.json"
