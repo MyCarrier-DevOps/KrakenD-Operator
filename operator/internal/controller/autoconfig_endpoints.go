@@ -318,7 +318,13 @@ func (r *KrakenDAutoConfigReconciler) precheck(
 	}
 
 	candidates := writes
-	for round := 0; len(candidates) > 0 && round < maxPrecheckRounds; round++ {
+	for round := 0; len(candidates) > 0; round++ {
+		if round == maxPrecheckRounds {
+			message := fmt.Sprintf("not written: the gateway config check still failed after %d rounds",
+				maxPrecheckRounds)
+			hold(rejected, candidates, message, errors.New(message))
+			return rejected, nil
+		}
 		verdict, err := r.Checker.CheckGateway(ctx, &gw, checkSet(candidates, stale, !held && len(rejected) == 0))
 		if err != nil {
 			return nil, &validatorUnavailableError{err: err}
@@ -359,14 +365,20 @@ func (r *KrakenDAutoConfigReconciler) unattributedFailure(
 	if !baseline.OK {
 		return rejected, nil
 	}
-	for _, ep := range candidates {
+	const prefix = "the change fails the gateway config check: "
+	hold(rejected, candidates, prefix+verdict.Summary(unattributedSummaryLimit),
+		errors.New(prefix+verdict.Summary(math.MaxInt)))
+	return rejected, nil
+}
+
+// hold records each endpoint in eps as failing the config check: message is
+// for the status, cause the full text for the log.
+func hold(rejected map[string]rejection, eps []*v1alpha1.KrakenDEndpoint, message string, cause error) {
+	for _, ep := range eps {
 		rejected[ep.Name] = rejection{
-			endpoint: ep, reason: v1alpha1.ReasonConfigValidationFailed,
-			message: "the change fails the gateway config check: " + verdict.Summary(unattributedSummaryLimit),
-			cause:   errors.New(verdict.Summary(math.MaxInt)),
+			endpoint: ep, reason: v1alpha1.ReasonConfigValidationFailed, message: message, cause: cause,
 		}
 	}
-	return rejected, nil
 }
 
 // checkSet is the replace set for one precheck round: the candidates, plus,
