@@ -95,8 +95,8 @@ type KrakenDAutoConfigReconciler struct {
 // runs the whole pipeline, so owned endpoints converge to the desired state
 // while the AutoConfig syncs successfully. While it is in Error, existing
 // endpoints are left as they are: a failed sync stops before touching them,
-// and a failed endpoint write keeps every stale endpoint. A successful reconcile that
-// finds nothing to change writes nothing.
+// and a failed endpoint write keeps every stale endpoint. A successful
+// reconcile that finds nothing to change writes nothing.
 func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
@@ -831,7 +831,7 @@ func autoConfigStatusChanged(orig, cur *v1alpha1.KrakenDAutoConfigStatus) bool {
 
 // reconcileEndpoints converges the KrakenDEndpoints ac controls to desired.
 // It writes the endpoints that are missing or differ first, attempting every
-// one whatever fails, and only then, when no write failed, deletes the ones
+// one whatever fails, and only then, when nothing failed, deletes the ones
 // no longer desired, so a failure never takes a route off the gateway. An
 // error means the pass could not start: listing failed.
 func (r *KrakenDAutoConfigReconciler) reconcileEndpoints(
