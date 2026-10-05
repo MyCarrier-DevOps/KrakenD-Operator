@@ -35,12 +35,15 @@ import (
 // claimEndpoints returns the endpoints ac controls, found by the controller
 // UID index, after adopting label-matched orphans the way a ReplicaSet adopts
 // pods: an endpoint carrying both managed labels for ac, no controller
-// reference and no deletion timestamp gets ac as its controller. An endpoint
-// controlled by another object is never touched. Both lists are scoped to
-// ac's namespace. Adoption failures are recorded in outcome.
+// reference and no deletion timestamp gets ac as its controller. An orphan
+// that is in desired is left for writeEndpoint, which takes it over in the
+// same write that updates it. An endpoint controlled by another object is
+// never touched. Both lists are scoped to ac's namespace. Adoption failures
+// are recorded in outcome.
 func (r *KrakenDAutoConfigReconciler) claimEndpoints(
 	ctx context.Context,
 	ac *v1alpha1.KrakenDAutoConfig,
+	desired []*v1alpha1.KrakenDEndpoint,
 	outcome *endpointOutcome,
 ) ([]v1alpha1.KrakenDEndpoint, error) {
 	var owned v1alpha1.KrakenDEndpointList
@@ -55,10 +58,14 @@ func (r *KrakenDAutoConfigReconciler) claimEndpoints(
 	); err != nil {
 		return nil, fmt.Errorf("listing labelled endpoints: %w", err)
 	}
+	wanted := make(map[string]bool, len(desired))
+	for _, ep := range desired {
+		wanted[ep.Name] = true
+	}
 	controlled := owned.Items
 	for i := range labelled.Items {
 		orphan := &labelled.Items[i]
-		if metav1.GetControllerOf(orphan) != nil || !orphan.DeletionTimestamp.IsZero() {
+		if metav1.GetControllerOf(orphan) != nil || !orphan.DeletionTimestamp.IsZero() || wanted[orphan.Name] {
 			continue
 		}
 		if err := controllerutil.SetControllerReference(ac, orphan, r.Scheme); err != nil {

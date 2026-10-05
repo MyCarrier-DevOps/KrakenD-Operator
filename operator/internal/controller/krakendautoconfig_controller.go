@@ -832,7 +832,7 @@ func (r *KrakenDAutoConfigReconciler) reconcileEndpoints(
 	desired []*v1alpha1.KrakenDEndpoint,
 ) (endpointOutcome, error) {
 	var outcome endpointOutcome
-	controlled, err := r.claimEndpoints(ctx, ac, &outcome)
+	controlled, err := r.claimEndpoints(ctx, ac, desired, &outcome)
 	if err != nil {
 		return outcome, err
 	}
