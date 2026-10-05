@@ -99,10 +99,9 @@ const (
 	ConditionPostRestartJobReadOnlyRootFilesystem = "PostRestartJobReadOnlyRootFilesystem"
 
 	// ConditionDragonflyRunAsRootUnacknowledged is an informational condition
-	// (review round 3, C2; renamed review round 4, D5 — the previous name
-	// "DragonflyRunAsRoot" read as a factual assertion that the container is
-	// running as root, when what the condition actually reports is whether
-	// an observed root request lacks an explicit acknowledgment) set
+	// (named for what it reports, whether an observed root request lacks an
+	// explicit acknowledgment, not as a factual assertion that the container
+	// is running as root) set
 	// whenever a Dragonfly is reconciled, reporting whether the BUILT
 	// Dragonfly CR's rendered securityContext maps carry an unacknowledged
 	// runAsUser: 0 request (see resources.DragonflyRunAsRootUnacknowledged).
@@ -180,13 +179,10 @@ const (
 
 	// ReasonDragonflyRunAsRootUnacknowledged/ReasonDragonflyRunAsRootAcknowledged
 	// back ConditionDragonflyRunAsRootUnacknowledged's True/False states
-	// respectively. ReasonDragonflyRunAsRootNoRequest (review round 4, D5)
-	// is a third, distinct False-state reason: ReasonDragonflyRunAsRootAcknowledged
-	// previously overloaded the False state for both an acknowledged root
-	// request AND the (far more common) no-root-request-at-all case,
-	// collapsing "someone explicitly opted into root and acknowledged it"
-	// and "this gateway never asked for root" into one indistinguishable
-	// reason string.
+	// respectively. ReasonDragonflyRunAsRootNoRequest is a third, distinct
+	// False-state reason, so "someone explicitly opted into root and
+	// acknowledged it" (ReasonDragonflyRunAsRootAcknowledged) and "this
+	// gateway never asked for root" are told apart.
 	ReasonDragonflyRunAsRootUnacknowledged = "RunAsRootUnacknowledged"
 	ReasonDragonflyRunAsRootAcknowledged   = "RunAsRootAcknowledged"
 	ReasonDragonflyRunAsRootNoRequest      = "NoRunAsRootRequest"
