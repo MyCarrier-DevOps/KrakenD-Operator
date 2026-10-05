@@ -253,5 +253,6 @@ func TestGatewayCRD_Rules(t *testing.T) {
 		{"too many plugin sources", gatewayHead + `edition: CE, config: {}, plugins: {sources: [` + strings.Repeat(`{configMapRef: {name: c, key: k}}, `, 33) + `]}}}`, "spec.plugins.sources"},
 		{"two PVC plugin sources", gatewayHead + `edition: CE, config: {}, plugins: {sources: [{persistentVolumeClaimRef: {claimName: a}}, {persistentVolumeClaimRef: {claimName: b}}]}}}`, "only one PVC plugin source"},
 		{"one PVC plugin source", gatewayHead + `edition: CE, config: {}, plugins: {sources: [{persistentVolumeClaimRef: {claimName: a}}, {configMapRef: {name: c, key: k}}]}}}`, ""},
+		{"redis password", gatewayHead + `edition: CE, config: {}, redis: {connectionPool: {addresses: ["redis:6379"], password: {name: s, key: p}}}}}`, "password is not supported yet"},
 	})
 }
