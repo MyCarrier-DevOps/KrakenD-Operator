@@ -254,8 +254,7 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	// Update final status
 	gw.Status.EndpointCount = int32(len(endpoints))
-	endpointsPerGateway.WithLabelValues(gw.Namespace, gw.Name).Set(float64(len(endpoints)))
-	gatewayInfo.WithLabelValues(gw.Namespace, gw.Name, string(gw.Spec.Edition), gw.Spec.Version).Set(1)
+	recordGatewayMetrics(&gw, len(endpoints))
 	setGatewayReadiness(&gw)
 
 	if err := r.updateStatusIfChanged(ctx, &gw, before); err != nil {

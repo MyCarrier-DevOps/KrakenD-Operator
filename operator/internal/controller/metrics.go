@@ -18,7 +18,10 @@ package controller
 
 import (
 	"github.com/prometheus/client_golang/prometheus"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
+
+	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 )
 
 var (
@@ -86,6 +89,20 @@ func deleteGatewayMetrics(namespace, name string) {
 	reconcileDuration.DeletePartialMatch(prometheus.Labels{
 		"controller": "gateway", "namespace": namespace, "name": name,
 	})
+}
+
+// recordGatewayMetrics sets the gateway's per-gateway series from its status.
+// gateway_info is replaced, not added to, so a version or edition change
+// leaves one series.
+func recordGatewayMetrics(gw *v1alpha1.KrakenDGateway, endpoints int) {
+	endpointsPerGateway.WithLabelValues(gw.Namespace, gw.Name).Set(float64(endpoints))
+	gatewayInfo.DeletePartialMatch(prometheus.Labels{"namespace": gw.Namespace, "name": gw.Name})
+	gatewayInfo.WithLabelValues(gw.Namespace, gw.Name, string(gw.Spec.Edition), gw.Spec.Version).Set(1)
+	valid := 0.0
+	if meta.IsStatusConditionTrue(gw.Status.Conditions, v1alpha1.ConditionConfigValid) {
+		valid = 1
+	}
+	gatewayConfigValid.WithLabelValues(gw.Namespace, gw.Name).Set(valid)
 }
 
 func init() { //nolint:gochecknoinits // required by prometheus metric registration
