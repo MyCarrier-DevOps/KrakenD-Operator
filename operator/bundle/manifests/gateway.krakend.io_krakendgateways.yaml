@@ -2511,6 +2511,9 @@ spec:
                       rejected by the validating webhook.
                     pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                     x-kubernetes-int-or-string: true
+                    x-kubernetes-validations:
+                    - message: must be a quantity that Kubernetes can decode
+                      rule: type(self) == int || isQuantity(self)
                   ttlSecondsAfterFinished:
                     description: |-
                       TTLSecondsAfterFinished controls automatic cleanup after Job
