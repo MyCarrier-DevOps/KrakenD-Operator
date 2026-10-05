@@ -945,7 +945,7 @@ flowchart TD
 
 ### Key Implementation Details
 
-**Admission** rejects new conflicts before they reach the renderer: `validateRouteUniqueness` rejects each added or changed entry whose `(route shape, method)` another entry on the gateway already has, in another KrakenDEndpoint or in the same one (`Duplicate value`, naming the owner and the clashing path). Endpoints with the same controller are exempt, because a KrakenDAutoConfig creates a renamed operation's endpoint before it deletes the old one. The detection below stays as the fallback for concurrent applies and for conflicts stored before the rule.
+**Admission** rejects new conflicts before they reach the renderer: `validateRouteUniqueness` rejects each added or changed entry whose `(route shape, method)` is new to the stored object and another entry on the gateway already has, in another KrakenDEndpoint or in the same one (`Duplicate value`, naming the owner and the clashing path). Endpoints with the same controller are exempt: while a KrakenDAutoConfig renames an operation, its new endpoint and the old one can share a route, and the admission cache can lag the deletion of the old one. Same-shape entries of one AutoConfig are thus caught by no admission rule, and the renderer reports the conflict. The denial names the claimant the renderer serves (oldest, then name, then entry position). A stored conflict is re-reported only when an edit adds a route the object did not have, or when the object moves to another gateway. The detection below stays as the fallback for concurrent applies and for conflicts stored before the rule. It also diverges in one case: it drops an endpoint with a missing `policyRef` before grouping, while admission still counts that endpoint as a claimant, so admission can reject a route the controller would serve until the policy exists.
 
 **Endpoint conflict detection** — The renderer (§10) iterates all `KrakenDEndpoint` resources for the gateway and flattens their `spec.endpoints[]` arrays. It groups entries by `(route shape, method)` across all CRs, where the route shape (`ConflictKey`) erases parameter names, so `/users/{id}` and `/users/{name}` collide. When multiple entries share a route shape and method, all but the oldest `KrakenDEndpoint`'s entry (by `creationTimestamp`) are excluded from the rendered config; between two entries of one `KrakenDEndpoint` the earlier spec entry wins. The renderer returns `ConflictedEndpoints` and `InvalidEndpoints` in `RenderOutput`. The gateway controller then writes its `Accepted` condition on each endpoint of the render, but only for a render that is the gateway's applied configuration (validated now, or unchanged since) and only when the verdict changes: `True` (`Accepted`) for an included endpoint, `True` (`PartiallyAccepted`) for one that lost some but not all of its routes, `False` (`EndpointConflict`) for one that lost all of them, and no `Accepted` condition for one excluded by a missing policy. `RenderOutput.EntryConflicts` names each lost entry and the `KrakenDEndpoint` that serves it (the endpoint itself when an earlier entry of its own won), and the gateway controller writes them to `status.conflicts` in the same optimistic-lock patch as `Accepted`. Only the conflicting entries are dropped; the losing endpoint's other entries are still rendered. A `Warning` event with reason `EndpointConflict` is emitted when an endpoint becomes fully conflicted, a `Warning` event with reason `PartiallyAccepted` when it becomes partly conflicted (from `Accepted`, from no condition, or from `EndpointConflict`), and a `Normal` `Accepted` event when it is served whole again.
 
@@ -1903,67 +1903,49 @@ func (v *GatewayValidator) ValidateCreate(
 **KrakenDEndpoint:**
 
 ```go
-func (v *EndpointValidator) ValidateCreate(
-    ctx context.Context, ep *v1alpha1.KrakenDEndpoint,
+// admit runs every rule against ep. old is the stored object on an update and
+// nil on a create. Literal (endpoint, method) uniqueness within one object is
+// enforced by the CRD (spec.endpoints is a map list), not here.
+func (v *EndpointValidator) admit(
+    ctx context.Context, old, ep *v1alpha1.KrakenDEndpoint,
 ) (admission.Warnings, error) {
-    var warnings admission.Warnings
-    var errs field.ErrorList
-
-    // Detect intra-CR duplicate (endpoint, method) pairs
-    seenPaths := make(map[string]struct{})
-    for i, entry := range ep.Spec.Endpoints {
-        key := entry.Method + " " + entry.Endpoint
-        if _, exists := seenPaths[key]; exists {
-            errs = append(errs, field.Duplicate(
-                field.NewPath("spec", "endpoints").Index(i),
-                key,
-            ))
-        }
-        seenPaths[key] = struct{}{}
-    }
-
-    // gatewayRef must exist (namespace-aware)
-    gwNS := ep.Spec.GatewayRef.ResolvedNamespace(ep.Namespace)
-    gw := &v1alpha1.KrakenDGateway{}
-    if err := v.Get(ctx, types.NamespacedName{
-        Name:      ep.Spec.GatewayRef.Name,
-        Namespace: gwNS,
-    }, gw); err != nil {
-        errs = append(errs, field.NotFound(
-            field.NewPath("spec", "gatewayRef", "name"),
-            ep.Spec.GatewayRef.Name,
-        ))
-    }
-
-    // policyRef must exist for each backend (namespace-aware)
-    for i, entry := range ep.Spec.Endpoints {
-        for j, be := range entry.Backends {
-            if be.PolicyRef != nil {
-                policy := &v1alpha1.KrakenDBackendPolicy{}
-                if err := v.Get(ctx, types.NamespacedName{
-                    Name:      be.PolicyRef.Name,
-                    Namespace: be.PolicyRef.ResolvedNamespace(ep.Namespace),
-                }, policy); err != nil {
-                    errs = append(errs, field.NotFound(
-                        field.NewPath("spec", "endpoints").Index(i).Child("backends").Index(j).Child("policyRef", "name"),
-                        be.PolicyRef.Name,
-                    ))
-                }
-            }
-        }
-    }
-
-    // Reject a changed entry whose method and route shape another entry on
-    // the gateway already has. The list comes from the field index
-    // (cluster-wide, not namespace-scoped); endpoints with ep's controller
-    // are exempt. changed holds the entries the request adds or edits.
-    dupErrs, err := v.validateRouteUniqueness(ctx, ep, changed, gw)
+    gw, errs, err := v.gatewayFor(ctx, old, ep) // gatewayRef must exist
     if err != nil {
-        return warnings, apierrors.NewInternalError(err)
+        return nil, unavailable(err)
     }
-    errs = append(errs, dupErrs...)
+    refErrs, err := v.validatePolicyRefs(ctx, old, ep) // only new policyRefs
+    if err != nil {
+        return nil, unavailable(err)
+    }
+    errs = append(errs, refErrs...)
 
-    return warnings, errs.ToAggregate()
+    // Another gateway judges every entry afresh.
+    stored := old
+    if movedGateway(old, ep) {
+        stored = nil
+    }
+    // Only entries that are new or differ from the stored entry with the same
+    // (endpoint, method) are judged, so a reorder or an unrelated edit never
+    // trips over a stored violation.
+    changed := changedEntries(stored, ep)
+    for _, i := range changed {
+        errs = append(errs, validateExtraConfigAudience(
+            field.NewPath("spec", "endpoints").Index(i).Child("extraConfig"),
+            ep.Spec.Endpoints[i].ExtraConfig)...)
+    }
+
+    // Reject a changed entry whose route is new to the stored object and that
+    // another entry on the gateway already has (same method and route shape).
+    // The list comes from the field index (cluster-wide, not
+    // namespace-scoped); endpoints with ep's controller are exempt.
+    if gw != nil {
+        dupErrs, err := v.validateRouteUniqueness(ctx, ep, newRoutes(stored, ep, changed), gw)
+        if err != nil {
+            return nil, unavailable(err)
+        }
+        errs = append(errs, dupErrs...)
+    }
+    return nil, invalid(kindEndpoint, ep.Name, errs)
 }
 ```
 
@@ -2116,38 +2098,22 @@ func (v *AutoConfigValidator) ValidateCreate(
             "is mutually exclusive with spec.urlTransform.addPathPrefix; set only one"))
     }
 
-    // additionalEndpoints validation
-    seenAdditional := make(map[string]struct{}, len(ac.Spec.AdditionalEndpoints))
+    // additionalEndpoints: the CRD enforces the rest (a required path that
+    // starts with "/", backends versus the shorthand, and uniqueness of
+    // (endpoint, method), since the list is a map list). The webhook checks
+    // the audience in each entry's extraConfig.
     for i, ae := range ac.Spec.AdditionalEndpoints {
-        p := field.NewPath("spec", "additionalEndpoints").Index(i)
-
-        // Rule 1: endpoint is required
-        if ae.Endpoint == "" {
-            errs = append(errs, field.Required(p.Child("endpoint"), "endpoint is required"))
-        } else if !strings.HasPrefix(ae.Endpoint, "/") {
-            // Rule 2: endpoint must start with "/"
-            errs = append(errs, field.Invalid(p.Child("endpoint"), ae.Endpoint,
-                "endpoint must start with '/'"))
-        }
-
-        // Rule 3: backends and shorthand fields are mutually exclusive
-        if len(ae.Backends) > 0 && (ae.Host != "" || ae.BackendURLPattern != "" || ae.Encoding != "") {
-            errs = append(errs, field.Invalid(p, "both",
-                "backends and the host/backendUrlPattern/encoding shorthand are mutually exclusive"))
-        }
-
-        // Rule 4: no duplicate (endpoint, method) within the list; method defaults to GET
-        method := ae.Method
-        if method == "" {
-            method = "GET"
-        }
-        key := method + " " + ae.Endpoint
-        if _, dup := seenAdditional[key]; dup {
-            errs = append(errs, field.Duplicate(p, key))
-        }
-        seenAdditional[key] = struct{}{}
+        errs = append(errs, validateExtraConfigAudience(
+            field.NewPath("spec", "additionalEndpoints").Index(i).Child("extraConfig"),
+            ae.ExtraConfig)...)
     }
 
+    // Admission does not compare route shapes between the endpoints one
+    // AutoConfig generates: they share a controller, which the
+    // KrakenDEndpoint webhook exempts from the route check. Same-shape paths
+    // (/h/{a} and /h/{b}) from one AutoConfig are therefore not rejected
+    // anywhere in admission; the renderer reports the newer one as
+    // EndpointConflict.
     return nil, errs.ToAggregate()
 }
 ```
