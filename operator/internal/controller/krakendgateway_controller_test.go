@@ -316,22 +316,25 @@ func TestGatewayReconcile_ValidationFailure(t *testing.T) {
 	}
 }
 
+// entriesEndpoint is a KrakenDEndpoint of the test gateway with one GET entry
+// per path, in the order given.
+func entriesEndpoint(name string, paths ...string) *v1alpha1.KrakenDEndpoint {
+	ep := &v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+		Spec:       v1alpha1.KrakenDEndpointSpec{GatewayRef: v1alpha1.GatewayRef{Name: "test-gw"}},
+	}
+	for _, path := range paths {
+		ep.Spec.Endpoints = append(ep.Spec.Endpoints, v1alpha1.EndpointEntry{
+			Endpoint: path, Method: "GET",
+			Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/"}},
+		})
+	}
+	return ep
+}
+
 func TestGatewayReconcile_RejectionNamesTheSpecEntry(t *testing.T) {
 	gw := testGateway()
-	entry := func(path string) v1alpha1.EndpointEntry {
-		return v1alpha1.EndpointEntry{Endpoint: path, Method: "GET",
-			Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/"}}}
-	}
-	a := &v1alpha1.KrakenDEndpoint{
-		ObjectMeta: metav1.ObjectMeta{Name: "a", Namespace: "default"},
-		Spec: v1alpha1.KrakenDEndpointSpec{GatewayRef: v1alpha1.GatewayRef{Name: gw.Name},
-			Endpoints: []v1alpha1.EndpointEntry{entry("/a")}},
-	}
-	b := &v1alpha1.KrakenDEndpoint{
-		ObjectMeta: metav1.ObjectMeta{Name: "b", Namespace: "default"},
-		Spec: v1alpha1.KrakenDEndpointSpec{GatewayRef: v1alpha1.GatewayRef{Name: gw.Name},
-			Endpoints: []v1alpha1.EndpointEntry{entry("/y"), entry("/x")}},
-	}
+	a, b := entriesEndpoint("a", "/a"), entriesEndpoint("b", "/y", "/x")
 	// The rendered order is /a, /x, /y: endpoints/1 is b's /x, its spec.endpoints[1].
 	rejecting := &mockValidator{validateErr: &renderer.ValidationError{
 		Output: "- at '/endpoints/1/extra_config': additional properties 'qos/circuit-breakr' not allowed",
