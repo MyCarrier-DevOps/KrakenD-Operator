@@ -64,6 +64,8 @@ func TestPolicyAdmission_Render(t *testing.T) {
 		{"referenced gateway already broken", referencing(), testPolicy(`{}`),
 			[]configcheck.Verdict{{OK: true}, failing("uses-p", 0, "bad"), failing("other", 0, "old")}, true,
 			"policy,gateway+policy,gateway", "gateway default/gw already fails validation"},
+		{"failing alone before and after: the gateways decide", referencing(), testPolicy(`{"x":{}}`),
+			[]configcheck.Verdict{bad, bad}, true, "policy,policy,gateway+policy", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
