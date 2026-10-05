@@ -74,7 +74,8 @@ spec:
                   that each KrakenDEndpoint CR is self-contained.
                 type: object
               endpoints:
-                description: Endpoints is the list of endpoint definitions.
+                description: Endpoints is the list of endpoint definitions, at least
+                  one.
                 items:
                   description: EndpointEntry defines a single KrakenD endpoint.
                   properties:
@@ -230,6 +231,7 @@ spec:
                   - endpoint
                   - method
                   type: object
+                minItems: 1
                 type: array
               gatewayRef:
                 description: GatewayRef references the KrakenDGateway this endpoint
