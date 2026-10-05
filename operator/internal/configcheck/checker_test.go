@@ -209,3 +209,15 @@ func TestCheck_WaitsForASlotUntilTheDeadline(t *testing.T) {
 		t.Errorf("waited %s past the deadline", time.Since(start))
 	}
 }
+
+func TestCheck_ReleasesTheSlotWhenDone(t *testing.T) {
+	c := newChecker(&fakeValidator{}, endpoint("a", "/a"))
+	for i := range 2 {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		verdict, err := c.CheckGateway(ctx, gateway(v1alpha1.EditionCE), nil)
+		cancel()
+		if err != nil || !verdict.OK {
+			t.Fatalf("check %d: verdict = %+v, err = %v; want OK", i, verdict, err)
+		}
+	}
+}
