@@ -262,6 +262,24 @@ func (f endpointFailuresError) Summary() string {
 // attribute a failing check to operations.
 const maxPrecheckRounds = 5
 
+// validatorUnavailableError marks a reconcileEndpoints failure caused by the
+// gateway config check being unavailable (a transient condition).
+type validatorUnavailableError struct{ err error }
+
+func (e *validatorUnavailableError) Error() string { return "gateway config check: " + e.err.Error() }
+func (e *validatorUnavailableError) Unwrap() error { return e.err }
+
+// endpointFailureReason is the Synced reason for a reconcileEndpoints error:
+// ValidatorUnavailable when the gateway config check could not run,
+// EndpointReconcileFailed otherwise.
+func endpointFailureReason(err error) string {
+	var unavailable *validatorUnavailableError
+	if errors.As(err, &unavailable) {
+		return v1alpha1.ReasonValidatorUnavailable
+	}
+	return v1alpha1.ReasonEndpointReconcileFailed
+}
+
 // precheck runs the gateway config check over the endpoints reconcileEndpoints
 // would write and returns those that fail it, keyed by name. Each round
 // checks the remaining candidates, attributes the check's findings to them by
@@ -299,7 +317,7 @@ func (r *KrakenDAutoConfigReconciler) precheck(
 	for round := 0; len(candidates) > 0 && round < maxPrecheckRounds; round++ {
 		verdict, err := r.Checker.CheckGateway(ctx, &gw, checkSet(candidates, stale, !held && len(rejected) == 0))
 		if err != nil {
-			return nil, fmt.Errorf("gateway config check: %w", err)
+			return nil, &validatorUnavailableError{err: err}
 		}
 		if verdict.OK {
 			return rejected, nil
