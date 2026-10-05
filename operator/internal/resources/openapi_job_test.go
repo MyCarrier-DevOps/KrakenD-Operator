@@ -348,8 +348,8 @@ func TestBuildPostRestartJob_HardenedContainerDefaults(t *testing.T) {
 	}
 }
 
-// TestBuildPostRestartJob_TmpSizeLimitOverride covers review id 3805157467
-// (#6): spec.postRestartJob.tmpSizeLimit must override the hardcoded 256Mi
+// TestBuildPostRestartJob_TmpSizeLimitOverride covers that
+// spec.postRestartJob.tmpSizeLimit must override the hardcoded 256Mi
 // default on the built /tmp emptyDir volume.
 func TestBuildPostRestartJob_TmpSizeLimitOverride(t *testing.T) {
 	qty := resource.MustParse("2Gi")
@@ -381,7 +381,7 @@ func TestBuildPostRestartJob_TmpSizeLimitOverride(t *testing.T) {
 }
 
 // TestMergeContainerSecurityContext_CapabilitiesAddOnlyPreservesDropAll
-// covers review id 3804144405 (#2): a user who sets only
+// covers that a user who sets only
 // capabilities.add must NOT lose the hardened capabilities.drop:[ALL]
 // baseline, even though Capabilities.Add/Drop are plain slices (no
 // patchMergeKey) and strategic-merge-patch therefore treats each of them,
@@ -426,7 +426,7 @@ func TestMergeContainerSecurityContext_CapabilitiesDropOverride(t *testing.T) {
 }
 
 // TestMergePodSecurityContext_RootUserDropsInheritedRunAsNonRoot covers
-// review id 3804144382 (#1, important/security): setting only
+// an important security rule: setting only
 // podSecurityContext.runAsUser: 0 (no explicit runAsNonRoot) must not leave
 // the contradictory pair {runAsUser:0, runAsNonRoot:true} — the kubelet
 // rejects that combination at container start
@@ -471,8 +471,7 @@ func TestMergePodSecurityContext_RootUserWithExplicitRunAsNonRootHonored(t *test
 // get a single non-zero element, bools become true, strings (including
 // named string kinds like Capability/ProcMountType/SeccompProfileType)
 // become a fixed sentinel, and integers become a fixed non-zero constant.
-// Used by the reflective round-trip merge tests (review id 3804144473,
-// #11) so the test automatically covers any field added to
+// Used by the reflective round-trip merge tests so the test automatically covers any field added to
 // SecurityContext/PodSecurityContext in a future k8s API bump without the
 // test itself needing to be updated.
 func fillNonZero(v reflect.Value) {
@@ -506,8 +505,7 @@ func fillNonZero(v reflect.Value) {
 	}
 }
 
-// TestMergeContainerSecurityContext_ReflectiveRoundTrip covers review id
-// 3804144473 (#11): every field of a fully-populated user SecurityContext
+// TestMergeContainerSecurityContext_ReflectiveRoundTrip covers that every field of a fully-populated user SecurityContext
 // must survive the merge unchanged (the user explicitly set every field, so
 // every field must win over the hardened default). Iterating fields via
 // reflection means this test keeps covering the FULL field set even after a
@@ -638,7 +636,7 @@ func TestPostRestartJobChecksum_ChangesWithSpec(t *testing.T) {
 }
 
 // TestPostRestartJobChecksum_UnsetVsExplicitDefaultWorkingDirConverge covers
-// the round-3 robustness finding: BuildPostRestartJob defaults an unset
+// the robustness rule: BuildPostRestartJob defaults an unset
 // WorkingDir to "/tmp" (postRestartWorkingDir), so a CR that leaves
 // WorkingDir unset and a CR that explicitly sets it to "/tmp" render a
 // byte-identical Job. The checksum must hash the EFFECTIVE (post-default)
@@ -709,11 +707,11 @@ func TestPostRestartJobChecksum_UnsetVsExplicitDefaultCommandConverge(t *testing
 	}
 }
 
-// TestPostRestartJobChecksum_UnsetVsExplicitDefaultImageConverge covers
-// review id 3811443558 (#2): BuildPostRestartJob defaults an unset Image to
+// TestPostRestartJobChecksum_UnsetVsExplicitDefaultImageConverge covers that
+// BuildPostRestartJob defaults an unset Image to
 // DefaultPostRestartJobImage, so a CR that leaves Image unset and a CR that
-// explicitly sets it to that same default must hash to the same checksum —
-// round-3's fix normalized Command/WorkingDir but missed Image.
+// explicitly sets it to that same default must hash to the same checksum,
+// as Command and WorkingDir already do.
 func TestPostRestartJobChecksum_UnsetVsExplicitDefaultImageConverge(t *testing.T) {
 	gw := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "ns"}}
 	unset := &v1alpha1.PostRestartJobSpec{Enabled: true, Script: "echo ok"}
@@ -746,10 +744,10 @@ func TestPostRestartJobChecksum_UnsetVsExplicitDefaultImageConverge(t *testing.T
 }
 
 // TestPostRestartJobChecksum_UnsetVsExplicitDefaultServiceAccountNameConverge
-// covers review id 3811443558 (#2): BuildPostRestartJob defaults an unset
+// covers that BuildPostRestartJob defaults an unset
 // ServiceAccountName to gw.Name, so a CR that leaves ServiceAccountName
 // unset and a CR that explicitly sets it to gw.Name must hash to the same
-// checksum — round-3's fix normalized Command/WorkingDir but missed this.
+// checksum, as Command and WorkingDir already do.
 func TestPostRestartJobChecksum_UnsetVsExplicitDefaultServiceAccountNameConverge(t *testing.T) {
 	gw := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "ns"}}
 	unset := &v1alpha1.PostRestartJobSpec{Enabled: true, Script: "echo ok"}
