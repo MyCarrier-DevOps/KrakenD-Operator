@@ -291,6 +291,7 @@ type GatewayConfig struct {
 	Name string `json:"name,omitempty"`
 
 	// Port is the KrakenD listen port (default 8080).
+	// +kubebuilder:validation:Maximum=65535
 	Port int32 `json:"port,omitempty"`
 
 	// ListenIP is the bind address (default "0.0.0.0").
