@@ -600,7 +600,12 @@ spec:
                   is "Periodic".
                 properties:
                   interval:
+                    description: Interval is the polling interval; at least 30s.
                     type: string
+                    x-kubernetes-validations:
+                    - message: periodic.interval must be at least 30s
+                      rule: '!self.matches(''^(0|(([0-9]+([.][0-9]*)?|[.][0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$'')
+                        || duration(self) >= duration(''30s'')'
                 required:
                 - interval
                 type: object
