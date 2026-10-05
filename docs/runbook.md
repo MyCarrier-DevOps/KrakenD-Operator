@@ -273,7 +273,8 @@ kubectl get events --field-selector involvedObject.name=<name> --sort-by='.lastT
 - Rollout timeout — check Deployment events
 - `PluginsResolved=False`, reason `ConfigMapNotFound` — a plugin ConfigMap is
   missing; the Deployment is held until it exists. Create it in the gateway's
-  namespace, and the operator rolls out the applied config.
+  namespace. A config applied during the hold (or a new gateway's first
+config) then rolls out; otherwise nothing rolls.
 - Config validation failure — the gateway keeps serving the last applied
   config (`status.configChecksum`), and its Deployment (unless a plugin
   ConfigMap is missing, which holds it), Service and other resources are
