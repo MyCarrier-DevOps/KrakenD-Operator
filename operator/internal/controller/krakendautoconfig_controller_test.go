@@ -5129,3 +5129,32 @@ func TestAttributeFindings_CauseCarriesEveryFindingInOrder(t *testing.T) {
 		t.Errorf("message = %q, want the least finding, alpha", got["test-ac-a"].message)
 	}
 }
+
+// readyEndpoint returns ep as the endpoint controller reports it at its
+// current generation: Ready with the given status and reason.
+func readyEndpoint(ep *v1alpha1.KrakenDEndpoint, status metav1.ConditionStatus, reason string) *v1alpha1.KrakenDEndpoint {
+	out := ep.DeepCopy()
+	out.Status.ObservedGeneration = out.Generation
+	out.Status.Conditions = []metav1.Condition{{
+		Type: v1alpha1.ConditionReady, Status: status, Reason: reason, LastTransitionTime: metav1.Now(),
+	}}
+	return out
+}
+
+func TestSummarizeReadiness(t *testing.T) {
+	a := readyEndpoint(generatedEndpoint("a", "/a"), metav1.ConditionTrue, "Ready")
+	updated := readyEndpoint(generatedEndpoint("b", "/b"), metav1.ConditionTrue, "Ready")
+	updated.Generation = 2 // changed since the endpoint controller last reported
+	gone := readyEndpoint(generatedEndpoint("c", "/c"), metav1.ConditionTrue, "Ready")
+
+	got := summarizeReadiness(
+		[]v1alpha1.KrakenDEndpoint{*a, *updated, *gone},
+		map[string]bool{"test-ac-d": true},
+		map[string]bool{"test-ac-c": true},
+	)
+
+	want := endpointReadiness{total: 3, ready: 1, notReady: []string{"test-ac-b: Pending", "test-ac-d: Pending"}}
+	if got.total != want.total || got.ready != want.ready || !slices.Equal(got.notReady, want.notReady) {
+		t.Errorf("summarizeReadiness = %+v, want %+v", got, want)
+	}
+}
