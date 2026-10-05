@@ -27,7 +27,6 @@ import (
 	"time"
 
 	"github.com/go-logr/logr/funcr"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
@@ -2798,8 +2797,7 @@ func TestGatewayReconcile_GatewayMetricsFollowTheSpec(t *testing.T) {
 	if got := testutil.ToFloat64(gatewayConfigValid.WithLabelValues(gw.Namespace, gw.Name)); got != 0 {
 		t.Errorf("gateway_config_valid = %v after a rejected config, want 0", got)
 	}
-	labels := prometheus.Labels{"namespace": gw.Namespace, "name": gw.Name}
-	if n := gatewayInfo.DeletePartialMatch(labels); n != 1 {
-		t.Errorf("gateway_info series for the gateway = %d, want 1 (the old version's series must go)", n)
+	if got := gatewayInfoVersions(t, gw.Namespace, gw.Name); !slices.Equal(got, []string{"2.13"}) {
+		t.Errorf("gateway_info versions = %v, want only [2.13] (the old version's series must go)", got)
 	}
 }
