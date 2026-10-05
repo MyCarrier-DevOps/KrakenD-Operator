@@ -452,7 +452,9 @@ type KrakenDAutoConfigStatus struct {
 	// config check (ConfigValidationFailed), or the API server rejected their
 	// endpoint (EndpointRejected). Each keeps the endpoint it had, if any,
 	// and while any is listed no stale endpoint is deleted. Synced is False
-	// with reason OperationsFailed while this list is not empty.
+	// while this list is not empty; its reason is OperationsFailed unless a
+	// later sync failed before its endpoint writes, which leaves this list
+	// as the last sync that reached them recorded it.
 	// +optional
 	// +listType=atomic
 	FailedOperations []OperationStatus `json:"failedOperations,omitempty"`
