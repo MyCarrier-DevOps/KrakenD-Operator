@@ -19,6 +19,7 @@ limitations under the License.
 package integration
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -124,6 +125,27 @@ func TestCRD_GatewayRules(t *testing.T) {
 
 // optionalOldSelf is beta and on by default in the 1.32 test cluster, and GA
 // (locked on) from 1.33, the floor.
+// A tmpSizeLimit whose exponent is beyond int32 takes the quantity parser
+// seconds to evaluate; the API server must refuse it on its pattern first.
+func TestCRD_GatewayRefusesAHugeQuantityExponentFast(t *testing.T) {
+	ns := testNamespace(t)
+	gw := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": v1alpha1.GroupVersion.String(),
+		"kind":       "KrakenDGateway",
+		"metadata":   map[string]any{"name": "huge-quantity", "namespace": ns},
+		"spec": map[string]any{
+			"version": "2.13", "edition": "CE", "config": map[string]any{},
+			"postRestartJob": map[string]any{"enabled": true, "script": "x", "tmpSizeLimit": "1e2147483648"},
+		},
+	}}
+	callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	err := k8sClient.Create(callCtx, gw)
+	if !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "tmpSizeLimit") {
+		t.Errorf("Create() error = %v, want a 422 naming tmpSizeLimit within 5s", err)
+	}
+}
+
 func TestCRD_GatewayDragonflyPasswordRatchets(t *testing.T) {
 	ns := testNamespace(t)
 	g := &v1alpha1.KrakenDGateway{
