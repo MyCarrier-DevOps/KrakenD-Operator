@@ -245,5 +245,6 @@ func TestGatewayCRD_Rules(t *testing.T) {
 		{"CE with a license", gatewayHead + `edition: CE, config: {}, license: {secretRef: {name: l, key: k}}}}`, "CE edition does not require"},
 		{"CE with fallback flag only", gatewayHead + `edition: CE, config: {}, license: {fallbackToCE: true}}}`, ""},
 		{"both license sources", gatewayHead + `edition: EE, config: {}, license: {secretRef: {name: l, key: k}, externalSecret: {enabled: true, secretStoreRef: {name: s}, remoteRef: {key: k}}}}}`, "mutually exclusive"},
+		{"EE with an empty secretRef name", gatewayHead + `edition: EE, config: {}, license: {secretRef: {name: "", key: k}}}}`, "edition EE requires"},
 	})
 }
