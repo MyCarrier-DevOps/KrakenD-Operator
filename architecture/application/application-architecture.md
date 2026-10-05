@@ -1822,21 +1822,44 @@ func DragonflyLabels(gw *v1alpha1.KrakenDGateway) map[string]string {
 
 **Package:** `internal/webhook/`
 
-The operator deploys a `ValidatingAdmissionWebhook` implementing all rules from operator architecture §15.
+The operator deploys four validating admission webhooks, one per kind, with `failurePolicy: Fail` on CREATE and UPDATE, implementing the rules in operator architecture §15. The CRD schema and CEL carry the rules an object decides alone, so the API server enforces them before any webhook runs. The webhooks keep what needs other objects, a rendered config, or the default-image context.
+
+### Schema rules
+
+The CRDs enforce, as markers on the types in `api/v1alpha1/`:
+
+- **KrakenDGateway:** KrakenD duration patterns on `config.timeout`, `cacheTTL`, `dnsCacheTTL`, `cors.maxAge` and `redis.connectionPool.dialTimeout`, port ranges, the `outputEncoding` enum, the `healthPath` pattern, the license sources (an EE gateway needs exactly one of `externalSecret` and `secretRef`, a CE gateway none), the OpenAPI sidecar port, a single PVC plugin source and the post-restart script rules.
+- **KrakenDEndpoint:** `spec.endpoints` is a map list keyed on (`endpoint`, `method`) with at least one entry, each entry has at least one backend, the path pattern, and duration patterns.
+- **KrakenDBackendPolicy:** the circuit breaker and rate limit ranges are minimums.
+- **KrakenDAutoConfig:** exactly one OpenAPI source, `hostMapping` with `configMapRef`, a Periodic interval of at least 30s, exclusive auth secrets, path patterns, enums and duration patterns on defaults, overrides and additional endpoints, and an `additionalEndpoints` map list keyed on (`endpoint`, `method`).
+
+Kubernetes 1.33 ratchets these rules: an update that leaves an already-invalid field unchanged is admitted. The webhooks below do not repeat any of them.
 
 ### Handler Structure
 
 ```go
 type GatewayValidator struct {
     client.Client
+    Checker ConfigChecker
 }
 
 type EndpointValidator struct {
     client.Client
+    Checker ConfigChecker
+    // APIReader reads uncached. Just before admitting, it re-reads each newly
+    // referenced policy, because the cached read at the start of the request
+    // can predate a deletion by the whole render check. Nil skips the re-read.
+    APIReader client.Reader
+    // OperatorUsername is the username the operator's own API requests carry.
+    // Its writes to endpoints a KrakenDAutoConfig controls skip the render
+    // check; empty disables the exemption.
+    OperatorUsername string
 }
 
 type PolicyValidator struct {
     client.Client
+    // Checker renders the policy alone and in every gateway that uses it.
+    Checker ConfigChecker
 }
 
 type AutoConfigValidator struct {
@@ -1844,160 +1867,129 @@ type AutoConfigValidator struct {
 }
 ```
 
-Each validator implements the `webhook.CustomValidator[T]` generic interface (controller-runtime v0.19+):
+Each validator implements `admission.CustomValidator` (controller-runtime v0.21), whose methods take a `runtime.Object` that the validator type-asserts with a checked comma-ok:
 
 ```go
-// Example: GatewayValidator implements CustomValidator[*v1alpha1.KrakenDGateway]
-type CustomValidator[T client.Object] interface {
-    ValidateCreate(ctx context.Context, obj T) (admission.Warnings, error)
-    ValidateUpdate(ctx context.Context, oldObj, newObj T) (admission.Warnings, error)
-    ValidateDelete(ctx context.Context, obj T) (admission.Warnings, error)
+type CustomValidator interface {
+    ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error)
+    ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error)
+    ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error)
 }
 ```
 
-All validators implement `ValidateUpdate` by delegating to the same structural checks as `ValidateCreate` (applied to `newObj`). This ensures updates cannot bypass validation (e.g., changing `gatewayRef` to a non-existent gateway, or adding an invalid `policyRef`).
+`ValidateDelete` is a no-op on every validator: none is registered for DELETE.
+
+### Admission mechanics
+
+Every validator follows the same rules (`admission.go`, `webhook.go`):
+
+- **Ratchet.** `ValidateUpdate` first admits an update to a terminating object that leaves the spec alone (`terminatingWithUnchangedSpec`, so a finalizer can be removed), then admits an update whose spec is unchanged without running a rule. A field rule rejects an update only for errors the stored object did not already have (`newErrors`, matched on the error's field, type, value and detail). References are checked only when added or changed, and endpoint entries are matched on (`endpoint`, `method`), so a reorder is not a change.
+- **Responses.** A rejected field is a `422 Invalid` with one cause per field error (`invalid`). A failed lookup, or a config check that cannot run or cannot get a validation slot, is a `500` (`unavailable`, `checkErr`): the request was not judged and is retried.
+- **Budget.** Every request stops its work after `admissionBudget` (12 s), inside the API server's 15 s `timeoutSeconds`, so the answer is a clear `500` and not a generic timeout.
+- **Render checks.** The validators depend on one port, `ConfigChecker`, implemented by the `configcheck.Checker` the gateway controller also uses:
+
+```go
+type ConfigChecker interface {
+    CheckGateway(ctx context.Context, gw *v1alpha1.KrakenDGateway,
+        replace []v1alpha1.KrakenDEndpoint) (configcheck.Verdict, error)
+    CheckIsolated(ctx context.Context, gw *v1alpha1.KrakenDGateway,
+        eps []v1alpha1.KrakenDEndpoint) (configcheck.Verdict, error)
+    CheckGatewayPolicy(ctx context.Context, gw *v1alpha1.KrakenDGateway,
+        policy *v1alpha1.KrakenDBackendPolicy) (configcheck.Verdict, error)
+    LintPolicy(ctx context.Context, policy *v1alpha1.KrakenDBackendPolicy) (configcheck.Verdict, error)
+}
+```
+
+A check renders the gateway with the change and lints it with `krakend check -n` plus the in-process route check. `ratchetRender` (`render.go`) turns verdicts into a decision: it rejects only when the config passes without the change and fails with it. When the config already fails, the failure is a warning, unless the change fails on an isolated baseline (the gateway root plus the change alone) where its own baseline passed. A denial is bounded: at most 20 causes, each cut to `warningLimit`, the rest folded into a summary.
 
 ### Validation Rules
 
-**KrakenDGateway:**
+**KrakenDGateway:** the webhook keeps the rules that need the default-image context or quantity arithmetic: the OpenAPI sidecar probe rules (when `spec.openapi.enabled`), the `runAsUser: 0` rules of `spec.postRestartJob` and `spec.dragonfly` (ratcheted on the stored security context), and a negative `spec.postRestartJob.tmpSizeLimit`. On a CE gateway it rejects what KrakenD CE accepts in `krakend check` and then ignores: Enterprise-only namespaces in `spec.config.extraConfig`, the typed fields `spec.redis`, `spec.config.documentation`, `spec.openapi.enabled` and `spec.dragonfly.enabled`, and an EE to CE switch while the gateway's endpoints or their policies use an Enterprise-only namespace. It warns about `spec.replicas` with `spec.autoscaling`, Redis and Dragonfly settings that never reach KrakenD, an enabled OpenAPI export or Dragonfly kept on a CE gateway, a `workingDir` outside `/tmp` while the root filesystem is read-only, and a `spec.version` other than the validator's minor.
 
 ```go
-func (v *GatewayValidator) ValidateCreate(
-    ctx context.Context, gw *v1alpha1.KrakenDGateway,
+// admit runs every rule against gw within the admission budget, then renders
+// its config. old is the stored object on an update and nil on a create.
+func (v *GatewayValidator) admit(
+    ctx context.Context, old, gw *v1alpha1.KrakenDGateway,
 ) (admission.Warnings, error) {
-    var errs field.ErrorList
+    ctx, cancel := context.WithTimeout(ctx, admissionBudget)
+    defer cancel()
 
-    // EE requires license configuration
-    if gw.Spec.Edition == v1alpha1.EditionEE {
-        if gw.Spec.License == nil ||
-            (!gw.Spec.License.ExternalSecret.Enabled && gw.Spec.License.SecretRef == nil) {
-            errs = append(errs, field.Required(
-                field.NewPath("spec", "license"),
-                "edition EE requires license.externalSecret.enabled or license.secretRef",
-            ))
-        }
+    warnings, errs := v.validate(gw, old)
+    if old != nil {
+        errs = newErrors(errs, v.storedErrors(gw, old))
     }
-
-    // CE must not have license configuration
-    if gw.Spec.Edition == v1alpha1.EditionCE && gw.Spec.License != nil {
-        if gw.Spec.License.ExternalSecret.Enabled || gw.Spec.License.SecretRef != nil {
-            errs = append(errs, field.Forbidden(
-                field.NewPath("spec", "license"),
-                "CE edition does not require license configuration",
-            ))
-        }
+    eeErrs, err := v.eeNamespacesOnCE(ctx, old, gw)
+    if err != nil {
+        return warnings, unavailable(err)
     }
-
-    // Mutually exclusive license sources
-    if gw.Spec.License != nil &&
-        gw.Spec.License.ExternalSecret.Enabled && gw.Spec.License.SecretRef != nil {
-        errs = append(errs, field.Invalid(
-            field.NewPath("spec", "license"),
-            "both",
-            "externalSecret and secretRef are mutually exclusive",
-        ))
+    errs = append(errs, eeErrs...)
+    errs = append(errs, eeFieldsOnCE(old, gw)...)
+    if len(errs) > 0 {
+        return warnings, invalid("KrakenDGateway", gw.Name, errs)
     }
-
-    // Only one PVC plugin source allowed
-    if gw.Spec.Plugins != nil {
-        pvcCount := 0
-        for _, src := range gw.Spec.Plugins.Sources {
-            if src.PersistentVolumeClaimRef != nil {
-                pvcCount++
-            }
-        }
-        if pvcCount > 1 {
-            errs = append(errs, field.Invalid(
-                field.NewPath("spec", "plugins", "sources"),
-                pvcCount,
-                "only one PVC plugin source is supported",
-            ))
-        }
-    }
-
-    return nil, errs.ToAggregate()
+    renderWarnings, err := checkGatewayRender(ctx, v.Checker, old, gw)
+    return append(append(warnings, renderWarnings...), versionWarning(gw, old)...), err
 }
 ```
+
+A create must render with the gateway root alone (`CheckIsolated`); an update is judged with the gateway's endpoints (`CheckGateway`). Root findings go on `spec.config`, findings about endpoints on `spec`.
 
 **KrakenDEndpoint:**
 
 ```go
-// admit runs every rule against ep. old is the stored object on an update and
-// nil on a create. Literal (endpoint, method) uniqueness within one object is
-// enforced by the CRD (spec.endpoints is a map list), not here.
+// admit runs every rule against ep within the admission budget, then re-reads
+// the policies ep newly references uncached. old is the stored object on an
+// update and nil on a create.
 func (v *EndpointValidator) admit(
     ctx context.Context, old, ep *v1alpha1.KrakenDEndpoint,
 ) (admission.Warnings, error) {
-    gw, errs, err := v.gatewayFor(ctx, old, ep) // gatewayRef must exist
+    ctx, cancel := context.WithTimeout(ctx, admissionBudget)
+    defer cancel()
+
+    warnings, err := v.check(ctx, old, ep)
+    if err != nil || v.APIReader == nil {
+        return warnings, err
+    }
+    // The cached read of a policy came before the render check, which can take
+    // seconds; a deletion that landed meanwhile would drop ep from the render.
+    errs, err := v.validatePolicyRefs(ctx, v.APIReader, old, ep)
     if err != nil {
         return nil, unavailable(err)
     }
-    refErrs, err := v.validatePolicyRefs(ctx, old, ep) // only new policyRefs
-    if err != nil {
-        return nil, unavailable(err)
+    if len(errs) > 0 {
+        return nil, invalid(kindEndpoint, ep.Name, errs)
     }
-    errs = append(errs, refErrs...)
-
-    // Another gateway judges every entry afresh.
-    stored := old
-    if movedGateway(old, ep) {
-        stored = nil
-    }
-    // Only entries that are new or differ from the stored entry with the same
-    // (endpoint, method) are judged, so a reorder or an unrelated edit never
-    // trips over a stored violation.
-    changed := changedEntries(stored, ep)
-    for _, i := range changed {
-        errs = append(errs, validateExtraConfigAudience(
-            field.NewPath("spec", "endpoints").Index(i).Child("extraConfig"),
-            ep.Spec.Endpoints[i].ExtraConfig)...)
-    }
-
-    // Reject a changed entry whose method and route shape another entry on
-    // the gateway already has. Against other KrakenDEndpoints only routes new
-    // to the stored object count; entries of ep itself are always compared.
-    // The list comes from the field index (cluster-wide, not
-    // namespace-scoped); endpoints with ep's controller are exempt.
-    if gw != nil {
-        dupErrs, err := v.validateRouteUniqueness(ctx, ep, stored, changed, gw)
-        if err != nil {
-            return nil, unavailable(err)
-        }
-        errs = append(errs, dupErrs...)
-    }
-    return nil, invalid(kindEndpoint, ep.Name, errs)
+    return warnings, nil
 }
 ```
 
-**KrakenDBackendPolicy (CREATE/UPDATE):**
+`check` runs, in order: the `gatewayRef` lookup (an error only when the request sets or changes it), the `policyRef` checks (a policy that is missing or terminating, for references the stored object lacks), then, for the entries that are new or differ from the stored entry with the same (`endpoint`, `method`), the audience shape check, the entry rules (`validateEntries`: reserved paths, the gateway's health path, `/*`, unnamed wildcards and Enterprise-only namespaces on CE, unknown placeholders) and route uniqueness (`validateRouteUniqueness`). A request that survives those is rendered (`checkRender`), unless it is the operator's own write to an endpoint a `KrakenDAutoConfig` controls (`trustedWrite`). When the gateway already fails without the change, `checkRender` judges the entry in isolation, so a pre-existing failure is a warning. A move to another gateway puts every entry through the new gateway's rules.
+
+Route uniqueness rejects a changed entry whose method and route shape (paths that differ only in parameter names or repeated slashes) another entry on the gateway already has, in this or another KrakenDEndpoint. The list comes from the `fieldindex.EndpointGateway` index, cluster-wide. Against other KrakenDEndpoints only routes new to the stored object are checked, and endpoints with the same controller are exempt: one AutoConfig renaming an operation has the old and the new endpoint for a while. The renderer keeps oldest-wins as the fallback.
+
+**KrakenDBackendPolicy:**
 
 ```go
-func (v *PolicyValidator) ValidateCreate(
-    ctx context.Context, policy *v1alpha1.KrakenDBackendPolicy,
+// ValidateUpdate: an update that leaves the spec alone, such as the
+// protection finalizer, is never validated.
+func (v *PolicyValidator) ValidateUpdate(
+    ctx context.Context, oldObj, newObj runtime.Object,
 ) (admission.Warnings, error) {
-    var errs field.ErrorList
-
-    if policy.Spec.CircuitBreaker != nil {
-        if policy.Spec.CircuitBreaker.MaxErrors <= 0 {
-            errs = append(errs, field.Invalid(
-                field.NewPath("spec", "circuitBreaker", "maxErrors"),
-                policy.Spec.CircuitBreaker.MaxErrors,
-                "must be greater than 0",
-            ))
-        }
+    if terminatingWithUnchangedSpec(oldObj, newObj) {
+        return nil, nil
     }
-    if policy.Spec.RateLimit != nil {
-        if policy.Spec.RateLimit.MaxRate <= 0 {
-            errs = append(errs, field.Invalid(
-                field.NewPath("spec", "rateLimit", "maxRate"),
-                policy.Spec.RateLimit.MaxRate,
-                "must be greater than 0",
-            ))
-        }
+    // ... type-assert policy and old
+    if equality.Semantic.DeepEqual(old.Spec, policy.Spec) {
+        return nil, nil
     }
-    return nil, errs.ToAggregate()
+    ctx, cancel := context.WithTimeout(ctx, admissionBudget)
+    defer cancel()
+    return checkPolicyRender(ctx, v.Client, v.Checker, old, policy)
 }
 ```
+
+`checkPolicyRender` renders the policy on its own (`LintPolicy`: one synthetic endpoint on a default CE gateway whose only backend references it) and rejects it when `krakend check -n` fails, unless the stored policy already failed too. For a change to a policy that endpoints reference, it finds the gateways of the referencing endpoints through the `fieldindex.EndpointPolicy` index and renders each with the new policy in place of the stored one (`CheckGatewayPolicy`), one gateway after another under the 12 s budget. It rejects only when a gateway passed before and fails after (`ratchetRender` without an isolated baseline, so a gateway that already fails earns a warning). A new or changed `raw` that holds what a CE render drops (`renderer.CEDrops` at the backend level) is rejected while a CE gateway uses the policy. Causes are one per gateway, at most 20, and warnings name at most 5 failing gateways (`maxPolicyWarnings`).
 
 **KrakenDBackendPolicy (DELETE):**
 
@@ -2012,123 +2004,68 @@ func (v *PolicyValidator) ValidateDelete(context.Context, runtime.Object) (admis
 **KrakenDAutoConfig:**
 
 ```go
-func (v *AutoConfigValidator) ValidateCreate(
-    ctx context.Context, ac *v1alpha1.KrakenDAutoConfig,
+// ValidateUpdate: the gateway reference is checked only when it changes, and a
+// field rule rejects the update only for errors the stored object did not
+// already have.
+func (v *AutoConfigValidator) ValidateUpdate(
+    ctx context.Context, oldObj, newObj runtime.Object,
 ) (admission.Warnings, error) {
+    // ... terminatingWithUnchangedSpec, type assertions, unchanged-spec skip
     var errs field.ErrorList
-
-    // gatewayRef must exist
-    gw := &v1alpha1.KrakenDGateway{}
-    if err := v.Get(ctx, types.NamespacedName{
-        Name:      ac.Spec.GatewayRef.Name,
-        Namespace: ac.Namespace,
-    }, gw); err != nil {
-        errs = append(errs, field.NotFound(
-            field.NewPath("spec", "gatewayRef", "name"),
-            ac.Spec.GatewayRef.Name,
-        ))
-    }
-
-    // Mutually exclusive OpenAPI sources
-    hasURL := ac.Spec.OpenAPI.URL != ""
-    hasCM := ac.Spec.OpenAPI.ConfigMapRef != nil
-    if hasURL && hasCM {
-        errs = append(errs, field.Invalid(
-            field.NewPath("spec", "openapi"),
-            "both",
-            "url and configMapRef are mutually exclusive",
-        ))
-    }
-    if !hasURL && !hasCM {
-        errs = append(errs, field.Required(
-            field.NewPath("spec", "openapi"),
-            "one of url or configMapRef is required",
-        ))
-    }
-
-    // configMapRef requires hostMapping
-    if hasCM && !hasURL {
-        if ac.Spec.URLTransform == nil || len(ac.Spec.URLTransform.HostMapping) == 0 {
-            errs = append(errs, field.Required(
-                field.NewPath("spec", "urlTransform", "hostMapping"),
-                "hostMapping is required when using configMapRef (no URL to infer backend host from)",
-            ))
+    if old.Spec.GatewayRef != ac.Spec.GatewayRef {
+        refErrs, err := v.validateGatewayRef(ctx, ac)
+        if err != nil {
+            return nil, unavailable(err)
         }
+        errs = refErrs
     }
-
-    // Periodic trigger requires interval
-    if ac.Spec.Trigger == v1alpha1.TriggerPeriodic {
-        if ac.Spec.Periodic == nil || ac.Spec.Periodic.Interval.Duration == 0 {
-            errs = append(errs, field.Required(
-                field.NewPath("spec", "periodic", "interval"),
-                "interval is required when trigger is Periodic",
-            ))
-        }
+    errs = append(errs, newErrors(validateFields(ac), validateFields(old))...)
+    warnings, err := v.policyRefWarnings(ctx, ac)
+    if err != nil {
+        return nil, unavailable(err)
     }
-
-    // Mutually exclusive auth methods
-    if ac.Spec.OpenAPI.Auth != nil {
-        if ac.Spec.OpenAPI.Auth.BearerTokenSecret != nil && ac.Spec.OpenAPI.Auth.BasicAuthSecret != nil {
-            errs = append(errs, field.Invalid(
-                field.NewPath("spec", "openapi", "auth"),
-                "both",
-                "bearerTokenSecret and basicAuthSecret are mutually exclusive",
-            ))
-        }
-    }
-
-    // additionalEndpointsBasePath validation
-    if ac.Spec.AdditionalEndpointsBasePath != "" &&
-        !strings.HasPrefix(ac.Spec.AdditionalEndpointsBasePath, "/") {
-        errs = append(errs, field.Invalid(
-            field.NewPath("spec", "additionalEndpointsBasePath"),
-            ac.Spec.AdditionalEndpointsBasePath,
-            "must start with '/'"))
-    }
-
-    // additionalEndpointsBasePath and urlTransform.addPathPrefix are mutually exclusive
-    if ac.Spec.AdditionalEndpointsBasePath != "" &&
-        ac.Spec.URLTransform != nil && ac.Spec.URLTransform.AddPathPrefix != "" {
-        errs = append(errs, field.Invalid(
-            field.NewPath("spec", "additionalEndpointsBasePath"),
-            ac.Spec.AdditionalEndpointsBasePath,
-            "is mutually exclusive with spec.urlTransform.addPathPrefix; set only one"))
-    }
-
-    // additionalEndpoints: the CRD enforces the rest (a required path that
-    // starts with "/", backends versus the shorthand, and uniqueness of
-    // (endpoint, method), since the list is a map list). The webhook checks
-    // the audience in each entry's extraConfig.
-    for i, ae := range ac.Spec.AdditionalEndpoints {
-        errs = append(errs, validateExtraConfigAudience(
-            field.NewPath("spec", "additionalEndpoints").Index(i).Child("extraConfig"),
-            ae.ExtraConfig)...)
-    }
-
-    // Admission does not compare route shapes between the endpoints one
-    // AutoConfig generates: they share a controller, which the
-    // KrakenDEndpoint webhook exempts from the route check. Same-shape paths
-    // (/h/{a} and /h/{b}) from one AutoConfig are therefore not rejected
-    // anywhere in admission; the renderer reports the newer one as
-    // EndpointConflict.
-    return nil, errs.ToAggregate()
+    return warnings, invalid("KrakenDAutoConfig", ac.Name, errs)
 }
 ```
 
+`validateFields` checks the shape of `documentation/openapi.audience` in each `extraConfig` (`spec.overrides[]`, `spec.defaults.endpoint` and `spec.additionalEndpoints[]`) and `validateOverrideIDs`, which rejects two overrides for one operation: an `operationId` listed twice (`Duplicate value`) or two that map to one override key (`autoconfig.SanitizeName`, which the CUE evaluator keys overrides on). `policyRefWarnings` looks up every `policyRef` in `spec.defaults`, `spec.overrides[]` and `spec.additionalEndpoints[].backends[]` and warns, in order of field path, about each that names no KrakenDBackendPolicy. It is a warning because a release may create the policy after the AutoConfig; the generated endpoints are rejected by the KrakenDEndpoint webhook until it exists. A failed lookup is a `500`.
+
+Admission does not compare route shapes between the endpoints one AutoConfig generates: they share a controller, which the KrakenDEndpoint webhook exempts from the route check. Same-shape paths (`/h/{a}` and `/h/{b}`) from one AutoConfig are therefore not rejected anywhere in admission; the renderer reports the newer one as `EndpointConflict`.
+
 ### Webhook Registration
 
+`NewValidators` builds the validators over the manager's client, the uncached reader and the pod's one checker. `SetupWebhooks` registers them, after making sure the endpoint field indexes exist, which the route check and the policy fan-out need even when the pod runs webhook-only:
+
 ```go
-func SetupWebhooks(mgr ctrl.Manager, v Validators) error {
+func NewValidators(
+    c client.Client, apiReader client.Reader, checker ConfigChecker, operatorUsername string,
+) Validators {
+    return Validators{
+        Gateway: &GatewayValidator{Client: c, Checker: checker},
+        Endpoint: &EndpointValidator{
+            Client: c, APIReader: apiReader, Checker: checker, OperatorUsername: operatorUsername,
+        },
+        Policy:     &PolicyValidator{Client: c, Checker: checker},
+        AutoConfig: &AutoConfigValidator{Client: c},
+    }
+}
+
+func SetupWebhooks(mgr ctrl.Manager, validators Validators) error {
+    if err := fieldindex.EnsureEndpointIndexes(mgr); err != nil {
+        return fmt.Errorf("registering endpoint indexes: %w", err)
+    }
     if err := ctrl.NewWebhookManagedBy(mgr).
         For(&v1alpha1.KrakenDGateway{}).
-        WithValidator(v.Gateway).
+        WithValidator(validators.Gateway).
         Complete(); err != nil {
-        return err
+        return fmt.Errorf("setting up gateway webhook: %w", err)
     }
     // ... repeat for Endpoint, Policy, AutoConfig
     return nil
 }
 ```
+
+The `+kubebuilder:webhook` markers in `webhook.go` generate `config/webhook/manifests.yaml`: each webhook has `failurePolicy: Fail`, `timeoutSeconds: 15` and the verbs `create` and `update`.
 
 ---
 
