@@ -3351,6 +3351,33 @@ func TestAutoConfigReconcile_FailedOperationOutsideFilterDoesNotFail(t *testing.
 	}
 }
 
+func TestAutoConfigReconcile_FailedOperationOutsideFilterIsIgnored(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	ac.Spec.Filter = &v1alpha1.FilterSpec{ExcludePaths: []string{"/b"}}
+	stale := ownedCopy(t, ac, generatedEndpoint("old", "/old"))
+	f, ce, _, g := defaultMocks()
+	ce.output.Failed = []autoconfig.OperationIssue{failedGetB()}
+	c := fakeClientBuilder().WithObjects(ac, cm, stale).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, &mockFilter{}, g)
+	r.Filter = autoconfig.NewFilter()
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if endpointExists(t, c, "test-ac-old") {
+		t.Error("expected the stale endpoint deleted: the failed operation is filtered out")
+	}
+	updated := getAC(t, c, ac)
+	if cond := meta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionSynced); cond == nil ||
+		cond.Status != metav1.ConditionTrue {
+		t.Errorf("expected Synced True, got %+v", cond)
+	}
+	if len(updated.Status.FailedOperations) != 0 {
+		t.Errorf("expected no failedOperations, got %+v", updated.Status.FailedOperations)
+	}
+}
+
 func TestAutoConfigReconcile_FailedOperationsAreListedSortedAndCapped(t *testing.T) {
 	cm := testCUEDefinitionsCM()
 	ac := syncedAutoConfig(cm)
