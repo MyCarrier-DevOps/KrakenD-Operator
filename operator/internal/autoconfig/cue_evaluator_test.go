@@ -2127,3 +2127,21 @@ endpoint: [string]: extraConfig: "auth/validator": _authCgf`,
 		t.Errorf("expected a whole-evaluation error naming _authCgf, got %v", err)
 	}
 }
+
+func TestEvaluate_RootErrorOnEntryFailsThatEntry(t *testing.T) {
+	// The reference is unresolved, which only the root validation reports:
+	// the entry alone decodes, with the default timeout.
+	out, err := evaluateWithCustomDefs(twoOperationSpec, map[string]string{
+		"custom.cue": `endpoint: "/b:GET": timeout: _overrides["getb"].t`,
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if len(out.Entries) != 1 || out.Entries[0].Endpoint != "/a" {
+		t.Fatalf("expected only the /a entry, got %+v", out.Entries)
+	}
+	if len(out.Failed) != 1 || out.Failed[0].OperationID != "getB" ||
+		!strings.Contains(out.Failed[0].Message, `reference "_overrides" not found`) {
+		t.Errorf("expected getB failed with the root error, got %+v", out.Failed)
+	}
+}
