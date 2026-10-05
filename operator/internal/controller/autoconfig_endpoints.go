@@ -174,7 +174,8 @@ func (r *KrakenDAutoConfigReconciler) writeEndpoint(
 // endpointOutcome is what one reconcileEndpoints call did and could not do.
 type endpointOutcome struct {
 	changes endpointChanges
-	// transient holds write errors worth retrying with backoff.
+	// transient holds adoption, write and delete errors worth retrying with
+	// backoff.
 	transient []error
 	// raced holds Conflict and AlreadyExists write errors: this reconcile
 	// acted on a stale cache and loses nothing by retrying soon.
