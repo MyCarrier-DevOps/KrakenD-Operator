@@ -265,7 +265,7 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	log.V(1).Info("autoconfig reconciled",
 		"phase", ac.Status.Phase,
 		"endpoints", len(genOutput.Endpoints),
-		"skipped", len(genOutput.Skipped),
+		"skipped", len(skippedOps),
 	)
 
 	return r.requeueResult(&ac), nil
@@ -287,7 +287,8 @@ func (r *KrakenDAutoConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 // inScope returns the issues whose operations spec.filter keeps, applying
 // the same rules the filter applies to entries, so an operation the user
-// excluded is neither reported nor holds anything back.
+// excluded is neither reported nor holds anything back. Each issue is judged
+// on its own: two can share a path and method.
 func (r *KrakenDAutoConfigReconciler) inScope(
 	ac *v1alpha1.KrakenDAutoConfig,
 	issues []autoconfig.OperationIssue,
@@ -295,21 +296,12 @@ func (r *KrakenDAutoConfigReconciler) inScope(
 	if ac.Spec.Filter == nil || len(issues) == 0 {
 		return issues
 	}
-	entries := make([]v1alpha1.EndpointEntry, len(issues))
-	opIDs := make(map[string]string, len(issues))
-	tags := make(map[string][]string, len(issues))
-	for i, issue := range issues {
-		entries[i] = v1alpha1.EndpointEntry{Endpoint: issue.Path, Method: issue.Method}
-		key := issue.Path + ":" + issue.Method
-		opIDs[key] = issue.OperationID
-		tags[key] = issue.Tags
-	}
-	kept := map[string]bool{}
-	for _, e := range r.Filter.Apply(entries, tags, opIDs, *ac.Spec.Filter) {
-		kept[e.Endpoint+":"+e.Method] = true
-	}
 	return slices.DeleteFunc(slices.Clone(issues), func(i autoconfig.OperationIssue) bool {
-		return !kept[i.Path+":"+i.Method]
+		key := i.Path + ":" + i.Method
+		entry := []v1alpha1.EndpointEntry{{Endpoint: i.Path, Method: i.Method}}
+		kept := r.Filter.Apply(entry, map[string][]string{key: i.Tags},
+			map[string]string{key: i.OperationID}, *ac.Spec.Filter)
+		return len(kept) == 0
 	})
 }
 
