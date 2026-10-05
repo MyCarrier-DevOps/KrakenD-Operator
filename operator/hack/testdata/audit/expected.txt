@@ -68,3 +68,4 @@ KrakenDAutoConfig a/additional-backend-sd: spec.additionalEndpoints[0].backends[
 KrakenDAutoConfig a/additional-backend-rest: spec.additionalEndpoints[0].backends[0].encoding jsn; spec.additionalEndpoints[0].backends[0].method get; spec.additionalEndpoints[0].backends[0].policyRef.name is empty
 KrakenDAutoConfig a/many-overrides: more than 1024 overrides
 KrakenDAutoConfig a/override-method: spec.overrides[0].method HEAD
+KrakenDAutoConfig a/override-index: spec.overrides[0].backends index -1
