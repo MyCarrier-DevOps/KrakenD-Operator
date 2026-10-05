@@ -43,7 +43,10 @@ func checkGatewayRender(
 		if before.OK {
 			return nil, gatewayRenderDenial(gw, after)
 		}
-		return nil, nil
+		preexisting := admission.Warnings{"the gateway's config already fails validation: " +
+			before.Summary(warningLimit)}
+		_, err = chk.CheckIsolated(ctx, gw, nil)
+		return preexisting, checkErr(err)
 	}
 	root, err := chk.CheckIsolated(ctx, gw, nil)
 	if err != nil || root.OK {
