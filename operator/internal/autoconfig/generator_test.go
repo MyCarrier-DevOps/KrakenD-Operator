@@ -335,3 +335,18 @@ func TestGenerator_SchemaClosureIsStableAcrossPasses(t *testing.T) {
 		t.Error("an unchanged spec generated different endpoints on the second pass")
 	}
 }
+
+func TestGenerator_SchemaEditRewritesOnlyEndpointsThatReferenceIt(t *testing.T) {
+	before := generatePets(t, petSchemas())
+	edited := petSchemas()
+	edited["Address"] = runtime.RawExtension{Raw: []byte(`{"type":"object","description":"edited"}`)}
+	after := generatePets(t, edited)
+
+	changed := map[string]bool{}
+	for i, ep := range after.Endpoints {
+		changed[ep.Name] = !reflect.DeepEqual(before.Endpoints[i], ep)
+	}
+	if want := map[string]bool{"ac-getpets": true, "ac-geterrors": false}; !reflect.DeepEqual(changed, want) {
+		t.Errorf("changed endpoints = %v, want %v", changed, want)
+	}
+}
