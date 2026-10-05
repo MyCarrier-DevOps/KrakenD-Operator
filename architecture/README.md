@@ -1321,7 +1321,7 @@ gateway status is written once, after both stages.
 
 ### Conflict reporting
 
-Conflicts are resolved per `(endpoint, method)` entry: the oldest
+Conflicts are resolved per route entry, keyed on the method and the route shape (`renderer.ConflictKey`: parameter names erased and the path cleaned), not the literal path, so `/users/{id}` and `/users/{name}` are one route: the oldest
 KrakenDEndpoint's entry is rendered. A KrakenDEndpoint that lost some but not
 all of its entries is `Accepted=True/PartiallyAccepted`; one that lost all of
 them is `Accepted=False/EndpointConflict`. In both cases `status.conflicts`
