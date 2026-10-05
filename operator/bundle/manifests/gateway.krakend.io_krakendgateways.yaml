@@ -372,7 +372,8 @@ spec:
                     type: string
                     x-kubernetes-validations:
                     - message: must be a duration that fits in 64 bits of nanoseconds
-                      rule: duration(self) >= duration('0s')
+                      rule: '!self.matches(''^[0-9]+(ns|ms|us|µs|s|m|h)$'') || duration(self)
+                        >= duration(''0s'')'
                 type: object
               dragonfly:
                 description: Dragonfly configures an in-cluster Dragonfly instance
