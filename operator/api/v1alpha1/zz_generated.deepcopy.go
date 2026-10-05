@@ -938,6 +938,11 @@ func (in *KrakenDAutoConfigStatus) DeepCopyInto(out *KrakenDAutoConfigStatus) {
 		*out = make([]OperationStatus, len(*in))
 		copy(*out, *in)
 	}
+	if in.FailedOperations != nil {
+		in, out := &in.FailedOperations, &out.FailedOperations
+		*out = make([]OperationStatus, len(*in))
+		copy(*out, *in)
+	}
 	if in.Warnings != nil {
 		in, out := &in.Warnings, &out.Warnings
 		*out = make([]string, len(*in))
