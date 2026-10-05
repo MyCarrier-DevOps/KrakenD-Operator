@@ -63,3 +63,4 @@ KrakenDAutoConfig a/mixed-shorthand: spec.additionalEndpoints[0] mixes backends 
 KrakenDAutoConfig a/additional-timeout: spec.additionalEndpoints[0].timeout 30
 KrakenDAutoConfig a/additional-cachettl: spec.additionalEndpoints[0].cacheTTL 2562048h does not fit in 64 bits of nanoseconds
 KrakenDAutoConfig a/additional-output: spec.additionalEndpoints[0].outputEncoding jsn
+KrakenDAutoConfig a/additional-encoding: spec.additionalEndpoints[0].encoding jsn
