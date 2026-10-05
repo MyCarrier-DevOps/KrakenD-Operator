@@ -202,3 +202,14 @@ func TestEndpointAdmission_SameControllerMayShareARoute(t *testing.T) {
 		t.Error("another controller's duplicate route admitted")
 	}
 }
+
+func TestEndpointAdmission_DuplicateAcrossNamespacesOnOneGateway(t *testing.T) {
+	other := testEndpoint("other", "/a")
+	other.Namespace = "team-b"
+	other.Spec.GatewayRef.Namespace = "default"
+	v := &EndpointValidator{Client: fakeClient(testGateway(), other)}
+	resp := review(t, v, "alice", testEndpoint("new", "/a"), nil)
+	if resp.Allowed || !strings.Contains(resp.Result.Details.Causes[0].Message, "team-b/other") {
+		t.Errorf("response = %+v, want a duplicate naming team-b/other", resp.Result)
+	}
+}
