@@ -120,6 +120,7 @@ spec:
                   dnsCacheTTL:
                     description: DNSCacheTTL is the DNS lookup cache duration (e.g.
                       "30s").
+                    pattern: ^[0-9]+(ns|ms|us|µs|s|m|h)$
                     type: string
                   documentation:
                     description: Documentation configures gateway-level OpenAPI documentation.
