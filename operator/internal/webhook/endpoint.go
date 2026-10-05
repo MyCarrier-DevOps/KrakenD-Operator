@@ -50,8 +50,8 @@ type EndpointValidator struct {
 	APIReader client.Reader
 	// OperatorUsername is the username the operator's own API requests carry.
 	// Its writes to endpoints a KrakenDAutoConfig controls skip the render
-	// check (the AutoConfig controller checks its whole desired set first);
-	// empty disables the exemption.
+	// check (the AutoConfig controller checks the endpoints it is about to
+	// write first); empty disables the exemption.
 	OperatorUsername string
 }
 
