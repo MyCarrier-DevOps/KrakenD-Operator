@@ -4277,3 +4277,16 @@ func TestAutoConfigReconcile_ConflictAndAlreadyExistsRequeueQuietly(t *testing.T
 		t.Errorf("expected both writes attempted, got %v", ops)
 	}
 }
+
+func TestEndpointFailuresError_IsNeverClassifiedAsARace(t *testing.T) {
+	gr := schema.GroupResource{Group: v1alpha1.GroupVersion.Group, Resource: "krakendendpoints"}
+	failures := endpointFailuresError{errs: []error{
+		errors.New("etcd timeout"),
+		conflictError("krakendendpoints", "a"),
+		apierrors.NewAlreadyExists(gr, "b"),
+	}}
+
+	if apierrors.IsConflict(failures) || apierrors.IsAlreadyExists(failures) {
+		t.Error("expected a failed pass never to read as a lost race")
+	}
+}
