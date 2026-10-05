@@ -54,6 +54,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
 	"github.com/mycarrier-devops/krakend-operator/internal/fieldindex"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 	"github.com/mycarrier-devops/krakend-operator/internal/resources"
@@ -70,7 +71,10 @@ type KrakenDGatewayReconciler struct {
 	Recorder  record.EventRecorder
 	Renderer  renderer.Renderer
 	Validator renderer.Validator
-	Clock     utilclock.Clock
+	// Checker gathers the render inputs and validates the render, behind the
+	// slots every config check in the pod shares.
+	Checker ConfigChecker
+	Clock   utilclock.Clock
 	// APIReader reads uncached from the API server (ReplicaSets for config GC)
 	APIReader client.Reader
 	// LicenseParser reads EE license certificates
@@ -79,6 +83,16 @@ type KrakenDGatewayReconciler struct {
 	// rejections remembers each gateway's last rejected validation input,
 	// so an unchanged bad render is not re-validated on every event.
 	rejections rejectionMemo
+}
+
+// ConfigChecker gathers a gateway's render inputs and validates what they
+// render to. The gateway controller owns this port; configcheck.Checker is
+// its implementation.
+type ConfigChecker interface {
+	Gather(ctx context.Context, gw *v1alpha1.KrakenDGateway,
+		replace []v1alpha1.KrakenDEndpoint) (renderer.RenderInput, error)
+	CheckRendered(ctx context.Context, in renderer.RenderInput,
+		out *renderer.RenderOutput) (configcheck.Verdict, error)
 }
 
 // +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendgateways,verbs=get;list;watch;create;update;patch;delete
