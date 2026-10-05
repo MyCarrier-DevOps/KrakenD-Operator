@@ -183,3 +183,10 @@ func TestCheckGateway_AttributesLintOutputToTheSpecEntry(t *testing.T) {
 		t.Errorf("findings = %+v, want ns/b spec.endpoints[1]", verdict.Findings)
 	}
 }
+
+func TestCheck_TransientValidatorErrorIsAnError(t *testing.T) {
+	c := newChecker(&fakeValidator{err: errors.New("running krakend check: fork/exec: no such file")}, endpoint("a", "/a"))
+	if verdict, err := c.CheckGateway(context.Background(), gateway(v1alpha1.EditionCE), nil); err == nil {
+		t.Fatalf("verdict = %+v, err = nil; want the validator failure as an error", verdict)
+	}
+}
