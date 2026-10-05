@@ -39,5 +39,6 @@
  {"metadata":{"namespace":"a","name":"hp-off-ok"},"spec":{"gatewayRef":{"name":"hp-off"},"endpoints":[{"endpoint":"/__health","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}]}]}},
  {"metadata":{"namespace":"a","name":"hp-post"},"spec":{"gatewayRef":{"name":"hp"},"endpoints":[{"endpoint":"/healthz","method":"POST","backends":[{"host":["http://a"],"urlPattern":"/u"}]}]}},
  {"metadata":{"namespace":"a","name":"hp-nogateway"},"spec":{"gatewayRef":{"name":"no-such-gateway"},"endpoints":[{"endpoint":"/__health","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}]}]}},
- {"metadata":{"namespace":"a","name":"ee-entry"},"spec":{"gatewayRef":{"name":"ce-gw"},"endpoints":[{"endpoint":"/x","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}],"extraConfig":{"auth/api-keys":{"roles":["a"]}}}]}}
+ {"metadata":{"namespace":"a","name":"ee-entry"},"spec":{"gatewayRef":{"name":"ce-gw"},"endpoints":[{"endpoint":"/x","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}],"extraConfig":{"auth/api-keys":{"roles":["a"]}}}]}},
+ {"metadata":{"namespace":"a","name":"ee-backend"},"spec":{"gatewayRef":{"name":"ce-gw"},"endpoints":[{"endpoint":"/eb","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u","extraConfig":{"backend/http/client":{}}}]}]}}
 ]}
