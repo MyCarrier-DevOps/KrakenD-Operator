@@ -2584,3 +2584,23 @@ func TestGatewayAdmission_ChangedDragonflyRunAsStillUnacknowledgedIsRejected(t *
 		t.Errorf("changed, still unacknowledged dragonfly runAsUser 0: %+v, want 422", resp.Result)
 	}
 }
+
+func TestGatewayAdmission_ChangedPostRestartRunAsStillUnacknowledgedIsRejected(t *testing.T) {
+	old := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+		Spec: v1alpha1.KrakenDGatewaySpec{
+			Version: "2.13", Edition: v1alpha1.EditionCE,
+			PostRestartJob: &v1alpha1.PostRestartJobSpec{
+				Enabled: true, Script: "true",
+				SecurityContext: &corev1.SecurityContext{RunAsUser: ptr.To(int64(0))},
+			},
+		},
+	}
+	changed := old.DeepCopy()
+	changed.Spec.PostRestartJob.SecurityContext.RunAsNonRoot = ptr.To(true)
+
+	resp := review(t, &GatewayValidator{}, "alice", changed, old)
+	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity {
+		t.Errorf("changed, still unacknowledged postRestartJob runAsUser 0: %+v, want 422", resp.Result)
+	}
+}
