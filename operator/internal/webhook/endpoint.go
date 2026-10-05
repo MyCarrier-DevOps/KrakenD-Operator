@@ -246,9 +246,16 @@ func (v *EndpointValidator) validateRouteUniqueness(
 	var errs field.ErrorList
 	for _, i := range changed {
 		e := ep.Spec.Endpoints[i]
+		p := field.NewPath("spec", "endpoints").Index(i)
 		if c, ok := claims[routeKey(e)]; ok {
-			p := field.NewPath("spec", "endpoints").Index(i)
 			errs = append(errs, routeClash(p, e, c.endpoint, c.owner))
+			continue
+		}
+		for j, other := range ep.Spec.Endpoints {
+			if j != i && routeKey(other) == routeKey(e) {
+				errs = append(errs, routeClash(p, e, other.Endpoint, fmt.Sprintf("spec.endpoints[%d]", j)))
+				break
+			}
 		}
 	}
 	return errs, nil
