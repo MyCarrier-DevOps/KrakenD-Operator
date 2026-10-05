@@ -3307,3 +3307,29 @@ func TestAutoConfigReconcile_RemappedFailedOperationInFilterFailsClosed(t *testi
 	}
 	assertEndpointKept(t, c, stale.Name)
 }
+
+func TestAutoConfigReconcile_FailedOperationWithUnknownMethodKeepsEndpoint(t *testing.T) {
+	// The evaluator could not tell the method of the failed operation: it
+	// reports it Failed with no method, and the sync fails closed instead of
+	// deleting the operation's existing endpoint.
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	existing := staleOwnedEndpoint(t, ac, g)
+	c := fakeClientBuilder().WithObjects(ac, cm, existing).WithStatusSubresource(ac).Build()
+	ce.output.Failed = []autoconfig.OperationIssue{{
+		Operation: autoconfig.Operation{Path: "/users/{id}", OperationID: "getUser"},
+		Reason:    v1alpha1.ReasonCUEEvaluationFailed,
+		Message:   "conflicting values",
+	}}
+	r := newACReconciler(c, f, ce, fi, g)
+
+	if _, err := reconcileAC(r, ac); err == nil {
+		t.Fatal("expected an error for an OnChange trigger")
+	}
+	cond := meta.FindStatusCondition(getAC(t, c, ac).Status.Conditions, v1alpha1.ConditionSynced)
+	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != v1alpha1.ReasonCUEEvaluationFailed {
+		t.Errorf("expected Synced False/CUEEvaluationFailed, got %+v", cond)
+	}
+	assertEndpointKept(t, c, existing.Name)
+}
