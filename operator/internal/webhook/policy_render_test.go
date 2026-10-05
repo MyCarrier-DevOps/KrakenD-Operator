@@ -17,6 +17,7 @@ limitations under the License.
 package webhook
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -302,5 +303,21 @@ func TestPolicyAdmission_JudgesEachGatewayWithTheRightPolicy(t *testing.T) {
 		if d <= 0 || d > admissionBudget {
 			t.Errorf("check %d had %s left, want a deadline within %s", i, d, admissionBudget)
 		}
+	}
+}
+
+// A check that cannot run in the middle of the fan-out leaves the request
+// unjudged: a retryable 500, never a partial verdict.
+func TestPolicyAdmission_CheckerErrorMidFanOutIs500(t *testing.T) {
+	chk := &scriptedChecker{err: errors.New("no slot"), failCall: 3}
+	v := &PolicyValidator{Client: fakeClient(referencingGateways("gw-a", "gw-b")...), Checker: chk}
+
+	resp := review(t, v, "alice", testPolicy(`{"x":{}}`), testPolicy(`{}`))
+
+	if resp.Allowed || resp.Result.Code != http.StatusInternalServerError {
+		t.Errorf("response = %+v, want 500", resp.Result)
+	}
+	if got := strings.Join(chk.calls, ","); got != "policy,gateway+policy,gateway+policy" {
+		t.Errorf("checks = %s, want the fan-out to stop at the failing check", got)
 	}
 }
