@@ -5168,4 +5168,13 @@ func TestEndpointsReadyCondition(t *testing.T) {
 			t.Errorf("unexpected condition %+v", got)
 		}
 	})
+	t.Run("not ready names the first five", func(t *testing.T) {
+		notReady := []string{"a: Pending", "b: Pending", "c: Pending", "d: Pending", "e: Pending", "f: Pending"}
+		got := endpointsReadyCondition(endpointReadiness{total: 8, ready: 2, notReady: notReady}, 3)
+		want := "6 of 8 endpoints not ready: a: Pending; b: Pending; c: Pending; d: Pending; e: Pending; and 1 more"
+		if got.Status != metav1.ConditionFalse || got.Reason != v1alpha1.ReasonEndpointsNotReady ||
+			got.ObservedGeneration != 3 || got.Message != want {
+			t.Errorf("unexpected condition %+v, want message %q", got, want)
+		}
+	})
 }
