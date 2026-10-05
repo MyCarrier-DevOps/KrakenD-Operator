@@ -273,3 +273,19 @@ func TestCheckIsolated_RendersThePoliciesTheEndpointsReference(t *testing.T) {
 		t.Errorf("config lacks the policy's circuit breaker: %s", v.seen[0])
 	}
 }
+
+// A missing policy is not a validator failure: the renderer leaves the
+// endpoint out and the check goes on.
+func TestCheckGateway_MissingPolicyLeavesTheEndpointOut(t *testing.T) {
+	v := &fakeValidator{}
+	c := newChecker(v, withPolicy(endpoint("a", "/a"), "gone"), endpoint("b", "/b"))
+
+	verdict, err := c.CheckGateway(context.Background(), gateway(v1alpha1.EditionCE), nil)
+
+	if err != nil || !verdict.OK {
+		t.Fatalf("verdict = %+v, err = %v; want OK", verdict, err)
+	}
+	if strings.Contains(v.seen[0], `"/a"`) || !strings.Contains(v.seen[0], `"/b"`) {
+		t.Errorf("linted %s, want /b only", v.seen[0])
+	}
+}
