@@ -230,8 +230,9 @@ func (v *GatewayValidator) eeNamespacesInUse(ctx context.Context, gw *v1alpha1.K
 
 // eeFieldsOnCE refuses, on a CE gateway, the typed fields that configure
 // features only KrakenD Enterprise has: KrakenD CE ignores the redis
-// connection pools and documentation/openapi, and the CE binary has no
-// openapi command for the OpenAPI export. A value already stored on a CE gateway and left unchanged
+// connection pools and documentation/openapi, the CE binary has no openapi
+// command for the OpenAPI export, and Dragonfly exists to back the redis
+// pools. A value already stored on a CE gateway and left unchanged
 // is not judged again; a gateway switching from EE to CE is judged on every
 // such field it keeps.
 func eeFieldsOnCE(old, gw *v1alpha1.KrakenDGateway) field.ErrorList {
@@ -253,6 +254,8 @@ func eeFieldsOnCE(old, gw *v1alpha1.KrakenDGateway) field.ErrorList {
 			"documentation/openapi is an Enterprise feature; KrakenD CE ignores it"},
 		{field.NewPath("spec", "openapi", "enabled"), openAPIExportEnabled(gw), wasCE && openAPIExportEnabled(old),
 			"the OpenAPI export is an Enterprise feature; the CE binary has no openapi command"},
+		{field.NewPath("spec", "dragonfly", "enabled"), dragonflyEnabled(gw), wasCE && dragonflyEnabled(old),
+			"Dragonfly is an Enterprise feature; KrakenD CE has no redis connection pools to use it"},
 	} {
 		if f.set && !f.kept {
 			errs = append(errs, field.Forbidden(f.path, f.what+" (the gateway runs CE)"))
@@ -264,6 +267,11 @@ func eeFieldsOnCE(old, gw *v1alpha1.KrakenDGateway) field.ErrorList {
 // openAPIExportEnabled reports whether gw enables the OpenAPI export.
 func openAPIExportEnabled(gw *v1alpha1.KrakenDGateway) bool {
 	return gw != nil && gw.Spec.OpenAPI != nil && gw.Spec.OpenAPI.Enabled
+}
+
+// dragonflyEnabled reports whether gw enables the managed Dragonfly instance.
+func dragonflyEnabled(gw *v1alpha1.KrakenDGateway) bool {
+	return gw != nil && gw.Spec.Dragonfly != nil && gw.Spec.Dragonfly.Enabled
 }
 
 // validate runs all admission checks for gw. old is the previously-stored
