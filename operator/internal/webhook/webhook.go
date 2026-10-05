@@ -284,6 +284,7 @@ func (v *GatewayValidator) validate(gw, old *v1alpha1.KrakenDGateway) (admission
 
 	warnings = append(warnings, replicasWithAutoscalingWarning(gw)...)
 	warnings = append(warnings, openAPIOnCEWarning(old, gw)...)
+	warnings = append(warnings, dragonflyOnCEWarning(old, gw)...)
 	warnings = append(warnings, redisPoolWarnings(gw)...)
 
 	if gw.Spec.OpenAPI != nil && gw.Spec.OpenAPI.Enabled {
@@ -381,18 +382,39 @@ func replicasWithAutoscalingWarning(gw *v1alpha1.KrakenDGateway) admission.Warni
 
 // openAPIOnCEWarning warns when a CE gateway keeps an enabled spec.openapi
 // that was stored before admission refused it: the CE binary has no openapi
-// command, so the operator runs no export or serving there. A new or changed
-// one is rejected instead (eeFieldsOnCE), and it takes effect again on an EE
-// gateway.
+// command, so the operator runs no export or serving there. Enabling it, or
+// switching to CE while it is enabled, is rejected instead (eeFieldsOnCE); an
+// edit of the settings of a stored, enabled one is admitted with this warning,
+// and it takes effect again on an EE gateway.
 func openAPIOnCEWarning(old, gw *v1alpha1.KrakenDGateway) admission.Warnings {
-	if gw.Spec.Edition != v1alpha1.EditionCE || !openAPIExportEnabled(gw) ||
-		old == nil || old.Spec.Edition != v1alpha1.EditionCE || !openAPIExportEnabled(old) {
+	if !keptOnCE(old, gw, openAPIExportEnabled) {
 		return nil
 	}
 	return admission.Warnings{
 		"spec.openapi is ignored on CE gateways: the CE binary cannot export OpenAPI, " +
 			"so no export or openapi-serve sidecar runs",
 	}
+}
+
+// dragonflyOnCEWarning warns when a CE gateway keeps a Dragonfly that was
+// stored enabled before admission refused it: KrakenD CE ignores the redis
+// connection pool, so the Dragonfly instance runs for nothing. Enabling it, or
+// switching to CE while it is enabled, is rejected instead (eeFieldsOnCE).
+func dragonflyOnCEWarning(old, gw *v1alpha1.KrakenDGateway) admission.Warnings {
+	if !keptOnCE(old, gw, dragonflyEnabled) {
+		return nil
+	}
+	return admission.Warnings{
+		"spec.dragonfly.enabled has no effect on CE gateways: KrakenD CE ignores the redis connection pool, " +
+			"so the Dragonfly instance runs for nothing",
+	}
+}
+
+// keptOnCE reports whether gw is a CE gateway that already was one with the
+// feature enabled, the only way a CE gateway still carries it.
+func keptOnCE(old, gw *v1alpha1.KrakenDGateway, enabled func(*v1alpha1.KrakenDGateway) bool) bool {
+	return gw.Spec.Edition == v1alpha1.EditionCE && enabled(gw) &&
+		old != nil && old.Spec.Edition == v1alpha1.EditionCE && enabled(old)
 }
 
 // redisPoolWarnings reports Redis and Dragonfly settings that do not reach
