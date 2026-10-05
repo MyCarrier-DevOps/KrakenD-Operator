@@ -935,7 +935,7 @@ flowchart TD
 
 **Policy resolution** — The controller fetches all referenced `KrakenDBackendPolicy` resources before calling `Renderer.Render`, populating `RenderInput.Policies`. The renderer itself has no Kubernetes client dependency — all inputs are passed as parameters. If a policy referenced by a `policyRef` does not exist in the map, the renderer reports the owning endpoint in `InvalidEndpoints` and excludes it from the rendered config; the endpoint controller reports the cause through `ResolvedRefs`.
 
-**CE fallback determination** — Before calling `Renderer.Render`, the controller calls `reconcileLicense`, which evaluates the license stage and returns the `ceFallback` verdict (the stage decision; while the license is unreadable, the stage judged from the last known expiry in `status.licenseExpiry` once that is inside the safety buffer or past, otherwise the last recorded decision). The verdict is passed as `RenderInput.CEFallback`, controlling image selection and wildcard endpoint stripping.
+**CE fallback determination** — Before calling `Renderer.Render`, the controller calls `reconcileLicense`, which evaluates the license stage and returns the `ceFallback` verdict (the stage decision; while the license is unreadable, the stage judged from the last known expiry in `status.licenseExpiry` once that is inside the safety buffer or past, otherwise the last recorded decision). The verdict is passed as `RenderInput.CEFallback`, which makes the renderer strip every Enterprise-only feature (wildcard endpoints and Enterprise-only `extra_config`). The image does not follow the verdict directly: `appliedImage` takes it from the applied config's edition (see "Image follows the applied edition" below).
 
 **Applied config** — The config stage (`reconcileConfig`) is the only code that decides the applied config. `status.configChecksum` is the checksum of the render the gateway serves and `status.configEdition` the edition it was validated for. A render that is not the applied one (a different checksum, or the same checksum for another edition) is validated as the edition it was rendered for; a verdict is deterministic for (checksum, edition), so a rejected input is remembered per gateway and not validated again until an input changes. Only a passing render is published and recorded as applied. A rejected render (`ConfigValid=False`) or one that could not be judged (`ConfigValid=Unknown`) leaves the applied config in place, and the infrastructure stage still runs, so the other resources keep converging and an image, plugin or license change still rolls. A `GatewayConfigRejected` verdict is written on each endpoint the rejection names (see `Attribute`, §10).
 
@@ -968,7 +968,7 @@ A configuration that could not be validated because the validator was unavailabl
 | KrakenDGateway | Create/Update/Delete | Full reconcile |
 | Owned Deployment | Update (status change) | Update replicas/readyReplicas. A rollout counts as converged only when the Deployment has observed its latest generation, its pod template carries the applied config checksum, and replicas, updated replicas and available replicas all equal the desired count; then `Progressing=False` and `Available=True`. A Deployment `Available=False` outside a rollout is mirrored into the gateway's `Available` condition. On `ProgressDeadlineExceeded`: `Progressing=False`, `Available=False`, emit `RolloutFailed`. `Ready` and the phase are re-derived from the conditions |
 | Owned Service | Update | Reconcile to correct drift |
-| Owned ConfigMap | Update/Delete | Reconcile to correct drift; a deleted config ConfigMap is published again from the render |
+| Owned ConfigMap | Update/Delete | Reconcile to correct drift; a deleted config ConfigMap is published again from the render when the render is the applied config (`publishApplied`); while a newer render is rejected, `appliedConfigMapName` can only re-seed it from the old `<gateway>` ConfigMap when that holds exactly the applied config, otherwise no ConfigMap holds it and the Deployment is held |
 | Owned Dragonfly CR | Status update | Update `DragonflyReady` condition on gateway; emit `DragonflyNotReady` Warning event on phase regression. Watched when the Dragonfly CRD existed at operator startup |
 | Owned HPA | Update | Reconcile to correct drift |
 | Owned Job (post-restart) | Update | Reconcile the post-restart Job decision |
@@ -1419,7 +1419,7 @@ type Renderer interface {
 type RenderInput struct {
     Gateway          *v1alpha1.KrakenDGateway
     Endpoints        []v1alpha1.KrakenDEndpoint
-    Policies         map[string]*v1alpha1.KrakenDBackendPolicy // keyed by policy name
+    Policies         map[string]*v1alpha1.KrakenDBackendPolicy // keyed by namespace/name (PolicyRef.PolicyKey)
     CEFallback       bool
     Dragonfly        *DragonflyState // nil if not enabled
     PluginConfigMaps []corev1.ConfigMap
@@ -1678,7 +1678,7 @@ func ResolveImage(gw *v1alpha1.KrakenDGateway, ceFallback bool) string {
         if gw.Spec.CEImage != "" {
             return gw.Spec.CEImage
         }
-        return fmt.Sprintf("krakend/krakend:%s", gw.Spec.Version)
+        return fmt.Sprintf("krakend:%s", gw.Spec.Version)
     }
     if gw.Spec.Image != "" {
         return gw.Spec.Image
@@ -1687,7 +1687,7 @@ func ResolveImage(gw *v1alpha1.KrakenDGateway, ceFallback bool) string {
     case v1alpha1.EditionEE:
         return fmt.Sprintf("krakend/krakend-ee:%s", gw.Spec.Version)
     default:
-        return fmt.Sprintf("krakend/krakend:%s", gw.Spec.Version)
+        return fmt.Sprintf("krakend:%s", gw.Spec.Version)
     }
 }
 ```
