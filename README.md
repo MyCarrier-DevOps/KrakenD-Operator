@@ -17,8 +17,8 @@ Kubernetes operator for managing [KrakenD API Gateway](https://www.krakend.io) i
 
 ### Prerequisites
 
-- Kubernetes 1.28+
-- Helm 3.x
+- Kubernetes 1.33+
+- Helm 3.18 or later
 
 ### Install via Helm
 
