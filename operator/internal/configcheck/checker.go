@@ -64,7 +64,7 @@ func (c *Checker) Gather(ctx context.Context, gw *v1alpha1.KrakenDGateway,
 // after the route check).
 func (c *Checker) CheckRendered(ctx context.Context, in renderer.RenderInput,
 	out *renderer.RenderOutput) (Verdict, error) {
-	return Verdict{}, nil
+	return c.check(ctx, in, out, c.validator.Validate)
 }
 
 // CheckGateway lints gw's config: its current endpoints with replace
