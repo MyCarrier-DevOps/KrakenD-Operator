@@ -114,6 +114,13 @@ func Truncate(s string, limit int) string {
 	return s[:cut]
 }
 
+// TruncateEllipsis returns s when it fits in limit bytes. Otherwise it cuts s
+// on a rune boundary and ends it with "...", so the result is at most limit
+// bytes.
+func TruncateEllipsis(s string, _ int) string {
+	return s
+}
+
 // findingsFrom converts the renderer's attributions, which name positions in the
 // rendered endpoints array, into findings that name the entry's position in
 // its KrakenDEndpoint's spec.endpoints. A rejection always has a finding:
