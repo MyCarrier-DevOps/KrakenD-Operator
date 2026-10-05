@@ -36,6 +36,13 @@ func testPolicy(raw string) *v1alpha1.KrakenDBackendPolicy {
 	}
 }
 
+// referencing returns objects for a gateway and an endpoint that references policy p.
+func referencing() []client.Object {
+	ep := testEndpoint("uses-p", "/a")
+	ep.Spec.Endpoints[0].Backends[0].PolicyRef = &v1alpha1.PolicyRef{Name: "p"}
+	return []client.Object{testGateway(), ep}
+}
+
 func TestPolicyAdmission_Render(t *testing.T) {
 	bad := failing("policy-lint", 0,
 		"- at '/endpoints/0/backend/0/extra_config': additional properties 'qos/circuit-breakr' not allowed")
@@ -49,6 +56,7 @@ func TestPolicyAdmission_Render(t *testing.T) {
 	}{
 		{"unreferenced, lints clean", nil, nil, nil, true, "policy"},
 		{"unreferenced, fails alone", nil, nil, []configcheck.Verdict{bad}, false, "policy"},
+		{"referenced, keeps its gateway passing", referencing(), nil, nil, true, "policy,gateway+policy"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
