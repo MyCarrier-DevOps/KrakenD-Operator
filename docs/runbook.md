@@ -413,8 +413,10 @@ gateway already has: the same path, a path that differs only in parameter
 names (`/users/{id}` and `/users/{name}`) or in repeated slashes. The message
 names the KrakenDEndpoint that owns the route (or the entry of the same
 KrakenDEndpoint). Remove or change the entry, or delete the other one first.
-Only an entry whose route is new to the stored object is checked, so an older
-conflict does not block unrelated edits; it shows as `PartiallyAccepted` or `EndpointConflict` above.
+Against other KrakenDEndpoints only a route new to the stored object is
+checked, so an older conflict does not block unrelated edits; it shows as
+`PartiallyAccepted` or `EndpointConflict` above. Same-shape entries inside one
+KrakenDEndpoint are always checked when an entry changes.
 
 ### Renaming a path parameter across several routes
 
