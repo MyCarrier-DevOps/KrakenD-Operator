@@ -190,8 +190,9 @@ func TestEndpointAdmission_StoredClashDoesNotBlockOtherEdits(t *testing.T) {
 	}
 }
 
-// The same-controller exemption: the AutoConfig controller creates a renamed
-// operation's endpoint before it deletes the old one on the same route.
+// The same-controller exemption: while an AutoConfig renames an operation, its
+// new endpoint and the old one on the same route exist together, and the
+// admission cache may lag the deletion of the old one.
 func TestEndpointAdmission_SameControllerMayShareARoute(t *testing.T) {
 	owned := func(name string, uid types.UID) *v1alpha1.KrakenDEndpoint {
 		ep := testEndpoint(name, "/users/{id}")
@@ -215,7 +216,8 @@ func TestEndpointAdmission_DuplicateAcrossNamespacesOnOneGateway(t *testing.T) {
 	other.Spec.GatewayRef.Namespace = "default"
 	v := &EndpointValidator{Client: fakeClient(testGateway(), other)}
 	resp := review(t, v, "alice", testEndpoint("new", "/a"), nil)
-	if resp.Allowed || !strings.Contains(resp.Result.Details.Causes[0].Message, "team-b/other") {
+	if resp.Allowed || resp.Result.Details == nil || len(resp.Result.Details.Causes) != 1 ||
+		!strings.Contains(resp.Result.Details.Causes[0].Message, "team-b/other") {
 		t.Errorf("response = %+v, want a duplicate naming team-b/other", resp.Result)
 	}
 }
