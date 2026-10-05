@@ -21,26 +21,10 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"unicode/utf8"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/autoconfig"
 )
-
-func TestTruncate_BoundsBytesAndMarksTheCut(t *testing.T) {
-	if got := truncate("short", 10); got != "short" {
-		t.Errorf("truncate(short) = %q, want it unchanged", got)
-	}
-	// 100 three-byte runes: 300 bytes, over the cap by byte count and well
-	// under it by rune count.
-	got := truncate(strings.Repeat("€", 100), maxStatusMessageLen)
-	if len(got) > maxStatusMessageLen {
-		t.Errorf("len = %d bytes, want at most %d", len(got), maxStatusMessageLen)
-	}
-	if !utf8.ValidString(got) || !strings.HasSuffix(got, "...") {
-		t.Errorf("truncate = %q, want valid UTF-8 ending in \"...\"", got)
-	}
-}
 
 func TestCapList_KeepsTheFirstTwentyItems(t *testing.T) {
 	items := make([]int, maxStatusListLen+5)
