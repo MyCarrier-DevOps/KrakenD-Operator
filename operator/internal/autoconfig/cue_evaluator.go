@@ -361,9 +361,14 @@ func sortIssues(issues []OperationIssue) {
 // must not hold anything back.
 func skipUnsupportedMethods(output *CUEOutput) {
 	kept := output.Entries[:0]
-	for _, entry := range output.Entries {
+	keptIDs := output.entryOperationIDs[:0]
+	aligned := len(output.entryOperationIDs) == len(output.Entries)
+	for i, entry := range output.Entries {
 		if slices.Contains(supportedMethods, entry.Method) {
 			kept = append(kept, entry)
+			if aligned {
+				keptIDs = append(keptIDs, output.entryOperationIDs[i])
+			}
 			continue
 		}
 		key := entry.Endpoint + ":" + entry.Method
@@ -375,6 +380,9 @@ func skipUnsupportedMethods(output *CUEOutput) {
 		delete(output.Tags, key)
 	}
 	output.Entries = kept
+	if aligned {
+		output.entryOperationIDs = keptIDs
+	}
 
 	stillFailed := output.Failed[:0]
 	for _, failed := range output.Failed {
