@@ -18,6 +18,10 @@ package controller
 
 import (
 	appsv1 "k8s.io/api/apps/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 )
 
 // deploymentObservation is what the Deployment step of the infrastructure
@@ -27,10 +31,33 @@ import (
 // step failed).
 type deploymentObservation struct {
 	dep *appsv1.Deployment
+	// templateChanged: this pass's write changed the pod template, judged by
+	// comparing the template read before the write with the server's response.
+	templateChanged bool
 }
 
 // rolloutNote is the reason and message a pass's change detection chose for
 // the rollout it started.
 type rolloutNote struct {
 	reason, message string
+}
+
+// raiseProgressing reports a rollout in progress. The reason is the one this
+// pass's detection chose; otherwise the reason of a rollout already reported;
+// otherwise DeploymentUpdated.
+func raiseProgressing(gw *v1alpha1.KrakenDGateway, note *rolloutNote) {
+	reason, message := "DeploymentUpdated", "Deployment is rolling out a changed pod template"
+	if cur := meta.FindStatusCondition(gw.Status.Conditions, v1alpha1.ConditionProgressing); condTrue(cur) {
+		reason, message = cur.Reason, cur.Message
+	}
+	if note != nil {
+		reason, message = note.reason, note.message
+	}
+	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+		Type:               v1alpha1.ConditionProgressing,
+		Status:             metav1.ConditionTrue,
+		ObservedGeneration: gw.Generation,
+		Reason:             reason,
+		Message:            message,
+	})
 }
