@@ -22,8 +22,10 @@ import (
 	"strings"
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
@@ -232,20 +234,34 @@ func TestGatewayAdmission_CERejectsEnterpriseOnlyNamespaces(t *testing.T) {
 		return gw
 	}
 	apiKeys := `{"auth/api-keys":{"keys":[]}}`
+	keys := testEndpoint("keys", "/k")
+	keys.Spec.Endpoints[0].ExtraConfig = &runtime.RawExtension{Raw: []byte(`{"auth/api-keys":{"roles":["a"]}}`)}
+	keys.Spec.Endpoints[0].Backends[0].PolicyRef = &v1alpha1.PolicyRef{Name: "p"}
+	proxy := &v1alpha1.KrakenDBackendPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "default"},
+		Spec: v1alpha1.KrakenDBackendPolicySpec{
+			Raw: &runtime.RawExtension{Raw: []byte(`{"backend/http/client":{"proxy_address":"http://p"}}`)},
+		},
+	}
 	tests := []struct {
 		name    string
+		objs    []client.Object
 		gw, old *v1alpha1.KrakenDGateway
 		reject  []string // substrings of the denial; none means admitted
 	}{
-		{"CE root with an EE namespace", withRoot(testGateway(), apiKeys), nil,
+		{"CE root with an EE namespace", nil, withRoot(testGateway(), apiKeys), nil,
 			[]string{`spec.config.extraConfig: Invalid value: "auth/api-keys"`}},
-		{"CE root with CE namespaces", withRoot(testGateway(), `{"security/cors":{"allow_origins":["*"]}}`), nil, nil},
-		{"EE root with an EE namespace", withRoot(ee(), apiKeys), nil, nil},
-		{"unchanged CE root", edited(withRoot(testGateway(), apiKeys)), withRoot(testGateway(), apiKeys), nil},
+		{"CE root with CE namespaces", nil, withRoot(testGateway(), `{"security/cors":{"allow_origins":["*"]}}`), nil, nil},
+		{"EE root with an EE namespace", nil, withRoot(ee(), apiKeys), nil, nil},
+		{"unchanged CE root", nil, edited(withRoot(testGateway(), apiKeys)), withRoot(testGateway(), apiKeys), nil},
+		{"EE to CE with EE namespaces in use", []client.Object{keys, proxy}, testGateway(), ee(), []string{
+			`spec.edition: Invalid value: "CE"`,
+			"KrakenDEndpoint default/keys spec.endpoints[0].extraConfig auth/api-keys",
+			"KrakenDBackendPolicy default/p spec.raw backend/http/client"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			v := &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
+			v := &GatewayValidator{Client: fakeClient(tt.objs...), Checker: &scriptedChecker{}}
 			var old runtime.Object
 			if tt.old != nil {
 				old = tt.old
