@@ -47,5 +47,6 @@
  {"metadata":{"namespace":"a","name":"ee-policy"},"spec":{"gatewayRef":{"name":"ce-gw"},"endpoints":[{"endpoint":"/pol","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u","policyRef":{"name":"p-ee"}}]}]}},
  {"metadata":{"namespace":"a","name":"ee-policy-ns"},"spec":{"gatewayRef":{"name":"ce-gw"},"endpoints":[{"endpoint":"/polns","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u","policyRef":{"name":"p-other","namespace":"b"}}]}]}},
  {"metadata":{"namespace":"a","name":"ee-policy-on-ee"},"spec":{"gatewayRef":{"name":"ee-gw"},"endpoints":[{"endpoint":"/pol-ee","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u","policyRef":{"name":"p-ee-only"}}]}]}},
- {"metadata":{"namespace":"a","name":"timeout-number"},"spec":{"gatewayRef":{"name":"gw"},"endpoints":[{"endpoint":"/x","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}],"timeout":5}]}}
+ {"metadata":{"namespace":"a","name":"timeout-number"},"spec":{"gatewayRef":{"name":"gw"},"endpoints":[{"endpoint":"/x","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}],"timeout":5}]}},
+ {"metadata":{"namespace":"a","name":"timeout-trailing-dot"},"spec":{"gatewayRef":{"name":"gw-timeout-trailing-dot"},"endpoints":[{"endpoint":"/x","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}],"timeout":"5.s","cacheTTL":"1.5h"}]}}
 ]}
