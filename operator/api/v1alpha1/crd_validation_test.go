@@ -128,5 +128,6 @@ func TestEndpointCRD_Rules(t *testing.T) {
 		{"wildcard mid-path", endpointHead + `[{endpoint: "/a/*/b", method: GET, ` + okBackend + `}]}}`, "should match"},
 		{"no endpoints", endpointHead + `[]}}`, "should have at least 1 items"},
 		{"no backends", endpointHead + `[{endpoint: "/a", method: GET, backends: []}]}}`, "should have at least 1 items"},
+		{"duplicate entry", endpointHead + `[{endpoint: "/a", method: GET, ` + okBackend + `}, {endpoint: "/a", method: GET, ` + okBackend + `}]}}`, "Duplicate value"},
 	})
 }
