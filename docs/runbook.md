@@ -45,7 +45,8 @@ Metrics are exposed on port **8443** (HTTPS). Key metrics:
 | `endpoints` | Gauge | Number of endpoints (per gateway) |
 | `dragonfly_ready` | Gauge | Dragonfly readiness (1/0 per gateway) |
 | `reconcile_duration_seconds` | Histogram | Reconcile loop duration |
-| `gateway_info` | Gauge | Gateway metadata labels |
+| `gateway_info` | Gauge | Gateway metadata labels (edition, version); one series per gateway |
+| `gateway_config_valid` | Gauge | 1 while the gateway's newest config passed validation, 0 while it is rejected or unjudged (per gateway); removed when the gateway is deleted |
 | `autoconfig_synced` | Gauge | 1 after an AutoConfig's last sync succeeded, 0 while it's failing (per AutoConfig); removed when the AutoConfig is deleted |
 
 ### Recommended Alerts
@@ -65,10 +66,10 @@ Metrics are exposed on port **8443** (HTTPS). Key metrics:
   labels:
     severity: critical
 
-# Repeated validation failures
-- alert: KrakenDConfigValidationFailures
-  expr: rate(config_validation_failures_total[5m]) > 0
-  for: 10m
+# A gateway's newest config is rejected (it keeps serving the last applied one)
+- alert: KrakenDGatewayConfigRejected
+  expr: krakend_operator_gateway_config_valid == 0
+  for: 15m
   labels:
     severity: warning
 
