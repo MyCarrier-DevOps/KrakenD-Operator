@@ -4253,3 +4253,27 @@ func TestAutoConfigReconcile_OrphanGoneBeforeAdoptionIsNotAFailure(t *testing.T)
 		t.Error("expected the stale endpoint deleted: the vanished orphan is not a failure")
 	}
 }
+
+func TestAutoConfigReconcile_ConflictAndAlreadyExistsRequeueQuietly(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	g.output.Endpoints = []*v1alpha1.KrakenDEndpoint{generatedEndpoint("a", "/a"), generatedEndpoint("b", "/b")}
+	var ops []string
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).
+		WithInterceptorFuncs(recordEndpointWrites(&ops, map[string]error{
+			"test-ac-a": conflictError("krakendendpoints", "test-ac-a"),
+			"test-ac-b": apierrors.NewAlreadyExists(
+				schema.GroupResource{Group: v1alpha1.GroupVersion.Group, Resource: "krakendendpoints"}, "test-ac-b"),
+		})).Build()
+	rec := fakeRecorder()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Recorder = rec
+
+	result, err := reconcileAC(r, ac)
+
+	assertQuietRequeue(t, result, err, rec)
+	if len(ops) != 2 {
+		t.Errorf("expected both writes attempted, got %v", ops)
+	}
+}
