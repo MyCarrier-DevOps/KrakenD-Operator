@@ -260,3 +260,16 @@ func TestCheckGateway_RendersThePoliciesTheEndpointsReference(t *testing.T) {
 		t.Errorf("config lacks the policy's circuit breaker: %s", v.seen[0])
 	}
 }
+
+func TestCheckIsolated_RendersThePoliciesTheEndpointsReference(t *testing.T) {
+	v := &fakeValidator{}
+	c := newChecker(v, policy("breaker"))
+
+	if _, err := c.CheckIsolated(context.Background(), gateway(v1alpha1.EditionCE),
+		[]v1alpha1.KrakenDEndpoint{*withPolicy(endpoint("a", "/a"), "breaker")}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(v.seen[0], "qos/circuit-breaker") {
+		t.Errorf("config lacks the policy's circuit breaker: %s", v.seen[0])
+	}
+}
