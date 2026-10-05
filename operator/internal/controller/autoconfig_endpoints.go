@@ -32,8 +32,19 @@ import (
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/autoconfig"
+	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
 	"github.com/mycarrier-devops/krakend-operator/internal/fieldindex"
 )
+
+// AutoConfigChecker is the gateway config check the AutoConfig controller runs
+// over the endpoints it is about to write (configcheck.Checker).
+type AutoConfigChecker interface {
+	CheckGateway(
+		ctx context.Context,
+		gw *v1alpha1.KrakenDGateway,
+		replace []v1alpha1.KrakenDEndpoint,
+	) (configcheck.Verdict, error)
+}
 
 // claimEndpoints returns the endpoints ac controls, found by the controller
 // UID index, after adopting label-matched orphans the way a ReplicaSet adopts
