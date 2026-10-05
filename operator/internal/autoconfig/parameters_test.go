@@ -19,6 +19,7 @@ package autoconfig
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -149,5 +150,28 @@ func TestDereferenceParameters_UnresolvableRefStillFailsTheOperation(t *testing.
 	got := evaluateEmbedded(t, string(out))
 	if len(got.Entries) != 1 || len(got.Failed) != 1 {
 		t.Errorf("entries=%d failed=%v, want 1 entry and 1 failed operation", len(got.Entries), got.Failed)
+	}
+}
+
+func TestDereferenceParameters_RefToPathsDoesNotMultiplyTheSpec(t *testing.T) {
+	var ops []string
+	for i := range 16 {
+		ops = append(ops, fmt.Sprintf(`"/p%d":{"get":{"operationId":"op%d","parameters":[{"$ref":"#/paths"}],`+
+			`"responses":{"200":{"description":"OK"}}}}`, i, i))
+	}
+	spec := []byte(`{"paths":{` + strings.Join(ops, ",") + `}}`)
+
+	out, warnings, err := DereferenceParameters(spec)
+	if err != nil {
+		t.Fatalf("DereferenceParameters: %v", err)
+	}
+	if len(out) > 2*len(spec) {
+		t.Fatalf("output grew from %d to %d bytes", len(spec), len(out))
+	}
+	if len(warnings) != 16 {
+		t.Errorf("got %d warnings, want 16: %q", len(warnings), warnings)
+	}
+	if failed := evaluateEmbedded(t, string(out)).Failed; len(failed) != 16 {
+		t.Errorf("got %d failed operations, want 16", len(failed))
 	}
 }
