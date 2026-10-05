@@ -283,6 +283,7 @@ func TestGatewayAdmission_CERejectsEnterpriseOnlyNamespaces(t *testing.T) {
 			Raw: &runtime.RawExtension{Raw: []byte(`{"backend/http/client":{"send_body_on_redirect":true}}`)},
 		},
 	}
+	wildcard := testEndpoint("wild", "/w/*")
 	tests := []struct {
 		name    string
 		objs    []client.Object
@@ -314,6 +315,9 @@ func TestGatewayAdmission_CERejectsEnterpriseOnlyNamespaces(t *testing.T) {
 			testGateway(), ee(), nil},
 		{"CE stays CE with stored EE namespaces", []client.Object{keys, proxy},
 			edited(testGateway()), testGateway(), nil},
+		{"EE to CE with a /prefix/* wildcard", []client.Object{wildcard}, testGateway(), ee(), []string{
+			`spec.edition: Invalid value: "CE"`,
+			"KrakenDEndpoint default/wild spec.endpoints[0].endpoint /w/*"}},
 		{"EE to CE with only keys CE honors", []client.Object{redirects, honored}, testGateway(), ee(), nil},
 	}
 	for _, tt := range tests {
