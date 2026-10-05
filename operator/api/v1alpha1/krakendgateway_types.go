@@ -300,6 +300,7 @@ type GatewayConfig struct {
 	Host []string `json:"host,omitempty"`
 
 	// Timeout is the global request timeout (e.g. "3s").
+	// +kubebuilder:validation:Pattern=`^[0-9]+(ns|ms|us|µs|s|m|h)$`
 	Timeout string `json:"timeout,omitempty"`
 
 	// CacheTTL is the global cache TTL (e.g. "0s").
