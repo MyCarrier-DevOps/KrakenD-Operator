@@ -1347,6 +1347,8 @@ Status is written only when it changes, so a reconcile with nothing to do makes 
 
 The operator runs `krakend check -t -n -c` against the rendered configuration before deploying. The KrakenD CE binary must be embedded in the operator's container image (via multi-stage Docker build). Validation is executed by invoking the binary as a subprocess against the rendered JSON file.
 
+The gateway controller does not gather and validate on its own: it uses the same `configcheck.Checker` the admission webhooks use. It reads the gateway's endpoints and their policies through `Checker.Gather`, replaces the CE fallback `Gather` read from status with the verdict of its own license evaluation in the same reconcile, renders, and validates the render through `CheckRendered` (the route check, then `krakend check -t -n`). Admission runs the same checker in lint mode (`krakend check -n`). One pod-wide pool of 3 validation slots serves both, so at most three krakend processes run at once; that is why the operator's memory limit is 512Mi.
+
 > **EE wildcard endpoints and CE validation:** The operator validates with
 > the embedded CE binary, whose router refuses unnamed wildcards and cannot
 > model EE's. The EE router registers `/p/*` as the catch-all `/p/*Wildcard`
@@ -1393,21 +1395,23 @@ The embedded-binary approach is preferred for latency and simplicity.
 
 Each run is limited to 30 seconds. Only a run that completes and exits non-zero is a verdict ("the config is invalid"); a missing binary, a timeout or a killed process means the config was not judged, and the controller retries.
 
-A rejection's krakend check output can be far larger than a condition allows (one bad policy used by many backends), so the `ConfigValid` condition message and the `ConfigValidationFailed` event carry at most 4 KiB of it: the leading whole lines that fit, then `(output truncated, N more lines)`. The operator logs the full output once per rejected input, as `validation rejected the rendered config`.
+A rejection's krakend check output can be far larger than a condition allows (one bad policy used by many backends), so the `ConfigValid` condition message and the `ConfigValidationFailed` event carry at most 4 KiB: a summary line naming the blamed KrakenDEndpoints, then one line per finding (`namespace/name spec.endpoints[i]: …`, or `gateway: …` when the finding names no endpoint), as many whole lines as fit, then `(output truncated, N more lines)`. The operator logs the full output once per rejected input, as `validation rejected the rendered config`.
 
 When validation fails, the rendered config is not applied and the gateway
 keeps serving the last applied one; there is no per-endpoint quarantine.
 `RenderOutput.Sources` is index-aligned with the rendered `endpoints` array,
 so each `krakend check` finding (a `/endpoints/<i>` pointer, or a
 `METHOD /path` or `path '…'` in router errors) maps back to its
-KrakenDEndpoint. Those endpoints get `Accepted=False/GatewayConfigRejected`,
+KrakenDEndpoint and to the entry of its `spec.endpoints` the finding names
+(`spec.endpoints[i]`). Those endpoints get `Accepted=False/GatewayConfigRejected`,
 and every other endpoint keeps the verdict of the applied config, except
 that a `GatewayConfigRejected` no finding names any more is removed. While no
 config has ever been applied (confirmed with an uncached read of the
 gateway), `Accepted` is removed from every endpoint that no finding names and
 that carries it, so a recreated gateway cannot inherit its predecessor's
 verdicts. A later pass that renders the same rejected config reuses the
-remembered verdict and writes nothing.
+remembered rejection and writes nothing; the findings are rebuilt from it against
+the current endpoints, so the entry indices they name are never stale.
 
 ---
 
