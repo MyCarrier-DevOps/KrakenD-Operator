@@ -274,6 +274,8 @@ type OperationOverride struct {
 	OutputEncoding string `json:"outputEncoding,omitempty"`
 
 	// ConcurrentCalls overrides the number of concurrent backend calls.
+	// When specified, it must be a positive integer.
+	// +kubebuilder:validation:Minimum=1
 	ConcurrentCalls *int32 `json:"concurrentCalls,omitempty"`
 
 	// InputHeaders overrides the list of headers forwarded to backends.
