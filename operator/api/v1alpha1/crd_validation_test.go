@@ -248,5 +248,6 @@ func TestGatewayCRD_Rules(t *testing.T) {
 		{"EE with an empty secretRef name", gatewayHead + `edition: EE, config: {}, license: {secretRef: {name: "", key: k}}}}`, "edition EE requires"},
 		{"openapi default port clash", gatewayHead + `edition: CE, config: {port: 8090}, openapi: {enabled: true}}}`, "openapi port must differ"},
 		{"openapi explicit port clash", gatewayHead + `edition: CE, config: {}, openapi: {enabled: true, port: 8080}}}`, "openapi port must differ"},
+		{"openapi disabled", gatewayHead + `edition: CE, config: {port: 8090}, openapi: {enabled: false}}}`, ""},
 	})
 }
