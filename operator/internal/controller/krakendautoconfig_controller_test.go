@@ -4156,3 +4156,36 @@ func TestAutoConfigReconcile_RaceMixedWithRealErrorFailsListingBoth(t *testing.T
 		}
 	}
 }
+
+func TestAutoConfigReconcile_LongCUEErrorIsBoundedInStatusAndEvent(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	ce.output = nil
+	// A whole-evaluation error joining the message of every one of 300
+	// operations is about 25 KB.
+	lines := make([]string, 300)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("operation%03d: field is incompatible with the policy definition at path %s",
+			i, strings.Repeat("x", 20))
+	}
+	ce.err = errors.New(strings.Join(lines, "\n"))
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).Build()
+	rec := fakeRecorder()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Recorder = rec
+
+	if _, err := reconcileAC(r, ac); err == nil {
+		t.Fatal("expected the evaluation error to be returned")
+	}
+
+	got := getAC(t, c, ac)
+	cond := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionSynced)
+	if cond == nil || cond.Reason != v1alpha1.ReasonCUEEvaluationFailed || len(cond.Message) > maxConditionMessageBytes {
+		t.Fatalf("expected Synced False/CUEEvaluationFailed within %d bytes, got %+v", maxConditionMessageBytes, cond)
+	}
+	events := drainEvents(rec)
+	if want := "Warning CUEEvaluationFailed " + cond.Message; !slices.Contains(events, want) {
+		t.Errorf("expected the Warning event to carry the truncated message, got %d events", len(events))
+	}
+}
