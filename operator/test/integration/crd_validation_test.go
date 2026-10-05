@@ -22,8 +22,10 @@ import (
 	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
@@ -62,7 +64,80 @@ func TestCRD_EndpointRules(t *testing.T) {
 	expectInvalid(t, ep("dup", entry("/a"), entry("/a")), "Duplicate value")
 	expectInvalid(t, ep("no-backends", v1alpha1.EndpointEntry{Endpoint: "/a", Method: "GET",
 		Backends: []v1alpha1.BackendSpec{}}), "spec.endpoints[0].backends")
+	// No Go duration can hold these, so send them as raw objects.
+	for _, field := range []string{"timeout", "cacheTTL"} {
+		overflowing := &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "gateway.krakend.io/v1alpha1", "kind": "KrakenDEndpoint",
+			"metadata": map[string]any{"name": "overflow-" + strings.ToLower(field), "namespace": ns},
+			"spec": map[string]any{"gatewayRef": map[string]any{"name": "gw"}, "endpoints": []any{map[string]any{
+				"endpoint": "/a", "method": "GET", field: "2562048h",
+				"backends": []any{map[string]any{"host": []any{"http://svc"}, "urlPattern": "/"}},
+			}}},
+		}}
+		expectInvalid(t, overflowing, "spec.endpoints[0]."+field)
+	}
 	if err := k8sClient.Create(ctx, ep("valid", entry("/a/{id}"), entry("/files/*"))); err != nil {
 		t.Errorf("valid endpoint rejected: %v", err)
+	}
+}
+
+func TestCRD_GatewayRules(t *testing.T) {
+	ns := testNamespace(t)
+	gw := func(name string, mutate func(*v1alpha1.KrakenDGatewaySpec)) *v1alpha1.KrakenDGateway {
+		g := &v1alpha1.KrakenDGateway{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+			Spec:       v1alpha1.KrakenDGatewaySpec{Version: "2.13", Edition: v1alpha1.EditionCE},
+		}
+		mutate(&g.Spec)
+		return g
+	}
+	secretKey := func(name string) *corev1.SecretKeySelector {
+		return &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: name}, Key: "p"}
+	}
+	expectInvalid(t, gw("ee-unlicensed", func(s *v1alpha1.KrakenDGatewaySpec) { s.Edition = v1alpha1.EditionEE }),
+		"edition EE requires")
+	expectInvalid(t, gw("ee-unnamed-license", func(s *v1alpha1.KrakenDGatewaySpec) {
+		s.Edition = v1alpha1.EditionEE
+		s.License = &v1alpha1.LicenseConfig{SecretRef: secretKey("")}
+	}), "edition EE requires")
+	expectInvalid(t, gw("bad-timeout", func(s *v1alpha1.KrakenDGatewaySpec) { s.Config.Timeout = "3 seconds" }),
+		"spec.config.timeout")
+	expectInvalid(t, gw("port-clash", func(s *v1alpha1.KrakenDGatewaySpec) {
+		s.OpenAPI = &v1alpha1.OpenAPIExportSpec{Enabled: true, Port: 8080}
+	}), "openapi port must differ")
+	expectInvalid(t, gw("redis-password", func(s *v1alpha1.KrakenDGatewaySpec) {
+		s.Redis = &v1alpha1.RedisSpec{ConnectionPool: v1alpha1.RedisConnectionPool{
+			Addresses: []string{"redis:6379"}, Password: secretKey("s")}}
+	}), "password is not supported yet")
+	if err := k8sClient.Create(ctx, gw("valid", func(s *v1alpha1.KrakenDGatewaySpec) { s.Config.Timeout = "3s" })); err != nil {
+		t.Errorf("valid gateway rejected: %v", err)
+	}
+}
+
+// optionalOldSelf is beta and on by default in the 1.32 test cluster, as in
+// the 1.33 floor and above.
+func TestCRD_GatewayDragonflyPasswordRatchets(t *testing.T) {
+	ns := testNamespace(t)
+	g := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "df-password", Namespace: ns},
+		Spec: v1alpha1.KrakenDGatewaySpec{Version: "2.13", Edition: v1alpha1.EditionCE,
+			Dragonfly: &v1alpha1.DragonflySpec{Enabled: true, Authentication: &v1alpha1.DragonflyAuthSpec{
+				PasswordFromSecret: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: "s"}, Key: "p"}}}},
+	}
+	if err := k8sClient.Create(ctx, g); err != nil {
+		t.Fatalf("a Community gateway with a Dragonfly password was rejected: %v", err)
+	}
+	replicas := int32(3)
+	g.Spec.Replicas = &replicas
+	if err := k8sClient.Update(ctx, g); err != nil {
+		t.Errorf("an unrelated edit of a Community gateway with a Dragonfly password was rejected: %v", err)
+	}
+	g.Spec.Edition = v1alpha1.EditionEE
+	g.Spec.License = &v1alpha1.LicenseConfig{SecretRef: &corev1.SecretKeySelector{
+		LocalObjectReference: corev1.LocalObjectReference{Name: "l"}, Key: "k"}}
+	err := k8sClient.Update(ctx, g)
+	if !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "passwordFromSecret is not supported yet") {
+		t.Errorf("switch to Enterprise: err = %v, want Invalid containing the Dragonfly password message", err)
 	}
 }
