@@ -181,3 +181,21 @@ func TestSchemaClosure_SeesRefsUnderPropertiesNamedExample(t *testing.T) {
 		t.Errorf("unresolved = %v, want none", unresolved)
 	}
 }
+
+func TestSchemaClosure_TerminatesOnCycles(t *testing.T) {
+	components := map[string]runtime.RawExtension{
+		"Node": {Raw: []byte(`{"properties":{"next":{"$ref":"#/components/schemas/Node"},` +
+			`"peer":{"$ref":"#/components/schemas/Other"}}}`)},
+		"Other": {Raw: []byte(`{"properties":{"back":{"$ref":"#/components/schemas/Node"}}}`)},
+	}
+	entry := docEntry("/nodes", `{"response_definition":{"200":{"ref":"Node"}}}`)
+
+	closure, unresolved := SchemaClosure(entry, components)
+
+	if got, want := slices.Sorted(maps.Keys(closure)), []string{"Node", "Other"}; !slices.Equal(got, want) {
+		t.Errorf("closure = %v, want %v", got, want)
+	}
+	if len(unresolved) != 0 {
+		t.Errorf("unresolved = %v, want none", unresolved)
+	}
+}
