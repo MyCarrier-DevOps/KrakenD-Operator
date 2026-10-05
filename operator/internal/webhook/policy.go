@@ -108,7 +108,7 @@ func checkPolicyRender(
 	// ignores them silently; only a new or changed raw is judged.
 	var drops []renderer.CEDrop
 	if old == nil || !equality.Semantic.DeepEqual(old.Spec.Raw, policy.Spec.Raw) {
-		drops = eeOnlyNamespacesIn(policy.Spec.Raw, renderer.LevelBackend)
+		drops = renderer.EEOnlyNamespacesIn(policy.Spec.Raw, renderer.LevelBackend)
 	}
 	var errs field.ErrorList
 	var warnings admission.Warnings
