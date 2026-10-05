@@ -195,6 +195,24 @@ func getOwnedEndpoint(ac *v1alpha1.KrakenDAutoConfig, name string) (*v1alpha1.Kr
 	return &ep, nil
 }
 
+// forceReconcile makes the AutoConfig reconcile with unchanged inputs: an
+// annotation change passes the AutoConfig watch predicate.
+func forceReconcile(t *testing.T, ac *v1alpha1.KrakenDAutoConfig) {
+	t.Helper()
+	var cur v1alpha1.KrakenDAutoConfig
+	if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(ac), &cur); err != nil {
+		t.Fatal(err)
+	}
+	forced := cur.DeepCopy()
+	if forced.Annotations == nil {
+		forced.Annotations = map[string]string{}
+	}
+	forced.Annotations["krakend.io/resync"] = strconv.FormatInt(time.Now().Unix(), 10)
+	if err := k8sClient.Patch(ctx, forced, client.MergeFrom(cur.DeepCopy())); err != nil {
+		t.Fatalf("annotate autoconfig: %v", err)
+	}
+}
+
 // endpointVersion is the metadata that records writes to a generated endpoint:
 // generation moves on spec changes, resourceVersion on any persisted change.
 type endpointVersion struct {
@@ -338,15 +356,7 @@ func TestAutoConfig_ForcedReconcileInSteadyStateWritesNothing(t *testing.T) {
 
 	// An annotation change passes the AutoConfig watch predicate, so this
 	// forces a reconcile with unchanged inputs.
-	forced := before.DeepCopy()
-	patch := client.MergeFrom(before.DeepCopy())
-	if forced.Annotations == nil {
-		forced.Annotations = map[string]string{}
-	}
-	forced.Annotations["krakend.io/resync"] = strconv.FormatInt(time.Now().Unix(), 10)
-	if err := k8sClient.Patch(ctx, forced, patch); err != nil {
-		t.Fatalf("annotate autoconfig: %v", err)
-	}
+	forceReconcile(t, ac)
 
 	// The forced reconcile must change nothing, so there is nothing to wait
 	// for; keep checking while it runs. That also means the test cannot
@@ -431,21 +441,9 @@ func TestAutoConfig_AdoptsAndRemovesALabelledOrphan(t *testing.T) {
 	}
 
 	// Nothing watches an endpoint without a controller, so force a reconcile
-	// the way the steady-state test does: an annotation change passes the
-	// AutoConfig watch predicate. The adoption write goes through the
-	// endpoint webhook.
-	var cur v1alpha1.KrakenDAutoConfig
-	if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(ac), &cur); err != nil {
-		t.Fatal(err)
-	}
-	forced := cur.DeepCopy()
-	if forced.Annotations == nil {
-		forced.Annotations = map[string]string{}
-	}
-	forced.Annotations["krakend.io/resync"] = strconv.FormatInt(time.Now().Unix(), 10)
-	if err := k8sClient.Patch(ctx, forced, client.MergeFrom(cur.DeepCopy())); err != nil {
-		t.Fatalf("annotate autoconfig: %v", err)
-	}
+	// the way the steady-state test does. Admission does not block the
+	// adoption write.
+	forceReconcile(t, ac)
 
 	eventuallyWithin(t, 30*time.Second, func() error {
 		err := k8sClient.Get(ctx, client.ObjectKeyFromObject(orphan), &v1alpha1.KrakenDEndpoint{})
