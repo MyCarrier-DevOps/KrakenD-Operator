@@ -377,11 +377,9 @@ malformed value (e.g. a YAML mapping) passed both checks unchanged and only
 surfaced as a `krakend check -t -n -c` failure, which blocks config updates for
 every service on that gateway — not just the one with the bad value.
 
-The admission check runs on `UPDATE` as well as `CREATE` and validates the
-whole object, so an AutoConfig or `KrakenDEndpoint` already stored with a
-non-list or `null` audience can't be updated at all — not even a
-metadata-only change such as a label or the `krakend.io/resync` annotation —
-until the same update fixes the value.
+Updates are ratcheted (see *Complete admission*): an object stored with a
+non-list or `null` audience accepts every update that leaves that value
+unchanged; only a change to it must fix it.
 
 The operation-level CUE rule lives in the embedded default CUE definitions. A
 namespace's `krakend-cue-definitions` ConfigMap replaces those defaults, so it
@@ -1448,6 +1446,14 @@ rejected for the same reason: the Dragonfly instance requires the password and
 the rendered KrakenD pool has none. A gateway that already has it keeps being
 accepted on unrelated updates; adding it, changing the stored password, or
 switching a gateway that has it to Enterprise, is rejected.
+
+**Updates are ratcheted.** A metadata-only update is never validated. A
+reference (`gatewayRef`, `policyRef`) is checked only when it is added or
+changed. A field rule rejects an update only if the error is new, so an object
+stored before a rule existed keeps accepting unrelated edits. KrakenDEndpoint
+entries are matched by (endpoint, method), so reordering `spec.endpoints`
+changes nothing, and moving the object to another gateway checks every entry
+again. A gateway's sidecar probe that changes is always checked again.
 
 ---
 
