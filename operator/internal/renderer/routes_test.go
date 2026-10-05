@@ -146,3 +146,14 @@ func TestRouteClashDetail_SamePathNamesTheOwner(t *testing.T) {
 		t.Errorf("RouteClashDetail = %q, want %q", got, want)
 	}
 }
+
+func TestRouteClashDetail_SameShapeExplainsTheRouter(t *testing.T) {
+	got := RouteClashDetail("GET", "/h/{b}", "/h/{a}", "KrakenDEndpoint ns/pets-a")
+
+	want := "has the same route as GET /h/{a} in KrakenDEndpoint ns/pets-a: paths that differ only in " +
+		"parameter names or repeated slashes cannot both be routed. Use the same parameter name, and " +
+		"keep routes that share a parameterized prefix in one KrakenDEndpoint so they can be renamed together"
+	if got != want {
+		t.Errorf("RouteClashDetail = %q, want %q", got, want)
+	}
+}
