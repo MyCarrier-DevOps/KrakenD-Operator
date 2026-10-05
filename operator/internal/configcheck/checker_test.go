@@ -21,6 +21,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -188,5 +189,23 @@ func TestCheck_TransientValidatorErrorIsAnError(t *testing.T) {
 	c := newChecker(&fakeValidator{err: errors.New("running krakend check: fork/exec: no such file")}, endpoint("a", "/a"))
 	if verdict, err := c.CheckGateway(context.Background(), gateway(v1alpha1.EditionCE), nil); err == nil {
 		t.Fatalf("verdict = %+v, err = nil; want the validator failure as an error", verdict)
+	}
+}
+
+// An admission request that cannot get a validation slot before its deadline
+// fails fast instead of hanging past the API server's timeout.
+func TestCheck_WaitsForASlotUntilTheDeadline(t *testing.T) {
+	c := newChecker(&fakeValidator{}, endpoint("a", "/a"))
+	c.slots <- struct{}{} // another check holds the only slot
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	_, err := c.CheckGateway(ctx, gateway(v1alpha1.EditionCE), nil)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want deadline exceeded", err)
+	}
+	if time.Since(start) > time.Second {
+		t.Errorf("waited %s past the deadline", time.Since(start))
 	}
 }
