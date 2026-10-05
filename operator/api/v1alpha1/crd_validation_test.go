@@ -257,6 +257,7 @@ func TestGatewayCRD_Rules(t *testing.T) {
 		{"redis tls", gatewayHead + `edition: CE, config: {}, redis: {connectionPool: {addresses: ["redis:6379"], tls: {enabled: true}}}}}`, "tls is not supported yet"},
 		{"redis dial timeout", gatewayHead + `edition: CE, config: {}, redis: {connectionPool: {addresses: ["redis:6379"], dialTimeout: "5 seconds"}}}}`, "spec.redis.connectionPool.dialTimeout"},
 		{"redis pool", gatewayHead + `edition: CE, config: {}, redis: {connectionPool: {addresses: ["redis:6379"], poolSize: 10, dialTimeout: 5s}}}}`, ""},
+		{"Dragonfly password on EE", gatewayHead + `edition: EE, config: {}, license: {secretRef: {name: l, key: k}}, dragonfly: {enabled: true, authentication: {passwordFromSecret: {name: s, key: p}}}}}`, "passwordFromSecret is not supported yet with edition EE"},
 	})
 }
 
