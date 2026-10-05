@@ -153,3 +153,28 @@ func (r *KrakenDAutoConfigReconciler) writeEndpoint(
 	}
 	return op, nil
 }
+
+// endpointOutcome is what one reconcileEndpoints call did and could not do.
+type endpointOutcome struct {
+	changes endpointChanges
+	// transient holds write errors worth retrying with backoff.
+	transient []error
+	// raced holds Conflict and AlreadyExists write errors: this reconcile
+	// acted on a stale cache and loses nothing by retrying soon.
+	raced []error
+}
+
+// failed reports whether any claim or write failed.
+func (o *endpointOutcome) failed() bool {
+	return len(o.transient) > 0 || len(o.raced) > 0
+}
+
+// record classifies a failed claim or write: a Conflict or AlreadyExists
+// lost a race; anything else is retried with backoff.
+func (o *endpointOutcome) record(err error) {
+	if apierrors.IsConflict(err) || apierrors.IsAlreadyExists(err) {
+		o.raced = append(o.raced, err)
+		return
+	}
+	o.transient = append(o.transient, err)
+}
