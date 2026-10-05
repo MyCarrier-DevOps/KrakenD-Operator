@@ -61,6 +61,10 @@ func TestWireValidation_SharesOneCheckerBetweenControllerAndWebhooks(t *testing.
 	if w.Gateway.Checker != controller.ConfigChecker(w.Checker) {
 		t.Errorf("the gateway reconciler's checker = %v, want the pod's checker %p", w.Gateway.Checker, w.Checker)
 	}
+	if w.Validators.Gateway.Checker != webhooksetup.ConfigChecker(w.Checker) {
+		t.Errorf("the gateway validator's checker = %v, want the pod's checker %p",
+			w.Validators.Gateway.Checker, w.Checker)
+	}
 	if w.Validators.Endpoint.Checker != webhooksetup.ConfigChecker(w.Checker) {
 		t.Errorf("the endpoint validator's checker = %v, want the pod's checker %p",
 			w.Validators.Endpoint.Checker, w.Checker)
