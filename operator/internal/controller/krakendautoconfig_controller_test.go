@@ -3459,8 +3459,9 @@ func TestAutoConfigReconcile_RejectedEndpointKeepsStaleEndpoints(t *testing.T) {
 
 func TestAutoConfigReconcile_TransientWriteErrorTakesPrecedenceOverHeldOperations(t *testing.T) {
 	tests := map[string]struct {
-		failed   []autoconfig.OperationIssue
-		rejected map[string]error
+		failed    []autoconfig.OperationIssue
+		rejected  map[string]error
+		endpoints []*v1alpha1.KrakenDEndpoint
 	}{
 		"a failed operation":  {failed: []autoconfig.OperationIssue{failedGetB()}},
 		"a rejected endpoint": {rejected: map[string]error{"test-ac-getb": invalidError("test-ac-getb")}},
@@ -3470,7 +3471,7 @@ func TestAutoConfigReconcile_TransientWriteErrorTakesPrecedenceOverHeldOperation
 			cm := testCUEDefinitionsCM()
 			ac := syncedAutoConfig(cm)
 			f, ce, fi, g := defaultMocks()
-			g.output.Endpoints = append(g.output.Endpoints, generatedEndpoint("getB", "/b"))
+			g.output.Endpoints = append(g.output.Endpoints, tt.endpoints...)
 			ce.output.Failed = tt.failed
 			errFor := map[string]error{"test-ac-listusers": apierrors.NewInternalError(errors.New("boom"))}
 			maps.Copy(errFor, tt.rejected)
