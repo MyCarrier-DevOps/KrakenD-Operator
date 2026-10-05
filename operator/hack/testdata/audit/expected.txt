@@ -12,3 +12,5 @@ KrakenDEndpoint a/backend-encoding: spec.endpoints[0].backends[0].encoding jsn
 KrakenDEndpoint a/backend-sd: spec.endpoints[0].backends[0].sd foo
 KrakenDEndpoint a/backend-method: spec.endpoints[0].backends[0].method get
 KrakenDEndpoint a/backend-policyref: spec.endpoints[0].backends[0].policyRef.name is empty
+KrakenDEndpoint a/path-linebreak: spec.endpoints[0].endpoint x
+/y
