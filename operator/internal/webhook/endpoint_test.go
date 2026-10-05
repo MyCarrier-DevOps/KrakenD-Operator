@@ -283,3 +283,22 @@ func TestEndpointAdmission_ServedEntryCanBeEditedBesideItsLoser(t *testing.T) {
 		t.Error("a new entry on a route another endpoint holds admitted")
 	}
 }
+
+// Moving an endpoint puts every stored entry in front of the new gateway's
+// routes, so an unchanged entry whose route is taken there is a duplicate.
+func TestEndpointAdmission_MovingOntoATakenRouteIsADuplicate(t *testing.T) {
+	old := testEndpoint("e", "/a")
+	other := testGateway()
+	other.Name = "other"
+	holder := testEndpoint("holder", "/a")
+	holder.Spec.GatewayRef.Name = "other"
+	v := &EndpointValidator{Client: fakeClient(testGateway(), other, old, holder)}
+
+	moved := old.DeepCopy()
+	moved.Spec.GatewayRef.Name = "other"
+	resp := review(t, v, "alice", moved, old)
+	c := resp.Result.Details
+	if resp.Allowed || c == nil || len(c.Causes) != 1 || c.Causes[0].Type != metav1.CauseTypeFieldValueDuplicate {
+		t.Errorf("response = %+v, want a Duplicate on the unchanged entry", resp.Result)
+	}
+}
