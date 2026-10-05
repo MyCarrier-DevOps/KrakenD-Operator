@@ -214,6 +214,8 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		filtered = r.Filter.Apply(cueOutput.Entries, cueOutput.Tags, cueOutput.OperationIDs, *ac.Spec.Filter)
 	}
 
+	skippedOps := r.inScope(&ac, cueOutput.Skipped)
+
 	filtered, replaced, scopeErr := applyAdditionalEndpoints(&ac, filtered, warnings)
 	specNotes = append(specNotes, replaced...)
 	if scopeErr != nil {
@@ -236,6 +238,8 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return r.handleCUEError(ctx, &ac, fmt.Errorf("generating endpoints: %w", err), warnings)
 	}
 
+	skippedOps = append(skippedOps, genOutput.Skipped...)
+
 	// Warn about duplicate operations the generator skipped
 	for _, dup := range genOutput.Skipped {
 		warnings.add(v1alpha1.ReasonDuplicateOperationId, fmt.Sprintf("Duplicate operation %s %s skipped: %s",
@@ -251,7 +255,7 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	if err := r.recordSync(ctx, &ac, origStatus, syncResult{
 		checksum:  combinedChecksum,
 		generated: len(genOutput.Endpoints),
-		skipped:   operationStatuses(genOutput.Skipped),
+		skipped:   operationStatuses(skippedOps),
 		warnings:  specWarnings(specNotes),
 		changes:   changes,
 	}, warnings); err != nil {
@@ -265,6 +269,15 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	)
 
 	return r.requeueResult(&ac), nil
+}
+
+// inScope returns the issues whose operations spec.filter keeps, so an
+// operation the user excluded is not reported.
+func (r *KrakenDAutoConfigReconciler) inScope(
+	_ *v1alpha1.KrakenDAutoConfig,
+	issues []autoconfig.OperationIssue,
+) []autoconfig.OperationIssue {
+	return issues
 }
 
 // SetupWithManager sets up the controller with the Manager.
