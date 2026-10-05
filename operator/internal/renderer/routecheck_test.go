@@ -38,3 +38,42 @@ func TestRouteConflicts_ParameterClashNamesBothEndpoints(t *testing.T) {
 		t.Errorf("line = %q, want gin's refusal", lines[0])
 	}
 }
+
+func TestRouteConflicts_MirrorsTheRuntimeRouter(t *testing.T) {
+	tests := []struct {
+		name, doc string
+		refused   string // substring of the first line; "" means no lines
+	}{
+		{"static beside parameter", `{"endpoints":[{"endpoint":"/a/{id}","method":"GET"},{"endpoint":"/a/static","method":"GET"}]}`, ""},
+		{"trailing slash is distinct", `{"endpoints":[{"endpoint":"/a","method":"GET"},{"endpoint":"/a/","method":"GET"}]}`, ""},
+		{"methods have separate trees", `{"endpoints":[{"endpoint":"/a/{id}","method":"GET"},{"endpoint":"/a/{name}","method":"POST"}]}`, ""},
+		{"parameter beside static prefix", `{"endpoints":[{"endpoint":"/a/{id}","method":"GET"},{"endpoint":"/{x}/b","method":"GET"}]}`, ""},
+		{"mid-segment braces are literal", `{"endpoints":[{"endpoint":"/a/b{id}","method":"GET"}]}`, ""},
+		{"suffix after a parameter", `{"endpoints":[{"endpoint":"/a/{id}","method":"GET"},{"endpoint":"/a/{id}.json","method":"GET"}]}`, "conflicts with existing wildcard"},
+		{"exact duplicate", `{"endpoints":[{"endpoint":"/a","method":"GET"},{"endpoint":"/a","method":"GET"}]}`, "handlers are already registered"},
+		{"double slash duplicate", `{"endpoints":[{"endpoint":"/a//b","method":"GET"},{"endpoint":"/a/b","method":"GET"}]}`, "handlers are already registered"},
+		{"unnamed wildcard", `{"endpoints":[{"endpoint":"/a/*","method":"GET"}]}`, "wildcards must be named"},
+		{"custom health path", `{"extra_config":{"router":{"health_path":"/healthz"}},"endpoints":[{"endpoint":"/healthz","method":"GET"}]}`, "the gateway's own route"},
+		{"health path is GET only", `{"extra_config":{"router":{"health_path":"/healthz"}},"endpoints":[{"endpoint":"/healthz","method":"POST"}]}`, ""},
+		{"health disabled", `{"extra_config":{"router":{"disable_health":true}},"endpoints":[{"endpoint":"/__health","method":"GET"}]}`, ""},
+		{"auto options joins methods", `{"extra_config":{"router":{"auto_options":true}},"endpoints":[{"endpoint":"/a/{id}","method":"GET"},{"endpoint":"/a/{name}","method":"POST"}]}`, "conflicts with existing wildcard"},
+		{"echo beside root parameter", `{"echo_endpoint":true,"endpoints":[{"endpoint":"/{x}","method":"GET"}]}`, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lines, err := routeConflicts([]byte(tt.doc))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.refused == "" {
+				if len(lines) != 0 {
+					t.Errorf("lines = %q, want none", lines)
+				}
+				return
+			}
+			if len(lines) == 0 || !strings.Contains(lines[0], tt.refused) {
+				t.Errorf("lines = %q, want one containing %q", lines, tt.refused)
+			}
+		})
+	}
+}
