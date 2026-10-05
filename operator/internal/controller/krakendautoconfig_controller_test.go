@@ -2296,6 +2296,13 @@ func TestAutoConfigReconcile_IdenticalSecondPassWritesNothing(t *testing.T) {
 		Reason:    v1alpha1.ReasonUnsupportedMethod,
 		Message:   "KrakenDEndpoint supports only GET, POST, PUT, PATCH, DELETE",
 	}}
+	// Two in-scope failed operations: the sync holds them, and an identical
+	// pass must not rewrite the status or repeat the event.
+	ce.output.Failed = []autoconfig.OperationIssue{{
+		Operation: autoconfig.Operation{Method: "GET", Path: "/a", OperationID: "getA"},
+		Reason:    v1alpha1.ReasonCUEEvaluationFailed,
+		Message:   "boom",
+	}, failedGetB()}
 	var counts writeCounts
 	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).
 		WithInterceptorFuncs(countWrites(&counts)).Build()
@@ -2311,8 +2318,12 @@ func TestAutoConfigReconcile_IdenticalSecondPassWritesNothing(t *testing.T) {
 	if len(first.Status.Skipped) != 3 || len(first.Status.Warnings) != 2 {
 		t.Fatalf("first pass skipped = %+v, warnings = %q; want 3 skipped and 2 warnings", first.Status.Skipped, first.Status.Warnings)
 	}
+	if len(first.Status.FailedOperations) != 2 {
+		t.Fatalf("first pass failedOperations = %+v, want 2", first.Status.FailedOperations)
+	}
 	// The same issues arrive in the opposite order.
 	slices.Reverse(ce.output.Skipped)
+	slices.Reverse(ce.output.Failed)
 	slices.Reverse(g.output.Skipped)
 	counts = writeCounts{}
 
