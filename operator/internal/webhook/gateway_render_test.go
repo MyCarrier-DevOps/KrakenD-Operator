@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -316,5 +317,39 @@ func TestGatewayAdmission_EditionSwitchLookupFailureIs500(t *testing.T) {
 	}
 	if !strings.Contains(resp.Result.Message, "listing the endpoints of gateway default/gw") {
 		t.Errorf("message = %q, want it to name the failed lookup", resp.Result.Message)
+	}
+}
+
+// The lookups of an edition switch run under the admission budget, so a slow
+// cache read ends with a clear error before the API server's timeout.
+func TestGatewayAdmission_EditionSwitchLookupsRunUnderTheAdmissionBudget(t *testing.T) {
+	var listed, got time.Duration
+	left := func(ctx context.Context) time.Duration {
+		d, _ := ctx.Deadline()
+		return time.Until(d)
+	}
+	funcs := interceptor.Funcs{
+		List: func(ctx context.Context, c client.WithWatch, l client.ObjectList, opts ...client.ListOption) error {
+			listed = left(ctx)
+			return c.List(ctx, l, opts...)
+		},
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object,
+			opts ...client.GetOption) error {
+			got = left(ctx)
+			return c.Get(ctx, key, obj, opts...)
+		},
+	}
+	keys := testEndpoint("keys", "/k")
+	keys.Spec.Endpoints[0].Backends[0].PolicyRef = &v1alpha1.PolicyRef{Name: "p"}
+	old := testGateway()
+	old.Spec.Edition = v1alpha1.EditionEE
+	v := &GatewayValidator{Client: fakeClientBuilderWith(funcs, keys), Checker: &scriptedChecker{}}
+
+	review(t, v, "alice", testGateway(), old)
+
+	for what, d := range map[string]time.Duration{"endpoint List": listed, "policy Get": got} {
+		if d <= 0 || d > admissionBudget {
+			t.Errorf("the %s ran with %s left, want a deadline within %s", what, d, admissionBudget)
+		}
 	}
 }
