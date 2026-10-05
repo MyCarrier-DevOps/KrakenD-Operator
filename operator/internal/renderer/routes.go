@@ -17,6 +17,7 @@ limitations under the License.
 package renderer
 
 import (
+	"fmt"
 	"path"
 	"regexp"
 	"strings"
@@ -56,5 +57,7 @@ func RouteClashDetail(method, path, otherPath, owner string) string {
 	if otherPath == path {
 		return "already defined by " + owner
 	}
-	return ""
+	return fmt.Sprintf("has the same route as %s %s in %s: paths that differ only in parameter names "+
+		"or repeated slashes cannot both be routed. Use the same parameter name, and keep routes that share "+
+		"a parameterized prefix in one KrakenDEndpoint so they can be renamed together", method, otherPath, owner)
 }
