@@ -560,7 +560,8 @@ func (r *KrakenDGatewayReconciler) inspectDeploymentStatus(
 	}
 
 	converged := deploymentConverged(&dep, want)
-	if converged {
+	switch {
+	case converged:
 		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
 			Type:               v1alpha1.ConditionProgressing,
 			Status:             metav1.ConditionFalse,
@@ -568,6 +569,8 @@ func (r *KrakenDGatewayReconciler) inspectDeploymentStatus(
 			Reason:             "RolloutComplete",
 			Message:            "Deployment rollout completed successfully",
 		})
+	case obs.templateChanged:
+		raiseProgressing(gw, note)
 	}
 
 	// Mirror a lost Deployment availability, but not while a rollout is
@@ -1341,7 +1344,9 @@ func (r *KrakenDGatewayReconciler) reconcileDeployment(
 	ctx context.Context, gw *v1alpha1.KrakenDGateway, in infraInputs,
 ) (deploymentObservation, error) {
 	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace}}
-	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, dep, func() error {
+	var before *corev1.PodTemplateSpec
+	result, err := controllerutil.CreateOrUpdate(ctx, r.Client, dep, func() error {
+		before = dep.Spec.Template.DeepCopy()
 		resources.BuildDeployment(dep, gw, resources.DeploymentInputs{
 			ConfigMapName:   in.configMapName,
 			ConfigChecksum:  in.appliedChecksum,
@@ -1351,12 +1356,18 @@ func (r *KrakenDGatewayReconciler) reconcileDeployment(
 			CERender:        in.ceRender,
 		})
 		return controllerutil.SetControllerReference(gw, dep, r.Scheme)
-	}); err != nil {
+	})
+	if err != nil {
 		return deploymentObservation{}, fmt.Errorf("reconciling deployment: %w", err)
 	}
 	gw.Status.ActiveImage = in.image
 	gw.Status.PluginChecksum = in.pluginChecksum
-	return deploymentObservation{dep: dep}, nil
+	// The server's response is compared, not the template as built:
+	// BuildDeployment leaves out the fields the API server defaults, so the
+	// built template differs from the stored one on every pass.
+	changed := result == controllerutil.OperationResultUpdated &&
+		!equality.Semantic.DeepEqual(before, &dep.Spec.Template)
+	return deploymentObservation{dep: dep, templateChanged: changed}, nil
 }
 
 // reconcilePostRestartJob creates a Job to run the user-provided bash script
