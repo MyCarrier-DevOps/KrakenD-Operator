@@ -7,6 +7,24 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 diff -u "$here/testdata/audit/expected.txt" <("$here/audit-admission-rules.sh" "$here/testdata/audit")
 
+# The patterns and enum lists the audit checks must be the ones in the CRDs.
+crds="$here/../config/crd/bases"
+flat="$(cat "$crds"/*.yaml | tr -s ' \n' ' ')"
+for var in endpoint_path_re go_duration_re single_unit_re quantity_re; do
+	pattern="$(sed -n "s/^$var='\(.*\)'\$/\1/p" "$here/audit-admission-rules.sh")"
+	[[ -n "$pattern" ]] && grep -qxF -- "pattern: $pattern" <(cat "$crds"/*.yaml | sed 's/^ *//') || {
+		echo "$var is not a pattern in the CRDs: $pattern" >&2
+		exit 1
+	}
+done
+while IFS= read -r list; do
+	items="$(grep -o '"[^"]*"' <<<"$list" | tr -d '"' | sed 's/^/- /' | tr '\n' ' ')"
+	grep -qF -- "enum: $items" <<<"$flat" || {
+		echo "no CRD enum matches the audit's list: $list" >&2
+		exit 1
+	}
+done < <(grep -o '\[\("[^"]*"\(, \)\?\)\+\]' "$here/audit-admission-rules.sh")
+
 # Cluster mode: a stub kubectl serves the fixtures and records its arguments.
 # The audit must ask for each kind once, and only with `get`.
 stub="$(mktemp -d)"
