@@ -17,6 +17,7 @@ limitations under the License.
 package webhook
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -129,6 +130,68 @@ func TestGatewayAdmission_DenialCausesAreBounded(t *testing.T) {
 	for _, c := range causes {
 		if len(c.Message) > 2*warningLimit {
 			t.Errorf("cause on %s is %d bytes, want it cut near %d", c.Field, len(c.Message), warningLimit)
+		}
+	}
+}
+
+// A checker that cannot run, at any of the checks, is a transient 500: the
+// request is not judged and clients retry.
+func TestGatewayAdmission_ValidatorUnavailableIs500(t *testing.T) {
+	old := testGateway()
+	edited := old.DeepCopy()
+	edited.Spec.Config.Timeout = "5s"
+	broken := failing("ep", 0, "broken elsewhere")
+	tests := []struct {
+		name     string
+		old      *v1alpha1.KrakenDGateway
+		verdicts []configcheck.Verdict
+		failCall int
+	}{
+		{"create", nil, nil, 1},
+		{"update, the gateway with the change", old, nil, 1},
+		{"update, the stored gateway", old, []configcheck.Verdict{broken}, 2},
+		{"update, the root with the change", old, []configcheck.Verdict{broken, broken}, 3},
+		{"update, the stored root", old, []configcheck.Verdict{broken, broken, rootFailure("bad")}, 4},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			chk := &scriptedChecker{verdicts: tt.verdicts, failCall: tt.failCall,
+				err: errors.New("waiting for a validation slot: context deadline exceeded")}
+			obj := testGateway()
+			var oldObj runtime.Object
+			if tt.old != nil {
+				obj, oldObj = edited, tt.old
+			}
+
+			resp := review(t, &GatewayValidator{Client: fakeClient(), Checker: chk}, "alice", obj, oldObj)
+
+			if resp.Allowed || resp.Result.Code != http.StatusInternalServerError {
+				t.Errorf("response = %+v, want 500", resp.Result)
+			}
+			if !strings.Contains(resp.Result.Message, "validating the gateway config") {
+				t.Errorf("message = %q, want it to say the validation could not run", resp.Result.Message)
+			}
+		})
+	}
+}
+
+// Every check runs under the admission budget, so a slow validator answers 500
+// before the API server's own timeout.
+func TestGatewayAdmission_ChecksRunUnderTheAdmissionBudget(t *testing.T) {
+	old := testGateway()
+	edited := old.DeepCopy()
+	edited.Spec.Config.Timeout = "5s"
+	broken := failing("ep", 0, "broken elsewhere")
+	chk := &scriptedChecker{verdicts: []configcheck.Verdict{broken, broken, rootFailure("bad"), {OK: true}}}
+
+	review(t, &GatewayValidator{Client: fakeClient(), Checker: chk}, "alice", edited, old)
+
+	if len(chk.deadlines) != 4 {
+		t.Fatalf("%d checks ran, want 4", len(chk.deadlines))
+	}
+	for i, left := range chk.deadlines {
+		if left <= 0 || left > admissionBudget {
+			t.Errorf("check %d ran with %s left, want a deadline within %s", i+1, left, admissionBudget)
 		}
 	}
 }
