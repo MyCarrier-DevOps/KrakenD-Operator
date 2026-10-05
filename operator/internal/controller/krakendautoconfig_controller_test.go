@@ -3420,3 +3420,30 @@ func TestAutoConfigReconcile_DereferencesParameterRefsBeforeEvaluation(t *testin
 		t.Errorf("warnings = %q, want to contain %q", got, want)
 	}
 }
+
+func TestAutoConfigReconcile_ParameterExpansionBeyondTheBodyLimitFailsTheSync(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).Build()
+	f, ce, fi, g := defaultMocks()
+	var paths []string
+	for i := range 12 {
+		paths = append(paths, fmt.Sprintf(
+			`"/p%d":{"get":{"parameters":[{"$ref":"#/components/parameters/Big"}]}}`, i))
+	}
+	f.result = &autoconfig.FetchResult{Data: []byte(`{"paths":{` + strings.Join(paths, ",") +
+		`},"components":{"parameters":{"Big":{"name":"big","in":"query","description":"` +
+		strings.Repeat("x", 1<<20) + `"}}}}`)}
+	r := newACReconciler(c, f, ce, fi, g)
+
+	if _, err := reconcileAC(r, ac); err == nil {
+		t.Fatal("expected the sync to fail")
+	}
+	if ce.called {
+		t.Error("the evaluator must not run on an oversized spec")
+	}
+	cond := meta.FindStatusCondition(getAC(t, c, ac).Status.Conditions, v1alpha1.ConditionSynced)
+	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != v1alpha1.ReasonSpecFetchFailed {
+		t.Errorf("expected Synced False with reason %s, got %+v", v1alpha1.ReasonSpecFetchFailed, cond)
+	}
+}
