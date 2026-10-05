@@ -30,7 +30,10 @@ func TestValidateEntries(t *testing.T) {
 		ep     *v1alpha1.KrakenDEndpoint
 		reject string // "" means valid
 	}{
+		{"plain", testGateway(), testEndpoint("e", "/a/{id}"), ""},
 		{"reserved health", testGateway(), testEndpoint("e", "/__health"), "reserved by KrakenD"},
+		{"reserved below debug", testGateway(), testEndpoint("e", "/x/__debug/y"), "reserved by KrakenD"},
+		{"not reserved", testGateway(), testEndpoint("e", "/__other"), ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
