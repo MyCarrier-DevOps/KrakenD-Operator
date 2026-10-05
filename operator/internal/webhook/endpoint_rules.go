@@ -17,6 +17,7 @@ limitations under the License.
 package webhook
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 
@@ -51,10 +52,23 @@ func validateEntries(ep *v1alpha1.KrakenDEndpoint, changed []int, gw *v1alpha1.K
 }
 
 // healthPath returns the path the gateway serves its health endpoint on, or
-// "" when it is disabled.
+// "" when it is disabled. A raw router block in spec.config.extraConfig
+// replaces the typed one, as the renderer merges them.
 func healthPath(gw *v1alpha1.KrakenDGateway) string {
+	path := "/__health"
 	if r := gw.Spec.Config.Router; r != nil && r.HealthPath != "" {
-		return r.HealthPath
+		path = r.HealthPath
 	}
-	return "/__health"
+	if gw.Spec.Config.ExtraConfig == nil {
+		return path
+	}
+	var raw struct {
+		Router struct {
+			HealthPath string `json:"health_path"`
+		} `json:"router"`
+	}
+	if json.Unmarshal(gw.Spec.Config.ExtraConfig.Raw, &raw) == nil && raw.Router.HealthPath != "" {
+		return raw.Router.HealthPath
+	}
+	return path
 }
