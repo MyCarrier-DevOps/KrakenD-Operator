@@ -337,3 +337,33 @@ func TestPolicyAdmission_TerminatingPolicyWithTheSameSpecIsNotValidated(t *testi
 		t.Errorf("checks = %v, want none", chk.calls)
 	}
 }
+
+// A policy on many gateways that already fail must not answer with a warning
+// per gateway: the count and the bytes stay bounded.
+func TestPolicyAdmission_WarningsAreBounded(t *testing.T) {
+	names := make([]string, 40)
+	verdicts := []configcheck.Verdict{{OK: true}}
+	for i := range names {
+		names[i] = fmt.Sprintf("gw-%02d", i)
+		verdicts = append(verdicts,
+			failing("e", 0, strings.Repeat("x", 3*warningLimit)), failing("e", 0, strings.Repeat("y", 3*warningLimit)))
+	}
+	v := &PolicyValidator{Client: fakeClient(referencingGateways(names...)...),
+		Checker: &scriptedChecker{verdicts: verdicts}}
+
+	resp := review(t, v, "alice", testPolicy(`{"x":{}}`), testPolicy(`{}`))
+
+	if !resp.Allowed {
+		t.Fatalf("response = %+v, want the change admitted: every gateway already fails", resp.Result)
+	}
+	total := 0
+	for _, w := range resp.Warnings {
+		total += len(w)
+	}
+	if len(resp.Warnings) > 6 || total > 8*warningLimit {
+		t.Errorf("%d warnings of %d bytes, want at most 6 and %d bytes", len(resp.Warnings), total, 8*warningLimit)
+	}
+	if last := resp.Warnings[len(resp.Warnings)-1]; !strings.Contains(last, "35 more gateways already fail validation") {
+		t.Errorf("last warning = %q, want it to count the 35 gateways left out", last)
+	}
+}
