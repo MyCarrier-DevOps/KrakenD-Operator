@@ -14,3 +14,5 @@ KrakenDEndpoint a/backend-method: spec.endpoints[0].backends[0].method get
 KrakenDEndpoint a/backend-policyref: spec.endpoints[0].backends[0].policyRef.name is empty
 KrakenDEndpoint a/path-linebreak: spec.endpoints[0].endpoint x
 /y
+KrakenDEndpoint a/timeout-newline: spec.endpoints[0].timeout 5s
+
