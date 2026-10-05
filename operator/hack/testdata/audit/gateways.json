@@ -33,5 +33,6 @@
  {"metadata":{"namespace":"a","name":"hp-default"},"spec":{"edition":"CE","config":{}}},
  {"metadata":{"namespace":"a","name":"hp-raw"},"spec":{"edition":"CE","config":{"router":{"healthPath":"/ignored"},"extraConfig":{"router":{"health_path":"/live"}}}}},
  {"metadata":{"namespace":"a","name":"hp-off"},"spec":{"edition":"CE","config":{"extraConfig":{"router":{"disable_health":true}}}}},
- {"metadata":{"namespace":"a","name":"ce-gw"},"spec":{"edition":"CE","config":{}}}
+ {"metadata":{"namespace":"a","name":"ce-gw"},"spec":{"edition":"CE","config":{}}},
+ {"metadata":{"namespace":"a","name":"ee-gw"},"spec":{"edition":"EE","config":{},"license":{"secretRef":{"name":"l","key":"k"}}}}
 ]}
