@@ -3990,3 +3990,25 @@ func TestAutoConfigReconcile_AttemptsEveryWriteAndKeepsStaleOnFailure(t *testing
 		t.Errorf("expected Synced False/EndpointReconcileFailed naming test-ac-b, got %+v", cond)
 	}
 }
+
+func TestAutoConfigReconcile_RacedWriteDoesNotStopOtherWrites(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	g.output.Endpoints = []*v1alpha1.KrakenDEndpoint{generatedEndpoint("a", "/a"), generatedEndpoint("b", "/b")}
+	var ops []string
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).
+		WithInterceptorFuncs(recordEndpointWrites(&ops, map[string]error{
+			"test-ac-a": conflictError("krakendendpoints", "test-ac-a"),
+		})).Build()
+	rec := fakeRecorder()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Recorder = rec
+
+	result, err := reconcileAC(r, ac)
+
+	assertQuietRequeue(t, result, err, rec)
+	if !endpointExists(t, c, "test-ac-b") {
+		t.Error("expected test-ac-b written despite the race on test-ac-a")
+	}
+}
