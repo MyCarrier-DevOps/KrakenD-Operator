@@ -172,7 +172,11 @@ func (v *AutoConfigValidator) ValidateUpdate(
 		errs = refErrs
 	}
 	errs = append(errs, newErrors(validateFields(ac), validateFields(old))...)
-	return nil, invalid("KrakenDAutoConfig", ac.Name, errs)
+	warnings, err := v.policyRefWarnings(ctx, ac)
+	if err != nil {
+		return nil, unavailable(err)
+	}
+	return warnings, invalid("KrakenDAutoConfig", ac.Name, errs)
 }
 
 // ValidateDelete is a no-op for autoconfigs.
