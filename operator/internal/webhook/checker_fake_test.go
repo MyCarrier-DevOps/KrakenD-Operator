@@ -31,7 +31,8 @@ import (
 // once the script runs out), or with err, and records which checks ran and
 // how much of its deadline each call had left and which endpoint entries it
 // was handed ("ns/name[METHOD /path ...]"; "-" for none). err fails the call
-// numbered failCall (1-based; 0 means the first).
+// numbered failCall (1-based; 0 means the first). gateways records, for each
+// gateway or isolated check, the gateway it was handed as "edition/timeout".
 type scriptedChecker struct {
 	verdicts  []configcheck.Verdict
 	err       error
@@ -39,6 +40,7 @@ type scriptedChecker struct {
 	calls     []string
 	deadlines []time.Duration
 	args      []string
+	gateways  []string
 }
 
 func (s *scriptedChecker) next(ctx context.Context, call string, eps []v1alpha1.KrakenDEndpoint) (configcheck.Verdict, error) {
@@ -61,8 +63,9 @@ func (s *scriptedChecker) next(ctx context.Context, call string, eps []v1alpha1.
 }
 
 func (s *scriptedChecker) CheckGateway(
-	ctx context.Context, _ *v1alpha1.KrakenDGateway, replace []v1alpha1.KrakenDEndpoint,
+	ctx context.Context, gw *v1alpha1.KrakenDGateway, replace []v1alpha1.KrakenDEndpoint,
 ) (configcheck.Verdict, error) {
+	s.gateways = append(s.gateways, string(gw.Spec.Edition)+"/"+gw.Spec.Config.Timeout)
 	if len(replace) > 0 {
 		return s.next(ctx, "gateway+candidate", replace)
 	}
@@ -70,8 +73,9 @@ func (s *scriptedChecker) CheckGateway(
 }
 
 func (s *scriptedChecker) CheckIsolated(
-	ctx context.Context, _ *v1alpha1.KrakenDGateway, eps []v1alpha1.KrakenDEndpoint,
+	ctx context.Context, gw *v1alpha1.KrakenDGateway, eps []v1alpha1.KrakenDEndpoint,
 ) (configcheck.Verdict, error) {
+	s.gateways = append(s.gateways, string(gw.Spec.Edition)+"/"+gw.Spec.Config.Timeout)
 	return s.next(ctx, "isolated", eps)
 }
 
