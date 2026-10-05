@@ -6,7 +6,7 @@ This directory contains the operator source code, built with [Operator SDK](http
 
 - Go 1.26+
 - Docker or Podman
-- kubectl configured for a Kubernetes 1.28+ cluster
+- kubectl configured for a Kubernetes 1.33+ cluster
 - operator-sdk v1.42+
 
 ## Project Layout
