@@ -32,4 +32,7 @@ type OperationIssue struct {
 	Operation
 	Reason  string
 	Message string
+	// methodKnown is set when Method came from a concrete method field or an
+	// override, not from the entry's label.
+	methodKnown bool
 }

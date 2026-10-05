@@ -75,6 +75,11 @@ type CUEEvaluator interface {
 // OPTIONS and TRACE operations) is skipped, not generated.
 var supportedMethods = []string{"GET", "POST", "PUT", "PATCH", "DELETE"}
 
+// skippedMethods are the methods the default definitions emit that the
+// KrakenDEndpoint API rejects. A failed operation is skipped, not held, only
+// when its method is known to be one of these.
+var skippedMethods = []string{"HEAD", "OPTIONS", "TRACE", "CONNECT"}
+
 // NewCUEEvaluator returns a CUEEvaluator implementation.
 func NewCUEEvaluator() CUEEvaluator {
 	return &cueEvaluator{}
@@ -220,7 +225,7 @@ func exportEndpointEntries(endpointsValue cue.Value, rootErrors map[string][]str
 		rootMsgs := rootErrors[key]
 		delete(rootErrors, key)
 		val := iter.Value()
-		op := entryOperation(iter.Selector().Unquoted(), val)
+		op, methodKnown := entryOperation(iter.Selector().Unquoted(), val)
 		entry, err := decodeEntry(val)
 		// The root validation reports errors the entry alone does not, such
 		// as an unresolved reference: the entry's own error comes first.
@@ -230,6 +235,7 @@ func exportEndpointEntries(endpointsValue cue.Value, rootErrors map[string][]str
 		if err != nil {
 			output.Failed = append(output.Failed, OperationIssue{
 				Operation: op, Reason: v1alpha1.ReasonCUEEvaluationFailed, Message: err.Error(),
+				methodKnown: methodKnown,
 			})
 			continue
 		}
@@ -299,8 +305,10 @@ func decodeEntry(val cue.Value) (v1alpha1.EndpointEntry, error) {
 // method fields, falling back to the label ("<path>:<METHOD>", the label the
 // default definitions use) when a field is not concrete, and by its hidden
 // _operationId and _tags, which the default definitions copy from the spec.
-func entryOperation(key string, val cue.Value) Operation {
+// It also reports whether the method came from a concrete method field.
+func entryOperation(key string, val cue.Value) (Operation, bool) {
 	op := Operation{Path: key}
+	methodKnown := false
 	if i := strings.LastIndex(key, ":"); i >= 0 {
 		op.Path, op.Method = key[:i], key[i+1:]
 	}
@@ -308,21 +316,21 @@ func entryOperation(key string, val cue.Value) Operation {
 		op.Path = path
 	}
 	if method, err := val.LookupPath(cue.ParsePath("method")).String(); err == nil {
-		op.Method = method
+		op.Method, methodKnown = method, true
 	}
 	if opID, err := val.LookupPath(cue.MakePath(cue.Hid("_operationId", "_"))).String(); err == nil {
 		op.OperationID = opID
 	}
 	tagsIter, err := val.LookupPath(cue.MakePath(cue.Hid("_tags", "_"))).List()
 	if err != nil {
-		return op
+		return op, methodKnown
 	}
 	for tagsIter.Next() {
 		if t, err := tagsIter.Value().String(); err == nil {
 			op.Tags = append(op.Tags, t)
 		}
 	}
-	return op
+	return op, methodKnown
 }
 
 // sortIssues orders issues by path, then method.
@@ -359,7 +367,7 @@ func skipUnsupportedMethods(output *CUEOutput) {
 
 	stillFailed := output.Failed[:0]
 	for _, failed := range output.Failed {
-		if slices.Contains(supportedMethods, failed.Method) {
+		if !failed.methodKnown || !slices.Contains(skippedMethods, failed.Method) {
 			stillFailed = append(stillFailed, failed)
 			continue
 		}
@@ -665,7 +673,7 @@ func remapFailed(failed []OperationIssue, ov v1alpha1.OperationOverride) {
 			failed[i].Path = ov.Endpoint
 		}
 		if ov.Method != "" {
-			failed[i].Method = ov.Method
+			failed[i].Method, failed[i].methodKnown = ov.Method, true
 		}
 	}
 }
