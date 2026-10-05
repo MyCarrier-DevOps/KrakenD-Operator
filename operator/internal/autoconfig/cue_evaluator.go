@@ -68,6 +68,11 @@ type CUEOutput struct {
 	// could not be decoded (reason CUEEvaluationFailed), sorted by path then
 	// method. They have no entry in Entries.
 	Failed []OperationIssue
+
+	// entryOperationIDs holds the operationId of each of Entries, in order,
+	// from before the URL transform and the overrides can put two operations
+	// on one route and so on one OperationIDs key.
+	entryOperationIDs []string
 }
 
 // CUEEvaluator evaluates CUE definitions against OpenAPI spec data.
@@ -245,6 +250,7 @@ func exportEndpointEntries(endpointsValue cue.Value, rootErrors map[string][]str
 			continue
 		}
 		output.Entries = append(output.Entries, entry)
+		output.entryOperationIDs = append(output.entryOperationIDs, op.OperationID)
 		entryKey := entry.Endpoint + ":" + entry.Method
 		if op.OperationID != "" {
 			output.OperationIDs[entryKey] = op.OperationID
@@ -585,16 +591,14 @@ func applyFieldOverrides(output *CUEOutput, overrides []v1alpha1.OperationOverri
 	// the index only serves operationIds declared once.
 	opIDIndex := make(map[string]int, len(output.Entries))
 	count := make(map[string]int, len(output.Entries))
-	for i := range output.Entries {
-		key := output.Entries[i].Endpoint + ":" + output.Entries[i].Method
-		if opID, ok := output.OperationIDs[key]; ok {
-			if _, seen := opIDIndex[opID]; !seen {
-				opIDIndex[opID] = i
-			}
-			if opID != "" {
-				count[opID]++
-			}
+	for i, opID := range output.operationIDsOfEntries() {
+		if opID == "" {
+			continue
 		}
+		if _, seen := opIDIndex[opID]; !seen {
+			opIDIndex[opID] = i
+		}
+		count[opID]++
 	}
 	for _, failed := range output.Failed {
 		if failed.OperationID != "" {
@@ -678,6 +682,20 @@ func applyFieldOverrides(output *CUEOutput, overrides []v1alpha1.OperationOverri
 			}
 		}
 	}
+}
+
+// operationIDsOfEntries returns the operationId of each of Entries, in order,
+// "" when it has none. An output the evaluator did not build, which has no
+// per-entry record, reads them from OperationIDs by route.
+func (o *CUEOutput) operationIDsOfEntries() []string {
+	if len(o.entryOperationIDs) == len(o.Entries) {
+		return o.entryOperationIDs
+	}
+	ids := make([]string, len(o.Entries))
+	for i, e := range o.Entries {
+		ids[i] = o.OperationIDs[e.Endpoint+":"+e.Method]
+	}
+	return ids
 }
 
 // remapFailed gives every failed operation of ov the endpoint and method the
