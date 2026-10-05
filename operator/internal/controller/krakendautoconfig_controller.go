@@ -344,11 +344,12 @@ func autoConfigPredicate() predicate.Predicate {
 	)
 }
 
-// ownedEndpointPredicate gates the Owns(KrakenDEndpoint) watch: endpoint
-// status updates alone must not re-enqueue the owning AutoConfig, only spec
-// changes (generation bumps) and deletes (e.g. drift from an external actor).
+// ownedEndpointPredicate gates the Owns(KrakenDEndpoint) watch. It passes
+// spec changes (generation bumps), label changes (label drift an external
+// actor made) and deletes, which the AutoConfig repairs; status updates
+// alone do not re-enqueue the owning AutoConfig.
 func ownedEndpointPredicate() predicate.Predicate {
-	return predicate.GenerationChangedPredicate{}
+	return predicate.Or(predicate.GenerationChangedPredicate{}, predicate.LabelChangedPredicate{})
 }
 
 // handleFetchError fails the sync on a spec fetch failure (including an
