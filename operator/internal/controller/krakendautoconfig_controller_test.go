@@ -3377,6 +3377,47 @@ func TestAutoConfigReconcile_FailedOperationsAreListedSortedAndCapped(t *testing
 	if want := []string{"/p1", "/p2", "/p3", "/p4", "/p5", "/p6", "/p7"}; !slices.Equal(paths, want) {
 		t.Errorf("failedOperations paths = %v, want %v", paths, want)
 	}
+	// The condition names the first five by path, then counts the rest.
+	want := "7 operations failed; they keep their last-synced endpoints and no stale endpoint is deleted until " +
+		"they recover (see status.failedOperations): GET /p1 (op1): CUEEvaluationFailed; " +
+		"GET /p2 (op2): CUEEvaluationFailed; GET /p3 (op3): CUEEvaluationFailed; " +
+		"GET /p4 (op4): CUEEvaluationFailed; GET /p5 (op5): CUEEvaluationFailed; and 2 more"
+	cond := meta.FindStatusCondition(getAC(t, c, ac).Status.Conditions, v1alpha1.ConditionSynced)
+	if cond == nil || cond.Message != want {
+		t.Errorf("Synced = %+v, want message %q", cond, want)
+	}
+}
+
+func TestAutoConfigReconcile_FailedOperationsStatusListIsCapped(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).Build()
+	f, ce, fi, g := defaultMocks()
+	for i := range 25 {
+		ce.output.Failed = append(ce.output.Failed, autoconfig.OperationIssue{
+			Operation: autoconfig.Operation{Method: "GET", Path: fmt.Sprintf("/p%02d", i), OperationID: fmt.Sprintf("op%02d", i)},
+			Reason:    v1alpha1.ReasonCUEEvaluationFailed,
+			Message:   strings.Repeat("x", 400),
+		})
+	}
+	r := newACReconciler(c, f, ce, fi, g)
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	updated := getAC(t, c, ac)
+	if got := len(updated.Status.FailedOperations); got != 20 {
+		t.Errorf("failedOperations has %d entries, want 20", got)
+	}
+	for _, op := range updated.Status.FailedOperations {
+		if len(op.Message) > 256 {
+			t.Errorf("message of %s is %d bytes, want at most 256", op.Path, len(op.Message))
+		}
+	}
+	cond := meta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionSynced)
+	if cond == nil || !strings.HasPrefix(cond.Message, "25 operations failed;") {
+		t.Errorf("expected the condition to count all 25 failures, got %+v", cond)
+	}
 }
 
 func TestAutoConfigReconcile_RemappedFailedOperationInFilterIsHeld(t *testing.T) {
