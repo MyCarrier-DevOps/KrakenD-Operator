@@ -87,6 +87,8 @@ func TestValidateEntries(t *testing.T) {
 		{"EE-only backend namespace on CE", testGateway(),
 			withExtra("", `{"backend/http/client":{"proxy_address":"http://p"}}`),
 			`spec.endpoints[0].backends[0].extraConfig: Invalid value: "backend/http/client"`},
+		{"CE-honored client keys on CE", testGateway(),
+			withExtra("", `{"backend/http/client":{"send_body_on_redirect":true}}`), ""},
 		{"CE namespaces on CE", testGateway(), withExtra(`{"qos/ratelimit/router":{"max_rate":1}}`,
 			`{"qos/circuit-breaker":{"interval":1,"timeout":1,"max_errors":1}}`), ""},
 		{"EE-only namespaces on EE", ee, withExtra(`{"auth/api-keys":{}}`, `{"backend/http/client":{}}`), ""},
