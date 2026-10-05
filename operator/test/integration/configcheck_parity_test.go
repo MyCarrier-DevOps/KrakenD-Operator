@@ -209,6 +209,22 @@ func TestConfigCheckParity(t *testing.T) {
 		}
 	})
 
+	t.Run("LintPolicy refuses a policy the binary rejects", func(t *testing.T) {
+		policy := &v1alpha1.KrakenDBackendPolicy{
+			ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "parity"},
+			Spec: v1alpha1.KrakenDBackendPolicySpec{
+				Raw: &k8sruntime.RawExtension{Raw: []byte(`{"backend/grpc":{"unknown":1}}`)},
+			},
+		}
+		verdict, err := policyChecker.LintPolicy(ctx, policy)
+		if err != nil {
+			t.Fatalf("LintPolicy: %v", err)
+		}
+		if verdict.OK || len(verdict.Findings) == 0 {
+			t.Fatalf("verdict = %+v, want a refusal with findings", verdict)
+		}
+	})
+
 	for _, tc := range parityCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			scheme := k8sruntime.NewScheme()
