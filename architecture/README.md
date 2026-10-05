@@ -1510,7 +1510,7 @@ The operator assembles the plugin volume mount from all configured sources using
 The operator uses an `emptyDir` volume at the plugin mount path and init containers to assemble all plugin files into it:
 
 1. **ConfigMap sources** — an init container copies `.so` files from each projected ConfigMap volume into the emptyDir
-2. **PVC sources** — an init container copies `.so` files from the PVC mount into the emptyDir (only one PVC source supported per gateway; the admission webhook rejects multiple PVC sources)
+2. **PVC sources** — an init container copies `.so` files from the PVC mount into the emptyDir (only one PVC source supported per gateway; the CRD rejects multiple PVC sources)
 3. **OCI image sources** — an init container pulls the image and copies plugin files into the emptyDir
 
 This strategy avoids the Kubernetes limitation that prevents mounting a `projected` volume and a `persistentVolumeClaim` at the same `mountPath`. KrakenD's plugin loader does not recurse into subdirectories, so all files must be flat in the mount path.
