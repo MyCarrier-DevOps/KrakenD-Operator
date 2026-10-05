@@ -30,6 +30,11 @@ func TestValidateEntries(t *testing.T) {
 	custom.Spec.Config.Router = &v1alpha1.RouterConfig{HealthPath: "/healthz"}
 	rawRouter := testGateway()
 	rawRouter.Spec.Config.ExtraConfig = &runtime.RawExtension{Raw: []byte(`{"router":{"health_path":"/live"}}`)}
+	rawRouterBlock := func(block string) *v1alpha1.KrakenDGateway {
+		gw := custom.DeepCopy()
+		gw.Spec.Config.ExtraConfig = &runtime.RawExtension{Raw: []byte(`{"router":` + block + `}`)}
+		return gw
+	}
 	tests := []struct {
 		name   string
 		gw     *v1alpha1.KrakenDGateway
@@ -42,6 +47,8 @@ func TestValidateEntries(t *testing.T) {
 		{"not reserved", testGateway(), testEndpoint("e", "/__other"), ""},
 		{"custom health path", custom, testEndpoint("e", "/healthz"), "health endpoint"},
 		{"raw health path", rawRouter, testEndpoint("e", "/live"), "health endpoint"},
+		{"health disabled", rawRouterBlock(`{"disable_health":true,"health_path":"/healthz"}`),
+			testEndpoint("e", "/healthz"), ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
