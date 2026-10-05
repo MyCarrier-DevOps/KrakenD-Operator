@@ -1,3 +1,4 @@
+---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingWebhookConfiguration
 metadata:
@@ -9,9 +10,9 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
-      path: /validate-gateway-krakend-io-v1alpha1-krakendgateway
+      path: /validate-gateway-krakend-io-v1alpha1-krakendautoconfig
   failurePolicy: Fail
-  name: vkrakendgateway.kb.io
+  name: vkrakendautoconfig.kb.io
   rules:
   - apiGroups:
     - gateway.krakend.io
@@ -21,28 +22,9 @@ webhooks:
     - CREATE
     - UPDATE
     resources:
-    - krakendgateways
+    - krakendautoconfigs
   sideEffects: None
-- admissionReviewVersions:
-  - v1
-  clientConfig:
-    service:
-      name: webhook-service
-      namespace: system
-      path: /validate-gateway-krakend-io-v1alpha1-krakendendpoint
-  failurePolicy: Fail
-  name: vkrakendendpoint.kb.io
-  rules:
-  - apiGroups:
-    - gateway.krakend.io
-    apiVersions:
-    - v1alpha1
-    operations:
-    - CREATE
-    - UPDATE
-    resources:
-    - krakendendpoints
-  sideEffects: None
+  timeoutSeconds: 15
 - admissionReviewVersions:
   - v1
   clientConfig:
@@ -64,15 +46,16 @@ webhooks:
     resources:
     - krakendbackendpolicies
   sideEffects: None
+  timeoutSeconds: 15
 - admissionReviewVersions:
   - v1
   clientConfig:
     service:
       name: webhook-service
       namespace: system
-      path: /validate-gateway-krakend-io-v1alpha1-krakendautoconfig
+      path: /validate-gateway-krakend-io-v1alpha1-krakendendpoint
   failurePolicy: Fail
-  name: vkrakendautoconfig.kb.io
+  name: vkrakendendpoint.kb.io
   rules:
   - apiGroups:
     - gateway.krakend.io
@@ -82,5 +65,27 @@ webhooks:
     - CREATE
     - UPDATE
     resources:
-    - krakendautoconfigs
+    - krakendendpoints
   sideEffects: None
+  timeoutSeconds: 15
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-gateway-krakend-io-v1alpha1-krakendgateway
+  failurePolicy: Fail
+  name: vkrakendgateway.kb.io
+  rules:
+  - apiGroups:
+    - gateway.krakend.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - krakendgateways
+  sideEffects: None
+  timeoutSeconds: 15
