@@ -13,6 +13,9 @@ set -euo pipefail
 # The CRD's endpoint path pattern, verbatim.
 endpoint_path_re='^(/\*|/[^*?&%]*(/\*)?)$'
 
+# The CRD pattern of the endpoint and AutoConfig duration fields (a Go duration), verbatim.
+go_duration_re='^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$'
+
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
@@ -25,12 +28,15 @@ for kind in endpoints gateways autoconfigs backendpolicies; do
 	fi
 done
 
-jq_opts=(-r --arg path_re "$endpoint_path_re")
+jq_opts=(-r --arg path_re "$endpoint_path_re" --arg go_re "$go_duration_re")
 
 jq_lib='
 # The API server anchors ^ and $ at the ends of the text only; Oniguruma also
 # anchors them at line breaks, so anchor the CRD pattern at the ends explicitly.
 def crd_test($re): test($re | sub("^\\^"; "\\A") | sub("\\$$"; "\\z"));
+# Why a duration string breaks its CRD rules, or nothing: $re is its pattern.
+def dur_problem($re; $label):
+  if crd_test($re) | not then "\($label) \(.)" else empty end;
 def report(kind): select(.v | length > 0) | "\(kind) \(.id): \(.v | unique | join("; "))";
 '
 
@@ -42,6 +48,7 @@ jq "${jq_opts[@]}" "$jq_lib"'
     | "duplicate entry \(.[0].method) \(.[0].endpoint)"),
   ((.spec.endpoints // []) | to_entries[] | .key as $i | .value as $e | "spec.endpoints[\($i)]" as $p | (
     (if ($e.endpoint // "" | crd_test($path_re)) then empty else "\($p).endpoint \($e.endpoint)" end),
-    (if (($e.backends // []) | length) == 0 then "\($p).backends is empty" else empty end)
+    (if (($e.backends // []) | length) == 0 then "\($p).backends is empty" else empty end),
+    ($e.timeout // empty | dur_problem($go_re; "\($p).timeout"))
   ))
 ]} | report("KrakenDEndpoint")' "$work/endpoints.json"
