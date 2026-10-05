@@ -452,16 +452,22 @@ func applyURLTransform(output *CUEOutput, transform *v1alpha1.URLTransformSpec) 
 // entry would have after applyURLTransform.
 func transformIssuePaths(issues []OperationIssue, transform *v1alpha1.URLTransformSpec) {
 	for i := range issues {
-		if transform.StripPathPrefix != "" {
-			issues[i].Path = strings.TrimPrefix(issues[i].Path, transform.StripPathPrefix)
-			if issues[i].Path == "" {
-				issues[i].Path = "/"
-			}
-		}
-		if transform.AddPathPrefix != "" {
-			issues[i].Path = transform.AddPathPrefix + issues[i].Path
+		issues[i].Path = transformPath(issues[i].Path, transform)
+	}
+}
+
+// transformPath applies the path strip and add-prefix of transform to path.
+func transformPath(path string, transform *v1alpha1.URLTransformSpec) string {
+	if transform.StripPathPrefix != "" {
+		path = strings.TrimPrefix(path, transform.StripPathPrefix)
+		if path == "" {
+			path = "/"
 		}
 	}
+	if transform.AddPathPrefix != "" {
+		path = transform.AddPathPrefix + path
+	}
+	return path
 }
 
 // applyURLTransformToEntry applies host mapping and path strip/add-prefix to a
@@ -478,15 +484,7 @@ func applyURLTransformToEntry(
 			}
 		}
 	}
-	if transform.StripPathPrefix != "" {
-		entry.Endpoint = strings.TrimPrefix(entry.Endpoint, transform.StripPathPrefix)
-		if entry.Endpoint == "" {
-			entry.Endpoint = "/"
-		}
-	}
-	if transform.AddPathPrefix != "" {
-		entry.Endpoint = transform.AddPathPrefix + entry.Endpoint
-	}
+	entry.Endpoint = transformPath(entry.Endpoint, transform)
 }
 
 // ApplyURLTransformToEntries applies a URLTransformSpec (host mapping + path
