@@ -218,3 +218,19 @@ func TestSchemaClosure_IgnoresRefsToExampleObjects(t *testing.T) {
 		t.Errorf("unresolved = %v, want none", unresolved)
 	}
 }
+
+// A pointer into a component schema needs that schema's root attached, and
+// is not an unresolved reference.
+func TestSchemaClosure_AttachesTheRootOfAPointerIntoASchema(t *testing.T) {
+	entry := docEntry("/pets", `{"response_definition":{"200":{"example_schema":`+
+		`{"$ref":"#/components/schemas/Pet/$defs/Tag"}}}}`)
+
+	closure, unresolved := SchemaClosure(entry, petSchemas())
+
+	if got, want := slices.Sorted(maps.Keys(closure)), []string{"Address", "Owner", "Pet"}; !slices.Equal(got, want) {
+		t.Errorf("closure = %v, want %v", got, want)
+	}
+	if len(unresolved) != 0 {
+		t.Errorf("unresolved = %v, want none", unresolved)
+	}
+}
