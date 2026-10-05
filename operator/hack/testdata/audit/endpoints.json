@@ -22,5 +22,7 @@
  {"metadata":{"namespace":"a","name":"route-dup1"},"spec":{"gatewayRef":{"name":"routes-dup"},"endpoints":[{"endpoint":"/same","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}]}]}},
  {"metadata":{"namespace":"a","name":"route-dup2"},"spec":{"gatewayRef":{"name":"routes-dup"},"endpoints":[{"endpoint":"/same","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}]}]}},
  {"metadata":{"namespace":"a","name":"route-get"},"spec":{"gatewayRef":{"name":"routes-method"},"endpoints":[{"endpoint":"/m/{id}","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}]}]}},
- {"metadata":{"namespace":"a","name":"route-post"},"spec":{"gatewayRef":{"name":"routes-method"},"endpoints":[{"endpoint":"/m/{name}","method":"POST","backends":[{"host":["http://a"],"urlPattern":"/u"}]}]}}
+ {"metadata":{"namespace":"a","name":"route-post"},"spec":{"gatewayRef":{"name":"routes-method"},"endpoints":[{"endpoint":"/m/{name}","method":"POST","backends":[{"host":["http://a"],"urlPattern":"/u"}]}]}},
+ {"metadata":{"namespace":"a","name":"route-slash1"},"spec":{"gatewayRef":{"name":"routes-clean"},"endpoints":[{"endpoint":"/a//b","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}]}]}},
+ {"metadata":{"namespace":"a","name":"route-slash2"},"spec":{"gatewayRef":{"name":"routes-clean"},"endpoints":[{"endpoint":"/a/b","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}]}]}}
 ]}
