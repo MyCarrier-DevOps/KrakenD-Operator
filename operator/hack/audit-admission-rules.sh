@@ -22,6 +22,10 @@ single_unit_re='^[0-9]+(ns|ms|us|µs|s|m|h)$'
 # The CRD pattern of a resource quantity, verbatim.
 quantity_re='^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$'
 
+# The Enterprise-only extra_config namespaces per level, which the renderer
+# strips from a CE render and admission rejects on a CE gateway.
+ee_only="$(dirname "$0")/../internal/renderer/eeonly_namespaces.json"
+
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
@@ -35,7 +39,7 @@ for kind in endpoints gateways autoconfigs backendpolicies; do
 done
 
 jq_opts=(-r --arg path_re "$endpoint_path_re" --arg go_re "$go_duration_re" --arg one_re "$single_unit_re"
-	--arg qty_re "$quantity_re")
+	--arg qty_re "$quantity_re" --slurpfile ee "$ee_only")
 
 jq_lib='
 # The API server anchors ^ and $ at the ends of the text only; Oniguruma also
@@ -76,6 +80,8 @@ def quantity_problem($label):
   elif length > 64 then "\($label) is longer than 64 characters"
   elif quantity_undecodable then "\($label) \(.) is not a quantity Kubernetes can decode"
   else empty end;
+# The keys of an extra_config object that are in $names.
+def eeonly($names): [(. // {}) | keys[] | select(IN($names[]))];
 def report(kind): select(.v | length > 0) | "\(kind) \(.id): \(.v | unique | join("; "))";
 '
 
@@ -134,5 +140,7 @@ jq "${jq_opts[@]}" "$jq_lib"'
   (if $s.redis.connectionPool.tls != null then "spec.redis.connectionPool.tls is not supported yet" else empty end),
   (if $s.edition == "EE" and $s.dragonfly.authentication.passwordFromSecret != null
    then "spec.dragonfly.authentication.passwordFromSecret is not supported yet with edition EE" else empty end),
-  ($s.postRestartJob.tmpSizeLimit // empty | quantity_problem("spec.postRestartJob.tmpSizeLimit"))
+  ($s.postRestartJob.tmpSizeLimit // empty | quantity_problem("spec.postRestartJob.tmpSizeLimit")),
+  (if $s.edition == "CE" then ($s.config.extraConfig | eeonly($ee[0].enterpriseOnly.service))[]
+     | "spec.config.extraConfig \(.) is Enterprise-only on a CE gateway" else empty end)
 ]} | report("KrakenDGateway")' "$work/gateways.json"
