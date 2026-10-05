@@ -405,6 +405,7 @@ func TestAutoConfigCRD_Rules(t *testing.T) {
 		{"OnChange with a short interval", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, periodic: {interval: 10s}}}`, ""},
 		{"default backend service discovery", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, defaults: {backend: {sd: dsn}}}}`, "Unsupported value: \"dsn\""},
 		{"override concurrent calls", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, overrides: [{operationId: x, concurrentCalls: 0}]}}`, "spec.overrides[0].concurrentCalls"},
+		{"override endpoint with a query", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, overrides: [{operationId: x, endpoint: "/a?b"}]}}`, "spec.overrides[0].endpoint"},
 	})
 }
 
