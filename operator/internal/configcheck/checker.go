@@ -111,7 +111,7 @@ func (c *Checker) CheckGatewayPolicy(ctx context.Context, gw *v1alpha1.KrakenDGa
 
 // LintPolicy lints policy on its own: one synthetic endpoint on a default CE
 // gateway, whose only backend references policy. It catches a bad policy
-// before anything references it.
+// before anything references it. Its findings name no endpoint.
 func (c *Checker) LintPolicy(ctx context.Context, policy *v1alpha1.KrakenDBackendPolicy) (Verdict, error) {
 	const name = "policy-lint"
 	gw := &v1alpha1.KrakenDGateway{
@@ -131,11 +131,17 @@ func (c *Checker) LintPolicy(ctx context.Context, policy *v1alpha1.KrakenDBacken
 			}},
 		},
 	}
-	return c.lint(ctx, renderer.RenderInput{
+	verdict, err := c.lint(ctx, renderer.RenderInput{
 		Gateway:   gw,
 		Endpoints: []v1alpha1.KrakenDEndpoint{ep},
 		Policies:  map[string]*v1alpha1.KrakenDBackendPolicy{policy.Namespace + "/" + policy.Name: policy},
 	})
+	// The synthetic endpoint is not something the caller created: its
+	// findings read as policy-level.
+	for i := range verdict.Findings {
+		verdict.Findings[i].Endpoint, verdict.Findings[i].Index = types.NamespacedName{}, -1
+	}
+	return verdict, err
 }
 
 func (c *Checker) lint(ctx context.Context, in renderer.RenderInput) (Verdict, error) {
