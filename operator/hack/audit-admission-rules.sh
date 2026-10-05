@@ -16,6 +16,7 @@
 # Checks:
 #   KrakenDEndpoint / KrakenDGateway / KrakenDAutoConfig   the CRD schema and CEL rules
 #   gateway ns/name: A vs B                                 entries one gateway would route as one
+#   KrakenDAutoConfig ns/name: endpoints share a route ...  endpoints it controls that one route serves
 #   KrakenDEndpoint ...: ... health path of gateway ...    a GET on the gateway's health endpoint
 #   ... Enterprise-only on CE gateway ...                   extra_config KrakenD CE ignores
 set -euo pipefail
@@ -287,6 +288,22 @@ jq "${jq_opts[@]}" "$jq_lib"'
     | select(($a.owner != $b.owner or $a.route != $b.route)
       and ($a.owner == $b.owner or $a.ctrl == null or $a.ctrl != $b.ctrl))] | length > 0)
 | "gateway \(.[0].gw | tojson): \([.[] | "\(.route) (\(.owner))"] | join(" vs "))"' "$work/endpoints.json"
+
+# Two endpoints one AutoConfig controls that share a route (the same method and
+# path shape): the gateway serves only one, so the AutoConfig controller holds
+# every other as ConfigValidationFailed (Synced False, OperationsFailed) and
+# keeps its stale endpoints until the pair is resolved.
+jq "${jq_opts[@]}" "$jq_lib"'
+[.items[] | . as $o
+  | ([$o.metadata.ownerReferences // [] | .[] | select(.controller == true and .kind == "KrakenDAutoConfig")][0]) as $ref
+  | select($ref != null)
+  | "\(.spec.gatewayRef.namespace // .metadata.namespace)/\(.spec.gatewayRef.name)" as $gw
+  | (.spec.endpoints // [])[]
+  | {gw: $gw, ac: "\($o.metadata.namespace)/\($ref.name)", uid: $ref.uid,
+     owner: "\($o.metadata.namespace)/\($o.metadata.name)",
+     key: "\(.method) \(.endpoint | conflict_key)", route: "\(.method) \(.endpoint | tojson)"}]
+| group_by([.ac, .uid, .gw, .key])[] | select([.[].owner] | unique | length > 1)
+| "KrakenDAutoConfig \(.[0].ac): endpoints share a route and the operator holds all but the one the gateway serves: \([.[] | "\(.route) (\(.owner))"] | join(" vs "))"' "$work/endpoints.json"
 
 # GET on a gateway health path: krakend check accepts it, and the controller's
 # route check rejects the render, so the gateway keeps its last applied config.
