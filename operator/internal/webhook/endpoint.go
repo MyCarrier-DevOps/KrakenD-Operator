@@ -19,6 +19,7 @@ package webhook
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -110,7 +111,7 @@ func (v *EndpointValidator) admit(
 			field.NewPath("spec", "endpoints").Index(i).Child("extraConfig"), ep.Spec.Endpoints[i].ExtraConfig)...)
 	}
 	if gw != nil {
-		dupErrs, err := v.validateRouteUniqueness(ctx, ep, changed, gw)
+		dupErrs, err := v.validateRouteUniqueness(ctx, ep, newRoutes(stored, ep, changed), gw)
 		if err != nil {
 			return nil, unavailable(err)
 		}
@@ -219,6 +220,21 @@ func changedEntries(old, ep *v1alpha1.KrakenDEndpoint) []int {
 		changed = append(changed, i)
 	}
 	return changed
+}
+
+// newRoutes returns the changed entries whose route no stored entry has. An
+// edit to an entry that already holds its route is not a new claim on it, so
+// a stored clash never blocks the owner of the served entry.
+func newRoutes(stored, ep *v1alpha1.KrakenDEndpoint, changed []int) []int {
+	held := map[string]bool{}
+	if stored != nil {
+		for _, e := range stored.Spec.Endpoints {
+			held[routeKey(e)] = true
+		}
+	}
+	return slices.DeleteFunc(slices.Clone(changed), func(i int) bool {
+		return held[routeKey(ep.Spec.Endpoints[i])]
+	})
 }
 
 // validateRouteUniqueness rejects each changed entry whose route another entry
