@@ -17,7 +17,9 @@ limitations under the License.
 package autoconfig
 
 import (
+	"encoding/base64"
 	"encoding/json"
+	"strings"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -47,10 +49,111 @@ func ExtractComponentSchemas(specData []byte) map[string]runtime.RawExtension {
 	return result
 }
 
-// SchemaClosure is implemented in the next step.
+// componentSchemaPrefix is the JSON pointer prefix of a component schema
+// reference inside the spec.
+const componentSchemaPrefix = "#/components/schemas/"
+
+// SchemaClosure returns the component schemas entry's documentation
+// references, directly or through the schemas it references. The result is nil
+// when there are none.
 func SchemaClosure(
-	_ v1alpha1.EndpointEntry,
+	entry v1alpha1.EndpointEntry,
 	components map[string]runtime.RawExtension,
 ) (closure map[string]runtime.RawExtension, unresolved []string) {
-	return components, nil
+	closure = map[string]runtime.RawExtension{}
+	pending := documentationRefs(entry)
+	for len(pending) > 0 {
+		ref := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		name, ok := schemaName(ref)
+		if !ok {
+			continue
+		}
+		if _, done := closure[name]; done {
+			continue
+		}
+		body, ok := components[name]
+		if !ok {
+			continue
+		}
+		closure[name] = body
+		var node any
+		if json.Unmarshal(body.Raw, &node) == nil {
+			pending = append(pending, schemaRefs(node)...)
+		}
+	}
+	if len(closure) == 0 {
+		closure = nil
+	}
+	return closure, nil
+}
+
+// schemaName returns the component schema name ref denotes: ref itself when
+// it is a bare name (the documentation "ref" fields), or the unescaped last
+// segment of a "#/components/schemas/<name>" pointer. ok is false for any
+// other pointer.
+func schemaName(ref string) (string, bool) {
+	if !strings.HasPrefix(ref, "#") {
+		return ref, true
+	}
+	name, ok := strings.CutPrefix(ref, componentSchemaPrefix)
+	if !ok || name == "" || strings.Contains(name, "/") {
+		return "", false
+	}
+	return strings.ReplaceAll(strings.ReplaceAll(name, "~1", "/"), "~0", "~"), true
+}
+
+// documentationRefs returns the schema references in entry's
+// documentation/openapi extra config: each "ref" name, and the "$ref"s of
+// each example_schema (an object, or base64-encoded JSON). Example payloads
+// are data and are not searched.
+func documentationRefs(entry v1alpha1.EndpointEntry) []string {
+	if entry.ExtraConfig == nil {
+		return nil
+	}
+	var ec map[string]json.RawMessage
+	if json.Unmarshal(entry.ExtraConfig.Raw, &ec) != nil {
+		return nil
+	}
+	var doc any
+	if json.Unmarshal(ec["documentation/openapi"], &doc) != nil {
+		return nil
+	}
+	var refs []string
+	walkJSON(doc, func(key string, value any) bool {
+		if payload, _ := examplePayload(key, value); payload {
+			return false
+		}
+		s, isString := value.(string)
+		switch {
+		case key == "ref" && isString:
+			refs = append(refs, s)
+		case key == "example_schema" && isString:
+			var schema any
+			if raw, err := base64.StdEncoding.DecodeString(s); err == nil && json.Unmarshal(raw, &schema) == nil {
+				refs = append(refs, schemaRefs(schema)...)
+			}
+		case key == "example_schema":
+			refs = append(refs, schemaRefs(value)...)
+			return false
+		}
+		return true
+	})
+	return refs
+}
+
+// schemaRefs returns the local "#/..." $ref pointers inside a JSON schema.
+// Examples are data and are not searched.
+func schemaRefs(schema any) []string {
+	var refs []string
+	walkJSON(schema, func(key string, value any) bool {
+		if payload, _ := examplePayload(key, value); payload {
+			return false
+		}
+		if s, ok := value.(string); ok && key == "$ref" && strings.HasPrefix(s, "#") {
+			refs = append(refs, s)
+		}
+		return true
+	})
+	return refs
 }
