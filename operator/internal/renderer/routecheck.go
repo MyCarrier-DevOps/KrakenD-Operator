@@ -140,6 +140,7 @@ func routeConflicts(ctx context.Context, doc []byte) ([]string, error) {
 	}
 	var lines []string
 	var accepted []ginRoute
+	refused := 0
 	engine := gin.New()
 	for _, r := range ginRoutesOf(cfg) {
 		if err := ctx.Err(); err != nil {
@@ -150,8 +151,16 @@ func routeConflicts(ctx context.Context, doc []byte) ([]string, error) {
 			accepted = append(accepted, r)
 			continue
 		}
-		for _, f := range clashRefusals(accepted, r, refusal) {
+		clashes, err := clashRefusals(ctx, accepted, r, refusal)
+		if err != nil {
+			return nil, err
+		}
+		for _, f := range clashes {
 			lines = append(lines, f.line(r))
+		}
+		if refused++; refused == maxRouteRefusals {
+			lines = append(lines, fmt.Sprintf("- route check stopped after %d refused routes", refused))
+			break
 		}
 		// gin can leave its tree half-updated after refusing a route; rebuild it.
 		engine = engineWith(accepted)
@@ -235,12 +244,17 @@ func engineWith(routes []ginRoute) *gin.Engine {
 
 // clashRefusals reports refused route r and, when one accepted route alone
 // clashes with it, that route too, so both endpoints are named.
-func clashRefusals(accepted []ginRoute, r ginRoute, refusal string) []routeRefusal {
+func clashRefusals(
+	ctx context.Context, accepted []ginRoute, r ginRoute, refusal string,
+) ([]routeRefusal, error) {
 	out := []routeRefusal{{index: r.index, message: refusal}}
 	if registerRoute(gin.New(), r) != "" {
-		return out // r is refused on its own, so no accepted route is to blame
+		return out, nil // r is refused on its own, so no accepted route is to blame
 	}
 	for _, a := range accepted {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("route check did not finish: %w", err)
+		}
 		if registerRoute(engineWith([]ginRoute{a}), r) == "" {
 			continue
 		}
@@ -252,5 +266,5 @@ func clashRefusals(accepted []ginRoute, r ginRoute, refusal string) []routeRefus
 		}
 		break
 	}
-	return out
+	return out, nil
 }
