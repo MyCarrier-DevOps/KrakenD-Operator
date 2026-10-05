@@ -300,3 +300,25 @@ func TestSchemaClosure_DiscriminatorMappingValueForms(t *testing.T) {
 		t.Errorf("unresolved = %v, want %v (a mapping outside a discriminator is not read)", unresolved, want)
 	}
 }
+
+// The members of every keyword that holds a map of schemas are schemas
+// whatever they are named, so one called "example" is searched.
+func TestSchemaClosure_SeesRefsUnderSchemaMapsMemberNamedExample(t *testing.T) {
+	tests := []struct{ keyword string }{
+		{"$defs"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.keyword, func(t *testing.T) {
+			components := petSchemas()
+			components["Odd"] = runtime.RawExtension{Raw: []byte(`{"` + tt.keyword +
+				`":{"example":{"$ref":"#/components/schemas/Address"}}}`)}
+			entry := docEntry("/odd", `{"response_definition":{"200":{"ref":"Odd"}}}`)
+
+			closure, _ := SchemaClosure(entry, components)
+
+			if got, want := slices.Sorted(maps.Keys(closure)), []string{"Address", "Odd"}; !slices.Equal(got, want) {
+				t.Errorf("closure = %v, want %v", got, want)
+			}
+		})
+	}
+}
