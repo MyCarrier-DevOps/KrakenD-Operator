@@ -405,9 +405,15 @@ func TestCUEEvaluator_Overrides(t *testing.T) {
 	if len(out.Entries) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(out.Entries))
 	}
-	// Verify the extra_config was applied
-	if out.Entries[0].ExtraConfig == nil {
-		t.Error("expected extra_config from override to be present")
+	// The evaluator merges the override into the entry itself, so the entry's
+	// extraConfig proves nothing about the CUE lookup. The definition copies
+	// the looked-up value onto the backend: that is the case-fold pin.
+	if len(out.Entries[0].Backends) == 0 {
+		t.Fatal("expected a backend")
+	}
+	be := out.Entries[0].Backends[0]
+	if be.ExtraConfig == nil || !strings.Contains(string(be.ExtraConfig.Raw), `"auth/validator"`) {
+		t.Errorf("expected the lookup of listUsers to find the override, got backend extraConfig %v", be.ExtraConfig)
 	}
 }
 
