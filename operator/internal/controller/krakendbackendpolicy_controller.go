@@ -137,7 +137,8 @@ const maxNamedReferrers = 5
 
 // reconcileProtection keeps the protection finalizer on a policy that is not
 // being deleted, and releases it from one that is once nothing references it.
-// done reports that the policy is gone, so the caller has nothing left to write.
+// done reports that the finalizer was released, so the caller has no status left
+// to write: the policy goes with it unless another finalizer still holds it.
 func (r *KrakenDBackendPolicyReconciler) reconcileProtection(
 	ctx context.Context, policy *v1alpha1.KrakenDBackendPolicy, referrers []v1alpha1.KrakenDEndpoint,
 ) (done bool, err error) {
