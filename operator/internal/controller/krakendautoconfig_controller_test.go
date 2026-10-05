@@ -4818,3 +4818,46 @@ func TestAttributeFindings_ReadsEndpointNotIndex(t *testing.T) {
 		t.Errorf("attributeFindings = %+v, want test-ac-a: first, test-ac-b: entry unknown", got)
 	}
 }
+
+func TestAutoConfigReconcile_PrecheckHoldsWhatTheRoundsLeftUnchecked(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	// Seven candidates; each round's check names the first one left, so five
+	// rounds attribute five and leave two that no passing check covered.
+	names := []string{"test-ac-listusers"}
+	for _, id := range []string{"b", "c", "d", "e", "f", "g"} {
+		g.output.Endpoints = append(g.output.Endpoints, generatedEndpoint(id, "/"+id))
+		names = append(names, "test-ac-"+id)
+	}
+	checker := &fakeChecker{}
+	for _, name := range names[:maxPrecheckRounds] {
+		checker.verdicts = append(checker.verdicts, configcheck.Verdict{Findings: []configcheck.Finding{{
+			Endpoint: types.NamespacedName{Namespace: "default", Name: name}, Index: 0, Message: "bad " + name,
+		}}})
+	}
+	c := fakeClientBuilder().WithObjects(ac, cm, testGateway()).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Checker = checker
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(checker.calls) != maxPrecheckRounds {
+		t.Errorf("config checks = %d, want %d", len(checker.calls), maxPrecheckRounds)
+	}
+	for _, name := range names {
+		if endpointExists(t, c, name) {
+			t.Errorf("endpoint %s was written without a passing check", name)
+		}
+	}
+	failed := getAC(t, c, ac).Status.FailedOperations
+	if len(failed) != len(names) {
+		t.Fatalf("failedOperations = %+v, want all %d held", failed, len(names))
+	}
+	for _, f := range failed {
+		if f.Endpoint == "test-ac-g" && f.Message != "not written: the gateway config check still failed after 5 rounds" {
+			t.Errorf("message of the unchecked endpoint = %q", f.Message)
+		}
+	}
+}
