@@ -19,6 +19,7 @@ package autoconfig
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -1812,5 +1813,47 @@ func TestApplyURLTransformToEntries_NilTransformNoop(t *testing.T) {
 	ApplyURLTransformToEntries(entries, nil)
 	if entries[0].Endpoint != "/x" {
 		t.Fatalf("nil transform must be a no-op, got %s", entries[0].Endpoint)
+	}
+}
+
+// evaluateEmbedded evaluates specJSON against the embedded default CUE
+// definitions with the given overrides.
+func evaluateEmbedded(t *testing.T, specJSON string, overrides ...v1alpha1.OperationOverride) *CUEOutput {
+	t.Helper()
+	defs, err := EmbeddedCUEDefinitions()
+	if err != nil {
+		t.Fatalf("loading defs: %v", err)
+	}
+	out, err := NewCUEEvaluator().Evaluate(context.Background(), CUEInput{
+		SpecData:    []byte(specJSON),
+		SpecFormat:  v1alpha1.SpecFormatJSON,
+		DefaultDefs: defs,
+		Overrides:   overrides,
+		ServiceName: "_spec",
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	return out
+}
+
+func TestEvaluate_OverrideExtraConfigWithNonIdentifierOperationID(t *testing.T) {
+	// SanitizeName maps "_" to "-", and a leading digit is not a CUE
+	// identifier: the override label must be quoted.
+	for _, opID := range []string{"get_a"} {
+		t.Run(opID, func(t *testing.T) {
+			spec := fmt.Sprintf(`{"paths":{"/a":{"get":{"operationId":%q,`+
+				`"responses":{"200":{"description":"OK"}}}}}}`, opID)
+			out := evaluateEmbedded(t, spec, v1alpha1.OperationOverride{
+				OperationID: opID,
+				ExtraConfig: &runtime.RawExtension{Raw: []byte(`{"auth/validator":{"alg":"RS256"}}`)},
+			})
+			if len(out.Entries) != 1 {
+				t.Fatalf("expected 1 entry, got %d", len(out.Entries))
+			}
+			if !strings.Contains(string(out.Entries[0].ExtraConfig.Raw), `"auth/validator"`) {
+				t.Errorf("expected the override's auth/validator, got %s", out.Entries[0].ExtraConfig.Raw)
+			}
+		})
 	}
 }
