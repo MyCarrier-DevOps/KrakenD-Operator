@@ -20,6 +20,7 @@ import (
 	"k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
 
+	"github.com/mycarrier-devops/krakend-operator/internal/autoconfig"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
 	"github.com/mycarrier-devops/krakend-operator/internal/controller"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
@@ -37,7 +38,8 @@ type validation struct {
 
 // wireValidation builds the pod's one config checker and the parts that use
 // it. The checker's slots bound concurrent krakend executions across the
-// gateway controller and the admission webhooks, so they must share it.
+// gateway controller, the AutoConfig controller and the admission webhooks, so
+// they must share it.
 func wireValidation(
 	mgr ctrl.Manager, r renderer.Renderer, v renderer.Validator, operatorUsername string,
 ) validation {
@@ -53,6 +55,17 @@ func wireValidation(
 			Clock:         clock.RealClock{},
 			APIReader:     mgr.GetAPIReader(),
 			LicenseParser: licenseutil.NewX509LicenseParser(),
+		},
+		AutoConfig: &controller.KrakenDAutoConfigReconciler{
+			Client:       mgr.GetClient(),
+			Scheme:       mgr.GetScheme(),
+			Recorder:     mgr.GetEventRecorderFor("krakendautoconfig-controller"),
+			Fetcher:      autoconfig.NewFetcher(mgr.GetClient()),
+			CUEEvaluator: autoconfig.NewCUEEvaluator(),
+			Filter:       autoconfig.NewFilter(),
+			Generator:    autoconfig.NewGenerator(),
+			Checker:      checker,
+			Clock:        clock.RealClock{},
 		},
 		Validators: webhooksetup.NewValidators(mgr.GetClient(), mgr.GetAPIReader(), checker, operatorUsername),
 	}
