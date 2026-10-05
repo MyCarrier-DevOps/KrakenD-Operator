@@ -3630,3 +3630,29 @@ func TestAutoConfigReconcile_ManyUnresolvedSchemaRefsStayBoundedAndQuiet(t *test
 		t.Errorf("an identical second pass emitted %v, want no events", events)
 	}
 }
+
+func TestAutoConfigReconcile_GeneratorNoteAlreadyEmittedAsFetchNoteIsNotRepeated(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	f, ce, fi, g := defaultMocks()
+	configMapSpecWithExternalRef(ac, f)
+	g.output.Warnings = []string{externalRefNote}
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).Build()
+	rec := fakeRecorder()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Recorder = rec
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	want := "Warning " + v1alpha1.ReasonSpecWarning + " " + externalRefNote
+	n := 0
+	for _, ev := range drainEvents(rec) {
+		if ev == want {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("events carrying the note = %d, want 1", n)
+	}
+}
