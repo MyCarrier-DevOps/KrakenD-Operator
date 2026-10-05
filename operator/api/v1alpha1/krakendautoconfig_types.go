@@ -71,6 +71,7 @@ type KrakenDAutoConfigSpec struct {
 	Defaults *Defaults `json:"defaults,omitempty"`
 
 	// Overrides applies per-operation overrides to generated endpoints.
+	// +kubebuilder:validation:MaxItems=1024
 	Overrides []OperationOverride `json:"overrides,omitempty"`
 
 	// Filter restricts which OpenAPI operations are converted to endpoints.
