@@ -158,7 +158,6 @@ const (
 	ReasonUnsupportedMethod             = "UnsupportedMethod"
 	ReasonRolloutFailed                 = "RolloutFailed"
 	ReasonCUEEvaluationFailed           = "CUEEvaluationFailed"
-	ReasonCUEEvaluationWarning          = "CUEEvaluationWarning"
 	ReasonSpecWarning                   = "SpecWarning"
 	ReasonAdditionalEndpointOverride    = "AdditionalEndpointOverride"
 	ReasonAdditionalEndpointScopeFailed = "AdditionalEndpointScopeFailed"
