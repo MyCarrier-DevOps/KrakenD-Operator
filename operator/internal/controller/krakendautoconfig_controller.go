@@ -145,7 +145,7 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// status.SpecChecksum unchanged, so each retry of a failing sync whose
 	// inputs changed emits them again.
 	warnings := &inputWarnings{inputsChanged: combinedChecksum != origStatus.SpecChecksum}
-	for _, note := range specWarnings(specNotes) {
+	for _, note := range capList(specWarnings(specNotes)) {
 		warnings.add(v1alpha1.ReasonSpecWarning, note)
 	}
 
@@ -639,7 +639,8 @@ type syncResult struct {
 	generated int
 	// skipped lists the operations the pass generated no endpoint for.
 	skipped []v1alpha1.OperationStatus
-	// warnings lists the problems that do not stop a sync.
+	// warnings lists every distinct problem that does not stop a sync; the
+	// status lists the first maxStatusListLen.
 	warnings []string
 	changes  endpointChanges
 }
@@ -669,7 +670,7 @@ func (r *KrakenDAutoConfigReconciler) recordSync(
 	ac.Status.GeneratedEndpoints = res.generated
 	ac.Status.SkippedOperations = len(res.skipped)
 	ac.Status.Skipped = capList(res.skipped)
-	ac.Status.Warnings = res.warnings
+	ac.Status.Warnings = capList(res.warnings)
 	meta.SetStatusCondition(&ac.Status.Conditions, syncedCondition(res, ac.Generation))
 	setAutoConfigReadiness(ac)
 	if autoConfigStatusChanged(orig, &ac.Status) {
