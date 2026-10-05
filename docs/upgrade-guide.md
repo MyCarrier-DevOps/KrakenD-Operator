@@ -1091,6 +1091,15 @@ nothing rolls, unless the plugin bytes changed (`DeploymentUpdated`).
 `PluginsResolved` exists only while the gateway has ConfigMap plugin
 sources.
 
+### Metrics
+
+- New gauge `krakend_operator_gateway_config_valid{namespace,name}`: 1 while
+  the gateway's newest config passed validation, 0 while it is rejected or
+  could not be checked. Alert on it instead of the unlabelled
+  `config_validation_failures_total`.
+- `krakend_operator_gateway_info` now keeps one series per gateway. A
+  version or edition change replaces the series instead of adding one.
+
 ---
 
 ## v0.14.0 — openapi-serve liveness probe (one-time rollout)
