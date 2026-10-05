@@ -403,3 +403,38 @@ func TestAutoConfigCRD_Rules(t *testing.T) {
 		{"additional endpoint cacheTTL not a duration", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, additionalEndpoints: [{endpoint: /h, cacheTTL: "1d"}]}}`, "spec.additionalEndpoints[0].cacheTTL in body should match"},
 	})
 }
+
+func TestAutoConfigCRD_Ratchets(t *testing.T) {
+	const src = `openapi: {url: "http://x"}, trigger: OnChange, `
+	runCRDUpdateCases(t, autoconfigsCRD, []crdUpdateCase{
+		{"stored default output encoding typo, another field edited",
+			autoconfigHead + src + `additionalEndpointsBasePath: /v1, defaults: {endpoint: {outputEncoding: jsn}}}}`,
+			autoconfigHead + src + `defaults: {endpoint: {outputEncoding: jsn}}}}`, ""},
+		{"stored default output encoding typo, encoding changed",
+			autoconfigHead + src + `defaults: {endpoint: {outputEncoding: jsonn}}}}`,
+			autoconfigHead + src + `defaults: {endpoint: {outputEncoding: jsn}}}}`, "Unsupported value: \"jsonn\""},
+		{"stored override timeout that is not a duration, another field edited",
+			autoconfigHead + src + `additionalEndpointsBasePath: /v1, overrides: [{operationId: x, timeout: "30"}]}}`,
+			autoconfigHead + src + `overrides: [{operationId: x, timeout: "30"}]}}`, ""},
+		{"stored override timeout that is not a duration, a sibling override edited",
+			autoconfigHead + src + `overrides: [{operationId: x, timeout: "30"}, {operationId: y, endpoint: /y}]}}`,
+			autoconfigHead + src + `overrides: [{operationId: x, timeout: "30"}, {operationId: y}]}}`,
+			"spec.overrides[0].timeout"},
+		{"stored additional endpoint without a slash, a different entry edited",
+			autoconfigHead + src + `additionalEndpoints: [{endpoint: health}, {endpoint: /live, timeout: 5s}]}}`,
+			autoconfigHead + src + `additionalEndpoints: [{endpoint: health}, {endpoint: /live}]}}`, ""},
+		{"stored additional endpoint encoding typo, the same entry's timeout edited",
+			autoconfigHead + src + `additionalEndpoints: [{endpoint: /h, encoding: jsn, timeout: 5s}]}}`,
+			autoconfigHead + src + `additionalEndpoints: [{endpoint: /h, encoding: jsn}]}}`, ""},
+		{"stored additional endpoint encoding typo, encoding changed",
+			autoconfigHead + src + `additionalEndpoints: [{endpoint: /h, encoding: jsonn}]}}`,
+			autoconfigHead + src + `additionalEndpoints: [{endpoint: /h, encoding: jsn}]}}`,
+			"Unsupported value: \"jsonn\""},
+		{"stored interval below 30s, another field edited",
+			autoconfigHead + `openapi: {url: "http://x"}, trigger: Periodic, additionalEndpointsBasePath: /v1, periodic: {interval: 10s}}}`,
+			autoconfigHead + `openapi: {url: "http://x"}, trigger: Periodic, periodic: {interval: 10s}}}`, ""},
+		{"stored interval below 30s, interval changed",
+			autoconfigHead + `openapi: {url: "http://x"}, trigger: Periodic, periodic: {interval: 20s}}}`,
+			autoconfigHead + `openapi: {url: "http://x"}, trigger: Periodic, periodic: {interval: 10s}}}`, "at least 30s"},
+	})
+}
