@@ -122,6 +122,18 @@ make deploy IMG=ghcr.io/mycarrier-devops/krakend-operator:<previous-version>
 
 > **Note:** CRD changes cannot be rolled back via Helm. If a CRD schema change is incompatible, restore from backup.
 
+> **Downgrading the operator past *Gateway reconcile correctness*.** Expect
+> these effects on every gateway:
+>
+> - The pods roll once more. The older operator builds a pod template that
+>   mounts the ConfigMap named after the gateway and carries no
+>   `krakend.io/image` annotation.
+> - The older operator recreates the `<gateway>` ConfigMap. It does not know
+>   the `<gateway>-config-<hash>` ConfigMaps, so it never collects them. They
+>   stay until the gateway is deleted, because the gateway owns them.
+> - `status.configEdition` is dropped. The CRD keeps the field, but the older
+>   operator does not write it, and its next status write removes it.
+
 ---
 
 ## Version Compatibility
@@ -601,7 +613,9 @@ kubectl patch <kind>/<name> -n <ns> --subresource=status --type=json \
   outside a rollout (an HPA scale-up, a pod eviction) also gives a brief
   `Ready=False` with phase `Error`, until the replica is available again.
 - `status.observedGeneration` advances on every reconcile that evaluated the
-  spec, including a rejected configuration.
+  spec, including a rejected configuration. It stays behind
+  `metadata.generation` while the gateway cannot be applied in full (see
+  *`observedGeneration` waits until the spec is applied*).
 - The gateway controller is the only writer of gateway status; license
   evaluation runs inside its reconcile (see *License checks run inside the
   gateway reconcile*).
@@ -695,6 +709,70 @@ it rather than the container image, which admission webhooks may rewrite).
 Existing gateways roll their pods once when the operator is upgraded, and
 every existing gateway reports `Ready` not `True` until that roll completes.
 
+### Rollout status follows the Deployment
+
+`Progressing` is now derived from the Deployment on every pass that
+reconciles it, instead of being raised only when the pass notices a config,
+image, plugin or license change. It is `True` while any of these holds:
+
+- the pass created the Deployment (a deleted Deployment is recreated);
+- the pass's write changed the pod template, including changes no annotation
+  tracks: resources, probes, drift the operator reverts, the migration to the
+  content-addressed ConfigMap;
+- the Deployment's pod template is not the wanted one;
+- old pods remain beside updated ones (`updatedReplicas < replicas`).
+
+It goes `False`/`RolloutComplete` once the Deployment has observed its latest
+generation and every replica is updated and available. A change in the
+replica count alone, an HPA scale-up included, is not a rollout and does not
+change `Ready`.
+
+What changes for you:
+
+- A gateway with no Enterprise license rolls its pods on upgrade (the pod
+  template gains the image annotation and the new ConfigMap name). It now
+  reports `Progressing=True`, phase `Deploying` and `Ready` not `True` until
+  that roll completes, as this guide always said.
+- A deleted Deployment reads `Deploying` while it is recreated, not
+  `Ready=True`/`Running` followed by `Error`.
+- A rollout stays reported when a status write fails or the cache is behind.
+- The reason is `ConfigDeployed` or `DeploymentUpdated`, whichever the change
+  gave; a rollout already reported keeps its reason, and otherwise it is
+  `DeploymentUpdated`.
+- `RolloutFailed` (`Progressing=False`, `Available=False`) now describes the
+  current rollout only. A fix pushed while a rollout is stuck on
+  `ProgressDeadlineExceeded` reads `Progressing=True` and phase `Deploying`
+  until it converges or misses its deadline again, with no second
+  `RolloutFailed` Warning, and `Available` no longer reads `RolloutFailed`.
+
+### `observedGeneration` waits until the spec is applied
+
+`status.observedGeneration`, and the `observedGeneration` of the `Ready`
+condition, stay at their previous value while this pass could not apply the
+spec in full:
+
+- a child resource could not be reconciled (an HPA, Job, Dragonfly,
+  ExternalSecret or VirtualService rejected by an admission webhook, say, or
+  old config ConfigMaps that cannot be deleted), or
+- the Deployment is held because no ConfigMap can hold the applied config
+  although the render is the applied config (a ConfigMap that someone else
+  owns sits at `<gateway>-config-<hash>`).
+
+In both cases the error is logged and the gateway is requeued, so kstatus and
+Flux report the gateway as in progress, not as current, until the error
+clears; then `observedGeneration` catches up. A stuck `observedGeneration`
+behind `metadata.generation`, together with an error in the operator log,
+means a child resource or the applied config's ConfigMap cannot be
+reconciled. A rejected config (`ConfigValid=False`), an unavailable validator
+and a missing plugin ConfigMap do not hold it back: they are verdicts on the
+current generation, and `Ready` reports them.
+
+The infrastructure stage now attempts every independent child on each pass
+and reports all the errors together, so one failing child no longer stops
+the others from being reconciled. The post-restart Job, ConfigMap collection
+and the deletion of an HPA the gateway no longer wants still wait for the
+Deployment step to succeed.
+
 ### Gateway events fire on transitions only
 
 `RolloutFailed` and `IstioVirtualServiceCreated` are now recorded once, when
@@ -723,7 +801,10 @@ last-known-good config.
 - Every gateway rolls once, because its pod template now mounts
   `<gateway>-config-<hash>` instead of `<gateway>`. It is an ordinary
   rolling update (`maxSurge: 1`, `maxUnavailable: 0`). The config checksum
-  is unchanged, so the post-restart Job does **not** run again.
+  is unchanged, so this change does not run the post-restart Job again. A
+  gateway with `spec.redis` or Dragonfly renders a new config on upgrade
+  anyway, and its Job runs once for that revision (see *Redis and Dragonfly
+  connection pools are now actually configured*).
 - A gateway may have its newest render rejected at upgrade time. The
   operator then copies the applied config out of the old `<gateway>`
   ConfigMap, but only when that content hashes to `status.configChecksum`,
@@ -738,6 +819,13 @@ mount it. The operator keeps:
   (revisions created in the same second are ordered by name);
 - any revision mounted by a ReplicaSet of the gateway's Deployment that
   still has or wants pods.
+
+Old revisions keep whatever the rendered config embeds, credentials
+included. A revision is kept for up to three config changes, plus any a live
+ReplicaSet still mounts, so a credential embedded in the rendered config
+outlives its rotation by up to two config changes. Keep secrets out of the
+rendered config, or restrict who can read ConfigMaps in the gateway's
+namespace.
 
 The old `<gateway>` ConfigMap never counts toward the three. Rolling a
 gateway back means reverting its CRs. `kubectl rollout undo` to an old
@@ -991,7 +1079,8 @@ dropped.
   longer rendered; the gateway webhook warns when they are set.
 - **On upgrade**, every gateway with `spec.redis` or Dragonfly renders a new
   config. It is validated and rolled out once, and its post-restart Job runs
-  for the new config revision.
+  once for the new config revision, although the ConfigMap migration alone
+  does not run it (see *Config ConfigMaps are immutable and content-addressed*).
 - `spec.redis.connectionPool.password` and `.tls` are still not rendered, and
   neither is `dragonfly.authentication.passwordFromSecret` into KrakenD's pool.
   The pool connects without them. A Dragonfly that requires a password (the
@@ -1123,6 +1212,13 @@ sources.
   for 15 minutes).
 - `krakend_operator_gateway_info` now keeps one series per gateway. A
   version or edition change replaces the series instead of adding one.
+- `krakend_operator_rolling_restarts_total` now counts Deployment writes that
+  changed the pod template, once per write. It no longer counts the detection
+  of a config, image, plugin or license change, so a write that fails, or a
+  change detected again after a failed status write, is not counted twice. A
+  creation is not a restart. Drift in the pod template that the operator
+  reverts now counts as a restart. Every gateway adds one count when the
+  operator is upgraded (the migration rollout).
 
 ---
 
