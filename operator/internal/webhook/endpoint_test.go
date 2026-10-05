@@ -139,3 +139,25 @@ func TestEndpointAdmission_MovingToAnotherNamespaceRechecksEveryEntry(t *testing
 		t.Errorf("entry moved to a gateway of the same name in another namespace: %+v, want 422", resp.Result)
 	}
 }
+
+func TestEndpointAdmission_RejectsRouteClaimedByAnotherEndpoint(t *testing.T) {
+	tests := []struct {
+		name, existing, candidate, detail string
+	}{
+		{"exact duplicate", "/users/{id}", "/users/{id}", "already defined by KrakenDEndpoint default/other"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v := &EndpointValidator{Client: fakeClient(testGateway(), testEndpoint("other", tt.existing))}
+			resp := review(t, v, "alice", testEndpoint("new", "/ok", tt.candidate), nil)
+			if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("response = %+v, want 422", resp.Result)
+			}
+			c := resp.Result.Details.Causes
+			if len(c) != 1 || c[0].Field != "spec.endpoints[1]" || c[0].Type != metav1.CauseTypeFieldValueDuplicate ||
+				!strings.Contains(c[0].Message, tt.detail) {
+				t.Errorf("causes = %+v, want a Duplicate on spec.endpoints[1] with %q", c, tt.detail)
+			}
+		})
+	}
+}
