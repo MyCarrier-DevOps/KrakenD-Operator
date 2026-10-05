@@ -22,7 +22,9 @@ import (
 	"errors"
 	"net/http"
 	"reflect"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	admissionv1 "k8s.io/api/admission/v1"
 	authenticationv1 "k8s.io/api/authentication/v1"
@@ -170,5 +172,15 @@ func TestAdmission_AutoConfigPolicyLookupFailureIs500(t *testing.T) {
 	resp := review(t, &AutoConfigValidator{Client: c}, "alice", ac, nil)
 	if resp.Allowed || resp.Result.Code != http.StatusInternalServerError {
 		t.Errorf("response = %+v, want 500", resp.Result)
+	}
+}
+
+func TestTruncate_StaysWithinTheLimitIncludingTheMarker(t *testing.T) {
+	got := truncate(strings.Repeat("é", 100), echoLimit)
+	if len(got) > echoLimit || !utf8.ValidString(got) || !strings.HasSuffix(got, "...") {
+		t.Errorf("truncate = %q (%d bytes), want valid UTF-8 ending in \"...\" within %d bytes", got, len(got), echoLimit)
+	}
+	if short := truncate("abc", echoLimit); short != "abc" {
+		t.Errorf("truncate(abc) = %q, want it unchanged", short)
 	}
 }
