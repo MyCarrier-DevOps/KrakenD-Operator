@@ -437,5 +437,11 @@ func TestAutoConfigCRD_Ratchets(t *testing.T) {
 		{"stored interval below 30s, interval changed",
 			autoconfigHead + `openapi: {url: "http://x"}, trigger: Periodic, periodic: {interval: 20s}}}`,
 			autoconfigHead + `openapi: {url: "http://x"}, trigger: Periodic, periodic: {interval: 10s}}}`, "at least 30s"},
+		{"stored configMapRef without hostMapping, another field edited",
+			autoconfigHead + `openapi: {configMapRef: {name: c}}, trigger: OnChange, additionalEndpointsBasePath: /v1}}`,
+			autoconfigHead + `openapi: {configMapRef: {name: c}}, trigger: OnChange}}`, "hostMapping is required"},
+		{"stored base path with addPathPrefix, an unrelated field edited",
+			autoconfigHead + src + `additionalEndpointsBasePath: /a, urlTransform: {addPathPrefix: /b}, filter: {includeTags: [x]}}}`,
+			autoconfigHead + src + `additionalEndpointsBasePath: /a, urlTransform: {addPathPrefix: /b}}}`, "mutually exclusive with urlTransform.addPathPrefix"},
 	})
 }
