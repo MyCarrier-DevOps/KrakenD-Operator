@@ -4947,3 +4947,19 @@ func TestAutoConfigReconcile_PrecheckWritesBackendKeysCEHonors(t *testing.T) {
 		t.Errorf("failedOperations = %+v, want none", failed)
 	}
 }
+
+func TestRouteCollisions_TheLowerNameKeepsTheRoute(t *testing.T) {
+	desired := []*v1alpha1.KrakenDEndpoint{generatedEndpoint("getB", "/h/{b}"), generatedEndpoint("getA", "/h/{a}")}
+
+	got := routeCollisions(desired, nil)
+
+	if len(got) != 1 {
+		t.Fatalf("routeCollisions = %+v, want only test-ac-getb held", got)
+	}
+	rej := got["test-ac-getb"]
+	if rej.endpoint != desired[0] || rej.reason != v1alpha1.ReasonConfigValidationFailed ||
+		!strings.HasPrefix(rej.message, "has the same route as GET /h/{a} in test-ac-geta: paths that differ only in ") ||
+		rej.cause == nil {
+		t.Errorf("rejection = %+v", rej)
+	}
+}

@@ -476,3 +476,12 @@ func attributeFindings(
 	}
 	return attributed
 }
+
+// routeCollisions returns, keyed by name, the desired endpoints that lose
+// their route to another desired endpoint.
+func routeCollisions(
+	desired []*v1alpha1.KrakenDEndpoint,
+	controlled []v1alpha1.KrakenDEndpoint,
+) map[string]rejection {
+	return nil
+}
