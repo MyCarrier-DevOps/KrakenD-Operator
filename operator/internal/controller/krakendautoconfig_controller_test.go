@@ -4803,3 +4803,18 @@ func TestAutoConfigReconcile_UnattributedCheckFailure(t *testing.T) {
 		})
 	}
 }
+
+func TestAttributeFindings_ReadsEndpointNotIndex(t *testing.T) {
+	a, b := generatedEndpoint("a", "/a"), generatedEndpoint("b", "/b")
+	got := attributeFindings([]configcheck.Finding{
+		{Endpoint: types.NamespacedName{Namespace: "default", Name: "test-ac-a"}, Index: 0, Message: "first"},
+		{Endpoint: types.NamespacedName{Namespace: "default", Name: "test-ac-a"}, Index: -1, Message: "second"},
+		{Endpoint: types.NamespacedName{Namespace: "default", Name: "test-ac-b"}, Index: -1, Message: "entry unknown"},
+		{Index: -1, Message: "gateway root"},
+		{Endpoint: types.NamespacedName{Namespace: "team-b", Name: "orders"}, Index: 0, Message: "elsewhere"},
+	}, []*v1alpha1.KrakenDEndpoint{a, b})
+
+	if len(got) != 2 || got["test-ac-a"].message != "first" || got["test-ac-b"].message != "entry unknown" {
+		t.Errorf("attributeFindings = %+v, want test-ac-a: first, test-ac-b: entry unknown", got)
+	}
+}
