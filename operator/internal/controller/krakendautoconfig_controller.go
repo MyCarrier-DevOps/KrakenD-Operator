@@ -778,14 +778,19 @@ func (r *KrakenDAutoConfigReconciler) recordSync(
 	ac.Status.Skipped = capList(res.skipped)
 	ac.Status.FailedOperations = capList(res.failed)
 	ac.Status.Warnings = capList(res.warnings)
-	meta.SetStatusCondition(&ac.Status.Conditions, syncedCondition(res, ac.Generation))
+	synced := syncedCondition(res, ac.Generation)
+	meta.SetStatusCondition(&ac.Status.Conditions, synced)
 	setAutoConfigReadiness(ac)
 	if autoConfigStatusChanged(orig, &ac.Status) {
 		if err := r.Status().Update(ctx, ac); err != nil {
 			return fmt.Errorf("updating final status: %w", err)
 		}
 	}
-	autoConfigSynced.WithLabelValues(ac.Namespace, ac.Name).Set(1)
+	gauge := 1.0
+	if synced.Status != metav1.ConditionTrue {
+		gauge = 0
+	}
+	autoConfigSynced.WithLabelValues(ac.Namespace, ac.Name).Set(gauge)
 
 	warnings.emit(r.Recorder, ac)
 	if changed {
@@ -796,9 +801,23 @@ func (r *KrakenDAutoConfigReconciler) recordSync(
 	return nil
 }
 
-// syncedCondition is the Synced condition for res: True, counting what was
-// skipped and warned about.
+// syncedCondition is the Synced condition for res: False with reason
+// OperationsFailed, naming the first operations, while res.failed is not
+// empty, otherwise True, counting what was skipped and warned about.
 func syncedCondition(res syncResult, generation int64) metav1.Condition {
+	if len(res.failed) > 0 {
+		labels := make([]string, len(res.failed))
+		for i, f := range res.failed {
+			labels[i] = operationLabel(f)
+		}
+		return metav1.Condition{
+			Type: v1alpha1.ConditionSynced, Status: metav1.ConditionFalse, ObservedGeneration: generation,
+			Reason: v1alpha1.ReasonOperationsFailed,
+			Message: fmt.Sprintf("%d operations failed; they keep their last-synced endpoints and no stale "+
+				"endpoint is deleted until they recover (see status.failedOperations): %s",
+				len(res.failed), listed(labels)),
+		}
+	}
 	c := metav1.Condition{
 		Type: v1alpha1.ConditionSynced, Status: metav1.ConditionTrue, ObservedGeneration: generation, Reason: "Synced",
 		Message: fmt.Sprintf("Generated %d endpoints", res.generated),
