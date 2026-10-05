@@ -113,3 +113,20 @@ func TestPolicyAdmission_MetadataOnlyUpdateIsNotValidated(t *testing.T) {
 		t.Errorf("checks = %v, want none", chk.calls)
 	}
 }
+
+// A gateway still renders a terminating policy, so a spec change on one is
+// judged like any other: only a metadata change is skipped.
+func TestPolicyAdmission_TerminatingPolicyWithBrokenSpecChangeIsRefused(t *testing.T) {
+	chk := &scriptedChecker{verdicts: []configcheck.Verdict{failing("policy-lint", 0, "bad"), {OK: true}}}
+	v := &PolicyValidator{Client: fakeClient(), Checker: chk}
+	old := terminating(testPolicy(`{}`))
+
+	resp := review(t, v, "alice", terminating(testPolicy(`{"qos/circuit-breakr":{}}`)), old)
+
+	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity {
+		t.Errorf("response = %+v, want 422", resp.Result)
+	}
+	if got := strings.Join(chk.calls, ","); got != "policy,policy" {
+		t.Errorf("checks = %s, want policy,policy", got)
+	}
+}
