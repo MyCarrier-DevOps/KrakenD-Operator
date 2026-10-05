@@ -112,6 +112,7 @@ spec:
                           type: string
                         type: array
                       maxAge:
+                        pattern: ^[0-9]+(ns|ms|us|µs|s|m|h)$
                         type: string
                     type: object
                   debugEndpoint:
