@@ -272,29 +272,31 @@ func validateFields(ac *v1alpha1.KrakenDAutoConfig) field.ErrorList {
 	}
 
 	errs = append(errs, validateAdditionalEndpoints(ac)...)
-	errs = append(errs, validateOverrideIDs(ac.Spec.Overrides)...)
+	errs = append(errs, validateOverrideIDs(ac.Name, ac.Spec.Overrides)...)
 
 	return errs
 }
 
 // validateOverrideIDs rejects overrides that target the same operation: an
-// operationId listed twice, or two operationIds that map to one override key
-// (autoconfig.SanitizeName), which the CUE evaluator cannot keep apart.
-func validateOverrideIDs(overrides []v1alpha1.OperationOverride) field.ErrorList {
+// operationId listed twice, or two operationIds that generate one endpoint
+// name (autoconfig.OperationEndpointName), which the generator cannot keep
+// apart: it drops the second.
+func validateOverrideIDs(acName string, overrides []v1alpha1.OperationOverride) field.ErrorList {
 	var errs field.ErrorList
 	first := map[string]string{}
 	for i, ov := range overrides {
 		p := field.NewPath("spec", "overrides").Index(i).Child("operationId")
-		key := autoconfig.SanitizeName(ov.OperationID)
-		prev, seen := first[key]
+		name := autoconfig.OperationEndpointName(acName, ov.OperationID)
+		prev, seen := first[name]
 		switch {
 		case !seen:
-			first[key] = ov.OperationID
+			first[name] = ov.OperationID
 		case prev == ov.OperationID:
-			errs = append(errs, field.Duplicate(p, ov.OperationID))
+			errs = append(errs, field.Duplicate(p, truncate(ov.OperationID, versionEchoLimit)))
 		default:
-			errs = append(errs, field.Invalid(p, ov.OperationID,
-				fmt.Sprintf("collides with operationId %q: both map to the override key %q", prev, key)))
+			errs = append(errs, field.Invalid(p, truncate(ov.OperationID, versionEchoLimit),
+				fmt.Sprintf("collides with operationId %q: both generate the endpoint %q",
+					truncate(prev, versionEchoLimit), truncate(name, versionEchoLimit))))
 		}
 	}
 	return errs
