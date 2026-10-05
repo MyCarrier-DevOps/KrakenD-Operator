@@ -23,6 +23,7 @@ import (
 	"sort"
 	"strings"
 
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -179,8 +180,11 @@ func checkPolicyRender(
 		return nil, unavailable(err)
 	}
 	// krakend check accepts Enterprise-only namespaces, and KrakenD CE then
-	// ignores them silently.
-	drops := eeOnlyNamespacesIn(policy.Spec.Raw, renderer.LevelBackend)
+	// ignores them silently; only a new or changed raw is judged.
+	var drops []renderer.CEDrop
+	if old == nil || !equality.Semantic.DeepEqual(old.Spec.Raw, policy.Spec.Raw) {
+		drops = eeOnlyNamespacesIn(policy.Spec.Raw, renderer.LevelBackend)
+	}
 	var errs field.ErrorList
 	var warnings admission.Warnings
 	for i := range gateways {
