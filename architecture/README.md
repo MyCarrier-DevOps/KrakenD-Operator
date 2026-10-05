@@ -708,7 +708,8 @@ sequenceDiagram
             Op->>K8s: Update KrakenDGateway condition → ConfigValid=False
             Op->>K8s: Set Ready=False (ConfigValidationFailed), phase Error
             Op->>K8s: Emit Warning Event (when the verdict changes)
-            Note over Op: STOP — do not deploy invalid config content.<br/>Image, version and plugin changes still roll (the infrastructure stage runs),<br/>except an image held while the applied edition differs from the current one, and everything held while a plugin ConfigMap is missing
+            Op->>K8s: Patch Accepted=False (GatewayConfigRejected) on the endpoints krakend check names, only on change
+            Note over Op: The rejected config is not applied: the last applied config keeps serving.<br/>Image, version and plugin changes still roll (the infrastructure stage runs),<br/>except an image held while the applied edition differs from the current one, and everything held while a plugin ConfigMap is missing
         else Validator unavailable (binary missing, timeout, killed, I/O error)
             Op->>K8s: Update KrakenDGateway condition → ConfigValid=Unknown<br/>(reason ValidatorUnavailable)
             Op->>K8s: Emit one Warning Event (ValidatorUnavailable)
@@ -716,7 +717,7 @@ sequenceDiagram
         else Validation passes
             Op->>K8s: Update KrakenDGateway condition → ConfigValid=True (ConfigApplied)
             Op->>K8s: Set Progressing=True (phase Deploying is derived)
-            Op->>CM: Update ConfigMap with new krakend.json
+            Op->>CM: Create the immutable ConfigMap gateway-config-hash with the new krakend.json
             Op->>K8s: Write status.configChecksum = newChecksum
             Op->>Dep: Patch Deployment: pod annotations<br/>checksum/config + checksum/plugins,<br/>container image (all to desired state)
             Op->>K8s: Patch Accepted on each endpoint of the render, only on change:<br/>True (Accepted or PartiallyAccepted), False (EndpointConflict), or removed (missing policy), plus status.conflicts
@@ -735,14 +736,14 @@ sequenceDiagram
             end
         end
     end
-    Note over Op: Accepted is written whenever the render equals the applied configuration (validated now, or unchanged since); never after a failed validation.
+    Note over Op: Accepted is written for every endpoint whenever the render equals the applied configuration (validated now, or unchanged since). After a failed validation, only the endpoints krakend check names get Accepted=False (GatewayConfigRejected).
 ```
 
 ### Reconciliation Triggers
 
 | Event | Controller | Action |
 |---|---|---|
-| KrakenDGateway created | Gateway controller | The first reconcile writes one status with the derived phase (no separate `Pending` write). Create Deployment, Service, ConfigMap, SA; optionally Dragonfly CR, VS, ExternalSecret. Trigger config render. The endpoint controller's gateway watch re-resolves the references of endpoints with a matching `gatewayRef`, which re-attaches `Detached` endpoints. |
+| KrakenDGateway created | Gateway controller | The first reconcile writes one status with the derived phase (no separate `Pending` write). The config stage renders, validates and publishes the first config ConfigMap (`<gateway>-config-<hash>`); the infrastructure stage creates the ServiceAccount, Service and PDB, the Deployment once a config has been applied, and, when configured, the HPA, post-restart Job, Dragonfly CR, VirtualService and ExternalSecret. The endpoint controller's gateway watch re-resolves the references of endpoints with a matching `gatewayRef`, which re-attaches `Detached` endpoints. |
 | KrakenDGateway updated | Gateway controller | Re-render config, update child resources, rolling restart |
 | KrakenDGateway deleted | Kubernetes GC | ownerReference cascade deletes all child resources. A KrakenDGateway with a deletionTimestamp is not reconciled: garbage collection removes its children, and the operator does not recreate them. |
 | KrakenDEndpoint created, spec changed, or its `Accepted` changed | Endpoint controller | Resolve gateway and policy references into `ResolvedRefs`; derive `Ready` and `phase` from `ResolvedRefs` and `Accepted`; patch status (optimistic lock) only when it changed. The gateway controller re-renders the target gateway on spec changes and records `Accepted` on every endpoint of an applied render. A resolved conflict flips `Accepted` back to `True`. |
@@ -754,9 +755,9 @@ sequenceDiagram
 | KrakenDGateway or KrakenDBackendPolicy created or deleted | Endpoint controller | Re-resolve references of the endpoints that reference it (`ResolvedRefs` `GatewayNotFound`/`PolicyNotFound` → phase `Detached`/`Invalid`). Gateway and policy updates are ignored: only their existence matters. Re-attachment occurs automatically when the gateway is created again. |
 | Secret (LICENSE) created or updated | Gateway controller | Re-evaluate the license inside the reconcile: re-parse X.509 `notAfter` from the Secret and set the `License*` conditions for its stage (below). A renewed license that clears `LicenseExpired`/`LicenseDegraded` re-renders EE and rolls the Deployment back to the EE image; a changed license (any change to the bytes in the Secret, whether or not `notAfter` moves) also changes the pod template's `krakend.io/checksum-license` annotation, so the Deployment rolls and every pod starts with the new license file; an unchanged license rolls nothing. |
 | Dragonfly, ExternalSecret or VirtualService owned by a gateway changed or deleted | Gateway controller | Re-run the gateway reconcile, which restores the object and refreshes `DragonflyReady`/`IstioConfigured`. Watched only for kinds whose CRD existed at operator startup; restart the operator after installing one later. |
-| Dragonfly CR status updated | Gateway controller | Reflect `DragonflyReady` condition on KrakenDGateway; emit `DragonflyNotReady` Warning event if phase regresses |
+| Dragonfly CR status updated | Gateway controller | Reflect `DragonflyReady` condition on KrakenDGateway; emit `DragonflyNotReady` Warning event if phase regresses. Watched when the Dragonfly CRD existed at operator startup. |
 | Deployment status updated | Gateway controller | Update `status.replicas`, `status.readyReplicas`, `Available` and `Progressing` conditions on KrakenDGateway. The rollout counts as converged only when the Deployment has observed its latest generation (`observedGeneration >= generation`), its pod template carries the applied config checksum, image, plugin checksum and license checksum, and `replicas == updatedReplicas == availableReplicas ==` the desired count; then `Progressing=False`, `Available=True`, and the derived phase becomes `Running`. Until then `Ready` stays `False`, because the cached Deployment can still describe the previous ReplicaSet. If the Deployment reports `Available=False` (for example `MinimumReplicasUnavailable`) and no rollout is in flight, that condition is mirrored into the gateway's `Available`, so `Ready` goes `False` with phase `Error`. If the Deployment reports `ProgressDeadlineExceeded`, set `Progressing=False`, `Available=False` (reason: `RolloutFailed`), and emit `RolloutFailed` Warning event. `ConfigValid` remains `True` (config passed validation). Existing pods are left running to preserve availability. |
-| License stage boundary | Gateway controller (requeue) | The reconcile evaluates the license on every run and requeues itself at the next stage boundary (start of the warning window, start of the 1 h safety buffer, expiry), and at least every 5 minutes. Stage `LicenseExpiringSoon` (`now+1h < expiry ≤ now+warningDays`): `LicenseValid=True` (reason: `LicenseExpiringSoon`) and one `LicenseExpiringSoon` Warning event on entering the window. Stage `LicensePreExpiry` (`now < expiry ≤ now+1h`) or expired: `LicenseValid=False` and `LicenseExpired=True` (reason: `LicensePreExpiry` or `LicenseExpired`). With `fallbackToCE=true` it also sets `LicenseDegraded=True` (reason: `LicenseFallbackCE`), renders CE and emits one `LicenseFallbackCE` Warning event; the gateway controller derives phase `Degraded`. With `fallbackToCE=false` it emits one `LicenseExpiredNoFallback` Warning event and leaves the Deployment running; the gateway controller derives phase `Error` from `LicenseExpired=True` without `LicenseDegraded`. Healthy (`expiry > now+warningDays`): `LicenseValid=True` (reason: `LicenseOK`). Back in a healthy or warning stage while `LicenseExpired` or `LicenseDegraded` is True, both become `False` (reason: `LicenseRestored`) and one `LicenseRestored` event is emitted. Events fire on condition transitions only, so a steady state repeats nothing. |
+| License stage boundary | Gateway controller (requeued at the license's next boundary, at least every 5 min) | The reconcile evaluates the license stage on every run, and requeues itself at the next boundary (start of the warning window, start of the 1 h safety buffer, expiry). Stage `LicenseExpiringSoon` (`now+1h < expiry ≤ now+warningDays`): `LicenseValid=True` (reason: `LicenseExpiringSoon`) and one `LicenseExpiringSoon` Warning event on entering the window. Stage `LicensePreExpiry` (`now < expiry ≤ now+1h`) or expired: `LicenseValid=False` and `LicenseExpired=True` (reason: `LicensePreExpiry` or `LicenseExpired`). With `fallbackToCE=true` it also sets `LicenseDegraded=True` (reason: `LicenseFallbackCE`) and emits one `LicenseFallbackCE` Warning event. The CE render is validated as CE, and the image switches to CE once that render is applied; the gateway controller derives phase `Degraded`. With `fallbackToCE=false` it emits one `LicenseExpiredNoFallback` Warning event and leaves the Deployment running; the gateway controller derives phase `Error` from `LicenseExpired=True` without `LicenseDegraded`. Healthy (`expiry > now+warningDays`): `LicenseValid=True` (reason: `LicenseOK`). Back in a healthy or warning stage while `LicenseExpired` or `LicenseDegraded` is True, both become `False` (reason: `LicenseRestored`), one `LicenseRestored` event is emitted, and the EE render is validated as EE and the EE image returns once it is applied. Events fire on condition transitions only, so a steady state repeats nothing. |
 
 ### Reconciliation Queueing
 
@@ -867,7 +868,7 @@ graph TB
 
 ### Auto-Configuration
 
-When `dragonfly.enabled=true` and `edition=EE` (and not CE fallback active), the operator:
+When `dragonfly.enabled=true`, the operator:
 
 1. Renders a `Dragonfly` CR (`dragonflydb.io/v1alpha1`) with an `ownerReference` to the KrakenDGateway
 2. Sets the Dragonfly service DNS as `{gateway-name}-dragonfly.{namespace}.svc.cluster.local:6379`
@@ -914,65 +915,47 @@ sequenceDiagram
     Vault-->>ESO: Return license content
     ESO->>K8s: Create/Update Secret<br/>"production-gateway-license"
 
-    Op->>K8s: Wait for Secret to exist
-    Op->>K8s: Check ExternalSecret status conditions
-    alt ExternalSecret Ready=False
-        Op->>K8s: Set condition LicenseSecretUnavailable=True
-        Op->>K8s: Emit Warning Event (ESO sync error)
-        Note over Op: Re-queue reconciliation.
-        Note over Op: STOP — do not create Deployment without license.
-    else ExternalSecret Ready=True
-        Op->>K8s: Read Secret, parse X.509 notAfter
-        Op->>Op: Run license validation (§9 ValidateLicense)
+    Note over Op: Every gateway reconcile reads the license Secret.<br/>It never waits for it and never reads the ExternalSecret status.
+    Op->>K8s: Read Secret, parse X.509 notAfter
+    alt Secret, key or certificate unusable
+        Op->>K8s: Set LicenseSecretUnavailable=True (reason=LicenseSecretMissing)
+        Op->>K8s: Emit Warning event (on the transition only)
+        Op->>K8s: Set LicenseValid=Unknown, unless the last known expiry<br/>is inside the safety buffer or past (then that stage applies)
+        Note over Op: The reconcile goes on: the config is rendered and applied,<br/>and the Deployment is created or updated, with the fallback decision<br/>recorded last. Its pods wait for the Secret mount.<br/>The gateway is requeued in 5 minutes.
+    else Secret read
+        Op->>K8s: Set LicenseSecretUnavailable=False
         alt Valid (expiry > now+warningDays)
-            Op->>K8s: Create Deployment with<br/>Secret volume mount at /etc/krakend/LICENSE<br/>using EE image
             Op->>K8s: Set condition LicenseValid=True (reason=LicenseOK)
+            opt LicenseExpired or LicenseDegraded is True
+                Op->>K8s: Set LicenseDegraded=False and LicenseExpired=False (reason=LicenseRestored)
+                Op->>K8s: Emit LicenseRestored
+                Op->>Op: Render EE again, validate it as EE
+                Op->>K8s: Switch Deployment image to EE once the EE render is applied
+            end
         else ExpiringSoon (now+1h < expiry ≤ now+warningDays)
-            Op->>K8s: Create Deployment with<br/>Secret volume mount at /etc/krakend/LICENSE<br/>using EE image
             Op->>K8s: Set condition LicenseValid=True (reason=LicenseExpiringSoon)
             Op->>K8s: Emit LicenseExpiringSoon Warning event (once, on entering the stage)
+            opt LicenseExpired or LicenseDegraded is True
+                Op->>K8s: Set LicenseDegraded=False and LicenseExpired=False (reason=LicenseRestored)
+                Op->>K8s: Emit LicenseRestored
+                Op->>Op: Render EE again, validate it as EE
+                Op->>K8s: Switch Deployment image to EE once the EE render is applied
+            end
         else PreExpiry or Expired AND fallbackToCE=true
-            Op->>K8s: Create Deployment with<br/>Secret volume mount at /etc/krakend/LICENSE<br/>using CE image (ceImage or krakend/krakend:version)
             Op->>K8s: Set LicenseValid=False and LicenseExpired=True (reason per stage: LicensePreExpiry or LicenseExpired)
             Op->>K8s: Set condition LicenseDegraded=True (reason=LicenseFallbackCE)
-            Op->>K8s: Emit LicenseFallbackCE Warning Event
-            Note over Op: CE fallback on cold start —<br/>no intermediate EE Deployment created.
+            Op->>K8s: Emit LicenseFallbackCE Warning Event (once)
+            Op->>Op: Render CE (Enterprise-only features stripped), validate it as CE
+            Op->>K8s: Create the Deployment, or switch its image, to CE (ceImage or krakend/krakend:version)<br/>once the CE render is applied
         else PreExpiry or Expired AND fallbackToCE=false
             Op->>K8s: Set LicenseValid=False and LicenseExpired=True (reason per stage: LicensePreExpiry or LicenseExpired)<br/>(the gateway controller derives phase Error from LicenseExpired=True)
-            Op->>K8s: Emit LicenseExpiredNoFallback Warning Event
-            Note over Op: STOP — license expired or within the pre-expiry safety window,<br/>no fallback configured.
+            Op->>K8s: Emit LicenseExpiredNoFallback Warning Event (once)
+            Note over Op: The license changes neither the EE render nor the Deployment;<br/>EE pods stop at the actual expiry.
         end
     end
 
     Note over Op: /etc/krakend is KrakenD's default working<br/>directory. LICENSE at this path is the default<br/>lookup location. No KRAKEND_LICENSE_PATH needed.
-
-    Note over Op: Every gateway reconcile, and again at the next stage boundary (at most 5 minutes later)
-    Op->>K8s: Read Secret, parse X.509 notAfter
-    alt now < expiry ≤ now+1h (PreExpiry) or expiry ≤ now (Expired), fallbackToCE=true
-        Op->>Op: Strip wildcard endpoints from rendered config
-        Op->>K8s: Switch Deployment image to CE (ceImage or krakend/krakend:version)
-        Op->>K8s: Set LicenseValid=False and LicenseExpired=True (reason=LicensePreExpiry or LicenseExpired)
-        Op->>K8s: Set condition LicenseDegraded=True (reason=LicenseFallbackCE)
-        Op->>K8s: Emit LicenseFallbackCE Warning Event (once)
-    else PreExpiry or Expired, fallbackToCE=false
-        Op->>K8s: Set LicenseValid=False and LicenseExpired=True (reason=LicensePreExpiry or LicenseExpired)<br/>(the gateway controller derives phase Error from LicenseExpired=True)
-        Op->>K8s: Emit LicenseExpiredNoFallback Warning Event (once)
-    else now+1h < expiry ≤ now+warningDays (ExpiringSoon)
-        Op->>K8s: Set condition LicenseValid=True (reason=LicenseExpiringSoon)
-        Op->>K8s: Emit LicenseExpiringSoon Warning event (once, on entering the stage)
-        opt LicenseExpired or LicenseDegraded is True
-            Op->>Op: Render EE again (switch to EE image)
-            Op->>K8s: Set LicenseDegraded=False and LicenseExpired=False (reason=LicenseRestored)
-            Op->>K8s: Emit LicenseRestored
-        end
-    else expiry > now+warningDays (Valid)
-        Op->>K8s: Set condition LicenseValid=True (reason=LicenseOK)
-        opt LicenseExpired or LicenseDegraded is True
-            Op->>Op: Render EE again (switch to EE image)
-            Op->>K8s: Set LicenseDegraded=False and LicenseExpired=False (reason=LicenseRestored)
-            Op->>K8s: Emit LicenseRestored
-        end
-    end
+    Note over Op: The gateway is requeued at the next stage boundary,<br/>at most 5 minutes later, and the watched Secret triggers a reconcile.
 ```
 
 ### Generated ExternalSecret
@@ -1219,7 +1202,7 @@ When `fallbackToCE=false` and the license is expired or approaching expiry, the 
 
 This is a conscious design choice: the operator provides maximum observability (error phase + events + metrics) without destructively interfering with a running workload. Cluster operators are expected to monitor `LicenseExpiredNoFallback` events and take corrective action.
 
-> **Cold-start without an existing Deployment (`fallbackToCE=false`):** If no Deployment exists yet and `fallbackToCE=false`, the operator skips Deployment creation and halts in `Error` phase in both the **expired** (`expiry ≤ now`) and **pre-expiry** (`now < expiry ≤ now+1h`) scenarios, until a valid license is available. When `fallbackToCE=true`, the operator deploys CE immediately in either case, transitioning to `Degraded` phase.
+> **Cold start without an existing Deployment:** The license stage never holds the Deployment. Once a config has been validated and applied, the Deployment is created whatever the license says. With `fallbackToCE=true` and an expired or pre-expiry license, it runs the CE render and image from the start and the phase is `Degraded`. With `fallbackToCE=false` it is created from the EE render, the phase is `Error` (`LicenseExpired=True` without `LicenseDegraded`), and its EE pods stop at, or refuse to start after, the license's expiry; a license that cannot be read leaves `LicenseSecretUnavailable=True` and the pods wait for the Secret mount.
 
 ### CE Fallback Behavior
 
@@ -1257,8 +1240,8 @@ When a valid license becomes available again (e.g., Secret updated by ESO with a
 
 1. **The gateway reconcile detects a valid license** — reads the Secret, parses X.509 `notAfter`, confirms validity
 2. **Re-render config from original CRD spec** — the KrakenDGateway and KrakenDEndpoint CRDs retain the full EE configuration (including wildcard endpoints); re-render restores all EE features
-3. **Switch container image back to EE** — restore `spec.image` if set (user override); otherwise use `krakend/krakend-ee:{spec.version}`
-4. **Rolling deployment** — new EE pods start with the full config and valid license (if recovering from `Error` with no existing Deployment, create the Deployment)
+3. **Switch container image back to EE** — once the EE render is validated as EE and applied, restore `spec.image` if set (user override); otherwise use `krakend/krakend-ee:{spec.version}`
+4. **Rolling deployment** — new EE pods start with the full config and valid license
 5. **Clear `LicenseDegraded` and `LicenseExpired`** — set both to `False` (reason: `LicenseRestored`). If recovering to `EERunning` state (`expiry > now+warningDays`), set `LicenseValid=True` (reason: `LicenseOK`). If recovering to `EEWarning` state (`now+1h < expiry ≤ now+warningDays`), set `LicenseValid=True` (reason: `LicenseExpiringSoon`) — the license is still approaching expiry
 6. **Emit Normal event** — `LicenseRestored` on the KrakenDGateway
 
@@ -1281,30 +1264,26 @@ flowchart TD
     CA -->|No| D
     CB --> D[Build internal config model<br/>excluding Conflicted and Invalid endpoints]
 
-    D --> DA{CE fallback active?}
-    DA -->|Yes| DB[Strip wildcard endpoints<br/>from deployed config]
-    DA -->|No| E
-    DB --> E
-    E{edition == EE<br/>and not CE fallback?}
-    E -->|Yes| EA{dragonfly.enabled?}
-    EA -->|true| F[Derive redis connection pool<br/>from Dragonfly Service DNS convention]
-    EA -->|false| FB[Use user-provided<br/>redis.connectionPool.addresses]
-    E -->|No| G[Skip EE service-level<br/>namespace injection]
+    D --> E{dragonfly.enabled?}
+    E -->|true| F[Derive redis connection pool<br/>from Dragonfly Service DNS convention]
+    E -->|false| FB[Use user-provided<br/>redis.connectionPool.addresses]
     F --> H[Merge service-level extra_config]
     FB --> H
-    G --> H
 
     H --> I[Build endpoints array<br/>from non-conflicted KrakenDEndpoints]
     I --> J[Apply backend policies<br/>merge extraConfig + policyRef<br/>inline extraConfig takes precedence on key collision]
     J --> K[Inject TLS config<br/>if tls.enabled and NOT istio]
     K --> K1[Inject plugin block<br/>if plugins configured]
-    K1 --> L[Serialize to JSON<br/>— this is the deploy config]
+    K1 --> KA{CE fallback active?}
+    KA -->|Yes| KB[Strip wildcard endpoints and Enterprise-only<br/>extra_config, listing each removal]
+    KA -->|No| L
+    KB --> L[Serialize to JSON<br/>— this is the deploy config]
     L --> M[Compute SHA-256 checksum]
     M --> N{checksum and edition<br/>match the applied config?}
 
     N -->|Yes| N1{Applied image ≠<br/>current Deployment image?}
     N1 -->|No| N3{checksum/plugins<br/>changed?}
-    N3 -->|No| O[No-op: skip deployment<br/>Set ConfigValid=True<br/>Derive Ready and phase]
+    N3 -->|No| O[No new config: set ConfigValid=True<br/>Republish the ConfigMap if it is missing<br/>Derive Ready and phase]
     N3 -->|Yes| N4[Set Progressing=True<br/>Patch pod annotation: checksum/plugins]
     N4 --> U
     N1 -->|Yes| N2[Set Progressing=True<br/>Patch Deployment container image +<br/>checksum/plugins if changed]
@@ -1314,11 +1293,11 @@ flowchart TD
     RJ -->|No| P[Validate as the render's edition:<br/>EE wildcard rules in Go; only if they<br/>find nothing, krakend check -t -n -c on the copy]
 
     P --> Q{Verdict?}
-    Q -->|Yes| R[Set ConfigValid=True<br/>Set Progressing=True<br/>Update ConfigMap<br/>Write status.configChecksum]
-    Q -->|No| S[Set ConfigValid=False<br/>Keep the applied config<br/>Emit Warning Event<br/>Continue with the infrastructure stage]
-    Q -->|Unavailable| V[Set ConfigValid=Unknown<br/>reason ValidatorUnavailable<br/>Ready=Unknown, keep the serving phase and applied config<br/>One Warning Event<br/>Return error: retry with backoff]
+    Q -->|Yes| R[Set ConfigValid=True<br/>Set Progressing=True<br/>Create ConfigMap gw-config-hash<br/>Write status.configChecksum and configEdition]
+    Q -->|No| S[Set ConfigValid=False<br/>Keep the applied config<br/>Emit a Warning Event only if the verdict changed<br/>Continue with the infrastructure stage]
+    Q -->|Unavailable| V[Set ConfigValid=Unknown<br/>reason ValidatorUnavailable<br/>Ready=Unknown, keep the serving phase and applied config<br/>One Warning Event, on entering the state<br/>Continue with the infrastructure stage,<br/>then return the error: retry with backoff]
 
-    R --> T[Patch Deployment<br/>pod annotation: checksum/config +<br/>checksum/plugins + checksum/license + container image]
+    R --> T[Patch Deployment: mount the new ConfigMap,<br/>pod annotation: checksum/config +<br/>checksum/plugins + checksum/license + container image]
     T --> U[Kubernetes Rolling Update]
 
     style S fill:#f66,stroke:#333
@@ -1336,8 +1315,9 @@ publish) is the only code that decides the applied config
 then always runs. It converges the ServiceAccount, Service, PDB, Deployment,
 HPA, post-restart Job and optional resources on the *applied* config, so a
 rejected or unjudged render never stops drift correction. The Deployment is
-created only once a config has been applied. The gateway status is written
-once, after both stages.
+created only once a config has been applied, and is left as it is only while
+no ConfigMap holds the applied config or a plugin ConfigMap is missing. The
+gateway status is written once, after both stages.
 
 ### Conflict reporting
 
@@ -1835,7 +1815,7 @@ conditions and shown with `-o wide`.
 | Condition | Meaning |
 |---|---|
 | `Ready` | Summary condition written only by the gateway controller, derived from ConfigValid, PluginsResolved, Available, Progressing, LicenseExpired, LicenseDegraded and CEFallbackApplied (`Unknown` while the validator is unavailable); phase is derived from the same rules |
-| `ConfigValid` | Last rendered krakend.json passed `krakend check -t -n -c` (`Unknown` with reason `ValidatorUnavailable` while krakend check cannot run) |
+| `ConfigValid` | Last rendered krakend.json passed validation as the edition it was rendered for: `krakend check -t -n -c`, after the EE wildcard route rules for an EE render (`Unknown` with reason `ValidatorUnavailable` while krakend check cannot run) |
 | `Available` | The Deployment is available: it mirrors the Deployment's `Available` condition once a rollout is not in flight, and is `False` with reason `RolloutFailed` when the Deployment exceeds its progress deadline |
 | `LicenseValid` | EE license state: `True`/`LicenseOK`, `True`/`LicenseExpiringSoon` inside the warning window, `False`/`LicensePreExpiry` or `False`/`LicenseExpired`, and `Unknown`/`LicenseSecretMissing` while the license cannot be read or parsed. While unreadable, the stage is judged from the last known expiry (`status.licenseExpiry`): once that is inside the safety buffer or past, the stage verdict (`False`) replaces `Unknown` |
 | `LicenseDegraded` | Gateway is actively running in CE mode as a fallback because the EE license expired or entered the pre-expiry safety window (**True** when the fallback decision is made, before the CE rollout has finished, and only when `fallbackToCE=true`; `False` with reason `LicenseRestored` after recovery, or `False` with reason `LicenseExpiredNoFallback` when the license expired and `fallbackToCE` is off while the condition was already present; absent otherwise) |
@@ -1867,8 +1847,8 @@ re-reads and retries.
 | `krakend_operator_config_renders_total` | Counter | Total config render attempts |
 | `krakend_operator_config_validation_failures_total` | Counter | Validation failures (broken configs blocked) |
 | `krakend_operator_rolling_restarts_total` | Counter | Rolling deployments triggered |
-| `krakend_operator_license_expiry_days` | Gauge | Days until EE license expiry |
-| `krakend_operator_endpoint_count` | Gauge | Number of KrakenDEndpoints per gateway |
+| `krakend_operator_license_expiry_seconds` | Gauge | Seconds until EE license expiry (labels: `namespace`, `name`) |
+| `krakend_operator_endpoints` | Gauge | Number of KrakenDEndpoints per gateway |
 | `krakend_operator_reconcile_duration_seconds` | Histogram | Reconciliation loop latency |
 | `krakend_operator_dragonfly_ready` | Gauge | 1 if Dragonfly is ready, 0 otherwise |
 | `krakend_operator_gateway_config_valid` | Gauge | 1 while the gateway's newest config passed validation, 0 otherwise (labels: `namespace`, `name`); removed when the gateway is deleted |
@@ -1879,12 +1859,12 @@ Per-gateway series (`namespace`, `name` labels) are removed when the gateway is 
 ### Kubernetes Events
 
 The operator emits events on the resource a condition or action concerns. Events on a KrakenDEndpoint are `EndpointConflict`, `Accepted` (emitted by the gateway controller), and `GatewayNotFound`, `PolicyNotFound` and `RefsResolved` (emitted by the endpoint controller). Events on a KrakenDBackendPolicy are `InvalidCircuitBreaker`, `InvalidRateLimit` and `Ready`. Events on a KrakenDAutoConfig are the AutoConfig rows (`SpecFetched` through `DuplicateOperationId`). All other rows are emitted on the KrakenDGateway. Condition-transition events (endpoint `ResolvedRefs`, policy `Ready`) fire on the transition only: a Warning when the condition becomes `False` or changes reason, and a Normal event when it recovers.
-A gateway event backed by a condition (`RolloutFailed`,
-`IstioVirtualServiceCreated`, `DragonflyNotReady`, `DragonflyReady`, the license events and
-`CRDNotInstalled`) is recorded only when that condition changes status or
-reason. A steady state emits no events. `ConfigValidationFailed` and
-`ValidatorUnavailable` fire when the recorded verdict changes.
 
+A gateway event backed by a condition (`RolloutFailed`,
+`IstioVirtualServiceCreated`, `DragonflyNotReady`, `DragonflyReady`, the license
+events and `CRDNotInstalled`) is recorded only when that condition changes
+status or reason. A steady state emits no events. `ConfigValidationFailed` and
+`ValidatorUnavailable` fire when the recorded verdict changes.
 
 | Event | Type | Reason |
 |---|---|---|
@@ -1898,6 +1878,9 @@ reason. A steady state emits no events. `ConfigValidationFailed` and
 | Dragonfly ready again | Normal | `DragonflyReady` |
 | Dragonfly, Istio or the license ExternalSecret is enabled but its CRD is not installed (on the transition only) | Warning | `CRDNotInstalled` |
 | VirtualService created | Normal | `IstioVirtualServiceCreated` |
+| A plugin ConfigMap is missing and the Deployment is held (on the transition only) | Warning | `ConfigMapNotFound` |
+| Every plugin ConfigMap exists again | Normal | `ConfigMapsFound` |
+| The applied config is a CE-fallback render that removed Enterprise-only features (on the transition only) | Warning | `EEFeaturesStripped` |
 | Endpoint newly loses all its entries to a path+method conflict (on the transition only) | Warning | `EndpointConflict` |
 | Endpoint newly loses some of its entries to a path+method conflict (on the transition only) | Warning | `PartiallyAccepted` |
 | Previously conflicted (fully or partly) endpoint included again | Normal | `Accepted` |
@@ -2337,10 +2320,14 @@ Go project layout following [Standard Go Project Layout](https://github.com/gola
 │   │   └── main.go                             # Entrypoint
 │   ├── internal/
 │   │   ├── controller/
-│   │   │   ├── gateway_controller.go           # KrakenDGateway reconciler
-│   │   │   ├── endpoint_controller.go          # KrakenDEndpoint reconciler
-│   │   │   ├── policy_controller.go            # KrakenDBackendPolicy reconciler
-│   │   │   ├── autoconfig_controller.go        # KrakenDAutoConfig reconciler (OpenAPI watcher)
+│   │   │   ├── krakendgateway_controller.go    # KrakenDGateway reconciler (config and infrastructure stages)
+│   │   │   ├── krakendendpoint_controller.go   # KrakenDEndpoint reconciler
+│   │   │   ├── krakendbackendpolicy_controller.go # KrakenDBackendPolicy reconciler
+│   │   │   ├── krakendautoconfig_controller.go # KrakenDAutoConfig reconciler (OpenAPI watcher)
+│   │   │   ├── gateway_config.go               # Config stage: publish, GC and attribute config ConfigMaps
+│   │   │   ├── gateway_events.go               # Events on condition transitions
+│   │   │   ├── gateway_optional.go             # Optional kinds (Dragonfly, ExternalSecret, VirtualService)
+│   │   │   ├── rejection_memo.go               # Remembered rejected render per gateway
 │   │   │   └── gateway_license.go              # License evaluation inside the gateway reconcile
 │   │   ├── autoconfig/
 │   │   │   ├── fetcher.go                      # OpenAPI spec fetcher (HTTP + ConfigMap sources)
@@ -2352,11 +2339,14 @@ Go project layout following [Standard Go Project Layout](https://github.com/gola
 │   │   │   ├── endpoints.go                    # Endpoint array builder
 │   │   │   ├── extra_config.go                 # extra_config namespace builder
 │   │   │   ├── plugins.go                      # Plugin volume + krakend.json plugin block builder
+│   │   │   ├── attribution.go                  # Attributes krakend check findings to KrakenDEndpoints
+│   │   │   ├── eestrip.go                      # Enterprise-only features stripped on CE fallback
+│   │   │   ├── eewildcard.go                   # EE wildcard route rules used when validating
 │   │   │   └── validator.go                    # krakend check -t -n -c wrapper
 │   │   ├── resources/
 │   │   │   ├── deployment.go                   # Deployment builder (includes plugin volume assembly)
 │   │   │   ├── service.go                      # Service builder
-│   │   │   ├── configmap.go                    # ConfigMap builder
+│   │   │   ├── configmap.go                    # Content-addressed config ConfigMap builder
 │   │   │   ├── serviceaccount.go               # ServiceAccount builder
 │   │   │   ├── pdb.go                          # PodDisruptionBudget builder
 │   │   │   ├── hpa.go                          # HorizontalPodAutoscaler builder
@@ -2367,7 +2357,8 @@ Go project layout following [Standard Go Project Layout](https://github.com/gola
 │   │   │   └── validation.go                   # ValidatingAdmissionWebhook handlers
 │   │   └── util/
 │   │       ├── hash.go                         # SHA-256 config checksumming
-│   │       └── license.go                      # X.509 license parsing
+│   │       ├── license.go                      # X.509 license parsing
+│       └── window.go                       # License stages (StageAt, NextChange)
 │   ├── config/
 │   │   ├── crd/
 │   │   │   └── bases/                          # Generated CRD YAML manifests
