@@ -12,7 +12,7 @@ crds="$here/../config/crd/bases"
 flat="$(cat "$crds"/*.yaml | tr -s ' \n' ' ')"
 for var in endpoint_path_re go_duration_re single_unit_re quantity_re; do
 	pattern="$(sed -n "s/^$var='\(.*\)'\$/\1/p" "$here/audit-admission-rules.sh")"
-	[[ -n "$pattern" ]] && grep -qxF -- "pattern: $pattern" <(cat "$crds"/*.yaml | sed 's/^ *//') || {
+	[[ -n "$pattern" ]] && grep -qxE -- "(- )?pattern: $(sed 's/[][\.*^$|?+(){}]/\\&/g' <<<"$pattern")" <(cat "$crds"/*.yaml | sed 's/^ *//') || {
 		echo "$var is not a pattern in the CRDs: $pattern" >&2
 		exit 1
 	}
