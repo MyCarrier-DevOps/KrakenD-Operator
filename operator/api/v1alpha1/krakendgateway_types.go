@@ -47,7 +47,7 @@ const (
 )
 
 // KrakenDGatewaySpec defines the desired state of KrakenDGateway.
-// +kubebuilder:validation:XValidation:rule="self.edition != 'EE' || (has(self.license) && ((has(self.license.externalSecret) && has(self.license.externalSecret.enabled) && self.license.externalSecret.enabled) || has(self.license.secretRef)))",message="edition EE requires license.externalSecret.enabled or license.secretRef",fieldPath=".license"
+// +kubebuilder:validation:XValidation:rule="self.edition != 'EE' || (has(self.license) && ((has(self.license.externalSecret) && has(self.license.externalSecret.enabled) && self.license.externalSecret.enabled) || (has(self.license.secretRef) && size(self.license.secretRef.name) > 0)))",message="edition EE requires license.externalSecret.enabled or license.secretRef",fieldPath=".license"
 // +kubebuilder:validation:XValidation:rule="self.edition != 'CE' || !has(self.license) || !((has(self.license.externalSecret) && has(self.license.externalSecret.enabled) && self.license.externalSecret.enabled) || has(self.license.secretRef))",message="CE edition does not require license configuration",fieldPath=".license"
 // +kubebuilder:validation:XValidation:rule="!has(self.license) || !(has(self.license.externalSecret) && has(self.license.externalSecret.enabled) && self.license.externalSecret.enabled && has(self.license.secretRef))",message="externalSecret and secretRef are mutually exclusive",fieldPath=".license"
 type KrakenDGatewaySpec struct {
