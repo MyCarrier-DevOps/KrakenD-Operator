@@ -638,6 +638,12 @@ spec:
             - openapi
             - trigger
             type: object
+            x-kubernetes-validations:
+            - fieldPath: .urlTransform.hostMapping
+              message: hostMapping is required when using configMapRef
+              rule: '!has(self.openapi.configMapRef) || (has(self.urlTransform) &&
+                has(self.urlTransform.hostMapping) && size(self.urlTransform.hostMapping)
+                > 0)'
           status:
             description: KrakenDAutoConfigStatus defines the observed state of KrakenDAutoConfig.
             properties:
