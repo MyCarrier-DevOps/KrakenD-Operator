@@ -24,6 +24,7 @@ import (
 	"maps"
 	"net/url"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 
@@ -714,6 +715,8 @@ func autoConfigStatusChanged(orig, cur *v1alpha1.KrakenDAutoConfigStatus) bool {
 		orig.SpecChecksum != cur.SpecChecksum ||
 		orig.GeneratedEndpoints != cur.GeneratedEndpoints ||
 		orig.SkippedOperations != cur.SkippedOperations ||
+		!slices.Equal(orig.Skipped, cur.Skipped) ||
+		!slices.Equal(orig.Warnings, cur.Warnings) ||
 		!orig.LastSyncTime.Equal(cur.LastSyncTime) ||
 		!conditionsEqual(orig.Conditions, cur.Conditions)
 }
