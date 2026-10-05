@@ -31,5 +31,6 @@
  {"metadata":{"namespace":"a","name":"ce-df-password"},"spec":{"edition":"CE","config":{},"dragonfly":{"enabled":true,"authentication":{"passwordFromSecret":{"name":"s","key":"p"}}}}},
  {"metadata":{"namespace":"a","name":"hp"},"spec":{"edition":"CE","config":{"router":{"healthPath":"/healthz"}}}},
  {"metadata":{"namespace":"a","name":"hp-default"},"spec":{"edition":"CE","config":{}}},
- {"metadata":{"namespace":"a","name":"hp-raw"},"spec":{"edition":"CE","config":{"router":{"healthPath":"/ignored"},"extraConfig":{"router":{"health_path":"/live"}}}}}
+ {"metadata":{"namespace":"a","name":"hp-raw"},"spec":{"edition":"CE","config":{"router":{"healthPath":"/ignored"},"extraConfig":{"router":{"health_path":"/live"}}}}},
+ {"metadata":{"namespace":"a","name":"hp-off"},"spec":{"edition":"CE","config":{"extraConfig":{"router":{"disable_health":true}}}}}
 ]}
