@@ -113,5 +113,7 @@ jq "${jq_opts[@]}" "$jq_lib"'
   (if ($s.postRestartJob.enabled // false) and (($s.postRestartJob.script // "") == "")
    then "spec.postRestartJob.script is empty" else empty end),
   (if $s.redis.connectionPool.password != null then "spec.redis.connectionPool.password is not supported yet" else empty end),
-  (if $s.redis.connectionPool.tls != null then "spec.redis.connectionPool.tls is not supported yet" else empty end)
+  (if $s.redis.connectionPool.tls != null then "spec.redis.connectionPool.tls is not supported yet" else empty end),
+  (if $s.edition == "EE" and $s.dragonfly.authentication.passwordFromSecret != null
+   then "spec.dragonfly.authentication.passwordFromSecret is not supported yet with edition EE" else empty end)
 ]} | report("KrakenDGateway")' "$work/gateways.json"
