@@ -3036,7 +3036,7 @@ lint:                             ## Run linter
 	golangci-lint run -c .github/.golangci.yml
 
 build:                            ## Build operator binary
-	go build -o bin/manager cmd/main.go
+	go build -o bin/manager ./cmd
 
 docker-build:                     ## Build Docker image
 	docker build -t krakend-operator:latest .
