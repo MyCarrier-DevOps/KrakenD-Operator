@@ -835,3 +835,25 @@ func TestEndpointAdmission_OperatorWritesStillGetTheAudienceRule(t *testing.T) {
 		t.Errorf("causes = %+v, want one on spec.endpoints[0].extraConfig", causes)
 	}
 }
+
+// The exemption holds for updates too, and only for the operator.
+func TestEndpointAdmission_OnlyOperatorUpdatesToAutoConfigEndpointsSkipRenderCheck(t *testing.T) {
+	old := ownedEndpoint("KrakenDAutoConfig", true)
+	edited := old.DeepCopy()
+	edited.Spec.Endpoints[0].Endpoint = "/b"
+	for _, tt := range []struct {
+		username  string
+		wantCheck bool
+	}{{operatorUser, false}, {"alice", true}} {
+		t.Run(tt.username, func(t *testing.T) {
+			chk := &scriptedChecker{}
+			v := &EndpointValidator{Client: fakeClient(testGateway(), old), Checker: chk, OperatorUsername: operatorUser}
+			if resp := review(t, v, tt.username, edited, old); !resp.Allowed {
+				t.Fatalf("denied: %+v", resp.Result)
+			}
+			if ran := len(chk.calls) > 0; ran != tt.wantCheck {
+				t.Errorf("render check ran = %v, want %v", ran, tt.wantCheck)
+			}
+		})
+	}
+}
