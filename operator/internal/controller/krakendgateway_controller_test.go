@@ -415,6 +415,37 @@ func TestGatewayReconcile_RememberedRejectionNamesTheEntryAsOrderedNow(t *testin
 	}
 }
 
+// methodValidator records which validator method each check calls, without
+// folding Lint into Validate.
+type methodValidator struct{ methods []string }
+
+func (m *methodValidator) Validate(context.Context, []byte, v1alpha1.Edition) error {
+	m.methods = append(m.methods, "Validate")
+	return nil
+}
+
+func (m *methodValidator) Lint(context.Context, []byte, v1alpha1.Edition) error {
+	m.methods = append(m.methods, "Lint")
+	return nil
+}
+
+// The controller publishes behind krakend check -t -n (Validate). Lint is
+// admission's cheaper check and must never stand in for it.
+func TestGatewayReconcile_ValidatesWithTheFullCheck(t *testing.T) {
+	gw := testGateway()
+	validator := &methodValidator{}
+	c := fakeClientBuilder().WithObjects(gw, entriesEndpoint("a", "/a")).WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}), validator)
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+
+	if !slices.Equal(validator.methods, []string{"Validate"}) {
+		t.Errorf("validator methods called = %v, want [Validate] only", validator.methods)
+	}
+}
+
 func TestGatewayReconcile_RenderError(t *testing.T) {
 	gw := testGateway()
 	gw.Status.Phase = v1alpha1.PhasePending
