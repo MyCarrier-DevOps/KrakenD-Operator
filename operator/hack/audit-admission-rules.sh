@@ -184,6 +184,7 @@ jq "${jq_opts[@]}" "$jq_lib"'
   (if (($s.additionalEndpoints // []) | length) > 256 then "more than 256 additionalEndpoints" else empty end),
   (($s.additionalEndpoints // []) | map(.method //= "GET") | group_by([.endpoint, .method])[] | select(length > 1)
     | "duplicate additionalEndpoint \(.[0].method) \(.[0].endpoint)"),
+  (if (($s.overrides // []) | length) > 1024 then "more than 1024 overrides" else empty end),
   (($s.additionalEndpoints // []) | to_entries[] | .key as $i | .value as $a | "spec.additionalEndpoints[\($i)]" as $p | (
     (if ($a.endpoint // "" | crd_test($path_re)) then empty else "\($p).endpoint \($a.endpoint)" end),
     (if (($a.backends // []) | length) > 0
