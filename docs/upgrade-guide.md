@@ -885,7 +885,8 @@ and its edition match:
   render is validated for the new edition.
 - **Plugins.** Plugins are not held back by the config verdict: the plugin
   sources, the plugin checksum and `DeploymentUpdated` follow the spec,
-  even while a render is rejected.
+  even while a render is rejected. A plugin ConfigMap that does not exist
+  does hold the Deployment (see "A missing plugin ConfigMap is reported").
 
 On upgrade, a status without `configEdition` is read as validated for the
 edition the gateway renders for now, which is the image it already runs.
@@ -1029,8 +1030,8 @@ and an orphaned VirtualService kept claiming its hosts.
   `spec.replicas`. While the Deployment is held it keeps the HPA's last
   replica count until the hold ends. It is held when no config has been
   applied yet, when the applied config's ConfigMap is missing while a newer
-  render is rejected, and when a plugin ConfigMap is missing. If `spec.replicas` is
-  unset that is one pod, so set `spec.replicas` before upgrading or before
+  render is rejected, and when a plugin ConfigMap is missing. If
+  `spec.replicas` is unset that is one pod, so set `spec.replicas` before upgrading or before
   removing `spec.autoscaling`. Setting `spec.replicas` while
   `spec.autoscaling` is still set gives the expected admission warning
   "spec.replicas is ignored while spec.autoscaling is set: the
@@ -1083,8 +1084,10 @@ reported while it is held. The Service, PDB, HPA, Dragonfly, ExternalSecret
 and VirtualService are still reconciled.
 Previously the operator rolled out a pod template that mounted the missing
 ConfigMap, and new pods hung in `ContainerCreating`. Creating the ConfigMap
-releases the hold. `PluginsResolved` exists only while the gateway has
-ConfigMap plugin sources.
+releases the hold and rolls out the applied config, which is then reported
+as `Progressing=True` with reason `ConfigDeployed`, with its event.
+`PluginsResolved` exists only while the gateway has ConfigMap plugin
+sources.
 
 ---
 
