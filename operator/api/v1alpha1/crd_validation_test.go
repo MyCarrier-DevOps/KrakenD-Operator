@@ -280,6 +280,7 @@ func TestGatewayCRD_Rules(t *testing.T) {
 		{"Dragonfly password on CE", gatewayHead + `edition: CE, config: {}, dragonfly: {enabled: true, authentication: {passwordFromSecret: {name: s, key: p}}}}}`, ""},
 		{"openapi explicit non-default port clash", gatewayHead + `edition: CE, config: {port: 9090}, openapi: {enabled: true, port: 9090}}}`, "openapi port must differ"},
 		{"openapi with distinct ports", gatewayHead + `edition: CE, config: {}, openapi: {enabled: true}}}`, ""},
+		{"overflowing timeout", gatewayHead + `edition: CE, config: {timeout: "99999999999h"}}}`, "spec.config.timeout"},
 	})
 }
 
