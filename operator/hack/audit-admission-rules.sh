@@ -108,5 +108,6 @@ jq "${jq_opts[@]}" "$jq_lib"'
         == (if ($s.config.port // 0) > 0 then $s.config.port else 8080 end))
    then "spec.openapi.port equals the gateway port" else empty end),
   (if ([($s.plugins.sources // [])[] | select(.persistentVolumeClaimRef != null)] | length) > 1
-   then "more than one PVC plugin source" else empty end)
+   then "more than one PVC plugin source" else empty end),
+  (if (($s.plugins.sources // []) | length) > 32 then "more than 32 plugin sources" else empty end)
 ]} | report("KrakenDGateway")' "$work/gateways.json"
