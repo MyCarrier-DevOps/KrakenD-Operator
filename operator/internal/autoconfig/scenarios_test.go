@@ -1404,3 +1404,28 @@ func TestScenario_StripPrefixRouteCollisionKeepsASharedOperationIdAmbiguous(t *t
 		t.Errorf("AmbiguousOverrides = %v, want [dup]: /x and /z both declare it", out.AmbiguousOverrides)
 	}
 }
+
+func TestScenario_StripPrefixRouteCollisionAppliesAnOverrideToItsOwnOperation(t *testing.T) {
+	timeout := metav1.Duration{Duration: 42 * time.Second}
+
+	out := evaluateStripPrefixCollision(t, v1alpha1.OperationOverride{OperationID: "other", Timeout: &timeout})
+
+	if len(out.UnmatchedOverrides) != 0 || len(out.AmbiguousOverrides) != 0 {
+		t.Errorf("UnmatchedOverrides = %v, AmbiguousOverrides = %v, want none", out.UnmatchedOverrides, out.AmbiguousOverrides)
+	}
+	// Both /x and /v1/x are entries of route /x GET now; the backend path
+	// tells them apart, since the URL transform leaves it alone.
+	for _, e := range out.Entries {
+		hasTimeout := e.Timeout != nil && e.Timeout.Duration == 42*time.Second
+		switch e.Backends[0].URLPattern {
+		case "/v1/x":
+			if !hasTimeout {
+				t.Errorf("/v1/x (other) did not get its override: timeout %v", e.Timeout)
+			}
+		default:
+			if hasTimeout {
+				t.Errorf("%s got the override for other", e.Backends[0].URLPattern)
+			}
+		}
+	}
+}
