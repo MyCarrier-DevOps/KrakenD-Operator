@@ -17,5 +17,6 @@
  {"metadata":{"namespace":"a","name":"job-script"},"spec":{"edition":"CE","config":{},"postRestartJob":{"enabled":true}}},
  {"metadata":{"namespace":"a","name":"redis-password"},"spec":{"edition":"EE","config":{},"redis":{"connectionPool":{"addresses":["r"],"password":{"name":"s","key":"p"}}},"license":{"secretRef":{"name":"l","key":"k"}}}},
  {"metadata":{"namespace":"a","name":"redis-tls"},"spec":{"edition":"EE","config":{},"redis":{"connectionPool":{"addresses":["r"],"tls":{"enabled":true}}},"license":{"secretRef":{"name":"l","key":"k"}}}},
- {"metadata":{"namespace":"a","name":"df-password-ee"},"spec":{"edition":"EE","config":{},"dragonfly":{"enabled":true,"authentication":{"passwordFromSecret":{"name":"s","key":"p"}}},"license":{"secretRef":{"name":"l","key":"k"}}}}
+ {"metadata":{"namespace":"a","name":"df-password-ee"},"spec":{"edition":"EE","config":{},"dragonfly":{"enabled":true,"authentication":{"passwordFromSecret":{"name":"s","key":"p"}}},"license":{"secretRef":{"name":"l","key":"k"}}}},
+ {"metadata":{"namespace":"a","name":"tmp-pattern"},"spec":{"edition":"CE","config":{},"postRestartJob":{"tmpSizeLimit":"lots"}}}
 ]}
