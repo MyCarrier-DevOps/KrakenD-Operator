@@ -268,7 +268,7 @@ func TestBuildDragonfly_ContainerScopeRunAsUserPinsSurvivePodScopeOverride(t *te
 // TestMergeDragonflyPodSecurityContext_FSGroupPreservedOnPartialOverride:
 // overriding ONLY podSecurityContext.runAsUser must still emit
 // fsGroup:999 alongside the user's runAsUser:1234 — the headline regression
-// this fix-round guards, verified all the way through to the rendered CR,
+// this test guards, verified all the way through to the rendered CR,
 // not just the merge step.
 func TestBuildDragonfly_PodOverridePreservesFSGroup(t *testing.T) {
 	gw := &v1alpha1.KrakenDGateway{
@@ -303,7 +303,7 @@ func TestBuildDragonfly_PodOverridePreservesFSGroup(t *testing.T) {
 }
 
 // TestBuildDragonfly_ContainerRootUserWithPodRunAsNonRootFalseStartable
-// covers the BLOCKER fix (fix-round review 1, change #1) at build level: a
+// covers the container-scope fixup at build level: a
 // container-scope runAsUser:0 combined with a pod-scope runAsNonRoot:false
 // must emit a STARTABLE containerSecurityContext — {runAsGroup:999,
 // runAsUser:0} with NO runAsNonRoot key at all (the container-scope fixup
@@ -351,9 +351,7 @@ func TestBuildDragonfly_ContainerRootUserWithPodRunAsNonRootFalseStartable(t *te
 }
 
 // TestBuildDragonfly_ContainerRootUserPodNilLegacyShapeMainParity covers the
-// grandfathered "container-0 + pod-nil" shape (renamed from
-// TestBuildDragonfly_ContainerRootUserAloneNoRunAsNonRootTrap, fix-round
-// review 2, R2): a container-scope runAsUser:0 set ALONE, with NO
+// grandfathered "container-0 + pod-nil" shape: a container-scope runAsUser:0 set ALONE, with NO
 // spec.dragonfly.podSecurityContext at all, must render exactly what main
 // rendered for this shape before the strategic-merge change — the
 // container-scope fixup still clears containerSecurityContext's own
@@ -467,8 +465,8 @@ func TestBuildDragonfly_DefaultSecurityContextUnchanged(t *testing.T) {
 }
 
 // TestBuildDragonfly_PodScopeRootAloneMainParity is the build-level
-// counterpart of TestMergeDragonflyPodSecurityContext_PodScopeRootAloneRestoresMainParity
-// (fix-round review 2, T1/R1/c-i): a user PodSecurityContext setting ONLY
+// counterpart of TestMergeDragonflyPodSecurityContext_PodScopeRootAloneRestoresMainParity:
+// a user PodSecurityContext setting ONLY
 // runAsUser:0 (no ContainerSecurityContext at all) must emit runAsUser:0 and
 // the preserved fsGroup:999 default, with NO runAsNonRoot key — the
 // main-parity render the cross-scope pod fixup restores for a grandfathered
@@ -510,8 +508,8 @@ func TestBuildDragonfly_PodScopeRootAloneMainParity(t *testing.T) {
 
 // TestBuildDragonfly_ContainerScopeRootAlonePodFixupApplies is the
 // build-level counterpart of
-// TestMergeDragonflyPodSecurityContext_ContainerScopeRootAloneTriggersPodFixup
-// (fix-round review 2, T1/R1/c-ii): a container-scope-only runAsUser:0,
+// TestMergeDragonflyPodSecurityContext_ContainerScopeRootAloneTriggersPodFixup:
+// a container-scope-only runAsUser:0,
 // combined with an unrelated pod-scope field, must leave BOTH the pod map
 // and the container map free of a runAsNonRoot key — the container-scope
 // fixup already clears the container map; the cross-scope pod fixup now
@@ -559,8 +557,8 @@ func TestBuildDragonfly_ContainerScopeRootAlonePodFixupApplies(t *testing.T) {
 }
 
 // TestBuildDragonfly_BothScopesRootBothMapsFree is the build-level
-// counterpart of TestMergeDragonflyPodSecurityContext_BothScopesRootTriggersPodFixup
-// (fix-round review 2, T1/R1/c-iii): both scopes independently setting
+// counterpart of TestMergeDragonflyPodSecurityContext_BothScopesRootTriggersPodFixup:
+// both scopes independently setting
 // runAsUser:0 must leave both the pod map and the container map free of a
 // runAsNonRoot key.
 func TestBuildDragonfly_BothScopesRootBothMapsFree(t *testing.T) {
