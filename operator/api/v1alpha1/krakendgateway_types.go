@@ -286,9 +286,12 @@ type PostRestartJobSpec struct {
 	// script-level failure. A value of "0" means no cap (an emptyDir
 	// SizeLimit of zero is treated by the kubelet as unbounded — it only
 	// enforces a limit for positive quantities); a negative value is
-	// rejected by the validating webhook.
+	// rejected by the validating webhook. The suffix is a binary (Ki..Ei) or
+	// decimal (n..E) SI suffix, or an e/E exponent of at most two digits:
+	// larger exponents are refused before they are parsed.
 	// +optional
-	// +kubebuilder:validation:XValidation:rule="type(self) == int || (size(self) <= 64 && isQuantity(self))",message="must be a quantity of at most 64 characters that Kubernetes can decode"
+	// +kubebuilder:validation:XValidation:rule="type(self) == int || (size(self) <= 64 && self.matches('^([+]|-)?(([0-9]+([.][0-9]*)?)|([.][0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE]([+]|-)?[0-9]{1,2}))?$') && isQuantity(self))",message="must be a quantity of at most 64 characters that Kubernetes can decode"
+	// +kubebuilder:validation:Pattern=`^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?[0-9]{1,2}))?$`
 	TmpSizeLimit *resource.Quantity `json:"tmpSizeLimit,omitempty"`
 }
 
