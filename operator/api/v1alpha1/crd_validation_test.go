@@ -272,5 +272,12 @@ func TestGatewayCRD_Ratchets(t *testing.T) {
 		{"stored redis tls, another field edited",
 			gatewayHead + `edition: CE, config: {}, replicas: 3, ` + pool + `tls: {enabled: true}}}}}`,
 			gatewayHead + `edition: CE, config: {}, ` + pool + `tls: {enabled: true}}}}}`, ""},
+		{"stored bad dial timeout, another field edited",
+			gatewayHead + `edition: CE, config: {}, replicas: 3, ` + pool + `dialTimeout: "5 seconds"}}}}`,
+			gatewayHead + `edition: CE, config: {}, ` + pool + `dialTimeout: "5 seconds"}}}}`, ""},
+		{"stored bad dial timeout, dial timeout changed",
+			gatewayHead + `edition: CE, config: {}, ` + pool + `dialTimeout: "6 seconds"}}}}`,
+			gatewayHead + `edition: CE, config: {}, ` + pool + `dialTimeout: "5 seconds"}}}}`,
+			"spec.redis.connectionPool.dialTimeout"},
 	})
 }
