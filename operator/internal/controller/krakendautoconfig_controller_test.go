@@ -3782,3 +3782,20 @@ func TestAutoConfigReconcile_AdoptsLabelledOrphansAndLeavesOthers(t *testing.T) 
 		}
 	}
 }
+
+func TestAutoConfigReconcile_DeletesControlledEndpointWithStrippedLabels(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	stripped := ownedCopy(t, ac, generatedEndpoint("old", "/old"))
+	stripped.Labels = nil
+	f, ce, fi, g := defaultMocks()
+	c := fakeClientBuilder().WithObjects(ac, cm, stripped).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if endpointExists(t, c, stripped.Name) {
+		t.Error("expected the controlled endpoint deleted although its labels were removed")
+	}
+}
