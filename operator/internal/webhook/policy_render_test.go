@@ -197,3 +197,18 @@ func TestPolicyAdmission_RejectsEnterpriseOnlyRawOnACEGateway(t *testing.T) {
 		})
 	}
 }
+
+func TestPolicyAdmission_NamesWhatACEGatewayDrops(t *testing.T) {
+	v := &PolicyValidator{Client: fakeClient(referencing()...), Checker: &scriptedChecker{}}
+	raw := `{"auth/gcp":{"audience":"https://a"},"backend/http/client":{"proxy_address":"http://p"}}`
+
+	resp := review(t, v, "alice", testPolicy(raw), nil)
+
+	if resp.Allowed || len(resp.Result.Details.Causes) != 1 {
+		t.Fatalf("response = %+v, want one cause", resp.Result)
+	}
+	cause := resp.Result.Details.Causes[0]
+	if cause.Field != "spec.raw" || !strings.Contains(cause.Message, `"auth/gcp, backend/http/client (proxy_address)"`) {
+		t.Errorf("cause = %+v, want spec.raw naming the namespace and the dropped key", cause)
+	}
+}
