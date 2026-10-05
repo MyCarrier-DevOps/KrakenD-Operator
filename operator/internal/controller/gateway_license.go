@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/resources"
 	"github.com/mycarrier-devops/krakend-operator/internal/util/hash"
 	"github.com/mycarrier-devops/krakend-operator/internal/util/license"
 )
@@ -127,7 +128,7 @@ func (r *KrakenDGatewayReconciler) reconcileUnreadableLicense(
 	if r.externalSecretCRDMissing(gw) {
 		reason = v1alpha1.ReasonCRDNotInstalled
 		message = fmt.Sprintf("spec.license.externalSecret is enabled but the external-secrets.io ExternalSecret "+
-			"CRD is not installed, so Secret %s-license is never synced: %v", gw.Name, readErr)
+			"CRD is not installed, so Secret %s is never synced: %v", resources.ExternalSecretName(gw), readErr)
 	}
 	r.setProblemCondition(gw, metav1.Condition{
 		Type:               v1alpha1.ConditionLicenseSecretUnavailable,
@@ -291,23 +292,9 @@ func (r *KrakenDGatewayReconciler) readLicense(
 
 // readLicenseSecret returns the license data the gateway's spec points at.
 func (r *KrakenDGatewayReconciler) readLicenseSecret(ctx context.Context, gw *v1alpha1.KrakenDGateway) ([]byte, error) {
-	if gw.Spec.License == nil {
+	secretName, secretKey, ok := resources.LicenseSecret(gw)
+	if !ok {
 		return nil, errNoLicenseConfigured
-	}
-	var secretName, secretKey string
-	switch {
-	case gw.Spec.License.SecretRef != nil:
-		secretName = gw.Spec.License.SecretRef.Name
-		secretKey = gw.Spec.License.SecretRef.Key
-	case gw.Spec.License.ExternalSecret.Enabled:
-		// ExternalSecret convention: secret name = "{gateway}-license"
-		secretName = gw.Name + "-license"
-		secretKey = "LICENSE"
-	default:
-		return nil, errNoLicenseConfigured
-	}
-	if secretKey == "" {
-		secretKey = "LICENSE"
 	}
 	var secret corev1.Secret
 	if err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: gw.Namespace}, &secret); err != nil {
