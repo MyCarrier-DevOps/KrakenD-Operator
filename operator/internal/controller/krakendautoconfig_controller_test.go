@@ -80,10 +80,13 @@ type mockCUEEvaluator struct {
 	output *autoconfig.CUEOutput
 	err    error
 	called bool
+	// gotInput is the input of the last Evaluate call.
+	gotInput *autoconfig.CUEInput
 }
 
-func (m *mockCUEEvaluator) Evaluate(_ context.Context, _ autoconfig.CUEInput) (*autoconfig.CUEOutput, error) {
+func (m *mockCUEEvaluator) Evaluate(_ context.Context, input autoconfig.CUEInput) (*autoconfig.CUEOutput, error) {
 	m.called = true
+	m.gotInput = &input
 	return m.output, m.err
 }
 
@@ -3390,4 +3393,30 @@ func TestAutoConfigReconcile_FailedOperationWithUnknownMethodKeepsEndpoint(t *te
 		t.Errorf("expected Synced False/CUEEvaluationFailed, got %+v", cond)
 	}
 	assertEndpointKept(t, c, existing.Name)
+}
+
+func TestAutoConfigReconcile_DereferencesParameterRefsBeforeEvaluation(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).Build()
+	f, ce, fi, g := defaultMocks()
+	f.result = &autoconfig.FetchResult{Data: []byte(`{"paths":{"/a":{"get":{"parameters":[` +
+		`{"$ref":"#/components/parameters/Limit"},{"$ref":"#/components/parameters/Nope"}]}}},` +
+		`"components":{"parameters":{"Limit":{"name":"limit","in":"query"}}}}`)}
+	r := newACReconciler(c, f, ce, fi, g)
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if ce.gotInput == nil {
+		t.Fatal("the evaluator was not called")
+	}
+	if !strings.Contains(string(ce.gotInput.SpecData), `"parameters":[{"in":"query","name":"limit"},`) {
+		t.Errorf("expected the Limit parameter inlined into the operation, got %s", ce.gotInput.SpecData)
+	}
+	want := `parameter $ref "#/components/parameters/Nope" in GET /a cannot be resolved: ` +
+		`pointer segment "Nope" not found`
+	if got := getAC(t, c, ac).Status.Warnings; !slices.Contains(got, want) {
+		t.Errorf("warnings = %q, want to contain %q", got, want)
+	}
 }
