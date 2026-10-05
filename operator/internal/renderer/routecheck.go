@@ -158,7 +158,8 @@ func routeConflicts(ctx context.Context, doc []byte) ([]string, error) {
 		for _, f := range clashes {
 			lines = append(lines, f.line(r))
 		}
-		if refused++; refused == maxRouteRefusals {
+		refused++
+		if refused == maxRouteRefusals {
 			lines = append(lines, fmt.Sprintf("- route check stopped after %d refused routes", refused))
 			break
 		}
