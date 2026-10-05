@@ -211,9 +211,11 @@ func sortEndpoints(endpoints []v1alpha1.KrakenDEndpoint) {
 	})
 }
 
-// ceFallback reads CE fallback from gw's status. The gateway controller
-// overrides it with its own in-reconcile license verdict; admission sees the
-// last one recorded.
+// ceFallback reads CE fallback from gw's status, for an EE gateway only: the
+// gateway controller never reports it for a CE gateway, whose condition may
+// be a stale one from before an edition switch. The controller overrides it
+// with its own in-reconcile license verdict; admission sees the last one
+// recorded.
 func ceFallback(gw *v1alpha1.KrakenDGateway) bool {
-	return meta.IsStatusConditionTrue(gw.Status.Conditions, v1alpha1.ConditionLicenseDegraded)
+	return gw.Spec.Edition == v1alpha1.EditionEE && meta.IsStatusConditionTrue(gw.Status.Conditions, v1alpha1.ConditionLicenseDegraded)
 }
