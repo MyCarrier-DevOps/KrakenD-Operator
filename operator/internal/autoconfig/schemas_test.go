@@ -306,6 +306,9 @@ func TestSchemaClosure_DiscriminatorMappingValueForms(t *testing.T) {
 func TestSchemaClosure_SeesRefsUnderSchemaMapsMemberNamedExample(t *testing.T) {
 	tests := []struct{ keyword string }{
 		{"$defs"},
+		{"definitions"},
+		{"patternProperties"},
+		{"dependentSchemas"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.keyword, func(t *testing.T) {
