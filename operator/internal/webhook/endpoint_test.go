@@ -747,6 +747,12 @@ func ownedEndpoint(kind string, controller bool) *v1alpha1.KrakenDEndpoint {
 	return ep
 }
 
+// fromGroup rewrites the API group of ep's owner reference.
+func fromGroup(ep *v1alpha1.KrakenDEndpoint, apiVersion string) *v1alpha1.KrakenDEndpoint {
+	ep.OwnerReferences[0].APIVersion = apiVersion
+	return ep
+}
+
 func TestEndpointAdmission_OnlyOperatorWritesToAutoConfigEndpointsSkipRenderCheck(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -763,6 +769,8 @@ func TestEndpointAdmission_OnlyOperatorWritesToAutoConfigEndpointsSkipRenderChec
 		{"exemption disabled", operatorUser, "", ownedEndpoint("KrakenDAutoConfig", true), true},
 		{"unset identity and an empty request username", "", "", ownedEndpoint("KrakenDAutoConfig", true), true},
 		{"username that only starts with the operator name", operatorUser + "-evil", operatorUser, ownedEndpoint("KrakenDAutoConfig", true), true},
+		{"AutoConfig kind from another API group", operatorUser, operatorUser,
+			fromGroup(ownedEndpoint("KrakenDAutoConfig", true), "other.example/v1"), true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
