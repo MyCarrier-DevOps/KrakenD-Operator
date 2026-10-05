@@ -622,6 +622,7 @@ type IstioSpec struct {
 
 // PluginsSpec configures KrakenD plugin sources.
 type PluginsSpec struct {
+	// +kubebuilder:validation:MaxItems=32
 	Sources []PluginSource `json:"sources"`
 }
 
