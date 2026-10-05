@@ -3215,6 +3215,7 @@ func TestAutoConfigReconcile_ReportsUnsupportedMethodsInScope(t *testing.T) {
 	}{
 		"reported":               {filter: nil, want: 1},
 		"excluded by the filter": {filter: &v1alpha1.FilterSpec{IncludeMethods: []string{"GET"}}, want: 0},
+		"excluded by tag":        {filter: &v1alpha1.FilterSpec{ExcludeTags: []string{"internal"}}, want: 0},
 		"excluded by operationId": {
 			filter: &v1alpha1.FilterSpec{ExcludeOperationIds: []string{"headUsers"}}, want: 0,
 		},
