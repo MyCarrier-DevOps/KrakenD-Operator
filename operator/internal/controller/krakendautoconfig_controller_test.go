@@ -5209,3 +5209,18 @@ func TestAutoConfigReconcile_AggregatesEndpointReadiness(t *testing.T) {
 		t.Errorf("unexpected EndpointsReady %+v", cond)
 	}
 }
+
+func TestOwnedEndpointPredicate_PassesReadinessChangesOnly(t *testing.T) {
+	old := generatedEndpoint("a", "/a")
+	old.Generation = 1
+	ready := readyEndpoint(old, metav1.ConditionTrue, "Ready")
+	reworded := ready.DeepCopy()
+	reworded.Status.Conditions[0].Message = "same readiness, new message"
+	p := ownedEndpointPredicate()
+	if !p.Update(event.UpdateEvent{ObjectOld: old, ObjectNew: ready}) {
+		t.Error("expected a readiness change to pass")
+	}
+	if p.Update(event.UpdateEvent{ObjectOld: ready, ObjectNew: reworded}) {
+		t.Error("expected a message-only status change to be ignored")
+	}
+}
