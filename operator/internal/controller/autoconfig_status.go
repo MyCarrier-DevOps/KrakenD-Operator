@@ -17,6 +17,9 @@ limitations under the License.
 package controller
 
 import (
+	"maps"
+	"slices"
+
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/autoconfig"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
@@ -45,8 +48,12 @@ func capList[T any](s []T) []T {
 
 // specWarnings returns the distinct warnings, sorted, each truncated to
 // maxStatusMessageLen bytes and capped at maxStatusListLen.
-func specWarnings(_ []string) []string {
-	return nil
+func specWarnings(warnings []string) []string {
+	set := map[string]struct{}{}
+	for _, w := range warnings {
+		set[truncate(w, maxStatusMessageLen)] = struct{}{}
+	}
+	return capList(slices.Sorted(maps.Keys(set)))
 }
 
 // truncate shortens s to at most n bytes, marking the cut with "...".
