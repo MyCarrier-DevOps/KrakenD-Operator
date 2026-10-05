@@ -2683,6 +2683,11 @@ spec:
               message: externalSecret and secretRef are mutually exclusive
               rule: '!has(self.license) || !(has(self.license.externalSecret) && has(self.license.externalSecret.enabled)
                 && self.license.externalSecret.enabled && has(self.license.secretRef))'
+            - fieldPath: .openapi.port
+              message: openapi port must differ from the gateway listen port
+              rule: '!has(self.openapi) || !self.openapi.enabled || ((has(self.openapi.port)
+                && self.openapi.port > 0) ? self.openapi.port : 8090) != ((has(self.config.port)
+                && self.config.port > 0) ? self.config.port : 8080)'
           status:
             description: KrakenDGatewayStatus defines the observed state of KrakenDGateway.
             properties:
