@@ -274,7 +274,6 @@ func hasEventReason(events []string, reason string) bool {
 // inputWarningReasons are the warning events emitted only when a reconcile's
 // inputs differ from the last successful sync's.
 var inputWarningReasons = []string{
-	v1alpha1.ReasonCUEEvaluationWarning,
 	v1alpha1.ReasonDuplicateOperationId,
 	v1alpha1.ReasonAdditionalEndpointOverride,
 }
@@ -1782,7 +1781,6 @@ func TestAutoConfigReconcile_SyncStatusConflictRequeuesQuietly(t *testing.T) {
 		WithInterceptorFuncs(conflictStatusWrites()).
 		Build()
 	f, ce, fi, g := defaultMocks()
-	ce.output.Warnings = []string{"skipping /x:GET: boom"}
 	g.output.Skipped = []autoconfig.OperationIssue{duplicateListUsers()}
 	rec := fakeRecorder()
 	r := newACReconciler(c, f, ce, fi, g)
@@ -1947,10 +1945,10 @@ func TestAutoConfigReconcile_FailureStatusConflictKeepsFailureResult(t *testing.
 				WithInterceptorFuncs(funcs).
 				Build()
 			f, ce, fi, g := defaultMocks()
-			// The evaluator warns and the inputs changed: the warning must
-			// not be recorded by a reconcile whose status write then
-			// conflicts.
-			ce.output.Warnings = []string{"skipping /x:GET: boom"}
+			// The generator skips a duplicate and the inputs changed: the
+			// warning must not be recorded by a reconcile whose status write
+			// then conflicts.
+			g.output.Skipped = []autoconfig.OperationIssue{duplicateListUsers()}
 			if tt.fail != nil {
 				tt.fail(f, ce)
 			}
@@ -1977,86 +1975,6 @@ func TestAutoConfigReconcile_FailureStatusConflictKeepsFailureResult(t *testing.
 	}
 }
 
-func TestAutoConfigReconcile_EvaluatorWarningsEmitEvents(t *testing.T) {
-	cm := testCUEDefinitionsCM()
-	ac := testAutoConfig()
-	ac.Status.Phase = v1alpha1.AutoConfigPhasePending
-	c := fakeClientBuilder().
-		WithObjects(ac, cm).
-		WithStatusSubresource(ac).
-		Build()
-	f, ce, fi, g := defaultMocks()
-	ce.output.Warnings = []string{"skipping /x:GET: boom"}
-	rec := fakeRecorder()
-	r := &KrakenDAutoConfigReconciler{
-		Client: c, Scheme: testScheme(), Recorder: rec,
-		Fetcher: f, CUEEvaluator: ce, Filter: fi, Generator: g,
-	}
-
-	if _, err := r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
-	}); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
-
-	var updated v1alpha1.KrakenDAutoConfig
-	if err := c.Get(
-		context.Background(),
-		types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
-		&updated,
-	); err != nil {
-		t.Fatalf("getting updated autoconfig: %v", err)
-	}
-	if updated.Status.Phase != v1alpha1.AutoConfigPhaseSynced {
-		t.Errorf("expected phase Synced, got %s", updated.Status.Phase)
-	}
-
-	wantEvent := "Warning CUEEvaluationWarning skipping /x:GET: boom"
-	if events := drainEvents(rec); !slices.Contains(events, wantEvent) {
-		t.Fatalf("expected event %q, got %v", wantEvent, events)
-	}
-}
-
-func TestAutoConfigReconcile_EvaluatorWarningsEmittedBeforeUnmatchedFailure(t *testing.T) {
-	cm := testCUEDefinitionsCM()
-	ac := testAutoConfig()
-	ac.Status.Phase = v1alpha1.AutoConfigPhasePending
-	c := fakeClientBuilder().
-		WithObjects(ac, cm).
-		WithStatusSubresource(ac).
-		Build()
-	f, ce, fi, g := defaultMocks()
-	ce.output.Warnings = []string{"skipping /x:GET: boom"}
-	ce.output.UnmatchedOverrides = []string{"WebhookStatus"}
-	rec := fakeRecorder()
-	r := &KrakenDAutoConfigReconciler{
-		Client: c, Scheme: testScheme(), Recorder: rec,
-		Fetcher: f, CUEEvaluator: ce, Filter: fi, Generator: g,
-	}
-
-	if _, err := r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
-	}); err == nil {
-		t.Fatal("expected error for OnChange trigger, got nil")
-	}
-
-	wantWarningEvent := "Warning CUEEvaluationWarning skipping /x:GET: boom"
-	wantUnmatchedEvent := "Warning UnmatchedOverride " +
-		"spec.overrides reference operationIds not present in the OpenAPI spec: WebhookStatus"
-	events := drainEvents(rec)
-	warningIdx := slices.Index(events, wantWarningEvent)
-	unmatchedIdx := slices.Index(events, wantUnmatchedEvent)
-	if warningIdx < 0 {
-		t.Errorf("expected event %q, got %v", wantWarningEvent, events)
-	}
-	if unmatchedIdx < 0 {
-		t.Errorf("expected event %q, got %v", wantUnmatchedEvent, events)
-	}
-	if warningIdx > unmatchedIdx {
-		t.Errorf("expected %q before %q, got %v", wantWarningEvent, wantUnmatchedEvent, events)
-	}
-}
-
 func TestAutoConfigReconcile_SteadyStateSuppressesInputWarningEvents(t *testing.T) {
 	cm := testCUEDefinitionsCM()
 	ac := syncedAutoConfig(cm)
@@ -2071,7 +1989,6 @@ func TestAutoConfigReconcile_SteadyStateSuppressesInputWarningEvents(t *testing.
 		WithStatusSubresource(ac).
 		Build()
 	f, ce, fi, g := defaultMocks()
-	ce.output.Warnings = []string{"skipping /x:GET: boom"}
 	g.output.Skipped = []autoconfig.OperationIssue{duplicateListUsers()}
 	rec := fakeRecorder()
 	r := &KrakenDAutoConfigReconciler{
@@ -2105,7 +2022,6 @@ func TestAutoConfigReconcile_ChangedInputsEmitsInputWarningEvents(t *testing.T) 
 		WithStatusSubresource(ac).
 		Build()
 	f, ce, fi, g := defaultMocks()
-	ce.output.Warnings = []string{"skipping /x:GET: boom"}
 	g.output.Skipped = []autoconfig.OperationIssue{duplicateListUsers()}
 	rec := fakeRecorder()
 	r := &KrakenDAutoConfigReconciler{
@@ -2139,7 +2055,6 @@ func TestAutoConfigReconcile_InputWarningEventsPrecedeEndpointsGenerated(t *test
 		WithStatusSubresource(ac).
 		Build()
 	f, ce, fi, g := defaultMocks()
-	ce.output.Warnings = []string{"skipping /x:GET: boom"}
 	g.output.Skipped = []autoconfig.OperationIssue{duplicateListUsers()}
 	rec := fakeRecorder()
 	r := newACReconciler(c, f, ce, fi, g)
