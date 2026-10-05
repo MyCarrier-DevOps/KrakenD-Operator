@@ -396,6 +396,8 @@ func TestGatewayAdmission_CERejectsEnterpriseOnlyFields(t *testing.T) {
 		gw.Spec.Edition = v1alpha1.EditionEE
 		return gw
 	}
+	disabled := testGateway()
+	disabled.Spec.OpenAPI = &v1alpha1.OpenAPIExportSpec{Enabled: false}
 	all := []string{"spec.redis: Forbidden", "spec.config.documentation: Forbidden", "spec.openapi.enabled: Forbidden"}
 	tests := []struct {
 		name    string
@@ -404,6 +406,7 @@ func TestGatewayAdmission_CERejectsEnterpriseOnlyFields(t *testing.T) {
 	}{
 		{"created on CE", withFields(testGateway()), nil, all},
 		{"created on EE", withFields(ee()), nil, nil},
+		{"OpenAPI export disabled on CE", disabled, nil, nil},
 		{"unchanged on CE", edited(withFields(testGateway())), withFields(testGateway()), nil},
 		{"added on CE", withFields(testGateway()), testGateway(), all},
 		{"EE to CE while set", withFields(testGateway()), withFields(ee()), all},
