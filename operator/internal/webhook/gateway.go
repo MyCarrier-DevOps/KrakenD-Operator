@@ -149,7 +149,8 @@ func (v *GatewayValidator) eeNamespacesOnCE(
 	}
 	if len(uses) > 0 {
 		errs = append(errs, field.Invalid(field.NewPath("spec", "edition"), string(gw.Spec.Edition),
-			"CE silently ignores the Enterprise-only extra_config namespaces these objects use: "+
+			"CE does not serve what these objects use (Enterprise-only extra_config namespaces it silently ignores, "+
+				"and /prefix/* wildcards): "+
 				truncate(strings.Join(uses, "; "), warningLimit)))
 	}
 	return errs, nil
@@ -158,7 +159,7 @@ func (v *GatewayValidator) eeNamespacesOnCE(
 // eeNamespacesInUse lists, sorted, each Enterprise-only namespace in gw's
 // endpoints and in the policies they reference, as "<kind> <ns>/<name>
 // <field> <namespace>", followed by ": <keys>" when CE honors the rest of the
-// block.
+// block, and each /prefix/* wildcard endpoint.
 func (v *GatewayValidator) eeNamespacesInUse(ctx context.Context, gw *v1alpha1.KrakenDGateway) ([]string, error) {
 	var eps v1alpha1.KrakenDEndpointList
 	byGateway := client.MatchingFields{fieldindex.EndpointGateway: gw.Namespace + "/" + gw.Name}
@@ -170,6 +171,10 @@ func (v *GatewayValidator) eeNamespacesInUse(ctx context.Context, gw *v1alpha1.K
 	for i := range eps.Items {
 		ep := &eps.Items[i]
 		for j, e := range ep.Spec.Endpoints {
+			if renderer.IsEEWildcard(e.Endpoint) {
+				uses = append(uses, fmt.Sprintf("KrakenDEndpoint %s/%s spec.endpoints[%d].endpoint %s (an EE wildcard)",
+					ep.Namespace, ep.Name, j, e.Endpoint))
+			}
 			for _, pd := range entryDrops(field.NewPath("spec", "endpoints").Index(j), e) {
 				for _, d := range pd.drops {
 					uses = append(uses, fmt.Sprintf("KrakenDEndpoint %s/%s %s %s",
