@@ -169,7 +169,23 @@ func schemaRefs(schema any) []string {
 		if s, ok := value.(string); ok && key == "$ref" && strings.HasPrefix(s, "#") {
 			refs = append(refs, s)
 		}
+		if d, ok := value.(map[string]any); ok && key == "discriminator" {
+			refs = append(refs, mappingTargets(d)...)
+		}
 		return true
 	})
 	return refs
+}
+
+// mappingTargets returns the schema references a discriminator object's
+// mapping holds: each value is a schema name or a pointer.
+func mappingTargets(discriminator map[string]any) []string {
+	mapping, _ := discriminator["mapping"].(map[string]any)
+	var targets []string
+	for _, key := range slices.Sorted(maps.Keys(mapping)) {
+		if target, ok := mapping[key].(string); ok {
+			targets = append(targets, target)
+		}
+	}
+	return targets
 }
