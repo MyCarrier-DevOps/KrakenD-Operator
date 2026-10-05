@@ -4879,3 +4879,51 @@ func TestAutoConfigReconcile_SteadyStateRunsNoCheck(t *testing.T) {
 		t.Errorf("expected no config check without writes, got %d", len(checker.calls))
 	}
 }
+
+func TestAutoConfigReconcile_PrecheckHoldsEnterpriseOnlyNamespacesOnACEGateway(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	keys := generatedEndpoint("getKeys", "/keys")
+	keys.Spec.Endpoints[0].ExtraConfig = &runtime.RawExtension{Raw: []byte(
+		`{"auth/api-keys":{"roles":["admin"]},"documentation/openapi":{"audience":["public"]}}`)}
+	keys.Spec.Endpoints[0].Backends[0].ExtraConfig = &runtime.RawExtension{Raw: []byte(
+		`{"backend/http/client":{"proxy_address":"http://proxy"}}`)}
+	docsOnly := generatedEndpoint("getDocs", "/docs")
+	docsOnly.Spec.Endpoints[0].ExtraConfig = &runtime.RawExtension{Raw: []byte(
+		`{"documentation/openapi":{"audience":["public"]}}`)}
+	g.output.Endpoints = append(g.output.Endpoints, keys, docsOnly)
+	var ops []string
+	c := fakeClientBuilder().WithObjects(ac, cm, testGateway()).WithStatusSubresource(ac).
+		WithInterceptorFuncs(recordEndpointWrites(&ops, nil)).Build()
+	checker := &fakeChecker{}
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Checker = checker
+
+	for sync := 1; sync <= 2; sync++ {
+		ops = nil
+		if _, err := reconcileAC(r, ac); err != nil {
+			t.Fatalf("sync %d: %v", sync, err)
+		}
+		if slices.ContainsFunc(ops, func(op string) bool { return strings.HasSuffix(op, " test-ac-getkeys") }) {
+			t.Errorf("sync %d wrote the held endpoint: %v", sync, ops)
+		}
+	}
+	if endpointExists(t, c, "test-ac-getkeys") || !endpointExists(t, c, "test-ac-listusers") ||
+		!endpointExists(t, c, "test-ac-getdocs") {
+		t.Error("expected listusers and getdocs written, getkeys held")
+	}
+	for i, call := range checker.calls {
+		if slices.Contains(endpointNames(call), "test-ac-getkeys") {
+			t.Errorf("config check %d included the held endpoint: %v", i, endpointNames(call))
+		}
+	}
+	failed := getAC(t, c, ac).Status.FailedOperations
+	if len(failed) != 1 || failed[0].Endpoint != "test-ac-getkeys" ||
+		failed[0].Reason != v1alpha1.ReasonEndpointRejected ||
+		!strings.Contains(failed[0].Message, "spec.endpoints[0].extraConfig auth/api-keys") ||
+		!strings.Contains(failed[0].Message, "spec.endpoints[0].backends[0].extraConfig backend/http/client") ||
+		strings.Contains(failed[0].Message, "documentation/openapi") {
+		t.Errorf("failedOperations = %+v", failed)
+	}
+}
