@@ -171,3 +171,13 @@ func TestEndpointAdmission_RouteClashInsideOneEndpoint(t *testing.T) {
 		t.Errorf("response = %+v, want both entries rejected", resp.Result)
 	}
 }
+
+func TestEndpointAdmission_StoredClashDoesNotBlockOtherEdits(t *testing.T) {
+	old := testEndpoint("new", "/users/{name}", "/b")
+	edited := old.DeepCopy()
+	edited.Spec.Endpoints[1].Backends[0].URLPattern = "/v2"
+	v := &EndpointValidator{Client: fakeClient(testGateway(), testEndpoint("other", "/users/{id}"), old)}
+	if resp := review(t, v, "alice", edited, old); !resp.Allowed {
+		t.Errorf("edit of an unrelated entry denied: %+v", resp.Result)
+	}
+}
