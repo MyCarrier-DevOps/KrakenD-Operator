@@ -2583,7 +2583,7 @@ func (w Window) NextChange(notAfter, now time.Time) time.Duration
 
 ## 15. Dependency Injection and Interfaces
 
-All external dependencies are abstracted behind interfaces, injected via struct fields, and wired in `main.go`.
+All external dependencies are abstracted behind interfaces, injected via struct fields, and wired in `cmd/` (`main.go` and `wiring.go`). Interfaces live with the package that consumes them.
 
 ### Interface Summary
 
@@ -2592,6 +2592,7 @@ All external dependencies are abstracted behind interfaces, injected via struct 
 | `Renderer` | `internal/renderer` | Build `krakend.json` from CRD state | `renderer.configRenderer` |
 | `Validator` | `internal/renderer` | Validate rendered config via `krakend check -t -n -c` (`Validate`) or lint it with `krakend check -n` (`Lint`) | `renderer.KrakenDValidator` |
 | `ConfigChecker` | `internal/controller` | Gather a gateway's render inputs and validate the render, behind the pod's shared validation slots | `configcheck.Checker` |
+| `ConfigChecker` | `internal/webhook` | Render a gateway with a proposed change and validate it (`CheckGateway`, `CheckIsolated`), render a policy in a gateway (`CheckGatewayPolicy`) or alone (`LintPolicy`), all with `krakend check -n` and the route check | `configcheck.Checker` (the same instance the controller's port uses) |
 | `CommandExecutor` | `internal/renderer` | Execute shell commands (krakend check) | `renderer.KrakenDExecutor` |
 | `Fetcher` | `internal/autoconfig` | Fetch OpenAPI specs (HTTP + ConfigMap) | `autoconfig.httpFetcher` |
 | `CUEEvaluator` | `internal/autoconfig` | Evaluate CUE definitions + OpenAPI spec → `EndpointEntry` objects | `autoconfig.cueEvaluator` |
@@ -2600,6 +2601,7 @@ All external dependencies are abstracted behind interfaces, injected via struct 
 | `LicenseParser` | `internal/util/license` | Parse X.509 license certificates | `license.x509LicenseParser` |
 | `clock.Clock` | `k8s.io/utils/clock` | Time abstraction for license checks and periodic reconcile scheduling | `clock.RealClock` |
 | `client.Client` | `sigs.k8s.io/controller-runtime` | Kubernetes API client | Manager's cached client |
+| `client.Reader` | `sigs.k8s.io/controller-runtime` | Uncached reads where the cache can lag: the policy controller's release check and `EndpointValidator.APIReader` | `mgr.GetAPIReader()` |
 | `record.EventRecorder` | `client-go/tools/record` | Kubernetes event emission | Manager's event recorder |
 
 ### Test Doubles
