@@ -180,6 +180,25 @@ func withBackendExtra(be v1alpha1.BackendSpec, raw string) v1alpha1.BackendSpec 
 	return be
 }
 
+// A null client block is no block: a CE fallback drops and lists it, as
+// admission rejects it.
+func TestRender_CEFallbackDropsAndListsANullClientBlock(t *testing.T) {
+	in := eeFeatureInput(true)
+	be := in.Endpoints[0].Spec.Endpoints[1].Backends[0]
+	in.Endpoints[0].Spec.Endpoints[1].Backends = []v1alpha1.BackendSpec{
+		withBackendExtra(be, `{"backend/http/client":null}`),
+	}
+	out, err := New(Options{}).Render(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := StrippedEEFeature{Source: types.NamespacedName{Namespace: "ns", Name: "a"}, Method: "GET",
+		Endpoint: "/users", Feature: "backend[0] extra_config backend/http/client"}
+	if !slices.Contains(out.StrippedEEFeatures, want) || strings.Contains(string(out.JSON), "backend/http/client") {
+		t.Errorf("StrippedEEFeatures = %+v, want %+v listed and the block gone", out.StrippedEEFeatures, want)
+	}
+}
+
 func TestRender_WithoutFallbackKeepsEEFeatures(t *testing.T) {
 	out, err := New(Options{}).Render(eeFeatureInput(false))
 	if err != nil {
