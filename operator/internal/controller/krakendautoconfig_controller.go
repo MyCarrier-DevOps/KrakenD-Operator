@@ -825,7 +825,7 @@ func autoConfigStatusChanged(orig, cur *v1alpha1.KrakenDAutoConfigStatus) bool {
 // It writes the endpoints that are missing or differ first, attempting every
 // one whatever fails, and only then, when no write failed, deletes the ones
 // no longer desired, so a failure never takes a route off the gateway. An
-// error means the pass could not continue: listing or deleting failed.
+// error means the pass could not start: listing failed.
 func (r *KrakenDAutoConfigReconciler) reconcileEndpoints(
 	ctx context.Context,
 	ac *v1alpha1.KrakenDAutoConfig,
@@ -852,7 +852,8 @@ func (r *KrakenDAutoConfigReconciler) reconcileEndpoints(
 	for i := range stale {
 		deleted, err := r.deleteEndpoint(ctx, &stale[i])
 		if err != nil {
-			return outcome, err
+			outcome.record(err)
+			continue
 		}
 		if deleted {
 			outcome.changes.deleted++
