@@ -89,7 +89,7 @@ func TestGatewayValidator_OpenAPIPortValid(t *testing.T) {
 	gw := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
 		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Version: "2.13", Edition: v1alpha1.EditionEE,
 			Config:  v1alpha1.GatewayConfig{},
 			OpenAPI: &v1alpha1.OpenAPIExportSpec{Enabled: true, Port: 8090},
 		},
@@ -105,7 +105,7 @@ func gwWithProbes(liveness, readiness *corev1.Probe, sidecarImage string) *v1alp
 	return &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
 		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
+			Version: "2.13", Edition: v1alpha1.EditionEE,
 			Config: v1alpha1.GatewayConfig{},
 			OpenAPI: &v1alpha1.OpenAPIExportSpec{
 				Enabled: true, Port: 8090, SidecarImage: sidecarImage,
@@ -2084,7 +2084,10 @@ func TestGatewayValidator_NoReplicasWarningWithoutAutoscaling(t *testing.T) {
 	}
 }
 
-func TestGatewayValidator_WarnsWhenOpenAPIIsSetOnACEGateway(t *testing.T) {
+// A CE gateway can only carry an enabled spec.openapi when it was stored before
+// admission refused it and the update leaves it unchanged; that is the case
+// that warns. A new or changed one is rejected.
+func TestGatewayValidator_WarnsWhenOpenAPIIsStoredOnACEGateway(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		openapi *v1alpha1.OpenAPIExportSpec
@@ -2094,13 +2097,15 @@ func TestGatewayValidator_WarnsWhenOpenAPIIsSetOnACEGateway(t *testing.T) {
 		{"export disabled", &v1alpha1.OpenAPIExportSpec{Enabled: false}, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			gw := &v1alpha1.KrakenDGateway{
+			old := &v1alpha1.KrakenDGateway{
 				ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
 				Spec: v1alpha1.KrakenDGatewaySpec{
 					Version: "2.13", Edition: v1alpha1.EditionCE, Config: v1alpha1.GatewayConfig{}, OpenAPI: tc.openapi,
 				},
 			}
-			warnings, err := (&GatewayValidator{Checker: &scriptedChecker{}}).ValidateCreate(context.Background(), gw)
+			gw := old.DeepCopy()
+			gw.Spec.Replicas = ptr.To(int32(2))
+			warnings, err := (&GatewayValidator{Checker: &scriptedChecker{}}).ValidateUpdate(context.Background(), old, gw)
 			if err != nil {
 				t.Fatalf("expected the gateway to be admitted, got %v", err)
 			}
