@@ -75,3 +75,4 @@ KrakenDAutoConfig a/override-calls: spec.overrides[0].concurrentCalls 0
 KrakenDAutoConfig a/override-output: spec.overrides[0].outputEncoding jsn
 KrakenDAutoConfig a/override-path: spec.overrides[0].endpoint orders
 KrakenDAutoConfig a/override-policy: spec.overrides[0].policyRef.name is empty
+KrakenDAutoConfig a/override-collide: overrides collide: get_a, get-a
