@@ -26,12 +26,14 @@ import (
 	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/validation"
 	"k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
 	"k8s.io/apiextensions-apiserver/pkg/apiserver/schema/cel"
+	"k8s.io/apiextensions-apiserver/pkg/apiserver/schema/cel/model"
 	structuraldefaulting "k8s.io/apiextensions-apiserver/pkg/apiserver/schema/defaulting"
 	"k8s.io/apiextensions-apiserver/pkg/apiserver/schema/listtype"
 	apiservervalidation "k8s.io/apiextensions-apiserver/pkg/apiserver/validation"
 	kjson "k8s.io/apimachinery/pkg/util/json"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	celconfig "k8s.io/apiserver/pkg/apis/cel"
+	"k8s.io/apiserver/pkg/cel/common"
 	"sigs.k8s.io/yaml"
 )
 
@@ -40,9 +42,17 @@ const (
 	policiesCRD  = "gateway.krakend.io_krakendbackendpolicies.yaml"
 )
 
-// validateCRD runs defaulting, the OpenAPI schema, list-type and CEL
-// validation of objectYAML against crdFile, as the API server does on create.
+// validateCRD validates a create of objectYAML against crdFile.
 func validateCRD(t *testing.T, crdFile, objectYAML string) field.ErrorList {
+	t.Helper()
+	return validateCRDUpdate(t, crdFile, objectYAML, "")
+}
+
+// validateCRDUpdate runs defaulting, the OpenAPI schema, list-type and CEL
+// validation of objectYAML against crdFile, as the API server does. With
+// oldYAML set it validates an update from that stored object, including the
+// ratcheting of errors in fields the update leaves unchanged.
+func validateCRDUpdate(t *testing.T, crdFile, objectYAML, oldYAML string) field.ErrorList {
 	t.Helper()
 	crd := loadCRD(t, crdFile)
 	var props apiextensions.JSONSchemaProps
@@ -58,6 +68,30 @@ func validateCRD(t *testing.T, crdFile, objectYAML string) field.ErrorList {
 	if err != nil {
 		t.Fatal(err)
 	}
+	obj := defaultedObject(t, structural, objectYAML)
+	celValidator := cel.NewValidator(structural, true, celconfig.PerCallLimit)
+	if oldYAML == "" {
+		errs := apiservervalidation.ValidateCustomResource(nil, obj, schemaValidator)
+		errs = append(errs, listtype.ValidateListSetsAndMaps(nil, structural, obj)...)
+		celErrs, _ := celValidator.Validate(
+			context.Background(), nil, structural, obj, nil, celconfig.RuntimeCELCostBudget)
+		return append(errs, celErrs...)
+	}
+
+	old := defaultedObject(t, structural, oldYAML)
+	corr := common.NewCorrelatedObject(obj, old, &model.Structural{Structural: structural})
+	errs := apiservervalidation.ValidateCustomResourceUpdate(
+		nil, obj, old, schemaValidator, apiservervalidation.WithRatcheting(corr))
+	if len(listtype.ValidateListSetsAndMaps(nil, structural, old)) == 0 {
+		errs = append(errs, listtype.ValidateListSetsAndMaps(nil, structural, obj)...)
+	}
+	celErrs, _ := celValidator.Validate(context.Background(), nil, structural, obj, old,
+		celconfig.RuntimeCELCostBudget, cel.WithRatcheting(corr))
+	return append(errs, celErrs...)
+}
+
+func defaultedObject(t *testing.T, structural *schema.Structural, objectYAML string) map[string]any {
+	t.Helper()
 	data, err := yaml.YAMLToJSON([]byte(objectYAML))
 	if err != nil {
 		t.Fatal(err)
@@ -67,11 +101,7 @@ func validateCRD(t *testing.T, crdFile, objectYAML string) field.ErrorList {
 		t.Fatal(err)
 	}
 	structuraldefaulting.Default(obj, structural)
-	errs := apiservervalidation.ValidateCustomResource(nil, obj, schemaValidator)
-	errs = append(errs, listtype.ValidateListSetsAndMaps(nil, structural, obj)...)
-	celErrs, _ := cel.NewValidator(structural, true, celconfig.PerCallLimit).
-		Validate(context.Background(), nil, structural, obj, nil, celconfig.RuntimeCELCostBudget)
-	return append(errs, celErrs...)
+	return obj
 }
 
 type crdCase struct {
@@ -85,17 +115,23 @@ func runCRDCases(t *testing.T, crdFile string, cases []crdCase) {
 	t.Helper()
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			errs := validateCRD(t, crdFile, tc.object)
-			if tc.rejects == "" {
-				if len(errs) != 0 {
-					t.Errorf("errors = %v, want none", errs)
-				}
-				return
-			}
-			if len(errs) == 0 || !strings.Contains(errs.ToAggregate().Error(), tc.rejects) {
-				t.Errorf("errors = %v, want one containing %q", errs, tc.rejects)
-			}
+			expectErrors(t, validateCRD(t, crdFile, tc.object), tc.rejects)
 		})
+	}
+}
+
+// expectErrors requires errs to be empty when rejects is "" and otherwise to
+// contain rejects.
+func expectErrors(t *testing.T, errs field.ErrorList, rejects string) {
+	t.Helper()
+	if rejects == "" {
+		if len(errs) != 0 {
+			t.Errorf("errors = %v, want none", errs)
+		}
+		return
+	}
+	if len(errs) == 0 || !strings.Contains(errs.ToAggregate().Error(), rejects) {
+		t.Errorf("errors = %v, want one containing %q", errs, rejects)
 	}
 }
 
