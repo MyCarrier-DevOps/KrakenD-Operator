@@ -103,9 +103,11 @@ type KrakenDAutoConfigReconciler struct {
 // endpoint. An operation that fails CUE evaluation, fails the gateway config
 // check that runs before the writes, loses its route to another operation, or
 // whose endpoint the API server rejects, is held at its last-good endpoint
-// instead: the healthy operations still converge, no stale endpoint is
-// deleted, and Synced is False with reason OperationsFailed without an error,
-// since retrying a deterministic failure with backoff gains nothing. When the
+// instead: the healthy operations still converge, except that an operation
+// the config check could not clear within its rounds is held too, no stale
+// endpoint is deleted, and Synced is False with reason OperationsFailed
+// without an error, since retrying a deterministic failure with backoff gains
+// nothing. When the
 // config check cannot run, nothing is written or deleted and Synced is False
 // with reason ValidatorUnavailable, retried with backoff. A successful
 // reconcile that finds nothing to change writes nothing and runs no check.
@@ -428,9 +430,9 @@ func (r *KrakenDAutoConfigReconciler) handleSyncedFailure(
 // EndpointReconcileFailed, for a failed list or the endpointFailuresError of
 // one pass, which can hold transient write, raced (beside a transient one),
 // adoption and delete errors. A pass whose only failures are raced never gets
-// here; it requeues quietly. The error is returned for every trigger, so controller-runtime
-// retries it with backoff: these errors are transient, and a periodic
-// trigger would otherwise wait a whole interval.
+// here; it requeues quietly. The error is returned for every trigger, so
+// controller-runtime retries it with backoff: these errors are transient, and
+// a periodic trigger would otherwise wait a whole interval.
 func (r *KrakenDAutoConfigReconciler) handleEndpointError(
 	ctx context.Context,
 	ac *v1alpha1.KrakenDAutoConfig,
