@@ -200,6 +200,7 @@ jq "${jq_opts[@]}" "$jq_lib"'
     ($o.method // empty | enum_problem("\($p).method"; ["GET", "POST", "PUT", "PATCH", "DELETE"])),
     (($o.backends // [])[] | select(.index < 0) | "\($p).backends index \(.index)"),
     ($o.timeout // empty | dur_problem($go_re; 64; "\($p).timeout")),
-    ($o.cacheTTL // empty | dur_problem($go_re; 64; "\($p).cacheTTL"))
+    ($o.cacheTTL // empty | dur_problem($go_re; 64; "\($p).cacheTTL")),
+    ($o.concurrentCalls // empty | select(. < 1) | "\($p).concurrentCalls \(.)")
   ))
 ]} | report("KrakenDAutoConfig")' "$work/autoconfigs.json"
