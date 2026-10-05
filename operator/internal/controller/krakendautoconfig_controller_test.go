@@ -3742,6 +3742,9 @@ func TestAutoConfigReconcile_InvalidEndpointIsHeldNotRetried(t *testing.T) {
 		failed[0].Method != "GET" || failed[0].Path != "/b" || failed[0].OperationID != "getB" {
 		t.Errorf("failedOperations = %+v", failed)
 	}
+	if len(failed) == 1 && !strings.HasPrefix(failed[0].Message, "KrakenDEndpoint.gateway.krakend.io") {
+		t.Errorf("expected the API server's message without the controller's wrap, got %q", failed[0].Message)
+	}
 }
 
 func TestAutoConfigReconcile_EndpointControlledByAnotherIsHeldNotRetried(t *testing.T) {
