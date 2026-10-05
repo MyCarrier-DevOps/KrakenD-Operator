@@ -190,6 +190,7 @@ jq "${jq_opts[@]}" "$jq_lib"'
         and ((($a.host // "") != "") or (($a.backendUrlPattern // "") != "") or (($a.encoding // "") != ""))
      then "\($p) mixes backends with the shorthand" else empty end),
     ($a.timeout // empty | dur_problem($go_re; 64; "\($p).timeout")),
-    ($a.cacheTTL // empty | dur_problem($go_re; 64; "\($p).cacheTTL"))
+    ($a.cacheTTL // empty | dur_problem($go_re; 64; "\($p).cacheTTL")),
+    ($a.outputEncoding // empty | enum_problem("\($p).outputEncoding"; output_encodings))
   ))
 ]} | report("KrakenDAutoConfig")' "$work/autoconfigs.json"
