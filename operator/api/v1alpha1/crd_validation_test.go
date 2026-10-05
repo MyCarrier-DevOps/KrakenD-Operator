@@ -372,5 +372,6 @@ func TestAutoConfigCRD_Rules(t *testing.T) {
 		{"configMap without hostMapping", autoconfigHead + `openapi: {configMapRef: {name: c}}, trigger: OnChange}}`, "hostMapping is required"},
 		{"periodic below 30s", autoconfigHead + `openapi: {url: "http://x"}, trigger: Periodic, periodic: {interval: 10s}}}`, "at least 30s"},
 		{"periodic interval not a duration", autoconfigHead + `openapi: {url: "http://x"}, trigger: Periodic, periodic: {interval: "5 minutes"}}}`, "spec.periodic.interval in body should match"},
+		{"periodic without interval", autoconfigHead + `openapi: {url: "http://x"}, trigger: Periodic}}`, "at least 30s"},
 	})
 }
