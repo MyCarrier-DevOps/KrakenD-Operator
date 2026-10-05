@@ -4963,3 +4963,17 @@ func TestRouteCollisions_TheLowerNameKeepsTheRoute(t *testing.T) {
 		t.Errorf("rejection = %+v", rej)
 	}
 }
+
+func TestRouteCollisions_AnExistingEndpointKeepsTheRouteOverANewOne(t *testing.T) {
+	// getB sorts after getA but is already served, so it keeps the route.
+	existing := generatedEndpoint("getB", "/h/{b}")
+	existing.CreationTimestamp = metav1.NewTime(time.Unix(1000, 0))
+	desired := []*v1alpha1.KrakenDEndpoint{generatedEndpoint("getA", "/h/{a}"), generatedEndpoint("getB", "/h/{b}")}
+
+	got := routeCollisions(desired, []v1alpha1.KrakenDEndpoint{*existing})
+
+	if len(got) != 1 || got["test-ac-geta"].endpoint != desired[0] ||
+		!strings.HasPrefix(got["test-ac-geta"].message, "has the same route as GET /h/{b} in test-ac-getb: ") {
+		t.Errorf("routeCollisions = %+v, want only test-ac-geta held", got)
+	}
+}
