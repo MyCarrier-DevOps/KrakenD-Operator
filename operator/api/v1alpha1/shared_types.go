@@ -158,6 +158,7 @@ const (
 	ReasonRolloutFailed                 = "RolloutFailed"
 	ReasonCUEEvaluationFailed           = "CUEEvaluationFailed"
 	ReasonCUEEvaluationWarning          = "CUEEvaluationWarning"
+	ReasonSpecWarning                   = "SpecWarning"
 	ReasonAdditionalEndpointOverride    = "AdditionalEndpointOverride"
 	ReasonAdditionalEndpointScopeFailed = "AdditionalEndpointScopeFailed"
 	ReasonUnmatchedOverride             = "UnmatchedOverride"
