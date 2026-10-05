@@ -407,6 +407,8 @@ func TestAutoConfigCRD_Rules(t *testing.T) {
 		{"override concurrent calls", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, overrides: [{operationId: x, concurrentCalls: 0}]}}`, "spec.overrides[0].concurrentCalls"},
 		{"override endpoint with a query", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, overrides: [{operationId: x, endpoint: "/a?b"}]}}`, "spec.overrides[0].endpoint"},
 		{"additional endpoint with a query", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, additionalEndpoints: [{endpoint: "/a?b"}]}}`, "spec.additionalEndpoints[0].endpoint"},
+		{"periodic interval too long", autoconfigHead + `openapi: {url: "http://x"}, trigger: Periodic, periodic: {interval: "` + strings.Repeat("1s", 17) + `"}}}`, "spec.periodic.interval"},
+		{"duration too long", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, defaults: {endpoint: {timeout: "` + strings.Repeat("1s", 33) + `"}}}}`, "spec.defaults.endpoint.timeout"},
 	})
 }
 
@@ -451,5 +453,14 @@ func TestAutoConfigCRD_Ratchets(t *testing.T) {
 		{"stored OnChange interval below 30s, trigger switched to Periodic",
 			autoconfigHead + `openapi: {url: "http://x"}, trigger: Periodic, periodic: {interval: 10s}}}`,
 			autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, periodic: {interval: 10s}}}`, "at least 30s"},
+		{"stored override endpoint and concurrentCalls that break the rules, another field edited",
+			autoconfigHead + src + `additionalEndpointsBasePath: /v1, overrides: [{operationId: x, endpoint: "a?b", concurrentCalls: 0}]}}`,
+			autoconfigHead + src + `overrides: [{operationId: x, endpoint: "a?b", concurrentCalls: 0}]}}`, ""},
+		{"stored additional endpoint with a query, a different entry edited",
+			autoconfigHead + src + `additionalEndpoints: [{endpoint: "/a?b"}, {endpoint: /live, timeout: 5s}]}}`,
+			autoconfigHead + src + `additionalEndpoints: [{endpoint: "/a?b"}, {endpoint: /live}]}}`, ""},
+		{"stored default service discovery typo, another field edited",
+			autoconfigHead + src + `additionalEndpointsBasePath: /v1, defaults: {backend: {sd: dsn}}}}`,
+			autoconfigHead + src + `defaults: {backend: {sd: dsn}}}}`, ""},
 	})
 }
