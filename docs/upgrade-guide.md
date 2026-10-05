@@ -736,7 +736,12 @@ What changes for you:
   that roll completes, as this guide always said.
 - A deleted Deployment reads `Deploying` while it is recreated, not
   `Ready=True`/`Running` followed by `Error`.
-- A rollout stays reported when a status write fails or the cache is behind.
+- A rollout stays reported when a status write fails or the cache is behind,
+  and a pass whose Deployment update fails (a stale-cache Conflict, say)
+  leaves `Progressing` and `Available` as they were. The one gap is the few
+  milliseconds between a template write and the Deployment controller
+  observing it: a later pass inside that window can read the Deployment as
+  converged until the watch fires on the observation.
 - The reason is `ConfigDeployed` or `DeploymentUpdated`, whichever the change
   gave; a rollout already reported keeps its reason, and otherwise it is
   `DeploymentUpdated`.
