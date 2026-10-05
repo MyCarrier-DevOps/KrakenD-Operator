@@ -243,6 +243,14 @@ func TestGatewayAdmission_CERejectsEnterpriseOnlyNamespaces(t *testing.T) {
 			Raw: &runtime.RawExtension{Raw: []byte(`{"backend/http/client":{"proxy_address":"http://p"}}`)},
 		},
 	}
+	redirects := testEndpoint("redirects", "/r")
+	redirects.Spec.Endpoints[0].Backends[0].PolicyRef = &v1alpha1.PolicyRef{Name: "r"}
+	honored := &v1alpha1.KrakenDBackendPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "r", Namespace: "default"},
+		Spec: v1alpha1.KrakenDBackendPolicySpec{
+			Raw: &runtime.RawExtension{Raw: []byte(`{"backend/http/client":{"send_body_on_redirect":true}}`)},
+		},
+	}
 	tests := []struct {
 		name    string
 		objs    []client.Object
@@ -260,6 +268,7 @@ func TestGatewayAdmission_CERejectsEnterpriseOnlyNamespaces(t *testing.T) {
 			"KrakenDBackendPolicy default/p spec.raw backend/http/client"}},
 		{"EE to CE with nothing Enterprise-only", []client.Object{testEndpoint("plain", "/p")}, testGateway(), ee(), nil},
 		{"CE stays CE with stored EE namespaces", []client.Object{keys, proxy}, edited(testGateway()), testGateway(), nil},
+		{"EE to CE with only keys CE honors", []client.Object{redirects, honored}, testGateway(), ee(), nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
