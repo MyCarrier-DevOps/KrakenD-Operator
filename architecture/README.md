@@ -708,7 +708,7 @@ sequenceDiagram
             Op->>K8s: Update KrakenDGateway condition → ConfigValid=False
             Op->>K8s: Set Ready=False (ConfigValidationFailed), phase Error
             Op->>K8s: Emit Warning Event (when the verdict changes)
-            Note over Op: STOP — do not deploy invalid config content.<br/>Image, version and plugin changes still roll (the infrastructure stage runs),<br/>except an image held while the applied edition differs from the current one
+            Note over Op: STOP — do not deploy invalid config content.<br/>Image, version and plugin changes still roll (the infrastructure stage runs),<br/>except an image held while the applied edition differs from the current one, and everything held while a plugin ConfigMap is missing
         else Validator unavailable (binary missing, timeout, killed, I/O error)
             Op->>K8s: Update KrakenDGateway condition → ConfigValid=Unknown<br/>(reason ValidatorUnavailable)
             Op->>K8s: Emit one Warning Event (ValidatorUnavailable)
@@ -1523,7 +1523,8 @@ and KrakenD reads its license at startup. The pod template therefore also
 carries `krakend.io/checksum-license`, the SHA-256 of the license bytes the
 operator read. It tracks the mounted license, so it is present for every EE gateway with a readable license, CE fallback or not (the license stays mounted under fallback, so a fallback toggle alone never changes the pod template), and absent on a Community gateway.
 Changing the license in the Secret changes the annotation, rolls the
-Deployment (`Progressing=True`, reason `DeploymentUpdated`) and holds `Ready`
+Deployment (`Progressing=True`, reason `DeploymentUpdated`; once a missing
+plugin ConfigMap exists, if one holds the Deployment) and holds `Ready`
 until the new pods are available. When the Secret cannot be read, the
 annotation the Deployment already carries is kept, so nothing rolls. The
 post-restart Job's identity does not include the license, so a renewal does
