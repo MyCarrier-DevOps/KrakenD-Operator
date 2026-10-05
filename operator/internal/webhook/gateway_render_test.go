@@ -51,6 +51,9 @@ func TestGatewayAdmission_Render(t *testing.T) {
 		{"update breaks it", old, []configcheck.Verdict{broken, {OK: true}}, false, "gateway,gateway", ""},
 		{"update of a broken gateway, root still fine", old, []configcheck.Verdict{broken, broken, {OK: true}}, true,
 			"gateway,gateway,isolated", "already fails validation"},
+		{"update of a broken gateway breaks the root", old,
+			[]configcheck.Verdict{broken, broken, rootFailure("bad"), {OK: true}}, false,
+			"gateway,gateway,isolated,isolated", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
