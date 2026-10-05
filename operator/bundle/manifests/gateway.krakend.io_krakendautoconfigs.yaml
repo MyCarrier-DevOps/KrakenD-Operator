@@ -836,6 +836,49 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              failedOperations:
+                description: |-
+                  FailedOperations lists up to 20 operations the last sync could not
+                  converge: they failed CUE evaluation (CUEEvaluationFailed), the gateway
+                  config check (ConfigValidationFailed), or the API server rejected their
+                  endpoint (EndpointRejected). Each keeps the endpoint it had, if any,
+                  and while any is listed no stale endpoint is deleted. Synced is False
+                  with reason OperationsFailed while this list is not empty.
+                items:
+                  description: |-
+                    OperationStatus reports one OpenAPI operation the AutoConfig skipped or
+                    could not converge.
+                  properties:
+                    endpoint:
+                      description: |-
+                        Endpoint is the KrakenDEndpoint generated for the operation, when the
+                        problem concerns that object.
+                      type: string
+                    message:
+                      description: Message explains Reason, truncated to 256 bytes.
+                      type: string
+                    method:
+                      description: Method is the operation's HTTP method, upper case.
+                      type: string
+                    operationId:
+                      description: OperationID is the operation's operationId, when
+                        it declares one.
+                      type: string
+                    path:
+                      description: Path is the gateway path the operation's endpoint
+                        has, or would have.
+                      type: string
+                    reason:
+                      description: Reason is a CamelCase code for why the operation
+                        is listed.
+                      type: string
+                  required:
+                  - method
+                  - path
+                  - reason
+                  type: object
+                type: array
+                x-kubernetes-list-type: atomic
               generatedEndpoints:
                 type: integer
               lastSyncTime:
