@@ -71,41 +71,33 @@ func (g *endpointGenerator) Generate(
 	input GenerateInput,
 ) (*GenerateOutput, error) {
 	ac := input.AutoConfig
-	seenKeys := map[string]struct{}{}
-	seenOperationIDs := map[string]struct{}{}
-	seenNames := map[string]struct{}{}
+	seenKeys := map[string]string{}
+	seenOperationIDs := map[string]string{}
+	seenNames := map[string]string{}
 	output := &GenerateOutput{}
 
 	for _, entry := range input.Entries {
 		key := entry.Endpoint + ":" + entry.Method
 		opID := input.OperationIDs[key]
 		name := endpointName(ac.Name, opID, entry.Method, entry.Endpoint)
+		op := entry.Method + " " + entry.Endpoint
 
-		if _, exists := seenKeys[key]; exists {
+		if ident, dup := duplicateOf(key, opID, name, seenKeys, seenOperationIDs, seenNames); dup != "" {
 			output.SkippedOperations++
-			output.Duplicates = append(output.Duplicates, key)
+			output.Duplicates = append(output.Duplicates, ident)
+			output.Skipped = append(output.Skipped, OperationIssue{
+				Operation: Operation{Method: entry.Method, Path: entry.Endpoint, OperationID: opID},
+				Reason:    v1alpha1.ReasonDuplicateOperationId,
+				Message:   dup,
+			})
 			continue
 		}
-
+		seenKeys[key] = op
 		if opID != "" {
-			if _, exists := seenOperationIDs[opID]; exists {
-				output.SkippedOperations++
-				output.Duplicates = append(output.Duplicates, opID)
-				continue
-			}
+			seenOperationIDs[opID] = op
 		}
+		seenNames[name] = op
 
-		if _, exists := seenNames[name]; exists {
-			output.SkippedOperations++
-			output.Duplicates = append(output.Duplicates, name)
-			continue
-		}
-
-		seenKeys[key] = struct{}{}
-		if opID != "" {
-			seenOperationIDs[opID] = struct{}{}
-		}
-		seenNames[name] = struct{}{}
 		ep := &v1alpha1.KrakenDEndpoint{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      name,
@@ -125,6 +117,26 @@ func (g *endpointGenerator) Generate(
 	}
 
 	return output, nil
+}
+
+// duplicateOf returns why an entry duplicates one generated before it (the
+// same path and method, operationId, or endpoint name), with the identifier
+// that collided, or "" when it does not. Each seen map records the operation
+// ("METHOD /path") that claimed it.
+func duplicateOf(
+	key, opID, name string,
+	seenKeys, seenOperationIDs, seenNames map[string]string,
+) (ident, why string) {
+	if by, ok := seenKeys[key]; ok {
+		return key, fmt.Sprintf("same path and method as %s", by)
+	}
+	if by, ok := seenOperationIDs[opID]; ok && opID != "" {
+		return opID, fmt.Sprintf("operationId %q is already used by %s", opID, by)
+	}
+	if by, ok := seenNames[name]; ok {
+		return name, fmt.Sprintf("endpoint name %q is already used by %s", name, by)
+	}
+	return "", ""
 }
 
 // maxNameLength is the Kubernetes DNS-1123 subdomain name limit.
