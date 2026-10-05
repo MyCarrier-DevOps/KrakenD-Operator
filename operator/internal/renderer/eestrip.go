@@ -221,7 +221,7 @@ type CEDrop struct {
 // String names the drop: the namespace, followed by the dropped keys when CE
 // honors the rest of the block.
 func (d CEDrop) String() string {
-	return ""
+	return d.Namespace
 }
 
 // CEDrops returns what a CE render drops from the extra_config ec at level, in
