@@ -383,6 +383,7 @@ func TestGatewayAdmission_CERejectsEnterpriseOnlyFields(t *testing.T) {
 		gw.Spec.Redis = &v1alpha1.RedisSpec{
 			ConnectionPool: v1alpha1.RedisConnectionPool{Addresses: []string{"redis:6379"}},
 		}
+		gw.Spec.Config.Documentation = &v1alpha1.DocumentationConfig{Version: "1.0"}
 		return gw
 	}
 	edited := func(gw *v1alpha1.KrakenDGateway) *v1alpha1.KrakenDGateway {
@@ -394,7 +395,7 @@ func TestGatewayAdmission_CERejectsEnterpriseOnlyFields(t *testing.T) {
 		gw.Spec.Edition = v1alpha1.EditionEE
 		return gw
 	}
-	all := []string{"spec.redis: Forbidden"}
+	all := []string{"spec.redis: Forbidden", "spec.config.documentation: Forbidden"}
 	tests := []struct {
 		name    string
 		gw, old *v1alpha1.KrakenDGateway
