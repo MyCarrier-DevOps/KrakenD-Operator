@@ -61,7 +61,8 @@ func validateEntries(ep *v1alpha1.KrakenDEndpoint, changed []int, gw *v1alpha1.K
 		}
 		if e.Endpoint == "/*" {
 			errs = append(errs, field.Invalid(p.Child("endpoint"), e.Endpoint,
-				"a root wildcard (/*) is not accepted by KrakenD in any edition; use /prefix/* on an Enterprise gateway"))
+				"a root wildcard (/*) is not accepted by KrakenD in any edition; "+
+					"use /prefix/* on an Enterprise gateway"))
 		}
 		if gw.Spec.Edition == v1alpha1.EditionCE && renderer.IsEEWildcard(e.Endpoint) {
 			errs = append(errs, field.Invalid(p.Child("endpoint"), e.Endpoint,
