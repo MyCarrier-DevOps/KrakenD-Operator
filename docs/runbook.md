@@ -444,9 +444,12 @@ the offending entry; a finding about another endpoint or the gateway root is on
 
 **Resolution:** Fix the entry the cause names. If the denial blames another
 endpoint, fix or remove that endpoint's clashing route; your change is only the
-trigger. A gateway that already fails because of another object does not block
-the write: the change is judged with the gateway root alone and admitted with a
-warning `gateway <ns>/<name> already fails validation without this change`.
+trigger. A gateway that already fails without the change (because of another
+object, or of the endpoint's own stored version) does not block the write: the
+change is judged with the gateway root alone and admitted with a warning
+`gateway <ns>/<name> already fails validation without this change`, unless the
+candidate fails there when its stored version did not (for a create or a move,
+the baseline is the root by itself).
 Fix the object the warning names, because until then the controller keeps the
 gateway at its last-known-good config.
 
@@ -529,9 +532,10 @@ enforced by the default CUE definitions at sync time, surfacing as
 
 A `KrakenDEndpoint` gets the same message on `spec.endpoints[i].extraConfig`
 when an added or changed entry carries a malformed audience, on CE and EE
-gateways alike; set it to a list of strings. Every other finding on an entry
-is reported by the gateway-wide check, as in *Admission rejects an endpoint
-with a krakend finding*.
+gateways alike; set it to a list of strings. What `krakend check` finds in an
+entry is reported by the gateway-wide check, as in *Admission rejects an
+endpoint with a krakend finding*; the entry rules and the duplicate-route
+check report their own causes.
 
 ### Forcing an immediate AutoConfig reconcile
 
