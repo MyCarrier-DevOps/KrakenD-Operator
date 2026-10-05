@@ -4861,3 +4861,21 @@ func TestAutoConfigReconcile_PrecheckHoldsWhatTheRoundsLeftUnchecked(t *testing.
 		}
 	}
 }
+
+func TestAutoConfigReconcile_SteadyStateRunsNoCheck(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	current := ownedCopy(t, ac, g.output.Endpoints[0])
+	c := fakeClientBuilder().WithObjects(ac, cm, current, testGateway()).WithStatusSubresource(ac).Build()
+	checker := &fakeChecker{}
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Checker = checker
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(checker.calls) != 0 {
+		t.Errorf("expected no config check without writes, got %d", len(checker.calls))
+	}
+}
