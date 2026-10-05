@@ -393,18 +393,31 @@ func TestGatewayReconcile_TerminatingGatewayIsLeftAlone(t *testing.T) {
 }
 
 func TestGatewayReconcile_DeletedGatewayDropsItsMetrics(t *testing.T) {
-	setGatewaySeries("deleted", "gone-gw")
-	t.Cleanup(func() { deleteGatewayMetrics("deleted", "gone-gw") })
-	r := &KrakenDGatewayReconciler{
-		Client: fakeClientBuilder().Build(), Scheme: testScheme(), Recorder: fakeRecorder(),
-		Renderer: &mockRenderer{}, Validator: &mockValidator{},
-	}
-	gone := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "gone-gw", Namespace: "deleted"}}
+	gw, secret, parser := licensedEEGateway(testNow.Add(90*24*time.Hour), false)
+	gw.Namespace = "deleted"
+	secret.Namespace = gw.Namespace
+	gw.Spec.Dragonfly = &v1alpha1.DragonflySpec{Enabled: true}
+	c := fakeClientBuilder().WithObjects(gw, secret).WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderOutput("cs"), &mockValidator{})
+	r.LicenseParser = parser
+	t.Cleanup(func() { deleteGatewayMetrics(gw.Namespace, gw.Name) })
 
-	if err := reconcileGateway(t, r, gone); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
 	}
-	if n := gatewaySeriesCount(t, "deleted", "gone-gw"); n != 0 {
+	// endpoints, info, config_valid, license expiry, dragonfly_ready and the
+	// reconcile duration: a floor, so a fixture that skips a path cannot pass.
+	if n := gatewaySeriesCount(t, gw.Namespace, gw.Name); n < 6 {
+		t.Fatalf("a live gateway has %d metric series, want at least 6", n)
+	}
+
+	if err := c.Delete(context.Background(), gw); err != nil {
+		t.Fatal(err)
+	}
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile after delete: %v", err)
+	}
+	if n := gatewaySeriesCount(t, gw.Namespace, gw.Name); n != 0 {
 		t.Errorf("%d metric series left for a deleted gateway, want 0", n)
 	}
 }
