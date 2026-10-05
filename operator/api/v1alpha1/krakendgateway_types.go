@@ -187,6 +187,7 @@ type OpenAPIExportSpec struct {
 // PostRestartJobSpec configures a Kubernetes Job that runs a user-provided
 // bash script once per unique config + postRestartJob-spec revision (see
 // internal/resources.PostRestartJobChecksum).
+// +kubebuilder:validation:XValidation:rule="!self.enabled || (has(self.script) && size(self.script) > 0)",message="script is required when postRestartJob is enabled",fieldPath=".script"
 type PostRestartJobSpec struct {
 	// Enabled toggles post-restart Job creation.
 	Enabled bool `json:"enabled"`
