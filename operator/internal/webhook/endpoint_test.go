@@ -19,6 +19,7 @@ package webhook
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -639,5 +640,31 @@ func TestEndpointAdmission_RuleViolationsSkipTheRenderCheck(t *testing.T) {
 				t.Errorf("checks = %v, want none", chk.calls)
 			}
 		})
+	}
+}
+
+// Findings on one entry of the candidate make one cause, cut to the warning
+// limit, however many there are and however long they are.
+func TestEndpointAdmission_ManyFindingsOnOneEntryMakeOneBoundedCause(t *testing.T) {
+	var findings []configcheck.Finding
+	for i := 0; i < 100; i++ {
+		findings = append(findings, configcheck.Finding{
+			Endpoint: types.NamespacedName{Namespace: "default", Name: "new"}, Index: 0,
+			Message: fmt.Sprintf("finding %d %s", i, strings.Repeat("é", 100)),
+		})
+	}
+	v := &EndpointValidator{Client: fakeClient(testGateway()), Checker: &scriptedChecker{
+		verdicts: []configcheck.Verdict{{Findings: findings}},
+	}}
+
+	resp := review(t, v, "alice", testEndpoint("new", "/a"), nil)
+
+	if resp.Allowed || resp.Result.Details == nil || len(resp.Result.Details.Causes) != 1 {
+		t.Fatalf("response = %+v, want a denial with one cause", resp.Result)
+	}
+	c := resp.Result.Details.Causes[0]
+	if c.Field != "spec.endpoints[0]" || len(c.Message) > 200+warningLimit || !utf8.ValidString(c.Message) {
+		t.Errorf("cause on %s is %d bytes (valid UTF-8: %v), want one on spec.endpoints[0] of at most %d bytes",
+			c.Field, len(c.Message), utf8.ValidString(c.Message), warningLimit)
 	}
 }
