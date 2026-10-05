@@ -20,3 +20,4 @@ KrakenDGateway a/timeout-pattern: spec.config.timeout 3 seconds
 KrakenDGateway a/cachettl-long: spec.config.cacheTTL is longer than 64 characters
 KrakenDGateway a/dnscachettl-overflow: spec.config.dnsCacheTTL 99999999999s does not fit in 64 bits of nanoseconds
 KrakenDGateway a/cors-maxage: spec.config.cors.maxAge 12h0m
+KrakenDGateway a/port-range: spec.config.port 70000
