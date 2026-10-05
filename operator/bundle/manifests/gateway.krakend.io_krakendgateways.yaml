@@ -1746,6 +1746,7 @@ spec:
                           - claimName
                           type: object
                       type: object
+                    maxItems: 32
                     type: array
                 required:
                 - sources
