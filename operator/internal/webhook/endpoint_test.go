@@ -38,6 +38,7 @@ import (
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
+	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 )
 
 func testGateway() *v1alpha1.KrakenDGateway {
@@ -1056,5 +1057,13 @@ func TestEndpointAdmission_ControllerUIDFromAnotherNamespaceDoesNotShareARoute(t
 	}
 	if resp := review(t, v, "alice", owned("sibling", "default"), nil); !resp.Allowed {
 		t.Errorf("a sibling of the same controller in its namespace denied: %+v", resp.Result)
+	}
+}
+
+// The route check reports one refusal more than a denial lists as causes, so
+// the denial can say that more exist.
+func TestRouteCheckRefusalLimitExceedsTheListedCausesByOne(t *testing.T) {
+	if renderer.MaxRouteRefusals != maxEntryCauses+1 {
+		t.Errorf("renderer.MaxRouteRefusals = %d, want maxEntryCauses+1 = %d", renderer.MaxRouteRefusals, maxEntryCauses+1)
 	}
 }
