@@ -33,6 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 	"github.com/mycarrier-devops/krakend-operator/internal/resources"
 )
 
@@ -202,42 +203,38 @@ func TestGatewayReconcile_ObservedGenerationCatchesUpOnceTheErrorClears(t *testi
 
 func TestGatewayReconcile_AVerdictOnThisGenerationDoesNotHoldObservedGenerationBack(t *testing.T) {
 	cases := []struct {
-		name  string
-		setup func(gw *v1alpha1.KrakenDGateway, r *KrakenDGatewayReconciler) []client.Object
+		name string
+		// setup shapes gw and returns what renders it and validates the render.
+		setup func(gw *v1alpha1.KrakenDGateway) (renderer.Renderer, renderer.Validator)
 	}{
 		{
 			name: "rejected render with the applied config's ConfigMap missing",
-			setup: func(gw *v1alpha1.KrakenDGateway, r *KrakenDGatewayReconciler) []client.Object {
-				r.Renderer = renderOutput("B")
-				r.Validator = &countingValidator{err: rejectedBy("- at '/endpoints/0/endpoint': bad")}
-				return nil
+			setup: func(*v1alpha1.KrakenDGateway) (renderer.Renderer, renderer.Validator) {
+				return renderOutput("B"), &countingValidator{err: rejectedBy("- at '/endpoints/0/endpoint': bad")}
 			},
 		},
 		{
 			name: "validator unavailable",
-			setup: func(gw *v1alpha1.KrakenDGateway, r *KrakenDGatewayReconciler) []client.Object {
-				r.Renderer = renderOutput("B")
-				r.Validator = &countingValidator{err: errors.New("fork/exec krakend: no such file or directory")}
-				return nil
+			setup: func(*v1alpha1.KrakenDGateway) (renderer.Renderer, renderer.Validator) {
+				return renderOutput("B"), &countingValidator{err: errors.New("fork/exec krakend: no such file or directory")}
 			},
 		},
 		{
 			name: "plugin ConfigMap missing",
-			setup: func(gw *v1alpha1.KrakenDGateway, r *KrakenDGatewayReconciler) []client.Object {
+			setup: func(gw *v1alpha1.KrakenDGateway) (renderer.Renderer, renderer.Validator) {
 				gw.Spec.Plugins = &v1alpha1.PluginsSpec{Sources: []v1alpha1.PluginSource{
 					{ConfigMapRef: &v1alpha1.ConfigMapKeyRef{Name: "plugins-a", Key: "auth.so"}},
 				}}
-				return nil
+				return renderOutput("A"), &mockValidator{}
 			},
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			gw := newerSpecGateway()
-			r := newTestGatewayReconciler(nil, renderOutput("A"), &mockValidator{})
-			tc.setup(gw, r)
+			rend, val := tc.setup(gw)
 			c := fakeClientBuilder().WithObjects(gw, settledDeployment(gw, "A")).WithStatusSubresource(gw).Build()
-			r.Client, r.APIReader = c, c
+			r := newTestGatewayReconciler(c, rend, val)
 
 			_ = reconcileGateway(t, r, gw) // the unavailable validator fails the pass; the others do not
 
