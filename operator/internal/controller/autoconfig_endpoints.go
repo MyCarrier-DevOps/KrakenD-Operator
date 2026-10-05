@@ -76,14 +76,14 @@ func (r *KrakenDAutoConfigReconciler) claimEndpoints(
 			continue
 		}
 		if err := controllerutil.SetControllerReference(ac, orphan, r.Scheme); err != nil {
-			outcome.record(fmt.Errorf("adopting endpoint %s: %w", orphan.Name, err))
+			outcome.record(orphan, fmt.Errorf("adopting endpoint %s: %w", orphan.Name, err))
 			continue
 		}
 		if err := r.Update(ctx, orphan); apierrors.IsNotFound(err) {
 			// Deleted since the list: nothing left to adopt.
 			continue
 		} else if err != nil {
-			outcome.record(fmt.Errorf("adopting endpoint %s: %w", orphan.Name, err))
+			outcome.record(orphan, fmt.Errorf("adopting endpoint %s: %w", orphan.Name, err))
 			continue
 		}
 		controlled = append(controlled, *orphan)
@@ -174,6 +174,12 @@ func (r *KrakenDAutoConfigReconciler) writeEndpoint(
 	return op, nil
 }
 
+// rejection is why an endpoint was not written.
+type rejection struct {
+	endpoint        *v1alpha1.KrakenDEndpoint
+	reason, message string
+}
+
 // endpointOutcome is what one reconcileEndpoints call did and could not do.
 type endpointOutcome struct {
 	changes endpointChanges
@@ -183,21 +189,29 @@ type endpointOutcome struct {
 	// raced holds Conflict and AlreadyExists write errors: this reconcile
 	// acted on a stale cache and loses nothing by retrying soon.
 	raced []error
+	// rejected holds the endpoints left unwritten for a persistent reason,
+	// keyed by name: the API server rejected them as invalid. Their existing
+	// endpoints are held.
+	rejected map[string]rejection
 }
 
 // failed reports whether any claim or write failed.
 func (o *endpointOutcome) failed() bool {
-	return len(o.transient) > 0 || len(o.raced) > 0
+	return len(o.transient) > 0 || len(o.raced) > 0 || len(o.rejected) > 0
 }
 
-// record classifies a failed claim or write: a Conflict or AlreadyExists
-// lost a race; anything else is retried with backoff.
-func (o *endpointOutcome) record(err error) {
-	if apierrors.IsConflict(err) || apierrors.IsAlreadyExists(err) {
+// record classifies a failed claim or write of ep: a Conflict or
+// AlreadyExists lost a race, an Invalid rejection is persistent, and anything
+// else is retried with backoff.
+func (o *endpointOutcome) record(ep *v1alpha1.KrakenDEndpoint, err error) {
+	switch {
+	case apierrors.IsConflict(err) || apierrors.IsAlreadyExists(err):
 		o.raced = append(o.raced, err)
-		return
+	case apierrors.IsInvalid(err):
+		o.rejected[ep.Name] = rejection{endpoint: ep, reason: v1alpha1.ReasonEndpointRejected, message: err.Error()}
+	default:
+		o.transient = append(o.transient, err)
 	}
-	o.transient = append(o.transient, err)
 }
 
 // endpointFailuresError is every failure of one endpoint pass. Error is the whole

@@ -92,6 +92,26 @@ func sortOperationStatuses(s []v1alpha1.OperationStatus) {
 	})
 }
 
+// rejectedStatuses converts rejected endpoint writes to status entries,
+// naming each operation by its endpoint's single entry and opIDs (keyed by
+// "path:METHOD").
+func rejectedStatuses(rejected map[string]rejection, opIDs map[string]string) []v1alpha1.OperationStatus {
+	out := make([]v1alpha1.OperationStatus, 0, len(rejected))
+	for _, name := range slices.Sorted(maps.Keys(rejected)) {
+		rej := rejected[name]
+		s := v1alpha1.OperationStatus{
+			Endpoint: name, Reason: rej.reason, Message: configcheck.TruncateEllipsis(rej.message, maxStatusMessageLen),
+		}
+		if entries := rej.endpoint.Spec.Endpoints; len(entries) > 0 {
+			s.Method, s.Path = entries[0].Method, entries[0].Endpoint
+			s.OperationID = opIDs[s.Path+":"+s.Method]
+		}
+		out = append(out, s)
+	}
+	sortOperationStatuses(out)
+	return out
+}
+
 // capList returns at most maxStatusListLen items of s.
 func capList[T any](s []T) []T {
 	if len(s) > maxStatusListLen {

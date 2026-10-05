@@ -291,6 +291,7 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		checksum:  combinedChecksum,
 		generated: len(genOutput.Endpoints),
 		skipped:   operationStatuses(skippedOps),
+		failed:    rejectedStatuses(outcome.rejected, cueOutput.OperationIDs),
 		warnings:  specWarnings(specNotes),
 		changes:   outcome.changes,
 	}, warnings); err != nil {
@@ -748,6 +749,8 @@ type syncResult struct {
 	generated int
 	// skipped lists the operations the pass generated no endpoint for.
 	skipped []v1alpha1.OperationStatus
+	// failed lists the operations the pass could not converge.
+	failed []v1alpha1.OperationStatus
 	// warnings lists every distinct problem that does not stop a sync; the
 	// status lists the first maxStatusListLen.
 	warnings []string
@@ -779,6 +782,7 @@ func (r *KrakenDAutoConfigReconciler) recordSync(
 	ac.Status.GeneratedEndpoints = res.generated
 	ac.Status.SkippedOperations = len(res.skipped)
 	ac.Status.Skipped = capList(res.skipped)
+	ac.Status.FailedOperations = capList(res.failed)
 	ac.Status.Warnings = capList(res.warnings)
 	meta.SetStatusCondition(&ac.Status.Conditions, syncedCondition(res, ac.Generation))
 	setAutoConfigReadiness(ac)
@@ -824,6 +828,7 @@ func autoConfigStatusChanged(orig, cur *v1alpha1.KrakenDAutoConfigStatus) bool {
 		orig.GeneratedEndpoints != cur.GeneratedEndpoints ||
 		orig.SkippedOperations != cur.SkippedOperations ||
 		!slices.Equal(orig.Skipped, cur.Skipped) ||
+		!slices.Equal(orig.FailedOperations, cur.FailedOperations) ||
 		!slices.Equal(orig.Warnings, cur.Warnings) ||
 		!orig.LastSyncTime.Equal(cur.LastSyncTime) ||
 		!conditionsEqual(orig.Conditions, cur.Conditions)
@@ -839,7 +844,7 @@ func (r *KrakenDAutoConfigReconciler) reconcileEndpoints(
 	ac *v1alpha1.KrakenDAutoConfig,
 	desired []*v1alpha1.KrakenDEndpoint,
 ) (endpointOutcome, error) {
-	var outcome endpointOutcome
+	outcome := endpointOutcome{rejected: map[string]rejection{}}
 	controlled, err := r.claimEndpoints(ctx, ac, desired, &outcome)
 	if err != nil {
 		return outcome, err
@@ -848,7 +853,7 @@ func (r *KrakenDAutoConfigReconciler) reconcileEndpoints(
 	for _, ep := range writes {
 		op, err := r.writeEndpoint(ctx, ac, ep)
 		if err != nil {
-			outcome.record(err)
+			outcome.record(ep, err)
 			continue
 		}
 		outcome.changes.count(op)
@@ -860,7 +865,7 @@ func (r *KrakenDAutoConfigReconciler) reconcileEndpoints(
 	for i := range stale {
 		deleted, err := r.deleteEndpoint(ctx, &stale[i])
 		if err != nil {
-			outcome.record(err)
+			outcome.record(&stale[i], err)
 			continue
 		}
 		if deleted {
