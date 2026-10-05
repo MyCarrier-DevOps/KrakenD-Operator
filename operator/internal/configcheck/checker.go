@@ -87,13 +87,20 @@ func (c *Checker) gather(ctx context.Context, gw *v1alpha1.KrakenDGateway, repla
 }
 
 // substitute returns current with each replace entry in place of the endpoint
-// with the same namespace/name, or appended when there is none.
+// with the same namespace/name, or appended when there is none. A replace
+// entry without entries removes that endpoint: it stands for a deletion.
 func substitute(current, replace []v1alpha1.KrakenDEndpoint) []v1alpha1.KrakenDEndpoint {
 	out := slices.Clone(current)
 	for _, r := range replace {
 		i := slices.IndexFunc(out, func(e v1alpha1.KrakenDEndpoint) bool {
 			return e.Namespace == r.Namespace && e.Name == r.Name
 		})
+		if len(r.Spec.Endpoints) == 0 {
+			if i >= 0 {
+				out = slices.Delete(out, i, i+1)
+			}
+			continue
+		}
 		if i >= 0 {
 			out[i] = r
 		} else {
