@@ -32,8 +32,18 @@ func checkGatewayRender(
 	ctx context.Context, chk ConfigChecker, old, gw *v1alpha1.KrakenDGateway,
 ) (admission.Warnings, error) {
 	if old != nil {
-		_, err := chk.CheckGateway(ctx, gw, nil)
-		return nil, checkErr(err)
+		after, err := chk.CheckGateway(ctx, gw, nil)
+		if err != nil || after.OK {
+			return nil, checkErr(err)
+		}
+		before, err := chk.CheckGateway(ctx, old, nil)
+		if err != nil {
+			return nil, checkErr(err)
+		}
+		if before.OK {
+			return nil, gatewayRenderDenial(gw, after)
+		}
+		return nil, nil
 	}
 	root, err := chk.CheckIsolated(ctx, gw, nil)
 	if err != nil || root.OK {
