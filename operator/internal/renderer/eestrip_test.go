@@ -458,6 +458,8 @@ func TestCEDrop_String(t *testing.T) {
 		want string
 	}{
 		"a whole namespace": {CEDrop{Namespace: "auth/api-keys"}, "auth/api-keys"},
+		"dropped keys": {CEDrop{Namespace: "backend/http/client", Keys: []string{"client_tls", "proxy_address"}},
+			"backend/http/client (client_tls, proxy_address)"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if got := tc.drop.String(); got != tc.want {
