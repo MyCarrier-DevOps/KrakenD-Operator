@@ -65,10 +65,14 @@ func (c *Checker) lint(ctx context.Context, in renderer.RenderInput) (Verdict, e
 	return c.check(ctx, in, out, c.validator.Lint)
 }
 
-// check runs validate on out as the edition in is for.
+// check runs validate on out as the edition in is for, holding a slot.
 func (c *Checker) check(ctx context.Context, in renderer.RenderInput, out *renderer.RenderOutput,
 	validate func(context.Context, []byte, v1alpha1.Edition) error) (Verdict, error) {
+	if err := c.acquire(ctx); err != nil {
+		return Verdict{}, err
+	}
 	err := validate(ctx, out.JSON, renderer.EditionFor(in.Gateway, in.CEFallback))
+	<-c.slots
 	var invalid *renderer.ValidationError
 	if errors.As(err, &invalid) {
 		atts := renderer.Attribute(out.JSON, out.Sources, invalid.Output)
@@ -78,6 +82,16 @@ func (c *Checker) check(ctx context.Context, in renderer.RenderInput, out *rende
 		return Verdict{}, err
 	}
 	return Verdict{OK: true}, nil
+}
+
+// acquire takes a validation slot, giving up when ctx ends.
+func (c *Checker) acquire(ctx context.Context) error {
+	select {
+	case c.slots <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("waiting for a validation slot: %w", ctx.Err())
+	}
 }
 
 // gather lists gw's endpoints and applies replace.
