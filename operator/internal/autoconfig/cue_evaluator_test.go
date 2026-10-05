@@ -877,6 +877,19 @@ func TestApplyFieldOverrides_OperationIDSharedWithFailedOperationIsAmbiguous(t *
 	}
 }
 
+func TestApplyFieldOverrides_BackendOverrideOnFailedOperationIsHeldNotUnmatched(t *testing.T) {
+	out := testOutputWithEntries()
+	out.Failed = []OperationIssue{{Operation: Operation{Method: "GET", Path: "/v2/users", OperationID: "getUser"}}}
+	ec := &runtime.RawExtension{Raw: []byte(`{"backend/http":{"return_error_code":true}}`)}
+	applyFieldOverrides(out, []v1alpha1.OperationOverride{{
+		OperationID: "getUser",
+		Backends:    []v1alpha1.BackendOverride{{Index: 0, ExtraConfig: ec}, {Index: 7, ExtraConfig: ec}},
+	}})
+	if len(out.UnmatchedOverrides) != 0 {
+		t.Errorf("UnmatchedOverrides = %v, want none for a failed target", out.UnmatchedOverrides)
+	}
+}
+
 func TestApplyFieldOverrides_NonExistentOperationID(t *testing.T) {
 	out := testOutputWithEntries()
 	timeout := metav1.Duration{Duration: 30 * time.Second}
