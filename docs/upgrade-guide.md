@@ -406,7 +406,8 @@ config, and retries with exponential backoff. Previously such failures were
 reported as an invalid config (and re-run in a status-write loop).
 
 `config_validation_failures_total` counts only a fresh verdict from the
-validator (`krakend check`, or the EE wildcard rules applied before it). Failures to prepare the validation copy and other errors that are not
+validator (`krakend check`, or the EE wildcard rules applied before it).
+Failures to prepare the validation copy and other errors that are not
 verdicts, such as an unavailable validator, do not increment it.
 
 ### Validation messages are capped at 4 KiB
@@ -513,7 +514,7 @@ To remove a duplicate, delete the extra entry from the object's status by its
 index in `status.conditions`:
 
 ```bash
-kubectl patch <kind>/<name> --subresource=status --type=json \
+kubectl patch <kind>/<name> -n <ns> --subresource=status --type=json \
   -p '[{"op":"remove","path":"/status/conditions/<index>"}]'
 ```
 
@@ -535,26 +536,29 @@ kubectl patch <kind>/<name> --subresource=status --type=json \
 - `Accepted` is written only for a configuration that passed validation, or
   is unchanged since it did, and records the endpoint generation that
   configuration contains. While a gateway's rendered configuration fails
-  validation, no verdict changes.
+  validation, no verdict changes, except that an endpoint a finding names
+  gets `Accepted=False` with reason `GatewayConfigRejected` (see "A rejected
+  config names the endpoints at fault").
 - The `EndpointConflict` Warning event fires once per transition instead of
   on every gateway reconcile. A `Normal` `Accepted` event marks a conflict
   that cleared. A `PartiallyAccepted` endpoint gets its own Warning
-  (`PartiallyAccepted`) when it becomes partly conflicted. The `EndpointInvalid` event is gone.
+  (`PartiallyAccepted`) when it becomes partly conflicted. The
+  `EndpointInvalid` event is gone.
 
 ### KrakenDEndpoint: `ResolvedRefs`, `Ready` and `phase` (endpoint controller)
 
 | Condition | Written by | True when | Reasons |
 |---|---|---|---|
 | `ResolvedRefs` | endpoint controller | the gateway and every referenced policy exist | `RefsResolved`, `GatewayNotFound`, `PolicyNotFound` |
-| `Accepted` | gateway controller | the endpoint is in the gateway's validated configuration | `Accepted`, `PartiallyAccepted`, `EndpointConflict` |
+| `Accepted` | gateway controller | the endpoint is in the gateway's validated configuration | `Accepted`, `PartiallyAccepted`, `EndpointConflict`, `GatewayConfigRejected`, `EEFeaturesStripped` |
 | `Ready` | endpoint controller | both are True, `Accepted` for the current generation | `Ready`, `Pending`, or the failing condition's reason; `SchemaNameConflict` (docs only) keeps it True |
 
 - The `Available` condition is removed. On its first reconcile after the
   upgrade, the endpoint controller drops it and writes `ResolvedRefs` and
   `Ready`. Replace alerts or health checks on `Available` with `Ready`.
 - `phase` is derived from `Ready`: `True` → `Active`; `Unknown` → `Pending`;
-  `GatewayNotFound` → `Detached`; `EndpointConflict` and `PartiallyAccepted` → `Conflicted`; any
-  other `False` reason → `Invalid`. This ends the flip-flop in which a
+  `GatewayNotFound` → `Detached`; `EndpointConflict` and `PartiallyAccepted` →
+  `Conflicted`; any other `False` reason → `Invalid`. This ends the flip-flop in which a
   conflicted endpoint alternated between `Conflicted` and `Active`.
 - `Ready=Unknown` with reason `Pending` ("Waiting for the gateway to accept
   generation N") means the gateway has not yet accepted this generation. That
@@ -570,8 +574,11 @@ kubectl patch <kind>/<name> --subresource=status --type=json \
 
 - New `Ready` condition. The first matching rule gives its value:
   `ConfigValid=False` (its reason), license expired without CE fallback
-  (`LicenseExpiredNoFallback`), `Available=False` (e.g. `RolloutFailed`),
-  CE fallback (`LicenseFallbackCE`), no configuration validated yet
+  (`LicenseExpiredNoFallback`), a missing plugin ConfigMap
+  (`PluginsResolved=False`, `ConfigMapNotFound`), `Available=False` (e.g.
+  `RolloutFailed`), CE fallback (`EEFeaturesStripped` while the applied
+  config is the fallback render, otherwise `LicenseFallbackCE`), no
+  configuration validated yet
   (`Unknown`/`Pending`), a configuration that could not be validated
   because the validator was unavailable (`Unknown`/`ValidatorUnavailable`;
   the phase stays at the serving phase: `Pending` before any rollout,
@@ -590,11 +597,14 @@ kubectl patch <kind>/<name> --subresource=status --type=json \
   Deployment has observed the change and every replica is updated and
   available, and goes `False` (phase `Error`) when the Deployment loses
   availability after a rollout finished, e.g. all replicas crash-looping.
+  The Deployment rolls with `maxUnavailable: 0`, so any unavailable replica
+  outside a rollout (an HPA scale-up, a pod eviction) also gives a brief
+  `Ready=False` with phase `Error`, until the replica is available again.
 - `status.observedGeneration` advances on every reconcile that evaluated the
   spec, including a rejected configuration.
-- The license check no longer writes `phase`; the gateway controller derives
-  it, together with `Ready`, from the `License*` conditions (see "License
-  checks run inside the gateway reconcile").
+- The gateway controller is the only writer of gateway status; license
+  evaluation runs inside its reconcile (see *License checks run inside the
+  gateway reconcile*).
 
 ### KrakenDAutoConfig
 
@@ -655,10 +665,14 @@ so a deleted Deployment stayed deleted. Reconciliation now has two stages:
 - **Infrastructure stage:** always runs and deploys the applied config. A
   rejected or unjudged render changes nothing the pods see. Every other spec
   change (replicas, image, resources, probes) and drift correction proceed
-  as usual.
+  as usual. The Deployment is left as it is in two cases only: no ConfigMap
+  holds the applied config (it was deleted while a newer render is
+  rejected), and a plugin ConfigMap is missing.
 
 Until a first config has passed validation, the Deployment is not created.
-The ServiceAccount, Service and PDB are.
+The ServiceAccount, Service and PDB are, and so are the HPA, Dragonfly,
+ExternalSecret and VirtualService when the gateway configures them. An HPA
+reports `FailedGetScale` until the Deployment exists.
 
 While the validator cannot run (`ConfigValid=Unknown/ValidatorUnavailable`),
 a gateway that is otherwise healthy reports `Ready=Unknown` with the same
@@ -678,16 +692,19 @@ every replica runs the applied config, image, plugins and license.
 **One-time rollout on upgrade.** The pod template gains a `krakend.io/image`
 annotation, which records the image the operator set (the operator compares
 it rather than the container image, which admission webhooks may rewrite).
-Existing gateways roll their pods once when the operator is upgraded.
+Existing gateways roll their pods once when the operator is upgraded, and
+every existing gateway reports `Ready` not `True` until that roll completes.
 
 ### Gateway events fire on transitions only
 
-`RolloutFailed`, `IstioVirtualServiceCreated` and `DragonflyNotReady` are now
-recorded once, when the condition behind them changes, instead of on every
-reconcile. `IstioVirtualServiceCreated` is recorded when `IstioConfigured`
-becomes True after being False, not when the VirtualService is first
-created. Alerts that counted these events per interval see one event per
-transition.
+`RolloutFailed` and `IstioVirtualServiceCreated` are now recorded once, when
+the condition behind them changes, instead of on every reconcile.
+`IstioVirtualServiceCreated` is recorded when `IstioConfigured` becomes True
+after being False, not when the VirtualService is first created. Alerts that
+counted these events per interval see one event per transition.
+`DragonflyNotReady` was already recorded on transitions only. Its message is
+now the condition's (`Dragonfly phase: <phase>`, or `Dragonfly CR not yet
+created`), and a `DragonflyReady` Normal event marks the recovery.
 
 ### Config ConfigMaps are immutable and content-addressed
 
@@ -723,9 +740,9 @@ mount it. The operator keeps:
   still has or wants pods.
 
 The old `<gateway>` ConfigMap never counts toward the three. Rolling a
-gateway back means reverting its CRs. `kubectl rollout undo` to an old ReplicaSet is not
-supported: the operator restores its own pod template, and the undone
-revision's ConfigMap may already be gone.
+gateway back means reverting its CRs. `kubectl rollout undo` to an old
+ReplicaSet is not supported: the operator restores its own pod template, and
+the undone revision's ConfigMap may already be gone.
 
 **RBAC:** the operator's ClusterRole gains `list` on `apps/replicasets`. The
 Helm chart ships it. If you maintain your own copy of the role, add it.
