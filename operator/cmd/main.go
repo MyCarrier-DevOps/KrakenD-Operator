@@ -38,11 +38,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	gatewayv1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
-	"github.com/mycarrier-devops/krakend-operator/internal/autoconfig"
 	"github.com/mycarrier-devops/krakend-operator/internal/controller"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 	webhooksetup "github.com/mycarrier-devops/krakend-operator/internal/webhook"
-	"k8s.io/utils/clock"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -231,7 +229,8 @@ func main() {
 	})
 
 	// One checker for the whole pod: its slots bound concurrent krakend
-	// executions across the gateway controller and the admission webhooks.
+	// executions across the gateway controller, the AutoConfig controller and
+	// the admission webhooks.
 	wired := wireValidation(mgr, krakendRenderer, krakendValidator, operatorUsername)
 	if enableWebhooks && operatorUsername == "" {
 		setupLog.Info("no operator username: every KrakenDEndpoint write gets the admission render check")
@@ -261,16 +260,7 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "KrakenDBackendPolicy")
 		os.Exit(1)
 	}
-	if err := (&controller.KrakenDAutoConfigReconciler{
-		Client:       mgr.GetClient(),
-		Scheme:       mgr.GetScheme(),
-		Recorder:     mgr.GetEventRecorderFor("krakendautoconfig-controller"),
-		Fetcher:      autoconfig.NewFetcher(mgr.GetClient()),
-		CUEEvaluator: autoconfig.NewCUEEvaluator(),
-		Filter:       autoconfig.NewFilter(),
-		Generator:    autoconfig.NewGenerator(),
-		Clock:        clock.RealClock{},
-	}).SetupWithManager(mgr); err != nil {
+	if err := wired.AutoConfig.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "KrakenDAutoConfig")
 		os.Exit(1)
 	}
