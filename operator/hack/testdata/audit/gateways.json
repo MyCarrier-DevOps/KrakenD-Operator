@@ -4,5 +4,6 @@
  {"metadata":{"namespace":"a","name":"dnscachettl-overflow"},"spec":{"edition":"CE","config":{"dnsCacheTTL":"99999999999s"}}},
  {"metadata":{"namespace":"a","name":"cors-maxage"},"spec":{"edition":"CE","config":{"cors":{"maxAge":"12h0m"}}}},
  {"metadata":{"namespace":"a","name":"port-range"},"spec":{"edition":"CE","config":{"port":70000}}},
- {"metadata":{"namespace":"a","name":"output-encoding"},"spec":{"edition":"CE","config":{"outputEncoding":"jsn"}}}
+ {"metadata":{"namespace":"a","name":"output-encoding"},"spec":{"edition":"CE","config":{"outputEncoding":"jsn"}}},
+ {"metadata":{"namespace":"a","name":"health-path"},"spec":{"edition":"CE","config":{"router":{"healthPath":"h"}}}}
 ]}
