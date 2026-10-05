@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
@@ -609,7 +610,8 @@ func TestPolicyReconcile_TerminatingPolicyIsHeldUntilUnreferenced(t *testing.T) 
 	}}
 	ref := referencingEndpoint("uses-p", "p")
 	c := fakeClientBuilder().WithObjects(policy, ref).WithStatusSubresource(policy).Build()
-	r := &KrakenDBackendPolicyReconciler{Client: c, APIReader: c, Scheme: testScheme(), Recorder: fakeRecorder()}
+	rec := fakeRecorder()
+	r := &KrakenDBackendPolicyReconciler{Client: c, APIReader: c, Scheme: testScheme(), Recorder: rec}
 	key := client.ObjectKeyFromObject(policy)
 	reconcile := func() {
 		t.Helper()
@@ -628,6 +630,14 @@ func TestPolicyReconcile_TerminatingPolicyIsHeldUntilUnreferenced(t *testing.T) 
 	}
 	if got.Status.ReferencedBy != 1 {
 		t.Errorf("referencedBy = %d, want 1 while terminating", got.Status.ReferencedBy)
+	}
+	select {
+	case ev := <-rec.Events:
+		if !strings.Contains(ev, "Warning "+v1alpha1.ReasonPolicyDeletionBlocked) || !strings.Contains(ev, "default/uses-p") {
+			t.Errorf("event = %q, want a %s warning naming default/uses-p", ev, v1alpha1.ReasonPolicyDeletionBlocked)
+		}
+	default:
+		t.Error("no event explains why the policy is still terminating")
 	}
 
 	if err := c.Delete(context.Background(), ref); err != nil {
