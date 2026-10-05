@@ -202,7 +202,8 @@ func (v *GatewayValidator) eeNamespacesInUse(ctx context.Context, gw *v1alpha1.K
 		ep := &eps.Items[i]
 		for j, e := range ep.Spec.Endpoints {
 			for _, fe := range validateEENamespaces(field.NewPath("spec", "endpoints").Index(j), e) {
-				uses = append(uses, fmt.Sprintf("KrakenDEndpoint %s/%s %s %v", ep.Namespace, ep.Name, fe.Field, fe.BadValue))
+				uses = append(uses, fmt.Sprintf("KrakenDEndpoint %s/%s %s %v",
+					ep.Namespace, ep.Name, fe.Field, fe.BadValue))
 			}
 			for _, be := range e.Backends {
 				if be.PolicyRef != nil {
