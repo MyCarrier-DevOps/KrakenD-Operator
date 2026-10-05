@@ -33,3 +33,9 @@ func invalid(kind, name string, errs field.ErrorList) error {
 	}
 	return apierrors.NewInvalid(schema.GroupKind{Group: v1alpha1.GroupVersion.Group, Kind: kind}, name, errs)
 }
+
+// unavailable is the admission error for a failed lookup or an unavailable
+// validator: 500, which clients retry.
+func unavailable(err error) error {
+	return apierrors.NewInternalError(err)
+}
