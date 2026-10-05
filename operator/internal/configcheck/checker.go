@@ -75,13 +75,7 @@ func (c *Checker) CheckRendered(ctx context.Context, in renderer.RenderInput,
 // spec.endpoints means that endpoint is removed: it renders nothing.
 func (c *Checker) CheckGateway(ctx context.Context, gw *v1alpha1.KrakenDGateway,
 	replace []v1alpha1.KrakenDEndpoint) (Verdict, error) {
-	// Nothing read here leaves the Checker and the renderer never mutates its
-	// inputs, so the cache's objects can be used without copying them.
-	in, err := c.gather(ctx, gw, replace, nil, client.UnsafeDisableDeepCopy)
-	if err != nil {
-		return Verdict{}, err
-	}
-	return c.lint(ctx, in)
+	return c.lintGathered(ctx, gw, replace, nil)
 }
 
 // CheckIsolated lints gw's root config with eps as its only endpoints.
@@ -102,11 +96,7 @@ func (c *Checker) CheckIsolated(ctx context.Context, gw *v1alpha1.KrakenDGateway
 // policy of the same namespace/name.
 func (c *Checker) CheckGatewayPolicy(ctx context.Context, gw *v1alpha1.KrakenDGateway,
 	policy *v1alpha1.KrakenDBackendPolicy) (Verdict, error) {
-	in, err := c.gather(ctx, gw, nil, policy, client.UnsafeDisableDeepCopy)
-	if err != nil {
-		return Verdict{}, err
-	}
-	return c.lint(ctx, in)
+	return c.lintGathered(ctx, gw, nil, policy)
 }
 
 // LintPolicy lints policy on its own: one synthetic endpoint on a default CE
@@ -142,6 +132,19 @@ func (c *Checker) LintPolicy(ctx context.Context, policy *v1alpha1.KrakenDBacken
 		verdict.Findings[i].Endpoint, verdict.Findings[i].Index = types.NamespacedName{}, -1
 	}
 	return verdict, err
+}
+
+// lintGathered lints what gather returns for gw, replace and override.
+func (c *Checker) lintGathered(ctx context.Context, gw *v1alpha1.KrakenDGateway,
+	replace []v1alpha1.KrakenDEndpoint, override *v1alpha1.KrakenDBackendPolicy) (Verdict, error) {
+	// Nothing read here leaves the Checker and the renderer never mutates its
+	// inputs, so the cache's objects, and the caller's override, can be used
+	// without copying them.
+	in, err := c.gather(ctx, gw, replace, override, client.UnsafeDisableDeepCopy)
+	if err != nil {
+		return Verdict{}, err
+	}
+	return c.lint(ctx, in)
 }
 
 func (c *Checker) lint(ctx context.Context, in renderer.RenderInput) (Verdict, error) {
