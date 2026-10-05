@@ -958,3 +958,66 @@ func TestEndpointAdmission_NewReferenceToAPolicyWithEEOnlyNamespacesOnACEGateway
 		t.Errorf("causes = %+v, want one on the backend's policyRef naming auth/gcp", causes)
 	}
 }
+
+// A move to a CE gateway puts every stored reference in front of that
+// gateway's rules, and an update that adds a reference is judged on that
+// reference alone: a stored one does not block an unrelated edit.
+func TestEndpointAdmission_PolicyEEOnlyNamespacesOnMovesNewReferencesAndStoredOnes(t *testing.T) {
+	policy := testPolicy(`{"auth/gcp":{"audience":"https://a"}}`)
+	clean := testPolicy(`{}`)
+	clean.Name = "clean"
+	other := testPolicy(`{"auth/gcp":{"audience":"https://b"}}`)
+	other.Name = "other"
+	ee := testGateway()
+	ee.Name = "ee"
+	ee.Spec.Edition = v1alpha1.EditionEE
+	old := testEndpoint("e", "/a")
+	old.Spec.GatewayRef.Name = "ee"
+	old.Spec.Endpoints[0].Backends[0].PolicyRef = &v1alpha1.PolicyRef{Name: "p"}
+	v := &EndpointValidator{Client: fakeClient(testGateway(), ee, policy, clean, old), Checker: &scriptedChecker{}}
+
+	t.Run("a move to a CE gateway", func(t *testing.T) {
+		moved := old.DeepCopy()
+		moved.Spec.GatewayRef.Name = "gw"
+		causes := requireInvalid(t, review(t, v, "alice", moved, old))
+		if len(causes) != 1 || causes[0].Field != "spec.endpoints[0].backends[0].policyRef" {
+			t.Errorf("causes = %+v, want one on the stored reference", causes)
+		}
+	})
+
+	stored := old.DeepCopy()
+	stored.Spec.GatewayRef.Name = "gw"
+	t.Run("a reference added beside a stored one", func(t *testing.T) {
+		added := stored.DeepCopy()
+		added.Spec.Endpoints = append(added.Spec.Endpoints, testEndpoint("x", "/b").Spec.Endpoints...)
+		added.Spec.Endpoints[1].Backends[0].PolicyRef = &v1alpha1.PolicyRef{Name: "other"}
+		v := &EndpointValidator{Client: fakeClient(testGateway(), policy, other, stored), Checker: &scriptedChecker{}}
+		causes := requireInvalid(t, review(t, v, "alice", added, stored))
+		if len(causes) != 1 || causes[0].Field != "spec.endpoints[1].backends[0].policyRef" {
+			t.Errorf("causes = %+v, want one on the new reference only", causes)
+		}
+	})
+	t.Run("a stored reference and an unrelated edit", func(t *testing.T) {
+		edited := stored.DeepCopy()
+		edited.Spec.Endpoints = append(edited.Spec.Endpoints, testEndpoint("x", "/b").Spec.Endpoints...)
+		v := &EndpointValidator{Client: fakeClient(testGateway(), policy, clean, stored), Checker: &scriptedChecker{}}
+		if resp := review(t, v, "alice", edited, stored); !resp.Allowed {
+			t.Errorf("denied: %+v", resp.Result)
+		}
+	})
+	t.Run("a policy with nothing Enterprise-only", func(t *testing.T) {
+		ep := testEndpoint("n", "/c")
+		ep.Spec.Endpoints[0].Backends[0].PolicyRef = &v1alpha1.PolicyRef{Name: "clean"}
+		if resp := review(t, v, "alice", ep, nil); !resp.Allowed {
+			t.Errorf("denied: %+v", resp.Result)
+		}
+	})
+	t.Run("an Enterprise gateway", func(t *testing.T) {
+		ep := testEndpoint("n", "/c")
+		ep.Spec.GatewayRef.Name = "ee"
+		ep.Spec.Endpoints[0].Backends[0].PolicyRef = &v1alpha1.PolicyRef{Name: "p"}
+		if resp := review(t, v, "alice", ep, nil); !resp.Allowed {
+			t.Errorf("denied: %+v", resp.Result)
+		}
+	})
+}
