@@ -96,15 +96,16 @@ func SchemaClosure(
 }
 
 // schemaName returns the component schema name ref denotes: ref itself when
-// it is a bare name (the documentation "ref" fields), or the unescaped last
-// segment of a "#/components/schemas/<name>" pointer. ok is false for any
-// other pointer.
+// it is a bare name (the documentation "ref" fields), or the unescaped first
+// segment after "#/components/schemas/", so a pointer into a schema denotes
+// the schema's root. ok is false for any other pointer.
 func schemaName(ref string) (string, bool) {
 	if !strings.HasPrefix(ref, "#") {
 		return ref, true
 	}
 	name, ok := strings.CutPrefix(ref, componentSchemaPrefix)
-	if !ok || name == "" || strings.Contains(name, "/") {
+	name, _, _ = strings.Cut(name, "/")
+	if !ok || name == "" {
 		return "", false
 	}
 	return strings.ReplaceAll(strings.ReplaceAll(name, "~1", "/"), "~0", "~"), true
