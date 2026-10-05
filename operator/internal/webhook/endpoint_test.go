@@ -822,3 +822,16 @@ func TestEndpointAdmission_OperatorWritesStillGetTheEntryRules(t *testing.T) {
 		t.Errorf("causes = %+v, want one on spec.endpoints[0] naming auth/api-keys", causes)
 	}
 }
+
+// Nor the audience rule, which runs before the exemption and is the only
+// guard on a CE gateway, where a render drops the entry's documentation.
+func TestEndpointAdmission_OperatorWritesStillGetTheAudienceRule(t *testing.T) {
+	ep := ownedEndpoint("KrakenDAutoConfig", true)
+	ep.Spec.Endpoints[0].ExtraConfig = &runtime.RawExtension{
+		Raw: []byte(`{"documentation/openapi":{"audience":{"a":1}}}`)}
+	v := &EndpointValidator{Client: fakeClient(testGateway()), Checker: &scriptedChecker{}, OperatorUsername: operatorUser}
+	causes := requireInvalid(t, review(t, v, operatorUser, ep, nil))
+	if len(causes) != 1 || !strings.Contains(causes[0].Field, "spec.endpoints[0].extraConfig") {
+		t.Errorf("causes = %+v, want one on spec.endpoints[0].extraConfig", causes)
+	}
+}
