@@ -2,5 +2,6 @@
  {"metadata":{"namespace":"a","name":"empty"},"spec":{"gatewayRef":{"name":"gw"},"endpoints":[]}},
  {"metadata":{"namespace":"a","name":"nogw"},"spec":{"gatewayRef":{"name":""},"endpoints":[{"endpoint":"/x","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}]}]}},
  {"metadata":{"namespace":"a","name":"dup"},"spec":{"gatewayRef":{"name":"gw"},"endpoints":[{"endpoint":"/x","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}]},{"endpoint":"/x","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}]}]}},
- {"metadata":{"namespace":"a","name":"path"},"spec":{"gatewayRef":{"name":"gw"},"endpoints":[{"endpoint":"x","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}]}]}}
+ {"metadata":{"namespace":"a","name":"path"},"spec":{"gatewayRef":{"name":"gw"},"endpoints":[{"endpoint":"x","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}]}]}},
+ {"metadata":{"namespace":"a","name":"no-backends"},"spec":{"gatewayRef":{"name":"gw"},"endpoints":[{"endpoint":"/x","method":"GET","backends":[]}]}}
 ]}
