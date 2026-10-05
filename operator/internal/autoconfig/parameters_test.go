@@ -137,3 +137,17 @@ func TestDereferenceParameters_IsDeterministic(t *testing.T) {
 		t.Errorf("a second pass over the output changed it: err=%v", err)
 	}
 }
+
+func TestDereferenceParameters_UnresolvableRefStillFailsTheOperation(t *testing.T) {
+	spec := []byte(`{"paths":{"/ok":{"get":{"operationId":"ok","responses":{"200":{"description":"OK"}}}},` +
+		`"/bad":{"get":{"operationId":"bad","parameters":[{"$ref":"#/components/parameters/Nope"}],` +
+		`"responses":{"200":{"description":"OK"}}}}}}`)
+	out, _, err := DereferenceParameters(spec)
+	if err != nil {
+		t.Fatalf("DereferenceParameters: %v", err)
+	}
+	got := evaluateEmbedded(t, string(out))
+	if len(got.Entries) != 1 || len(got.Failed) != 1 {
+		t.Errorf("entries=%d failed=%v, want 1 entry and 1 failed operation", len(got.Entries), got.Failed)
+	}
+}
