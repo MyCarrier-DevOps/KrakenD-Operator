@@ -87,4 +87,5 @@ gateway a/routes: GET /orders/{id} (a/route-one) vs GET /orders/{name} (b/route-
 gateway a/routes-clean: GET /a//b (a/route-slash1) vs GET /a/b (a/route-slash2)
 gateway a/routes-dots: GET /d/./e/ (a/route-dots1) vs GET /d/x/../e/ (a/route-dots2)
 gateway a/routes-dup: GET /same (a/route-dup1) vs GET /same (a/route-dup2)
+gateway a/routes-gen2: GET /h/{id} (a/gen-a) vs GET /h/{name} (a/gen-b)
 gateway a/routes-self: GET /self/{id} (a/route-self) vs GET /self/{name} (a/route-self)
