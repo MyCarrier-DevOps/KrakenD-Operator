@@ -5228,3 +5228,25 @@ func TestOwnedEndpointPredicate_PassesReadinessChangesOnly(t *testing.T) {
 		t.Error("expected a message-only status change to be ignored")
 	}
 }
+
+func TestAutoConfigReconcile_ReadyWhenEveryEndpointIsReady(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	users := readyEndpoint(ownedCopy(t, ac, g.output.Endpoints[0]), metav1.ConditionTrue, "Ready")
+	c := fakeClientBuilder().WithObjects(ac, cm, users).WithStatusSubresource(ac, users).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	updated := getAC(t, c, ac)
+	for _, cond := range []string{v1alpha1.ConditionEndpointsReady, v1alpha1.ConditionReady} {
+		if !meta.IsStatusConditionTrue(updated.Status.Conditions, cond) {
+			t.Errorf("expected %s True, got %+v", cond, meta.FindStatusCondition(updated.Status.Conditions, cond))
+		}
+	}
+	if updated.Status.ReadyEndpoints != 1 {
+		t.Errorf("readyEndpoints = %d, want 1", updated.Status.ReadyEndpoints)
+	}
+}
