@@ -59,6 +59,14 @@ func validateCRD(t *testing.T, crdFile, objectYAML string) field.ErrorList {
 // ratcheting of errors in fields the update leaves unchanged.
 func validateCRDUpdate(t *testing.T, crdFile, objectYAML, oldYAML string) field.ErrorList {
 	t.Helper()
+	return prepareCRDUpdate(t, crdFile, objectYAML, oldYAML)()
+}
+
+// prepareCRDUpdate does the part of validateCRDUpdate that can fail the test
+// and returns the validation itself, which touches no *testing.T and so can run
+// on another goroutine.
+func prepareCRDUpdate(t *testing.T, crdFile, objectYAML, oldYAML string) func() field.ErrorList {
+	t.Helper()
 	crd := loadCRD(t, crdFile)
 	var props apiextensions.JSONSchemaProps
 	if err := apiextensionsv1.Convert_v1_JSONSchemaProps_To_apiextensions_JSONSchemaProps(
@@ -76,27 +84,31 @@ func validateCRDUpdate(t *testing.T, crdFile, objectYAML, oldYAML string) field.
 	obj := defaultedObject(t, structural, objectYAML)
 	celValidator := cel.NewValidator(structural, true, celconfig.PerCallLimit)
 	if oldYAML == "" {
-		errs := apiservervalidation.ValidateCustomResource(nil, obj, schemaValidator)
-		errs = append(errs, listtype.ValidateListSetsAndMaps(nil, structural, obj)...)
-		return withCEL(errs, func() field.ErrorList {
-			celErrs, _ := celValidator.Validate(
-				context.Background(), nil, structural, obj, nil, celconfig.RuntimeCELCostBudget)
-			return celErrs
-		})
+		return func() field.ErrorList {
+			errs := apiservervalidation.ValidateCustomResource(nil, obj, schemaValidator)
+			errs = append(errs, listtype.ValidateListSetsAndMaps(nil, structural, obj)...)
+			return withCEL(errs, func() field.ErrorList {
+				celErrs, _ := celValidator.Validate(
+					context.Background(), nil, structural, obj, nil, celconfig.RuntimeCELCostBudget)
+				return celErrs
+			})
+		}
 	}
 
 	old := defaultedObject(t, structural, oldYAML)
 	corr := common.NewCorrelatedObject(obj, old, &model.Structural{Structural: structural})
-	errs := apiservervalidation.ValidateCustomResourceUpdate(
-		nil, obj, old, schemaValidator, apiservervalidation.WithRatcheting(corr))
-	if len(listtype.ValidateListSetsAndMaps(nil, structural, old)) == 0 {
-		errs = append(errs, listtype.ValidateListSetsAndMaps(nil, structural, obj)...)
+	return func() field.ErrorList {
+		errs := apiservervalidation.ValidateCustomResourceUpdate(
+			nil, obj, old, schemaValidator, apiservervalidation.WithRatcheting(corr))
+		if len(listtype.ValidateListSetsAndMaps(nil, structural, old)) == 0 {
+			errs = append(errs, listtype.ValidateListSetsAndMaps(nil, structural, obj)...)
+		}
+		return withCEL(errs, func() field.ErrorList {
+			celErrs, _ := celValidator.Validate(context.Background(), nil, structural, obj, old,
+				celconfig.RuntimeCELCostBudget, cel.WithRatcheting(corr))
+			return celErrs
+		})
 	}
-	return withCEL(errs, func() field.ErrorList {
-		celErrs, _ := celValidator.Validate(context.Background(), nil, structural, obj, old,
-			celconfig.RuntimeCELCostBudget, cel.WithRatcheting(corr))
-		return celErrs
-	})
 }
 
 // withCEL appends the CEL errors to errs, unless errs holds an error that makes
@@ -310,8 +322,12 @@ func TestGatewayCRD_Rules(t *testing.T) {
 // the budget: a pathological quantity must be refused before it is parsed.
 func validateWithin(t *testing.T, budget time.Duration, object string) field.ErrorList {
 	t.Helper()
+	validate := prepareCRDUpdate(t, gatewaysCRD, object, "")
+	// The goroutine only sends on the channel; on a timeout it cannot be
+	// stopped, because the quantity parse is not cancellable, and it ends with
+	// the test process.
 	done := make(chan field.ErrorList, 1)
-	go func() { done <- validateCRD(t, gatewaysCRD, object) }()
+	go func() { done <- validate() }()
 	select {
 	case errs := <-done:
 		return errs
