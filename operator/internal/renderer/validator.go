@@ -89,6 +89,9 @@ func (v *KrakenDValidator) Validate(ctx context.Context, jsonData []byte, editio
 	return v.check(ctx, doc)
 }
 
+// Lint is Validate without krakend's router test.
+func (v *KrakenDValidator) Lint(context.Context, []byte, v1alpha1.Edition) error { return nil }
+
 // errEEWildcardRule is the verdict for an EE wildcard endpoint that EE
 // would refuse, found before krakend check runs.
 var errEEWildcardRule = errors.New("EE wildcard rule")

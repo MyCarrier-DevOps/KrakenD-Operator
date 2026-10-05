@@ -507,3 +507,15 @@ func TestValidate_EEWildcardMayUseAParameterTheEndpointDeclares(t *testing.T) {
 		t.Errorf("Validate = %v; the endpoint declares {Wildcard} itself, so EE resolves it", err)
 	}
 }
+
+func TestLint_RunsOfflineLintWithoutTheRouterTest(t *testing.T) {
+	rec := &recordingExecutor{}
+	v := NewValidator(ValidatorOptions{Executor: rec, BinaryPath: "/usr/local/bin/krakend"})
+
+	if err := v.Lint(context.Background(), []byte(`{"version":3}`), v1alpha1.EditionCE); err != nil {
+		t.Fatalf("Lint: %v", err)
+	}
+	if len(rec.args) != 4 || !slices.Equal(rec.args[:3], []string{"check", "-n", "-c"}) {
+		t.Fatalf("args = %q, want [check -n -c <file>]", rec.args)
+	}
+}
