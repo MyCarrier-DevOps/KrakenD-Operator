@@ -121,12 +121,10 @@ func (e *cueEvaluator) Evaluate(_ context.Context, input CUEInput) (*CUEOutput, 
 
 	// Errors inside one endpoint entry fail only that operation (see
 	// exportEndpointEntries); any other error fails the whole evaluation.
-	if err := unified.Validate(cue.Concrete(true)); err != nil && !onlyEntryErrors(err) {
-		return nil, fmt.Errorf("CUE evaluation failed: %w", err)
-	}
+	rootErrors := entryErrors(unified.Validate(cue.Concrete(true)))
 
 	endpointsValue := unified.LookupPath(cue.ParsePath("endpoint"))
-	output, err := exportEndpointEntries(endpointsValue)
+	output, err := exportEndpointEntries(endpointsValue, rootErrors)
 	if err != nil {
 		return nil, err
 	}
@@ -204,7 +202,7 @@ func applyOverrides(cueCtx *cue.Context, unified cue.Value, input CUEInput) cue.
 // its method: skipUnsupportedMethods partitions them once overrides applied.
 // An entry that fails concrete validation or does not decode into an
 // EndpointEntry is recorded in Failed and does not stop the other entries.
-func exportEndpointEntries(endpointsValue cue.Value) (*CUEOutput, error) {
+func exportEndpointEntries(endpointsValue cue.Value, rootErrors map[string][]string) (*CUEOutput, error) {
 	output := &CUEOutput{
 		OperationIDs: make(map[string]string),
 		Tags:         make(map[string][]string),
@@ -216,6 +214,7 @@ func exportEndpointEntries(endpointsValue cue.Value) (*CUEOutput, error) {
 	}
 
 	for iter.Next() {
+		delete(rootErrors, iter.Selector().String())
 		val := iter.Value()
 		op := entryOperation(iter.Selector().Unquoted(), val)
 		entry, err := decodeEntry(val)
@@ -234,18 +233,35 @@ func exportEndpointEntries(endpointsValue cue.Value) (*CUEOutput, error) {
 			output.Tags[entryKey] = op.Tags
 		}
 	}
+	if len(rootErrors) > 0 {
+		return nil, fmt.Errorf("CUE evaluation failed: %s", strings.Join(sortedMessages(rootErrors), "; "))
+	}
 	return output, nil
 }
 
-// onlyEntryErrors reports whether every error in err lies inside one entry of
-// the endpoint struct, at a path endpoint.<key>.<...>.
-func onlyEntryErrors(err error) bool {
+// entryErrors groups the errors of err by the endpoint entry they lie in, at a
+// path endpoint.<key>.<...>, keyed by the entry's selector. An error anywhere
+// else is grouped under "", which no entry has.
+func entryErrors(err error) map[string][]string {
+	byEntry := map[string][]string{}
 	for _, e := range cueerrors.Errors(err) {
-		if p := e.Path(); len(p) < 2 || p[0] != "endpoint" {
-			return false
+		key := ""
+		if p := e.Path(); len(p) >= 2 && p[0] == "endpoint" {
+			key = p[1]
 		}
+		byEntry[key] = append(byEntry[key], e.Error())
 	}
-	return true
+	return byEntry
+}
+
+// sortedMessages returns every message of byEntry, sorted.
+func sortedMessages(byEntry map[string][]string) []string {
+	var all []string
+	for _, msgs := range byEntry {
+		all = append(all, msgs...)
+	}
+	slices.Sort(all)
+	return slices.Compact(all)
 }
 
 // decodeEntry validates one endpoint entry as concrete and decodes it.
