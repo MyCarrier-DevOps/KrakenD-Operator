@@ -4069,3 +4069,30 @@ func TestAutoConfigReconcile_AdoptionFailureStillWritesAndKeepsStale(t *testing.
 		}
 	}
 }
+
+func TestAutoConfigReconcile_DesiredOrphanIsReownedWithOneWrite(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	// A labelled orphan the pass desires, with a spec that differs: adopting
+	// it and then writing it would cost two updates.
+	orphan := generatedEndpoint("listUsers", "/old-path")
+	var counts writeCounts
+	c := fakeClientBuilder().WithObjects(ac, cm, orphan).WithStatusSubresource(ac).
+		WithInterceptorFuncs(countWrites(&counts)).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if counts.updates != 1 || counts.creates != 0 {
+		t.Errorf("expected one update of the desired orphan, got %+v", counts)
+	}
+	var got v1alpha1.KrakenDEndpoint
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(orphan), &got); err != nil {
+		t.Fatal(err)
+	}
+	if !metav1.IsControlledBy(&got, ac) || got.Spec.Endpoints[0].Endpoint != "/api/users" {
+		t.Errorf("expected the orphan re-owned with the desired spec, got %+v", got)
+	}
+}
