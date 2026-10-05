@@ -381,3 +381,29 @@ func TestAutoConfig_ForcedReconcileInSteadyStateWritesNothing(t *testing.T) {
 		return nil
 	})
 }
+
+func TestAutoConfig_RestoresStrippedLabelPromptly(t *testing.T) {
+	ac := newSyncedAutoConfig(t)
+	ep, err := getOwnedEndpoint(ac, initialEndpointNames[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	patch := client.MergeFrom(ep.DeepCopy())
+	delete(ep.Labels, "gateway.krakend.io/autoconfig")
+	if err := k8sClient.Patch(ctx, ep, patch); err != nil {
+		t.Fatalf("strip label: %v", err)
+	}
+
+	// A label change bumps no generation: only the Owns predicate's label
+	// clause reconciles the AutoConfig before the 5-minute resync.
+	eventuallyWithin(t, 30*time.Second, func() error {
+		cur, err := getOwnedEndpoint(ac, ep.Name)
+		if err != nil {
+			return err
+		}
+		if cur.Labels["gateway.krakend.io/autoconfig"] != ac.Name {
+			return fmt.Errorf("label not restored yet: %v", cur.Labels)
+		}
+		return nil
+	})
+}
