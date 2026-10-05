@@ -536,6 +536,7 @@ spec:
                             x-kubernetes-preserve-unknown-fields: true
                           index:
                             description: Index is the 0-based backend index.
+                            minimum: 0
                             type: integer
                         required:
                         - index
