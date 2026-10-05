@@ -105,11 +105,16 @@ func (c *Checker) lint(ctx context.Context, in renderer.RenderInput) (Verdict, e
 // check runs validate on out as the edition in is for, holding a slot.
 func (c *Checker) check(ctx context.Context, in renderer.RenderInput, out *renderer.RenderOutput,
 	validate func(context.Context, []byte, v1alpha1.Edition) error) (Verdict, error) {
+	edition := renderer.EditionFor(in.Gateway, in.CEFallback)
 	if err := c.acquire(ctx); err != nil {
 		return Verdict{}, err
 	}
-	err := validate(ctx, out.JSON, renderer.EditionFor(in.Gateway, in.CEFallback))
-	<-c.slots
+	// The slot is freed even if validate panics (the manager recovers
+	// panics), and before attribution, which needs no slot.
+	err := func() error {
+		defer func() { <-c.slots }()
+		return validate(ctx, out.JSON, edition)
+	}()
 	var invalid *renderer.ValidationError
 	if errors.As(err, &invalid) {
 		atts := renderer.Attribute(out.JSON, out.Sources, invalid.Output)
