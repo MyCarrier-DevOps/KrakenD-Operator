@@ -510,6 +510,15 @@ status:
       message: "References resolved and accepted by the gateway"
 ```
 
+**Schema rules.** The CRD enforces what the object alone decides, so the API server rejects a violation before any webhook runs and the same rules apply to GitOps tools that bypass the webhook:
+
+- `spec.endpoints` is a map list keyed on (`endpoint`, `method`) with at least one entry. A repeated pair is rejected (`Duplicate value`), and server-side apply merges entries by key instead of replacing the list.
+- Every entry has at least one backend. `endpoint` starts with `/` and has no `*`, `?`, `&` or `%`, except a trailing `/*` wildcard.
+- `timeout` and `cacheTTL` match Go's `time.ParseDuration` grammar without a sign. A malformed value would otherwise break decoding of the whole `KrakenDEndpointList` in every informer.
+- `outputEncoding`, a backend's `encoding`, `sd` and `method` are enums taken from KrakenD 2.13's own schema. `gatewayRef.name` and `policyRef.name` have a minimum length of 1.
+
+Kubernetes 1.33 is the supported floor because it ratchets CRD validation: an update that leaves an already-invalid field unchanged is admitted, so objects stored before a rule existed keep accepting unrelated changes. Rules that need other objects (reference existence, cross-object conflicts, the rendered configuration) stay in the webhooks.
+
 ### 3.3 KrakenDBackendPolicy
 
 Reusable backend-level configurations that can be referenced by name from any KrakenDEndpoint.
