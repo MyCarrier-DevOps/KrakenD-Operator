@@ -877,7 +877,7 @@ func TestApplyFieldOverrides_OperationIDSharedWithFailedOperationIsAmbiguous(t *
 	}
 }
 
-func TestApplyFieldOverrides_BackendOverrideOnFailedOperationIsHeldNotUnmatched(t *testing.T) {
+func TestApplyFieldOverrides_BackendOverrideOnFailedOperationIsNotUnmatched(t *testing.T) {
 	out := testOutputWithEntries()
 	out.Failed = []OperationIssue{{Operation: Operation{Method: "GET", Path: "/v2/users", OperationID: "getUser"}}}
 	ec := &runtime.RawExtension{Raw: []byte(`{"backend/http":{"return_error_code":true}}`)}
@@ -887,6 +887,22 @@ func TestApplyFieldOverrides_BackendOverrideOnFailedOperationIsHeldNotUnmatched(
 	}})
 	if len(out.UnmatchedOverrides) != 0 {
 		t.Errorf("UnmatchedOverrides = %v, want none for a failed target", out.UnmatchedOverrides)
+	}
+}
+
+func TestApplyFieldOverrides_AmbiguousOverrideSkipsBackendRangeCheck(t *testing.T) {
+	out := testOutputWithEntries()
+	out.OperationIDs["/api/orders:POST"] = "listUsers"
+	ec := &runtime.RawExtension{Raw: []byte(`{"backend/http":{"return_error_code":true}}`)}
+	applyFieldOverrides(out, []v1alpha1.OperationOverride{{
+		OperationID: "listUsers",
+		Backends:    []v1alpha1.BackendOverride{{Index: 1, ExtraConfig: ec}},
+	}})
+	if !slices.Equal(out.AmbiguousOverrides, []string{"listUsers"}) {
+		t.Errorf("AmbiguousOverrides = %v, want [listUsers]", out.AmbiguousOverrides)
+	}
+	if len(out.UnmatchedOverrides) != 0 {
+		t.Errorf("UnmatchedOverrides = %v, want none: the override is ambiguous, not out of range", out.UnmatchedOverrides)
 	}
 }
 
