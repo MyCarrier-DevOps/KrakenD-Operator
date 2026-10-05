@@ -173,7 +173,7 @@ spec:
   edition: EE                          # CE or EE
   version: "2.13"                      # KrakenD version tag
   image: ""                            # Override: full image reference (ignores edition/version for image selection only; `edition` still controls config rendering)
-  ceImage: ""                          # CE fallback image override (default: krakend/krakend:{version}); used when fallbackToCE=true and the operator switches from EE to CE
+  ceImage: ""                          # CE fallback image override (default: krakend:{version}); used when fallbackToCE=true and the operator switches from EE to CE
   replicas: 3                          # ignored when autoscaling is set; a new Deployment starts at minReplicas and the HPA owns the count
   # Omit the autoscaling block to disable autoscaling (there is no `enabled` field).
   autoscaling:
@@ -698,7 +698,7 @@ sequenceDiagram
                 Note over Op: Plugin-only change. Triggers rolling update.
             else No drift detected
                 Note over Op: No-op — config, image, and plugins<br/>all identical to current state.
-                Op->>K8s: Set ConfigValid=True (ConfigApplied); derive Ready and phase
+                Op->>K8s: Set ConfigValid=True (ConfigApplied), derive Ready and phase
             end
         end
     else Not the applied config (new checksum or edition)
@@ -730,7 +730,7 @@ sequenceDiagram
                 Op->>K8s: Update replicas/readyReplicas
                 Op->>K8s: Set Progressing=False, Available=True (Ready=True, phase Running)
             else ProgressDeadlineExceeded
-                Op->>K8s: Set Progressing=False, Available=False (reason: RolloutFailed); Ready=False, phase Error
+                Op->>K8s: Set Progressing=False, Available=False (reason: RolloutFailed), Ready=False, phase Error
                 Op->>K8s: Emit Warning Event (RolloutFailed)
                 Note over Op: ConfigValid remains True (config passed validation).<br/>Leave existing pods running.<br/>Requeue for user correction.
             end
@@ -921,7 +921,7 @@ sequenceDiagram
         Op->>K8s: Set LicenseSecretUnavailable=True (reason=LicenseSecretMissing)
         Op->>K8s: Emit Warning event (on the transition only)
         Op->>K8s: Set LicenseValid=Unknown, unless the last known expiry<br/>is inside the safety buffer or past (then that stage applies)
-        Note over Op: The reconcile goes on: the config is rendered and applied,<br/>and the Deployment is created or updated, with the fallback decision<br/>recorded last. Its pods wait for the Secret mount.<br/>The gateway is requeued in 5 minutes.
+        Note over Op: The reconcile goes on: the config is rendered and applied,<br/>and the Deployment is created or updated, with the fallback decision<br/>recorded last. Its pods wait for the Secret mount.<br/>The gateway is requeued within 5 minutes.
     else Secret read
         Op->>K8s: Set LicenseSecretUnavailable=False
         alt Valid (expiry > now+warningDays)
@@ -946,11 +946,11 @@ sequenceDiagram
             Op->>K8s: Set condition LicenseDegraded=True (reason=LicenseFallbackCE)
             Op->>K8s: Emit LicenseFallbackCE Warning Event (once)
             Op->>Op: Render CE (Enterprise-only features stripped), validate it as CE
-            Op->>K8s: Create the Deployment, or switch its image, to CE (ceImage or krakend/krakend:version)<br/>once the CE render is applied
+            Op->>K8s: Create the Deployment, or switch its image, to CE (ceImage or krakend:version)<br/>once the CE render is applied
         else PreExpiry or Expired AND fallbackToCE=false
             Op->>K8s: Set LicenseValid=False and LicenseExpired=True (reason per stage: LicensePreExpiry or LicenseExpired)<br/>(the gateway controller derives phase Error from LicenseExpired=True)
             Op->>K8s: Emit LicenseExpiredNoFallback Warning Event (once)
-            Note over Op: The license changes neither the EE render nor the Deployment;<br/>EE pods stop at the actual expiry.
+            Note over Op: The license changes neither the EE render nor the Deployment,<br/>EE pods stop at the actual expiry.
         end
     end
 
@@ -1224,7 +1224,7 @@ When falling back from EE to CE:
    `status.configEdition` records the edition of the applied config. The
    image follows the applied edition, so while a CE render is rejected the
    pods stay on EE with the EE-validated config. The CE image is
-   `spec.ceImage` if set, otherwise `krakend/krakend:{spec.version}`;
+   `spec.ceImage` if set, otherwise `krakend:{spec.version}`;
    `spec.image` (EE override) is ignored during CE fallback. While the
    applied edition differs from the current one (a CE fallback whose render is
    rejected), version and custom-image changes wait too, and take effect once a
@@ -1880,7 +1880,7 @@ status or reason. A steady state emits no events. `ConfigValidationFailed` and
 | VirtualService created | Normal | `IstioVirtualServiceCreated` |
 | A plugin ConfigMap is missing and the Deployment is held (on the transition only) | Warning | `ConfigMapNotFound` |
 | Every plugin ConfigMap exists again | Normal | `ConfigMapsFound` |
-| The applied config is a CE-fallback render that removed Enterprise-only features (on the transition only) | Warning | `EEFeaturesStripped` |
+| The applied config is the CE-fallback render (on the transition only; the message lists the Enterprise-only features removed, or says it uses none) | Warning | `EEFeaturesStripped` |
 | Endpoint newly loses all its entries to a path+method conflict (on the transition only) | Warning | `EndpointConflict` |
 | Endpoint newly loses some of its entries to a path+method conflict (on the transition only) | Warning | `PartiallyAccepted` |
 | Previously conflicted (fully or partly) endpoint included again | Normal | `Accepted` |
@@ -2356,9 +2356,11 @@ Go project layout following [Standard Go Project Layout](https://github.com/gola
 │   │   ├── webhook/
 │   │   │   └── validation.go                   # ValidatingAdmissionWebhook handlers
 │   │   └── util/
-│   │       ├── hash.go                         # SHA-256 config checksumming
-│   │       ├── license.go                      # X.509 license parsing
-│       └── window.go                       # License stages (StageAt, NextChange)
+│   │       ├── hash/
+│   │       │   └── hash.go                     # SHA-256 config checksumming
+│   │       └── license/
+│   │           ├── license.go                  # X.509 license parsing
+│   │           └── window.go                   # License stages (StageAt, NextChange)
 │   ├── config/
 │   │   ├── crd/
 │   │   │   └── bases/                          # Generated CRD YAML manifests
