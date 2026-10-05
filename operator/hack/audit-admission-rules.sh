@@ -62,11 +62,19 @@ def dur_problem($re; $max; $label):
   else empty end;
 # Why a value is outside an enum: $set lists the values the CRD allows.
 def enum_problem($label; $set): select(IN($set[]) | not) | "\($label) \(.)";
+# True for a pattern-valid quantity that resource.ParseQuantity rejects, which
+# the CRD isQuantity() rule rejects too: an exponent with a fraction, or one
+# outside the range of a 64-bit integer.
+def quantity_undecodable:
+  ([capture("[eE](?<sign>[+-]?)(?<exp>[0-9.]+)$")] | .[0]) as $e
+  | $e != null and (($e.exp | contains("."))
+    or ($e.exp | digits_exceed(if $e.sign == "-" then "9223372036854775808" else "9223372036854775807" end)));
 # Why a quantity breaks its CRD rules, or nothing; a number is always valid.
 def quantity_problem($label):
   if type != "string" then empty
   elif crd_test($qty_re) | not then "\($label) \(.)"
   elif length > 64 then "\($label) is longer than 64 characters"
+  elif quantity_undecodable then "\($label) \(.) is not a quantity Kubernetes can decode"
   else empty end;
 def report(kind): select(.v | length > 0) | "\(kind) \(.id): \(.v | unique | join("; "))";
 '
