@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -190,8 +191,8 @@ type endpointOutcome struct {
 	// acted on a stale cache and loses nothing by retrying soon.
 	raced []error
 	// rejected holds the endpoints left unwritten for a persistent reason,
-	// keyed by name: the API server rejected them as invalid. Their existing
-	// endpoints are held.
+	// keyed by name: the API server rejected them as invalid, or another
+	// object controls their name. Their existing endpoints are held.
 	rejected map[string]rejection
 }
 
@@ -201,13 +202,14 @@ func (o *endpointOutcome) failed() bool {
 }
 
 // record classifies a failed claim or write of ep: a Conflict or
-// AlreadyExists lost a race, an Invalid rejection is persistent, and anything
-// else is retried with backoff.
+// AlreadyExists lost a race, an Invalid rejection or a name another object
+// controls is persistent, and anything else is retried with backoff.
 func (o *endpointOutcome) record(ep *v1alpha1.KrakenDEndpoint, err error) {
+	var owned *controllerutil.AlreadyOwnedError
 	switch {
 	case apierrors.IsConflict(err) || apierrors.IsAlreadyExists(err):
 		o.raced = append(o.raced, err)
-	case apierrors.IsInvalid(err):
+	case apierrors.IsInvalid(err) || errors.As(err, &owned):
 		o.rejected[ep.Name] = rejection{endpoint: ep, reason: v1alpha1.ReasonEndpointRejected, message: err.Error()}
 	default:
 		o.transient = append(o.transient, err)
