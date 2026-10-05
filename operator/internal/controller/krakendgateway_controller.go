@@ -1758,7 +1758,7 @@ func (r *KrakenDGatewayReconciler) recordPostRestartJobROFSCondition(
 
 // recordDragonflyRunAsRootCondition sets an informational status Condition
 // reporting whether the BUILT Dragonfly CR's rendered securityContext maps
-// carry an unacknowledged runAsUser: 0 request (review round 3, C2). df is
+// carry an unacknowledged runAsUser: 0 request. df is
 // the object AFTER resources.BuildDragonfly has already mutated it in the
 // CreateOrUpdate mutate callback, so this reads the actual rendered maps
 // (post-merge-fixup), not the raw v1alpha1.DragonflySpec — mirroring
@@ -1796,12 +1796,9 @@ func (r *KrakenDGatewayReconciler) recordDragonflyRunAsRootCondition(
 		return
 	}
 
-	// Review round 4, D5b: the False state previously overloaded
-	// ReasonDragonflyRunAsRootAcknowledged for both an acknowledged root
-	// request AND the far more common no-root-request-at-all case. Split
-	// into two distinct reasons so a viewer can tell "someone requested
-	// root and explicitly acknowledged it" apart from "this gateway never
-	// requested root".
+	// The False state has two distinct reasons, so a viewer can tell "someone
+	// requested root and explicitly acknowledged it" apart from "this gateway
+	// never requested root".
 	if resources.DragonflyRunAsRootRequested(containerMap, podMap) {
 		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
 			Type:               v1alpha1.ConditionDragonflyRunAsRootUnacknowledged,
