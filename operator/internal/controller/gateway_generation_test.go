@@ -23,6 +23,7 @@ import (
 
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -142,5 +143,32 @@ func TestGatewayReconcile_StepsThatConsumeTheDeploymentWaitForIt(t *testing.T) {
 	}
 	if err := c.Get(context.Background(), client.ObjectKeyFromObject(gw), hpa); err != nil {
 		t.Errorf("the HPA was deleted before the Deployment carried its replica count: %v", err)
+	}
+}
+
+// foreignConfigMap is a ConfigMap the gateway does not control, at the
+// content-addressed name of config checksum.
+func foreignConfigMap(gw *v1alpha1.KrakenDGateway, checksum string) *corev1.ConfigMap {
+	return &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: resources.ConfigMapName(gw, checksum), Namespace: gw.Namespace},
+		Data:       map[string]string{resources.ConfigKey: `{"someone":"else"}`},
+	}
+}
+
+func TestGatewayReconcile_AnAppliedConfigThatCannotBePublishedKeepsObservedGenerationBehind(t *testing.T) {
+	gw := newerSpecGateway()
+	gw.Spec.Replicas = new(int32(3)) // the edit at generation 2, which the held Deployment never receives
+	c := fakeClientBuilder().WithObjects(gw, settledDeployment(gw, "A"), foreignConfigMap(gw, "A")).
+		WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderOutput("A"), &mockValidator{})
+
+	if err := reconcileGateway(t, r, gw); err == nil {
+		t.Fatal("a foreign ConfigMap at the applied config's name must fail the pass so it is retried")
+	}
+
+	got := getGateway(t, c, gw)
+	if got.Status.ObservedGeneration != 1 {
+		t.Errorf("observedGeneration = %d, want it held at 1: the Deployment is held and never saw generation 2",
+			got.Status.ObservedGeneration)
 	}
 }
