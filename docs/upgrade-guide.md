@@ -725,7 +725,8 @@ image, plugin or license change. It is `True` while any of these holds:
 It goes `False`/`RolloutComplete` once the Deployment has observed its latest
 generation and every replica is updated and available. A change in the
 replica count alone, an HPA scale-up included, is not a rollout and does not
-change `Ready`.
+raise `Progressing`. The brief `Available=False` a scale-up can cause is still
+mirrored as described in the status-model section above.
 
 What changes for you:
 
