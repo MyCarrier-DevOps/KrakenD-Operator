@@ -2086,8 +2086,8 @@ func TestGatewayValidator_NoReplicasWarningWithoutAutoscaling(t *testing.T) {
 }
 
 // A CE gateway can only carry an enabled spec.openapi when it was stored before
-// admission refused it and the update leaves it unchanged; that is the case
-// that warns. A new or changed one is rejected.
+// admission refused it and the update leaves it enabled; that is the case that
+// warns. Enabling it is rejected.
 func TestGatewayValidator_WarnsWhenOpenAPIIsStoredOnACEGateway(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
