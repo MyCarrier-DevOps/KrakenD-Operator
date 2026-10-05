@@ -72,6 +72,8 @@ type EndpointEntry struct {
 
 	// Timeout overrides the global endpoint timeout (a Go duration).
 	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:XValidation:rule="duration(self) >= duration('0s')",message="must be a duration that fits in 64 bits of nanoseconds"
 	// +kubebuilder:validation:Pattern=`^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$`
 	Timeout *metav1.Duration `json:"timeout,omitempty"`
 
