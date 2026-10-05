@@ -93,5 +93,7 @@ jq "${jq_opts[@]}" "$jq_lib"'
   ($s.config.port // empty | select(. < 1 or . > 65535) | "spec.config.port \(.)"),
   ($s.config.outputEncoding // empty
     | enum_problem("spec.config.outputEncoding"; ["json", "fast-json", "json-collection", "xml", "negotiate", "string", "no-op"])),
-  ($s.config.router.healthPath // empty | select(crd_test("^/") | not) | "spec.config.router.healthPath \(.)")
+  ($s.config.router.healthPath // empty | select(crd_test("^/") | not) | "spec.config.router.healthPath \(.)"),
+  ($s.redis.connectionPool.dialTimeout // empty
+    | dur_problem($one_re; 64; "spec.redis.connectionPool.dialTimeout"))
 ]} | report("KrakenDGateway")' "$work/gateways.json"
