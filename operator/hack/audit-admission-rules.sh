@@ -267,7 +267,9 @@ jq "${jq_opts[@]}" --slurpfile gws "$work/gateways.json" "$jq_lib"'
   | "\(.spec.gatewayRef.namespace // .metadata.namespace)/\(.spec.gatewayRef.name)" as $gw
   | select($ce[$gw])
   | [(.spec.endpoints // []) | to_entries[] | .key as $i | .value as $en
-      | ($en.extraConfig | eeonly($entry_ee)[] | "spec.endpoints[\($i)].extraConfig \(.)")]
+      | (($en.extraConfig | eeonly($entry_ee)[] | "spec.endpoints[\($i)].extraConfig \(.)"),
+         (($en.backends // []) | to_entries[] | .key as $j | .value.extraConfig | eeonly($ee[0].enterpriseOnly.backend)[]
+           | "spec.endpoints[\($i)].backends[\($j)].extraConfig \(.)"))]
   | select(length > 0)
   | "KrakenDEndpoint \($e.metadata.namespace)/\($e.metadata.name): Enterprise-only on CE gateway \($gw): \(join(", "))"]
 | unique[]' "$work/endpoints.json"
