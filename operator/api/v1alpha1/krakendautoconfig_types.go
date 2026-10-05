@@ -268,6 +268,7 @@ type OperationOverride struct {
 // BackendOverride applies extra_config to a specific backend by index.
 type BackendOverride struct {
 	// Index is the 0-based backend index.
+	// +kubebuilder:validation:Minimum=0
 	Index int `json:"index"`
 
 	// ExtraConfig holds arbitrary backend-level extra_config JSON.
