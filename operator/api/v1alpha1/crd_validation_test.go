@@ -250,5 +250,6 @@ func TestGatewayCRD_Rules(t *testing.T) {
 		{"openapi explicit port clash", gatewayHead + `edition: CE, config: {}, openapi: {enabled: true, port: 8080}}}`, "openapi port must differ"},
 		{"openapi disabled", gatewayHead + `edition: CE, config: {port: 8090}, openapi: {enabled: false}}}`, ""},
 		{"post-restart job without script", gatewayHead + `edition: CE, config: {}, postRestartJob: {enabled: true}}}`, "script is required"},
+		{"too many plugin sources", gatewayHead + `edition: CE, config: {}, plugins: {sources: [` + strings.Repeat(`{configMapRef: {name: c, key: k}}, `, 33) + `]}}}`, "spec.plugins.sources"},
 	})
 }
