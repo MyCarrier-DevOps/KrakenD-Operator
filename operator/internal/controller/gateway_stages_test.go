@@ -2587,13 +2587,12 @@ func TestGatewayReconcile_PluginsResolvedIsAbsentWithoutConfigMapSources(t *test
 
 func TestGatewayReconcile_HeldForPluginConfigMapReportsNoDeploymentUpdate(t *testing.T) {
 	gw := servingGateway("applied", convergedImage)
-	stale := makeConvergedDeployment(gw, "applied")
+	live := makeConvergedDeployment(gw, "applied")
 	gw.Spec.Image = "img:v2"
 	gw.Spec.Plugins = &v1alpha1.PluginsSpec{Sources: []v1alpha1.PluginSource{
 		{ConfigMapRef: &v1alpha1.ConfigMapKeyRef{Name: "plugins-a", Key: "auth.so"}},
 	}}
-	c := fakeClientBuilder().WithObjects(gw, stale).WithStatusSubresource(gw).
-		WithInterceptorFuncs(staleDeploymentReads(stale)).Build()
+	c := fakeClientBuilder().WithObjects(gw, live).WithStatusSubresource(gw).Build()
 	rend := &mockRenderer{output: &renderer.RenderOutput{
 		JSON: []byte(`{"version":3}`), Checksum: "applied",
 	}}
