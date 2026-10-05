@@ -3187,11 +3187,30 @@ func failedGetB() autoconfig.OperationIssue {
 	}
 }
 
+// staleOwnedEndpoint returns an endpoint ac controls that the generator no
+// longer produces: a sync that proceeds deletes it.
+func staleOwnedEndpoint(t *testing.T, ac *v1alpha1.KrakenDAutoConfig, g *mockGenerator) *v1alpha1.KrakenDEndpoint {
+	t.Helper()
+	stale := ownedCopy(t, ac, g.output.Endpoints[0])
+	stale.Name = "test-ac-stale"
+	return stale
+}
+
+// assertEndpointKept fails unless the endpoint named name still exists.
+func assertEndpointKept(t *testing.T, c client.Client, name string) {
+	t.Helper()
+	var ep v1alpha1.KrakenDEndpoint
+	if err := c.Get(context.Background(), types.NamespacedName{Name: name, Namespace: "default"}, &ep); err != nil {
+		t.Errorf("expected endpoint %s kept, got %v", name, err)
+	}
+}
+
 func TestAutoConfigReconcile_FailedOperationFailsSyncClosed(t *testing.T) {
 	cm := testCUEDefinitionsCM()
 	ac := syncedAutoConfig(cm)
-	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).Build()
 	f, ce, fi, g := defaultMocks()
+	stale := staleOwnedEndpoint(t, ac, g)
+	c := fakeClientBuilder().WithObjects(ac, cm, stale).WithStatusSubresource(ac).Build()
 	ce.output.Failed = []autoconfig.OperationIssue{failedGetB()}
 	r := newACReconciler(c, f, ce, fi, g)
 
@@ -3199,10 +3218,11 @@ func TestAutoConfigReconcile_FailedOperationFailsSyncClosed(t *testing.T) {
 		t.Fatal("expected an error for an OnChange trigger")
 	}
 	cond := meta.FindStatusCondition(getAC(t, c, ac).Status.Conditions, v1alpha1.ConditionSynced)
-	if cond == nil || cond.Reason != v1alpha1.ReasonCUEEvaluationFailed ||
+	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != v1alpha1.ReasonCUEEvaluationFailed ||
 		!strings.Contains(cond.Message, "GET /b (getB): CUEEvaluationFailed") {
 		t.Errorf("expected Synced False/CUEEvaluationFailed naming GET /b, got %+v", cond)
 	}
+	assertEndpointKept(t, c, stale.Name)
 	var ep v1alpha1.KrakenDEndpoint
 	if err := c.Get(context.Background(), types.NamespacedName{Name: "test-ac-listusers", Namespace: "default"},
 		&ep); !apierrors.IsNotFound(err) {
