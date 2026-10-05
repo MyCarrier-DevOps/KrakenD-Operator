@@ -58,6 +58,7 @@ func TestValidateEntries(t *testing.T) {
 		{"null router block reads as defaults", rawRouterBlock(`null`), testEndpoint("e", "/healthz"), ""},
 		{"empty raw health_path reads as default", rawRouterBlock(`{"health_path":""}`),
 			testEndpoint("e", "/healthz"), ""},
+		{"unnamed wildcard on CE", testGateway(), testEndpoint("e", "/files/*"), "Enterprise feature"},
 		{"only GET collides with the health endpoint", custom, post, ""},
 		// A raw router block replaces the typed one, so the typed healthPath is gone.
 		{"raw router replaces the typed one", rawRouterBlock(`{"auto_options":true}`),
