@@ -22,11 +22,15 @@ import (
 	"testing"
 
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
+	batchv1 "k8s.io/api/batch/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/resources"
 )
 
 // newerSpecGateway is a CE gateway serving config "A" with its Deployment
@@ -70,5 +74,42 @@ func TestGatewayReconcile_AChildErrorKeepsObservedGenerationBehind(t *testing.T)
 	if ready := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionReady); ready == nil ||
 		ready.ObservedGeneration != 1 {
 		t.Errorf("Ready = %+v, want its observedGeneration held at 1 with the status's", ready)
+	}
+}
+
+func TestGatewayReconcile_AChildErrorDoesNotStarveTheIndependentChildren(t *testing.T) {
+	gw := newerSpecGateway()
+	gw.Spec.Autoscaling = &v1alpha1.AutoscalingSpec{MaxReplicas: 5}
+	gw.Spec.PostRestartJob = &v1alpha1.PostRestartJobSpec{Enabled: true, Script: "echo done"}
+	gw.Spec.Dragonfly = &v1alpha1.DragonflySpec{Enabled: true}
+	gw.Spec.License = &v1alpha1.LicenseConfig{ExternalSecret: v1alpha1.ExternalSecretLicenseConfig{Enabled: true}}
+	gw.Spec.Istio = &v1alpha1.IstioSpec{
+		Enabled: true, Hosts: []string{"api.example.com"}, Gateways: []string{"istio-system/gw"},
+	}
+	c := fakeClientBuilder().
+		WithRESTMapper(optionalCRDMapper(dragonflyGVK, externalSecretGVK, virtualServiceGVK)).
+		WithObjects(gw, settledDeployment(gw, "A")).WithStatusSubresource(gw).
+		WithInterceptorFuncs(rejectHPAWrites()).Build()
+	r := newTestGatewayReconciler(c, renderOutput("A"), &mockValidator{})
+
+	if err := reconcileGateway(t, r, gw); err == nil {
+		t.Fatal("a rejected HorizontalPodAutoscaler must fail the pass so it is retried")
+	}
+
+	for gvk, name := range map[schema.GroupVersionKind]string{
+		dragonflyGVK:      resources.DragonflyName(gw),
+		externalSecretGVK: resources.ExternalSecretName(gw),
+		virtualServiceGVK: gw.Name,
+	} {
+		u := &unstructured.Unstructured{}
+		u.SetGroupVersionKind(gvk)
+		if err := c.Get(context.Background(), client.ObjectKey{Namespace: gw.Namespace, Name: name}, u); err != nil {
+			t.Errorf("the %s must still be reconciled after the HPA failed: %v", gvk.Kind, err)
+		}
+	}
+	var jobs batchv1.JobList
+	if err := c.List(context.Background(), &jobs, client.InNamespace(gw.Namespace)); err != nil || len(jobs.Items) != 1 {
+		t.Errorf("jobs = %d (%v), want the post-restart Job: it waits for the Deployment, not for the HPA",
+			len(jobs.Items), err)
 	}
 }
