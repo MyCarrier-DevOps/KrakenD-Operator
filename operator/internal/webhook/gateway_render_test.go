@@ -486,3 +486,23 @@ func TestGatewayAdmission_RejectedDragonflyOnCEDoesNotAlsoWarn(t *testing.T) {
 		})
 	}
 }
+
+// A check that cannot run leaves the request unjudged: the 500 carries no
+// warning about the failure that was already there.
+func TestGatewayAdmission_UnavailableCheckCarriesNoWarning(t *testing.T) {
+	old := testGateway()
+	edited := old.DeepCopy()
+	edited.Spec.Config.Timeout = "5s"
+	broken := failing("ep", 0, "broken elsewhere")
+	chk := &scriptedChecker{verdicts: []configcheck.Verdict{broken, broken}, failCall: 3,
+		err: errors.New("waiting for a validation slot: context deadline exceeded")}
+
+	warnings, err := (&GatewayValidator{Client: fakeClient(), Checker: chk}).ValidateUpdate(context.Background(), old, edited)
+
+	if err == nil {
+		t.Fatal("admitted, want a 500")
+	}
+	if len(warnings) != 0 {
+		t.Errorf("warnings = %v, want none with the error", warnings)
+	}
+}
