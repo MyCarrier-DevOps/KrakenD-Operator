@@ -785,3 +785,15 @@ func TestEndpointAdmission_OnlyOperatorWritesToAutoConfigEndpointsSkipRenderChec
 		})
 	}
 }
+
+// The exemption skips only the render check: route uniqueness still applies.
+func TestEndpointAdmission_OperatorWritesStillGetTheDuplicateCheck(t *testing.T) {
+	ep := testEndpoint("gen", "/users/{id}")
+	ep.OwnerReferences = ownedEndpoint("KrakenDAutoConfig", true).OwnerReferences
+	chk := &scriptedChecker{}
+	v := &EndpointValidator{Client: fakeClient(testGateway(), testEndpoint("hand", "/users/{id}")),
+		Checker: chk, OperatorUsername: operatorUser}
+	if resp := review(t, v, operatorUser, ep, nil); resp.Allowed {
+		t.Error("an operator write duplicating a hand-written route was admitted")
+	}
+}
