@@ -1523,8 +1523,8 @@ and KrakenD reads its license at startup. The pod template therefore also
 carries `krakend.io/checksum-license`, the SHA-256 of the license bytes the
 operator read. It tracks the mounted license, so it is present for every EE gateway with a readable license, CE fallback or not (the license stays mounted under fallback, so a fallback toggle alone never changes the pod template), and absent on a Community gateway.
 Changing the license in the Secret changes the annotation, rolls the
-Deployment (`Progressing=True`, reason `DeploymentUpdated`; once a missing
-plugin ConfigMap exists, if one holds the Deployment) and holds `Ready`
+Deployment (`Progressing=True`, reason `DeploymentUpdated`, or `ConfigDeployed`
+when a config applied during a plugin ConfigMap hold rolls out with it) and holds `Ready`
 until the new pods are available. When the Secret cannot be read, the
 annotation the Deployment already carries is kept, so nothing rolls. The
 post-restart Job's identity does not include the license, so a renewal does
