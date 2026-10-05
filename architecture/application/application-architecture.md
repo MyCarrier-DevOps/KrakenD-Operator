@@ -105,13 +105,15 @@ val := renderer.NewValidator(renderer.ValidatorOptions{
     BinaryPath: "/usr/local/bin/krakend",
 })
 
-gatewayCtrl := &controller.GatewayReconciler{
-    Client:    mgr.GetClient(),
-    Scheme:    mgr.GetScheme(),
-    Recorder:  recorder,
-    Renderer:  rend,
-    Validator: val,
-    Clock:     clock,
+gatewayCtrl := &controller.KrakenDGatewayReconciler{
+    Client:        mgr.GetClient(),
+    Scheme:        mgr.GetScheme(),
+    Recorder:      recorder,
+    Renderer:      rend,
+    Validator:     val,
+    Clock:         clock,
+    APIReader:     mgr.GetAPIReader(),
+    LicenseParser: licenseutil.NewX509LicenseParser(),
 }
 
 autoconfigCtrl := &controller.KrakenDAutoConfigReconciler{
@@ -125,13 +127,13 @@ autoconfigCtrl := &controller.KrakenDAutoConfigReconciler{
     Clock:        clock,
 }
 
-policyCtrl := &controller.PolicyReconciler{
+policyCtrl := &controller.KrakenDBackendPolicyReconciler{
     Client:   mgr.GetClient(),
     Scheme:   mgr.GetScheme(),
     Recorder: recorder,
 }
 
-endpointCtrl := &controller.EndpointReconciler{
+endpointCtrl := &controller.KrakenDEndpointReconciler{
     Client:   mgr.GetClient(),
     Scheme:   mgr.GetScheme(),
     Recorder: recorder,
@@ -472,6 +474,7 @@ Status types use Kubernetes `metav1.Condition` for all conditions described in t
 type KrakenDGatewayStatus struct {
     Phase              GatewayPhase       `json:"phase,omitempty"`
     ConfigChecksum     string             `json:"configChecksum,omitempty"`
+    ConfigEdition      Edition            `json:"configEdition,omitempty"` // the edition configChecksum was validated for
     ObservedGeneration int64              `json:"observedGeneration,omitempty"`
     Conditions         []metav1.Condition `json:"conditions,omitempty"`
     Replicas           int32              `json:"replicas,omitempty"`
@@ -536,6 +539,11 @@ const (
     ConditionProgressing              = "Progressing"
     ConditionSpecAvailable            = "SpecAvailable"
     ConditionSynced                   = "Synced"
+    ConditionReady                    = "Ready"
+    ConditionPluginsResolved          = "PluginsResolved"
+    ConditionCEFallbackApplied        = "CEFallbackApplied"
+    ConditionResolvedRefs             = "ResolvedRefs" // endpoints
+    ConditionAccepted                 = "Accepted"     // endpoints, written by the gateway controller
 )
 ```
 
@@ -558,6 +566,11 @@ const (
     ReasonEndpointConflict              = "EndpointConflict"
     ReasonPartiallyAccepted             = "PartiallyAccepted"
     ReasonLicenseSecretMissing          = "LicenseSecretMissing"
+    ReasonValidatorUnavailable          = "ValidatorUnavailable"
+    ReasonConfigMapNotFound             = "ConfigMapNotFound"
+    ReasonConfigMapsFound               = "ConfigMapsFound"
+    ReasonCRDNotInstalled               = "CRDNotInstalled"
+    ReasonEEFeaturesStripped            = "EEFeaturesStripped"
     ReasonSpecFetched                   = "SpecFetched"
     ReasonSpecFetchFailed               = "SpecFetchFailed"
     ReasonEndpointsGenerated            = "EndpointsGenerated"
@@ -768,8 +781,8 @@ type Reconciler interface {
 Each controller exposes a `SetupWithManager` method that configures watches:
 
 ```go
-func (r *GatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
-    return ctrl.NewControllerManagedBy(mgr).
+func (r *KrakenDGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
+    b := ctrl.NewControllerManagedBy(mgr).
         For(&v1alpha1.KrakenDGateway{}).
         Owns(&appsv1.Deployment{}).
         Owns(&corev1.Service{}).
@@ -777,22 +790,38 @@ func (r *GatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
         Owns(&corev1.ServiceAccount{}).
         Owns(&policyv1.PodDisruptionBudget{}).
         Owns(&autoscalingv2.HorizontalPodAutoscaler{}).
-        Owns(&dragonflyv1alpha1.Dragonfly{}).
-        Owns(&esv1.ExternalSecret{}).
-        Owns(&istiov1.VirtualService{}).
+        Owns(&batchv1.Job{}).
         Watches(
             &v1alpha1.KrakenDEndpoint{},
             handler.EnqueueRequestsFromMapFunc(r.endpointToGateway),
+            builder.WithPredicates(predicate.GenerationChangedPredicate{}),
         ).
         Watches(
             &v1alpha1.KrakenDBackendPolicy{},
             handler.EnqueueRequestsFromMapFunc(r.policyToGateways),
+            builder.WithPredicates(predicate.GenerationChangedPredicate{}),
         ).
         Watches(
             &corev1.Secret{},
             handler.EnqueueRequestsFromMapFunc(r.licenseSecretToGateway),
         ).
-        Complete(r)
+        Watches(
+            &corev1.ConfigMap{},
+            handler.EnqueueRequestsFromMapFunc(r.pluginConfigMapToGateway),
+        )
+
+    // Dragonfly, ExternalSecret and VirtualService are owned as
+    // unstructured objects, and only when their CRDs exist at startup.
+    installed, _, err := installedOptionalKinds(mgr.GetRESTMapper())
+    if err != nil {
+        return err
+    }
+    for _, gvk := range installed {
+        u := &unstructured.Unstructured{}
+        u.SetGroupVersionKind(gvk)
+        b = b.Owns(u)
+    }
+    return b.Named("krakendgateway").Complete(r)
 }
 ```
 
@@ -801,9 +830,9 @@ func (r *GatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 ```mermaid
 graph TB
     subgraph "Controllers"
-        GC[GatewayReconciler]
-        EC[EndpointReconciler]
-        PC[PolicyReconciler]
+        GC[KrakenDGatewayReconciler]
+        EC[KrakenDEndpointReconciler]
+        PC[KrakenDBackendPolicyReconciler]
         ACC[KrakenDAutoConfigReconciler]
     end
 
@@ -814,6 +843,8 @@ graph TB
         CL[Clock]
         REC[EventRecorder]
         HC[HTTP Client]
+        LP[License Parser]
+        AR[API Reader]
     end
 
     subgraph "AutoConfig Subsystem"
@@ -828,6 +859,8 @@ graph TB
     GC --> RB
     GC --> CL
     GC --> REC
+    GC --> LP
+    GC --> AR
     ACC --> FE
     ACC --> CUE_E
     ACC --> FI
@@ -842,20 +875,27 @@ graph TB
 
 ## 5. Gateway Controller
 
-**File:** `internal/controller/gateway_controller.go`
+**Files:** `internal/controller/krakendgateway_controller.go`, `gateway_config.go` (the config stage), `gateway_license.go`, `gateway_optional.go`, `gateway_events.go`, `rejection_memo.go`
 
-The gateway controller is the primary reconciler. It orchestrates the full rendering pipeline (operator architecture §10), manages all owned Kubernetes resources, and handles edition-specific logic.
+The gateway controller is the primary reconciler. It orchestrates the full rendering pipeline (operator architecture §10), manages all owned Kubernetes resources, and handles edition-specific logic. Each reconcile runs two stages: the config stage decides and publishes the applied config, and the infrastructure stage always runs and deploys it.
 
 ### Reconciler Struct
 
 ```go
-type GatewayReconciler struct {
+type KrakenDGatewayReconciler struct {
     client.Client
     Scheme    *runtime.Scheme
     Recorder  record.EventRecorder
     Renderer  renderer.Renderer
     Validator renderer.Validator
     Clock     clock.Clock
+    // APIReader reads uncached from the API server (ReplicaSets for config GC)
+    APIReader client.Reader
+    // LicenseParser reads EE license certificates
+    LicenseParser license.LicenseParser
+
+    // rejections remembers each gateway's last rejected validation input
+    rejections rejectionMemo
 }
 ```
 
@@ -867,32 +907,26 @@ The `Reconcile` method follows the pipeline described in operator architecture �
 flowchart TD
     A[Fetch KrakenDGateway] --> B{Found and<br/>not terminating?}
     B -->|No| Z[Forget the gateway<br/>metrics and rejection memo<br/>Return]
-    B -->|Yes| C[List KrakenDEndpoints by gatewayRef]
-    C --> C1[Fetch referenced KrakenDBackendPolicies]
-    C1 --> C2[Determine CEFallback from<br/>status conditions LicenseDegraded]
-    C2 --> F[Call Renderer.Render<br/>passes endpoints + policies +<br/>CEFallback. Renderer handles<br/>conflict detection internally]
-    F --> G{Checksum changed?}
-    G -->|No| G1{Image drift?}
-    G1 -->|No| G2{Plugin checksum changed?}
-    G2 -->|No| H[Record Accepted on each endpoint,<br/>reconcile owned resources]
-    H --> R
-    G2 -->|Yes| G5[Progressing=True<br/>reason DeploymentUpdated]
-    G5 --> I[Patch pod annotation]
-    G1 -->|Yes| G4[Progressing=True<br/>reason DeploymentUpdated]
-    G4 --> I
-    G -->|Yes| J1{Same render and edition<br/>already rejected?}
-    J1 -->|Yes| L[Re-apply the remembered rejection:<br/>ConfigValid=False,<br/>Warning event only if the verdict changed, return]
+    B -->|Yes| C[List KrakenDEndpoints by gatewayRef,<br/>fetch referenced KrakenDBackendPolicies]
+    C --> C2[reconcileLicense: License* conditions<br/>and the CE fallback verdict]
+    C2 --> C3[Gather plugin ConfigMaps, set PluginsResolved,<br/>detect the Dragonfly state]
+    C3 --> F[Call Renderer.Render for the edition:<br/>CE for a CE gateway or a CE fallback, else EE.<br/>The renderer detects conflicts internally]
+    F --> G{Render and edition<br/>are the applied config?}
+    G -->|Yes| H[ConfigValid=True,<br/>republish the ConfigMap if it is missing]
+    G -->|No| J1{Same render and edition<br/>already rejected?}
+    J1 -->|Yes| L[ConfigValid=False,<br/>Warning event only if the verdict changed,<br/>keep the applied config]
     J1 -->|No| J[Validate as the render's edition:<br/>EE wildcard rules in Go; only if they<br/>find nothing, krakend check -t -n -c on the copy]
     J --> K{Verdict?}
     K -->|Rejected| L
-    K -->|Unavailable| L2[Set ConfigValid=Unknown<br/>reason ValidatorUnavailable,<br/>Ready Unknown, keep applied config,<br/>one Warning event,<br/>return error: retry with backoff]
-    K -->|Valid| M[Update ConfigMap, set ConfigValid=True,<br/>Progressing=True reason ConfigDeployed]
-    M --> I
-    I --> N[Record Accepted on each endpoint,<br/>reconcile Deployment, Service, SA, PDB, HPA]
-    N --> O[Reconcile Dragonfly CR if enabled]
-    O --> P[Reconcile ExternalSecret if enabled]
-    P --> Q[Reconcile VirtualService if Istio enabled]
-    Q --> R[Inspect the Deployment status, then derive Ready and<br/>the phase from the conditions via gatewayReadinessFor<br/>and update the gateway status only if it changed]
+    K -->|Unavailable| L2[Set ConfigValid=Unknown<br/>reason ValidatorUnavailable,<br/>Ready Unknown, keep applied config,<br/>one Warning event on entering;<br/>the error is returned after the infrastructure stage]
+    K -->|Valid| M[Create the immutable ConfigMap<br/>gateway-config-hash, write status.configChecksum<br/>and configEdition, ConfigValid=True,<br/>Progressing=True reason ConfigDeployed]
+    H --> N
+    L --> N
+    L2 --> N
+    M --> N[Report CEFallbackApplied. Record Accepted on each<br/>endpoint of an applied render, or<br/>GatewayConfigRejected on the endpoints a rejection names]
+    N --> I[Infrastructure stage on the applied config:<br/>SA, Service, PDB, Deployment unless held, config GC,<br/>HPA, post-restart Job, Dragonfly CR,<br/>ExternalSecret, VirtualService;<br/>children of disabled features are deleted]
+    I --> R[Inspect the Deployment status, then derive Ready and<br/>the phase from the conditions via gatewayReadinessFor<br/>and update the gateway status only if it changed]
+    R --> S[Return the config, acceptance and infrastructure<br/>errors if any, otherwise RequeueAfter<br/>the license's next stage boundary]
 ```
 
 ### Key Implementation Details
@@ -903,13 +937,17 @@ flowchart TD
 
 **CE fallback determination** — Before calling `Renderer.Render`, the controller calls `reconcileLicense`, which evaluates the license stage and returns the `ceFallback` verdict (the stage decision; while the license is unreadable, the stage judged from the last known expiry in `status.licenseExpiry` once that is inside the safety buffer or past, otherwise the last recorded decision). The verdict is passed as `RenderInput.CEFallback`, controlling image selection and wildcard endpoint stripping.
 
-**Checksum comparison** — After rendering, the controller compares the new SHA-256 checksum against `status.configChecksum`. If unchanged, it skips ConfigMap update and validation. It still reconciles owned resources (Deployment, Service, etc.) to handle drift.
+**Applied config** — The config stage (`reconcileConfig`) is the only code that decides the applied config. `status.configChecksum` is the checksum of the render the gateway serves and `status.configEdition` the edition it was validated for. A render that is not the applied one (a different checksum, or the same checksum for another edition) is validated as the edition it was rendered for; a verdict is deterministic for (checksum, edition), so a rejected input is remembered per gateway and not validated again until an input changes. Only a passing render is published and recorded as applied. A rejected render (`ConfigValid=False`) or one that could not be judged (`ConfigValid=Unknown`) leaves the applied config in place, and the infrastructure stage still runs, so the other resources keep converging and an image, plugin or license change still rolls. A `GatewayConfigRejected` verdict is written on each endpoint the rejection names (see `Attribute`, §10).
 
-**Image drift detection** — Even when the config checksum is unchanged, the controller compares the desired container image (determined by edition, CE fallback state, and user overrides) against the current Deployment's container image. A mismatch triggers a Deployment patch to correct the image. This is the mechanism by which CE fallback and EE recovery change the running image.
+**Content-addressed config ConfigMaps** — `publishConfig` creates the ConfigMap `<gateway>-config-<10 hex of the checksum>`. It is immutable, owned by the gateway and carries the checksum in an annotation; an existing one is verified, never updated. The Deployment mounts the applied config's ConfigMap by name, so a config change is a pod-template change and rolls like any other. `collectConfigMaps` deletes the gateway's config ConfigMaps that nothing can still mount: it keeps the applied one, the most recent revisions (three in all), and every ConfigMap that a live ReplicaSet of the Deployment mounts (ReplicaSets are read through `APIReader`, never cached). The ConfigMap an earlier operator version kept under the gateway's own name is seeded into the new name when the first render after an upgrade is rejected, and collected on the same terms.
 
-**Plugin checksum** — Computed from ConfigMap data hashes and OCI image tags. Changes trigger a rolling restart via pod annotation patch, independent of config checksum.
+**Held Deployment** — `reconcileDeploymentUnlessHeld` creates or updates the Deployment only once a config has been applied, and leaves it exactly as it is while no ConfigMap holds the applied config or while a plugin ConfigMap is missing (`PluginsResolved=False`, which names it).
 
-**Phase transitions** — The controller does not latch `status.phase` at points in the pipeline. At the end of each reconcile it derives `Ready` and the phase from the gateway's conditions (`ConfigValid`, `Progressing`, `Available`, `LicenseExpired`, `LicenseDegraded`) with `gatewayReadinessFor`, and writes status only when something changed. The gateway reconcile evaluates the license itself, writes the `License*` conditions, and turns them into `Ready` and the phase. The phase is the compatibility view of `Ready`:
+**Image follows the applied edition** — `appliedImage` resolves the image of the edition of the applied config, so CE pods never load a config validated only as EE. While the edition rendered now differs from the applied one (a CE fallback whose render is rejected, or a `spec.edition` change), version and custom-image changes wait too. This is the mechanism by which CE fallback and EE recovery change the running image: once a render validated for the new edition is applied, the image follows.
+
+**Plugin and license checksums** — The plugin checksum is computed from ConfigMap data hashes and OCI image tags, and the license checksum from the license bytes read. Each is a pod-template annotation, so a change rolls the Deployment independently of the config checksum.
+
+**Phase transitions** — The controller does not latch `status.phase` at points in the pipeline. At the end of each reconcile it derives `Ready` and the phase from the gateway's conditions (`ConfigValid`, `PluginsResolved`, `Available`, `Progressing`, `LicenseExpired`, `LicenseDegraded`, `CEFallbackApplied`) with `gatewayReadinessFor`, and writes status only when something changed. The gateway reconcile evaluates the license itself, writes the `License*` conditions, and turns them into `Ready` and the phase. The phase is the compatibility view of `Ready`:
 
 | Phase | Derived When |
 |---|---|
@@ -918,8 +956,8 @@ flowchart TD
 | `Validating` | No longer written by the operator; kept only for status values persisted by older versions |
 | `Deploying` | A rollout is in progress (`Progressing=True`), or the Deployment is not yet available |
 | `Running` | Config valid, the applied config rolled out to every replica, the Deployment available, and no license condition degrading it |
-| `Degraded` | CE fallback is active (`LicenseDegraded=True`) |
-| `Error` | Config validation failed, the rollout failed or the Deployment lost availability (`Available=False`), or the license expired with `fallbackToCE=false` |
+| `Degraded` | CE fallback is active (`CEFallbackApplied` or `LicenseDegraded` is `True`) |
+| `Error` | Config validation failed, a plugin ConfigMap is missing (`PluginsResolved=False`), the rollout failed or the Deployment lost availability (`Available=False`), or the license expired with `fallbackToCE=false` |
 
 A configuration that could not be validated because the validator was unavailable leaves `Ready` Unknown with reason `ValidatorUnavailable` and keeps the serving phase.
 
@@ -930,19 +968,23 @@ A configuration that could not be validated because the validator was unavailabl
 | KrakenDGateway | Create/Update/Delete | Full reconcile |
 | Owned Deployment | Update (status change) | Update replicas/readyReplicas. A rollout counts as converged only when the Deployment has observed its latest generation, its pod template carries the applied config checksum, and replicas, updated replicas and available replicas all equal the desired count; then `Progressing=False` and `Available=True`. A Deployment `Available=False` outside a rollout is mirrored into the gateway's `Available` condition. On `ProgressDeadlineExceeded`: `Progressing=False`, `Available=False`, emit `RolloutFailed`. `Ready` and the phase are re-derived from the conditions |
 | Owned Service | Update | Reconcile to correct drift |
-| Owned ConfigMap | Update | Reconcile to correct drift |
-| Owned Dragonfly CR | Status update | Update `DragonflyReady` condition on gateway; emit `DragonflyNotReady` Warning event on phase regression |
+| Owned ConfigMap | Update/Delete | Reconcile to correct drift; a deleted config ConfigMap is published again from the render |
+| Owned Dragonfly CR | Status update | Update `DragonflyReady` condition on gateway; emit `DragonflyNotReady` Warning event on phase regression. Watched when the Dragonfly CRD existed at operator startup |
 | Owned HPA | Update | Reconcile to correct drift |
-| Owned ExternalSecret | Update | Reconcile to correct drift |
-| Owned VirtualService | Update | Reconcile to correct drift |
+| Owned Job (post-restart) | Update | Reconcile the post-restart Job decision |
+| Owned ExternalSecret | Update | Reconcile to correct drift. Watched when the ExternalSecret CRD existed at operator startup |
+| Owned VirtualService | Update | Reconcile to correct drift. Watched when the VirtualService CRD existed at operator startup |
+| Plugin ConfigMap (via mapper) | Create/Update/Delete | Enqueue the gateways that reference it in `spec.plugins.sources[].configMapRef`; creating a missing one lifts the hold |
 | KrakenDEndpoint (via mapper) | Create/Update/Delete | Enqueue owning gateway — re-render config |
 | KrakenDBackendPolicy (via mapper) | Update/Delete | Enqueue all gateways whose endpoints reference this policy |
 | License Secret (via mapper) | Update | Enqueue gateway — the license is re-evaluated in the reconcile and may trigger CE fallback/recovery |
 
+The three optional kinds (Dragonfly, ExternalSecret, VirtualService) are registered with `Owns()` at startup only when their CRDs are installed (`installedOptionalKinds`); a CRD installed later is watched after an operator restart, and until then its objects are still reconciled on every gateway event.
+
 ### Mapper Functions
 
 ```go
-func (r *GatewayReconciler) endpointToGateway(
+func (r *KrakenDGatewayReconciler) endpointToGateway(
     ctx context.Context, obj client.Object,
 ) []reconcile.Request {
     ep, ok := obj.(*v1alpha1.KrakenDEndpoint)
@@ -952,48 +994,47 @@ func (r *GatewayReconciler) endpointToGateway(
     return []reconcile.Request{{
         NamespacedName: types.NamespacedName{
             Name:      ep.Spec.GatewayRef.Name,
-            Namespace: ep.Namespace,
+            Namespace: ep.Spec.GatewayRef.ResolvedNamespace(ep.Namespace),
         },
     }}
 }
 
-func (r *GatewayReconciler) policyToGateways(
+func (r *KrakenDGatewayReconciler) policyToGateways(
     ctx context.Context, obj client.Object,
 ) []reconcile.Request {
-    // List all endpoints in the same namespace as the policy
+    // The policy field index finds the endpoints that reference the policy,
+    // whatever their namespace
     var endpoints v1alpha1.KrakenDEndpointList
-    if err := r.List(ctx, &endpoints, client.InNamespace(obj.GetNamespace())); err != nil {
+    if err := r.List(ctx, &endpoints, client.MatchingFields{
+        EndpointPolicyIndex: obj.GetNamespace() + "/" + obj.GetName(),
+    }); err != nil {
         return nil
     }
     seen := map[types.NamespacedName]struct{}{}
     var requests []reconcile.Request
     for i := range endpoints.Items {
         ep := &endpoints.Items[i]
-        for _, entry := range ep.Spec.Endpoints {
-            for _, be := range entry.Backends {
-                if be.PolicyRef != nil && be.PolicyRef.Name == obj.GetName() {
-                    nn := types.NamespacedName{
-                        Name:      ep.Spec.GatewayRef.Name,
-                        Namespace: ep.Namespace,
-                    }
-                    if _, ok := seen[nn]; !ok {
-                        seen[nn] = struct{}{}
-                        requests = append(requests, reconcile.Request{NamespacedName: nn})
-                    }
-                }
-            }
+        nn := types.NamespacedName{
+            Name:      ep.Spec.GatewayRef.Name,
+            Namespace: ep.Spec.GatewayRef.ResolvedNamespace(ep.Namespace),
+        }
+        if _, ok := seen[nn]; !ok {
+            seen[nn] = struct{}{}
+            requests = append(requests, reconcile.Request{NamespacedName: nn})
         }
     }
     return requests
 }
 ```
 
+`pluginConfigMapToGateway` follows the same shape for ConfigMaps: it lists the gateways in the ConfigMap's namespace and enqueues each one whose `spec.plugins.sources[].configMapRef` names it.
+
 ### licenseSecretToGateway Mapper
 
 The `licenseSecretToGateway` mapper maps Secret changes to the gateways that reference them:
 
 ```go
-func (r *GatewayReconciler) licenseSecretToGateway(
+func (r *KrakenDGatewayReconciler) licenseSecretToGateway(
     ctx context.Context, obj client.Object,
 ) []reconcile.Request {
     // List all KrakenDGateways in the Secret's namespace
@@ -1051,7 +1092,7 @@ This ensures idempotent reconciliation: the same `Reconcile` call can be retried
 
 ## 6. Endpoint Controller
 
-**File:** `internal/controller/endpoint_controller.go`
+**File:** `internal/controller/krakendendpoint_controller.go`
 
 The endpoint controller is lightweight. It resolves the endpoint's gateway and policy references into the `ResolvedRefs` condition and derives `Ready` and the phase. The `Accepted` condition belongs to the gateway controller, which this controller never overwrites; status is patched with an optimistic lock, and only when it changed.
 
@@ -1092,7 +1133,7 @@ The endpoint controller does NOT render config or manage Kubernetes resources. C
 ### SetupWithManager
 
 ```go
-func (r *EndpointReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *KrakenDEndpointReconciler) SetupWithManager(mgr ctrl.Manager) error {
     return ctrl.NewControllerManagedBy(mgr).
         For(&v1alpha1.KrakenDEndpoint{}, builder.WithPredicates(endpointPredicate())).
         Watches(
@@ -1144,9 +1185,9 @@ func (r *KrakenDEndpointReconciler) gatewayToEndpoints(
 
 ## 7. Policy Controller
 
-**File:** `internal/controller/policy_controller.go`
+**File:** `internal/controller/krakendbackendpolicy_controller.go`
 
-The policy controller maintains the `referencedBy` count in policy status and triggers gateway re-renders when policies change.
+The policy controller maintains the `referencedBy` count and the `Ready` condition in policy status. Gateway re-renders on policy changes are the gateway controller's job (`policyToGateways`).
 
 ### Reconciler Struct
 
@@ -1164,8 +1205,8 @@ type KrakenDBackendPolicyReconciler struct {
 flowchart TD
     A[Fetch KrakenDBackendPolicy] --> B{Found?}
     B -->|No| Z[Return]
-    B -->|Yes| C[List KrakenDEndpoints<br/>in namespace]
-    C --> D[Count endpoints where<br/>any backend references this policy]
+    B -->|Yes| C[List KrakenDEndpoints through the<br/>EndpointPolicyIndex field index]
+    C --> D[Count the endpoints where any<br/>backend references this policy]
     D --> E[Update status.referencedBy]
     E --> F{Validate policy fields}
     F -->|Invalid| G[Set Ready=False with the<br/>InvalidCircuitBreaker or<br/>InvalidRateLimit reason]
@@ -1177,52 +1218,30 @@ flowchart TD
 
 `Ready` replaces the earlier `PolicyValid` condition, which is removed from policies written by earlier versions. It is `False` when `circuitBreaker.maxErrors`, `interval` or `timeout` is not positive (`InvalidCircuitBreaker`) or `rateLimit.maxRate` is not positive (`InvalidRateLimit`), and `True` otherwise. Events fire on transitions only: a `Warning` with the invalid reason when `Ready` becomes `False` or changes reason, and a `Normal` `Ready` when it recovers.
 
-The policy controller's reconciliation is straightforward. The `referencedBy` count scans all `KrakenDEndpoint` resources in the namespace and counts how many have at least one `backend[].policyRef.name` matching this policy. The important cross-controller interaction is through the gateway controller's `policyToGateways` mapper: when a policy is updated, all gateways with endpoints referencing that policy are re-queued for re-rendering.
+The policy controller's reconciliation is straightforward. The `referencedBy` count is the number of `KrakenDEndpoint` resources the `EndpointPolicyIndex` field index returns for the policy's `namespace/name`: those with at least one `backend[].policyRef` that resolves to this policy, in any namespace. The important cross-controller interaction is through the gateway controller's `policyToGateways` mapper, which uses the same index: when a policy is updated, all gateways with endpoints referencing that policy are re-queued for re-rendering.
 
 ### SetupWithManager
 
 ```go
-func (r *PolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *KrakenDBackendPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
+    if err := EnsureEndpointIndexes(mgr); err != nil {
+        return err
+    }
     return ctrl.NewControllerManagedBy(mgr).
-        For(&v1alpha1.KrakenDBackendPolicy{}).
+        For(&v1alpha1.KrakenDBackendPolicy{},
+            builder.WithPredicates(predicate.GenerationChangedPredicate{}),
+        ).
         Watches(
             &v1alpha1.KrakenDEndpoint{},
-            handler.EnqueueRequestsFromMapFunc(r.endpointToReferencedPolicies),
+            r.endpointPolicyHandler(),
+            builder.WithPredicates(policyEndpointPredicate()),
         ).
+        Named("krakendbackendpolicy").
         Complete(r)
 }
 ```
 
-The `Watches(&v1alpha1.KrakenDEndpoint{})` ensures that when an endpoint is created, updated, or deleted, the policies it references are re-reconciled to update their `referencedBy` counts:
-
-```go
-func (r *PolicyReconciler) endpointToReferencedPolicies(
-    ctx context.Context, obj client.Object,
-) []reconcile.Request {
-    ep, ok := obj.(*v1alpha1.KrakenDEndpoint)
-    if !ok {
-        return nil
-    }
-    seen := map[string]struct{}{}
-    var requests []reconcile.Request
-    for _, entry := range ep.Spec.Endpoints {
-        for _, be := range entry.Backends {
-            if be.PolicyRef != nil {
-                if _, ok := seen[be.PolicyRef.Name]; !ok {
-                    seen[be.PolicyRef.Name] = struct{}{}
-                    requests = append(requests, reconcile.Request{
-                        NamespacedName: types.NamespacedName{
-                            Name:      be.PolicyRef.Name,
-                            Namespace: ep.Namespace,
-                        },
-                    })
-                }
-            }
-        }
-    }
-    return requests
-}
-```
+The `Watches(&v1alpha1.KrakenDEndpoint{})` ensures that when an endpoint is created or deleted, or its spec changes (a generation bump; `policyEndpointPredicate` drops status-only updates), the policies it references are re-reconciled to update their `referencedBy` counts. `endpointPolicyHandler` enqueues the policies of the endpoint on a create or delete, and on an update the union of the old and the new references, so a removed reference is recounted too. `policyRefsFromEndpoint` extracts the deduplicated requests, resolving each reference's namespace with `PolicyRef.ResolvedNamespace`.
 
 ---
 
@@ -1299,7 +1318,7 @@ flowchart TD
     R5 --> R6[RequeueAfter periodic.interval<br/>or 5m for OnChange]
 ```
 
-Every reconcile runs the whole pipeline — there is no checksum gate — so owned endpoints converge to the desired state whatever woke the controller. **Fail sync** is `handleSyncedFailure`: the `Synced` condition `False` with that reason (so `Ready` is `False` and the derived phase is `Error`), and a Warning event with the same reason; `OnChange` returns the error so controller-runtime retries with exponential backoff, `Periodic` requeues at `spec.periodic.interval`. A fetch failure (`SpecFetchFailed`), including an external `$ref` document that can't be fetched or decoded, fails the sync the same way and also sets `SpecAvailable=False`. If the failure's status write conflicts, the reconcile still returns the failure's result (not the quiet one-second requeue, which would reset the backoff) and records no event. A failed sync leaves `status.specChecksum` at the last successful sync's value, and drift repair stops at the failure until a sync succeeds: every other failure stops the pipeline before any endpoint is touched, and an endpoint write failure stops convergence at that endpoint. `phase` never passes through `Fetching` or `Rendering`. It is derived from the `Synced` condition each time status is written, and every status write sets `Synced`, so the phase is empty before the first write and is then only `Synced` or `Error`; `Ready` is `Unknown` with reason `Pending` until the first sync.
+Every reconcile runs the whole pipeline — there is no checksum gate — so owned endpoints converge to the desired state whatever woke the controller. **Fail sync** is `handleSyncedFailure`: the `Synced` condition `False` with that reason (so `Ready` is `False` and the derived phase is `Error`), and a Warning event with the same reason; `OnChange` returns the error so controller-runtime retries with exponential backoff, `Periodic` requeues at `spec.periodic.interval`. A fetch failure (`SpecFetchFailed`), including an external `$ref` document that can't be fetched or decoded, fails the sync the same way and also sets `SpecAvailable=False`. If the failure's status write conflicts, the reconcile still returns the failure's result (not the quiet one-second requeue, which would reset the backoff) and records no event. A failed sync leaves `status.specChecksum` at the last successful sync's value, and drift repair stops at the failure until a sync succeeds: every other failure stops the pipeline before any endpoint is touched, and an endpoint write failure stops convergence at that endpoint. `phase` never passes through `Fetching` or `Rendering`. It is derived from the `Synced` condition each time status is written, and every status write sets `Synced`, so the phase is empty before the first write and is then only `Synced` or `Error`; `Ready` is absent until the first sync, because every status write sets `Synced`.
 
 A terminating AutoConfig (`deletionTimestamp` set) is not reconciled. Under foreground deletion it lingers while garbage collection deletes its endpoints, each delete re-enqueues it through the `Owns` watch, and converging would recreate the endpoint just collected.
 
@@ -1337,7 +1356,7 @@ The `For` predicate ignores status-only updates, so the reconciler's own status 
 
 ## 9. License Evaluation
 
-**File:** `internal/controller/gateway_license.go`
+**Files:** `internal/controller/gateway_license.go`, `internal/util/license/window.go`
 
 The gateway reconcile evaluates an EE gateway's license before it renders, because the result decides whether the render is CE. There is no separate license goroutine: gateway status has a single writer, and the reconcile writes nothing to the user's KrakenDGateway object.
 
@@ -1398,11 +1417,12 @@ type Renderer interface {
 }
 
 type RenderInput struct {
-    Gateway    *v1alpha1.KrakenDGateway
-    Endpoints  []v1alpha1.KrakenDEndpoint
-    Policies   map[string]*v1alpha1.KrakenDBackendPolicy // keyed by policy name
-    CEFallback bool
-    Dragonfly  *DragonflyState // nil if not enabled
+    Gateway          *v1alpha1.KrakenDGateway
+    Endpoints        []v1alpha1.KrakenDEndpoint
+    Policies         map[string]*v1alpha1.KrakenDBackendPolicy // keyed by policy name
+    CEFallback       bool
+    Dragonfly        *DragonflyState // nil if not enabled
+    PluginConfigMaps []corev1.ConfigMap
 }
 
 type DragonflyState struct {
@@ -1411,11 +1431,21 @@ type DragonflyState struct {
 }
 
 type RenderOutput struct {
-    JSON             []byte
-    Checksum         string   // SHA-256 hex
-    PluginChecksum   string
+    JSON                []byte
+    Checksum            string // SHA-256 hex
+    PluginChecksum      string
     ConflictedEndpoints []types.NamespacedName
     InvalidEndpoints    []types.NamespacedName
+    // EntryConflicts: for each KrakenDEndpoint that lost an entry, the
+    // entries it lost and the KrakenDEndpoint that serves each
+    EntryConflicts map[types.NamespacedName][]EntryConflict
+    // Sources[i] is the KrakenDEndpoint that produced endpoints[i] of the
+    // rendered config; Attribute uses it to blame a krakend check finding
+    // on a KrakenDEndpoint
+    Sources []types.NamespacedName
+    // StrippedEEFeatures: what a CE-fallback render removed because only
+    // KrakenD Enterprise supports it
+    StrippedEEFeatures []StrippedEEFeature
 }
 ```
 
@@ -1465,6 +1495,9 @@ type Validator interface {
 | `endpoints.go` | Builds the `endpoints` array by flattening all `KrakenDEndpoint.spec.endpoints[]` entries, sorts by path then method |
 | `extra_config.go` | Merges `extra_config` namespaces from gateway spec, policies, and endpoint overrides |
 | `plugins.go` | Builds the `plugin` root key when plugins are configured. Computes plugin checksum from ConfigMap data hashes and OCI image tags |
+| `eestrip.go` | Strips the Enterprise-only features from a CE-fallback render and lists them (`StrippedEEFeatures`); exports the Enterprise-only namespace lists (`EEOnlyNamespaces`) |
+| `eewildcard.go` | The EE wildcard rules applied when an EE render is validated with the CE binary |
+| `attribution.go` | `Attribute` maps `krakend check` findings to the KrakenDEndpoints that caused them, through `RenderOutput.Sources` |
 | `validator.go` | Wraps `krakend check -t -n -c` execution via the `CommandExecutor` interface |
 
 ### Deterministic Serialization
@@ -1521,7 +1554,7 @@ func (v *KrakenDValidator) Validate(ctx context.Context, jsonData []byte, editio
         return fmt.Errorf("preparing validation copy: %w", err)
     }
     if len(findings) > 0 {
-        return &ValidationError{Output: strings.Join(findings, "\n"), Err: errEEWildcardConflict}
+        return &ValidationError{Output: strings.Join(findings, "\n"), Err: errEEWildcardRule}
     }
     return v.check(ctx, doc)
 }
@@ -1559,10 +1592,25 @@ func (v *KrakenDValidator) check(ctx context.Context, jsonData []byte) error {
 
 EE configurations containing wildcard endpoints are handled by
 `KrakenDValidator.Validate(ctx, json, edition)`. For
-`EditionEE` it first applies the EE router rule: `/p/*` conflicts with any
-same-method route under `/p/` (`eeWildcardFindings`). It then checks a copy
-in which `/p/*` is rewritten to `/p/{Wildcard}` (`rewriteEEWildcards`). The
-copy is index-aligned with the render. See `internal/renderer/eewildcard.go`.
+`EditionEE` it first applies the rules EE enforces for wildcard endpoints and
+the CE binary cannot test (`eeWildcardFindings`). Each finding is a
+krakend-style lint-pointer line, so `Attribute` maps it like any other:
+
+- **Route conflict.** EE registers `/p/*` as the catch-all `/p/*Wildcard`
+  in its method's route tree, so `/p/*` conflicts with any other route of the
+  same method under `/p/`.
+- **The `{Wildcard}` parameter.** The copy the CE binary checks declares
+  `{Wildcard}`, but the EE router does not, so a backend `url_pattern` that
+  references `{Wildcard}` on a wildcard endpoint is rejected
+  (`eeWildcardParamFindings`). An endpoint whose own path declares
+  `{Wildcard}` is left alone.
+- **One backend.** A wildcard endpoint has exactly one backend
+  (`eeWildcardBackendFindings`).
+
+It then checks a copy in which `/p/*` is rewritten to `/p/{Wildcard}`
+(`rewriteEEWildcards`). The copy is index-aligned with the render. A root
+`/*` is not an EE wildcard (`IsEEWildcard`): it is checked as it is and
+rejected, as EE rejects it. See `internal/renderer/eewildcard.go`.
 
 ### Extra Config Merge Order
 
@@ -1588,9 +1636,9 @@ Resource builders are pure functions that construct Kubernetes object specs from
 
 | File | Function | Output Resource |
 |---|---|---|
-| `deployment.go` | `BuildDeployment(dep, gw, configChecksum, pluginChecksum, image)` | `appsv1.Deployment` |
-| `service.go` | `BuildService(svc, gw)` | `corev1.Service` |
-| `configmap.go` | `BuildConfigMap(cm, gw, jsonData)` | `corev1.ConfigMap` |
+| `deployment.go` | `BuildDeployment(dep, gw, in DeploymentInputs)` (config ConfigMap name and checksum, plugin and license checksums, image, CE render) | `appsv1.Deployment` |
+| `service.go` | `BuildService(svc, gw, ceRender)` | `corev1.Service` |
+| `configmap.go` | `ConfigMapName(gw, checksum)`, `BuildConfigMap(cm, gw, jsonData, checksum)` | `corev1.ConfigMap` (immutable, content-addressed) |
 | `serviceaccount.go` | `BuildServiceAccount(sa, gw)` | `corev1.ServiceAccount` |
 | `pdb.go` | `BuildPDB(pdb, gw)` | `policyv1.PodDisruptionBudget` |
 | `hpa.go` | `BuildHPA(hpa, gw)` | `autoscalingv2.HorizontalPodAutoscaler` |
@@ -1610,9 +1658,9 @@ flowchart TD
     B --> E[Volume Mounts]
     B --> F[Security Context]
     B --> G[Health Probes]
-    B --> H[Pod Annotations<br/>checksum/config<br/>checksum/plugins]
+    B --> H[Pod Annotations<br/>config checksum, krakend.io/checksum-plugins,<br/>krakend.io/checksum-license, krakend.io/image]
 
-    E --> E1["ConfigMap volume<br/>/etc/krakend/krakend.json"]
+    E --> E1["Config ConfigMap volume<br/>(the applied config's gateway-config-hash)<br/>/etc/krakend/krakend.json"]
     E --> E2["Secret volume<br/>/etc/krakend/LICENSE<br/>if EE"]
     E --> E3["Plugin volume<br/>/opt/krakend/plugins<br/>if plugins configured"]
     E --> E4["emptyDir /tmp"]
@@ -2518,7 +2566,7 @@ func PluginChecksum(configMaps []corev1.ConfigMap, ociTags []string) string {
 
 ### License Parser
 
-**File:** `internal/util/license.go`
+**File:** `internal/util/license/license.go`
 
 ```go
 type LicenseParser interface {
@@ -2552,6 +2600,26 @@ func (p *x509LicenseParser) Parse(data []byte) (*LicenseInfo, error) {
 }
 ```
 
+### License Window
+
+**File:** `internal/util/license/window.go`
+
+`Window` splits a license's lifetime into stages. The gateway reconcile builds one from `spec.license.expiryWarningDays` and the 1 hour safety buffer, and asks it two questions:
+
+```go
+type Window struct {
+    Warning      time.Duration // must be longer than SafetyBuffer
+    SafetyBuffer time.Duration
+}
+
+// StageAt: StageValid, StageExpiringSoon, StagePreExpiry or StageExpired
+func (w Window) StageAt(notAfter, now time.Time) Stage
+
+// NextChange: how long after now StageAt next returns a different stage,
+// or 0 once the license has expired
+func (w Window) NextChange(notAfter, now time.Time) time.Duration
+```
+
 ---
 
 ## 15. Dependency Injection and Interfaces
@@ -2569,7 +2637,7 @@ All external dependencies are abstracted behind interfaces, injected via struct 
 | `CUEEvaluator` | `internal/autoconfig` | Evaluate CUE definitions + OpenAPI spec → `EndpointEntry` objects | `autoconfig.cueEvaluator` |
 | `Filter` | `internal/autoconfig` | Include/exclude operations | `autoconfig.operationFilter` |
 | `Generator` | `internal/autoconfig` | Endpoint entries → `KrakenDEndpoint` CRDs with metadata | `autoconfig.endpointGenerator` |
-| `LicenseParser` | `internal/util` | Parse X.509 license certificates | `util.x509LicenseParser` |
+| `LicenseParser` | `internal/util/license` | Parse X.509 license certificates | `license.x509LicenseParser` |
 | `clock.Clock` | `k8s.io/utils/clock` | Time abstraction for license checks and periodic reconcile scheduling | `clock.RealClock` |
 | `client.Client` | `sigs.k8s.io/controller-runtime` | Kubernetes API client | Manager's cached client |
 | `record.EventRecorder` | `client-go/tools/record` | Kubernetes event emission | Manager's event recorder |
@@ -2637,7 +2705,7 @@ type ValidationError struct {
 }
 
 func (e *ValidationError) Error() string {
-    return fmt.Sprintf("krakend check validation failed: %s", e.Output)
+    return fmt.Sprintf("krakend config validation failed: %s: %s", e.Err, e.Output)
 }
 
 func (e *ValidationError) Unwrap() error { return e.Err }
@@ -2645,14 +2713,14 @@ func (e *ValidationError) Unwrap() error { return e.Err }
 
 ### Status Update Failures
 
-When a status update fails after a successful mutation (e.g., ConfigMap updated but status patch fails), the controller returns the error to trigger a retry. On the next reconcile, the checksum comparison detects no change (ConfigMap is already updated), so the controller skips the mutation and retries only the status update. This ensures eventual consistency without duplicate work.
+When a status update fails after a successful mutation (e.g., the config ConfigMap published but the status write fails), the controller returns the error to trigger a retry. The config stage publishes before it records the checksum as applied, and publishing is idempotent: the content-addressed ConfigMap is created only when absent, and an existing one is verified rather than rewritten. On the next reconcile the render is still not the applied config, so it is validated again, finds its ConfigMap already published, and retries the status write. This ensures eventual consistency without duplicate work.
 
 ---
 
 ## 17. Metrics Implementation
 
-**Registered in:** `cmd/main.go` via `prometheus.MustRegister`
-**Instrumented in:** controller `Reconcile` methods
+**Registered in:** `internal/controller/metrics.go`, with the controller-runtime registry (`metrics.Registry.MustRegister`)
+**Instrumented in:** controller `Reconcile` methods and the gateway controller's license evaluation (`reconcileLicense`)
 
 ### Metric Definitions
 
@@ -2673,13 +2741,13 @@ var (
         Help: "Rolling deployments triggered",
     })
 
-    licenseExpiryDays = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-        Name: "krakend_operator_license_expiry_days",
-        Help: "Days until EE license expiry",
+    licenseExpirySeconds = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+        Name: "krakend_operator_license_expiry_seconds",
+        Help: "Seconds until EE license expiry",
     }, []string{"namespace", "name"})
 
-    endpointCount = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-        Name: "krakend_operator_endpoint_count",
+    endpointsPerGateway = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+        Name: "krakend_operator_endpoints",
         Help: "Number of KrakenDEndpoints per gateway",
     }, []string{"namespace", "name"})
 
@@ -2687,7 +2755,7 @@ var (
         Name:    "krakend_operator_reconcile_duration_seconds",
         Help:    "Reconciliation loop latency",
         Buckets: prometheus.DefBuckets,
-    }, []string{"namespace", "name"})
+    }, []string{"controller", "namespace", "name"})
 
     dragonflyReady = prometheus.NewGaugeVec(prometheus.GaugeOpts{
         Name: "krakend_operator_dragonfly_ready",
@@ -2698,6 +2766,16 @@ var (
         Name: "krakend_operator_gateway_info",
         Help: "Gateway metadata labels",
     }, []string{"namespace", "name", "edition", "version"})
+
+    gatewayConfigValid = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+        Name: "krakend_operator_gateway_config_valid",
+        Help: "1 while the gateway's newest rendered config passed validation (ConfigValid=True), 0 otherwise",
+    }, []string{"namespace", "name"})
+
+    autoConfigSynced = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+        Name: "krakend_operator_autoconfig_synced",
+        Help: "1 if the KrakenDAutoConfig's last reconcile synced successfully, 0 if it is failing",
+    }, []string{"namespace", "name"})
 )
 ```
 
@@ -2705,14 +2783,18 @@ var (
 
 | Metric | Instrumented In | When |
 |---|---|---|
-| `config_renders_total` | `GatewayReconciler.Reconcile` | After calling `Renderer.Render` |
-| `config_validation_failures_total` | `GatewayReconciler.Reconcile` | When `Validator.Validate` returns `ValidationError` |
-| `rolling_restarts_total` | `GatewayReconciler.Reconcile` | After patching Deployment pod template |
-| `license_expiry_seconds` | `GatewayReconciler.reconcileLicense` | After parsing license certificate; the series is removed with the gateway |
-| `endpoint_count` | `GatewayReconciler.Reconcile` | After listing endpoints for gateway |
-| `reconcile_duration_seconds` | `GatewayReconciler.Reconcile` | `defer` at top of Reconcile, observing total duration |
-| `dragonfly_ready` | `GatewayReconciler.Reconcile` | After checking Dragonfly CR status |
-| `gateway_info` | `GatewayReconciler.Reconcile` | After successful reconcile |
+| `config_renders_total` | `KrakenDGatewayReconciler.Reconcile` | After calling `Renderer.Render` |
+| `config_validation_failures_total` | `KrakenDGatewayReconciler.validateConfig` | Once for each rejected (render, edition) input, when `Validator.Validate` returns `ValidationError`; a remembered rejection is not counted again |
+| `rolling_restarts_total` | `KrakenDGatewayReconciler.reportConfigRollout`, `markDeploymentUpdate` | When a new config is applied, or an image, plugin or license change starts a rollout |
+| `license_expiry_seconds` | `KrakenDGatewayReconciler.reconcileLicense` | After parsing the license certificate (from the last known expiry while the license is unreadable); the series is removed with the gateway, and when the gateway is not EE |
+| `endpoints` | `recordGatewayMetrics` | At the end of each reconcile, from the endpoints listed for the gateway |
+| `reconcile_duration_seconds` | `KrakenDGatewayReconciler.Reconcile` | `defer` at top of Reconcile, observing total duration |
+| `dragonfly_ready` | `KrakenDGatewayReconciler.detectDragonflyState` | After checking Dragonfly CR status |
+| `gateway_info` | `recordGatewayMetrics` | At the end of each reconcile; the gateway's earlier series is deleted first, so one series is left after a version or edition change |
+| `gateway_config_valid` | `recordGatewayMetrics` | At the end of each reconcile: 1 while `ConfigValid` is `True`, 0 while it is `False` or `Unknown` or absent |
+| `autoconfig_synced` | `KrakenDAutoConfigReconciler` | 1 after a successful sync, 0 while it fails; removed when the AutoConfig is deleted |
+
+Every per-gateway series is removed when the gateway is deleted or terminating (`deleteGatewayMetrics`).
 
 ---
 
