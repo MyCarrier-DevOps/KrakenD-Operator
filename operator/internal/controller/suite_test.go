@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/fieldindex"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
@@ -44,38 +45,8 @@ func testScheme() *runtime.Scheme {
 func fakeClientBuilder() *fake.ClientBuilder {
 	return fake.NewClientBuilder().
 		WithScheme(testScheme()).
-		WithIndex(&v1alpha1.KrakenDEndpoint{}, EndpointGatewayIndex,
-			func(obj client.Object) []string {
-				ep, ok := obj.(*v1alpha1.KrakenDEndpoint)
-				if !ok {
-					return nil
-				}
-				ns := ep.Spec.GatewayRef.ResolvedNamespace(ep.Namespace)
-				return []string{ns + "/" + ep.Spec.GatewayRef.Name}
-			},
-		).
-		WithIndex(&v1alpha1.KrakenDEndpoint{}, EndpointPolicyIndex,
-			func(obj client.Object) []string {
-				ep, ok := obj.(*v1alpha1.KrakenDEndpoint)
-				if !ok {
-					return nil
-				}
-				var refs []string
-				seen := make(map[string]struct{})
-				for _, entry := range ep.Spec.Endpoints {
-					for _, be := range entry.Backends {
-						if be.PolicyRef != nil {
-							key := be.PolicyRef.PolicyKey(ep.Namespace)
-							if _, ok := seen[key]; !ok {
-								seen[key] = struct{}{}
-								refs = append(refs, key)
-							}
-						}
-					}
-				}
-				return refs
-			},
-		)
+		WithIndex(&v1alpha1.KrakenDEndpoint{}, fieldindex.EndpointGateway, fieldindex.EndpointGatewayKeys).
+		WithIndex(&v1alpha1.KrakenDEndpoint{}, fieldindex.EndpointPolicy, fieldindex.EndpointPolicyKeys)
 }
 
 func fakeRecorder() *record.FakeRecorder {
