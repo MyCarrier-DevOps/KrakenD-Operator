@@ -414,3 +414,6 @@ func decodeSpec(data []byte) (map[string]any, error) {
 	}
 	return out, nil
 }
+
+// ExternalRefs is implemented in the next step.
+func ExternalRefs(specData []byte) ([]string, error) { return nil, nil }

@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -496,5 +497,18 @@ func TestResolveExternalRefs_ReportsLocalRefInFetchedDocument(t *testing.T) {
 	want := `$ref "#/Owner" in https://api.example.com/common.json is resolved against the main spec`
 	if len(warnings) != 1 || !strings.Contains(warnings[0], want) {
 		t.Errorf("warnings = %q, want one containing %q", warnings, want)
+	}
+}
+
+func TestExternalRefs_ListsDistinctNonLocalRefs(t *testing.T) {
+	spec := []byte(`{"paths":{"/a":{"get":{"parameters":[{"$ref":"common.yaml#/Limit"}],` +
+		`"responses":{"200":{"$ref":"#/components/responses/OK"},"404":{"$ref":"common.yaml#/Limit"},` +
+		`"500":{"$ref":"https://x.example.com/e.json"}}}}}}`)
+	refs, err := ExternalRefs(spec)
+	if err != nil {
+		t.Fatalf("ExternalRefs: %v", err)
+	}
+	if want := []string{"common.yaml#/Limit", "https://x.example.com/e.json"}; !slices.Equal(refs, want) {
+		t.Errorf("refs = %v, want %v", refs, want)
 	}
 }
