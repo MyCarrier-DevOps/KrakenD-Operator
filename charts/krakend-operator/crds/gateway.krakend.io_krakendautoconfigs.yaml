@@ -601,6 +601,8 @@ spec:
                 properties:
                   interval:
                     description: Interval is the polling interval; at least 30s.
+                    maxLength: 32
+                    pattern: ^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$
                     type: string
                     x-kubernetes-validations:
                     - message: periodic.interval must be at least 30s
