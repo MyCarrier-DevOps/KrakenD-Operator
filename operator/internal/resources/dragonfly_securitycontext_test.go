@@ -400,8 +400,9 @@ func TestMergeDragonflyContainerSecurityContext_ReflectiveRoundTrip(t *testing.T
 // TestMergeDragonflyPodSecurityContext_ReflectiveRoundTrip is the
 // PodSecurityContext counterpart. RunAsUser is filled with a non-zero value
 // (7, via fillNonZero) same as every other field. fillNonZero also sets
-// RunAsNonRoot non-nil (true), which alone keeps the cross-scope pod fixup (mergeDragonflyPodSecurityContext) from firing
-// regardless of RunAsUser's value — the fixup only ever inspects
+// RunAsNonRoot non-nil (true), which alone keeps the cross-scope pod fixup
+// (mergeDragonflyPodSecurityContext) from firing regardless of RunAsUser's
+// value — the fixup only ever inspects
 // runAsUser:0 requests where RunAsNonRoot is left UNSET, and this test sets
 // every field explicitly. userContainer is passed nil: the containerUid0
 // branch is exercised by the dedicated cross-scope tests above, not this
