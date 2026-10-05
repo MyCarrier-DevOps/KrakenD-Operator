@@ -301,7 +301,7 @@ func TestGatewayReconcile_ImageChangeIsNotReadyUntilTheDeploymentRunsIt(t *testi
 	stale := makeConvergedDeployment(gw, "applied")
 	gw.Spec.Image = "img:v2"
 	c := fakeClientBuilder().WithObjects(gw, stale).WithStatusSubresource(gw).
-		WithInterceptorFuncs(staleDeploymentReads(stale)).Build()
+		WithInterceptorFuncs(withGenerationBumps(staleDeploymentReads(stale))).Build()
 	rend := &mockRenderer{output: &renderer.RenderOutput{
 		JSON: []byte(`{"version":3}`), Checksum: "applied",
 	}}
@@ -327,7 +327,7 @@ func TestGatewayReconcile_PluginChangeIsNotReadyUntilTheDeploymentRunsIt(t *test
 	stale := makeConvergedDeployment(gw, "applied")
 	stale.Spec.Template.Annotations[resources.PluginChecksumAnnotation] = "plugins-old"
 	c := fakeClientBuilder().WithObjects(gw, stale).WithStatusSubresource(gw).
-		WithInterceptorFuncs(staleDeploymentReads(stale)).Build()
+		WithInterceptorFuncs(withGenerationBumps(staleDeploymentReads(stale))).Build()
 	rend := &mockRenderer{output: &renderer.RenderOutput{
 		JSON: []byte(`{"version":3}`), Checksum: "applied", PluginChecksum: "plugins-new",
 	}}
