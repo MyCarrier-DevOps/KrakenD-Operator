@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
@@ -48,7 +49,11 @@ func validateEntries(ep *v1alpha1.KrakenDEndpoint, changed []int, gw *v1alpha1.K
 		}
 		if e.Method == "GET" && health != "" && renderer.ConflictKey(e.Endpoint) == renderer.ConflictKey(health) {
 			errs = append(errs, field.Invalid(p.Child("endpoint"), e.Endpoint,
-				fmt.Sprintf("GET %s is the gateway's health endpoint (spec.config.router.healthPath)", health)))
+				fmt.Sprintf("GET %s is the gateway's health endpoint (spec.config.router)", health)))
+		}
+		if gw.Spec.Edition == v1alpha1.EditionCE && strings.HasSuffix(e.Endpoint, "/*") {
+			errs = append(errs, field.Invalid(p.Child("endpoint"), e.Endpoint,
+				"unnamed wildcards (/*) are an Enterprise feature; the gateway runs CE"))
 		}
 	}
 	return errs
