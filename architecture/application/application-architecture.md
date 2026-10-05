@@ -1123,6 +1123,9 @@ type KrakenDEndpointReconciler struct {
     client.Client
     Scheme   *runtime.Scheme
     Recorder record.EventRecorder
+    // APIReader reads uncached; the finalizer is released only after it
+    // confirms that no endpoint references the policy.
+    APIReader client.Reader
 }
 ```
 
@@ -1227,7 +1230,14 @@ flowchart TD
     B -->|No| Z[Return]
     B -->|Yes| C[List KrakenDEndpoints through the<br/>EndpointPolicyIndex field index]
     C --> D[Count the endpoints where any<br/>backend references this policy]
-    D --> E[Update status.referencedBy]
+    D --> P{deletionTimestamp set?}
+    P -->|No| Q[Add the protection finalizer if missing]
+    P -->|Yes, still referenced| R[Emit a DeletionBlocked event, keep the policy]
+    P -->|Yes, no cached reference| S[List endpoints uncached]
+    S -->|Still unreferenced| T[Remove the finalizer, return]
+    S -->|Referenced| R
+    Q --> E[Update status.referencedBy]
+    R --> E
     E --> F{Validate policy fields}
     F -->|Invalid| G[Set Ready=False with the<br/>InvalidCircuitBreaker or<br/>InvalidRateLimit reason]
     F -->|Valid| H[Set Ready=True<br/>reason Ready]
@@ -1239,6 +1249,10 @@ flowchart TD
 `Ready` replaces the earlier `PolicyValid` condition, which is removed from policies written by earlier versions. It is `False` when `circuitBreaker.maxErrors`, `interval` or `timeout` is not positive (`InvalidCircuitBreaker`) or `rateLimit.maxRate` is not positive (`InvalidRateLimit`), and `True` otherwise. Events fire on transitions only: a `Warning` with the invalid reason when `Ready` becomes `False` or changes reason, and a `Normal` `Ready` when it recovers.
 
 The policy controller's reconciliation is straightforward. The `referencedBy` count is the number of `KrakenDEndpoint` resources the `EndpointPolicyIndex` field index returns for the policy's `namespace/name`: those with at least one `backend[].policyRef` that resolves to this policy, in any namespace. The important cross-controller interaction is through the gateway controller's `policyToGateways` mapper, which uses the same index: when a policy is updated, all gateways with endpoints referencing that policy are re-queued for re-rendering.
+
+### Protection finalizer
+
+Every policy that is not being deleted carries the finalizer `gateway.krakend.io/policy-protection` (`v1alpha1.PolicyProtectionFinalizer`), added with an `Update` of the object (RBAC: `update` on `krakendbackendpolicies`). Deleting a policy is always accepted, because the policy webhook is not registered for DELETE. A terminating policy that endpoints still reference keeps serving: the controller keeps reporting `referencedBy`, emits a `DeletionBlocked` warning event that names up to five referencing endpoints, and leaves the finalizer. The endpoint watch enqueues the policy when its last reference is deleted or repointed, and the controller then removes the finalizer. The cached index can lag a reference created a moment ago, so before it releases a policy its cache shows unreferenced the controller lists the endpoints through `APIReader` (a field index exists only in the cache, so it filters the list with `EndpointPolicyKeys`). Admission rejects a new reference to a terminating policy. A reference created after the controller's uncached list but admitted before the webhook saw the deletion is possible only inside a window of milliseconds; the endpoint then reports `PolicyNotFound`.
 
 ### SetupWithManager
 
@@ -1983,32 +1997,9 @@ func (v *PolicyValidator) ValidateCreate(
 **KrakenDBackendPolicy (DELETE):**
 
 ```go
-func (v *PolicyValidator) ValidateDelete(
-    ctx context.Context, policy *v1alpha1.KrakenDBackendPolicy,
-) (admission.Warnings, error) {
-    var endpoints v1alpha1.KrakenDEndpointList
-    if err := v.List(ctx, &endpoints, client.InNamespace(policy.Namespace)); err != nil {
-        return nil, fmt.Errorf("listing endpoints: %w", err)
-    }
-
-    var references []string
-    for _, ep := range endpoints.Items {
-        for _, entry := range ep.Spec.Endpoints {
-            for _, be := range entry.Backends {
-                if be.PolicyRef != nil && be.PolicyRef.Name == policy.Name {
-                    references = append(references, ep.Name)
-                    break
-                }
-            }
-        }
-    }
-
-    if len(references) > 0 {
-        return nil, field.Forbidden(
-            field.NewPath("metadata", "name"),
-            fmt.Sprintf("policy is referenced by endpoints: %s", strings.Join(references, ", ")),
-        )
-    }
+// The policy webhook is not registered for DELETE. PolicyProtectionFinalizer
+// keeps a referenced policy until nothing references it.
+func (v *PolicyValidator) ValidateDelete(context.Context, runtime.Object) (admission.Warnings, error) {
     return nil, nil
 }
 ```
@@ -2874,7 +2865,7 @@ func TestGatewayReconciler_CreatesOwnedResources(t *testing.T) {
 | Endpoint create → gateway re-reconciles → ConfigMap updated | Endpoint watch, config rendering |
 | Endpoint conflict → oldest wins; a loser of every entry gets Accepted=False (EndpointConflict), a loser of some gets Accepted=True (PartiallyAccepted); status.conflicts names the lost entries | Conflict detection logic across endpoints[] entries |
 | Policy update → all gateways with referencing endpoints re-queued → ConfigMap updated | `policyToGateways` mapper, namespace-scoped list, re-render |
-| Policy delete blocked by referencing endpoint | Webhook DELETE validation |
+| Policy delete while an endpoint references it → held Terminating with a `DeletionBlocked` event, then released when the last reference goes | Protection finalizer, endpoint watch, uncached confirmation before release |
 | Policy create/update with invalid field ranges rejected | Webhook CREATE/UPDATE validation |
 | Config validation failure → Error phase, no Deployment update | Validation pipeline, error handling |
 | License expiry → CE fallback (image + config change) | License evaluation inside the gateway reconcile |
