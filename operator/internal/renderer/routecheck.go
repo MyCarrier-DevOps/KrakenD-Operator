@@ -83,12 +83,39 @@ type routedConfig struct {
 	} `json:"endpoints"`
 }
 
-// routerOptions are the "router" extra_config keys that add routes.
-type routerOptions struct {
+// RouterOptions are the "router" extra_config keys that add routes.
+type RouterOptions struct {
 	HealthPath    string `json:"health_path"`
 	DisableHealth bool   `json:"disable_health"`
 	AutoOptions   bool   `json:"auto_options"`
 }
+
+// ParseRouterOptions reads a "router" extra_config block. A block that does
+// not decode, for example one with a wrongly typed key, reads as the defaults:
+// the schema lint reports it.
+func ParseRouterOptions(block json.RawMessage) RouterOptions {
+	var opts RouterOptions
+	if json.Unmarshal(block, &opts) != nil {
+		return RouterOptions{}
+	}
+	return opts
+}
+
+// HealthRoute returns the path the health endpoint is served on, or "" when
+// it is disabled.
+func (o RouterOptions) HealthRoute() string {
+	switch {
+	case o.DisableHealth:
+		return ""
+	case o.HealthPath != "":
+		return o.HealthPath
+	}
+	return DefaultHealthPath
+}
+
+// DefaultHealthPath is where KrakenD serves its health endpoint unless told
+// otherwise.
+const DefaultHealthPath = "/__health"
 
 // routeConflicts registers every route of doc in a gin engine, in the order
 // the KrakenD runtime does, and returns one lint-pointer line per refused
@@ -127,16 +154,12 @@ func routeConflicts(doc []byte) ([]string, error) {
 // health endpoint, the debug and echo endpoints, every endpoint, then one
 // OPTIONS route per distinct path when auto_options is on.
 func ginRoutesOf(cfg routedConfig) []ginRoute {
-	var opts routerOptions
-	if raw, ok := cfg.ExtraConfig["router"]; ok && json.Unmarshal(raw, &opts) != nil {
-		opts = routerOptions{} // a malformed router block is the schema lint's to report
+	opts := RouterOptions{}
+	if raw, ok := cfg.ExtraConfig["router"]; ok {
+		opts = ParseRouterOptions(raw)
 	}
 	var routes []ginRoute
-	if !opts.DisableHealth {
-		health := opts.HealthPath
-		if health == "" {
-			health = "/__health"
-		}
+	if health := opts.HealthRoute(); health != "" {
 		routes = append(routes, ginRoute{index: gatewayRoute, method: http.MethodGet, path: health})
 	}
 	if cfg.Debug {
