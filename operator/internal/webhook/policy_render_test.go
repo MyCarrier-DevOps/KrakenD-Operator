@@ -154,6 +154,8 @@ func TestPolicyAdmission_DenialIsBounded(t *testing.T) {
 
 func TestPolicyAdmission_RejectsEnterpriseOnlyRawOnACEGateway(t *testing.T) {
 	const proxy = `{"backend/http/client":{"proxy_address":"http://p"}}`
+	cached := testPolicy(proxy)
+	cached.Spec.Cache = &v1alpha1.CacheSpec{Shared: true}
 	tests := []struct {
 		name    string
 		objs    []client.Object
@@ -163,6 +165,8 @@ func TestPolicyAdmission_RejectsEnterpriseOnlyRawOnACEGateway(t *testing.T) {
 		calls   string
 	}{
 		{"new raw on a CE gateway", referencing(), testPolicy(proxy), nil, false, "policy"},
+		{"raw unchanged, another field edited", referencing(), cached, testPolicy(proxy), true,
+			"policy,gateway+policy"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
