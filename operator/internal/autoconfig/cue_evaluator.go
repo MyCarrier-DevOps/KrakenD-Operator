@@ -51,7 +51,6 @@ type CUEOutput struct {
 	Entries      []v1alpha1.EndpointEntry
 	OperationIDs map[string]string
 	Tags         map[string][]string
-	Warnings     []string
 	// UnmatchedOverrides holds the operationIds from spec.overrides that
 	// matched no generated entry, in override order.
 	UnmatchedOverrides []string
