@@ -1686,10 +1686,12 @@ func TestAutoConfigValidator_Update(t *testing.T) {
 			Trigger:    v1alpha1.TriggerOnChange,
 		},
 	}
+	old := ac.DeepCopy()
+	old.Spec.GatewayRef.Name = "previous"
 	v := &AutoConfigValidator{Client: fakeClient()}
-	_, err := v.ValidateUpdate(context.Background(), ac, ac)
+	_, err := v.ValidateUpdate(context.Background(), old, ac)
 	if err == nil {
-		t.Error("expected error on update")
+		t.Error("expected error on update to a missing gateway")
 	}
 }
 
