@@ -186,7 +186,10 @@ func schemaRefs(schema any) []string {
 // mappingTargets returns the schema references a discriminator object's
 // mapping holds: each value is a schema name or a pointer.
 func mappingTargets(discriminator map[string]any) []string {
-	mapping, _ := discriminator["mapping"].(map[string]any)
+	mapping, ok := discriminator["mapping"].(map[string]any)
+	if !ok {
+		return nil
+	}
 	var targets []string
 	for _, key := range slices.Sorted(maps.Keys(mapping)) {
 		if target, ok := mapping[key].(string); ok {
