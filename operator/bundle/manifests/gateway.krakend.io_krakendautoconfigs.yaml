@@ -103,6 +103,15 @@ spec:
                             type: boolean
                           encoding:
                             description: Encoding selects the backend response encoding.
+                            enum:
+                            - json
+                            - safejson
+                            - fast-json
+                            - xml
+                            - rss
+                            - string
+                            - no-op
+                            - yaml
                             type: string
                           extraConfig:
                             description: ExtraConfig holds arbitrary backend-level
@@ -142,12 +151,23 @@ spec:
                           method:
                             description: Method overrides the endpoint method for
                               this backend.
+                            enum:
+                            - GET
+                            - POST
+                            - PUT
+                            - PATCH
+                            - DELETE
+                            - OPTIONS
+                            - HEAD
+                            - CONNECT
+                            - TRACE
                             type: string
                           policyRef:
                             description: PolicyRef references a KrakenDBackendPolicy
                               to apply.
                             properties:
                               name:
+                                minLength: 1
                                 type: string
                               namespace:
                                 maxLength: 63
@@ -159,6 +179,10 @@ spec:
                           sd:
                             description: SD selects the service discovery provider
                               (e.g. "static", "dns").
+                            enum:
+                            - static
+                            - dns
+                            - dns-shared
                             type: string
                           sdScheme:
                             description: SDScheme sets the service discovery scheme
@@ -360,6 +384,7 @@ spec:
                       to all backends.
                     properties:
                       name:
+                        minLength: 1
                         type: string
                       namespace:
                         maxLength: 63
@@ -403,6 +428,7 @@ spec:
                   endpoints belong to.
                 properties:
                   name:
+                    minLength: 1
                     type: string
                   namespace:
                     maxLength: 63
@@ -550,6 +576,7 @@ spec:
                       description: PolicyRef overrides the backend policy reference.
                       properties:
                         name:
+                          minLength: 1
                           type: string
                         namespace:
                           maxLength: 63
