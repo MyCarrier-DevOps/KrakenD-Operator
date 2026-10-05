@@ -16,6 +16,9 @@ endpoint_path_re='^(/\*|/[^*?&%]*(/\*)?)$'
 # The CRD pattern of the endpoint and AutoConfig duration fields (a Go duration), verbatim.
 go_duration_re='^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$'
 
+# The CRD pattern of the gateway duration fields (one integer and one unit), verbatim.
+single_unit_re='^[0-9]+(ns|ms|us|µs|s|m|h)$'
+
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
@@ -28,7 +31,7 @@ for kind in endpoints gateways autoconfigs backendpolicies; do
 	fi
 done
 
-jq_opts=(-r --arg path_re "$endpoint_path_re" --arg go_re "$go_duration_re")
+jq_opts=(-r --arg path_re "$endpoint_path_re" --arg go_re "$go_duration_re" --arg one_re "$single_unit_re")
 
 jq_lib='
 # The API server anchors ^ and $ at the ends of the text only; Oniguruma also
@@ -80,3 +83,8 @@ jq "${jq_opts[@]}" "$jq_lib"'
     ))
   ))
 ]} | report("KrakenDEndpoint")' "$work/endpoints.json"
+
+jq "${jq_opts[@]}" "$jq_lib"'
+.items[] | .spec as $s | {id: "\(.metadata.namespace)/\(.metadata.name)", v: [
+  ($s.config.timeout // empty | dur_problem($one_re; 64; "spec.config.timeout"))
+]} | report("KrakenDGateway")' "$work/gateways.json"
