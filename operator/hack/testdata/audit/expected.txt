@@ -77,3 +77,4 @@ KrakenDAutoConfig a/override-path: spec.overrides[0].endpoint orders
 KrakenDAutoConfig a/override-policy: spec.overrides[0].policyRef.name is empty
 KrakenDAutoConfig a/override-collide: overrides collide: get_a, get-a
 KrakenDAutoConfig a/defaults-timeout: spec.defaults.endpoint.timeout 3 seconds
+KrakenDAutoConfig a/defaults-cachettl: spec.defaults.endpoint.cacheTTL is longer than 64 characters
