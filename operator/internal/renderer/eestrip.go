@@ -184,8 +184,9 @@ const (
 
 // EEOnlyNamespaces returns the extra_config namespaces that only KrakenD
 // Enterprise implements at level, sorted, or nil for an unknown level. A
-// CE-fallback render strips them; admission rejects them on CE gateways,
-// where KrakenD CE would accept and then silently ignore them. At
+// CE-fallback render strips them, except that it keeps the keys CE honors of a
+// partly honored block (ceHonoredKeys); admission rejects what CEDrops reports
+// on CE gateways, where KrakenD CE would accept and then silently drop it. At
 // LevelEndpoint it leaves out the namespaces every CE render drops
 // (ceDroppedEndpointNamespaces).
 func EEOnlyNamespaces(level NamespaceLevel) []string {
