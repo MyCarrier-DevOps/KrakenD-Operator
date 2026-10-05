@@ -156,3 +156,11 @@ func TestFindingsFrom_ABlameWithoutAnEndpointIsAGatewayFinding(t *testing.T) {
 		t.Errorf("findings = %+v, want one gateway finding", got)
 	}
 }
+
+func TestFindingsFrom_EmptyOutputStillGivesAReason(t *testing.T) {
+	got := findingsFrom(nil, nil, nil, " \n ")
+
+	if len(got) != 1 || got[0].Index != -1 || got[0].Message != "rejected with no output" {
+		t.Errorf("findings = %+v, want one gateway finding saying the output was empty", got)
+	}
+}
