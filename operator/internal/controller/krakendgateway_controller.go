@@ -570,7 +570,7 @@ func (r *KrakenDGatewayReconciler) inspectDeploymentStatus(
 			Reason:             "RolloutComplete",
 			Message:            "Deployment rollout completed successfully",
 		})
-	case rolloutInFlight(obs):
+	case rolloutInFlight(obs, want):
 		raiseProgressing(gw, note)
 	}
 
@@ -607,11 +607,7 @@ func (r *KrakenDGatewayReconciler) inspectDeploymentStatus(
 // describes the previous ReplicaSet, so the replica counts alone are not
 // proof.
 func deploymentConverged(dep *appsv1.Deployment, want infraInputs) bool {
-	tmpl := dep.Spec.Template
-	if tmpl.Annotations[resources.PostRestartJobChecksumAnnotation] != want.appliedChecksum ||
-		tmpl.Annotations[resources.PluginChecksumAnnotation] != want.pluginChecksum ||
-		tmpl.Annotations[resources.ImageAnnotation] != want.image ||
-		tmpl.Annotations[resources.LicenseChecksumAnnotation] != want.licenseChecksum {
+	if !templateAnnotationsMatch(dep, want) {
 		return false
 	}
 	desired := int32(1)

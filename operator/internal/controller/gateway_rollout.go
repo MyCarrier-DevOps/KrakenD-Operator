@@ -23,6 +23,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/resources"
 )
 
 // deploymentObservation is what the Deployment step of the infrastructure
@@ -47,13 +48,33 @@ type rolloutNote struct {
 
 // rolloutInFlight reports whether the pass that reconciled the Deployment
 // started, or sees, a rollout: it created the Deployment, its write changed
-// the pod template, or old pods remain beside updated ones. A replica change
-// alone is not a rollout, and neither is a generation the Deployment
-// controller has not observed yet: a scale (an HPA's included) bumps the
-// generation without touching the pod template.
-func rolloutInFlight(obs deploymentObservation) bool {
+// the pod template, the template is not the wanted one, or old pods remain
+// beside updated ones. A replica change alone is not a rollout, and neither is
+// a generation the Deployment controller has not observed yet: a scale (an
+// HPA's included) bumps the generation without touching the pod template.
+//
+// The Deployment CreateOrUpdate returns normally carries the wanted template
+// already. Two edge cases are accepted. When the cache already matches the
+// desired spec but its status is stale, the result is at most one extra
+// Progressing=True pass, which the Owns watch corrects. And on a later pass,
+// inside the few milliseconds before the Deployment controller observes a
+// template write, the Deployment can read as converged; the Owns watch
+// reconciles again on the observation.
+func rolloutInFlight(obs deploymentObservation, want infraInputs) bool {
 	dep := obs.dep
-	return dep != nil && (obs.created || obs.templateChanged || dep.Status.UpdatedReplicas < dep.Status.Replicas)
+	return dep != nil && (obs.created || obs.templateChanged || !templateAnnotationsMatch(dep, want) ||
+		dep.Status.UpdatedReplicas < dep.Status.Replicas)
+}
+
+// templateAnnotationsMatch reports whether dep's pod template annotations
+// carry the applied config, image, plugins and license. They are compared
+// through annotations because admission can rewrite the container image.
+func templateAnnotationsMatch(dep *appsv1.Deployment, want infraInputs) bool {
+	annotations := dep.Spec.Template.Annotations
+	return annotations[resources.PostRestartJobChecksumAnnotation] == want.appliedChecksum &&
+		annotations[resources.PluginChecksumAnnotation] == want.pluginChecksum &&
+		annotations[resources.ImageAnnotation] == want.image &&
+		annotations[resources.LicenseChecksumAnnotation] == want.licenseChecksum
 }
 
 // raiseProgressing reports a rollout in progress. The reason is the one this
