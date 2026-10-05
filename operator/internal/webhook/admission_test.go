@@ -150,3 +150,25 @@ func TestNewErrors_KeepsOnlyErrorsTheOldObjectLacked(t *testing.T) {
 		t.Errorf("newErrors = %q, want %q", have, want)
 	}
 }
+
+func TestAdmission_AutoConfigPolicyLookupFailureIs500(t *testing.T) {
+	c := fakeClientBuilderWith(interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object,
+			opts ...client.GetOption,
+		) error {
+			if _, ok := obj.(*v1alpha1.KrakenDBackendPolicy); ok {
+				return errors.New("cache not synced")
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	}, testGateway())
+	ac := &v1alpha1.KrakenDAutoConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "ac", Namespace: "default"},
+		Spec: v1alpha1.KrakenDAutoConfigSpec{GatewayRef: v1alpha1.GatewayRef{Name: "gw"},
+			Defaults: &v1alpha1.Defaults{PolicyRef: &v1alpha1.PolicyRef{Name: "p"}}},
+	}
+	resp := review(t, &AutoConfigValidator{Client: c}, "alice", ac, nil)
+	if resp.Allowed || resp.Result.Code != http.StatusInternalServerError {
+		t.Errorf("response = %+v, want 500", resp.Result)
+	}
+}
