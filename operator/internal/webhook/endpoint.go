@@ -100,19 +100,41 @@ func (v *EndpointValidator) ValidateDelete(
 	return nil, nil
 }
 
-// admit runs every rule against ep within the admission budget. old is the
-// stored object on an update and nil on a create.
+// admit runs every rule against ep within the admission budget, then re-reads
+// the policies ep newly references uncached. old is the stored object on an
+// update and nil on a create.
 func (v *EndpointValidator) admit(
 	ctx context.Context, old, ep *v1alpha1.KrakenDEndpoint,
 ) (admission.Warnings, error) {
 	ctx, cancel := context.WithTimeout(ctx, admissionBudget)
 	defer cancel()
 
+	warnings, err := v.check(ctx, old, ep)
+	if err != nil || v.APIReader == nil {
+		return warnings, err
+	}
+	// The cached read of a policy came before the render check, which can take
+	// seconds; a deletion that landed meanwhile would drop ep from the render.
+	errs, err := v.validatePolicyRefs(ctx, v.APIReader, old, ep)
+	if err != nil {
+		return nil, unavailable(err)
+	}
+	if len(errs) > 0 {
+		return nil, invalid(kindEndpoint, ep.Name, errs)
+	}
+	return warnings, nil
+}
+
+// check runs every rule against ep. old is the stored object on an update and
+// nil on a create.
+func (v *EndpointValidator) check(
+	ctx context.Context, old, ep *v1alpha1.KrakenDEndpoint,
+) (admission.Warnings, error) {
 	gw, errs, err := v.gatewayFor(ctx, old, ep)
 	if err != nil {
 		return nil, unavailable(err)
 	}
-	refErrs, err := v.validatePolicyRefs(ctx, old, ep)
+	refErrs, err := v.validatePolicyRefs(ctx, v.Client, old, ep)
 	if err != nil {
 		return nil, unavailable(err)
 	}
@@ -277,7 +299,7 @@ func (v *EndpointValidator) gatewayFor(
 // policy cannot be deleted (its protection finalizer holds it), so the gap
 // only matters for stored references that already dangle.
 func (v *EndpointValidator) validatePolicyRefs(
-	ctx context.Context, old, ep *v1alpha1.KrakenDEndpoint,
+	ctx context.Context, reader client.Reader, old, ep *v1alpha1.KrakenDEndpoint,
 ) (field.ErrorList, error) {
 	known := map[string]bool{}
 	if old != nil {
@@ -292,7 +314,7 @@ func (v *EndpointValidator) validatePolicyRefs(
 				continue
 			}
 			p := field.NewPath("spec", "endpoints").Index(i).Child("backends").Index(j).Child("policyRef")
-			refErrs, err := v.policyRefError(ctx, p, ep.Namespace, be.PolicyRef)
+			refErrs, err := policyRefError(ctx, reader, p, ep.Namespace, be.PolicyRef)
 			if err != nil {
 				return nil, err
 			}
@@ -304,12 +326,12 @@ func (v *EndpointValidator) validatePolicyRefs(
 
 // policyRefError returns the errors for a reference to a policy that is not
 // usable, none when it is.
-func (v *EndpointValidator) policyRefError(
-	ctx context.Context, p *field.Path, namespace string, ref *v1alpha1.PolicyRef,
+func policyRefError(
+	ctx context.Context, reader client.Reader, p *field.Path, namespace string, ref *v1alpha1.PolicyRef,
 ) (field.ErrorList, error) {
 	polNS := ref.ResolvedNamespace(namespace)
 	policy := &v1alpha1.KrakenDBackendPolicy{}
-	err := v.Get(ctx, types.NamespacedName{Name: ref.Name, Namespace: polNS}, policy)
+	err := reader.Get(ctx, types.NamespacedName{Name: ref.Name, Namespace: polNS}, policy)
 	switch {
 	case apierrors.IsNotFound(err):
 		if polNS != namespace {
