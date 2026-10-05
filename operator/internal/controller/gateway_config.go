@@ -345,6 +345,17 @@ func rejectionsByEndpoint(findings []configcheck.Finding) map[types.NamespacedNa
 	return out
 }
 
+// rejectionMessage is ConfigValid's message on rejection: the summary, then
+// one line per finding, so truncateMessage keeps whole findings.
+func rejectionMessage(findings []configcheck.Finding) string {
+	lines := make([]string, 0, len(findings)+1)
+	lines = append(lines, rejectionSummary(findings))
+	for _, f := range findings {
+		lines = append(lines, f.String())
+	}
+	return strings.Join(lines, "\n")
+}
+
 // rejectionSummary is the first line of ConfigValid's message on rejection. It
 // names the KrakenDEndpoints krakend check blamed.
 func rejectionSummary(findings []configcheck.Finding) string {
