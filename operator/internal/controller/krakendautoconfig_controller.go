@@ -560,6 +560,13 @@ func (r *KrakenDAutoConfigReconciler) fetchSpec(
 		}
 		fetchResult.Data = resolved
 		notes = append(notes, refNotes...)
+	} else if external, refErr := autoconfig.ExternalRefs(fetchResult.Data); refErr == nil {
+		// Nothing can fetch these. A decode error is ignored: the same data
+		// then fails CUE evaluation, which reports it.
+		for _, ref := range external {
+			notes = append(notes, fmt.Sprintf(
+				"external $ref %q is not resolved: a ConfigMap-sourced spec cannot fetch other documents", ref))
+		}
 	}
 
 	// Strip upstream `servers` entries: the KrakenD gateway is the
