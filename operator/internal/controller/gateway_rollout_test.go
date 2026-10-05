@@ -389,6 +389,17 @@ func TestInspectDeploymentStatus_ATemplateThatIsNotTheWantedOneIsARollout(t *tes
 				dep.Spec.Template.Annotations[resources.PostRestartJobChecksumAnnotation] = "B"
 			},
 		},
+		{
+			name: "mounts another config ConfigMap",
+			mutate: func(dep *appsv1.Deployment) {
+				dep.Spec.Template.Spec.Volumes = []corev1.Volume{{
+					Name: "config",
+					VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
+						LocalObjectReference: corev1.LocalObjectReference{Name: "another"},
+					}},
+				}}
+			},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
