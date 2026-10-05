@@ -140,6 +140,46 @@ func TestRender_CEFallbackKeepsTheKeysCEHonors(t *testing.T) {
 	}
 }
 
+// A client block with nothing CE drops survives a CE fallback and is not
+// listed: listing it would report a feature the gateway still has as stripped.
+func TestRender_CEFallbackKeepsAndDoesNotListBlocksCEHonors(t *testing.T) {
+	in := eeFeatureInput(true)
+	be := in.Endpoints[0].Spec.Endpoints[1].Backends[0]
+	in.Endpoints[0].Spec.Endpoints[1].Backends = []v1alpha1.BackendSpec{
+		withBackendExtra(be, `{"backend/http/client":{}}`),
+		withBackendExtra(be, `{"backend/http/client":{"send_body_on_redirect":true}}`),
+	}
+	out, err := New(Options{}).Render(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range out.StrippedEEFeatures {
+		if strings.HasPrefix(f.Feature, "backend[") {
+			t.Errorf("listed %+v as stripped, but CE keeps that block", f)
+		}
+	}
+	var doc struct {
+		Endpoints []struct {
+			Backend []struct {
+				ExtraConfig map[string]map[string]any `json:"extra_config"`
+			} `json:"backend"`
+		} `json:"endpoints"`
+	}
+	if err := json.Unmarshal(out.JSON, &doc); err != nil {
+		t.Fatal(err)
+	}
+	for i, b := range doc.Endpoints[0].Backend {
+		if _, ok := b.ExtraConfig["backend/http/client"]; !ok {
+			t.Errorf("backend[%d] lost its client block, which a CE fallback keeps", i)
+		}
+	}
+}
+
+func withBackendExtra(be v1alpha1.BackendSpec, raw string) v1alpha1.BackendSpec {
+	be.ExtraConfig = &runtime.RawExtension{Raw: []byte(raw)}
+	return be
+}
+
 func TestRender_WithoutFallbackKeepsEEFeatures(t *testing.T) {
 	out, err := New(Options{}).Render(eeFeatureInput(false))
 	if err != nil {
