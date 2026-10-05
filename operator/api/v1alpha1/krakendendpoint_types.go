@@ -52,6 +52,9 @@ type KrakenDEndpointSpec struct {
 // EndpointEntry defines a single KrakenD endpoint.
 type EndpointEntry struct {
 	// Endpoint is the public path exposed by KrakenD (e.g. "/api/v1/users").
+	// It starts with "/" and contains no "*", "?", "&" or "%", except a
+	// trailing "/*" wildcard (an Enterprise feature).
+	// +kubebuilder:validation:Pattern=`^(/\*|/[^*?&%]*(/\*)?)$`
 	Endpoint string `json:"endpoint"`
 
 	// Method is the HTTP method for this endpoint.
