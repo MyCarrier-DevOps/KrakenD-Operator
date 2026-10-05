@@ -20,9 +20,11 @@ package integration
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -389,6 +391,47 @@ func TestAutoConfig_FailedOperationKeepsLastGoodEndpoint(t *testing.T) {
 		}
 		return nil
 	})
+}
+
+func TestAutoConfig_EndpointRejectedByTheAPIServerIsHeldAndReported(t *testing.T) {
+	ac := newSyncedAutoConfig(t)
+	owners, err := getOwnedEndpoint(ac, "pets-listowners")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The CRD allows no "&" in an endpoint path, and nothing in the
+	// AutoConfig or the spec checks that: the API server answers the
+	// generated endpoint of /bad&path with a 422. /toys is healthy.
+	operations := maps.Clone(initialOperations)
+	operations["/bad&path"] = "listBad"
+	operations["/toys"] = "listToys"
+	setSpec(t, ac, openAPISpec(t, operations))
+
+	eventuallyWithin(t, 30*time.Second, func() error {
+		var got v1alpha1.KrakenDAutoConfig
+		if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(ac), &got); err != nil {
+			return err
+		}
+		cond := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionSynced)
+		if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != v1alpha1.ReasonOperationsFailed {
+			return fmt.Errorf("waiting for Synced=False/OperationsFailed, got %+v", cond)
+		}
+		failed := got.Status.FailedOperations
+		if len(failed) != 1 || failed[0].OperationID != "listBad" || failed[0].Endpoint != "pets-listbad" ||
+			failed[0].Reason != v1alpha1.ReasonEndpointRejected || !strings.Contains(failed[0].Message, "is invalid") {
+			return fmt.Errorf("unexpected failedOperations %+v", failed)
+		}
+		_, err := getOwnedEndpoint(ac, "pets-listtoys")
+		return err
+	})
+	if _, err := getOwnedEndpoint(ac, "pets-listbad"); !apierrors.IsNotFound(errors.Unwrap(err)) {
+		t.Errorf("expected no pets-listbad endpoint, got %v", err)
+	}
+	held, err := getOwnedEndpoint(ac, "pets-listowners")
+	if err != nil || held.UID != owners.UID || held.Generation != owners.Generation {
+		t.Fatalf("expected pets-listowners unchanged, got %v %+v", err, held)
+	}
 }
 
 func TestAutoConfig_ForcedReconcileInSteadyStateWritesNothing(t *testing.T) {
