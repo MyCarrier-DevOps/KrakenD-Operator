@@ -138,3 +138,11 @@ func TestFlattenEndpoints_SameShapeInOneEndpointKeepsTheEarlierEntry(t *testing.
 		})
 	}
 }
+
+func TestRouteClashDetail_SamePathNamesTheOwner(t *testing.T) {
+	got := RouteClashDetail("GET", "/users/{id}", "/users/{id}", "KrakenDEndpoint default/pets-getuser")
+
+	if want := "already defined by KrakenDEndpoint default/pets-getuser"; got != want {
+		t.Errorf("RouteClashDetail = %q, want %q", got, want)
+	}
+}

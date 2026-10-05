@@ -49,3 +49,9 @@ func ConflictKey(endpoint string) string {
 	}
 	return cleaned
 }
+
+// RouteClashDetail says why the route of the entry (method, path) is not
+// served because owner already serves otherPath, which has the same route.
+func RouteClashDetail(method, path, otherPath, owner string) string {
+	return ""
+}
