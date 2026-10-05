@@ -4977,3 +4977,28 @@ func TestRouteCollisions_AnExistingEndpointKeepsTheRouteOverANewOne(t *testing.T
 		t.Errorf("routeCollisions = %+v, want only test-ac-geta held", got)
 	}
 }
+
+func TestRouteCollisions_TheOldestExistingEndpointKeepsTheRoute(t *testing.T) {
+	older, newer := generatedEndpoint("getB", "/h/{b}"), generatedEndpoint("getA", "/h/{a}")
+	older.CreationTimestamp = metav1.NewTime(time.Unix(1000, 0))
+	newer.CreationTimestamp = metav1.NewTime(time.Unix(2000, 0))
+	desired := []*v1alpha1.KrakenDEndpoint{generatedEndpoint("getA", "/h/{a}"), generatedEndpoint("getB", "/h/{b}")}
+
+	got := routeCollisions(desired, []v1alpha1.KrakenDEndpoint{*newer, *older})
+
+	if len(got) != 1 || got["test-ac-geta"].endpoint != desired[0] {
+		t.Errorf("routeCollisions = %+v, want only test-ac-geta held", got)
+	}
+}
+
+func TestRouteCollisions_AStaleEndpointTakesNoPart(t *testing.T) {
+	// getUser was renamed getUserById: the old endpoint still holds the
+	// route until it is deleted, and the new one must not be held for it.
+	stale := generatedEndpoint("getUser", "/users/{id}")
+	stale.CreationTimestamp = metav1.NewTime(time.Unix(1000, 0))
+	desired := []*v1alpha1.KrakenDEndpoint{generatedEndpoint("getUserById", "/users/{id}")}
+
+	if got := routeCollisions(desired, []v1alpha1.KrakenDEndpoint{*stale}); len(got) != 0 {
+		t.Errorf("routeCollisions = %+v, want none", got)
+	}
+}
