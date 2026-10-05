@@ -14,5 +14,6 @@
  {"metadata":{"namespace":"a","name":"backend-method"},"spec":{"gatewayRef":{"name":"gw"},"endpoints":[{"endpoint":"/x","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u","method":"get"}]}]}},
  {"metadata":{"namespace":"a","name":"backend-policyref"},"spec":{"gatewayRef":{"name":"gw"},"endpoints":[{"endpoint":"/x","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u","policyRef":{"name":""}}]}]}},
  {"metadata":{"namespace":"a","name":"good"},"spec":{"gatewayRef":{"name":"gw"},"endpoints":[{"endpoint":"/x","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}],"timeout":"2562047h47m16.854775807s","cacheTTL":"9223372036854775807ns"},{"endpoint":"/y/{id}","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u","encoding":"no-op","sd":"static","method":"GET","policyRef":{"name":"p"}}],"timeout":"1m30s","cacheTTL":"0","outputEncoding":"no-op"}]}},
- {"metadata":{"namespace":"a","name":"path-linebreak"},"spec":{"gatewayRef":{"name":"gw"},"endpoints":[{"endpoint":"x\n/y","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}]}]}}
+ {"metadata":{"namespace":"a","name":"path-linebreak"},"spec":{"gatewayRef":{"name":"gw"},"endpoints":[{"endpoint":"x\n/y","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}]}]}},
+ {"metadata":{"namespace":"a","name":"timeout-newline"},"spec":{"gatewayRef":{"name":"gw"},"endpoints":[{"endpoint":"/x","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}],"timeout":"5s\n"}]}}
 ]}
