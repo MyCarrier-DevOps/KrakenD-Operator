@@ -681,9 +681,11 @@ func (w *inputWarnings) add(reason, message string) {
 	}
 }
 
-// emit records the buffered events on ac.
+// emit records the first maxStatusListLen buffered events on ac, whatever
+// their reasons. The recorder's per-object budget is shared by every Warning
+// event, so the cap leaves room for the failure event of a failing pass.
 func (w *inputWarnings) emit(recorder record.EventRecorder, ac *v1alpha1.KrakenDAutoConfig) {
-	for _, ev := range w.pending {
+	for _, ev := range capList(w.pending) {
 		recorder.Event(ac, "Warning", ev.reason, ev.message)
 	}
 }
