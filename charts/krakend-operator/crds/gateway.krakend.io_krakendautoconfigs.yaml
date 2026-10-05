@@ -631,9 +631,11 @@ spec:
                         rule: '!self.matches(''^(0|(([0-9]+([.][0-9]*)?|[.][0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$'')
                           || duration(self) >= duration(''0s'')'
                     concurrentCalls:
-                      description: ConcurrentCalls overrides the number of concurrent
-                        backend calls.
+                      description: |-
+                        ConcurrentCalls overrides the number of concurrent backend calls.
+                        When specified, it must be a positive integer.
                       format: int32
+                      minimum: 1
                       type: integer
                     endpoint:
                       description: Endpoint overrides the generated endpoint path.
