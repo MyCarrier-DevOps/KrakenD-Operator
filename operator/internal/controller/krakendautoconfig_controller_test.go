@@ -3262,3 +3262,35 @@ func TestAutoConfigReconcile_InScopeJudgesEachOperationOnItsOwn(t *testing.T) {
 		t.Errorf("in scope = %+v, want only headV1", got)
 	}
 }
+
+// failedGetB is an evaluator failure for operation getB.
+func failedGetB() autoconfig.OperationIssue {
+	return autoconfig.OperationIssue{
+		Operation: autoconfig.Operation{Method: "GET", Path: "/b", OperationID: "getB"},
+		Reason:    v1alpha1.ReasonCUEEvaluationFailed,
+		Message:   `time: missing unit in duration "30"`,
+	}
+}
+
+func TestAutoConfigReconcile_FailedOperationFailsSyncClosed(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).Build()
+	f, ce, fi, g := defaultMocks()
+	ce.output.Failed = []autoconfig.OperationIssue{failedGetB()}
+	r := newACReconciler(c, f, ce, fi, g)
+
+	if _, err := reconcileAC(r, ac); err == nil {
+		t.Fatal("expected an error for an OnChange trigger")
+	}
+	cond := meta.FindStatusCondition(getAC(t, c, ac).Status.Conditions, v1alpha1.ConditionSynced)
+	if cond == nil || cond.Reason != v1alpha1.ReasonCUEEvaluationFailed ||
+		!strings.Contains(cond.Message, "GET /b (getB): CUEEvaluationFailed") {
+		t.Errorf("expected Synced False/CUEEvaluationFailed naming GET /b, got %+v", cond)
+	}
+	var ep v1alpha1.KrakenDEndpoint
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "test-ac-listusers", Namespace: "default"},
+		&ep); !apierrors.IsNotFound(err) {
+		t.Errorf("expected no endpoint written, got %v", err)
+	}
+}
