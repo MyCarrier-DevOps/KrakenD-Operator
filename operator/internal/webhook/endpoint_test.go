@@ -23,6 +23,8 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 )
@@ -179,5 +181,24 @@ func TestEndpointAdmission_StoredClashDoesNotBlockOtherEdits(t *testing.T) {
 	v := &EndpointValidator{Client: fakeClient(testGateway(), testEndpoint("other", "/users/{id}"), old)}
 	if resp := review(t, v, "alice", edited, old); !resp.Allowed {
 		t.Errorf("edit of an unrelated entry denied: %+v", resp.Result)
+	}
+}
+
+// The same-controller exemption: the AutoConfig controller creates a renamed
+// operation's endpoint before it deletes the old one on the same route.
+func TestEndpointAdmission_SameControllerMayShareARoute(t *testing.T) {
+	owned := func(name string, uid types.UID) *v1alpha1.KrakenDEndpoint {
+		ep := testEndpoint(name, "/users/{id}")
+		ep.OwnerReferences = []metav1.OwnerReference{{APIVersion: v1alpha1.GroupVersion.String(),
+			Kind: "KrakenDAutoConfig", Name: "pets", UID: uid, Controller: ptr.To(true)}}
+		return ep
+	}
+	v := &EndpointValidator{Client: fakeClient(testGateway(), owned("pets-getuser", "pets-uid"))}
+
+	if resp := review(t, v, "alice", owned("pets-getuserbyid", "pets-uid"), nil); !resp.Allowed {
+		t.Errorf("same-controller route denied: %+v", resp.Result)
+	}
+	if resp := review(t, v, "alice", owned("other-getuser", "other-uid"), nil); resp.Allowed {
+		t.Error("another controller's duplicate route admitted")
 	}
 }
