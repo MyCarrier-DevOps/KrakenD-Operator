@@ -27,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-logr/logr/funcr"
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/autoconfig"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -46,6 +47,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
@@ -3543,6 +3545,48 @@ func TestAutoConfigReconcile_IdenticalPassWithRejectedEndpointsWritesNoStatus(t 
 	}
 	if events := drainEvents(rec); len(events) != 0 {
 		t.Errorf("an identical second pass emitted %v, want no events", events)
+	}
+}
+
+func TestAutoConfigReconcile_RejectionCauseIsLoggedInFullOnceWhenItChanges(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	g.output.Endpoints = append(g.output.Endpoints, generatedEndpoint("getB", "/b"))
+	ce.output.OperationIDs["/b:GET"] = "getB"
+	cause := strings.Repeat("c", 600)
+	rejected := apierrors.NewInvalid(schema.GroupKind{Group: v1alpha1.GroupVersion.Group, Kind: "KrakenDEndpoint"},
+		"test-ac-getb", field.ErrorList{field.Invalid(field.NewPath("spec", "endpoints").Index(0), "x", cause)})
+	var ops []string
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).
+		WithInterceptorFuncs(recordEndpointWrites(&ops, map[string]error{"test-ac-getb": rejected})).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	var logged []string
+	ctx := logf.IntoContext(context.Background(), funcr.New(func(prefix, args string) {
+		logged = append(logged, prefix+args)
+	}, funcr.Options{}))
+	full := func() int {
+		n := 0
+		for _, line := range logged {
+			if strings.Contains(line, cause) {
+				n++
+			}
+		}
+		return n
+	}
+
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(ac)}); err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+	if n := full(); n != 1 {
+		t.Fatalf("expected the full rejection logged once on the first pass, got %d in %q", n, logged)
+	}
+
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(ac)}); err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+	if n := full(); n != 1 {
+		t.Errorf("expected no log on an identical second pass, got %d", n)
 	}
 }
 
