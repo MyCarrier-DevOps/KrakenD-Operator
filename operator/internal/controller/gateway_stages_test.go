@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr/funcr"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
@@ -2771,6 +2772,7 @@ func TestGatewayReconcile_ReleasingThePluginHoldWithAnUnchangedConfigReportsNoRo
 func TestGatewayReconcile_GatewayMetricsFollowTheSpec(t *testing.T) {
 	gw := reconciledGateway()
 	gw.Namespace = "metrics-follow"
+	gw.Spec.Version = "2.12"
 	c := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).Build()
 	val := &countingValidator{}
 	r := newTestGatewayReconciler(c, renderOutput("cs1"), val)
@@ -2783,6 +2785,11 @@ func TestGatewayReconcile_GatewayMetricsFollowTheSpec(t *testing.T) {
 		t.Errorf("gateway_config_valid = %v after an applied config, want 1", got)
 	}
 
+	stored := getGateway(t, c, gw)
+	stored.Spec.Version = "2.13"
+	if err := c.Update(context.Background(), stored); err != nil {
+		t.Fatal(err)
+	}
 	r.Renderer = renderOutput("cs2")
 	val.err = rejectedBy("- at '/endpoints/0/endpoint': bad")
 	if err := reconcileGateway(t, r, gw); err != nil {
@@ -2790,5 +2797,9 @@ func TestGatewayReconcile_GatewayMetricsFollowTheSpec(t *testing.T) {
 	}
 	if got := testutil.ToFloat64(gatewayConfigValid.WithLabelValues(gw.Namespace, gw.Name)); got != 0 {
 		t.Errorf("gateway_config_valid = %v after a rejected config, want 0", got)
+	}
+	labels := prometheus.Labels{"namespace": gw.Namespace, "name": gw.Name}
+	if n := gatewayInfo.DeletePartialMatch(labels); n != 1 {
+		t.Errorf("gateway_info series for the gateway = %d, want 1 (the old version's series must go)", n)
 	}
 }
