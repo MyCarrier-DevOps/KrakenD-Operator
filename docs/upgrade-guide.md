@@ -1303,15 +1303,23 @@ ns/name`). Until now it was admitted with a warning, then reported as
 `EndpointConflict`/`PartiallyAccepted` with `status.conflicts` and not served.
 So is an entry whose path differs from another only in parameter names
 (`/users/{id}` and `/users/{name}`) or in repeated slashes, on the same method,
-including two entries of one KrakenDEndpoint. Only added or changed entries are
-checked, so a conflict stored before the upgrade does not block unrelated
-edits; the pre-upgrade audit lists them. After the upgrade, the newer
+including two entries of one KrakenDEndpoint. Only an entry whose route is new
+to the stored object is checked (or every entry, when the object moves to
+another gateway), so a conflict stored before the upgrade does not block
+unrelated edits, including edits to the body of the entry that is served; the
+pre-upgrade audit lists them. The denial names the endpoint the renderer
+serves. After the upgrade, the newer
 endpoint of such a stored pair keeps listing the lost entry in
 `status.conflicts` (`Accepted=False/EndpointConflict` when it has no other
 entry, otherwise `Accepted=True/PartiallyAccepted`). Endpoints with the same
 controller (two endpoints one KrakenDAutoConfig generated, while it renames an
 operation) may share a route: the renderer serves the older one until the
-AutoConfig deletes it. Renaming a path parameter across several routes needs
+AutoConfig deletes it. For the same reason, entries of one AutoConfig whose
+paths differ only in parameter names (`/h/{a}` and `/h/{b}`) are caught by no
+admission rule; the renderer reports the newer one as a conflict. An endpoint
+whose `policyRef` names a missing policy is not rendered, but admission still
+counts its routes as taken, so a route can be rejected that the gateway would
+serve until the policy exists. Renaming a path parameter across several routes needs
 them in one KrakenDEndpoint; see the runbook.
 
 **Gateways with a health-path or `autoOptions` clash freeze instead of
