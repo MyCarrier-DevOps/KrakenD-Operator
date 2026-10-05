@@ -280,8 +280,8 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 	if len(outcome.transient) > 0 {
 		// A race beside a real failure is part of the same failed pass.
-		failures := slices.Concat(outcome.transient, outcome.raced)
-		return r.handleEndpointError(ctx, &ac, kerrors.NewAggregate(failures), warnings)
+		failures := endpointFailures{errs: slices.Concat(outcome.transient, outcome.raced)}
+		return r.handleEndpointError(ctx, &ac, failures, warnings)
 	}
 	if len(outcome.raced) > 0 {
 		return lostWriteRace(ctx, kerrors.NewAggregate(outcome.raced))
@@ -397,7 +397,7 @@ func (r *KrakenDAutoConfigReconciler) handleSyncedFailure(
 	syncErr error,
 	warnings *inputWarnings,
 ) (ctrl.Result, error) {
-	if err := r.recordSyncedFailure(ctx, ac, reason, syncErr, warnings); err != nil {
+	if err := r.recordSyncedFailure(ctx, ac, reason, syncErr.Error(), warnings); err != nil {
 		return ctrl.Result{}, err
 	}
 	if ac.Spec.Trigger == v1alpha1.TriggerPeriodic {
@@ -406,34 +406,37 @@ func (r *KrakenDAutoConfigReconciler) handleSyncedFailure(
 	return ctrl.Result{}, syncErr
 }
 
-// handleEndpointError handles a reconcileEndpoints error, or the aggregate
-// of the transient endpoint write errors one pass collected. A Conflict or
-// an AlreadyExists lost a race with a newer copy of the endpoint than this
-// reconcile read; it requeues quietly after conflictRequeueDelay. Any other
-// error fails the sync with EndpointReconcileFailed and is returned for
-// every trigger, so controller-runtime retries it with backoff: these errors
-// are transient, and a periodic trigger would otherwise wait a whole
-// interval.
+// handleEndpointError fails the sync with EndpointReconcileFailed for
+// endpointErr: a failed list, or the endpointFailures of one pass, which can
+// hold transient write, raced (beside a transient one), adoption and delete
+// errors. A pass whose only failures are raced never gets here; it requeues
+// quietly. The error is returned for every trigger, so controller-runtime
+// retries it with backoff: these errors are transient, and a periodic
+// trigger would otherwise wait a whole interval.
 func (r *KrakenDAutoConfigReconciler) handleEndpointError(
 	ctx context.Context,
 	ac *v1alpha1.KrakenDAutoConfig,
 	endpointErr error,
 	warnings *inputWarnings,
 ) (ctrl.Result, error) {
-	if errors.IsConflict(endpointErr) || errors.IsAlreadyExists(endpointErr) {
-		return lostWriteRace(ctx, endpointErr)
-	}
 	syncErr := fmt.Errorf("reconciling endpoints: %w", endpointErr)
-	if err := r.recordSyncedFailure(ctx, ac, v1alpha1.ReasonEndpointReconcileFailed, syncErr, warnings); err != nil {
+	// The returned error carries every failure for the log; the status and
+	// the event name the first few.
+	message := syncErr.Error()
+	if f, ok := endpointErr.(interface{ Summary() string }); ok {
+		message = "reconciling endpoints: " + f.Summary()
+	}
+	if err := r.recordSyncedFailure(ctx, ac, v1alpha1.ReasonEndpointReconcileFailed, message, warnings); err != nil {
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{}, syncErr
 }
 
 // recordSyncedFailure records a failed sync: the synced gauge 0, the Synced
-// condition False with the given reason and error, and the Ready, phase and
-// observedGeneration derived from it, then, once that status write succeeds,
-// the buffered input warnings followed by a Warning event for syncErr. It
+// condition False with the given reason and message (bounded by
+// truncateMessage), and the Ready, phase and observedGeneration derived from
+// it, then, once that status write succeeds, the buffered input warnings
+// followed by a Warning event with the same message. It
 // returns the status write's error, if any, other than a Conflict: a
 // reconcile whose failure-status write conflicts read a stale copy of the
 // AutoConfig, but its sync failed all the same, so it records no events and
@@ -445,12 +448,12 @@ func (r *KrakenDAutoConfigReconciler) recordSyncedFailure(
 	ctx context.Context,
 	ac *v1alpha1.KrakenDAutoConfig,
 	reason string,
-	syncErr error,
+	syncMessage string,
 	warnings *inputWarnings,
 ) error {
 	// A failure can list every operation or write that failed, which would
 	// overrun the condition's size limit: bound the status and event text.
-	message := truncateMessage(syncErr.Error())
+	message := truncateMessage(syncMessage)
 	meta.SetStatusCondition(&ac.Status.Conditions, metav1.Condition{
 		Type:               v1alpha1.ConditionSynced,
 		Status:             metav1.ConditionFalse,
