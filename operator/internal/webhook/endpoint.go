@@ -129,14 +129,14 @@ func (v *EndpointValidator) admit(
 	if gw == nil {
 		return nil, nil
 	}
-	return v.checkRender(ctx, ep, gw)
+	return v.checkRender(ctx, old, ep, gw)
 }
 
 // checkRender renders ep's gateway with ep and rejects the request only when
 // that turns a passing config into a failing one. When the gateway already
 // fails without ep, ep is judged in isolation: the gateway root plus ep alone.
 func (v *EndpointValidator) checkRender(
-	ctx context.Context, ep *v1alpha1.KrakenDEndpoint, gw *v1alpha1.KrakenDGateway,
+	ctx context.Context, old, ep *v1alpha1.KrakenDEndpoint, gw *v1alpha1.KrakenDGateway,
 ) (admission.Warnings, error) {
 	after, err := v.Checker.CheckGateway(ctx, gw, []v1alpha1.KrakenDEndpoint{*ep})
 	if err != nil {
@@ -158,10 +158,20 @@ func (v *EndpointValidator) checkRender(
 	if err != nil {
 		return nil, err
 	}
-	if !isoAfter.OK {
+	if isoAfter.OK {
+		return preexisting, nil
+	}
+	if old == nil {
 		return nil, renderDenial(ep, isoAfter)
 	}
-	return preexisting, nil
+	isoBefore, err := v.Checker.CheckIsolated(ctx, gw, []v1alpha1.KrakenDEndpoint{*old})
+	if err != nil {
+		return nil, err
+	}
+	if isoBefore.OK {
+		return nil, renderDenial(ep, isoAfter)
+	}
+	return nil, nil
 }
 
 // renderDenial rejects ep with one cause per entry of ep the verdict blames.
