@@ -57,7 +57,7 @@ func validateEntries(ep *v1alpha1.KrakenDEndpoint, changed []int, gw *v1alpha1.K
 		}
 		if e.Method == "GET" && health != "" && renderer.ConflictKey(e.Endpoint) == renderer.ConflictKey(health) {
 			errs = append(errs, field.Invalid(p.Child("endpoint"), e.Endpoint,
-				fmt.Sprintf("GET %s is the gateway's health endpoint (spec.config.router)", health)))
+				fmt.Sprintf("GET %s is the gateway's health endpoint (%s)", health, healthSource(gw))))
 		}
 		if e.Endpoint == "/*" {
 			errs = append(errs, field.Invalid(p.Child("endpoint"), e.Endpoint,
@@ -144,6 +144,17 @@ func healthPath(gw *v1alpha1.KrakenDGateway) string {
 		return r.HealthPath
 	}
 	return renderer.DefaultHealthPath
+}
+
+// healthSource names where gw's health path is set, for a denial message.
+func healthSource(gw *v1alpha1.KrakenDGateway) string {
+	if _, ok := rawRouterBlock(gw); ok {
+		return "the router block of spec.config.extraConfig"
+	}
+	if r := gw.Spec.Config.Router; r != nil && r.HealthPath != "" {
+		return "spec.config.router.healthPath"
+	}
+	return "the default path"
 }
 
 // rawRouterBlock returns the "router" entry of the gateway's raw extraConfig.
