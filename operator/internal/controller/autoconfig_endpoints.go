@@ -79,7 +79,10 @@ func (r *KrakenDAutoConfigReconciler) claimEndpoints(
 			outcome.record(fmt.Errorf("adopting endpoint %s: %w", orphan.Name, err))
 			continue
 		}
-		if err := r.Update(ctx, orphan); err != nil {
+		if err := r.Update(ctx, orphan); apierrors.IsNotFound(err) {
+			// Deleted since the list: nothing left to adopt.
+			continue
+		} else if err != nil {
 			outcome.record(fmt.Errorf("adopting endpoint %s: %w", orphan.Name, err))
 			continue
 		}
