@@ -2017,3 +2017,23 @@ func TestEvaluate_OverrideOnFailedOperationIsHeldNotUnmatched(t *testing.T) {
 		t.Errorf("expected no unmatched overrides for a failed target, got %v", out.UnmatchedOverrides)
 	}
 }
+
+func TestEvaluate_FailedOperationCarriesTransformedPath(t *testing.T) {
+	defs, err := EmbeddedCUEDefinitions()
+	if err != nil {
+		t.Fatalf("loading defs: %v", err)
+	}
+	out, err := NewCUEEvaluator().Evaluate(context.Background(), CUEInput{
+		SpecData:     []byte(`{"paths":{"/b":{"get":{"operationId":"getB","responses":{"200":{}}}}}}`),
+		SpecFormat:   v1alpha1.SpecFormatJSON,
+		DefaultDefs:  defs,
+		URLTransform: &v1alpha1.URLTransformSpec{AddPathPrefix: "/svc"},
+		ServiceName:  "_spec",
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if len(out.Failed) != 1 || out.Failed[0].Path != "/svc/b" {
+		t.Errorf("expected the failed operation at /svc/b, got %+v", out.Failed)
+	}
+}
