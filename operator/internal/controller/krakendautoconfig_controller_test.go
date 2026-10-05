@@ -424,8 +424,9 @@ func TestAutoConfigReconcile_FirstReconcileWritesOnlyTheSyncedStatus(t *testing.
 	}
 	ready := meta.FindStatusCondition(stored.Status.Conditions, v1alpha1.ConditionReady)
 	if stored.Status.Phase != v1alpha1.AutoConfigPhaseSynced || stored.Status.ObservedGeneration != 1 ||
-		ready == nil || ready.Status != metav1.ConditionTrue || ready.ObservedGeneration != 1 {
-		t.Errorf("phase %q, observedGeneration %d, Ready %+v; want Synced, 1, True at generation 1",
+		ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != v1alpha1.ReasonEndpointsNotReady ||
+		ready.ObservedGeneration != 1 {
+		t.Errorf("phase %q, observedGeneration %d, Ready %+v; want Synced, 1, False/EndpointsNotReady at generation 1",
 			stored.Status.Phase, stored.Status.ObservedGeneration, ready)
 	}
 }
