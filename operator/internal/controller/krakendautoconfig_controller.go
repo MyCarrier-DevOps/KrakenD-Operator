@@ -95,8 +95,12 @@ type KrakenDAutoConfigReconciler struct {
 // runs the whole pipeline, so owned endpoints converge to the desired state
 // while the AutoConfig syncs successfully. While it is in Error, existing
 // endpoints are left as they are: a failed sync stops before touching them,
-// and a failed endpoint write keeps every stale endpoint. A successful
-// reconcile that finds nothing to change writes nothing.
+// and a failed endpoint write keeps every stale endpoint. An operation that
+// fails CUE evaluation, or whose endpoint the API server rejects, is held at
+// its last-good endpoint instead: the healthy operations still converge, no
+// stale endpoint is deleted, and Synced is False with reason OperationsFailed
+// without an error, since retrying a deterministic failure with backoff gains
+// nothing. A successful reconcile that finds nothing to change writes nothing.
 func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
