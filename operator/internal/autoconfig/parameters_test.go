@@ -17,7 +17,9 @@ limitations under the License.
 package autoconfig
 
 import (
+	"bytes"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -47,5 +49,20 @@ func TestDereferenceParameters_InlinesLocalRefs(t *testing.T) {
 		if !slices.Contains(entry.InputHeaders, h) {
 			t.Errorf("inputHeaders %v: missing %s", entry.InputHeaders, h)
 		}
+	}
+}
+
+func TestDereferenceParameters_ReportsUnresolvableRef(t *testing.T) {
+	spec := []byte(`{"paths":{"/pets":{"get":{"parameters":[{"$ref":"#/components/parameters/Nope"}]}}}}`)
+
+	out, warnings, err := DereferenceParameters(spec)
+	if err != nil {
+		t.Fatalf("DereferenceParameters: %v", err)
+	}
+	if !bytes.Equal(out, spec) {
+		t.Errorf("expected the spec unchanged, got %s", out)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], `"#/components/parameters/Nope" in GET /pets`) {
+		t.Errorf("warnings = %q", warnings)
 	}
 }
