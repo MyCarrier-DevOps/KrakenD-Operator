@@ -9,9 +9,10 @@
 #        hack/audit-admission-rules.sh DIR    read DIR/{endpoints,gateways,autoconfigs,backendpolicies}.json
 #
 # Prints one line per object or conflict. No output means none of the checks
-# below found anything, not that every rule is covered: reserved /__debug,
-# /__echo and /__health paths, unnamed /* wildcards on CE gateways, unknown
-# urlPattern placeholders and cross-method auto_options clashes are not checked.
+# below found anything, not that every rule is covered: other reserved paths
+# under /__debug, /__echo and /__health (the gateway's own health path is
+# checked), unnamed /* wildcards on CE gateways, unknown urlPattern placeholders
+# and cross-method auto_options clashes are not checked.
 # Checks:
 #   KrakenDEndpoint / KrakenDGateway / KrakenDAutoConfig   the CRD schema and CEL rules
 #   gateway ns/name: A vs B                                 entries one gateway would route as one
