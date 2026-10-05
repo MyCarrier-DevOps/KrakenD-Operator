@@ -517,7 +517,7 @@ status:
 - `timeout` and `cacheTTL` match Go's `time.ParseDuration` grammar without a sign. A malformed value would otherwise break decoding of the whole `KrakenDEndpointList` in every informer.
 - `outputEncoding`, a backend's `encoding`, `sd` and `method` are enums taken from KrakenD 2.13's own schema. `gatewayRef.name` and `policyRef.name` have a minimum length of 1.
 
-Kubernetes 1.33 is the supported floor because it ratchets CRD validation: an update that leaves an already-invalid field unchanged is admitted, so objects stored before a rule existed keep accepting unrelated changes. Rules that need other objects (reference existence, cross-object conflicts, the rendered configuration) stay in the webhooks.
+Kubernetes 1.33 is the supported floor because it ratchets CRD validation: an update that leaves an already-invalid field unchanged is admitted, so objects stored before a rule existed keep accepting unrelated changes. A list without per-item keys is the exception: an entry's `backends` (atomic), and the AutoConfig `overrides[]` and `additionalEndpoints[]`, ratchet only while the whole list is unchanged, so any edit to the list re-checks every item. Rules that need other objects (reference existence, cross-object conflicts, the rendered configuration) stay in the webhooks.
 
 ### 3.3 KrakenDBackendPolicy
 
