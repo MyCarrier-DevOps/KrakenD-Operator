@@ -171,7 +171,7 @@ func (v *EndpointValidator) checkRender(
 	if isoBefore.OK {
 		return nil, renderDenial(ep, isoAfter)
 	}
-	return nil, nil
+	return preexisting, nil
 }
 
 // renderDenial rejects ep with one cause per entry of ep the verdict blames.
