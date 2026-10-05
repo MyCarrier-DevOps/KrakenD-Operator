@@ -70,13 +70,16 @@ func pinnedKrakenD(t *testing.T) string {
 	}
 	t.Cleanup(func() { _ = c.Terminate(context.Background()) })
 
-	_, out, err := c.Exec(ctx, []string{"sh", "-c", "ls /lib/ld-musl-*.so.1"}, tcexec.Multiplexed())
+	code, out, err := c.Exec(ctx, []string{"sh", "-c", "ls /lib/ld-musl-*.so.1"}, tcexec.Multiplexed())
 	if err != nil {
 		t.Fatal(err)
 	}
 	listing, err := io.ReadAll(out)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if code != 0 {
+		t.Fatalf("finding the musl loader in %s: exit %d: %s", m[1], code, listing)
 	}
 	dir := t.TempDir()
 	files := map[string]string{"/usr/bin/krakend": "krakend.bin", strings.TrimSpace(string(listing)): "loader"}
