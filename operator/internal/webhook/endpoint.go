@@ -40,6 +40,7 @@ const kindEndpoint = "KrakenDEndpoint"
 // EndpointValidator validates KrakenDEndpoint resources.
 type EndpointValidator struct {
 	client.Client
+	Checker ConfigChecker
 }
 
 // ValidateCreate validates a new KrakenDEndpoint.
