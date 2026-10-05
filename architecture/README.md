@@ -702,7 +702,7 @@ sequenceDiagram
             end
         end
     else Not the applied config (new checksum or edition)
-        Op->>Op: 6. Validate as the render's edition<br/>(EE: apply the wildcard route rule, rewrite /p/* to /p/{Wildcard}),<br/>via krakend check -t -n -c
+        Op->>Op: 6. Validate as the render's edition<br/>(EE: apply the wildcard route rule, rewrite /p/* to /p/{Wildcard}),<br/>via the route check, then krakend check -t -n -c
 
         alt Validation fails
             Op->>K8s: Update KrakenDGateway condition → ConfigValid=False
@@ -1290,7 +1290,7 @@ flowchart TD
     N2 --> U
     N -->|No| RJ{Same render and edition<br/>already rejected?}
     RJ -->|Yes| S
-    RJ -->|No| P[Validate as the render's edition:<br/>EE wildcard rules in Go; only if they<br/>find nothing, krakend check -t -n -c on the copy]
+    RJ -->|No| P[Validate as the render's edition:<br/>EE wildcard rules and the route check in Go,<br/>then krakend check -t -n -c on the copy]
 
     P --> Q{Verdict?}
     Q -->|Yes| R[Set ConfigValid=True<br/>Create ConfigMap gw-config-hash<br/>Write status.configChecksum and configEdition]
@@ -1360,8 +1360,19 @@ The operator runs `krakend check -t -n -c` against the rendered configuration be
 >    references `{Wildcard}` on a wildcard endpoint is rejected.
 >
 > The copy keeps every endpoint at its index, so findings attribute back to
-> CRs. `/*` is left as is and rejected, as EE does. No EE license is needed
-> in the operator image.
+> CRs. A root `/*` is left as is and refused by the route check below, as EE
+> does. No EE license is needed in the operator image.
+
+After those rules, and before `krakend check`, the validator registers every
+route of the edition's copy in an in-process gin engine (the gin version
+KrakenD 2.13 embeds), in the order the KrakenD runtime registers them. That
+reproduces what `krakend check -t` catches, and adds the routes `-t` never
+registers and the runtime panics on: the gateway's health endpoint (a custom
+`health_path`) and the per-path `OPTIONS` routes `router.auto_options` adds. A
+refused route is a verdict, reported as `/endpoints/<i>` findings that name
+both endpoints of a clash, so attribution works as for any `krakend check`
+finding, and `krakend check` is not run. The check runs for both `Validate`
+(`krakend check -t -n`) and `Lint` (`krakend check -n`).
 
 Alternatively, for environments where embedding the binary is impractical:
 
@@ -1838,7 +1849,7 @@ Deployment step.
 | Condition | Meaning |
 |---|---|
 | `Ready` | Summary condition written only by the gateway controller, derived from ConfigValid, PluginsResolved, Available, Progressing, LicenseExpired, LicenseDegraded and CEFallbackApplied (`Unknown` while the validator is unavailable); phase is derived from the same rules |
-| `ConfigValid` | Last rendered krakend.json passed validation as the edition it was rendered for: `krakend check -t -n -c`, after the EE wildcard route rules for an EE render (`Unknown` with reason `ValidatorUnavailable` while krakend check cannot run) |
+| `ConfigValid` | Last rendered krakend.json passed validation as the edition it was rendered for: `krakend check -t -n -c`, after the EE wildcard route rules and the route check (see Validation Strategy) for an EE render (`Unknown` with reason `ValidatorUnavailable` while krakend check cannot run) |
 | `Available` | The Deployment is available: it mirrors the Deployment's `Available` condition once a rollout is not in flight, and is `False` with reason `RolloutFailed` when the Deployment exceeds its progress deadline for the rollout it is running now (the Deployment has observed its latest generation and carries the wanted template). A fix pushed while a rollout is stuck replaces `RolloutFailed` with `Progressing=True`, and `Available` is reset until the new rollout settles |
 | `LicenseValid` | EE license state: `True`/`LicenseOK`, `True`/`LicenseExpiringSoon` inside the warning window, `False`/`LicensePreExpiry` or `False`/`LicenseExpired`, and `Unknown`/`LicenseSecretMissing` while the license cannot be read or parsed. While unreadable, the stage is judged from the last known expiry (`status.licenseExpiry`): once that is inside the safety buffer or past, the stage verdict (`False`) replaces `Unknown` |
 | `LicenseDegraded` | Gateway is actively running in CE mode as a fallback because the EE license expired or entered the pre-expiry safety window (**True** when the fallback decision is made, before the CE rollout has finished, and only when `fallbackToCE=true`; `False` with reason `LicenseRestored` after recovery, or `False` with reason `LicenseExpiredNoFallback` when the license expired and `fallbackToCE` is off while the condition was already present; absent otherwise) |
