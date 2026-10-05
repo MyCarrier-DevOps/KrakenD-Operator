@@ -3906,3 +3906,55 @@ func TestAutoConfigReconcile_DoesNotAdoptATerminatingOrphan(t *testing.T) {
 		t.Errorf("expected a terminating endpoint left alone, got %+v", got.ObjectMeta)
 	}
 }
+
+// recordEndpointWrites records every endpoint create, update and delete as
+// "<verb> <name>" in ops, and fails creates and updates of the endpoints
+// errFor names with that error.
+func recordEndpointWrites(ops *[]string, errFor map[string]error) interceptor.Funcs {
+	return interceptor.Funcs{
+		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if _, ok := obj.(*v1alpha1.KrakenDEndpoint); ok {
+				*ops = append(*ops, "create "+obj.GetName())
+				if err := errFor[obj.GetName()]; err != nil {
+					return err
+				}
+			}
+			return c.Create(ctx, obj, opts...)
+		},
+		Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			if _, ok := obj.(*v1alpha1.KrakenDEndpoint); ok {
+				*ops = append(*ops, "update "+obj.GetName())
+				if err := errFor[obj.GetName()]; err != nil {
+					return err
+				}
+			}
+			return c.Update(ctx, obj, opts...)
+		},
+		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			if _, ok := obj.(*v1alpha1.KrakenDEndpoint); ok {
+				*ops = append(*ops, "delete "+obj.GetName())
+			}
+			return c.Delete(ctx, obj, opts...)
+		},
+	}
+}
+
+func TestAutoConfigReconcile_WritesBeforeDeletingStale(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	// getUser was renamed getUserById upstream: same route, new name.
+	old := ownedCopy(t, ac, generatedEndpoint("getUser", "/users/{id}"))
+	f, ce, fi, g := defaultMocks()
+	g.output.Endpoints = []*v1alpha1.KrakenDEndpoint{generatedEndpoint("getUserById", "/users/{id}")}
+	var ops []string
+	c := fakeClientBuilder().WithObjects(ac, cm, old).WithStatusSubresource(ac).
+		WithInterceptorFuncs(recordEndpointWrites(&ops, nil)).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if want := []string{"create test-ac-getuserbyid", "delete test-ac-getuser"}; !slices.Equal(ops, want) {
+		t.Errorf("endpoint writes = %v, want %v", ops, want)
+	}
+}
