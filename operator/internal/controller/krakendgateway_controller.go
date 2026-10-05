@@ -1156,180 +1156,67 @@ func (r *KrakenDGatewayReconciler) reconcileDeploymentUnlessHeld(
 // the Kubernetes resources owned by the gateway, except the gateway ConfigMap,
 // using the create-or-update pattern, deploying the applied config. The
 // ConfigMap holds the config itself, which only the config stage writes.
+//
+// Every child is attempted, and the errors are joined: a child that keeps
+// failing must not starve the ones after it. Three steps wait for the
+// Deployment step instead, because they consume it:
+//   - ConfigMap collection, after a successful Deployment reconcile;
+//   - the deletion of an HPA the gateway no longer wants, so the Deployment
+//     carries the replica count before the HPA stops managing it;
+//   - the post-restart Job, which runs against the Deployment's pods.
 func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
 	in infraInputs,
 ) (deploymentObservation, error) {
-	// ServiceAccount
-	sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{
-		Name: gw.Name, Namespace: gw.Namespace,
-	}}
-	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, sa, func() error {
-		resources.BuildServiceAccount(sa, gw)
-		return controllerutil.SetControllerReference(gw, sa, r.Scheme)
-	}); err != nil {
-		return deploymentObservation{}, fmt.Errorf("reconciling serviceaccount: %w", err)
-	}
+	errs := []error{r.reconcileCoreResources(ctx, gw, in)}
 
-	// Service
-	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{
-		Name: gw.Name, Namespace: gw.Namespace,
-	}}
-	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, svc, func() error {
-		resources.BuildService(svc, gw, in.ceRender)
-		return controllerutil.SetControllerReference(gw, svc, r.Scheme)
-	}); err != nil {
-		return deploymentObservation{}, fmt.Errorf("reconciling service: %w", err)
+	obs, gcErr, deploymentErr := r.reconcileDeploymentUnlessHeld(ctx, gw, in)
+	errs = append(errs, deploymentErr, gcErr, r.reconcileHPA(ctx, gw, deploymentErr == nil))
+	if deploymentErr == nil {
+		// Only after the Deployment has rolled out the applied config, image
+		// and plugins. Jobs are idempotent by name so each unique config
+		// revision produces exactly one Job.
+		errs = append(errs, r.reconcilePostRestartJob(ctx, gw, in))
 	}
+	errs = append(errs,
+		r.reconcileDragonfly(ctx, gw),
+		r.reconcileExternalSecret(ctx, gw),
+		r.reconcileVirtualService(ctx, gw))
+	return obs, stderrors.Join(errs...)
+}
 
-	// PodDisruptionBudget
-	pdb := &policyv1.PodDisruptionBudget{ObjectMeta: metav1.ObjectMeta{
-		Name: gw.Name, Namespace: gw.Namespace,
-	}}
-	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, pdb, func() error {
-		resources.BuildPDB(pdb, gw)
-		return controllerutil.SetControllerReference(gw, pdb, r.Scheme)
-	}); err != nil {
-		return deploymentObservation{}, fmt.Errorf("reconciling pdb: %w", err)
+// reconcileCoreResources creates or updates the gateway's ServiceAccount,
+// Service and PodDisruptionBudget. They are independent of each other, so each
+// is attempted and the errors joined.
+func (r *KrakenDGatewayReconciler) reconcileCoreResources(
+	ctx context.Context, gw *v1alpha1.KrakenDGateway, in infraInputs,
+) error {
+	named := metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace}
+	sa := &corev1.ServiceAccount{ObjectMeta: named}
+	svc := &corev1.Service{ObjectMeta: named}
+	pdb := &policyv1.PodDisruptionBudget{ObjectMeta: named}
+	return stderrors.Join(
+		r.applyOwned(ctx, gw, sa, "serviceaccount", func() { resources.BuildServiceAccount(sa, gw) }),
+		r.applyOwned(ctx, gw, svc, "service", func() { resources.BuildService(svc, gw, in.ceRender) }),
+		r.applyOwned(ctx, gw, pdb, "pdb", func() { resources.BuildPDB(pdb, gw) }))
+}
+
+// reconcileHPA creates or updates the HorizontalPodAutoscaler when
+// autoscaling is configured. Otherwise one the gateway controls is deleted, but
+// only once the Deployment reconciled: it is the Deployment that carries the
+// replica count the HPA stops managing.
+func (r *KrakenDGatewayReconciler) reconcileHPA(
+	ctx context.Context, gw *v1alpha1.KrakenDGateway, deploymentReconciled bool,
+) error {
+	hpa := &autoscalingv2.HorizontalPodAutoscaler{ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace}}
+	switch {
+	case gw.Spec.Autoscaling != nil:
+		return r.applyOwned(ctx, gw, hpa, "hpa", func() { resources.BuildHPA(hpa, gw) })
+	case deploymentReconciled:
+		return r.deleteIfControlled(ctx, gw, hpa)
 	}
-
-	obs, gcErr, err := r.reconcileDeploymentUnlessHeld(ctx, gw, in)
-	if err != nil {
-		return deploymentObservation{}, err
-	}
-
-	// HPA (only if autoscaling is configured; otherwise one the gateway
-	// controls is deleted)
-	if gw.Spec.Autoscaling != nil {
-		hpa := &autoscalingv2.HorizontalPodAutoscaler{ObjectMeta: metav1.ObjectMeta{
-			Name: gw.Name, Namespace: gw.Namespace,
-		}}
-		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, hpa, func() error {
-			resources.BuildHPA(hpa, gw)
-			return controllerutil.SetControllerReference(gw, hpa, r.Scheme)
-		}); err != nil {
-			return deploymentObservation{}, fmt.Errorf("reconciling hpa: %w", err)
-		}
-	} else if err := r.deleteIfControlled(ctx, gw, &autoscalingv2.HorizontalPodAutoscaler{
-		ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace},
-	}); err != nil {
-		return deploymentObservation{}, err
-	}
-
-	// Post-restart Job (only if enabled, and only after the Deployment has
-	// rolled out the applied config, image and plugins). Jobs are idempotent by name so each
-	// unique config revision produces exactly one Job.
-	if err := r.reconcilePostRestartJob(ctx, gw, in); err != nil {
-		return deploymentObservation{}, err
-	}
-
-	// Dragonfly (only if enabled AND CRD is installed)
-	if gw.Spec.Dragonfly != nil && gw.Spec.Dragonfly.Enabled {
-		dfAvailable, dfErr := r.crdAvailable(dragonflyGVK)
-		if dfErr != nil {
-			return deploymentObservation{}, fmt.Errorf("checking Dragonfly CRD: %w", dfErr)
-		}
-		// Without the CRD there is nothing to create: detectDragonflyState
-		// reports DragonflyReady=False/CRDNotInstalled.
-		if dfAvailable {
-			df := &unstructured.Unstructured{}
-			df.SetGroupVersionKind(dragonflyGVK)
-			df.SetName(resources.DragonflyName(gw))
-			df.SetNamespace(gw.Namespace)
-			if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, df, func() error {
-				resources.BuildDragonfly(df, gw)
-				return controllerutil.SetControllerReference(gw, df, r.Scheme)
-			}); err != nil {
-				return deploymentObservation{}, fmt.Errorf("reconciling dragonfly: %w", err)
-			}
-			r.recordDragonflyRunAsRootCondition(gw, df)
-		}
-	} else {
-		// Dragonfly is deliberately off (unset or Enabled: false). Mirrors
-		// reconcilePostRestartJob's disabled/empty guard (the spec == nil ||
-		// !spec.Enabled branch) so `kubectl describe krakendgateway` does not
-		// keep showing a stale ConditionDragonflyRunAsRootUnacknowledged
-		// forever after the user disables Dragonfly. Deliberately NOT
-		// cleared when Dragonfly is enabled but !dfAvailable (CRD not yet
-		// installed) — that is a transient/environmental state, not a
-		// deliberate disable, mirroring reconcilePostRestartJob's
-		// configChecksum == "" reasoning for not flickering
-		// conditions away during an in-progress/incomplete state.
-		meta.RemoveStatusCondition(&gw.Status.Conditions, v1alpha1.ConditionDragonflyRunAsRootUnacknowledged)
-		if err := r.deleteOptionalIfControlled(ctx, gw, dragonflyGVK, resources.DragonflyName(gw)); err != nil {
-			return deploymentObservation{}, err
-		}
-		meta.RemoveStatusCondition(&gw.Status.Conditions, v1alpha1.ConditionDragonflyReady)
-		gw.Status.DragonflyAddress = ""
-		dragonflyReady.DeleteLabelValues(gw.Namespace, gw.Name)
-	}
-
-	// ExternalSecret (only if license.externalSecret is enabled AND CRD is installed)
-	if gw.Spec.License != nil && gw.Spec.License.ExternalSecret.Enabled {
-		esAvailable, esErr := r.crdAvailable(externalSecretGVK)
-		if esErr != nil {
-			return deploymentObservation{}, fmt.Errorf("checking ExternalSecret CRD: %w", esErr)
-		}
-		// Without the CRD there is nothing to create: reconcileLicense reports
-		// LicenseSecretUnavailable=True/CRDNotInstalled.
-		if esAvailable {
-			es := &unstructured.Unstructured{}
-			es.SetGroupVersionKind(externalSecretGVK)
-			es.SetName(resources.ExternalSecretName(gw))
-			es.SetNamespace(gw.Namespace)
-			if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, es, func() error {
-				resources.BuildExternalSecret(es, gw)
-				return controllerutil.SetControllerReference(gw, es, r.Scheme)
-			}); err != nil {
-				return deploymentObservation{}, fmt.Errorf("reconciling externalsecret: %w", err)
-			}
-		}
-	} else if err := r.deleteOptionalIfControlled(ctx, gw, externalSecretGVK, resources.ExternalSecretName(gw)); err != nil {
-		return deploymentObservation{}, err
-	}
-
-	// VirtualService (only if Istio is enabled AND CRD is installed)
-	if gw.Spec.Istio != nil && gw.Spec.Istio.Enabled {
-		vsAvailable, vsErr := r.crdAvailable(virtualServiceGVK)
-		if vsErr != nil {
-			return deploymentObservation{}, fmt.Errorf("checking VirtualService CRD: %w", vsErr)
-		}
-		if !vsAvailable {
-			r.setConditionWithEvent(gw, metav1.Condition{
-				Type:               v1alpha1.ConditionIstioConfigured,
-				Status:             metav1.ConditionFalse,
-				ObservedGeneration: gw.Generation,
-				Reason:             v1alpha1.ReasonCRDNotInstalled,
-				Message:            "Istio is enabled but the networking.istio.io VirtualService CRD is not installed in the cluster",
-			})
-		} else {
-			vs := &unstructured.Unstructured{}
-			vs.SetGroupVersionKind(virtualServiceGVK)
-			vs.SetName(gw.Name)
-			vs.SetNamespace(gw.Namespace)
-			if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, vs, func() error {
-				resources.BuildVirtualService(vs, gw)
-				return controllerutil.SetControllerReference(gw, vs, r.Scheme)
-			}); err != nil {
-				return deploymentObservation{}, fmt.Errorf("reconciling virtualservice: %w", err)
-			}
-			r.setConditionWithEvent(gw, metav1.Condition{
-				Type:               v1alpha1.ConditionIstioConfigured,
-				Status:             metav1.ConditionTrue,
-				ObservedGeneration: gw.Generation,
-				Reason:             v1alpha1.ReasonIstioVSCreated,
-				Message:            "Istio VirtualService reconciled",
-			})
-		}
-	} else {
-		if err := r.deleteOptionalIfControlled(ctx, gw, virtualServiceGVK, gw.Name); err != nil {
-			return deploymentObservation{}, err
-		}
-		meta.RemoveStatusCondition(&gw.Status.Conditions, v1alpha1.ConditionIstioConfigured)
-	}
-
-	return obs, gcErr
+	return nil
 }
 
 // reconcileDeployment converges the gateway Deployment on the applied config
