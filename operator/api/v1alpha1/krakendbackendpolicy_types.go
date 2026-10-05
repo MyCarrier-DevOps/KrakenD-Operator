@@ -100,6 +100,11 @@ type KrakenDBackendPolicy struct {
 	Status KrakenDBackendPolicyStatus `json:"status,omitempty"`
 }
 
+// PolicyProtectionFinalizer keeps a KrakenDBackendPolicy while any
+// KrakenDEndpoint references it, so deleting a policy never pulls it out from
+// under a rendered backend. Deletion completes once nothing references it.
+const PolicyProtectionFinalizer = "gateway.krakend.io/policy-protection"
+
 // +kubebuilder:object:root=true
 
 // KrakenDBackendPolicyList contains a list of KrakenDBackendPolicy.
