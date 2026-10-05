@@ -197,9 +197,23 @@ type CEDrop struct {
 func CEDrops(level NamespaceLevel, ec map[string]json.RawMessage) []CEDrop {
 	var drops []CEDrop
 	for _, ns := range EEOnlyNamespaces(level) {
-		if _, ok := ec[ns]; ok {
-			drops = append(drops, CEDrop{Namespace: ns})
+		block, ok := ec[ns]
+		if !ok {
+			continue
 		}
+		var keys map[string]json.RawMessage
+		if honored, partly := ceHonoredKeys[level][ns]; partly && json.Unmarshal(block, &keys) == nil {
+			if !slices.ContainsFunc(slices.Collect(maps.Keys(keys)), func(k string) bool { return !honored[k] }) {
+				continue
+			}
+		}
+		drops = append(drops, CEDrop{Namespace: ns})
 	}
 	return drops
+}
+
+// ceHonoredKeys are, per level and Enterprise-listed namespace, the keys KrakenD
+// CE honors. Any other key of the block is Enterprise-only.
+var ceHonoredKeys = map[NamespaceLevel]map[string]map[string]bool{
+	LevelBackend: {"backend/http/client": {"send_body_on_redirect": true}},
 }
