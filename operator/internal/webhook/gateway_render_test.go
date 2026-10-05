@@ -486,7 +486,7 @@ func TestGatewayAdmission_CERejectsEnterpriseOnlyFields(t *testing.T) {
 	}
 }
 
-// A new or changed spec.openapi on a CE gateway is rejected; its denial must
+// Enabling spec.openapi on a CE gateway is rejected; its denial must
 // not also carry the warning for a stored one.
 func TestGatewayAdmission_RejectedOpenAPIOnCEDoesNotAlsoWarn(t *testing.T) {
 	enabled := testGateway()
