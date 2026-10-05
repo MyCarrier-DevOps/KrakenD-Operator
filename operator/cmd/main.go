@@ -39,6 +39,7 @@ import (
 
 	gatewayv1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/autoconfig"
+	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
 	"github.com/mycarrier-devops/krakend-operator/internal/controller"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 	licenseutil "github.com/mycarrier-devops/krakend-operator/internal/util/license"
@@ -226,12 +227,16 @@ func main() {
 		BinaryPath: "/usr/local/bin/krakend",
 	})
 
+	// One checker for the whole pod: its slots bound concurrent krakend
+	// executions across the gateway controller and the admission webhooks.
+	checker := configcheck.New(mgr.GetClient(), krakendRenderer, krakendValidator, configCheckSlots)
+
 	if err := (&controller.KrakenDGatewayReconciler{
 		Client:    mgr.GetClient(),
 		Scheme:    mgr.GetScheme(),
 		Recorder:  mgr.GetEventRecorderFor("krakendgateway-controller"),
 		Renderer:  krakendRenderer,
-		Validator: krakendValidator,
+		Checker:   checker,
 		Clock:     clock.RealClock{},
 		APIReader: mgr.GetAPIReader(),
 
