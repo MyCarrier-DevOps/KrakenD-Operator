@@ -257,7 +257,6 @@ kubectl describe deploy <name>-krakend
   `krakend` container's HTTP probe on `/healthz`, and (when
   `spec.openapi.enabled: true`) the `openapi-serve` sidecar's TCP probe on the
   openapi port. `kubectl describe pod` names the container that failed.
-- `PluginsResolved=False`, reason `ConfigMapNotFound` — a plugin ConfigMap is missing; the Deployment is held until it exists. Create it in the gateway's namespace.
 - `ProgressDeadlineExceeded` — sets `Available=False`/`RolloutFailed` (phase `Error`) with a `RolloutFailed` event; the gateway returns to `Running` once the rollout recovers
 
 ### Gateway stuck in `Error`
@@ -272,9 +271,13 @@ kubectl get events --field-selector involvedObject.name=<name> --sort-by='.lastT
 - Config validation failure — check the `ConfigValid` condition message. It carries at most 4 KiB of krakend check output; the full output is in the operator log, message `krakend check rejected the rendered config`.
 - License expired without CE fallback (`LicenseExpired=True`, `Ready` reason `LicenseExpiredNoFallback`) — renew the license or set `fallbackToCE: true`. A missing license Secret (`LicenseSecretUnavailable=True`) does not change `Ready` or the phase
 - Rollout timeout — check Deployment events
+- `PluginsResolved=False`, reason `ConfigMapNotFound` — a plugin ConfigMap is
+  missing; the Deployment is held until it exists. Create it in the gateway's
+  namespace, and the operator rolls out the applied config.
 - Config validation failure — the gateway keeps serving the last applied
-  config (`status.configChecksum`), and its Deployment, Service and other
-  resources are still reconciled. Only the rejected render waits for a fix.
+  config (`status.configChecksum`), and its Deployment (unless a plugin
+  ConfigMap is missing, which holds it), Service and other resources are
+  still reconciled. Only the rejected render waits for a fix.
 
 ### Installed Istio, External Secrets or Dragonfly after the operator
 
