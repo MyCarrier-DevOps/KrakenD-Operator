@@ -113,6 +113,11 @@ type parityCase struct {
 	// test passes but admission rejects is a runtime-only clash -t never
 	// registers (the health endpoint, auto_options).
 	admitted bool
+	// routerRejects is the expected verdict of the binary's own `check -t -n`
+	// on the render. It is checked on CE rows only. Where admitted is false and
+	// routerRejects is true, the route check stands in for -t; where both are
+	// false, admission is stricter than the binary on purpose.
+	routerRejects bool
 }
 
 func parityGateway(edition v1alpha1.Edition, router *v1alpha1.RouterConfig) *v1alpha1.KrakenDGateway {
@@ -140,30 +145,30 @@ func parityCases() []parityCase {
 	ce := parityGateway(v1alpha1.EditionCE, nil)
 	return []parityCase{
 		{"valid", ce, []*v1alpha1.KrakenDEndpoint{
-			parityEndpoint("a", time.Hour, "GET", "/a/{id}"), parityEndpoint("b", 0, "GET", "/b")}, true},
+			parityEndpoint("a", time.Hour, "GET", "/a/{id}"), parityEndpoint("b", 0, "GET", "/b")}, true, false},
 		{"prefix parameter clash", ce, []*v1alpha1.KrakenDEndpoint{
 			parityEndpoint("a", time.Hour, "GET", "/users/{id}"),
-			parityEndpoint("b", 0, "GET", "/users/{userId}/orders")}, false},
+			parityEndpoint("b", 0, "GET", "/users/{userId}/orders")}, false, true},
 		{"suffix after parameter", ce, []*v1alpha1.KrakenDEndpoint{
 			parityEndpoint("a", time.Hour, "GET", "/files/{id}"),
-			parityEndpoint("b", 0, "GET", "/files/{id}.json")}, false},
+			parityEndpoint("b", 0, "GET", "/files/{id}.json")}, false, true},
 		{"same shape resolves oldest-wins", ce, []*v1alpha1.KrakenDEndpoint{
-			parityEndpoint("a", time.Hour, "GET", "/a/{id}"), parityEndpoint("b", 0, "GET", "/a/{name}")}, true},
+			parityEndpoint("a", time.Hour, "GET", "/a/{id}"), parityEndpoint("b", 0, "GET", "/a/{name}")}, true, false},
 		{"double slash resolves oldest-wins", ce, []*v1alpha1.KrakenDEndpoint{
-			parityEndpoint("a", time.Hour, "GET", "/a//b"), parityEndpoint("b", 0, "GET", "/a/b")}, true},
+			parityEndpoint("a", time.Hour, "GET", "/a//b"), parityEndpoint("b", 0, "GET", "/a/b")}, true, false},
 		{"trailing slash is a distinct route", ce, []*v1alpha1.KrakenDEndpoint{
-			parityEndpoint("a", time.Hour, "GET", "/b"), parityEndpoint("b", 0, "GET", "/b/")}, true},
+			parityEndpoint("a", time.Hour, "GET", "/b"), parityEndpoint("b", 0, "GET", "/b/")}, true, false},
 		{"parameter names across methods without auto options", ce, []*v1alpha1.KrakenDEndpoint{
-			parityEndpoint("a", time.Hour, "GET", "/a/{id}"), parityEndpoint("b", 0, "POST", "/a/{name}")}, true},
-		{"unnamed wildcard on CE", ce, []*v1alpha1.KrakenDEndpoint{parityEndpoint("a", 0, "GET", "/files/*")}, false},
+			parityEndpoint("a", time.Hour, "GET", "/a/{id}"), parityEndpoint("b", 0, "POST", "/a/{name}")}, true, false},
+		{"unnamed wildcard on CE", ce, []*v1alpha1.KrakenDEndpoint{parityEndpoint("a", 0, "GET", "/files/*")}, false, true},
 		{"unnamed wildcard on EE", parityGateway(v1alpha1.EditionEE, nil),
-			[]*v1alpha1.KrakenDEndpoint{parityEndpoint("a", 0, "GET", "/files/*")}, true},
-		{"reserved path", ce, []*v1alpha1.KrakenDEndpoint{parityEndpoint("a", 0, "GET", "/__health")}, false},
+			[]*v1alpha1.KrakenDEndpoint{parityEndpoint("a", 0, "GET", "/files/*")}, true, false},
+		{"reserved path", ce, []*v1alpha1.KrakenDEndpoint{parityEndpoint("a", 0, "GET", "/__health")}, false, true},
 		{"custom health path clash", parityGateway(v1alpha1.EditionCE, &v1alpha1.RouterConfig{HealthPath: "/healthz"}),
-			[]*v1alpha1.KrakenDEndpoint{parityEndpoint("a", 0, "GET", "/healthz")}, false},
+			[]*v1alpha1.KrakenDEndpoint{parityEndpoint("a", 0, "GET", "/healthz")}, false, false},
 		{"auto options clash", parityGateway(v1alpha1.EditionCE, &v1alpha1.RouterConfig{AutoOptions: true}),
 			[]*v1alpha1.KrakenDEndpoint{
-				parityEndpoint("a", time.Hour, "GET", "/a/{id}"), parityEndpoint("b", 0, "POST", "/a/{name}")}, false},
+				parityEndpoint("a", time.Hour, "GET", "/a/{id}"), parityEndpoint("b", 0, "POST", "/a/{name}")}, false, false},
 	}
 }
 
@@ -271,8 +276,12 @@ func TestConfigCheckParity(t *testing.T) {
 				t.Errorf("controller verdict %v differs from admission verdict %v", controller.OK, admission.OK)
 			}
 			if tc.gateway.Spec.Edition == v1alpha1.EditionCE {
-				if rejected, output := routerTestRejects(t, bin, out.JSON); rejected && admission.OK {
+				rejected, output := routerTestRejects(t, bin, out.JSON)
+				if rejected && admission.OK {
 					t.Fatalf("krakend check -t -n rejects what admission admits:\n%s", output)
+				}
+				if rejected != tc.routerRejects {
+					t.Errorf("krakend check -t -n rejected = %v, want %v:\n%s", rejected, tc.routerRejects, output)
 				}
 			}
 		})
