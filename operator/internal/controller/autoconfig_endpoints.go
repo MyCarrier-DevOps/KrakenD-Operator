@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -62,6 +63,11 @@ func (r *KrakenDAutoConfigReconciler) claimEndpoints(
 	for _, ep := range desired {
 		wanted[ep.Name] = true
 	}
+	// A cache lists in no particular order; adopt by name so the failures
+	// of one pass read the same on every identical pass.
+	slices.SortFunc(labelled.Items, func(a, b v1alpha1.KrakenDEndpoint) int {
+		return strings.Compare(a.Name, b.Name)
+	})
 	controlled := owned.Items
 	for i := range labelled.Items {
 		orphan := &labelled.Items[i]
