@@ -1493,7 +1493,9 @@ was served without it. An entry's `documentation/openapi` is still admitted,
 because AutoConfig generates it on every endpoint and a CE render drops it.
 Only added or changed entries are checked, and moving the object to another
 gateway checks every entry again, so an entry stored before the upgrade does not
-block unrelated edits. The pre-upgrade audit lists stored uses.
+block unrelated edits. The pre-upgrade audit lists stored `GET` entries on a
+health path and stored Enterprise-only namespaces on CE gateways; it does not
+check the other rules.
 
 **Updates are ratcheted.** A metadata-only update is never validated. A
 reference (`gatewayRef`, `policyRef`) is checked only when it is added or
