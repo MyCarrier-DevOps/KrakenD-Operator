@@ -365,17 +365,22 @@ dropped; these do not change `status.phase` or conditions.
 
 `documentation/openapi.audience` must now be a list of strings wherever it's
 set: inside `extraConfig` on `spec.overrides[]`, `spec.defaults.endpoint`, or
-`spec.additionalEndpoints[]` (AutoConfig), on a `KrakenDEndpoint`'s
-`spec.endpoints[].extraConfig`, or declared directly on an OpenAPI operation.
-`null` (e.g. an `audience:` key with no value in YAML) and `null` items are
-rejected too.
-The admission webhook now rejects a non-list `extraConfig` value at `kubectl
-apply` time (`must be a list of strings, e.g. ["internal"]`); a value
-declared on the operation itself is caught by the default CUE definitions
-instead and fails the sync with reason `CUEEvaluationFailed`. Previously a
-malformed value (e.g. a YAML mapping) passed both checks unchanged and only
-surfaced as a `krakend check -t -n -c` failure, which blocks config updates for
-every service on that gateway — not just the one with the bad value.
+`spec.additionalEndpoints[]` (AutoConfig), or declared directly on an OpenAPI
+operation. `null` (e.g. an `audience:` key with no value in YAML) and `null`
+items are rejected too.
+The `KrakenDAutoConfig` admission webhook now rejects a non-list `extraConfig`
+value at `kubectl apply` time (`must be a list of strings, e.g. ["internal"]`);
+a value declared on the operation itself is caught by the default CUE
+definitions instead and fails the sync with reason `CUEEvaluationFailed`.
+Previously a malformed value (e.g. a YAML mapping) passed both checks
+unchanged and only surfaced as a `krakend check -t -n -c` failure, which blocks
+config updates for every service on that gateway — not just the one with the
+bad value.
+
+A `KrakenDEndpoint` gets the same rule on `spec.endpoints[].extraConfig`, with
+the same message, for every added or changed entry, on CE and EE gateways
+alike. Every other finding on an entry is reported by the gateway-wide check
+described under *Complete admission*, as `spec.endpoints[i]: <finding>`.
 
 Updates are ratcheted (see *Complete admission*): a `KrakenDEndpoint` stored
 with a non-list or `null` audience accepts every update that leaves the entry
@@ -1370,6 +1375,28 @@ instead of `403 Forbidden` with a single message. Scripts that matched
 validator is `500 Internal Error`, a transient server error: retry the
 request; controllers and GitOps tools retry on their own. Each webhook call is
 now limited to 15 s (`timeoutSeconds`; it was the 10 s default).
+
+**Endpoint writes are checked against the whole gateway.** Creating or
+changing a KrakenDEndpoint renders its gateway's config with the change and
+validates it with `krakend check -n` and the route check, which together cover
+what the controller's `krakend check -t -n` finds. The write is rejected only
+when the gateway's config passed before the change and fails after it, with one
+cause per offending entry (`spec.endpoints[1]: <finding>`); a finding about
+another endpoint or the gateway root is reported on `spec.endpoints`. If the
+gateway already fails because of another object, the change is judged with the
+gateway root alone: it is admitted with a warning that names the existing
+failure, unless it fails there when it did not before. The entry rules run
+first, and a write they reject is not rendered. That includes the
+`documentation/openapi.audience` rule, which keeps rejecting a malformed
+audience on a changed entry on every gateway, because a CE render drops an
+entry's `documentation/openapi` and the render check would never see it. The
+checks run in the operator pod, three at a time for the whole pod, sharing those
+slots with the gateway controller, and each webhook call stops its work after
+12 s. A request that cannot get a slot in time, or whose check cannot run, is
+answered `500 Internal Error`: a transient error that `kubectl` does not retry,
+so run the command again (controllers and GitOps tools retry on their own).
+With the webhooks disabled the controller's check is the only protection: a
+config that fails it keeps the gateway at its last-known-good config.
 
 **The operator's memory limit is 512Mi** (was 256Mi). Up to three `krakend
 check` runs share the container, each peaking near 110 MB. If you set
