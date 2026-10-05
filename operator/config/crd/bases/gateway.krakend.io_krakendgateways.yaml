@@ -173,6 +173,7 @@ spec:
                   port:
                     description: Port is the KrakenD listen port (default 8080).
                     format: int32
+                    maximum: 65535
                     type: integer
                   router:
                     description: Router configures KrakenD router behavior.
