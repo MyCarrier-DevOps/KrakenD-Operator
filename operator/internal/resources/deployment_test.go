@@ -319,6 +319,26 @@ func TestBuildDeployment_EEWithLicense(t *testing.T) {
 	}
 }
 
+func TestBuildDeployment_LicenseSecretReferenceWithNoKeyMountsTheLICENSEKey(t *testing.T) {
+	gw := testGateway()
+	gw.Spec.Edition = v1alpha1.EditionEE
+	gw.Spec.License = &v1alpha1.LicenseConfig{
+		SecretRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "krakend-license"}},
+	}
+	dep := &appsv1.Deployment{}
+	BuildDeployment(dep, gw, DeploymentInputs{ConfigChecksum: "cs", Image: "krakend/krakend-ee:2.7.0"})
+
+	for _, v := range dep.Spec.Template.Spec.Volumes {
+		if v.Name == "license" {
+			if got := v.Secret.Items[0].Key; got != "LICENSE" {
+				t.Errorf("mounted key = %q, want LICENSE: the controller reads that key when none is named", got)
+			}
+			return
+		}
+	}
+	t.Error("no license volume")
+}
+
 func TestBuildDeployment_SingleSourceConfigMapPlugin(t *testing.T) {
 	gw := testGateway()
 	gw.Spec.Plugins = &v1alpha1.PluginsSpec{
