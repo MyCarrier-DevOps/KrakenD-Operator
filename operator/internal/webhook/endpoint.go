@@ -162,10 +162,11 @@ func (v *EndpointValidator) checkRender(
 	if isoAfter.OK {
 		return preexisting, nil
 	}
-	if old == nil {
-		return nil, renderDenial(ep, isoAfter)
+	var baseline []v1alpha1.KrakenDEndpoint
+	if old != nil {
+		baseline = []v1alpha1.KrakenDEndpoint{*old}
 	}
-	isoBefore, err := v.Checker.CheckIsolated(ctx, gw, []v1alpha1.KrakenDEndpoint{*old})
+	isoBefore, err := v.Checker.CheckIsolated(ctx, gw, baseline)
 	if err != nil {
 		return nil, checkErr(err)
 	}
