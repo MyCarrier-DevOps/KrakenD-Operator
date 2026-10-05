@@ -218,6 +218,12 @@ type CEDrop struct {
 	Keys      []string
 }
 
+// String names the drop: the namespace, followed by the dropped keys when CE
+// honors the rest of the block.
+func (d CEDrop) String() string {
+	return ""
+}
+
 // CEDrops returns what a CE render drops from the extra_config ec at level, in
 // namespace order.
 func CEDrops(level NamespaceLevel, ec map[string]json.RawMessage) []CEDrop {

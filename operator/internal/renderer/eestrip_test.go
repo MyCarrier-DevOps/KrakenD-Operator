@@ -451,3 +451,18 @@ func TestCEDrops(t *testing.T) {
 		})
 	}
 }
+
+func TestCEDrop_String(t *testing.T) {
+	for name, tc := range map[string]struct {
+		drop CEDrop
+		want string
+	}{
+		"a whole namespace": {CEDrop{Namespace: "auth/api-keys"}, "auth/api-keys"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := tc.drop.String(); got != tc.want {
+				t.Errorf("String() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
