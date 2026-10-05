@@ -459,6 +459,20 @@ validator itself failed. This is transient and `kubectl` does not retry it, so
 run the command again. Controllers and GitOps tools retry on their own. If it
 repeats, check the operator pod's CPU and memory.
 
+### The operator's AutoConfig writes skip the render check
+
+The operator's own writes to KrakenDEndpoints a KrakenDAutoConfig controls are
+not rendered at admission, because the AutoConfig controller validates its
+whole set first. To confirm the exemption is active, look for the startup log
+line `admission skips the render check for AutoConfig endpoint writes from`
+with the username `system:serviceaccount:<namespace>:<serviceaccount>` of the
+operator pod. If the log says `no operator username`, the pod lacks
+`POD_NAMESPACE` or `POD_SERVICE_ACCOUNT` (a custom deployment) and no write is
+trusted: set `--operator-username` to the pod's ServiceAccount username.
+Disabling the exemption is safe but costs one `krakend check` per generated
+endpoint write, which can make a large AutoConfig sync slow and can fail it with
+`500 Internal Error` when the validation slots stay busy.
+
 ### AutoConfig not generating endpoints
 
 **Diagnosis:**
