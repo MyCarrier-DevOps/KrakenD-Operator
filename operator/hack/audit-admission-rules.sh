@@ -150,3 +150,8 @@ jq "${jq_opts[@]}" "$jq_lib"'
   (if $s.edition == "CE" and ($s.dragonfly.enabled // false)
    then "spec.dragonfly.enabled is Enterprise-only on a CE gateway" else empty end)
 ]} | report("KrakenDGateway")' "$work/gateways.json"
+
+jq "${jq_opts[@]}" "$jq_lib"'
+.items[] | .spec as $s | {id: "\(.metadata.namespace)/\(.metadata.name)", v: [
+  (if (.metadata.name | length) > 63 then "name longer than 63 characters" else empty end)
+]} | report("KrakenDAutoConfig")' "$work/autoconfigs.json"
