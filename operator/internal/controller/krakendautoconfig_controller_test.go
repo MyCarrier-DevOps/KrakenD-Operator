@@ -3205,7 +3205,8 @@ func TestAutoConfigReconcile_ReportsUnsupportedMethodsInScope(t *testing.T) {
 		filter *v1alpha1.FilterSpec
 		want   int
 	}{
-		"reported": {filter: nil, want: 1},
+		"reported":               {filter: nil, want: 1},
+		"excluded by the filter": {filter: &v1alpha1.FilterSpec{IncludeMethods: []string{"GET"}}, want: 0},
 	} {
 		t.Run(name, func(t *testing.T) {
 			cm := testCUEDefinitionsCM()
