@@ -49,6 +49,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 	"github.com/mycarrier-devops/krakend-operator/internal/resources"
 	"github.com/mycarrier-devops/krakend-operator/internal/util/hash"
@@ -1428,13 +1429,13 @@ func TestGatewayReconcile_UnavailableValidatorLiftsAnOldBlame(t *testing.T) {
 }
 
 func TestRejectionSummary_CountsFindingsNamingNoEndpoint(t *testing.T) {
-	atts := []renderer.Attribution{
+	findings := []configcheck.Finding{
 		{Endpoint: types.NamespacedName{Namespace: "default", Name: "bad"}, Index: 1, Message: "m1"},
 		{Index: -1, Message: "m2"},
 		{Index: -1, Message: "m3"},
 	}
 	want := "Rejected by krakend check; findings name KrakenDEndpoint(s) default/bad; 2 finding(s) name no endpoint."
-	if got := rejectionSummary(atts); got != want {
+	if got := rejectionSummary(findings); got != want {
 		t.Errorf("rejectionSummary = %q, want %q", got, want)
 	}
 	if got := rejectionSummary(nil); !strings.Contains(got, "no finding names a KrakenDEndpoint") {
@@ -1444,14 +1445,14 @@ func TestRejectionSummary_CountsFindingsNamingNoEndpoint(t *testing.T) {
 
 func TestRejectionsByEndpoint_ListsEachFindingOncePerEndpoint(t *testing.T) {
 	owner := types.NamespacedName{Namespace: "default", Name: "both"}
-	// A router error blaming two entries of one CR is reported once per entry.
-	atts := []renderer.Attribution{
+	// A router error blaming two entries of one CR is reported once, naming both.
+	findings := []configcheck.Finding{
 		{Endpoint: owner, Index: 0, Message: "conflict"},
 		{Endpoint: owner, Index: 1, Message: "conflict"},
 	}
-	msg := rejectionsByEndpoint(atts)[owner]
-	if strings.Count(msg, "conflict") != 1 {
-		t.Errorf("message = %q, want the finding once", msg)
+	msg := rejectionsByEndpoint(findings)[owner]
+	if strings.Count(msg, "conflict") != 1 || !strings.Contains(msg, "spec.endpoints[0], spec.endpoints[1]: conflict") {
+		t.Errorf("message = %q, want the finding once, naming both entries", msg)
 	}
 }
 

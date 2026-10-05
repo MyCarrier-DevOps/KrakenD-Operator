@@ -37,6 +37,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 	"github.com/mycarrier-devops/krakend-operator/internal/resources"
 	"github.com/mycarrier-devops/krakend-operator/internal/util/hash"
@@ -300,11 +301,15 @@ func (r *KrakenDGatewayReconciler) liveReplicaSetConfigMaps(
 
 // rejectionsByEndpoint groups krakend check findings by the KrakenDEndpoint
 // they name. Findings that name no endpoint are reported on the gateway only.
-func rejectionsByEndpoint(atts []renderer.Attribution) map[types.NamespacedName]string {
+func rejectionsByEndpoint(findings []configcheck.Finding) map[types.NamespacedName]string {
 	lines := map[types.NamespacedName][]string{}
-	for _, a := range atts {
-		if a.Endpoint != (types.NamespacedName{}) && !slices.Contains(lines[a.Endpoint], a.Message) {
-			lines[a.Endpoint] = append(lines[a.Endpoint], a.Message)
+	for _, f := range findings {
+		line := f.Message
+		if f.Index >= 0 {
+			line = fmt.Sprintf("spec.endpoints[%d]: %s", f.Index, f.Message)
+		}
+		if f.Endpoint != (types.NamespacedName{}) && !slices.Contains(lines[f.Endpoint], line) {
+			lines[f.Endpoint] = append(lines[f.Endpoint], line)
 		}
 	}
 	out := make(map[types.NamespacedName]string, len(lines))
@@ -317,17 +322,17 @@ func rejectionsByEndpoint(atts []renderer.Attribution) map[types.NamespacedName]
 
 // rejectionSummary is the first line of ConfigValid's message on rejection. It
 // names the KrakenDEndpoints krakend check blamed.
-func rejectionSummary(atts []renderer.Attribution) string {
+func rejectionSummary(findings []configcheck.Finding) string {
 	seen := map[types.NamespacedName]bool{}
 	var names []string
 	unattributed := 0
-	for _, a := range atts {
+	for _, f := range findings {
 		switch {
-		case a.Endpoint == (types.NamespacedName{}):
+		case f.Endpoint == (types.NamespacedName{}):
 			unattributed++
-		case !seen[a.Endpoint]:
-			seen[a.Endpoint] = true
-			names = append(names, a.Endpoint.String())
+		case !seen[f.Endpoint]:
+			seen[f.Endpoint] = true
+			names = append(names, f.Endpoint.String())
 		}
 	}
 	sort.Strings(names)
@@ -617,4 +622,13 @@ func (r *KrakenDGatewayReconciler) setPluginsResolved(gw *v1alpha1.KrakenDGatewa
 			Message:            "every plugin ConfigMap exists",
 		})
 	}
+}
+
+// findingsOfAttributions names no spec entry.
+func findingsOfAttributions(atts []renderer.Attribution) []configcheck.Finding {
+	out := make([]configcheck.Finding, 0, len(atts))
+	for _, a := range atts {
+		out = append(out, configcheck.Finding{Endpoint: a.Endpoint, Index: -1, Message: a.Message})
+	}
+	return out
 }

@@ -730,9 +730,9 @@ func (r *KrakenDGatewayReconciler) validateAndApply(
 	var rejected *renderer.ValidationError
 	switch {
 	case stderrors.As(err, &rejected):
-		atts := renderer.Attribute(output.JSON, output.Sources, rejected.Output)
-		r.handleValidationError(gw, before, rejected, rejectionSummary(atts))
-		return rejectionsByEndpoint(atts), nil
+		findings := findingsOfAttributions(renderer.Attribute(output.JSON, output.Sources, rejected.Output))
+		r.handleValidationError(gw, before, rejected, rejectionSummary(findings))
+		return rejectionsByEndpoint(findings), nil
 	case err != nil:
 		return nil, r.handleValidatorUnavailable(gw, before, err)
 	}
