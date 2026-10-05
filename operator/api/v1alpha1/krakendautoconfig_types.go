@@ -234,6 +234,7 @@ type OperationOverride struct {
 	Endpoint string `json:"endpoint,omitempty"`
 
 	// Method overrides the HTTP method.
+	// +kubebuilder:validation:Enum=GET;POST;PUT;PATCH;DELETE
 	Method string `json:"method,omitempty"`
 
 	// Timeout overrides the endpoint timeout.
