@@ -31,5 +31,6 @@
  {"metadata":{"namespace":"a","name":"override-calls"},"spec":{"gatewayRef":{"name":"gw"},"openapi":{"url":"http://x"},"trigger":"OnChange","overrides":[{"operationId":"x","concurrentCalls":0}]}},
  {"metadata":{"namespace":"a","name":"override-output"},"spec":{"gatewayRef":{"name":"gw"},"openapi":{"url":"http://x"},"trigger":"OnChange","overrides":[{"operationId":"x","outputEncoding":"jsn"}]}},
  {"metadata":{"namespace":"a","name":"override-path"},"spec":{"gatewayRef":{"name":"gw"},"openapi":{"url":"http://x"},"trigger":"OnChange","overrides":[{"operationId":"x","endpoint":"orders"}]}},
- {"metadata":{"namespace":"a","name":"override-policy"},"spec":{"gatewayRef":{"name":"gw"},"openapi":{"url":"http://x"},"trigger":"OnChange","overrides":[{"operationId":"x","policyRef":{"name":""}}]}}
+ {"metadata":{"namespace":"a","name":"override-policy"},"spec":{"gatewayRef":{"name":"gw"},"openapi":{"url":"http://x"},"trigger":"OnChange","overrides":[{"operationId":"x","policyRef":{"name":""}}]}},
+ {"metadata":{"namespace":"a","name":"override-collide"},"spec":{"gatewayRef":{"name":"gw"},"openapi":{"url":"http://x"},"trigger":"OnChange","overrides":[{"operationId":"get_a"},{"operationId":"get-a"}]}}
 ]}
