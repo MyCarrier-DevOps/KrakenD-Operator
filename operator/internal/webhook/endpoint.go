@@ -324,7 +324,7 @@ func routeClash(p *field.Path, e v1alpha1.EndpointEntry, otherPath, owner string
 		return err
 	}
 	err.Detail = fmt.Sprintf("has the same route as %s %s in %s: paths that differ only in parameter names "+
-		"cannot both be routed. Use the same parameter name, and keep routes that share a parameterized "+
-		"prefix in one KrakenDEndpoint so they can be renamed together", e.Method, otherPath, owner)
+		"or repeated slashes cannot both be routed. Use the same parameter name, and keep routes that share "+
+		"a parameterized prefix in one KrakenDEndpoint so they can be renamed together", e.Method, otherPath, owner)
 	return err
 }
