@@ -89,6 +89,9 @@ func (v *PolicyValidator) ValidateCreate(ctx context.Context, obj runtime.Object
 func (v *PolicyValidator) ValidateUpdate(
 	ctx context.Context, oldObj, newObj runtime.Object,
 ) (admission.Warnings, error) {
+	if terminatingWithUnchangedSpec(oldObj, newObj) {
+		return nil, nil
+	}
 	policy, ok := newObj.(*v1alpha1.KrakenDBackendPolicy)
 	if !ok {
 		return nil, fmt.Errorf("expected KrakenDBackendPolicy, got %T", newObj)
