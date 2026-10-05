@@ -1076,9 +1076,18 @@ instead of loading the EE config into the CE binary. The CE render removes:
 - every EE wildcard endpoint (`/prefix/*`), which the CE router cannot load;
 - every Enterprise-only `extra_config` namespace at service, endpoint and
   backend level, for example `auth/api-keys`, `security/policies`, `redis`,
-  `qos/ratelimit/service`, `backend/http/client` and `documentation/openapi`.
-  KrakenD CE silently ignores these, which previously left routes unprotected
-  with no trace in status.
+  `qos/ratelimit/service` and `documentation/openapi`. The exception is
+  `backend/http/client`, which CE partly honors: only its Enterprise-only keys
+  (such as `proxy_address`, `client_tls` and `no_redirect`) are removed and
+  listed, while `send_body_on_redirect` stays. A client block that holds only
+  `send_body_on_redirect`, or nothing, stays whole and is not listed.
+  KrakenD CE silently ignores what is removed, which previously left routes
+  unprotected with no trace in status.
+
+A CE-fallback render now keeps `send_body_on_redirect` where it removed the
+whole `backend/http/client` block before, so the rendered config differs from
+earlier releases (a new checksum, so the pods roll once), and an empty
+`backend/http/client` block is no longer listed as stripped.
 
 **What you see:**
 - The gateway reports `CEFallbackApplied=True`, reason `EEFeaturesStripped`,
