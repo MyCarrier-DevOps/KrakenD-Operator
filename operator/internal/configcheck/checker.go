@@ -220,5 +220,6 @@ func sortEndpoints(endpoints []v1alpha1.KrakenDEndpoint) {
 // with its own in-reconcile license verdict; admission sees the last one
 // recorded.
 func ceFallback(gw *v1alpha1.KrakenDGateway) bool {
-	return gw.Spec.Edition == v1alpha1.EditionEE && meta.IsStatusConditionTrue(gw.Status.Conditions, v1alpha1.ConditionLicenseDegraded)
+	return gw.Spec.Edition == v1alpha1.EditionEE &&
+		meta.IsStatusConditionTrue(gw.Status.Conditions, v1alpha1.ConditionLicenseDegraded)
 }
