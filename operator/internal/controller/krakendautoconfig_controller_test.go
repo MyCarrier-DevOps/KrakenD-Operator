@@ -4765,3 +4765,38 @@ func TestAutoConfigReconcile_PrecheckUnavailableWritesNothing(t *testing.T) {
 		t.Errorf("expected Synced False/ValidatorUnavailable, got %+v", cond)
 	}
 }
+
+func TestAutoConfigReconcile_UnattributedCheckFailure(t *testing.T) {
+	otherEndpoint := configcheck.Verdict{Findings: []configcheck.Finding{{
+		Endpoint: types.NamespacedName{Namespace: "team-b", Name: "orders"}, Index: 0, Message: "wildcard conflict",
+	}}}
+	for name, tc := range map[string]struct {
+		failure, baseline configcheck.Verdict
+		wantWrite         bool
+	}{
+		"another endpoint, change breaks gateway: hold": {otherEndpoint, configcheck.Verdict{OK: true}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cm := testCUEDefinitionsCM()
+			ac := syncedAutoConfig(cm)
+			f, ce, fi, g := defaultMocks()
+			c := fakeClientBuilder().WithObjects(ac, cm, testGateway()).WithStatusSubresource(ac).Build()
+			r := newACReconciler(c, f, ce, fi, g)
+			r.Checker = &fakeChecker{verdicts: []configcheck.Verdict{tc.failure, tc.baseline}}
+
+			if _, err := reconcileAC(r, ac); err != nil {
+				t.Fatalf("reconcile: %v", err)
+			}
+			if got := endpointExists(t, c, "test-ac-listusers"); got != tc.wantWrite {
+				t.Errorf("endpoint written = %v, want %v", got, tc.wantWrite)
+			}
+			if !tc.wantWrite {
+				failed := getAC(t, c, ac).Status.FailedOperations
+				if len(failed) != 1 ||
+					!strings.HasPrefix(failed[0].Message, "the change fails the gateway config check: ") {
+					t.Errorf("failedOperations = %+v", failed)
+				}
+			}
+		})
+	}
+}
