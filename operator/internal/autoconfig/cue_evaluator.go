@@ -64,6 +64,11 @@ type CUEEvaluator interface {
 	Evaluate(ctx context.Context, input CUEInput) (*CUEOutput, error)
 }
 
+// supportedMethods are the HTTP methods the KrakenDEndpoint API accepts. An
+// entry with any other method (the default definitions also emit HEAD,
+// OPTIONS and TRACE operations) is skipped, not generated.
+var supportedMethods = []string{"GET", "POST", "PUT", "PATCH", "DELETE"}
+
 // NewCUEEvaluator returns a CUEEvaluator implementation.
 func NewCUEEvaluator() CUEEvaluator {
 	return &cueEvaluator{}
@@ -180,6 +185,9 @@ func applyOverrides(cueCtx *cue.Context, unified cue.Value, input CUEInput) cue.
 	return unified
 }
 
+// exportEndpointEntries decodes every entry of the endpoint struct. An entry
+// whose method the KrakenDEndpoint API does not accept is recorded in
+// Skipped instead.
 func exportEndpointEntries(endpointsValue cue.Value) (*CUEOutput, error) {
 	output := &CUEOutput{
 		OperationIDs: make(map[string]string),
@@ -194,6 +202,15 @@ func exportEndpointEntries(endpointsValue cue.Value) (*CUEOutput, error) {
 	for iter.Next() {
 		key := iter.Selector().String()
 		val := iter.Value()
+		op := entryOperation(iter.Selector().Unquoted(), val)
+		if !slices.Contains(supportedMethods, op.Method) {
+			output.Skipped = append(output.Skipped, OperationIssue{
+				Operation: op,
+				Reason:    v1alpha1.ReasonUnsupportedMethod,
+				Message:   "KrakenDEndpoint supports only " + strings.Join(supportedMethods, ", "),
+			})
+			continue
+		}
 
 		var entry v1alpha1.EndpointEntry
 		jsonBytes, err := val.MarshalJSON()
@@ -205,33 +222,57 @@ func exportEndpointEntries(endpointsValue cue.Value) (*CUEOutput, error) {
 			output.Warnings = append(output.Warnings, fmt.Sprintf("skipping %s: %v", key, err))
 			continue
 		}
-
 		output.Entries = append(output.Entries, entry)
-
 		entryKey := entry.Endpoint + ":" + entry.Method
-		opIDValue := val.LookupPath(cue.MakePath(cue.Hid("_operationId", "_")))
-		if opIDValue.Exists() {
-			if opID, err := opIDValue.String(); err == nil {
-				output.OperationIDs[entryKey] = opID
-			}
+		if op.OperationID != "" {
+			output.OperationIDs[entryKey] = op.OperationID
 		}
-
-		tagsValue := val.LookupPath(cue.MakePath(cue.Hid("_tags", "_")))
-		if tagsValue.Exists() {
-			tagsIter, err := tagsValue.List()
-			if err == nil {
-				var tags []string
-				for tagsIter.Next() {
-					if t, err := tagsIter.Value().String(); err == nil {
-						tags = append(tags, t)
-					}
-				}
-				output.Tags[entryKey] = tags
-			}
+		if len(op.Tags) > 0 {
+			output.Tags[entryKey] = op.Tags
 		}
 	}
-
+	sortIssues(output.Skipped)
 	return output, nil
+}
+
+// entryOperation identifies the entry labelled key by its own endpoint and
+// method fields, falling back to the label ("<path>:<METHOD>", the label the
+// default definitions use) when a field is not concrete, and by its hidden
+// _operationId and _tags, which the default definitions copy from the spec.
+func entryOperation(key string, val cue.Value) Operation {
+	op := Operation{Path: key}
+	if i := strings.LastIndex(key, ":"); i >= 0 {
+		op.Path, op.Method = key[:i], key[i+1:]
+	}
+	if path, err := val.LookupPath(cue.ParsePath("endpoint")).String(); err == nil {
+		op.Path = path
+	}
+	if method, err := val.LookupPath(cue.ParsePath("method")).String(); err == nil {
+		op.Method = method
+	}
+	if opID, err := val.LookupPath(cue.MakePath(cue.Hid("_operationId", "_"))).String(); err == nil {
+		op.OperationID = opID
+	}
+	tagsIter, err := val.LookupPath(cue.MakePath(cue.Hid("_tags", "_"))).List()
+	if err != nil {
+		return op
+	}
+	for tagsIter.Next() {
+		if t, err := tagsIter.Value().String(); err == nil {
+			op.Tags = append(op.Tags, t)
+		}
+	}
+	return op
+}
+
+// sortIssues orders issues by path, then method.
+func sortIssues(issues []OperationIssue) {
+	slices.SortFunc(issues, func(a, b OperationIssue) int {
+		if c := strings.Compare(a.Path, b.Path); c != 0 {
+			return c
+		}
+		return strings.Compare(a.Method, b.Method)
+	})
 }
 
 // applyDefaults applies CR-level EndpointDefaults to all entries. These replace
