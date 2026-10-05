@@ -201,6 +201,7 @@ jq "${jq_opts[@]}" "$jq_lib"'
     (($o.backends // [])[] | select(.index < 0) | "\($p).backends index \(.index)"),
     ($o.timeout // empty | dur_problem($go_re; 64; "\($p).timeout")),
     ($o.cacheTTL // empty | dur_problem($go_re; 64; "\($p).cacheTTL")),
-    ($o.concurrentCalls // empty | select(. < 1) | "\($p).concurrentCalls \(.)")
+    ($o.concurrentCalls // empty | select(. < 1) | "\($p).concurrentCalls \(.)"),
+    ($o.outputEncoding // empty | enum_problem("\($p).outputEncoding"; output_encodings))
   ))
 ]} | report("KrakenDAutoConfig")' "$work/autoconfigs.json"
