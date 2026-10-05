@@ -488,8 +488,8 @@ func TestEndpointAdmission_BrokenGatewayFallsBackToIsolation(t *testing.T) {
 	}{
 		{"candidate fine alone", nil, []configcheck.Verdict{broken, broken, {OK: true}}, true,
 			"gateway+candidate,gateway,isolated", "default/new[GET /a]|-|default/new[GET /a]"},
-		{"create failing alone", nil, []configcheck.Verdict{broken, broken, failing("new", 0, "bad")}, false,
-			"gateway+candidate,gateway,isolated", "default/new[GET /a]|-|default/new[GET /a]"},
+		{"create failing alone", nil, []configcheck.Verdict{broken, broken, failing("new", 0, "bad"), {OK: true}}, false,
+			"gateway+candidate,gateway,isolated,isolated", "default/new[GET /a]|-|default/new[GET /a]|-"},
 		{"update newly failing alone", testEndpoint("new", "/old"),
 			[]configcheck.Verdict{broken, broken, failing("new", 0, "bad"), {OK: true}}, false,
 			"gateway+candidate,gateway,isolated,isolated",
