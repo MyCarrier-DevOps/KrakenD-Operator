@@ -269,7 +269,8 @@ func TestGatewayAdmission_CERejectsEnterpriseOnlyNamespaces(t *testing.T) {
 		},
 	}
 	generated := testEndpoint("generated", "/g")
-	generated.Spec.Endpoints[0].ExtraConfig = &runtime.RawExtension{Raw: []byte(`{"documentation/openapi":{"summary":"s"}}`)}
+	generated.Spec.Endpoints[0].ExtraConfig = &runtime.RawExtension{
+		Raw: []byte(`{"documentation/openapi":{"summary":"s"}}`)}
 	proxied := testEndpoint("proxied", "/x")
 	proxied.Spec.Endpoints[0].Backends[0].ExtraConfig = &runtime.RawExtension{
 		Raw: []byte(`{"backend/http/client":{"proxy_address":"http://q"}}`)}
@@ -290,7 +291,8 @@ func TestGatewayAdmission_CERejectsEnterpriseOnlyNamespaces(t *testing.T) {
 	}{
 		{"CE root with an EE namespace", nil, withRoot(testGateway(), apiKeys), nil,
 			[]string{`spec.config.extraConfig: Invalid value: "auth/api-keys"`}},
-		{"CE root with CE namespaces", nil, withRoot(testGateway(), `{"security/cors":{"allow_origins":["*"]}}`), nil, nil},
+		{"CE root with CE namespaces", nil,
+			withRoot(testGateway(), `{"security/cors":{"allow_origins":["*"]}}`), nil, nil},
 		{"EE root with an EE namespace", nil, withRoot(ee(), apiKeys), nil, nil},
 		{"unchanged CE root", nil, edited(withRoot(testGateway(), apiKeys)), withRoot(testGateway(), apiKeys), nil},
 		{"CE root changed while it keeps an EE namespace", nil,
@@ -304,11 +306,14 @@ func TestGatewayAdmission_CERejectsEnterpriseOnlyNamespaces(t *testing.T) {
 			"KrakenDBackendPolicy default/p spec.raw backend/http/client"}},
 		{"EE to CE names the dropped keys of a partly honored block", []client.Object{proxied, proxy},
 			testGateway(), ee(), []string{
-				"KrakenDEndpoint default/proxied spec.endpoints[0].backends[0].extraConfig backend/http/client: proxy_address",
+				"KrakenDEndpoint default/proxied spec.endpoints[0].backends[0].extraConfig " +
+					"backend/http/client: proxy_address",
 				"KrakenDBackendPolicy default/p spec.raw backend/http/client: proxy_address"}},
 		{"EE to CE with an entry's documentation/openapi", []client.Object{generated}, testGateway(), ee(), nil},
-		{"EE to CE with nothing Enterprise-only", []client.Object{testEndpoint("plain", "/p")}, testGateway(), ee(), nil},
-		{"CE stays CE with stored EE namespaces", []client.Object{keys, proxy}, edited(testGateway()), testGateway(), nil},
+		{"EE to CE with nothing Enterprise-only", []client.Object{testEndpoint("plain", "/p")},
+			testGateway(), ee(), nil},
+		{"CE stays CE with stored EE namespaces", []client.Object{keys, proxy},
+			edited(testGateway()), testGateway(), nil},
 		{"EE to CE with only keys CE honors", []client.Object{redirects, honored}, testGateway(), ee(), nil},
 	}
 	for _, tt := range tests {
@@ -544,7 +549,9 @@ func TestGatewayAdmission_UnavailableCheckCarriesNoWarning(t *testing.T) {
 	chk := &scriptedChecker{verdicts: []configcheck.Verdict{broken, broken}, failCall: 3,
 		err: errors.New("waiting for a validation slot: context deadline exceeded")}
 
-	warnings, err := (&GatewayValidator{Client: fakeClient(), Checker: chk}).ValidateUpdate(context.Background(), old, edited)
+	v := &GatewayValidator{Client: fakeClient(), Checker: chk}
+
+	warnings, err := v.ValidateUpdate(context.Background(), old, edited)
 
 	if err == nil {
 		t.Fatal("admitted, want a 500")
