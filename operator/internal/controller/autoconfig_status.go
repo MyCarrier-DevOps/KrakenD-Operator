@@ -45,7 +45,7 @@ func operationLabel(s v1alpha1.OperationStatus) string {
 	if s.OperationID != "" {
 		label += " (" + s.OperationID + ")"
 	}
-	return label + ": " + s.Reason
+	return configcheck.TruncateEllipsis(label, maxStatusMessageLen) + ": " + s.Reason
 }
 
 // listed joins the first maxConditionListed items, noting how many more
