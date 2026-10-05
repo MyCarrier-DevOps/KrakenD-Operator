@@ -2169,3 +2169,17 @@ func TestEvaluate_OverrideRemapsAFailedOperation(t *testing.T) {
 		t.Errorf("expected the failure at GET /v2/users, got %+v", out.Failed)
 	}
 }
+
+func TestEvaluate_FailedOperationWithUnsupportedMethodIsSkipped(t *testing.T) {
+	// A HEAD operation can never publish, so its CUE failure must not hold
+	// anything back: it is skipped like any other unsupported method.
+	out := evaluateEmbedded(t, `{"paths":{"/legacy/users":{"head":{"operationId":"headUsers","responses":{"200":{}}}}}}`)
+
+	if len(out.Failed) != 0 {
+		t.Errorf("expected no failed operation, got %+v", out.Failed)
+	}
+	if len(out.Skipped) != 1 || out.Skipped[0].Method != "HEAD" || out.Skipped[0].OperationID != "headUsers" ||
+		out.Skipped[0].Reason != v1alpha1.ReasonUnsupportedMethod {
+		t.Errorf("expected headUsers skipped as UnsupportedMethod, got %+v", out.Skipped)
+	}
+}
