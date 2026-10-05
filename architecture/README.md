@@ -526,6 +526,14 @@ status:
 - `timeout` and `cacheTTL` match Go's `time.ParseDuration` grammar without a sign. A malformed value would otherwise break decoding of the whole `KrakenDEndpointList` in every informer. A CEL rule also requires that they parse as a duration that fits in 64 bits of nanoseconds, with a `maxLength` of 64: the pattern alone admits overflowing values such as `2562048h`. The rule runs only on values that match the pattern, so a stored non-duration fails the pattern alone and ratchets, and a spec holds at most 1024 entries, which keeps the rules inside the CEL cost budget.
 - `outputEncoding`, a backend's `encoding`, `sd` and `method` are enums taken from KrakenD 2.13's own schema. `gatewayRef.name` and `policyRef.name` have a minimum length of 1.
 
+**Entry rules at admission.** The webhook checks the rules KrakenD enforces that the entry and its gateway decide, on the entries an update adds or changes (every entry when the object moves to another gateway), and names the field:
+
+- A path equal to or under `/__debug`, `/__echo` or `/__health` is reserved by KrakenD.
+- `GET` on the gateway's health path is rejected. The path follows the route check: a `router` block in `spec.config.extraConfig` replaces the typed `spec.config.router`, `disable_health` frees the path, and a block that does not decode reads as the defaults.
+- `/prefix/*` wildcards need an EE gateway and are rejected on CE. A root `/*` is rejected in both editions.
+- Every backend `urlPattern` placeholder must be a parameter of the endpoint path, `respN_...` or `JWT....`.
+- On a CE gateway, an Enterprise-only `extra_config` namespace (`renderer.EEOnlyNamespaces`) in an entry or backend is rejected, because KrakenD CE passes `krakend check` and ignores it silently. An entry's `documentation/openapi` is not on the list: AutoConfig generates it on every endpoint and a CE render drops it.
+
 Kubernetes 1.33 is the supported floor because it ratchets CRD validation: an update that leaves an already-invalid field unchanged is admitted, so objects stored before a rule existed keep accepting unrelated changes. A list without per-item keys is the exception: an entry's `backends` (atomic), and the AutoConfig `overrides[]` and `additionalEndpoints[].backends`, ratchet only while the whole list is unchanged, so any edit to the list re-checks every item. CEL evaluation errors are never ratcheted either: a stored duration that matches the pattern but overflows (for example `2562048h`) fails its parse rule on every update to that object until it is corrected. On the gateway's string durations the parse rule applies only to pattern-valid values, so a stored value that breaks the pattern still ratchets. Rules that need other objects (reference existence, cross-object conflicts, the rendered configuration) stay in the webhooks.
 
 ### 3.3 KrakenDBackendPolicy
