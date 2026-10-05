@@ -520,15 +520,19 @@ func (r *KrakenDGatewayReconciler) inspectDeploymentStatus(
 	obs deploymentObservation,
 	note *rolloutNote,
 ) {
-	log := logf.FromContext(ctx)
-	var dep appsv1.Deployment
-	key := types.NamespacedName{Name: gw.Name, Namespace: gw.Namespace}
-	if err := r.Get(ctx, key, &dep); err != nil {
-		if errors.IsNotFound(err) {
+	// The Deployment this pass reconciled is read from what CreateOrUpdate
+	// left behind, not from the cache, which can still describe the Deployment
+	// from before the write. A pass that did not reconcile it reads the cache.
+	dep := obs.dep
+	if dep == nil {
+		dep = &appsv1.Deployment{}
+		key := types.NamespacedName{Name: gw.Name, Namespace: gw.Namespace}
+		if err := r.Get(ctx, key, dep); err != nil {
+			if !errors.IsNotFound(err) {
+				logf.FromContext(ctx).Error(err, "failed to get deployment for status inspection")
+			}
 			return
 		}
-		log.Error(err, "failed to get deployment for status inspection")
-		return
 	}
 
 	// Propagate observed replica counts.
@@ -559,7 +563,7 @@ func (r *KrakenDGatewayReconciler) inspectDeploymentStatus(
 		return
 	}
 
-	converged := deploymentConverged(&dep, want)
+	converged := deploymentConverged(dep, want)
 	switch {
 	case converged:
 		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
@@ -575,7 +579,7 @@ func (r *KrakenDGatewayReconciler) inspectDeploymentStatus(
 
 	// Mirror a lost Deployment availability, but not while a rollout is
 	// still in flight: a new Deployment is unavailable until its pods start.
-	if depAvailable := findDeploymentCondition(&dep, appsv1.DeploymentAvailable); depAvailable != nil &&
+	if depAvailable := findDeploymentCondition(dep, appsv1.DeploymentAvailable); depAvailable != nil &&
 		depAvailable.Status == corev1.ConditionFalse &&
 		(converged || !condTrue(meta.FindStatusCondition(gw.Status.Conditions, v1alpha1.ConditionProgressing))) {
 		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
