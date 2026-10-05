@@ -20,5 +20,7 @@
  {"metadata":{"namespace":"b","name":"route-two"},"spec":{"gatewayRef":{"name":"routes","namespace":"a"},"endpoints":[{"endpoint":"/orders/{name}","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}]}]}},
  {"metadata":{"namespace":"a","name":"route-self"},"spec":{"gatewayRef":{"name":"routes-self"},"endpoints":[{"endpoint":"/self/{id}","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}]},{"endpoint":"/self/{name}","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}]}]}},
  {"metadata":{"namespace":"a","name":"route-dup1"},"spec":{"gatewayRef":{"name":"routes-dup"},"endpoints":[{"endpoint":"/same","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}]}]}},
- {"metadata":{"namespace":"a","name":"route-dup2"},"spec":{"gatewayRef":{"name":"routes-dup"},"endpoints":[{"endpoint":"/same","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}]}]}}
+ {"metadata":{"namespace":"a","name":"route-dup2"},"spec":{"gatewayRef":{"name":"routes-dup"},"endpoints":[{"endpoint":"/same","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}]}]}},
+ {"metadata":{"namespace":"a","name":"route-get"},"spec":{"gatewayRef":{"name":"routes-method"},"endpoints":[{"endpoint":"/m/{id}","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}]}]}},
+ {"metadata":{"namespace":"a","name":"route-post"},"spec":{"gatewayRef":{"name":"routes-method"},"endpoints":[{"endpoint":"/m/{name}","method":"POST","backends":[{"host":["http://a"],"urlPattern":"/u"}]}]}}
 ]}
