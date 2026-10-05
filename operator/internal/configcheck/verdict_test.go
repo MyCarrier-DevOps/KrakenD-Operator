@@ -222,3 +222,24 @@ func TestRejected_NamesTheEntryOfTheCurrentSpec(t *testing.T) {
 		}
 	}
 }
+
+func TestTruncate_CutsOnARuneBoundary(t *testing.T) {
+	tests := []struct {
+		name, in string
+		limit    int
+		want     string
+	}{
+		{"short is unchanged", "abc", 3, "abc"},
+		{"ascii cut", "abcdef", 4, "abcd"},
+		{"never splits a rune", "aéé", 2, "a"},
+		{"keeps a whole rune that fits", "aéé", 3, "aé"},
+		{"zero limit", "abc", 0, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := Truncate(tt.in, tt.limit); got != tt.want || !utf8.ValidString(got) {
+				t.Errorf("Truncate(%q, %d) = %q, want %q", tt.in, tt.limit, got, tt.want)
+			}
+		})
+	}
+}
