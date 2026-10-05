@@ -53,6 +53,7 @@ const (
 
 // KrakenDAutoConfigSpec defines the desired state of KrakenDAutoConfig.
 // +kubebuilder:validation:XValidation:rule="!has(self.openapi.configMapRef) || (has(self.urlTransform) && has(self.urlTransform.hostMapping) && size(self.urlTransform.hostMapping) > 0)",message="hostMapping is required when using configMapRef",fieldPath=".urlTransform.hostMapping"
+// +kubebuilder:validation:XValidation:rule="self.trigger != 'Periodic' || has(self.periodic)",message="periodic.interval of at least 30s is required when trigger is Periodic",fieldPath=".periodic"
 type KrakenDAutoConfigSpec struct {
 	// GatewayRef references the KrakenDGateway that generated endpoints belong to.
 	GatewayRef GatewayRef `json:"gatewayRef"`
