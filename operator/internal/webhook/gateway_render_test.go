@@ -385,6 +385,7 @@ func TestGatewayAdmission_CERejectsEnterpriseOnlyFields(t *testing.T) {
 		}
 		gw.Spec.Config.Documentation = &v1alpha1.DocumentationConfig{Version: "1.0"}
 		gw.Spec.OpenAPI = &v1alpha1.OpenAPIExportSpec{Enabled: true}
+		gw.Spec.Dragonfly = &v1alpha1.DragonflySpec{Enabled: true}
 		return gw
 	}
 	edited := func(gw *v1alpha1.KrakenDGateway) *v1alpha1.KrakenDGateway {
@@ -398,7 +399,8 @@ func TestGatewayAdmission_CERejectsEnterpriseOnlyFields(t *testing.T) {
 	}
 	disabled := testGateway()
 	disabled.Spec.OpenAPI = &v1alpha1.OpenAPIExportSpec{Enabled: false}
-	all := []string{"spec.redis: Forbidden", "spec.config.documentation: Forbidden", "spec.openapi.enabled: Forbidden"}
+	all := []string{"spec.redis: Forbidden", "spec.config.documentation: Forbidden",
+		"spec.openapi.enabled: Forbidden", "spec.dragonfly.enabled: Forbidden"}
 	tests := []struct {
 		name    string
 		gw, old *v1alpha1.KrakenDGateway
