@@ -48,7 +48,8 @@ func fakeClientBuilder() *fake.ClientBuilder {
 	return fake.NewClientBuilder().
 		WithScheme(testScheme()).
 		WithIndex(&v1alpha1.KrakenDEndpoint{}, fieldindex.EndpointGateway, fieldindex.EndpointGatewayKeys).
-		WithIndex(&v1alpha1.KrakenDEndpoint{}, fieldindex.EndpointPolicy, fieldindex.EndpointPolicyKeys)
+		WithIndex(&v1alpha1.KrakenDEndpoint{}, fieldindex.EndpointPolicy, fieldindex.EndpointPolicyKeys).
+		WithIndex(&v1alpha1.KrakenDEndpoint{}, fieldindex.EndpointController, fieldindex.EndpointControllerKeys)
 }
 
 // newTestChecker returns a config checker reading through c and validating
