@@ -62,11 +62,13 @@ def overflows:
     | {int: (.[0] | if . == "" then "0" else . end), frac: (.[1] // ""), unit: .[2]}] as $parts
   | any($parts[]; .int as $i | .unit as $u | $i | digits_exceed(unit_max[$u]))
     or ([$parts[] | ((.int + .frac) | tonumber) * unit_ns[.unit]] | add // 0) > 9223372036854775807;
-def dur_problem($re; $max; $label):
+def dur_shape_problem($re; $max; $label):
   if crd_test($re) | not then "\($label) \(.)"
   elif length > $max then "\($label) is longer than \($max) characters"
-  elif overflows then "\($label) \(.) does not fit in 64 bits of nanoseconds"
   else empty end;
+def dur_problem($re; $max; $label):
+  dur_shape_problem($re; $max; $label)
+  // if overflows then "\($label) \(.) does not fit in 64 bits of nanoseconds" else empty end;
 # Why a value is outside an enum: $set lists the values the CRD allows.
 def enum_problem($label; $set): select(IN($set[]) | not) | "\($label) \(.)";
 # True for a pattern-valid quantity that resource.ParseQuantity rejects, which
