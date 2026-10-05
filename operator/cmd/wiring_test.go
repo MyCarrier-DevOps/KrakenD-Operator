@@ -89,3 +89,15 @@ func TestWireValidation_EndpointValidatorTrustsTheGivenOperatorUsername(t *testi
 		t.Errorf("endpoint validator's OperatorUsername = %q, want %q", got, operator)
 	}
 }
+
+// The endpoint validator re-reads policies uncached, through the manager's
+// API reader.
+func TestWireValidation_EndpointValidatorReadsPoliciesUncached(t *testing.T) {
+	mgr := stubManager{client: fake.NewClientBuilder().Build()}
+
+	w := wireValidation(mgr, renderer.New(renderer.Options{}), nil, "")
+
+	if w.Validators.Endpoint.APIReader != mgr.GetAPIReader() {
+		t.Errorf("endpoint validator's APIReader = %v, want the manager's API reader", w.Validators.Endpoint.APIReader)
+	}
+}
