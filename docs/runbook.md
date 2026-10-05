@@ -670,7 +670,9 @@ No output means none of the checks found anything. It does not check other
 reserved paths under `/__debug`, `/__echo` and `/__health` (a GET on the
 gateway's own health path is reported), unnamed `/*` wildcards on CE
 gateways, unknown `urlPattern` placeholders or cross-method `auto_options`
-clashes; admission rejects those. The lines are:
+clashes. Admission rejects those only on a new or changed object; a stored
+`auto_options` or health-path clash makes the controller refuse the render, so
+the gateway keeps its last applied config. The lines are:
 
 | Line | Meaning |
 |---|---|
