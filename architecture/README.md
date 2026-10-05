@@ -2450,7 +2450,9 @@ Go project layout following [Standard Go Project Layout](https://github.com/gola
 │   │       ├── groupversion_info.go            # API group registration
 │   │       └── zz_generated.deepcopy.go        # Generated deep copy methods
 │   ├── cmd/
-│   │   └── main.go                             # Entrypoint
+│   │   ├── main.go                             # Entrypoint
+│   │   ├── wiring.go                           # wireValidation: the one config checker, the gateway reconciler and the webhook validators
+│   │   └── webhooks.go                         # registerWebhooks: sets the webhooks up only when enabled
 │   ├── internal/
 │   │   ├── controller/
 │   │   │   ├── krakendgateway_controller.go    # KrakenDGateway reconciler (config and infrastructure stages)
@@ -2462,6 +2464,11 @@ Go project layout following [Standard Go Project Layout](https://github.com/gola
 │   │   │   ├── gateway_optional.go             # Optional kinds (Dragonfly, ExternalSecret, VirtualService)
 │   │   │   ├── rejection_memo.go               # Remembered rejected render per gateway
 │   │   │   └── gateway_license.go              # License evaluation inside the gateway reconcile
+│   │   ├── configcheck/
+│   │   │   ├── checker.go                      # Checker: renders a gateway with a change and validates it, behind a pod-wide slot pool
+│   │   │   └── verdict.go                      # Verdict and Finding: what a check found, attributed to endpoints
+│   │   ├── fieldindex/
+│   │   │   └── fieldindex.go                   # KrakenDEndpoint field indexes (gateway, policy) shared by controllers, webhooks and checker
 │   │   ├── autoconfig/
 │   │   │   ├── fetcher.go                      # OpenAPI spec fetcher (HTTP + ConfigMap sources)
 │   │   │   ├── cue_evaluator.go                # CUE evaluation engine (cuelang.org/go/cue)
@@ -2475,7 +2482,10 @@ Go project layout following [Standard Go Project Layout](https://github.com/gola
 │   │   │   ├── attribution.go                  # Attributes krakend check findings to KrakenDEndpoints
 │   │   │   ├── eestrip.go                      # Enterprise-only features stripped on CE fallback
 │   │   │   ├── eewildcard.go                   # EE wildcard route rules used when validating
-│   │   │   └── validator.go                    # krakend check -t -n -c wrapper
+│   │   │   ├── eeonly_namespaces.json          # Data: extra_config namespaces only Enterprise accepts, by level
+│   │   │   ├── routes.go                       # Route shape: ConflictKey and PathParams
+│   │   │   ├── routecheck.go                   # In-process gin route check that stands in for krakend check -t
+│   │   │   └── validator.go                    # krakend check wrapper: Validate (-t -n, controller) and Lint (-n, admission)
 │   │   ├── resources/
 │   │   │   ├── deployment.go                   # Deployment builder (includes plugin volume assembly)
 │   │   │   ├── service.go                      # Service builder
@@ -2487,7 +2497,12 @@ Go project layout following [Standard Go Project Layout](https://github.com/gola
 │   │   │   ├── virtualservice.go               # Istio VirtualService builder
 │   │   │   └── externalsecret.go               # ExternalSecret builder
 │   │   ├── webhook/
-│   │   │   └── validation.go                   # ValidatingAdmissionWebhook handlers
+│   │   │   ├── webhook.go                      # Webhook markers, Validators, SetupWebhooks, PolicyValidator and AutoConfigValidator
+│   │   │   ├── admission.go                    # ConfigChecker port, 422/500 error helpers, the newErrors ratchet
+│   │   │   ├── endpoint.go                     # EndpointValidator: refs, route uniqueness, render check, operator-write exemption
+│   │   │   ├── endpoint_rules.go               # Entry rules: reserved and health paths, wildcards, Enterprise-only namespaces, placeholders
+│   │   │   ├── gateway.go                      # GatewayValidator: probe, runAs and Enterprise-on-CE rules, warnings
+│   │   │   └── render.go                       # Verdict ratchet shared by the render checks; gateway and policy render checks
 │   │   └── util/
 │   │       ├── hash/
 │   │       │   └── hash.go                     # SHA-256 config checksumming
@@ -2506,8 +2521,13 @@ Go project layout following [Standard Go Project Layout](https://github.com/gola
 │   │   ├── webhook/                            # Webhook manifests (ValidatingWebhookConfiguration)
 │   │   ├── manager/                            # Operator Deployment manifests
 │   │   └── samples/                            # Example CR YAML files
+│   ├── hack/
+│   │   ├── audit-admission-rules.sh            # Read-only pre-upgrade audit of stored objects against the admission rules
+│   │   ├── test-audit-admission-rules.sh       # Runs the audit against its fixtures (make test-audit)
+│   │   └── testdata/audit/                     # Audit fixtures and expected output
 │   ├── test/
-│   │   └── e2e/                                # End-to-end tests
+│   │   ├── e2e/                                # End-to-end tests
+│   │   └── integration/                        # Integration tests against an ephemeral K3s cluster (build tag integration)
 │   ├── go.mod
 │   ├── go.sum
 │   ├── Makefile
