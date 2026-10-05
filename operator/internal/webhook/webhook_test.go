@@ -2469,6 +2469,7 @@ func TestAutoConfigAdmission_OverrideOperationIDs(t *testing.T) {
 	}{
 		{"distinct", ac("getA", "getB"), ""},
 		{"duplicate", ac("getA", "getA"), "Duplicate value"},
+		{"collide after sanitizing", ac("get_a", "get-a"), `collides with operationId "get_a"`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
