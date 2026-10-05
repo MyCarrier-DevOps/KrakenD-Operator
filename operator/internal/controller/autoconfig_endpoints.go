@@ -26,6 +26,7 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -255,4 +256,116 @@ func (f endpointFailuresError) Summary() string {
 		messages[i] = err.Error()
 	}
 	return listed(messages)
+}
+
+// maxPrecheckRounds bounds the gateway config checks one reconcile runs to
+// attribute a failing check to operations.
+const maxPrecheckRounds = 5
+
+// precheck runs the gateway config check over the endpoints reconcileEndpoints
+// would write and returns those that fail it, keyed by name. Each round
+// checks the remaining candidates, attributes the check's findings to them by
+// Finding.Endpoint, and drops the attributed ones, until the check passes, no
+// finding names a candidate, or maxPrecheckRounds rounds ran. A round models
+// the state its writes would produce: when this reconcile will also delete
+// the stale endpoints (held is false and nothing was held in an earlier
+// round), they are replaced by empty copies so the check sees them gone. A
+// missing gateway renders nothing, so nothing is checked. An error means the
+// check could not run.
+func (r *KrakenDAutoConfigReconciler) precheck(
+	ctx context.Context,
+	ac *v1alpha1.KrakenDAutoConfig,
+	writes []*v1alpha1.KrakenDEndpoint,
+	stale []v1alpha1.KrakenDEndpoint,
+	held bool,
+) (map[string]rejection, error) {
+	rejected := map[string]rejection{}
+	if len(writes) == 0 {
+		return rejected, nil
+	}
+	var gw v1alpha1.KrakenDGateway
+	gwKey := types.NamespacedName{
+		Name:      ac.Spec.GatewayRef.Name,
+		Namespace: ac.Spec.GatewayRef.ResolvedNamespace(ac.Namespace),
+	}
+	if err := r.Get(ctx, gwKey, &gw); err != nil {
+		if apierrors.IsNotFound(err) {
+			return rejected, nil
+		}
+		return nil, fmt.Errorf("getting gateway %s: %w", gwKey, err)
+	}
+
+	candidates := writes
+	for round := 0; len(candidates) > 0 && round < maxPrecheckRounds; round++ {
+		verdict, err := r.Checker.CheckGateway(ctx, &gw, checkSet(candidates, stale, !held && len(rejected) == 0))
+		if err != nil {
+			return nil, fmt.Errorf("gateway config check: %w", err)
+		}
+		if verdict.OK {
+			return rejected, nil
+		}
+		attributed := attributeFindings(verdict.Findings, candidates)
+		if len(attributed) == 0 {
+			return rejected, nil
+		}
+		maps.Copy(rejected, attributed)
+		candidates = slices.DeleteFunc(slices.Clone(candidates), func(ep *v1alpha1.KrakenDEndpoint) bool {
+			_, ok := attributed[ep.Name]
+			return ok
+		})
+	}
+	return rejected, nil
+}
+
+// checkSet is the replace set for one precheck round: the candidates, plus,
+// when withoutStale, an empty copy of each stale endpoint, which renders no
+// route and no schema.
+func checkSet(
+	candidates []*v1alpha1.KrakenDEndpoint,
+	stale []v1alpha1.KrakenDEndpoint,
+	withoutStale bool,
+) []v1alpha1.KrakenDEndpoint {
+	set := make([]v1alpha1.KrakenDEndpoint, 0, len(candidates)+len(stale))
+	for _, ep := range candidates {
+		set = append(set, *ep.DeepCopy())
+	}
+	if !withoutStale {
+		return set
+	}
+	for i := range stale {
+		gone := stale[i].DeepCopy()
+		gone.Spec.Endpoints = nil
+		gone.Spec.ComponentSchemas = nil
+		set = append(set, *gone)
+	}
+	return set
+}
+
+// attributeFindings maps each candidate a finding's Endpoint names to its
+// first finding. Finding.Index is the entry's position in that endpoint's
+// spec.endpoints, or -1 when unknown; a generated endpoint has one entry, so
+// either value means its single operation. A gateway-root finding (empty
+// Endpoint) names no candidate.
+func attributeFindings(
+	findings []configcheck.Finding,
+	candidates []*v1alpha1.KrakenDEndpoint,
+) map[string]rejection {
+	byKey := make(map[types.NamespacedName]*v1alpha1.KrakenDEndpoint, len(candidates))
+	for _, ep := range candidates {
+		byKey[types.NamespacedName{Namespace: ep.Namespace, Name: ep.Name}] = ep
+	}
+	attributed := map[string]rejection{}
+	for _, f := range findings {
+		ep, ok := byKey[f.Endpoint]
+		if !ok {
+			continue
+		}
+		if _, seen := attributed[ep.Name]; !seen {
+			attributed[ep.Name] = rejection{
+				endpoint: ep, reason: v1alpha1.ReasonConfigValidationFailed,
+				message: f.Message, cause: errors.New(f.String()),
+			}
+		}
+	}
+	return attributed
 }
