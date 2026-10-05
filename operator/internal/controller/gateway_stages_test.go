@@ -2732,3 +2732,38 @@ func TestGatewayReconcile_MissingPluginConfigMapIsNamedOnce(t *testing.T) {
 		t.Errorf("PluginsResolved message names plugins-a %d times, want once: %q", n, cond.Message)
 	}
 }
+
+func TestGatewayReconcile_ReleasingThePluginHoldWithAnUnchangedConfigReportsNoRollout(t *testing.T) {
+	gw := servingGateway("A", convergedImage)
+	live := makeConvergedDeployment(gw, "A")
+	gw.Spec.Plugins = &v1alpha1.PluginsSpec{Sources: []v1alpha1.PluginSource{
+		{ConfigMapRef: &v1alpha1.ConfigMapKeyRef{Name: "plugins-a", Key: "auth.so"}},
+	}}
+	c := fakeClientBuilder().WithObjects(gw, live).WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderOutput("A"), &mockValidator{})
+	rec := fakeRecorder()
+	r.Recorder = rec
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile while held: %v", err)
+	}
+	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "plugins-a", Namespace: gw.Namespace},
+		BinaryData: map[string][]byte{"auth.so": []byte("plugin")}}
+	if err := c.Create(context.Background(), cm); err != nil {
+		t.Fatal(err)
+	}
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile releasing the hold: %v", err)
+	}
+	got := getGateway(t, c, gw)
+	if cond := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionPluginsResolved); cond == nil ||
+		cond.Status != metav1.ConditionTrue {
+		t.Fatalf("PluginsResolved = %+v, want True: the hold must have lifted", cond)
+	}
+	if events := drainEvents(rec); hasEventReason(events, v1alpha1.ReasonConfigDeployed) {
+		t.Errorf("events = %q, want no ConfigDeployed: the applied config is already deployed", events)
+	}
+	if cond := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionProgressing); condTrue(cond) {
+		t.Errorf("Progressing = %+v, want no rollout when the hold lifts on an unchanged config", cond)
+	}
+}
