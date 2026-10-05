@@ -200,6 +200,16 @@ func defaultMocks() (*mockFetcher, *mockCUEEvaluator, *mockFilter, *mockGenerato
 		}
 }
 
+// duplicateListUsers is a generator skip: a second operation claiming
+// listUsers.
+func duplicateListUsers() autoconfig.OperationIssue {
+	return autoconfig.OperationIssue{
+		Operation: autoconfig.Operation{Method: "GET", Path: "/v2/users", OperationID: "listUsers"},
+		Reason:    v1alpha1.ReasonDuplicateOperationId,
+		Message:   `operationId "listUsers" is already used by GET /api/users`,
+	}
+}
+
 func newACReconciler(
 	c client.Client,
 	fetcher *mockFetcher,
@@ -1760,6 +1770,7 @@ func TestAutoConfigReconcile_SyncStatusConflictRequeuesQuietly(t *testing.T) {
 	f, ce, fi, g := defaultMocks()
 	ce.output.Warnings = []string{"skipping /x:GET: boom"}
 	g.output.Duplicates = []string{"listUsers"}
+	g.output.Skipped = []autoconfig.OperationIssue{duplicateListUsers()}
 	rec := fakeRecorder()
 	r := newACReconciler(c, f, ce, fi, g)
 	r.Recorder = rec
@@ -2049,6 +2060,7 @@ func TestAutoConfigReconcile_SteadyStateSuppressesInputWarningEvents(t *testing.
 	f, ce, fi, g := defaultMocks()
 	ce.output.Warnings = []string{"skipping /x:GET: boom"}
 	g.output.Duplicates = []string{"listUsers"}
+	g.output.Skipped = []autoconfig.OperationIssue{duplicateListUsers()}
 	rec := fakeRecorder()
 	r := &KrakenDAutoConfigReconciler{
 		Client: c, Scheme: testScheme(), Recorder: rec,
@@ -2083,6 +2095,7 @@ func TestAutoConfigReconcile_ChangedInputsEmitsInputWarningEvents(t *testing.T) 
 	f, ce, fi, g := defaultMocks()
 	ce.output.Warnings = []string{"skipping /x:GET: boom"}
 	g.output.Duplicates = []string{"listUsers"}
+	g.output.Skipped = []autoconfig.OperationIssue{duplicateListUsers()}
 	rec := fakeRecorder()
 	r := &KrakenDAutoConfigReconciler{
 		Client: c, Scheme: testScheme(), Recorder: rec,
@@ -2117,6 +2130,7 @@ func TestAutoConfigReconcile_InputWarningEventsPrecedeEndpointsGenerated(t *test
 	f, ce, fi, g := defaultMocks()
 	ce.output.Warnings = []string{"skipping /x:GET: boom"}
 	g.output.Duplicates = []string{"listUsers"}
+	g.output.Skipped = []autoconfig.OperationIssue{duplicateListUsers()}
 	rec := fakeRecorder()
 	r := newACReconciler(c, f, ce, fi, g)
 	r.Recorder = rec
