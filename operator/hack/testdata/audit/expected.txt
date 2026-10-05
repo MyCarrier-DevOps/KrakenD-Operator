@@ -80,3 +80,4 @@ KrakenDAutoConfig a/defaults-timeout: spec.defaults.endpoint.timeout 3 seconds
 KrakenDAutoConfig a/defaults-cachettl: spec.defaults.endpoint.cacheTTL is longer than 64 characters
 KrakenDAutoConfig a/defaults-output: spec.defaults.endpoint.outputEncoding jsn
 KrakenDAutoConfig a/defaults-encoding: spec.defaults.backend.encoding jsn
+KrakenDAutoConfig a/defaults-sd: spec.defaults.backend.sd foo
