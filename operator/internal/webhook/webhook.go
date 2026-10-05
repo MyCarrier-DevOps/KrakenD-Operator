@@ -131,48 +131,11 @@ func (v *GatewayValidator) validate(gw, old *v1alpha1.KrakenDGateway) (admission
 	var errs field.ErrorList
 	var warnings admission.Warnings
 
-	if gw.Spec.Edition == v1alpha1.EditionEE {
-		if gw.Spec.License == nil ||
-			(!gw.Spec.License.ExternalSecret.Enabled && gw.Spec.License.SecretRef == nil) {
-			errs = append(errs, field.Required(
-				field.NewPath("spec", "license"),
-				"edition EE requires license.externalSecret.enabled or license.secretRef",
-			))
-		}
-	}
-
-	if gw.Spec.Edition == v1alpha1.EditionCE && gw.Spec.License != nil {
-		if gw.Spec.License.ExternalSecret.Enabled || gw.Spec.License.SecretRef != nil {
-			errs = append(errs, field.Forbidden(
-				field.NewPath("spec", "license"),
-				"CE edition does not require license configuration",
-			))
-		}
-	}
-
-	if gw.Spec.License != nil &&
-		gw.Spec.License.ExternalSecret.Enabled && gw.Spec.License.SecretRef != nil {
-		errs = append(errs, field.Invalid(
-			field.NewPath("spec", "license"),
-			"both",
-			"externalSecret and secretRef are mutually exclusive",
-		))
-	}
-
 	warnings = append(warnings, replicasWithAutoscalingWarning(gw)...)
 	warnings = append(warnings, openAPIOnCEWarning(gw)...)
 	warnings = append(warnings, redisPoolWarnings(gw)...)
 
 	if gw.Spec.OpenAPI != nil && gw.Spec.OpenAPI.Enabled {
-		gwPort := resources.GatewayPort(gw)
-		oaPort := resources.OpenAPIPort(gw)
-		if oaPort == gwPort {
-			errs = append(errs, field.Invalid(
-				field.NewPath("spec", "openapi", "port"),
-				oaPort,
-				"openapi port must differ from the gateway listen port",
-			))
-		}
 		// Probe validation. Everything rejected here is already broken today: the
 		// CR is accepted, the rendered Deployment is rejected by the API server,
 		// and the reconcile then fails on backoff. That failure is SILENT -- a
@@ -196,22 +159,6 @@ func (v *GatewayValidator) validate(gw, old *v1alpha1.KrakenDGateway) (admission
 			oaPath.Child("livenessProbe"), gw.Spec.OpenAPI.LivenessProbe, probeKindLiveness, defaultSidecar)...)
 		errs = append(errs, validateSidecarProbe(
 			oaPath.Child("readinessProbe"), gw.Spec.OpenAPI.ReadinessProbe, probeKindReadiness, defaultSidecar)...)
-	}
-
-	if gw.Spec.Plugins != nil {
-		pvcCount := 0
-		for _, src := range gw.Spec.Plugins.Sources {
-			if src.PersistentVolumeClaimRef != nil {
-				pvcCount++
-			}
-		}
-		if pvcCount > 1 {
-			errs = append(errs, field.Invalid(
-				field.NewPath("spec", "plugins", "sources"),
-				pvcCount,
-				"only one PVC plugin source is supported",
-			))
-		}
 	}
 
 	if gw.Spec.PostRestartJob != nil && gw.Spec.PostRestartJob.Enabled {
@@ -315,13 +262,6 @@ func validatePostRestartJob(
 ) (field.ErrorList, admission.Warnings) {
 	var errs field.ErrorList
 	var warnings admission.Warnings
-
-	if prj.Script == "" {
-		errs = append(errs, field.Required(
-			field.NewPath("spec", "postRestartJob", "script"),
-			"script is required when postRestartJob is enabled",
-		))
-	}
 
 	if w := validatePostRestartWorkingDir(prj); w != "" {
 		warnings = append(warnings, w)
