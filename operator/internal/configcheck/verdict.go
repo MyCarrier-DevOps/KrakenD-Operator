@@ -116,9 +116,15 @@ func Truncate(s string, limit int) string {
 
 // TruncateEllipsis returns s when it fits in limit bytes. Otherwise it cuts s
 // on a rune boundary and ends it with "...", so the result is at most limit
-// bytes.
-func TruncateEllipsis(s string, _ int) string {
-	return s
+// bytes; a limit under 3 leaves no room for the marker, so it only cuts.
+func TruncateEllipsis(s string, limit int) string {
+	if len(s) <= limit {
+		return s
+	}
+	if limit < len("...") {
+		return Truncate(s, limit)
+	}
+	return Truncate(s, limit-len("...")) + "..."
 }
 
 // findingsFrom converts the renderer's attributions, which name positions in the
