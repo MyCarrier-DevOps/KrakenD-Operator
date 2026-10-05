@@ -429,8 +429,8 @@ func TestGatewayValidator_PostRestartJobEmptyScript(t *testing.T) {
 	}
 }
 
-// TestGatewayValidator_WorkingDirOutsideTmpWithROFSWarns covers review id
-// 3804144425 (#4): overriding workingDir outside the /tmp emptyDir mount
+// TestGatewayValidator_WorkingDirOutsideTmpWithROFSWarns covers overriding
+// workingDir outside the /tmp emptyDir mount
 // while readOnlyRootFilesystem is effectively true (the hardened default)
 // must produce an admission warning, not silently pass — the container
 // starts fine and the failure (EROFS) only surfaces when the script runs.
@@ -516,8 +516,8 @@ func TestGatewayValidator_WorkingDirUnderTmpNoWarning(t *testing.T) {
 	}
 }
 
-// TestGatewayValidator_ContainerRunAsUserZeroRejected covers review id
-// 3805157408 (#1, ADMISSION REJECT — USER-CHOSEN fork): a container-level
+// TestGatewayValidator_ContainerRunAsUserZeroRejected covers the admission
+// reject (a deliberate choice): a container-level
 // securityContext.runAsUser: 0 with no explicit runAsNonRoot escape hatch
 // (at either container or pod scope) must be rejected outright, since the
 // resulting {runAsUser:0, runAsNonRoot:true} pair hangs the Job pod
@@ -615,7 +615,7 @@ func TestGatewayValidator_ContainerRunAsUserZeroWithContainerRunAsNonRootFalseAl
 }
 
 // TestGatewayValidator_PodScopeRunAsUserZeroWithExplicitRunAsNonRootTrueRejected
-// covers review id 3807285645 (#6): the pod-scope hole. Unlike a fully
+// covers the pod-scope hole. Unlike a fully
 // unset podSecurityContext.runAsNonRoot (self-healed at build time by
 // job.go's mergePodSecurityContext fixup), an EXPLICIT
 // podSecurityContext.runAsNonRoot: true alongside podSecurityContext.
@@ -662,7 +662,7 @@ func TestGatewayValidator_PodScopeRunAsUserZeroWithExplicitRunAsNonRootTrueRejec
 }
 
 // TestGatewayValidator_PodScopeRunAsUserZeroUnsetRunAsNonRootAllowed verifies
-// outcome 2 from review id 3807285645 (#6) is preserved: pod-scope
+// the second outcome of the pod-scope rule is preserved: pod-scope
 // runAsUser:0 with runAsNonRoot left unset everywhere is NOT rejected at
 // admission — job.go's mergePodSecurityContext fixup self-heals this
 // combination at build time (kept as defense-in-depth for webhook-bypass
@@ -790,8 +790,8 @@ func TestGatewayValidator_PodScopeRunAsUserZeroExplicitTrueContainerOptOutReject
 	}
 }
 
-// TestGatewayValidator_EffectiveRunAsRootCrossScopePrecedence covers review
-// id 3811443593 (#6): every existing runAsUser:0 test above sets runAsUser
+// TestGatewayValidator_EffectiveRunAsRootCrossScopePrecedence covers the
+// cross-scope precedence: every existing runAsUser:0 test above sets runAsUser
 // at exactly one scope (container-only or pod-only), so none of them
 // discriminates the cross-scope PRECEDENCE effectiveRunAsRoot implements
 // (container wins over pod when container.RunAsUser is set) — the suite
@@ -888,7 +888,7 @@ func TestGatewayValidator_EffectiveRunAsRootCrossScopePrecedence(t *testing.T) {
 }
 
 // TestGatewayValidator_RunAsUserZeroRatchetUnchangedUpdateAllowed covers
-// review id 3807285627 (#2): a CR already carrying container
+// a CR already carrying container
 // securityContext.runAsUser:0 with no runAsNonRoot escape hatch — as
 // accepted by an OLDER operator version before this reject existed — must
 // not start failing on an UNRELATED update as long as the relevant
@@ -921,7 +921,7 @@ func TestGatewayValidator_RunAsUserZeroRatchetUnchangedUpdateAllowed(t *testing.
 }
 
 // TestGatewayValidator_RunAsUserZeroRatchetNewlyIntroducedUpdateRejected
-// covers the other half of review id 3807285627 (#2): the ratchet must NOT
+// covers the other half of the ratchet: it must NOT
 // apply when the update is what actually INTRODUCES the offending
 // combination — that must still be rejected exactly like a Create.
 func TestGatewayValidator_RunAsUserZeroRatchetNewlyIntroducedUpdateRejected(t *testing.T) {
@@ -952,7 +952,7 @@ func TestGatewayValidator_RunAsUserZeroRatchetNewlyIntroducedUpdateRejected(t *t
 }
 
 // TestGatewayValidator_RunAsUserZeroRatchetDisabledThenEnabledRejected covers
-// review id 3811443520 (#1): a spec stored with postRestartJob DISABLED
+// a spec stored with postRestartJob DISABLED
 // (never validated by any operator version, old or new) must not grandfather
 // its runAsUser:0 when the caller flips Enabled to true on the same update —
 // the ratchet only applies to a previously-ENABLED spec.
@@ -1029,9 +1029,8 @@ func TestGatewayValidator_DragonflyContainerRunAsUserZeroRejected(t *testing.T) 
 // TestGatewayValidator_DragonflyContainerRunAsUserZeroWithPodRunAsNonRootFalseAllowed
 // verifies the escape hatch: setting podSecurityContext.runAsNonRoot: false
 // alongside the container's runAsUser: 0 is accepted AT ADMISSION. This is
-// admission-only, though: before fix-round review 1's change #1 (the
-// container-scope uid0 fixup in mergeDragonflyContainerSecurityContext),
-// admission would allow this spec while the BUILDER still rendered the
+// admission-only, though: before the container-scope uid0 fixup in
+// mergeDragonflyContainerSecurityContext existed, admission would allow this spec while the BUILDER still rendered the
 // kubelet-rejected {runAsUser:0, runAsNonRoot:true} pair — the escape hatch
 // was a lie. Paired with the build-level assertion that the escape hatch
 // actually renders a startable container: see external_crd_test.go's
@@ -1090,8 +1089,8 @@ func TestGatewayValidator_DragonflyContainerRunAsUserZeroWithContainerRunAsNonRo
 // Dragonfly: podSecurityContext.runAsUser:0 with an explicit
 // podSecurityContext.runAsNonRoot:true must be rejected at admission, same
 // as the container-scope case. Note there is no self-heal fixup to
-// distinguish this from anymore (fix-round review 1, change #2 removed
-// mergeDragonflyPodSecurityContext's pod-scope fixup): a fully UNSET
+// distinguish this from anymore (mergeDragonflyPodSecurityContext has no
+// admission-time pod-scope fixup): a fully UNSET
 // podSecurityContext.runAsNonRoot alongside runAsUser:0 is now ALSO
 // rejected at admission — see the adjacent
 // TestGatewayValidator_DragonflyPodScopeRunAsUserZeroUnsetRunAsNonRootRejected.
@@ -1122,7 +1121,7 @@ func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroWithExplicitRunAsNonRoot
 }
 
 // TestGatewayValidator_DragonflyPodScopeRunAsUserZeroUnsetRunAsNonRootRejected
-// covers fix-round review 1, change #2: unlike postRestartJob, the
+// covers that, unlike postRestartJob, the
 // pod-scope-unset case for Dragonfly is now REJECTED at admission (renamed
 // from ...Allowed). Dragonfly's container-scope default PINS RunAsNonRoot
 // (and RunAsUser/RunAsGroup) regardless of pod scope — container-scope
@@ -1131,10 +1130,9 @@ func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroWithExplicitRunAsNonRoot
 // only silently roots injected sidecars with no legitimate capability
 // gained. There is nothing to self-heal for admission purposes, so this
 // combination is rejected outright for any NEW or CHANGED spec
-// (allowPodScopeUnsetSelfHeal: false). Note (fix-round review 2 update):
-// mergeDragonflyPodSecurityContext's pod-scope fixup was restored in a
-// LATER fix-round as a build-time-only, cross-scope-aware fixup — but that
-// restoration serves GRANDFATHERED/webhook-bypassed CRs only (main-branch
+// (allowPodScopeUnsetSelfHeal: false). Note: mergeDragonflyPodSecurityContext
+// keeps a build-time-only, cross-scope-aware pod-scope fixup — but that
+// serves GRANDFATHERED/webhook-bypassed CRs only (main-branch
 // render parity), not this admission path; a brand-new spec with this exact
 // shape is still rejected here regardless of what the builder would later
 // do with it.
@@ -1283,11 +1281,11 @@ func TestGatewayValidator_DragonflyRunAsUserZeroRatchetUnchangedUpdateAllowed(t 
 }
 
 // TestGatewayValidator_DragonflyPodScopeRunAsUserZeroRatchetUnchangedUpdateAllowed
-// covers item 5c of fix-round review 1: now that pod-scope runAsUser:0 with
-// runAsNonRoot unset is rejected at admission for NEW/changed specs (see
+// covers the ratchet for a grandfathered Dragonfly spec: now that pod-scope
+// runAsUser:0 with runAsNonRoot unset is rejected at admission for NEW/changed specs (see
 // TestGatewayValidator_DragonflyPodScopeRunAsUserZeroUnsetRunAsNonRootRejected),
-// a CR that already carries that shape — grandfathered from before this
-// fix-round's admission tightening — must still be ratcheted (allowed) on
+// a CR that already carries that shape — grandfathered from before the
+// admission tightening — must still be ratcheted (allowed) on
 // an update that leaves the relevant fields unchanged.
 func TestGatewayValidator_DragonflyPodScopeRunAsUserZeroRatchetUnchangedUpdateAllowed(t *testing.T) {
 	old := &v1alpha1.KrakenDGateway{
@@ -1586,8 +1584,8 @@ func TestGatewayValidator_DragonflyContainerRootRecipeWithPodScopeRootStillAdmit
 	}
 }
 
-// TestGatewayValidator_NegativeTmpSizeLimitRejected covers review id
-// 3805157457 (#5): a negative tmpSizeLimit must be rejected.
+// TestGatewayValidator_NegativeTmpSizeLimitRejected covers that a negative
+// tmpSizeLimit must be rejected.
 func TestGatewayValidator_NegativeTmpSizeLimitRejected(t *testing.T) {
 	qty := resource.MustParse("-1Gi")
 	gw := &v1alpha1.KrakenDGateway{
