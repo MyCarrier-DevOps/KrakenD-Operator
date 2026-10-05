@@ -1,5 +1,9 @@
+# KrakenD CE image the validator binary comes from, pinned by digest so every
+# build validates with the same binary. Change it together with
+# ValidatorVersion in internal/configcheck and the gin version in go.mod.
+ARG KRAKEND_IMAGE=docker.io/library/krakend:2.13.11@sha256:26eb32dbb0e679c62170b21b4efb0729dc00262afd98fe6210110dbbbdd6425f
+
 # Stage 1: Build operator binary
-ARG KRAKEND_VERSION=2.13
 FROM golang:1.26-alpine AS builder
 ARG TARGETOS
 ARG TARGETARCH
@@ -21,7 +25,7 @@ COPY internal/ internal/
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -ldflags="-s -w" -a -o manager ./cmd
 
 # Stage 2: Extract KrakenD CE binary and musl libraries
-FROM krakend:${KRAKEND_VERSION} AS krakend
+FROM ${KRAKEND_IMAGE} AS krakend
 # Collect musl libraries into a staging directory so we can copy them
 # architecture-independently (x86_64 has ld-musl-x86_64, arm64 has ld-musl-aarch64).
 RUN mkdir -p /staging/lib && cp /lib/ld-musl-*.so.1 /lib/libc.musl-*.so.1 /staging/lib/
