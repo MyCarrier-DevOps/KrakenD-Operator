@@ -195,6 +195,7 @@ spec:
                       disableRedirectTrailingSlash:
                         type: boolean
                       healthPath:
+                        pattern: ^/
                         type: string
                       loggerSkipPaths:
                         items:
