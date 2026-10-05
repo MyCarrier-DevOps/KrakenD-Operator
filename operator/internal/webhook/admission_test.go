@@ -19,6 +19,7 @@ package webhook
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"reflect"
 	"testing"
@@ -27,6 +28,8 @@ import (
 	authenticationv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
@@ -72,5 +75,21 @@ func TestAdmission_FieldErrorsAre422WithCauses(t *testing.T) {
 	if c := resp.Result.Details.Causes; len(c) != 1 || c[0].Field != "spec.gatewayRef.name" ||
 		c[0].Type != metav1.CauseTypeFieldValueNotFound {
 		t.Errorf("causes = %+v, want NotFound on spec.gatewayRef.name", c)
+	}
+}
+
+func TestAdmission_LookupFailuresAre500(t *testing.T) {
+	c := fakeClientBuilderWith(interceptor.Funcs{
+		Get: func(context.Context, client.WithWatch, client.ObjectKey, client.Object, ...client.GetOption) error {
+			return errors.New("cache not synced")
+		},
+	})
+	ep := &v1alpha1.KrakenDEndpoint{
+		ObjectMeta: metav1.ObjectMeta{Name: "e", Namespace: "default"},
+		Spec:       v1alpha1.KrakenDEndpointSpec{GatewayRef: v1alpha1.GatewayRef{Name: "gw"}},
+	}
+	resp := review(t, &EndpointValidator{Client: c}, "alice", ep, nil)
+	if resp.Allowed || resp.Result.Code != http.StatusInternalServerError {
+		t.Errorf("response = %+v, want 500", resp.Result)
 	}
 }
