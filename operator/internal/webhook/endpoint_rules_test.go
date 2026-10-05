@@ -64,8 +64,10 @@ func TestValidateEntries(t *testing.T) {
 		{"reserved health", testGateway(), testEndpoint("e", "/__health"), "reserved by KrakenD"},
 		{"reserved below debug", testGateway(), testEndpoint("e", "/x/__debug/y"), "reserved by KrakenD"},
 		{"not reserved", testGateway(), testEndpoint("e", "/__other"), ""},
-		{"custom health path", custom, testEndpoint("e", "/healthz"), "health endpoint"},
-		{"raw health path", rawRouter, testEndpoint("e", "/live"), "health endpoint"},
+		{"custom health path", custom, testEndpoint("e", "/healthz"),
+			"health endpoint (spec.config.router.healthPath)"},
+		{"raw health path", rawRouter, testEndpoint("e", "/live"),
+			"health endpoint (the router block of spec.config.extraConfig)"},
 		{"health disabled", rawRouterBlock(`{"disable_health":true,"health_path":"/healthz"}`),
 			testEndpoint("e", "/healthz"), ""},
 		// A router block that does not decode is read as the defaults, as the
