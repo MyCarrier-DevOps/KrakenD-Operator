@@ -36,6 +36,7 @@ import (
 	"github.com/mycarrier-devops/krakend-operator/internal/autoconfig"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
 	"github.com/mycarrier-devops/krakend-operator/internal/fieldindex"
+	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 )
 
 // AutoConfigChecker is the gateway config check the AutoConfig controller runs
@@ -292,8 +293,13 @@ func endpointFailureReason(err error) string {
 // the state its writes would produce: when this reconcile will also delete
 // the stale endpoints (held is false and nothing was held in an earlier
 // round), they are replaced by empty copies so the check sees them gone. A
-// missing gateway renders nothing, so nothing is checked. An error means the
-// check could not run.
+// missing gateway renders nothing, so nothing is checked. On a CE gateway,
+// candidates that use Enterprise-only namespaces are held first (as
+// EndpointRejected, the reason a refused write would give) and never checked:
+// entry and backend namespaces are held without a write, while other
+// admission rules the config check cannot see cost one rejected write per
+// sync, which is held as EndpointRejected too. An error means the check could
+// not run.
 func (r *KrakenDAutoConfigReconciler) precheck(
 	ctx context.Context,
 	ac *v1alpha1.KrakenDAutoConfig,
@@ -315,6 +321,22 @@ func (r *KrakenDAutoConfigReconciler) precheck(
 			return rejected, nil
 		}
 		return nil, fmt.Errorf("getting gateway %s: %w", gwKey, err)
+	}
+
+	if gw.Spec.Edition == v1alpha1.EditionCE {
+		for _, ep := range writes {
+			if uses := ceIgnoredNamespaces(ep); len(uses) > 0 {
+				message := fmt.Sprintf("not written: gateway %s runs CE, which ignores these Enterprise-only "+
+					"namespaces: %s", gwKey, strings.Join(uses, ", "))
+				rejected[ep.Name] = rejection{
+					endpoint: ep, reason: v1alpha1.ReasonEndpointRejected, message: message, cause: errors.New(message),
+				}
+			}
+		}
+		writes = slices.DeleteFunc(slices.Clone(writes), func(ep *v1alpha1.KrakenDEndpoint) bool {
+			_, ok := rejected[ep.Name]
+			return ok
+		})
 	}
 
 	candidates := writes
@@ -379,6 +401,27 @@ func hold(rejected map[string]rejection, eps []*v1alpha1.KrakenDEndpoint, messag
 			endpoint: ep, reason: v1alpha1.ReasonConfigValidationFailed, message: message, cause: cause,
 		}
 	}
+}
+
+// ceIgnoredNamespaces lists each Enterprise-only extra_config namespace ep's
+// entries and backends use, as "<field> <namespace>", with the keys CE drops
+// when it honors the rest of the block. KrakenD CE accepts them in krakend
+// check and ignores them, so the gateway config check cannot see them, and
+// the endpoint webhook refuses them on a CE gateway.
+func ceIgnoredNamespaces(ep *v1alpha1.KrakenDEndpoint) []string {
+	var uses []string
+	for i, e := range ep.Spec.Endpoints {
+		entry := fmt.Sprintf("spec.endpoints[%d]", i)
+		for _, d := range renderer.EEOnlyNamespacesIn(e.ExtraConfig, renderer.LevelEndpoint) {
+			uses = append(uses, entry+".extraConfig "+d.String())
+		}
+		for j, be := range e.Backends {
+			for _, d := range renderer.EEOnlyNamespacesIn(be.ExtraConfig, renderer.LevelBackend) {
+				uses = append(uses, fmt.Sprintf("%s.backends[%d].extraConfig %s", entry, j, d.String()))
+			}
+		}
+	}
+	return uses
 }
 
 // checkSet is the replace set for one precheck round: the candidates, plus,
