@@ -80,10 +80,7 @@ func checkErr(err error) error {
 // truncate cuts s to at most limit bytes, on a rune boundary, and marks the
 // cut.
 func truncate(s string, limit int) string {
-	if len(s) <= limit {
-		return s
-	}
-	return configcheck.Truncate(s, limit) + "..."
+	return configcheck.TruncateEllipsis(s, limit)
 }
 
 // newErrors returns the errors in errs that old does not already have, matched
