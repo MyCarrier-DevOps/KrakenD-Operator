@@ -279,6 +279,7 @@ spec:
                   belongs to.
                 properties:
                   name:
+                    minLength: 1
                     type: string
                   namespace:
                     maxLength: 63
