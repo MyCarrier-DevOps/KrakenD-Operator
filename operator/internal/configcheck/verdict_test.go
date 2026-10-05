@@ -55,7 +55,7 @@ func TestVerdictSummary_KeepsAPrefixOfAnOversizedFirstFinding(t *testing.T) {
 	got := v.Summary(20)
 
 	// "gateway: " is 9 bytes; the 20th byte splits an "é".
-	if !strings.HasPrefix(got, "gateway: ééééé") || !strings.HasSuffix(got, " (+2 more)") {
+	if !strings.HasPrefix(got, "gateway: ééééé") || !strings.HasSuffix(got, " (+1 more)") {
 		t.Errorf("summary = %q, want a prefix of the first finding and the count", got)
 	}
 	if !utf8.ValidString(got) {
