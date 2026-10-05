@@ -261,3 +261,24 @@ func TestSchemaClosure_PointerIntoASchemaVariants(t *testing.T) {
 		})
 	}
 }
+
+// A discriminator mapping names the schemas a response may be, so they belong
+// to the closure of a schema that declares one: Dog inherits from Pet, which
+// maps back to it.
+func TestSchemaClosure_FollowsDiscriminatorMappings(t *testing.T) {
+	components := map[string]runtime.RawExtension{
+		"Pet": {Raw: []byte(`{"type":"object","discriminator":{"propertyName":"kind",` +
+			`"mapping":{"dog":"#/components/schemas/Dog"}}}`)},
+		"Dog": {Raw: []byte(`{"allOf":[{"$ref":"#/components/schemas/Pet"},{"type":"object"}]}`)},
+	}
+	entry := docEntry("/pets", `{"response_definition":{"200":{"ref":"Pet"}}}`)
+
+	closure, unresolved := SchemaClosure(entry, components)
+
+	if got, want := slices.Sorted(maps.Keys(closure)), []string{"Dog", "Pet"}; !slices.Equal(got, want) {
+		t.Errorf("closure = %v, want %v", got, want)
+	}
+	if len(unresolved) != 0 {
+		t.Errorf("unresolved = %v, want none", unresolved)
+	}
+}
