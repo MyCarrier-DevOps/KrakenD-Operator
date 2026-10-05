@@ -21,7 +21,6 @@ import (
 	"errors"
 	"fmt"
 	"testing"
-	"time"
 )
 
 func TestEEWildcardFindings_ACancelledContextIsAnErrorNotAVerdict(t *testing.T) {
@@ -38,8 +37,8 @@ func TestEEWildcardFindings_ACancelledContextIsAnErrorNotAVerdict(t *testing.T) 
 	}
 }
 
-func TestEEWildcardFindings_WorkGrowsWithRoutesNotWildcardsTimesShapes(t *testing.T) {
-	const others, wildcards = 10000, 1024
+func TestEEWildcardFindings_ShapesAreComputedPerRouteNotPerPair(t *testing.T) {
+	const others, wildcards = 1000, 100
 	endpoints := make([]any, 0, others+wildcards)
 	for i := 0; i < others; i++ {
 		endpoints = append(endpoints, map[string]any{"endpoint": fmt.Sprintf("/r%d/{id}", i), "method": "GET"})
@@ -47,15 +46,17 @@ func TestEEWildcardFindings_WorkGrowsWithRoutesNotWildcardsTimesShapes(t *testin
 	for i := 0; i < wildcards; i++ {
 		endpoints = append(endpoints, map[string]any{"endpoint": fmt.Sprintf("/w%d/*", i), "method": "GET"})
 	}
+	calls := 0
+	shapeOf = func(path string) string { calls++; return routeShape(path) }
+	t.Cleanup(func() { shapeOf = routeShape })
 
-	start := time.Now()
 	findings, err := eeWildcardFindings(context.Background(), endpoints)
-	elapsed := time.Since(start)
 
 	if err != nil || len(findings) != 0 {
 		t.Fatalf("eeWildcardFindings = %q, %v, want none", findings, err)
 	}
-	if elapsed > 500*time.Millisecond {
-		t.Errorf("took %v for %d wildcards over %d routes, want the route shapes computed once", elapsed, wildcards, others)
+	if limit := 2 * (others + wildcards); calls > limit {
+		t.Errorf("%d shape computations for %d wildcards over %d routes, want at most %d (per route, not per pair)",
+			calls, wildcards, others+wildcards, limit)
 	}
 }

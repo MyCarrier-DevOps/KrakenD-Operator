@@ -52,6 +52,9 @@ func rewriteEEWildcards(endpoints []any) bool {
 	return changed
 }
 
+// shapeOf spells a route's shape; a variable so a test can count the calls.
+var shapeOf = routeShape
+
 // eeWildcardFindings applies the rules EE enforces for wildcard endpoints and
 // the CE binary cannot test (measured with krakend-ee 2.13):
 //   - Route conflicts. EE registers "/p/*" as the catch-all "/p/*Wildcard" in
@@ -76,7 +79,7 @@ func eeWildcardFindings(ctx context.Context, endpoints []any) ([]string, error) 
 			continue
 		}
 		path := stringField(m, "endpoint")
-		routes = append(routes, route{index: i, method: endpointMethod(m), path: path, shape: routeShape(path)})
+		routes = append(routes, route{index: i, method: endpointMethod(m), path: path, shape: shapeOf(path)})
 	}
 	var findings []string
 	for _, w := range routes {
@@ -87,7 +90,7 @@ func eeWildcardFindings(ctx context.Context, endpoints []any) ([]string, error) 
 			return nil, fmt.Errorf("wildcard check did not finish: %w", err)
 		}
 		prefix := strings.TrimSuffix(w.path, "*")
-		prefixShape := routeShape(prefix)
+		prefixShape := shapeOf(prefix)
 		for _, o := range routes {
 			if o.index == w.index || o.method != w.method || !strings.HasPrefix(o.shape, prefixShape) {
 				continue
