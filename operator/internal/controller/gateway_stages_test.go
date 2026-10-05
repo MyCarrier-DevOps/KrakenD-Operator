@@ -2767,3 +2767,28 @@ func TestGatewayReconcile_ReleasingThePluginHoldWithAnUnchangedConfigReportsNoRo
 		t.Errorf("Progressing = %+v, want no rollout when the hold lifts on an unchanged config", cond)
 	}
 }
+
+func TestGatewayReconcile_GatewayMetricsFollowTheSpec(t *testing.T) {
+	gw := reconciledGateway()
+	gw.Namespace = "metrics-follow"
+	c := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).Build()
+	val := &countingValidator{}
+	r := newTestGatewayReconciler(c, renderOutput("cs1"), val)
+	t.Cleanup(func() { deleteGatewayMetrics(gw.Namespace, gw.Name) })
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if got := testutil.ToFloat64(gatewayConfigValid.WithLabelValues(gw.Namespace, gw.Name)); got != 1 {
+		t.Errorf("gateway_config_valid = %v after an applied config, want 1", got)
+	}
+
+	r.Renderer = renderOutput("cs2")
+	val.err = rejectedBy("- at '/endpoints/0/endpoint': bad")
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if got := testutil.ToFloat64(gatewayConfigValid.WithLabelValues(gw.Namespace, gw.Name)); got != 0 {
+		t.Errorf("gateway_config_valid = %v after a rejected config, want 0", got)
+	}
+}
