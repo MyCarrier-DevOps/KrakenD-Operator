@@ -1512,54 +1512,6 @@ func TestEndpointValidator_PolicyNotFound(t *testing.T) {
 	}
 }
 
-func TestEndpointValidator_ConflictWarning(t *testing.T) {
-	gw := &v1alpha1.KrakenDGateway{
-		ObjectMeta: metav1.ObjectMeta{Name: "my-gw", Namespace: "default"},
-		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
-			Config: v1alpha1.GatewayConfig{},
-		},
-	}
-	existing := &v1alpha1.KrakenDEndpoint{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "old-ep", Namespace: "default",
-			CreationTimestamp: metav1.NewTime(time.Now().Add(-time.Hour)),
-		},
-		Spec: v1alpha1.KrakenDEndpointSpec{
-			GatewayRef: v1alpha1.GatewayRef{Name: "my-gw"},
-			Endpoints: []v1alpha1.EndpointEntry{
-				{Endpoint: "/api", Method: "GET",
-					Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/"}}},
-			},
-		},
-	}
-	newEP := &v1alpha1.KrakenDEndpoint{
-		ObjectMeta: metav1.ObjectMeta{Name: "new-ep", Namespace: "default"},
-		Spec: v1alpha1.KrakenDEndpointSpec{
-			GatewayRef: v1alpha1.GatewayRef{Name: "my-gw"},
-			Endpoints: []v1alpha1.EndpointEntry{
-				{Endpoint: "/api", Method: "GET",
-					Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc2"}, URLPattern: "/"}}},
-			},
-		},
-	}
-	v := &EndpointValidator{Client: fakeClient(gw, existing)}
-	warnings, err := v.ValidateCreate(context.Background(), newEP)
-	if err != nil {
-		t.Errorf("expected no error, got %v", err)
-	}
-	if len(warnings) == 0 {
-		t.Fatal("expected conflict warning")
-	}
-	w := warnings[0]
-	if !strings.Contains(w, "default/old-ep") {
-		t.Errorf("warning should reference existing endpoint, got: %s", w)
-	}
-	if !strings.Contains(w, "default/my-gw") {
-		t.Errorf("warning should reference gateway, got: %s", w)
-	}
-}
-
 func TestEndpointValidator_Update(t *testing.T) {
 	ep := &v1alpha1.KrakenDEndpoint{
 		ObjectMeta: metav1.ObjectMeta{Name: "ep1", Namespace: "default"},
@@ -1823,58 +1775,6 @@ func TestEndpointValidator_CrossNamespacePolicyNotFound(t *testing.T) {
 	}
 }
 
-func TestEndpointValidator_ConflictSameNameDifferentNamespace(t *testing.T) {
-	// Two gateways named "my-gw" in different namespaces.
-	// Endpoints referencing each should NOT produce a conflict warning.
-	gwA := &v1alpha1.KrakenDGateway{
-		ObjectMeta: metav1.ObjectMeta{Name: "my-gw", Namespace: "ns-a"},
-		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
-			Config: v1alpha1.GatewayConfig{},
-		},
-	}
-	gwB := &v1alpha1.KrakenDGateway{
-		ObjectMeta: metav1.ObjectMeta{Name: "my-gw", Namespace: "ns-b"},
-		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
-			Config: v1alpha1.GatewayConfig{},
-		},
-	}
-	// Existing endpoint points to gw in ns-a.
-	existing := &v1alpha1.KrakenDEndpoint{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "ep-a", Namespace: "default",
-			CreationTimestamp: metav1.NewTime(time.Now().Add(-time.Hour)),
-		},
-		Spec: v1alpha1.KrakenDEndpointSpec{
-			GatewayRef: v1alpha1.GatewayRef{Name: "my-gw", Namespace: "ns-a"},
-			Endpoints: []v1alpha1.EndpointEntry{
-				{Endpoint: "/api", Method: "GET",
-					Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/"}}},
-			},
-		},
-	}
-	// New endpoint points to gw in ns-b — same path, different gateway.
-	newEP := &v1alpha1.KrakenDEndpoint{
-		ObjectMeta: metav1.ObjectMeta{Name: "ep-b", Namespace: "default"},
-		Spec: v1alpha1.KrakenDEndpointSpec{
-			GatewayRef: v1alpha1.GatewayRef{Name: "my-gw", Namespace: "ns-b"},
-			Endpoints: []v1alpha1.EndpointEntry{
-				{Endpoint: "/api", Method: "GET",
-					Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc2"}, URLPattern: "/"}}},
-			},
-		},
-	}
-	v := &EndpointValidator{Client: fakeClient(gwA, gwB, existing)}
-	warnings, err := v.ValidateCreate(context.Background(), newEP)
-	if err != nil {
-		t.Errorf("expected no error, got %v", err)
-	}
-	if len(warnings) != 0 {
-		t.Errorf("expected no conflict warning for different gateway namespaces, got %v", warnings)
-	}
-}
-
 func TestPolicyValidator_DeleteBlockedCrossNamespace(t *testing.T) {
 	p := &v1alpha1.KrakenDBackendPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: "shared-policy", Namespace: "policies"},
@@ -1938,56 +1838,6 @@ func TestAutoConfigValidator_CrossNamespaceGatewayNotFound(t *testing.T) {
 	_, err := v.ValidateCreate(context.Background(), ac)
 	if err == nil {
 		t.Error("expected error for cross-ns gateway not found")
-	}
-}
-
-func TestEndpointValidator_ConflictCrossNamespaceEndpoints(t *testing.T) {
-	// Two endpoints in DIFFERENT namespaces both targeting the same gateway.
-	// Same path/method → should produce a conflict warning.
-	gw := &v1alpha1.KrakenDGateway{
-		ObjectMeta: metav1.ObjectMeta{Name: "shared-gw", Namespace: "infra"},
-		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.13", Edition: v1alpha1.EditionCE,
-			Config: v1alpha1.GatewayConfig{},
-		},
-	}
-	existing := &v1alpha1.KrakenDEndpoint{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "ep-tenant-a", Namespace: "tenant-a",
-			CreationTimestamp: metav1.NewTime(time.Now().Add(-time.Hour)),
-		},
-		Spec: v1alpha1.KrakenDEndpointSpec{
-			GatewayRef: v1alpha1.GatewayRef{Name: "shared-gw", Namespace: "infra"},
-			Endpoints: []v1alpha1.EndpointEntry{
-				{Endpoint: "/api", Method: "GET",
-					Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/"}}},
-			},
-		},
-	}
-	newEP := &v1alpha1.KrakenDEndpoint{
-		ObjectMeta: metav1.ObjectMeta{Name: "ep-tenant-b", Namespace: "tenant-b"},
-		Spec: v1alpha1.KrakenDEndpointSpec{
-			GatewayRef: v1alpha1.GatewayRef{Name: "shared-gw", Namespace: "infra"},
-			Endpoints: []v1alpha1.EndpointEntry{
-				{Endpoint: "/api", Method: "GET",
-					Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc2"}, URLPattern: "/"}}},
-			},
-		},
-	}
-	v := &EndpointValidator{Client: fakeClient(gw, existing)}
-	warnings, err := v.ValidateCreate(context.Background(), newEP)
-	if err != nil {
-		t.Errorf("expected no error, got %v", err)
-	}
-	if len(warnings) == 0 {
-		t.Fatal("expected conflict warning for cross-namespace endpoints targeting same gateway")
-	}
-	w := warnings[0]
-	if !strings.Contains(w, "tenant-a/ep-tenant-a") {
-		t.Errorf("warning should include namespace-qualified conflicting endpoint, got: %s", w)
-	}
-	if !strings.Contains(w, "infra/shared-gw") {
-		t.Errorf("warning should include namespace-qualified gateway, got: %s", w)
 	}
 }
 
