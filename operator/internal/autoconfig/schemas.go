@@ -19,6 +19,7 @@ package autoconfig
 import (
 	"encoding/json"
 
+	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
@@ -44,4 +45,12 @@ func ExtractComponentSchemas(specData []byte) map[string]runtime.RawExtension {
 		result[name] = runtime.RawExtension{Raw: raw}
 	}
 	return result
+}
+
+// SchemaClosure is implemented in the next step.
+func SchemaClosure(
+	_ v1alpha1.EndpointEntry,
+	components map[string]runtime.RawExtension,
+) (closure map[string]runtime.RawExtension, unresolved []string) {
+	return components, nil
 }

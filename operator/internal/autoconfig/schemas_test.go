@@ -17,8 +17,12 @@ limitations under the License.
 package autoconfig
 
 import (
+	"encoding/base64"
+	"maps"
+	"slices"
 	"testing"
 
+	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
@@ -105,5 +109,42 @@ func TestExtractComponentSchemas_PreservesRawContent(t *testing.T) {
 	roundtrip.Raw = raw.Raw
 	if roundtrip.Raw == nil {
 		t.Error("round-trip failed")
+	}
+}
+
+// docEntry returns an entry whose documentation/openapi extra config is doc.
+func docEntry(path, doc string) v1alpha1.EndpointEntry {
+	return v1alpha1.EndpointEntry{
+		Endpoint:    path,
+		Method:      "GET",
+		Backends:    []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: path}},
+		ExtraConfig: &runtime.RawExtension{Raw: []byte(`{"documentation/openapi":` + doc + `}`)},
+	}
+}
+
+// petSchemas is a components map: Pet references Owner, Owner references
+// Address; Error's example carries a $ref that is data; Unused stands alone.
+func petSchemas() map[string]runtime.RawExtension {
+	return map[string]runtime.RawExtension{
+		"Pet":     {Raw: []byte(`{"type":"object","properties":{"owner":{"$ref":"#/components/schemas/Owner"}}}`)},
+		"Owner":   {Raw: []byte(`{"type":"object","properties":{"address":{"$ref":"#/components/schemas/Address"}}}`)},
+		"Address": {Raw: []byte(`{"type":"object"}`)},
+		"Error":   {Raw: []byte(`{"type":"object","example":{"$ref":"#/components/schemas/Unused"}}`)},
+		"Unused":  {Raw: []byte(`{"type":"object"}`)},
+	}
+}
+
+func TestSchemaClosure_FollowsRefsTransitively(t *testing.T) {
+	allOf := base64.StdEncoding.EncodeToString([]byte(`{"allOf":[{"$ref":"#/components/schemas/Pet"}]}`))
+	entry := docEntry("/pets", `{"request_definition":[{"ref":"Error"}],`+
+		`"response_definition":{"200":{"example_schema":"`+allOf+`","example":{"ref":"Unused"}}}}`)
+
+	closure, unresolved := SchemaClosure(entry, petSchemas())
+
+	if got, want := slices.Sorted(maps.Keys(closure)), []string{"Address", "Error", "Owner", "Pet"}; !slices.Equal(got, want) {
+		t.Errorf("closure = %v, want %v", got, want)
+	}
+	if len(unresolved) != 0 {
+		t.Errorf("unresolved = %v, want none", unresolved)
 	}
 }
