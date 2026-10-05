@@ -129,3 +129,12 @@ func TestOperationLabel_BoundsALongOperationName(t *testing.T) {
 			len(got), maxStatusMessageLen, got)
 	}
 }
+
+func TestOperationLabel_OmitsAnUnknownMethod(t *testing.T) {
+	got := operationLabel(v1alpha1.OperationStatus{
+		Path: "/users/{id}", OperationID: "getUser", Reason: v1alpha1.ReasonCUEEvaluationFailed,
+	})
+	if want := "/users/{id} (getUser): CUEEvaluationFailed"; got != want {
+		t.Errorf("operationLabel = %q, want %q", got, want)
+	}
+}
