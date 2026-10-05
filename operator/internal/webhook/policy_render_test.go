@@ -17,6 +17,7 @@ limitations under the License.
 package webhook
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -319,5 +320,24 @@ func TestPolicyAdmission_CheckerErrorMidFanOutIs500(t *testing.T) {
 	}
 	if got := strings.Join(chk.calls, ","); got != "policy,gateway+policy,gateway+policy" {
 		t.Errorf("checks = %s, want the fan-out to stop at the failing check", got)
+	}
+}
+
+// Removing a finalizer from a terminating policy must never be refused, even
+// when the stored raw reads differently as bytes: the spec is the same.
+func TestPolicyAdmission_TerminatingPolicyWithTheSameSpecIsNotValidated(t *testing.T) {
+	chk := &scriptedChecker{verdicts: []configcheck.Verdict{failing("policy-lint", 0, "bad")}}
+	v := &PolicyValidator{Client: fakeClient(), Checker: chk}
+	old := terminating(testPolicy(`{"a":1}`))
+	policy := unfinalized(testPolicy(`{ "a": 1 }`))
+	policy.SetDeletionTimestamp(old.GetDeletionTimestamp())
+
+	warnings, err := v.ValidateUpdate(context.Background(), old, policy)
+
+	if err != nil || len(warnings) != 0 {
+		t.Errorf("warnings = %q, err = %v, want the finalizer removal admitted silently", warnings, err)
+	}
+	if len(chk.calls) != 0 {
+		t.Errorf("checks = %v, want none", chk.calls)
 	}
 }
