@@ -235,5 +235,6 @@ func TestGatewayCRD_Rules(t *testing.T) {
 		{"timeout", gatewayHead + `edition: CE, config: {timeout: "3 seconds"}}}`, "spec.config.timeout"},
 		{"cacheTTL", gatewayHead + `edition: CE, config: {cacheTTL: "1 minute"}}}`, "spec.config.cacheTTL"},
 		{"dnsCacheTTL", gatewayHead + `edition: CE, config: {dnsCacheTTL: "30"}}}`, "spec.config.dnsCacheTTL"},
+		{"compound duration", gatewayHead + `edition: CE, config: {cors: {maxAge: 12h0m}}}}`, "spec.config.cors.maxAge"},
 	})
 }
