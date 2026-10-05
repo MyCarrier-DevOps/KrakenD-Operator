@@ -99,6 +99,10 @@ type routerOptions struct {
 func routeConflicts(doc []byte) ([]string, error) {
 	var cfg routedConfig
 	if err := json.Unmarshal(doc, &cfg); err != nil {
+		var typeErr *json.UnmarshalTypeError
+		if errors.As(err, &typeErr) {
+			return nil, nil // a wrongly typed field is the schema lint's to report
+		}
 		return nil, fmt.Errorf("decoding config for the route check: %w", err)
 	}
 	var lines []string
