@@ -2661,7 +2661,8 @@ func TestGatewayValidator_RejectsSpecChangeOnTerminatingObject(t *testing.T) {
 		Spec:       v1alpha1.KrakenDGatewaySpec{Version: "2.13", Edition: v1alpha1.EditionCE},
 	})
 	newGW := oldGW.DeepCopy()
-	newGW.Spec.Edition = v1alpha1.EditionEE // EE without a license
+	negative := resource.MustParse("-1Gi")
+	newGW.Spec.PostRestartJob = &v1alpha1.PostRestartJobSpec{Enabled: true, Script: "true", TmpSizeLimit: &negative}
 
 	_, err := (&GatewayValidator{}).ValidateUpdate(context.Background(), oldGW, newGW)
 	if err == nil {
