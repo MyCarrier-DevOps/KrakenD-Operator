@@ -43,8 +43,9 @@ make deploy IMG=ghcr.io/mycarrier-devops/krakend-operator:<new-version>
    operator/hack/audit-admission-rules.sh
    ```
    It prints one line per object or conflict. No output means none of the
-   checks found anything; it does not cover reserved `/__debug`, `/__echo` and
-   `/__health` paths, unnamed `/*` wildcards on CE gateways, unknown
+   checks found anything; it does not cover other reserved paths under
+   `/__debug`, `/__echo` and `/__health` (a GET on the gateway's own health
+   path is reported), unnamed `/*` wildcards on CE gateways, unknown
    `urlPattern` placeholders or cross-method `auto_options` clashes. Fix or
    knowingly accept each line before upgrading. What a listed object blocks
    depends on the rule it breaks:
@@ -68,6 +69,8 @@ make deploy IMG=ghcr.io/mycarrier-devops/krakend-operator:<new-version>
      deleted and recreated.
    - A `passwordFromSecret` on an Enterprise gateway keeps being accepted
      until you change the value or the edition.
+   - A `more than 1024 entries` line blocks any change to that object's entry
+     list, which re-checks `maxItems`.
    - A `duplicate entry` or `duplicate additionalEndpoint` line does not block
      writes: list-type uniqueness is skipped when the stored object already
      fails it, and server-side apply tolerates live duplicates. Remove the
