@@ -593,7 +593,7 @@ func settleLicensedGateway(t *testing.T, tweaks ...func(gw *v1alpha1.KrakenDGate
 	}
 	s := &settledLicensedGateway{gw: gw, secret: secret, parser: parser}
 	s.c = fakeClientBuilder().WithObjects(gw, secret).WithStatusSubresource(gw).
-		WithInterceptorFuncs(interceptor.Funcs{
+		WithInterceptorFuncs(withGenerationBumps(interceptor.Funcs{
 			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object,
 				opts ...client.GetOption) error {
 				if dep, ok := obj.(*appsv1.Deployment); ok && s.cached != nil {
@@ -602,7 +602,7 @@ func settleLicensedGateway(t *testing.T, tweaks ...func(gw *v1alpha1.KrakenDGate
 				}
 				return c.Get(ctx, key, obj, opts...)
 			},
-		}).Build()
+		})).Build()
 	c := s.c
 	s.r = newTestGatewayReconciler(c, renderOutput("cs"), &mockValidator{})
 	s.r.LicenseParser = parser
@@ -612,7 +612,9 @@ func settleLicensedGateway(t *testing.T, tweaks ...func(gw *v1alpha1.KrakenDGate
 	}
 	var dep appsv1.Deployment
 	getObject(t, c, gw, gw.Name, &dep)
-	dep.Status = appsv1.DeploymentStatus{Replicas: 1, UpdatedReplicas: 1, AvailableReplicas: 1}
+	dep.Status = appsv1.DeploymentStatus{
+		ObservedGeneration: dep.Generation, Replicas: 1, UpdatedReplicas: 1, AvailableReplicas: 1,
+	}
 	if err := c.Status().Update(context.Background(), &dep); err != nil {
 		t.Fatal(err)
 	}
