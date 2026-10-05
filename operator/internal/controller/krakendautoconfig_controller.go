@@ -191,13 +191,6 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return r.handleCUEError(ctx, &ac, err, warnings)
 	}
 
-	// Collect entries the evaluator skipped (e.g. failed to marshal) before
-	// the unmatched-override check below, so they remain visible even when
-	// that check then fails the sync.
-	for _, warning := range cueOutput.Warnings {
-		warnings.add(v1alpha1.ReasonCUEEvaluationWarning, warning)
-	}
-
 	// An override whose operationId matched no generated entry must fail
 	// closed rather than be silently dropped: overrides can carry
 	// security-relevant config (e.g. auth/validator).
@@ -626,11 +619,11 @@ func (r *KrakenDAutoConfigReconciler) loadCUEDefinitions(
 }
 
 // inputWarnings collects the Warning events about one reconcile's inputs —
-// CUEEvaluationWarning, DuplicateOperationId, AdditionalEndpointOverride and
-// SpecWarning — and holds them until the reconcile's terminal status write succeeds. A
-// reconcile that read a stale AutoConfig and then loses that write to a
-// conflict records none of them; its retry records them if they still
-// apply. Warnings are collected only when inputsChanged.
+// DuplicateOperationId, AdditionalEndpointOverride and SpecWarning — and holds
+// them until the reconcile's terminal status write succeeds. A reconcile that
+// read a stale AutoConfig and then loses that write to a conflict records
+// none of them; its retry records them if they still apply. Warnings are
+// collected only when inputsChanged.
 type inputWarnings struct {
 	inputsChanged bool
 	pending       []inputWarning
