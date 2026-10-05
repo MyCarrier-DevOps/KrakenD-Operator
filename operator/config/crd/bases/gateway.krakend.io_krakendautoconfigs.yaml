@@ -570,6 +570,12 @@ spec:
                       type: array
                     method:
                       description: Method overrides the HTTP method.
+                      enum:
+                      - GET
+                      - POST
+                      - PUT
+                      - PATCH
+                      - DELETE
                       type: string
                     operationId:
                       description: OperationID identifies the OpenAPI operation to
