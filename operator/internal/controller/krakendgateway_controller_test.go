@@ -358,6 +358,29 @@ func TestGatewayReconcile_RejectionNamesTheSpecEntry(t *testing.T) {
 	}
 }
 
+func TestGatewayReconcile_ConfigValidListsEachFindingOnItsOwnLine(t *testing.T) {
+	gw := testGateway()
+	a, b := entriesEndpoint("a", "/a"), entriesEndpoint("b", "/y", "/x")
+	rejecting := &mockValidator{validateErr: &renderer.ValidationError{
+		Output: "- at '/endpoints/1/extra_config': bad\ntimeout: unknown unit",
+		Err:    fmt.Errorf("exit status 1"),
+	}}
+	c := fakeClientBuilder().WithObjects(gw, a, b).WithStatusSubresource(gw, a, b).Build()
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}), rejecting)
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+
+	cond := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionConfigValid)
+	want := "Rejected by krakend check; findings name KrakenDEndpoint(s) default/b; 1 finding(s) name no endpoint.\n" +
+		"default/b spec.endpoints[1]: - at '/endpoints/1/extra_config': bad\n" +
+		"gateway: timeout: unknown unit"
+	if cond == nil || cond.Message != want {
+		t.Errorf("ConfigValid = %+v, want message %q", cond, want)
+	}
+}
+
 func TestGatewayReconcile_RenderError(t *testing.T) {
 	gw := testGateway()
 	gw.Status.Phase = v1alpha1.PhasePending
