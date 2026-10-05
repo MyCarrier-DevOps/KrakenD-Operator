@@ -187,10 +187,20 @@ func checkPolicyRender(
 	}
 	var errs field.ErrorList
 	var warnings admission.Warnings
+	omitted := 0
+	// cause records a gateway the policy cannot go to; past maxEntryCauses the
+	// rest are only counted.
+	cause := func(e *field.Error) {
+		if len(errs) < maxEntryCauses {
+			errs = append(errs, e)
+			return
+		}
+		omitted++
+	}
 	for i := range gateways {
 		gw := &gateways[i]
 		if gw.Spec.Edition == v1alpha1.EditionCE && len(drops) > 0 {
-			errs = append(errs, field.Invalid(field.NewPath("spec", "raw"), describeDrops(drops),
+			cause(field.Invalid(field.NewPath("spec", "raw"), describeDrops(drops),
 				fmt.Sprintf("Enterprise-only extra_config: gateway %s/%s runs CE, which ignores it silently",
 					gw.Namespace, gw.Name)))
 			continue
@@ -200,7 +210,7 @@ func checkPolicyRender(
 			before: bindCheck(chk.CheckGateway, gw, nil),
 		},
 			func(after configcheck.Verdict) error {
-				errs = append(errs, field.Invalid(field.NewPath("spec"), field.OmitValueType{},
+				cause(field.Invalid(field.NewPath("spec"), field.OmitValueType{},
 					fmt.Sprintf("breaks gateway %s/%s: %s", gw.Namespace, gw.Name, after.Summary(warningLimit))))
 				return errPolicyBreaksGateway
 			},
@@ -212,6 +222,10 @@ func checkPolicyRender(
 			return nil, err
 		}
 		warnings = append(warnings, w...)
+	}
+	if omitted > 0 {
+		errs = append(errs, field.Invalid(field.NewPath("spec"), field.OmitValueType{},
+			fmt.Sprintf("the policy also fails %d more gateways", omitted)))
 	}
 	return warnings, invalid("KrakenDBackendPolicy", policy.Name, errs)
 }
