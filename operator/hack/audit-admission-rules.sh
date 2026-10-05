@@ -87,5 +87,6 @@ jq "${jq_opts[@]}" "$jq_lib"'
 jq "${jq_opts[@]}" "$jq_lib"'
 .items[] | .spec as $s | {id: "\(.metadata.namespace)/\(.metadata.name)", v: [
   ($s.config.timeout // empty | dur_problem($one_re; 64; "spec.config.timeout")),
-  ($s.config.cacheTTL // empty | dur_problem($one_re; 64; "spec.config.cacheTTL"))
+  ($s.config.cacheTTL // empty | dur_problem($one_re; 64; "spec.config.cacheTTL")),
+  ($s.config.dnsCacheTTL // empty | dur_problem($one_re; 64; "spec.config.dnsCacheTTL"))
 ]} | report("KrakenDGateway")' "$work/gateways.json"
