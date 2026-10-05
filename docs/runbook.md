@@ -281,8 +281,12 @@ kubectl get events --field-selector involvedObject.name=<name> --sort-by='.lastT
 
 **Common causes:**
 - Config validation failure — check the `ConfigValid` condition message. It
-  lists each failure on its own line, as `namespace/name spec.endpoints[i]: …`
-  or `gateway: …` when the failure names no endpoint, up to 4 KiB; the full
+  lists each failure on its own line: `namespace/name spec.endpoints[i]: …`,
+  `namespace/name: …` when the endpoint is known but no entry of it matches,
+  or `gateway: …` when the failure names no endpoint, up to 4 KiB. Runtime
+  route clashes read `… (GET /healthz is the gateway's own route)` for an
+  endpoint on the custom health path, and `… conflicts with existing wildcard …`
+  for clashes under `router.auto_options`. The full
   output is in the operator log, message `validation rejected the rendered config`. The gateway
   keeps serving the last applied config (`status.configChecksum`), and its
   Deployment (unless a plugin ConfigMap is missing, which holds it), Service
