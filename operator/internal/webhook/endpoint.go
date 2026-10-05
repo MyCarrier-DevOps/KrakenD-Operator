@@ -31,6 +31,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
 	"github.com/mycarrier-devops/krakend-operator/internal/fieldindex"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 )
@@ -122,7 +123,46 @@ func (v *EndpointValidator) admit(
 		}
 		errs = append(errs, dupErrs...)
 	}
-	return nil, invalid(kindEndpoint, ep.Name, errs)
+	if len(errs) > 0 {
+		return nil, invalid(kindEndpoint, ep.Name, errs)
+	}
+	if gw == nil {
+		return nil, nil
+	}
+	return v.checkRender(ctx, ep, gw)
+}
+
+// checkRender renders ep's gateway with ep and rejects the request only when
+// that turns a passing config into a failing one.
+func (v *EndpointValidator) checkRender(
+	ctx context.Context, ep *v1alpha1.KrakenDEndpoint, gw *v1alpha1.KrakenDGateway,
+) (admission.Warnings, error) {
+	after, err := v.Checker.CheckGateway(ctx, gw, []v1alpha1.KrakenDEndpoint{*ep})
+	if err != nil {
+		return nil, err
+	}
+	if after.OK {
+		return nil, nil
+	}
+	before, err := v.Checker.CheckGateway(ctx, gw, nil)
+	if err != nil {
+		return nil, err
+	}
+	if before.OK {
+		return nil, renderDenial(ep, after)
+	}
+	return nil, nil
+}
+
+// renderDenial rejects ep with one cause per entry of ep the verdict blames.
+func renderDenial(ep *v1alpha1.KrakenDEndpoint, verdict configcheck.Verdict) error {
+	var errs field.ErrorList
+	for _, f := range verdict.Findings {
+		entry := ep.Spec.Endpoints[f.Index]
+		errs = append(errs, field.Invalid(field.NewPath("spec", "endpoints").Index(f.Index),
+			entry.Method+" "+entry.Endpoint, f.Message))
+	}
+	return invalid(kindEndpoint, ep.Name, errs)
 }
 
 // gatewayFor returns ep's gateway, or nil when there is none to check
