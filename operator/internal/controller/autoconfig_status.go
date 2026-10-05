@@ -42,7 +42,7 @@ func operationStatuses(issues []autoconfig.OperationIssue) []v1alpha1.OperationS
 	for _, i := range issues {
 		out = append(out, v1alpha1.OperationStatus{
 			Method: i.Method, Path: i.Path, OperationID: i.OperationID,
-			Reason: i.Reason, Message: truncate(i.Message, maxStatusMessageLen),
+			Reason: i.Reason, Message: configcheck.TruncateEllipsis(i.Message, maxStatusMessageLen),
 		})
 	}
 	sortOperationStatuses(out)
@@ -79,15 +79,7 @@ func capList[T any](s []T) []T {
 func specWarnings(warnings []string) []string {
 	set := map[string]struct{}{}
 	for _, w := range warnings {
-		set[truncate(w, maxStatusMessageLen)] = struct{}{}
+		set[configcheck.TruncateEllipsis(w, maxStatusMessageLen)] = struct{}{}
 	}
 	return slices.Sorted(maps.Keys(set))
-}
-
-// truncate shortens s to at most n bytes, marking the cut with "...".
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return configcheck.Truncate(s, n-3) + "..."
 }
