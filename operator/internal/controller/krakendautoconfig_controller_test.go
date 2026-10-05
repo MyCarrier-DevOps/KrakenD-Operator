@@ -2329,6 +2329,9 @@ func TestAutoConfigReconcile_IdenticalSecondPassWritesNothing(t *testing.T) {
 	if len(first.Status.Skipped) != 3 || len(first.Status.Warnings) != 2 {
 		t.Fatalf("first pass skipped = %+v, warnings = %q; want 3 skipped and 2 warnings", first.Status.Skipped, first.Status.Warnings)
 	}
+	// The same issues arrive in the opposite order.
+	slices.Reverse(ce.output.Skipped)
+	slices.Reverse(g.output.Skipped)
 	counts = writeCounts{}
 
 	if _, err := reconcileAC(r, first); err != nil {
