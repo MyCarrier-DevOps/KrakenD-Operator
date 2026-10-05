@@ -1294,7 +1294,11 @@ check` runs share the container, each peaking near 110 MB. If you set
 CEL validation. Kubernetes 1.33 ratchets CRD validation: an update that leaves
 an already-invalid field unchanged is admitted, so objects stored before the
 upgrade keep accepting unrelated changes (labels, annotations, other fields);
-only a change *to* the violating field must fix it. Run the audit in the
+only a change *to* the violating field must fix it. The exception is a list
+without per-item keys: an entry's `backends` (an atomic list) and a
+KrakenDAutoConfig's `overrides[]` and `additionalEndpoints[]`. Their items
+ratchet only while the whole list is unchanged, so any edit to the list
+re-checks every item and a stored invalid sibling blocks it. Run the audit in the
 Pre-Upgrade Checklist to find such objects. The chart refuses clusters below
 1.33 (`kubeVersion`), and the OLM bundle's `minKubeVersion` is 1.33.0. With
 Helm, use 3.18 or later: older releases default `helm template` and `helm lint`
