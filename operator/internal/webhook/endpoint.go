@@ -98,7 +98,11 @@ func (v *EndpointValidator) admit(
 		return nil, unavailable(err)
 	}
 	errs = append(errs, refErrs...)
-	for _, i := range changedEntries(old, ep) {
+	stored := old
+	if movedGateway(old, ep) {
+		stored = nil // another gateway judges every entry afresh
+	}
+	for _, i := range changedEntries(stored, ep) {
 		errs = append(errs, validateExtraConfigAudience(
 			field.NewPath("spec", "endpoints").Index(i).Child("extraConfig"), ep.Spec.Endpoints[i].ExtraConfig)...)
 	}
@@ -182,6 +186,15 @@ func (v *EndpointValidator) policyRefError(
 		return nil, fmt.Errorf("looking up policy %s/%s: %w", polNS, ref.Name, err)
 	}
 	return nil, nil
+}
+
+// movedGateway reports whether ep resolves to a different gateway than old.
+func movedGateway(old, ep *v1alpha1.KrakenDEndpoint) bool {
+	if old == nil {
+		return false
+	}
+	oldRef, ref := old.Spec.GatewayRef, ep.Spec.GatewayRef
+	return oldRef.Name != ref.Name || oldRef.ResolvedNamespace(old.Namespace) != ref.ResolvedNamespace(ep.Namespace)
 }
 
 // changedEntries returns the positions of ep's entries that are new or differ
