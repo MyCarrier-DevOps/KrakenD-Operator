@@ -1,3 +1,4 @@
 {"items":[
- {"metadata":{"namespace":"a","name":"empty"},"spec":{"gatewayRef":{"name":"gw"},"endpoints":[]}}
+ {"metadata":{"namespace":"a","name":"empty"},"spec":{"gatewayRef":{"name":"gw"},"endpoints":[]}},
+ {"metadata":{"namespace":"a","name":"nogw"},"spec":{"gatewayRef":{"name":""},"endpoints":[{"endpoint":"/x","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}]}]}}
 ]}
