@@ -226,7 +226,9 @@ spec:
                       description: OutputEncoding overrides the default response encoding.
                       type: string
                     timeout:
-                      description: Timeout overrides the global endpoint timeout.
+                      description: Timeout overrides the global endpoint timeout (a
+                        Go duration).
+                      pattern: ^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$
                       type: string
                   required:
                   - backends
