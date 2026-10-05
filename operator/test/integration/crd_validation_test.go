@@ -21,6 +21,7 @@ package integration
 import (
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -146,5 +147,42 @@ func TestCRD_GatewayDragonflyPasswordRatchets(t *testing.T) {
 	err := k8sClient.Update(ctx, g)
 	if !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "passwordFromSecret is not supported yet") {
 		t.Errorf("switch to Enterprise: err = %v, want Invalid containing the Dragonfly password message", err)
+	}
+}
+
+func TestCRD_AutoConfigRules(t *testing.T) {
+	ns := testNamespace(t)
+	ac := func(name string, mutate func(*v1alpha1.KrakenDAutoConfigSpec)) *v1alpha1.KrakenDAutoConfig {
+		a := &v1alpha1.KrakenDAutoConfig{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+			Spec: v1alpha1.KrakenDAutoConfigSpec{
+				GatewayRef: v1alpha1.GatewayRef{Name: "gw"},
+				OpenAPI:    v1alpha1.OpenAPISource{URL: "http://svc/openapi.json"},
+				Trigger:    v1alpha1.TriggerOnChange,
+			},
+		}
+		mutate(&a.Spec)
+		return a
+	}
+	expectInvalid(t, ac("fast-poll", func(s *v1alpha1.KrakenDAutoConfigSpec) {
+		s.Trigger = v1alpha1.TriggerPeriodic
+		s.Periodic = &v1alpha1.PeriodicSpec{Interval: metav1.Duration{Duration: 10 * time.Second}}
+	}), "at least 30s")
+	expectInvalid(t, ac(strings.Repeat("a", 64), func(*v1alpha1.KrakenDAutoConfigSpec) {}), "at most 63 characters")
+	expectInvalid(t, ac("typo", func(s *v1alpha1.KrakenDAutoConfigSpec) {
+		s.Defaults = &v1alpha1.Defaults{Endpoint: &v1alpha1.EndpointDefaults{OutputEncoding: "jsn"}}
+	}), "Unsupported value: \"jsn\"")
+	defaulted := ac("defaulted", func(s *v1alpha1.KrakenDAutoConfigSpec) {
+		s.AdditionalEndpoints = []v1alpha1.AdditionalEndpoint{{Endpoint: "/health"}}
+	})
+	if err := k8sClient.Create(ctx, defaulted); err != nil {
+		t.Fatalf("valid autoconfig rejected: %v", err)
+	}
+	var got v1alpha1.KrakenDAutoConfig
+	if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(defaulted), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Spec.AdditionalEndpoints[0].Method != "GET" {
+		t.Errorf("additional endpoint method = %q, want the GET default", got.Spec.AdditionalEndpoints[0].Method)
 	}
 }
