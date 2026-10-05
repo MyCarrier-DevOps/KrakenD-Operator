@@ -192,6 +192,23 @@ func TestConfigCheckParity(t *testing.T) {
 		}
 	})
 
+	policyChecker := configcheck.New(nil, renderer.New(renderer.Options{}), validator, 1)
+	t.Run("LintPolicy valid policy alone", func(t *testing.T) {
+		policy := &v1alpha1.KrakenDBackendPolicy{
+			ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "parity"},
+			Spec: v1alpha1.KrakenDBackendPolicySpec{
+				CircuitBreaker: &v1alpha1.CircuitBreakerSpec{Interval: 60, Timeout: 10, MaxErrors: 3},
+			},
+		}
+		verdict, err := policyChecker.LintPolicy(ctx, policy)
+		if err != nil {
+			t.Fatalf("LintPolicy: %v", err)
+		}
+		if !verdict.OK {
+			t.Fatalf("a valid policy alone is refused by the real binary: %+v", verdict.Findings)
+		}
+	})
+
 	for _, tc := range parityCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			scheme := k8sruntime.NewScheme()
