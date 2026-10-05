@@ -24,5 +24,8 @@ import (
 // mounted from: spec.license.secretRef when set, otherwise the Secret an
 // enabled ExternalSecret syncs. ok is false when the spec names neither.
 func LicenseSecret(gw *v1alpha1.KrakenDGateway) (name, key string, ok bool) {
+	if lic := gw.Spec.License; lic != nil && lic.SecretRef != nil {
+		return lic.SecretRef.Name, lic.SecretRef.Key, true
+	}
 	return "", "", false
 }
