@@ -448,12 +448,15 @@ func (r *KrakenDAutoConfigReconciler) recordSyncedFailure(
 	syncErr error,
 	warnings *inputWarnings,
 ) error {
+	// A failure can list every operation or write that failed, which would
+	// overrun the condition's size limit: bound the status and event text.
+	message := truncateMessage(syncErr.Error())
 	meta.SetStatusCondition(&ac.Status.Conditions, metav1.Condition{
 		Type:               v1alpha1.ConditionSynced,
 		Status:             metav1.ConditionFalse,
 		ObservedGeneration: ac.Generation,
 		Reason:             reason,
-		Message:            syncErr.Error(),
+		Message:            message,
 	})
 	setAutoConfigReadiness(ac)
 	// The sync has failed whether or not its status write succeeds.
@@ -465,7 +468,7 @@ func (r *KrakenDAutoConfigReconciler) recordSyncedFailure(
 		return fmt.Errorf("updating %s status: %w", reason, err)
 	}
 	warnings.emit(r.Recorder, ac)
-	r.Recorder.Event(ac, "Warning", reason, syncErr.Error())
+	r.Recorder.Event(ac, "Warning", reason, message)
 	return nil
 }
 
