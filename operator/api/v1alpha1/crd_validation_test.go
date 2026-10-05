@@ -126,5 +126,6 @@ func TestEndpointCRD_Rules(t *testing.T) {
 		{"no leading slash", endpointHead + `[{endpoint: "a/b", method: GET, ` + okBackend + `}]}}`, "should match"},
 		{"query in path", endpointHead + `[{endpoint: "/a?b", method: GET, ` + okBackend + `}]}}`, "should match"},
 		{"wildcard mid-path", endpointHead + `[{endpoint: "/a/*/b", method: GET, ` + okBackend + `}]}}`, "should match"},
+		{"no endpoints", endpointHead + `[]}}`, "should have at least 1 items"},
 	})
 }
