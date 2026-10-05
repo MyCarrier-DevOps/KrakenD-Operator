@@ -211,6 +211,8 @@ type endpointOutcome struct {
 	// keyed by name: the API server rejected them as invalid, or another
 	// object controls their name. Their existing endpoints are held.
 	rejected map[string]rejection
+	// readiness summarizes the endpoints the AutoConfig controls afterwards.
+	readiness endpointReadiness
 }
 
 // failed reports whether any claim or write failed.
