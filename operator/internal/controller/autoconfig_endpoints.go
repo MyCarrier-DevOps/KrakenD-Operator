@@ -478,10 +478,39 @@ func attributeFindings(
 }
 
 // routeCollisions returns, keyed by name, the desired endpoints that lose
-// their route to another desired endpoint.
+// their route to another desired endpoint. Endpoints are grouped by method and
+// route shape (renderer.ConflictKey), the way the gateway's router tells
+// routes apart: paths that differ only in parameter names or repeated slashes
+// share a route, and only one of them is served. Stale endpoints take no part:
+// while an operation is renamed its new endpoint and the old one share a route
+// until the old one is deleted. The survivor of a group is the one the
+// renderer serves.
 func routeCollisions(
 	desired []*v1alpha1.KrakenDEndpoint,
 	controlled []v1alpha1.KrakenDEndpoint,
 ) map[string]rejection {
-	return nil
+	groups := map[string][]*v1alpha1.KrakenDEndpoint{}
+	for _, ep := range desired {
+		if len(ep.Spec.Endpoints) == 0 {
+			continue
+		}
+		e := ep.Spec.Endpoints[0]
+		key := e.Method + " " + renderer.ConflictKey(e.Endpoint)
+		groups[key] = append(groups[key], ep)
+	}
+	collisions := map[string]rejection{}
+	for _, group := range groups {
+		slices.SortFunc(group, func(a, b *v1alpha1.KrakenDEndpoint) int {
+			return strings.Compare(a.Name, b.Name)
+		})
+		survivor := group[0]
+		for _, ep := range group[1:] {
+			e := ep.Spec.Endpoints[0]
+			message := renderer.RouteClashDetail(e.Method, e.Endpoint, survivor.Spec.Endpoints[0].Endpoint, survivor.Name)
+			collisions[ep.Name] = rejection{
+				endpoint: ep, reason: v1alpha1.ReasonConfigValidationFailed, message: message, cause: errors.New(message),
+			}
+		}
+	}
+	return collisions
 }
