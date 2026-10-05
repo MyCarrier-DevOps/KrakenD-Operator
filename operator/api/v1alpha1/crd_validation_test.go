@@ -238,5 +238,6 @@ func TestGatewayCRD_Rules(t *testing.T) {
 		{"compound duration", gatewayHead + `edition: CE, config: {cors: {maxAge: 12h0m}}}}`, "spec.config.cors.maxAge"},
 		{"port above range", gatewayHead + `edition: CE, config: {port: 70000}}}`, "spec.config.port"},
 		{"port zero", gatewayHead + `edition: CE, config: {port: 0}}}`, "spec.config.port"},
+		{"output encoding", gatewayHead + `edition: CE, config: {outputEncoding: yaml}}}`, "Unsupported value: \"yaml\""},
 	})
 }
