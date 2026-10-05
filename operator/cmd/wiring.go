@@ -31,6 +31,7 @@ import (
 type validation struct {
 	Checker    *configcheck.Checker
 	Gateway    *controller.KrakenDGatewayReconciler
+	AutoConfig *controller.KrakenDAutoConfigReconciler
 	Validators webhooksetup.Validators
 }
 
