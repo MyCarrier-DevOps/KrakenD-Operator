@@ -137,6 +137,9 @@ func routeConflicts(ctx context.Context, doc []byte) ([]string, error) {
 	var accepted []ginRoute
 	engine := gin.New()
 	for _, r := range ginRoutesOf(cfg) {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("route check did not finish: %w", err)
+		}
 		refusal := registerRoute(engine, r)
 		if refusal == "" {
 			accepted = append(accepted, r)
