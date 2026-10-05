@@ -100,12 +100,15 @@ type KrakenDAutoConfigReconciler struct {
 // while the AutoConfig syncs successfully. When a sync fails before or during
 // its endpoint writes, existing endpoints are left as they are: it stops
 // before touching them, and a failed endpoint write keeps every stale
-// endpoint. An operation that fails CUE evaluation, or whose endpoint the API
-// server rejects, is held at its last-good endpoint instead: the healthy
-// operations still converge, no stale endpoint is deleted, and Synced is False
-// with reason OperationsFailed without an error, since retrying a
-// deterministic failure with backoff gains nothing. A successful reconcile
-// that finds nothing to change writes nothing.
+// endpoint. An operation that fails CUE evaluation, fails the gateway config
+// check that runs before the writes, loses its route to another operation, or
+// whose endpoint the API server rejects, is held at its last-good endpoint
+// instead: the healthy operations still converge, no stale endpoint is
+// deleted, and Synced is False with reason OperationsFailed without an error,
+// since retrying a deterministic failure with backoff gains nothing. When the
+// config check cannot run, nothing is written or deleted and Synced is False
+// with reason ValidatorUnavailable, retried with backoff. A successful
+// reconcile that finds nothing to change writes nothing and runs no check.
 func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
