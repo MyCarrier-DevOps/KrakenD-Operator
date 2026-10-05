@@ -1096,47 +1096,22 @@ func TestEvaluate_OverrideOnOperationWithoutOperationIdIsReported(t *testing.T) 
 }
 
 func TestEvaluate_OperationAudienceMustBeListOfStrings(t *testing.T) {
-	// A YAML mapping coerced to a JSON object (e.g. `audience: {internal}`),
-	// or a null in place of the list or one of its items, must fail CUE
-	// evaluation rather than reach the gateway, where it fails `krakend check
-	// -t -n -c` and blocks config updates for the whole gateway.
-	defs, err := EmbeddedCUEDefinitions()
-	if err != nil {
-		t.Fatalf("loading defs: %v", err)
-	}
-
-	tests := map[string]string{
+	// A non-list audience on an operation must fail that operation rather
+	// than reach the gateway, where it fails `krakend check -t -n -c` and
+	// blocks config updates for the whole gateway.
+	for name, audience := range map[string]string{
 		"map instead of list":   `{"internal": null}`,
 		"null instead of list":  `null`,
 		"list with a null item": `["internal", null]`,
-	}
-
-	for name, audience := range tests {
+	} {
 		t.Run(name, func(t *testing.T) {
-			specJSON := []byte(`{
-				"paths": {
-					"/api/v1/users": {
-						"get": {
-							"operationId": "listUsers",
-							"audience": ` + audience + `,
-							"responses": {"200": {"description": "OK"}}
-						}
-					}
-				}
-			}`)
-
-			eval := NewCUEEvaluator()
-			_, err := eval.Evaluate(context.Background(), CUEInput{
-				SpecData:    specJSON,
-				SpecFormat:  v1alpha1.SpecFormatJSON,
-				DefaultDefs: defs,
-				ServiceName: "_spec",
-			})
-			if err == nil {
-				t.Fatal("expected an error for a non-list audience declared on the operation")
+			out := evaluateEmbedded(t, `{"paths":{"/api/v1/users":{"get":{"operationId":"listUsers",`+
+				`"audience":`+audience+`,"responses":{"200":{"description":"OK"}}}}}}`)
+			if len(out.Entries) != 0 {
+				t.Errorf("expected no entry for a non-list audience, got %+v", out.Entries)
 			}
-			if !strings.Contains(err.Error(), "audience") {
-				t.Errorf("expected the error to name the audience field, got: %v", err)
+			if len(out.Failed) != 1 || !strings.Contains(out.Failed[0].Message, "audience") {
+				t.Errorf("expected listUsers failed naming the audience field, got %+v", out.Failed)
 			}
 		})
 	}
