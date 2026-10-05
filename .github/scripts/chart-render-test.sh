@@ -115,6 +115,9 @@ expect_equal "the chart's gateway webhook is not registered for DELETE" \
 expect_equal "the kustomize gateway webhook is not registered for DELETE" \
 	"CREATE UPDATE " "$(manifest_operations vkrakendgateway.kb.io operator/config/webhook/manifests.yaml)"
 
+# --- three concurrent krakend validations fit in the operator's limit ------
+expect_contains "the operator memory limit is 512Mi" "memory: 512Mi"
+
 if [ "$failures" -gt 0 ]; then
 	printf '%d chart render test(s) failed\n' "$failures"
 	exit 1
