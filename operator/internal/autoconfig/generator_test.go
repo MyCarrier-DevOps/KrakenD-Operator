@@ -25,6 +25,7 @@ import (
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 func TestGenerator_BasicGeneration(t *testing.T) {
@@ -302,5 +303,35 @@ func TestGenerator_NilComponentSchemas(t *testing.T) {
 	}
 	if out.Endpoints[0].Spec.ComponentSchemas != nil {
 		t.Error("expected nil ComponentSchemas when none provided")
+	}
+}
+
+// generatePets generates the /pets, /errors and /health endpoints from
+// components.
+func generatePets(t *testing.T, components map[string]runtime.RawExtension) *GenerateOutput {
+	t.Helper()
+	ac := &v1alpha1.KrakenDAutoConfig{ObjectMeta: metav1.ObjectMeta{Name: "ac", Namespace: "default"}}
+	out, err := NewGenerator().Generate(context.Background(), GenerateInput{
+		AutoConfig: ac,
+		Entries: []v1alpha1.EndpointEntry{
+			docEntry("/pets", `{"response_definition":{"200":{"ref":"Pet"}}}`),
+			docEntry("/errors", `{"response_definition":{"500":{"ref":"Error"}}}`),
+		},
+		OperationIDs:     map[string]string{"/pets:GET": "getPets", "/errors:GET": "getErrors"},
+		GatewayRef:       v1alpha1.GatewayRef{Name: "gw"},
+		ComponentSchemas: components,
+	})
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	return out
+}
+
+func TestGenerator_SchemaClosureIsStableAcrossPasses(t *testing.T) {
+	first := generatePets(t, petSchemas())
+	second := generatePets(t, petSchemas())
+
+	if !reflect.DeepEqual(first.Endpoints, second.Endpoints) {
+		t.Error("an unchanged spec generated different endpoints on the second pass")
 	}
 }
