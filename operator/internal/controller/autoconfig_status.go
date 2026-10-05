@@ -19,6 +19,7 @@ package controller
 import (
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/autoconfig"
+	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
 )
 
 const (
@@ -46,6 +47,9 @@ func specWarnings(_ []string) []string {
 }
 
 // truncate shortens s to at most n bytes, marking the cut with "...".
-func truncate(s string, _ int) string {
-	return s
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return configcheck.Truncate(s, n-3) + "..."
 }
