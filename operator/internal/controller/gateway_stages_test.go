@@ -2801,3 +2801,21 @@ func TestGatewayReconcile_GatewayMetricsFollowTheSpec(t *testing.T) {
 		t.Errorf("gateway_info versions = %v, want only [2.13] (the old version's series must go)", got)
 	}
 }
+
+func TestGatewayReconcile_UnjudgedConfigReportsInvalidGauge(t *testing.T) {
+	gw := reconciledGateway()
+	gw.Namespace = "metrics-unjudged"
+	c := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).Build()
+	t.Cleanup(func() { deleteGatewayMetrics(gw.Namespace, gw.Name) })
+	gatewayConfigValid.WithLabelValues(gw.Namespace, gw.Name).Set(1)
+
+	reconcileWithUnavailableValidator(t, c, gw)
+
+	cond := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionConfigValid)
+	if cond != nil && cond.Status == metav1.ConditionTrue {
+		t.Fatalf("ConfigValid = %+v, want not True while the validator is down", cond)
+	}
+	if got := testutil.ToFloat64(gatewayConfigValid.WithLabelValues(gw.Namespace, gw.Name)); got != 0 {
+		t.Errorf("gateway_config_valid = %v while the config is unjudged, want 0", got)
+	}
+}
