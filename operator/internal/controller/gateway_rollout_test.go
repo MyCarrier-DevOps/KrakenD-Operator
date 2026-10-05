@@ -433,3 +433,43 @@ func TestInspectDeploymentStatus_AMissedDeadlineOfAnotherTemplateIsNotTheCurrent
 		t.Errorf("Progressing = %+v, want True: the deadline judged a template that is not the wanted one", progressing)
 	}
 }
+
+func TestInspectDeploymentStatus_ResetsRolloutFailedAvailabilityFromTheDeployment(t *testing.T) {
+	cases := []struct {
+		name                string
+		deploymentAvailable corev1.ConditionStatus
+		want                *metav1.ConditionStatus
+	}{
+		{name: "available Deployment", deploymentAvailable: corev1.ConditionTrue, want: new(metav1.ConditionTrue)},
+		{name: "Deployment that reports nothing", deploymentAvailable: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gw := convergedGatewayAt("A")
+			meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+				Type: v1alpha1.ConditionAvailable, Status: metav1.ConditionFalse, Reason: v1alpha1.ReasonRolloutFailed,
+			})
+			dep := makeConvergedDeployment(gw, "A")
+			dep.Generation = 2 // a newer spec the Deployment controller has not observed
+			dep.Status.Conditions = []appsv1.DeploymentCondition{{
+				Type: appsv1.DeploymentProgressing, Status: corev1.ConditionFalse, Reason: "ProgressDeadlineExceeded",
+			}}
+			if tc.deploymentAvailable != "" {
+				dep.Status.Conditions = append(dep.Status.Conditions,
+					appsv1.DeploymentCondition{Type: appsv1.DeploymentAvailable, Status: tc.deploymentAvailable})
+			}
+			r := &KrakenDGatewayReconciler{Client: fakeClientBuilder().Build(), Scheme: testScheme(), Recorder: fakeRecorder()}
+
+			r.inspectDeploymentStatus(context.Background(), gw, convergedInputs("A"),
+				deploymentObservation{dep: dep, templateChanged: true}, nil)
+
+			available := meta.FindStatusCondition(gw.Status.Conditions, v1alpha1.ConditionAvailable)
+			switch {
+			case tc.want == nil && available != nil:
+				t.Errorf("Available = %+v, want it removed", available)
+			case tc.want != nil && (available == nil || available.Status != *tc.want):
+				t.Errorf("Available = %+v, want status %s", available, *tc.want)
+			}
+		})
+	}
+}
