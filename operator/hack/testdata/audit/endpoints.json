@@ -17,5 +17,6 @@
  {"metadata":{"namespace":"a","name":"path-linebreak"},"spec":{"gatewayRef":{"name":"gw-path-linebreak"},"endpoints":[{"endpoint":"x\n/y","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}]}]}},
  {"metadata":{"namespace":"a","name":"timeout-newline"},"spec":{"gatewayRef":{"name":"gw-timeout-newline"},"endpoints":[{"endpoint":"/x","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}],"timeout":"5s\n"}]}},
  {"metadata":{"namespace":"a","name":"route-one"},"spec":{"gatewayRef":{"name":"routes"},"endpoints":[{"endpoint":"/orders/{id}","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}]}]}},
- {"metadata":{"namespace":"b","name":"route-two"},"spec":{"gatewayRef":{"name":"routes","namespace":"a"},"endpoints":[{"endpoint":"/orders/{name}","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}]}]}}
+ {"metadata":{"namespace":"b","name":"route-two"},"spec":{"gatewayRef":{"name":"routes","namespace":"a"},"endpoints":[{"endpoint":"/orders/{name}","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}]}]}},
+ {"metadata":{"namespace":"a","name":"route-self"},"spec":{"gatewayRef":{"name":"routes-self"},"endpoints":[{"endpoint":"/self/{id}","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}]},{"endpoint":"/self/{name}","method":"GET","backends":[{"host":["http://a"],"urlPattern":"/u"}]}]}}
 ]}
