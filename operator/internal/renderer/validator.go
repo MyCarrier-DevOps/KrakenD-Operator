@@ -77,8 +77,24 @@ func (e *KrakenDExecutor) Execute(
 	return cmd.CombinedOutput()
 }
 
-// Validate checks jsonData as the given edition would load it.
+// Validate checks jsonData as the given edition would load it: the edition's
+// validation copy, the EE router rules, then krakend check -t -n.
 func (v *KrakenDValidator) Validate(ctx context.Context, jsonData []byte, edition v1alpha1.Edition) error {
+	return v.validate(ctx, jsonData, edition, "-t", "-n")
+}
+
+// Lint is Validate without krakend's one-second router test (check -n). It
+// is the admission check; the route check (routecheck.go) covers what -t
+// would catch.
+func (v *KrakenDValidator) Lint(ctx context.Context, jsonData []byte, edition v1alpha1.Edition) error {
+	return v.validate(ctx, jsonData, edition, "-n")
+}
+
+// validate prepares the edition's copy of jsonData, applies the rules checked
+// in Go, and runs krakend check with flags on the copy.
+func (v *KrakenDValidator) validate(
+	ctx context.Context, jsonData []byte, edition v1alpha1.Edition, flags ...string,
+) error {
 	doc, findings, err := validationCopy(jsonData, edition)
 	if err != nil {
 		return fmt.Errorf("preparing validation copy: %w", err)
@@ -86,26 +102,23 @@ func (v *KrakenDValidator) Validate(ctx context.Context, jsonData []byte, editio
 	if len(findings) > 0 {
 		return &ValidationError{Output: strings.Join(findings, "\n"), Err: errEEWildcardRule}
 	}
-	return v.check(ctx, doc)
+	return v.check(ctx, doc, flags...)
 }
-
-// Lint is Validate without krakend's router test.
-func (v *KrakenDValidator) Lint(context.Context, []byte, v1alpha1.Edition) error { return nil }
 
 // errEEWildcardRule is the verdict for an EE wildcard endpoint that EE
 // would refuse, found before krakend check runs.
 var errEEWildcardRule = errors.New("EE wildcard rule")
 
-// check writes jsonData to a temp file and runs `krakend check -t -n -c`
-// on it: -t tests the router and -n lints against the JSON schema built into
-// the binary, so validation never needs network access.
+// check writes jsonData to a temp file and runs `krakend check <flags> -c` on
+// it. -n lints against the JSON schema built into the binary, so validation
+// never needs network access; -t also tests the router.
 //
 // It returns a *ValidationError only when krakend check ran to completion and
 // rejected the config (a non-zero exit status before the deadline): that is a
 // verdict on the config. Every other failure (binary missing, temp-file I/O,
 // deadline exceeded, process killed by a signal) comes back as a plain error:
 // the config was not judged and the caller should retry.
-func (v *KrakenDValidator) check(ctx context.Context, jsonData []byte) (retErr error) {
+func (v *KrakenDValidator) check(ctx context.Context, jsonData []byte, flags ...string) (retErr error) {
 	ctx, cancel := context.WithTimeout(ctx, v.timeout())
 	defer cancel()
 
@@ -131,7 +144,8 @@ func (v *KrakenDValidator) check(ctx context.Context, jsonData []byte) (retErr e
 		return fmt.Errorf("closing temp file: %w", withoutPath(err))
 	}
 
-	output, err := v.Executor.Execute(ctx, v.BinaryPath, "check", "-t", "-n", "-c", tmpName)
+	args := append(append([]string{"check"}, flags...), "-c", tmpName)
+	output, err := v.Executor.Execute(ctx, v.BinaryPath, args...)
 	if err != nil {
 		return classifyCheckError(ctx, bytes.ReplaceAll(output, []byte(tmpName), []byte(checkedConfigName)), err)
 	}
