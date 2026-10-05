@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
@@ -135,7 +136,33 @@ func (v *EndpointValidator) admit(
 	if gw == nil {
 		return nil, nil
 	}
+	if v.trustedWrite(ctx, ep) {
+		logf.FromContext(ctx).V(1).Info("operator write to an AutoConfig endpoint: render check skipped",
+			"endpoint", ep.Namespace+"/"+ep.Name)
+		return nil, nil
+	}
 	return v.checkRender(ctx, stored, ep, gw)
+}
+
+// trustedWrite reports whether the request is the operator, by its exact
+// username, writing an endpoint a KrakenDAutoConfig controls. An empty
+// OperatorUsername trusts nobody.
+func (v *EndpointValidator) trustedWrite(ctx context.Context, ep *v1alpha1.KrakenDEndpoint) bool {
+	if v.OperatorUsername == "" {
+		return false
+	}
+	req, err := admission.RequestFromContext(ctx)
+	if err != nil || req.UserInfo.Username != v.OperatorUsername {
+		return false
+	}
+	return autoConfigController(ep)
+}
+
+// autoConfigController reports whether ep's controller owner reference is a
+// KrakenDAutoConfig. Labels are never trusted for this: anyone can set them.
+func autoConfigController(ep *v1alpha1.KrakenDEndpoint) bool {
+	ref := metav1.GetControllerOf(ep)
+	return ref != nil && ref.Kind == "KrakenDAutoConfig" && ref.APIVersion == v1alpha1.GroupVersion.String()
 }
 
 // checkRender renders ep's gateway with ep and rejects the request only when
