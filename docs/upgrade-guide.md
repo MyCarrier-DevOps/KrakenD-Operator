@@ -82,9 +82,12 @@ make deploy IMG=ghcr.io/mycarrier-devops/krakend-operator:<new-version>
    - A line naming an Enterprise-only namespace or field on a CE gateway is a
      feature KrakenD CE ignores today: remove it, or move the gateway to EE.
      Only a changed entry, a changed root `extraConfig`, a changed policy
-     `raw` or a changed typed field (`spec.redis`, `spec.config.documentation`,
-     `spec.openapi.enabled` or `spec.dragonfly.enabled`) is rejected; a stored
-     use that stays unchanged keeps being accepted.
+     `raw`, a changed `spec.redis` or `spec.config.documentation`, or enabling
+     `spec.openapi` or `spec.dragonfly`, is rejected; so is switching the
+     gateway to CE while the last two are enabled. A stored use that stays
+     keeps being accepted: editing the settings of a stored, enabled
+     `spec.openapi` or `spec.dragonfly` on a CE gateway only warns, and turning
+     one off is admitted.
 
 ---
 
@@ -1131,8 +1134,9 @@ CE-edition gateway with `spec.openapi` enabled also rolls once, because its
 pod template loses the export init container and the `openapi-serve`
 sidecar (and its Service loses the `openapi` port); those pods could not have
 started the export, which needs the Enterprise binary. The admission webhook
-warns about a stored, unchanged `spec.openapi` on a CE gateway; a new or
-changed one is rejected.
+warns about a `spec.openapi` that is stored enabled on a CE gateway and stays
+enabled; enabling it, or switching a gateway that has it enabled to CE, is
+rejected.
 
 ### Redis and Dragonfly connection pools are now actually configured
 
@@ -1581,11 +1585,16 @@ is set or changed, and switching `edition: EE` to `CE` is rejected while the
 gateway's KrakenDEndpoints or their KrakenDBackendPolicies use one; the denial
 lists each object, field and namespace. So are the typed Enterprise fields
 `spec.redis`, `spec.config.documentation`, `spec.openapi.enabled: true` and
-`spec.dragonfly.enabled: true` on a CE gateway (`Forbidden`), when set, changed,
-or kept through an EE to CE switch: CE ignores the first two, the CE binary
-cannot run the OpenAPI export, so a CE gateway runs without it, and a CE
-gateway has no Redis connection pools to use Dragonfly. A stored, unchanged
-use on a CE gateway keeps being accepted. An entry's `documentation/openapi`
+`spec.dragonfly.enabled: true` on a CE gateway (`Forbidden`): `spec.redis` and
+`spec.config.documentation` when set or changed, the export and Dragonfly when
+enabled, and any of them kept through an EE to CE switch. CE ignores the first
+two, the CE binary cannot run the OpenAPI export, so a CE gateway runs without
+it, and a CE gateway has no Redis connection pools to use Dragonfly. A stored
+use on a CE gateway keeps being accepted: an unchanged `spec.redis` or
+`spec.config.documentation` is not judged again, and an edit of the settings of
+a stored, enabled export or Dragonfly is admitted with a warning (the export
+has no effect, and the Dragonfly instance runs for nothing); turning either off
+is admitted. An entry's `documentation/openapi`
 (which AutoConfig generates) is not refused: a CE render drops it.
 
 **Updates are ratcheted.** A metadata-only update is never validated. A
