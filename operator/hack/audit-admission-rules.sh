@@ -213,5 +213,7 @@ jq "${jq_opts[@]}" "$jq_lib"'
   ($s.defaults.endpoint.outputEncoding // empty
     | enum_problem("spec.defaults.endpoint.outputEncoding"; output_encodings)),
   ($s.defaults.backend.encoding // empty | enum_problem("spec.defaults.backend.encoding"; backend_encodings)),
-  ($s.defaults.backend.sd // empty | enum_problem("spec.defaults.backend.sd"; discoveries))
+  ($s.defaults.backend.sd // empty | enum_problem("spec.defaults.backend.sd"; discoveries)),
+  (if $s.defaults.policyRef != null and ($s.defaults.policyRef.name // "") == ""
+   then "spec.defaults.policyRef.name is empty" else empty end)
 ]} | report("KrakenDAutoConfig")' "$work/autoconfigs.json"
