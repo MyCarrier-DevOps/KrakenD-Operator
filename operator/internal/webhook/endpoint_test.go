@@ -875,3 +875,29 @@ func TestEndpointAdmission_UnavailableCheckCarriesNoWarning(t *testing.T) {
 		t.Errorf("warnings = %v, want none with the error", warnings)
 	}
 }
+
+func TestEndpointAdmission_NewReferenceToATerminatingPolicyIsRejected(t *testing.T) {
+	now := metav1.Now()
+	going := &v1alpha1.KrakenDBackendPolicy{ObjectMeta: metav1.ObjectMeta{
+		Name: "going", Namespace: "default", DeletionTimestamp: &now,
+		Finalizers: []string{v1alpha1.PolicyProtectionFinalizer},
+	}}
+	withRef := func(name string) *v1alpha1.KrakenDEndpoint {
+		ep := testEndpoint(name, "/a")
+		ep.Spec.Endpoints[0].Backends[0].PolicyRef = &v1alpha1.PolicyRef{Name: "going"}
+		return ep
+	}
+	v := &EndpointValidator{Client: fakeClient(testGateway(), going), Checker: &scriptedChecker{}}
+
+	resp := review(t, v, "alice", withRef("new"), nil)
+	if resp.Allowed || !strings.Contains(resp.Result.Details.Causes[0].Message, "being deleted") {
+		t.Errorf("response = %+v, want the new reference rejected as being deleted", resp.Result)
+	}
+
+	stored := withRef("kept")
+	edited := stored.DeepCopy()
+	edited.Spec.Endpoints[0].Backends[0].URLPattern = "/v2"
+	if resp := review(t, v, "alice", edited, stored); !resp.Allowed {
+		t.Errorf("an unchanged reference blocked an unrelated edit: %+v", resp.Result)
+	}
+}
