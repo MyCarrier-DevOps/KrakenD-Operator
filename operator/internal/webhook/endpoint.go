@@ -111,7 +111,7 @@ func (v *EndpointValidator) admit(
 			field.NewPath("spec", "endpoints").Index(i).Child("extraConfig"), ep.Spec.Endpoints[i].ExtraConfig)...)
 	}
 	if gw != nil {
-		dupErrs, err := v.validateRouteUniqueness(ctx, ep, newRoutes(stored, ep, changed), gw)
+		dupErrs, err := v.validateRouteUniqueness(ctx, ep, stored, changed, gw)
 		if err != nil {
 			return nil, unavailable(err)
 		}
@@ -243,9 +243,11 @@ func newRoutes(stored, ep *v1alpha1.KrakenDEndpoint, changed []int) []int {
 // or repeated slashes, which KrakenD's router cannot tell apart. Endpoints
 // with ep's controller are exempt: while an AutoConfig renames an operation
 // its new endpoint and the old one share a route until the old one is deleted.
-// The denial names the claimant the renderer serves.
+// The denial names the claimant the renderer serves. Claims of other
+// endpoints are checked only for routes new to the stored object; entries of
+// ep itself are compared whenever one changes.
 func (v *EndpointValidator) validateRouteUniqueness(
-	ctx context.Context, ep *v1alpha1.KrakenDEndpoint, changed []int, gw *v1alpha1.KrakenDGateway,
+	ctx context.Context, ep, stored *v1alpha1.KrakenDEndpoint, changed []int, gw *v1alpha1.KrakenDGateway,
 ) (field.ErrorList, error) {
 	var list v1alpha1.KrakenDEndpointList
 	if err := v.List(ctx, &list, client.UnsafeDisableDeepCopy,
@@ -275,10 +277,11 @@ func (v *EndpointValidator) validateRouteUniqueness(
 		entriesByKey[keys[i]] = append(entriesByKey[keys[i]], i)
 	}
 	var errs field.ErrorList
+	fresh := newRoutes(stored, ep, changed)
 	for _, i := range changed {
 		e := ep.Spec.Endpoints[i]
 		p := field.NewPath("spec", "endpoints").Index(i)
-		if c, ok := claims[keys[i]]; ok {
+		if c, ok := claims[keys[i]]; ok && slices.Contains(fresh, i) {
 			errs = append(errs, routeClash(p, e, c.endpoint, "KrakenDEndpoint "+c.owner))
 			continue
 		}
