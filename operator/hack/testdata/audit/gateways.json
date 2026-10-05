@@ -11,5 +11,6 @@
  {"metadata":{"namespace":"a","name":"ee-emptyname"},"spec":{"edition":"EE","config":{},"license":{"secretRef":{"name":"","key":"k"}}}},
  {"metadata":{"namespace":"a","name":"ce-license"},"spec":{"edition":"CE","config":{},"license":{"secretRef":{"name":"l","key":"k"}}}},
  {"metadata":{"namespace":"a","name":"both-license"},"spec":{"edition":"EE","config":{},"license":{"externalSecret":{"enabled":true},"secretRef":{"name":"l","key":"k"}}}},
- {"metadata":{"namespace":"a","name":"openapi-port"},"spec":{"edition":"CE","config":{"port":9000},"openapi":{"enabled":true,"port":9000}}}
+ {"metadata":{"namespace":"a","name":"openapi-port"},"spec":{"edition":"CE","config":{"port":9000},"openapi":{"enabled":true,"port":9000}}},
+ {"metadata":{"namespace":"a","name":"two-pvc"},"spec":{"edition":"CE","config":{},"plugins":{"sources":[{"persistentVolumeClaimRef":{"claimName":"a"}},{"persistentVolumeClaimRef":{"claimName":"b"}}]}}}
 ]}
