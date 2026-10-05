@@ -388,7 +388,7 @@ func validatePostRestartJob(
 // opt-out and short-circuits the whole check, since it inherits down to
 // every container. An explicit runAsNonRoot: false at CONTAINER scope only
 // short-circuits when the effective uid0 came from that same container
-// scope (round-2 review, S1) — see the containerOptsOut/podOptsOut
+// scope — see the containerOptsOut/podOptsOut
 // combination below.
 //
 // Review id 3807285627 (#2): the check is skipped entirely (ratcheted) on
@@ -702,7 +702,7 @@ func validateRunAsRootConflict(
 		container.RunAsNonRoot != nil && !*container.RunAsNonRoot
 	podOptsOut := pod != nil &&
 		pod.RunAsNonRoot != nil && !*pod.RunAsNonRoot
-	// Round-2 review, S1: an opt-out is only a valid acknowledgment from the
+	// An opt-out is only a valid acknowledgment from the
 	// scope that actually produced the effective root request. Pod-scope
 	// opt-out (podOptsOut) is ALWAYS acceptable regardless of fromContainer,
 	// because pod scope inherits down to every container that doesn't set
