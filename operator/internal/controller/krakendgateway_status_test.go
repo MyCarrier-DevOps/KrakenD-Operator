@@ -54,6 +54,7 @@ func (v *countingValidator) Validate(context.Context, []byte, v1alpha1.Edition) 
 func (v *countingValidator) Lint(ctx context.Context, jsonData []byte, edition v1alpha1.Edition) error {
 	return v.Validate(ctx, jsonData, edition)
 }
+
 // rejectedBy returns a validation error shaped like a krakend check
 // rejection.
 func rejectedBy(output string) *renderer.ValidationError {
