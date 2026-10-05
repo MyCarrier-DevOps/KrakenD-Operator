@@ -945,6 +945,8 @@ flowchart TD
 
 ### Key Implementation Details
 
+**Admission** rejects new conflicts before they reach the renderer: `validateRouteUniqueness` rejects each added or changed entry whose `(route shape, method)` another entry on the gateway already has, in another KrakenDEndpoint or in the same one (`Duplicate value`, naming the owner and the clashing path). Endpoints with the same controller are exempt, because a KrakenDAutoConfig creates a renamed operation's endpoint before it deletes the old one. The detection below stays as the fallback for concurrent applies and for conflicts stored before the rule.
+
 **Endpoint conflict detection** — The renderer (§10) iterates all `KrakenDEndpoint` resources for the gateway and flattens their `spec.endpoints[]` arrays. It groups entries by `(route shape, method)` across all CRs, where the route shape (`ConflictKey`) erases parameter names, so `/users/{id}` and `/users/{name}` collide. When multiple entries share a route shape and method, all but the oldest `KrakenDEndpoint`'s entry (by `creationTimestamp`) are excluded from the rendered config; between two entries of one `KrakenDEndpoint` the earlier spec entry wins. The renderer returns `ConflictedEndpoints` and `InvalidEndpoints` in `RenderOutput`. The gateway controller then writes its `Accepted` condition on each endpoint of the render, but only for a render that is the gateway's applied configuration (validated now, or unchanged since) and only when the verdict changes: `True` (`Accepted`) for an included endpoint, `True` (`PartiallyAccepted`) for one that lost some but not all of its routes, `False` (`EndpointConflict`) for one that lost all of them, and no `Accepted` condition for one excluded by a missing policy. `RenderOutput.EntryConflicts` names each lost entry and the `KrakenDEndpoint` that serves it (the endpoint itself when an earlier entry of its own won), and the gateway controller writes them to `status.conflicts` in the same optimistic-lock patch as `Accepted`. Only the conflicting entries are dropped; the losing endpoint's other entries are still rendered. A `Warning` event with reason `EndpointConflict` is emitted when an endpoint becomes fully conflicted, a `Warning` event with reason `PartiallyAccepted` when it becomes partly conflicted (from `Accepted`, from no condition, or from `EndpointConflict`), and a `Normal` `Accepted` event when it is served whole again.
 
 **Policy resolution** — The controller gathers all referenced `KrakenDBackendPolicy` resources through `Checker.Gather` before calling `Renderer.Render`, populating `RenderInput.Policies`. The renderer itself has no Kubernetes client dependency — all inputs are passed as parameters. If a policy referenced by a `policyRef` does not exist in the map, the renderer reports the owning endpoint in `InvalidEndpoints` and excludes it from the rendered config; the endpoint controller reports the cause through `ResolvedRefs`.
@@ -1951,36 +1953,15 @@ func (v *EndpointValidator) ValidateCreate(
         }
     }
 
-    // Warn on conflict via field index (cluster-wide, not namespace-scoped)
-    gwKey := gwNS + "/" + ep.Spec.GatewayRef.Name
-    var existing v1alpha1.KrakenDEndpointList
-    if err := v.List(ctx, &existing,
-        client.MatchingFields{controller.EndpointGatewayIndex: gwKey},
-    ); err != nil {
-        errs = append(errs, field.InternalError(
-            field.NewPath("spec", "gatewayRef"),
-            fmt.Errorf("listing endpoints for conflict check: %w", err),
-        ))
-        return errs, warnings
+    // Reject a changed entry whose method and route shape another entry on
+    // the gateway already has. The list comes from the field index
+    // (cluster-wide, not namespace-scoped); endpoints with ep's controller
+    // are exempt. changed holds the entries the request adds or edits.
+    dupErrs, err := v.validateRouteUniqueness(ctx, ep, changed, gw)
+    if err != nil {
+        return warnings, apierrors.NewInternalError(err)
     }
-    for _, newEntry := range ep.Spec.Endpoints {
-        for _, other := range existing.Items {
-            if other.Name == ep.Name && other.Namespace == ep.Namespace {
-                continue
-            }
-            for _, otherEntry := range other.Spec.Endpoints {
-                if otherEntry.Endpoint == newEntry.Endpoint &&
-                    otherEntry.Method == newEntry.Method {
-                    warnings = append(warnings, fmt.Sprintf(
-                        "endpoint %s %s already exists on gateway %s "+
-                            "(defined by %s/%s) — conflict resolved by creationTimestamp",
-                        newEntry.Method, newEntry.Endpoint,
-                        gwKey, other.Namespace, other.Name,
-                    ))
-                }
-            }
-        }
-    }
+    errs = append(errs, dupErrs...)
 
     return warnings, errs.ToAggregate()
 }
