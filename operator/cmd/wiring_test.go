@@ -48,8 +48,8 @@ func (m stubManager) GetEventRecorderFor(string) record.EventRecorder {
 }
 
 // The 3-slot limit on concurrent krakend executions is per pod: the gateway
-// controller and every webhook validator must share the one Checker that
-// holds it.
+// controller, the AutoConfig controller and every webhook validator must share
+// the one Checker that holds it.
 func TestWireValidation_SharesOneCheckerBetweenControllerAndWebhooks(t *testing.T) {
 	mgr := stubManager{client: fake.NewClientBuilder().Build()}
 
@@ -60,6 +60,12 @@ func TestWireValidation_SharesOneCheckerBetweenControllerAndWebhooks(t *testing.
 	}
 	if w.Gateway.Checker != controller.ConfigChecker(w.Checker) {
 		t.Errorf("the gateway reconciler's checker = %v, want the pod's checker %p", w.Gateway.Checker, w.Checker)
+	}
+	if w.AutoConfig == nil {
+		t.Fatal("wireValidation built no AutoConfig reconciler")
+	}
+	if w.AutoConfig.Checker != controller.AutoConfigChecker(w.Checker) {
+		t.Errorf("the AutoConfig reconciler's checker = %v, want the pod's checker %p", w.AutoConfig.Checker, w.Checker)
 	}
 	if w.Validators.Gateway.Checker != webhooksetup.ConfigChecker(w.Checker) {
 		t.Errorf("the gateway validator's checker = %v, want the pod's checker %p",
