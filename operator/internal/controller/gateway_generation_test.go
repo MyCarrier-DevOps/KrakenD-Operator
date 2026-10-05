@@ -24,10 +24,12 @@ import (
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/resources"
@@ -111,5 +113,34 @@ func TestGatewayReconcile_AChildErrorDoesNotStarveTheIndependentChildren(t *test
 	if err := c.List(context.Background(), &jobs, client.InNamespace(gw.Namespace)); err != nil || len(jobs.Items) != 1 {
 		t.Errorf("jobs = %d (%v), want the post-restart Job: it waits for the Deployment, not for the HPA",
 			len(jobs.Items), err)
+	}
+}
+
+func TestGatewayReconcile_StepsThatConsumeTheDeploymentWaitForIt(t *testing.T) {
+	gw := newerSpecGateway()
+	dep := settledDeployment(gw, "A")
+	limitCPU(&gw.Spec) // the update the Deployment step cannot write
+	gw.Spec.PostRestartJob = &v1alpha1.PostRestartJobSpec{Enabled: true, Script: "echo done"}
+	// An HPA the gateway controls and no longer wants: autoscaling is not configured.
+	hpa := &autoscalingv2.HorizontalPodAutoscaler{ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace}}
+	if err := controllerutil.SetControllerReference(gw, hpa, testScheme()); err != nil {
+		t.Fatal(err)
+	}
+	c := fakeClientBuilder().WithObjects(gw, dep, hpa).WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderOutput("A"), &mockValidator{})
+	servedByFailing := &servedGateway{c: c, r: r, gw: gw}
+	servedByFailing.failDeploymentWrites()
+
+	if err := reconcileGateway(t, r, gw); err == nil {
+		t.Fatal("a rejected Deployment update must fail the pass")
+	}
+
+	var jobs batchv1.JobList
+	if err := c.List(context.Background(), &jobs, client.InNamespace(gw.Namespace)); err != nil || len(jobs.Items) != 0 {
+		t.Errorf("jobs = %d (%v), want none: the post-restart Job runs only after the Deployment reconciled",
+			len(jobs.Items), err)
+	}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(gw), hpa); err != nil {
+		t.Errorf("the HPA was deleted before the Deployment carried its replica count: %v", err)
 	}
 }
