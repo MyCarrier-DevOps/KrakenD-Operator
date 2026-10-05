@@ -47,6 +47,7 @@ const (
 )
 
 // KrakenDGatewaySpec defines the desired state of KrakenDGateway.
+// +kubebuilder:validation:XValidation:rule="self.edition != 'EE' || (has(self.license) && ((has(self.license.externalSecret) && has(self.license.externalSecret.enabled) && self.license.externalSecret.enabled) || has(self.license.secretRef)))",message="edition EE requires license.externalSecret.enabled or license.secretRef",fieldPath=".license"
 type KrakenDGatewaySpec struct {
 	// Version is the KrakenD version to deploy (e.g. "2.13").
 	Version string `json:"version"`
