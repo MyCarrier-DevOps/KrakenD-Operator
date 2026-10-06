@@ -36,6 +36,9 @@ func TestGatewayReconcile_AForgedAppliedConfigMapIsReplacedWhateverItsMetadata(t
 	checksum := hash.SHA256Hex([]byte(config))
 	forgeries := map[string]func(cm *corev1.ConfigMap){
 		"owner reference removed": func(cm *corev1.ConfigMap) { cm.OwnerReferences = nil },
+		"checksum annotation changed": func(cm *corev1.ConfigMap) {
+			cm.Annotations[resources.PostRestartJobChecksumAnnotation] = "something-else"
+		},
 	}
 	for name, forge := range forgeries {
 		t.Run(name, func(t *testing.T) {
