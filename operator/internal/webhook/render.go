@@ -61,6 +61,19 @@ func foreignCheckOutput(stage renderer.RejectionStage, f configcheck.Finding, ns
 	return f.Endpoint.Name == "" || f.Endpoint.Namespace != ns
 }
 
+// withholdForeign returns the findings of v that a writer in namespace ns may
+// be shown, and counts the foreignCheckOutput ones it leaves out.
+func withholdForeign(v configcheck.Verdict, ns string) (shown []configcheck.Finding, withheld int) {
+	for _, f := range v.Findings {
+		if foreignCheckOutput(v.Stage, f, ns) {
+			withheld++
+			continue
+		}
+		shown = append(shown, f)
+	}
+	return shown, withheld
+}
+
 // onceCheck runs check at most once and returns its first result to every
 // call, so the ratchet and the denial it builds share one isolated check.
 func onceCheck(

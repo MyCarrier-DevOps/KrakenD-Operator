@@ -288,8 +288,8 @@ func renderDenial(
 		}
 		msg := fmt.Sprintf("with this change the gateway's config also fails krakend check on %d findings "+
 			"about the gateway root or endpoints in other namespaces, which are not shown", withheld)
-		if !own.OK {
-			msg += "; this change alone fails it: " + own.Summary(warningLimit)
+		if shown, _ := withholdForeign(own, ep.Namespace); len(shown) > 0 {
+			msg += "; this change alone fails it: " + configcheck.Verdict{Findings: shown}.Summary(warningLimit)
 		}
 		errs = append(errs, field.Invalid(field.NewPath("spec", "endpoints"), field.OmitValueType{}, msg))
 	}
