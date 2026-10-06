@@ -457,7 +457,7 @@ func ExternalRefs(specData []byte) ([]string, error) {
 	walkJSON(root, func(key string, value any) bool {
 		if payload, own := examplePayload(key, value); payload {
 			for _, entry := range own {
-				if ref, _ := entry["$ref"].(string); isExternalRef(ref) {
+				if ref, ok := entry["$ref"].(string); ok && isExternalRef(ref) {
 					refs[ref] = struct{}{}
 				}
 			}
