@@ -613,6 +613,11 @@ func TestResolveExternalRefs_ExamplesAndNameKeyedMaps(t *testing.T) {
 		wantHits int    // fetches in total
 	}{
 		{
+			name:    "a media type example is not fetched",
+			spec:    fmt.Sprintf(op, `{"example":{"$ref":"not-a-ref.json"}}`),
+			wantOut: `{"example":{"$ref":"not-a-ref.json"}}`,
+		},
+		{
 			name:     "an examples entry that is a reference is resolved",
 			spec:     fmt.Sprintf(op, `{"examples":{"one":{"$ref":"ex.json#/E"}}}`),
 			wantOut:  `{"$ref":"#/components/schemas/ex_E"}`,
