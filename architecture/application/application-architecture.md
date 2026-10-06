@@ -114,6 +114,8 @@ func wireValidation(
             Clock:         clock.RealClock{},
             APIReader:     mgr.GetAPIReader(),
             LicenseParser: licenseutil.NewX509LicenseParser(),
+            // each reconcile holds one checker slot
+            MaxConcurrentReconciles: gatewayCheckWorkers, // 1
         },
         AutoConfig: &controller.KrakenDAutoConfigReconciler{
             Client:       mgr.GetClient(),
@@ -938,6 +940,9 @@ type KrakenDGatewayReconciler struct {
     APIReader client.Reader
     // LicenseParser reads EE license certificates
     LicenseParser license.LicenseParser
+    // MaxConcurrentReconciles is how many gateways reconcile at once; zero
+    // means one. Each reconcile holds one config checker slot at a time.
+    MaxConcurrentReconciles int
 
     // rejections remembers each gateway's last rejected validation input
     rejections rejectionMemo
@@ -1423,12 +1428,12 @@ A terminating AutoConfig (`deletionTimestamp` set) is not reconciled. Under fore
 
 1. `claimEndpoints` lists the endpoints the AutoConfig controls through the `fieldindex.EndpointController` index (namespace-scoped), and adopts each label-matched orphan it does not itself want to write (both managed labels, no controller, not terminating) as a ReplicaSet adopts pods. An endpoint controlled by another object is never touched.
 2. `planEndpoints` splits the desired endpoints into writes (missing, label-short or spec-different by JSON value) and stale endpoints.
-3. `routeCollisions` groups the desired endpoints by method and `renderer.ConflictKey` of the path. The survivor of a group is the one the renderer serves (the existing controlled copy with the oldest `creationTimestamp`, then the lowest name; a new endpoint sorts last: `creationOrder`). Every other member is held, written or not. The holds enter `precheck` as holds, so the stale endpoints stay in the check.
+3. `routeCollisions` groups the desired endpoints by method and `renderer.ConflictKey` of the path. The survivor of a group is the one the renderer serves (the oldest stored `creationTimestamp`, then the lowest name; `creationOrder` takes the stored time of every controlled endpoint and of every existing desired endpoint that no other object controls (`withUncontrolled`: an orphan `writeEndpoint` takes over, or an unlabelled endpoint of that name), and a new one sorts last). Every other member is held, written or not. The holds enter `precheck` as holds, so the stale endpoints stay in the check.
 4. `precheck` runs `Checker.CheckGateway` over the writes, within `CheckSlots`, in at most `maxPrecheckRounds` (5) rounds. Each round attributes findings to the candidates by `Finding.Endpoint`, holds those, and re-checks the rest. When the sync will also delete the stale endpoints, the round sees them as empty copies (`checkSet`); the stale endpoints stay in the check when an operation is held or a write names an endpoint the last status recorded as `EndpointRejected` (`recursRejection`). `checkSet` also gives each candidate the creation time the cluster will give it (`creationOrder.timestamp`: an existing endpoint's own, a new one after every existing one), because the renderer serves the oldest of the endpoints that share a route. A rename and a brand-new rejection in one pass is not predicted, and the gateway keeps its applied config with `ConfigValid=False` until the cause is fixed. A finding that names no candidate is judged against a baseline check without the writes: when the gateway fails there too, the candidates are written, and otherwise all of them are held. A gateway that does not exist is not checked.
 5. `writeEndpoint` writes every candidate that passed with `CreateOrUpdate`: it merges the managed labels into the live ones and makes the AutoConfig its controller. `endpointOutcome.record` classifies each failure: `Conflict` and `AlreadyExists` as raced (a quiet requeue), `IsInvalid` and `AlreadyOwnedError` as rejected (held), anything else as transient (`EndpointReconcileFailed`, with backoff, naming five failures and counting the rest).
 6. `deleteEndpoint` removes each stale endpoint, preconditioned on its UID, only when nothing is held and no write failed.
 
-`logHeldCauses` then logs the full cause of every held operation, a CUE failure or a rejection, at Info when the causes differ from what this process last logged for the AutoConfig (a `sync.Map` of digests keyed by UID, dropped when the AutoConfig is deleted or holds nothing). `summarizeReadiness` judges the endpoints the AutoConfig controls afterwards, a written one from the object its write returned, and `endpointsReadyCondition` sets `EndpointsReady`; `autoConfigReady` derives `Ready` from `SpecAvailable`, `Synced` and `EndpointsReady`.
+`logHeldCauses` then logs the full cause of every held operation, a CUE failure or a rejection, at Info when the causes differ from what this process last logged for the AutoConfig (a `sync.Map` of digests keyed by namespace and name, so a recreated AutoConfig overwrites its predecessor, dropped when the AutoConfig is deleted or holds nothing). `summarizeReadiness` judges the endpoints the AutoConfig controls afterwards, a written one from the object its write returned, and `endpointsReadyCondition` sets `EndpointsReady`; `autoConfigReady` derives `Ready` from `SpecAvailable`, `Synced` and `EndpointsReady`.
 
 **Additional endpoints pipeline note:** `spec.additionalEndpoints` entries bypass `filter` and `overrides` (they carry no `operationId`), but they DO receive `urlTransform`. After applying the URL transform, additional endpoints are scoped under the application's base path — `spec.additionalEndpointsBasePath` if set, else `urlTransform.addPathPrefix` (already applied, so no further scoping), else the common parent directory derived from the generated endpoints (`DeriveBasePath`). If none of these resolves to a non-empty base, the sync fails with `AdditionalEndpointScopeFailed`. Scoping prepends the base to the public path only; backend `urlPattern` is unchanged. `ApplyURLTransformToEntries` is called before scoping and `MergeAdditional` so that collision keys (`endpoint:method`) align with the already-transformed spec-derived entries. On collision, the additional entry wins and, when the inputs changed since the last successful sync, the controller emits an `AdditionalEndpointOverride` Warning event.
 
