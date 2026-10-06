@@ -103,12 +103,16 @@ type ConfigChecker interface {
 // +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendendpoints,verbs=get;list;watch
 // +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendendpoints/status,verbs=patch
 // +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendbackendpolicies,verbs=get;list;watch
-// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update
+// The controller never deletes a Deployment, Service, ServiceAccount or
+// PodDisruptionBudget, but the OwnerReferencesPermissionEnforcement admission
+// plugin requires delete on an object whose ownerReferences an update
+// changes, as when a gateway adopts a same-named object that predates it.
+// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;delete
 // +kubebuilder:rbac:groups=apps,resources=replicasets,verbs=list
-// +kubebuilder:rbac:groups="",resources=services;serviceaccounts,verbs=get;list;watch;create;update
+// +kubebuilder:rbac:groups="",resources=services;serviceaccounts,verbs=get;list;watch;create;update;delete
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;delete
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
-// +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update
+// +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update;delete
 // +kubebuilder:rbac:groups=autoscaling,resources=horizontalpodautoscalers,verbs=get;list;watch;create;update;delete
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;delete
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
