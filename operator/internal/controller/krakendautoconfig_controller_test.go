@@ -1412,7 +1412,7 @@ func TestAutoConfigReconcile_EndpointReconcileFailureFailsSync(t *testing.T) {
 		Type:               v1alpha1.ConditionSynced,
 		Status:             metav1.ConditionTrue,
 		Reason:             "Synced",
-		Message:            "Generated 1 endpoints",
+		Message:            "Generated 1 endpoint",
 		LastTransitionTime: metav1.Now(),
 	}}
 	// The generated endpoint is missing and the API server rejects the
@@ -2213,7 +2213,7 @@ func TestAutoConfigReconcile_RecordsSkippedOperationsAndNotes(t *testing.T) {
 		t.Errorf("warnings = %q, want %q", updated.Status.Warnings, wantWarnings)
 	}
 	cond := meta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionSynced)
-	wantMsg := "Generated 1 endpoints; 1 operations skipped (see status.skipped); 1 spec warnings (see status.warnings)"
+	wantMsg := "Generated 1 endpoint; 1 operation skipped (see status.skipped); 1 spec warning (see status.warnings)"
 	if cond == nil || cond.Status != metav1.ConditionTrue || cond.Message != wantMsg {
 		t.Errorf("expected Synced True %q, got %+v", wantMsg, cond)
 	}
@@ -2444,7 +2444,7 @@ func TestAutoConfigReconcile_SyncedMessageCountsEveryDistinctWarning(t *testing.
 		t.Errorf("listed warnings = %d, want the %d cap", len(updated.Status.Warnings), maxStatusListLen)
 	}
 	cond := meta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionSynced)
-	want := "Generated 1 endpoints; 45 spec warnings (see status.warnings)"
+	want := "Generated 1 endpoint; 45 spec warnings (see status.warnings)"
 	if cond == nil || cond.Message != want {
 		t.Errorf("Synced = %+v, want message %q", cond, want)
 	}
