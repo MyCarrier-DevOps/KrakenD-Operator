@@ -503,10 +503,12 @@ func appendEndpointComponentSchemas(ec map[string]any, endpoints []v1alpha1.Krak
 }
 
 // publishesDocs reports whether a render of input publishes OpenAPI docs: an
-// EE gateway, not in CE fallback. A schema name collision anywhere else
-// changes no document a reader sees.
+// EE gateway, not in CE fallback, with the OpenAPI export enabled. A schema
+// name collision anywhere else changes no document a reader sees.
 func publishesDocs(input RenderInput) bool {
-	return input.Gateway.Spec.Edition == v1alpha1.EditionEE && !input.CEFallback
+	gw := input.Gateway
+	return gw.Spec.Edition == v1alpha1.EditionEE && !input.CEFallback && gw.Spec.OpenAPI != nil &&
+		gw.Spec.OpenAPI.Enabled
 }
 
 // RedisPoolName names the Redis connection pool (or cluster) rendered from
