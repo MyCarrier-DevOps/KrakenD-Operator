@@ -604,7 +604,7 @@ func (o creationOrder) timestamp(name string) metav1.Time {
 // renderer serves.
 func routeCollisions(
 	desired []*v1alpha1.KrakenDEndpoint,
-	controlled []v1alpha1.KrakenDEndpoint,
+	existing []v1alpha1.KrakenDEndpoint,
 ) map[string]rejection {
 	groups := map[string][]*v1alpha1.KrakenDEndpoint{}
 	for _, ep := range desired {
@@ -615,7 +615,7 @@ func routeCollisions(
 		key := renderer.RouteKey(e.Method, e.Endpoint)
 		groups[key] = append(groups[key], ep)
 	}
-	order := newCreationOrder(controlled)
+	order := newCreationOrder(existing)
 	collisions := map[string]rejection{}
 	for _, group := range groups {
 		slices.SortFunc(group, func(a, b *v1alpha1.KrakenDEndpoint) int {
