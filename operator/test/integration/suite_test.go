@@ -41,10 +41,12 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/k3s"
 	appsv1 "k8s.io/api/apps/v1"
+	authorizationv1 "k8s.io/api/authorization/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apiextclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -169,7 +171,17 @@ func runTests(m *testing.M) int {
 	}
 
 	// Start a controller manager in the background.
-	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
+	// Run the manager as the operator's ServiceAccount, bound to the
+	// generated manager ClusterRole, so every scenario below also proves
+	// the RBAC is sufficient: a missing verb fails a test with Forbidden.
+	// No webhook server runs in this suite: the admission webhooks' cached
+	// lists and policy reads are exercised under the role only in e2e.
+	mgrCfg, err := operatorRBACConfig(ctx, cfg, k8sClient)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to set up operator RBAC: %v\n", err)
+		return 1
+	}
+	mgr, err := ctrl.NewManager(mgrCfg, ctrl.Options{
 		Scheme: scheme,
 	})
 	if err != nil {
@@ -522,6 +534,77 @@ func (v *markerValidator) Lint(ctx context.Context, jsonData []byte, edition v1a
 }
 
 // waitForNodes polls the Kubernetes API until all nodes report Ready.
+// The identity the suite's manager impersonates.
+const (
+	operatorNamespace      = "krakend-operator-system"
+	operatorServiceAccount = "controller-manager"
+)
+
+// operatorRBACConfig binds the generated manager ClusterRole
+// (config/rbac/role.yaml) to the operator's ServiceAccount and returns cfg
+// impersonating that ServiceAccount, so the manager runs with exactly the
+// permissions a deployment grants and a missing verb fails a test. It returns
+// once the API server's authorizer allows the ServiceAccount to list gateways.
+func operatorRBACConfig(ctx context.Context, cfg *rest.Config, c client.Client) (*rest.Config, error) {
+	rolePath, err := filepath.Abs(filepath.Join("..", "..", "config", "rbac", "role.yaml"))
+	if err != nil {
+		return nil, fmt.Errorf("resolving role path: %w", err)
+	}
+	data, err := os.ReadFile(rolePath)
+	if err != nil {
+		return nil, fmt.Errorf("reading generated role: %w", err)
+	}
+	var role rbacv1.ClusterRole
+	if err := yaml.NewYAMLOrJSONDecoder(bytes.NewReader(data), 4096).Decode(&role); err != nil {
+		return nil, fmt.Errorf("decoding generated role: %w", err)
+	}
+	role.ObjectMeta = metav1.ObjectMeta{Name: "krakend-operator-integration-manager"}
+	if err := c.Create(ctx, &role); err != nil {
+		return nil, fmt.Errorf("creating manager role: %w", err)
+	}
+	binding := &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: role.Name},
+		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: role.Name},
+		Subjects: []rbacv1.Subject{{
+			Kind: rbacv1.ServiceAccountKind, Name: operatorServiceAccount, Namespace: operatorNamespace,
+		}},
+	}
+	if err := c.Create(ctx, binding); err != nil {
+		return nil, fmt.Errorf("creating manager role binding: %w", err)
+	}
+	user := "system:serviceaccount:" + operatorNamespace + ":" + operatorServiceAccount
+	if err := waitForServiceAccountAccess(ctx, c, user); err != nil {
+		return nil, err
+	}
+	impersonated := rest.CopyConfig(cfg)
+	impersonated.Impersonate = rest.ImpersonationConfig{UserName: user}
+	return impersonated, nil
+}
+
+// waitForServiceAccountAccess polls a SubjectAccessReview until the binding is
+// visible to the authorizer, so the manager never starts against a stale view.
+func waitForServiceAccountAccess(ctx context.Context, c client.Client, user string) error {
+	err := wait.PollUntilContextTimeout(ctx, 500*time.Millisecond, 30*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			review := &authorizationv1.SubjectAccessReview{
+				Spec: authorizationv1.SubjectAccessReviewSpec{
+					User: user,
+					ResourceAttributes: &authorizationv1.ResourceAttributes{
+						Group: v1alpha1.GroupVersion.Group, Resource: "krakendgateways", Verb: "list",
+					},
+				},
+			}
+			if err := c.Create(ctx, review); err != nil {
+				return false, err
+			}
+			return review.Status.Allowed, nil
+		})
+	if err != nil {
+		return fmt.Errorf("manager role binding never took effect for %s: %w", user, err)
+	}
+	return nil
+}
+
 func waitForNodes(ctx context.Context, cfg *rest.Config) error {
 	clientset, err := k8sclient.NewForConfig(cfg)
 	if err != nil {
