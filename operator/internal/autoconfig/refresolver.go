@@ -142,9 +142,8 @@ func (e *fatalRefError) Unwrap() error { return e.err }
 // no further refs are resolved and no further documents are fetched.
 // An example payload, the value of an object's "example" or "examples" field,
 // is data: walk neither descends into it nor fetches from it, and resolves
-// only the Example Object references an "examples" object holds
-// (walkExampleRefs). The members of a name-keyed map (nameKeyedMaps) are
-// objects whatever they are named.
+// only the Example Object references an "examples" object holds. The members
+// of a name-keyed map (nameKeyedMaps) are objects whatever they are named.
 func (r *refResolver) walk(node any, base string) {
 	if r.fatalErr != nil {
 		return
@@ -171,14 +170,17 @@ func (r *refResolver) walk(node any, base string) {
 		// Sorted keys make the walk order, and so the first failing ref
 		// and its error, deterministic.
 		for _, k := range slices.Sorted(maps.Keys(v)) {
-			members, isMap := v[k].(map[string]any)
-			switch payload, _ := examplePayload(k, v[k]); {
-			case isMap && slices.Contains(nameKeyedMaps, k):
-				for _, name := range slices.Sorted(maps.Keys(members)) {
-					r.walk(members[name], base)
+			members, isMap := nameKeyedMembers(k, v[k])
+			payload, exampleRefs := examplePayload(k, v[k])
+			switch {
+			case isMap:
+				for _, member := range members {
+					r.walk(member, base)
 				}
 			case payload:
-				r.walkExampleRefs(k, v[k], base)
+				for _, ref := range exampleRefs {
+					r.walk(ref, base)
+				}
 			default:
 				r.walk(v[k], base)
 			}
@@ -191,23 +193,6 @@ func (r *refResolver) walk(node any, base string) {
 			r.walk(child, base)
 			if r.fatalErr != nil {
 				return
-			}
-		}
-	}
-}
-
-// walkExampleRefs resolves the entries of an "examples" object that are
-// themselves a $ref to an Example Object; every other part of an example
-// payload is data and is neither walked nor fetched.
-func (r *refResolver) walkExampleRefs(key string, value any, base string) {
-	entries, ok := value.(map[string]any)
-	if key != "examples" || !ok {
-		return
-	}
-	for _, name := range slices.Sorted(maps.Keys(entries)) {
-		if entry, ok := entries[name].(map[string]any); ok {
-			if _, isRef := entry["$ref"].(string); isRef {
-				r.walk(entry, base)
 			}
 		}
 	}
@@ -460,9 +445,9 @@ func decodeSpec(data []byte) (map[string]any, error) {
 // document (those not starting with "#"), sorted. Only a URL-sourced spec has
 // a base to resolve them against, so in a ConfigMap-sourced spec they stay
 // unresolved. $refs inside example payloads are data, not references, and are
-// skipped, apart from an examples entry that is itself a $ref. A schema
-// property literally named "example" or "examples" is taken for a payload
-// too, so an external ref below it goes unreported.
+// skipped, apart from an examples entry that is itself a $ref. The members of
+// a name-keyed map are objects whatever they are named, so an external ref
+// below a schema or response called "example" is reported.
 func ExternalRefs(specData []byte) ([]string, error) {
 	root, err := decodeSpec(specData)
 	if err != nil {
@@ -471,8 +456,8 @@ func ExternalRefs(specData []byte) ([]string, error) {
 	refs := map[string]struct{}{}
 	walkJSON(root, func(key string, value any) bool {
 		if payload, own := examplePayload(key, value); payload {
-			for _, ref := range own {
-				if isExternalRef(ref) {
+			for _, entry := range own {
+				if ref, _ := entry["$ref"].(string); isExternalRef(ref) {
 					refs[ref] = struct{}{}
 				}
 			}

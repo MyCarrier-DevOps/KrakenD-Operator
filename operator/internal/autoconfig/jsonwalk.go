@@ -21,9 +21,22 @@ import (
 	"slices"
 )
 
+// nameKeyedMembers returns, in sorted name order, the members of value, the
+// field key of an object, when it is a name-keyed map (see nameKeyedMaps).
+func nameKeyedMembers(key string, value any) (members []any, ok bool) {
+	byName, isMap := value.(map[string]any)
+	if !isMap || !slices.Contains(nameKeyedMaps, key) {
+		return nil, false
+	}
+	for _, name := range slices.Sorted(maps.Keys(byName)) {
+		members = append(members, byName[name])
+	}
+	return members, true
+}
+
 // walkJSON calls visit for every object field below node, in sorted key
 // order, and descends into a field's value when visit returns true. The
-// members of a name-keyed map (see nameKeyedMaps) are not fields: they are
+// members of a name-keyed map (see nameKeyedMembers) are not fields: they are
 // walked as objects without being visited by name.
 func walkJSON(node any, visit func(key string, value any) bool) {
 	switch v := node.(type) {
@@ -32,9 +45,9 @@ func walkJSON(node any, visit func(key string, value any) bool) {
 			if !visit(k, v[k]) {
 				continue
 			}
-			if members, ok := v[k].(map[string]any); ok && slices.Contains(nameKeyedMaps, k) {
-				for _, name := range slices.Sorted(maps.Keys(members)) {
-					walkJSON(members[name], visit)
+			if members, ok := nameKeyedMembers(k, v[k]); ok {
+				for _, member := range members {
+					walkJSON(member, visit)
 				}
 				continue
 			}
@@ -60,14 +73,15 @@ var nameKeyedMaps = []string{
 	"headers", "securitySchemes", "links", "callbacks", "pathItems", "content", "encoding",
 }
 
-// examplePayload reports whether value, the member key of an object, is
+// examplePayload reports whether value, the field key of an object, is
 // example data rather than part of the spec's structure, and returns the
-// $refs that are real references inside it. The payload is the value of an
+// Example Object references inside it. The payload is the value of an
 // "example" key and the content of an "examples" key, except that each entry
-// of an "examples" object may itself be a $ref to an Example Object. Callers
-// apply it to the fields of an object, not to the members of a name-keyed map
-// (see nameKeyedMaps), which are objects whatever they are named.
-func examplePayload(key string, value any) (isPayload bool, refs []string) {
+// of an "examples" object may itself be a {"$ref": …} object, which is a real
+// reference; those entries are returned. Callers apply it to the fields of an
+// object, not to the members of a name-keyed map (see nameKeyedMembers),
+// which are objects whatever they are named.
+func examplePayload(key string, value any) (isPayload bool, refs []map[string]any) {
 	switch key {
 	case "example":
 		return true, nil
@@ -78,8 +92,8 @@ func examplePayload(key string, value any) (isPayload bool, refs []string) {
 		}
 		for _, name := range slices.Sorted(maps.Keys(entries)) {
 			if entry, ok := entries[name].(map[string]any); ok {
-				if ref, ok := entry["$ref"].(string); ok {
-					refs = append(refs, ref)
+				if _, isRef := entry["$ref"].(string); isRef {
+					refs = append(refs, entry)
 				}
 			}
 		}
