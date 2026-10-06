@@ -932,7 +932,7 @@ type heldLog struct {
 // which no longer exists: its UID is gone with it, so it is found by name.
 func (r *KrakenDAutoConfigReconciler) forgetHeldCauses(owner types.NamespacedName) {
 	r.heldLogged.Range(func(uid, entry any) bool {
-		if entry.(heldLog).owner == owner {
+		if logged, ok := entry.(heldLog); ok && logged.owner == owner {
 			r.heldLogged.Delete(uid)
 		}
 		return true
@@ -980,13 +980,15 @@ func (r *KrakenDAutoConfigReconciler) logHeldCauses(
 		r.heldLogged.Delete(ac.UID)
 		return
 	}
-	hash := sha256.New()
+	var joined strings.Builder
 	for _, h := range held {
-		fmt.Fprintf(hash, "%s\x00%s\x00", h.operation, h.cause)
+		joined.WriteString(h.operation + "\x00" + h.cause + "\x00")
 	}
-	digest := fmt.Sprintf("%x", hash.Sum(nil))
-	if prev, ok := r.heldLogged.Load(ac.UID); ok && prev.(heldLog).digest == digest {
-		return
+	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(joined.String())))
+	if prev, ok := r.heldLogged.Load(ac.UID); ok {
+		if logged, isLog := prev.(heldLog); isLog && logged.digest == digest {
+			return
+		}
 	}
 	r.heldLogged.Store(ac.UID, heldLog{owner: client.ObjectKeyFromObject(ac), digest: digest})
 	log := logf.FromContext(ctx)
