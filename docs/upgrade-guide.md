@@ -261,8 +261,9 @@ make deploy IMG=ghcr.io/mycarrier-devops/krakend-operator:<previous-version>
 > drop out of the render. Repoint those endpoints first (the runbook lists them).
 
 > **Downgrading the operator past *Operator RBAC, caching and availability*.**
-> v0.14.0 needs `update` on ConfigMaps and on `krakendendpoints/status`, which
-> the trimmed ClusterRole no longer grants. `helm rollback` restores the older
+> v0.14.0 needs `update` on ConfigMaps and on `krakendendpoints/status`, and
+> `patch` on `krakendgateways` and `krakendgateways/status` (the Enterprise
+> license monitor). The trimmed ClusterRole grants none of them. `helm rollback` restores the older
 > role together with the older operator. `make deploy IMG=…:<previous>` run
 > from a current checkout applies the trimmed role to the older binary, which
 > then fails with `forbidden: User …`. Check out the previous release's
@@ -272,6 +273,11 @@ make deploy IMG=ghcr.io/mycarrier-devops/krakend-operator:<previous-version>
 > git checkout v<previous-version>
 > make deploy IMG=ghcr.io/mycarrier-devops/krakend-operator:<previous-version>
 > ```
+>
+> `make deploy` also re-applies that release's CRDs, because `config/default`
+> includes them. With kustomize the older CRD therefore prunes
+> `status.configEdition` on the older operator's next write, as described in
+> the *Gateway reconcile correctness* note above.
 
 ---
 
@@ -2149,8 +2155,8 @@ OLM upgrade applies the permissions in the new bundle's ClusterServiceVersion.
 
 During `helm upgrade` from v0.14.0, the old leader keeps running under the new
 role until the Lease moves to a new pod, about 30 to 60 seconds. In that time
-it logs `forbidden: User …` for the verbs it no longer has (ConfigMap
-`update`, endpoint status `update`). That is expected and stops once the new
+it logs `forbidden: User …` for the verbs it no longer has (for example ConfigMap
+`update`, endpoint status `update` and gateway `patch`). That is expected and stops once the new
 leader takes over.
 
 ### The Helm chart's ClusterRole now tracks the operator exactly
