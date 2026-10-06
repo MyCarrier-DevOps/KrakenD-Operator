@@ -1956,7 +1956,7 @@ A gateway event backed by a condition (`RolloutFailed`,
 `IstioVirtualServiceCreated`, `DragonflyNotReady`, `DragonflyReady`, the license
 events and `CRDNotInstalled`) is recorded only when that condition changes
 status or reason. A steady state emits no events. `ConfigValidationFailed` and
-`ValidatorUnavailable` fire when the recorded verdict changes, and `ConfigPublishFailed` when the reason changes.
+`ValidatorUnavailable` fire when the recorded verdict changes, and `ConfigPublishFailed` when the reason changes. `ConfigMapTampered` fires on each deletion of a ConfigMap for a payload mismatch.
 
 | Event | Type | Reason |
 |---|---|---|
@@ -1964,6 +1964,7 @@ status or reason. A steady state emits no events. `ConfigValidationFailed` and
 | Config validation failed | Warning | `ConfigValidationFailed` |
 | krakend check could not run (retried with backoff): a gateway's config check, or an AutoConfig's check before its writes | Warning | `ValidatorUnavailable` |
 | A render passed validation but its ConfigMap could not be published (retried with backoff) | Warning | `ConfigPublishFailed` |
+| A config ConfigMap whose payload does not hash to the checksum its name addresses was deleted (whoever owned it) and is published again | Warning | `ConfigMapTampered` |
 | License expiring soon | Warning | `LicenseExpiringSoon` |
 | License expired or entering pre-expiry safety window, falling back to CE | Warning | `LicenseFallbackCE` |
 | License expired or entering pre-expiry safety window, CE fallback not configured | Warning | `LicenseExpiredNoFallback` |
