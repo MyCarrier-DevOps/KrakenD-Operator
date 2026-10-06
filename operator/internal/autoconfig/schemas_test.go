@@ -309,6 +309,7 @@ func TestSchemaClosure_SeesRefsUnderSchemaMapsMemberNamedExample(t *testing.T) {
 		{"definitions"},
 		{"patternProperties"},
 		{"dependentSchemas"},
+		{"dependencies"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.keyword, func(t *testing.T) {
