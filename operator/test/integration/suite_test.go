@@ -26,6 +26,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -60,6 +61,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -73,6 +75,11 @@ var (
 	restConfig   *rest.Config
 	ctx          context.Context
 	cancel       context.CancelFunc
+	// mgrClient is the manager's own client, which the controllers use.
+	mgrClient client.Client
+	// suiteCache records typed Secret and ConfigMap requests to the
+	// manager's cache.
+	suiteCache *typedCoreReads
 )
 
 func TestMain(m *testing.M) {
@@ -186,6 +193,14 @@ func runTests(m *testing.M) int {
 	}
 	mgr, err := ctrl.NewManager(mgrCfg, ctrl.Options{
 		Scheme: scheme,
+		NewCache: func(config *rest.Config, opts cache.Options) (cache.Cache, error) {
+			c, err := cache.New(config, opts)
+			if err != nil {
+				return nil, err
+			}
+			suiteCache = &typedCoreReads{Cache: c}
+			return suiteCache, nil
+		},
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to create manager: %v\n", err)
@@ -253,6 +268,8 @@ func runTests(m *testing.M) int {
 		fmt.Fprintf(os.Stderr, "failed to setup autoconfig controller: %v\n", err)
 		return 1
 	}
+
+	mgrClient = mgr.GetClient()
 
 	go func() {
 		if err := mgr.Start(ctx); err != nil {
@@ -541,6 +558,58 @@ const (
 	operatorNamespace      = "krakend-operator-system"
 	operatorServiceAccount = "controller-manager"
 )
+
+// metadataOnly returns the metadata-only form of a core kind, as the
+// controllers watch it.
+func metadataOnly(kind string) client.Object {
+	m := &metav1.PartialObjectMetadata{}
+	m.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind(kind))
+	return m
+}
+
+// typedCoreReads wraps the manager's cache and records every request it
+// receives for a typed Secret or ConfigMap: an informer, a Get or a List.
+// The controllers watch those kinds as metadata only and read their content
+// live, so the record stays empty unless something caches their data.
+type typedCoreReads struct {
+	cache.Cache
+	mu   sync.Mutex
+	seen []string
+}
+
+func (r *typedCoreReads) note(obj runtime.Object) {
+	switch obj.(type) {
+	case *corev1.Secret, *corev1.SecretList, *corev1.ConfigMap, *corev1.ConfigMapList:
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		r.seen = append(r.seen, fmt.Sprintf("%T", obj))
+	}
+}
+
+func (r *typedCoreReads) records() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.seen)
+}
+
+func (r *typedCoreReads) Get(
+	ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption,
+) error {
+	r.note(obj)
+	return r.Cache.Get(ctx, key, obj, opts...)
+}
+
+func (r *typedCoreReads) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	r.note(list)
+	return r.Cache.List(ctx, list, opts...)
+}
+
+func (r *typedCoreReads) GetInformer(
+	ctx context.Context, obj client.Object, opts ...cache.InformerGetOption,
+) (cache.Informer, error) {
+	r.note(obj)
+	return r.Cache.GetInformer(ctx, obj, opts...)
+}
 
 // operatorRBACConfig binds the generated manager ClusterRole
 // (config/rbac/role.yaml) to the operator's ServiceAccount and returns cfg
