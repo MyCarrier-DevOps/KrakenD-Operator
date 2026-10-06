@@ -1242,8 +1242,11 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 
 // reconcileCoreResources creates or updates the gateway's ServiceAccount,
 // Service and PodDisruptionBudget. They are independent of each other, so each
-// is attempted and the errors joined. saControlled reports whether gw controls
-// the ServiceAccount.
+// is attempted and the errors joined. saControlled reports whether the
+// ServiceAccount step succeeded and gw controls the object CreateOrUpdate left
+// behind (the server's copy, or the one it created), decided without a cached
+// read: a ServiceAccount another controller owns keeps that controller's
+// reference, and a failed write holds the pass.
 func (r *KrakenDGatewayReconciler) reconcileCoreResources(
 	ctx context.Context, gw *v1alpha1.KrakenDGateway, in infraInputs,
 ) (saControlled bool, err error) {
@@ -1251,11 +1254,13 @@ func (r *KrakenDGatewayReconciler) reconcileCoreResources(
 	sa := &corev1.ServiceAccount{ObjectMeta: named}
 	svc := &corev1.Service{ObjectMeta: named}
 	pdb := &policyv1.PodDisruptionBudget{ObjectMeta: named}
-	err = stderrors.Join(
-		r.applyOwned(ctx, gw, sa, "serviceaccount", func() { resources.BuildServiceAccount(sa, gw) }),
+	saErr := r.applyOwned(ctx, gw, sa, "serviceaccount", func() { resources.BuildServiceAccount(sa, gw) })
+	err = stderrors.Join(saErr,
 		r.applyOwned(ctx, gw, svc, "service", func() { resources.BuildService(svc, gw, in.ceRender) }),
 		r.applyOwned(ctx, gw, pdb, "pdb", func() { resources.BuildPDB(pdb, gw) }))
-	return metav1.IsControlledBy(sa, gw), err
+	// The mutate function stamps the gateway's reference on sa before the
+	// write, so sa alone does not prove the server accepted it.
+	return saErr == nil && metav1.IsControlledBy(sa, gw), err
 }
 
 // reconcileHPA creates or updates the HorizontalPodAutoscaler when
