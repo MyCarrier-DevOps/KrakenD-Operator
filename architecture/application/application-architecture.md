@@ -3005,17 +3005,15 @@ func TestE2E_FullGatewayLifecycle(t *testing.T) {
 func runTests(m *testing.M) int {
     // An ephemeral K3s cluster through testcontainers. K3s 1.32 is used because
     // 1.33 removed the KubeletInUserNamespace feature gate that rootless
-    // podman needs; the kubelet args work around rootless cgroup constraints.
-    k3sContainer, err = k3s.Run(ctx, "rancher/k3s:v1.32.13-k3s1", testcontainers.WithCmdArgs(
-        "--disable=traefik",
-        "--disable=metrics-server",
-        // Clusters that enable this plugin require delete on any object whose
-        // ownerReferences an update changes, so the suite proves the trimmed role.
-        "--kube-apiserver-arg=enable-admission-plugins=OwnerReferencesPermissionEnforcement",
-        "--kubelet-arg=feature-gates=KubeletInUserNamespace=true",
-        "--kubelet-arg=cgroups-per-qos=false",
-        "--kubelet-arg=enforce-node-allocatable=",
-    ))
+    // podman needs. utils.K3sImage and utils.K3sArgs are shared with the e2e
+    // suite. K3sArgs always disables traefik and metrics-server and enables
+    // the OwnerReferencesPermissionEnforcement plugin (clusters that enable it
+    // require delete on any object whose ownerReferences an update changes, so
+    // the suite proves the trimmed role). Only when DOCKER_HOST points at
+    // rootless podman (a socket under /run/user/<uid>/) does it add the kubelet
+    // args KubeletInUserNamespace=true, cgroups-per-qos=false and
+    // enforce-node-allocatable="", which work around rootless cgroup constraints.
+    k3sContainer, err = k3s.Run(ctx, utils.K3sImage, testcontainers.WithCmdArgs(utils.K3sArgs()...))
     defer k3sContainer.Terminate(terminateCtx)
 
     // Build a rest.Config from the cluster's kubeconfig, wait for the nodes,
