@@ -623,7 +623,8 @@ func TestEndpointAdmission_FindingsBeyondTheCandidateGoOnTheEndpointsField(t *te
 		!strings.Contains(causes[0].Message, "default/other spec.endpoints[0]: clashes") {
 		t.Fatalf("causes = %+v, want the same-namespace finding quoted on spec.endpoints", causes)
 	}
-	if causes[1].Field != "spec.endpoints" || !strings.Contains(causes[1].Message, "on 1 findings about the gateway root") {
+	if causes[1].Field != "spec.endpoints" ||
+		!strings.Contains(causes[1].Message, "1 findings that name no endpoint of namespace default are not shown") {
 		t.Errorf("causes[1] = %+v, want the gateway-root krakend line counted, not quoted", causes[1])
 	}
 	for _, c := range causes {
@@ -674,7 +675,8 @@ func TestEndpointAdmission_IsolatedSummaryInADenialIsBounded(t *testing.T) {
 		t.Fatalf("response = %+v, want one cause", resp.Result)
 	}
 	msg := resp.Result.Details.Causes[0].Message
-	if !strings.Contains(msg, "this change alone fails it: ") || strings.Contains(msg, "a gateway root line") {
+	if !strings.Contains(msg, "the gateway root with this endpoint alone fails krakend check: ") ||
+		strings.Contains(msg, "a gateway root line") {
 		t.Fatalf("cause = %q, want the isolated summary and not the withheld line", msg)
 	}
 	if len(msg) > 300+warningLimit || !utf8.ValidString(msg) {
@@ -716,20 +718,101 @@ func TestEndpointAdmission_DenialDoesNotQuoteTheGatewayRootFromTheIsolatedCheck(
 		Endpoint: types.NamespacedName{Namespace: "default", Name: "new"}, Index: -1, Message: "own error"}
 	after := configcheck.Verdict{Stage: renderer.StageCheck, Findings: []configcheck.Finding{root}}
 	isolated := configcheck.Verdict{Stage: renderer.StageCheck, Findings: []configcheck.Finding{root, mine}}
-	v := &EndpointValidator{Client: fakeClient(testGateway()), Checker: &scriptedChecker{
-		verdicts: []configcheck.Verdict{after, {OK: true}, isolated}}}
+	rootAlone := configcheck.Verdict{Stage: renderer.StageCheck, Findings: []configcheck.Finding{root}}
+	chk := &scriptedChecker{verdicts: []configcheck.Verdict{after, {OK: true}, isolated, rootAlone}}
+	v := &EndpointValidator{Client: fakeClient(testGateway()), Checker: chk}
 
 	resp := review(t, v, "alice", testEndpoint("new", "/a"), nil)
 
 	if resp.Result.Details == nil || len(resp.Result.Details.Causes) != 1 {
 		t.Fatalf("response = %+v, want one cause", resp.Result)
 	}
+	if got := strings.Join(chk.calls, ","); got != "gateway+candidate,gateway,isolated,isolated" {
+		t.Errorf("checks = %s, want the gateway root checked alone once", got)
+	}
 	msg := resp.Result.Details.Causes[0].Message
-	if !strings.Contains(msg, "this change alone fails it: default/new: own error") {
+	if !strings.Contains(msg, "the gateway root with this endpoint alone fails krakend check: default/new: own error") {
 		t.Errorf("cause = %q, want the requester's own error from the isolated check", msg)
 	}
 	if strings.Contains(msg, "a gateway root line") {
 		t.Errorf("cause = %q quotes the gateway root line of the isolated check", msg)
+	}
+}
+
+// krakend check reports an invalid backend host at parse time without naming
+// an endpoint. When the gateway root passes alone, such a line in the root with
+// the requester's endpoint is the requester's own: the denial quotes it under
+// the endpoint's name and does not count it as withheld as well.
+func TestEndpointAdmission_DenialQuotesAnOwnLineThatNamesNoEndpoint(t *testing.T) {
+	host := configcheck.Finding{Index: -1,
+		Message: "ERROR parsing the configuration file: 'krakend.json': host http://svc:8080/api not valid: invalid host"}
+	bad := configcheck.Verdict{Stage: renderer.StageCheck, Findings: []configcheck.Finding{host}}
+	chk := &scriptedChecker{verdicts: []configcheck.Verdict{bad, {OK: true}, bad, {OK: true}}}
+	v := &EndpointValidator{Client: fakeClient(testGateway()), Checker: chk}
+
+	resp := review(t, v, "alice", testEndpoint("new", "/a"), nil)
+
+	if resp.Allowed || resp.Result.Details == nil || len(resp.Result.Details.Causes) != 1 {
+		t.Fatalf("response = %+v, want a denial with one cause", resp.Result)
+	}
+	msg := resp.Result.Details.Causes[0].Message
+	if !strings.Contains(msg, "the gateway root with this endpoint alone fails krakend check: default/new: "+
+		host.Message) {
+		t.Errorf("cause = %q, want the line quoted as the endpoint's", msg)
+	}
+	if strings.Contains(msg, "not shown") || strings.Contains(msg, "gateway: ") {
+		t.Errorf("cause = %q, want no withheld count and no gateway label for the endpoint's own line", msg)
+	}
+	if got := strings.Join(chk.calls, ","); got != "gateway+candidate,gateway,isolated,isolated" {
+		t.Errorf("checks = %s, want the gateway root checked alone once", got)
+	}
+}
+
+// Another namespace's finding stays counted beside the requester's own
+// unnamed line, and the count leaves out the line the denial quotes.
+func TestEndpointAdmission_DenialCountsOnlyWhatItDoesNotQuote(t *testing.T) {
+	host := configcheck.Finding{Index: -1, Message: "host http://svc:8080/api not valid: invalid host"}
+	theirs := configcheck.Finding{Endpoint: types.NamespacedName{Namespace: "tenant-a", Name: "orders"},
+		Index: 0, Message: "'SECRET-EVERY' does not match pattern"}
+	after := configcheck.Verdict{Stage: renderer.StageCheck, Findings: []configcheck.Finding{theirs, host}}
+	own := configcheck.Verdict{Stage: renderer.StageCheck, Findings: []configcheck.Finding{host}}
+	chk := &scriptedChecker{verdicts: []configcheck.Verdict{after, {OK: true}, own, {OK: true}}}
+	v := &EndpointValidator{Client: fakeClient(testGateway()), Checker: chk}
+
+	resp := review(t, v, "alice", testEndpoint("new", "/a"), nil)
+
+	text := responseText(resp)
+	if !strings.Contains(text, "1 findings that name no endpoint of namespace default are not shown") ||
+		!strings.Contains(text, "default/new: "+host.Message) {
+		t.Errorf("response = %s, want the other namespace's finding counted once and the own line quoted", text)
+	}
+	if strings.Contains(text, "SECRET") {
+		t.Errorf("response = %s quotes another namespace's value", text)
+	}
+}
+
+// On a gateway that already fails, a create denied on the isolated check
+// quotes its own unnamed line, without the line the gateway fails on: the
+// root-alone check is the create's isolated baseline, so it runs once.
+func TestEndpointAdmission_IsolatedDenialQuotesAnOwnLineThatNamesNoEndpoint(t *testing.T) {
+	theirs := configcheck.Finding{Index: -1, Message: "host http://u:TENANT-C-SECRET@h1 not valid: invalid host"}
+	mine := configcheck.Finding{Index: -1, Message: "host http://svc:8080/api not valid: invalid host"}
+	broken := configcheck.Verdict{Stage: renderer.StageCheck, Findings: []configcheck.Finding{theirs}}
+	isoAfter := configcheck.Verdict{Stage: renderer.StageCheck, Findings: []configcheck.Finding{mine}}
+	chk := &scriptedChecker{verdicts: []configcheck.Verdict{broken, broken, isoAfter, {OK: true}}}
+	v := &EndpointValidator{Client: fakeClient(testGateway()), Checker: chk}
+
+	resp := review(t, v, "alice", testEndpoint("new", "/a"), nil)
+
+	text := responseText(resp)
+	if resp.Allowed || !strings.Contains(text, "default/new: "+mine.Message) || strings.Contains(text, "not shown") {
+		t.Errorf("response = %s, want a denial quoting the own line with nothing counted", text)
+	}
+	if strings.Contains(text, "TENANT-C-SECRET") {
+		t.Errorf("response = %s quotes the line the gateway already fails on", text)
+	}
+	if got := strings.Join(chk.calls, ","); got != "gateway+candidate,gateway,isolated,isolated" {
+		t.Errorf("checks = %s, want the isolated baseline reused as the root-alone check", got)
 	}
 }
 
@@ -752,7 +835,7 @@ func TestEndpointAdmission_AlreadyFailingWarningWithholdsForeignFindings(t *test
 	}
 	w := resp.Warnings[0]
 	if !strings.Contains(w, "default/mine spec.endpoints[0]: same namespace") ||
-		!strings.Contains(w, "2 findings about the gateway root or endpoints in other namespaces are not shown") {
+		!strings.Contains(w, "2 findings that name no endpoint of namespace default are not shown") {
 		t.Errorf("warning = %q, want the same-namespace finding quoted and two others counted", w)
 	}
 	if strings.Contains(w, "SECRET") {
