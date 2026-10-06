@@ -1913,9 +1913,10 @@ its own, before anything references it, unless the stored policy already failed
 on its own too (then its gateways decide). A change to a policy that endpoints reference is rendered in each
 gateway of those endpoints and refused if it breaks one that passed
 (`breaks gateway ns/name: ...`); a gateway that already fails for another reason
-gets a warning instead, which counts rather than quotes the `krakend check`
-findings about the gateway root or another namespace's endpoints (see *Endpoint
-writes are checked against the whole gateway*). The denial lists at most 20 gateways and the warnings
+gets a warning instead. Both the denial and the warning count rather than quote
+the `krakend check` findings about the gateway root or an endpoint outside the
+policy's namespace (see *Endpoint writes are checked against the whole
+gateway*), since the policy's writer may not read them. The denial lists at most 20 gateways and the warnings
 name at most 5, each counting the rest, in at most 4 KiB together (past that
 the API server would cut every warning to 256 characters).
 A new or changed `raw` with Enterprise-only namespaces, for example `auth/gcp`, or
