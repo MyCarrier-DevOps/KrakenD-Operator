@@ -1403,7 +1403,10 @@ The gateway controller does not gather and validate on its own: it uses the same
 > in its method's tree, so no other route of that method may start with
 > `/p/`. For an EE render the validator therefore does two things:
 > 1. It applies that rule in Go. A conflict is reported as two
->    `/endpoints/<i>` findings, one per endpoint.
+>    `/endpoints/<i>` findings, one per endpoint. Like the route check
+>    below, it stops after 21 conflicts with a notice line, so nested
+>    wildcards over many routes cannot grow the findings or the work
+>    without bound.
 > 2. It checks, with the CE binary, a copy in which each wildcard's trailing
 >    `*` is rewritten to the path parameter `{Wildcard}`. This only models the
 >    route: EE has no such parameter, so a backend `url_pattern` that
