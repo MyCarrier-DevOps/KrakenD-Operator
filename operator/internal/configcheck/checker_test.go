@@ -31,6 +31,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -215,6 +216,33 @@ func TestCheckGateway_RouteRefusalsNameTheEndpointsOfEachClash(t *testing.T) {
 		!reflect.DeepEqual(verdict.Refusals[0].Endpoints, []types.NamespacedName{b, a}) {
 		t.Errorf("stage = %d, refusals = %+v, want the route stage and one refusal naming ns/b, then ns/a",
 			verdict.Stage, verdict.Refusals)
+	}
+}
+
+func TestSameConfig(t *testing.T) {
+	tests := []struct {
+		name string
+		edit func(gw *v1alpha1.KrakenDGateway)
+		want bool
+	}{
+		{"image, version and replicas do not reach the config", func(gw *v1alpha1.KrakenDGateway) {
+			gw.Spec.Image = "registry/krakend:other"
+			gw.Spec.Replicas = ptr.To[int32](5)
+		}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newChecker(&fakeValidator{}, endpoint("a", "/a"))
+			old := gateway(v1alpha1.EditionCE)
+			gw := old.DeepCopy()
+			tt.edit(gw)
+
+			got, err := c.SameConfig(context.Background(), old, gw)
+
+			if err != nil || got != tt.want {
+				t.Errorf("SameConfig = %v, %v, want %v", got, err, tt.want)
+			}
+		})
 	}
 }
 

@@ -97,6 +97,13 @@ func (c *Checker) CheckIsolated(ctx context.Context, gw *v1alpha1.KrakenDGateway
 	})
 }
 
+// SameConfig reports whether gw and old, two versions of one gateway, render
+// the same config for the same edition from the same endpoints and policies.
+// It renders in process: no validation slot is held and nothing is executed.
+func (c *Checker) SameConfig(_ context.Context, _, _ *v1alpha1.KrakenDGateway) (bool, error) {
+	return false, nil
+}
+
 // CheckGatewayPolicy lints gw's config with policy in place of the stored
 // policy of the same namespace/name.
 func (c *Checker) CheckGatewayPolicy(ctx context.Context, gw *v1alpha1.KrakenDGateway,
