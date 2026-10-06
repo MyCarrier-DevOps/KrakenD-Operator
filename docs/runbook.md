@@ -586,13 +586,20 @@ output param`, or a wildcard conflict with a route of another endpoint).
 config failed validation although it passed before the change. The cause is on
 the offending entry; a finding about another endpoint in your namespace is on
 `spec.endpoints` and names it (`team-a/orders spec.endpoints[0]: ...`).
-`krakend check` prints the values it refuses, so its findings about the gateway
-root or an endpoint in another namespace are only counted there (`also fails
-krakend check on N findings about the gateway root or endpoints in other
-namespaces, which are not shown`), followed by what this change alone fails.
-Route and wildcard refusals are quoted whoever they name. The warning `already
-fails validation` counts those findings the same way; ask the gateway's owner,
-who can read `status.conditions` (`ConfigValid`), for the withheld text.
+`krakend check` prints the values it refuses, so a finding of the whole-gateway
+check that names no endpoint of your namespace is only counted there (`N
+findings that name no endpoint of namespace <ns> are not shown`), unless the
+root-alone check shows it as your endpoint's. The denial then adds what the
+gateway root plus your endpoint alone fails (`the gateway root with this
+endpoint alone fails krakend check: ...`). When the root passes on its own,
+that includes your endpoint's lines that krakend ties to no entry, such as an
+invalid backend host (`<ns>/<name>: ERROR parsing the configuration file: ...
+host ... not valid`), which are quoted as yours and not counted. A line that
+fails only in combination with a gateway-root setting is quoted too, and can
+reveal that setting. Route and wildcard refusals are quoted whoever they name.
+The warning `already fails validation` counts withheld findings the same way.
+Ask the gateway's owner, who can read `status.conditions` (`ConfigValid`), for
+the text the warning withholds.
 
 **Resolution:** Fix the entry the cause names. If the denial blames another
 endpoint, fix or remove that endpoint's clashing route; your change is only the
@@ -624,10 +631,10 @@ repeats, check the operator pod's CPU and memory.
 breaks gateway <ns>/<name>: ...`.
 
 **Cause:** The policy, rendered in that gateway, turns a passing config into a
-failing one. `krakend check` prints the values it refuses, so its findings about
-the gateway root or an endpoint outside the policy's namespace are only counted
-(`N findings about the gateway root or endpoints in other namespaces are not
-shown`); findings about endpoints in the policy's namespace, and route or
+failing one. `krakend check` prints the values it refuses, so its findings that
+name no endpoint of the policy's namespace are only counted (`N findings that
+name no endpoint of namespace <ns> are not shown`); findings about endpoints in the policy's namespace,
+and route or
 wildcard refusals, are quoted.
 
 **Resolution:** Fix the policy for the findings shown. The withheld ones are not
