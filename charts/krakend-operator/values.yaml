@@ -78,6 +78,11 @@ resources:
     cpu: 10m
     memory: 128Mi
 
+# A PodDisruptionBudget allowing one voluntary disruption at a time.
+# Rendered only when replicaCount is greater than 1.
+podDisruptionBudget:
+  enabled: true
+
 nodeSelector: {}
 
 tolerations: []
