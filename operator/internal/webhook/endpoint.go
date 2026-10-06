@@ -221,7 +221,7 @@ func (v *EndpointValidator) checkRender(
 		func(verdict configcheck.Verdict) error { return renderDenial(ctx, ep, verdict, isolated) },
 		func(before configcheck.Verdict) string {
 			return fmt.Sprintf("gateway %s/%s already fails validation without this change: %s",
-				gw.Namespace, gw.Name, before.Summary(warningLimit))
+				gw.Namespace, gw.Name, shownSummary(before, ep.Namespace, warningLimit))
 		})
 }
 

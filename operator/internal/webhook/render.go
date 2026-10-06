@@ -18,6 +18,7 @@ package webhook
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 
@@ -72,6 +73,21 @@ func withholdForeign(v configcheck.Verdict, ns string) (shown []configcheck.Find
 		shown = append(shown, f)
 	}
 	return shown, withheld
+}
+
+// shownSummary is v's summary, cut to limit, over the findings a writer in
+// namespace ns may be shown, followed by a count of those withheld.
+func shownSummary(v configcheck.Verdict, ns string, limit int) string {
+	shown, withheld := withholdForeign(v, ns)
+	summary := configcheck.Verdict{Findings: shown}.Summary(limit)
+	if withheld == 0 {
+		return summary
+	}
+	note := fmt.Sprintf("%d findings about the gateway root or endpoints in other namespaces are not shown", withheld)
+	if summary == "" {
+		return note
+	}
+	return summary + "; " + note
 }
 
 // onceCheck runs check at most once and returns its first result to every
