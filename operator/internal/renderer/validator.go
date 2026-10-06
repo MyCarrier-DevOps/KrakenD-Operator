@@ -110,7 +110,7 @@ func (v *KrakenDValidator) validate(
 		return fmt.Errorf("preparing validation copy: %w", err)
 	}
 	if len(findings) > 0 {
-		return &ValidationError{Output: strings.Join(findings, "\n"), Err: errEEWildcardRule}
+		return &ValidationError{Output: strings.Join(findings, "\n"), Err: errEEWildcardRule, Stage: StageEEWildcard}
 	}
 	refusals, capped, err := routeRefusals(ctx, doc)
 	if err != nil {
