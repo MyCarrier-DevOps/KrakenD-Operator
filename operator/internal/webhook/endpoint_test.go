@@ -733,6 +733,33 @@ func TestEndpointAdmission_DenialDoesNotQuoteTheGatewayRootFromTheIsolatedCheck(
 	}
 }
 
+// The warning that the gateway already fails is read by a writer who may not
+// read the gateway or another namespace's endpoints, so it follows the denial's
+// rule: it quotes the requester's own namespace and counts the rest.
+func TestEndpointAdmission_AlreadyFailingWarningWithholdsForeignFindings(t *testing.T) {
+	before := configcheck.Verdict{Stage: renderer.StageCheck, Findings: []configcheck.Finding{
+		{Index: -1, Message: "host http://u:SECRET-PASS@h1 not valid"},
+		{Endpoint: types.NamespacedName{Namespace: "tenant-a", Name: "orders"}, Index: 0, Message: "SECRET-EVERY"},
+		{Endpoint: types.NamespacedName{Namespace: "default", Name: "mine"}, Index: 0, Message: "same namespace"},
+	}}
+	chk := &scriptedChecker{verdicts: []configcheck.Verdict{before, before, {OK: true}}}
+	v := &EndpointValidator{Client: fakeClient(testGateway()), Checker: chk}
+
+	resp := review(t, v, "alice", testEndpoint("new", "/a"), nil)
+
+	if !resp.Allowed || len(resp.Warnings) != 1 {
+		t.Fatalf("response = %+v, warnings %q, want an admission with one warning", resp.Result, resp.Warnings)
+	}
+	w := resp.Warnings[0]
+	if !strings.Contains(w, "default/mine spec.endpoints[0]: same namespace") ||
+		!strings.Contains(w, "2 findings about the gateway root or endpoints in other namespaces are not shown") {
+		t.Errorf("warning = %q, want the same-namespace finding quoted and two others counted", w)
+	}
+	if strings.Contains(w, "SECRET") {
+		t.Errorf("warning = %q quotes a value the requester may not read", w)
+	}
+}
+
 func TestEndpointAdmission_NoRenderCheckWithoutAGatewayOrAChange(t *testing.T) {
 	old := testEndpoint("e", "/a")
 	labeled := old.DeepCopy()
