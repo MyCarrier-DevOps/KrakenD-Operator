@@ -20,6 +20,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"reflect"
+	"slices"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/util/hash"
@@ -458,21 +461,32 @@ func appendDocumentationConfig(ec map[string]any, doc *v1alpha1.DocumentationCon
 
 // appendEndpointComponentSchemas collects component schemas from all endpoint
 // CRs and merges them into the root documentation/openapi.components_schemas.
-// First-seen wins for duplicate schema names across different CRs.
+// First-seen wins for duplicate schema names across different CRs; each
+// later endpoint that defines a seen name differently is returned as a
+// SchemaConflict, in endpoint order and then by schema name.
 func appendEndpointComponentSchemas(ec map[string]any, endpoints []v1alpha1.KrakenDEndpoint) []SchemaConflict {
 	schemas := make(map[string]any)
+	from := make(map[string]types.NamespacedName)
+	var conflicts []SchemaConflict
 	for i := range endpoints {
-		for name, raw := range endpoints[i].Spec.ComponentSchemas {
-			if _, exists := schemas[name]; !exists {
-				var schema any
-				if err := json.Unmarshal(raw.Raw, &schema); err == nil {
-					schemas[name] = schema
-				}
+		source := types.NamespacedName{Namespace: endpoints[i].Namespace, Name: endpoints[i].Name}
+		for _, name := range slices.Sorted(maps.Keys(endpoints[i].Spec.ComponentSchemas)) {
+			var schema any
+			if err := json.Unmarshal(endpoints[i].Spec.ComponentSchemas[name].Raw, &schema); err != nil {
+				continue
+			}
+			seen, exists := schemas[name]
+			switch {
+			case !exists:
+				schemas[name] = schema
+				from[name] = source
+			case !reflect.DeepEqual(seen, schema):
+				conflicts = append(conflicts, SchemaConflict{Endpoint: source, Schema: name, Winner: from[name]})
 			}
 		}
 	}
 	if len(schemas) == 0 {
-		return nil
+		return conflicts
 	}
 	docConfig, ok := ec["documentation/openapi"].(map[string]any)
 	if !ok {
@@ -480,7 +494,7 @@ func appendEndpointComponentSchemas(ec map[string]any, endpoints []v1alpha1.Krak
 	}
 	docConfig["components_schemas"] = schemas
 	ec["documentation/openapi"] = docConfig
-	return nil
+	return conflicts
 }
 
 // RedisPoolName names the Redis connection pool (or cluster) rendered from
