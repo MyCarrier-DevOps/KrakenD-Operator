@@ -833,6 +833,10 @@ Each controller exposes a `SetupWithManager` method that configures watches:
 
 ```go
 func (r *KrakenDGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
+    if err := fieldindex.EnsureEndpointIndexes(mgr); err != nil {
+        return err
+    }
+
     b := ctrl.NewControllerManagedBy(mgr).
         For(&v1alpha1.KrakenDGateway{}).
         Owns(&appsv1.Deployment{}).
@@ -861,7 +865,15 @@ func (r *KrakenDGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
             &corev1.ConfigMap{},
             handler.EnqueueRequestsFromMapFunc(r.pluginConfigMapToGateway),
             builder.OnlyMetadata,
-        )
+        ).
+        // The backoff is capped at the license recheck interval (5 minutes), and
+        // each reconcile holds one checker slot, so the workers bound the slots
+        // the gateway controller takes.
+        WithOptions(crcontroller.Options{
+            RateLimiter:             newGatewayRateLimiter(),
+            MaxConcurrentReconciles: r.MaxConcurrentReconciles,
+        }).
+        Named("krakendgateway")
 
     // Dragonfly, ExternalSecret and VirtualService are owned as
     // unstructured objects, and only when their CRDs exist at startup.
@@ -874,7 +886,7 @@ func (r *KrakenDGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
         u.SetGroupVersionKind(gvk)
         b = b.Owns(u)
     }
-    return b.Named("krakendgateway").Complete(r)
+    return b.Complete(r)
 }
 ```
 
@@ -909,13 +921,14 @@ graph TB
     end
 
     GC --> R
-    GC --> V
     GC --> RB
     GC --> CL
     GC --> REC
     GC --> LP
     GC --> AR
     GC --> CK
+    CK --> R
+    CK --> V
     ACC --> CK
     ACC --> FE
     ACC --> CUE_E
@@ -987,13 +1000,13 @@ flowchart TD
     J1 -->|No| J[Checker.CheckRendered as the render's edition,<br/>holding one of the pod's 3 slots:<br/>route check, then krakend check -t -n -c on the copy]
     J --> K{Verdict?}
     K -->|Rejected| L
-    K -->|Unavailable| L2[Set ConfigValid=Unknown<br/>reason ValidatorUnavailable,<br/>Ready Unknown, keep applied config,<br/>one Warning event on entering;<br/>the error is returned after the infrastructure stage]
+    K -->|Unavailable| L2[Set ConfigValid=Unknown<br/>reason ValidatorUnavailable,<br/>Ready Unknown, keep applied config,<br/>one Warning event on entering,<br/>the error is returned after the infrastructure stage]
     K -->|Valid| M[Create the immutable ConfigMap<br/>gateway-config-hash, write status.configChecksum<br/>and configEdition, ConfigValid=True,<br/>Progressing=True reason ConfigDeployed]
     H --> N
     L --> N
     L2 --> N
     M --> N[Report CEFallbackApplied. Record Accepted on each<br/>endpoint of an applied render, or<br/>GatewayConfigRejected on the endpoints a rejection names]
-    N --> I[Infrastructure stage on the applied config:<br/>SA, Service, PDB, Deployment unless held, config GC,<br/>HPA, post-restart Job, Dragonfly CR,<br/>ExternalSecret, VirtualService;<br/>children of disabled features are deleted]
+    N --> I[Infrastructure stage on the applied config:<br/>SA, Service, PDB, Deployment unless held, config GC,<br/>HPA, post-restart Job, Dragonfly CR,<br/>ExternalSecret, VirtualService.<br/>Children of disabled features are deleted]
     I --> R[Inspect the Deployment status, then derive Ready and<br/>the phase from the conditions via gatewayReadinessFor<br/>and update the gateway status only if it changed]
     R --> S[Return the config, acceptance and infrastructure<br/>errors if any, otherwise RequeueAfter<br/>the license's next stage boundary]
 ```
@@ -1211,6 +1224,9 @@ The endpoint controller does NOT render config or manage Kubernetes resources. C
 
 ```go
 func (r *KrakenDEndpointReconciler) SetupWithManager(mgr ctrl.Manager) error {
+    if err := fieldindex.EnsureEndpointIndexes(mgr); err != nil {
+        return err
+    }
     return ctrl.NewControllerManagedBy(mgr).
         For(&v1alpha1.KrakenDEndpoint{}, builder.WithPredicates(endpointPredicate())).
         Watches(
@@ -1460,12 +1476,12 @@ A successful reconcile returns `ctrl.Result{RequeueAfter: interval}`: `spec.peri
 
 ```go
 func (r *KrakenDAutoConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
+    if err := fieldindex.EnsureEndpointIndexes(mgr); err != nil {
+        return err
+    }
     return ctrl.NewControllerManagedBy(mgr).
-        For(&v1alpha1.KrakenDAutoConfig{}, builder.WithPredicates(predicate.Or(
-            predicate.GenerationChangedPredicate{},
-            predicate.LabelChangedPredicate{},
-            predicate.AnnotationChangedPredicate{},
-        ))).
+        // autoConfigPredicate: generation, label or annotation changes
+        For(&v1alpha1.KrakenDAutoConfig{}, builder.WithPredicates(autoConfigPredicate())).
         Owns(&v1alpha1.KrakenDEndpoint{}, builder.WithPredicates(ownedEndpointPredicate())).
         Watches(
             &corev1.ConfigMap{},
@@ -1481,7 +1497,7 @@ func (r *KrakenDAutoConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 ```
 
-The `For` predicate ignores status-only updates, so the reconciler's own status writes never re-enqueue the AutoConfig. Generation covers spec edits, labels are included because application deploys relabel the AutoConfig, and annotations let `kubectl annotate` force an immediate reconcile. The `Owns(&v1alpha1.KrakenDEndpoint{})` watch (`ownedEndpointPredicate`) re-enqueues the owning AutoConfig when a generated endpoint is deleted, its spec changes (a generation bump), its labels change, or its readiness changes (`endpointReadinessKey`: the observed generation and the `Ready` status and reason, not the message) — other status updates are ignored — so a hand-edited, relabelled or deleted endpoint is restored and `EndpointsReady` stays current (a failed sync refreshes it too, from the endpoints the AutoConfig controls then). `Owns` matches the controller owner reference, so endpoints the AutoConfig does not control are not watched: a label-matched orphan is adopted on the next reconcile. The `Watches(&corev1.ConfigMap{})` watch maps a changed ConfigMap to every AutoConfig in its namespace that depends on it: the default `krakend-cue-definitions` ConfigMap, a custom CUE ConfigMap referenced by `cue.definitionsConfigMapRef`, or an OpenAPI spec ConfigMap referenced by `openapi.configMapRef`. The watch is metadata-only, so `configMapToAutoConfigs` reads only the ConfigMap's name and namespace (`TestAutoConfigMapper_ConfigMapToAutoConfigs_MetadataOnly`). The AutoConfig controller reads its Secrets and ConfigMaps live: each reconcile reads the namespace's `krakend-cue-definitions` ConfigMap once, in full (falling back to the embedded definitions when it is absent), and the `cue.definitionsConfigMapRef` ConfigMap the same way when it is set, and their resource versions feed the sync checksum; the spec and auth sources are read in full when it fetches them.
+The `For` predicate ignores status-only updates, so the reconciler's own status writes never re-enqueue the AutoConfig. Generation covers spec edits, labels are included because application deploys relabel the AutoConfig, and annotations let `kubectl annotate` force an immediate reconcile. The `Owns(&v1alpha1.KrakenDEndpoint{})` watch (`ownedEndpointPredicate`) re-enqueues the owning AutoConfig when a generated endpoint is deleted, its spec changes (a generation bump), its labels change, or its readiness changes (`endpointReadinessKey`: the observed generation and the `Ready` status and reason, not the message) — other status updates are ignored — so a hand-edited, relabelled or deleted endpoint is restored and `EndpointsReady` stays current (a failed sync refreshes it too, from the endpoints the AutoConfig controls then). `Owns` matches the controller owner reference, so endpoints the AutoConfig does not control are not watched: a label-matched orphan is adopted on the next reconcile. The `Watches(&corev1.ConfigMap{})` watch maps a changed ConfigMap to every AutoConfig in its namespace that depends on it: the default `krakend-cue-definitions` ConfigMap, a custom CUE ConfigMap referenced by `cue.definitionsConfigMapRef`, or an OpenAPI spec ConfigMap referenced by `openapi.configMapRef`. The watch is metadata-only, so `configMapToAutoConfigs` reads only the ConfigMap's name and namespace (`TestAutoConfigMapper_ConfigMapToAutoConfigs_MetadataOnly`). The AutoConfig controller reads its Secrets and ConfigMaps live: each reconcile reads the namespace's `krakend-cue-definitions` ConfigMap once, in full (falling back to the embedded definitions when it is absent), and the `cue.definitionsConfigMapRef` ConfigMap once, in full, when it is set (a missing one fails the sync with `CUEEvaluationFailed`, with no fallback), and their resource versions feed the sync checksum; the spec and auth sources are read in full when it fetches them.
 
 ---
 
@@ -1514,7 +1530,7 @@ The license is mounted with `subPath`, so a renewed Secret never reaches running
 flowchart TD
     A[Gateway reconcile, edition=EE] --> C[Read license Secret]
     C --> D{Secret readable<br/>and parseable?}
-    D -->|No| E[Set LicenseSecretUnavailable=True,<br/>emit LicenseSecretMissing once;<br/>LicenseValid=Unknown unless the last known<br/>expiry is in the safety buffer or past,<br/>then apply that stage;<br/>otherwise keep the last fallback decision;<br/>keep the deployed license checksum;<br/>requeue at the next boundary, at most 5 minutes]
+    D -->|No| E[Set LicenseSecretUnavailable=True,<br/>emit LicenseSecretMissing once,<br/>LicenseValid=Unknown unless the last known<br/>expiry is in the safety buffer or past,<br/>then apply that stage;<br/>otherwise keep the last fallback decision;<br/>keep the deployed license checksum;<br/>requeue at the next boundary, at most 5 minutes]
     D -->|Yes| F[Set licenseExpiry and the<br/>krakend_operator_license_expiry_seconds metric]
     F --> G{Stage}
     G -->|Valid| M[LicenseValid=True LicenseOK]
@@ -1525,7 +1541,7 @@ flowchart TD
     G -->|PreExpiry or Expired| H[LicenseValid=False and LicenseExpired=True]
     H --> N{fallbackToCE?}
     N -->|Yes| O[LicenseDegraded=True LicenseFallbackCE,<br/>emit LicenseFallbackCE,<br/>render CE]
-    N -->|No| P[emit LicenseExpiredNoFallback;<br/>the gateway derives Ready=False and phase=Error]
+    N -->|No| P[emit LicenseExpiredNoFallback,<br/>the gateway derives Ready=False and phase=Error]
 ```
 
 ### Events on Transitions
@@ -2991,6 +3007,9 @@ func runTests(m *testing.M) int {
     k3sContainer, err = k3s.Run(ctx, "rancher/k3s:v1.32.13-k3s1", testcontainers.WithCmdArgs(
         "--disable=traefik",
         "--disable=metrics-server",
+        // Clusters that enable this plugin require delete on any object whose
+        // ownerReferences an update changes, so the suite proves the trimmed role.
+        "--kube-apiserver-arg=enable-admission-plugins=OwnerReferencesPermissionEnforcement",
         "--kubelet-arg=feature-gates=KubeletInUserNamespace=true",
         "--kubelet-arg=cgroups-per-qos=false",
         "--kubelet-arg=enforce-node-allocatable=",
