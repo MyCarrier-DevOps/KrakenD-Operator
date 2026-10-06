@@ -193,6 +193,9 @@ func runTests(m *testing.M) int {
 	}
 	mgr, err := ctrl.NewManager(mgrCfg, ctrl.Options{
 		Scheme: scheme,
+		Client: client.Options{
+			Cache: &client.CacheOptions{DisableFor: controller.UncachedObjects()},
+		},
 		NewCache: func(config *rest.Config, opts cache.Options) (cache.Cache, error) {
 			c, err := cache.New(config, opts)
 			if err != nil {
@@ -289,8 +292,8 @@ func runTests(m *testing.M) int {
 		&v1alpha1.KrakenDEndpoint{},
 		&v1alpha1.KrakenDBackendPolicy{},
 		&v1alpha1.KrakenDAutoConfig{},
-		&corev1.ConfigMap{},
-		&corev1.Secret{},
+		metadataOnly("ConfigMap"),
+		metadataOnly("Secret"),
 		&appsv1.Deployment{},
 		&corev1.Service{},
 		&corev1.ServiceAccount{},
