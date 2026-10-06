@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -294,7 +295,7 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}, warnings); err != nil {
 		return statusWriteFailure(ctx, err)
 	}
-	r.logHeldCauses(ctx, &ac, outcome.rejected)
+	r.logHeldCauses(ctx, &ac, failedOps, outcome.rejected)
 
 	log.V(1).Info("autoconfig reconciled",
 		"phase", ac.Status.Phase,
@@ -1212,6 +1213,32 @@ type heldLog struct {
 	digest string
 }
 
+// heldCause is the full cause of one held operation, for the log.
+type heldCause struct {
+	// operation names the operation: an endpoint, or "METHOD path (operationId)"
+	// when it has none.
+	operation, cause string
+}
+
+// heldCauses lists the full cause of every operation held this pass, sorted:
+// the ones that failed CUE evaluation, then the endpoints the config check or
+// the API server rejected.
+func heldCauses(failedOps []autoconfig.OperationIssue, rejected map[string]rejection) []heldCause {
+	var held []heldCause
+	for _, op := range failedOps {
+		held = append(held, heldCause{
+			operation: op.Method + " " + op.Path + " (" + op.OperationID + ")", cause: op.Message,
+		})
+	}
+	for name, rej := range rejected {
+		held = append(held, heldCause{operation: name, cause: rej.cause.Error()})
+	}
+	slices.SortFunc(held, func(a, b heldCause) int {
+		return cmp.Or(strings.Compare(a.operation, b.operation), strings.Compare(a.cause, b.cause))
+	})
+	return held
+}
+
 // logHeldCauses logs the full cause of every operation ac holds. The status
 // keeps a cut message, so the log is where the whole text lives. It logs when
 // the causes differ from what this process last logged for ac, so a restart
@@ -1219,24 +1246,25 @@ type heldLog struct {
 func (r *KrakenDAutoConfigReconciler) logHeldCauses(
 	ctx context.Context,
 	ac *v1alpha1.KrakenDAutoConfig,
+	failedOps []autoconfig.OperationIssue,
 	rejected map[string]rejection,
 ) {
-	var causes []string
-	for _, name := range slices.Sorted(maps.Keys(rejected)) {
-		causes = append(causes, name+": "+rejected[name].cause.Error())
-	}
-	if len(causes) == 0 {
+	held := heldCauses(failedOps, rejected)
+	if len(held) == 0 {
 		r.heldLogged.Delete(ac.UID)
 		return
 	}
-	sum := sha256.Sum256([]byte(strings.Join(causes, "\x00")))
-	digest := fmt.Sprintf("%x", sum)
+	hash := sha256.New()
+	for _, h := range held {
+		fmt.Fprintf(hash, "%s\x00%s\x00", h.operation, h.cause)
+	}
+	digest := fmt.Sprintf("%x", hash.Sum(nil))
 	if prev, ok := r.heldLogged.Load(ac.UID); ok && prev.(heldLog).digest == digest {
 		return
 	}
 	r.heldLogged.Store(ac.UID, heldLog{owner: client.ObjectKeyFromObject(ac), digest: digest})
 	log := logf.FromContext(ctx)
-	for _, name := range slices.Sorted(maps.Keys(rejected)) {
-		log.Info("endpoint rejected; holding it", "endpoint", name, "error", rejected[name].cause.Error())
+	for _, h := range held {
+		log.Info("operation held", "operation", h.operation, "error", h.cause)
 	}
 }
