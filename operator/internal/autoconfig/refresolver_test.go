@@ -628,6 +628,9 @@ func TestResolveExternalRefs_ExamplesAndNameKeyedMaps(t *testing.T) {
 		"https://schemas.example.com/x.json": []byte(`{"X":{"type":"string"}}`),
 		"https://api.example.com/ex.json":    []byte(`{"E":{"value":1}}`),
 		"https://api.example.com/exv.json":   []byte(`{"E":{"value":{"$ref":"data.json"}}}`),
+		"https://api.example.com/a.json":     []byte(`{"$ref":"b.json#/E"}`),
+		"https://api.example.com/b.json":     []byte(`{"E":{"value":{"$ref":"data.json"}}}`),
+		"https://api.example.com/a2.json":    []byte(`{"$ref":"gone.json#/E"}`),
 		"https://api.example.com/payload.json": []byte(
 			`{"type":"object","properties":{"a":{"$ref":"common.json#/A"}}}`),
 	}
@@ -681,6 +684,19 @@ func TestResolveExternalRefs_ExamplesAndNameKeyedMaps(t *testing.T) {
 			wantOut:  `{"$ref":"#/components/examples/payload"}`,
 			wantAlso: `"payload":{"properties":{"a":{"$ref":"common.json#/A"}},"type":"object"}`,
 			wantHits: 1,
+		},
+		{
+			name:     "a reference chain from an examples entry is followed without fetching its data",
+			spec:     fmt.Sprintf(op, `{"examples":{"one":{"$ref":"a.json"}}}`),
+			wantOut:  `{"$ref":"#/components/examples/a"}`,
+			wantAlso: `"a":{"$ref":"#/components/examples/b_E"},"b_E":{"value":{"$ref":"data.json"}}`,
+			wantHits: 2,
+		},
+		{
+			name:     "an unreachable link of a reference chain fails closed",
+			spec:     fmt.Sprintf(op, `{"examples":{"one":{"$ref":"a2.json"}}}`),
+			wantErr:  "fetching https://api.example.com/gone.json",
+			wantHits: 2,
 		},
 		{
 			name:     "an unreachable examples entry reference fails closed",

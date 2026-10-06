@@ -231,6 +231,9 @@ func (r *refResolver) walk(node any, base string) {
 // resolveExampleRef resolves entry, an Example Object reference held by an
 // "examples" object, and rewrites it to point into components/examples.
 func (r *refResolver) resolveExampleRef(entry map[string]any, base string) {
+	if r.fatalErr != nil {
+		return
+	}
 	ref, _ := entry["$ref"].(string)
 	r.warnLocalRef(ref, base)
 	if ref == "" || strings.HasPrefix(ref, "#") {
@@ -336,6 +339,10 @@ func (r *refResolver) resolveExternal(ref, base string, role refRole) (string, e
 	// the document they appear in. An Example Object is data and is not walked.
 	if role == schemaRole {
 		r.walk(target, absolute)
+	} else if root, ok := target.(map[string]any); ok {
+		// The one thing followed in an Example Object is a root $ref, a chain
+		// to the object that holds the data. Its siblings are not walked.
+		r.resolveExampleRef(root, absolute)
 	}
 
 	if r.resolved == nil {
