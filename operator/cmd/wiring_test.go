@@ -122,3 +122,15 @@ func TestWireValidation_AutoConfigAndGatewayChecksLeaveAnAdmissionSlot(t *testin
 			"leaving admission none", cap(w.AutoConfig.CheckSlots), gatewayCheckWorkers, held, configCheckSlots)
 	}
 }
+
+// The gateway controller reconciles with as many workers as the checker slots
+// the AutoConfig bound leaves it.
+func TestWireValidation_GatewayWorkersMatchTheSlotsReservedForThem(t *testing.T) {
+	mgr := stubManager{client: fake.NewClientBuilder().Build()}
+
+	w := wireValidation(mgr, renderer.New(renderer.Options{}), nil, "")
+
+	if got := w.Gateway.MaxConcurrentReconciles; got != gatewayCheckWorkers {
+		t.Errorf("gateway MaxConcurrentReconciles = %d, want gatewayCheckWorkers (%d)", got, gatewayCheckWorkers)
+	}
+}

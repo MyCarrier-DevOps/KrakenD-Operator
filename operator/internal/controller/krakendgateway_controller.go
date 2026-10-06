@@ -77,6 +77,9 @@ type KrakenDGatewayReconciler struct {
 	APIReader client.Reader
 	// LicenseParser reads EE license certificates
 	LicenseParser license.LicenseParser
+	// MaxConcurrentReconciles is how many gateways reconcile at once; zero
+	// means one. Each reconcile holds one config checker slot at a time.
+	MaxConcurrentReconciles int
 
 	// rejections remembers each gateway's last rejected validation input,
 	// so an unchanged bad render is not re-validated on every event.
