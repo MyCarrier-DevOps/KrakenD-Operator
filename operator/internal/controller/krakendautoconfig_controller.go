@@ -353,7 +353,10 @@ func (r *KrakenDAutoConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			&corev1.ConfigMap{},
 			handler.EnqueueRequestsFromMapFunc(r.configMapToAutoConfigs),
 		).
-		WithOptions(crcontroller.Options{RateLimiter: newAutoConfigRateLimiter()}).
+		WithOptions(crcontroller.Options{
+			RateLimiter:             newAutoConfigRateLimiter(),
+			MaxConcurrentReconciles: r.MaxConcurrentReconciles,
+		}).
 		Named("krakendautoconfig").
 		Complete(r)
 }
