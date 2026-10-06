@@ -1113,3 +1113,35 @@ func TestRender_EntryConflictsAreSortedByEndpointThenMethod(t *testing.T) {
 		t.Errorf("EntryConflicts[newer] = %+v, want %+v", got, want)
 	}
 }
+
+// schemaEndpoint returns an endpoint in namespace "default" carrying the
+// given component schemas.
+func schemaEndpoint(name string, schemas map[string]string) v1alpha1.KrakenDEndpoint {
+	ep := v1alpha1.KrakenDEndpoint{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"}}
+	ep.Spec.ComponentSchemas = map[string]runtime.RawExtension{}
+	for k, v := range schemas {
+		ep.Spec.ComponentSchemas[k] = runtime.RawExtension{Raw: json.RawMessage(v)}
+	}
+	return ep
+}
+
+func TestAppendEndpointComponentSchemas_ReportsDifferingBodies(t *testing.T) {
+	endpoints := []v1alpha1.KrakenDEndpoint{
+		schemaEndpoint("a", map[string]string{"User": `{"type":"object","description":"a"}`}),
+		schemaEndpoint("c", map[string]string{
+			"User": `{"type":"object","description":"c"}`,
+			"Pet":  `{"type":"object"}`,
+		}),
+	}
+
+	conflicts := appendEndpointComponentSchemas(map[string]any{}, endpoints)
+
+	want := []SchemaConflict{{
+		Endpoint: types.NamespacedName{Namespace: "default", Name: "c"},
+		Schema:   "User",
+		Winner:   types.NamespacedName{Namespace: "default", Name: "a"},
+	}}
+	if !reflect.DeepEqual(conflicts, want) {
+		t.Errorf("conflicts = %+v, want %+v", conflicts, want)
+	}
+}

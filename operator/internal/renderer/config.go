@@ -459,7 +459,7 @@ func appendDocumentationConfig(ec map[string]any, doc *v1alpha1.DocumentationCon
 // appendEndpointComponentSchemas collects component schemas from all endpoint
 // CRs and merges them into the root documentation/openapi.components_schemas.
 // First-seen wins for duplicate schema names across different CRs.
-func appendEndpointComponentSchemas(ec map[string]any, endpoints []v1alpha1.KrakenDEndpoint) {
+func appendEndpointComponentSchemas(ec map[string]any, endpoints []v1alpha1.KrakenDEndpoint) []SchemaConflict {
 	schemas := make(map[string]any)
 	for i := range endpoints {
 		for name, raw := range endpoints[i].Spec.ComponentSchemas {
@@ -472,7 +472,7 @@ func appendEndpointComponentSchemas(ec map[string]any, endpoints []v1alpha1.Krak
 		}
 	}
 	if len(schemas) == 0 {
-		return
+		return nil
 	}
 	docConfig, ok := ec["documentation/openapi"].(map[string]any)
 	if !ok {
@@ -480,6 +480,7 @@ func appendEndpointComponentSchemas(ec map[string]any, endpoints []v1alpha1.Krak
 	}
 	docConfig["components_schemas"] = schemas
 	ec["documentation/openapi"] = docConfig
+	return nil
 }
 
 // RedisPoolName names the Redis connection pool (or cluster) rendered from
