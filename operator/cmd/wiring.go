@@ -29,8 +29,8 @@ import (
 )
 
 // gatewayCheckWorkers is how many gateway checks the gateway controller runs at
-// once: it reconciles with one worker (no MaxConcurrentReconciles is set on
-// its controller) and each reconcile holds one checker slot at a time.
+// once: it reconciles with this many workers (wireValidation sets its
+// MaxConcurrentReconciles) and each reconcile holds one checker slot at a time.
 const gatewayCheckWorkers = 1
 
 // autoConfigCheckSlots is how many checker slots the AutoConfig prechecks may
@@ -65,6 +65,9 @@ func wireValidation(
 			Clock:         clock.RealClock{},
 			APIReader:     mgr.GetAPIReader(),
 			LicenseParser: licenseutil.NewX509LicenseParser(),
+			// Each gateway reconcile holds one checker slot, so the workers
+			// are the slots the AutoConfig bound leaves the gateway.
+			MaxConcurrentReconciles: gatewayCheckWorkers,
 		},
 		AutoConfig: &controller.KrakenDAutoConfigReconciler{
 			Client:       mgr.GetClient(),
