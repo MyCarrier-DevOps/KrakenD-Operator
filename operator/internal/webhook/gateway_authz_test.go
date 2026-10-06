@@ -182,3 +182,57 @@ func TestGatewayAdmission_PostRestartJobReviewFailureIs500(t *testing.T) {
 		t.Errorf("response = %+v, want 500", resp.Result)
 	}
 }
+
+// A post-restart Job that relaxes the operator's default security context is
+// reviewed like one that borrows a ServiceAccount: the requester must be able
+// to create pods. Anything outside the allow-list counts, so a setting the
+// list does not name is reviewed too.
+func TestGatewayAdmission_PostRestartJobSecurityRelaxationNeedsPodCreateRights(t *testing.T) {
+	root := &corev1.PodSecurityContext{RunAsUser: ptr.To[int64](0), RunAsNonRoot: ptr.To(false)}
+	cases := map[string]func(*v1alpha1.PostRestartJobSpec){
+		"privileged root container": func(p *v1alpha1.PostRestartJobSpec) {
+			p.SecurityContext = &corev1.SecurityContext{Privileged: ptr.To(true), AllowPrivilegeEscalation: ptr.To(true)}
+			p.PodSecurityContext = root
+		},
+		"root with SYS_ADMIN added": func(p *v1alpha1.PostRestartJobSpec) {
+			p.SecurityContext = &corev1.SecurityContext{
+				Capabilities: &corev1.Capabilities{Add: []corev1.Capability{"SYS_ADMIN"}}}
+			p.PodSecurityContext = root
+		},
+		"a drop list without ALL": func(p *v1alpha1.PostRestartJobSpec) {
+			p.SecurityContext = &corev1.SecurityContext{
+				Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"NET_RAW"}}}
+		},
+		"AppArmor unconfined field": func(p *v1alpha1.PostRestartJobSpec) {
+			p.SecurityContext = &corev1.SecurityContext{
+				AppArmorProfile: &corev1.AppArmorProfile{Type: corev1.AppArmorProfileTypeUnconfined}}
+		},
+		"AppArmor unconfined annotation": func(p *v1alpha1.PostRestartJobSpec) {
+			p.PodAnnotations = map[string]string{
+				corev1.DeprecatedAppArmorBetaContainerAnnotationKeyPrefix + "post-restart": "unconfined"}
+		},
+		"seccomp unconfined at pod scope": func(p *v1alpha1.PostRestartJobSpec) {
+			p.PodSecurityContext = &corev1.PodSecurityContext{
+				SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeUnconfined}}
+		},
+		"a field outside the allow-list (procMount)": func(p *v1alpha1.PostRestartJobSpec) {
+			p.SecurityContext = &corev1.SecurityContext{ProcMount: ptr.To(corev1.UnmaskedProcMount)}
+		},
+		"sysctls": func(p *v1alpha1.PostRestartJobSpec) {
+			p.PodSecurityContext = &corev1.PodSecurityContext{
+				Sysctls: []corev1.Sysctl{{Name: "net.ipv4.ip_forward", Value: "1"}}}
+		},
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			var reviews []authorizationv1.SubjectAccessReview
+			v := &GatewayValidator{Client: reviewingClient(false, &reviews), Checker: &scriptedChecker{}}
+
+			resp := review(t, v, "alice", gatewayWithJob(mutate), nil)
+
+			if resp.Allowed || resp.Result.Code != http.StatusForbidden || len(reviews) != 1 {
+				t.Errorf("response = %+v after %d reviews, want a 403 denial after one review", resp.Result, len(reviews))
+			}
+		})
+	}
+}
