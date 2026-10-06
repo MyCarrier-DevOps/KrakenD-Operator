@@ -1112,6 +1112,28 @@ func TestPublishConfig_ChecksAnExistingConfigMapWithoutReadingItsPayload(t *test
 	}
 }
 
+func TestPublishConfig_ReplacesAConfigMapWhoseDataDoesNotMatchItsChecksum(t *testing.T) {
+	gw := reconciledGateway()
+	gw.UID = "gw-uid"
+	const config = `{"version":3,"name":"genuine"}`
+	checksum := hash.SHA256Hex([]byte(config))
+	// Same name, controller reference and checksum annotation: only the
+	// payload differs.
+	forged := publishedConfigMap(t, gw, `{"version":3,"name":"forged"}`, checksum)
+	c := fakeClientBuilder().WithObjects(gw, forged).Build()
+	r := newTestGatewayReconciler(c, &mockRenderer{}, &mockValidator{})
+
+	if err := r.publishConfig(context.Background(), gw, []byte(config), checksum); err != nil {
+		t.Fatalf("publishConfig = %v, want the forged ConfigMap replaced", err)
+	}
+
+	var got corev1.ConfigMap
+	getObject(t, c, gw, resources.ConfigMapName(gw, checksum), &got)
+	if got.Data[resources.ConfigKey] != config {
+		t.Errorf("config ConfigMap holds %q, want the config its name addresses", got.Data[resources.ConfigKey])
+	}
+}
+
 func TestCollectConfigMaps_ListsConfigMapsAsMetadataOnly(t *testing.T) {
 	gw := reconciledGateway()
 	gw.UID = "gw-uid"
