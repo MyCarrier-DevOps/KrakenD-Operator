@@ -3723,6 +3723,47 @@ func TestAutoConfigReconcile_CUEFailedCauseIsLoggedInFull(t *testing.T) {
 	}
 }
 
+func TestAutoConfigReconcile_HeldCauseIsLoggedOncePerChange(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	first, second := strings.Repeat("e", 300), strings.Repeat("f", 300)
+	ce.output.Failed = []autoconfig.OperationIssue{{
+		Operation: autoconfig.Operation{Method: "GET", Path: "/a", OperationID: "getA"},
+		Reason:    v1alpha1.ReasonCUEEvaluationFailed,
+		Message:   first,
+	}}
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).Build()
+	ctx, logged := capturedLog()
+	r := newACReconciler(c, f, ce, fi, g)
+	reconcile := func() {
+		t.Helper()
+		if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(ac)}); err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+	}
+
+	reconcile()
+	reconcile()
+	if n := logged(first); n != 1 {
+		t.Fatalf("an identical second pass left the cause logged %d times, want 1", n)
+	}
+	ce.output.Failed[0].Message = second
+	reconcile()
+	if logged(second) != 1 {
+		t.Errorf("a changed cause was logged %d times, want 1", logged(second))
+	}
+	// Recovering forgets the hold, so the same cause failing again is news.
+	failed := ce.output.Failed
+	ce.output.Failed = nil
+	reconcile()
+	ce.output.Failed = failed
+	reconcile()
+	if n := logged(second); n != 2 {
+		t.Errorf("a cause that returned after recovery was logged %d times in total, want 2", n)
+	}
+}
+
 func TestAutoConfigReconcile_FailedOperationsAreListedSortedAndCapped(t *testing.T) {
 	cm := testCUEDefinitionsCM()
 	ac := syncedAutoConfig(cm)
