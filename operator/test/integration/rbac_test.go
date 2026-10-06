@@ -23,14 +23,16 @@ import (
 	"testing"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// TestRBAC_RareWritePathsSucceedAsTheOperator drives a write path no other
+// TestRBAC_RareWritePathsSucceedAsTheOperator drives write paths no other
 // scenario reaches, as the operator's ServiceAccount (see
 // operatorRBACConfig): a verb missing from the generated role leaves the
 // object stuck and the check times out.
@@ -69,6 +71,37 @@ func TestRBAC_RareWritePathsSucceedAsTheOperator(t *testing.T) {
 				return nil
 			}
 			return fmt.Errorf("HPA still present (get err = %v)", err)
+		})
+	})
+
+	t.Run("a ServiceAccount that predates the gateway is adopted", func(t *testing.T) {
+		ns := testNamespace(t)
+		// Taking over an object changes its ownerReferences, which the
+		// OwnerReferencesPermissionEnforcement plugin authorizes as delete.
+		sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: "gw-adopt", Namespace: ns}}
+		if err := k8sClient.Create(ctx, sa); err != nil {
+			t.Fatalf("create ServiceAccount: %v", err)
+		}
+		gw := &v1alpha1.KrakenDGateway{
+			ObjectMeta: metav1.ObjectMeta{Name: sa.Name, Namespace: ns},
+			Spec:       v1alpha1.KrakenDGatewaySpec{Version: "2.9", Edition: v1alpha1.EditionCE},
+		}
+		if err := k8sClient.Create(ctx, gw); err != nil {
+			t.Fatalf("create gateway: %v", err)
+		}
+		key := client.ObjectKeyFromObject(gw)
+		eventually(t, func() error {
+			if err := k8sClient.Get(ctx, key, &appsv1.Deployment{}); err != nil {
+				return fmt.Errorf("deployment: %w", err)
+			}
+			var cur corev1.ServiceAccount
+			if err := k8sClient.Get(ctx, key, &cur); err != nil {
+				return err
+			}
+			if !metav1.IsControlledBy(&cur, gw) {
+				return fmt.Errorf("ServiceAccount is not controlled by the gateway yet: %v", cur.OwnerReferences)
+			}
+			return nil
 		})
 	})
 }
