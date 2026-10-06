@@ -686,8 +686,14 @@ func (r *KrakenDGatewayReconciler) reconcileConfig(
 		// revert to it clears a rejection. Recording the edition adopts a
 		// status written before configEdition existed.
 		gw.Status.ConfigEdition = edition
+		res, err := r.publishApplied(ctx, gw, output)
+		if err != nil {
+			// The ConfigMap does not hold this config, so it is not reported
+			// as the applied one.
+			return res, r.handleConfigPublishFailed(gw, before, err)
+		}
 		setConfigApplied(gw)
-		return r.publishApplied(ctx, gw, output)
+		return res, nil
 	}
 	rejections, err := r.validateAndApply(ctx, gw, before, in, output, edition)
 	if isApplied(gw, output, edition) {
