@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -1973,6 +1974,59 @@ func TestEvaluate_SkippedOperationsCarryTheTransformedPath(t *testing.T) {
 	}
 	if len(out.Skipped) != 1 || out.Skipped[0].Path != "/api/a" {
 		t.Errorf("skipped = %+v, want one entry at /api/a", out.Skipped)
+	}
+}
+
+// Two unsupported-method operations the URL transform puts on one route are
+// each skipped with their own operationId and tags, in the order
+// StripServers leaves them in (paths sorted, so /v1/x before /x). The
+// route-keyed maps hold only one of them, so a skip labelled from them would
+// be filtered, and so reported, as the wrong operation.
+func TestEvaluate_SkippedOperationsOnOneRouteKeepTheirOwnIDAndTags(t *testing.T) {
+	defs, err := EmbeddedCUEDefinitions()
+	if err != nil {
+		t.Fatalf("loading defs: %v", err)
+	}
+	spec, err := StripServers([]byte(`{"paths":{` +
+		`"/x":{"head":{"operationId":"b","tags":["tb"],"responses":{"200":{"description":"OK"}}}},` +
+		`"/v1/x":{"head":{"operationId":"a","tags":["ta"],"responses":{"200":{"description":"OK"}}}}}}`))
+	if err != nil {
+		t.Fatalf("StripServers: %v", err)
+	}
+	out, err := NewCUEEvaluator().Evaluate(context.Background(), CUEInput{
+		SpecData: spec, SpecFormat: v1alpha1.SpecFormatJSON, DefaultDefs: defs, ServiceName: "_spec",
+		URLTransform: &v1alpha1.URLTransformSpec{StripPathPrefix: "/v1"},
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+
+	tagsByID := map[string][]string{}
+	for _, s := range out.Skipped {
+		tagsByID[s.OperationID] = s.Tags
+	}
+	if want := map[string][]string{"a": {"ta"}, "b": {"tb"}}; !reflect.DeepEqual(tagsByID, want) {
+		t.Fatalf("skipped (operationId -> tags) = %v, want %v", tagsByID, want)
+	}
+
+	// kept returns the operationIds of the skips a filter leaves in scope.
+	kept := func(spec v1alpha1.FilterSpec) []string {
+		var ids []string
+		for _, s := range out.Skipped {
+			key := s.Path + ":" + s.Method
+			in := NewFilter().Apply([]v1alpha1.EndpointEntry{{Endpoint: s.Path, Method: s.Method}},
+				map[string][]string{key: s.Tags}, map[string]string{key: s.OperationID}, spec)
+			if len(in) > 0 {
+				ids = append(ids, s.OperationID)
+			}
+		}
+		return ids
+	}
+	if got, want := kept(v1alpha1.FilterSpec{ExcludeOperationIds: []string{"b"}}), []string{"a"}; !slices.Equal(got, want) {
+		t.Errorf("excludeOperationIds [b] keeps %v, want %v", got, want)
+	}
+	if got, want := kept(v1alpha1.FilterSpec{IncludeTags: []string{"tb"}}), []string{"b"}; !slices.Equal(got, want) {
+		t.Errorf("includeTags [tb] keeps %v, want %v", got, want)
 	}
 }
 
