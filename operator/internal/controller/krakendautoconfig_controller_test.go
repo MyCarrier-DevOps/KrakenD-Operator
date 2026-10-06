@@ -3892,6 +3892,39 @@ func TestHeldCauses_NamesAnOperationWithoutAnOperationIDCleanly(t *testing.T) {
 	}
 }
 
+func TestAutoConfigReconcile_RecreatedAutoConfigReplacesTheCauseLogEntry(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	ce.output.Failed = []autoconfig.OperationIssue{failedGetB()}
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	// The AutoConfig is deleted and recreated under the same name before the
+	// controller sees the deletion; the new object has a new UID and holds
+	// nothing.
+	if err := c.Delete(context.Background(), ac); err != nil {
+		t.Fatalf("deleting the autoconfig: %v", err)
+	}
+	recreated := syncedAutoConfig(cm)
+	recreated.UID = "recreated-uid"
+	if err := c.Create(context.Background(), recreated); err != nil {
+		t.Fatalf("recreating the autoconfig: %v", err)
+	}
+	ce.output.Failed = nil
+
+	if _, err := reconcileAC(r, recreated); err != nil {
+		t.Fatalf("reconcile after recreate: %v", err)
+	}
+	n := 0
+	r.heldLogged.Range(func(_, _ any) bool { n++; return true })
+	if n != 0 {
+		t.Errorf("%d cause log entries remain, want none: the recreated autoconfig holds nothing", n)
+	}
+}
+
 func TestAutoConfigReconcile_FailedOperationsAreListedSortedAndCapped(t *testing.T) {
 	cm := testCUEDefinitionsCM()
 	ac := syncedAutoConfig(cm)
