@@ -740,6 +740,8 @@ The operator uses leader election (`krakend-operator-leader` lease). You can run
 
 The active replica reconciles up to 4 KrakenDAutoConfigs at once, because each reconcile fetches its OpenAPI spec over the network and a slow upstream should delay only its own AutoConfig. Set `--autoconfig-max-concurrent-reconciles` (chart value `autoconfig.maxConcurrentReconciles`, default `4`; values below 1 mean 1) to change it. The AutoConfig config checks hold at most 1 of the pod's 3 validation slots, and the gateway controller at most 1, so the controllers never hold more than 2 of the 3 slots, however many workers there are. Concurrent admission requests can take the rest.
 
+The operator caches only metadata for Secrets and ConfigMaps (names, labels and owners, without annotations or `managedFields`), so its memory no longer grows with the number or size of Secrets and ConfigMaps in the cluster. A reconcile reads the content it needs live from the API server: a gateway reads its plugin ConfigMaps and license Secret in full, and an AutoConfig reads its spec and auth sources in full and its CUE definitions as metadata, then in full when they are custom. Each of those reads is an API request, so API server latency shows up in reconcile time.
+
 ### Gateway Replicas
 
 Set `spec.replicas` on the `KrakenDGateway` resource. With `spec.autoscaling` set, the operator creates an HPA targeting the gateway Deployment, starts a new Deployment at `spec.autoscaling.minReplicas` (1 when unset), and never writes the replica count again: the HPA owns it, and `spec.replicas` is ignored (the webhook warns when both are set).
