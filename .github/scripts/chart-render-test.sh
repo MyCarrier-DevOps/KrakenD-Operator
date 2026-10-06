@@ -212,6 +212,8 @@ binding_summary() {
 expect_equal "the metrics auth ClusterRole is bound to the operator ServiceAccount" \
 	"t-krakend-operator-metrics-auth-role t-krakend-operator-controller-manager/krakend-operator-system" \
 	"$(manifest ClusterRoleBinding t-krakend-operator-metrics-auth-rolebinding | binding_summary)"
+expect_contains "a metrics-reader ClusterRole allows GET /metrics" "- /metrics" \
+	--show-only templates/metrics-rbac.yaml
 
 if [ "$failures" -gt 0 ]; then
 	printf '%d chart render test(s) failed\n' "$failures"
