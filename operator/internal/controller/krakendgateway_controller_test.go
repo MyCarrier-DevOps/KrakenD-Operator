@@ -2088,3 +2088,76 @@ func TestSchemaConflictMessages_AreCapped(t *testing.T) {
 		t.Errorf("message = %q, want the first 5 schemas and \"and 2 more\"", got)
 	}
 }
+
+func TestGatewayReconcile_SchemaConflictIsTheLowestAcceptedReason(t *testing.T) {
+	other := types.NamespacedName{Namespace: "default", Name: "a-users"}
+	for _, tc := range []struct {
+		name       string
+		output     func(key types.NamespacedName) *renderer.RenderOutput
+		wantStatus metav1.ConditionStatus
+		wantReason string // empty: no Accepted condition
+	}{
+		{
+			name: "route conflict",
+			output: func(key types.NamespacedName) *renderer.RenderOutput {
+				return &renderer.RenderOutput{ConflictedEndpoints: []types.NamespacedName{key}}
+			},
+			wantStatus: metav1.ConditionFalse, wantReason: v1alpha1.ReasonEndpointConflict,
+		},
+		{
+			name: "partly served",
+			output: func(key types.NamespacedName) *renderer.RenderOutput {
+				return &renderer.RenderOutput{
+					ConflictedEndpoints: []types.NamespacedName{key},
+					EntryConflicts: map[types.NamespacedName][]renderer.EntryConflict{
+						key: {{Endpoint: "/a", Method: "GET", Winner: other}},
+					},
+				}
+			},
+			wantStatus: metav1.ConditionTrue, wantReason: v1alpha1.ReasonPartiallyAccepted,
+		},
+		{
+			name: "EE features stripped",
+			output: func(key types.NamespacedName) *renderer.RenderOutput {
+				return &renderer.RenderOutput{StrippedEEFeatures: []renderer.StrippedEEFeature{
+					{Source: key, Method: "GET", Endpoint: "/a", Feature: "extra_config qos/ratelimit/router/redis"},
+				}}
+			},
+			wantStatus: metav1.ConditionTrue, wantReason: v1alpha1.ReasonEEFeaturesStripped,
+		},
+		{
+			name: "unresolved policy",
+			output: func(key types.NamespacedName) *renderer.RenderOutput {
+				return &renderer.RenderOutput{InvalidEndpoints: []types.NamespacedName{key}}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gw := reconciledGateway()
+			ep := gatewayEndpoint("b-users", 1)
+			ep.Spec.Endpoints = []v1alpha1.EndpointEntry{
+				{Endpoint: "/a", Method: "GET"}, {Endpoint: "/b", Method: "GET"},
+			}
+			c := fakeClientBuilder().WithObjects(gw, ep).WithStatusSubresource(gw, ep).Build()
+			key := client.ObjectKeyFromObject(ep)
+			out := tc.output(key)
+			out.JSON, out.Checksum = []byte(`{"version":3}`), "cs1"
+			out.SchemaConflicts = []renderer.SchemaConflict{{Endpoint: key, Schema: "User", Winner: other}}
+
+			if err := reconcileGateway(t, acceptanceReconciler(c, fakeRecorder(), out), gw); err != nil {
+				t.Fatal(err)
+			}
+
+			got := storedAccepted(t, c, key)
+			if tc.wantReason == "" {
+				if got != nil {
+					t.Errorf("Accepted = %+v, want none", got)
+				}
+				return
+			}
+			if got == nil || got.Status != tc.wantStatus || got.Reason != tc.wantReason {
+				t.Errorf("Accepted = %+v, want %s/%s", got, tc.wantStatus, tc.wantReason)
+			}
+		})
+	}
+}
