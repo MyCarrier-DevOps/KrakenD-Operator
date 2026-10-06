@@ -14,7 +14,36 @@ metadata:
             },
             "name": "krakendautoconfig-sample"
           },
-          "spec": null
+          "spec": {
+            "additionalEndpoints": [
+              {
+                "encoding": "no-op",
+                "endpoint": "/liveness"
+              },
+              {
+                "encoding": "no-op",
+                "endpoint": "/readiness"
+              }
+            ],
+            "gatewayRef": {
+              "name": "krakendgateway-sample"
+            },
+            "openapi": {
+              "configMapRef": {
+                "key": "openapi.json",
+                "name": "my-openapi-spec"
+              }
+            },
+            "trigger": "OnChange",
+            "urlTransform": {
+              "hostMapping": [
+                {
+                  "from": "users-service",
+                  "to": "http://users-service.default.svc.cluster.local:8080"
+                }
+              ]
+            }
+          }
         },
         {
           "apiVersion": "gateway.krakend.io/v1alpha1",
@@ -26,7 +55,18 @@ metadata:
             },
             "name": "krakendbackendpolicy-sample"
           },
-          "spec": null
+          "spec": {
+            "circuitBreaker": {
+              "interval": 60,
+              "logStatusChange": true,
+              "maxErrors": 3,
+              "timeout": 10
+            },
+            "rateLimit": {
+              "capacity": 100,
+              "maxRate": 100
+            }
+          }
         },
         {
           "apiVersion": "gateway.krakend.io/v1alpha1",
@@ -38,7 +78,25 @@ metadata:
             },
             "name": "krakendendpoint-sample"
           },
-          "spec": null
+          "spec": {
+            "endpoints": [
+              {
+                "backends": [
+                  {
+                    "host": [
+                      "http://users-service.default.svc.cluster.local:8080"
+                    ],
+                    "urlPattern": "/v1/users"
+                  }
+                ],
+                "endpoint": "/api/users",
+                "method": "GET"
+              }
+            ],
+            "gatewayRef": {
+              "name": "krakendgateway-sample"
+            }
+          }
         },
         {
           "apiVersion": "gateway.krakend.io/v1alpha1",
@@ -50,13 +108,21 @@ metadata:
             },
             "name": "krakendgateway-sample"
           },
-          "spec": null
+          "spec": {
+            "config": {
+              "port": 8080,
+              "timeout": "30s"
+            },
+            "edition": "CE",
+            "replicas": 2,
+            "version": "2.8"
+          }
         }
       ]
     capabilities: Full Lifecycle
     categories: Networking
     containerImage: ghcr.io/mycarrier-devops/krakend-operator:latest
-    createdAt: "2026-04-07T18:08:18Z"
+    createdAt: "2026-10-06T03:35:32Z"
     description: Kubernetes operator for managing KrakenD API Gateway instances declaratively
       via Custom Resources
     operators.operatorframework.io/builder: operator-sdk-v1.42.2
@@ -69,25 +135,22 @@ spec:
   customresourcedefinitions:
     owned:
     - description: KrakenDAutoConfig is the Schema for the krakendautoconfigs API.
-        Automates endpoint generation from OpenAPI/Swagger specs.
       displayName: KrakenD AutoConfig
       kind: KrakenDAutoConfig
       name: krakendautoconfigs.gateway.krakend.io
       version: v1alpha1
     - description: KrakenDBackendPolicy is the Schema for the krakendbackendpolicies
-        API. Defines reusable backend policies (rate limiting, circuit breaker, caching).
+        API.
       displayName: KrakenD Backend Policy
       kind: KrakenDBackendPolicy
       name: krakendbackendpolicies.gateway.krakend.io
       version: v1alpha1
-    - description: KrakenDEndpoint is the Schema for the krakendendpoints API. Defines
-        a single API endpoint routed through the gateway.
+    - description: KrakenDEndpoint is the Schema for the krakendendpoints API.
       displayName: KrakenD Endpoint
       kind: KrakenDEndpoint
       name: krakendendpoints.gateway.krakend.io
       version: v1alpha1
-    - description: KrakenDGateway is the Schema for the krakendgateways API. Represents
-        a KrakenD API Gateway deployment.
+    - description: KrakenDGateway is the Schema for the krakendgateways API.
       displayName: KrakenD Gateway
       kind: KrakenDGateway
       name: krakendgateways.gateway.krakend.io
@@ -108,9 +171,6 @@ spec:
     - **Istio Integration** — Optional VirtualService generation for mesh routing
     - **External Secrets** — ExternalSecret integration for license secret management
   displayName: KrakenD Operator
-  icon:
-  - base64data: ""
-    mediatype: image/png
   install:
     spec:
       clusterPermissions:
@@ -313,11 +373,26 @@ spec:
                 app.kubernetes.io/name: krakend-operator
                 control-plane: controller-manager
             spec:
+              affinity:
+                nodeAffinity:
+                  requiredDuringSchedulingIgnoredDuringExecution:
+                    nodeSelectorTerms:
+                    - matchExpressions:
+                      - key: kubernetes.io/arch
+                        operator: In
+                        values:
+                        - amd64
+                        - arm64
+                      - key: kubernetes.io/os
+                        operator: In
+                        values:
+                        - linux
               containers:
               - args:
                 - --metrics-bind-address=:8443
                 - --leader-elect
                 - --health-probe-bind-address=:8081
+                - --webhook-cert-path=/tmp/k8s-webhook-server/serving-certs
                 command:
                 - /manager
                 env:
@@ -329,7 +404,7 @@ spec:
                   valueFrom:
                     fieldRef:
                       fieldPath: spec.serviceAccountName
-                image: ghcr.io/mycarrier-devops/krakend-operator:v0.0.1
+                image: ghcr.io/mycarrier-devops/krakend-operator:latest
                 livenessProbe:
                   httpGet:
                     path: /healthz
@@ -337,6 +412,10 @@ spec:
                   initialDelaySeconds: 15
                   periodSeconds: 20
                 name: manager
+                ports:
+                - containerPort: 9443
+                  name: webhook-server
+                  protocol: TCP
                 readinessProbe:
                   httpGet:
                     path: /readyz
@@ -346,10 +425,10 @@ spec:
                 resources:
                   limits:
                     cpu: 500m
-                    memory: 128Mi
+                    memory: 512Mi
                   requests:
                     cpu: 10m
-                    memory: 64Mi
+                    memory: 128Mi
                 securityContext:
                   allowPrivilegeEscalation: false
                   capabilities:
@@ -409,3 +488,88 @@ spec:
     name: MyCarrier DevOps
     url: https://github.com/MyCarrier-DevOps
   version: 0.0.1
+  webhookdefinitions:
+  - admissionReviewVersions:
+    - v1
+    containerPort: 443
+    deploymentName: krakend-operator-controller-manager
+    failurePolicy: Fail
+    generateName: vkrakendautoconfig.kb.io
+    rules:
+    - apiGroups:
+      - gateway.krakend.io
+      apiVersions:
+      - v1alpha1
+      operations:
+      - CREATE
+      - UPDATE
+      resources:
+      - krakendautoconfigs
+    sideEffects: None
+    targetPort: 9443
+    timeoutSeconds: 15
+    type: ValidatingAdmissionWebhook
+    webhookPath: /validate-gateway-krakend-io-v1alpha1-krakendautoconfig
+  - admissionReviewVersions:
+    - v1
+    containerPort: 443
+    deploymentName: krakend-operator-controller-manager
+    failurePolicy: Fail
+    generateName: vkrakendbackendpolicy.kb.io
+    rules:
+    - apiGroups:
+      - gateway.krakend.io
+      apiVersions:
+      - v1alpha1
+      operations:
+      - CREATE
+      - UPDATE
+      resources:
+      - krakendbackendpolicies
+    sideEffects: None
+    targetPort: 9443
+    timeoutSeconds: 15
+    type: ValidatingAdmissionWebhook
+    webhookPath: /validate-gateway-krakend-io-v1alpha1-krakendbackendpolicy
+  - admissionReviewVersions:
+    - v1
+    containerPort: 443
+    deploymentName: krakend-operator-controller-manager
+    failurePolicy: Fail
+    generateName: vkrakendendpoint.kb.io
+    rules:
+    - apiGroups:
+      - gateway.krakend.io
+      apiVersions:
+      - v1alpha1
+      operations:
+      - CREATE
+      - UPDATE
+      resources:
+      - krakendendpoints
+    sideEffects: None
+    targetPort: 9443
+    timeoutSeconds: 15
+    type: ValidatingAdmissionWebhook
+    webhookPath: /validate-gateway-krakend-io-v1alpha1-krakendendpoint
+  - admissionReviewVersions:
+    - v1
+    containerPort: 443
+    deploymentName: krakend-operator-controller-manager
+    failurePolicy: Fail
+    generateName: vkrakendgateway.kb.io
+    rules:
+    - apiGroups:
+      - gateway.krakend.io
+      apiVersions:
+      - v1alpha1
+      operations:
+      - CREATE
+      - UPDATE
+      resources:
+      - krakendgateways
+    sideEffects: None
+    targetPort: 9443
+    timeoutSeconds: 15
+    type: ValidatingAdmissionWebhook
+    webhookPath: /validate-gateway-krakend-io-v1alpha1-krakendgateway

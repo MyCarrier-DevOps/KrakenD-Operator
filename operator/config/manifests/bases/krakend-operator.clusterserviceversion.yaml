@@ -6,7 +6,8 @@ metadata:
     capabilities: Full Lifecycle
     categories: Networking
     containerImage: ghcr.io/mycarrier-devops/krakend-operator:latest
-    description: Kubernetes operator for managing KrakenD API Gateway instances declaratively via Custom Resources
+    description: Kubernetes operator for managing KrakenD API Gateway instances declaratively
+      via Custom Resources
     repository: https://github.com/MyCarrier-DevOps/KrakenD-Operator
   name: krakend-operator.v0.0.0
   namespace: placeholder
@@ -14,25 +15,26 @@ spec:
   apiservicedefinitions: {}
   customresourcedefinitions:
     owned:
-    - description: KrakenDGateway is the Schema for the krakendgateways API. Represents a KrakenD API Gateway deployment.
-      displayName: KrakenD Gateway
-      kind: KrakenDGateway
-      name: krakendgateways.gateway.krakend.io
+    - description: KrakenDAutoConfig is the Schema for the krakendautoconfigs API.
+      displayName: KrakenD AutoConfig
+      kind: KrakenDAutoConfig
+      name: krakendautoconfigs.gateway.krakend.io
       version: v1alpha1
-    - description: KrakenDEndpoint is the Schema for the krakendendpoints API. Defines a single API endpoint routed through the gateway.
-      displayName: KrakenD Endpoint
-      kind: KrakenDEndpoint
-      name: krakendendpoints.gateway.krakend.io
-      version: v1alpha1
-    - description: KrakenDBackendPolicy is the Schema for the krakendbackendpolicies API. Defines reusable backend policies (rate limiting, circuit breaker, caching).
+    - description: KrakenDBackendPolicy is the Schema for the krakendbackendpolicies
+        API.
       displayName: KrakenD Backend Policy
       kind: KrakenDBackendPolicy
       name: krakendbackendpolicies.gateway.krakend.io
       version: v1alpha1
-    - description: KrakenDAutoConfig is the Schema for the krakendautoconfigs API. Automates endpoint generation from OpenAPI/Swagger specs.
-      displayName: KrakenD AutoConfig
-      kind: KrakenDAutoConfig
-      name: krakendautoconfigs.gateway.krakend.io
+    - description: KrakenDEndpoint is the Schema for the krakendendpoints API.
+      displayName: KrakenD Endpoint
+      kind: KrakenDEndpoint
+      name: krakendendpoints.gateway.krakend.io
+      version: v1alpha1
+    - description: KrakenDGateway is the Schema for the krakendgateways API.
+      displayName: KrakenD Gateway
+      kind: KrakenDGateway
+      name: krakendgateways.gateway.krakend.io
       version: v1alpha1
   description: |
     The KrakenD Operator manages KrakenD API Gateway instances on Kubernetes.
