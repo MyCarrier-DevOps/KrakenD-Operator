@@ -94,3 +94,31 @@ func TestEEWildcardFindings_StopsAfterTheFirstConflicts(t *testing.T) {
 		t.Errorf("%d bytes allocated for %d routes, want at most %d", allocated, len(endpoints), budget)
 	}
 }
+
+// Routes conflict by the shape gin registers them under: a brace group lura
+// does not parse as a parameter is literal text, never the parameter a
+// literal colon spells.
+func TestEEWildcardFindings_ComparesRoutesByTheirRegisteredShape(t *testing.T) {
+	cases := []struct {
+		name, wildcard, other string
+		wantFindings          int
+	}{
+		{"an unparsed brace group is not a colon parameter", "/v1/jobs{x}/*", "/v1/jobs:x/y", 0},
+		{"a dotted brace group is not a colon parameter", "/users/{user.id}/*", "/users/:user.id/x", 0},
+		{"a parsed parameter still conflicts", "/v1/{id}/*", "/v1/{id}/x", 2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			endpoints := []any{
+				map[string]any{"endpoint": tc.wildcard, "method": "GET"},
+				map[string]any{"endpoint": tc.other, "method": "GET"},
+			}
+
+			findings, err := eeWildcardFindings(context.Background(), endpoints)
+
+			if err != nil || len(findings) != tc.wantFindings {
+				t.Errorf("eeWildcardFindings = %q, %v, want %d findings", findings, err, tc.wantFindings)
+			}
+		})
+	}
+}
