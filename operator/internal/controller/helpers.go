@@ -50,8 +50,8 @@ func setReadyCondition(
 
 // UncachedObjects lists the kinds the manager's client reads live from the
 // API server instead of from its cache. The controllers watch these kinds as
-// metadata only, so no Secret data or ConfigMap payload is held in operator
-// memory. Every manager that runs these controllers sets
+// metadata only, so no Secret data or ConfigMap payload is cached (content
+// read live is held only while a reconcile uses it). Every manager that runs these controllers sets
 // client.Options{Cache: &client.CacheOptions{DisableFor: UncachedObjects()}}
 // and cache.Options{ByObject: CacheByObject()}.
 //
