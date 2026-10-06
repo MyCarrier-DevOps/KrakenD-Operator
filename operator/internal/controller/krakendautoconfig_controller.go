@@ -818,8 +818,9 @@ type syncResult struct {
 // that changed something: new inputs (a different combined checksum) or
 // endpoint writes, so a steady-state reconcile leaves both alone. Status is
 // written only when it differs from orig, the status read at the start of the
-// reconcile, and an OperationsFailed Warning event is recorded only with such
-// a write. The buffered input warnings are recorded once that write succeeds,
+// reconcile, and an OperationsFailed Warning event is recorded only when the
+// Synced condition or status.failedOperations changed (failureChanged). The
+// buffered input warnings are recorded once that write succeeds,
 // before EndpointsGenerated.
 func (r *KrakenDAutoConfigReconciler) recordSync(
 	ctx context.Context,
@@ -857,7 +858,7 @@ func (r *KrakenDAutoConfigReconciler) recordSync(
 	autoConfigSynced.WithLabelValues(ac.Namespace, ac.Name).Set(gauge)
 
 	warnings.emit(r.Recorder, ac)
-	if statusChanged && synced.Status != metav1.ConditionTrue {
+	if synced.Status != metav1.ConditionTrue && failureChanged(orig, &ac.Status) {
 		r.Recorder.Event(ac, "Warning", v1alpha1.ReasonOperationsFailed, synced.Message)
 	}
 	if changed {
@@ -866,6 +867,22 @@ func (r *KrakenDAutoConfigReconciler) recordSync(
 			res.generated, res.changes.created, res.changes.updated, res.changes.deleted, len(res.skipped))
 	}
 	return nil
+}
+
+// failureChanged reports whether the Synced condition (status, reason or
+// message) or status.failedOperations differ between orig and cur, so a held
+// operation warns when its failure changes, not on every status change that
+// goes with it, such as an endpoint turning ready.
+func failureChanged(orig, cur *v1alpha1.KrakenDAutoConfigStatus) bool {
+	if !slices.Equal(orig.FailedOperations, cur.FailedOperations) {
+		return true
+	}
+	was := meta.FindStatusCondition(orig.Conditions, v1alpha1.ConditionSynced)
+	now := meta.FindStatusCondition(cur.Conditions, v1alpha1.ConditionSynced)
+	if was == nil || now == nil {
+		return was != now
+	}
+	return was.Status != now.Status || was.Reason != now.Reason || was.Message != now.Message
 }
 
 // syncedCondition is the Synced condition for res: False with reason
