@@ -92,6 +92,7 @@ type KrakenDBackendPolicyStatus struct {
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // KrakenDBackendPolicy is the Schema for the krakendbackendpolicies API.
+// +operator-sdk:csv:customresourcedefinitions:displayName="KrakenD Backend Policy"
 type KrakenDBackendPolicy struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
