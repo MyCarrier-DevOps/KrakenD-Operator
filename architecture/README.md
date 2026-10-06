@@ -1991,7 +1991,7 @@ status or reason. A steady state emits no events. `ConfigValidationFailed` and
 
 The operator deploys four `ValidatingAdmissionWebhook`s, one per kind, with `failurePolicy: Fail` on CREATE and UPDATE, to reject invalid CRs at submission time, before they enter etcd. The CRD schema and CEL carry the rules an object decides on its own (§3 and §16), so the API server enforces them even for clients that bypass the webhook. The webhooks keep what needs other objects, a rendered config, or the default-image context. Every validator accepts an update that leaves the spec alone, and applies its rules to what an update changes (the ratchet below).
 
-> **Operational note:** `failurePolicy: Fail` means webhook pod outages will block CRD mutations cluster-wide. The operator Deployment should run with `replicas >= 2` and a PDB to minimize webhook downtime. For less strict environments, `failurePolicy: Ignore` allows bypass during outages at the cost of deferred validation.
+> **Operational note:** `failurePolicy: Fail` means webhook pod outages block CRD mutations cluster-wide. The Helm chart therefore runs two operator replicas by default, with a PodDisruptionBudget, soft anti-affinity and a readiness check on the webhook server; leader election keeps a single active controller. For less strict environments, `failurePolicy: Ignore` allows bypass during outages at the cost of deferred validation.
 
 > **Deletion:** updates to an object that is being deleted (it has a `deletionTimestamp`) are admitted when they don't change its spec (for example, removing a finalizer); a spec change is still validated. Rejecting a finalizer removal would leave the object stuck in `Terminating`.
 
