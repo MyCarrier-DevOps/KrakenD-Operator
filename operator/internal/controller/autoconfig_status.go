@@ -18,6 +18,7 @@ package controller
 
 import (
 	"cmp"
+	"context"
 	"fmt"
 	"maps"
 	"slices"
@@ -25,6 +26,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/record"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/autoconfig"
@@ -209,4 +211,180 @@ func endpointsReadyCondition(r endpointReadiness, generation int64) metav1.Condi
 	c.Status, c.Reason = metav1.ConditionFalse, v1alpha1.ReasonEndpointsNotReady
 	c.Message = fmt.Sprintf("%d of %s not ready: %s", len(r.notReady), counted(r.total, "endpoint"), listed(r.notReady))
 	return c
+}
+
+// inputWarnings collects the Warning events about one reconcile's inputs —
+// DuplicateOperationId, AdditionalEndpointOverride and SpecWarning — and holds
+// them until the reconcile's terminal status write succeeds. A reconcile that
+// read a stale AutoConfig and then loses that write to a conflict records
+// none of them; its retry records them if they still apply. Warnings are
+// collected only when inputsChanged.
+type inputWarnings struct {
+	inputsChanged bool
+	pending       []inputWarning
+}
+
+// inputWarning is one buffered Warning event.
+type inputWarning struct {
+	reason, message string
+}
+
+// add buffers a Warning event with the given reason and message, if the
+// reconcile's inputs changed.
+func (w *inputWarnings) add(reason, message string) {
+	if w.inputsChanged {
+		w.pending = append(w.pending, inputWarning{reason: reason, message: message})
+	}
+}
+
+// emit records the first maxStatusListLen buffered events on ac, whatever
+// their reasons. The recorder's per-object budget is shared by every Warning
+// event, so the cap leaves room for the failure event of a failing pass.
+func (w *inputWarnings) emit(recorder record.EventRecorder, ac *v1alpha1.KrakenDAutoConfig) {
+	for _, ev := range capList(w.pending) {
+		recorder.Event(ac, "Warning", ev.reason, ev.message)
+	}
+}
+
+// syncResult is what a pipeline pass that reached its endpoint writes
+// produced, for recordSync.
+type syncResult struct {
+	// checksum is the pass's combined input checksum.
+	checksum string
+	// generated counts the endpoints the pass generated.
+	generated int
+	// skipped lists the operations the pass generated no endpoint for.
+	skipped []v1alpha1.OperationStatus
+	// failed lists the operations the pass could not converge.
+	failed []v1alpha1.OperationStatus
+	// warnings lists every distinct problem that does not stop a sync; the
+	// status lists the first maxStatusListLen.
+	warnings []string
+	changes  endpointChanges
+	// readiness summarizes the endpoints the AutoConfig controls afterwards.
+	readiness endpointReadiness
+}
+
+// recordSync records a sync that reached its endpoint writes: the combined
+// checksum, the endpoint counts and lists, and the Synced condition (True, or
+// False with reason OperationsFailed while res.failed is not empty) with the
+// Ready, phase and observedGeneration derived from it. The synced gauge
+// follows Synced. LastSyncTime and the EndpointsGenerated event mark a sync
+// that changed something: new inputs (a different combined checksum) or
+// endpoint writes, so a steady-state reconcile leaves both alone. Status is
+// written only when it differs from orig, the status read at the start of the
+// reconcile, and an OperationsFailed Warning event is recorded only when the
+// Synced condition or status.failedOperations changed (failureChanged). The
+// buffered input warnings are recorded once that write succeeds,
+// before EndpointsGenerated.
+func (r *KrakenDAutoConfigReconciler) recordSync(
+	ctx context.Context,
+	ac *v1alpha1.KrakenDAutoConfig,
+	orig *v1alpha1.KrakenDAutoConfigStatus,
+	res syncResult,
+	warnings *inputWarnings,
+) error {
+	changed := res.checksum != orig.SpecChecksum || res.changes.total() > 0
+	ac.Status.SpecChecksum = res.checksum
+	if changed {
+		now := metav1.Now()
+		ac.Status.LastSyncTime = &now
+	}
+	ac.Status.GeneratedEndpoints = res.generated
+	ac.Status.ReadyEndpoints = res.readiness.ready
+	ac.Status.SkippedOperations = len(res.skipped)
+	ac.Status.Skipped = capList(res.skipped)
+	ac.Status.FailedOperations = capList(res.failed)
+	ac.Status.Warnings = capList(res.warnings)
+	synced := syncedCondition(res, ac.Generation)
+	meta.SetStatusCondition(&ac.Status.Conditions, synced)
+	meta.SetStatusCondition(&ac.Status.Conditions, endpointsReadyCondition(res.readiness, ac.Generation))
+	setAutoConfigReadiness(ac)
+	statusChanged := autoConfigStatusChanged(orig, &ac.Status)
+	if statusChanged {
+		if err := r.Status().Update(ctx, ac); err != nil {
+			return fmt.Errorf("updating final status: %w", err)
+		}
+	}
+	gauge := 1.0
+	if synced.Status != metav1.ConditionTrue {
+		gauge = 0
+	}
+	autoConfigSynced.WithLabelValues(ac.Namespace, ac.Name).Set(gauge)
+
+	warnings.emit(r.Recorder, ac)
+	if synced.Status != metav1.ConditionTrue && failureChanged(orig, &ac.Status) {
+		r.Recorder.Event(ac, "Warning", v1alpha1.ReasonOperationsFailed, synced.Message)
+	}
+	if changed {
+		r.Recorder.Eventf(ac, "Normal", v1alpha1.ReasonEndpointsGenerated,
+			"Generated %s (%d created, %d updated, %d deleted, %d skipped)",
+			counted(res.generated, "endpoint"), res.changes.created, res.changes.updated, res.changes.deleted, len(res.skipped))
+	}
+	return nil
+}
+
+// failureChanged reports whether the Synced condition (status, reason or
+// message) or status.failedOperations differ between orig and cur, so a held
+// operation warns when its failure changes, not on every status change that
+// goes with it, such as an endpoint turning ready.
+func failureChanged(orig, cur *v1alpha1.KrakenDAutoConfigStatus) bool {
+	if !slices.Equal(orig.FailedOperations, cur.FailedOperations) {
+		return true
+	}
+	was := meta.FindStatusCondition(orig.Conditions, v1alpha1.ConditionSynced)
+	now := meta.FindStatusCondition(cur.Conditions, v1alpha1.ConditionSynced)
+	if was == nil || now == nil {
+		return was != now
+	}
+	return was.Status != now.Status || was.Reason != now.Reason || was.Message != now.Message
+}
+
+// syncedCondition is the Synced condition for res: False with reason
+// OperationsFailed, naming the first operations, while res.failed is not
+// empty, otherwise True, counting what was skipped and warned about.
+func syncedCondition(res syncResult, generation int64) metav1.Condition {
+	if len(res.failed) > 0 {
+		labels := make([]string, len(res.failed))
+		for i, f := range res.failed {
+			labels[i] = operationLabel(f)
+		}
+		return metav1.Condition{
+			Type: v1alpha1.ConditionSynced, Status: metav1.ConditionFalse, ObservedGeneration: generation,
+			Reason: v1alpha1.ReasonOperationsFailed,
+			Message: fmt.Sprintf("%s failed; %s and no stale endpoint is deleted until %s "+
+				"(see status.failedOperations): %s",
+				counted(len(res.failed), "operation"),
+				plural(len(res.failed), "it keeps its last-synced endpoint", "they keep their last-synced endpoints"),
+				plural(len(res.failed), "it recovers", "they recover"), listed(labels)),
+		}
+	}
+	c := metav1.Condition{
+		Type: v1alpha1.ConditionSynced, Status: metav1.ConditionTrue, ObservedGeneration: generation, Reason: "Synced",
+		Message: "Generated " + counted(res.generated, "endpoint"),
+	}
+	if n := len(res.skipped); n > 0 {
+		c.Message += "; " + counted(n, "operation") + " skipped (see status.skipped)"
+	}
+	if n := len(res.warnings); n > 0 {
+		c.Message += "; " + counted(n, "spec warning") + " (see status.warnings)"
+	}
+	return c
+}
+
+// autoConfigStatusChanged reports whether cur differs semantically from orig.
+// Conditions are compared with conditionsEqual, which ignores
+// LastTransitionTime.
+func autoConfigStatusChanged(orig, cur *v1alpha1.KrakenDAutoConfigStatus) bool {
+	return orig.Phase != cur.Phase ||
+		orig.ObservedGeneration != cur.ObservedGeneration ||
+		orig.SpecChecksum != cur.SpecChecksum ||
+		orig.GeneratedEndpoints != cur.GeneratedEndpoints ||
+		orig.ReadyEndpoints != cur.ReadyEndpoints ||
+		orig.SkippedOperations != cur.SkippedOperations ||
+		!slices.Equal(orig.Skipped, cur.Skipped) ||
+		!slices.Equal(orig.FailedOperations, cur.FailedOperations) ||
+		!slices.Equal(orig.Warnings, cur.Warnings) ||
+		!orig.LastSyncTime.Equal(cur.LastSyncTime) ||
+		!conditionsEqual(orig.Conditions, cur.Conditions)
 }
