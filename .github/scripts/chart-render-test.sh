@@ -225,6 +225,19 @@ expect_equal "the chart's metrics-reader ClusterRole matches config/rbac" \
 expect_contains "the ServiceMonitor selects only the metrics Service" "app.kubernetes.io/component: metrics" \
 	--set metrics.serviceMonitor.enabled=true --show-only templates/servicemonitor.yaml
 expect_absent "no ServiceMonitor by default" "kind: ServiceMonitor"
+# selects SERVICE_TEMPLATE: "yes" when every spec.selector.matchLabels pair of
+# the ServiceMonitor is among the metadata labels of that Service template.
+selects() {
+	local labels selector
+	selector=$(render --set metrics.serviceMonitor.enabled=true --show-only templates/servicemonitor.yaml |
+		awk '/^  selector:/ { f = 1; next } f && /^    matchLabels:/ { next } f && NF { sub(/^ +/, ""); print }')
+	labels=$(render --show-only "$1" | awk '/^  labels:/ { f = 1; next } f && /^    / { sub(/^ +/, ""); print; next } f { exit }')
+	while IFS= read -r pair; do
+		grep -qxF -- "$pair" <<<"$labels" || { echo no; return; }
+	done <<<"$selector"
+	echo yes
+}
+expect_equal "the ServiceMonitor selector matches the metrics Service" "yes" "$(selects templates/metrics-service.yaml)"
 
 if [ "$failures" -gt 0 ]; then
 	printf '%d chart render test(s) failed\n' "$failures"
