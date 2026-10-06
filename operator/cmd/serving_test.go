@@ -91,3 +91,29 @@ func TestCheckServingFiles_MissingKeyIsAnError(t *testing.T) {
 		t.Errorf("err = %v, want one naming the missing key file", err)
 	}
 }
+
+func TestCheckServingFiles_BothPresentIsNil(t *testing.T) {
+	dir := t.TempDir()
+	for _, n := range []string{"a.crt", "a.key"} {
+		if err := os.WriteFile(filepath.Join(dir, n), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := checkServingFiles(dir, "a.crt", "a.key"); err != nil {
+		t.Errorf("err = %v, want nil", err)
+	}
+}
+
+func TestCheckServingFiles_MissingCertIsAnError(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "tls.key"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := checkServingFiles(dir, "tls.crt", "tls.key")
+
+	if err == nil || !strings.Contains(err.Error(), filepath.Join(dir, "tls.crt")) {
+		t.Errorf("err = %v, want one naming the missing cert file", err)
+	}
+}
