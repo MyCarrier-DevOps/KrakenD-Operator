@@ -34,7 +34,11 @@ curl -s http://localhost:8081/readyz   # {"status":"ok"}
 
 ## Prometheus Metrics
 
-Metrics are exposed on port **8443** (HTTPS). Every name below carries the
+Metrics are exposed on port **8443** (HTTPS). Scrapes need a bearer token
+whose identity is bound to the `<fullname>-metrics-reader` ClusterRole;
+without it the endpoint answers 403. The chart grants the operator the
+TokenReview and SubjectAccessReview permissions this check needs, and creates
+a `ServiceMonitor` when `metrics.serviceMonitor.enabled` is true. Every name below carries the
 `krakend_operator_` prefix (`krakend_operator_license_expiry_seconds`, and so
 on). Key metrics:
 
