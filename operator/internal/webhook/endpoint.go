@@ -211,10 +211,11 @@ func (v *EndpointValidator) checkRender(
 	}
 	candidate := []v1alpha1.KrakenDEndpoint{*ep}
 	return ratchetRender(ctx, renderChecks{
-		after:     bindCheck(v.Checker.CheckGateway, gw, candidate),
-		before:    bindCheck(v.Checker.CheckGateway, gw, nil),
-		isoAfter:  bindCheck(v.Checker.CheckIsolated, gw, candidate),
-		isoBefore: bindCheck(v.Checker.CheckIsolated, gw, baseline),
+		after:      bindCheck(v.Checker.CheckGateway, gw, candidate),
+		before:     bindCheck(v.Checker.CheckGateway, gw, nil),
+		isoAfter:   bindCheck(v.Checker.CheckIsolated, gw, candidate),
+		isoBefore:  bindCheck(v.Checker.CheckIsolated, gw, baseline),
+		newFailure: newlyBlamed(types.NamespacedName{Namespace: ep.Namespace, Name: ep.Name}),
 	},
 		func(verdict configcheck.Verdict) error { return renderDenial(ep, verdict) },
 		func(before configcheck.Verdict) string {

@@ -18,7 +18,10 @@ package webhook
 
 import (
 	"context"
+	"slices"
 	"strings"
+
+	"k8s.io/apimachinery/pkg/types"
 
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
@@ -30,9 +33,12 @@ import (
 // renderChecks are the checks of the verdict ratchet, each over a proposed
 // change: the gateway with it, and without it, then, optionally, the same two
 // on the isolated baseline used when the gateway already fails (a change with
-// no isolated form leaves isoAfter and isoBefore nil).
+// no isolated form leaves isoAfter and isoBefore nil). newFailure, when set,
+// decides from the two verdicts whether a gateway that already fails is made
+// newly worse by the change, which is then denied without the isolated checks.
 type renderChecks struct {
 	after, before, isoAfter, isoBefore func(context.Context) (configcheck.Verdict, error)
+	newFailure                         func(before, after configcheck.Verdict) bool
 }
 
 // bindCheck fixes the gateway and endpoints a check runs on.
@@ -45,8 +51,9 @@ func bindCheck(
 
 // ratchetRender rejects a change only when it turns a passing config into a
 // failing one. It runs after, then before; when before fails too the failure
-// is a warning (preexisting words it from before's verdict) unless the change
-// fails on the isolated baseline where its own baseline passed. Without an
+// is a warning (preexisting words it from before's verdict) unless newFailure
+// finds the change newly to blame, or the change fails on the isolated
+// baseline where its own baseline passed. Without an
 // isolated baseline (isoAfter nil) a preexisting failure is only a warning.
 // A check that cannot run is a 500 with no warning: the request is not
 // judged. deny builds the rejection from a failing verdict.
@@ -63,6 +70,9 @@ func ratchetRender(
 		return nil, checkErr(err)
 	}
 	if before.OK {
+		return nil, deny(after)
+	}
+	if c.newFailure != nil && c.newFailure(before, after) {
 		return nil, deny(after)
 	}
 	warning := admission.Warnings{preexisting(before)}
@@ -94,4 +104,20 @@ func describeDrops(drops []renderer.CEDrop) string {
 		parts[i] = d.String()
 	}
 	return strings.Join(parts, ", ")
+}
+
+// blames reports whether v names an entry of endpoint.
+func blames(v configcheck.Verdict, endpoint types.NamespacedName) bool {
+	return slices.ContainsFunc(v.Findings, func(f configcheck.Finding) bool { return f.Endpoint == endpoint })
+}
+
+// newlyBlamed is the endpoint rule of the ratchet on a failing gateway: the
+// candidate's own KrakenDEndpoint is blamed after the change and was not
+// before it. An isolated check cannot see a clash with another endpoint, and a
+// change reaches a later check stage than before only by removing a failure of
+// its own object, which was then blamed before.
+func newlyBlamed(self types.NamespacedName) func(before, after configcheck.Verdict) bool {
+	return func(before, after configcheck.Verdict) bool {
+		return blames(after, self) && !blames(before, self)
+	}
 }
