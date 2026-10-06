@@ -2666,6 +2666,41 @@ func TestAutoConfigMapper_ConfigMapToAutoConfigs_MetadataOnly(t *testing.T) {
 	}
 }
 
+func TestGetCUEDefsResourceVersion_ReadsMetadataOnly(t *testing.T) {
+	ac := testAutoConfig()
+	ac.Spec.CUE = &v1alpha1.CUESpec{DefinitionsConfigMapRef: &v1alpha1.ConfigMapKeyRef{Name: "custom-cue"}}
+	cueMap := func(name string) *corev1.ConfigMap {
+		return &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+			Data:       map[string]string{"defs.cue": "package defs"},
+		}
+	}
+	// The manager's client reads ConfigMaps live, and only their resource
+	// versions are wanted: a typed Get would fetch the definitions' content on
+	// every reconcile.
+	c := interceptor.NewClient(
+		fakeClientBuilder().WithObjects(ac, cueMap(defaultCUEDefinitionsConfigMap), cueMap("custom-cue")).Build(),
+		interceptor.Funcs{
+			Get: func(
+				ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object,
+				opts ...client.GetOption,
+			) error {
+				if _, ok := obj.(*corev1.ConfigMap); ok {
+					return errors.New("typed ConfigMap read")
+				}
+				return cl.Get(ctx, key, obj, opts...)
+			},
+		})
+	f, ce, fi, g := defaultMocks()
+	r := newACReconciler(c, f, ce, fi, g)
+
+	got := r.getCUEDefsResourceVersion(context.Background(), ac)
+
+	if !strings.Contains(got, ":") {
+		t.Errorf("resource version = %q, want the default and the custom ConfigMap versions", got)
+	}
+}
+
 func TestAutoConfigReconcile_FallbackToEmbeddedCUE(t *testing.T) {
 	ac := testAutoConfig()
 	ac.Status.Phase = v1alpha1.AutoConfigPhasePending
