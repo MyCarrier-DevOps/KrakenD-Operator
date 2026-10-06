@@ -2136,6 +2136,17 @@ Each reconcile pass now makes these live API requests:
   versions), then in full when the AutoConfig sets custom definitions; the spec
   and auth sources in full.
 
+### Helm chart: metrics can be scraped
+
+Chart installs served metrics that failed every scrape (HTTP 500): the
+operator lacked permission to create the TokenReview and
+SubjectAccessReview its authenticated metrics endpoint performs. The chart
+now grants them when `metrics.enabled` is true, adds a
+`<fullname>-metrics-reader` ClusterRole to bind to your scraper, labels the
+metrics Service `app.kubernetes.io/component: metrics`, and can create a
+`ServiceMonitor` (`metrics.serviceMonitor.enabled`, off by default) that
+selects only that Service.
+
 ---
 
 ## v0.14.0 — openapi-serve liveness probe (one-time rollout)
