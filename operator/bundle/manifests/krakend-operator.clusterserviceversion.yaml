@@ -239,6 +239,12 @@ spec:
           verbs:
           - list
         - apiGroups:
+          - authorization.k8s.io
+          resources:
+          - subjectaccessreviews
+          verbs:
+          - create
+        - apiGroups:
           - autoscaling
           resources:
           - horizontalpodautoscalers
