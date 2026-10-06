@@ -2513,8 +2513,8 @@ Go project layout following [Standard Go Project Layout](https://github.com/gola
 │   │   │   ├── krakendendpoint_controller.go   # KrakenDEndpoint reconciler
 │   │   │   ├── krakendbackendpolicy_controller.go # KrakenDBackendPolicy reconciler
 │   │   │   ├── krakendautoconfig_controller.go # KrakenDAutoConfig reconciler (OpenAPI watcher)
-│   │   │   ├── autoconfig_endpoints.go         # AutoConfig endpoint convergence: adoption, precheck, route collisions, writes, deletes
-│   │   │   ├── autoconfig_status.go            # AutoConfig status lists, condition messages and endpoint readiness
+│   │   │   ├── autoconfig_endpoints.go         # AutoConfig endpoint convergence: adoption, precheck, route collisions, reconcileEndpoints, writes, deletes
+│   │   │   ├── autoconfig_status.go            # AutoConfig status lists, condition messages, endpoint readiness and sync recording
 │   │   │   ├── schema_conflicts.go             # Accepted message for an endpoint whose component schema loses a name collision
 │   │   │   ├── gateway_config.go               # Config stage: publish, GC and attribute config ConfigMaps
 │   │   │   ├── gateway_events.go               # Events on condition transitions
