@@ -680,7 +680,7 @@ func TestGatewayReconcile_RefusesAConfigMapItDoesNotControl(t *testing.T) {
 	const config = `{"version":3,"name":"squatted"}`
 	squatter := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
 		Name: resources.ConfigMapName(gw, hash.SHA256Hex([]byte(config))), Namespace: gw.Namespace,
-	}, Data: map[string]string{resources.ConfigKey: `{"version":3,"name":"something else"}`}}
+	}, Data: map[string]string{resources.ConfigKey: config}} // right bytes, not the gateway's copy
 	c := fakeClientBuilder().WithObjects(gw, squatter).WithStatusSubresource(gw).Build()
 	r := newTestGatewayReconciler(c, renderOf(config), &mockValidator{})
 
@@ -795,7 +795,7 @@ func TestGatewayReconcile_HoldsTheDeploymentWhenTheAppliedConfigMapIsNotTheGatew
 			gw.Status.ConfigChecksum = hash.SHA256Hex([]byte(applied))
 			squatter := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
 				Name: resources.ConfigMapName(gw, gw.Status.ConfigChecksum), Namespace: gw.Namespace,
-			}, Data: map[string]string{resources.ConfigKey: `{"version":3,"name":"something else"}`}}
+			}, Data: map[string]string{resources.ConfigKey: applied}} // right bytes, not the gateway's copy
 			c := fakeClientBuilder().WithObjects(gw, squatter, legacyDeployment(gw)).WithStatusSubresource(gw).Build()
 			r := newTestGatewayReconciler(c, tc.render, tc.val)
 
@@ -837,7 +837,7 @@ func TestGatewayReconcile_HoldLogSaysWhyTheDeploymentIsHeld(t *testing.T) {
 	gw.Status.ConfigChecksum = hash.SHA256Hex([]byte(applied))
 	squatter := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
 		Name: resources.ConfigMapName(gw, gw.Status.ConfigChecksum), Namespace: gw.Namespace,
-	}}
+	}, Data: map[string]string{resources.ConfigKey: applied}} // right bytes, not the gateway's copy
 	c := fakeClientBuilder().WithObjects(gw, squatter, legacyDeployment(gw)).WithStatusSubresource(gw).Build()
 	r := newTestGatewayReconciler(c, renderOf(`{"version":3,"name":"rejected"}`),
 		&countingValidator{err: rejectedBy("- at '/endpoints/0/endpoint': bad")})
@@ -1033,6 +1033,7 @@ func TestPublishConfig_VerifiesTheConfigMapALostCreateRaceLeftBehind(t *testing.
 	checksum := hash.SHA256Hex([]byte(config))
 	foreign := ownedConfigMap(gw, resources.ConfigMapName(gw, checksum), testNow, true)
 	foreign.OwnerReferences = nil
+	foreign.Data = map[string]string{resources.ConfigKey: config} // right bytes, not the gateway's copy
 	live := fakeClientBuilder().WithObjects(gw, foreign).Build()
 	// The first existence check misses the ConfigMap (it is read as
 	// metadata), so the Create loses to what the API server already holds.
