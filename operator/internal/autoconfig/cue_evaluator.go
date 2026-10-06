@@ -69,10 +69,12 @@ type CUEOutput struct {
 	// method. They have no entry in Entries.
 	Failed []OperationIssue
 
-	// entryOperationIDs holds the operationId of each of Entries, in order,
-	// from before the URL transform and the overrides can put two operations
-	// on one route and so on one OperationIDs key.
+	// entryOperationIDs and entryTags hold the operationId and the tags of
+	// each of Entries, in order, from before the URL transform and the
+	// overrides can put two operations on one route and so on one
+	// OperationIDs and Tags key.
 	entryOperationIDs []string
+	entryTags         [][]string
 }
 
 // CUEEvaluator evaluates CUE definitions against OpenAPI spec data.
@@ -251,6 +253,7 @@ func exportEndpointEntries(endpointsValue cue.Value, rootErrors map[string][]str
 		}
 		output.Entries = append(output.Entries, entry)
 		output.entryOperationIDs = append(output.entryOperationIDs, op.OperationID)
+		output.entryTags = append(output.entryTags, op.Tags)
 		entryKey := entry.Endpoint + ":" + entry.Method
 		if op.OperationID != "" {
 			output.OperationIDs[entryKey] = op.OperationID
@@ -362,22 +365,25 @@ func sortIssues(issues []OperationIssue) {
 func skipUnsupportedMethods(output *CUEOutput) {
 	kept := output.Entries[:0]
 	keptIDs := output.entryOperationIDs[:0]
+	keptTags := output.entryTags[:0]
 	for i, entry := range output.Entries {
 		if slices.Contains(supportedMethods, entry.Method) {
 			kept = append(kept, entry)
 			keptIDs = append(keptIDs, output.entryOperationIDs[i])
+			keptTags = append(keptTags, output.entryTags[i])
 			continue
 		}
 		key := entry.Endpoint + ":" + entry.Method
 		output.Skipped = append(output.Skipped, unsupportedMethodIssue(Operation{
 			Method: entry.Method, Path: entry.Endpoint,
-			OperationID: output.OperationIDs[key], Tags: output.Tags[key],
+			OperationID: output.entryOperationIDs[i], Tags: output.entryTags[i],
 		}))
 		delete(output.OperationIDs, key)
 		delete(output.Tags, key)
 	}
 	output.Entries = kept
 	output.entryOperationIDs = keptIDs
+	output.entryTags = keptTags
 
 	stillFailed := output.Failed[:0]
 	for _, failed := range output.Failed {
