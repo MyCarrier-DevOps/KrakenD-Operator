@@ -22,7 +22,17 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 )
 
-// webhookServerOptions builds the webhook server options.
-func webhookServerOptions(enabled bool, certPath, certName, certKey string, tlsOpts []func(*tls.Config)) webhook.Options {
-	return webhook.Options{TLSOpts: tlsOpts}
+// webhookServerOptions builds the webhook server options. The certificate
+// location goes to the server rather than into a certificate watcher added to
+// the manager: the server starts its own watcher on every replica, while a
+// manager-added watcher runs only on the leader and a standby would keep the
+// certificate it read at startup. With webhooks disabled no certificate is read.
+func webhookServerOptions(
+	enabled bool, certPath, certName, certKey string, tlsOpts []func(*tls.Config),
+) webhook.Options {
+	opts := webhook.Options{TLSOpts: tlsOpts}
+	if webhookCertWatchNeeded(enabled, certPath) {
+		opts.CertDir, opts.CertName, opts.KeyName = certPath, certName, certKey
+	}
+	return opts
 }
