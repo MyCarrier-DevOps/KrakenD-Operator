@@ -242,6 +242,12 @@ func TestAttribute_PathWithStopCharactersNamesItsOwnEntry(t *testing.T) {
 			wantIndex: []int{1},
 		},
 		{
+			name:      "a placeholder list names no route",
+			rendered:  `{"endpoints":[{"endpoint":"/orders-a","method":"GET"},{"endpoint":"/b","method":"GET"}]}`,
+			output:    "ERROR parsing the configuration file:\t'krakend.json': input and output params do not match. endpoint: GET /b, backend: 0. input: [], output: [-GET /orders-a zz]\n",
+			wantIndex: []int{1},
+		},
+		{
 			name:      "a path ending in a bang names only its own entry",
 			rendered:  `{"endpoints":[{"endpoint":"/orders-a","method":"GET"},{"endpoint":"/orders-a!","method":"GET"}]}`,
 			output:    "ERROR parsing the configuration file:\t'krakend.json': undefined output param 'missing'! endpoint: GET /orders-a!, backend: 0. input: [], output: [missing]\n",
