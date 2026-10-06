@@ -110,6 +110,11 @@ manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and Cust
 	# that README.md alone; hand edits to the CRD *.yaml files themselves
 	# are still discarded on the next `make manifests` run.
 	cp config/crd/bases/*.yaml ../charts/krakend-operator/crds/
+	# The chart's manager ClusterRole renders its rules from this copy
+	# (templates/clusterrole.yaml), so it cannot drift from the markers;
+	# verify-manifests below gates the copy like the CRDs.
+	mkdir -p ../charts/krakend-operator/files
+	cp config/rbac/role.yaml ../charts/krakend-operator/files/manager-role.yaml
 
 .PHONY: generate
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
@@ -118,7 +123,7 @@ generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and
 .PHONY: verify-manifests
 # Fail if any generated manifest output drifts from source (review id
 # 3807285642, #5's original CI drift gate; broadened by review id
-# 3811443563, #3). Covers all THREE generated-output locations, not just
+# 3811443563, #3). Covers every generated-output location, not just
 # config/crd/bases:
 #   - config/crd/bases, config/rbac/role.yaml, config/webhook/manifests.yaml
 #     (controller-gen output, via the `manifests` target)
@@ -141,13 +146,10 @@ generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and
 # none of that is genuine CRD/RBAC/webhook drift, and gating on it would
 # make this target permanently red for reasons unrelated to source changes.
 #
-# There is a FOURTH RBAC copy this gate does NOT and CANNOT cover:
-# charts/krakend-operator/templates/clusterrole.yaml is hand-maintained —
-# nothing regenerates or diffs it against config/rbac/role.yaml. Keep it in
-# sync with config/rbac/role.yaml (and bundle's cluster role) BY HAND on any
-# RBAC-affecting change; see docs/upgrade-guide.md. Verified as part of this
-# round-4 fix: both config/rbac/role.yaml and charts/krakend-operator/
-# templates/clusterrole.yaml currently grant delete on batch/jobs.
+# ../charts/krakend-operator/files/manager-role.yaml: the chart's
+# ClusterRole rules, copied from config/rbac/role.yaml by `manifests` and
+# rendered by templates/clusterrole.yaml, so the chart cannot drift from the
+# +kubebuilder:rbac markers. Gated here like the chart's CRD copy.
 #
 # ../charts/krakend-operator/crds (review id 3812030497, round-5 #1): the
 # Helm chart's CRD copy, kept in sync by the `manifests` target's own `cp`
@@ -155,7 +157,7 @@ generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and
 # cp with nothing to enforce it) would let the chart copy drift again the
 # next time someone edits a CRD type without running `make manifests`
 # locally before commit.
-VERIFY_MANIFESTS_PATHS = config/crd/bases config/rbac/role.yaml config/webhook/manifests.yaml bundle/manifests ../charts/krakend-operator/crds
+VERIFY_MANIFESTS_PATHS = config/crd/bases config/rbac/role.yaml config/webhook/manifests.yaml bundle/manifests ../charts/krakend-operator/crds ../charts/krakend-operator/files
 # NOTE: this target mutates config/manager/kustomization.yaml as a side
 # effect of its `bundle` dependency (`kustomize edit set image`), which
 # runs to completion as a prerequisite before this recipe's own body
