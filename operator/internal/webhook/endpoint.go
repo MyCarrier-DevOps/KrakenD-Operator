@@ -210,14 +210,15 @@ func (v *EndpointValidator) checkRender(
 		baseline = []v1alpha1.KrakenDEndpoint{*stored}
 	}
 	candidate := []v1alpha1.KrakenDEndpoint{*ep}
+	isolated := bindCheck(v.Checker.CheckIsolated, gw, candidate)
 	return ratchetRender(ctx, renderChecks{
 		after:      bindCheck(v.Checker.CheckGateway, gw, candidate),
 		before:     bindCheck(v.Checker.CheckGateway, gw, nil),
-		isoAfter:   bindCheck(v.Checker.CheckIsolated, gw, candidate),
+		isoAfter:   isolated,
 		isoBefore:  bindCheck(v.Checker.CheckIsolated, gw, baseline),
 		newFailure: newlyBlamed(types.NamespacedName{Namespace: ep.Namespace, Name: ep.Name}),
 	},
-		func(verdict configcheck.Verdict) error { return renderDenial(ep, verdict) },
+		func(verdict configcheck.Verdict) error { return renderDenial(ctx, ep, verdict, isolated) },
 		func(before configcheck.Verdict) string {
 			return fmt.Sprintf("gateway %s/%s already fails validation without this change: %s",
 				gw.Namespace, gw.Name, before.Summary(warningLimit))
@@ -234,8 +235,12 @@ const maxEntryCauses = 20
 // those of the entries beyond the limit, go on spec.endpoints as a bounded
 // summary that counts what it leaves out. krakend check prints the values it
 // refuses, so its findings about the gateway root or about an endpoint in
-// another namespace are only counted.
-func renderDenial(ep *v1alpha1.KrakenDEndpoint, verdict configcheck.Verdict) error {
+// another namespace are only counted; when there are any, isolated (the
+// gateway root and ep alone) is run so that ep's own errors are still shown.
+func renderDenial(
+	ctx context.Context, ep *v1alpha1.KrakenDEndpoint, verdict configcheck.Verdict,
+	isolated func(context.Context) (configcheck.Verdict, error),
+) error {
 	self := types.NamespacedName{Namespace: ep.Namespace, Name: ep.Name}
 	byEntry := map[int][]configcheck.Finding{}
 	var blamed []int
@@ -277,9 +282,16 @@ func renderDenial(ep *v1alpha1.KrakenDEndpoint, verdict configcheck.Verdict) err
 				configcheck.Verdict{Findings: others}.Summary(warningLimit)))
 	}
 	if withheld > 0 {
-		errs = append(errs, field.Invalid(field.NewPath("spec", "endpoints"), field.OmitValueType{},
-			fmt.Sprintf("with this change the gateway's config also fails krakend check on %d findings "+
-				"about the gateway root or endpoints in other namespaces, which are not shown", withheld)))
+		own, err := isolated(ctx)
+		if err != nil {
+			return checkErr(err)
+		}
+		msg := fmt.Sprintf("with this change the gateway's config also fails krakend check on %d findings "+
+			"about the gateway root or endpoints in other namespaces, which are not shown", withheld)
+		if !own.OK {
+			msg += "; this change alone fails it: " + own.Summary(warningLimit)
+		}
+		errs = append(errs, field.Invalid(field.NewPath("spec", "endpoints"), field.OmitValueType{}, msg))
 	}
 	return invalid(kindEndpoint, ep.Name, errs)
 }
