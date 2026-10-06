@@ -23,6 +23,7 @@ import (
 
 	authorizationv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
@@ -113,5 +114,22 @@ func TestGatewayAdmission_PostRestartJobSecretReferencesNeedPodCreateRights(t *t
 				t.Errorf("response = %+v, want a 403 denial", resp.Result)
 			}
 		})
+	}
+}
+
+// A post-restart Job the requester did not touch is not reviewed again: a
+// user who may edit the gateway but not create pods can still scale it.
+func TestGatewayAdmission_UnchangedPostRestartJobIsNotReviewedAgain(t *testing.T) {
+	var reviews []authorizationv1.SubjectAccessReview
+	v := &GatewayValidator{Client: reviewingClient(false, &reviews), Checker: &scriptedChecker{}}
+	borrow := func(p *v1alpha1.PostRestartJobSpec) { p.ServiceAccountName = "namespace-admin" }
+	old := gatewayWithJob(borrow)
+	edited := gatewayWithJob(borrow)
+	edited.Spec.Replicas = ptr.To[int32](3)
+
+	resp := review(t, v, "alice", edited, old)
+
+	if !resp.Allowed || len(reviews) != 0 {
+		t.Errorf("response = %+v after %d reviews, want it admitted without a review", resp.Result, len(reviews))
 	}
 }
