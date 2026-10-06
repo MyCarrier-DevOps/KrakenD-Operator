@@ -29,6 +29,9 @@ import (
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+
+	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 )
 
 // otherControllersServiceAccount is a ServiceAccount named like gw that a
@@ -136,5 +139,21 @@ func TestReconcileInfrastructure_ServiceAccountCreatedOrAdoptedIsUsedInTheSamePa
 				t.Fatalf("the Deployment must be created in the same pass: %v", err)
 			}
 		})
+	}
+}
+
+func TestGatewayReconcile_NewConfigUnderAForeignServiceAccountReportsNoRollout(t *testing.T) {
+	gw := reconciledGateway()
+	c := fakeClientBuilder().WithObjects(gw, otherControllersServiceAccount(&gw.ObjectMeta)).
+		WithStatusSubresource(gw).Build()
+	rec := fakeRecorder()
+	r := acceptanceReconciler(c, rec, &renderer.RenderOutput{JSON: []byte(`{"version":3}`), Checksum: "cs1"})
+
+	if err := reconcileGateway(t, r, gw); err == nil {
+		t.Errorf("expected the hold to be reported as an error")
+	}
+
+	if events := drainEvents(rec); hasEventReason(events, v1alpha1.ReasonConfigDeployed) {
+		t.Errorf("events = %q, want no ConfigDeployed: the held Deployment starts no rollout", events)
 	}
 }
