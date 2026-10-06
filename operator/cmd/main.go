@@ -133,6 +133,10 @@ func main() {
 			"webhook-cert-name", webhookCertName,
 			"webhook-cert-key", webhookCertKey,
 		)
+		if err := checkServingFiles(webhookCertPath, webhookCertName, webhookCertKey); err != nil {
+			setupLog.Error(err, "Webhook certificate files are not readable")
+			os.Exit(1)
+		}
 	}
 	webhookServer := webhook.NewServer(
 		webhookServerOptions(enableWebhooks, webhookCertPath, webhookCertName, webhookCertKey, tlsOpts))
@@ -146,6 +150,10 @@ func main() {
 			"metrics-cert-name", metricsCertName,
 			"metrics-cert-key", metricsCertKey,
 		)
+		if err := checkServingFiles(metricsCertPath, metricsCertName, metricsCertKey); err != nil {
+			setupLog.Error(err, "Metrics certificate files are not readable")
+			os.Exit(1)
+		}
 	}
 	metricsOptions := metricsServerOptions(
 		metricsAddr, secureMetrics, metricsCertPath, metricsCertName, metricsCertKey, tlsOpts)
