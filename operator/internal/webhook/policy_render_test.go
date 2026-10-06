@@ -31,6 +31,7 @@ import (
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
+	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 )
 
 func testPolicy(raw string) *v1alpha1.KrakenDBackendPolicy {
@@ -45,6 +46,33 @@ func referencing() []client.Object {
 	ep := testEndpoint("uses-p", "/a")
 	ep.Spec.Endpoints[0].Backends[0].PolicyRef = &v1alpha1.PolicyRef{Name: "p"}
 	return []client.Object{testGateway(), ep}
+}
+
+// The warning that a gateway already fails is read by a writer who may not
+// read the gateway or another namespace's endpoints, so it follows the endpoint
+// denial's rule: it quotes the policy's own namespace and counts the rest.
+func TestPolicyAdmission_AlreadyFailingWarningWithholdsForeignFindings(t *testing.T) {
+	before := configcheck.Verdict{Stage: renderer.StageCheck, Findings: []configcheck.Finding{
+		{Index: -1, Message: "host http://u:SECRET-PASS@h1 not valid"},
+		{Endpoint: types.NamespacedName{Namespace: "tenant-a", Name: "orders"}, Index: 0, Message: "SECRET-EVERY"},
+		failing("mine", 0, "same namespace").Findings[0],
+	}}
+	chk := &scriptedChecker{verdicts: []configcheck.Verdict{{OK: true}, failing("uses-p", 0, "bad"), before}}
+	v := &PolicyValidator{Client: fakeClient(referencing()...), Checker: chk}
+
+	resp := review(t, v, "alice", testPolicy(`{"qos/circuit-breaker":{}}`), testPolicy(`{}`))
+
+	if !resp.Allowed || len(resp.Warnings) != 1 {
+		t.Fatalf("response = %+v, warnings %q, want an admission with one warning", resp.Result, resp.Warnings)
+	}
+	w := resp.Warnings[0]
+	if !strings.Contains(w, "default/mine spec.endpoints[0]: same namespace") ||
+		!strings.Contains(w, "2 findings about the gateway root or endpoints in other namespaces are not shown") {
+		t.Errorf("warning = %q, want the same-namespace finding quoted and two others counted", w)
+	}
+	if strings.Contains(w, "SECRET") {
+		t.Errorf("warning = %q quotes a value the requester may not read", w)
+	}
 }
 
 func TestPolicyAdmission_Render(t *testing.T) {
