@@ -315,6 +315,8 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 - `Chart.yaml` with kubeVersion >=1.33 constraint
 - Templated: Deployment, ClusterRole/Binding, leader-election Role/Binding, ServiceAccount, metrics Service
 - Webhook infrastructure: ValidatingWebhookConfiguration (4 webhooks), webhook Service, cert-manager Issuer+Certificate, cert volume mount in Deployment
+- Metrics RBAC (when `metrics.enabled`): `<fullname>-metrics-auth-role` ClusterRole (TokenReviews and SubjectAccessReviews, bound to the operator ServiceAccount) and `<fullname>-metrics-reader` ClusterRole (GET `/metrics`, to bind to the scraper). Hand-copied from `config/rbac`; the render test pins both to the kustomize copies. The metrics Service carries `app.kubernetes.io/component: metrics`
+- Optional `ServiceMonitor` (`metrics.serviceMonitor.enabled`, default `false`; `additionalLabels`): selects only the metrics Service through the component label (the webhook Service shares the other selector labels, and the render test proves it is not selected). Uses `bearerTokenFile`, as `config/prometheus/monitor.yaml` does (accepted, though deprecated, by the prometheus-operator v0.77.1 CRD)
 - Webhooks enabled by default (`webhooks.enabled=true`, `webhooks.certManager.enabled=true`); can be disabled or used with external CA bundle
 - CRDs in `crds/` directory (auto-installed by Helm)
 - Configurable: image, replicas, resources, security context, probes, affinity, tolerations, webhooks, cert-manager
