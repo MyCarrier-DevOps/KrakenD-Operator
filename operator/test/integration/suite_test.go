@@ -222,16 +222,17 @@ func runTests(m *testing.M) int {
 	// evaluator, filter and generator.
 	slowFetcher = &gatedFetcher{Fetcher: autoconfig.NewFetcher(mgr.GetClient())}
 	if err := (&controller.KrakenDAutoConfigReconciler{
-		Client:       mgr.GetClient(),
-		Scheme:       scheme,
-		Recorder:     mgr.GetEventRecorderFor("krakendautoconfig-controller"),
-		Fetcher:      slowFetcher,
-		CUEEvaluator: autoconfig.NewCUEEvaluator(),
-		Filter:       autoconfig.NewFilter(),
-		Generator:    autoconfig.NewGenerator(),
-		Checker:      checker,
-		Clock:        clock.RealClock{},
-		FetchTimeout: 20 * time.Second,
+		Client:                  mgr.GetClient(),
+		Scheme:                  scheme,
+		Recorder:                mgr.GetEventRecorderFor("krakendautoconfig-controller"),
+		Fetcher:                 slowFetcher,
+		CUEEvaluator:            autoconfig.NewCUEEvaluator(),
+		Filter:                  autoconfig.NewFilter(),
+		Generator:               autoconfig.NewGenerator(),
+		Checker:                 checker,
+		Clock:                   clock.RealClock{},
+		MaxConcurrentReconciles: 4,
+		FetchTimeout:            20 * time.Second,
 	}).SetupWithManager(mgr); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to setup autoconfig controller: %v\n", err)
 		return 1
