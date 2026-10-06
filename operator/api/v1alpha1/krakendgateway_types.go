@@ -706,6 +706,7 @@ type KrakenDGatewayStatus struct {
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // KrakenDGateway is the Schema for the krakendgateways API.
+// +operator-sdk:csv:customresourcedefinitions:displayName="KrakenD Gateway"
 type KrakenDGateway struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
