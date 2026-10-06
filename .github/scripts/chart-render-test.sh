@@ -218,6 +218,10 @@ expect_absent "metrics.enabled=false renders no metrics RBAC" "tokenreviews" --s
 expect_equal "the chart's metrics auth ClusterRole matches config/rbac" \
 	"$(rules_block <operator/config/rbac/metrics_auth_role.yaml)" \
 	"$(manifest ClusterRole t-krakend-operator-metrics-auth-role | rules_block)"
+# The kustomize copy quotes the path; the chart does not.
+expect_equal "the chart's metrics-reader ClusterRole matches config/rbac" \
+	"$(rules_block <operator/config/rbac/metrics_reader_role.yaml | tr -d '"')" \
+	"$(manifest ClusterRole t-krakend-operator-metrics-reader | rules_block)"
 
 if [ "$failures" -gt 0 ]; then
 	printf '%d chart render test(s) failed\n' "$failures"
