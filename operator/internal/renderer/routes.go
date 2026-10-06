@@ -51,6 +51,13 @@ func ConflictKey(endpoint string) string {
 	return cleaned
 }
 
+// RouteKey identifies the route an entry (method, endpoint) occupies: the
+// method and the endpoint's ConflictKey. Two entries with the same RouteKey
+// cannot both be served.
+func RouteKey(method, endpoint string) string {
+	return ""
+}
+
 // RouteClashDetail says why the route of the entry (method, endpoint) is not
 // served because owner already serves otherPath, which has the same route.
 func RouteClashDetail(method, endpoint, otherPath, owner string) string {

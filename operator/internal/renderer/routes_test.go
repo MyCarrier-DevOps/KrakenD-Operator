@@ -86,6 +86,18 @@ func TestConflictKey(t *testing.T) {
 	}
 }
 
+func TestRouteKey(t *testing.T) {
+	if got, want := RouteKey("GET", "/a/{id}"), "GET /a/{}"; got != want {
+		t.Errorf("RouteKey = %q, want %q", got, want)
+	}
+	if RouteKey("GET", "/a/{id}") != RouteKey("GET", "/a//{name}") {
+		t.Error("paths that differ only in parameter names or slashes must share a RouteKey")
+	}
+	if RouteKey("GET", "/a") == RouteKey("POST", "/a") {
+		t.Error("methods must separate RouteKeys")
+	}
+}
+
 func TestPathParams(t *testing.T) {
 	if got := PathParams("/a/{id}/b/{x-y}/c{z}"); !slices.Equal(got, []string{"id", "x-y"}) {
 		t.Errorf("PathParams = %v, want [id x-y]", got)
