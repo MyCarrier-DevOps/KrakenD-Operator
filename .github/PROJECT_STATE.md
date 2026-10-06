@@ -318,8 +318,8 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 - Validated: `helm lint` + `helm template` pass
 
 ### CI Pipelines (`.github/workflows/`)
-- `ci.yml` — PR-only gate: lint (golangci-lint v2.11.4), test (race, coverage >=80%), build, e2e (testcontainers + K3s); triggers on `operator/**` changes
-- `helm-ci.yml` — PR-only gate: Helm lint + template; triggers on `charts/**` changes
+- `ci.yml` — PR-only gate: lint (golangci-lint v2.11.4), test (race, coverage >=80%), build, e2e (testcontainers + K3s); triggers on `operator/**` changes; also triggers on `charts/krakend-operator/**` and `.github/krakend-smoke/**`, so a hand edit of the chart's generated copies (CRDs, `files/manager-role.yaml`) fails Manifests Drift. `krakend-smoke` job: runs `krakend check -t -n` from the Dockerfile-pinned `KRAKEND_IMAGE` with `--network=none` on three fixtures in `.github/krakend-smoke/` and asserts exit codes (valid 0, decoding error 1, route conflict 1)
+- `helm-ci.yml` — PR-only gate: Helm lint + template + render tests (`.github/scripts/chart-render-test.sh`); triggers on `charts/**`, `operator/config/rbac/**`, `operator/config/manager/**`, `operator/config/webhook/**` and its own workflow and script (the render tests read those config files)
 - `release.yml` — On push to main: runs lint/test/build/e2e/helm-lint gates, then auto-calculates next semver from conventional commits (`mathieudutour/github-tag-action`), builds+pushes multi-arch image to GHCR, releases Helm chart via chart-releaser-action, creates GitHub release with changelog
 
 ### Operational Documentation (`docs/`)
