@@ -287,6 +287,21 @@ func TestValidate_RejectionIsAVerdict(t *testing.T) {
 	}
 }
 
+func TestValidate_KrakendCheckRejectionIsTheCheckStage(t *testing.T) {
+	bin := fakeKrakenD(t, `echo "ERROR: bad endpoint"; exit 1`)
+	v := NewValidator(ValidatorOptions{Executor: NewKrakenDExecutor(bin), BinaryPath: bin})
+
+	err := v.Validate(context.Background(), []byte(`{"version":3}`), v1alpha1.EditionCE)
+
+	var valErr *ValidationError
+	if !errors.As(err, &valErr) {
+		t.Fatalf("Validate = %v, want a ValidationError", err)
+	}
+	if valErr.Stage != StageCheck {
+		t.Errorf("Stage = %d, want StageCheck (%d)", valErr.Stage, StageCheck)
+	}
+}
+
 func TestValidate_TempFileErrorIsStable(t *testing.T) {
 	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "missing"))
 	v := NewValidator(ValidatorOptions{Executor: &mockExecutor{}, BinaryPath: "krakend"})
