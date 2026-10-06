@@ -5226,6 +5226,61 @@ func TestAutoConfigReconcile_HoldDoesNotEchoAnotherEndpointsValue(t *testing.T) 
 	}
 }
 
+// The candidates' own failures stay visible: when the candidates fail the
+// check on their own, the hold shows that check's summary.
+func TestAutoConfigReconcile_HoldStillShowsTheTenantsOwnError(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	c := fakeClientBuilder().WithObjects(ac, cm, testGateway()).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	parseError := configcheck.Finding{Index: -1, Message: "host http://own-host:bad not valid: invalid host"}
+	checker := &fakeChecker{
+		verdicts: []configcheck.Verdict{{Findings: []configcheck.Finding{parseError}}, {OK: true}},
+		isolated: []configcheck.Verdict{{Findings: []configcheck.Finding{parseError}}},
+	}
+	r.Checker = checker
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	failed := getAC(t, c, ac).Status.FailedOperations
+	if len(failed) != 1 || !strings.Contains(failed[0].Message, "own-host:bad not valid") {
+		t.Errorf("failedOperations = %+v, want the candidate's own parse error", failed)
+	}
+	if len(checker.isolatedCalls) != 1 || len(checker.isolatedCalls[0]) != 1 {
+		t.Errorf("isolated checks = %v, want one over the candidate alone", checker.isolatedCalls)
+	}
+}
+
+// An isolated check that cannot run leaves the sync unjudged, like a baseline
+// that cannot run: nothing is written.
+func TestAutoConfigReconcile_IsolatedCheckThatCannotRunFailsTheSync(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	c := fakeClientBuilder().WithObjects(ac, cm, testGateway()).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Checker = &fakeChecker{
+		verdicts: []configcheck.Verdict{
+			{Findings: []configcheck.Finding{{Index: -1, Message: "broken"}}}, {OK: true},
+		},
+		isolatedErr: errors.New("no free validator slot before the deadline"),
+	}
+
+	if _, err := reconcileAC(r, ac); err == nil {
+		t.Fatal("expected an error to retry with backoff")
+	}
+	cond := meta.FindStatusCondition(getAC(t, c, ac).Status.Conditions, v1alpha1.ConditionSynced)
+	if cond == nil || cond.Reason != v1alpha1.ReasonValidatorUnavailable {
+		t.Errorf("expected Synced False/ValidatorUnavailable, got %+v", cond)
+	}
+	if endpointExists(t, c, "test-ac-listusers") {
+		t.Error("an endpoint was written although its check could not run")
+	}
+}
+
 func TestAttributeFindings_ReadsEndpointNotIndexAndKeepsTheLeastMessage(t *testing.T) {
 	a, b := generatedEndpoint("a", "/a"), generatedEndpoint("b", "/b")
 	got := attributeFindings([]configcheck.Finding{
@@ -6419,11 +6474,14 @@ type slotHeldChecker struct {
 	slots    chan struct{}
 	verdicts []configcheck.Verdict
 	held     []int
+	// isolatedHeld records the same for isolated checks, which all pass.
+	isolatedHeld []int
 }
 
 func (s *slotHeldChecker) CheckIsolated(
 	_ context.Context, _ *v1alpha1.KrakenDGateway, _ []v1alpha1.KrakenDEndpoint,
 ) (configcheck.Verdict, error) {
+	s.isolatedHeld = append(s.isolatedHeld, len(s.slots))
 	return configcheck.Verdict{OK: true}, nil
 }
 
@@ -6459,6 +6517,9 @@ func TestAutoConfigReconcile_BaselineCheckHoldsACheckSlot(t *testing.T) {
 		t.Fatalf("reconcile: %v", err)
 	}
 
+	if !slices.Equal(checker.isolatedHeld, []int{1}) {
+		t.Errorf("slots held during the isolated check = %v, want [1]", checker.isolatedHeld)
+	}
 	if !slices.Equal(checker.held, []int{1, 1}) {
 		t.Errorf("slots held during the round and baseline checks = %v, want [1 1]", checker.held)
 	}
