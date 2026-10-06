@@ -2006,7 +2006,7 @@ func TestEvaluate_SkippedOperationsOnOneRouteKeepTheirOwnIDAndTags(t *testing.T)
 		tagsByID[s.OperationID] = s.Tags
 	}
 	if want := map[string][]string{"a": {"ta"}, "b": {"tb"}}; !reflect.DeepEqual(tagsByID, want) {
-		t.Fatalf("skipped (operationId -> tags) = %v, want %v", tagsByID, want)
+		t.Errorf("skipped (operationId -> tags) = %v, want %v", tagsByID, want)
 	}
 
 	// kept returns the operationIds of the skips a filter leaves in scope.
