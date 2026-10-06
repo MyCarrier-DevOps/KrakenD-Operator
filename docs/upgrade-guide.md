@@ -42,17 +42,19 @@ make deploy IMG=ghcr.io/mycarrier-devops/krakend-operator:<new-version>
    ```bash
    operator/hack/audit-admission-rules.sh
    ```
-   It prints one line per object or conflict. No output means none of the
-   checks found anything; it does not cover other reserved paths under
+   It prints one line per object or conflict, including a backend host or an
+   endpoint path that holds whitespace or a control character. No output means
+   none of the checks found anything; it does not cover other reserved paths under
    `/__debug`, `/__echo` and `/__health` (a GET on the gateway's own health
    path is reported), unnamed `/*` wildcards on CE gateways, unknown
    `urlPattern` placeholders or cross-method `auto_options` clashes. Fix or
    knowingly accept each line before upgrading. What a listed object blocks
    depends on the rule it breaks:
    - A stored value that breaks a field rule (a pattern, an enum, a minimum, a
-     length, a `tmpSizeLimit` outside the allowed forms, or an endpoint
-     `timeout` or `cacheTTL` that is not a duration) keeps being accepted on
-     unrelated updates; only a change to that field must fix it. Items of a
+     length, a `tmpSizeLimit` outside the allowed forms, an endpoint
+     `timeout` or `cacheTTL` that is not a duration, or a backend host or
+     endpoint path with whitespace) keeps being accepted on unrelated updates;
+     only a change to that field must fix it. Items of a
      list without per-item keys (an entry's `backends`, a KrakenDAutoConfig's
      `overrides` and `additionalEndpoints[].backends`) are re-checked on any
      edit to that list.
@@ -1722,8 +1724,9 @@ to Kubernetes capabilities below 1.33 and refuse the chart unless given
 
 **KrakenDEndpoint schema.** `spec.endpoints` needs one to 1024 entries and each
 (endpoint, method) pair at most once; every entry needs a backend; `endpoint`
-must start with `/` and contain no `*`, `?`, `&` or `%` except a trailing `/*`;
-`timeout` and `cacheTTL` must be Go durations (`30s`, `1m30s`); `outputEncoding`,
+must start with `/` and contain no `*`, `?`, `&`, `%`, whitespace or control
+character except a trailing `/*`; each backend `host` is non-empty and holds
+no whitespace or control character; `timeout` and `cacheTTL` must be Go durations (`30s`, `1m30s`); `outputEncoding`,
 a backend's `encoding`, `sd` and `method` must be values KrakenD 2.13 accepts;
 `gatewayRef.name` and `policyRef.name` must be non-empty (this also applies to
 the same references on a KrakenDAutoConfig). `spec.endpoints` is now a map list
@@ -1739,6 +1742,21 @@ fits in 64 bits of nanoseconds and be at most 64 characters: a value such as
 broke decoding of the whole endpoint list. The rule applies only to values that
 match the pattern, so a stored non-duration (`3 seconds`) fails the pattern
 alone and keeps ratcheting.
+
+**Backend hosts and endpoint paths hold no whitespace or control
+characters.** A backend `host` (on a KrakenDEndpoint, or in the `backends` of
+an AutoConfig additional endpoint), and the `endpoint` path of an entry, an
+AutoConfig override or an AutoConfig additional endpoint, may no
+longer contain a space, tab, newline or other control character (ASCII 0x00 to
+0x20 and 0x7F); a host may not be empty. `krakend check` prints both
+verbatim in its errors, and the operator attributes those errors to endpoints
+by the route they name, so text of that kind let one tenant's invalid value
+make its error read as another tenant's endpoint. No valid URL host or path
+contains such a character. Stored objects ratchet like every other field rule:
+an entry the update leaves unchanged keeps validating, and an edit to the
+backends of an entry re-checks every host of that entry. The audit in
+step 5 of the Pre-Upgrade Checklist lists existing objects that hold one, so
+fix them before the CRDs are applied.
 
 **KrakenDGateway schema.** `config.timeout`, `cacheTTL`, `dnsCacheTTL`,
 `cors.maxAge` and `redis.connectionPool.dialTimeout` must be KrakenD durations
@@ -1776,7 +1794,8 @@ on the generated endpoints. An override `method` is one of GET, POST, PUT, PATCH
 or DELETE, `concurrentCalls` is 1 or more, `backends[].index` is 0 or more, and
 `spec.overrides` holds at most 1024 items. An override `endpoint` and an
 `additionalEndpoints[].endpoint` follow the KrakenDEndpoint path rule (start
-with `/`, no `*`, `?`, `&` or `%` except a trailing `/*`), and
+with `/`, no `*`, `?`, `&`, `%`, whitespace or control character except a
+trailing `/*`; a backend `host` follows the same rule as on a KrakenDEndpoint), and
 `additionalEndpointsBasePath` starts with `/`. The base path `additionalEndpointsBasePath` stays mutually exclusive with
 `urlTransform.addPathPrefix`. `additionalEndpoints` holds at most 256 items,
 unique on (endpoint, method), with `method` defaulting to `GET` (existing
