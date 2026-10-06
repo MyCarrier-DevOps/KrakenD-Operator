@@ -119,7 +119,9 @@ make deploy IMG=ghcr.io/mycarrier-devops/krakend-operator:<new-version>
      `replicaCount: 1` no longer renders, because `replicaCount` now defaults
      to 2. Set `replicaCount: 1` or re-enable leader election before
      upgrading. Otherwise the operator Deployment goes from 1 to 2 pods and a
-     PodDisruptionBudget appears.
+     PodDisruptionBudget appears. On a single-node cluster, `kubectl drain`
+     blocks on the second operator pod because of that PodDisruptionBudget: set
+     `podDisruptionBudget.enabled: false` or `replicaCount: 1` there.
    - If you set `resources` for the operator in your own values or manifests,
      raise the memory limit to 512Mi (the default was 256Mi): up to three
      `krakend check` runs share the container.
@@ -257,6 +259,19 @@ make deploy IMG=ghcr.io/mycarrier-devops/krakend-operator:<previous-version>
 > Removing the finalizer from a policy that is already `Terminating` and still
 > referenced deletes it at once: its endpoints then report `PolicyNotFound` and
 > drop out of the render. Repoint those endpoints first (the runbook lists them).
+
+> **Downgrading the operator past *Operator RBAC, caching and availability*.**
+> v0.14.0 needs `update` on ConfigMaps and on `krakendendpoints/status`, which
+> the trimmed ClusterRole no longer grants. `helm rollback` restores the older
+> role together with the older operator. `make deploy IMG=…:<previous>` run
+> from a current checkout applies the trimmed role to the older binary, which
+> then fails with `forbidden: User …`. Check out the previous release's
+> manifests first:
+>
+> ```bash
+> git checkout v<previous-version>
+> make deploy IMG=ghcr.io/mycarrier-devops/krakend-operator:<previous-version>
+> ```
 
 ---
 
@@ -2131,6 +2146,12 @@ The leader-election Role drops ConfigMaps and keeps `get`, `create` and
 Upgrading applies the new rules with no other change: `helm upgrade` and
 `make deploy` apply them from the chart and the kustomize manifests, and an
 OLM upgrade applies the permissions in the new bundle's ClusterServiceVersion.
+
+During `helm upgrade` from v0.14.0, the old leader keeps running under the new
+role until the Lease moves to a new pod, about 30 to 60 seconds. In that time
+it logs `forbidden: User …` for the verbs it no longer has (ConfigMap
+`update`, endpoint status `update`). That is expected and stops once the new
+leader takes over.
 
 ### The Helm chart's ClusterRole now tracks the operator exactly
 
