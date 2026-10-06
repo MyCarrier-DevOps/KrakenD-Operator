@@ -55,7 +55,7 @@ func ConflictKey(endpoint string) string {
 // method and the endpoint's ConflictKey. Two entries with the same RouteKey
 // cannot both be served.
 func RouteKey(method, endpoint string) string {
-	return ""
+	return method + " " + ConflictKey(endpoint)
 }
 
 // RouteClashDetail says why the route of the entry (method, endpoint) is not
