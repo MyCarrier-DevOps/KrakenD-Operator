@@ -1,4 +1,6 @@
-replicaCount: 1
+# Two replicas keep the admission webhooks available during rollouts and
+# node drains; leader election keeps one controller active at a time.
+replicaCount: 2
 
 image:
   repository: ghcr.io/mycarrier-devops/krakend-operator
