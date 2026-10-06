@@ -686,6 +686,27 @@ func TestEndpointAdmission_IsolatedSummaryInADenialIsBounded(t *testing.T) {
 	}
 }
 
+// The isolated check that decided a denial is the one its withheld findings
+// run for the requester's own errors: krakend runs once for both.
+func TestEndpointAdmission_DenialReusesTheIsolatedCheckOfTheRatchet(t *testing.T) {
+	root := configcheck.Finding{Index: -1, Message: "a gateway root line"}
+	mine := configcheck.Finding{
+		Endpoint: types.NamespacedName{Namespace: "default", Name: "new"}, Index: 0, Message: "own error"}
+	broken := configcheck.Verdict{Stage: renderer.StageCheck, Findings: []configcheck.Finding{root}}
+	isoAfter := configcheck.Verdict{Stage: renderer.StageCheck, Findings: []configcheck.Finding{root, mine}}
+	chk := &scriptedChecker{verdicts: []configcheck.Verdict{broken, broken, isoAfter, {OK: true}}}
+	v := &EndpointValidator{Client: fakeClient(testGateway()), Checker: chk}
+
+	resp := review(t, v, "alice", testEndpoint("new", "/a"), nil)
+
+	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("response = %+v, want a 422 denial", resp.Result)
+	}
+	if got := strings.Join(chk.calls, ","); got != "gateway+candidate,gateway,isolated,isolated" {
+		t.Errorf("checks = %s, want one isolated check of the candidate and one of the baseline", got)
+	}
+}
+
 func TestEndpointAdmission_NoRenderCheckWithoutAGatewayOrAChange(t *testing.T) {
 	old := testEndpoint("e", "/a")
 	labeled := old.DeepCopy()
