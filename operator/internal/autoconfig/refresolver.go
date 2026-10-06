@@ -132,25 +132,18 @@ func componentMap(root map[string]any, kind string) map[string]any {
 // existingExampleNames returns the keys of root's components.examples.
 func existingExampleNames(root map[string]any) map[string]bool {
 	taken := map[string]bool{}
-	components, _ := root["components"].(map[string]any)
-	examples, _ := components["examples"].(map[string]any)
+	components, ok := root["components"].(map[string]any)
+	if !ok {
+		return taken
+	}
+	examples, ok := components["examples"].(map[string]any)
+	if !ok {
+		return taken
+	}
 	for name := range examples {
 		taken[name] = true
 	}
 	return taken
-}
-
-// freeExampleName returns name, or name_2, name_3, and so on, whichever is the
-// first not in components/examples yet, and takes it. An Example Object body
-// never replaces an entry the spec already has, or takes the name a reference
-// in the spec points at.
-func (r *refResolver) freeExampleName(name string) string {
-	free := name
-	for n := 2; r.takenExamples[free]; n++ {
-		free = fmt.Sprintf("%s_%d", name, n)
-	}
-	r.takenExamples[free] = true
-	return free
 }
 
 // refRole is what an external $ref's target is: a schema, which is walked for
@@ -187,6 +180,19 @@ type refResolver struct {
 	warnings      []string
 	warned        map[string]bool // warnings already recorded, so each is reported once
 	fatalErr      error           // first fetch/decode failure; halts all further resolution
+}
+
+// freeExampleName returns name, or name_2, name_3, and so on, whichever is the
+// first not in components/examples yet, and takes it. An Example Object body
+// never replaces an entry the spec already has, or takes the name a reference
+// in the spec points at.
+func (r *refResolver) freeExampleName(name string) string {
+	free := name
+	for n := 2; r.takenExamples[free]; n++ {
+		free = fmt.Sprintf("%s_%d", name, n)
+	}
+	r.takenExamples[free] = true
+	return free
 }
 
 var sanitizeNameRE = regexp.MustCompile(`[^A-Za-z0-9_]+`)
@@ -271,9 +277,9 @@ func (r *refResolver) resolveExampleRef(entry map[string]any, base string) {
 	if r.fatalErr != nil {
 		return
 	}
-	ref, _ := entry["$ref"].(string)
+	ref, ok := entry["$ref"].(string)
 	r.warnLocalRef(ref, base)
-	if ref == "" || strings.HasPrefix(ref, "#") {
+	if !ok || ref == "" || strings.HasPrefix(ref, "#") {
 		return
 	}
 	if localName, err := r.resolveExternal(ref, base, exampleRole); err == nil {
