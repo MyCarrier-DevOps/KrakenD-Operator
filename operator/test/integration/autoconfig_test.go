@@ -649,3 +649,52 @@ func TestAutoConfig_EndpointsReadyFollowsChildReadiness(t *testing.T) {
 		return nil
 	})
 }
+
+func TestAutoConfig_SlowUpstreamDoesNotBlockOtherAutoConfigs(t *testing.T) {
+	ns := testNamespace(t)
+	gw := createReconciledGateway(t, ns, "gw-slow")
+	slow := &v1alpha1.KrakenDAutoConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "slow", Namespace: ns},
+		Spec: v1alpha1.KrakenDAutoConfigSpec{
+			GatewayRef: v1alpha1.GatewayRef{Name: gw.Name},
+			OpenAPI:    v1alpha1.OpenAPISource{URL: "http://spec.slow.invalid/openapi.json"},
+			Trigger:    v1alpha1.TriggerOnChange,
+		},
+	}
+	if err := k8sClient.Create(ctx, slow); err != nil {
+		t.Fatalf("create slow autoconfig: %v", err)
+	}
+	eventuallyWithin(t, 30*time.Second, func() error {
+		if slowFetcher.held.Load() == 0 {
+			return fmt.Errorf("slow fetch not started yet")
+		}
+		return nil
+	})
+
+	// With a single worker this AutoConfig would wait out the slow one's
+	// 20-second fetch deadline.
+	fast := createPetsAutoConfig(t, ns, gw.Name)
+	eventuallyWithin(t, 10*time.Second, func() error {
+		var cur v1alpha1.KrakenDAutoConfig
+		if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(fast), &cur); err != nil {
+			return err
+		}
+		if !meta.IsStatusConditionTrue(cur.Status.Conditions, v1alpha1.ConditionSynced) {
+			return fmt.Errorf("fast autoconfig not synced yet")
+		}
+		return nil
+	})
+
+	// The slow one fails at the deadline instead of hanging.
+	eventuallyWithin(t, 60*time.Second, func() error {
+		var cur v1alpha1.KrakenDAutoConfig
+		if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(slow), &cur); err != nil {
+			return err
+		}
+		cond := meta.FindStatusCondition(cur.Status.Conditions, v1alpha1.ConditionSpecAvailable)
+		if cond == nil || !strings.Contains(cond.Message, "context deadline exceeded") {
+			return fmt.Errorf("waiting for SpecFetchFailed at the deadline, got %+v", cond)
+		}
+		return nil
+	})
+}
