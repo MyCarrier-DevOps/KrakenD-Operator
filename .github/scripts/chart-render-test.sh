@@ -195,6 +195,10 @@ expect_equal "the chart's leader-election Role matches config/rbac" \
 	"$(rules_block <operator/config/rbac/leader_election_role.yaml)" \
 	"$(manifest Role t-krakend-operator-leader-election-role | rules_block)"
 
+# --- metrics -------------------------------------------------------------
+expect_contains "metrics RBAC lets the operator create TokenReviews" "- tokenreviews" \
+	--show-only templates/metrics-rbac.yaml
+
 if [ "$failures" -gt 0 ]; then
 	printf '%d chart render test(s) failed\n' "$failures"
 	exit 1
