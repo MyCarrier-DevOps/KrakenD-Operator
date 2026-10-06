@@ -241,6 +241,24 @@ func TestAttribute_PathWithStopCharactersNamesItsOwnEntry(t *testing.T) {
 			output:    "ERROR parsing the configuration file:\t'krakend.json': undefined output param 'x'! endpoint: GET /b/:p, backend: 0. input: [p], output: [x]\n",
 			wantIndex: []int{1},
 		},
+		{
+			name:      "a path ending in a bang names only its own entry",
+			rendered:  `{"endpoints":[{"endpoint":"/orders-a","method":"GET"},{"endpoint":"/orders-a!","method":"GET"}]}`,
+			output:    "ERROR parsing the configuration file:\t'krakend.json': undefined output param 'missing'! endpoint: GET /orders-a!, backend: 0. input: [], output: [missing]\n",
+			wantIndex: []int{1},
+		},
+		{
+			name:      "a path ending in a comma names only its own entry",
+			rendered:  `{"endpoints":[{"endpoint":"/orders-a","method":"GET"},{"endpoint":"/orders-a,","method":"GET"}]}`,
+			output:    "ERROR parsing the configuration file:\t'krakend.json': undefined output param 'missing'! endpoint: GET /orders-a,, backend: 0. input: [], output: [missing]\n",
+			wantIndex: []int{1},
+		},
+		{
+			name:      "a path ending in an apostrophe names only its own entry",
+			rendered:  `{"endpoints":[{"endpoint":"/orders-a","method":"GET"},{"endpoint":"/orders-a'","method":"GET"}]}`,
+			output:    "ERROR parsing the configuration file:\t'krakend.json': undefined output param 'missing'! endpoint: GET /orders-a', backend: 0. input: [], output: [missing]\n",
+			wantIndex: []int{1},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
