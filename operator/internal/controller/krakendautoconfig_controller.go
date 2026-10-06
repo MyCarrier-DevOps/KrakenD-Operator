@@ -233,8 +233,8 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return r.handleSyncedFailure(ctx, &ac, v1alpha1.ReasonAdditionalEndpointScopeFailed, scopeErr, warnings)
 	}
 
-	// Extract component schemas from the spec before CUE evaluation
-	// so they can be attached to each generated KrakenDEndpoint CR.
+	// Extract component schemas from the spec so they can be attached to each
+	// generated KrakenDEndpoint CR.
 	componentSchemas := autoconfig.ExtractComponentSchemas(fetchResult.Data)
 
 	// Generate endpoint CRs
