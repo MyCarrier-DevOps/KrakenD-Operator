@@ -1190,3 +1190,34 @@ func TestRender_SchemaConflictsOnlyWhereDocsArePublished(t *testing.T) {
 		})
 	}
 }
+
+func TestAppendEndpointComponentSchemas_ComparesAgainstTheWinner(t *testing.T) {
+	endpoints := []v1alpha1.KrakenDEndpoint{
+		schemaEndpoint("a", map[string]string{"User": `{"description":"A"}`}),
+		schemaEndpoint("b", map[string]string{"User": `{"description":"B"}`}),
+		schemaEndpoint("c", map[string]string{
+			"User": `{"description":"B"}`,
+			"Pet":  `{"description":"C"}`,
+			"Cat":  `{"description":"C"}`,
+		}),
+		schemaEndpoint("d", map[string]string{
+			"Pet": `{"description":"D"}`,
+			"Cat": `{"description":"D"}`,
+		}),
+	}
+	ref := func(name string) types.NamespacedName { return types.NamespacedName{Namespace: "default", Name: name} }
+
+	conflicts := appendEndpointComponentSchemas(map[string]any{}, endpoints)
+
+	want := []SchemaConflict{
+		{Endpoint: ref("b"), Schema: "User", Winner: ref("a")},
+		// c equals b, but the winner is a, so c conflicts with it too.
+		{Endpoint: ref("c"), Schema: "User", Winner: ref("a")},
+		// c wins Cat and Pet; d differs on both, in schema name order.
+		{Endpoint: ref("d"), Schema: "Cat", Winner: ref("c")},
+		{Endpoint: ref("d"), Schema: "Pet", Winner: ref("c")},
+	}
+	if !reflect.DeepEqual(conflicts, want) {
+		t.Errorf("conflicts = %+v, want %+v", conflicts, want)
+	}
+}
