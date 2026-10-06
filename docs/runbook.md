@@ -639,7 +639,10 @@ kubectl get events --field-selector involvedObject.name=<name>
   `SpecAvailable` and `Synced` conditions are `False` with reason
   `SpecFetchFailed` and a message prefixed `resolving external $refs: `, and
   existing endpoints are left at their last-good state. A relative `$ref`
-  resolves against the URL of the document that contains it. A pointer not found, a resolution cycle, or
+  resolves against the URL of the document that contains it. Example data
+  (an `example` field, an `examples` field and the `value` of an Example
+  Object) is not fetched, so a `$ref`-shaped value there never causes this
+  failure; an Example Object's own `$ref` still does. A pointer not found, a resolution cycle, or
   a schema-name collision between two `$ref`s are listed in `status.warnings`,
   with a `SpecWarning` event when the inputs change, and don't block the sync.
 - CUE evaluation error (check embedded/custom CUE definitions): an error
