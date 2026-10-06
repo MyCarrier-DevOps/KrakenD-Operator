@@ -559,9 +559,15 @@ output param`, or a wildcard conflict with a route of another endpoint).
 
 **Cause:** The write renders the gateway's config with the change, and that
 config failed validation although it passed before the change. The cause is on
-the offending entry; a finding about another endpoint or the gateway root is on
-`spec.endpoints` and names it (`team-a/orders spec.endpoints[0]: ...`,
-`gateway: ...`).
+the offending entry; a finding about another endpoint in your namespace is on
+`spec.endpoints` and names it (`team-a/orders spec.endpoints[0]: ...`).
+`krakend check` prints the values it refuses, so its findings about the gateway
+root or an endpoint in another namespace are only counted there (`also fails
+krakend check on N findings about the gateway root or endpoints in other
+namespaces, which are not shown`), followed by what this change alone fails.
+Route and wildcard refusals are quoted whoever they name. The warning `already
+fails validation` counts those findings the same way; ask the gateway's owner,
+who can read `status.conditions` (`ConfigValid`), for the withheld text.
 
 **Resolution:** Fix the entry the cause names. If the denial blames another
 endpoint, fix or remove that endpoint's clashing route; your change is only the
