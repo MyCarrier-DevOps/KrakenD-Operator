@@ -1855,22 +1855,44 @@ has no effect, and the Dragonfly instance runs for nothing); turning either off
 is admitted. An entry's `documentation/openapi`
 (which AutoConfig generates) is not refused: a CE render drops it.
 
-**A post-restart Job that borrows rights needs `create pods`.** The operator
-creates the `spec.postRestartJob` Job with its own permissions, so the Job's
-ServiceAccount and Secret references used to be honored whoever wrote the
-gateway. The gateway webhook now answers `403 Forbidden` (`spec.postRestartJob:
-<user> may not create pods in namespace <ns>, so the post-restart Job may not
-run as another ServiceAccount or read a Secret`) when an enabled
-`spec.postRestartJob` sets a `serviceAccountName` other than the gateway's own
-name, takes `envFrom` from a Secret, or has an `env` `secretKeyRef`, and the
-requesting user (the identity the API server authenticated, not the operator)
-may not create pods in the gateway's namespace. The webhook asks the API server
-with a SubjectAccessReview, which needs the new `create` permission on
-`authorization.k8s.io/subjectaccessreviews` in the operator's ClusterRole (see
-*Operator RBAC, caching and availability*). A post-restart Job on the gateway's
-own ServiceAccount, with no Secret reference, needs no review. The review runs
-when the `postRestartJob` is new or changed, so scaling or relabeling a gateway
-that already has such a Job is not blocked. Before upgrading, check who writes
+**A post-restart Job that borrows rights or relaxes its security context needs
+`create pods`.** The operator creates the `spec.postRestartJob` Job with its own
+permissions, so the Job's ServiceAccount, Secret references and security
+contexts used to be honored whoever wrote the gateway. The gateway webhook now
+answers `403 Forbidden` (`spec.postRestartJob: <user> may not create pods in
+namespace <ns>, so the post-restart Job may not run as another ServiceAccount,
+read a Secret, or relax the operator's default security context`) when an
+enabled `spec.postRestartJob` does any of these, and the requesting user (the
+identity the API server authenticated, not the operator) may not create pods in
+the gateway's namespace:
+
+- sets a `serviceAccountName` other than the gateway's own name;
+- takes `envFrom` from a Secret, or has an `env` `secretKeyRef`;
+- sets a `securityContext` or `podSecurityContext` field outside an allow-list
+  of settings that grant no privilege, or a
+  `container.apparmor.security.beta.kubernetes.io/*` pod annotation other than
+  `runtime/default`.
+
+The allow-list is the run-as identity (`runAsUser`, `runAsGroup`,
+`runAsNonRoot`), `fsGroup`, `fsGroupChangePolicy`, `supplementalGroups` and
+`supplementalGroupsPolicy`, `readOnlyRootFilesystem`, `allowPrivilegeEscalation:
+false`, `privileged: false`, `procMount: Default`, a `capabilities` block with
+no `add` and a `drop` that keeps `ALL`, and the `RuntimeDefault` seccomp and
+AppArmor profiles. Anything else is reviewed, including a field a later
+Kubernetes release adds. In particular a custom `drop` without `ALL` replaces
+the default drop of `ALL`, so it counts, and `Localhost` profiles and
+`seLinuxOptions` are reviewed. Running as root needs no review: it stays an
+acknowledged choice (`runAsNonRoot: false`). `podLabels` and `podAnnotations`
+other than the AppArmor annotation are not reviewed.
+
+The webhook asks the API server with a SubjectAccessReview, which needs the new
+`create` permission on `authorization.k8s.io/subjectaccessreviews` in the
+operator's ClusterRole (see *Operator RBAC, caching and availability*). A
+post-restart Job on the gateway's own ServiceAccount, with no Secret reference
+and only allow-listed security settings, needs no review. The review runs when
+the `postRestartJob` is new or changed, so scaling or relabeling a gateway that
+already has such a Job is not blocked, and a stored gateway is affected only
+once its `postRestartJob` is edited. Before upgrading, check who writes
 KrakenDGateways that use these fields. A GitOps controller's ServiceAccount, for
 example, needs `create` on `pods` in the gateway's namespace (for instance
 through the `edit` ClusterRole), or its sync of that gateway is refused.
@@ -2280,8 +2302,8 @@ ConfigMap garbage collection see which revisions running pods still mount.
 The leader-election Role drops ConfigMaps and keeps `get`, `create` and
 `update` on Leases. The role also gains one rule: `create` on
 `authorization.k8s.io/subjectaccessreviews`, which the gateway webhook uses to
-check that a user who sets a post-restart Job's ServiceAccount or Secret
-references may create pods (see *Complete admission*). The chart used to grant
+check that a user who sets a post-restart Job's ServiceAccount, Secret
+references or a relaxed security context may create pods (see *Complete admission*). The chart used to grant
 SubjectAccessReviews only with `metrics.enabled`, for the metrics endpoint; the
 manager role now carries the grant on every install.
 
@@ -2317,9 +2339,10 @@ so the bundle carries no cert-manager dependency.
 The Job permission means that, on OLM, the right to write a KrakenDGateway
 reaches the operator's `batch/jobs` grant, which an OLM install did not have
 before. The gateway webhook now reviews the requester's access for a
-post-restart Job that runs as another ServiceAccount or reads a Secret (see
-*Complete admission*), so a gateway writer cannot use the operator to borrow
-rights they lack. One adoption path is not closed by that, and it is the same on
+post-restart Job that runs as another ServiceAccount, reads a Secret, or
+relaxes the operator's default security context (see *Complete admission*), so
+a gateway writer cannot use the operator to borrow those rights. It does not
+review `podLabels` or the `podAnnotations` other than the AppArmor one. One adoption path is not closed by that, and it is the same on
 every install method: the gateway reconciler creates or updates a ServiceAccount
 named like the gateway and adopts one that already exists with no controller, so
 a user who may create KrakenDGateways in a namespace can run `spec.image` as
