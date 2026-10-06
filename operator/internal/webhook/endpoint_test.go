@@ -600,8 +600,10 @@ func TestEndpointAdmission_ValidatorUnavailableIs500(t *testing.T) {
 	}
 }
 
-// A finding about another object or the gateway root has no entry of the
-// candidate to point at: the denial carries it on spec.endpoints.
+// A finding about another object in the candidate's namespace has no entry of
+// the candidate to point at: the denial carries it on spec.endpoints. krakend
+// check output about the gateway root is counted, never quoted: it prints the
+// values it refuses, and the requester may not read the gateway.
 func TestEndpointAdmission_FindingsBeyondTheCandidateGoOnTheEndpointsField(t *testing.T) {
 	after := configcheck.Verdict{Findings: []configcheck.Finding{
 		{Endpoint: types.NamespacedName{Namespace: "default", Name: "other"}, Index: 0, Message: "clashes"},
@@ -617,9 +619,17 @@ func TestEndpointAdmission_FindingsBeyondTheCandidateGoOnTheEndpointsField(t *te
 		t.Fatalf("response = %+v, want a 422 denial", resp.Result)
 	}
 	causes := resp.Result.Details.Causes
-	if len(causes) != 1 || causes[0].Field != "spec.endpoints" ||
-		!strings.Contains(causes[0].Message, "default/other spec.endpoints[0]: clashes; gateway: bad root") {
-		t.Errorf("causes = %+v, want one on spec.endpoints naming both findings", causes)
+	if len(causes) != 2 || causes[0].Field != "spec.endpoints" ||
+		!strings.Contains(causes[0].Message, "default/other spec.endpoints[0]: clashes") {
+		t.Fatalf("causes = %+v, want the same-namespace finding quoted on spec.endpoints", causes)
+	}
+	if causes[1].Field != "spec.endpoints" || !strings.Contains(causes[1].Message, "on 1 findings about the gateway root") {
+		t.Errorf("causes[1] = %+v, want the gateway-root krakend line counted, not quoted", causes[1])
+	}
+	for _, c := range causes {
+		if strings.Contains(c.Message, "bad root") {
+			t.Errorf("cause %+v quotes the gateway-root krakend line", c)
+		}
 	}
 }
 
