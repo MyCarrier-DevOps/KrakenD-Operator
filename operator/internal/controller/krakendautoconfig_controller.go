@@ -179,7 +179,7 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		Message:            "OpenAPI spec fetched successfully",
 	})
 
-	cueDefsRV := r.getCUEDefsResourceVersion(ctx, &ac)
+	defaultDefs, customDefs, cueDefsRV, cueErr := r.loadAllCUEDefinitions(ctx, &ac)
 	combinedChecksum := autoConfigSpecChecksum(fetchResult.Checksum, cueDefsRV, ac.Generation)
 	// warnings holds the input warning events until the terminal status write
 	// succeeds. They would otherwise repeat on every resync, so they are
@@ -192,9 +192,8 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		warnings.add(v1alpha1.ReasonSpecWarning, note)
 	}
 
-	defaultDefs, customDefs, err := r.loadAllCUEDefinitions(ctx, &ac)
-	if err != nil {
-		return r.handleCUEError(ctx, &ac, err, warnings)
+	if cueErr != nil {
+		return r.handleCUEError(ctx, &ac, cueErr, warnings)
 	}
 
 	// CUE evaluation
@@ -699,51 +698,21 @@ func (r *KrakenDAutoConfigReconciler) requeueResult(ac *v1alpha1.KrakenDAutoConf
 	return ctrl.Result{RequeueAfter: defaultResyncInterval}
 }
 
-// getCUEDefsResourceVersion returns the resource versions of the CUE
-// definitions ConfigMaps, read as metadata only: the definitions themselves
-// are loaded when a sync needs them.
-func (r *KrakenDAutoConfigReconciler) getCUEDefsResourceVersion(
-	ctx context.Context,
-	ac *v1alpha1.KrakenDAutoConfig,
-) string {
-	rv := ""
-	if v, ok := r.configMapResourceVersion(ctx, ac.Namespace, defaultCUEDefinitionsConfigMap); ok {
-		rv = v
-	}
-	if ac.Spec.CUE != nil && ac.Spec.CUE.DefinitionsConfigMapRef != nil {
-		if v, ok := r.configMapResourceVersion(ctx, ac.Namespace, ac.Spec.CUE.DefinitionsConfigMapRef.Name); ok {
-			rv += ":" + v
-		}
-	}
-	return rv
-}
-
-// configMapResourceVersion returns the resource version of a ConfigMap, and
-// false when it cannot be read.
-func (r *KrakenDAutoConfigReconciler) configMapResourceVersion(
-	ctx context.Context, namespace, name string,
-) (string, bool) {
-	cm := &metav1.PartialObjectMetadata{}
-	cm.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("ConfigMap"))
-	if err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, cm); err != nil {
-		return "", false
-	}
-	return cm.ResourceVersion, true
-}
-
+// loadCUEDefinitions reads a CUE definitions ConfigMap and returns its data
+// and resource version.
 func (r *KrakenDAutoConfigReconciler) loadCUEDefinitions(
 	ctx context.Context,
 	namespace string,
 	configMapName string,
-) (map[string]string, error) {
+) (data map[string]string, resourceVersion string, err error) {
 	var cm corev1.ConfigMap
 	if err := r.Get(ctx, types.NamespacedName{
 		Name:      configMapName,
 		Namespace: namespace,
 	}, &cm); err != nil {
-		return nil, fmt.Errorf("getting CUE definitions ConfigMap %s: %w", configMapName, err)
+		return nil, "", fmt.Errorf("getting CUE definitions ConfigMap %s: %w", configMapName, err)
 	}
-	return cm.Data, nil
+	return cm.Data, cm.ResourceVersion, nil
 }
 
 // endpointChanges counts the endpoint writes one reconcileEndpoints call issued.
@@ -877,27 +846,32 @@ func newAutoConfigRateLimiter() workqueue.TypedRateLimiter[reconcile.Request] {
 }
 
 // loadAllCUEDefinitions loads the default CUE definitions (the ConfigMap,
-// falling back to the embedded ones) and the AutoConfig's custom ones.
+// falling back to the embedded ones) and the AutoConfig's custom ones. Each
+// ConfigMap is read once, and resourceVersion joins the versions of the ones
+// read, so a change to either changes the sync's inputs checksum. It is
+// returned with an error too, for the versions read before the failure.
 func (r *KrakenDAutoConfigReconciler) loadAllCUEDefinitions(
 	ctx context.Context, ac *v1alpha1.KrakenDAutoConfig,
-) (defaultDefs, customDefs map[string]string, err error) {
-	defaultDefs, err = r.loadCUEDefinitions(ctx, ac.Namespace, defaultCUEDefinitionsConfigMap)
+) (defaultDefs, customDefs map[string]string, resourceVersion string, err error) {
+	defaultDefs, resourceVersion, err = r.loadCUEDefinitions(ctx, ac.Namespace, defaultCUEDefinitionsConfigMap)
 	if err != nil {
 		if !errors.IsNotFound(err) {
-			return nil, nil, fmt.Errorf("loading default CUE definitions: %w", err)
+			return nil, nil, "", fmt.Errorf("loading default CUE definitions: %w", err)
 		}
 		defaultDefs, err = autoconfig.EmbeddedCUEDefinitions()
 		if err != nil {
-			return nil, nil, fmt.Errorf("loading embedded CUE definitions: %w", err)
+			return nil, nil, "", fmt.Errorf("loading embedded CUE definitions: %w", err)
 		}
 	}
 	if ac.Spec.CUE != nil && ac.Spec.CUE.DefinitionsConfigMapRef != nil {
-		customDefs, err = r.loadCUEDefinitions(ctx, ac.Namespace, ac.Spec.CUE.DefinitionsConfigMapRef.Name)
+		var customRV string
+		customDefs, customRV, err = r.loadCUEDefinitions(ctx, ac.Namespace, ac.Spec.CUE.DefinitionsConfigMapRef.Name)
 		if err != nil {
-			return nil, nil, fmt.Errorf("loading custom CUE definitions: %w", err)
+			return nil, nil, resourceVersion, fmt.Errorf("loading custom CUE definitions: %w", err)
 		}
+		resourceVersion += ":" + customRV
 	}
-	return defaultDefs, customDefs, nil
+	return defaultDefs, customDefs, resourceVersion, nil
 }
 
 // overrideFailure reports the sync failure for an override that matched no
