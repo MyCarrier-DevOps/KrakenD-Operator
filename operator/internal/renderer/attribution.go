@@ -192,9 +192,9 @@ func underPrefix(shape, prefix string) bool {
 }
 
 // routeShape spells a route the way krakend's router registers it: the
-// parameters lura extracts are written :param (ginPath), and an EE wildcard's
-// trailing "*" is written as the ":Wildcard" parameter it is rewritten to for
-// the CE binary (eeWildcardParam).
+// parameters lura extracts are written :param (ginPath, which stops at the
+// first "?"), and an EE wildcard's trailing "*" is written as the ":Wildcard"
+// parameter it is rewritten to for the CE binary (eeWildcardParam).
 func routeShape(path string) string {
 	if IsEEWildcard(path) {
 		path = strings.TrimSuffix(path, "*") + eeWildcardParam

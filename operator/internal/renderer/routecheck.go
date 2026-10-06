@@ -232,13 +232,19 @@ func ginRoutesOf(cfg routedConfig) []ginRoute {
 }
 
 // ginPath converts an endpoint path to the pattern KrakenD registers: a
-// leading slash, and each extracted parameter "{name}" as ":name".
+// leading slash, and each extracted parameter "{name}" as ":name". The
+// conversion stops at the first "?", as lura's GetEndpointPath does, so a
+// "{name}" in the query part stays as written.
 func ginPath(endpoint string) string {
 	p := "/" + strings.TrimPrefix(endpoint, "/")
+	route, query, hasQuery := strings.Cut(p, "?")
 	for _, param := range PathParams(p) {
-		p = strings.ReplaceAll(p, "{"+param+"}", ":"+param)
+		route = strings.ReplaceAll(route, "{"+param+"}", ":"+param)
 	}
-	return p
+	if hasQuery {
+		route += "?" + query
+	}
+	return route
 }
 
 // registerRoute adds r to engine and returns gin's refusal, or "" when gin
