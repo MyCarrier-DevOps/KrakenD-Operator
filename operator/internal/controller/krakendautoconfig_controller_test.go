@@ -5576,6 +5576,46 @@ func TestAutoConfigReconcile_HeldOperationWarnsOnlyWhenItsFailureChanges(t *test
 	}
 }
 
+// holdsSiblingOfOlderUncontrolledEndpoint reconciles an AutoConfig that desires
+// an endpoint already in the cluster that it does not control (older than
+// anything it writes), a new endpoint that shares its route shape and sorts
+// first by name, and a new sibling that only the older endpoint's parameter
+// name breaks. The cluster keeps the older endpoint's creation time, so it
+// serves the route and the new endpoint and the sibling must be held.
+func holdsSiblingOfOlderUncontrolledEndpoint(t *testing.T, existing *v1alpha1.KrakenDEndpoint) {
+	t.Helper()
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	existing.CreationTimestamp = metav1.NewTime(time.Unix(1000, 0))
+	g.output.Endpoints = []*v1alpha1.KrakenDEndpoint{
+		generatedEndpoint("aUser", "/users/{userId}"),
+		generatedEndpoint("getUser", "/users/{id}"),
+		generatedEndpoint("getUserOrders", "/users/{userId}/orders"),
+	}
+	c := fakeClientBuilder().WithObjects(ac, cm, existing, testGateway()).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Checker = realRouteChecker(c)
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	held := map[string]string{}
+	for _, op := range getAC(t, c, ac).Status.FailedOperations {
+		held[op.Endpoint] = op.Reason
+	}
+	for _, name := range []string{"test-ac-auser", "test-ac-getuserorders"} {
+		if held[name] != v1alpha1.ReasonConfigValidationFailed || endpointExists(t, c, name) {
+			t.Errorf("%s: held = %q, want it held and unwritten (failed operations %v)", name, held[name], held)
+		}
+	}
+}
+
+func TestAutoConfigReconcile_PrecheckKeepsAnOlderLabelMatchedOrphansRoute(t *testing.T) {
+	orphan := generatedEndpoint("getUser", "/users/{id}")
+	holdsSiblingOfOlderUncontrolledEndpoint(t, orphan)
+}
+
 func TestAttributeFindings_CauseCarriesEveryFindingInOrder(t *testing.T) {
 	a := generatedEndpoint("a", "/a")
 	key := types.NamespacedName{Namespace: "default", Name: "test-ac-a"}
