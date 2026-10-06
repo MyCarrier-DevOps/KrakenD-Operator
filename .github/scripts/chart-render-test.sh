@@ -200,6 +200,18 @@ expect_contains "metrics RBAC lets the operator create TokenReviews" "- tokenrev
 	--show-only templates/metrics-rbac.yaml
 expect_contains "metrics RBAC lets the operator create SubjectAccessReviews" "- subjectaccessreviews" \
 	--show-only templates/metrics-rbac.yaml
+# binding_summary: "<role> <subject>/<namespace>" of a ClusterRoleBinding on stdin.
+binding_summary() {
+	awk '$1 == "roleRef:" { in_ref = 1 } $1 == "subjects:" { in_ref = 0 }
+		in_ref && $1 == "name:" { role = $2 }
+		$1 == "-" && $2 == "kind:" { subject = 1; next }
+		subject && $1 == "name:" { name = $2 }
+		subject && $1 == "namespace:" { ns = $2 }
+		END { print role, name "/" ns }'
+}
+expect_equal "the metrics auth ClusterRole is bound to the operator ServiceAccount" \
+	"t-krakend-operator-metrics-auth-role t-krakend-operator-controller-manager/krakend-operator-system" \
+	"$(manifest ClusterRoleBinding t-krakend-operator-metrics-auth-rolebinding | binding_summary)"
 
 if [ "$failures" -gt 0 ]; then
 	printf '%d chart render test(s) failed\n' "$failures"
