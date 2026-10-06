@@ -238,6 +238,9 @@ selects() {
 	echo yes
 }
 expect_equal "the ServiceMonitor selector matches the metrics Service" "yes" "$(selects templates/metrics-service.yaml)"
+expect_equal "the ServiceMonitor selector does not match the webhook Service" "no" "$(selects templates/webhook-service.yaml)"
+expect_absent "the webhook Service carries no metrics component label" "app.kubernetes.io/component: metrics" \
+	--show-only templates/webhook-service.yaml
 
 if [ "$failures" -gt 0 ]; then
 	printf '%d chart render test(s) failed\n' "$failures"
