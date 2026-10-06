@@ -41,7 +41,6 @@ var (
 	methodRunRe   = regexp.MustCompile(`(?:endpoint: |the ')(GET|POST|PUT|PATCH|DELETE) (/\S*)(?:, backend: |' endpoint)`)
 	newPathRe     = regexp.MustCompile(`path '(/[^']*)'`)
 	prefixRe      = regexp.MustCompile(`prefix '(/[^']*)'`)
-	braceParamRe  = regexp.MustCompile(`\{([^}/]+)\}`)
 )
 
 // renderedRoute is one rendered endpoint entry as krakend's router sees it.
@@ -191,14 +190,15 @@ func underPrefix(shape, prefix string) bool {
 	return prefix != "" && (shape == prefix || strings.HasPrefix(shape, prefix+"/"))
 }
 
-// routeShape spells a route the way krakend's router errors do: {param} is
-// written :param, and an EE wildcard's trailing "*" is written as the
-// ":Wildcard" parameter it is rewritten to for the CE binary (eeWildcardParam).
+// routeShape spells a route the way krakend's router registers it: the
+// parameters lura extracts are written :param (ginPath), and an EE wildcard's
+// trailing "*" is written as the ":Wildcard" parameter it is rewritten to for
+// the CE binary (eeWildcardParam).
 func routeShape(path string) string {
 	if IsEEWildcard(path) {
 		path = strings.TrimSuffix(path, "*") + eeWildcardParam
 	}
-	return braceParamRe.ReplaceAllString(path, ":$1")
+	return ginPath(path)
 }
 
 // parseRoutes reads the method and route shape of every rendered entry.
