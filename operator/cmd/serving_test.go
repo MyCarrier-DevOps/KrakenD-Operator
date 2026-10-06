@@ -18,6 +18,9 @@ package main
 
 import (
 	"crypto/tls"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -73,5 +76,18 @@ func TestMetricsServerOptions_SecureServingIsAuthenticated(t *testing.T) {
 	}
 	if insecure.CertDir != "" {
 		t.Errorf("CertDir = %q, want none without a cert path", insecure.CertDir)
+	}
+}
+
+func TestCheckServingFiles_MissingKeyIsAnError(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "tls.crt"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := checkServingFiles(dir, "tls.crt", "tls.key")
+
+	if err == nil || !strings.Contains(err.Error(), filepath.Join(dir, "tls.key")) {
+		t.Errorf("err = %v, want one naming the missing key file", err)
 	}
 }

@@ -58,3 +58,11 @@ func metricsServerOptions(
 	}
 	return opts
 }
+
+// checkServingFiles returns an error naming the first of the certificate and
+// key files under dir that cannot be read. The servers fall back to a
+// self-signed certificate (metrics) or fail late (webhook) on a wrong file
+// name, so startup checks them to fail fast.
+func checkServingFiles(dir, certName, keyName string) error {
+	return nil
+}
