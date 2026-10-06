@@ -1498,7 +1498,9 @@ are an endpoint on the gateway's custom `health_path` with a GET method, and
 endpoints under different methods whose routes would clash in one method's
 tree while `router.auto_options` is on, because `auto_options` joins every
 method's paths in one tree (for example `GET /users/{id}` with
-`POST /users/{userId}/orders`).
+`POST /users/{userId}/orders`). The route check and the EE wildcard rule each
+report at most 21 conflicts and end with a notice line, so a config with many
+clashing routes cannot exhaust the operator's memory in the validator.
 
 **The validator binary is pinned by digest.** The operator image takes its
 `krakend` binary from KrakenD CE 2.13.11, referenced by digest in the
