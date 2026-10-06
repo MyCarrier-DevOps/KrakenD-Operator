@@ -628,6 +628,8 @@ func TestResolveExternalRefs_ExamplesAndNameKeyedMaps(t *testing.T) {
 		"https://schemas.example.com/x.json": []byte(`{"X":{"type":"string"}}`),
 		"https://api.example.com/ex.json":    []byte(`{"E":{"value":1}}`),
 		"https://api.example.com/exv.json":   []byte(`{"E":{"value":{"$ref":"data.json"}}}`),
+		"https://api.example.com/payload.json": []byte(
+			`{"type":"object","properties":{"a":{"$ref":"common.json#/A"}}}`),
 	}
 	tests := []struct {
 		name     string
@@ -664,6 +666,20 @@ func TestResolveExternalRefs_ExamplesAndNameKeyedMaps(t *testing.T) {
 			spec:     fmt.Sprintf(op, `{"examples":{"one":{"$ref":"exv.json#/E"}}}`),
 			wantOut:  `{"$ref":"#/components/examples/exv_E"}`,
 			wantAlso: `"examples":{"exv_E":{"value":{"$ref":"data.json"}}}`,
+			wantHits: 1,
+		},
+		{
+			name:     "the value of a components example reached through a reference is not fetched",
+			spec:     `{"components":{"examples":{"E":{"$ref":"exv.json#/E"}}}}`,
+			wantOut:  `"E":{"$ref":"#/components/examples/exv_E"}`,
+			wantAlso: `"exv_E":{"value":{"$ref":"data.json"}}`,
+			wantHits: 1,
+		},
+		{
+			name:     "a payload file an examples entry points to is not fetched from",
+			spec:     fmt.Sprintf(op, `{"examples":{"one":{"$ref":"payload.json"}}}`),
+			wantOut:  `{"$ref":"#/components/examples/payload"}`,
+			wantAlso: `"payload":{"properties":{"a":{"$ref":"common.json#/A"}},"type":"object"}`,
 			wantHits: 1,
 		},
 		{
