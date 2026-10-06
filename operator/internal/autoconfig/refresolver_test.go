@@ -633,6 +633,8 @@ func TestResolveExternalRefs_ExamplesAndNameKeyedMaps(t *testing.T) {
 		spec     string
 		wantErr  string // substring of the error; empty means the sync succeeds
 		wantOut  string // substring of the resolved spec
+		wantAlso string // a second substring of the resolved spec
+		noWarn   string // substring no warning may contain
 		wantHits int    // fetches in total
 	}{
 		{
@@ -653,7 +655,7 @@ func TestResolveExternalRefs_ExamplesAndNameKeyedMaps(t *testing.T) {
 		{
 			name:     "an examples entry that is a reference is resolved",
 			spec:     fmt.Sprintf(op, `{"examples":{"one":{"$ref":"ex.json#/E"}}}`),
-			wantOut:  `{"$ref":"#/components/schemas/ex_E"}`,
+			wantOut:  `{"$ref":"#/components/examples/ex_E"}`,
 			wantHits: 1,
 		},
 		{
@@ -745,7 +747,7 @@ func TestResolveExternalRefs_ExamplesAndNameKeyedMaps(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			fetcher := &stubFetcher{docs: docs}
 
-			out, _, err := ResolveExternalRefs(context.Background(), []byte(tc.spec),
+			out, warnings, err := ResolveExternalRefs(context.Background(), []byte(tc.spec),
 				"https://api.example.com/openapi.json", fetcher, FetchSource{})
 
 			switch {
@@ -755,6 +757,13 @@ func TestResolveExternalRefs_ExamplesAndNameKeyedMaps(t *testing.T) {
 				t.Fatalf("err = %v, want one containing %q", err, tc.wantErr)
 			case tc.wantErr == "" && !strings.Contains(string(out), tc.wantOut):
 				t.Errorf("resolved spec = %s, want it to contain %s", out, tc.wantOut)
+			case tc.wantErr == "" && !strings.Contains(string(out), tc.wantAlso):
+				t.Errorf("resolved spec = %s, want it to contain %s", out, tc.wantAlso)
+			}
+			for _, w := range warnings {
+				if tc.noWarn != "" && strings.Contains(w, tc.noWarn) {
+					t.Errorf("warning %q contains %q", w, tc.noWarn)
+				}
 			}
 			hits := 0
 			for _, n := range fetcher.hits {

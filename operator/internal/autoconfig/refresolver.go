@@ -79,16 +79,7 @@ func ResolveExternalRefs(
 
 	// Inline collected external schemas under components/schemas.
 	if len(resolver.inlined) > 0 {
-		components, ok := root["components"].(map[string]any)
-		if !ok || components == nil {
-			components = map[string]any{}
-			root["components"] = components
-		}
-		schemas, ok := components["schemas"].(map[string]any)
-		if !ok || schemas == nil {
-			schemas = map[string]any{}
-			components["schemas"] = schemas
-		}
+		schemas := componentMap(root, "schemas")
 		for name, body := range resolver.inlined {
 			if _, exists := schemas[name]; exists {
 				msg := fmt.Sprintf(
@@ -102,6 +93,11 @@ func ResolveExternalRefs(
 		}
 	}
 
+	// Inline collected external Example Objects under components/examples.
+	if len(resolver.inlinedExamples) > 0 {
+		maps.Copy(componentMap(root, "examples"), resolver.inlinedExamples)
+	}
+
 	out, err := json.Marshal(root)
 	if err != nil {
 		return nil, resolver.warnings, fmt.Errorf("marshaling resolved spec: %w", err)
@@ -109,18 +105,52 @@ func ResolveExternalRefs(
 	return out, resolver.warnings, nil
 }
 
+// componentMap returns root's components.<kind> map, creating it when absent.
+func componentMap(root map[string]any, kind string) map[string]any {
+	components, ok := root["components"].(map[string]any)
+	if !ok || components == nil {
+		components = map[string]any{}
+		root["components"] = components
+	}
+	m, ok := components[kind].(map[string]any)
+	if !ok || m == nil {
+		m = map[string]any{}
+		components[kind] = m
+	}
+	return m
+}
+
+// refRole is what an external $ref's target is: a schema, which is walked for
+// the refs it holds, or an Example Object, which is data.
+type refRole int
+
+const (
+	schemaRole refRole = iota
+	exampleRole
+)
+
+// componentsPath is where a target of this role is inlined.
+func (role refRole) componentsPath() string {
+	if role == exampleRole {
+		return "#/components/examples/"
+	}
+	return "#/components/schemas/"
+}
+
 type refResolver struct {
-	ctx       context.Context
-	baseURL   string
-	fetcher   Fetcher
-	source    FetchSource
-	docs      map[string]map[string]any // cache: absoluteURL -> parsed doc
-	inlined   map[string]any            // sanitized name -> schema body
-	resolving map[string]bool           // cycle detection: ref keys currently being resolved
-	resolved  map[string]string         // refKey -> sanitized name for already-resolved refs
-	warnings  []string
-	warned    map[string]bool // warnings already recorded, so each is reported once
-	fatalErr  error           // first fetch/decode failure; halts all further resolution
+	ctx     context.Context
+	baseURL string
+	fetcher Fetcher
+	source  FetchSource
+	docs    map[string]map[string]any // cache: absoluteURL -> parsed doc
+	inlined map[string]any            // sanitized name -> schema body
+	// inlinedExamples is the Example Object bodies, by name, for components/examples.
+	inlinedExamples map[string]any
+	resolving       map[string]bool   // cycle detection: ref keys currently being resolved
+	resolved        map[string]string // refKey -> sanitized name for already-resolved refs
+	warnings        []string
+	warned          map[string]bool // warnings already recorded, so each is reported once
+	fatalErr        error           // first fetch/decode failure; halts all further resolution
 }
 
 var sanitizeNameRE = regexp.MustCompile(`[^A-Za-z0-9_]+`)
@@ -154,8 +184,8 @@ func (r *refResolver) walk(node any, base string) {
 			r.warnLocalRef(ref, base)
 		}
 		if ref, ok := v["$ref"].(string); ok && ref != "" && !strings.HasPrefix(ref, "#") {
-			if localName, err := r.resolveExternal(ref, base); err == nil {
-				v["$ref"] = "#/components/schemas/" + localName
+			if localName, err := r.resolveExternal(ref, base, schemaRole); err == nil {
+				v["$ref"] = schemaRole.componentsPath() + localName
 			} else {
 				var fatal *fatalRefError
 				if errors.As(err, &fatal) {
@@ -179,7 +209,7 @@ func (r *refResolver) walk(node any, base string) {
 				}
 			case payload:
 				for _, ref := range exampleRefs {
-					r.walk(ref, base)
+					r.resolveExampleRef(ref, base)
 				}
 			default:
 				r.walk(v[k], base)
@@ -194,6 +224,27 @@ func (r *refResolver) walk(node any, base string) {
 			if r.fatalErr != nil {
 				return
 			}
+		}
+	}
+}
+
+// resolveExampleRef resolves entry, an Example Object reference held by an
+// "examples" object, and rewrites it to point into components/examples.
+func (r *refResolver) resolveExampleRef(entry map[string]any, base string) {
+	ref, _ := entry["$ref"].(string)
+	r.warnLocalRef(ref, base)
+	if ref == "" || strings.HasPrefix(ref, "#") {
+		return
+	}
+	if localName, err := r.resolveExternal(ref, base, exampleRole); err == nil {
+		entry["$ref"] = exampleRole.componentsPath() + localName
+	} else {
+		var fatal *fatalRefError
+		if errors.As(err, &fatal) {
+			r.fatalErr = fatal.err
+		} else {
+			r.warnings = append(r.warnings,
+				fmt.Sprintf("failed to resolve external $ref %q: %v", ref, err))
 		}
 	}
 }
@@ -224,7 +275,7 @@ func (r *refResolver) warnOnce(msg string) {
 // points to (caching), extracts the referenced fragment, inlines it into the
 // components/schemas map of the root doc, and returns the sanitized local
 // name used for the new $ref.
-func (r *refResolver) resolveExternal(ref, base string) (string, error) {
+func (r *refResolver) resolveExternal(ref, base string, role refRole) (string, error) {
 	docURL, fragment := splitRef(ref)
 	absolute, err := absolutize(docURL, base)
 	if err != nil {
@@ -285,6 +336,17 @@ func (r *refResolver) resolveExternal(ref, base string) (string, error) {
 	// the document they appear in.
 	r.walk(target, absolute)
 
+	if r.resolved == nil {
+		r.resolved = map[string]string{}
+	}
+	if role == exampleRole {
+		if r.inlinedExamples == nil {
+			r.inlinedExamples = map[string]any{}
+		}
+		r.inlinedExamples[name] = target
+		r.resolved[refKey] = name
+		return name, nil
+	}
 	if r.inlined == nil {
 		r.inlined = map[string]any{}
 	}
@@ -295,9 +357,6 @@ func (r *refResolver) resolveExternal(ref, base string) (string, error) {
 		))
 	} else {
 		r.inlined[name] = target
-	}
-	if r.resolved == nil {
-		r.resolved = map[string]string{}
 	}
 	r.resolved[refKey] = name
 	return name, nil
