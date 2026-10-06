@@ -377,10 +377,6 @@ idle.
   schema, response, header or other member of a name-keyed map (for example
   `components.schemas.example`) is an object whatever it is named, so it is
   still resolved too.
-- A skipped HEAD, OPTIONS or TRACE operation now carries its own `operationId`
-  and tags when the URL transform puts two of them on one route, so
-  `spec.filter` `excludeOperationIds` and `includeTags` judge each skip as
-  itself rather than as the other operation.
 - A spec fetch failure now also sets `Synced=False` (reason
   `SpecFetchFailed`) alongside `SpecAvailable=False`, instead of leaving the
   last successful sync's `Synced=True`, so health checks that read
@@ -421,6 +417,9 @@ curl -s <spec-url> | jq '[.. | objects | select(has("$ref")) | .["$ref"] | selec
 `[]` means no external refs. Otherwise check that each referenced document —
 resolved against the URL of the document containing the ref — is reachable
 from the operator, and repeat for those documents' own external refs.
+A `$ref` inside example data (an `example` or `examples` field) is not fetched
+and can be ignored, unless it is an `examples` entry that is itself a
+`{"$ref": "…"}`, which is still resolved.
 
 To force an immediate reconcile — for example right after fixing an upstream
 spec — change any annotation on the resource:
@@ -2001,7 +2000,10 @@ endpoints are serving.
 - **HEAD, OPTIONS and TRACE operations are skipped and reported** in
   `status.skipped` (reason `UnsupportedMethod`), instead of failing every
   sync with `EndpointReconcileFailed`. An override that gives such an
-  operation a supported `method` keeps it generated. Duplicate operations
+  operation a supported `method` keeps it generated. When the URL transform
+  puts two of them on one route, each skip carries its own `operationId` and
+  tags, so `spec.filter` `excludeOperationIds` and `includeTags` judge each as
+  itself. Duplicate operations
   appear there too (reason `DuplicateOperationId`: the same path and method,
   operationId or endpoint name as an earlier operation), with a
   `DuplicateOperationId` Warning event when the inputs change.
