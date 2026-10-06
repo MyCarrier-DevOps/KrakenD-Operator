@@ -73,3 +73,23 @@ func TestGatewayAdmission_PostRestartJobNeedsPodCreateRights(t *testing.T) {
 		t.Fatalf("response = %+v, want a 403 denial", resp.Result)
 	}
 }
+
+func TestGatewayAdmission_PostRestartJobReviewIsOfTheRequesterToCreatePods(t *testing.T) {
+	var reviews []authorizationv1.SubjectAccessReview
+	v := &GatewayValidator{Client: reviewingClient(true, &reviews), Checker: &scriptedChecker{}}
+	gw := gatewayWithJob(func(p *v1alpha1.PostRestartJobSpec) { p.ServiceAccountName = "namespace-admin" })
+
+	resp := review(t, v, "alice", gw, nil)
+
+	if !resp.Allowed {
+		t.Fatalf("denied: %+v", resp.Result)
+	}
+	if len(reviews) != 1 {
+		t.Fatalf("%d reviews, want 1", len(reviews))
+	}
+	spec, attrs := reviews[0].Spec, reviews[0].Spec.ResourceAttributes
+	if spec.User != "alice" || attrs == nil || attrs.Namespace != "default" || attrs.Verb != "create" ||
+		attrs.Resource != "pods" || attrs.Group != "" {
+		t.Errorf("review = %+v, want alice to create pods in namespace default", spec)
+	}
+}
