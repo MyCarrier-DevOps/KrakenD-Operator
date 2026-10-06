@@ -1203,12 +1203,27 @@ func (r *KrakenDGatewayReconciler) reconcileDeploymentUnlessHeld(
 //   - the deletion of an HPA the gateway no longer wants, so the Deployment
 //     carries the replica count before the HPA stops managing it;
 //   - the post-restart Job, which runs against the Deployment's pods.
+//
+// The Deployment and the post-restart Job run as the ServiceAccount named like
+// the gateway, so while the gateway does not control it both are held as they
+// are, and the pass returns an error and the zero observation.
 func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
 	in infraInputs,
 ) (deploymentObservation, error) {
-	errs := []error{r.reconcileCoreResources(ctx, gw, in)}
+	saControlled, coreErr := r.reconcileCoreResources(ctx, gw, in)
+	errs := []error{coreErr}
+	if !saControlled {
+		// The Deployment and the post-restart Job run as the ServiceAccount
+		// named like the gateway. While the gateway does not control it
+		// (another controller owns it, or it could not be reconciled), both are
+		// held as they are.
+		errs = append(errs, fmt.Errorf("holding the Deployment and the post-restart Job: "+
+			"serviceaccount %s/%s is not controlled by gateway %s", gw.Namespace, gw.Name, gw.Name),
+			r.reconcileDragonfly(ctx, gw), r.reconcileExternalSecret(ctx, gw), r.reconcileVirtualService(ctx, gw))
+		return deploymentObservation{}, stderrors.Join(errs...)
+	}
 
 	obs, gcErr, deploymentErr := r.reconcileDeploymentUnlessHeld(ctx, gw, in)
 	errs = append(errs, deploymentErr, gcErr, r.reconcileHPA(ctx, gw, deploymentErr == nil))
@@ -1227,18 +1242,20 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 
 // reconcileCoreResources creates or updates the gateway's ServiceAccount,
 // Service and PodDisruptionBudget. They are independent of each other, so each
-// is attempted and the errors joined.
+// is attempted and the errors joined. saControlled reports whether gw controls
+// the ServiceAccount.
 func (r *KrakenDGatewayReconciler) reconcileCoreResources(
 	ctx context.Context, gw *v1alpha1.KrakenDGateway, in infraInputs,
-) error {
+) (saControlled bool, err error) {
 	named := metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace}
 	sa := &corev1.ServiceAccount{ObjectMeta: named}
 	svc := &corev1.Service{ObjectMeta: named}
 	pdb := &policyv1.PodDisruptionBudget{ObjectMeta: named}
-	return stderrors.Join(
+	err = stderrors.Join(
 		r.applyOwned(ctx, gw, sa, "serviceaccount", func() { resources.BuildServiceAccount(sa, gw) }),
 		r.applyOwned(ctx, gw, svc, "service", func() { resources.BuildService(svc, gw, in.ceRender) }),
 		r.applyOwned(ctx, gw, pdb, "pdb", func() { resources.BuildPDB(pdb, gw) }))
+	return metav1.IsControlledBy(sa, gw), err
 }
 
 // reconcileHPA creates or updates the HorizontalPodAutoscaler when
