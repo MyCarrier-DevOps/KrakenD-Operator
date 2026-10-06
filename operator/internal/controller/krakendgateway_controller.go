@@ -91,6 +91,9 @@ type KrakenDGatewayReconciler struct {
 	// is read live.
 	cachedOptionalKinds map[schema.GroupVersionKind]struct{}
 	optionalCache       client.Reader
+	// absentKinds remembers the optional kinds discovery found absent, for
+	// the delete path of a disabled feature only.
+	absentKinds absentKindMemo
 }
 
 // ConfigChecker gathers a gateway's render inputs and validates what they
