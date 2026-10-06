@@ -110,14 +110,16 @@ make deploy IMG=ghcr.io/mycarrier-devops/krakend-operator:<new-version>
      resolved.
 
 7. **Check the chart values and the operator's new defaults** (Helm
-   installs; read-only):
+   installs; read-only). This prints only the values you set, so `null` means the
+   chart default applies, and this release changes the `replicaCount` default
+   to 2:
    ```bash
-   helm -n krakend-operator-system get values krakend-operator -a -o json \
+   helm -n krakend-operator-system get values krakend-operator -o json \
      | jq '{replicaCount, leaderElection, webhooks: {enabled: .webhooks.enabled, failurePolicy: .webhooks.failurePolicy}, metrics}'
    ```
-   - A release with `leaderElection.enabled: false` and no explicit
-     `replicaCount: 1` no longer renders, because `replicaCount` now defaults
-     to 2. Set `replicaCount: 1` or re-enable leader election before
+   - A release with `leaderElection.enabled: false` and a `replicaCount` of
+     `null` (not set explicitly to 1) no longer renders, because `replicaCount`
+     now defaults to 2. Set `replicaCount: 1` or re-enable leader election before
      upgrading. Otherwise the operator Deployment goes from 1 to 2 pods and a
      PodDisruptionBudget appears. On a single-node cluster, `kubectl drain`
      blocks on the second operator pod because of that PodDisruptionBudget: set
