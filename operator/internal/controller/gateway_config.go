@@ -145,6 +145,7 @@ func (r *KrakenDGatewayReconciler) publishConfig(
 	err := r.Create(ctx, cm)
 	switch {
 	case err == nil:
+		r.verified.remember(client.ObjectKeyFromObject(gw), name, configMapVersion{cm.UID, cm.ResourceVersion})
 		return nil
 	case errors.IsAlreadyExists(err):
 		// A ConfigMap of that name appeared after the existence check above
@@ -184,6 +185,9 @@ func (r *KrakenDGatewayReconciler) verifyExistingConfigMap(
 	if err := verifyConfigMap(cm, gw, checksum); err != nil {
 		return true, err
 	}
+	if r.verified.has(client.ObjectKeyFromObject(gw), name, configMapVersion{cm.UID, cm.ResourceVersion}) {
+		return true, nil
+	}
 	return r.verifyPayload(ctx, reader, gw, name, checksum)
 }
 
@@ -200,9 +204,12 @@ func (r *KrakenDGatewayReconciler) verifyPayload(
 		}
 		return false, fmt.Errorf("getting configmap %s: %w", name, err)
 	}
+	gwKey := client.ObjectKeyFromObject(gw)
 	if hash.SHA256Hex([]byte(full.Data[resources.ConfigKey])) == checksum {
+		r.verified.remember(gwKey, name, configMapVersion{full.UID, full.ResourceVersion})
 		return true, nil
 	}
+	r.verified.forget(gwKey, name)
 	uid := full.UID
 	if err := r.Delete(ctx, full, client.Preconditions{UID: &uid}); err != nil && !errors.IsNotFound(err) {
 		return true, fmt.Errorf("deleting configmap %s whose data does not match its checksum: %w", name, err)
