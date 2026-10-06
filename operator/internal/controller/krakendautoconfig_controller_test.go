@@ -5536,6 +5536,8 @@ func (b blockingFetcher) Fetch(ctx context.Context, source autoconfig.FetchSourc
 func TestAutoConfigReconcile_FetchTimeoutBoundsFetchAndResolve(t *testing.T) {
 	for name, fetcher := range map[string]blockingFetcher{
 		"spec fetch hangs": {},
+		"external $ref fetch hangs": {main: []byte(
+			`{"paths":{"/a":{"get":{"responses":{"200":{"$ref":"schemas.json#/R"}}}}}}`)},
 	} {
 		t.Run(name, func(t *testing.T) {
 			cm := testCUEDefinitionsCM()
