@@ -740,7 +740,7 @@ phase `Error`.
 
 ### Operator Replicas
 
-The operator uses leader election (`krakend-operator-leader` lease). You can run multiple replicas for high availability, but only one will be active at a time.
+The chart runs two replicas by default, with a PodDisruptionBudget allowing one voluntary disruption and a preference for different nodes. Leader election (`krakend-operator-leader` Lease) keeps one replica running the controllers; every replica serves the admission webhooks and is Ready only once its webhook server is serving, so a rollout or node drain never leaves admission without a backend. The chart refuses `replicaCount` > 1 with `leaderElection.enabled: false`.
 
 The active replica reconciles up to 4 KrakenDAutoConfigs at once, because each reconcile fetches its OpenAPI spec over the network and a slow upstream should delay only its own AutoConfig. Set `--autoconfig-max-concurrent-reconciles` (chart value `autoconfig.maxConcurrentReconciles`, default `4`; values below 1 mean 1) to change it. The AutoConfig config checks hold at most 1 of the pod's 3 validation slots, and the gateway controller at most 1, so the controllers never hold more than 2 of the 3 slots, however many workers there are. Concurrent admission requests can take the rest.
 
