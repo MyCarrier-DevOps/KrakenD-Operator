@@ -198,6 +198,8 @@ expect_equal "the chart's leader-election Role matches config/rbac" \
 # --- metrics -------------------------------------------------------------
 expect_contains "metrics RBAC lets the operator create TokenReviews" "- tokenreviews" \
 	--show-only templates/metrics-rbac.yaml
+expect_contains "metrics RBAC lets the operator create SubjectAccessReviews" "- subjectaccessreviews" \
+	--show-only templates/metrics-rbac.yaml
 
 if [ "$failures" -gt 0 ]; then
 	printf '%d chart render test(s) failed\n' "$failures"
