@@ -528,7 +528,7 @@ func routeCollisions(
 			continue
 		}
 		e := ep.Spec.Endpoints[0]
-		key := e.Method + " " + renderer.ConflictKey(e.Endpoint)
+		key := renderer.RouteKey(e.Method, e.Endpoint)
 		groups[key] = append(groups[key], ep)
 	}
 	created := make(map[string]int64, len(controlled))
