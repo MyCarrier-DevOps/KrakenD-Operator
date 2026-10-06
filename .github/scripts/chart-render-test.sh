@@ -41,6 +41,13 @@ expect_absent() {
 	if grep -qF -- "$needle" <<<"$out"; then fail "$name"; else pass "$name"; fi
 }
 
+# expect_render_fails NAME [helm args...]: helm template exits non-zero.
+expect_render_fails() {
+	local name=$1
+	shift
+	if render "$@" >/dev/null 2>&1; then fail "$name"; else pass "$name"; fi
+}
+
 # expect_equal NAME WANT GOT
 expect_equal() {
 	if [ "$2" = "$3" ]; then pass "$1"; else fail "$1 (want '$2', got '$3')"; fi
@@ -254,6 +261,7 @@ expect_contains "replicas prefer different nodes by default" "preferredDuringSch
 expect_absent "a user affinity replaces the default" "podAntiAffinity" --show-only templates/deployment.yaml \
 	--set 'affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0].key=kubernetes.io/os' \
 	--set 'affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0].operator=Exists'
+expect_render_fails "several replicas without leader election are refused" --set leaderElection.enabled=false
 
 if [ "$failures" -gt 0 ]; then
 	printf '%d chart render test(s) failed\n' "$failures"
