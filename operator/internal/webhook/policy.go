@@ -159,7 +159,7 @@ func checkPolicyRender(
 			},
 			func(before configcheck.Verdict) string {
 				return truncate(fmt.Sprintf("gateway %s/%s already fails validation: %s",
-					gw.Namespace, gw.Name, before.Summary(policySummaryLimit)), policyWarningLimit)
+					gw.Namespace, gw.Name, shownSummary(before, policy.Namespace, policySummaryLimit)), policyWarningLimit)
 			})
 		if err != nil && !errors.Is(err, errPolicyBreaksGateway) {
 			return nil, err
