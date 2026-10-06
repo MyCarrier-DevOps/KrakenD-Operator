@@ -141,7 +141,8 @@ The manager's ClusterRole exists in three places, all generated from the
   `make manifests`; `templates/clusterrole.yaml` renders its rules.
 
 `make verify-manifests` (the CI `Manifests Drift` job) fails when
-`config/rbac/role.yaml` or the chart copy is stale, and
+`config/rbac/role.yaml`, the chart copy or the OLM bundle's
+ClusterServiceVersion is stale, and
 `TestManagerRoleGrantsOnlyUsedVerbs` fails when the generated role differs
 from the verbs the controllers use.
 
@@ -2092,6 +2093,21 @@ OLM upgrade applies the permissions in the new bundle's ClusterServiceVersion.
 `charts/krakend-operator/templates/clusterrole.yaml` renders its rules from
 a copy of the generated role instead of a hand-maintained list, so a chart
 release can no longer grant more, or less, than the operator binary needs.
+
+### The OLM bundle matches the Helm and kustomize installs
+
+The bundle's ClusterServiceVersion is regenerated from source and checked by
+`make verify-manifests`. It had drifted: an OLM install ran without the
+admission webhooks, could not create post-restart Jobs (the `batch/jobs`
+permission was missing) and capped the operator at 128Mi of memory. The
+bundle now declares the four validating webhooks, grants the Job permission
+and uses the same memory (512Mi limit, 128Mi request) and node affinity as the
+other installs. OLM provides and mounts the webhook certificates, so the
+bundle carries no cert-manager dependency.
+
+For OLM users: writes to the four KrakenD kinds are now validated before they
+are stored, and the webhooks use `failurePolicy: Fail`. While the operator is
+unavailable, creating or updating those resources is rejected.
 
 ---
 
