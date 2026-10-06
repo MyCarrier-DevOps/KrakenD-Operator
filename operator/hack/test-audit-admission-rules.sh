@@ -10,7 +10,7 @@ diff -u "$here/testdata/audit/expected.txt" <("$here/audit-admission-rules.sh" "
 # The patterns and enum lists the audit checks must be the ones in the CRDs.
 crds="$here/../config/crd/bases"
 flat="$(cat "$crds"/*.yaml | tr -s ' \n' ' ')"
-for var in endpoint_path_re go_duration_re single_unit_re quantity_re; do
+for var in endpoint_path_re host_re go_duration_re single_unit_re quantity_re; do
 	pattern="$(sed -n "s/^$var='\(.*\)'\$/\1/p" "$here/audit-admission-rules.sh")"
 	[[ -n "$pattern" ]] && grep -qxE -- "(- )?pattern: $(sed 's/[][\.*^$|?+(){}]/\\&/g' <<<"$pattern")" <(cat "$crds"/*.yaml | sed 's/^ *//') || {
 		echo "$var is not a pattern in the CRDs: $pattern" >&2
@@ -21,6 +21,7 @@ done
 # it: the number of fields of that name carrying the pattern is pinned.
 pattern_of() { sed -n "s/^$1='\\(.*\\)'\$/\\1/p" "$here/audit-admission-rules.sh"; }
 for pin in "endpoints timeout 1 go_duration_re" "endpoints cacheTTL 1 go_duration_re" "endpoints endpoint 1 endpoint_path_re" \
+	"endpoints host 1 host_re" "autoconfigs host 1 host_re" \
 	"autoconfigs timeout 3 go_duration_re" "autoconfigs cacheTTL 3 go_duration_re" "autoconfigs interval 1 go_duration_re" \
 	"autoconfigs endpoint 2 endpoint_path_re" "gateways timeout 1 single_unit_re" "gateways cacheTTL 1 single_unit_re" \
 	"gateways dnsCacheTTL 1 single_unit_re" "gateways maxAge 1 single_unit_re" "gateways dialTimeout 1 single_unit_re" \
