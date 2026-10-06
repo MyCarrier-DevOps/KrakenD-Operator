@@ -531,7 +531,7 @@ func sameController(a, b metav1.Object) bool {
 }
 
 func routeKey(e v1alpha1.EndpointEntry) string {
-	return e.Method + " " + renderer.ConflictKey(e.Endpoint)
+	return renderer.RouteKey(e.Method, e.Endpoint)
 }
 
 // routeClash reports that e's route is already claimed by otherPath in owner.
