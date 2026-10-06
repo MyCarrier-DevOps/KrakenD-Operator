@@ -66,6 +66,9 @@ var shapeOf = routeShape
 //   - Backends. A wildcard endpoint has exactly one backend
 //     (eeWildcardBackendFindings).
 //
+// The route conflicts stop at MaxRouteRefusals, with one notice line, so the
+// work and the output stay bounded however many routes conflict.
+//
 // Every finding is a lint-pointer line, so Attribute maps it like any other.
 func eeWildcardFindings(ctx context.Context, endpoints []any) ([]string, error) {
 	type route struct {
@@ -82,7 +85,12 @@ func eeWildcardFindings(ctx context.Context, endpoints []any) ([]string, error) 
 		routes = append(routes, route{index: i, method: endpointMethod(m), path: path, shape: shapeOf(path)})
 	}
 	var findings []string
+	conflicts := 0
+	stopped := false
 	for _, w := range routes {
+		if stopped {
+			break
+		}
 		if !IsEEWildcard(w.path) {
 			continue
 		}
@@ -95,6 +103,11 @@ func eeWildcardFindings(ctx context.Context, endpoints []any) ([]string, error) 
 			if o.index == w.index || o.method != w.method || !strings.HasPrefix(o.shape, prefixShape) {
 				continue
 			}
+			if conflicts == MaxRouteRefusals {
+				stopped = true
+				break
+			}
+			conflicts++
 			findings = append(findings,
 				fmt.Sprintf("- at '/endpoints/%d/endpoint': EE wildcard '%s %s' conflicts with '%s %s' "+
 					"(endpoints/%d): the EE router accepts no other %s route under %s",
@@ -106,6 +119,9 @@ func eeWildcardFindings(ctx context.Context, endpoints []any) ([]string, error) 
 	findings = append(findings, eeWildcardParamFindings(endpoints)...)
 	findings = append(findings, eeWildcardBackendFindings(endpoints)...)
 	sort.Strings(findings)
+	if stopped {
+		findings = append(findings, fmt.Sprintf("- EE wildcard check stopped after %d conflicts", conflicts))
+	}
 	return findings, nil
 }
 
