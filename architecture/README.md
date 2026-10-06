@@ -1807,93 +1807,43 @@ spec:
 
 The operator uses a two-tier RBAC model:
 
-- **`ClusterRole` (cluster-scoped)** — bound via `ClusterRoleBinding` to the operator’s ServiceAccount. Covers: CRD watching/status updates, leader election leases, and cluster-level resources.
-- **Namespaced resources** — the same `ClusterRole` includes permissions for namespaced resources (Deployments, Services, ConfigMaps, etc.). This allows the operator to manage gateways in any namespace. For stricter isolation, a `Role` + `RoleBinding` per gateway namespace can be used instead.
+- **`ClusterRole` (cluster-scoped)** — bound via `ClusterRoleBinding` to the operator’s ServiceAccount. Covers the CRDs, their status subresources, and the namespaced resources the controllers manage (Deployments, Services, ConfigMaps, and so on), so the operator can manage gateways in any namespace. For stricter isolation, a `Role` + `RoleBinding` per gateway namespace can be used instead.
+- **`Role` (namespaced)** — the leader-election Role in the operator's own namespace. Covers the leader-election leases and events; see below.
 
-### Core Resources
+### Manager ClusterRole
 
-```yaml
-# ClusterRole: krakend-operator-manager
-rules:
-  # Manage owned resources
-  - apiGroups: ["apps"]
-    resources: ["deployments"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: ["apps"]
-    resources: ["replicasets"]
-    verbs: ["list"]                    # config ConfigMap GC: a live ReplicaSet keeps its ConfigMap; read uncached
-  - apiGroups: [""]
-    resources: ["services", "configmaps", "serviceaccounts"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: [""]
-    resources: ["secrets"]
-    verbs: ["get", "list", "watch"]    # watch needed for license Secret change detection; scope to gateway namespaces via Role if stricter isolation required
+A verb is granted only when a call site needs it. `get`/`list`/`watch` are needed for every kind the controllers watch (informers list and watch) or read through the client (`get`). Status subresources need only `update`/`patch`: reads go through the main resource. `<kind>/finalizers: update` is kept only for owners that set `blockOwnerDeletion` on a controller reference (`SetControllerReference`), which the `OwnerReferencesPermissionEnforcement` admission plugin checks.
 
-  # Dragonfly CRD (rendered by operator, reconciled by Dragonfly Operator)
-  - apiGroups: ["dragonflydb.io"]
-    resources: ["dragonflies"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: ["dragonflydb.io"]
-    resources: ["dragonflies/status"]
-    verbs: ["get"]
+| group/resource | verbs | consumer |
+|---|---|---|
+| `""/configmaps` | get list watch create delete | immutable config ConfigMaps via `Create` (never updated); garbage collection of unreferenced config ConfigMaps (delete, label-selected list); plugin ConfigMaps and AutoConfig spec/CUE ConfigMaps (get); metadata watches (list/watch) |
+| `""/secrets` | get list watch | license Secret reads, AutoConfig auth Secret reads (get); the gateway controller's license-Secret metadata watch (list/watch) |
+| `""/serviceaccounts`, `""/services` | get list watch create update | gateway `CreateOrUpdate` + `Owns` |
+| `""/events` | create patch | every `EventRecorder` |
+| `apps/deployments` | get list watch create update | gateway `CreateOrUpdate` + `Owns` |
+| `apps/replicasets` | list | config ConfigMap garbage collection: live ReplicaSets that still mount a config ConfigMap, listed through the uncached `APIReader` (no watch, no cache) |
+| `policy/poddisruptionbudgets` | get list watch create update | gateway `CreateOrUpdate` + `Owns` (always built, never deleted) |
+| `autoscaling/horizontalpodautoscalers` | get list watch create update delete | `CreateOrUpdate` + `Owns`; delete when autoscaling is removed |
+| `batch/jobs` | get list watch create delete | post-restart Job `Create`; failed-revision recreate `Delete` |
+| `dragonflydb.io/dragonflies`, `external-secrets.io/externalsecrets`, `networking.istio.io/virtualservices` | get list watch create update delete | `CreateOrUpdate`; watches; delete when the feature is disabled |
+| `gateway.krakend.io/krakendgateways` | get list watch | all controllers read and watch gateways (the operator never writes the user's object) |
+| `gateway.krakend.io/krakendgateways/status` | update | gateway controller `Status().Update`, the only status writer |
+| `gateway.krakend.io/krakendgateways/finalizers` | update | `blockOwnerDeletion` on every gateway child |
+| `gateway.krakend.io/krakendendpoints` | get list watch create update delete | AutoConfig `CreateOrUpdate`, adoption `Update` and stale-endpoint `Delete`; watches |
+| `gateway.krakend.io/krakendendpoints/status` | patch | the gateway controller (`Accepted`) and the endpoint controller (`ResolvedRefs`/`Ready`) each patch their own condition with `Status().Patch` and an optimistic lock; nothing updates endpoint status |
+| `gateway.krakend.io/krakendbackendpolicies` | get list watch update | protection finalizer add/remove |
+| `gateway.krakend.io/krakendbackendpolicies/status` | update | policy controller status |
+| `gateway.krakend.io/krakendautoconfigs` | get list watch | AutoConfig controller |
+| `gateway.krakend.io/krakendautoconfigs/status` | update | AutoConfig controller `Status().Update` |
+| `gateway.krakend.io/krakendautoconfigs/finalizers` | update | `blockOwnerDeletion` on generated endpoints |
 
-  # Watch CRDs
-  - apiGroups: ["gateway.krakend.io"]
-    resources: ["krakendgateways", "krakendendpoints", "krakendbackendpolicies", "krakendautoconfigs"]
-    verbs: ["get", "list", "watch"]
-  - apiGroups: ["gateway.krakend.io"]
-    resources: ["krakendgateways/status", "krakendendpoints/status", "krakendbackendpolicies/status", "krakendautoconfigs/status"]
-    verbs: ["get", "update", "patch"]
-  - apiGroups: ["gateway.krakend.io"]
-    resources: ["krakendgateways/finalizers", "krakendendpoints/finalizers", "krakendbackendpolicies/finalizers", "krakendautoconfigs/finalizers"]
-    verbs: ["update"]                  # kubebuilder convention; finalizers used for pre-deletion cleanup when ownerReference GC is insufficient
+Not granted: `create`/`update`/`patch`/`delete` on the four CRDs' main resources except where listed; `patch` everywhere except events and the endpoint status subresource; `update` on configmaps and on the endpoint status subresource; `delete` on deployments, services, serviceaccounts and PDBs; `get` on every status subresource; `krakendendpoints/finalizers` and `krakendbackendpolicies/finalizers` (neither kind owns anything).
 
-  # Autoconfig: create/update/delete generated KrakenDEndpoints
-  - apiGroups: ["gateway.krakend.io"]
-    resources: ["krakendendpoints"]
-    verbs: ["create", "update", "patch", "delete"]
+### Leader election (namespaced Role)
 
-  # Leader election
-  - apiGroups: ["coordination.k8s.io"]
-    resources: ["leases"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+`coordination.k8s.io/leases`: `get`, `create`, `update`; `events`: `create`, `patch`. controller-runtime uses a Lease; no ConfigMap lock.
 
-  # Events
-  - apiGroups: [""]
-    resources: ["events"]
-    verbs: ["create", "patch"]
-
-  # HPA (optional)
-  - apiGroups: ["autoscaling"]
-    resources: ["horizontalpodautoscalers"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-
-  # PodDisruptionBudget
-  - apiGroups: ["policy"]
-    resources: ["poddisruptionbudgets"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-```
-
-### External Secrets (Conditional)
-
-```yaml
-  # Only when ExternalSecret integration is enabled
-  - apiGroups: ["external-secrets.io"]
-    resources: ["externalsecrets"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: ["external-secrets.io"]
-    resources: ["externalsecrets/status"]
-    verbs: ["get"]
-```
-
-### Istio (Conditional)
-
-```yaml
-  # Only when Istio integration is enabled
-  - apiGroups: ["networking.istio.io"]
-    resources: ["virtualservices"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-```
+The ClusterRole is generated from the `+kubebuilder:rbac` markers into `operator/config/rbac/role.yaml`. `TestManagerRoleGrantsOnlyUsedVerbs` pins it to the table above, and the integration suite runs its manager as a ServiceAccount bound to exactly that role, so a missing or surplus verb fails a test.
 
 ---
 
