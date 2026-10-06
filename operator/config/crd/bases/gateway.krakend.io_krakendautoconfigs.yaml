@@ -125,8 +125,11 @@ spec:
                               named key to avoid collisions.
                             type: string
                           host:
-                            description: Host is the list of backend host URLs.
+                            description: |-
+                              Host is the list of backend host URLs. A host holds no whitespace or
+                              control character: krakend check prints it verbatim in its errors.
                             items:
+                              pattern: ^[^\x00-\x20\x7F]+$
                               type: string
                             type: array
                           inputHeaders:
