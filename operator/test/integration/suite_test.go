@@ -23,6 +23,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -216,18 +217,21 @@ func runTests(m *testing.M) int {
 		return 1
 	}
 
-	// Wire up the AutoConfig controller with the real fetcher, embedded CUE
+	// Wire up the AutoConfig controller with the real fetcher (behind a gate
+	// for hosts that must hang), embedded CUE
 	// evaluator, filter and generator.
+	slowFetcher = &gatedFetcher{Fetcher: autoconfig.NewFetcher(mgr.GetClient())}
 	if err := (&controller.KrakenDAutoConfigReconciler{
 		Client:       mgr.GetClient(),
 		Scheme:       scheme,
 		Recorder:     mgr.GetEventRecorderFor("krakendautoconfig-controller"),
-		Fetcher:      autoconfig.NewFetcher(mgr.GetClient()),
+		Fetcher:      slowFetcher,
 		CUEEvaluator: autoconfig.NewCUEEvaluator(),
 		Filter:       autoconfig.NewFilter(),
 		Generator:    autoconfig.NewGenerator(),
 		Checker:      checker,
 		Clock:        clock.RealClock{},
+		FetchTimeout: 20 * time.Second,
 	}).SetupWithManager(mgr); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to setup autoconfig controller: %v\n", err)
 		return 1
@@ -446,6 +450,27 @@ type markerValidator struct {
 
 // suiteValidator is the validator the suite's gateway controller uses.
 var suiteValidator = &markerValidator{}
+
+// slowFetcher is the AutoConfig reconciler's fetcher in the suite.
+var slowFetcher *gatedFetcher
+
+// gatedFetcher blocks every fetch of a host ending in ".slow.invalid" until
+// the fetch's context ends, counting the fetches it holds, and passes every
+// other fetch to the real fetcher.
+type gatedFetcher struct {
+	autoconfig.Fetcher
+	held atomic.Int32
+}
+
+func (g *gatedFetcher) Fetch(ctx context.Context, source autoconfig.FetchSource) (*autoconfig.FetchResult, error) {
+	if u, err := url.Parse(source.URL); err == nil && strings.HasSuffix(u.Hostname(), ".slow.invalid") {
+		g.held.Add(1)
+		defer g.held.Add(-1)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return g.Fetcher.Fetch(ctx, source)
+}
 
 func (v *markerValidator) Validate(_ context.Context, jsonData []byte, _ v1alpha1.Edition) error {
 	if !bytes.Contains(jsonData, []byte(rejectMarker)) {
