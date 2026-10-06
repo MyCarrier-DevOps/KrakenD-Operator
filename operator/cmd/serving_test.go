@@ -38,3 +38,11 @@ func TestWebhookServerOptions_CertPathGoesToServer(t *testing.T) {
 		t.Error("TLSOpts set GetCertificate, which bypasses the server's own certificate watcher")
 	}
 }
+
+func TestWebhookServerOptions_DisabledReadsNoCertificate(t *testing.T) {
+	opts := webhookServerOptions(false, "/certs", "a.crt", "a.key", nil)
+
+	if opts.CertDir != "" || opts.CertName != "" || opts.KeyName != "" {
+		t.Errorf("cert location = %q %q %q, want none with webhooks disabled", opts.CertDir, opts.CertName, opts.KeyName)
+	}
+}
