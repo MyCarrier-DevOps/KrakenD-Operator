@@ -21,15 +21,24 @@ import (
 	"slices"
 )
 
-// walkJSON calls visit for every object member below node, in sorted key
-// order, and descends into a member's value when visit returns true.
+// walkJSON calls visit for every object field below node, in sorted key
+// order, and descends into a field's value when visit returns true. The
+// members of a name-keyed map (see nameKeyedMaps) are not fields: they are
+// walked as objects without being visited by name.
 func walkJSON(node any, visit func(key string, value any) bool) {
 	switch v := node.(type) {
 	case map[string]any:
 		for _, k := range slices.Sorted(maps.Keys(v)) {
-			if visit(k, v[k]) {
-				walkJSON(v[k], visit)
+			if !visit(k, v[k]) {
+				continue
 			}
+			if members, ok := v[k].(map[string]any); ok && slices.Contains(nameKeyedMaps, k) {
+				for _, name := range slices.Sorted(maps.Keys(members)) {
+					walkJSON(members[name], visit)
+				}
+				continue
+			}
+			walkJSON(v[k], visit)
 		}
 	case []any:
 		for _, child := range v {
