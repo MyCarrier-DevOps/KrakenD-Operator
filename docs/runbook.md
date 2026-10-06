@@ -439,6 +439,22 @@ config that passes validation is published and rolled out. The same
 hold follows when the operator deletes the applied config's ConfigMap because
 its `krakend.json` does not hash to the checksum (someone replaced the payload).
 
+### Gateway Deployment held: "serviceaccount is not controlled by gateway"
+
+The operator logs `holding the Deployment and the post-restart Job:
+serviceaccount <ns>/<name> is not controlled by gateway <name>` when a
+ServiceAccount named like the gateway exists and another controller owns it, or
+when the operator could not write it. The Deployment and the post-restart Job run
+as that ServiceAccount, so both are left as they are: running pods keep
+running, and a new gateway gets no Deployment (`Ready` reads
+`AwaitingAvailability`). The error keeps `status.observedGeneration` behind
+`metadata.generation`, and the reconcile is retried with backoff.
+
+Diagnose with `kubectl get serviceaccount <name> -n <ns> -o yaml` (the
+controller owner reference). Rename the gateway, or remove the ServiceAccount's
+other owner, and the next retry recovers it; restarting the operator retries at
+once.
+
 ### Endpoint shows `Invalid`
 
 **Diagnosis:**
