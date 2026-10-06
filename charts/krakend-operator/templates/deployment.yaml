@@ -48,6 +48,7 @@ spec:
             - --leader-elect
             {{- end }}
             - --health-probe-bind-address=:{{ .Values.healthProbes.port }}
+            - --autoconfig-max-concurrent-reconciles={{ .Values.autoconfig.maxConcurrentReconciles }}
             {{- if .Values.metrics.enabled }}
             - --metrics-bind-address=:{{ .Values.metrics.service.port }}
             {{- end }}
