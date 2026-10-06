@@ -249,6 +249,8 @@ expect_contains "a PodDisruptionBudget allows one disruption" "maxUnavailable: 1
 expect_absent "no PodDisruptionBudget for a single replica" "kind: PodDisruptionBudget" --set replicaCount=1
 expect_absent "podDisruptionBudget.enabled=false renders none" "kind: PodDisruptionBudget" \
 	--set podDisruptionBudget.enabled=false
+expect_contains "replicas prefer different nodes by default" "preferredDuringSchedulingIgnoredDuringExecution" \
+	--show-only templates/deployment.yaml
 
 if [ "$failures" -gt 0 ]; then
 	printf '%d chart render test(s) failed\n' "$failures"
