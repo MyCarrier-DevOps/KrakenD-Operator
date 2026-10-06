@@ -43,7 +43,7 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 - `extra_config.go` — 3-layer merge (raw < typed < inline) for backend/endpoint extra_config
 - `routes.go` — `PathParams`, `ConflictKey` and `RouteKey`: the route shape (parameter names erased, path cleaned) that the renderer, admission and the AutoConfig controller all key conflicts on
 - `routecheck.go` — the route check: registers every route of the edition's copy in an in-process gin engine, in the order KrakenD registers them, and refuses what the runtime would panic on (the health path, `auto_options` clashes), stopping after 21 refusals
-- `eewildcard.go`, `eestrip.go`, `eeonly_namespaces.json` — the EE wildcard rules and rewrite, and the CE fallback strip with the list of Enterprise-only namespaces (`CEDrops`, `EEOnlyNamespacesIn`)
+- `eewildcard.go`, `eestrip.go`, `eeonly_namespaces.json` — the EE wildcard rules (route conflicts stop after 21 with a notice line) and rewrite, and the CE fallback strip with the list of Enterprise-only namespaces (`CEDrops`, `EEOnlyNamespacesIn`)
 - `attribution.go` — `Attribute` maps each `krakend check` finding to the rendered entry it names (`RenderOutput.Sources` is index-aligned with the endpoints array)
 - `validator.go` — `Validate` (`krakend check -t -n`, the gateway controller's check) and `Lint` (`krakend check -n`, the admission check), each after the EE wildcard rules and the route check; KrakenD CLI validation via temp file, validation rewrites EE wildcard endpoints to a parameter route and applies the EE wildcard route rule; the Redis pool is rendered under the EE `redis` namespace and validated
 - `plugins.go` — buildPluginBlock, computePluginChecksum
