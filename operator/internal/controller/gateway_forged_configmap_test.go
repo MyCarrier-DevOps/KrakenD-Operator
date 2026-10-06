@@ -17,11 +17,13 @@ limitations under the License.
 package controller
 
 import (
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/record"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/resources"
@@ -66,5 +68,38 @@ func TestGatewayReconcile_AForgedAppliedConfigMapIsReplacedWhateverItsMetadata(t
 				t.Errorf("ConfigValid = %+v, want True/ConfigApplied once the ConfigMap holds the config", cv)
 			}
 		})
+	}
+}
+
+// A ConfigMap deleted for holding another payload leaves a trace: on the applied
+// path the pass otherwise ends ConfigApplied. It is one Warning on the gateway,
+// naming the ConfigMap, and later passes do not repeat it.
+func TestGatewayReconcile_DeletingAForgedConfigMapWarnsOnTheGateway(t *testing.T) {
+	const config = `{"version":3,"name":"genuine"}`
+	checksum := hash.SHA256Hex([]byte(config))
+	gw := servingGateway(checksum, convergedImage)
+	forged := publishedConfigMap(t, gw, `{"version":3,"name":"forged"}`, checksum)
+	c := fakeClientBuilder().WithObjects(gw, settledDeployment(gw, checksum), forged).
+		WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderOf(config), &mockValidator{})
+
+	for range 3 {
+		if err := reconcileGateway(t, r, gw); err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+	}
+
+	var tampered []string
+	for _, e := range drainEvents(r.Recorder.(*record.FakeRecorder)) {
+		if strings.Contains(e, " "+v1alpha1.ReasonConfigMapTampered+" ") {
+			tampered = append(tampered, e)
+		}
+	}
+	if len(tampered) != 1 {
+		t.Fatalf("%s events over three passes = %v, want exactly 1", v1alpha1.ReasonConfigMapTampered, tampered)
+	}
+	if !strings.HasPrefix(tampered[0], corev1.EventTypeWarning+" ") ||
+		!strings.Contains(tampered[0], forged.Name) {
+		t.Errorf("event = %q, want a Warning naming the deleted ConfigMap %s", tampered[0], forged.Name)
 	}
 }
