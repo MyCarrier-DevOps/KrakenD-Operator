@@ -213,6 +213,12 @@ const (
 	// and the reconcile is retried with backoff.
 	ReasonConfigPublishFailed = "ConfigPublishFailed"
 
+	// ReasonConfigMapTampered is the event reason for a config ConfigMap that
+	// the operator deleted because its krakend.json does not hash to the
+	// checksum its name addresses. The operator then publishes the config
+	// again.
+	ReasonConfigMapTampered = "ConfigMapTampered"
+
 	// ReasonPolicyDeletionBlocked is the event reason for a KrakenDBackendPolicy
 	// that is being deleted while a KrakenDEndpoint still references it.
 	ReasonPolicyDeletionBlocked = "DeletionBlocked"
