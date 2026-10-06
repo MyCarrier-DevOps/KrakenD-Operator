@@ -63,7 +63,7 @@ kustomize manifests set the ones they need.
 | `--enable-http2` | `false` | Allow HTTP/2 on the metrics and webhook servers. |
 | `--enable-webhooks` | `true` | Serve the validating admission webhooks. |
 | `--operator-username` | `system:serviceaccount:$POD_NAMESPACE:$POD_SERVICE_ACCOUNT`, or empty when either variable is unset | Username of the operator's own API requests. See below. |
-| `--autoconfig-max-concurrent-reconciles` | `4` | How many KrakenDAutoConfigs reconcile at once. Each reconcile fetches its OpenAPI spec over the network, so a slow upstream delays only its own AutoConfig. Values below 1 mean 1. The AutoConfig config checks hold at most 1 of the 3 validation slots, and the gateway controller 1, so admission always finds one free. |
+| `--autoconfig-max-concurrent-reconciles` | `4` | How many KrakenDAutoConfigs reconcile at once. Each reconcile fetches its OpenAPI spec over the network, so a slow upstream delays only its own AutoConfig. Values below 1 mean 1. The AutoConfig config checks hold at most 1 of the 3 validation slots, and the gateway controller 1, so the controllers never hold more than 2 of the 3. Concurrent admission requests can take the rest. |
 
 `--operator-username` is matched exactly, as a whole string, against the
 username on each admission request. A KrakenDEndpoint write from that username
