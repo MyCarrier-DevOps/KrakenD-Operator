@@ -262,6 +262,8 @@ expect_absent "a user affinity replaces the default" "podAntiAffinity" --show-on
 	--set 'affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0].key=kubernetes.io/os' \
 	--set 'affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0].operator=Exists'
 expect_render_fails "several replicas without leader election are refused" --set leaderElection.enabled=false
+expect_contains "one replica without leader election still renders" "kind: Deployment" \
+	--set leaderElection.enabled=false --set replicaCount=1
 
 if [ "$failures" -gt 0 ]; then
 	printf '%d chart render test(s) failed\n' "$failures"
