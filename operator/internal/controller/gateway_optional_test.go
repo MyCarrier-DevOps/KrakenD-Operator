@@ -267,6 +267,43 @@ func TestGatewayReconcile_DisabledOptionalKindsAreReadThroughTheCache(t *testing
 	}
 }
 
+// countingMapper counts the kind lookups made through it.
+type countingMapper struct {
+	meta.RESTMapper
+	lookups int
+}
+
+func (m *countingMapper) RESTMapping(gk schema.GroupKind, versions ...string) (*meta.RESTMapping, error) {
+	m.lookups++
+	return m.RESTMapper.RESTMapping(gk, versions...)
+}
+
+// A CRD that was absent a moment ago is not asked about again on every
+// reconcile of a gateway that does not use the feature.
+func TestGatewayReconcile_AnAbsentOptionalKindIsNotRediscoveredOnEveryPass(t *testing.T) {
+	gw := reconciledGateway()
+	gw.UID = "gw-uid"
+	gw.Status.ConfigChecksum = "applied"
+	mapper := &countingMapper{RESTMapper: optionalCRDMapper()}
+	base := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(mapperClient{Client: base, mapper: mapper}, renderOutput("applied"), &mockValidator{})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+	first := mapper.lookups
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+
+	if first != len(optionalOwnedGVKs) {
+		t.Fatalf("first pass kind lookups = %d, want one per optional kind", first)
+	}
+	if got := mapper.lookups - first; got != 0 {
+		t.Errorf("second pass kind lookups = %d, want 0 within the memo window", got)
+	}
+}
+
 func TestGatewayReconcile_NoCRDNeverReadsLive(t *testing.T) {
 	gw := reconciledGateway()
 	gw.UID = "gw-uid"
