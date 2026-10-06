@@ -1032,14 +1032,14 @@ func TestPublishConfig_VerifiesTheConfigMapALostCreateRaceLeftBehind(t *testing.
 	foreign := ownedConfigMap(gw, resources.ConfigMapName(gw, checksum), testNow, true)
 	foreign.OwnerReferences = nil
 	live := fakeClientBuilder().WithObjects(gw, foreign).Build()
-	// The cache has not seen the ConfigMap yet, so the Get misses and the
-	// Create loses to what the API server already holds.
+	// The first existence check misses the ConfigMap (it is read as
+	// metadata), so the Create loses to what the API server already holds.
 	stale := interceptor.NewClient(live, interceptor.Funcs{
 		Get: func(
 			ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object,
 			opts ...client.GetOption,
 		) error {
-			if _, ok := obj.(*corev1.ConfigMap); ok {
+			if m, ok := obj.(*metav1.PartialObjectMetadata); ok && m.Kind == "ConfigMap" {
 				return apierrors.NewNotFound(corev1.Resource("configmaps"), key.Name)
 			}
 			return c.Get(ctx, key, obj, opts...)
