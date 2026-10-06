@@ -541,6 +541,29 @@ func TestExternalRefs_IgnoresExamplePayloads(t *testing.T) {
 	}
 }
 
+// A member of a name-keyed map is an object whatever it is named, so an
+// external ref below one called "example" or "examples" is reported.
+func TestExternalRefs_ListsRefsUnderMembersNamedExample(t *testing.T) {
+	tests := []struct{ name, spec string }{
+		{"component schema", `{"components":{"schemas":{"example":{"$ref":"x.json#/X"}}}}`},
+		{"component response", `{"components":{"responses":{"examples":{"$ref":"x.json#/X"}}}}`},
+		{"response header", `{"components":{"responses":{"R":{"headers":{"example":{"$ref":"x.json#/X"}}}}}}`},
+		{"property", `{"properties":{"example":{"$ref":"x.json#/X"}}}`},
+		{"webhook", `{"webhooks":{"example":{"$ref":"x.json#/X"}}}`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			refs, err := ExternalRefs([]byte(tc.spec))
+			if err != nil {
+				t.Fatalf("ExternalRefs: %v", err)
+			}
+			if want := []string{"x.json#/X"}; !slices.Equal(refs, want) {
+				t.Errorf("refs = %q, want %q", refs, want)
+			}
+		})
+	}
+}
+
 func TestResolveExternalRefs_LocalRefWarningSkipsExamplePayload(t *testing.T) {
 	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"content":{"application/json":` +
 		`{"schema":{"$ref":"common.json#/Pet"}}}}}}}}}`)
