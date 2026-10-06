@@ -3764,6 +3764,31 @@ func TestAutoConfigReconcile_HeldCauseIsLoggedOncePerChange(t *testing.T) {
 	}
 }
 
+func TestAutoConfigReconcile_DeletedAutoConfigIsForgottenByTheCauseLog(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	ce.output.Failed = []autoconfig.OperationIssue{failedGetB()}
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if _, ok := r.heldLogged.Load(ac.UID); !ok {
+		t.Fatal("expected the held cause remembered")
+	}
+
+	if err := c.Delete(context.Background(), ac); err != nil {
+		t.Fatalf("deleting the autoconfig: %v", err)
+	}
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile after delete: %v", err)
+	}
+	if _, ok := r.heldLogged.Load(ac.UID); ok {
+		t.Error("expected a deleted autoconfig forgotten")
+	}
+}
+
 func TestAutoConfigReconcile_FailedOperationsAreListedSortedAndCapped(t *testing.T) {
 	cm := testCUEDefinitionsCM()
 	ac := syncedAutoConfig(cm)
