@@ -45,7 +45,7 @@ on). Key metrics:
 | Metric | Type | Description |
 |---|---|---|
 | `config_renders_total` | Counter | Total config renders |
-| `config_validation_failures_total` | Counter | Config validation failures |
+| `config_validation_failures_total` | Counter | Rejected configs: each rejected input counts once, not once per reconcile |
 | `rolling_restarts_total` | Counter | Deployment writes that changed the pod template, once per write (a creation does not count; drift in the template the operator reverts does) |
 | `license_expiry_seconds` | Gauge | Seconds until license expiry (per gateway) |
 | `endpoints` | Gauge | Number of endpoints (per gateway) |
@@ -140,11 +140,12 @@ pod eviction) makes the Deployment report `Available=False`
 
 | Condition | Meaning |
 |---|---|
-| `Ready` | Summary: the Deployment is available and the applied config is rolled out to all replicas; its reason names the blocking condition |
-| `ConfigValid` | `True`: the rendered config passed `krakend check`. `False` (`ConfigValidationFailed`): rejected; the last applied config keeps serving. `Unknown` (`ValidatorUnavailable`): krakend check could not run; retried with backoff |
+| `Ready` | Summary, written only by the gateway controller. `True` (`Ready`): the configuration is applied, the Deployment is available and the applied config is rolled out to all replicas. Otherwise its reason names the first thing that blocks it. `False`: `ConfigValidationFailed`, `LicenseExpiredNoFallback`, `ConfigMapNotFound`, the Deployment's reason when `Available` is `False` (`RolloutFailed`, `MinimumReplicasUnavailable`), `EEFeaturesStripped` or `LicenseFallbackCE` while the gateway runs CE as a fallback, `ConfigDeployed` or `DeploymentUpdated` while a rollout is in progress, `AwaitingAvailability` while the Deployment reports no available replicas. `Unknown`: `Pending` (no configuration validated yet) or `ValidatorUnavailable` |
+| `ConfigValid` | `True` (`ConfigApplied`): the rendered config passed validation and is the applied config. `False` (`ConfigValidationFailed`): rejected; the last applied config keeps serving. `Unknown` (`ValidatorUnavailable`): krakend check could not run; retried with backoff |
 | `PluginsResolved` | `True` (`ConfigMapsFound`) when every plugin ConfigMap exists; `False` (`ConfigMapNotFound`) naming the missing ones while the Deployment is held. Absent without ConfigMap plugin sources |
 | `Available` | The Deployment is available; `False` when it loses its minimum replicas (for example all pods crash-looping) or its rollout fails |
 | `Progressing` | A rollout is in progress: the Deployment was created, its pod template was written (a config, image, plugin or license change, but also resources, probes or drift the operator reverted), or old pods remain beside updated ones. It stays `True` until the Deployment has observed the change and every replica is updated and available. A replica change alone (an HPA scale) does not raise it, though the brief `Available=False` a scale-up can cause is still mirrored |
+| `CEFallbackApplied` | `True` (`EEFeaturesStripped`) while the applied config is the CE-fallback render; the message lists the Enterprise-only features it removed. Absent otherwise |
 | `DragonflyReady` | DragonflyDB instance is operational |
 | `IstioConfigured` | VirtualService has been reconciled |
 | `LicenseValid` | EE license state: `True` (`LicenseOK`), `True` (`LicenseExpiringSoon`) inside the warning window, `False` (`LicensePreExpiry`, `LicenseExpired`), or `Unknown` (`LicenseSecretMissing`) while the license cannot be read, unless the last known expiry is already inside the safety buffer or past |
@@ -159,9 +160,9 @@ pod eviction) makes the Deployment report `Available=False`
 
 | Condition | Meaning |
 |---|---|
-| `ResolvedRefs` | Gateway and referenced policies exist (endpoint controller) |
-| `Accepted` | Included in the gateway's validated configuration (gateway controller) |
-| `Ready` | Both of the above, for the current generation |
+| `ResolvedRefs` | Gateway and referenced policies exist (endpoint controller): `True` (`RefsResolved`), or `False` (`GatewayNotFound`, `PolicyNotFound`) |
+| `Accepted` | Included in the gateway's validated configuration (gateway controller): `True` (`Accepted`); `True` (`PartiallyAccepted`) when an older endpoint serves some of its entries; `False` (`EndpointConflict`) when older endpoints serve all of them; `False` (`GatewayConfigRejected`) when the gateway's newest config was rejected and names this endpoint; `EEFeaturesStripped` (`True` while some entry is still served, `False` when every entry was an EE wildcard) after a CE fallback render removed Enterprise-only features; `True` (`SchemaNameConflict`) for a docs-only schema name clash. Removed while a referenced policy is missing |
+| `Ready` | Both of the above, for the current generation: `True` (`Ready`), or `True` (`SchemaNameConflict`) for a docs-only clash; `Unknown` (`Pending`) until the gateway accepts the generation; otherwise `False` with the failing condition's reason, so a `PartiallyAccepted` or `EEFeaturesStripped` endpoint is not `Ready` |
 
 - **`Ready=Unknown`, reason `Pending`, for more than a few seconds:** the
   gateway has not accepted this generation. Check the gateway:
@@ -171,8 +172,15 @@ pod eviction) makes the Deployment report `Available=False`
   serve every one of this endpoint's (path, method) pairs, so none is served
   (when only some are lost the reason is `PartiallyAccepted`, below). Rename
   the route or remove the duplicate.
-- **`ResolvedRefs=False`:** create the named gateway or policy; the endpoint
-  recovers on its own.
+- **`ResolvedRefs=False`, reason `GatewayNotFound` or `PolicyNotFound`:** create
+  the named gateway or policy; the endpoint recovers on its own.
+- **`Accepted=False`, reason `GatewayConfigRejected`:** see
+  [Endpoint shows `Accepted=False`, reason `GatewayConfigRejected`](#endpoint-shows-acceptedfalse-reason-gatewayconfigrejected).
+- **`Accepted` reason `PartiallyAccepted`:** see
+  [Endpoint shows `Accepted` reason `PartiallyAccepted`](#endpoint-shows-accepted-reason-partiallyaccepted).
+- **`Accepted` reason `EEFeaturesStripped`:** the gateway runs CE in license
+  fallback and its render removed Enterprise-only features from this endpoint;
+  the message lists them. See *License expiry warnings*.
 - **`Ready=True`, reason `SchemaNameConflict`:** the endpoint is served, but it
   defines a component schema differently from the endpoint the gateway's
   published documentation takes that name from. See
@@ -185,9 +193,9 @@ pod eviction) makes the Deployment report `Available=False`
 | Condition | Meaning |
 |---|---|
 | `SpecAvailable` | The OpenAPI spec was fetched (`SpecFetched`), or not (`SpecFetchFailed`) |
-| `Synced` | Generated endpoints are in sync with the spec. `False` with reason `OperationsFailed` while any operation is held, or with the failure's reason (`SpecFetchFailed`, `CUEEvaluationFailed`, `UnmatchedOverride`, `AmbiguousOverride`, `AdditionalEndpointScopeFailed`, `EndpointReconcileFailed`, `ValidatorUnavailable`) |
+| `Synced` | Generated endpoints are in sync with the spec (`True`, reason `Synced`). `False` with reason `OperationsFailed` while any operation is held, or with the failure's reason (`SpecFetchFailed`, `CUEEvaluationFailed`, `UnmatchedOverride`, `AmbiguousOverride`, `AdditionalEndpointScopeFailed`, `EndpointReconcileFailed`, `ValidatorUnavailable`) |
 | `EndpointsReady` | Every generated endpoint's `Ready` is True for its current generation (`AllEndpointsReady`), or `False` (`EndpointsNotReady`) naming up to five endpoints and their reasons (`Pending` while the endpoint controller has not reported a new or changed endpoint) |
-| `Ready` | `SpecAvailable`, `Synced` and `EndpointsReady` are True; its reason names the first that is not |
+| `Ready` | `SpecAvailable`, `Synced` and `EndpointsReady` are True (`Ready`); otherwise `False` with the reason of the first that is not, or `Unknown` (`Pending`) while one of them is still absent |
 
 The status also lists, each at most 20 entries with messages cut at 256 bytes:
 
@@ -423,8 +431,15 @@ config that passes validation is published and rolled out.
 kubectl describe krakendendpoint <name>
 ```
 
+`Invalid` is the phase of every `Ready=False` endpoint that is not `Detached`,
+`Conflicted` or `Pending`.
+
 **Common causes:**
 - `policyRef` references a non-existent policy (`ResolvedRefs=False`, reason `PolicyNotFound`)
+- The gateway's newest config was rejected and a finding names the endpoint
+  (`Accepted=False`, reason `GatewayConfigRejected`, below)
+- A CE fallback render removed every entry (all wildcards) (`Accepted=False`,
+  reason `EEFeaturesStripped`)
 
 A `gatewayRef` to a non-existent gateway shows phase `Detached` instead
 (`ResolvedRefs=False`, reason `GatewayNotFound`). For what each condition
@@ -744,7 +759,7 @@ The chart runs two replicas by default, with a PodDisruptionBudget allowing one 
 
 The active replica reconciles up to 4 KrakenDAutoConfigs at once, because each reconcile fetches its OpenAPI spec over the network and a slow upstream should delay only its own AutoConfig. Set `--autoconfig-max-concurrent-reconciles` (chart value `autoconfig.maxConcurrentReconciles`, default `4`; values below 1 mean 1) to change it. The AutoConfig config checks hold at most 1 of the pod's 3 validation slots, and the gateway controller at most 1, so the controllers never hold more than 2 of the 3 slots, however many workers there are. Concurrent admission requests can take the rest.
 
-The operator caches only metadata for Secrets and ConfigMaps (names, labels and owners, without annotations or `managedFields`), so no Secret data or ConfigMap payload is cached and its memory no longer grows with their size (one small metadata entry per object remains). A reconcile reads the content it needs live from the API server: a gateway reads its plugin ConfigMaps and license Secret in full, and an AutoConfig reads its spec and auth sources in full, the namespace's `krakend-cue-definitions` ConfigMap once in full (falling back to the embedded definitions) and the `cue.definitionsConfigMapRef` ConfigMap the same way when it is set. Each of those reads is an API request, so API server latency shows up in reconcile time.
+The operator caches only metadata for Secrets and ConfigMaps (names, labels and owners, without annotations or `managedFields`), so no Secret data or ConfigMap payload is cached and its memory no longer grows with their size (one small metadata entry per object remains). A reconcile reads the content it needs live from the API server: a gateway reads its plugin ConfigMaps and license Secret in full, and an AutoConfig reads its spec and auth sources in full, the namespace's `krakend-cue-definitions` ConfigMap once in full (falling back to the embedded definitions) and the `cue.definitionsConfigMapRef` ConfigMap once in full when it is set (a missing one fails the sync with `CUEEvaluationFailed`). Each of those reads is an API request, so API server latency shows up in reconcile time.
 
 ### Gateway Replicas
 
