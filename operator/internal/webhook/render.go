@@ -122,20 +122,31 @@ func newlyBlamed(self types.NamespacedName) func(before, after configcheck.Verdi
 	}
 }
 
-// newRouteRefusals is the gateway rule of the ratchet on a failing gateway: a
-// route refusal after the change counts against it when every endpoint the
-// refusal names was unblamed before. The route check leaves a refused route
-// out of its engine, so a refusal that names an endpoint blamed before may only
-// have been hidden by an earlier one, which is no fault of the change. When the
-// route check stopped at its cap before the change, which refusals it hid is
-// unknown and the rule does not apply.
+// newRouteRefusals is the gateway rule of the ratchet on a failing gateway,
+// for a change after which the route check refuses routes:
+//   - when the gateway failed before only at krakend check, its route check ran
+//     to completion without a refusal, so any refusal is the change's;
+//   - when it failed before at the route check, a refusal counts against the
+//     change when every endpoint it names was unblamed before. The route check
+//     leaves a refused route out of its engine, so a refusal that names an
+//     endpoint blamed before may only have been hidden by an earlier one, which
+//     is no fault of the change. When the check stopped at its cap before the
+//     change, which refusals it hid is unknown and this does not apply.
+//
+// In every other case the rule does not apply.
 func newRouteRefusals(before, after configcheck.Verdict) bool {
-	if after.Stage != renderer.StageRoute || before.Stage != renderer.StageRoute || before.RefusalsCapped {
+	if after.Stage != renderer.StageRoute {
 		return false
 	}
-	return slices.ContainsFunc(after.Refusals, func(r configcheck.Refusal) bool {
-		return len(r.Endpoints) > 0 && !slices.ContainsFunc(r.Endpoints, func(e types.NamespacedName) bool {
-			return blames(before, e)
+	switch {
+	case before.Stage == renderer.StageCheck:
+		return len(after.Refusals) > 0
+	case before.Stage == renderer.StageRoute && !before.RefusalsCapped:
+		return slices.ContainsFunc(after.Refusals, func(r configcheck.Refusal) bool {
+			return len(r.Endpoints) > 0 && !slices.ContainsFunc(r.Endpoints, func(e types.NamespacedName) bool {
+				return blames(before, e)
+			})
 		})
-	})
+	}
+	return false
 }
