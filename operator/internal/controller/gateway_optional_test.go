@@ -33,6 +33,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	clocktesting "k8s.io/utils/clock/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
@@ -301,6 +302,74 @@ func TestGatewayReconcile_AnAbsentOptionalKindIsNotRediscoveredOnEveryPass(t *te
 	}
 	if got := mapper.lookups - first; got != 0 {
 		t.Errorf("second pass kind lookups = %d, want 0 within the memo window", got)
+	}
+}
+
+func TestGatewayReconcile_AnAbsentOptionalKindIsAskedAgainAfterTheWindow(t *testing.T) {
+	gw := reconciledGateway()
+	gw.UID = "gw-uid"
+	gw.Status.ConfigChecksum = "applied"
+	mapper := &countingMapper{RESTMapper: optionalCRDMapper()}
+	base := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(mapperClient{Client: base, mapper: mapper}, renderOutput("applied"), &mockValidator{})
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+	first := mapper.lookups
+
+	r.Clock.(*clocktesting.FakeClock).Step(absentKindWindow)
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+
+	if got := mapper.lookups - first; got != len(optionalOwnedGVKs) {
+		t.Errorf("kind lookups after the window = %d, want one per optional kind", got)
+	}
+}
+
+// The create path asks discovery every time, whatever the memo says, and a
+// kind it finds installed is forgotten: the next delete path looks for the
+// child it created.
+func TestGatewayReconcile_AFoundOptionalKindIsForgottenByTheDeletePath(t *testing.T) {
+	gw := reconciledGateway()
+	gw.UID = "gw-uid"
+	gw.Status.ConfigChecksum = "applied"
+	mapper := &countingMapper{RESTMapper: optionalCRDMapper()}
+	base := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(mapperClient{Client: base, mapper: mapper}, renderOutput("applied"), &mockValidator{})
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile with the CRD absent: %v", err)
+	}
+
+	mapper.RESTMapper = optionalCRDMapper(virtualServiceGVK) // the CRD is installed, and Istio is enabled
+	enableIstio(t, base, gw, true)
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile with Istio enabled: %v", err)
+	}
+	vs := &unstructured.Unstructured{}
+	vs.SetGroupVersionKind(virtualServiceGVK)
+	if err := base.Get(context.Background(), client.ObjectKeyFromObject(gw), vs); err != nil {
+		t.Fatalf("the create path must not honour the absent memo: %v", err)
+	}
+
+	enableIstio(t, base, gw, false)
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile with Istio disabled: %v", err)
+	}
+	if err := base.Get(context.Background(), client.ObjectKeyFromObject(gw), vs); !apierrors.IsNotFound(err) {
+		t.Errorf("VirtualService Get = %v; the child of a disabled feature must be deleted once its CRD is known", err)
+	}
+}
+
+// enableIstio sets spec.istio.enabled on the stored gw.
+func enableIstio(t *testing.T, c client.Client, gw *v1alpha1.KrakenDGateway, enabled bool) {
+	t.Helper()
+	stored := getGateway(t, c, gw)
+	stored.Spec.Istio = &v1alpha1.IstioSpec{
+		Enabled: enabled, Hosts: []string{"api.example.com"}, Gateways: []string{"istio-system/gw"},
+	}
+	if err := c.Update(context.Background(), stored); err != nil {
+		t.Fatal(err)
 	}
 }
 
