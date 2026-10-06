@@ -41,6 +41,9 @@ jobs:
         run: |
           go test -race -coverprofile=coverage.out -covermode=atomic ./internal/... ./api/... ./cmd/...
           go tool cover -func=coverage.out
+      - name: Run test helper unit tests
+        working-directory: operator
+        run: go test -race ./test/utils/...
       - name: Test the admission audit
         working-directory: operator
         run: make test-audit
