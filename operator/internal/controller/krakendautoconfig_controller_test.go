@@ -3802,6 +3802,11 @@ func TestSyncedCondition_FailedOperationsGrammar(t *testing.T) {
 			want: "1 operation failed; it keeps its last-synced endpoint and no stale endpoint is deleted " +
 				"until it recovers (see status.failedOperations): GET /a: CUEEvaluationFailed",
 		},
+		"two": {
+			failed: []v1alpha1.OperationStatus{op("/a"), op("/b")},
+			want: "2 operations failed; they keep their last-synced endpoints and no stale endpoint is deleted " +
+				"until they recover (see status.failedOperations): GET /a: CUEEvaluationFailed; GET /b: CUEEvaluationFailed",
+		},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
