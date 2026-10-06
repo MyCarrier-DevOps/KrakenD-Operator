@@ -15,23 +15,31 @@ spec:
   apiservicedefinitions: {}
   customresourcedefinitions:
     owned:
-    - description: KrakenDAutoConfig is the Schema for the krakendautoconfigs API.
+    - description: |-
+        KrakenDAutoConfig generates the KrakenDEndpoints of a gateway from an OpenAPI
+        specification and keeps them in sync with it.
       displayName: KrakenD AutoConfig
       kind: KrakenDAutoConfig
       name: krakendautoconfigs.gateway.krakend.io
       version: v1alpha1
-    - description: KrakenDBackendPolicy is the Schema for the krakendbackendpolicies
-        API.
+    - description: |-
+        KrakenDBackendPolicy defines circuit-breaker and rate-limit settings that
+        KrakenDEndpoints reference by name for their backends.
       displayName: KrakenD Backend Policy
       kind: KrakenDBackendPolicy
       name: krakendbackendpolicies.gateway.krakend.io
       version: v1alpha1
-    - description: KrakenDEndpoint is the Schema for the krakendendpoints API.
+    - description: |-
+        KrakenDEndpoint declares one KrakenD endpoint (path, method and backends) for a
+        gateway. The operator renders it into the gateway's krakend.json.
       displayName: KrakenD Endpoint
       kind: KrakenDEndpoint
       name: krakendendpoints.gateway.krakend.io
       version: v1alpha1
-    - description: KrakenDGateway is the Schema for the krakendgateways API.
+    - description: |-
+        KrakenDGateway declares a KrakenD API gateway. The operator creates and keeps
+        its Deployment, Service and rendered configuration in sync with the gateway
+        and its endpoints.
       displayName: KrakenD Gateway
       kind: KrakenDGateway
       name: krakendgateways.gateway.krakend.io
