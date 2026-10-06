@@ -41,8 +41,8 @@ spec:
     schema:
       openAPIV3Schema:
         description: |-
-          KrakenDEndpoint declares one KrakenD endpoint (path, method and backends) for a
-          gateway. The operator renders it into the gateway's krakend.json.
+          KrakenDEndpoint declares one or more KrakenD endpoints (path, method and
+          backends) for a gateway. The operator renders it into the gateway's krakend.json.
         properties:
           apiVersion:
             description: |-
