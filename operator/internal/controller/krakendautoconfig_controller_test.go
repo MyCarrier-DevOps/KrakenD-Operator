@@ -5218,6 +5218,50 @@ func TestAutoConfigReconcile_PrecheckHoldsASiblingThatAnotherTenantsOlderRouteBr
 	}
 }
 
+func TestAutoConfigReconcile_PrecheckKeepsStaleWhenAKnownRejectionRecurs(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	// getB is rejected by the API server on every pass and the last status
+	// recorded it, so this pass will not delete the stale endpoints. The
+	// rename of getUser and the move of its sibling must be checked with the
+	// old getUser still serving its route.
+	ac.Status.FailedOperations = []v1alpha1.OperationStatus{{
+		Method: "GET", Path: "/b", OperationID: "getB", Endpoint: "test-ac-getb",
+		Reason: v1alpha1.ReasonEndpointRejected, Message: "rejected",
+	}}
+	stale := ownedCopy(t, ac, generatedEndpoint("getUser", "/users/{id}"))
+	stale.CreationTimestamp = metav1.NewTime(time.Unix(1000, 0))
+	orders := ownedCopy(t, ac, generatedEndpoint("getUserOrders", "/users/{id}/orders"))
+	orders.CreationTimestamp = metav1.NewTime(time.Unix(1000, 0))
+	g.output.Endpoints = []*v1alpha1.KrakenDEndpoint{
+		generatedEndpoint("getB", "/b"),
+		generatedEndpoint("getUserById", "/users/{userId}"),
+		generatedEndpoint("getUserOrders", "/users/{userId}/orders"),
+	}
+	var ops []string
+	c := fakeClientBuilder().WithObjects(ac, cm, stale, orders, testGateway()).WithStatusSubresource(ac).
+		WithInterceptorFuncs(recordEndpointWrites(&ops, map[string]error{"test-ac-getb": invalidError("test-ac-getb")})).
+		Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Checker = realRouteChecker(c)
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if slices.Contains(ops, "update test-ac-getuserorders") {
+		t.Errorf("the sibling was written, want it held: %v", ops)
+	}
+	reasons := map[string]string{}
+	for _, f := range getAC(t, c, ac).Status.FailedOperations {
+		reasons[f.Endpoint] = f.Reason
+	}
+	if reasons["test-ac-getuserorders"] != v1alpha1.ReasonConfigValidationFailed ||
+		reasons["test-ac-getb"] != v1alpha1.ReasonEndpointRejected {
+		t.Errorf("failed operations by endpoint = %v, want the sibling held and getB rejected", reasons)
+	}
+}
+
 func TestAttributeFindings_CauseCarriesEveryFindingInOrder(t *testing.T) {
 	a := generatedEndpoint("a", "/a")
 	key := types.NamespacedName{Namespace: "default", Name: "test-ac-a"}
