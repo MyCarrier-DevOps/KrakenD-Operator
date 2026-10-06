@@ -40,7 +40,7 @@ func TestRBAC_RareWritePathsSucceedAsTheOperator(t *testing.T) {
 		gw := &v1alpha1.KrakenDGateway{
 			ObjectMeta: metav1.ObjectMeta{Name: "gw-hpa", Namespace: ns},
 			Spec: v1alpha1.KrakenDGatewaySpec{
-				Version: "2.9", Edition: v1alpha1.EditionCE, Config: v1alpha1.GatewayConfig{},
+				Version: "2.9", Edition: v1alpha1.EditionCE,
 				Autoscaling: &v1alpha1.AutoscalingSpec{MaxReplicas: 3},
 			},
 		}
