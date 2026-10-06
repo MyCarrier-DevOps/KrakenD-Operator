@@ -5185,6 +5185,39 @@ func TestAutoConfigReconcile_PrecheckHoldsASiblingThatTheOlderRouteOwnerBreaks(t
 	}
 }
 
+func TestAutoConfigReconcile_PrecheckHoldsASiblingThatAnotherTenantsOlderRouteBreaks(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	// Another controller's endpoint, older than anything this AutoConfig
+	// writes, serves /users/{id}. The new /users/{userId} shares its route and
+	// loses it, so the sibling /users/{userId}/orders is the one the router
+	// refuses.
+	other := generatedEndpoint("otherUser", "/users/{id}")
+	other.Name = "other-user"
+	other.Labels = nil
+	other.CreationTimestamp = metav1.NewTime(time.Unix(500, 0))
+	g.output.Endpoints = []*v1alpha1.KrakenDEndpoint{
+		generatedEndpoint("getUserById", "/users/{userId}"),
+		generatedEndpoint("getUserOrders", "/users/{userId}/orders"),
+	}
+	c := fakeClientBuilder().WithObjects(ac, cm, other, testGateway()).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Checker = realRouteChecker(c)
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if endpointExists(t, c, "test-ac-getuserorders") {
+		t.Error("the sibling was written, want it held")
+	}
+	failed := getAC(t, c, ac).Status.FailedOperations
+	if len(failed) != 1 || failed[0].Endpoint != "test-ac-getuserorders" ||
+		failed[0].Reason != v1alpha1.ReasonConfigValidationFailed {
+		t.Errorf("failedOperations = %+v, want test-ac-getuserorders held", failed)
+	}
+}
+
 func TestAttributeFindings_CauseCarriesEveryFindingInOrder(t *testing.T) {
 	a := generatedEndpoint("a", "/a")
 	key := types.NamespacedName{Namespace: "default", Name: "test-ac-a"}
