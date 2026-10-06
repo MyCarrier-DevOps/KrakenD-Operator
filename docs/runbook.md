@@ -688,9 +688,14 @@ kubectl get events --field-selector involvedObject.name=<name>
   `SpecFetchFailed` and a message prefixed `resolving external $refs: `, and
   existing endpoints are left at their last-good state. A relative `$ref`
   resolves against the URL of the document that contains it. Example data
-  (an `example` field, an `examples` field and the `value` of an Example
-  Object) is not fetched, so a `$ref`-shaped value there never causes this
-  failure; an Example Object's own `$ref` still does. A pointer not found, a resolution cycle, or
+  (an `example` field, an `examples` field, and everything inside an Example
+  Object that an `examples` entry points to, such as its `value` or a raw
+  payload file) is not fetched, so a `$ref`-shaped value there never causes
+  this failure. The Example Object's own `$ref`, an `examples` or
+  `components.examples` entry that is itself a `{"$ref": "…"}`, is fetched,
+  and a failure to fetch it still causes this failure; so does a link of a
+  root `$ref` chain in the fetched target. The fetched Example Object is
+  inlined under `components/examples`, not `components/schemas`. A pointer not found, a resolution cycle, or
   a schema-name collision between two `$ref`s are listed in `status.warnings`,
   with a `SpecWarning` event when the inputs change, and don't block the sync.
 - CUE evaluation error (check embedded/custom CUE definitions): an error
