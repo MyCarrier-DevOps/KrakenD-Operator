@@ -67,7 +67,7 @@ func TestPolicyAdmission_AlreadyFailingWarningWithholdsForeignFindings(t *testin
 	}
 	w := resp.Warnings[0]
 	if !strings.Contains(w, "default/mine spec.endpoints[0]: same namespace") ||
-		!strings.Contains(w, "2 findings about the gateway root or endpoints in other namespaces are not shown") {
+		!strings.Contains(w, "2 findings that name no endpoint of namespace default are not shown") {
 		t.Errorf("warning = %q, want the same-namespace finding quoted and two others counted", w)
 	}
 	if strings.Contains(w, "SECRET") {
@@ -94,7 +94,7 @@ func TestPolicyAdmission_BreaksGatewayDenialWithholdsForeignFindings(t *testing.
 	}
 	msg := resp.Result.Details.Causes[0].Message
 	if !strings.Contains(msg, "default/uses-p spec.endpoints[0]: same namespace") ||
-		!strings.Contains(msg, "2 findings about the gateway root or endpoints in other namespaces are not shown") {
+		!strings.Contains(msg, "2 findings that name no endpoint of namespace default are not shown") {
 		t.Errorf("cause = %q, want the same-namespace finding quoted and two others counted", msg)
 	}
 	if strings.Contains(msg, "SECRET") {
