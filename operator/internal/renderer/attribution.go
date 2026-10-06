@@ -38,7 +38,7 @@ type Attribution struct {
 
 var (
 	lintPointerRe = regexp.MustCompile(`^- at '/endpoints/(\d+)[/']`)
-	methodPathRe  = regexp.MustCompile(`\b(GET|POST|PUT|PATCH|DELETE) (/[^\s',!]*)`)
+	methodRunRe   = regexp.MustCompile(`\b(GET|POST|PUT|PATCH|DELETE) (/\S*)`)
 	newPathRe     = regexp.MustCompile(`path '(/[^']*)'`)
 	prefixRe      = regexp.MustCompile(`prefix '(/[^']*)'`)
 	braceParamRe  = regexp.MustCompile(`\{([^}/]+)\}`)
@@ -87,8 +87,8 @@ func skipCheckLine(line string) bool {
 }
 
 // matchLine returns the indices of the rendered entries line names: a lint
-// pointer's index, else every entry whose method and route shape match a
-// "METHOD /path" in the line, else the entries a router error about a quoted
+// pointer's index, else every entry whose method and route shape exactly match
+// a "METHOD /path" in the line, else the entries a router error about a quoted
 // path (and prefix) implicates; see matchRouterError.
 func matchLine(line string, routes []renderedRoute) []int {
 	if m := lintPointerRe.FindStringSubmatch(line); m != nil {
@@ -108,8 +108,15 @@ func matchLine(line string, routes []renderedRoute) []int {
 			}
 		}
 	}
-	for _, m := range methodPathRe.FindAllStringSubmatch(line, -1) {
-		method, shape := m[1], routeShape(m[2])
+	for _, m := range methodRunRe.FindAllStringSubmatch(line, -1) {
+		// krakend prints a path whole, followed by at most one ',', '\'' or
+		// '!' of its own. Drop that one and match the rest exactly, so a path
+		// holding those characters is never cut down to another route's.
+		method, path := m[1], m[2]
+		if n := len(path); n > 1 && strings.ContainsRune("',!", rune(path[n-1])) {
+			path = path[:n-1]
+		}
+		shape := routeShape(path)
 		add(func(r renderedRoute) bool { return r.method == method && r.shape == shape })
 	}
 	if len(indices) > 0 {
