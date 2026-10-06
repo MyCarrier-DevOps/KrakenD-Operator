@@ -1084,6 +1084,34 @@ func TestGatewayReconcile_ACollectionFailureDoesNotStallTheRestOfTheInfrastructu
 	getObject(t, c, gw, gw.Name, &hpa)
 }
 
+func TestPublishConfig_ChecksAnExistingConfigMapWithoutReadingItsPayload(t *testing.T) {
+	gw := reconciledGateway()
+	gw.UID = "gw-uid"
+	const config = `{"version":3,"name":"present"}`
+	checksum := hash.SHA256Hex([]byte(config))
+	existing := ownedConfigMap(gw, resources.ConfigMapName(gw, checksum), testNow, true)
+	existing.Annotations = map[string]string{resources.PostRestartJobChecksumAnnotation: checksum}
+	existing.Data = map[string]string{resources.ConfigKey: config}
+	// The manager's client reads ConfigMaps live, so a typed Get would carry
+	// the whole rendered config over the wire on every pass.
+	c := interceptor.NewClient(fakeClientBuilder().WithObjects(gw, existing).Build(), interceptor.Funcs{
+		Get: func(
+			ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object,
+			opts ...client.GetOption,
+		) error {
+			if _, ok := obj.(*corev1.ConfigMap); ok {
+				return errors.New("typed ConfigMap read")
+			}
+			return cl.Get(ctx, key, obj, opts...)
+		},
+	})
+	r := newTestGatewayReconciler(c, &mockRenderer{}, &mockValidator{})
+
+	if err := r.publishConfig(context.Background(), gw, []byte(config), checksum); err != nil {
+		t.Errorf("publishConfig = %v, want the existing ConfigMap verified from its metadata", err)
+	}
+}
+
 func TestPublishConfig_FailsWhenTheConfigMapAVanishedCreateRaceLeftIsGone(t *testing.T) {
 	gw := reconciledGateway()
 	gw.UID = "gw-uid"
