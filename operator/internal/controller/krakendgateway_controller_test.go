@@ -2200,3 +2200,18 @@ func TestGatewayReconcile_SchemaConflictIsWrittenOnce(t *testing.T) {
 		t.Errorf("identical render: events = %q, want none for the endpoints", events)
 	}
 }
+
+func TestSchemaConflictMessages_AreBoundedByTheConditionCap(t *testing.T) {
+	loser := types.NamespacedName{Namespace: "default", Name: "b-users"}
+	winner := types.NamespacedName{Namespace: "default", Name: strings.Repeat("w", 250)}
+	var conflicts []renderer.SchemaConflict
+	for _, c := range "ABCDE" {
+		conflicts = append(conflicts, renderer.SchemaConflict{
+			Endpoint: loser, Schema: string(c) + strings.Repeat("s", 2000), Winner: winner,
+		})
+	}
+
+	if got := schemaConflictMessages(conflicts)[loser]; len(got) > maxConditionMessageBytes {
+		t.Errorf("message is %d bytes, want at most %d", len(got), maxConditionMessageBytes)
+	}
+}
