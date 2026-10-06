@@ -46,3 +46,18 @@ func TestWebhookServerOptions_DisabledReadsNoCertificate(t *testing.T) {
 		t.Errorf("cert location = %q %q %q, want none with webhooks disabled", opts.CertDir, opts.CertName, opts.KeyName)
 	}
 }
+
+func TestMetricsServerOptions_CertPathGoesToServer(t *testing.T) {
+	opts := metricsServerOptions(":8443", true, "/m", "m.crt", "m.key", nil)
+
+	if opts.CertDir != "/m" || opts.CertName != "m.crt" || opts.KeyName != "m.key" {
+		t.Errorf("cert location = %q %q %q, want /m m.crt m.key", opts.CertDir, opts.CertName, opts.KeyName)
+	}
+	cfg := &tls.Config{}
+	for _, o := range opts.TLSOpts {
+		o(cfg)
+	}
+	if cfg.GetCertificate != nil {
+		t.Error("TLSOpts set GetCertificate, which bypasses the server's own certificate watcher")
+	}
+}

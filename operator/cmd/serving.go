@@ -19,6 +19,7 @@ package main
 import (
 	"crypto/tls"
 
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 )
 
@@ -35,4 +36,11 @@ func webhookServerOptions(
 		opts.CertDir, opts.CertName, opts.KeyName = certPath, certName, certKey
 	}
 	return opts
+}
+
+// metricsServerOptions builds the metrics server options.
+func metricsServerOptions(
+	addr string, secure bool, certPath, certName, certKey string, tlsOpts []func(*tls.Config),
+) metricsserver.Options {
+	return metricsserver.Options{BindAddress: addr, SecureServing: secure, TLSOpts: tlsOpts}
 }
