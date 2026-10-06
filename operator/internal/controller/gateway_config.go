@@ -197,7 +197,8 @@ func verifyConfigMap(cm metav1.Object, gw *v1alpha1.KrakenDGateway, checksum str
 const configMapHistoryLimit = 3
 
 // collectConfigMaps deletes the gateway's config ConfigMaps that nothing can
-// still mount. A ConfigMap is kept when any of these holds:
+// still mount. It lists them as metadata only. A ConfigMap is kept when any
+// of these holds:
 //   - it is inUse (the applied config, which the Deployment template mounts);
 //   - it is in the revision history (configMapGCCandidates);
 //   - a live ReplicaSet of the gateway's Deployment mounts it.
@@ -207,8 +208,9 @@ const configMapHistoryLimit = 3
 func (r *KrakenDGatewayReconciler) collectConfigMaps(
 	ctx context.Context, gw *v1alpha1.KrakenDGateway, inUse string,
 ) error {
-	var list corev1.ConfigMapList
-	if err := r.List(ctx, &list, client.InNamespace(gw.Namespace),
+	list := &metav1.PartialObjectMetadataList{}
+	list.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("ConfigMapList"))
+	if err := r.List(ctx, list, client.InNamespace(gw.Namespace),
 		client.MatchingLabels(resources.SelectorLabels(gw))); err != nil {
 		return fmt.Errorf("listing config configmaps: %w", err)
 	}
@@ -225,6 +227,7 @@ func (r *KrakenDGatewayReconciler) collectConfigMaps(
 		if mounted[cm.Name] {
 			continue
 		}
+		cm.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("ConfigMap"))
 		uid := cm.UID
 		if err := r.Delete(ctx, cm, client.Preconditions{UID: &uid}); err != nil && !errors.IsNotFound(err) {
 			return fmt.Errorf("deleting configmap %s: %w", cm.Name, err)
@@ -236,8 +239,10 @@ func (r *KrakenDGatewayReconciler) collectConfigMaps(
 // configMapGCCandidates returns the gateway's config ConfigMaps that only a
 // live ReplicaSet could still keep: every controlled one except inUse and the
 // revision history.
-func configMapGCCandidates(gw *v1alpha1.KrakenDGateway, cms []corev1.ConfigMap, inUse string) []corev1.ConfigMap {
-	var revisions, candidates []corev1.ConfigMap
+func configMapGCCandidates(
+	gw *v1alpha1.KrakenDGateway, cms []metav1.PartialObjectMetadata, inUse string,
+) []metav1.PartialObjectMetadata {
+	var revisions, candidates []metav1.PartialObjectMetadata
 	for i := range cms {
 		cm := cms[i]
 		if !metav1.IsControlledBy(&cm, gw) {
@@ -250,7 +255,7 @@ func configMapGCCandidates(gw *v1alpha1.KrakenDGateway, cms []corev1.ConfigMap, 
 			candidates = append(candidates, cm)
 		}
 	}
-	slices.SortFunc(revisions, func(a, b corev1.ConfigMap) int {
+	slices.SortFunc(revisions, func(a, b metav1.PartialObjectMetadata) int {
 		if c := b.CreationTimestamp.Compare(a.CreationTimestamp.Time); c != 0 {
 			return c // newest first
 		}
