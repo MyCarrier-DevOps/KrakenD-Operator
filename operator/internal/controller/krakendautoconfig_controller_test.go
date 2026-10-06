@@ -5262,6 +5262,35 @@ func TestAutoConfigReconcile_PrecheckKeepsStaleWhenAKnownRejectionRecurs(t *test
 	}
 }
 
+func TestAutoConfigReconcile_FailurePathRefreshesEndpointReadiness(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	f.err = errors.New("connection refused")
+	// The last sync saw the endpoint Pending; it has turned Ready since.
+	ac.Status.ReadyEndpoints = 0
+	ac.Status.Conditions = []metav1.Condition{{
+		Type: v1alpha1.ConditionEndpointsReady, Status: metav1.ConditionFalse,
+		Reason: v1alpha1.ReasonEndpointsNotReady, Message: "1 of 1 endpoints not ready: test-ac-listusers: Pending",
+		LastTransitionTime: metav1.Now(),
+	}}
+	served := readyEndpoint(ownedCopy(t, ac, g.output.Endpoints[0]), metav1.ConditionTrue, "Ready")
+	c := fakeClientBuilder().WithObjects(ac, cm, served).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+
+	if _, err := reconcileAC(r, ac); err == nil {
+		t.Fatal("expected the fetch failure to be returned")
+	}
+	got := getAC(t, c, ac)
+	cond := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionEndpointsReady)
+	if cond == nil || cond.Status != metav1.ConditionTrue || cond.Message != "1 of 1 endpoints ready" {
+		t.Errorf("EndpointsReady = %+v, want True with 1 of 1 endpoints ready", cond)
+	}
+	if got.Status.ReadyEndpoints != 1 {
+		t.Errorf("readyEndpoints = %d, want 1", got.Status.ReadyEndpoints)
+	}
+}
+
 func TestAttributeFindings_CauseCarriesEveryFindingInOrder(t *testing.T) {
 	a := generatedEndpoint("a", "/a")
 	key := types.NamespacedName{Namespace: "default", Name: "test-ac-a"}
