@@ -5291,6 +5291,42 @@ func TestAutoConfigReconcile_FailurePathRefreshesEndpointReadiness(t *testing.T)
 	}
 }
 
+func TestAutoConfigReconcile_HeldOperationWarnsOnlyWhenItsFailureChanges(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	ce.output.Failed = []autoconfig.OperationIssue{failedGetB()}
+	served := ownedCopy(t, ac, g.output.Endpoints[0])
+	c := fakeClientBuilder().WithObjects(ac, cm, served, testGateway()).WithStatusSubresource(ac).Build()
+	rec := fakeRecorder()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Recorder = rec
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+	first := getAC(t, c, ac)
+	if !hasEventReason(drainEvents(rec), v1alpha1.ReasonOperationsFailed) {
+		t.Fatal("expected an OperationsFailed event for the new hold")
+	}
+	// The held operation stays held while its endpoint turns Ready: the
+	// status changes, the failure does not.
+	if err := c.Update(context.Background(), readyEndpoint(served, metav1.ConditionTrue, "Ready")); err != nil {
+		t.Fatalf("marking the endpoint ready: %v", err)
+	}
+
+	if _, err := reconcileAC(r, first); err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+	second := getAC(t, c, ac)
+	if second.Status.ReadyEndpoints != 1 {
+		t.Fatalf("readyEndpoints = %d, want the readiness change recorded", second.Status.ReadyEndpoints)
+	}
+	if events := drainEvents(rec); hasEventReason(events, v1alpha1.ReasonOperationsFailed) {
+		t.Errorf("got %v, want no OperationsFailed event for a readiness-only change", events)
+	}
+}
+
 func TestAttributeFindings_CauseCarriesEveryFindingInOrder(t *testing.T) {
 	a := generatedEndpoint("a", "/a")
 	key := types.NamespacedName{Namespace: "default", Name: "test-ac-a"}
