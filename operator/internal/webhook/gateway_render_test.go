@@ -170,6 +170,24 @@ func TestGatewayAdmission_FailingGatewayDeniesNewRouteRefusals(t *testing.T) {
 	}
 }
 
+// An edit that cannot change the rendered config is not checked: the checker
+// being unavailable must not refuse an image rollback or a scale-up.
+func TestGatewayAdmission_RenderNeutralEditSkipsTheCheck(t *testing.T) {
+	old := testGateway()
+	edited := old.DeepCopy()
+	edited.Spec.Replicas = ptr.To[int32](3)
+	chk := &scriptedChecker{same: true, err: errors.New("waiting for a validation slot: context deadline exceeded")}
+
+	resp := review(t, &GatewayValidator{Client: fakeClient(), Checker: chk}, "alice", edited, old)
+
+	if !resp.Allowed {
+		t.Errorf("denied: %+v", resp.Result)
+	}
+	if len(chk.calls) != 0 {
+		t.Errorf("checks = %v, want none for an edit that renders the same config", chk.calls)
+	}
+}
+
 // A gateway write can break endpoints it does not own: each cause goes on the
 // field the user edits, and the endpoints it breaks are named.
 func TestGatewayAdmission_DenialAttributesFindings(t *testing.T) {
