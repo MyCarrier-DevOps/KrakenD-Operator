@@ -593,6 +593,21 @@ gateway edit that cannot change the rendered config (image, version, replicas,
 resources, probes, `postRestartJob`) is not checked and never draws this error. If it
 repeats, check the operator pod's CPU and memory.
 
+### Admission refuses a policy with `breaks gateway`
+
+**Symptom:** a KrakenDBackendPolicy write fails with `spec: Invalid value:
+breaks gateway <ns>/<name>: ...`.
+
+**Cause:** The policy, rendered in that gateway, turns a passing config into a
+failing one. `krakend check` prints the values it refuses, so its findings about
+the gateway root or an endpoint outside the policy's namespace are only counted
+(`N findings about the gateway root or endpoints in other namespaces are not
+shown`); findings about endpoints in the policy's namespace, and route or
+wildcard refusals, are quoted.
+
+**Resolution:** Fix the policy for the findings shown. For the withheld ones,
+ask the gateway's owner, who can read `status.conditions` (`ConfigValid`).
+
 ### A KrakenDBackendPolicy is stuck in `Terminating`
 
 **Symptom:** `kubectl delete krakendbackendpolicy` returns, but the policy stays
