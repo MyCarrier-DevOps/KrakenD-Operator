@@ -266,12 +266,33 @@ func newACReconciler(
 // fakeChecker is an AutoConfigChecker that returns verdicts in order, then
 // passes; err, when set, is returned by every call, and judge, when set,
 // decides every call's verdict from its replace set. calls records each
-// call's replace set.
+// call's replace set. Isolated checks answer from isolated the same way and
+// are recorded in isolatedCalls; isolatedErr, when set, fails every one.
 type fakeChecker struct {
-	verdicts []configcheck.Verdict
-	err      error
-	judge    func(replace []v1alpha1.KrakenDEndpoint) configcheck.Verdict
-	calls    [][]v1alpha1.KrakenDEndpoint
+	verdicts      []configcheck.Verdict
+	err           error
+	judge         func(replace []v1alpha1.KrakenDEndpoint) configcheck.Verdict
+	calls         [][]v1alpha1.KrakenDEndpoint
+	isolated      []configcheck.Verdict
+	isolatedErr   error
+	isolatedCalls [][]v1alpha1.KrakenDEndpoint
+}
+
+func (f *fakeChecker) CheckIsolated(
+	_ context.Context,
+	_ *v1alpha1.KrakenDGateway,
+	eps []v1alpha1.KrakenDEndpoint,
+) (configcheck.Verdict, error) {
+	f.isolatedCalls = append(f.isolatedCalls, eps)
+	if f.isolatedErr != nil {
+		return configcheck.Verdict{}, f.isolatedErr
+	}
+	if len(f.isolated) == 0 {
+		return configcheck.Verdict{OK: true}, nil
+	}
+	v := f.isolated[0]
+	f.isolated = f.isolated[1:]
+	return v, nil
 }
 
 func (f *fakeChecker) CheckGateway(
@@ -5168,11 +5189,40 @@ func TestAutoConfigReconcile_UnattributedCheckFailure(t *testing.T) {
 			} else {
 				failed := getAC(t, c, ac).Status.FailedOperations
 				if len(failed) != 1 ||
-					!strings.HasPrefix(failed[0].Message, "the change fails the gateway config check: ") {
+					!strings.HasPrefix(failed[0].Message, "the change fails the gateway config check") {
 					t.Errorf("failedOperations = %+v", failed)
 				}
 			}
 		})
+	}
+}
+
+// A change that fails the gateway check only because it un-hides another
+// endpoint (one that lost a route to a candidate's endpoint) must not copy that
+// endpoint's echoed value into this AutoConfig's status.
+func TestAutoConfigReconcile_HoldDoesNotEchoAnotherEndpointsValue(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	c := fakeClientBuilder().WithObjects(ac, cm, testGateway()).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	// The combined render un-hides a loser whose host krakend refuses and echoes;
+	// the gateway alone passes, and so do the candidates on their own.
+	r.Checker = &fakeChecker{verdicts: []configcheck.Verdict{
+		{Findings: []configcheck.Finding{{Index: -1, Message: "host http://u:SECRET-PASS@h1 not valid: invalid host"}}},
+		{OK: true},
+	}}
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	failed := getAC(t, c, ac).Status.FailedOperations
+	if len(failed) != 1 || !strings.HasPrefix(failed[0].Message, "the change fails the gateway config check") {
+		t.Fatalf("failedOperations = %+v, want the one candidate held", failed)
+	}
+	if strings.Contains(failed[0].Message, "SECRET-PASS") {
+		t.Errorf("the hold message %q copies a value from another endpoint", failed[0].Message)
 	}
 }
 
@@ -6241,6 +6291,12 @@ type peakChecker struct {
 	running, peak atomic.Int32
 }
 
+func (p *peakChecker) CheckIsolated(
+	_ context.Context, _ *v1alpha1.KrakenDGateway, _ []v1alpha1.KrakenDEndpoint,
+) (configcheck.Verdict, error) {
+	return configcheck.Verdict{OK: true}, nil
+}
+
 func (p *peakChecker) CheckGateway(
 	_ context.Context,
 	_ *v1alpha1.KrakenDGateway,
@@ -6363,6 +6419,12 @@ type slotHeldChecker struct {
 	slots    chan struct{}
 	verdicts []configcheck.Verdict
 	held     []int
+}
+
+func (s *slotHeldChecker) CheckIsolated(
+	_ context.Context, _ *v1alpha1.KrakenDGateway, _ []v1alpha1.KrakenDEndpoint,
+) (configcheck.Verdict, error) {
+	return configcheck.Verdict{OK: true}, nil
 }
 
 func (s *slotHeldChecker) CheckGateway(
