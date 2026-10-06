@@ -39,8 +39,8 @@ func schemaConflictMessages(conflicts []renderer.SchemaConflict) map[types.Names
 	}
 	msgs := make(map[types.NamespacedName]string, len(byEndpoint))
 	for nn, schemas := range byEndpoint {
-		msgs[nn] = "Served, but the gateway documentation shows another endpoint's definition of component schemas " +
-			listed(schemas) + "; rename them in the OpenAPI spec to publish both"
+		msgs[nn] = truncateMessage("Served, but the gateway documentation shows another endpoint's definition of " +
+			"component schemas " + listed(schemas) + "; rename them in the OpenAPI spec to publish both")
 	}
 	return msgs
 }
