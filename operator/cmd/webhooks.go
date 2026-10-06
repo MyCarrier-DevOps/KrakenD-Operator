@@ -17,12 +17,15 @@ limitations under the License.
 package main
 
 import (
+	"fmt"
 	"os"
 
 	ctrl "sigs.k8s.io/controller-runtime"
 )
 
-// registerWebhooks wires the admission webhooks into mgr when enabled.
+// registerWebhooks wires the admission webhooks into mgr when enabled, and
+// makes the pod ready only once the webhook server accepts connections, so
+// admission requests are never routed to a replica that cannot answer them.
 // With webhooks disabled nothing asks mgr for its webhook server, so the
 // server is never started and, as the certificate watcher is skipped too,
 // no serving certificate is read: the controllers run, protected only by
@@ -32,7 +35,13 @@ func registerWebhooks(mgr ctrl.Manager, enabled bool, setup func(ctrl.Manager) e
 		setupLog.Info("admission webhooks disabled; invalid objects are caught only at render time")
 		return nil
 	}
-	return setup(mgr)
+	if err := setup(mgr); err != nil {
+		return err
+	}
+	if err := mgr.AddReadyzCheck("webhook", mgr.GetWebhookServer().StartedChecker()); err != nil {
+		return fmt.Errorf("adding webhook readiness check: %w", err)
+	}
+	return nil
 }
 
 // webhookCertWatchNeeded reports whether the webhook certificate watcher
