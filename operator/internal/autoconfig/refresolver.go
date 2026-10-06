@@ -72,6 +72,7 @@ func ResolveExternalRefs(
 		source:  source,
 		docs:    map[string]map[string]any{},
 	}
+	resolver.takenExamples = existingExampleNames(root)
 	resolver.walk(root, baseURL)
 	if resolver.fatalErr != nil {
 		return nil, resolver.warnings, fmt.Errorf("resolving external $refs: %w", resolver.fatalErr)
@@ -120,6 +121,30 @@ func componentMap(root map[string]any, kind string) map[string]any {
 	return m
 }
 
+// existingExampleNames returns the keys of root's components.examples.
+func existingExampleNames(root map[string]any) map[string]bool {
+	taken := map[string]bool{}
+	components, _ := root["components"].(map[string]any)
+	examples, _ := components["examples"].(map[string]any)
+	for name := range examples {
+		taken[name] = true
+	}
+	return taken
+}
+
+// freeExampleName returns name, or name_2, name_3, and so on, whichever is the
+// first not in components/examples yet, and takes it. An Example Object body
+// never replaces an entry the spec already has, or takes the name a reference
+// in the spec points at.
+func (r *refResolver) freeExampleName(name string) string {
+	free := name
+	for n := 2; r.takenExamples[free]; n++ {
+		free = fmt.Sprintf("%s_%d", name, n)
+	}
+	r.takenExamples[free] = true
+	return free
+}
+
 // refRole is what an external $ref's target is: a schema, which is walked for
 // the refs it holds, or an Example Object, which is data.
 type refRole int
@@ -146,11 +171,14 @@ type refResolver struct {
 	inlined map[string]any            // sanitized name -> schema body
 	// inlinedExamples is the Example Object bodies, by name, for components/examples.
 	inlinedExamples map[string]any
-	resolving       map[string]bool   // cycle detection: ref keys currently being resolved
-	resolved        map[string]string // refKey -> sanitized name for already-resolved refs
-	warnings        []string
-	warned          map[string]bool // warnings already recorded, so each is reported once
-	fatalErr        error           // first fetch/decode failure; halts all further resolution
+	// takenExamples is the names in components/examples that an Example Object
+	// body cannot take: the input's own, and those already given to a body.
+	takenExamples map[string]bool
+	resolving     map[string]string // cycle detection: role and ref keys being resolved -> their name
+	resolved      map[string]string // role and ref key -> local name for already-resolved refs
+	warnings      []string
+	warned        map[string]bool // warnings already recorded, so each is reported once
+	fatalErr      error           // first fetch/decode failure; halts all further resolution
 }
 
 var sanitizeNameRE = regexp.MustCompile(`[^A-Za-z0-9_]+`)
@@ -320,19 +348,22 @@ func (r *refResolver) resolveExternal(ref, base string, role refRole) (string, e
 		return "", err
 	}
 
-	name := sanitizeRefName(absolute, fragment)
-
-	// Cycle detection: if we are already resolving this ref, short-circuit.
-	// Do NOT write to r.inlined here — the outer (first) call will store
-	// the properly-walked clone after its r.walk completes.
-	if r.resolving[cacheKey] {
+	// Cycle detection: if we are already resolving this ref, short-circuit
+	// with the name the outer (first) call chose. Do NOT write to r.inlined
+	// here — the outer call will store the properly-walked clone after its
+	// r.walk completes.
+	if name, busy := r.resolving[cacheKey]; busy {
 		r.warnings = append(r.warnings, fmt.Sprintf("cycle detected for %s, skipping recursive resolution", refKey))
 		return name, nil
 	}
-	if r.resolving == nil {
-		r.resolving = map[string]bool{}
+	name := sanitizeRefName(absolute, fragment)
+	if role == exampleRole {
+		name = r.freeExampleName(name)
 	}
-	r.resolving[cacheKey] = true
+	if r.resolving == nil {
+		r.resolving = map[string]string{}
+	}
+	r.resolving[cacheKey] = name
 	defer delete(r.resolving, cacheKey)
 
 	// Deep-clone the target before walking so the cached document is not mutated.

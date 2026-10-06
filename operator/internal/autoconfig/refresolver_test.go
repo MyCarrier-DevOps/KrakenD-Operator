@@ -711,6 +711,13 @@ func TestResolveExternalRefs_ExamplesAndNameKeyedMaps(t *testing.T) {
 			wantHits: 2,
 		},
 		{
+			name:     "a components example named like its own reference gets a free name",
+			spec:     `{"components":{"examples":{"ex_E":{"$ref":"ex.json#/E"}}}}`,
+			wantOut:  `"ex_E":{"$ref":"#/components/examples/ex_E_2"}`,
+			wantAlso: `"ex_E_2":{"value":1}`,
+			wantHits: 1,
+		},
+		{
 			name:     "an unreachable examples entry reference fails closed",
 			spec:     fmt.Sprintf(op, `{"examples":{"one":{"$ref":"gone.json#/E"}}}`),
 			wantErr:  "fetching https://api.example.com/gone.json",
