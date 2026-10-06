@@ -613,9 +613,9 @@ func applyFieldOverrides(output *CUEOutput, overrides []v1alpha1.OperationOverri
 // many operations (entries and failed ones) declare each operationId. An
 // override on an operationId declared more than once is ambiguous and is not
 // applied, so the index only serves operationIds declared once.
-func indexOverrideTargets(output *CUEOutput) (map[string]int, map[string]int) {
-	opIDIndex := make(map[string]int, len(output.Entries))
-	count := make(map[string]int, len(output.Entries))
+func indexOverrideTargets(output *CUEOutput) (opIDIndex, count map[string]int) {
+	opIDIndex = make(map[string]int, len(output.Entries))
+	count = make(map[string]int, len(output.Entries))
 	for i, opID := range output.entryOperationIDs {
 		if opID == "" {
 			continue
