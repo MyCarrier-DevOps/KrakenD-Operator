@@ -1145,3 +1145,15 @@ func TestAppendEndpointComponentSchemas_ReportsDifferingBodies(t *testing.T) {
 		t.Errorf("conflicts = %+v, want %+v", conflicts, want)
 	}
 }
+
+func TestAppendEndpointComponentSchemas_ComparesDecodedBodies(t *testing.T) {
+	endpoints := []v1alpha1.KrakenDEndpoint{
+		schemaEndpoint("a", map[string]string{"User": `{"type":"object","description":"a"}`}),
+		// The same body with other key order and spacing.
+		schemaEndpoint("b", map[string]string{"User": `{"description": "a", "type": "object"}`}),
+	}
+
+	if conflicts := appendEndpointComponentSchemas(map[string]any{}, endpoints); len(conflicts) != 0 {
+		t.Errorf("conflicts = %+v, want none for an equal body", conflicts)
+	}
+}
