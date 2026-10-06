@@ -2186,7 +2186,10 @@ func TestGatewayReconcile_SchemaConflictIsWrittenOnce(t *testing.T) {
 	if writes != 2 {
 		t.Errorf("first reconcile: endpoint status writes = %d, want 2", writes)
 	}
-	drainEvents(rec)
+	if events := drainEvents(rec); hasEventReason(events, v1alpha1.ReasonSchemaNameConflict) ||
+		hasEventReason(events, v1alpha1.ReasonAccepted) {
+		t.Errorf("entering the conflict: events = %q, want no SchemaNameConflict or Accepted event", events)
+	}
 
 	writes = 0
 	if err := reconcileGateway(t, r, gw); err != nil {
@@ -2197,7 +2200,7 @@ func TestGatewayReconcile_SchemaConflictIsWrittenOnce(t *testing.T) {
 	}
 	if events := drainEvents(rec); hasEventReason(events, v1alpha1.ReasonSchemaNameConflict) ||
 		hasEventReason(events, v1alpha1.ReasonAccepted) {
-		t.Errorf("identical render: events = %q, want none for the endpoints", events)
+		t.Errorf("identical render: events = %q, want no SchemaNameConflict or Accepted event", events)
 	}
 }
 
