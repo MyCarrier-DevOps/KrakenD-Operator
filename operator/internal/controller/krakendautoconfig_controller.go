@@ -610,12 +610,12 @@ func applyAdditionalEndpoints(
 	return filtered, notes, nil
 }
 
-// fetchSpec fetches the OpenAPI spec and prepares it for evaluation: it
-// resolves external $refs (URL sources only), strips upstream server entries
-// and dereferences parameter $refs. A failure to fetch or decode the spec or
-// an external $ref document, or a parameter expansion past the body size
-// limit, is returned and fails the sync closed. notes are
-// the spec problems that do not stop the sync (the $refs the resolver could
+// fetchSpec fetches the OpenAPI spec, within FetchTimeout, and prepares it for
+// evaluation: it resolves external $refs (URL sources only), strips upstream
+// server entries and dereferences parameter $refs. A failure to fetch or
+// decode the spec or an external $ref document, a deadline that ends the
+// fetch or the resolution, or a parameter expansion past the body size limit,
+// is returned and fails the sync closed. notes are the spec problems that do not stop the sync (the $refs the resolver could
 // not honour, the external $refs of a ConfigMap-sourced spec, which nothing
 // can fetch, and the parameter $refs that do not resolve) for
 // status.warnings. A StripServers or parameter decode failure is logged and
@@ -625,6 +625,12 @@ func (r *KrakenDAutoConfigReconciler) fetchSpec(
 	ac *v1alpha1.KrakenDAutoConfig,
 ) (*autoconfig.FetchResult, []string, error) {
 	log := logf.FromContext(ctx)
+	timeout := r.FetchTimeout
+	if timeout == 0 {
+		timeout = defaultFetchTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	fetchResult, err := r.Fetcher.Fetch(ctx, autoconfig.FetchSource{
 		URL:               ac.Spec.OpenAPI.URL,
 		ConfigMapRef:      ac.Spec.OpenAPI.ConfigMapRef,
