@@ -1839,6 +1839,8 @@ A verb is granted only when a call site needs it. `get`/`list`/`watch` are neede
 
 Not granted: `create`/`update`/`patch`/`delete` on the four CRDs' main resources except where listed; `patch` everywhere except events and the endpoint status subresource; `update` on configmaps and on the endpoint status subresource; `get` on every status subresource; `krakendendpoints/finalizers` and `krakendbackendpolicies/finalizers` (neither kind owns anything).
 
+Secrets and ConfigMaps are watched as metadata only (`builder.OnlyMetadata`) and read live from the API server (`client.CacheOptions.DisableFor`), so no Secret data or ConfigMap payload is cached; the grants stay `get`/`list`/`watch` because metadata watches still list and watch. The cached metadata also loses its annotations and `managedFields` (`controller.CacheByObject`), because an object applied client-side repeats its body in the `kubectl.kubernetes.io/last-applied-configuration` annotation. The residual: the names, labels and owner references of every Secret and ConfigMap in the cluster stay cached. Per reconcile pass the live reads are: gateway, the plugin ConfigMaps and the license Secret in full, and the config ConfigMap's existence and the garbage-collection list as metadata; AutoConfig, the CUE definitions as metadata and then in full when custom, and the spec and auth sources in full.
+
 ### Leader election (namespaced Role)
 
 `coordination.k8s.io/leases`: `get`, `create`, `update`; `events`: `create`, `patch`. controller-runtime uses a Lease; no ConfigMap lock.
