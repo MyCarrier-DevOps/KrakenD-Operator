@@ -41,14 +41,15 @@ type scriptedChecker struct {
 	deadlines []time.Duration
 	args      []string
 	gateways  []string
-	// same is the answer of SameConfig: whether the two gateway versions
-	// render the same config. err does not fail it.
-	same bool
+	// same and sameErr are the answer of SameConfig: whether the two gateway
+	// versions render the same config, or why that could not be told.
+	same    bool
+	sameErr error
 }
 
-// SameConfig answers from same and records nothing: it runs no check.
+// SameConfig answers from same and sameErr and records nothing: it runs no check.
 func (s *scriptedChecker) SameConfig(context.Context, *v1alpha1.KrakenDGateway, *v1alpha1.KrakenDGateway) (bool, error) {
-	return s.same, nil
+	return s.same, s.sameErr
 }
 
 func (s *scriptedChecker) next(ctx context.Context, call string, eps []v1alpha1.KrakenDEndpoint) (configcheck.Verdict, error) {

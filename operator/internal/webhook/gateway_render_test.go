@@ -188,6 +188,20 @@ func TestGatewayAdmission_RenderNeutralEditSkipsTheCheck(t *testing.T) {
 	}
 }
 
+// A gateway edit whose renders cannot be compared is not judged: a transient 500.
+func TestGatewayAdmission_RenderComparisonFailureIs500(t *testing.T) {
+	old := testGateway()
+	edited := old.DeepCopy()
+	edited.Spec.Replicas = ptr.To[int32](3)
+	chk := &scriptedChecker{sameErr: errors.New("listing endpoints of gateway default/gw: cache not synced")}
+
+	resp := review(t, &GatewayValidator{Client: fakeClient(), Checker: chk}, "alice", edited, old)
+
+	if resp.Allowed || resp.Result.Code != http.StatusInternalServerError {
+		t.Errorf("response = %+v, want 500", resp.Result)
+	}
+}
+
 // A gateway write can break endpoints it does not own: each cause goes on the
 // field the user edits, and the endpoints it breaks are named.
 func TestGatewayAdmission_DenialAttributesFindings(t *testing.T) {
