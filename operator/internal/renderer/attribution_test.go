@@ -211,6 +211,36 @@ func TestAttribute_PathWithStopCharactersNamesItsOwnEntry(t *testing.T) {
 				"endpoint: GET /orders-a,x/:p, backend: 0. input: [p], output: [missing]\n",
 			wantIndex: []int{1},
 		},
+		{
+			name:      "comma then a reserved segment",
+			rendered:  `{"endpoints":[{"endpoint":"/orders-a","method":"GET"},{"endpoint":"/orders-a,/__debug","method":"GET"}]}`,
+			output:    "ERROR parsing the configuration file:\t'krakend.json': ignoring the 'GET /orders-a,/__debug' endpoint, since it is invalid!!!\n",
+			wantIndex: []int{1},
+		},
+		{
+			name:      "apostrophe then a reserved segment",
+			rendered:  `{"endpoints":[{"endpoint":"/orders-a","method":"GET"},{"endpoint":"/orders-a'/__echo","method":"GET"}]}`,
+			output:    "ERROR parsing the configuration file:\t'krakend.json': ignoring the 'GET /orders-a'/__echo' endpoint, since it is invalid!!!\n",
+			wantIndex: []int{1},
+		},
+		{
+			name:      "bang then a reserved segment",
+			rendered:  `{"endpoints":[{"endpoint":"/orders-a","method":"GET"},{"endpoint":"/orders-a!/__health","method":"GET"}]}`,
+			output:    "ERROR parsing the configuration file:\t'krakend.json': ignoring the 'GET /orders-a!/__health' endpoint, since it is invalid!!!\n",
+			wantIndex: []int{1},
+		},
+		{
+			name:      "two routes run together name neither",
+			rendered:  `{"endpoints":[{"endpoint":"/orders-a","method":"GET"},{"endpoint":"/x","method":"GET"}]}`,
+			output:    "ERROR parsing the configuration file:\t'krakend.json': ignoring the 'GET /orders-a,GET /x' endpoint, since it is invalid!!!\n",
+			wantIndex: []int{-1},
+		},
+		{
+			name:      "a genuine line still names its entry",
+			rendered:  `{"endpoints":[{"endpoint":"/a","method":"GET"},{"endpoint":"/b/{p}","method":"GET"}]}`,
+			output:    "ERROR parsing the configuration file:\t'krakend.json': undefined output param 'x'! endpoint: GET /b/:p, backend: 0. input: [p], output: [x]\n",
+			wantIndex: []int{1},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
