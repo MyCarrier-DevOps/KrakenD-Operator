@@ -376,7 +376,7 @@ func TestDeleteIfControlled_ErrorNamesTheKind(t *testing.T) {
 	target.SetName(gw.Name)
 	target.SetNamespace(gw.Namespace)
 
-	err := r.deleteIfControlled(context.Background(), gw, target)
+	err := r.deleteIfControlled(context.Background(), c, gw, target)
 
 	if err == nil || !strings.Contains(err.Error(), "VirtualService") {
 		t.Errorf("error = %v, want it to name the VirtualService kind", err)

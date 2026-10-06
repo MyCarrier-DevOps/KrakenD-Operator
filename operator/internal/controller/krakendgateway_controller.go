@@ -351,7 +351,10 @@ func (r *KrakenDGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 	log := mgr.GetLogger().WithName("krakendgateway")
+	r.optionalCache = mgr.GetCache()
+	r.cachedOptionalKinds = make(map[schema.GroupVersionKind]struct{}, len(installed))
 	for _, gvk := range installed {
+		r.cachedOptionalKinds[gvk] = struct{}{}
 		u := &unstructured.Unstructured{}
 		u.SetGroupVersionKind(gvk)
 		b = b.Owns(u)
@@ -1237,7 +1240,7 @@ func (r *KrakenDGatewayReconciler) reconcileHPA(
 	case gw.Spec.Autoscaling != nil:
 		return r.applyOwned(ctx, gw, hpa, "hpa", func() { resources.BuildHPA(hpa, gw) })
 	case deploymentReconciled:
-		return r.deleteIfControlled(ctx, gw, hpa)
+		return r.deleteIfControlled(ctx, r.Client, gw, hpa)
 	}
 	return nil
 }

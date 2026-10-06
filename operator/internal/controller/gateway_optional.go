@@ -76,14 +76,14 @@ func kindInstalled(mapper meta.RESTMapper, gvk schema.GroupVersionKind) (bool, e
 	}
 }
 
-// deleteIfControlled deletes obj, looked up by its name and namespace, when
-// it exists and gw controls it. An object someone else owns under the same
-// name is left alone.
+// deleteIfControlled deletes obj, looked up through reader by its name and
+// namespace, when it exists and gw controls it. An object someone else owns
+// under the same name is left alone.
 func (r *KrakenDGatewayReconciler) deleteIfControlled(
-	ctx context.Context, gw *v1alpha1.KrakenDGateway, obj client.Object,
+	ctx context.Context, reader client.Reader, gw *v1alpha1.KrakenDGateway, obj client.Object,
 ) error {
 	key := client.ObjectKeyFromObject(obj)
-	if err := r.Get(ctx, key, obj); err != nil {
+	if err := reader.Get(ctx, key, obj); err != nil {
 		return client.IgnoreNotFound(err)
 	}
 	if !metav1.IsControlledBy(obj, gw) {
@@ -103,7 +103,10 @@ func (r *KrakenDGatewayReconciler) deleteIfControlled(
 }
 
 // deleteOptionalIfControlled is deleteIfControlled for an optional kind.
-// Without its CRD there is nothing to delete.
+// Without its CRD there is nothing to delete. A kind that has an informer is
+// looked up through it: a child it does not hold yet cannot be orphaned,
+// because the child's Add event enqueues the gateway again and that pass
+// deletes it.
 func (r *KrakenDGatewayReconciler) deleteOptionalIfControlled(
 	ctx context.Context, gw *v1alpha1.KrakenDGateway, gvk schema.GroupVersionKind, name string,
 ) error {
@@ -118,7 +121,16 @@ func (r *KrakenDGatewayReconciler) deleteOptionalIfControlled(
 	u.SetGroupVersionKind(gvk)
 	u.SetName(name)
 	u.SetNamespace(gw.Namespace)
-	return r.deleteIfControlled(ctx, gw, u)
+	return r.deleteIfControlled(ctx, r.optionalReader(gvk), gw, u)
+}
+
+// optionalReader is the reader for gvk's children: the informer cache for a
+// kind that has an informer, the live client otherwise.
+func (r *KrakenDGatewayReconciler) optionalReader(gvk schema.GroupVersionKind) client.Reader {
+	if _, ok := r.cachedOptionalKinds[gvk]; ok && r.optionalCache != nil {
+		return r.optionalCache
+	}
+	return r.Client
 }
 
 // applyOwned creates or updates obj, which gw controls, with what build sets.
