@@ -3827,6 +3827,59 @@ func TestSyncedCondition_FailedOperationsGrammar(t *testing.T) {
 	}
 }
 
+func TestAutoConfigReconcile_TerminatingAutoConfigIsForgottenByTheCauseLog(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	now := metav1.Now()
+	ac.DeletionTimestamp = &now
+	ac.Finalizers = []string{"test/hold"}
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.heldLogged.Store(ac.UID, heldLog{owner: client.ObjectKeyFromObject(ac), digest: "d"})
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if _, ok := r.heldLogged.Load(ac.UID); ok {
+		t.Error("expected a terminating autoconfig forgotten")
+	}
+}
+
+func TestAutoConfigReconcile_FailurePathKeepsLastReadinessWhenTheListFails(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	f.err = errors.New("connection refused")
+	ac.Status.ReadyEndpoints = 3
+	ac.Status.Conditions = []metav1.Condition{{
+		Type: v1alpha1.ConditionEndpointsReady, Status: metav1.ConditionTrue,
+		Reason: v1alpha1.ReasonAllEndpointsReady, Message: "3 of 3 endpoints ready", LastTransitionTime: metav1.Now(),
+	}}
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).WithInterceptorFuncs(interceptor.Funcs{
+		List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if _, ok := list.(*v1alpha1.KrakenDEndpointList); ok {
+				return errors.New("cache is not synced")
+			}
+			return cl.List(ctx, list, opts...)
+		},
+	}).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+
+	if _, err := reconcileAC(r, ac); err == nil {
+		t.Fatal("expected the fetch failure to be returned")
+	}
+	got := getAC(t, c, ac)
+	synced := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionSynced)
+	if synced == nil || synced.Status != metav1.ConditionFalse || synced.Reason != v1alpha1.ReasonSpecFetchFailed {
+		t.Errorf("Synced = %+v, want False with SpecFetchFailed written despite the failed list", synced)
+	}
+	ready := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionEndpointsReady)
+	if got.Status.ReadyEndpoints != 3 || ready == nil || ready.Message != "3 of 3 endpoints ready" {
+		t.Errorf("readyEndpoints = %d, EndpointsReady = %+v, want the last-known 3 and its message", got.Status.ReadyEndpoints, ready)
+	}
+}
+
 func TestAutoConfigReconcile_FailedOperationsAreListedSortedAndCapped(t *testing.T) {
 	cm := testCUEDefinitionsCM()
 	ac := syncedAutoConfig(cm)
