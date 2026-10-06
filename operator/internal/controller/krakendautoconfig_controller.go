@@ -110,12 +110,13 @@ type KrakenDAutoConfigReconciler struct {
 // by the fetcher's own per-request timeout.
 const defaultFetchTimeout = 2 * time.Minute
 
-// +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendautoconfigs,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendautoconfigs/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendautoconfigs,verbs=get;list;watch
+// +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendautoconfigs/status,verbs=update
 // +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendautoconfigs/finalizers,verbs=update
-// +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendendpoints,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendendpoints,verbs=get;list;watch;create;update;delete
+// +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendgateways;krakendbackendpolicies,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
-// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 // Reconcile implements the autoconfig pipeline: fetch → CUE evaluate → filter
