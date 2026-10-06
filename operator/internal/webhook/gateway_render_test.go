@@ -308,6 +308,10 @@ func TestGatewayAdmission_CERejectsEnterpriseOnlyNamespaces(t *testing.T) {
 			`spec.edition: Invalid value: "CE"`,
 			"KrakenDEndpoint default/keys spec.endpoints[0].extraConfig auth/api-keys",
 			"KrakenDBackendPolicy default/p spec.raw backend/http/client"}},
+		{"CE create with EE namespaces in use", []client.Object{keys, proxy}, testGateway(), nil, []string{
+			`spec.edition: Invalid value: "CE"`,
+			"KrakenDEndpoint default/keys spec.endpoints[0].extraConfig auth/api-keys",
+			"KrakenDBackendPolicy default/p spec.raw backend/http/client"}},
 		{"EE to CE names the dropped keys of a partly honored block", []client.Object{proxied, proxy},
 			testGateway(), ee(), []string{
 				"KrakenDEndpoint default/proxied spec.endpoints[0].backends[0].extraConfig " +
