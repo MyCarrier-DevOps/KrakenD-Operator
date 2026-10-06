@@ -126,9 +126,10 @@ func (v *GatewayValidator) admit(
 
 // eeNamespacesOnCE rejects Enterprise-only extra_config namespaces that a CE
 // gateway would accept and then silently ignore: in spec.config.extraConfig
-// when it is new, changed or newly on CE, and, when the gateway switches to CE,
-// in its endpoints and the policies they reference, which their own webhooks
-// admitted while the gateway ran EE.
+// when it is new, changed or newly on CE, and, when the gateway is created as CE
+// or switches to CE, in its endpoints and the policies they reference, which
+// their own webhooks admitted while the gateway ran EE (or while it did not
+// exist).
 func (v *GatewayValidator) eeNamespacesOnCE(
 	ctx context.Context, old, gw *v1alpha1.KrakenDGateway,
 ) (field.ErrorList, error) {
@@ -141,7 +142,7 @@ func (v *GatewayValidator) eeNamespacesOnCE(
 		errs = ceIgnores(field.NewPath("spec", "config", "extraConfig"),
 			renderer.EEOnlyNamespacesIn(gw.Spec.Config.ExtraConfig, renderer.LevelService))
 	}
-	if old == nil || old.Spec.Edition != v1alpha1.EditionEE {
+	if old != nil && old.Spec.Edition != v1alpha1.EditionEE {
 		return errs, nil
 	}
 	uses, err := v.eeNamespacesInUse(ctx, gw)
@@ -1059,7 +1060,8 @@ func validatePostRestartWorkingDir(prj *v1alpha1.PostRestartJobSpec) string {
 
 // checkGatewayRender validates gw's config. A new gateway must render on its
 // own; the endpoints that already reference it only draw a warning when they
-// clash with it. An update is rejected only when it turns a passing config (the root
+// clash with it (on a CE gateway their Enterprise-only namespaces and
+// /prefix/* wildcards are refused earlier, by eeNamespacesOnCE). An update is rejected only when it turns a passing config (the root
 // with its endpoints) into a failing one; when the config already fails, only
 // the root alone is judged.
 func checkGatewayRender(
@@ -1074,7 +1076,9 @@ func checkGatewayRender(
 			return nil, gatewayRenderDenial(gw, root)
 		}
 		// The root is the verdict. Endpoints that named the gateway before it
-		// existed can still clash with it, and only they are to blame.
+		// existed can still clash with it, and only they are to blame. Their
+		// Enterprise-only content on a CE gateway never reaches this check:
+		// eeNamespacesOnCE refuses it.
 		withEndpoints, err := chk.CheckGateway(ctx, gw, nil)
 		if err != nil {
 			//nolint:nilerr // the check is advisory: the root already passed
