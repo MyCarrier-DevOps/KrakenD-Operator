@@ -25,6 +25,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
@@ -44,6 +45,15 @@ func setReadyCondition(
 		Reason:             reason,
 		Message:            message,
 	})
+}
+
+// UncachedObjects lists the kinds the manager's client reads live from the
+// API server instead of from its cache. The controllers watch these kinds as
+// metadata only, so no Secret data or ConfigMap payload is held in operator
+// memory. Every manager that runs these controllers sets
+// client.Options{Cache: &client.CacheOptions{DisableFor: UncachedObjects()}}.
+func UncachedObjects() []client.Object {
+	return []client.Object{&corev1.Secret{}, &corev1.ConfigMap{}}
 }
 
 // conditionsEqual returns true if two condition slices have the same semantic
