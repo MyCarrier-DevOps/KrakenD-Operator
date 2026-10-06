@@ -5497,3 +5497,26 @@ func TestAutoConfigReconcile_SpecUpdateOfAReadyEndpointReadsPending(t *testing.T
 		t.Errorf("expected EndpointsReady False naming test-ac-listusers Pending, got %+v", cond)
 	}
 }
+
+func TestAutoConfigReconcile_NoEndpointsIsReady(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	g.output.Endpoints = nil
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	updated := getAC(t, c, ac)
+	cond := meta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionEndpointsReady)
+	if updated.Status.ReadyEndpoints != 0 || cond == nil || cond.Status != metav1.ConditionTrue ||
+		cond.Message != "0 of 0 endpoints ready" {
+		t.Errorf("readyEndpoints = %d, EndpointsReady = %+v, want 0 and True \"0 of 0 endpoints ready\"",
+			updated.Status.ReadyEndpoints, cond)
+	}
+	if !meta.IsStatusConditionTrue(updated.Status.Conditions, v1alpha1.ConditionReady) {
+		t.Errorf("expected Ready True with nothing to wait for")
+	}
+}
