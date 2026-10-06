@@ -137,7 +137,11 @@ func refusalLines(refusals []RouteRefusal, capped bool) []string {
 	return lines
 }
 
-// routeRefusals is routeConflicts' work, grouped by refused registration.
+// routeRefusals registers every route of doc in a gin engine, in the order
+// the KrakenD runtime does, and returns the refused registrations, grouped.
+// It catches everything `krakend check -t` catches (-t registers the same
+// endpoints in the same gin version), plus the routes -t never registers and
+// the runtime panics on: the health endpoint and the auto_options routes.
 // capped is set when it stopped at MaxRouteRefusals.
 func routeRefusals(ctx context.Context, doc []byte) (refusals []RouteRefusal, capped bool, err error) {
 	var cfg routedConfig
