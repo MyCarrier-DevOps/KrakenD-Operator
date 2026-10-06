@@ -52,6 +52,11 @@ type AutoConfigChecker interface {
 		gw *v1alpha1.KrakenDGateway,
 		replace []v1alpha1.KrakenDEndpoint,
 	) (configcheck.Verdict, error)
+	CheckIsolated(
+		ctx context.Context,
+		gw *v1alpha1.KrakenDGateway,
+		eps []v1alpha1.KrakenDEndpoint,
+	) (configcheck.Verdict, error)
 }
 
 // claimEndpoints returns the endpoints ac controls, found by the controller
@@ -366,7 +371,7 @@ func (r *KrakenDAutoConfigReconciler) precheck(
 		}
 		attributed := attributeFindings(verdict.Findings, candidates)
 		if len(attributed) == 0 {
-			return r.unattributedFailure(ctx, &gw, candidates, verdict, rejected)
+			return r.unattributedFailure(ctx, &gw, candidates, order, verdict, rejected)
 		}
 		maps.Copy(rejected, attributed)
 		failedByCheck += len(attributed)
@@ -386,6 +391,29 @@ func (r *KrakenDAutoConfigReconciler) checkGateway(
 	gw *v1alpha1.KrakenDGateway,
 	replace []v1alpha1.KrakenDEndpoint,
 ) (configcheck.Verdict, error) {
+	return r.checkHoldingSlot(ctx, func() (configcheck.Verdict, error) {
+		return r.Checker.CheckGateway(ctx, gw, replace)
+	})
+}
+
+// checkIsolated runs the config check of gw's root with eps as its only
+// endpoints, holding one of CheckSlots like checkGateway.
+func (r *KrakenDAutoConfigReconciler) checkIsolated(
+	ctx context.Context,
+	gw *v1alpha1.KrakenDGateway,
+	eps []v1alpha1.KrakenDEndpoint,
+) (configcheck.Verdict, error) {
+	return r.checkHoldingSlot(ctx, func() (configcheck.Verdict, error) {
+		return r.Checker.CheckIsolated(ctx, gw, eps)
+	})
+}
+
+// checkHoldingSlot runs check holding one of CheckSlots, and gives up when
+// ctx ends while waiting. Every check this reconciler runs goes through it.
+func (r *KrakenDAutoConfigReconciler) checkHoldingSlot(
+	ctx context.Context,
+	check func() (configcheck.Verdict, error),
+) (configcheck.Verdict, error) {
 	if r.CheckSlots != nil {
 		select {
 		case r.CheckSlots <- struct{}{}:
@@ -394,19 +422,25 @@ func (r *KrakenDAutoConfigReconciler) checkGateway(
 			return configcheck.Verdict{}, fmt.Errorf("waiting for an AutoConfig check slot: %w", ctx.Err())
 		}
 	}
-	return r.Checker.CheckGateway(ctx, gw, replace)
+	return check()
 }
 
 // unattributedFailure handles a failed check whose findings name no
 // candidate: gateway-root findings, or findings on endpoints outside this
 // sync. When the gateway fails the check without the candidates too, the
 // failure is not theirs and they are written. Otherwise the change as a whole
-// breaks the gateway, and every candidate is held with the check's bounded
-// summary.
+// breaks the gateway, and every candidate is held. What the hold says depends
+// on the candidates alone, so the message never carries krakend output about
+// another endpoint: a check of the gateway root with only the candidates
+// either fails, and its bounded summary is shown (the failure is in the
+// candidates' own content), or passes, and the hold says only that the
+// failure needs other endpoints. The full text of the combined check stays in
+// the cause, for the log.
 func (r *KrakenDAutoConfigReconciler) unattributedFailure(
 	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
 	candidates []*v1alpha1.KrakenDEndpoint,
+	order creationOrder,
 	verdict configcheck.Verdict,
 	rejected map[string]rejection,
 ) (map[string]rejection, error) {
@@ -417,9 +451,16 @@ func (r *KrakenDAutoConfigReconciler) unattributedFailure(
 	if !baseline.OK {
 		return rejected, nil
 	}
-	const prefix = "the change fails the gateway config check: "
-	hold(rejected, candidates, prefix+verdict.Summary(unattributedSummaryLimit),
-		errors.New(prefix+verdict.Summary(math.MaxInt)))
+	own, err := r.checkIsolated(ctx, gw, checkSet(candidates, nil, order, false))
+	if err != nil {
+		return nil, &validatorUnavailableError{err: err}
+	}
+	const prefix = "the change fails the gateway config check"
+	message := prefix + " only together with other endpoints on the gateway (see the operator log)"
+	if !own.OK {
+		message = prefix + ": " + own.Summary(unattributedSummaryLimit)
+	}
+	hold(rejected, candidates, message, errors.New(prefix+": "+verdict.Summary(math.MaxInt)))
 	return rejected, nil
 }
 
