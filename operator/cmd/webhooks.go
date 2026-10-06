@@ -27,7 +27,7 @@ import (
 // makes the pod ready only once the webhook server accepts connections, so
 // admission requests are never routed to a replica that cannot answer them.
 // With webhooks disabled nothing asks mgr for its webhook server, so the
-// server is never started and, as the certificate watcher is skipped too,
+// server is never started and, as no certificate directory is handed to it,
 // no serving certificate is read: the controllers run, protected only by
 // render-time validation.
 func registerWebhooks(mgr ctrl.Manager, enabled bool, setup func(ctrl.Manager) error) error {
@@ -44,9 +44,9 @@ func registerWebhooks(mgr ctrl.Manager, enabled bool, setup func(ctrl.Manager) e
 	return nil
 }
 
-// webhookCertWatchNeeded reports whether the webhook certificate watcher
-// should be created. It is skipped with webhooks disabled, because creating
-// it reads the certificate and key and a missing file would stop startup.
+// webhookCertWatchNeeded reports whether the certificate directory is handed
+// to the webhook server, which then watches it. It is not with webhooks
+// disabled, because a missing certificate or key would stop startup.
 func webhookCertWatchNeeded(enabled bool, certPath string) bool {
 	return enabled && certPath != ""
 }
