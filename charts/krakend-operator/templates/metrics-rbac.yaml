@@ -1,0 +1,15 @@
+# The metrics endpoint authenticates and authorizes every scrape with a
+# TokenReview and a SubjectAccessReview, so the operator creates both.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "krakend-operator.fullname" . }}-metrics-auth-role
+  labels:
+    {{- include "krakend-operator.labels" . | nindent 4 }}
+rules:
+- apiGroups:
+  - authentication.k8s.io
+  resources:
+  - tokenreviews
+  verbs:
+  - create
