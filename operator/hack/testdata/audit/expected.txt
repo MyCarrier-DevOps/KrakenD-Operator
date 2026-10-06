@@ -14,6 +14,10 @@ KrakenDEndpoint a/backend-sd: spec.endpoints[0].backends[0].sd "foo"
 KrakenDEndpoint a/backend-method: spec.endpoints[0].backends[0].method "get"
 KrakenDEndpoint a/backend-policyref: spec.endpoints[0].backends[0].policyRef.name is empty
 KrakenDEndpoint a/path-linebreak: spec.endpoints[0].endpoint "x\n/y"
+KrakenDEndpoint a/path-space: spec.endpoints[0].endpoint "/b GET /a"
+KrakenDEndpoint a/host-space: spec.endpoints[0].backends[0].host[0] "http://x GET /a"
+KrakenDEndpoint a/host-linebreak: spec.endpoints[0].backends[0].host[1] "http://x\n- at '/endpoints/0"
+KrakenDEndpoint a/host-empty: spec.endpoints[0].backends[0].host[0] ""
 KrakenDEndpoint a/timeout-newline: spec.endpoints[0].timeout "5s\n"
 KrakenDEndpoint a/timeout-number: spec.endpoints[0].timeout 5
 KrakenDGateway a/timeout-pattern: spec.config.timeout "3 seconds"
@@ -61,6 +65,8 @@ KrakenDAutoConfig a/basepath-prefix: additionalEndpointsBasePath with urlTransfo
 KrakenDAutoConfig a/many-additional: more than 256 additionalEndpoints
 KrakenDAutoConfig a/dup-additional: duplicate additionalEndpoint GET "/h"
 KrakenDAutoConfig a/additional-path: spec.additionalEndpoints[0].endpoint "h"
+KrakenDAutoConfig a/additional-path-space: spec.additionalEndpoints[0].endpoint "/b GET /a"
+KrakenDAutoConfig a/additional-host-space: spec.additionalEndpoints[0].backends[0].host[0] "http://x GET /a"
 KrakenDAutoConfig a/mixed-shorthand: spec.additionalEndpoints[0] mixes backends with the shorthand
 KrakenDAutoConfig a/additional-timeout: spec.additionalEndpoints[0].timeout "30"
 KrakenDAutoConfig a/additional-cachettl: spec.additionalEndpoints[0].cacheTTL "2562048h" does not fit in 64 bits of nanoseconds
@@ -76,6 +82,7 @@ KrakenDAutoConfig a/override-cachettl: spec.overrides[0].cacheTTL "2562047.9h" d
 KrakenDAutoConfig a/override-calls: spec.overrides[0].concurrentCalls 0
 KrakenDAutoConfig a/override-output: spec.overrides[0].outputEncoding "jsn"
 KrakenDAutoConfig a/override-path: spec.overrides[0].endpoint "orders"
+KrakenDAutoConfig a/override-path-space: spec.overrides[0].endpoint "/b GET /a"
 KrakenDAutoConfig a/override-policy: spec.overrides[0].policyRef.name is empty
 KrakenDAutoConfig a/override-collide: overrides collide: "get_a", "get-a"
 KrakenDAutoConfig a/override-collide-fold: overrides collide: "getk", "getK"
