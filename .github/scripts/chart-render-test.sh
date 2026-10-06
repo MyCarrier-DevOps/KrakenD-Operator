@@ -251,6 +251,9 @@ expect_absent "podDisruptionBudget.enabled=false renders none" "kind: PodDisrupt
 	--set podDisruptionBudget.enabled=false
 expect_contains "replicas prefer different nodes by default" "preferredDuringSchedulingIgnoredDuringExecution" \
 	--show-only templates/deployment.yaml
+expect_absent "a user affinity replaces the default" "podAntiAffinity" --show-only templates/deployment.yaml \
+	--set 'affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0].key=kubernetes.io/os' \
+	--set 'affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0].operator=Exists'
 
 if [ "$failures" -gt 0 ]; then
 	printf '%d chart render test(s) failed\n' "$failures"
