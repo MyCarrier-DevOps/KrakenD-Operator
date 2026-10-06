@@ -320,6 +320,7 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 - Optional `ServiceMonitor` (`metrics.serviceMonitor.enabled`, default `false`; `additionalLabels`): selects only the metrics Service through the component label (the webhook Service shares the other selector labels, and the render test proves it is not selected). Uses `bearerTokenFile`, as `config/prometheus/monitor.yaml` does (accepted, though deprecated, by the prometheus-operator v0.77.1 CRD)
 - Webhooks enabled by default (`webhooks.enabled=true`, `webhooks.certManager.enabled=true`); can be disabled or used with external CA bundle
 - CRDs in `crds/` directory (auto-installed by Helm)
+- Availability defaults: `replicaCount: 2`; a PodDisruptionBudget (`podDisruptionBudget.enabled`, default `true`, `maxUnavailable: 1`, selecting only the operator's own selector labels) rendered only when `replicaCount` > 1, so a single replica never blocks a node drain; soft pod anti-affinity (`preferredDuringSchedulingIgnoredDuringExecution`, hostname topology) when `affinity` is empty, replaced by a user-supplied `affinity`; `deployment.yaml` fails the render for `replicaCount` > 1 with `leaderElection.enabled: false` (two active controllers would fight over every object). The render test pins each, including the refusal (`expect_render_fails`)
 - Configurable: image, replicas, resources, security context, probes, affinity, tolerations, webhooks, cert-manager
 - Validated: `helm lint` + `helm template` pass
 
