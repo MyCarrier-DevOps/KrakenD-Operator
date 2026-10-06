@@ -55,9 +55,10 @@ type KrakenDBackendPolicyReconciler struct {
 	APIReader client.Reader
 }
 
-// +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendbackendpolicies,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendbackendpolicies/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendbackendpolicies/finalizers,verbs=update
+// +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendbackendpolicies,verbs=get;list;watch;update
+// +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendbackendpolicies/status,verbs=update
+// +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendendpoints,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 // Reconcile counts endpoint references and sets the Ready condition.
 func (r *KrakenDBackendPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
