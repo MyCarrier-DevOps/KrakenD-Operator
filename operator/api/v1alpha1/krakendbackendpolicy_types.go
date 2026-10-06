@@ -91,8 +91,9 @@ type KrakenDBackendPolicyStatus struct {
 // +kubebuilder:printcolumn:name="ReferencedBy",type=integer,JSONPath=`.status.referencedBy`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
-// KrakenDBackendPolicy defines circuit-breaker and rate-limit settings that
-// KrakenDEndpoints reference by name for their backends.
+// KrakenDBackendPolicy defines circuit-breaker, rate-limit and cache settings,
+// plus raw backend extra_config, that KrakenDEndpoint backends reference
+// through policyRef.
 // +operator-sdk:csv:customresourcedefinitions:displayName="KrakenD Backend Policy"
 type KrakenDBackendPolicy struct {
 	metav1.TypeMeta   `json:",inline"`
