@@ -77,9 +77,18 @@ type mockFetchOutcome struct {
 func (m *mockFetcher) Fetch(_ context.Context, source autoconfig.FetchSource) (*autoconfig.FetchResult, error) {
 	m.called = true
 	if outcome, ok := m.byURL[source.URL]; ok {
-		return outcome.result, outcome.err
+		return copyFetchResult(outcome.result), outcome.err
 	}
-	return m.result, m.err
+	return copyFetchResult(m.result), m.err
+}
+
+// copyFetchResult returns a deep copy of r, as a real fetch returns a fresh
+// result on every call that the reconciler may modify.
+func copyFetchResult(r *autoconfig.FetchResult) *autoconfig.FetchResult {
+	if r == nil {
+		return nil
+	}
+	return &autoconfig.FetchResult{Data: slices.Clone(r.Data), Checksum: r.Checksum}
 }
 
 // --- Mock CUEEvaluator ---
