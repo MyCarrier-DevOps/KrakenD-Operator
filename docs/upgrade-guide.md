@@ -1541,7 +1541,10 @@ another endpoint or the gateway root is reported on `spec.endpoints`. If the
 gateway already fails without the change (because of another object, or of the
 endpoint's own stored version), the change is judged with the gateway root
 alone: it is admitted with a warning that names the existing failure, unless
-the candidate fails with the root alone when its stored version did not. For a
+the candidate fails with the root alone when its stored version did not, or the
+whole gateway's check blames the candidate's own endpoint after the change and
+did not before it (the root-alone check cannot see a clash with another
+endpoint, for example `GET /a/{id}.json` beside `GET /a/{id}`). For a
 create, or a move to another gateway, the baseline is the root by itself, so a
 broken root never blocks every new endpoint on its gateway. The entry rules run
 first, and a write they reject is not rendered. That includes the
@@ -1743,7 +1746,10 @@ exist. The denial puts the root findings on `spec.config` (at most 20, each cut
 to a bounded length) and the endpoints the change breaks, which can belong to
 other objects, on `spec`. When the gateway's config already fails, the update
 is judged on the root alone, against the stored root, and the existing failure
-is a warning. A `spec.version` other than 2.13.x gets a warning when it is set
+is a warning; the update is also denied when it makes the route check refuse
+endpoints that were not refused before it (turning on `router.auto_options`, or
+moving `health_path` onto an endpoint's route, so that healthy endpoints clash).
+An edit that only un-masks an older clash is admitted. A `spec.version` other than 2.13.x gets a warning when it is set
 or changed: validation uses the pinned 2.13 binary. **On a CE gateway,
 Enterprise-only namespaces are rejected** in `spec.config.extraConfig` when it
 is set or changed, and creating a CE gateway, or switching `edition: EE` to
