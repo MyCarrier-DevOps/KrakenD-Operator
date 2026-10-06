@@ -1208,12 +1208,15 @@ func (v *GatewayValidator) authorizePostRestartJob(ctx context.Context, old, gw 
 }
 
 // postRestartJobBorrowsRights reports whether the Job runs as a ServiceAccount
-// other than the gateway's own, or reads a Secret through envFrom. The Job on
+// other than the gateway's own, or reads a Secret through envFrom or an env secretKeyRef. The Job on
 // the gateway's ServiceAccount with no Secret references gets nothing the
 // gateway Deployment does not already have.
 func postRestartJobBorrowsRights(prj *v1alpha1.PostRestartJobSpec, gw *v1alpha1.KrakenDGateway) bool {
 	if prj.ServiceAccountName != "" && prj.ServiceAccountName != gw.Name {
 		return true
 	}
-	return slices.ContainsFunc(prj.EnvFrom, func(e corev1.EnvFromSource) bool { return e.SecretRef != nil })
+	return slices.ContainsFunc(prj.EnvFrom, func(e corev1.EnvFromSource) bool { return e.SecretRef != nil }) ||
+		slices.ContainsFunc(prj.Env, func(e corev1.EnvVar) bool {
+			return e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil
+		})
 }
