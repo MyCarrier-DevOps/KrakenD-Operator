@@ -360,8 +360,11 @@ func TestPolicyAdmission_WarningsAreBounded(t *testing.T) {
 	for _, w := range resp.Warnings {
 		total += len(w)
 	}
-	if len(resp.Warnings) > 6 || total > 8*warningLimit {
-		t.Errorf("%d warnings of %d bytes, want at most 6 and %d bytes", len(resp.Warnings), total, 8*warningLimit)
+	// The API server cuts every warning of a response to 256 characters once
+	// they pass 4096 in all.
+	const apiServerWarningBudget = 4096
+	if len(resp.Warnings) > 6 || total > apiServerWarningBudget {
+		t.Errorf("%d warnings of %d bytes, want at most 6 and %d bytes", len(resp.Warnings), total, apiServerWarningBudget)
 	}
 	if last := resp.Warnings[len(resp.Warnings)-1]; !strings.Contains(last, "35 more gateways already fail validation") {
 		t.Errorf("last warning = %q, want it to count the 35 gateways left out", last)
