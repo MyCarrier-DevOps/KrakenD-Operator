@@ -110,8 +110,8 @@ func TestWireValidation_EndpointValidatorReadsPoliciesUncached(t *testing.T) {
 
 // The pod's checker is shared by the gateway controller, the AutoConfig
 // controller and admission. The AutoConfig prechecks and the gateway checks
-// together may hold at most all but one of its slots, so admission always finds
-// a free one.
+// together never hold more than all but one of its slots (2 of the 3);
+// concurrent admission requests can still take the rest.
 func TestWireValidation_AutoConfigAndGatewayChecksLeaveAnAdmissionSlot(t *testing.T) {
 	mgr := stubManager{client: fake.NewClientBuilder().Build()}
 
