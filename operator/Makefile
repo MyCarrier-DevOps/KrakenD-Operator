@@ -136,15 +136,17 @@ generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and
 # --exit-code` alone is blind to a newly-generated file that was never
 # committed, which is exactly the historical webhook-service incident above.
 #
-# EXCLUDED on purpose, not an oversight: config/manager/kustomization.yaml
-# and the two *.clusterserviceversion.yaml CSV files (config/manifests/bases
-# and bundle/manifests). All three are mutated by `kustomize edit set image`
-# / `operator-sdk generate bundle` as a function of the IMG this target
-# happens to be invoked with (default :latest here, but e.g. `make deploy
-# IMG=...:e2e` legitimately leaves a different committed value) and, for the
-# CSV pair, hand-tuned prose the generator reformats/reorders on every run —
-# none of that is genuine CRD/RBAC/webhook drift, and gating on it would
-# make this target permanently red for reasons unrelated to source changes.
+# EXCLUDED on purpose, not an oversight: config/manager/kustomization.yaml.
+# `kustomize edit set image` (run by the `bundle` target) rewrites it as a
+# function of the IMG this target happens to be invoked with (default
+# :latest here, but e.g. `make deploy IMG=...:e2e` legitimately leaves a
+# different committed value), so gating on it would make this target
+# permanently red for reasons unrelated to source changes.
+#
+# The two *.clusterserviceversion.yaml files (bundle/manifests and
+# config/manifests/bases) ARE gated. The generator stamps metadata.createdAt
+# with the current time on every run, so the comparison ignores that one
+# line (`git diff -I 'createdAt:'`) and nothing else.
 #
 # ../charts/krakend-operator/files/manager-role.yaml: the chart's
 # ClusterRole rules, copied from config/rbac/role.yaml by `manifests` and
@@ -157,7 +159,7 @@ generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and
 # cp with nothing to enforce it) would let the chart copy drift again the
 # next time someone edits a CRD type without running `make manifests`
 # locally before commit.
-VERIFY_MANIFESTS_PATHS = config/crd/bases config/rbac/role.yaml config/webhook/manifests.yaml bundle/manifests ../charts/krakend-operator/crds ../charts/krakend-operator/files
+VERIFY_MANIFESTS_PATHS = config/crd/bases config/rbac/role.yaml config/webhook/manifests.yaml bundle/manifests ../charts/krakend-operator/crds ../charts/krakend-operator/files config/manifests/bases
 # NOTE: this target mutates config/manager/kustomization.yaml as a side
 # effect of its `bundle` dependency (`kustomize edit set image`), which
 # runs to completion as a prerequisite before this recipe's own body
@@ -192,8 +194,7 @@ verify-manifests: manifests bundle ## Verify generated manifests (CRDs/RBAC/webh
 	  echo "run 'make manifests && make bundle' and commit the result"; \
 	  exit 1; \
 	fi
-	git diff --exit-code -- $(VERIFY_MANIFESTS_PATHS) \
-	    ':!bundle/manifests/*.clusterserviceversion.yaml' || \
+	git diff --exit-code -I 'createdAt:' -- $(VERIFY_MANIFESTS_PATHS) || \
 	  (echo "generated manifests are out of date — run 'make manifests && make bundle' and commit the result" \
 	    && exit 1)
 
