@@ -2172,7 +2172,10 @@ PodDisruptionBudget and no anti-affinity: only the Helm chart gets the
 availability defaults below. OLM provides and mounts the webhook certificates,
 so the bundle carries no cert-manager dependency.
 
-For OLM users: writes to the four KrakenD kinds are now validated before they
+For OLM users: the bundle now supports only the `AllNamespaces` install mode.
+The operator watches every namespace, and under `OwnNamespace` or
+`SingleNamespace` OLM would scope the webhooks to the target namespaces only.
+Writes to the four KrakenD kinds are now validated before they
 are stored, and the webhooks use `failurePolicy: Fail`. While the operator is
 unavailable, creating or updating those resources is rejected.
 
