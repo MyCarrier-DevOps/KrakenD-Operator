@@ -280,3 +280,53 @@ func TestAttribute_PathWithStopCharactersNamesItsOwnEntry(t *testing.T) {
 		})
 	}
 }
+
+// A printed path names only entries krakend would print that way: a brace
+// group lura does not parse as a parameter is literal text, and a literal
+// colon is not a brace parameter.
+func TestAttribute_ShapeFollowsLurasParameters(t *testing.T) {
+	cases := []struct {
+		name, rendered, output string
+		wantIndex              []int
+	}{
+		{
+			name:     "AIP custom method next to a brace group",
+			rendered: `{"endpoints":[{"endpoint":"/v1/jobs:cancel","method":"GET"},{"endpoint":"/v1/jobs{cancel}","method":"GET"}]}`,
+			output: "ERROR parsing the configuration file:\t'krakend.json': undefined output param 'missing'! " +
+				"endpoint: GET /v1/jobs{cancel}, backend: 0. input: [], output: [missing]\n",
+			wantIndex: []int{1},
+		},
+		{
+			name:     "dotted brace group next to a literal colon",
+			rendered: `{"endpoints":[{"endpoint":"/users/{user.id}","method":"GET"},{"endpoint":"/users/:user.id","method":"GET"}]}`,
+			output: "ERROR parsing the configuration file:\t'krakend.json': undefined output param 'missing'! " +
+				"endpoint: GET /users/:user.id, backend: 0. input: [], output: [missing]\n",
+			wantIndex: []int{1},
+		},
+		{
+			name:     "a lura parameter still matches its converted spelling",
+			rendered: `{"endpoints":[{"endpoint":"/a","method":"GET"},{"endpoint":"/b/{p}","method":"GET"}]}`,
+			output: "ERROR parsing the configuration file:\t'krakend.json': undefined output param 'x'! " +
+				"endpoint: GET /b/:p, backend: 0. input: [p], output: [x]\n",
+			wantIndex: []int{1},
+		},
+		{
+			name:      "a reserved path is printed before conversion",
+			rendered:  `{"endpoints":[{"endpoint":"/a","method":"GET"},{"endpoint":"/__debug/{x}","method":"POST"}]}`,
+			output:    "ERROR parsing the configuration file:\t'krakend.json': ignoring the 'POST /__debug/{x}' endpoint, since it is invalid!!!\n",
+			wantIndex: []int{1},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var indices []int
+			for _, a := range Attribute([]byte(tc.rendered), []types.NamespacedName{{Name: "a"}, {Name: "b"}}, tc.output) {
+				indices = append(indices, a.Index)
+			}
+			slices.Sort(indices)
+			if !slices.Equal(indices, tc.wantIndex) {
+				t.Errorf("blamed indices = %v, want %v", indices, tc.wantIndex)
+			}
+		})
+	}
+}
