@@ -55,7 +55,7 @@ func TestReconcileInfrastructure_NothingRunsAsAServiceAccountAnotherControllerOw
 	in := convergedInputs("abc123")
 	in.configMapName = "gw-config-abc123"
 
-	_, err := r.reconcileInfrastructure(ctx, gw, in)
+	_, err := reconcileInfrastructureOf(ctx, r, gw, in)
 
 	if err == nil {
 		t.Errorf("expected the hold to be reported as an error")
@@ -96,7 +96,7 @@ func TestReconcileInfrastructure_FailedServiceAccountWriteHoldsTheDeployment(t *
 	in := convergedInputs("abc123")
 	in.configMapName = "gw-config-abc123"
 
-	if _, err := r.reconcileInfrastructure(ctx, gw, in); err == nil {
+	if _, err := reconcileInfrastructureOf(ctx, r, gw, in); err == nil {
 		t.Errorf("expected the failed ServiceAccount write to be reported")
 	}
 
@@ -130,7 +130,7 @@ func TestReconcileInfrastructure_ServiceAccountCreatedOrAdoptedIsUsedInTheSamePa
 			in := convergedInputs("abc123")
 			in.configMapName = "gw-config-abc123"
 
-			if _, err := r.reconcileInfrastructure(ctx, gw, in); err != nil {
+			if _, err := reconcileInfrastructureOf(ctx, r, gw, in); err != nil {
 				t.Fatalf("reconcileInfrastructure: %v", err)
 			}
 
@@ -156,4 +156,13 @@ func TestGatewayReconcile_NewConfigUnderAForeignServiceAccountReportsNoRollout(t
 	if events := drainEvents(rec); hasEventReason(events, v1alpha1.ReasonConfigDeployed) {
 		t.Errorf("events = %q, want no ConfigDeployed: the held Deployment starts no rollout", events)
 	}
+}
+
+// reconcileInfrastructureOf runs the core resources, then the infrastructure
+// stage on their outcome, as Reconcile does.
+func reconcileInfrastructureOf(
+	ctx context.Context, r *KrakenDGatewayReconciler, gw *v1alpha1.KrakenDGateway, in infraInputs,
+) (deploymentObservation, error) {
+	saControlled, coreErr := r.reconcileCoreResources(ctx, gw, in)
+	return r.reconcileInfrastructure(ctx, gw, in, saControlled, coreErr)
 }

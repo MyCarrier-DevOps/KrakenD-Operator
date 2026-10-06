@@ -252,8 +252,9 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		heldBecause:     cfg.heldBecause,
 		missingPlugins:  missingPlugins,
 	}
-	note := r.noteRollout(&gw, infra, deployed, configChanged)
-	obs, infraErr := r.reconcileInfrastructure(ctx, &gw, infra)
+	saControlled, coreErr := r.reconcileCoreResources(ctx, &gw, infra)
+	note := r.noteRollout(&gw, infra, deployed, configChanged, saControlled)
+	obs, infraErr := r.reconcileInfrastructure(ctx, &gw, infra, saControlled, coreErr)
 	r.inspectDeploymentStatus(ctx, &gw, infra, obs, note)
 
 	// Update final status
@@ -743,12 +744,14 @@ func markConfigApplied(gw *v1alpha1.KrakenDGateway, checksum string, edition v1a
 // noteRollout reports the rollout the infrastructure stage starts for a change
 // this pass detected, and returns the reason and message chosen for it. It
 // returns nil when the pass detects no change, including while the Deployment
-// is held: a held Deployment starts no rollout.
+// is held: a held Deployment starts no rollout. A ServiceAccount hold returns
+// nil too, and its end reports no config rollout: the Deployment write that
+// follows raises Progressing with reason DeploymentUpdated.
 func (r *KrakenDGatewayReconciler) noteRollout(
-	gw *v1alpha1.KrakenDGateway, in infraInputs, deployed deployedChecksums, configChanged bool,
+	gw *v1alpha1.KrakenDGateway, in infraInputs, deployed deployedChecksums, configChanged, saControlled bool,
 ) *rolloutNote {
 	switch {
-	case len(in.missingPlugins) > 0:
+	case !saControlled, len(in.missingPlugins) > 0:
 		return nil
 	case configChanged:
 		return r.reportConfigRollout(gw)
@@ -1206,13 +1209,15 @@ func (r *KrakenDGatewayReconciler) reconcileDeploymentUnlessHeld(
 //
 // The Deployment and the post-restart Job run as the ServiceAccount named like
 // the gateway, so while the gateway does not control it both are held as they
-// are, and the pass returns an error and the zero observation.
+// are, and the pass returns an error and the zero observation. The caller runs
+// reconcileCoreResources first and passes its outcome in, so the rollout note
+// can honour the hold.
 func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
 	in infraInputs,
+	saControlled bool, coreErr error,
 ) (deploymentObservation, error) {
-	saControlled, coreErr := r.reconcileCoreResources(ctx, gw, in)
 	errs := []error{coreErr}
 	if !saControlled {
 		// The Deployment and the post-restart Job run as the ServiceAccount
