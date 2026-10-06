@@ -27,6 +27,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -456,19 +457,47 @@ var suiteValidator = &markerValidator{}
 var slowFetcher *gatedFetcher
 
 // gatedFetcher blocks every fetch of a host ending in ".slow.invalid" until
-// the fetch's context ends, counting the fetches it holds, and passes every
-// other fetch to the real fetcher.
+// the fetch's context ends or Release is called, counting the fetches it
+// holds, and passes every other fetch to the real fetcher.
 type gatedFetcher struct {
 	autoconfig.Fetcher
 	held atomic.Int32
+
+	mu      sync.Mutex
+	release chan struct{}
+}
+
+// Release ends the fetches the gate holds now, which fail with an error; later
+// fetches are held again.
+func (g *gatedFetcher) Release() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.release != nil {
+		close(g.release)
+		g.release = nil
+	}
+}
+
+// gate returns the channel that ends the fetches held now.
+func (g *gatedFetcher) gate() chan struct{} {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.release == nil {
+		g.release = make(chan struct{})
+	}
+	return g.release
 }
 
 func (g *gatedFetcher) Fetch(ctx context.Context, source autoconfig.FetchSource) (*autoconfig.FetchResult, error) {
 	if u, err := url.Parse(source.URL); err == nil && strings.HasSuffix(u.Hostname(), ".slow.invalid") {
 		g.held.Add(1)
 		defer g.held.Add(-1)
-		<-ctx.Done()
-		return nil, ctx.Err()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-g.gate():
+			return nil, errors.New("slow host released")
+		}
 	}
 	return g.Fetcher.Fetch(ctx, source)
 }
