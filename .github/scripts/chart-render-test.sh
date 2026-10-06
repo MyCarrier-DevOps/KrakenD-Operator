@@ -52,6 +52,20 @@ ca_bundles() {
 		awk '$1 == "caBundle:" { print $2 }' | tr '\n' ' '
 }
 
+# manifest KIND NAME [helm args...]: the rendered document of that kind and
+# metadata name.
+manifest() {
+	local kind=$1 name=$2
+	shift 2
+	render "$@" | awk -v k="kind: $kind" -v n="  name: $name" '
+		/^---/ { if (doc ~ ("\n" k "\n") && index(doc, "\n" n "\n")) print doc; doc = ""; next }
+		{ doc = doc "\n" $0 }
+		END { if (doc ~ ("\n" k "\n") && index(doc, "\n" n "\n")) print doc }'
+}
+
+# rules_block: the "rules:" list of a ClusterRole or Role manifest on stdin.
+rules_block() { awk '/^rules:/ { f = 1; next } /^---/ { f = 0 } f'; }
+
 # webhook_operations WEBHOOK [helm args...]: the admission operations the
 # chart registers for WEBHOOK, space-separated.
 webhook_operations() {
@@ -170,6 +184,10 @@ elif grep -q kubeVersion <<<"$floor_err"; then
 else
 	fail "a Kubernetes 1.32 cluster is refused for another reason: $floor_err"
 fi
+
+# --- RBAC ---------------------------------------------------------------
+expect_equal "the leader-election Role grants nothing on configmaps" "0" \
+	"$(manifest Role t-krakend-operator-leader-election-role | grep -c -- '- configmaps' || true)"
 
 if [ "$failures" -gt 0 ]; then
 	printf '%d chart render test(s) failed\n' "$failures"
