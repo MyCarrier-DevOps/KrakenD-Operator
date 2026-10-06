@@ -369,13 +369,18 @@ idle.
   warnings, not failures, listed in `status.warnings`. See *Before upgrading*
   below.
 - A `$ref`-shaped value inside example data is no longer fetched. The value
-  of an `example` field, the content of an `examples` field and the `value` of
-  an Example Object are data, so a `{"$ref": "…"}` in them is neither resolved
-  nor rewritten, and a fetch that cannot succeed no longer fails the sync
-  (this fixes a regression in the fail-closed behaviour above: such a spec
-  went to `SpecFetchFailed` on every resync). An Example Object's own `$ref`,
-  an entry of `examples` or of `components.examples` that is itself a
-  `{"$ref": "…"}`, is still resolved and still fails the sync closed. A
+  of an `example` field, the content of an `examples` field and everything
+  inside an Example Object that an `examples` entry points to (its `value`,
+  or a raw payload file) are data, so a `{"$ref": "…"}` in them is neither
+  resolved nor rewritten, and a fetch that cannot succeed no longer fails the
+  sync (this fixes a regression in the fail-closed behaviour above: such a
+  spec went to `SpecFetchFailed` on every resync). An Example Object's own
+  `$ref`, an entry of `examples` or of `components.examples` that is itself a
+  `{"$ref": "…"}`, is still fetched and still fails the sync closed, as does
+  a link of a root `$ref` chain in the fetched target. The target is inlined
+  under `components/examples`, not `components/schemas`, at its sanitized
+  name, or with a `_2`, `_3` suffix when the spec's own `components.examples`
+  already holds that name. A
   schema, response, header or other member of a name-keyed map (for example
   `components.schemas.example`) is an object whatever it is named, so it is
   still resolved too.
