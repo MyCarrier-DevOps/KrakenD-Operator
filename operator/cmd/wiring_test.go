@@ -107,3 +107,15 @@ func TestWireValidation_EndpointValidatorReadsPoliciesUncached(t *testing.T) {
 		t.Errorf("endpoint validator's APIReader = %v, want the manager's API reader", w.Validators.Endpoint.APIReader)
 	}
 }
+
+// The AutoConfig controller's workers share the pod's checker with admission,
+// so their prechecks may hold all but one of its slots.
+func TestWireValidation_AutoConfigPrecheckLeavesAnAdmissionSlot(t *testing.T) {
+	mgr := stubManager{client: fake.NewClientBuilder().Build()}
+
+	w := wireValidation(mgr, renderer.New(renderer.Options{}), nil, "")
+
+	if got, want := cap(w.AutoConfig.CheckSlots), configCheckSlots-1; got != want {
+		t.Errorf("AutoConfig check slots = %d, want %d", got, want)
+	}
+}
