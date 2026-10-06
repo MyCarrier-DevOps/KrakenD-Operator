@@ -549,6 +549,26 @@ func TestEndpointAdmission_BrokenGatewayFallsBackToIsolation(t *testing.T) {
 	}
 }
 
+// On a gateway that already fails, a write that makes its own object newly
+// blamed is refused: its clash with another endpoint is invisible to the
+// isolated check.
+func TestEndpointAdmission_BrokenGatewayDeniesACandidateTheChangeNewlyBlames(t *testing.T) {
+	broken := failing("other", 0, "broken elsewhere")
+	blamesNew := configcheck.Verdict{Findings: append(slices.Clone(broken.Findings),
+		failing("new", 0, "clashes with default/other").Findings...)}
+	chk := &scriptedChecker{verdicts: []configcheck.Verdict{blamesNew, broken}}
+	v := &EndpointValidator{Client: fakeClient(testGateway()), Checker: chk}
+
+	resp := review(t, v, "alice", testEndpoint("new", "/a"), nil)
+
+	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("response = %+v, want a 422 denial", resp.Result)
+	}
+	if got := strings.Join(chk.calls, ","); got != "gateway+candidate,gateway" {
+		t.Errorf("checks = %s, want the denial before the isolated checks", got)
+	}
+}
+
 // A checker that cannot get a slot in time is a transient 500: the request is
 // not judged, and clients retry.
 func TestEndpointAdmission_ValidatorUnavailableIs500(t *testing.T) {
