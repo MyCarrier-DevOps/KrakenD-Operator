@@ -635,7 +635,9 @@ func TestEndpointAdmission_FindingsBeyondTheCandidateGoOnTheEndpointsField(t *te
 
 // A finding quoted in a denial is cut to the warning limit, on a rune boundary.
 func TestEndpointAdmission_DenialQuotingOtherFindingsIsBounded(t *testing.T) {
-	after := configcheck.Verdict{Findings: []configcheck.Finding{{Index: -1, Message: strings.Repeat("é", 2000)}}}
+	// A route-stage finding is operator-formatted, so it is quoted.
+	after := configcheck.Verdict{Stage: renderer.StageRoute,
+		Findings: []configcheck.Finding{{Index: -1, Message: strings.Repeat("é", 2000)}}}
 	v := &EndpointValidator{Client: fakeClient(testGateway()), Checker: &scriptedChecker{
 		verdicts: []configcheck.Verdict{after},
 	}}
@@ -646,6 +648,9 @@ func TestEndpointAdmission_DenialQuotingOtherFindingsIsBounded(t *testing.T) {
 		t.Fatalf("response = %+v, want a denial with causes", resp.Result)
 	}
 	msg := resp.Result.Details.Causes[0].Message
+	if !strings.Contains(msg, "éé") {
+		t.Fatalf("cause = %q, want the finding quoted (and cut)", msg)
+	}
 	if len(msg) > 200+warningLimit || !utf8.ValidString(msg) {
 		t.Errorf("cause is %d bytes (valid UTF-8: %v), want at most %d bytes of findings, cut on a rune boundary",
 			len(msg), utf8.ValidString(msg), warningLimit)
