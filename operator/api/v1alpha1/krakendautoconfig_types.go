@@ -485,6 +485,7 @@ type KrakenDAutoConfigStatus struct {
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // KrakenDAutoConfig is the Schema for the krakendautoconfigs API.
+// +operator-sdk:csv:customresourcedefinitions:displayName="KrakenD AutoConfig"
 // +kubebuilder:validation:XValidation:rule="size(self.metadata.name) <= 63",message="name must be at most 63 characters: it is a label value on generated endpoints"
 type KrakenDAutoConfig struct {
 	metav1.TypeMeta   `json:",inline"`
