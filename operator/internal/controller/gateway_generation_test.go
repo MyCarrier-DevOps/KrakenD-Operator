@@ -37,6 +37,7 @@ import (
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 	"github.com/mycarrier-devops/krakend-operator/internal/resources"
+	"github.com/mycarrier-devops/krakend-operator/internal/util/hash"
 )
 
 // newerSpecGateway is a CE gateway serving config "A" with its Deployment
@@ -323,5 +324,40 @@ func TestGatewayReconcile_APublishFailureWarnsOnceUntilItsReasonChanges(t *testi
 
 	if n := eventsWithReason(r.Recorder.(*record.FakeRecorder), v1alpha1.ReasonConfigPublishFailed); n != 1 {
 		t.Errorf("%s events = %d over two failing passes, want 1", v1alpha1.ReasonConfigPublishFailed, n)
+	}
+}
+
+// A pass over the applied config whose ConfigMap holds a payload that is not
+// the config, and cannot be replaced, must not report the config as applied.
+func TestGatewayReconcile_AnAppliedConfigMapThatCannotBeReplacedIsNotReportedApplied(t *testing.T) {
+	const config = `{"version":3,"name":"genuine"}`
+	checksum := hash.SHA256Hex([]byte(config))
+	gw := servingGateway(checksum, convergedImage)
+	forged := publishedConfigMap(t, gw, `{"version":3,"name":"forged"}`, checksum)
+	c := interceptor.NewClient(
+		fakeClientBuilder().WithObjects(gw, settledDeployment(gw, checksum), forged).WithStatusSubresource(gw).Build(),
+		interceptor.Funcs{Delete: func(
+			ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.DeleteOption,
+		) error {
+			if _, ok := obj.(*corev1.ConfigMap); ok {
+				return errors.New("configmaps is forbidden")
+			}
+			return cl.Delete(ctx, obj, opts...)
+		}})
+	r := newTestGatewayReconciler(c,
+		&mockRenderer{output: &renderer.RenderOutput{JSON: []byte(config), Checksum: checksum}}, &mockValidator{})
+
+	if err := reconcileGateway(t, r, gw); err == nil {
+		t.Fatal("a forged ConfigMap that cannot be deleted must fail the pass so it is retried")
+	}
+
+	got := getGateway(t, c, gw)
+	cv := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionConfigValid)
+	if cv == nil || cv.Status == metav1.ConditionTrue {
+		t.Errorf("ConfigValid = %+v, want it not True: the ConfigMap does not hold the config", cv)
+	}
+	if ready := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionReady); ready == nil ||
+		ready.Status == metav1.ConditionTrue {
+		t.Errorf("Ready = %+v, want it not True", ready)
 	}
 }
