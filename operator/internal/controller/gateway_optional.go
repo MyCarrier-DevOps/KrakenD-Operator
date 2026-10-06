@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -103,25 +104,40 @@ func (r *KrakenDGatewayReconciler) deleteIfControlled(
 }
 
 // deleteOptionalIfControlled is deleteIfControlled for an optional kind.
-// Without its CRD there is nothing to delete. A kind that has an informer is
+// Without its CRD there is nothing to delete, and a CRD found absent is not
+// asked about again for absentKindWindow. A kind that has an informer is
 // looked up through it: a child it does not hold yet cannot be orphaned,
 // because the child's Add event enqueues the gateway again and that pass
 // deletes it.
 func (r *KrakenDGatewayReconciler) deleteOptionalIfControlled(
 	ctx context.Context, gw *v1alpha1.KrakenDGateway, gvk schema.GroupVersionKind, name string,
 ) error {
+	now := r.now()
+	if r.absentKinds.absent(gvk, now) {
+		return nil
+	}
 	available, err := r.crdAvailable(gvk)
 	if err != nil {
 		return fmt.Errorf("checking %s CRD: %w", gvk.Kind, err)
 	}
 	if !available {
+		r.absentKinds.remember(gvk, now)
 		return nil
 	}
+	r.absentKinds.forget(gvk)
 	u := &unstructured.Unstructured{}
 	u.SetGroupVersionKind(gvk)
 	u.SetName(name)
 	u.SetNamespace(gw.Namespace)
 	return r.deleteIfControlled(ctx, r.optionalReader(gvk), gw, u)
+}
+
+// now reads the reconciler's clock, the wall clock when none is wired.
+func (r *KrakenDGatewayReconciler) now() time.Time {
+	if r.Clock == nil {
+		return time.Now()
+	}
+	return r.Clock.Now()
 }
 
 // optionalReader is the reader for gvk's children: the informer cache for a
