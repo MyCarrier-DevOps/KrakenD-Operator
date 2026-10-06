@@ -20,7 +20,7 @@ The operator exposes two probes on port **8081**:
 | Path | Purpose |
 |---|---|
 | `/healthz` | Liveness — restart if failing |
-| `/readyz` | Readiness — remove from service if failing |
+| `/readyz` | Readiness — remove from service if failing. With webhooks enabled it also fails until the pod's webhook server accepts connections (check `webhook`) |
 
 Verify manually:
 
