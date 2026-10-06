@@ -737,6 +737,15 @@ func testOutputWithEntries() *CUEOutput {
 	}
 }
 
+// testOutputWithSharedOperationID is testOutputWithEntries with both entries
+// declaring the operationId listUsers.
+func testOutputWithSharedOperationID() *CUEOutput {
+	out := testOutputWithEntries()
+	out.entryOperationIDs[1] = "listUsers"
+	out.OperationIDs["/api/orders:POST"] = "listUsers"
+	return out
+}
+
 func TestApplyFieldOverrides_Timeout(t *testing.T) {
 	out := testOutputWithEntries()
 	timeout := metav1.Duration{Duration: 30 * time.Second}
@@ -862,8 +871,7 @@ func TestApplyFieldOverrides_BackendIndexOutOfRangeIsUnmatched(t *testing.T) {
 }
 
 func TestApplyFieldOverrides_SharedOperationIDIsAmbiguous(t *testing.T) {
-	out := testOutputWithEntries()
-	out.OperationIDs["/api/orders:POST"] = "listUsers"
+	out := testOutputWithSharedOperationID()
 	applyFieldOverrides(out, []v1alpha1.OperationOverride{{OperationID: "listUsers"}, {OperationID: "ghost"}})
 	if !slices.Equal(out.AmbiguousOverrides, []string{"listUsers"}) {
 		t.Errorf("AmbiguousOverrides = %v, want [listUsers]", out.AmbiguousOverrides)
@@ -893,8 +901,7 @@ func TestApplyFieldOverrides_BackendOverrideOnFailedOperationIsNotUnmatched(t *t
 }
 
 func TestApplyFieldOverrides_AmbiguousOverrideSkipsBackendRangeCheck(t *testing.T) {
-	out := testOutputWithEntries()
-	out.OperationIDs["/api/orders:POST"] = "listUsers"
+	out := testOutputWithSharedOperationID()
 	ec := &runtime.RawExtension{Raw: []byte(`{"backend/http":{"return_error_code":true}}`)}
 	applyFieldOverrides(out, []v1alpha1.OperationOverride{{
 		OperationID: "listUsers",
