@@ -242,6 +242,9 @@ expect_equal "the ServiceMonitor selector does not match the webhook Service" "n
 expect_absent "the webhook Service carries no metrics component label" "app.kubernetes.io/component: metrics" \
 	--show-only templates/webhook-service.yaml
 
+# --- availability ---------------------------------------------------------
+expect_contains "two replicas by default" "replicas: 2" --show-only templates/deployment.yaml
+
 if [ "$failures" -gt 0 ]; then
 	printf '%d chart render test(s) failed\n' "$failures"
 	exit 1
