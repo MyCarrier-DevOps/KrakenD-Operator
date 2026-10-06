@@ -593,26 +593,7 @@ func applyFieldOverrides(output *CUEOutput, overrides []v1alpha1.OperationOverri
 		return
 	}
 
-	// Build operationID → entry index lookup, and how many operations
-	// (entries and failed ones) declare each operationId. An override on an
-	// operationId declared more than once is ambiguous and is not applied, so
-	// the index only serves operationIds declared once.
-	opIDIndex := make(map[string]int, len(output.Entries))
-	count := make(map[string]int, len(output.Entries))
-	for i, opID := range output.operationIDsOfEntries() {
-		if opID == "" {
-			continue
-		}
-		if _, seen := opIDIndex[opID]; !seen {
-			opIDIndex[opID] = i
-		}
-		count[opID]++
-	}
-	for _, failed := range output.Failed {
-		if failed.OperationID != "" {
-			count[failed.OperationID]++
-		}
-	}
+	opIDIndex, count := indexOverrideTargets(output)
 
 	for _, ov := range overrides {
 		if count[ov.OperationID] > 1 {
@@ -629,66 +610,101 @@ func applyFieldOverrides(output *CUEOutput, overrides []v1alpha1.OperationOverri
 			remapFailed(output.Failed, ov)
 			continue
 		}
-		entry := &output.Entries[idx]
-		oldKey := entry.Endpoint + ":" + entry.Method
+		applyOverrideToEntry(output, idx, ov)
+	}
+}
 
-		if ov.Timeout != nil {
-			entry.Timeout = ov.Timeout
+// indexOverrideTargets builds the operationID → entry index lookup, and how
+// many operations (entries and failed ones) declare each operationId. An
+// override on an operationId declared more than once is ambiguous and is not
+// applied, so the index only serves operationIds declared once.
+func indexOverrideTargets(output *CUEOutput) (map[string]int, map[string]int) {
+	opIDIndex := make(map[string]int, len(output.Entries))
+	count := make(map[string]int, len(output.Entries))
+	for i, opID := range output.operationIDsOfEntries() {
+		if opID == "" {
+			continue
 		}
-		if ov.CacheTTL != nil {
-			entry.CacheTTL = ov.CacheTTL
+		if _, seen := opIDIndex[opID]; !seen {
+			opIDIndex[opID] = i
 		}
-		if ov.OutputEncoding != "" {
-			entry.OutputEncoding = ov.OutputEncoding
+		count[opID]++
+	}
+	for _, failed := range output.Failed {
+		if failed.OperationID != "" {
+			count[failed.OperationID]++
 		}
-		if ov.ConcurrentCalls != nil {
-			entry.ConcurrentCalls = ov.ConcurrentCalls
-		}
-		if ov.InputHeaders != nil {
-			entry.InputHeaders = slices.Clone(ov.InputHeaders)
-		}
-		if ov.InputQueryStrings != nil {
-			entry.InputQueryStrings = slices.Clone(ov.InputQueryStrings)
-		}
-		if ov.Endpoint != "" {
-			entry.Endpoint = ov.Endpoint
-		}
-		if ov.Method != "" {
-			entry.Method = ov.Method
-		}
-		if ov.ExtraConfig != nil {
-			entry.ExtraConfig = mergeExtraConfig(entry.ExtraConfig, ov.ExtraConfig)
-		}
-		if ov.PolicyRef != nil {
-			for i := range entry.Backends {
-				entry.Backends[i].PolicyRef = ov.PolicyRef
-			}
-		}
-		for _, bo := range ov.Backends {
-			if bo.Index < 0 || bo.Index >= len(entry.Backends) {
-				output.UnmatchedOverrides = append(output.UnmatchedOverrides,
-					fmt.Sprintf("%s backends[%d]", ov.OperationID, bo.Index))
-				continue
-			}
-			if bo.ExtraConfig != nil {
-				entry.Backends[bo.Index].ExtraConfig = &runtime.RawExtension{
-					Raw: append([]byte(nil), bo.ExtraConfig.Raw...),
-				}
-			}
-		}
+	}
+	return opIDIndex, count
+}
 
-		// Update OperationIDs and Tags maps if endpoint/method changed
-		newKey := entry.Endpoint + ":" + entry.Method
-		if newKey != oldKey {
-			if opID, ok := output.OperationIDs[oldKey]; ok {
-				delete(output.OperationIDs, oldKey)
-				output.OperationIDs[newKey] = opID
-			}
-			if tags, ok := output.Tags[oldKey]; ok {
-				delete(output.Tags, oldKey)
-				output.Tags[newKey] = tags
+// applyOverrideToEntry applies ov to Entries[idx] and keeps the route-keyed
+// OperationIDs and Tags maps in step when the override moves the entry.
+func applyOverrideToEntry(output *CUEOutput, idx int, ov v1alpha1.OperationOverride) {
+	entry := &output.Entries[idx]
+	oldKey := entry.Endpoint + ":" + entry.Method
+
+	applyOverrideFields(entry, ov)
+	if ov.PolicyRef != nil {
+		for i := range entry.Backends {
+			entry.Backends[i].PolicyRef = ov.PolicyRef
+		}
+	}
+	for _, bo := range ov.Backends {
+		if bo.Index < 0 || bo.Index >= len(entry.Backends) {
+			output.UnmatchedOverrides = append(output.UnmatchedOverrides,
+				fmt.Sprintf("%s backends[%d]", ov.OperationID, bo.Index))
+			continue
+		}
+		if bo.ExtraConfig != nil {
+			entry.Backends[bo.Index].ExtraConfig = &runtime.RawExtension{
+				Raw: append([]byte(nil), bo.ExtraConfig.Raw...),
 			}
 		}
+	}
+
+	// Update OperationIDs and Tags maps if endpoint/method changed
+	newKey := entry.Endpoint + ":" + entry.Method
+	if newKey != oldKey {
+		if opID, ok := output.OperationIDs[oldKey]; ok {
+			delete(output.OperationIDs, oldKey)
+			output.OperationIDs[newKey] = opID
+		}
+		if tags, ok := output.Tags[oldKey]; ok {
+			delete(output.Tags, oldKey)
+			output.Tags[newKey] = tags
+		}
+	}
+}
+
+// applyOverrideFields copies the entry-level fields ov sets onto entry.
+func applyOverrideFields(entry *v1alpha1.EndpointEntry, ov v1alpha1.OperationOverride) {
+	if ov.Timeout != nil {
+		entry.Timeout = ov.Timeout
+	}
+	if ov.CacheTTL != nil {
+		entry.CacheTTL = ov.CacheTTL
+	}
+	if ov.OutputEncoding != "" {
+		entry.OutputEncoding = ov.OutputEncoding
+	}
+	if ov.ConcurrentCalls != nil {
+		entry.ConcurrentCalls = ov.ConcurrentCalls
+	}
+	if ov.InputHeaders != nil {
+		entry.InputHeaders = slices.Clone(ov.InputHeaders)
+	}
+	if ov.InputQueryStrings != nil {
+		entry.InputQueryStrings = slices.Clone(ov.InputQueryStrings)
+	}
+	if ov.Endpoint != "" {
+		entry.Endpoint = ov.Endpoint
+	}
+	if ov.Method != "" {
+		entry.Method = ov.Method
+	}
+	if ov.ExtraConfig != nil {
+		entry.ExtraConfig = mergeExtraConfig(entry.ExtraConfig, ov.ExtraConfig)
 	}
 }
 
