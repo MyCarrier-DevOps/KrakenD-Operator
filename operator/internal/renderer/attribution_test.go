@@ -193,3 +193,36 @@ func TestAttribute_RouterErrorsRespectMethods(t *testing.T) {
 		})
 	}
 }
+
+// A path krakend prints whole must name the entry that holds it, never a
+// shorter route that is only its prefix up to a stop character.
+func TestAttribute_PathWithStopCharactersNamesItsOwnEntry(t *testing.T) {
+	cases := []struct {
+		name      string
+		rendered  string
+		output    string
+		wantIndex []int
+	}{
+		{
+			name: "comma inside a path with a param",
+			rendered: `{"endpoints":[{"endpoint":"/orders-a","method":"GET"},` +
+				`{"endpoint":"/orders-a,x/{p}","method":"GET"}]}`,
+			output: "ERROR parsing the configuration file:\t'krakend.json': undefined output param 'missing'! " +
+				"endpoint: GET /orders-a,x/:p, backend: 0. input: [p], output: [missing]\n",
+			wantIndex: []int{1},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sources := []types.NamespacedName{{Name: "a"}, {Name: "b"}}
+			var indices []int
+			for _, a := range Attribute([]byte(tc.rendered), sources, tc.output) {
+				indices = append(indices, a.Index)
+			}
+			slices.Sort(indices)
+			if !slices.Equal(indices, tc.wantIndex) {
+				t.Errorf("blamed indices = %v, want %v", indices, tc.wantIndex)
+			}
+		})
+	}
+}
