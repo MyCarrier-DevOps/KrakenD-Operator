@@ -594,3 +594,137 @@ func TestResolveExternalRefs_LocalRefToAnExampleObjectIsWarnedAbout(t *testing.T
 		t.Errorf("warnings = %q, want exactly one, about #/Sample", warnings)
 	}
 }
+
+// Example data is never fetched, a reference to an Example Object is, and a
+// schema, response, header or other member of a name-keyed map is an object
+// whatever it is named, so one called "example" or "examples" is resolved.
+func TestResolveExternalRefs_ExamplesAndNameKeyedMaps(t *testing.T) {
+	const ref = `{"$ref":"https://schemas.example.com/x.json#/X"}`
+	const op = `{"paths":{"/a":{"get":{"responses":{"200":{"description":"ok","content":{"application/json":%s}}}}}}}`
+	docs := map[string][]byte{
+		"https://schemas.example.com/x.json": []byte(`{"X":{"type":"string"}}`),
+		"https://api.example.com/ex.json":    []byte(`{"E":{"value":1}}`),
+	}
+	tests := []struct {
+		name     string
+		spec     string
+		wantErr  string // substring of the error; empty means the sync succeeds
+		wantOut  string // substring of the resolved spec
+		wantHits int    // fetches in total
+	}{
+		{
+			name:     "an examples entry that is a reference is resolved",
+			spec:     fmt.Sprintf(op, `{"examples":{"one":{"$ref":"ex.json#/E"}}}`),
+			wantOut:  `{"$ref":"#/components/schemas/ex_E"}`,
+			wantHits: 1,
+		},
+		{
+			name:     "an unreachable examples entry reference fails closed",
+			spec:     fmt.Sprintf(op, `{"examples":{"one":{"$ref":"gone.json#/E"}}}`),
+			wantErr:  "fetching https://api.example.com/gone.json",
+			wantHits: 1,
+		},
+		{
+			name:     "an unreachable components example reference fails closed",
+			spec:     `{"components":{"examples":{"E":{"$ref":"gone.json#/E"}}}}`,
+			wantErr:  "fetching https://api.example.com/gone.json",
+			wantHits: 1,
+		},
+		{
+			name:     "a schema named example is resolved",
+			spec:     `{"components":{"schemas":{"example":` + ref + `}}}`,
+			wantOut:  `{"example":{"$ref":"#/components/schemas/x_X"}`,
+			wantHits: 1,
+		},
+		{
+			name:     "an unreachable schema named example fails closed",
+			spec:     `{"components":{"schemas":{"example":{"$ref":"https://missing.example.com/y.json#/Y"}}}}`,
+			wantErr:  "fetching https://missing.example.com/y.json",
+			wantHits: 1,
+		},
+		{
+			name:     "a property of a schema named examples is resolved",
+			spec:     `{"components":{"schemas":{"examples":{"type":"object","properties":{"p":` + ref + `}}}}}`,
+			wantOut:  `{"p":{"$ref":"#/components/schemas/x_X"}`,
+			wantHits: 1,
+		},
+		{
+			name:     "a property named example is resolved",
+			spec:     `{"components":{"schemas":{"Pet":{"properties":{"example":` + ref + `}}}}}`,
+			wantOut:  `{"example":{"$ref":"#/components/schemas/x_X"}`,
+			wantHits: 1,
+		},
+		{
+			name:     "a component response named example is resolved",
+			spec:     `{"components":{"responses":{"example":` + ref + `}}}`,
+			wantOut:  `{"example":{"$ref":"#/components/schemas/x_X"}`,
+			wantHits: 1,
+		},
+		{
+			name:     "a component parameter named examples is resolved",
+			spec:     `{"components":{"parameters":{"examples":` + ref + `}}}`,
+			wantOut:  `{"examples":{"$ref":"#/components/schemas/x_X"}`,
+			wantHits: 1,
+		},
+		{
+			name:     "a component request body named example is resolved",
+			spec:     `{"components":{"requestBodies":{"example":` + ref + `}}}`,
+			wantOut:  `{"example":{"$ref":"#/components/schemas/x_X"}`,
+			wantHits: 1,
+		},
+		{
+			name:     "a component link named example is resolved",
+			spec:     `{"components":{"links":{"example":` + ref + `}}}`,
+			wantOut:  `{"example":{"$ref":"#/components/schemas/x_X"}`,
+			wantHits: 1,
+		},
+		{
+			name:     "a response header named example is resolved",
+			spec:     `{"components":{"responses":{"R":{"headers":{"example":` + ref + `}}}}}`,
+			wantOut:  `{"example":{"$ref":"#/components/schemas/x_X"}`,
+			wantHits: 1,
+		},
+		{
+			name:     "a header of an encoding named example is resolved",
+			spec:     fmt.Sprintf(op, `{"encoding":{"example":{"headers":{"h":`+ref+`}}}}`),
+			wantOut:  `{"h":{"$ref":"#/components/schemas/x_X"}`,
+			wantHits: 1,
+		},
+		{
+			name:     "a callback named example is resolved",
+			spec:     `{"paths":{"/a":{"post":{"callbacks":{"example":` + ref + `}}}}}`,
+			wantOut:  `{"example":{"$ref":"#/components/schemas/x_X"}`,
+			wantHits: 1,
+		},
+		{
+			name:     "a webhook named example is resolved",
+			spec:     `{"webhooks":{"example":` + ref + `}}`,
+			wantOut:  `{"example":{"$ref":"#/components/schemas/x_X"}`,
+			wantHits: 1,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fetcher := &stubFetcher{docs: docs}
+
+			out, _, err := ResolveExternalRefs(context.Background(), []byte(tc.spec),
+				"https://api.example.com/openapi.json", fetcher, FetchSource{})
+
+			switch {
+			case tc.wantErr == "" && err != nil:
+				t.Fatalf("resolve: %v", err)
+			case tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)):
+				t.Fatalf("err = %v, want one containing %q", err, tc.wantErr)
+			case tc.wantErr == "" && !strings.Contains(string(out), tc.wantOut):
+				t.Errorf("resolved spec = %s, want it to contain %s", out, tc.wantOut)
+			}
+			hits := 0
+			for _, n := range fetcher.hits {
+				hits += n
+			}
+			if hits != tc.wantHits {
+				t.Errorf("fetches = %v, want %d in total", fetcher.hits, tc.wantHits)
+			}
+		})
+	}
+}
