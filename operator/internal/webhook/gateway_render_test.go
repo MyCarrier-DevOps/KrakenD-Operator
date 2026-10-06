@@ -111,6 +111,12 @@ func routeRejection(refusals ...[]string) configcheck.Verdict {
 	return v
 }
 
+// cappedRouteRejection marks v as a route check that stopped at its cap.
+func cappedRouteRejection(v configcheck.Verdict) configcheck.Verdict {
+	v.RefusalsCapped = true
+	return v
+}
+
 // On a gateway that already fails, a gateway change is denied when it makes
 // the route check refuse endpoints that were not refused before it, which the
 // root-alone check cannot see.
@@ -126,6 +132,24 @@ func TestGatewayAdmission_FailingGatewayDeniesNewRouteRefusals(t *testing.T) {
 		{"healthy endpoints newly clash",
 			routeRejection([]string{"x1", "x2"}),
 			routeRejection([]string{"x1", "x2"}, []string{"c", "b"}), false},
+		{"a clash the change only un-masked, between a blamed endpoint and another",
+			routeRejection([]string{"x"}),
+			routeRejection([]string{"x", "z"}), true},
+		{"the auto_options counterexample: the fixed pair was blamed before",
+			routeRejection([]string{"r", "a"}, []string{"s", "r"}),
+			routeRejection([]string{"r", "s"}), true},
+		{"a healthy endpoint refused alone, as the gateway's own route",
+			routeRejection([]string{"x1", "x2"}),
+			routeRejection([]string{"x1", "x2"}, []string{"e"}), false},
+		{"the failure before was at the cap, so refusals are unknown",
+			cappedRouteRejection(routeRejection([]string{"x1", "x2"})),
+			routeRejection([]string{"x1", "x2"}, []string{"c", "b"}), true},
+		{"the failure before was an EE wildcard conflict",
+			configcheck.Verdict{Stage: renderer.StageEEWildcard, Findings: routeRejection([]string{"w"}).Findings},
+			routeRejection([]string{"c", "b"}), true},
+		{"the failure after is an EE wildcard conflict",
+			routeRejection([]string{"x1", "x2"}),
+			configcheck.Verdict{Stage: renderer.StageEEWildcard, Findings: routeRejection([]string{"w"}).Findings}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
