@@ -2161,3 +2161,42 @@ func TestGatewayReconcile_SchemaConflictIsTheLowestAcceptedReason(t *testing.T) 
 		})
 	}
 }
+
+func TestGatewayReconcile_SchemaConflictIsWrittenOnce(t *testing.T) {
+	gw := reconciledGateway()
+	winner := gatewayEndpoint("a-users", 1)
+	loser := gatewayEndpoint("b-users", 1)
+	writes := 0
+	c := fakeClientBuilder().
+		WithObjects(gw, winner, loser).
+		WithStatusSubresource(gw, winner, loser).
+		WithInterceptorFuncs(countStatusWrites[*v1alpha1.KrakenDEndpoint](&writes)).
+		Build()
+	rec := fakeRecorder()
+	r := acceptanceReconciler(c, rec, &renderer.RenderOutput{
+		JSON: []byte(`{"version":3}`), Checksum: "cs1",
+		SchemaConflicts: []renderer.SchemaConflict{{
+			Endpoint: client.ObjectKeyFromObject(loser), Schema: "User", Winner: client.ObjectKeyFromObject(winner),
+		}},
+	})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+	if writes != 2 {
+		t.Errorf("first reconcile: endpoint status writes = %d, want 2", writes)
+	}
+	drainEvents(rec)
+
+	writes = 0
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+	if writes != 0 {
+		t.Errorf("identical render: endpoint status writes = %d, want 0", writes)
+	}
+	if events := drainEvents(rec); hasEventReason(events, v1alpha1.ReasonSchemaNameConflict) ||
+		hasEventReason(events, v1alpha1.ReasonAccepted) {
+		t.Errorf("identical render: events = %q, want none for the endpoints", events)
+	}
+}
