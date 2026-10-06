@@ -296,7 +296,7 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 - Scaffolded operator-sdk project in `operator/`
 
 ### Testing Infrastructure
-- `test/integration/suite_test.go` — starts an ephemeral K3s cluster through testcontainers, installs the CRDs and wires the Gateway, Endpoint, Policy and AutoConfig controllers over a marker validator; it starts no webhook server
+- `test/integration/suite_test.go` — starts an ephemeral K3s cluster through testcontainers, installs the CRDs and wires the Gateway, Endpoint, Policy and AutoConfig controllers over a marker validator; it starts no webhook server (webhook reads run under the trimmed role only in e2e). The manager runs as the operator ServiceAccount, bound to the generated `config/rbac/role.yaml` and impersonated once a SubjectAccessReview allows it, so every test exercises the role as a deployment grants it
 - `test/integration/gateway_test.go` — 6 integration tests: resource creation with owner refs, endpoint triggers re-reconcile, owner reference verification, Active/Detached endpoint status, policy referenced-by count
 - `test/e2e/e2e_suite_test.go` — testcontainers-go + K3s module: ephemeral K3s cluster per test run, image build + load, cert-manager + CRD install, full teardown. Requires rootful podman machine
 - `test/e2e/e2e_test.go` — 8 e2e specs: Controller Manager (pod running, metrics, sample CRs), Basic CE Gateway (create, endpoint lifecycle), Dragonfly Gateway, Istio Gateway, Dragonfly+Istio Gateway
