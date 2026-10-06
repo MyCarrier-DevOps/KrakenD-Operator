@@ -25,6 +25,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -51,9 +52,32 @@ func setReadyCondition(
 // API server instead of from its cache. The controllers watch these kinds as
 // metadata only, so no Secret data or ConfigMap payload is held in operator
 // memory. Every manager that runs these controllers sets
-// client.Options{Cache: &client.CacheOptions{DisableFor: UncachedObjects()}}.
+// client.Options{Cache: &client.CacheOptions{DisableFor: UncachedObjects()}}
+// and cache.Options{ByObject: CacheByObject()}.
+//
+// Metadata can still carry content: an object applied client-side repeats its
+// whole body, data included, in the kubectl last-applied annotation.
+// CacheByObject drops the annotations and managedFields from what the cache
+// keeps. The names, labels and owners of every Secret and ConfigMap in the
+// cluster stay cached, because the watches cannot select the user-named
+// objects they follow.
 func UncachedObjects() []client.Object {
 	return []client.Object{&corev1.Secret{}, &corev1.ConfigMap{}}
+}
+
+// CacheByObject is the cache configuration that goes with UncachedObjects: it
+// strips the annotations and managedFields from every cached Secret and
+// ConfigMap and keeps the rest of the metadata (names, labels, owners), which
+// the watches and mappers use.
+func CacheByObject() map[client.Object]cache.ByObject {
+	strip := cache.ByObject{Transform: func(obj any) (any, error) {
+		if m, ok := obj.(metav1.Object); ok {
+			m.SetAnnotations(nil)
+			m.SetManagedFields(nil)
+		}
+		return obj, nil
+	}}
+	return map[client.Object]cache.ByObject{&corev1.Secret{}: strip, &corev1.ConfigMap{}: strip}
 }
 
 // conditionsEqual returns true if two condition slices have the same semantic
