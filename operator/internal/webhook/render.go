@@ -121,3 +121,19 @@ func newlyBlamed(self types.NamespacedName) func(before, after configcheck.Verdi
 		return blames(after, self) && !blames(before, self)
 	}
 }
+
+// newRouteRefusals is the gateway rule of the ratchet on a failing gateway: a
+// route refusal after the change counts against it when every endpoint the
+// refusal names was unblamed before. The route check leaves a refused route
+// out of its engine, so a refusal that names an endpoint blamed before may only
+// have been hidden by an earlier one, which is no fault of the change.
+func newRouteRefusals(before, after configcheck.Verdict) bool {
+	if after.Stage != renderer.StageRoute || before.Stage != renderer.StageRoute {
+		return false
+	}
+	return slices.ContainsFunc(after.Refusals, func(r configcheck.Refusal) bool {
+		return len(r.Endpoints) > 0 && !slices.ContainsFunc(r.Endpoints, func(e types.NamespacedName) bool {
+			return blames(before, e)
+		})
+	})
+}

@@ -1093,10 +1093,11 @@ func checkGatewayRender(
 			withEndpoints.Summary(warningLimit))}, nil
 	}
 	return ratchetRender(ctx, renderChecks{
-		after:     bindCheck(chk.CheckGateway, gw, nil),
-		before:    bindCheck(chk.CheckGateway, old, nil),
-		isoAfter:  bindCheck(chk.CheckIsolated, gw, nil),
-		isoBefore: bindCheck(chk.CheckIsolated, old, nil),
+		after:      bindCheck(chk.CheckGateway, gw, nil),
+		before:     bindCheck(chk.CheckGateway, old, nil),
+		isoAfter:   bindCheck(chk.CheckIsolated, gw, nil),
+		isoBefore:  bindCheck(chk.CheckIsolated, old, nil),
+		newFailure: newRouteRefusals,
 	},
 		func(v configcheck.Verdict) error { return gatewayRenderDenial(gw, v) },
 		func(before configcheck.Verdict) string {
