@@ -952,9 +952,11 @@ type heldCause struct {
 func heldCauses(failedOps []autoconfig.OperationIssue, rejected map[string]rejection) []heldCause {
 	var held []heldCause
 	for _, op := range failedOps {
-		held = append(held, heldCause{
-			operation: op.Method + " " + op.Path + " (" + op.OperationID + ")", cause: op.Message,
-		})
+		name := op.Method + " " + op.Path
+		if op.OperationID != "" {
+			name += " (" + op.OperationID + ")"
+		}
+		held = append(held, heldCause{operation: name, cause: op.Message})
 	}
 	for name, rej := range rejected {
 		held = append(held, heldCause{operation: name, cause: rej.cause.Error()})
