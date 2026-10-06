@@ -760,6 +760,79 @@ func TestEndpointAdmission_AlreadyFailingWarningWithholdsForeignFindings(t *test
 	}
 }
 
+// tenantEndpoint is a KrakenDEndpoint of namespace ns on the test gateway.
+func tenantEndpoint(ns, name, path string) *v1alpha1.KrakenDEndpoint {
+	ep := testEndpoint(name, path)
+	ep.Namespace = ns
+	ep.Spec.GatewayRef = v1alpha1.GatewayRef{Name: "gw", Namespace: "default"}
+	return ep
+}
+
+// responseText is everything a response carries to the requester.
+func responseText(resp admission.Response) string {
+	var got []string
+	if resp.Result != nil {
+		got = append(got, resp.Result.Message)
+		if resp.Result.Details != nil {
+			for _, c := range resp.Result.Details.Causes {
+				got = append(got, c.Message)
+			}
+		}
+	}
+	return strings.Join(append(got, resp.Warnings...), "\n")
+}
+
+// A write that turns a passing gateway into a failing one on another tenant's
+// entry gets a denial that does not carry the credential krakend prints for it.
+func TestEndpointAdmission_DenialDoesNotEchoAnotherTenantsCredential(t *testing.T) {
+	krakend := configcheck.Verdict{Stage: renderer.StageCheck, Findings: []configcheck.Finding{{Index: -1,
+		Message: "ERROR parsing the configuration file: 'krakend.json': host http://u:SECRET-PASS@h1 not valid: invalid host"}}}
+	chk := &scriptedChecker{verdicts: []configcheck.Verdict{krakend, {OK: true}, {OK: true}}}
+	v := &EndpointValidator{Client: fakeClient(testGateway()), Checker: chk}
+
+	resp := review(t, v, "system:serviceaccount:tenant-b:deployer",
+		tenantEndpoint("tenant-b", "orders-b", "/orders-v2"), tenantEndpoint("tenant-b", "orders-b", "/orders"))
+
+	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("response = %+v, want a 422 denial", resp.Result)
+	}
+	if text := responseText(resp); strings.Contains(text, "SECRET-PASS") {
+		t.Errorf("the denial carries another tenant's credential: %s", text)
+	}
+}
+
+// On a gateway that already fails, a change that newly blames the requester's
+// own entry is denied with the requester's own error, not the combined check's
+// lines about another tenant's endpoint.
+func TestEndpointAdmission_NewlyBlamedDenialDoesNotQuoteAnotherTenantsEndpoint(t *testing.T) {
+	theirs := configcheck.Finding{
+		Endpoint: types.NamespacedName{Namespace: "tenant-a", Name: "orders-a"}, Index: 0,
+		Message: "'SECRET-EVERY' does not match pattern"}
+	broken := configcheck.Verdict{Stage: renderer.StageCheck, Findings: []configcheck.Finding{{
+		Endpoint: types.NamespacedName{Namespace: "tenant-c", Name: "broken"}, Index: 0, Message: "bad every"}}}
+	mine := configcheck.Finding{
+		Endpoint: types.NamespacedName{Namespace: "tenant-b", Name: "orders-b"}, Index: 0, Message: "'bad-b' does not match pattern"}
+	after := configcheck.Verdict{Stage: renderer.StageCheck,
+		Findings: append(slices.Clone(broken.Findings), theirs, mine)}
+	own := configcheck.Verdict{Stage: renderer.StageCheck, Findings: []configcheck.Finding{mine}}
+	chk := &scriptedChecker{verdicts: []configcheck.Verdict{after, broken, own}}
+	v := &EndpointValidator{Client: fakeClient(testGateway()), Checker: chk}
+
+	resp := review(t, v, "system:serviceaccount:tenant-b:deployer",
+		tenantEndpoint("tenant-b", "orders-b", "/orders-v2"), tenantEndpoint("tenant-b", "orders-b", "/orders"))
+
+	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("response = %+v, want a 422 denial", resp.Result)
+	}
+	text := responseText(resp)
+	if !strings.Contains(text, "bad-b") {
+		t.Errorf("the denial = %s, want it to keep the requester's own error", text)
+	}
+	if strings.Contains(text, "SECRET-EVERY") || strings.Contains(text, "tenant-a/orders-a") {
+		t.Errorf("the denial quotes another tenant's endpoint and value: %s", text)
+	}
+}
+
 func TestEndpointAdmission_NoRenderCheckWithoutAGatewayOrAChange(t *testing.T) {
 	old := testEndpoint("e", "/a")
 	labeled := old.DeepCopy()
