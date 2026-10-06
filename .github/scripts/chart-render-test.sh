@@ -73,6 +73,12 @@ manifest_operations() {
 		f && /- (CREATE|UPDATE|DELETE|CONNECT)$/ { printf "%s ", $2 }' "$2"
 }
 
+# --- autoconfig.maxConcurrentReconciles drives the AutoConfig worker count -
+expect_contains "the AutoConfig worker count defaults to 4" \
+	"--autoconfig-max-concurrent-reconciles=4"
+expect_contains "autoconfig.maxConcurrentReconciles sets the AutoConfig worker count" \
+	"--autoconfig-max-concurrent-reconciles=8" --set autoconfig.maxConcurrentReconciles=8
+
 # --- webhooks.enabled drives --enable-webhooks ---------------------------
 expect_absent "enabled webhooks pass no flag (older images keep working)" "--enable-webhooks"
 expect_contains "webhooks.enabled=false disables them in the operator" \
