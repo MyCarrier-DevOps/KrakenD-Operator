@@ -161,11 +161,14 @@ func (r *KrakenDGatewayReconciler) publishConfig(
 }
 
 // verifyExistingConfigMap looks up the config ConfigMap for checksum through
-// reader, as metadata only: the rendered config can be large and its content
-// is addressed by the name. found says whether one exists; when it does, err
-// says whether it is this gateway's copy of that config. The checksum
-// annotation it reads is stripped from the cached metadata, so this read must
-// stay live (client.CacheOptions.DisableFor).
+// reader. found says whether one exists; when it does, err says whether it
+// is this gateway's copy of that config. Its owner and checksum annotation
+// are read as metadata only; the annotation is stripped from the cached
+// metadata, so this read must stay live (client.CacheOptions.DisableFor).
+// Both are copyable by anyone who can create ConfigMaps, so the payload is
+// hashed too: a ConfigMap that claims to be the gateway's copy but whose
+// krakend.json does not hash to checksum is deleted and reported as not
+// found, for the caller to create again.
 func (r *KrakenDGatewayReconciler) verifyExistingConfigMap(
 	ctx context.Context, reader client.Reader, gw *v1alpha1.KrakenDGateway, checksum string,
 ) (found bool, err error) {
@@ -178,7 +181,33 @@ func (r *KrakenDGatewayReconciler) verifyExistingConfigMap(
 		}
 		return false, fmt.Errorf("getting configmap %s: %w", name, err)
 	}
-	return true, verifyConfigMap(cm, gw, checksum)
+	if err := verifyConfigMap(cm, gw, checksum); err != nil {
+		return true, err
+	}
+	return r.verifyPayload(ctx, reader, gw, name, checksum)
+}
+
+// verifyPayload hashes the krakend.json of the ConfigMap name and deletes it
+// when the hash is not checksum. found is false when the ConfigMap is gone
+// or was deleted here.
+func (r *KrakenDGatewayReconciler) verifyPayload(
+	ctx context.Context, reader client.Reader, gw *v1alpha1.KrakenDGateway, name, checksum string,
+) (found bool, err error) {
+	full := &corev1.ConfigMap{}
+	if err := reader.Get(ctx, types.NamespacedName{Name: name, Namespace: gw.Namespace}, full); err != nil {
+		if errors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("getting configmap %s: %w", name, err)
+	}
+	if hash.SHA256Hex([]byte(full.Data[resources.ConfigKey])) == checksum {
+		return true, nil
+	}
+	uid := full.UID
+	if err := r.Delete(ctx, full, client.Preconditions{UID: &uid}); err != nil && !errors.IsNotFound(err) {
+		return true, fmt.Errorf("deleting configmap %s whose data does not match its checksum: %w", name, err)
+	}
+	return false, nil
 }
 
 // verifyConfigMap rejects a ConfigMap that has the content-addressed name for

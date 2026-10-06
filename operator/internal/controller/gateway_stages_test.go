@@ -175,13 +175,15 @@ func TestGatewayReconcile_InfrastructureRunsWhateverTheConfigVerdict(t *testing.
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			gw := reconciledGateway()
-			gw.Status.ConfigChecksum = "applied"
+			const appliedConfig = `{"applied":true}`
+			applied := hash.SHA256Hex([]byte(appliedConfig))
+			gw.Status.ConfigChecksum = applied
 			appliedCM := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
-				Name:            resources.ConfigMapName(gw, "applied"),
+				Name:            resources.ConfigMapName(gw, applied),
 				Namespace:       gw.Namespace,
 				OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(gw, v1alpha1.GroupVersion.WithKind("KrakenDGateway"))},
 			}}
-			resources.BuildConfigMap(appliedCM, gw, []byte(`{"applied":true}`), "applied")
+			resources.BuildConfigMap(appliedCM, gw, []byte(appliedConfig), applied)
 			c := fakeClientBuilder().WithObjects(gw, appliedCM).WithStatusSubresource(gw).Build()
 			r := newTestGatewayReconciler(c, renderOutput("new"), &countingValidator{err: tc.verdict})
 
@@ -193,8 +195,8 @@ func TestGatewayReconcile_InfrastructureRunsWhateverTheConfigVerdict(t *testing.
 			if err := c.Get(context.Background(), client.ObjectKeyFromObject(gw), &dep); err != nil {
 				t.Fatalf("the Deployment must be reconciled whatever the config verdict: %v", err)
 			}
-			if got := dep.Spec.Template.Annotations[resources.PostRestartJobChecksumAnnotation]; got != "applied" {
-				t.Errorf("the Deployment must carry the applied config %q, got %q", "applied", got)
+			if got := dep.Spec.Template.Annotations[resources.PostRestartJobChecksumAnnotation]; got != applied {
+				t.Errorf("the Deployment must carry the applied config %q, got %q", applied, got)
 			}
 			var svc corev1.Service
 			if err := c.Get(context.Background(), client.ObjectKeyFromObject(gw), &svc); err != nil {
@@ -1084,23 +1086,20 @@ func TestGatewayReconcile_ACollectionFailureDoesNotStallTheRestOfTheInfrastructu
 	getObject(t, c, gw, gw.Name, &hpa)
 }
 
-func TestPublishConfig_ChecksAnExistingConfigMapWithoutReadingItsPayload(t *testing.T) {
+func TestPublishConfig_HashesAnExistingConfigMapsPayload(t *testing.T) {
 	gw := reconciledGateway()
 	gw.UID = "gw-uid"
 	const config = `{"version":3,"name":"present"}`
 	checksum := hash.SHA256Hex([]byte(config))
-	existing := ownedConfigMap(gw, resources.ConfigMapName(gw, checksum), testNow, true)
-	existing.Annotations = map[string]string{resources.PostRestartJobChecksumAnnotation: checksum}
-	existing.Data = map[string]string{resources.ConfigKey: config}
-	// The manager's client reads ConfigMaps live, so a typed Get would carry
-	// the whole rendered config over the wire on every pass.
+	existing := publishedConfigMap(t, gw, config, checksum)
+	typedReads := 0
 	c := interceptor.NewClient(fakeClientBuilder().WithObjects(gw, existing).Build(), interceptor.Funcs{
 		Get: func(
 			ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object,
 			opts ...client.GetOption,
 		) error {
 			if _, ok := obj.(*corev1.ConfigMap); ok {
-				return errors.New("typed ConfigMap read")
+				typedReads++
 			}
 			return cl.Get(ctx, key, obj, opts...)
 		},
@@ -1108,7 +1107,10 @@ func TestPublishConfig_ChecksAnExistingConfigMapWithoutReadingItsPayload(t *test
 	r := newTestGatewayReconciler(c, &mockRenderer{}, &mockValidator{})
 
 	if err := r.publishConfig(context.Background(), gw, []byte(config), checksum); err != nil {
-		t.Errorf("publishConfig = %v, want the existing ConfigMap verified from its metadata", err)
+		t.Errorf("publishConfig = %v, want the existing ConfigMap accepted", err)
+	}
+	if typedReads != 1 {
+		t.Errorf("typed ConfigMap reads = %d, want 1: the payload is hashed", typedReads)
 	}
 }
 
