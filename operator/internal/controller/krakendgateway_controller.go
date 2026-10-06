@@ -308,7 +308,7 @@ func (r *KrakenDGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&v1alpha1.KrakenDGateway{}).
 		Owns(&appsv1.Deployment{}).
 		Owns(&corev1.Service{}).
-		Owns(&corev1.ConfigMap{}).
+		Owns(&corev1.ConfigMap{}, builder.OnlyMetadata).
 		Owns(&corev1.ServiceAccount{}).
 		Owns(&policyv1.PodDisruptionBudget{}).
 		Owns(&autoscalingv2.HorizontalPodAutoscaler{}).
@@ -326,10 +326,12 @@ func (r *KrakenDGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(
 			&corev1.Secret{},
 			handler.EnqueueRequestsFromMapFunc(r.licenseSecretToGateway),
+			builder.OnlyMetadata,
 		).
 		Watches(
 			&corev1.ConfigMap{},
 			handler.EnqueueRequestsFromMapFunc(r.pluginConfigMapToGateway),
+			builder.OnlyMetadata,
 		).
 		WithOptions(crcontroller.Options{
 			RateLimiter:             newGatewayRateLimiter(),
