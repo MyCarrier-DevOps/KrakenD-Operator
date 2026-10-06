@@ -422,8 +422,8 @@ rollout completes, or until a rejected render is fixed.
 **Symptom:** `ConfigValid` and `Ready` are `Unknown` with reason `ConfigPublishFailed`; the gateway keeps serving its previous config and a Warning event `ConfigPublishFailed` was emitted when it entered the state. The newest render passed `krakend check`, so the cause is not the config's content.
 
 **Diagnosis:** the `ConfigValid` message ends with the cause (the operator log has the same error):
-- `configmap <ns>/<gateway>-config-<hash> exists but is not controlled by gateway <name>`, or `holds config <x>, not <y>`: someone else's ConfigMap sits at the content-addressed name. Look at it with `kubectl get configmap <name> -n <ns> -o yaml` (owner references, annotation `krakend.io/checksum-config`).
-- `deleting configmap <name> whose data does not match its checksum: ...`: a ConfigMap that claims to be the gateway's copy holds another payload (someone edited or recreated it) and the operator may not delete it; check the operator's `delete` permission on ConfigMaps. Treat the unexpected writer as a security finding: the payload is what the pods load.
+- `configmap <ns>/<gateway>-config-<hash> exists but is not controlled by gateway <name>`, or `holds config <x>, not <y>`: someone else's ConfigMap sits at the content-addressed name and holds the right bytes. The operator hashes the payload of any ConfigMap at that name whatever its owner or annotation, deletes one that holds other bytes, and does not delete one that holds the right bytes. Look at it with `kubectl get configmap <name> -n <ns> -o yaml` (owner references, annotation `krakend.io/checksum-config`); delete it to let the operator create its own copy. Pods that start meanwhile mount the right bytes.
+- `deleting configmap <name> whose data does not match its checksum: ...`: a ConfigMap at the name holds another payload (someone edited, copied or recreated it) and the operator may not delete it; check the operator's `delete` permission on ConfigMaps. Treat the unexpected writer as a security finding: the payload is what the pods load.
 - `creating configmap <name>: ...` followed by the API server's refusal: a `count/configmaps` ResourceQuota is exhausted (free quota or raise it; old revisions are collected down to the last three), an admission policy refuses the create, or the rendered config exceeds the 1 MiB ConfigMap limit (split the gateway's endpoints or trim the spec).
 
 **Resolution:** remove the cause. The operator retries with exponential backoff up to 5 minutes; editing the gateway or restarting the operator retries at once. Once the ConfigMap is published, `ConfigValid` returns to `True`.
@@ -437,7 +437,11 @@ but a deleted Deployment cannot be recreated. Fix the rejected input
 (`kubectl describe krakendgateway <name>`, condition `ConfigValid`). The next
 config that passes validation is published and rolled out. The same
 hold follows when the operator deletes the applied config's ConfigMap because
-its `krakend.json` does not hash to the checksum (someone replaced the payload).
+its `krakend.json` does not hash to the checksum (someone replaced the payload,
+or created a ConfigMap of that name with another payload, owned or not). The
+operator emits a Warning event `ConfigMapTampered` on the gateway naming the
+deleted ConfigMap (`kubectl get events --field-selector reason=ConfigMapTampered`);
+when the pass publishes the config again, the status ends `ConfigApplied` and the event is the only trace.
 
 ### Gateway Deployment held: "serviceaccount is not controlled by gateway"
 
