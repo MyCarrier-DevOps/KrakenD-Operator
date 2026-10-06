@@ -2467,7 +2467,7 @@ Go project layout following [Standard Go Project Layout](https://github.com/gola
 │   ├── cmd/
 │   │   ├── main.go                             # Entrypoint
 │   │   ├── wiring.go                           # wireValidation: the one config checker, the gateway and AutoConfig reconcilers and the webhook validators
-│   │   └── webhooks.go                         # registerWebhooks: sets the webhooks up only when enabled
+│   │   └── webhooks.go                         # registerWebhooks: sets the webhooks up and gates readiness on them, only when enabled
 │   ├── internal/
 │   │   ├── controller/
 │   │   │   ├── krakendgateway_controller.go    # KrakenDGateway reconciler (config and infrastructure stages)
