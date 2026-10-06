@@ -89,6 +89,25 @@ make deploy IMG=ghcr.io/mycarrier-devops/krakend-operator:<new-version>
      keeps being accepted: editing the settings of a stored, enabled
      `spec.openapi` or `spec.dragonfly` on a CE gateway only warns, and turning
      one off is admitted.
+6. **Audit what the AutoConfig controller will now hold, adopt or delete.**
+   Run the audits under *Unreleased — AutoConfig per-operation failures,
+   ownership and readiness* (read-only, `kubectl get` and `jq`):
+   - the ownership audit lists label-matched endpoints the AutoConfig will
+     adopt, and controlled endpoints whose labels no longer name their
+     controller; it is the one change that can delete endpoints the
+     AutoConfig does not own today. An AutoConfig that recovers from
+     `CUEEvaluationFailed` also deletes the stale endpoints it kept while it
+     was failing (see the recovery list in that section);
+   - the override audit lists every AutoConfig's overrides (it needs `curl`,
+     and `yq` for YAML specs, to list each spec's duplicated operationIds);
+     match them against the duplicates and the operation's backend count, to
+     find the ones that will fail closed: an operationId the spec declares
+     more than once, or a backend index out of range;
+   - the `KrakenDAutoConfig ns/name: endpoints share a route…` line that the
+     admission audit in item 5 prints lists same-shape endpoint pairs of one
+     AutoConfig. After the upgrade such an AutoConfig reports
+     `OperationsFailed` and keeps its stale endpoints until the pair is
+     resolved.
 
 ---
 
@@ -249,32 +268,40 @@ idle.
 - Drift repair: every reconcile converges owned endpoints to the desired
   state while the AutoConfig syncs successfully, so a generated
   `KrakenDEndpoint` that was deleted or hand-edited out of band is restored on
-  the next reconcile or resync. While the AutoConfig is in `Error`, existing
-  endpoints are left as they are until a sync succeeds (an endpoint write
-  failure stops convergence at the endpoint that failed).
+  the next reconcile or resync. While the AutoConfig is in `Error`, no stale
+  endpoint is deleted. A failure before the endpoint writes leaves every
+  endpoint as it is. Held operations or failed writes leave their own
+  endpoints unchanged while the other operations still converge (see
+  *Unreleased — AutoConfig per-operation failures, ownership and readiness*).
 - Steady state writes nothing: a reconcile that finds no change writes no
   status and emits no event. `status.lastSyncTime` and the
   `EndpointsGenerated` event update only when the spec/CUE-definitions/
   generation inputs or the generated endpoints changed; the
-  `CUEEvaluationWarning`, `DuplicateOperationId`, and
+  `SpecWarning`, `DuplicateOperationId`, and
   `AdditionalEndpointOverride` warning events fire only when those inputs
   differ from the last successful sync's. A failed sync doesn't record its
   inputs, so they repeat on each retry of a failing sync whose inputs
-  changed; a spec fetch failure emits `SpecFetchFailed` instead.
+  changed; a spec fetch failure emits `SpecFetchFailed` instead. A sync that
+  only holds operations (`OperationsFailed`) records its inputs like a
+  successful one, so its warnings are not repeated on the next resync.
 - Endpoint write failures fail the sync: when a generated endpoint can't be
   created, updated, or deleted for a reason other than a write conflict (e.g.
-  an admission webhook rejects it, or a `KrakenDEndpoint` of that name is
-  controlled by another owner), the AutoConfig goes to `status.phase: Error`
+  the API server or an admission webhook times out or returns a server
+  error), the AutoConfig goes to `status.phase: Error`
   with `Synced=False`, reason `EndpointReconcileFailed`, and a matching
   `Warning` event. This always retries with backoff, on both `OnChange` and
   `Periodic` AutoConfigs — a `Periodic` AutoConfig no longer waits a whole
   `spec.periodic.interval` to retry what's usually a transient write error.
+  Since the per-operation change, a write the API server rejects as invalid,
+  or a name another object controls, holds only that operation
+  (`OperationsFailed`) and is not retried with backoff. Only other write
+  errors fail the sync this way.
 - Write conflicts retry quietly, not as a failure: a stale-cache `Conflict` on
   a status write, or a `Conflict`/`AlreadyExists` on an endpoint write (this
   reconcile raced another and lost), requeues one second later with no error
   log, no event, and no status change — it does not set
   `EndpointReconcileFailed` and does not touch `status.phase`. The
-  `CUEEvaluationWarning`/`DuplicateOperationId`/`AdditionalEndpointOverride`
+  `SpecWarning`/`DuplicateOperationId`/`AdditionalEndpointOverride`
   warning events above are recorded only once the reconcile's own status
   write succeeds, so a reconcile that loses to a conflict doesn't re-emit
   them on its retry. The exception is a failed sync whose own status write
@@ -293,7 +320,8 @@ idle.
   URL, not the main spec's (a `schemas/pet.json` that refers to
   `category.json` fetches `schemas/category.json`). A pointer not found, a
   resolution cycle, or a schema-name collision between two `$ref`s remain
-  warnings, not failures. See *Before upgrading* below.
+  warnings, not failures, listed in `status.warnings`. See *Before upgrading*
+  below.
 - A spec fetch failure now also sets `Synced=False` (reason
   `SpecFetchFailed`) alongside `SpecAvailable=False`, instead of leaving the
   last successful sync's `Synced=True`, so health checks that read
@@ -307,10 +335,12 @@ idle.
 - `status.phase` no longer transitions through `Fetching`/`Rendering` — those
   enum values remain for compatibility, but the controller now only sets
   `Pending`, `Synced`, or `Error`.
-- Spec fetch, CUE, unmatched-override, and additional-endpoint scope failures
-  retry via controller-runtime's exponential backoff (`OnChange`) or at
-  `spec.periodic.interval` (`Periodic`), same as before; endpoint write
-  failures and write conflicts follow the different rules described above.
+- Spec fetch, CUE, unmatched-override, ambiguous-override, and
+  additional-endpoint scope failures retry via controller-runtime's
+  exponential backoff (`OnChange`) or at `spec.periodic.interval`
+  (`Periodic`), same as before; endpoint write failures and write conflicts
+  follow the different rules described above, and held operations
+  (`OperationsFailed`) are not errors (see *Unreleased — AutoConfig per-operation failures, ownership and readiness*).
 
 **Before upgrading — external `$ref`s.** A URL-sourced AutoConfig whose spec
 has an external `$ref` the operator can't fetch goes to `Error` after the
@@ -366,9 +396,9 @@ reconcile after the upgrade, even if its OpenAPI spec, CUE definitions and
 resync* above), so the detection query below is meaningful shortly after the
 upgrade. Healthy resources regenerate identical endpoints, so their
 `KrakenDEndpoints` are not modified — no endpoint churn. The one exception is
-an override on an `operationId` the spec declares more than once: it now
-lands on the endpoint that is actually published instead of on a skipped
-duplicate.
+an override on an `operationId` the spec declares more than once: it fails
+the sync with reason `AmbiguousOverride` instead of landing on one of the
+operations (see *Unreleased — AutoConfig per-operation failures, ownership and readiness*).
 
 Find affected resources cluster-wide:
 
@@ -389,12 +419,23 @@ present (`cue/defaults.cue`), avoiding an override entirely.
 
 Custom CUE definitions that read `_overrides` under a key that doesn't
 correspond to an operationId the spec declares will now fail the sync, because
-overrides are matched on the operationId contract.
+overrides are matched on the operationId contract. The `_overrides` keys are
+the `SanitizeName` form of each override's `operationId`: lowercased, every
+character outside `a-z`, `0-9` and `-` replaced by `-`, and leading and
+trailing `-` trimmed (`getUser_v2` is `getuser-v2`). A definition that looks
+an override up by `strings.ToLower(op.operationId)` misses any id containing
+another character; use the same form (with `regexp` and `strings` imported):
 
-Separately, the evaluator's per-operation warnings (e.g. an operation skipped
-because it failed to convert) are now surfaced as `CUEEvaluationWarning`
-events on the `KrakenDAutoConfig` resource instead of being silently
-dropped; these do not change `status.phase` or conditions.
+```cue
+import "regexp"
+import "strings"
+
+_overrides[strings.Trim(regexp.ReplaceAll("[^a-z0-9-]", strings.ToLower(op.operationId), "-"), "-")]
+```
+
+Separately, an operation that fails evaluation (for example, one that failed
+to convert) is no longer dropped silently with only an event: it is held and
+listed in `status.failedOperations` (see *Unreleased — AutoConfig per-operation failures, ownership and readiness*).
 
 `documentation/openapi.audience` must now be a list of strings wherever it's
 set: inside `extraConfig` on `spec.overrides[]`, `spec.defaults.endpoint`, or
@@ -404,7 +445,9 @@ items are rejected too.
 The `KrakenDAutoConfig` admission webhook now rejects a non-list `extraConfig`
 value at `kubectl apply` time (`must be a list of strings, e.g. ["internal"]`);
 a value declared on the operation itself is caught by the default CUE
-definitions instead and fails the sync with reason `CUEEvaluationFailed`.
+definitions instead: that operation is held with reason `CUEEvaluationFailed`
+in `status.failedOperations` and `Synced` is `False` with reason
+`OperationsFailed`.
 Previously a malformed value (e.g. a YAML mapping) passed both checks
 unchanged and only surfaced as a `krakend check -t -n -c` failure, which blocks
 config updates for every service on that gateway — not just the one with the
@@ -434,7 +477,9 @@ guard on a CE gateway, where the render drops `documentation/openapi`. On an EE
 gateway the AutoConfig controller's own precheck, which validates the
 endpoints it is about to write with the checker the webhooks use, catches it
 first. That precheck holds the operations that fail and writes the rest; it
-does not hold back the whole set. The operator's writes of generated endpoints
+does not hold back the whole set, except when a failure names none of the
+endpoints it is about to write (see *Pre-validation* under *AutoConfig
+per-operation failures, ownership and readiness*). The operator's writes of generated endpoints
 skip only the admission render check (see *Complete admission*).
 
 ---
@@ -658,7 +703,7 @@ kubectl patch <kind>/<name> -n <ns> --subresource=status --type=json \
 | Condition | Written by | True when | Reasons |
 |---|---|---|---|
 | `ResolvedRefs` | endpoint controller | the gateway and every referenced policy exist | `RefsResolved`, `GatewayNotFound`, `PolicyNotFound` |
-| `Accepted` | gateway controller | the endpoint is in the gateway's validated configuration | `Accepted`, `PartiallyAccepted`, `EndpointConflict`, `GatewayConfigRejected`, `EEFeaturesStripped` |
+| `Accepted` | gateway controller | the endpoint is in the gateway's validated configuration | `Accepted`, `PartiallyAccepted`, `EndpointConflict`, `GatewayConfigRejected`, `EEFeaturesStripped`, `SchemaNameConflict` |
 | `Ready` | endpoint controller | both are True, `Accepted` for the current generation | `Ready`, `Pending`, or the failing condition's reason; `SchemaNameConflict` (docs only) keeps it True |
 
 - The `Available` condition is removed. On its first reconcile after the
@@ -718,9 +763,12 @@ kubectl patch <kind>/<name> -n <ns> --subresource=status --type=json \
 
 ### KrakenDAutoConfig
 
-- New `Ready` condition: `True` when `SpecAvailable` and `Synced` are both
-  `True`, otherwise `False` with the first failing condition's reason (e.g.
-  `SpecFetchFailed`, `UnmatchedOverride`, `EndpointReconcileFailed`).
+- New `Ready` condition: `True` when `SpecAvailable`, `Synced` and
+  `EndpointsReady` are all `True`, otherwise `False` with the first failing
+  condition's reason (e.g. `SpecFetchFailed`, `UnmatchedOverride`,
+  `OperationsFailed`, `EndpointsNotReady`). `Ready` is absent until the first
+  status write. A first sync that creates endpoints reports `Ready=False`
+  with reason `EndpointsNotReady` until the endpoint controller reports them.
 - New `status.observedGeneration`, set on every status write.
 - `phase` is derived from `Synced` (`Synced`, `Error`) and is empty before
   the first sync. A new AutoConfig no longer gets a separate `Pending`
@@ -728,7 +776,8 @@ kubectl patch <kind>/<name> -n <ns> --subresource=status --type=json \
 - `lastSyncTime` is documented on the field: it is the last sync that
   changed something, not a heartbeat.
 - An AutoConfig whose reconcile fails with an error, which is every
-  `OnChange` failure and `EndpointReconcileFailed` for either trigger, now
+  `OnChange` failure except `OperationsFailed`, and `EndpointReconcileFailed`
+  or `ValidatorUnavailable` for either trigger, now
   retries at least every 5 minutes (the exponential backoff used to grow to
   about 16.7 minutes), so it recovers within one resync interval once a
   missing gateway, policy or auth Secret appears or its spec source comes
@@ -1439,8 +1488,9 @@ an Enterprise gateway is in CE fallback (its `LicenseDegraded` condition is
 true), admission judges the fallback render, which drops the Enterprise-only
 content, so such content in a write is first judged when the license returns.
 The checks run in the operator pod, three at a time for the whole pod, sharing those
-slots with the gateway controller, and each webhook call stops its work after
-12 s. A request that cannot get a slot in time, or whose check cannot run, is
+slots with the gateway controller and the AutoConfig controller (each holds at
+most one, so a slot is always free for admission), and each webhook call stops
+its work after 12 s. A request that cannot get a slot in time, or whose check cannot run, is
 answered `500 Internal Error`: a transient error that `kubectl` does not retry,
 so run the command again (controllers and GitOps tools retry on their own).
 A policy write is rendered in each gateway that uses it, one after another: 1 + N
@@ -1708,7 +1758,279 @@ Checklist lists these lists. A `policyRef` in `defaults`, `overrides` or
 `additionalEndpoints` that names no existing policy now produces an admission
 warning (at most five, then a count), not a rejection: a release may create the
 policy after the AutoConfig, and the generated endpoints are rejected until it
-exists.
+exists (the AutoConfig holds each as `EndpointRejected` in
+`status.failedOperations` and reports `OperationsFailed`).
+
+---
+
+## Unreleased — AutoConfig per-operation failures, ownership and readiness
+
+A problem in one OpenAPI operation now stays with that operation. The
+AutoConfig's status shows what is held, what was skipped, and whether its
+endpoints are serving.
+
+**Behavior changes:**
+
+- **Per-operation failures are held, not fatal.** An operation is held when:
+  - its entry fails CUE evaluation (reason `CUEEvaluationFailed`), for
+    example a `documentation/openapi.audience` that is not a list of
+    strings;
+  - its endpoint fails the gateway config check, or loses its route to
+    another operation's endpoint of the same method and route shape (reason
+    `ConfigValidationFailed`);
+  - the API server rejects its endpoint, or another object controls its
+    name (reason `EndpointRejected`);
+  - on a CE gateway, it uses an Enterprise-only `extra_config` namespace in
+    an entry or a backend (`EndpointRejected` without a write; the generated
+    `documentation/openapi` does not count).
+
+  A held operation keeps its existing `KrakenDEndpoint` unchanged, every
+  other operation is still created and updated, and no stale endpoint is
+  deleted until every operation converges. An operation that `spec.filter`
+  excludes is neither reported nor held.
+
+  The AutoConfig reports `Synced=False` with reason `OperationsFailed`,
+  naming up to five operations, and lists them in `status.failedOperations`
+  (up to 20 entries, each message cut at 256 bytes). It emits an
+  `OperationsFailed` Warning event when that status changes. The
+  `krakend_operator_autoconfig_synced` gauge is `0` while any operation is
+  held. These failures are deterministic, so they are not retried with
+  backoff: the AutoConfig retries at its resync interval (5 minutes for
+  `OnChange`, `spec.periodic.interval` for `Periodic`), or at once when an
+  input or a watched dependency changes. Previously, one bad entry failed the
+  whole AutoConfig (`CUEEvaluationFailed`), or an undecodable entry was
+  dropped and its route deleted while the AutoConfig reported `Synced`.
+  `status.failedOperations` can also name a label-matched endpoint the
+  AutoConfig could not adopt (the API server answered 422). The list stays as
+  the last sync that reached the endpoint writes recorded it when a later
+  sync fails earlier, as `status.skipped` and `status.warnings` do. A
+  rejection's full cause is in the operator log at Info.
+- **Make-before-break writes.** Creates and updates run first, every one
+  attempted. Stale endpoints are deleted only when every write succeeded and
+  no operation is held, so a failure never takes a route off the gateway. An
+  operation renamed upstream (a new operationId on the same route) converges
+  this way: the new endpoint is written first and shares the route with the
+  old one, which the webhook admits for endpoints of one AutoConfig, and the
+  AutoConfig deletes the old one afterwards. A write error is reported for
+  every failed endpoint (the status names five, then counts the rest), not
+  just the first. A transient write error fails the sync as
+  `EndpointReconcileFailed`, retried with backoff on both triggers. A
+  `Conflict` or `AlreadyExists` still requeues quietly after one second.
+- **HEAD, OPTIONS and TRACE operations are skipped and reported** in
+  `status.skipped` (reason `UnsupportedMethod`), instead of failing every
+  sync with `EndpointReconcileFailed`. An override that gives such an
+  operation a supported `method` keeps it generated. Duplicate operations
+  appear there too (reason `DuplicateOperationId`: the same path and method,
+  operationId or endpoint name as an earlier operation), with a
+  `DuplicateOperationId` Warning event when the inputs change.
+  `status.skippedOperations` counts both, including any beyond the 20 listed.
+- **A `urlTransform` that collapses two operations onto one method and path
+  is a misconfiguration.** The operator publishes one of them
+  deterministically and reports the other as a duplicate in `status.skipped`.
+  The published endpoint's name, its `failedOperations` label and filter
+  matching can follow the other operation, and `spec.filter` cannot separate
+  the two. Fix the transform or the upstream paths.
+- **Same-shape routes are held.** Two generated endpoints whose paths differ
+  only in parameter names or repeated slashes (`GET /h/{a}` and
+  `GET /h/{b}`) share one route, and the gateway serves only one. The
+  AutoConfig writes and keeps the one the renderer serves (the existing
+  endpoint with the oldest `creationTimestamp`, then the lowest name; a
+  new endpoint ranks after existing ones) and holds every other as
+  `ConfigValidationFailed`, written or not. Stale endpoints take no part, so
+  a rename still converges. The message is the one a KrakenDEndpoint author
+  gets, advice included, and the status cuts it at 256 bytes. An AutoConfig
+  user instead excludes one of the operations with `spec.filter`, or fixes
+  the upstream paths to use one parameter name. An AutoConfig that already
+  stores such a pair moves from `Synced=True` to `OperationsFailed` on
+  upgrade, and its stale endpoints are kept until the pair is resolved (see
+  the checklist audit below).
+- **Ambiguous overrides fail closed.** An override whose `operationId` more
+  than one operation declares fails the sync with reason `AmbiguousOverride`
+  and a Warning event, and is not applied to any of them. An override
+  `backends[].index` outside the operation's backends fails it with
+  `UnmatchedOverride`, listed as `<operationId> backends[<i>]`. The
+  unmatched message now reads `spec.overrides reference operationIds or
+  backend indexes not present in the OpenAPI spec: …`. An override on an
+  operation that failed CUE evaluation is held with it, not unmatched.
+- **Override `operationId`s with `_`, `-` or a leading digit** now work with
+  `extraConfig`. Previously CUE failed with `missing ',' in struct literal`.
+  The keys of `_overrides` are the `SanitizeName` form of the operationId
+  (lowercased, every character outside `a-z`, `0-9` and `-` replaced by `-`,
+  leading and trailing `-` trimmed),
+  which matters to custom CUE definitions that read it (see *AutoConfig
+  fails sync on unmatched overrides* above).
+- **Parameter `$ref`s** (`#/components/parameters/…`, and external ones for
+  URL sources) are dereferenced, so forwarded query strings and headers are
+  complete. Previously a parameter `$ref` failed CUE evaluation for the
+  whole AutoConfig. A ref resolves only to a parameter object (one with a
+  `name` and an `in`) under `#/components/`. An unresolvable one is listed in
+  `status.warnings`, and the operation using it is held; an unresolvable
+  **path-level** ref fails every operation on that path. A spec that
+  dereferencing would grow past 10 MiB fails the sync (`SpecFetchFailed`).
+- **Spec problems are persistent** in `status.warnings` (distinct, sorted,
+  capped at 20 entries of 256 bytes), with a `SpecWarning` event when the
+  inputs change (a sync emits at most 20 input warning events in all, `SpecWarning`,
+  `DuplicateOperationId` and `AdditionalEndpointOverride` together, plus the
+  failure or `OperationsFailed` event):
+  - `$ref`s the resolver could not honour;
+  - name collisions between inlined schemas;
+  - `#/…` refs inside fetched documents, which resolve against the main spec;
+  - external `$ref`s in a ConfigMap-sourced spec;
+  - parameter `$ref`s that do not resolve;
+  - schema references that `components/schemas` does not define;
+  - additional-endpoint replacements (their event stays
+    `AdditionalEndpointOverride`).
+
+  One root cause can produce two notes, such as an external or local ref
+  note and a schema-not-defined note. The warning event that reported
+  entries the evaluator dropped is gone: a dropped entry is now a held
+  operation.
+- **Each generated endpoint carries only the component schemas its
+  documentation references**, directly or transitively. Previously it
+  carried the whole spec's map. On upgrade, each generated endpoint whose
+  schema map shrinks is updated once, on its AutoConfig's first sync that
+  reaches the writes, and the gateway's published documentation drops schemas
+  no operation references. An Enterprise gateway whose documentation changes
+  re-renders after each endpoint write and rolls, possibly more than once in
+  quick succession.
+- **Schema name collisions across endpoints are reported.** An endpoint whose
+  component schema differs from the definition the gateway publishes under
+  that name is still served: `Accepted` stays `True` with reason
+  `SchemaNameConflict`, naming the schemas and the endpoint each is published
+  from, and the endpoint's `Ready` stays `True` with that reason and message.
+  The winning definition is the first in namespace/name order of the
+  gateway's endpoints, not the oldest endpoint (routes are oldest-wins). It
+  applies only to gateways that publish documentation (EE, not in CE
+  fallback, with `spec.openapi.enabled`), and only when the endpoint would
+  otherwise be plain `Accepted`. No event is emitted for it, except the usual
+  recovery event when the endpoint was not accepted before.
+- **Ownership by controller reference.** Generated endpoints are found by
+  their controller owner reference, not their labels:
+  - A generated endpoint whose labels were removed is repaired, or deleted
+    if no longer desired.
+  - A `KrakenDEndpoint` carrying both `gateway.krakend.io/autoconfig=<name>`
+    and `gateway.krakend.io/auto-generated=true` with no controller is
+    adopted by that AutoConfig, then converged or deleted. Anyone who can
+    label an uncontrolled endpoint in the namespace can therefore have the
+    AutoConfig converge or delete it, as with a ReplicaSet and its pods.
+  - Uncontrolled endpoints are not watched, so adoption happens on the
+    AutoConfig's next reconcile, not when the orphan appears.
+  - An uncontrolled endpoint whose **name** a generated endpoint wants is
+    taken over whatever its labels. That predates this change, so do not
+    read unlabelled endpoints as safe.
+  - An endpoint controlled by another object is never modified or deleted.
+  - Managed labels are merged into existing labels.
+  - Label changes on a generated endpoint trigger an immediate reconcile.
+- **Readiness.** New `status.readyEndpoints` and condition `EndpointsReady`
+  (reasons `AllEndpointsReady`, `EndpointsNotReady`, naming up to five
+  endpoints) aggregate the generated endpoints' `Ready` conditions: a new
+  or just-changed endpoint reads `Pending` until the endpoint controller
+  reports it. The AutoConfig's `Ready` condition requires it, so an
+  AutoConfig with a conflicted or detached endpoint reads `Ready=False`. A
+  generated endpoint's readiness change triggers an immediate reconcile.
+- **Pre-validation.** Before writing, the controller checks the endpoints it
+  is about to write against the gateway's config with the same checker the
+  webhooks use. It writes only the operations that pass, and the stale
+  endpoints it will delete count as gone. The check runs up to 5 rounds,
+  holding the endpoints it attributes findings to; a hold at the round limit
+  reads "not checked: N other operations failed the gateway config check
+  first". Findings that name no written endpoint proceed when the gateway
+  already fails without the change; otherwise every write in that round is
+  held. When the checker is unavailable, nothing is written or deleted, and
+  `Synced=False` has reason `ValidatorUnavailable` (retried with backoff);
+  it may still adopt label-matched orphans, which changes owner references
+  only. A write the API server rejects after a passing check keeps its stale
+  endpoints. With several workers, two AutoConfigs can check the same gateway
+  at once, each without seeing the other's pending writes. The gateway
+  controller still never publishes a failing render: it keeps its applied
+  config with `ConfigValid=False`.
+- **Concurrency, slots and deadline.** Up to 4 AutoConfigs reconcile at once.
+  Configure this with `--autoconfig-max-concurrent-reconciles`, or chart
+  value `autoconfig.maxConcurrentReconciles`. The AutoConfig checks hold at
+  most 1 of the pod's 3 config-check slots, and the gateway controller at
+  most 1, so admission always finds one free. Fetching a spec and resolving
+  its external `$ref`s is bounded by 2 minutes overall, and each request by
+  30 seconds. A stuck upstream fails with `SpecFetchFailed` (`context
+  deadline exceeded`) instead of holding a worker.
+
+**Before upgrading — ownership audit.** List the generated endpoints whose
+handling changes: label-matched orphans, which will be adopted, and
+controlled endpoints whose labels no longer name their controller:
+
+```bash
+kubectl get krakendendpoints -A -o json | jq -r '
+  .items[]
+  | ([.metadata.ownerReferences[]? | select(.controller == true)] | first) as $ctl
+  | select(
+      ($ctl == null
+        and .metadata.labels["gateway.krakend.io/auto-generated"] == "true"
+        and .metadata.labels["gateway.krakend.io/autoconfig"] != null)
+      or ($ctl.kind == "KrakenDAutoConfig"
+        and .metadata.labels["gateway.krakend.io/autoconfig"] != $ctl.name))
+  | "\(.metadata.namespace)/\(.metadata.name)\towner=\($ctl.name // "none")\tlabel=\(.metadata.labels["gateway.krakend.io/autoconfig"] // "none")"'
+```
+
+Empty output means the ownership change affects nothing. For each line,
+the AutoConfig named by `label` (orphans) or `owner` (controlled) will
+converge the endpoint, and delete it if its operation is no longer
+generated. Remove the labels from any endpoint you want to keep outside
+that AutoConfig.
+
+**Before upgrading — overrides that will now fail closed.** List each
+AutoConfig's override operationIds and backend indexes:
+
+```bash
+kubectl get krakendautoconfigs -A -o json | jq -r '.items[] | .metadata as $m | .spec.overrides[]? | "\($m.namespace)/\($m.name)\t\(.operationId)\t\([.backends[]?.index] | map(tostring) | join(","))"'
+```
+
+Then check each spec for duplicated operationIds. For a YAML spec, convert
+it with `yq -o=json` first:
+
+```bash
+curl -s <spec-url> | jq -r '[.paths[][]? | objects | .operationId? // empty] | group_by(.) | map(select(length > 1) | .[0])[]'
+```
+
+An override on a listed operationId, or a backend index at or above the
+operation's backend count (1 with the default CUE definitions), fails the
+sync after the upgrade.
+
+**Before upgrading — same-shape routes.** The admission audit in the
+Pre-Upgrade Checklist prints a line `KrakenDAutoConfig ns/name: endpoints
+share a route and the operator holds all but the one the gateway serves,
+unless one of them is a rename in flight` for each AutoConfig that controls
+two endpoints with one method and route shape. After the upgrade the
+AutoConfig holds all but one of them as described above.
+
+**AutoConfigs that recover.** An AutoConfig whose spec declares HEAD, OPTIONS
+or TRACE operations was stuck in `EndpointReconcileFailed`, and one whose
+whole evaluation failed (parameter `$ref`s, or override `extraConfig` on
+operationIds with `_`, `-` or a leading digit) in `CUEEvaluationFailed`. It now
+syncs and lists those operations in `status.skipped`. On that first sync it
+also deletes the stale endpoints it kept while it was failing. List the
+AutoConfigs stuck that way:
+
+```bash
+kubectl get krakendautoconfigs -A -o json | jq -r '.items[] | select(any(.status.conditions[]?; .type == "Synced" and (.reason == "EndpointReconcileFailed" or .reason == "CUEEvaluationFailed"))) | "\(.metadata.namespace)/\(.metadata.name)\t\([.status.conditions[] | select(.type == "Synced") | .message][0])"'
+```
+
+A message naming a HEAD, OPTIONS or TRACE enum violation, a parameter `$ref`
+or a CUE syntax error on an override means that AutoConfig recovers on
+upgrade. Check which stale endpoints it holds before upgrading.
+
+**Rollout.** Each generated `KrakenDEndpoint` whose schema map shrinks to the
+closure its documentation references is updated once, on its AutoConfig's
+first sync that reaches the writes, and each Enterprise gateway whose
+published documentation changes re-renders after each write and rolls,
+possibly more than once in quick succession. Those writes also run the new check, about one `krakend check`
+lint per AutoConfig through the 1 slot the AutoConfigs share, so expect a
+short burst after the rollout. Every AutoConfig's status gains `skipped`,
+`warnings`, `failedOperations` and `readyEndpoints` and the `EndpointsReady`
+condition, and its `Ready` now also requires `EndpointsReady`, so health
+checks keyed on `Ready` can read `False` for a conflicted or detached
+endpoint. `SpecWarning` events appear, and the evaluator-warning events stop.
+
+The CRDs gain the new optional status fields; apply them before the operator,
+as for any CRD change (see *CRD Upgrades*).
 
 ---
 
