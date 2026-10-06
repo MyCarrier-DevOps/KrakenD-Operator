@@ -222,6 +222,8 @@ expect_equal "the chart's metrics auth ClusterRole matches config/rbac" \
 expect_equal "the chart's metrics-reader ClusterRole matches config/rbac" \
 	"$(rules_block <operator/config/rbac/metrics_reader_role.yaml | tr -d '"')" \
 	"$(manifest ClusterRole t-krakend-operator-metrics-reader | rules_block)"
+expect_contains "the ServiceMonitor selects only the metrics Service" "app.kubernetes.io/component: metrics" \
+	--set metrics.serviceMonitor.enabled=true --show-only templates/servicemonitor.yaml
 
 if [ "$failures" -gt 0 ]; then
 	printf '%d chart render test(s) failed\n' "$failures"
