@@ -61,6 +61,25 @@ func foreignCheckOutput(stage renderer.RejectionStage, f configcheck.Finding, ns
 	return f.Endpoint.Name == "" || f.Endpoint.Namespace != ns
 }
 
+// onceCheck runs check at most once and returns its first result to every
+// call, so the ratchet and the denial it builds share one isolated check.
+func onceCheck(
+	check func(context.Context) (configcheck.Verdict, error),
+) func(context.Context) (configcheck.Verdict, error) {
+	var (
+		ran     bool
+		verdict configcheck.Verdict
+		err     error
+	)
+	return func(ctx context.Context) (configcheck.Verdict, error) {
+		if !ran {
+			verdict, err = check(ctx)
+			ran = true
+		}
+		return verdict, err
+	}
+}
+
 // ratchetRender rejects a change only when it turns a passing config into a
 // failing one. It runs after, then before; when before fails too the failure
 // is a warning (preexisting words it from before's verdict) unless newFailure

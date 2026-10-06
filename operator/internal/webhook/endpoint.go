@@ -210,7 +210,7 @@ func (v *EndpointValidator) checkRender(
 		baseline = []v1alpha1.KrakenDEndpoint{*stored}
 	}
 	candidate := []v1alpha1.KrakenDEndpoint{*ep}
-	isolated := bindCheck(v.Checker.CheckIsolated, gw, candidate)
+	isolated := onceCheck(bindCheck(v.Checker.CheckIsolated, gw, candidate))
 	return ratchetRender(ctx, renderChecks{
 		after:      bindCheck(v.Checker.CheckGateway, gw, candidate),
 		before:     bindCheck(v.Checker.CheckGateway, gw, nil),
