@@ -657,6 +657,35 @@ func TestEndpointAdmission_DenialQuotingOtherFindingsIsBounded(t *testing.T) {
 	}
 }
 
+// When findings are withheld, the requester's own errors from the isolated
+// check are quoted after them, cut to the warning limit on a rune boundary.
+func TestEndpointAdmission_IsolatedSummaryInADenialIsBounded(t *testing.T) {
+	after := configcheck.Verdict{Stage: renderer.StageCheck,
+		Findings: []configcheck.Finding{{Index: -1, Message: "a gateway root line"}}}
+	own := configcheck.Verdict{Stage: renderer.StageCheck, Findings: []configcheck.Finding{{
+		Endpoint: types.NamespacedName{Namespace: "default", Name: "new"}, Index: -1,
+		Message: strings.Repeat("é", 2000)}}}
+	chk := &scriptedChecker{verdicts: []configcheck.Verdict{after, {OK: true}, own}}
+	v := &EndpointValidator{Client: fakeClient(testGateway()), Checker: chk}
+
+	resp := review(t, v, "alice", testEndpoint("new", "/a"), nil)
+
+	if resp.Result.Details == nil || len(resp.Result.Details.Causes) != 1 {
+		t.Fatalf("response = %+v, want one cause", resp.Result)
+	}
+	msg := resp.Result.Details.Causes[0].Message
+	if !strings.Contains(msg, "this change alone fails it: ") || strings.Contains(msg, "a gateway root line") {
+		t.Fatalf("cause = %q, want the isolated summary and not the withheld line", msg)
+	}
+	if len(msg) > 300+warningLimit || !utf8.ValidString(msg) {
+		t.Errorf("cause is %d bytes (valid UTF-8: %v), want at most %d bytes of findings, cut on a rune boundary",
+			len(msg), utf8.ValidString(msg), warningLimit)
+	}
+	if got := strings.Join(chk.calls, ","); got != "gateway+candidate,gateway,isolated" {
+		t.Errorf("checks = %s, want the isolated check run once", got)
+	}
+}
+
 func TestEndpointAdmission_NoRenderCheckWithoutAGatewayOrAChange(t *testing.T) {
 	old := testEndpoint("e", "/a")
 	labeled := old.DeepCopy()
