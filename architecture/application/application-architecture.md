@@ -97,8 +97,8 @@ val := renderer.NewValidator(renderer.ValidatorOptions{
 })
 
 // wireValidation builds one checker for the whole pod: its slots bound
-// concurrent krakend executions across the gateway controller and the
-// admission webhooks, so they must share it.
+// concurrent krakend executions across the gateway controller, the AutoConfig
+// controller and the admission webhooks, so they must share it.
 func wireValidation(
     mgr ctrl.Manager, r renderer.Renderer, v renderer.Validator, operatorUsername string,
 ) validation {
@@ -115,6 +115,21 @@ func wireValidation(
             APIReader:     mgr.GetAPIReader(),
             LicenseParser: licenseutil.NewX509LicenseParser(),
         },
+        AutoConfig: &controller.KrakenDAutoConfigReconciler{
+            Client:       mgr.GetClient(),
+            Scheme:       mgr.GetScheme(),
+            Recorder:     mgr.GetEventRecorderFor("krakendautoconfig-controller"),
+            Fetcher:      autoconfig.NewFetcher(mgr.GetClient()),
+            CUEEvaluator: autoconfig.NewCUEEvaluator(),
+            Filter:       autoconfig.NewFilter(),
+            Generator:    autoconfig.NewGenerator(),
+            Checker:      checker,
+            // The AutoConfig prechecks hold at most autoConfigCheckSlots (1) of the
+            // checker's slots: configCheckSlots - 1 for admission - 1 for the gateway
+            // controller, however many workers there are.
+            CheckSlots: make(chan struct{}, autoConfigCheckSlots),
+            Clock:      clock.RealClock{},
+        },
         Validators: webhooksetup.NewValidators(mgr.GetClient(), mgr.GetAPIReader(), checker, operatorUsername),
     }
 }
@@ -124,6 +139,7 @@ func wireValidation(
 
 ```go
 wired := wireValidation(mgr, rend, val, operatorUsername)
+wired.AutoConfig.MaxConcurrentReconciles = autoConfigMaxConcurrentReconciles // --autoconfig-max-concurrent-reconciles, default 4
 
 wired.Gateway.SetupWithManager(mgr)
 
@@ -140,16 +156,7 @@ wired.Gateway.SetupWithManager(mgr)
     APIReader: mgr.GetAPIReader(), // releases the protection finalizer only after an uncached list
 }).SetupWithManager(mgr)
 
-(&controller.KrakenDAutoConfigReconciler{
-    Client:       mgr.GetClient(),
-    Scheme:       mgr.GetScheme(),
-    Recorder:     mgr.GetEventRecorderFor("krakendautoconfig-controller"),
-    Fetcher:      autoconfig.NewFetcher(mgr.GetClient()),
-    CUEEvaluator: autoconfig.NewCUEEvaluator(),
-    Filter:       autoconfig.NewFilter(),
-    Generator:    autoconfig.NewGenerator(),
-    Clock:        clock.RealClock{},
-}).SetupWithManager(mgr)
+wired.AutoConfig.SetupWithManager(mgr)
 
 // Registers the four validators only when --enable-webhooks is true (the default).
 registerWebhooks(mgr, enableWebhooks, func(m ctrl.Manager) error {
@@ -548,6 +555,7 @@ const (
     ConditionProgressing              = "Progressing"
     ConditionSpecAvailable            = "SpecAvailable"
     ConditionSynced                   = "Synced"
+    ConditionEndpointsReady           = "EndpointsReady" // AutoConfig: every generated endpoint is Ready
     ConditionReady                    = "Ready"
     ConditionPluginsResolved          = "PluginsResolved"
     ConditionCEFallbackApplied        = "CEFallbackApplied"
@@ -586,11 +594,13 @@ const (
     ReasonDuplicateOperationId          = "DuplicateOperationId"
     ReasonRolloutFailed                 = "RolloutFailed"
     ReasonCUEEvaluationFailed           = "CUEEvaluationFailed"
-    ReasonCUEEvaluationWarning          = "CUEEvaluationWarning"
+    ReasonSpecWarning                   = "SpecWarning"
     ReasonAdditionalEndpointOverride    = "AdditionalEndpointOverride"
     ReasonAdditionalEndpointScopeFailed = "AdditionalEndpointScopeFailed"
     ReasonUnmatchedOverride             = "UnmatchedOverride"
+    ReasonAmbiguousOverride             = "AmbiguousOverride"
     ReasonEndpointReconcileFailed       = "EndpointReconcileFailed"
+    ReasonOperationsFailed              = "OperationsFailed"
     ReasonPostRestartJobAlreadyRun      = "PostRestartJobAlreadyRun"
     ReasonPostRestartJobCreated         = "PostRestartJobCreated"
     ReasonPostRestartJobAdopted         = "PostRestartJobAdopted"
@@ -604,7 +614,11 @@ const (
 
 `ReasonLicenseSecretSyncFailed`, `ReasonOperationFiltered`, and
 `ReasonMissingOperationId` are declared in `shared_types.go` but never
-emitted by any controller, so they are left out of this list.
+emitted by any controller, so they are left out of this list. The reasons
+`EndpointRejected`, `UnsupportedMethod`, `AllEndpointsReady`,
+`EndpointsNotReady` and `SchemaNameConflict` appear in statuses and
+conditions only, and are not events. `SchemaNameConflict` emits none of its
+own, except the usual recovery event when the endpoint was not accepted before.
 
 ### KrakenDEndpoint Type
 
@@ -716,12 +730,29 @@ type CUESpec struct {
     Environment string `json:"environment,omitempty"`
 }
 
+// OperationStatus reports one OpenAPI operation the AutoConfig skipped or could
+// not converge. Message is cut to 256 bytes.
+type OperationStatus struct {
+    Method      string `json:"method"`
+    Path        string `json:"path"`
+    OperationID string `json:"operationId,omitempty"`
+    Endpoint    string `json:"endpoint,omitempty"` // the generated KrakenDEndpoint, when the problem concerns it
+    Reason      string `json:"reason"`
+    Message     string `json:"message,omitempty"`
+}
+
 type KrakenDAutoConfigStatus struct {
     Phase              AutoConfigPhase    `json:"phase,omitempty"`
+    ObservedGeneration int64              `json:"observedGeneration,omitempty"`
     LastSyncTime       *metav1.Time       `json:"lastSyncTime,omitempty"`
     SpecChecksum       string             `json:"specChecksum,omitempty"`
     GeneratedEndpoints int                `json:"generatedEndpoints,omitempty"`
-    SkippedOperations  int                `json:"skippedOperations,omitempty"`
+    ReadyEndpoints     int                `json:"readyEndpoints,omitempty"`   // generated endpoints whose Ready is True for their generation
+    SkippedOperations  int                `json:"skippedOperations,omitempty"` // counts every Skipped entry, listed or not
+    // Skipped, FailedOperations and Warnings list at most 20 entries.
+    Skipped            []OperationStatus  `json:"skipped,omitempty"`          // UnsupportedMethod, DuplicateOperationId
+    FailedOperations   []OperationStatus  `json:"failedOperations,omitempty"` // CUEEvaluationFailed, ConfigValidationFailed, EndpointRejected
+    Warnings           []string           `json:"warnings,omitempty"`         // spec problems that do not stop a sync
     Conditions         []metav1.Condition `json:"conditions,omitempty"`
 }
 ```
@@ -854,6 +885,7 @@ graph TB
         HC[HTTP Client]
         LP[License Parser]
         AR[API Reader]
+        CK[Checker]
     end
 
     subgraph "AutoConfig Subsystem"
@@ -870,6 +902,8 @@ graph TB
     GC --> REC
     GC --> LP
     GC --> AR
+    GC --> CK
+    ACC --> CK
     ACC --> FE
     ACC --> CUE_E
     ACC --> FI
@@ -950,7 +984,7 @@ flowchart TD
 
 ### Key Implementation Details
 
-**Admission** rejects new conflicts before they reach the renderer: `validateRouteUniqueness` rejects each added or changed entry whose `(route shape, method)` another entry on the gateway already has, in another KrakenDEndpoint or in the same one (`Duplicate value`, naming the owner and the clashing path). Against other KrakenDEndpoints it considers only routes new to the stored object; same-shape entries inside the KrakenDEndpoint itself are always checked when an entry changes. Endpoints with the same controller are exempt: while a KrakenDAutoConfig renames an operation, its new endpoint and the old one can share a route, and the admission cache can lag the deletion of the old one. Same-shape entries of one AutoConfig are thus caught by no admission rule, and the renderer reports the conflict. The denial names the claimant the renderer serves (oldest, then name, then entry position). A stored conflict with another KrakenDEndpoint is re-reported only when an edit adds a route the object did not have, or when the object moves to another gateway. The detection below stays as the fallback for concurrent applies and for conflicts stored before the rule. It also diverges in one case: it drops an endpoint with a missing `policyRef` before grouping, while admission still counts that endpoint as a claimant, so admission can reject a route the controller would serve until the policy exists.
+**Admission** rejects new conflicts before they reach the renderer: `validateRouteUniqueness` rejects each added or changed entry whose `(route shape, method)` another entry on the gateway already has, in another KrakenDEndpoint or in the same one (`Duplicate value`, naming the owner and the clashing path). Against other KrakenDEndpoints it considers only routes new to the stored object; same-shape entries inside the KrakenDEndpoint itself are always checked when an entry changes. Endpoints with the same controller are exempt: while a KrakenDAutoConfig renames an operation, its new endpoint and the old one can share a route, and the admission cache can lag the deletion of the old one. Same-shape entries of one AutoConfig are thus caught by no admission rule: the AutoConfig controller holds all but the one the renderer serves (`routeCollisions`), and the renderer's conflict report stays as the fallback for pairs stored before. The denial names the claimant the renderer serves (oldest, then name, then entry position). A stored conflict with another KrakenDEndpoint is re-reported only when an edit adds a route the object did not have, or when the object moves to another gateway. The detection below stays as the fallback for concurrent applies and for conflicts stored before the rule. It also diverges in one case: it drops an endpoint with a missing `policyRef` before grouping, while admission still counts that endpoint as a claimant, so admission can reject a route the controller would serve until the policy exists.
 
 **Endpoint conflict detection** — The renderer (§10) iterates all `KrakenDEndpoint` resources for the gateway and flattens their `spec.endpoints[]` arrays. It groups entries by `(route shape, method)` across all CRs, where the route shape (`ConflictKey`) erases parameter names, so `/users/{id}` and `/users/{name}` collide. When multiple entries share a route shape and method, all but the oldest `KrakenDEndpoint`'s entry (by `creationTimestamp`) are excluded from the rendered config; between two entries of one `KrakenDEndpoint` the earlier spec entry wins. The renderer returns `ConflictedEndpoints` and `InvalidEndpoints` in `RenderOutput`. The gateway controller then writes its `Accepted` condition on each endpoint of the render, but only for a render that is the gateway's applied configuration (validated now, or unchanged since) and only when the verdict changes: `True` (`Accepted`) for an included endpoint, `True` (`PartiallyAccepted`) for one that lost some but not all of its routes, `False` (`EndpointConflict`) for one that lost all of them, and no `Accepted` condition for one excluded by a missing policy. `RenderOutput.EntryConflicts` names each lost entry and the `KrakenDEndpoint` that serves it (the endpoint itself when an earlier entry of its own won), and the gateway controller writes them to `status.conflicts` in the same optimistic-lock patch as `Accepted`. Only the conflicting entries are dropped; the losing endpoint's other entries are still rendered. A `Warning` event with reason `EndpointConflict` is emitted when an endpoint becomes fully conflicted, a `Warning` event with reason `PartiallyAccepted` when it becomes partly conflicted (from `Accepted`, from no condition, or from `EndpointConflict`), and a `Normal` `Accepted` event when it is served whole again.
 
@@ -1301,7 +1335,17 @@ type KrakenDAutoConfigReconciler struct {
     CUEEvaluator autoconfig.CUEEvaluator
     Filter       autoconfig.Filter
     Generator    autoconfig.Generator
+    Checker      AutoConfigChecker  // the pod's one configcheck.Checker, over the endpoints a sync is about to write
+    CheckSlots   chan struct{}      // bounds this reconciler's concurrent checks (1 of the checker's 3 slots); nil is unbounded
     Clock        clock.Clock
+    MaxConcurrentReconciles int     // --autoconfig-max-concurrent-reconciles, default 4; below 1 means 1
+    FetchTimeout time.Duration      // spec fetch plus external $ref resolution; zero means defaultFetchTimeout (2 minutes)
+}
+
+// AutoConfigChecker is declared by the AutoConfig controller, which consumes it.
+type AutoConfigChecker interface {
+    CheckGateway(ctx context.Context, gw *v1alpha1.KrakenDGateway,
+        replace []v1alpha1.KrakenDEndpoint) (configcheck.Verdict, error)
 }
 ```
 
@@ -1313,22 +1357,23 @@ flowchart TD
     B -->|No| Z[Return]
     B -->|Yes| BD{deletionTimestamp set?}
     BD -->|Yes| Z
-    BD -->|No| D[Fetch OpenAPI spec<br/>via Fetcher]
+    BD -->|No| D[Fetch OpenAPI spec via Fetcher<br/>2 minute deadline over the fetch<br/>and the external $ref resolution]
     D --> E{Fetch OK?}
     E -->|No| F[Set SpecAvailable=False<br/>Fail sync:<br/>SpecFetchFailed]
-    E -->|Yes| G[Resolve external $refs, strip servers<br/>Set SpecAvailable=True]
+    E -->|Yes| G[Resolve external $refs, strip servers,<br/>dereference parameter $refs<br/>Set SpecAvailable=True<br/>collect spec notes]
     G --> H[Combined checksum: spec checksum +<br/>CUE definitions resourceVersion + generation<br/>inputsChanged = differs from status.specChecksum]
     H --> J1[Load default CUE definitions<br/>from krakend-cue-definitions ConfigMap<br/>or the embedded defaults]
     J1 --> J2{Custom CUE ConfigMap<br/>referenced?}
     J2 -->|Yes| J3[Load custom CUE definitions]
-    J2 -->|No| J4[CUE Evaluator: unify<br/>spec + defaults + CR overrides]
+    J2 -->|No| J4[CUE Evaluator: unify<br/>spec + defaults + CR overrides<br/>an entry that fails CUE is Failed<br/>HEAD, OPTIONS, TRACE entries are Skipped]
     J3 --> J4
-    J4 --> J5{CUE evaluation OK?}
+    J4 --> J5{Whole-evaluation<br/>CUE OK?}
     J5 -->|No| J6[Fail sync:<br/>CUEEvaluationFailed]
-    J5 -->|Yes| J7[Emit CUEEvaluationWarning per<br/>evaluator warning if inputsChanged]
-    J7 --> J8{Every override<br/>matched an operationId?}
+    J5 -->|Yes| J8{Every override matched an<br/>operationId and backend index?}
     J8 -->|No| J9[Fail sync:<br/>UnmatchedOverride]
-    J8 -->|Yes| M[Apply include/exclude filters]
+    J8 -->|Yes| J10{Override operationId declared<br/>by more than one operation?}
+    J10 -->|Yes| J11[Fail sync:<br/>AmbiguousOverride]
+    J10 -->|No| M[Apply include/exclude filters<br/>to entries, Skipped and Failed]
     M --> M2{additionalEndpoints set?}
     M2 -->|No| O
     M2 -->|Yes| M3[BuildAdditionalEntries<br/>synthesize AdditionalEndpoint specs]
@@ -1337,29 +1382,53 @@ flowchart TD
     MB -->|indeterminate| ME[Fail sync:<br/>AdditionalEndpointScopeFailed]
     MB -->|resolved| MS[ScopeAdditionalEntries<br/>prepend base to public paths]
     MS --> M5[MergeAdditional<br/>additional wins on endpoint:method collision]
-    M5 --> M6[Emit AdditionalEndpointOverride Warning<br/>per replaced entry if inputsChanged]
-    M6 --> O[Generate KrakenDEndpoints<br/>via Generator]
+    M5 --> M6[Buffer AdditionalEndpointOverride Warning<br/>per replaced entry if inputsChanged]
+    M6 --> O[Generate KrakenDEndpoints<br/>via Generator<br/>per-endpoint schema closure<br/>duplicates skipped]
     O --> O1{Generate OK?}
     O1 -->|No| O2[Fail sync:<br/>CUEEvaluationFailed]
-    O1 -->|Yes| O3[Emit DuplicateOperationId per<br/>duplicate if inputsChanged]
-    O3 --> P[Diff against the endpoints labeled<br/>gateway.krakend.io/autoconfig=name]
-    P --> Q[Delete undesired endpoints<br/>CreateOrUpdate desired: labels, spec<br/>by JSON value, controller reference]
-    Q --> Q1{Every write OK?}
-    Q1 -->|No| Q2[Fail sync:<br/>EndpointReconcileFailed]
-    Q1 -->|Yes| R[Set Synced=True, specChecksum,<br/>endpoint counts; Ready and phase=Synced<br/>are derived when status is written]
+    O1 -->|Yes| O3[Buffer SpecWarning and DuplicateOperationId<br/>events if inputsChanged]
+    O3 --> K[List the endpoints the AutoConfig controls<br/>by controller UID, adopt label-matched<br/>orphans it does not write]
+    K --> K1[Hold desired endpoints that lose their route<br/>to another desired endpoint:<br/>ConfigValidationFailed]
+    K1 --> K2[Precheck: gateway config check over the writes<br/>up to 5 rounds, stale endpoints modelled as gone<br/>CE gateway: Enterprise-only namespaces are held<br/>as EndpointRejected without a write]
+    K2 --> K3{Check could run?}
+    K3 -->|No| K4[Fail sync:<br/>ValidatorUnavailable]
+    K3 -->|Yes| Q[Write every endpoint that is not held<br/>CreateOrUpdate: merged labels, spec by JSON value,<br/>controller reference<br/>an invalid rejection is held as EndpointRejected]
+    Q --> Q0[Delete stale endpoints only when no<br/>operation is held and no write failed]
+    Q0 --> Q1{Transient write, adopt<br/>or delete error?}
+    Q1 -->|Yes| Q2[Fail sync:<br/>EndpointReconcileFailed]
+    Q1 -->|No| Q3{Only Conflict or<br/>AlreadyExists?}
+    Q3 -->|Yes| Q4[Requeue quietly after 1s]
+    Q3 -->|No| R[Set Synced, specChecksum, endpoint counts,<br/>skipped, failedOperations, warnings,<br/>readyEndpoints and EndpointsReady<br/>Synced=False OperationsFailed while any operation is held<br/>Ready and phase are derived when status is written]
     R --> R1{inputsChanged or<br/>any endpoint write?}
     R1 -->|Yes| R2[Set lastSyncTime]
     R1 -->|No| R3
     R2 --> R3{Status differs from the<br/>status read at the start?}
     R3 -->|Yes| R4[Write status]
     R3 -->|No| R5
-    R4 --> R5[Emit EndpointsGenerated if inputsChanged<br/>or any endpoint write]
+    R4 --> R5[Emit buffered warnings, OperationsFailed if held<br/>and status written, and EndpointsGenerated if inputsChanged<br/>or any endpoint write]
     R5 --> R6[RequeueAfter periodic.interval<br/>or 5m for OnChange]
 ```
 
-Every reconcile runs the whole pipeline — there is no checksum gate — so owned endpoints converge to the desired state whatever woke the controller. **Fail sync** is `handleSyncedFailure`: the `Synced` condition `False` with that reason (so `Ready` is `False` and the derived phase is `Error`), and a Warning event with the same reason; `OnChange` returns the error so controller-runtime retries with exponential backoff, `Periodic` requeues at `spec.periodic.interval`. A fetch failure (`SpecFetchFailed`), including an external `$ref` document that can't be fetched or decoded, fails the sync the same way and also sets `SpecAvailable=False`. If the failure's status write conflicts, the reconcile still returns the failure's result (not the quiet one-second requeue, which would reset the backoff) and records no event. A failed sync leaves `status.specChecksum` at the last successful sync's value, and drift repair stops at the failure until a sync succeeds: every other failure stops the pipeline before any endpoint is touched, and an endpoint write failure stops convergence at that endpoint. `phase` never passes through `Fetching` or `Rendering`. It is derived from the `Synced` condition each time status is written, and every status write sets `Synced`, so the phase is empty before the first write and is then only `Synced` or `Error`; `Ready` is absent until the first sync, because every status write sets `Synced`.
+Every reconcile runs the whole pipeline — there is no checksum gate — so owned endpoints converge to the desired state whatever woke the controller. **Fail sync** is `handleSyncedFailure`: the `Synced` condition `False` with that reason (so `Ready` is `False` and the derived phase is `Error`), and a Warning event with the same reason; `OnChange` returns the error so controller-runtime retries with exponential backoff, `Periodic` requeues at `spec.periodic.interval`. A fetch failure (`SpecFetchFailed`), including an external `$ref` document that can't be fetched or decoded, fails the sync the same way and also sets `SpecAvailable=False`. If the failure's status write conflicts, the reconcile still returns the failure's result (not the quiet one-second requeue, which would reset the backoff) and records no event. A failed sync (any failure but `OperationsFailed`, which reaches its endpoint writes and records its inputs like a successful sync) leaves `status.specChecksum` at the last successful sync's value: a spec fetch, whole-evaluation CUE, unmatched or ambiguous override, or base-path failure stops the pipeline before any endpoint is touched, and a transient write failure or an unavailable check (`ValidatorUnavailable`) keeps every stale endpoint. `phase` never passes through `Fetching` or `Rendering`. It is derived from the `Synced` condition each time status is written, and every status write sets `Synced`, so the phase is empty before the first write and is then only `Synced` or `Error`; `Ready` is absent until the first sync, because every status write sets `Synced`.
 
 A terminating AutoConfig (`deletionTimestamp` set) is not reconciled. Under foreground deletion it lingers while garbage collection deletes its endpoints, each delete re-enqueues it through the `Owns` watch, and converging would recreate the endpoint just collected.
+
+### Per-Operation Holds, Write Order and Ownership
+
+**Files:** `internal/controller/autoconfig_endpoints.go`, `autoconfig_status.go`, `schema_conflicts.go`
+
+`Reconcile` splits an operation's fate from the sync's. An operation that fails CUE evaluation (`CUEOutput.Failed`, reason `CUEEvaluationFailed`), fails the gateway config check or loses its route to another desired endpoint (`routeCollisions`, `precheck`, reason `ConfigValidationFailed`), or whose endpoint the API server rejects as invalid or another object controls (`endpointOutcome.record`, reason `EndpointRejected`), is held: `reconcileEndpoints` does not write it, so its endpoint stays as it was, and it deletes no stale endpoint while `held || outcome.failed()`. `recordSync` then sets `Synced` `False` with reason `OperationsFailed` (`syncedCondition`, naming at most 5 operations) and lists each operation in `status.failedOperations` (`rejectedStatuses` for the endpoint holds, `operationStatuses` for the CUE ones). The reconcile returns no error, so a held operation is not retried with backoff. Operations `spec.filter` excludes are dropped first (`inScope`), so they are neither listed nor hold anything.
+
+`reconcileEndpoints` orders its work for make-before-break:
+
+1. `claimEndpoints` lists the endpoints the AutoConfig controls through the `fieldindex.EndpointController` index (namespace-scoped), and adopts each label-matched orphan it does not itself want to write (both managed labels, no controller, not terminating) as a ReplicaSet adopts pods. An endpoint controlled by another object is never touched.
+2. `planEndpoints` splits the desired endpoints into writes (missing, label-short or spec-different by JSON value) and stale endpoints.
+3. `routeCollisions` groups the desired endpoints by method and `renderer.ConflictKey` of the path. The survivor of a group is the one the renderer serves (the existing controlled copy with the oldest `creationTimestamp`, then the lowest name; a new endpoint sorts last). Every other member is held, written or not. The holds enter `precheck` as holds, so the stale endpoints stay in the check.
+4. `precheck` runs `Checker.CheckGateway` over the writes, within `CheckSlots`, in at most `maxPrecheckRounds` (5) rounds. Each round attributes findings to the candidates by `Finding.Endpoint`, holds those, and re-checks the rest. When the sync will also delete the stale endpoints, the round sees them as empty copies (`checkSet`). A finding that names no candidate is judged against a baseline check without the writes: when the gateway fails there too, the candidates are written, and otherwise all of them are held. A gateway that does not exist is not checked.
+5. `writeEndpoint` writes every candidate that passed with `CreateOrUpdate`: it merges the managed labels into the live ones and makes the AutoConfig its controller. `endpointOutcome.record` classifies each failure: `Conflict` and `AlreadyExists` as raced (a quiet requeue), `IsInvalid` and `AlreadyOwnedError` as rejected (held), anything else as transient (`EndpointReconcileFailed`, with backoff, naming five failures and counting the rest).
+6. `deleteEndpoint` removes each stale endpoint, preconditioned on its UID, only when nothing is held and no write failed.
+
+`summarizeReadiness` then judges the endpoints the AutoConfig controls afterwards, a written one from the object its write returned, and `endpointsReadyCondition` sets `EndpointsReady`; `autoConfigReady` derives `Ready` from `SpecAvailable`, `Synced` and `EndpointsReady`.
 
 **Additional endpoints pipeline note:** `spec.additionalEndpoints` entries bypass `filter` and `overrides` (they carry no `operationId`), but they DO receive `urlTransform`. After applying the URL transform, additional endpoints are scoped under the application's base path — `spec.additionalEndpointsBasePath` if set, else `urlTransform.addPathPrefix` (already applied, so no further scoping), else the common parent directory derived from the generated endpoints (`DeriveBasePath`). If none of these resolves to a non-empty base, the sync fails with `AdditionalEndpointScopeFailed`. Scoping prepends the base to the public path only; backend `urlPattern` is unchanged. `ApplyURLTransformToEntries` is called before scoping and `MergeAdditional` so that collision keys (`endpoint:method`) align with the already-transformed spec-derived entries. On collision, the additional entry wins and, when the inputs changed since the last successful sync, the controller emits an `AdditionalEndpointOverride` Warning event.
 
@@ -1367,7 +1436,7 @@ A terminating AutoConfig (`deletionTimestamp` set) is not reconciled. Under fore
 
 A successful reconcile returns `ctrl.Result{RequeueAfter: interval}`: `spec.periodic.interval` for `trigger: Periodic`, otherwise `defaultResyncInterval` (5 minutes), so `OnChange` AutoConfigs are also re-polled without a watch event and upstream spec changes are picked up. A resync runs the same full pipeline as a watch-triggered reconcile.
 
-`status.specChecksum` records which inputs the last successful sync used; it does not gate evaluation. A sync whose combined checksum differs from it, or that wrote an endpoint, sets `lastSyncTime` and emits `EndpointsGenerated`; the `CUEEvaluationWarning`, `DuplicateOperationId`, and `AdditionalEndpointOverride` warnings are emitted only when the checksum differs. Churn is avoided by comparison instead: endpoint labels are compared with `maps.Equal` and specs by decoded JSON value (`endpointSpecEqual`, so the API server's re-encoding of raw `extraConfig` doesn't count as a change), `CreateOrUpdate` writes nothing for an endpoint already in the desired state, and status is written only when it differs semantically from the status read at the start of the reconcile. A steady-state reconcile writes nothing and emits no event.
+`status.specChecksum` records which inputs the last sync that reached its endpoint writes used (a sync that holds operations included); it does not gate evaluation. A sync whose combined checksum differs from it, or that wrote an endpoint, sets `lastSyncTime` and emits `EndpointsGenerated`; the `SpecWarning`, `DuplicateOperationId`, and `AdditionalEndpointOverride` warnings are emitted only when the checksum differs (at most 20 events per sync). Churn is avoided by comparison instead: endpoint labels are compared with `maps.Equal` and specs by decoded JSON value (`endpointSpecEqual`, so the API server's re-encoding of raw `extraConfig` doesn't count as a change), `CreateOrUpdate` writes nothing for an endpoint already in the desired state, and status is written only when it differs semantically from the status read at the start of the reconcile. A steady-state reconcile writes nothing and emits no event.
 
 ### SetupWithManager
 
@@ -1379,17 +1448,21 @@ func (r *KrakenDAutoConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
             predicate.LabelChangedPredicate{},
             predicate.AnnotationChangedPredicate{},
         ))).
-        Owns(&v1alpha1.KrakenDEndpoint{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+        Owns(&v1alpha1.KrakenDEndpoint{}, builder.WithPredicates(ownedEndpointPredicate())).
         Watches(
             &corev1.ConfigMap{},
             handler.EnqueueRequestsFromMapFunc(r.configMapToAutoConfigs),
         ).
+        WithOptions(crcontroller.Options{
+            RateLimiter:             newAutoConfigRateLimiter(), // per-item backoff capped at defaultResyncInterval
+            MaxConcurrentReconciles: r.MaxConcurrentReconciles,
+        }).
         Named("krakendautoconfig").
         Complete(r)
 }
 ```
 
-The `For` predicate ignores status-only updates, so the reconciler's own status writes never re-enqueue the AutoConfig. Generation covers spec edits, labels are included because application deploys relabel the AutoConfig, and annotations let `kubectl annotate` force an immediate reconcile. The `Owns(&v1alpha1.KrakenDEndpoint{})` watch re-enqueues the owning AutoConfig when a generated endpoint is deleted or its spec changes (a generation bump) — endpoint status updates alone are ignored — so a hand-edited or deleted endpoint is restored. The `Watches(&corev1.ConfigMap{})` watch maps a changed ConfigMap to every AutoConfig in its namespace that depends on it: the default `krakend-cue-definitions` ConfigMap, a custom CUE ConfigMap referenced by `cue.definitionsConfigMapRef`, or an OpenAPI spec ConfigMap referenced by `openapi.configMapRef`.
+The `For` predicate ignores status-only updates, so the reconciler's own status writes never re-enqueue the AutoConfig. Generation covers spec edits, labels are included because application deploys relabel the AutoConfig, and annotations let `kubectl annotate` force an immediate reconcile. The `Owns(&v1alpha1.KrakenDEndpoint{})` watch (`ownedEndpointPredicate`) re-enqueues the owning AutoConfig when a generated endpoint is deleted, its spec changes (a generation bump), its labels change, or its readiness changes (`endpointReadinessKey`: the observed generation and the `Ready` status and reason, not the message) — other status updates are ignored — so a hand-edited, relabelled or deleted endpoint is restored and `EndpointsReady` stays current. `Owns` matches the controller owner reference, so endpoints the AutoConfig does not control are not watched: a label-matched orphan is adopted on the next reconcile. The `Watches(&corev1.ConfigMap{})` watch maps a changed ConfigMap to every AutoConfig in its namespace that depends on it: the default `krakend-cue-definitions` ConfigMap, a custom CUE ConfigMap referenced by `cue.definitionsConfigMapRef`, or an OpenAPI spec ConfigMap referenced by `openapi.configMapRef`.
 
 ---
 
@@ -2028,9 +2101,9 @@ func (v *AutoConfigValidator) ValidateUpdate(
 }
 ```
 
-`validateFields` checks the shape of `documentation/openapi.audience` in each `extraConfig` (`spec.overrides[]`, `spec.defaults.endpoint` and `spec.additionalEndpoints[]`) and runs `validateOverrideIDs`, which rejects two overrides for one operation: an `operationId` listed twice (`Duplicate value`) or two that generate one endpoint name (`autoconfig.OperationEndpointName`: the AutoConfig name and `SanitizeName(operationId)`, cut to 253 characters), of which the generator keeps only the first. `policyRefWarnings` looks up every `policyRef` in `spec.defaults`, `spec.overrides[]` and `spec.additionalEndpoints[].backends[]` and warns, in field order, about each that names no KrakenDBackendPolicy (at most `maxPolicyWarnings`, then a count). It is a warning because a release may create the policy after the AutoConfig; the generated endpoints are rejected by the KrakenDEndpoint webhook until it exists. A failed lookup is a `500`.
+`validateFields` checks the shape of `documentation/openapi.audience` in each `extraConfig` (`spec.overrides[]`, `spec.defaults.endpoint` and `spec.additionalEndpoints[]`) and runs `validateOverrideIDs`, which rejects two overrides for one operation: an `operationId` listed twice (`Duplicate value`) or two that generate one endpoint name (`autoconfig.OperationEndpointName`: the AutoConfig name and `SanitizeName(operationId)`, cut to 253 characters), of which the generator keeps only the first. `policyRefWarnings` looks up every `policyRef` in `spec.defaults`, `spec.overrides[]` and `spec.additionalEndpoints[].backends[]` and warns, in field order, about each that names no KrakenDBackendPolicy (at most `maxPolicyWarnings`, then a count). It is a warning because a release may create the policy after the AutoConfig; the generated endpoints are rejected by the KrakenDEndpoint webhook until it exists, and the AutoConfig holds each as `EndpointRejected`. A failed lookup is a `500`.
 
-Admission does not compare route shapes between the endpoints one AutoConfig generates: they share a controller (the same UID in the same namespace), which the KrakenDEndpoint webhook exempts from the route check. Same-shape paths (`/h/{a}` and `/h/{b}`) from one AutoConfig are therefore not rejected anywhere in admission; the renderer reports the newer one as `EndpointConflict`.
+Admission does not compare route shapes between the endpoints one AutoConfig generates: they share a controller (the same UID in the same namespace), which the KrakenDEndpoint webhook exempts from the route check. Same-shape paths (`/h/{a}` and `/h/{b}`) from one AutoConfig are therefore not rejected anywhere in admission. The AutoConfig controller holds every desired endpoint but the one the renderer serves as `ConfigValidationFailed` (`routeCollisions`), and the renderer reports the newer one as `EndpointConflict` only for a pair stored before.
 
 ### Webhook Registration
 
@@ -2089,6 +2162,7 @@ type FetchSource struct {
     ConfigMapRef      *v1alpha1.ConfigMapKeyRef
     Auth              *v1alpha1.AuthConfig
     AllowClusterLocal bool
+    Namespace         string
 }
 
 type FetchResult struct {
@@ -2136,6 +2210,8 @@ func normalizeIP(ip net.IP) net.IP {
 
 **ConfigMap source:** When `configMapRef` is set, the fetcher reads the spec directly from the Kubernetes API via the injected `client.Client`, bypassing HTTP entirely.
 
+**Deadlines and size:** each HTTP request is bounded at 30 seconds (`fetchTimeout`) and a body at 10 MiB (`maxBodyBytes`). The controller's `fetchSpec` additionally bounds the spec fetch and the whole external `$ref` resolution (`ResolveExternalRefs`) with one context deadline, `FetchTimeout`, 2 minutes by default (`defaultFetchTimeout`), so a stuck host fails that AutoConfig with `SpecFetchFailed` instead of holding a worker. `fetchSpec` then strips upstream `servers` and dereferences parameter `$ref`s (`DereferenceParameters`, `parameters.go`); a result past `maxBodyBytes` fails the sync (`ErrParameterRefsTooLarge`). The `$ref`s the resolver cannot honour, the external `$ref`s of a ConfigMap-sourced spec and the parameter `$ref`s that do not resolve come back as notes for `status.warnings`.
+
 ### CUE Evaluator
 
 **File:** `internal/autoconfig/cue_evaluator.go`
@@ -2157,13 +2233,27 @@ type CUEInput struct {
     URLTransform   *v1alpha1.URLTransformSpec // host mapping + path prefix config
     Environment    string                     // CUE _env field value (injected via FillPath)
     ServiceName    string                     // label for the spec data in CUE namespace
+    DefaultHost    string                     // scheme, host and port of openapi.url
 }
 
 type CUEOutput struct {
     Entries      []v1alpha1.EndpointEntry
     OperationIDs map[string]string   // keyed by "path:method" → operationId; used by Generator for naming and dedup
     Tags         map[string][]string // keyed by "path:method", used for tag-based filtering before final output
-    Warnings     []string            // non-fatal CUE evaluation warnings
+    // UnmatchedOverrides: an override operationId no operation has, or "<operationId> backends[<i>]" for an index out of range.
+    UnmatchedOverrides []string
+    // AmbiguousOverrides: override operationIds that more than one operation declares; such an override is not applied.
+    AmbiguousOverrides []string
+    // Skipped: operations whose method KrakenDEndpoint does not accept (UnsupportedMethod), after URL transform and overrides.
+    Skipped []OperationIssue
+    // Failed: operations whose entries failed CUE validation or did not decode (CUEEvaluationFailed).
+    Failed []OperationIssue
+}
+
+// OperationIssue is an operation the pipeline generates no endpoint for (operations.go).
+type OperationIssue struct {
+    Operation        // Method, Path, OperationID, Tags
+    Reason, Message string
 }
 ```
 
@@ -2176,7 +2266,10 @@ func (e *cueEvaluator) loadDefinitions(
     cueCtx *cue.Context, defs map[string]string,
 ) cue.Value {
     var unified cue.Value
-    for filename, content := range defs {
+    // Sorted by filename: CUE words a conflict by operand order, so map order
+    // would change an error's text from one evaluation to the next.
+    for _, filename := range slices.Sorted(maps.Keys(defs)) {
+        content := defs[filename]
         val := cueCtx.CompileString(content, cue.Filename(filename))
         if !unified.Exists() {
             unified = val
@@ -2232,13 +2325,21 @@ func (e *cueEvaluator) Evaluate(ctx context.Context, input CUEInput) (*CUEOutput
     )
     unified = e.applyOverrides(cueCtx, unified, input)
 
-    // 6. Evaluate to concrete endpoint entries
-    if err := unified.Validate(cue.Concrete(true)); err != nil {
-        return nil, fmt.Errorf("CUE evaluation failed: %w", err)
+    // 6. Evaluate to concrete endpoint entries. An error inside one endpoint
+    // entry fails only that operation (CUEOutput.Failed); any other error fails
+    // the whole evaluation.
+    rootErrors := entryErrors(unified.Validate(cue.Concrete(true)))
+    endpointsValue := unified.LookupPath(cue.ParsePath("endpoint"))
+    output, err := exportEndpointEntries(endpointsValue, rootErrors)
+    if err != nil {
+        return nil, err
     }
 
-    endpointsValue := unified.LookupPath(cue.ParsePath("endpoint"))
-    return e.exportEndpointEntries(endpointsValue)
+    // 7. CR defaults, the URL transform, per-operation overrides (an override
+    // on a duplicated operationId is ambiguous and not applied), then the
+    // partition by method: HEAD, OPTIONS and TRACE entries move to Skipped.
+    // ...
+    return output, nil
 }
 ```
 
@@ -2248,7 +2349,9 @@ func (e *cueEvaluator) Evaluate(ctx context.Context, input CUEInput) (*CUEOutput
 - Environment injection via `FillPath("_env", ...)` populates a hidden CUE field that CUE definitions reference for per-environment host resolution (matching KrakenD-SwaggerParse's `#internalHost.dev`/`#internalHost.preprod`/`#internalHost.prod` pattern). This approach is used instead of CUE `@tag()` because the operator evaluates CUE via `cue/cuecontext` (not `cue/load`), and `@tag()` injection is only supported by `cue/load`
 - The `urlTransform.hostMapping` from the CR is converted to CUE `#internalHost` constraints; when omitted, the host is auto-inferred from `openapi.url` base address
 - CR `overrides` (keyed by `operationId`) are converted to per-path CUE values and unified with the evaluation context, producing the same effect as KrakenD-SwaggerParse's `swagger_overrides.cue` per-path overrides
-- CUE constraint violations (type mismatches, missing required fields, conflicts) produce structured errors that map to `KrakenDAutoConfig` status conditions
+- CUE constraint violations (type mismatches, missing required fields, conflicts) inside one endpoint entry fail that operation only: it lands in `CUEOutput.Failed` and the AutoConfig holds it (`status.failedOperations`, reason `CUEEvaluationFailed`). Violations outside the endpoint entries fail the whole evaluation (`CUEEvaluationFailed` on `Synced`)
+- The methods the KrakenDEndpoint API accepts are `GET`, `POST`, `PUT`, `PATCH` and `DELETE` (`supportedMethods`). The default definitions also emit `HEAD`, `OPTIONS` and `TRACE` entries; `skipUnsupportedMethods` runs on the final entries, after the overrides, and reports them in `Skipped`, so an override that gives such an operation a supported method keeps it generated
+- Each override's `extraConfig` reaches custom definitions as `_overrides` under `SanitizeName(operationId)` (lowercased, characters outside `a-z0-9-` replaced by `-`, leading and trailing `-` trimmed), with the key quoted (`_overrides: "get-a": …`), so ids with `-`, `_` or a leading digit evaluate
 
 ### Filter
 
@@ -2256,7 +2359,12 @@ func (e *cueEvaluator) Evaluate(ctx context.Context, input CUEInput) (*CUEOutput
 
 ```go
 type Filter interface {
-    Apply(entries []v1alpha1.EndpointEntry, tags map[string][]string, spec v1alpha1.FilterSpec) []v1alpha1.EndpointEntry
+    Apply(
+        entries []v1alpha1.EndpointEntry,
+        tags map[string][]string,
+        operationIDs map[string]string,
+        spec v1alpha1.FilterSpec,
+    ) []v1alpha1.EndpointEntry
 }
 ```
 
@@ -2278,46 +2386,53 @@ type Generator interface {
 }
 
 type GenerateInput struct {
-    AutoConfig     *v1alpha1.KrakenDAutoConfig
-    Entries        []v1alpha1.EndpointEntry // from CUE evaluator, post-filter
-    OperationIDs   map[string]string        // from CUEOutput.OperationIDs; keyed by "path:method"
-    GatewayRefName string                   // populates gatewayRef on each generated KrakenDEndpoint
+    AutoConfig       *v1alpha1.KrakenDAutoConfig
+    Entries          []v1alpha1.EndpointEntry // from CUE evaluator, post-filter
+    OperationIDs     map[string]string        // from CUEOutput.OperationIDs; keyed by "path:method"
+    GatewayRef       v1alpha1.GatewayRef      // populates gatewayRef on each generated KrakenDEndpoint
+    ComponentSchemas map[string]runtime.RawExtension // ExtractComponentSchemas of the fetched spec
 }
 
 type GenerateOutput struct {
-    Endpoints         []*v1alpha1.KrakenDEndpoint
-    SkippedOperations int
-    DuplicateIDs      []string
+    Endpoints []*v1alpha1.KrakenDEndpoint
+    Skipped   []OperationIssue // duplicates of an earlier entry, reason DuplicateOperationId
+    Warnings  []string         // schema references ComponentSchemas cannot satisfy, once each, sorted
 }
 ```
 
-The generator wraps each `EndpointEntry` (produced by CUE evaluation and filtering) in a `KrakenDEndpoint` CR with metadata, labels, and owner references. It groups entries by a configurable strategy (default: one CR per entry) and handles naming and duplicate detection; the controller diffs the output against the endpoints it already owns.
+The generator wraps each `EndpointEntry` (produced by CUE evaluation and filtering) in a `KrakenDEndpoint` CR with metadata and labels, one CR per entry, and handles naming and duplicate detection. The controller diffs the output against the endpoints it controls and sets the controller owner reference when it writes them.
 
-**Duplicate operationId detection:**
+**Duplicate detection:**
 
-The generator tracks seen operationIds during the naming step. When the same operationId appears on multiple entries, the first occurrence is used for naming (and included in the output), subsequent duplicates are skipped, their operationId is added to `GenerateOutput.DuplicateIDs`, and `SkippedOperations` is incremented. The autoconfig controller records the count in `status.skippedOperations` and, when the inputs changed since the last successful sync, emits a `DuplicateOperationId` Warning event for each duplicate.
+The generator skips an entry that repeats an earlier one's path and method, operationId (`duplicateOf`), or generated endpoint name. The first occurrence is generated, and each skipped entry is returned in `GenerateOutput.Skipped` with reason `DuplicateOperationId` and a message that names the claimant (`same path and method as GET /x`). The controller adds them to `status.skipped`, counts them in `status.skippedOperations`, and, when the inputs changed since the last successful sync, emits a `DuplicateOperationId` Warning event for each. Two operations that a `urlTransform` collapses onto one method and path are skipped the same way: one is published, the other reported. An override on a duplicated operationId never gets that far, because `applyFieldOverrides` fails the sync closed (`AmbiguousOverride`).
 
 ```go
 func (g *endpointGenerator) Generate(ctx context.Context, input GenerateInput) (*GenerateOutput, error) {
-    seen := map[string]struct{}{} // keyed by operationId
-    // ... for each entry:
-    //   - derive operationId from CUE output metadata
-    //   - if operationId in seen, skip + record duplicate
-    //   - else: add to seen, generate KrakenDEndpoint CR
+    // for each entry:
+    //   - derive operationId from CUEOutput.OperationIDs and the name from it
+    //   - duplicateOf(path:method, operationId, name) != "" → record in Skipped and continue
+    //   - SchemaClosure(entry, ComponentSchemas) → the endpoint's componentSchemas
+    //     and any unresolved reference, reported once in Warnings
+    //   - build the KrakenDEndpoint with the two labels
 }
 ```
+
+**Schema closure:**
+
+`SchemaClosure` (`schemas.go`) returns only the component schemas an entry's `documentation/openapi` extra config references, directly (a `ref` field, an `example_schema` `$ref`) or through the schemas they reference, and the references `components` cannot satisfy: a name `components/schemas` does not define, or a local `#/…` pointer outside it. Example payloads are data and are not searched (`examplePayload`, `jsonwalk.go`). Each generated endpoint therefore carries its closure instead of the whole map, and an unresolved reference becomes a spec warning. The renderer aggregates the endpoints' schemas into the gateway's `documentation/openapi.components_schemas`, the first definition of a name in namespace/name order winning, and reports a different definition of the same name as `Accepted` reason `SchemaNameConflict` on the endpoint that carries it.
 
 **Naming convention:**
 
 ```go
 func endpointName(autoconfigName, operationID, method, path string) string {
     if operationID != "" {
-        return fmt.Sprintf("%s-%s", autoconfigName, sanitizeName(operationID))
+        return OperationEndpointName(autoconfigName, operationID) // AutoConfig name + SanitizeName(operationID), cut to 253
     }
-    return fmt.Sprintf("%s-%s-%s", autoconfigName, strings.ToLower(method), sanitizePath(path))
+    return limitName(fmt.Sprintf("%s-%s-%s", autoconfigName, strings.ToLower(method), sanitizePath(path)))
 }
 
-func sanitizeName(s string) string {
+// SanitizeName also keys the _overrides CUE struct.
+func SanitizeName(s string) string {
     s = strings.ToLower(s)
     s = strings.Map(func(r rune) rune {
         if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
@@ -2330,10 +2445,15 @@ func sanitizeName(s string) string {
 
 func sanitizePath(path string) string {
     path = strings.TrimPrefix(path, "/")
+    path = strings.ToLower(path)
     path = strings.ReplaceAll(path, "/", "-")
-    path = strings.ReplaceAll(path, "{", "")
-    path = strings.ReplaceAll(path, "}", "")
-    return path
+    path = strings.Map(func(r rune) rune { // drops every character outside [a-z0-9-], braces included
+        if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+            return r
+        }
+        return -1
+    }, path)
+    return strings.Trim(path, "-")
 }
 ```
 
@@ -2538,6 +2658,7 @@ All external dependencies are abstracted behind interfaces, injected via struct 
 | `CommandExecutor` | `internal/renderer` | Execute shell commands (krakend check) | `renderer.KrakenDExecutor` |
 | `Fetcher` | `internal/autoconfig` | Fetch OpenAPI specs (HTTP + ConfigMap) | `autoconfig.httpFetcher` |
 | `CUEEvaluator` | `internal/autoconfig` | Evaluate CUE definitions + OpenAPI spec → `EndpointEntry` objects | `autoconfig.cueEvaluator` |
+| `AutoConfigChecker` | `internal/controller` | The gateway config check over the endpoints a sync is about to write (`CheckGateway`), the AutoConfig controller's own port | `configcheck.Checker` (the pod's one instance, behind `CheckSlots`) |
 | `Filter` | `internal/autoconfig` | Include/exclude operations | `autoconfig.operationFilter` |
 | `Generator` | `internal/autoconfig` | Endpoint entries → `KrakenDEndpoint` CRDs with metadata | `autoconfig.endpointGenerator` |
 | `LicenseParser` | `internal/util/license` | Parse X.509 license certificates | `license.x509LicenseParser` |
@@ -2584,8 +2705,10 @@ client := fake.NewClientBuilder().
 | Missing prerequisites | Set status condition, return `nil` with `RequeueAfter` | License Secret not yet synced |
 | Programming errors | Panic (should never reach production) | Nil pointer on required field that passed webhook validation |
 | Validator unavailable (binary missing, timeout, killed, temp-file I/O, validation copy not prepared) | Set `ConfigValid=Unknown` with reason `ValidatorUnavailable`, emit one Warning event, leave `Ready` Unknown and the serving phase and applied config unchanged, return `error` — controller-runtime retries with backoff | `krakend check -t -n -c` hits its deadline or `/usr/local/bin/krakend` is missing |
-| AutoConfig spec/CUE/unmatched-override/scope failures | `Periodic`: `RequeueAfter: spec.periodic.interval`; `OnChange`: return `error` for backoff | `SpecFetchFailed`, `CUEEvaluationFailed`, `UnmatchedOverride`, `AdditionalEndpointScopeFailed` — includes a failed external `$ref` fetch/decode, which fails closed as `SpecFetchFailed` instead of falling back to the raw spec |
-| AutoConfig endpoint write failures | Return `error` for backoff regardless of trigger (a `Periodic` AutoConfig does not wait for `spec.periodic.interval`) | `EndpointReconcileFailed` |
+| AutoConfig spec/CUE/unmatched-override/ambiguous-override/scope failures | `Periodic`: `RequeueAfter: spec.periodic.interval`; `OnChange`: return `error` for backoff | `SpecFetchFailed`, `CUEEvaluationFailed`, `UnmatchedOverride`, `AmbiguousOverride`, `AdditionalEndpointScopeFailed` — includes a failed external `$ref` fetch/decode or a fetch past the 2-minute deadline, which fail closed as `SpecFetchFailed` instead of falling back to the raw spec |
+| AutoConfig held operations (CUE evaluation of one entry, the gateway config check, an API rejection of the endpoint) | Set `Synced=False` with reason `OperationsFailed`, list them in `status.failedOperations`, emit one Warning event on a change, return `nil` and requeue at the resync interval: deterministic, so no backoff | `CUEEvaluationFailed`, `ConfigValidationFailed`, `EndpointRejected` |
+| AutoConfig transient endpoint write, adoption or delete failures | Return `error` for backoff regardless of trigger (a `Periodic` AutoConfig does not wait for `spec.periodic.interval`); every endpoint is attempted and the failures are aggregated | `EndpointReconcileFailed` |
+| AutoConfig config check unavailable | Write and delete nothing, set `Synced=False` with reason `ValidatorUnavailable`, return `error` for backoff regardless of trigger | `krakend check` cannot run, or the reconcile was cancelled while it waited for a check slot |
 | AutoConfig status/endpoint write conflicts | Quiet `RequeueAfter: 1s` — no error log, no event, no status change | Stale-cache `Conflict` on a successful sync's status write, or `Conflict`/`AlreadyExists` on an endpoint write; a failed sync whose status write conflicts keeps its failure row's handling, with no event |
 
 ### Error Wrapping Convention
@@ -2696,7 +2819,7 @@ var (
 | `krakend_operator_dragonfly_ready` | `KrakenDGatewayReconciler.detectDragonflyState` | After checking Dragonfly CR status |
 | `krakend_operator_gateway_info` | `recordGatewayMetrics` | At the end of each reconcile; the gateway's earlier series is deleted first, so one series is left after a version or edition change |
 | `krakend_operator_gateway_config_valid` | `recordGatewayMetrics` | At the end of each reconcile: 1 while `ConfigValid` is `True`, 0 while it is `False` or `Unknown` or absent |
-| `krakend_operator_autoconfig_synced` | `KrakenDAutoConfigReconciler` | 1 after a successful sync, 0 while it fails; removed when the AutoConfig is deleted |
+| `krakend_operator_autoconfig_synced` | `KrakenDAutoConfigReconciler` | 1 after a successful sync, 0 while it fails or any operation is held; removed when the AutoConfig is deleted |
 
 Every per-gateway series is removed when the gateway is deleted or terminating (`deleteGatewayMetrics`).
 
