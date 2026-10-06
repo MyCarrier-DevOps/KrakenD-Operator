@@ -207,6 +207,12 @@ const (
 	// backoff.
 	ReasonValidatorUnavailable = "ValidatorUnavailable"
 
+	// ReasonConfigPublishFailed backs ConfigValid=Unknown: the newest rendered
+	// config passed validation but its ConfigMap could not be published, so it
+	// is not the applied config. The previously applied config keeps serving
+	// and the reconcile is retried with backoff.
+	ReasonConfigPublishFailed = "ConfigPublishFailed"
+
 	// ReasonPolicyDeletionBlocked is the event reason for a KrakenDBackendPolicy
 	// that is being deleted while a KrakenDEndpoint still references it.
 	ReasonPolicyDeletionBlocked = "DeletionBlocked"

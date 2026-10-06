@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
@@ -243,5 +244,47 @@ func TestGatewayReconcile_AVerdictOnThisGenerationDoesNotHoldObservedGenerationB
 				t.Errorf("observedGeneration = %d, want 2: the verdict is on this generation", got)
 			}
 		})
+	}
+}
+
+// publishedConfigMap is the gateway's own published ConfigMap for the config
+// whose rendered JSON is jsonData and whose checksum is checksum.
+func publishedConfigMap(t *testing.T, gw *v1alpha1.KrakenDGateway, jsonData, checksum string) *corev1.ConfigMap {
+	t.Helper()
+	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: resources.ConfigMapName(gw, checksum), Namespace: gw.Namespace}}
+	resources.BuildConfigMap(cm, gw, []byte(jsonData), checksum)
+	if err := controllerutil.SetControllerReference(gw, cm, testScheme()); err != nil {
+		t.Fatal(err)
+	}
+	return cm
+}
+
+func TestGatewayReconcile_AValidRenderThatCannotBePublishedIsNotReported(t *testing.T) {
+	gw := newerSpecGateway()
+	c := fakeClientBuilder().
+		WithObjects(gw, settledDeployment(gw, "A"), publishedConfigMap(t, gw, `{"applied":true}`, "A"), foreignConfigMap(gw, "B")).
+		WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderOutput("B"), &mockValidator{}) // B passes validation
+
+	err := reconcileGateway(t, r, gw)
+	if err == nil {
+		t.Fatal("a foreign ConfigMap at the new config's name must fail the pass so it is retried")
+	}
+
+	got := getGateway(t, c, gw)
+	if got.Status.ConfigChecksum != "A" {
+		t.Fatalf("configChecksum = %q, want the old applied config A", got.Status.ConfigChecksum)
+	}
+	cv := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionConfigValid)
+	if cv == nil || cv.Status != metav1.ConditionUnknown || cv.Reason != v1alpha1.ReasonConfigPublishFailed {
+		t.Errorf("ConfigValid = %+v, want Unknown/%s: the newest config passed validation but is not published",
+			cv, v1alpha1.ReasonConfigPublishFailed)
+	}
+	if cv != nil && !strings.Contains(cv.Message, "not controlled by gateway") {
+		t.Errorf("ConfigValid message = %q, want it to carry the publish failure", cv.Message)
+	}
+	ready := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionReady)
+	if ready == nil || ready.Status != metav1.ConditionUnknown || ready.Reason != v1alpha1.ReasonConfigPublishFailed {
+		t.Errorf("Ready = %+v, want Unknown/%s", ready, v1alpha1.ReasonConfigPublishFailed)
 	}
 }
