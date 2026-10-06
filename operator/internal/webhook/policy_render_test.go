@@ -75,6 +75,33 @@ func TestPolicyAdmission_AlreadyFailingWarningWithholdsForeignFindings(t *testin
 	}
 }
 
+// The denial that a policy breaks a gateway is read by a writer who may not
+// read the gateway or another namespace's endpoints: it quotes the policy's own
+// namespace and counts the rest.
+func TestPolicyAdmission_BreaksGatewayDenialWithholdsForeignFindings(t *testing.T) {
+	after := configcheck.Verdict{Stage: renderer.StageCheck, Findings: []configcheck.Finding{
+		{Index: -1, Message: "host http://u:SECRET-PASS@h1 not valid"},
+		{Endpoint: types.NamespacedName{Namespace: "tenant-a", Name: "orders"}, Index: 0, Message: "SECRET-EVERY"},
+		failing("uses-p", 0, "same namespace").Findings[0],
+	}}
+	chk := &scriptedChecker{verdicts: []configcheck.Verdict{{OK: true}, after, {OK: true}}}
+	v := &PolicyValidator{Client: fakeClient(referencing()...), Checker: chk}
+
+	resp := review(t, v, "alice", testPolicy(`{"qos/circuit-breaker":{}}`), testPolicy(`{}`))
+
+	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("response = %+v, want 422", resp.Result)
+	}
+	msg := resp.Result.Details.Causes[0].Message
+	if !strings.Contains(msg, "default/uses-p spec.endpoints[0]: same namespace") ||
+		!strings.Contains(msg, "2 findings about the gateway root or endpoints in other namespaces are not shown") {
+		t.Errorf("cause = %q, want the same-namespace finding quoted and two others counted", msg)
+	}
+	if strings.Contains(msg, "SECRET") {
+		t.Errorf("cause = %q quotes a value the requester may not read", msg)
+	}
+}
+
 func TestPolicyAdmission_Render(t *testing.T) {
 	bad := failing("policy-lint", 0,
 		"- at '/endpoints/0/backend/0/extra_config': additional properties 'qos/circuit-breakr' not allowed")
