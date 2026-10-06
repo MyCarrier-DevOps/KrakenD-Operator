@@ -533,7 +533,6 @@ func (v *markerValidator) Lint(ctx context.Context, jsonData []byte, edition v1a
 	return v.Validate(ctx, jsonData, edition)
 }
 
-// waitForNodes polls the Kubernetes API until all nodes report Ready.
 // The identity the suite's manager impersonates.
 const (
 	operatorNamespace      = "krakend-operator-system"
@@ -605,6 +604,7 @@ func waitForServiceAccountAccess(ctx context.Context, c client.Client, user stri
 	return nil
 }
 
+// waitForNodes polls the Kubernetes API until all nodes report Ready.
 func waitForNodes(ctx context.Context, cfg *rest.Config) error {
 	clientset, err := k8sclient.NewForConfig(cfg)
 	if err != nil {
