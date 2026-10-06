@@ -23,15 +23,16 @@ spec:
       name: krakendautoconfigs.gateway.krakend.io
       version: v1alpha1
     - description: |-
-        KrakenDBackendPolicy defines circuit-breaker and rate-limit settings that
-        KrakenDEndpoints reference by name for their backends.
+        KrakenDBackendPolicy defines circuit-breaker, rate-limit and cache settings,
+        plus raw backend extra_config, that KrakenDEndpoint backends reference
+        through policyRef.
       displayName: KrakenD Backend Policy
       kind: KrakenDBackendPolicy
       name: krakendbackendpolicies.gateway.krakend.io
       version: v1alpha1
     - description: |-
-        KrakenDEndpoint declares one KrakenD endpoint (path, method and backends) for a
-        gateway. The operator renders it into the gateway's krakend.json.
+        KrakenDEndpoint declares one or more KrakenD endpoints (path, method and
+        backends) for a gateway. The operator renders it into the gateway's krakend.json.
       displayName: KrakenD Endpoint
       kind: KrakenDEndpoint
       name: krakendendpoints.gateway.krakend.io
