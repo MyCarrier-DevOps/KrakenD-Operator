@@ -204,8 +204,8 @@ type KrakenDEndpointStatus struct {
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
-// KrakenDEndpoint declares one KrakenD endpoint (path, method and backends) for a
-// gateway. The operator renders it into the gateway's krakend.json.
+// KrakenDEndpoint declares one or more KrakenD endpoints (path, method and
+// backends) for a gateway. The operator renders it into the gateway's krakend.json.
 // +operator-sdk:csv:customresourcedefinitions:displayName="KrakenD Endpoint"
 type KrakenDEndpoint struct {
 	metav1.TypeMeta   `json:",inline"`
