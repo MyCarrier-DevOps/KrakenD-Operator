@@ -104,6 +104,9 @@ func runTests(m *testing.M) int {
 		testcontainers.WithCmdArgs(
 			"--disable=traefik",
 			"--disable=metrics-server",
+			// Clusters that enable this plugin (OpenShift by default) require
+			// delete on any object whose ownerReferences an update changes.
+			"--kube-apiserver-arg=enable-admission-plugins=OwnerReferencesPermissionEnforcement",
 			"--kubelet-arg=feature-gates=KubeletInUserNamespace=true",
 			"--kubelet-arg=cgroups-per-qos=false",
 			"--kubelet-arg=enforce-node-allocatable=",
