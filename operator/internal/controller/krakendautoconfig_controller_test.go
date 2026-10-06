@@ -2647,6 +2647,25 @@ func TestConfigMapToAutoConfigs_SpecConfigMap(t *testing.T) {
 	}
 }
 
+func TestAutoConfigMapper_ConfigMapToAutoConfigs_MetadataOnly(t *testing.T) {
+	ac := testAutoConfig()
+	c := fakeClientBuilder().WithObjects(ac).Build()
+	f, ce, fi, g := defaultMocks()
+	r := newACReconciler(c, f, ce, fi, g)
+
+	// With a metadata-only watch the mapper receives PartialObjectMetadata,
+	// never a typed ConfigMap.
+	cm := &metav1.PartialObjectMetadata{
+		ObjectMeta: metav1.ObjectMeta{Name: defaultCUEDefinitionsConfigMap, Namespace: "default"},
+	}
+	cm.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("ConfigMap"))
+
+	requests := r.configMapToAutoConfigs(context.Background(), cm)
+	if len(requests) != 1 || requests[0].Name != ac.Name {
+		t.Errorf("requests = %v, want one for %s", requests, ac.Name)
+	}
+}
+
 func TestAutoConfigReconcile_FallbackToEmbeddedCUE(t *testing.T) {
 	ac := testAutoConfig()
 	ac.Status.Phase = v1alpha1.AutoConfigPhasePending
