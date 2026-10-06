@@ -205,6 +205,7 @@ type KrakenDEndpointStatus struct {
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // KrakenDEndpoint is the Schema for the krakendendpoints API.
+// +operator-sdk:csv:customresourcedefinitions:displayName="KrakenD Endpoint"
 type KrakenDEndpoint struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
