@@ -163,7 +163,9 @@ func (r *KrakenDGatewayReconciler) publishConfig(
 // verifyExistingConfigMap looks up the config ConfigMap for checksum through
 // reader, as metadata only: the rendered config can be large and its content
 // is addressed by the name. found says whether one exists; when it does, err
-// says whether it is this gateway's copy of that config.
+// says whether it is this gateway's copy of that config. The checksum
+// annotation it reads is stripped from the cached metadata, so this read must
+// stay live (client.CacheOptions.DisableFor).
 func (r *KrakenDGatewayReconciler) verifyExistingConfigMap(
 	ctx context.Context, reader client.Reader, gw *v1alpha1.KrakenDGateway, checksum string,
 ) (found bool, err error) {
