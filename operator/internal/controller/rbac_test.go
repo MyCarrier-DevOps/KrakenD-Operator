@@ -72,6 +72,9 @@ func TestManagerRoleGrantsOnlyUsedVerbs(t *testing.T) {
 	}
 	got := map[string][]string{}
 	for _, rule := range role.Rules {
+		if len(rule.NonResourceURLs) > 0 || len(rule.ResourceNames) > 0 {
+			t.Errorf("rule %+v is scoped by URL or resource name; the table models neither", rule)
+		}
 		for _, group := range rule.APIGroups {
 			for _, resource := range rule.Resources {
 				key := group + "/" + resource
