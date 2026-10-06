@@ -24,6 +24,16 @@ import (
 	"testing"
 )
 
+// routeConflicts returns the lint lines of routeRefusals: one per refused
+// registration, ending with the stop notice when the check hit its cap.
+func routeConflicts(ctx context.Context, doc []byte) ([]string, error) {
+	refusals, capped, err := routeRefusals(ctx, doc)
+	if err != nil {
+		return nil, err
+	}
+	return refusalLines(refusals, capped), nil
+}
+
 func TestRouteConflicts_ParameterClashNamesBothEndpoints(t *testing.T) {
 	doc := `{"version":3,"endpoints":[
 		{"endpoint":"/users/{id}","method":"GET"},

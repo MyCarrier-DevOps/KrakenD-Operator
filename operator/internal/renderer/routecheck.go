@@ -124,20 +124,6 @@ const DefaultHealthPath = "/__health"
 // bounded however many routes a config refuses.
 const MaxRouteRefusals = 21
 
-// routeConflicts registers every route of doc in a gin engine, in the order
-// the KrakenD runtime does, and returns one lint-pointer line per refused
-// registration. It catches everything `krakend check -t` catches (-t
-// registers the same endpoints in the same gin version), plus the routes -t
-// never registers and the runtime panics on: the health endpoint and the
-// auto_options routes.
-func routeConflicts(ctx context.Context, doc []byte) ([]string, error) {
-	refusals, capped, err := routeRefusals(ctx, doc)
-	if err != nil {
-		return nil, err
-	}
-	return refusalLines(refusals, capped), nil
-}
-
 // refusalLines flattens refusals into lint lines, ending with the stop notice
 // when the check stopped at MaxRouteRefusals.
 func refusalLines(refusals []RouteRefusal, capped bool) []string {
