@@ -1481,7 +1481,7 @@ func (r *KrakenDAutoConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 ```
 
-The `For` predicate ignores status-only updates, so the reconciler's own status writes never re-enqueue the AutoConfig. Generation covers spec edits, labels are included because application deploys relabel the AutoConfig, and annotations let `kubectl annotate` force an immediate reconcile. The `Owns(&v1alpha1.KrakenDEndpoint{})` watch (`ownedEndpointPredicate`) re-enqueues the owning AutoConfig when a generated endpoint is deleted, its spec changes (a generation bump), its labels change, or its readiness changes (`endpointReadinessKey`: the observed generation and the `Ready` status and reason, not the message) — other status updates are ignored — so a hand-edited, relabelled or deleted endpoint is restored and `EndpointsReady` stays current (a failed sync refreshes it too, from the endpoints the AutoConfig controls then). `Owns` matches the controller owner reference, so endpoints the AutoConfig does not control are not watched: a label-matched orphan is adopted on the next reconcile. The `Watches(&corev1.ConfigMap{})` watch maps a changed ConfigMap to every AutoConfig in its namespace that depends on it: the default `krakend-cue-definitions` ConfigMap, a custom CUE ConfigMap referenced by `cue.definitionsConfigMapRef`, or an OpenAPI spec ConfigMap referenced by `openapi.configMapRef`. The watch is metadata-only, so `configMapToAutoConfigs` reads only the ConfigMap's name and namespace (`TestAutoConfigMapper_ConfigMapToAutoConfigs_MetadataOnly`). The AutoConfig controller reads its Secrets and ConfigMaps live: the CUE definitions ConfigMaps as metadata on every reconcile (their resource versions feed the sync checksum), then in full when a sync loads custom definitions, and the spec and auth sources in full when it fetches them.
+The `For` predicate ignores status-only updates, so the reconciler's own status writes never re-enqueue the AutoConfig. Generation covers spec edits, labels are included because application deploys relabel the AutoConfig, and annotations let `kubectl annotate` force an immediate reconcile. The `Owns(&v1alpha1.KrakenDEndpoint{})` watch (`ownedEndpointPredicate`) re-enqueues the owning AutoConfig when a generated endpoint is deleted, its spec changes (a generation bump), its labels change, or its readiness changes (`endpointReadinessKey`: the observed generation and the `Ready` status and reason, not the message) — other status updates are ignored — so a hand-edited, relabelled or deleted endpoint is restored and `EndpointsReady` stays current (a failed sync refreshes it too, from the endpoints the AutoConfig controls then). `Owns` matches the controller owner reference, so endpoints the AutoConfig does not control are not watched: a label-matched orphan is adopted on the next reconcile. The `Watches(&corev1.ConfigMap{})` watch maps a changed ConfigMap to every AutoConfig in its namespace that depends on it: the default `krakend-cue-definitions` ConfigMap, a custom CUE ConfigMap referenced by `cue.definitionsConfigMapRef`, or an OpenAPI spec ConfigMap referenced by `openapi.configMapRef`. The watch is metadata-only, so `configMapToAutoConfigs` reads only the ConfigMap's name and namespace (`TestAutoConfigMapper_ConfigMapToAutoConfigs_MetadataOnly`). The AutoConfig controller reads its Secrets and ConfigMaps live: each reconcile reads the namespace's `krakend-cue-definitions` ConfigMap once, in full (falling back to the embedded definitions when it is absent), and the `cue.definitionsConfigMapRef` ConfigMap the same way when it is set, and their resource versions feed the sync checksum; the spec and auth sources are read in full when it fetches them.
 
 ---
 
@@ -3003,7 +3003,18 @@ func runTests(m *testing.M) int {
     // authorizer allows it, then start a manager in the background as that
     // ServiceAccount, so a missing RBAC verb fails a test with Forbidden.
     mgrCfg, err := operatorRBACConfig(ctx, cfg, k8sClient)
-    mgr, err := ctrl.NewManager(mgrCfg, ctrl.Options{Scheme: scheme})
+    mgr, err := ctrl.NewManager(mgrCfg, ctrl.Options{
+        Scheme: scheme,
+        // As cmd/main.go: Secrets and ConfigMaps are read live and cached as
+        // metadata without annotations or managedFields.
+        Client: client.Options{
+            Cache: &client.CacheOptions{DisableFor: controller.UncachedObjects()},
+        },
+        Cache: cache.Options{ByObject: controller.CacheByObject()},
+        // NewCache wraps cache.New in typedCoreReads, which records any typed
+        // Secret or ConfigMap informer, Get, List or IndexField.
+        NewCache: func(config *rest.Config, opts cache.Options) (cache.Cache, error) { /* ... */ },
+    })
 
     // The gateway controller gets the real renderer and one config checker over a
     // marker validator, because the krakend binary is not available here.
