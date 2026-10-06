@@ -5462,3 +5462,33 @@ func TestAutoConfigReconcile_LabelRepairOfAReadyEndpointDoesNotFlapReady(t *test
 		}
 	}
 }
+
+func TestAutoConfigReconcile_SpecUpdateOfAReadyEndpointReadsPending(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	// The endpoint's spec is stale, so the pass updates it. The API server
+	// bumps the generation of a spec update, which the fake client does not.
+	stale := readyEndpoint(ownedCopy(t, ac, g.output.Endpoints[0]), metav1.ConditionTrue, "Ready")
+	stale.Spec.Endpoints[0].Backends[0].URLPattern = "/old"
+	stale.Generation = 1
+	stale.Status.ObservedGeneration = 1
+	c := fakeClientBuilder().WithObjects(ac, cm, stale).WithStatusSubresource(ac, stale).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+				if ep, ok := obj.(*v1alpha1.KrakenDEndpoint); ok {
+					ep.Generation++
+				}
+				return c.Update(ctx, obj, opts...)
+			},
+		}).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	cond := meta.FindStatusCondition(getAC(t, c, ac).Status.Conditions, v1alpha1.ConditionEndpointsReady)
+	if cond == nil || cond.Status != metav1.ConditionFalse || !strings.Contains(cond.Message, "test-ac-listusers: Pending") {
+		t.Errorf("expected EndpointsReady False naming test-ac-listusers Pending, got %+v", cond)
+	}
+}
