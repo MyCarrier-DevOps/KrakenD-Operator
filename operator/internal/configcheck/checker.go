@@ -118,7 +118,8 @@ func (c *Checker) SameConfig(ctx context.Context, old, gw *v1alpha1.KrakenDGatew
 	if err != nil {
 		return false, fmt.Errorf("rendering config: %w", err)
 	}
-	return bytes.Equal(out.JSON, oldOut.JSON), nil
+	return bytes.Equal(out.JSON, oldOut.JSON) &&
+		renderer.EditionFor(gw, in.CEFallback) == renderer.EditionFor(old, before.CEFallback), nil
 }
 
 // CheckGatewayPolicy lints gw's config with policy in place of the stored
