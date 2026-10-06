@@ -18,9 +18,15 @@ package main
 
 import (
 	"errors"
+	"maps"
+	"net/http"
+	"net/http/httptest"
+	"slices"
 	"testing"
 
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
+	"sigs.k8s.io/controller-runtime/pkg/webhook"
 )
 
 // untouchableManager panics on every Manager method (the embedded interface
@@ -56,6 +62,36 @@ func TestRegisterWebhooks_EnabledRunsSetup(t *testing.T) {
 	}
 	if got != mgr {
 		t.Error("setup did not receive the manager")
+	}
+}
+
+// readyzManager serves a real, never-started webhook server and records
+// readiness checks; every other Manager method panics.
+type readyzManager struct {
+	ctrl.Manager
+	server webhook.Server
+	checks map[string]healthz.Checker
+}
+
+func (m *readyzManager) GetWebhookServer() webhook.Server { return m.server }
+
+func (m *readyzManager) AddReadyzCheck(name string, check healthz.Checker) error {
+	m.checks[name] = check
+	return nil
+}
+
+func TestRegisterWebhooks_ReadinessWaitsForTheWebhookServer(t *testing.T) {
+	mgr := &readyzManager{server: webhook.NewServer(webhook.Options{}), checks: map[string]healthz.Checker{}}
+	if err := registerWebhooks(mgr, true, func(ctrl.Manager) error { return nil }); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	check, ok := mgr.checks["webhook"]
+	if !ok {
+		t.Fatalf("no webhook readiness check registered; checks = %v", slices.Collect(maps.Keys(mgr.checks)))
+	}
+	req := httptest.NewRequest(http.MethodGet, "/readyz", http.NoBody)
+	if err := check(req); err == nil {
+		t.Error("readiness passed before the webhook server started")
 	}
 }
 
