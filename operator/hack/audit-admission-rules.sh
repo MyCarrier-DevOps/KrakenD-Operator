@@ -22,7 +22,7 @@
 set -euo pipefail
 
 # The CRD's endpoint path pattern, verbatim.
-endpoint_path_re='^(/\*|/[^*?&%]*(/\*)?)$'
+endpoint_path_re='^(/\*|/[^*?&%\x00-\x20\x7F]*(/\*)?)$'
 
 # The CRD pattern of the endpoint and AutoConfig duration fields (a Go duration), verbatim.
 go_duration_re='^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$'
