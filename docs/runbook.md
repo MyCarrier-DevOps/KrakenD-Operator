@@ -525,20 +525,27 @@ recreate the second with the new name.
 
 ### Admission refuses a post-restart Job with `403 Forbidden`
 
-**Symptom:** `kubectl apply` of a KrakenDGateway fails with `krakendgateways.gateway.krakend.io "x" is forbidden: spec.postRestartJob: <user> may not create pods in namespace <ns>, so the post-restart Job may not run as another ServiceAccount or read a Secret`.
+**Symptom:** `kubectl apply` of a KrakenDGateway fails with `krakendgateways.gateway.krakend.io "x" is forbidden: spec.postRestartJob: <user> may not create pods in namespace <ns>, so the post-restart Job may not run as another ServiceAccount, read a Secret, or relax the operator's default security context`.
 
 **Cause:** The enabled `spec.postRestartJob` sets a `serviceAccountName` other
-than the gateway's name, takes `envFrom` from a Secret, or has an `env`
-`secretKeyRef`, and the user making the request may not create pods in the
+than the gateway's name, takes `envFrom` from a Secret, has an `env`
+`secretKeyRef`, or sets a `securityContext` or `podSecurityContext` field
+outside the allow-list of settings that grant no privilege (for example
+`privileged: true`, added capabilities, a `capabilities.drop` without `ALL`, an
+`Unconfined` seccomp or AppArmor profile, `sysctls`, `seLinuxOptions`) or a
+`container.apparmor.security.beta.kubernetes.io/*` annotation other than
+`runtime/default`. The user making the request may not create pods in the
 gateway's namespace. The operator creates the Job with its own permissions, so
 the webhook asks the API server (SubjectAccessReview) whether the requester
 could create such a pod themselves. A Job on the gateway's own ServiceAccount
-with no Secret reference is not reviewed.
+with no Secret reference and only allow-listed security settings is not
+reviewed, nor is one that runs as root with `runAsNonRoot: false`. `podLabels`
+and the other `podAnnotations` are never reviewed.
 
 **Resolution:** Have a user who may create pods in the namespace make the
 change, or grant the requester (for a GitOps controller, its ServiceAccount)
 `create` on `pods` in that namespace. Or drop the field: use the gateway's
-ServiceAccount, and inject secrets by another route (for example the Vault
+ServiceAccount, keep the default security context, and inject secrets by another route (for example the Vault
 annotations the ReadMe publisher uses). A `500` with `reviewing the requester's
 access` instead means the review itself failed: check that the operator's role
 has `create` on `subjectaccessreviews`.
