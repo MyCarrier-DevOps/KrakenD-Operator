@@ -542,7 +542,9 @@ gateway at its last-known-good config.
 **`500 Internal Error: validating the gateway config: ...`:** the check could
 not run: all three validation slots stayed busy for the 12 s budget, or the
 validator itself failed. This is transient and `kubectl` does not retry it, so
-run the command again. Controllers and GitOps tools retry on their own. If it
+run the command again. Controllers and GitOps tools retry on their own. A
+gateway edit that cannot change the rendered config (image, version, replicas,
+resources, probes, `postRestartJob`) is not checked and never draws this error. If it
 repeats, check the operator pod's CPU and memory.
 
 ### A KrakenDBackendPolicy is stuck in `Terminating`
