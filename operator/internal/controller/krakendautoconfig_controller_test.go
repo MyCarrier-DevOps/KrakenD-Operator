@@ -2701,6 +2701,42 @@ func TestGetCUEDefsResourceVersion_ReadsMetadataOnly(t *testing.T) {
 	}
 }
 
+func TestAutoConfigReconcile_ReadsEachCUEConfigMapOncePerPass(t *testing.T) {
+	ac := testAutoConfig()
+	ac.Status.Phase = v1alpha1.AutoConfigPhasePending
+	ac.Spec.CUE = &v1alpha1.CUESpec{DefinitionsConfigMapRef: &v1alpha1.ConfigMapKeyRef{Name: "custom-cue"}}
+	custom := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: "custom-cue", Namespace: "default"},
+		Data:       map[string]string{"defs.cue": "package defs"},
+	}
+	reads := map[string]int{}
+	c := interceptor.NewClient(
+		fakeClientBuilder().WithObjects(ac, testCUEDefinitionsCM(), custom).WithStatusSubresource(ac).Build(),
+		interceptor.Funcs{
+			Get: func(
+				ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object,
+				opts ...client.GetOption,
+			) error {
+				if _, ok := obj.(*v1alpha1.KrakenDAutoConfig); !ok {
+					reads[key.Name]++
+				}
+				return cl.Get(ctx, key, obj, opts...)
+			},
+		})
+	f, ce, fi, g := defaultMocks()
+	r := newACReconciler(c, f, ce, fi, g)
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	for _, name := range []string{defaultCUEDefinitionsConfigMap, "custom-cue"} {
+		if reads[name] != 1 {
+			t.Errorf("reads of ConfigMap %s = %d, want 1 per pass (all reads: %v)", name, reads[name], reads)
+		}
+	}
+}
+
 func TestAutoConfigReconcile_FallbackToEmbeddedCUE(t *testing.T) {
 	ac := testAutoConfig()
 	ac.Status.Phase = v1alpha1.AutoConfigPhasePending
