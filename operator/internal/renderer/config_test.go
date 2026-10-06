@@ -1157,3 +1157,33 @@ func TestAppendEndpointComponentSchemas_ComparesDecodedBodies(t *testing.T) {
 		t.Errorf("conflicts = %+v, want none for an equal body", conflicts)
 	}
 }
+
+func TestRender_SchemaConflictsOnlyWhereDocsArePublished(t *testing.T) {
+	endpoints := []v1alpha1.KrakenDEndpoint{
+		schemaEndpoint("a", map[string]string{"User": `{"type":"object","description":"a"}`}),
+		schemaEndpoint("c", map[string]string{"User": `{"type":"object","description":"c"}`}),
+	}
+	for _, tc := range []struct {
+		name       string
+		edition    v1alpha1.Edition
+		openapi    bool
+		ceFallback bool
+		want       int
+	}{
+		{"EE publishing docs", v1alpha1.EditionEE, true, false, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gw := minimalGateway()
+			gw.Spec.Edition = tc.edition
+			gw.Spec.OpenAPI = &v1alpha1.OpenAPIExportSpec{Enabled: tc.openapi}
+
+			out, err := New(Options{}).Render(RenderInput{Gateway: gw, Endpoints: endpoints, CEFallback: tc.ceFallback})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(out.SchemaConflicts) != tc.want {
+				t.Errorf("SchemaConflicts = %+v, want %d", out.SchemaConflicts, tc.want)
+			}
+		})
+	}
+}
