@@ -1147,6 +1147,35 @@ func TestPublishConfig_HashesAnUnchangedConfigMapOnce(t *testing.T) {
 	}
 }
 
+// An edit to a ConfigMap changes its resource version, so the next pass
+// hashes it again and replaces it when the payload is no longer the config.
+func TestPublishConfig_HashesAConfigMapAgainAfterItIsEdited(t *testing.T) {
+	gw := reconciledGateway()
+	gw.UID = "gw-uid"
+	const config = `{"version":3,"name":"present"}`
+	checksum := hash.SHA256Hex([]byte(config))
+	c := fakeClientBuilder().WithObjects(gw, publishedConfigMap(t, gw, config, checksum)).Build()
+	r := newTestGatewayReconciler(c, &mockRenderer{}, &mockValidator{})
+	if err := r.publishConfig(context.Background(), gw, []byte(config), checksum); err != nil {
+		t.Fatalf("publishConfig = %v", err)
+	}
+	var cm corev1.ConfigMap
+	getObject(t, c, gw, resources.ConfigMapName(gw, checksum), &cm)
+	cm.Data[resources.ConfigKey] = `{"version":3,"name":"edited"}`
+	if err := c.Update(context.Background(), &cm); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := r.publishConfig(context.Background(), gw, []byte(config), checksum); err != nil {
+		t.Fatalf("publishConfig after the edit = %v", err)
+	}
+
+	getObject(t, c, gw, resources.ConfigMapName(gw, checksum), &cm)
+	if cm.Data[resources.ConfigKey] != config {
+		t.Errorf("config ConfigMap holds %q after an edit, want the config its name addresses", cm.Data[resources.ConfigKey])
+	}
+}
+
 func TestPublishConfig_ReplacesAConfigMapWhoseDataDoesNotMatchItsChecksum(t *testing.T) {
 	gw := reconciledGateway()
 	gw.UID = "gw-uid"

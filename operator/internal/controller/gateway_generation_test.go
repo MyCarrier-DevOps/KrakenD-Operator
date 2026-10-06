@@ -361,3 +361,47 @@ func TestGatewayReconcile_AnAppliedConfigMapThatCannotBeReplacedIsNotReportedApp
 		t.Errorf("Ready = %+v, want it not True", ready)
 	}
 }
+
+// A published ConfigMap that holds another payload under the applied config's
+// name is replaced once, and later passes leave the replacement alone.
+func TestGatewayReconcile_AForgedAppliedConfigMapIsReplacedOnce(t *testing.T) {
+	const config = `{"version":3,"name":"genuine"}`
+	checksum := hash.SHA256Hex([]byte(config))
+	gw := servingGateway(checksum, convergedImage)
+	forged := publishedConfigMap(t, gw, `{"version":3,"name":"forged"}`, checksum)
+	deletes := 0
+	c := interceptor.NewClient(
+		fakeClientBuilder().WithObjects(gw, settledDeployment(gw, checksum), forged).WithStatusSubresource(gw).Build(),
+		interceptor.Funcs{Delete: func(
+			ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.DeleteOption,
+		) error {
+			if _, ok := obj.(*corev1.ConfigMap); ok {
+				deletes++
+			}
+			return cl.Delete(ctx, obj, opts...)
+		}})
+	r := newTestGatewayReconciler(c,
+		&mockRenderer{output: &renderer.RenderOutput{JSON: []byte(config), Checksum: checksum}}, &mockValidator{})
+
+	for range 3 {
+		if err := reconcileGateway(t, r, gw); err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+	}
+
+	var cm corev1.ConfigMap
+	if err := c.Get(context.Background(), client.ObjectKey{
+		Namespace: gw.Namespace, Name: resources.ConfigMapName(gw, checksum)}, &cm); err != nil {
+		t.Fatal(err)
+	}
+	if cm.Data[resources.ConfigKey] != config {
+		t.Errorf("config ConfigMap holds %q, want the config its name addresses", cm.Data[resources.ConfigKey])
+	}
+	if deletes != 1 {
+		t.Errorf("ConfigMap deletes over three passes = %d, want 1: the replacement is not deleted again", deletes)
+	}
+	cv := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionConfigValid)
+	if cv == nil || cv.Status != metav1.ConditionTrue || cv.Reason != v1alpha1.ReasonConfigApplied {
+		t.Errorf("ConfigValid = %+v, want True/ConfigApplied once the ConfigMap holds the config", cv)
+	}
+}
