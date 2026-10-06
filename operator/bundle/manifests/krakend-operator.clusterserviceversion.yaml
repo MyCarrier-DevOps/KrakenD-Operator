@@ -119,15 +119,11 @@ spec:
           - ""
           resources:
           - configmaps
-          - serviceaccounts
-          - services
           verbs:
           - create
           - delete
           - get
           - list
-          - patch
-          - update
           - watch
         - apiGroups:
           - ""
@@ -145,15 +141,24 @@ spec:
           - list
           - watch
         - apiGroups:
+          - ""
+          resources:
+          - serviceaccounts
+          - services
+          verbs:
+          - create
+          - get
+          - list
+          - update
+          - watch
+        - apiGroups:
           - apps
           resources:
           - deployments
           verbs:
           - create
-          - delete
           - get
           - list
-          - patch
           - update
           - watch
         - apiGroups:
@@ -171,8 +176,17 @@ spec:
           - delete
           - get
           - list
-          - patch
           - update
+          - watch
+        - apiGroups:
+          - batch
+          resources:
+          - jobs
+          verbs:
+          - create
+          - delete
+          - get
+          - list
           - watch
         - apiGroups:
           - dragonflydb.io
@@ -183,7 +197,6 @@ spec:
           - delete
           - get
           - list
-          - patch
           - update
           - watch
         - apiGroups:
@@ -195,44 +208,53 @@ spec:
           - delete
           - get
           - list
-          - patch
           - update
           - watch
         - apiGroups:
           - gateway.krakend.io
           resources:
           - krakendautoconfigs
-          - krakendbackendpolicies
-          - krakendendpoints
           - krakendgateways
           verbs:
-          - create
-          - delete
           - get
           - list
-          - patch
-          - update
           - watch
         - apiGroups:
           - gateway.krakend.io
           resources:
           - krakendautoconfigs/finalizers
-          - krakendbackendpolicies/finalizers
-          - krakendendpoints/finalizers
+          - krakendautoconfigs/status
+          - krakendbackendpolicies/status
           - krakendgateways/finalizers
+          - krakendgateways/status
           verbs:
           - update
         - apiGroups:
           - gateway.krakend.io
           resources:
-          - krakendautoconfigs/status
-          - krakendbackendpolicies/status
-          - krakendendpoints/status
-          - krakendgateways/status
+          - krakendbackendpolicies
           verbs:
           - get
-          - patch
+          - list
           - update
+          - watch
+        - apiGroups:
+          - gateway.krakend.io
+          resources:
+          - krakendendpoints
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - update
+          - watch
+        - apiGroups:
+          - gateway.krakend.io
+          resources:
+          - krakendendpoints/status
+          verbs:
+          - patch
         - apiGroups:
           - networking.istio.io
           resources:
@@ -242,7 +264,6 @@ spec:
           - delete
           - get
           - list
-          - patch
           - update
           - watch
         - apiGroups:
@@ -251,10 +272,8 @@ spec:
           - poddisruptionbudgets
           verbs:
           - create
-          - delete
           - get
           - list
-          - patch
           - update
           - watch
         - apiGroups:
@@ -342,29 +361,13 @@ spec:
       permissions:
       - rules:
         - apiGroups:
-          - ""
-          resources:
-          - configmaps
-          verbs:
-          - get
-          - list
-          - watch
-          - create
-          - update
-          - patch
-          - delete
-        - apiGroups:
           - coordination.k8s.io
           resources:
           - leases
           verbs:
           - get
-          - list
-          - watch
           - create
           - update
-          - patch
-          - delete
         - apiGroups:
           - ""
           resources:
