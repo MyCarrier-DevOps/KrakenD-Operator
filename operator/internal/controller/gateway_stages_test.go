@@ -1112,6 +1112,37 @@ func TestPublishConfig_ChecksAnExistingConfigMapWithoutReadingItsPayload(t *test
 	}
 }
 
+func TestCollectConfigMaps_ListsConfigMapsAsMetadataOnly(t *testing.T) {
+	gw := reconciledGateway()
+	gw.UID = "gw-uid"
+	at := func(h int) time.Time { return testNow.Add(time.Duration(h) * time.Hour) }
+	live := fakeClientBuilder().WithObjects(gw,
+		ownedConfigMap(gw, "test-gw-config-r1", at(1), true),
+		ownedConfigMap(gw, "test-gw-config-r2", at(2), true),
+		ownedConfigMap(gw, "test-gw-config-r3", at(3), true),
+		ownedConfigMap(gw, "test-gw-config-r4", at(4), true),
+	).Build()
+	// The manager's client lists ConfigMaps live, so a typed list would carry
+	// every revision's rendered config over the wire.
+	c := interceptor.NewClient(live, interceptor.Funcs{
+		List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if _, ok := list.(*corev1.ConfigMapList); ok {
+				return errors.New("typed ConfigMap list")
+			}
+			return cl.List(ctx, list, opts...)
+		},
+	})
+	r := newTestGatewayReconciler(c, &mockRenderer{}, &mockValidator{})
+
+	if err := r.collectConfigMaps(context.Background(), gw, "test-gw-config-r4"); err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	want := []string{"test-gw-config-r2", "test-gw-config-r3", "test-gw-config-r4"}
+	if got := remainingConfigMaps(t, live, gw); !slices.Equal(got, want) {
+		t.Errorf("remaining ConfigMaps = %v, want %v", got, want)
+	}
+}
+
 func TestPublishConfig_FailsWhenTheConfigMapAVanishedCreateRaceLeftIsGone(t *testing.T) {
 	gw := reconciledGateway()
 	gw.UID = "gw-uid"
