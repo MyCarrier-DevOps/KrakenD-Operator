@@ -319,7 +319,8 @@ func (r *KrakenDAutoConfigReconciler) recordSync(
 	if changed {
 		r.Recorder.Eventf(ac, "Normal", v1alpha1.ReasonEndpointsGenerated,
 			"Generated %s (%d created, %d updated, %d deleted, %d skipped)",
-			counted(res.generated, "endpoint"), res.changes.created, res.changes.updated, res.changes.deleted, len(res.skipped))
+			counted(res.generated, "endpoint"), res.changes.created, res.changes.updated,
+			res.changes.deleted, len(res.skipped))
 	}
 	return nil
 }
