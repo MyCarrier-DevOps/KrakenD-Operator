@@ -33,6 +33,7 @@ import (
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/autoconfig"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
+	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -5119,6 +5120,68 @@ func TestAutoConfigReconcile_HoldsAStoredSameShapePairsLoserAndKeepsStale(t *tes
 	cond := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionSynced)
 	if cond == nil || cond.Reason != v1alpha1.ReasonOperationsFailed {
 		t.Errorf("expected Synced False/OperationsFailed, got %+v", cond)
+	}
+}
+
+// passingExecutor stands in for a krakend binary that accepts every config,
+// so the in-process route check is the only judge of a real gateway check.
+type passingExecutor struct{}
+
+func (passingExecutor) Execute(context.Context, string, ...string) ([]byte, error) {
+	return nil, nil
+}
+
+// realRouteChecker returns the gateway config check main wires, reading
+// through c, with the krakend binary stubbed to accept everything.
+func realRouteChecker(c client.Client) *configcheck.Checker {
+	return newTestChecker(c, renderer.NewValidator(renderer.ValidatorOptions{
+		Executor: passingExecutor{}, BinaryPath: "krakend",
+	}))
+}
+
+func TestAutoConfigReconcile_PrecheckHoldsASiblingThatTheOlderRouteOwnerBreaks(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	// Upstream renamed getUser to getUserById, changed {id} to {userId} and
+	// moved its sibling getUserOrders. The old getUser endpoint is older than
+	// the new one, so the gateway serves it until it is deleted, and the
+	// sibling's new route then clashes with its parameter name.
+	stale := ownedCopy(t, ac, generatedEndpoint("getUser", "/users/{id}"))
+	stale.CreationTimestamp = metav1.NewTime(time.Unix(1000, 0))
+	orders := ownedCopy(t, ac, generatedEndpoint("getUserOrders", "/users/{id}/orders"))
+	orders.CreationTimestamp = metav1.NewTime(time.Unix(1000, 0))
+	g.output.Endpoints = []*v1alpha1.KrakenDEndpoint{
+		generatedEndpoint("getUserById", "/users/{userId}"),
+		generatedEndpoint("getUserOrders", "/users/{userId}/orders"),
+	}
+	// An unrelated operation fails CUE, so the stale endpoints are modelled
+	// as staying.
+	ce.output.Failed = []autoconfig.OperationIssue{failedGetB()}
+	c := fakeClientBuilder().WithObjects(ac, cm, stale, orders, testGateway()).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Checker = realRouteChecker(c)
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	var cur v1alpha1.KrakenDEndpoint
+	if err := c.Get(context.Background(),
+		types.NamespacedName{Name: "test-ac-getuserorders", Namespace: "default"}, &cur); err != nil {
+		t.Fatalf("getting the sibling: %v", err)
+	}
+	if got := cur.Spec.Endpoints[0].Endpoint; got != "/users/{id}/orders" {
+		t.Errorf("sibling route = %q, want it held at /users/{id}/orders", got)
+	}
+	var held *v1alpha1.OperationStatus
+	for _, f := range getAC(t, c, ac).Status.FailedOperations {
+		if f.Endpoint == "test-ac-getuserorders" {
+			held = &f
+		}
+	}
+	if held == nil || held.Reason != v1alpha1.ReasonConfigValidationFailed ||
+		!strings.Contains(held.Message, "':userId'") || !strings.Contains(held.Message, "conflicts with existing wildcard ':id'") {
+		t.Errorf("sibling failure = %+v, want ConfigValidationFailed naming the wildcard clash", held)
 	}
 }
 
