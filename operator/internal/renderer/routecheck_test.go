@@ -73,6 +73,10 @@ func TestRouteConflicts_MirrorsTheRuntimeRouter(t *testing.T) {
 		{"auto options joins methods", `{"extra_config":{"router":{"auto_options":true}},"endpoints":[{"endpoint":"/a/{id}","method":"GET"},{"endpoint":"/a/{name}","method":"POST"}]}`, "conflicts with existing wildcard", []int{1, 0}},
 		{"auto options registers one route per path", `{"extra_config":{"router":{"auto_options":true}},"endpoints":[{"endpoint":"/a","method":"GET"},{"endpoint":"/a","method":"POST"}]}`, "", nil},
 		{"auto options cleans the path first", `{"extra_config":{"router":{"auto_options":true}},"endpoints":[{"endpoint":"a","method":"GET"},{"endpoint":"/a","method":"POST"}]}`, "", nil},
+		{"query brace beside a path parameter", `{"endpoints":[{"endpoint":"/a/{id}?x={id}","method":"GET"}]}`, "", nil},
+		{"query brace converted or not is one route", `{"endpoints":[{"endpoint":"/a/{id}/b?x={id}","method":"GET"},{"endpoint":"/a/{id}/b?x=:id","method":"GET"}]}`, "", nil},
+		{"query brace duplicates the converted spelling", `{"endpoints":[{"endpoint":"/a/{id}?x={id}","method":"GET"},{"endpoint":"/a/:id?x={id}","method":"GET"}]}`, "handlers are already registered", []int{1, 0}},
+		{"query brace path beside another wildcard name", `{"endpoints":[{"endpoint":"/a/{id}?x={id}","method":"GET"},{"endpoint":"/a/{name}","method":"GET"}]}`, "conflicts with existing wildcard", []int{1, 0}},
 		{"echo beside root parameter", `{"echo_endpoint":true,"endpoints":[{"endpoint":"/{x}","method":"GET"}]}`, "", nil},
 	}
 	for _, tt := range tests {
