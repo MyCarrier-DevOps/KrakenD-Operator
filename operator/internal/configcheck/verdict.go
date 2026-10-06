@@ -62,6 +62,21 @@ type Verdict struct {
 	// A caller that remembers it can rebuild the findings with Rejected
 	// against whatever the endpoints are by then.
 	Rejection *renderer.ValidationError
+	// Stage is the check that rejected the config.
+	Stage renderer.RejectionStage
+	// Refusals are the route check's refused registrations, when Stage is
+	// renderer.StageRoute, and RefusalsCapped is set when the check stopped
+	// at renderer.MaxRouteRefusals, so refusals past those listed are unknown.
+	Refusals       []Refusal
+	RefusalsCapped bool
+}
+
+// Refusal is one registration the route check refused: the KrakenDEndpoints
+// it names (the refused entry's, then the accepted entry's it clashes with, if
+// any; none for a refusal of the gateway's own route) and its lint lines.
+type Refusal struct {
+	Endpoints []types.NamespacedName
+	Message   string
 }
 
 // Rejected returns the verdict for rejection of out, the render of in. The

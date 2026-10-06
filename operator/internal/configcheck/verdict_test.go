@@ -18,6 +18,7 @@ package configcheck
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -220,6 +221,35 @@ func TestRejected_NamesTheEntryOfTheCurrentSpec(t *testing.T) {
 		if got.Rejection != rejection {
 			t.Errorf("%s: Rejection = %v, want the rejection it was built from", name, got.Rejection)
 		}
+	}
+}
+
+func TestRejected_ReportsTheStageAndTheEndpointsEachRefusalNames(t *testing.T) {
+	rejection := &renderer.ValidationError{
+		Output: "- at '/endpoints/1/endpoint': refused\n- at '/endpoints/0/endpoint': clashes\n- gateway route: x",
+		Err:    fmt.Errorf("route conflict"), Stage: renderer.StageRoute, RefusalsCapped: true,
+		Refusals: []renderer.RouteRefusal{
+			{Indices: []int{1, 0}, Message: "- at '/endpoints/1/endpoint': refused\n- at '/endpoints/0/endpoint': clashes"},
+			{Message: "- gateway route: x"},
+		},
+	}
+	a, b := types.NamespacedName{Namespace: "ns", Name: "a"}, types.NamespacedName{Namespace: "ns", Name: "b"}
+	rendered := &renderer.RenderOutput{
+		JSON:    []byte(`{"endpoints":[{"endpoint":"/a","method":"GET"},{"endpoint":"/x","method":"GET"}]}`),
+		Sources: []types.NamespacedName{a, b},
+	}
+
+	got := Rejected(rejection, renderer.RenderInput{}, rendered)
+
+	if got.Stage != renderer.StageRoute || !got.RefusalsCapped {
+		t.Errorf("Stage = %d, RefusalsCapped = %t, want the route stage, capped", got.Stage, got.RefusalsCapped)
+	}
+	want := []Refusal{
+		{Endpoints: []types.NamespacedName{b, a}, Message: rejection.Refusals[0].Message},
+		{Message: "- gateway route: x"},
+	}
+	if !reflect.DeepEqual(got.Refusals, want) {
+		t.Errorf("Refusals = %+v, want %+v", got.Refusals, want)
 	}
 }
 
