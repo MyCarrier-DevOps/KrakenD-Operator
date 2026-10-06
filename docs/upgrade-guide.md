@@ -109,6 +109,23 @@ make deploy IMG=ghcr.io/mycarrier-devops/krakend-operator:<new-version>
      `OperationsFailed` and keeps its stale endpoints until the pair is
      resolved.
 
+7. **Check the chart values and the operator's new defaults** (Helm
+   installs; read-only):
+   ```bash
+   helm -n krakend-operator-system get values krakend-operator -a -o json \
+     | jq '{replicaCount, leaderElection, webhooks: {enabled: .webhooks.enabled, failurePolicy: .webhooks.failurePolicy}, metrics}'
+   ```
+   - A release with `leaderElection.enabled: false` and no explicit
+     `replicaCount: 1` no longer renders, because `replicaCount` now defaults
+     to 2. Set `replicaCount: 1` or re-enable leader election before
+     upgrading. Otherwise the operator Deployment goes from 1 to 2 pods and a
+     PodDisruptionBudget appears.
+   - Metrics scrapes start succeeding once the scraper's ServiceAccount is
+     bound to the `<fullname>-metrics-reader` ClusterRole.
+   - OLM installs gain the admission webhooks (`failurePolicy: Fail`), so
+     writes to the four KrakenD kinds are rejected while the operator is
+     unavailable.
+
 ---
 
 ## CRD Upgrades
@@ -2153,6 +2170,16 @@ selects only that Service.
 admission webhook server accepts TLS connections. During rollouts and
 restarts, admission requests are no longer sent to a pod that cannot answer
 them (with `failurePolicy: Fail` those requests used to be rejected).
+
+### Helm chart: two replicas, a PodDisruptionBudget and anti-affinity by default
+
+`replicaCount` now defaults to 2, with a PodDisruptionBudget
+(`maxUnavailable: 1`, `podDisruptionBudget.enabled`) and a soft preference
+for different nodes when `affinity` is empty. A single operator pod made
+every write to the four CRDs fail during its rollouts and node drains. The
+chart now refuses to render `replicaCount` > 1 with
+`leaderElection.enabled: false`. To keep one replica, set `replicaCount: 1`
+(no PodDisruptionBudget is created then).
 
 ---
 
