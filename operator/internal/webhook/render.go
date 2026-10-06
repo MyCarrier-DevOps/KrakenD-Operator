@@ -126,9 +126,11 @@ func newlyBlamed(self types.NamespacedName) func(before, after configcheck.Verdi
 // route refusal after the change counts against it when every endpoint the
 // refusal names was unblamed before. The route check leaves a refused route
 // out of its engine, so a refusal that names an endpoint blamed before may only
-// have been hidden by an earlier one, which is no fault of the change.
+// have been hidden by an earlier one, which is no fault of the change. When the
+// route check stopped at its cap before the change, which refusals it hid is
+// unknown and the rule does not apply.
 func newRouteRefusals(before, after configcheck.Verdict) bool {
-	if after.Stage != renderer.StageRoute || before.Stage != renderer.StageRoute {
+	if after.Stage != renderer.StageRoute || before.Stage != renderer.StageRoute || before.RefusalsCapped {
 		return false
 	}
 	return slices.ContainsFunc(after.Refusals, func(r configcheck.Refusal) bool {
