@@ -765,20 +765,15 @@ func (r *KrakenDAutoConfigReconciler) configMapToAutoConfigs(
 	ctx context.Context,
 	obj client.Object,
 ) []reconcile.Request {
-	cm, ok := obj.(*corev1.ConfigMap)
-	if !ok {
-		return nil
-	}
-
 	var acList v1alpha1.KrakenDAutoConfigList
-	if err := r.List(ctx, &acList, client.InNamespace(cm.Namespace)); err != nil {
+	if err := r.List(ctx, &acList, client.InNamespace(obj.GetNamespace())); err != nil {
 		return nil
 	}
 
 	var requests []reconcile.Request
 	for i := range acList.Items {
 		ac := &acList.Items[i]
-		if !autoConfigReferencesConfigMap(ac, cm.Name) {
+		if !autoConfigReferencesConfigMap(ac, obj.GetName()) {
 			continue
 		}
 		requests = append(requests, reconcile.Request{
