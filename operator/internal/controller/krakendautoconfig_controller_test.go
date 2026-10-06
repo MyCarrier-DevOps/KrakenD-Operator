@@ -3789,6 +3789,30 @@ func TestAutoConfigReconcile_DeletedAutoConfigIsForgottenByTheCauseLog(t *testin
 	}
 }
 
+func TestSyncedCondition_FailedOperationsGrammar(t *testing.T) {
+	op := func(path string) v1alpha1.OperationStatus {
+		return v1alpha1.OperationStatus{Method: "GET", Path: path, Reason: v1alpha1.ReasonCUEEvaluationFailed}
+	}
+	tests := map[string]struct {
+		failed []v1alpha1.OperationStatus
+		want   string
+	}{
+		"one": {
+			failed: []v1alpha1.OperationStatus{op("/a")},
+			want: "1 operation failed; it keeps its last-synced endpoint and no stale endpoint is deleted " +
+				"until it recovers (see status.failedOperations): GET /a: CUEEvaluationFailed",
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			got := syncedCondition(syncResult{failed: tt.failed}, 1)
+			if got.Message != tt.want {
+				t.Errorf("message = %q, want %q", got.Message, tt.want)
+			}
+		})
+	}
+}
+
 func TestAutoConfigReconcile_FailedOperationsAreListedSortedAndCapped(t *testing.T) {
 	cm := testCUEDefinitionsCM()
 	ac := syncedAutoConfig(cm)
