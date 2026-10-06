@@ -2147,6 +2147,13 @@ metrics Service `app.kubernetes.io/component: metrics`, and can create a
 `ServiceMonitor` (`metrics.serviceMonitor.enabled`, off by default) that
 selects only that Service.
 
+### The operator is ready only once its webhook server is serving
+
+`/readyz` now includes a `webhook` check that passes once the pod's
+admission webhook server accepts TLS connections. During rollouts and
+restarts, admission requests are no longer sent to a pod that cannot answer
+them (with `failurePolicy: Fail` those requests used to be rejected).
+
 ---
 
 ## v0.14.0 — openapi-serve liveness probe (one-time rollout)
