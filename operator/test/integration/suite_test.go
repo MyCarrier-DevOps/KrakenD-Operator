@@ -53,6 +53,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	k8sclient "k8s.io/client-go/kubernetes"
@@ -584,10 +585,14 @@ type typedCoreReads struct {
 func (r *typedCoreReads) note(obj runtime.Object) {
 	switch obj.(type) {
 	case *corev1.Secret, *corev1.SecretList, *corev1.ConfigMap, *corev1.ConfigMapList:
-		r.mu.Lock()
-		defer r.mu.Unlock()
-		r.seen = append(r.seen, fmt.Sprintf("%T", obj))
+		r.record(fmt.Sprintf("%T", obj))
 	}
+}
+
+func (r *typedCoreReads) record(what string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.seen = append(r.seen, what)
 }
 
 func (r *typedCoreReads) records() []string {
@@ -606,6 +611,22 @@ func (r *typedCoreReads) Get(
 func (r *typedCoreReads) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
 	r.note(list)
 	return r.Cache.List(ctx, list, opts...)
+}
+
+func (r *typedCoreReads) GetInformerForKind(
+	ctx context.Context, gvk schema.GroupVersionKind, opts ...cache.InformerGetOption,
+) (cache.Informer, error) {
+	if gvk.Group == "" && (gvk.Kind == "Secret" || gvk.Kind == "ConfigMap") {
+		r.record("GetInformerForKind " + gvk.Kind)
+	}
+	return r.Cache.GetInformerForKind(ctx, gvk, opts...)
+}
+
+func (r *typedCoreReads) IndexField(
+	ctx context.Context, obj client.Object, field string, extract client.IndexerFunc,
+) error {
+	r.note(obj)
+	return r.Cache.IndexField(ctx, obj, field, extract)
 }
 
 func (r *typedCoreReads) GetInformer(
