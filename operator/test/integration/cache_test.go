@@ -19,6 +19,7 @@ limitations under the License.
 package integration
 
 import (
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -61,5 +62,44 @@ func TestManager_CachesNoSecretOrConfigMapContent(t *testing.T) {
 
 	if seen := suiteCache.records(); len(seen) != 0 {
 		t.Errorf("the manager cache was asked for typed Secret/ConfigMap objects: %v", seen)
+	}
+}
+
+// TestManager_CachesNoLastAppliedAnnotation covers the one place content
+// hides in metadata: a client-side apply stores the whole object, data
+// included, in the last-applied annotation.
+func TestManager_CachesNoLastAppliedAnnotation(t *testing.T) {
+	ns := testNamespace(t)
+	const lastApplied = "kubectl.kubernetes.io/last-applied-configuration"
+	for _, kind := range []string{"Secret", "ConfigMap"} {
+		t.Run(kind, func(t *testing.T) {
+			meta := metav1.ObjectMeta{
+				Name: "applied-" + strings.ToLower(kind), Namespace: ns,
+				Labels:      map[string]string{"app": "probe"},
+				Annotations: map[string]string{lastApplied: `{"data":{"token":"s3cret"}}`, "keep": "me"},
+			}
+			var obj client.Object = &corev1.ConfigMap{ObjectMeta: meta, Data: map[string]string{"spec": "{}"}}
+			if kind == "Secret" {
+				obj = &corev1.Secret{ObjectMeta: meta, StringData: map[string]string{"token": "s3cret"}}
+			}
+			if err := k8sClient.Create(ctx, obj); err != nil {
+				t.Fatalf("create %s: %v", kind, err)
+			}
+
+			cached := metadataOnly(kind)
+			eventually(t, func() error {
+				return suiteCache.Get(ctx, client.ObjectKeyFromObject(obj), cached)
+			})
+
+			if _, ok := cached.GetAnnotations()[lastApplied]; ok {
+				t.Errorf("the cached %s holds the last-applied annotation: %v", kind, cached.GetAnnotations())
+			}
+			if got := cached.GetLabels()["app"]; got != "probe" {
+				t.Errorf("the cached %s lost its labels: %v", kind, cached.GetLabels())
+			}
+			if n := len(cached.GetManagedFields()); n != 0 {
+				t.Errorf("the cached %s holds %d managedFields entries", kind, n)
+			}
+		})
 	}
 }
