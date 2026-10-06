@@ -236,3 +236,54 @@ func TestGatewayAdmission_PostRestartJobSecurityRelaxationNeedsPodCreateRights(t
 		})
 	}
 }
+
+// Settings on the allow-list grant no privilege, so they need no review, root
+// included (it is an acknowledged choice). Neither do podLabels and podAnnotations
+// other than the AppArmor one.
+func TestGatewayAdmission_PostRestartJobAllowListedSecurityContextNeedsNoReview(t *testing.T) {
+	cases := map[string]func(*v1alpha1.PostRestartJobSpec){
+		"acknowledged root": func(p *v1alpha1.PostRestartJobSpec) {
+			p.PodSecurityContext = &corev1.PodSecurityContext{RunAsUser: ptr.To[int64](0), RunAsNonRoot: ptr.To(false)}
+		},
+		"restated hardening": func(p *v1alpha1.PostRestartJobSpec) {
+			p.SecurityContext = &corev1.SecurityContext{
+				AllowPrivilegeEscalation: ptr.To(false), ReadOnlyRootFilesystem: ptr.To(false),
+				Capabilities:    &corev1.Capabilities{Drop: []corev1.Capability{"ALL", "NET_RAW"}},
+				SeccompProfile:  &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+				AppArmorProfile: &corev1.AppArmorProfile{Type: corev1.AppArmorProfileTypeRuntimeDefault},
+			}
+			p.PodSecurityContext = &corev1.PodSecurityContext{
+				FSGroup: ptr.To[int64](2000), SupplementalGroups: []int64{3000}}
+		},
+		"neutral restatements: privileged false, procMount Default": func(p *v1alpha1.PostRestartJobSpec) {
+			p.SecurityContext = &corev1.SecurityContext{
+				Privileged: ptr.To(false), ProcMount: ptr.To(corev1.DefaultProcMount)}
+		},
+		"the operator's own default restated": func(p *v1alpha1.PostRestartJobSpec) {
+			p.SecurityContext = &corev1.SecurityContext{
+				AllowPrivilegeEscalation: ptr.To(false), ReadOnlyRootFilesystem: ptr.To(true),
+				Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}}
+			p.PodSecurityContext = &corev1.PodSecurityContext{
+				RunAsNonRoot: ptr.To(true), RunAsUser: ptr.To[int64](1000), RunAsGroup: ptr.To[int64](1000),
+				SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}}
+		},
+		"runtime/default annotation, other annotations and labels": func(p *v1alpha1.PostRestartJobSpec) {
+			p.PodAnnotations = map[string]string{
+				corev1.DeprecatedAppArmorBetaContainerAnnotationKeyPrefix + "post-restart": "runtime/default",
+				"sidecar.istio.io/inject": "false"}
+			p.PodLabels = map[string]string{"team": "a"}
+		},
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			var reviews []authorizationv1.SubjectAccessReview
+			v := &GatewayValidator{Client: reviewingClient(false, &reviews), Checker: &scriptedChecker{}}
+
+			resp := review(t, v, "alice", gatewayWithJob(mutate), nil)
+
+			if !resp.Allowed || len(reviews) != 0 {
+				t.Errorf("response = %+v after %d reviews, want it admitted without a review", resp.Result, len(reviews))
+			}
+		})
+	}
+}
