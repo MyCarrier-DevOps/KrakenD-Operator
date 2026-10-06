@@ -2073,3 +2073,18 @@ func TestSchemaConflictMessages_AreSortedBySchemaName(t *testing.T) {
 		t.Errorf("message = %q, want Address listed before Pet", got)
 	}
 }
+
+func TestSchemaConflictMessages_AreCapped(t *testing.T) {
+	loser := types.NamespacedName{Namespace: "default", Name: "b-users"}
+	winner := types.NamespacedName{Namespace: "default", Name: "a-users"}
+	var conflicts []renderer.SchemaConflict
+	for _, name := range []string{"S1", "S2", "S3", "S4", "S5", "S6", "S7"} {
+		conflicts = append(conflicts, renderer.SchemaConflict{Endpoint: loser, Schema: name, Winner: winner})
+	}
+
+	got := schemaConflictMessages(conflicts)[loser]
+
+	if !strings.Contains(got, "and 2 more") || strings.Contains(got, `"S6"`) {
+		t.Errorf("message = %q, want the first 5 schemas and \"and 2 more\"", got)
+	}
+}
