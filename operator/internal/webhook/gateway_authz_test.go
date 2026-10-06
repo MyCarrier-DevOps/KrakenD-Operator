@@ -97,6 +97,10 @@ func TestGatewayAdmission_PostRestartJobReviewIsOfTheRequesterToCreatePods(t *te
 func TestGatewayAdmission_PostRestartJobSecretReferencesNeedPodCreateRights(t *testing.T) {
 	cases := map[string]func(*v1alpha1.PostRestartJobSpec){
 		"envFrom a Secret": func(p *v1alpha1.PostRestartJobSpec) { p.EnvFrom = secretEnvFrom("db-credentials") },
+		"env secretKeyRef": func(p *v1alpha1.PostRestartJobSpec) {
+			p.Env = []corev1.EnvVar{{Name: "PW", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: "db-credentials"}, Key: "password"}}}}
+		},
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
