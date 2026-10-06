@@ -37,6 +37,14 @@ import (
 // into `components.schemas` of the main spec under a sanitized key. The
 // original $ref is rewritten to `#/components/schemas/<sanitized-name>`.
 //
+// A reference an "examples" object holds is to an Example Object, which is
+// data: its target is fetched and inlined under `components.examples`, and
+// the reference is rewritten to `#/components/examples/<name>`, without
+// resolving anything inside the target. Only a root $ref in the target, a
+// chain to the object that holds the data, is followed. The name is the
+// sanitized key, or that key with _2, _3 and so on when the spec's own
+// components.examples, or another inlined example, already holds it.
+//
 // baseURL is the main spec's URL. A relative reference resolves against the
 // URL of the document that contains it: baseURL for a ref in the main spec,
 // the fetched document's URL for a ref inside an external document. When
@@ -200,7 +208,8 @@ func (e *fatalRefError) Unwrap() error { return e.err }
 // no further refs are resolved and no further documents are fetched.
 // An example payload, the value of an object's "example" or "examples" field,
 // is data: walk neither descends into it nor fetches from it, and resolves
-// only the Example Object references an "examples" object holds. The members
+// only the Example Object references an "examples" object holds, in the
+// example role (see resolveExternal). The members
 // of a name-keyed map (nameKeyedMaps) are objects whatever they are named.
 func (r *refResolver) walk(node any, base string) {
 	if r.fatalErr != nil {
@@ -304,8 +313,10 @@ func (r *refResolver) warnOnce(msg string) {
 
 // resolveExternal fetches the document ref (found in the document at base)
 // points to (caching), extracts the referenced fragment, inlines it into the
-// components/schemas map of the root doc, and returns the sanitized local
-// name used for the new $ref.
+// root doc, and returns the local name used for the new $ref. In the schema
+// role the fragment is walked and inlined under components/schemas, named by
+// sanitizeRefName. In the example role it is data: cloned, not walked except
+// for a root $ref chain, and inlined under components/examples at a free name.
 func (r *refResolver) resolveExternal(ref, base string, role refRole) (string, error) {
 	docURL, fragment := splitRef(ref)
 	absolute, err := absolutize(docURL, base)
