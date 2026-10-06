@@ -611,6 +611,22 @@ func TestValidate_RouteRejectionNamesTheRefusedEntries(t *testing.T) {
 	}
 }
 
+func TestValidate_EEWildcardRejectionIsTheWildcardStage(t *testing.T) {
+	v := NewValidator(ValidatorOptions{Executor: &capturingExecutor{}, BinaryPath: "krakend"})
+	rendered := []byte(`{"version":3,"endpoints":[` +
+		`{"endpoint":"/p/*","method":"GET"},{"endpoint":"/p/static","method":"GET"}]}`)
+
+	err := v.Validate(context.Background(), rendered, v1alpha1.EditionEE)
+
+	var verr *ValidationError
+	if !errors.As(err, &verr) {
+		t.Fatalf("Validate = %v, want a ValidationError", err)
+	}
+	if verr.Stage != StageEEWildcard {
+		t.Errorf("Stage = %d, want StageEEWildcard (%d)", verr.Stage, StageEEWildcard)
+	}
+}
+
 func TestEditionFor(t *testing.T) {
 	cases := []struct {
 		name       string
