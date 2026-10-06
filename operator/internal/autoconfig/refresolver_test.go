@@ -625,14 +625,17 @@ func TestResolveExternalRefs_ExamplesAndNameKeyedMaps(t *testing.T) {
 	const ref = `{"$ref":"https://schemas.example.com/x.json#/X"}`
 	const op = `{"paths":{"/a":{"get":{"responses":{"200":{"description":"ok","content":{"application/json":%s}}}}}}}`
 	docs := map[string][]byte{
-		"https://schemas.example.com/x.json": []byte(`{"X":{"type":"string"}}`),
-		"https://api.example.com/ex.json":    []byte(`{"E":{"value":1}}`),
-		"https://api.example.com/exv.json":   []byte(`{"E":{"value":{"$ref":"data.json"}}}`),
-		"https://api.example.com/a.json":     []byte(`{"$ref":"b.json#/E"}`),
-		"https://api.example.com/b.json":     []byte(`{"E":{"value":{"$ref":"data.json"}}}`),
-		"https://api.example.com/y.json":     []byte(`{"Y":{"properties":{"p":{"$ref":"z.json#/Z"}}}}`),
-		"https://api.example.com/z.json":     []byte(`{"Z":{"type":"string"}}`),
-		"https://api.example.com/a2.json":    []byte(`{"$ref":"gone.json#/E"}`),
+		"https://schemas.example.com/x.json":  []byte(`{"X":{"type":"string"}}`),
+		"https://api.example.com/ex.json":     []byte(`{"E":{"value":1}}`),
+		"https://api.example.com/exv.json":    []byte(`{"E":{"value":{"$ref":"data.json"}}}`),
+		"https://api.example.com/a.json":      []byte(`{"$ref":"b.json#/E"}`),
+		"https://api.example.com/b.json":      []byte(`{"E":{"value":{"$ref":"data.json"}}}`),
+		"https://api.example.com/sub/ex.json": []byte(`{"E":{"value":2}}`),
+		"https://api.example.com/ca.json":     []byte(`{"$ref":"cb.json"}`),
+		"https://api.example.com/cb.json":     []byte(`{"$ref":"ca.json"}`),
+		"https://api.example.com/y.json":      []byte(`{"Y":{"properties":{"p":{"$ref":"z.json#/Z"}}}}`),
+		"https://api.example.com/z.json":      []byte(`{"Z":{"type":"string"}}`),
+		"https://api.example.com/a2.json":     []byte(`{"$ref":"gone.json#/E"}`),
 		"https://api.example.com/payload.json": []byte(
 			`{"type":"object","properties":{"a":{"$ref":"common.json#/A"}}}`),
 	}
@@ -715,6 +718,34 @@ func TestResolveExternalRefs_ExamplesAndNameKeyedMaps(t *testing.T) {
 			spec:     `{"components":{"examples":{"ex_E":{"$ref":"ex.json#/E"}}}}`,
 			wantOut:  `"ex_E":{"$ref":"#/components/examples/ex_E_2"}`,
 			wantAlso: `"ex_E_2":{"value":1}`,
+			wantHits: 1,
+		},
+		{
+			name:     "an unrelated components example keeps the name a reference would take",
+			spec:     `{"components":{"examples":{"ex_E":{"value":"mine"},"use":{"$ref":"ex.json#/E"}}}}`,
+			wantOut:  `"ex_E":{"value":"mine"}`,
+			wantAlso: `"use":{"$ref":"#/components/examples/ex_E_2"}`,
+			wantHits: 1,
+		},
+		{
+			name: "two references that sanitize to one name get different names",
+			spec: fmt.Sprintf(op, `{"examples":{"one":{"$ref":"ex.json#/E"},`+
+				`"two":{"$ref":"sub/ex.json#/E"}}}`),
+			wantOut:  `"one":{"$ref":"#/components/examples/ex_E"},"two":{"$ref":"#/components/examples/ex_E_2"}`,
+			wantAlso: `"ex_E":{"value":1},"ex_E_2":{"value":2}`,
+			wantHits: 2,
+		},
+		{
+			name:     "a reference cycle in an example chain keeps the name it was given",
+			spec:     `{"components":{"examples":{"ca":{"value":1},"use":{"$ref":"ca.json"}}}}`,
+			wantOut:  `"ca_2":{"$ref":"#/components/examples/cb"}`,
+			wantAlso: `"cb":{"$ref":"#/components/examples/ca_2"}`,
+			wantHits: 2,
+		},
+		{
+			name:     "no examples entry is fetched after one failed",
+			spec:     fmt.Sprintf(op, `{"examples":{"a":{"$ref":"gone.json#/E"},"b":{"$ref":"ex.json#/E"}}}`),
+			wantErr:  "fetching https://api.example.com/gone.json",
 			wantHits: 1,
 		},
 		{
