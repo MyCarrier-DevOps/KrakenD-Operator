@@ -707,6 +707,32 @@ func TestEndpointAdmission_DenialReusesTheIsolatedCheckOfTheRatchet(t *testing.T
 	}
 }
 
+// The isolated check runs the gateway root too, and its lines about the root
+// are as foreign to the requester as the combined check's: the denial quotes
+// only what the isolated check says about the requester's own namespace.
+func TestEndpointAdmission_DenialDoesNotQuoteTheGatewayRootFromTheIsolatedCheck(t *testing.T) {
+	root := configcheck.Finding{Index: -1, Message: "a gateway root line"}
+	mine := configcheck.Finding{
+		Endpoint: types.NamespacedName{Namespace: "default", Name: "new"}, Index: -1, Message: "own error"}
+	after := configcheck.Verdict{Stage: renderer.StageCheck, Findings: []configcheck.Finding{root}}
+	isolated := configcheck.Verdict{Stage: renderer.StageCheck, Findings: []configcheck.Finding{root, mine}}
+	v := &EndpointValidator{Client: fakeClient(testGateway()), Checker: &scriptedChecker{
+		verdicts: []configcheck.Verdict{after, {OK: true}, isolated}}}
+
+	resp := review(t, v, "alice", testEndpoint("new", "/a"), nil)
+
+	if resp.Result.Details == nil || len(resp.Result.Details.Causes) != 1 {
+		t.Fatalf("response = %+v, want one cause", resp.Result)
+	}
+	msg := resp.Result.Details.Causes[0].Message
+	if !strings.Contains(msg, "this change alone fails it: default/new: own error") {
+		t.Errorf("cause = %q, want the requester's own error from the isolated check", msg)
+	}
+	if strings.Contains(msg, "a gateway root line") {
+		t.Errorf("cause = %q quotes the gateway root line of the isolated check", msg)
+	}
+}
+
 func TestEndpointAdmission_NoRenderCheckWithoutAGatewayOrAChange(t *testing.T) {
 	old := testEndpoint("e", "/a")
 	labeled := old.DeepCopy()
