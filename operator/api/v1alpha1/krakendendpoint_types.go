@@ -106,7 +106,9 @@ type EndpointEntry struct {
 
 // BackendSpec defines a backend service target.
 type BackendSpec struct {
-	// Host is the list of backend host URLs.
+	// Host is the list of backend host URLs. A host holds no whitespace or
+	// control character: krakend check prints it verbatim in its errors.
+	// +kubebuilder:validation:items:Pattern=`^[^\x00-\x20\x7F]+$`
 	Host []string `json:"host"`
 
 	// URLPattern is the backend URL path pattern.
