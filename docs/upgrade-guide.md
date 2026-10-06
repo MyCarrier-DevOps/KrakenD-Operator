@@ -1792,7 +1792,9 @@ endpoints are serving.
   The AutoConfig reports `Synced=False` with reason `OperationsFailed`,
   naming up to five operations, and lists them in `status.failedOperations`
   (up to 20 entries, each message cut at 256 bytes). It emits an
-  `OperationsFailed` Warning event when that status changes. The
+  `OperationsFailed` Warning event when the `Synced` condition or
+  `status.failedOperations` changes, not when only readiness or
+  `status.readyEndpoints` does. The
   `krakend_operator_autoconfig_synced` gauge is `0` while any operation is
   held. These failures are deterministic, so they are not retried with
   backoff: the AutoConfig retries at its resync interval (5 minutes for
@@ -1803,8 +1805,12 @@ endpoints are serving.
   `status.failedOperations` can also name a label-matched endpoint the
   AutoConfig could not adopt (the API server answered 422). The list stays as
   the last sync that reached the endpoint writes recorded it when a later
-  sync fails earlier, as `status.skipped` and `status.warnings` do. A
-  rejection's full cause is in the operator log at Info.
+  sync fails earlier, as `status.skipped` and `status.warnings` do. The full
+  cause of every held operation, a CUE failure or a rejection, is in the
+  operator log at Info, once per change of the causes for each operator
+  process, so a restart logs them again; the status cuts each message at 256
+  bytes. Count messages agree with their number (`1 operation failed`,
+  `1 endpoint ready`).
 - **Make-before-break writes.** Creates and updates run first, every one
   attempted. Stale endpoints are deleted only when every write succeeded and
   no operation is held, so a failure never takes a route off the gateway. An
@@ -1927,11 +1933,19 @@ endpoints are serving.
   or just-changed endpoint reads `Pending` until the endpoint controller
   reports it. The AutoConfig's `Ready` condition requires it, so an
   AutoConfig with a conflicted or detached endpoint reads `Ready=False`. A
-  generated endpoint's readiness change triggers an immediate reconcile.
+  generated endpoint's readiness change triggers an immediate reconcile. A
+  failed sync refreshes both from the endpoints the AutoConfig controls at
+  that moment; if they cannot be listed, the last values stay.
 - **Pre-validation.** Before writing, the controller checks the endpoints it
   is about to write against the gateway's config with the same checker the
-  webhooks use. It writes only the operations that pass, and the stale
-  endpoints it will delete count as gone. The check runs up to 5 rounds,
+  webhooks use. It writes only the operations that pass. Each endpoint it
+  checks carries the creation time the cluster will give it (an existing
+  endpoint keeps its own, a new one ranks after every existing one), so the
+  check picks the same winner for a shared route that the gateway does. The
+  stale endpoints it will delete count as gone, unless this pass will not
+  delete them: an operation is held, or a write in this pass names an
+  endpoint the last status recorded as `EndpointRejected`, which the API
+  server rejects again. The check runs up to 5 rounds,
   holding the endpoints it attributes findings to; a hold at the round limit
   reads "not checked: N other operations failed the gateway config check
   first". Findings that name no written endpoint proceed when the gateway
@@ -1943,12 +1957,18 @@ endpoints are serving.
   endpoints. With several workers, two AutoConfigs can check the same gateway
   at once, each without seeing the other's pending writes. The gateway
   controller still never publishes a failing render: it keeps its applied
-  config with `ConfigValid=False`.
+  config with `ConfigValid=False`. A rename and a brand-new rejection (the
+  API server answering 422) in the same pass is not predicted: the check
+  models the stale endpoints as deleted, the rejection stops the delete, and
+  the gateway can fail its own check. It keeps its applied config,
+  `ConfigValid=False` names both entries, and it clears once the cause of
+  the 422 is fixed.
 - **Concurrency, slots and deadline.** Up to 4 AutoConfigs reconcile at once.
   Configure this with `--autoconfig-max-concurrent-reconciles`, or chart
   value `autoconfig.maxConcurrentReconciles`. The AutoConfig checks hold at
   most 1 of the pod's 3 config-check slots, and the gateway controller at
-  most 1, so admission always finds one free. Fetching a spec and resolving
+  most 1, so the controllers never hold more than 2 of the 3 slots.
+  Concurrent admission requests can take the rest. Fetching a spec and resolving
   its external `$ref`s is bounded by 2 minutes overall, and each request by
   30 seconds. A stuck upstream fails with `SpecFetchFailed` (`context
   deadline exceeded`) instead of holding a worker.
@@ -2005,9 +2025,20 @@ AutoConfig holds all but one of them as described above.
 or TRACE operations was stuck in `EndpointReconcileFailed`, and one whose
 whole evaluation failed (parameter `$ref`s, or override `extraConfig` on
 operationIds with `_`, `-` or a leading digit) in `CUEEvaluationFailed`. It now
-syncs and lists those operations in `status.skipped`. On that first sync it
-also deletes the stale endpoints it kept while it was failing. List the
-AutoConfigs stuck that way:
+syncs and lists those operations in `status.skipped`. What else its first sync
+does differs by case:
+
+- An AutoConfig stuck in `EndpointReconcileFailed` kept no stale endpoints:
+  the previous version deleted them before it wrote, so a failed write left
+  them gone. On upgrade the endpoints after its first failed write are
+  created, so those routes go live.
+- An AutoConfig stuck in `CUEEvaluationFailed` for the causes above deletes
+  the stale endpoints it kept while it was failing, unless an operation is
+  held. One that failed on a single bad entry moves to `OperationsFailed`
+  instead: its healthy operations are written, so the upstream drift it
+  accumulated lands at once, and nothing is deleted while the entry is held.
+
+List the AutoConfigs stuck that way:
 
 ```bash
 kubectl get krakendautoconfigs -A -o json | jq -r '.items[] | select(any(.status.conditions[]?; .type == "Synced" and (.reason == "EndpointReconcileFailed" or .reason == "CUEEvaluationFailed"))) | "\(.metadata.namespace)/\(.metadata.name)\t\([.status.conditions[] | select(.type == "Synced") | .message][0])"'
@@ -2015,7 +2046,8 @@ kubectl get krakendautoconfigs -A -o json | jq -r '.items[] | select(any(.status
 
 A message naming a HEAD, OPTIONS or TRACE enum violation, a parameter `$ref`
 or a CUE syntax error on an override means that AutoConfig recovers on
-upgrade. Check which stale endpoints it holds before upgrading.
+upgrade. Check which stale endpoints a `CUEEvaluationFailed` one holds before
+upgrading; an `EndpointReconcileFailed` one holds none.
 
 **Rollout.** Each generated `KrakenDEndpoint` whose schema map shrinks to the
 closure its documentation references is updated once, on its AutoConfig's
