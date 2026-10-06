@@ -362,13 +362,10 @@ func sortIssues(issues []OperationIssue) {
 func skipUnsupportedMethods(output *CUEOutput) {
 	kept := output.Entries[:0]
 	keptIDs := output.entryOperationIDs[:0]
-	aligned := len(output.entryOperationIDs) == len(output.Entries)
 	for i, entry := range output.Entries {
 		if slices.Contains(supportedMethods, entry.Method) {
 			kept = append(kept, entry)
-			if aligned {
-				keptIDs = append(keptIDs, output.entryOperationIDs[i])
-			}
+			keptIDs = append(keptIDs, output.entryOperationIDs[i])
 			continue
 		}
 		key := entry.Endpoint + ":" + entry.Method
@@ -380,9 +377,7 @@ func skipUnsupportedMethods(output *CUEOutput) {
 		delete(output.Tags, key)
 	}
 	output.Entries = kept
-	if aligned {
-		output.entryOperationIDs = keptIDs
-	}
+	output.entryOperationIDs = keptIDs
 
 	stillFailed := output.Failed[:0]
 	for _, failed := range output.Failed {
@@ -621,7 +616,7 @@ func applyFieldOverrides(output *CUEOutput, overrides []v1alpha1.OperationOverri
 func indexOverrideTargets(output *CUEOutput) (map[string]int, map[string]int) {
 	opIDIndex := make(map[string]int, len(output.Entries))
 	count := make(map[string]int, len(output.Entries))
-	for i, opID := range output.operationIDsOfEntries() {
+	for i, opID := range output.entryOperationIDs {
 		if opID == "" {
 			continue
 		}
@@ -706,20 +701,6 @@ func applyOverrideFields(entry *v1alpha1.EndpointEntry, ov v1alpha1.OperationOve
 	if ov.ExtraConfig != nil {
 		entry.ExtraConfig = mergeExtraConfig(entry.ExtraConfig, ov.ExtraConfig)
 	}
-}
-
-// operationIDsOfEntries returns the operationId of each of Entries, in order,
-// "" when it has none. An output the evaluator did not build, which has no
-// per-entry record, reads them from OperationIDs by route.
-func (o *CUEOutput) operationIDsOfEntries() []string {
-	if len(o.entryOperationIDs) == len(o.Entries) {
-		return o.entryOperationIDs
-	}
-	ids := make([]string, len(o.Entries))
-	for i, e := range o.Entries {
-		ids[i] = o.OperationIDs[e.Endpoint+":"+e.Method]
-	}
-	return ids
 }
 
 // remapFailed gives every failed operation of ov the endpoint and method the
