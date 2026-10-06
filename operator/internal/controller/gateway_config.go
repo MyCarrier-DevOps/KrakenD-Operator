@@ -90,8 +90,13 @@ func (r *KrakenDGatewayReconciler) appliedConfigMapName(
 		return "", nil
 	}
 	name := resources.ConfigMapName(gw, applied)
-	// A ConfigMap that is not this gateway's copy is not served: the
-	// Deployment is held instead.
+	// A ConfigMap that is not this gateway's copy but holds the applied
+	// config's bytes is an error: the Deployment is held as it is, mounting
+	// the right bytes. One that holds other bytes is deleted
+	// (verifyExistingConfigMap). This pass has no applied render to publish
+	// again; only the legacy ConfigMap below can restore it. Otherwise the
+	// Deployment is held, mounting a name that no longer exists, until a
+	// render is applied.
 	found, err := r.verifyExistingConfigMap(ctx, r.Client, gw, applied)
 	if err != nil {
 		return "", err
@@ -166,10 +171,12 @@ func (r *KrakenDGatewayReconciler) publishConfig(
 // is this gateway's copy of that config. Its owner and checksum annotation
 // are read as metadata only; the annotation is stripped from the cached
 // metadata, so this read must stay live (client.CacheOptions.DisableFor).
-// Both are copyable by anyone who can create ConfigMaps, so the payload is
-// hashed too: a ConfigMap that claims to be the gateway's copy but whose
-// krakend.json does not hash to checksum is deleted and reported as not
-// found, for the caller to create again.
+// Both are copyable by anyone who can create ConfigMaps, and the pods load the
+// payload whatever the metadata says, so the payload is hashed too, of any
+// ConfigMap at that name: one whose krakend.json does not hash to checksum is
+// deleted, whoever owns it, and reported as not found, for the caller to create
+// again. One that holds the right bytes but is not this gateway's copy is
+// reported through err.
 func (r *KrakenDGatewayReconciler) verifyExistingConfigMap(
 	ctx context.Context, reader client.Reader, gw *v1alpha1.KrakenDGateway, checksum string,
 ) (found bool, err error) {
@@ -182,10 +189,20 @@ func (r *KrakenDGatewayReconciler) verifyExistingConfigMap(
 		}
 		return false, fmt.Errorf("getting configmap %s: %w", name, err)
 	}
+	gwKey, version := client.ObjectKeyFromObject(gw), configMapVersion{cm.UID, cm.ResourceVersion}
 	if err := verifyConfigMap(cm, gw, checksum); err != nil {
+		// What the pods load is the payload, not the metadata: a ConfigMap at
+		// the gateway's content address that holds another payload is removed
+		// whoever owns it. One that holds this config stays not this gateway's
+		// copy (err), but serves the right bytes.
+		if !r.verified.has(gwKey, name, version) {
+			if found, perr := r.verifyPayload(ctx, reader, gw, name, checksum); perr != nil || !found {
+				return found, perr
+			}
+		}
 		return true, err
 	}
-	if r.verified.has(client.ObjectKeyFromObject(gw), name, configMapVersion{cm.UID, cm.ResourceVersion}) {
+	if r.verified.has(gwKey, name, version) {
 		return true, nil
 	}
 	return r.verifyPayload(ctx, reader, gw, name, checksum)
