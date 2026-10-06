@@ -3880,6 +3880,18 @@ func TestAutoConfigReconcile_FailurePathKeepsLastReadinessWhenTheListFails(t *te
 	}
 }
 
+func TestHeldCauses_NamesAnOperationWithoutAnOperationIDCleanly(t *testing.T) {
+	got := heldCauses([]autoconfig.OperationIssue{{
+		Operation: autoconfig.Operation{Method: "GET", Path: "/a"},
+		Reason:    v1alpha1.ReasonCUEEvaluationFailed,
+		Message:   "boom",
+	}}, nil)
+
+	if len(got) != 1 || got[0].operation != "GET /a" || got[0].cause != "boom" {
+		t.Errorf("heldCauses = %+v, want one cause for \"GET /a\"", got)
+	}
+}
+
 func TestAutoConfigReconcile_FailedOperationsAreListedSortedAndCapped(t *testing.T) {
 	cm := testCUEDefinitionsCM()
 	ac := syncedAutoConfig(cm)
