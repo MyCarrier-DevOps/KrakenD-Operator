@@ -38,9 +38,10 @@ type Attribution struct {
 
 var (
 	lintPointerRe = regexp.MustCompile(`^- at '/endpoints/(\d+)[/']`)
-	methodRunRe   = regexp.MustCompile(`(?:endpoint: |the ')(GET|POST|PUT|PATCH|DELETE) (/\S*)(?:, backend: |' endpoint)`)
-	newPathRe     = regexp.MustCompile(`path '(/[^']*)'`)
-	prefixRe      = regexp.MustCompile(`prefix '(/[^']*)'`)
+	methodRunRe   = regexp.MustCompile(
+		`(?:endpoint: |the ')(GET|POST|PUT|PATCH|DELETE) (/\S*)(?:, backend: |' endpoint)`)
+	newPathRe = regexp.MustCompile(`path '(/[^']*)'`)
+	prefixRe  = regexp.MustCompile(`prefix '(/[^']*)'`)
 )
 
 // renderedRoute is one rendered endpoint entry as krakend's router sees it.
