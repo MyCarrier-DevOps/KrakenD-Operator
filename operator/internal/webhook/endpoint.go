@@ -211,14 +211,20 @@ func (v *EndpointValidator) checkRender(
 	}
 	candidate := []v1alpha1.KrakenDEndpoint{*ep}
 	isolated := onceCheck(bindCheck(v.Checker.CheckIsolated, gw, candidate))
+	rootAlone := onceCheck(bindCheck(v.Checker.CheckIsolated, gw, nil))
+	isoBefore := bindCheck(v.Checker.CheckIsolated, gw, baseline)
+	if baseline == nil {
+		// On a create the isolated baseline is the gateway root alone.
+		isoBefore = rootAlone
+	}
 	return ratchetRender(ctx, renderChecks{
 		after:      bindCheck(v.Checker.CheckGateway, gw, candidate),
 		before:     bindCheck(v.Checker.CheckGateway, gw, nil),
 		isoAfter:   isolated,
-		isoBefore:  bindCheck(v.Checker.CheckIsolated, gw, baseline),
+		isoBefore:  isoBefore,
 		newFailure: newlyBlamed(types.NamespacedName{Namespace: ep.Namespace, Name: ep.Name}),
 	},
-		func(verdict configcheck.Verdict) error { return renderDenial(ctx, ep, verdict, isolated) },
+		func(verdict configcheck.Verdict) error { return renderDenial(ctx, ep, verdict, isolated, rootAlone) },
 		func(before configcheck.Verdict) string {
 			return fmt.Sprintf("gateway %s/%s already fails validation without this change: %s",
 				gw.Namespace, gw.Name, shownSummary(before, ep.Namespace, warningLimit))
@@ -234,12 +240,15 @@ const maxEntryCauses = 20
 // maxEntryCauses entries. Findings about other objects in ep's namespace, and
 // those of the entries beyond the limit, go on spec.endpoints as a bounded
 // summary that counts what it leaves out. krakend check prints the values it
-// refuses, so its findings about the gateway root or about an endpoint in
-// another namespace are only counted; when there are any, isolated (the
-// gateway root and ep alone) is run so that ep's own errors are still shown.
+// refuses, so its findings that name no endpoint of ep's namespace (another
+// namespace's, or none, as for the gateway root) are only counted. When there
+// are any, isolated (the gateway root and ep alone) is run so that ep's own
+// errors are still shown. Its findings that name no endpoint are quoted, as
+// ep's, only when rootAlone (the gateway root with no endpoint) passes, and
+// the combined check's copies of them are then not counted.
 func renderDenial(
 	ctx context.Context, ep *v1alpha1.KrakenDEndpoint, verdict configcheck.Verdict,
-	isolated func(context.Context) (configcheck.Verdict, error),
+	isolated, rootAlone func(context.Context) (configcheck.Verdict, error),
 ) error {
 	self := types.NamespacedName{Namespace: ep.Namespace, Name: ep.Name}
 	byEntry := map[int][]configcheck.Finding{}
@@ -286,14 +295,66 @@ func renderDenial(
 		if err != nil {
 			return checkErr(err)
 		}
-		msg := fmt.Sprintf("with this change the gateway's config also fails krakend check on %d findings "+
-			"about the gateway root or endpoints in other namespaces, which are not shown", withheld)
-		if shown, _ := withholdForeign(own, ep.Namespace); len(shown) > 0 {
-			msg += "; this change alone fails it: " + configcheck.Verdict{Findings: shown}.Summary(warningLimit)
+		shown, unnamed := withholdForeign(own, ep.Namespace)
+		if unnamed > 0 {
+			root, err := rootAlone(ctx)
+			if err != nil {
+				return checkErr(err)
+			}
+			if root.OK {
+				// The gateway root passes alone, so what it fails with ep is ep's:
+				// quote it all under ep's name, and stop counting the combined
+				// check's copies of it as withheld.
+				shown = asEndpoints(own.Findings, self)
+				withheld -= repeatedUnnamed(verdict, own)
+			}
 		}
-		errs = append(errs, field.Invalid(field.NewPath("spec", "endpoints"), field.OmitValueType{}, msg))
+		var parts []string
+		if withheld > 0 {
+			parts = append(parts, "with this change the gateway's config fails krakend check: "+
+				withheldNote(withheld, ep.Namespace))
+		}
+		if len(shown) > 0 {
+			parts = append(parts, "the gateway root with this endpoint alone fails krakend check: "+
+				configcheck.Verdict{Findings: shown}.Summary(warningLimit))
+		}
+		errs = append(errs, field.Invalid(field.NewPath("spec", "endpoints"), field.OmitValueType{},
+			strings.Join(parts, "; ")))
 	}
 	return invalid(kindEndpoint, ep.Name, errs)
+}
+
+// asEndpoints returns findings with each one that names no endpoint named as
+// ep's, for findings of the gateway root with ep alone when the root passes
+// alone.
+func asEndpoints(findings []configcheck.Finding, ep types.NamespacedName) []configcheck.Finding {
+	out := slices.Clone(findings)
+	for i := range out {
+		if out[i].Endpoint.Name == "" {
+			out[i].Endpoint, out[i].Index = ep, -1
+		}
+	}
+	return out
+}
+
+// repeatedUnnamed counts the findings of v that name no endpoint and repeat,
+// word for word, a finding of own that names none, each of own's once.
+// krakend check prints such a line the same way in every render it is in.
+func repeatedUnnamed(v, own configcheck.Verdict) int {
+	left := map[string]int{}
+	for _, f := range own.Findings {
+		if f.Endpoint.Name == "" {
+			left[f.Message]++
+		}
+	}
+	n := 0
+	for _, f := range v.Findings {
+		if f.Endpoint.Name == "" && left[f.Message] > 0 {
+			left[f.Message]--
+			n++
+		}
+	}
+	return n
 }
 
 // gatewayFor returns ep's gateway, or nil when there is none to check
