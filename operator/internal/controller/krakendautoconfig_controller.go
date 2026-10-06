@@ -20,12 +20,9 @@ import (
 	"cmp"
 	"context"
 	"crypto/sha256"
-	"encoding/json"
 	stderrors "errors"
 	"fmt"
-	"maps"
 	"net/url"
-	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -936,117 +933,6 @@ func autoConfigStatusChanged(orig, cur *v1alpha1.KrakenDAutoConfigStatus) bool {
 		!slices.Equal(orig.Warnings, cur.Warnings) ||
 		!orig.LastSyncTime.Equal(cur.LastSyncTime) ||
 		!conditionsEqual(orig.Conditions, cur.Conditions)
-}
-
-// reconcileEndpoints converges the KrakenDEndpoints ac controls to desired.
-// It adopts label-matched orphans, runs the gateway config check over the
-// endpoints it would write, writes every endpoint that passes (attempting all
-// of them, whatever fails), and only then, when held is false and nothing
-// failed, deletes the endpoints no longer desired, so a failure never takes a
-// route off the gateway (make-before-break). held is true when some operation
-// failed before generation: its endpoint is not in desired and must not be
-// deleted. An error means the pass could not start: listing failed or the
-// config check could not run. The outcome's readiness summarizes the
-// endpoints ac controls afterwards: held ones keep their last-good endpoint,
-// and a written one is judged from the object its write returned.
-func (r *KrakenDAutoConfigReconciler) reconcileEndpoints(
-	ctx context.Context,
-	ac *v1alpha1.KrakenDAutoConfig,
-	desired []*v1alpha1.KrakenDEndpoint,
-	held bool,
-) (endpointOutcome, error) {
-	outcome := endpointOutcome{rejected: map[string]rejection{}}
-	controlled, err := r.claimEndpoints(ctx, ac, desired, &outcome)
-	if err != nil {
-		return outcome, err
-	}
-	writes, stale := planEndpoints(controlled, desired)
-	// An endpoint that loses its route to another is held whether or not it
-	// would be written. The holds go in before the check, so it sees the stale
-	// endpoints as they stay and checks only the endpoints still to be written.
-	maps.Copy(outcome.rejected, routeCollisions(desired, controlled))
-	writes = slices.DeleteFunc(slices.Clone(writes), func(ep *v1alpha1.KrakenDEndpoint) bool {
-		_, ok := outcome.rejected[ep.Name]
-		return ok
-	})
-	checked, err := r.precheck(ctx, ac, writes, stale, newCreationOrder(controlled),
-		held || outcome.failed() || recursRejection(ac, writes))
-	if err != nil {
-		return outcome, err
-	}
-	maps.Copy(outcome.rejected, checked)
-	// What ac controls once the writes are in: a written endpoint is judged
-	// from the object the write returned, so one that was created or whose
-	// spec changed reads Pending, and one that only gained a controller or
-	// labels keeps the readiness its endpoint controller last reported.
-	after := make(map[string]v1alpha1.KrakenDEndpoint, len(controlled)+len(writes))
-	for _, ep := range controlled {
-		after[ep.Name] = ep
-	}
-	for _, ep := range writes {
-		if _, ok := outcome.rejected[ep.Name]; ok {
-			continue // held by the config check
-		}
-		op, live, err := r.writeEndpoint(ctx, ac, ep)
-		if err != nil {
-			outcome.record(ep, err)
-			continue
-		}
-		outcome.changes.count(op)
-		after[ep.Name] = *live
-	}
-
-	gone := map[string]bool{}
-	if !held && !outcome.failed() {
-		for i := range stale {
-			deleted, err := r.deleteEndpoint(ctx, &stale[i])
-			if err != nil {
-				outcome.record(&stale[i], err)
-				continue
-			}
-			if deleted {
-				outcome.changes.deleted++
-			}
-			gone[stale[i].Name] = true
-		}
-	}
-	outcome.readiness = summarizeReadiness(slices.Collect(maps.Values(after)), gone)
-	return outcome, nil
-}
-
-// recursRejection reports whether a write in this pass names an endpoint the
-// last status recorded as EndpointRejected. The API server rejects it again,
-// so the pass will not delete the stale endpoints and the check must model
-// them as staying.
-func recursRejection(ac *v1alpha1.KrakenDAutoConfig, writes []*v1alpha1.KrakenDEndpoint) bool {
-	for _, f := range ac.Status.FailedOperations {
-		if f.Reason != v1alpha1.ReasonEndpointRejected {
-			continue
-		}
-		if slices.ContainsFunc(writes, func(ep *v1alpha1.KrakenDEndpoint) bool { return ep.Name == f.Endpoint }) {
-			return true
-		}
-	}
-	return false
-}
-
-// endpointSpecEqual reports whether a and b serialize to the same JSON value.
-// Embedded raw JSON (extraConfig, componentSchemas) is compared by value, so
-// key order, whitespace, escaping and number formatting do not count: the API
-// server re-encodes it differently from how the generator emits it, and a
-// byte comparison would update every generated endpoint on every reconcile.
-func endpointSpecEqual(a, b v1alpha1.KrakenDEndpointSpec) bool {
-	var values [2]any
-	for i, spec := range []v1alpha1.KrakenDEndpointSpec{a, b} {
-		raw, err := json.Marshal(spec)
-		if err != nil {
-			return false
-		}
-		if err := json.Unmarshal(raw, &values[i]); err != nil {
-			return false
-		}
-	}
-	return reflect.DeepEqual(values[0], values[1])
 }
 
 func (r *KrakenDAutoConfigReconciler) configMapToAutoConfigs(
