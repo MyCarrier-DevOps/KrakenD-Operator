@@ -85,8 +85,24 @@ type KrakenDAutoConfigReconciler struct {
 	// Checker runs the gateway config check over the endpoints a sync would
 	// write, before it writes them.
 	Checker AutoConfigChecker
-	Clock   utilclock.Clock
+	// CheckSlots bounds how many gateway config checks this reconciler's
+	// workers run at once; nil means no bound. The pod's one Checker is shared
+	// with the admission webhooks, so a bound below its slot count keeps a
+	// slot free for admission however many workers there are.
+	CheckSlots chan struct{}
+	Clock      utilclock.Clock
+	// MaxConcurrentReconciles is how many AutoConfigs reconcile at once;
+	// zero means one.
+	MaxConcurrentReconciles int
+	// FetchTimeout bounds fetching the OpenAPI spec and resolving its
+	// external $refs; zero means defaultFetchTimeout.
+	FetchTimeout time.Duration
 }
+
+// defaultFetchTimeout bounds one reconcile's spec fetch and external $ref
+// resolution when FetchTimeout is zero. Each document fetch is also bounded
+// by the fetcher's own per-request timeout.
+const defaultFetchTimeout = 2 * time.Minute
 
 // +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendautoconfigs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendautoconfigs/status,verbs=get;update;patch
