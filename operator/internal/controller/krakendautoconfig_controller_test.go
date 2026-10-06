@@ -5446,7 +5446,7 @@ func TestAutoConfigReconcile_FailurePathRefreshesEndpointReadiness(t *testing.T)
 	ac.Status.ReadyEndpoints = 0
 	ac.Status.Conditions = []metav1.Condition{{
 		Type: v1alpha1.ConditionEndpointsReady, Status: metav1.ConditionFalse,
-		Reason: v1alpha1.ReasonEndpointsNotReady, Message: "1 of 1 endpoints not ready: test-ac-listusers: Pending",
+		Reason: v1alpha1.ReasonEndpointsNotReady, Message: "1 of 1 endpoint not ready: test-ac-listusers: Pending",
 		LastTransitionTime: metav1.Now(),
 	}}
 	served := readyEndpoint(ownedCopy(t, ac, g.output.Endpoints[0]), metav1.ConditionTrue, "Ready")
@@ -5458,8 +5458,8 @@ func TestAutoConfigReconcile_FailurePathRefreshesEndpointReadiness(t *testing.T)
 	}
 	got := getAC(t, c, ac)
 	cond := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionEndpointsReady)
-	if cond == nil || cond.Status != metav1.ConditionTrue || cond.Message != "1 of 1 endpoints ready" {
-		t.Errorf("EndpointsReady = %+v, want True with 1 of 1 endpoints ready", cond)
+	if cond == nil || cond.Status != metav1.ConditionTrue || cond.Message != "1 of 1 endpoint ready" {
+		t.Errorf("EndpointsReady = %+v, want True with 1 of 1 endpoint ready", cond)
 	}
 	if got.Status.ReadyEndpoints != 1 {
 		t.Errorf("readyEndpoints = %d, want 1", got.Status.ReadyEndpoints)
@@ -5560,6 +5560,12 @@ func TestEndpointsReadyCondition(t *testing.T) {
 			got.Reason != v1alpha1.ReasonAllEndpointsReady || got.ObservedGeneration != 3 ||
 			got.Message != "2 of 2 endpoints ready" {
 			t.Errorf("unexpected condition %+v", got)
+		}
+	})
+	t.Run("one endpoint not ready", func(t *testing.T) {
+		got := endpointsReadyCondition(endpointReadiness{total: 1, notReady: []string{"a: Pending"}}, 3)
+		if want := "1 of 1 endpoint not ready: a: Pending"; got.Message != want {
+			t.Errorf("message = %q, want %q", got.Message, want)
 		}
 	})
 	t.Run("not ready names the first five", func(t *testing.T) {
@@ -5759,8 +5765,8 @@ func TestAutoConfigReconcile_DeletedEndpointsLeaveTheReadinessCount(t *testing.T
 	updated := getAC(t, c, ac)
 	cond := meta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionEndpointsReady)
 	if updated.Status.ReadyEndpoints != 1 || cond == nil || cond.Status != metav1.ConditionTrue ||
-		cond.Message != "1 of 1 endpoints ready" {
-		t.Errorf("readyEndpoints = %d, EndpointsReady = %+v, want 1 and \"1 of 1 endpoints ready\"",
+		cond.Message != "1 of 1 endpoint ready" {
+		t.Errorf("readyEndpoints = %d, EndpointsReady = %+v, want 1 and \"1 of 1 endpoint ready\"",
 			updated.Status.ReadyEndpoints, cond)
 	}
 }
