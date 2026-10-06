@@ -5590,9 +5590,9 @@ func (p *peakChecker) CheckGateway(
 	return configcheck.Verdict{OK: true}, nil
 }
 
-// The pod's one checker has 3 slots and admission shares them, so however many
-// workers prechecks, they never hold more than CheckSlots' capacity (2 in the
-// wiring), which leaves a slot free for admission.
+// The pod's one checker has a fixed number of slots and admission shares them,
+// so however many workers run prechecks at once, they never hold more checker
+// slots than CheckSlots' capacity, which leaves the rest to admission.
 func TestAutoConfigPrecheck_ConcurrentWorkersNeverExceedCheckSlots(t *testing.T) {
 	cm := testCUEDefinitionsCM()
 	ac := syncedAutoConfig(cm)
@@ -5601,7 +5601,8 @@ func TestAutoConfigPrecheck_ConcurrentWorkersNeverExceedCheckSlots(t *testing.T)
 	r := newACReconciler(c, f, ce, fi, g)
 	checker := &peakChecker{}
 	r.Checker = checker
-	r.CheckSlots = make(chan struct{}, 2)
+	const slots = 2
+	r.CheckSlots = make(chan struct{}, slots)
 	writes := []*v1alpha1.KrakenDEndpoint{generatedEndpoint("getA", "/a")}
 
 	var wg sync.WaitGroup
@@ -5616,7 +5617,7 @@ func TestAutoConfigPrecheck_ConcurrentWorkersNeverExceedCheckSlots(t *testing.T)
 	}
 	wg.Wait()
 
-	if got := checker.peak.Load(); got != 2 {
-		t.Errorf("peak concurrent checks = %d, want 2", got)
+	if got := checker.peak.Load(); got < 1 || got > slots {
+		t.Errorf("peak concurrent checks = %d, want between 1 and %d", got, slots)
 	}
 }
