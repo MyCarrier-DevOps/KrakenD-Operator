@@ -701,9 +701,11 @@ func TestMergeExtraConfig_NilOverride(t *testing.T) {
 
 // --- applyFieldOverrides comprehensive tests ---
 
-// testOutputWithEntries creates a CUEOutput with entries and operationID mappings.
+// testOutputWithEntries creates a CUEOutput with entries and operationID
+// mappings, with the per-entry operationIds the evaluator records.
 func testOutputWithEntries() *CUEOutput {
 	return &CUEOutput{
+		entryOperationIDs: []string{"listUsers", "createOrder"},
 		Entries: []v1alpha1.EndpointEntry{
 			{
 				Endpoint: "/api/users",
