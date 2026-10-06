@@ -522,7 +522,7 @@ status:
 **Schema rules.** The CRD enforces what the object alone decides, so the API server rejects a violation before any webhook runs and the same rules apply to GitOps tools that bypass the webhook:
 
 - `spec.endpoints` is a map list keyed on (`endpoint`, `method`) with at least one entry. A repeated pair is rejected (`Duplicate value`), and server-side apply merges entries by key instead of replacing the list.
-- Every entry has at least one backend. `endpoint` starts with `/` and has no `*`, `?`, `&` or `%`, except a trailing `/*` wildcard.
+- Every entry has at least one backend. `endpoint` starts with `/` and has no `*`, `?`, `&`, `%`, whitespace or control character, except a trailing `/*` wildcard. A backend `host` is non-empty and holds no whitespace or control character: `krakend check` prints both verbatim in its errors, and the operator attributes those errors to endpoints by the route they name.
 - `timeout` and `cacheTTL` match Go's `time.ParseDuration` grammar without a sign. A malformed value would otherwise break decoding of the whole `KrakenDEndpointList` in every informer. A CEL rule also requires that they parse as a duration that fits in 64 bits of nanoseconds, with a `maxLength` of 64: the pattern alone admits overflowing values such as `2562048h`. The rule runs only on values that match the pattern, so a stored non-duration fails the pattern alone and ratchets, and a spec holds at most 1024 entries, which keeps the rules inside the CEL cost budget.
 - `outputEncoding`, a backend's `encoding`, `sd` and `method` are enums taken from KrakenD 2.13's own schema. `gatewayRef.name` and `policyRef.name` have a minimum length of 1.
 
