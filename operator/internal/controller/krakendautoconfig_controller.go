@@ -183,29 +183,9 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		warnings.add(v1alpha1.ReasonSpecWarning, note)
 	}
 
-	// Load CUE definitions: prefer ConfigMap, fall back to embedded defaults
-	defaultDefs, err := r.loadCUEDefinitions(ctx, ac.Namespace, defaultCUEDefinitionsConfigMap)
+	defaultDefs, customDefs, err := r.loadAllCUEDefinitions(ctx, &ac)
 	if err != nil {
-		if !errors.IsNotFound(err) {
-			return r.handleCUEError(ctx, &ac, fmt.Errorf("loading default CUE definitions: %w", err), warnings)
-		}
-		defaultDefs, err = autoconfig.EmbeddedCUEDefinitions()
-		if err != nil {
-			return r.handleCUEError(ctx, &ac, fmt.Errorf("loading embedded CUE definitions: %w", err), warnings)
-		}
-	}
-
-	var customDefs map[string]string
-	if ac.Spec.CUE != nil && ac.Spec.CUE.DefinitionsConfigMapRef != nil {
-		customDefs, err = r.loadCUEDefinitions(ctx, ac.Namespace, ac.Spec.CUE.DefinitionsConfigMapRef.Name)
-		if err != nil {
-			return r.handleCUEError(ctx, &ac, fmt.Errorf("loading custom CUE definitions: %w", err), warnings)
-		}
-	}
-
-	env := ""
-	if ac.Spec.CUE != nil {
-		env = ac.Spec.CUE.Environment
+		return r.handleCUEError(ctx, &ac, err, warnings)
 	}
 
 	// CUE evaluation
@@ -217,7 +197,7 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		Defaults:     ac.Spec.Defaults,
 		Overrides:    ac.Spec.Overrides,
 		URLTransform: ac.Spec.URLTransform,
-		Environment:  env,
+		Environment:  cueEnvironment(&ac),
 		ServiceName:  "_spec",
 		DefaultHost:  extractHost(ac.Spec.OpenAPI.URL),
 	})
@@ -225,24 +205,8 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return r.handleCUEError(ctx, &ac, err, warnings)
 	}
 
-	// An override whose operationId matched no generated entry, or whose
-	// backend index is out of range, must fail closed rather than be
-	// silently dropped: overrides can carry security-relevant config (e.g.
-	// auth/validator).
-	if len(cueOutput.UnmatchedOverrides) > 0 {
-		unmatchedErr := fmt.Errorf(
-			"spec.overrides reference operationIds or backend indexes not present in the OpenAPI spec: %s",
-			listed(cueOutput.UnmatchedOverrides))
-		return r.handleSyncedFailure(ctx, &ac, v1alpha1.ReasonUnmatchedOverride, unmatchedErr, warnings)
-	}
-
-	// An override whose operationId several operations share would land on
-	// only one of them; fail closed as for an unmatched one.
-	if len(cueOutput.AmbiguousOverrides) > 0 {
-		ambiguousErr := fmt.Errorf(
-			"spec.overrides reference operationIds that more than one operation declares: %s",
-			listed(cueOutput.AmbiguousOverrides))
-		return r.handleSyncedFailure(ctx, &ac, v1alpha1.ReasonAmbiguousOverride, ambiguousErr, warnings)
+	if reason, overrideErr := overrideFailure(cueOutput); overrideErr != nil {
+		return r.handleSyncedFailure(ctx, &ac, reason, overrideErr, warnings)
 	}
 
 	// Apply filters
@@ -1135,4 +1099,56 @@ func setAutoConfigReadiness(ac *v1alpha1.KrakenDAutoConfig) {
 // A Periodic AutoConfig's other failures requeue at spec.periodic.interval.
 func newAutoConfigRateLimiter() workqueue.TypedRateLimiter[reconcile.Request] {
 	return cappedRateLimiter(defaultResyncInterval)
+}
+
+// loadAllCUEDefinitions loads the default CUE definitions (the ConfigMap,
+// falling back to the embedded ones) and the AutoConfig's custom ones.
+func (r *KrakenDAutoConfigReconciler) loadAllCUEDefinitions(
+	ctx context.Context, ac *v1alpha1.KrakenDAutoConfig,
+) (defaultDefs, customDefs map[string]string, err error) {
+	defaultDefs, err = r.loadCUEDefinitions(ctx, ac.Namespace, defaultCUEDefinitionsConfigMap)
+	if err != nil {
+		if !errors.IsNotFound(err) {
+			return nil, nil, fmt.Errorf("loading default CUE definitions: %w", err)
+		}
+		defaultDefs, err = autoconfig.EmbeddedCUEDefinitions()
+		if err != nil {
+			return nil, nil, fmt.Errorf("loading embedded CUE definitions: %w", err)
+		}
+	}
+	if ac.Spec.CUE != nil && ac.Spec.CUE.DefinitionsConfigMapRef != nil {
+		customDefs, err = r.loadCUEDefinitions(ctx, ac.Namespace, ac.Spec.CUE.DefinitionsConfigMapRef.Name)
+		if err != nil {
+			return nil, nil, fmt.Errorf("loading custom CUE definitions: %w", err)
+		}
+	}
+	return defaultDefs, customDefs, nil
+}
+
+// overrideFailure reports the sync failure for an override that matched no
+// generated entry, whose backend index is out of range, or whose operationId
+// several operations share. Each must fail closed rather than be silently
+// dropped or land on only one operation: overrides can carry security-relevant
+// config (e.g. auth/validator). It returns a nil error when every override
+// resolved.
+func overrideFailure(out *autoconfig.CUEOutput) (string, error) {
+	if len(out.UnmatchedOverrides) > 0 {
+		return v1alpha1.ReasonUnmatchedOverride, fmt.Errorf(
+			"spec.overrides reference operationIds or backend indexes not present in the OpenAPI spec: %s",
+			listed(out.UnmatchedOverrides))
+	}
+	if len(out.AmbiguousOverrides) > 0 {
+		return v1alpha1.ReasonAmbiguousOverride, fmt.Errorf(
+			"spec.overrides reference operationIds that more than one operation declares: %s",
+			listed(out.AmbiguousOverrides))
+	}
+	return "", nil
+}
+
+// cueEnvironment is the CUE environment the AutoConfig selects, "" when unset.
+func cueEnvironment(ac *v1alpha1.KrakenDAutoConfig) string {
+	if ac.Spec.CUE == nil {
+		return ""
+	}
+	return ac.Spec.CUE.Environment
 }
