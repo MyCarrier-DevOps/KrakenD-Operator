@@ -33,7 +33,9 @@ type Renderer interface {
 
 // RenderInput holds all inputs needed to render the KrakenD configuration.
 type RenderInput struct {
-	Gateway          *v1alpha1.KrakenDGateway
+	Gateway *v1alpha1.KrakenDGateway
+	// Endpoints' order decides which definition of a component schema wins
+	// (first seen); callers pass it sorted by namespace/name.
 	Endpoints        []v1alpha1.KrakenDEndpoint
 	Policies         map[string]*v1alpha1.KrakenDBackendPolicy
 	CEFallback       bool
