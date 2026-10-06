@@ -329,7 +329,7 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 - CSV includes all 4 owned CRDs with display names, `alm-examples` from `config/samples`, and the four validating `webhookdefinitions` (`failurePolicy: Fail`); OLM mounts its own webhook certs, so the `[WEBHOOK]` patches in `config/manifests/kustomization.yaml` remove the cert volume and mount
 - `make verify-manifests` gates both CSV files (`bundle/manifests` and `config/manifests/bases`), ignoring only `createdAt`
 - No OLM install is exercised in CI or tests: the bundle is generated and validated with `operator-sdk bundle validate`, never installed
-- InstallModes: OwnNamespace, SingleNamespace, AllNamespaces
+- InstallModes: AllNamespaces only (`OwnNamespace` and `SingleNamespace` are `supported: false`): the operator watches every namespace, and under the other modes OLM would scope the webhooks to the target namespaces
 - `bundle.Dockerfile` for OLM bundle image builds
 
 ### Helm Chart (`charts/krakend-operator/`)
