@@ -24,6 +24,12 @@ metrics:
   enabled: true
   service:
     port: 8443
+  serviceMonitor:
+    # Create a Prometheus Operator ServiceMonitor (needs the
+    # monitoring.coreos.com CRDs). Bind the <release>-metrics-reader
+    # ClusterRole to the scraping ServiceAccount.
+    enabled: false
+    additionalLabels: {}
 
 healthProbes:
   port: 8081
