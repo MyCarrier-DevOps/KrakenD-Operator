@@ -86,8 +86,9 @@ func (r *krakendRenderer) Render(input RenderInput) (*RenderOutput, error) {
 	// documentation/openapi.components_schemas so that endpoint-level ref
 	// fields resolve. Only KrakenD Enterprise publishes it, so a CE-edition
 	// render aggregates nothing.
+	var schemaConflicts []SchemaConflict
 	if gw.Spec.Edition != v1alpha1.EditionCE {
-		appendEndpointComponentSchemas(gatewayEC, input.Endpoints)
+		schemaConflicts = appendEndpointComponentSchemas(gatewayEC, input.Endpoints)
 	}
 	if input.CEFallback {
 		stripped = append(stripped,
@@ -131,6 +132,7 @@ func (r *krakendRenderer) Render(input RenderInput) (*RenderOutput, error) {
 		InvalidEndpoints:    invalidSlice,
 		Sources:             sources,
 		StrippedEEFeatures:  stripped,
+		SchemaConflicts:     schemaConflicts,
 	}, nil
 }
 
