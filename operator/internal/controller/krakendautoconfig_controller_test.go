@@ -5622,6 +5622,47 @@ func TestAutoConfigReconcile_PrecheckKeepsAnOlderUnlabelledEndpointsRoute(t *tes
 	holdsSiblingOfOlderUncontrolledEndpoint(t, unlabelled)
 }
 
+func TestAutoConfigReconcile_PrecheckIgnoresTheAgeOfAnEndpointAnotherObjectControls(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	// getUser's name is taken by an older endpoint another object controls,
+	// so our write of it fails and never takes that age. A newer tenant
+	// endpoint therefore serves /users/{tid}, and the sibling's
+	// /users/{userId}/orders breaks against its parameter name.
+	foreign := generatedEndpoint("getUser", "/other")
+	foreign.Labels = nil
+	foreign.CreationTimestamp = metav1.NewTime(time.Unix(1000, 0))
+	isController := true
+	foreign.OwnerReferences = []metav1.OwnerReference{{
+		APIVersion: "v1", Kind: "ConfigMap", Name: "someone-else", UID: "other-uid", Controller: &isController,
+	}}
+	tenant := generatedEndpoint("tenantUser", "/users/{tid}")
+	tenant.Name, tenant.Labels = "tenant-user", nil
+	tenant.CreationTimestamp = metav1.NewTime(time.Unix(2000, 0))
+	g.output.Endpoints = []*v1alpha1.KrakenDEndpoint{
+		generatedEndpoint("getUser", "/users/{userId}"),
+		generatedEndpoint("getUserOrders", "/users/{userId}/orders"),
+	}
+	c := fakeClientBuilder().WithObjects(ac, cm, foreign, tenant, testGateway()).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Checker = realRouteChecker(c)
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	held := map[string]string{}
+	for _, op := range getAC(t, c, ac).Status.FailedOperations {
+		held[op.Endpoint] = op.Reason
+	}
+	if held["test-ac-getuserorders"] != v1alpha1.ReasonConfigValidationFailed || endpointExists(t, c, "test-ac-getuserorders") {
+		t.Errorf("sibling: held = %q, want held and unwritten (failed operations %v)", held["test-ac-getuserorders"], held)
+	}
+	if held["test-ac-getuser"] != v1alpha1.ReasonEndpointRejected {
+		t.Errorf("getUser: held = %q, want EndpointRejected (another object controls it)", held["test-ac-getuser"])
+	}
+}
+
 func TestAttributeFindings_CauseCarriesEveryFindingInOrder(t *testing.T) {
 	a := generatedEndpoint("a", "/a")
 	key := types.NamespacedName{Namespace: "default", Name: "test-ac-a"}
