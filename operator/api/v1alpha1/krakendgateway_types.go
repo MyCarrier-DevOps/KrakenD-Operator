@@ -705,7 +705,9 @@ type KrakenDGatewayStatus struct {
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
-// KrakenDGateway is the Schema for the krakendgateways API.
+// KrakenDGateway declares a KrakenD API gateway. The operator creates and keeps
+// its Deployment, Service and rendered configuration in sync with the gateway
+// and its endpoints.
 // +operator-sdk:csv:customresourcedefinitions:displayName="KrakenD Gateway"
 type KrakenDGateway struct {
 	metav1.TypeMeta   `json:",inline"`
