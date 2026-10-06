@@ -77,6 +77,7 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 - `krakend_operator_autoconfig_synced` (gauge per AutoConfig namespace+name: 1 after a successful sync, 0 while failing or any operation is held; removed on delete)
 - Instrumented in gateway controller Reconcile (including Dragonfly state) and the AutoConfig controller
 - `cmd/main.go` — Wires Renderer, Validator, Recorder, Clock into all controller setups; passes X509LicenseParser and the API reader to the gateway reconciler; builds the one `configcheck.Checker`, and the gateway and AutoConfig reconcilers that hold it (the AutoConfig one with Fetcher, CUEEvaluator, Filter, Generator and a one-slot `CheckSlots` bound), in `wireValidation`; sets `MaxConcurrentReconciles` from `--autoconfig-max-concurrent-reconciles` (default 4); and calls `webhook.SetupWebhooks(mgr, validators)` for admission webhook registration; `LeaderElectionID` set to `krakend-operator-leader`
+- `cmd/webhooks.go` — `registerWebhooks` sets the webhooks up only when enabled and then adds the `webhook` readiness check (`GetWebhookServer().StartedChecker()`), so each replica is Ready only once its webhook server accepts TLS connections; with webhooks disabled it touches nothing on the manager
 
 ### External CRD Builders (`internal/resources/`)
 - `dragonfly.go` — BuildDragonfly as `unstructured.Unstructured`, DragonflyGVR, DragonflyName, DragonflyServiceDNS, buildResourceRequirements helper
