@@ -2058,3 +2058,18 @@ func TestGatewayReconcile_SchemaConflictSetsAcceptedReason(t *testing.T) {
 		t.Errorf("b-users: Accepted = %+v, want True/SchemaNameConflict naming User and a-users", got)
 	}
 }
+
+func TestSchemaConflictMessages_AreSortedBySchemaName(t *testing.T) {
+	loser := types.NamespacedName{Namespace: "default", Name: "b-users"}
+	winner := types.NamespacedName{Namespace: "default", Name: "a-users"}
+	conflicts := []renderer.SchemaConflict{
+		{Endpoint: loser, Schema: "Pet", Winner: winner},
+		{Endpoint: loser, Schema: "Address", Winner: winner},
+	}
+
+	got := schemaConflictMessages(conflicts)[loser]
+
+	if i, j := strings.Index(got, `"Address"`), strings.Index(got, `"Pet"`); i < 0 || j < 0 || i > j {
+		t.Errorf("message = %q, want Address listed before Pet", got)
+	}
+}
