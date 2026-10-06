@@ -1114,6 +1114,39 @@ func TestPublishConfig_HashesAnExistingConfigMapsPayload(t *testing.T) {
 	}
 }
 
+// A ConfigMap whose payload this process already hashed is not read again on
+// the passes that follow: its UID and resource version identify what was
+// hashed.
+func TestPublishConfig_HashesAnUnchangedConfigMapOnce(t *testing.T) {
+	gw := reconciledGateway()
+	gw.UID = "gw-uid"
+	const config = `{"version":3,"name":"present"}`
+	checksum := hash.SHA256Hex([]byte(config))
+	typedReads := 0
+	c := interceptor.NewClient(
+		fakeClientBuilder().WithObjects(gw, publishedConfigMap(t, gw, config, checksum)).Build(),
+		interceptor.Funcs{Get: func(
+			ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object,
+			opts ...client.GetOption,
+		) error {
+			if _, ok := obj.(*corev1.ConfigMap); ok {
+				typedReads++
+			}
+			return cl.Get(ctx, key, obj, opts...)
+		}})
+	r := newTestGatewayReconciler(c, &mockRenderer{}, &mockValidator{})
+
+	for range 3 {
+		if err := r.publishConfig(context.Background(), gw, []byte(config), checksum); err != nil {
+			t.Fatalf("publishConfig = %v", err)
+		}
+	}
+
+	if typedReads != 1 {
+		t.Errorf("typed ConfigMap reads over three passes = %d, want 1", typedReads)
+	}
+}
+
 func TestPublishConfig_ReplacesAConfigMapWhoseDataDoesNotMatchItsChecksum(t *testing.T) {
 	gw := reconciledGateway()
 	gw.UID = "gw-uid"
