@@ -246,6 +246,7 @@ expect_absent "the webhook Service carries no metrics component label" "app.kube
 expect_contains "two replicas by default" "replicas: 2" --show-only templates/deployment.yaml
 expect_contains "a PodDisruptionBudget allows one disruption" "maxUnavailable: 1" \
 	--show-only templates/pdb.yaml
+expect_absent "no PodDisruptionBudget for a single replica" "kind: PodDisruptionBudget" --set replicaCount=1
 
 if [ "$failures" -gt 0 ]; then
 	printf '%d chart render test(s) failed\n' "$failures"
