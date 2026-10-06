@@ -28,6 +28,7 @@ See [values.yaml](values.yaml) for the full list of configurable parameters.
 | `metrics.enabled` | Expose Prometheus metrics | `true` |
 | `webhooks.enabled` | Serve the validating admission webhooks. `false` runs the operator without a webhook server; only render-time validation then protects gateways | `true` |
 | `webhooks.caBundle` | CA bundle (PEM or base64-encoded PEM) for the webhook, used when `webhooks.certManager.enabled` is `false` | `""` |
+| `autoconfig.maxConcurrentReconciles` | KrakenDAutoConfigs reconciled at once; each reconcile fetches its OpenAPI spec over the network, so a slow upstream delays only its own AutoConfig | `4` |
 | `resources` | CPU/memory requests and limits | See values.yaml |
 
 ## Uninstall
