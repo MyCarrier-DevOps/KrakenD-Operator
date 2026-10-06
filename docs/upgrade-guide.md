@@ -2360,9 +2360,24 @@ every install method: the gateway reconciler creates or updates a ServiceAccount
 named like the gateway and adopts one that already exists with no controller, so
 a user who may create KrakenDGateways in a namespace can run `spec.image` as
 any such ServiceAccount by giving the gateway its name. A ServiceAccount that
-another controller owns cannot be adopted this way. Treat the right to create
-KrakenDGateways in a namespace as the right to run pods as that namespace's
-unowned ServiceAccounts, and grant it accordingly.
+another controller owns is neither adopted nor run as:
+
+- While the gateway does not control it, the Deployment and the post-restart Job
+  are held. The operator logs `holding the Deployment and the post-restart Job:
+  serviceaccount <ns>/<name> is not controlled by gateway <name>`, and still
+  reconciles the Service, PodDisruptionBudget, Dragonfly, ExternalSecret and
+  VirtualService.
+- The hold returns an error, like any other failed child. The gateway's
+  `status.observedGeneration` stays behind `metadata.generation`, so kstatus and
+  Flux show it in progress, and a new gateway's `Ready` reads
+  `AwaitingAvailability`. The reconcile is retried with backoff, which is what
+  recovers it once the conflict is gone, because nothing watches a ServiceAccount
+  the gateway does not own.
+- A Deployment that already runs as that ServiceAccount is held as it is, and
+  its pods keep running until the conflict is resolved.
+
+Treat the right to create KrakenDGateways in a namespace as the right to run pods
+as that namespace's unowned ServiceAccounts, and grant it accordingly.
 
 For OLM users: the bundle now supports only the `AllNamespaces` install mode.
 The operator watches every namespace, and under `OwnNamespace` or
