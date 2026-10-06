@@ -18,6 +18,7 @@ package webhook
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"testing"
 
@@ -131,5 +132,53 @@ func TestGatewayAdmission_UnchangedPostRestartJobIsNotReviewedAgain(t *testing.T
 
 	if !resp.Allowed || len(reviews) != 0 {
 		t.Errorf("response = %+v after %d reviews, want it admitted without a review", resp.Result, len(reviews))
+	}
+}
+
+// A Job that gets nothing the gateway Deployment does not already have needs no
+// review, even from a requester who may not create pods.
+func TestGatewayAdmission_DefaultPostRestartJobNeedsNoReview(t *testing.T) {
+	disabled := gatewayWithJob(func(p *v1alpha1.PostRestartJobSpec) {
+		p.Enabled, p.ServiceAccountName, p.EnvFrom = false, "namespace-admin", secretEnvFrom("db-credentials")
+	})
+	cases := map[string]*v1alpha1.KrakenDGateway{
+		"no ServiceAccount, no Secrets": gatewayWithJob(func(*v1alpha1.PostRestartJobSpec) {}),
+		"the gateway's own ServiceAccount": gatewayWithJob(func(p *v1alpha1.PostRestartJobSpec) {
+			p.ServiceAccountName = "gw"
+		}),
+		"a ConfigMap envFrom": gatewayWithJob(func(p *v1alpha1.PostRestartJobSpec) {
+			p.EnvFrom = []corev1.EnvFromSource{{ConfigMapRef: &corev1.ConfigMapEnvSource{
+				LocalObjectReference: corev1.LocalObjectReference{Name: "settings"}}}}
+		}),
+		"a disabled Job": disabled,
+		"no Job":         testGateway(),
+	}
+	for name, gw := range cases {
+		t.Run(name, func(t *testing.T) {
+			var reviews []authorizationv1.SubjectAccessReview
+			v := &GatewayValidator{Client: reviewingClient(false, &reviews), Checker: &scriptedChecker{}}
+
+			resp := review(t, v, "alice", gw, nil)
+
+			if !resp.Allowed || len(reviews) != 0 {
+				t.Errorf("response = %+v after %d reviews, want it admitted without a review", resp.Result, len(reviews))
+			}
+		})
+	}
+}
+
+// A review that cannot be made is not a verdict: a transient 500.
+func TestGatewayAdmission_PostRestartJobReviewFailureIs500(t *testing.T) {
+	c := fakeClientBuilderWith(interceptor.Funcs{
+		Create: func(context.Context, client.WithWatch, client.Object, ...client.CreateOption) error {
+			return errors.New("the server could not process the review")
+		},
+	})
+	gw := gatewayWithJob(func(p *v1alpha1.PostRestartJobSpec) { p.ServiceAccountName = "namespace-admin" })
+
+	resp := review(t, &GatewayValidator{Client: c, Checker: &scriptedChecker{}}, "alice", gw, nil)
+
+	if resp.Allowed || resp.Result.Code != http.StatusInternalServerError {
+		t.Errorf("response = %+v, want 500", resp.Result)
 	}
 }
