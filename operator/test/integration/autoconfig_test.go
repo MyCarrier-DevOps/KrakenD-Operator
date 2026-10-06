@@ -586,9 +586,10 @@ func TestAutoConfig_EndpointsReadyFollowsChildReadiness(t *testing.T) {
 	ns := testNamespace(t)
 	gw := createReconciledGateway(t, ns, "gw-ready")
 	// An older hand-written endpoint claims GET /pets, so the generated
-	// pets-listpets starts out conflicted.
-	createEndpoint(t, ns, "manual-pets", gw.Name, "/pets")
-	manual := &v1alpha1.KrakenDEndpoint{ObjectMeta: metav1.ObjectMeta{Name: "manual-pets", Namespace: ns}}
+	// pets-listpets starts out conflicted. This relies on the integration
+	// suite running without admission webhooks: under them the generated
+	// /pets write would be denied and pets-listpets would never exist.
+	manualKey := createEndpoint(t, ns, "manual-pets", gw.Name, "/pets")
 	ac := createPetsAutoConfig(t, ns, gw.Name)
 
 	eventually(t, func() error {
@@ -603,6 +604,7 @@ func TestAutoConfig_EndpointsReadyFollowsChildReadiness(t *testing.T) {
 		return nil
 	})
 
+	manual := &v1alpha1.KrakenDEndpoint{ObjectMeta: metav1.ObjectMeta{Name: manualKey.Name, Namespace: manualKey.Namespace}}
 	if err := k8sClient.Delete(ctx, manual); err != nil {
 		t.Fatalf("delete manual endpoint: %v", err)
 	}
