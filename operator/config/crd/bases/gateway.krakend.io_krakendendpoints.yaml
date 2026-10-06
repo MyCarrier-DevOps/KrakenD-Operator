@@ -227,9 +227,10 @@ spec:
                     endpoint:
                       description: |-
                         Endpoint is the public path exposed by KrakenD (e.g. "/api/v1/users").
-                        It starts with "/" and contains no "*", "?", "&" or "%", except a
-                        trailing "/*" wildcard (an Enterprise feature).
-                      pattern: ^(/\*|/[^*?&%]*(/\*)?)$
+                        It starts with "/" and contains no "*", "?", "&", "%", whitespace or
+                        control character, except a trailing "/*" wildcard (an Enterprise
+                        feature). krakend check prints the path verbatim in its errors.
+                      pattern: ^(/\*|/[^*?&%\x00-\x20\x7F]*(/\*)?)$
                       type: string
                     extraConfig:
                       description: ExtraConfig holds arbitrary endpoint-level extra_config
