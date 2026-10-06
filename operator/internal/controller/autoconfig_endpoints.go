@@ -352,7 +352,7 @@ func (r *KrakenDAutoConfigReconciler) precheck(
 			hold(rejected, candidates, message, errors.New(message))
 			return rejected, nil
 		}
-		verdict, err := r.Checker.CheckGateway(ctx, &gw, checkSet(candidates, stale, !held && len(rejected) == 0))
+		verdict, err := r.checkGateway(ctx, &gw, checkSet(candidates, stale, !held && len(rejected) == 0))
 		if err != nil {
 			return nil, &validatorUnavailableError{err: err}
 		}
@@ -373,6 +373,25 @@ func (r *KrakenDAutoConfigReconciler) precheck(
 	return rejected, nil
 }
 
+// checkGateway runs the gateway config check holding one of CheckSlots, so
+// all of the reconciler's workers together never hold more checker slots than
+// that. It gives up when ctx ends while waiting.
+func (r *KrakenDAutoConfigReconciler) checkGateway(
+	ctx context.Context,
+	gw *v1alpha1.KrakenDGateway,
+	replace []v1alpha1.KrakenDEndpoint,
+) (configcheck.Verdict, error) {
+	if r.CheckSlots != nil {
+		select {
+		case r.CheckSlots <- struct{}{}:
+			defer func() { <-r.CheckSlots }()
+		case <-ctx.Done():
+			return configcheck.Verdict{}, fmt.Errorf("waiting for an AutoConfig check slot: %w", ctx.Err())
+		}
+	}
+	return r.Checker.CheckGateway(ctx, gw, replace)
+}
+
 // unattributedFailure handles a failed check whose findings name no
 // candidate: gateway-root findings, or findings on endpoints outside this
 // sync. When the gateway fails the check without the candidates too, the
@@ -386,7 +405,7 @@ func (r *KrakenDAutoConfigReconciler) unattributedFailure(
 	verdict configcheck.Verdict,
 	rejected map[string]rejection,
 ) (map[string]rejection, error) {
-	baseline, err := r.Checker.CheckGateway(ctx, gw, nil)
+	baseline, err := r.checkGateway(ctx, gw, nil)
 	if err != nil {
 		return nil, &validatorUnavailableError{err: err}
 	}
