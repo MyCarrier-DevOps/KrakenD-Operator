@@ -303,8 +303,10 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 - `test/utils/utils.go` — Shared e2e helpers: kubeconfig management, command execution with KUBECONFIG/CONTAINER_HOST injection, cert-manager install, CRD installers (Dragonfly, Istio, ExternalSecrets)
 
 ### OLM Bundle (`operator/bundle/`)
-- Generated via `make bundle` with validated CSV, CRDs, RBAC roles
-- CSV includes all 4 owned CRDs with descriptions
+- Generated via `make bundle` with the pinned operator-sdk (`OPERATOR_SDK_VERSION`, installed under `operator/bin/`), validated CSV, CRDs, RBAC roles
+- CSV includes all 4 owned CRDs with display names, `alm-examples` from `config/samples`, and the four validating `webhookdefinitions` (`failurePolicy: Fail`); OLM mounts its own webhook certs, so the `[WEBHOOK]` patches in `config/manifests/kustomization.yaml` remove the cert volume and mount
+- `make verify-manifests` gates both CSV files (`bundle/manifests` and `config/manifests/bases`), ignoring only `createdAt`
+- No OLM install is exercised in CI or tests: the bundle is generated and validated with `operator-sdk bundle validate`, never installed
 - InstallModes: OwnNamespace, SingleNamespace, AllNamespaces
 - `bundle.Dockerfile` for OLM bundle image builds
 
