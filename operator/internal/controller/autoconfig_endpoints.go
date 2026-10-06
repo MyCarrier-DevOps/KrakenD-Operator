@@ -510,6 +510,33 @@ func attributeFindings(
 	return attributed
 }
 
+// creationOrder is the order in which the renderer serves endpoints that share
+// a route: the oldest creationTimestamp first (to the second), then the name.
+// It knows the endpoints that exist; one it does not know is not yet created
+// and sorts after every one that does.
+type creationOrder map[string]int64
+
+// newCreationOrder records the creation time of each of existing.
+func newCreationOrder(existing []v1alpha1.KrakenDEndpoint) creationOrder {
+	order := make(creationOrder, len(existing))
+	for i := range existing {
+		order[existing[i].Name] = existing[i].CreationTimestamp.Unix()
+	}
+	return order
+}
+
+// compare orders two endpoint names as the renderer serves them.
+func (o creationOrder) compare(a, b string) int {
+	return cmp.Or(cmp.Compare(o.createdAt(a), o.createdAt(b)), strings.Compare(a, b))
+}
+
+func (o creationOrder) createdAt(name string) int64 {
+	if t, ok := o[name]; ok {
+		return t
+	}
+	return math.MaxInt64
+}
+
 // routeCollisions returns, keyed by name, the desired endpoints that lose
 // their route to another desired endpoint. Endpoints are grouped by method and
 // route shape (renderer.ConflictKey), the way the gateway's router tells
@@ -531,21 +558,11 @@ func routeCollisions(
 		key := renderer.RouteKey(e.Method, e.Endpoint)
 		groups[key] = append(groups[key], ep)
 	}
-	created := make(map[string]int64, len(controlled))
-	for i := range controlled {
-		created[controlled[i].Name] = controlled[i].CreationTimestamp.Unix()
-	}
-	// A new endpoint sorts after the existing ones.
-	createdAt := func(name string) int64 {
-		if t, ok := created[name]; ok {
-			return t
-		}
-		return math.MaxInt64
-	}
+	order := newCreationOrder(controlled)
 	collisions := map[string]rejection{}
 	for _, group := range groups {
 		slices.SortFunc(group, func(a, b *v1alpha1.KrakenDEndpoint) int {
-			return cmp.Or(cmp.Compare(createdAt(a.Name), createdAt(b.Name)), strings.Compare(a.Name, b.Name))
+			return order.compare(a.Name, b.Name)
 		})
 		survivor := group[0]
 		for _, ep := range group[1:] {
