@@ -2895,7 +2895,7 @@ func TestRender_DeterministicOutput(t *testing.T) {
 
 **Location:** `test/integration/`
 
-Integration tests run the controllers against a real Kubernetes API server, an ephemeral K3s cluster that testcontainers starts, so they test controller logic and the CRD schema and CEL rules end-to-end. The suite starts no webhook server: the webhook rules are unit-tested in `internal/webhook`.
+Integration tests run the controllers against a real Kubernetes API server, an ephemeral K3s cluster that testcontainers starts, so they test controller logic and the CRD schema and CEL rules end-to-end. The suite starts no webhook server: the webhook rules are unit-tested in `internal/webhook`, and the webhooks' cached lists and policy reads run under the trimmed role only in e2e. The manager itself runs as the operator ServiceAccount, bound to the generated `config/rbac/role.yaml`, so every scenario also proves the role is sufficient.
 
 ```go
 func TestGatewayReconciler_CreatesOwnedResources(t *testing.T) {
@@ -2979,8 +2979,12 @@ func runTests(m *testing.M) int {
     defer k3sContainer.Terminate(terminateCtx)
 
     // Build a rest.Config from the cluster's kubeconfig, wait for the nodes,
-    // install the CRDs from config/crd/bases, then start a manager in the background.
-    mgr, err := ctrl.NewManager(cfg, ctrl.Options{Scheme: scheme})
+    // install the CRDs from config/crd/bases, bind the generated manager ClusterRole
+    // (config/rbac/role.yaml) to the operator ServiceAccount and wait until the
+    // authorizer allows it, then start a manager in the background as that
+    // ServiceAccount, so a missing RBAC verb fails a test with Forbidden.
+    mgrCfg, err := operatorRBACConfig(ctx, cfg, k8sClient)
+    mgr, err := ctrl.NewManager(mgrCfg, ctrl.Options{Scheme: scheme})
 
     // The gateway controller gets the real renderer and one config checker over a
     // marker validator, because the krakend binary is not available here.
