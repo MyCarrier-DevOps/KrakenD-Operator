@@ -5662,3 +5662,33 @@ func TestAutoConfigReconcile_FetchTimeoutIsOverallNotPerRequest(t *testing.T) {
 		t.Errorf("expected a deadline error from two 300ms fetches under a 500ms timeout, got %v", err)
 	}
 }
+
+// A worker waiting for a check slot gives up when its context ends, without
+// running the check.
+func TestAutoConfigCheckGateway_GivesUpWaitingForASlotWhenContextEnds(t *testing.T) {
+	r := newACReconciler(fakeClientBuilder().Build(), &mockFetcher{}, nil, nil, nil)
+	checker := &fakeChecker{}
+	r.Checker = checker
+	r.CheckSlots = make(chan struct{}, 1)
+	r.CheckSlots <- struct{}{}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := r.checkGateway(ctx, &v1alpha1.KrakenDGateway{}, nil)
+		done <- err
+	}()
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("expected a cancellation error, got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("checkGateway kept waiting for a slot after its context ended")
+	}
+	if len(checker.calls) != 0 {
+		t.Errorf("expected no check to run, got %d", len(checker.calls))
+	}
+}
