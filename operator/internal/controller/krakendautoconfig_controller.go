@@ -927,7 +927,8 @@ func (r *KrakenDAutoConfigReconciler) reconcileEndpoints(
 		_, ok := outcome.rejected[ep.Name]
 		return ok
 	})
-	checked, err := r.precheck(ctx, ac, writes, stale, newCreationOrder(controlled), held || outcome.failed())
+	checked, err := r.precheck(ctx, ac, writes, stale, newCreationOrder(controlled),
+		held || outcome.failed() || recursRejection(ac, writes))
 	if err != nil {
 		return outcome, err
 	}
@@ -969,6 +970,22 @@ func (r *KrakenDAutoConfigReconciler) reconcileEndpoints(
 	}
 	outcome.readiness = summarizeReadiness(slices.Collect(maps.Values(after)), gone)
 	return outcome, nil
+}
+
+// recursRejection reports whether a write in this pass names an endpoint the
+// last status recorded as EndpointRejected. The API server rejects it again,
+// so the pass will not delete the stale endpoints and the check must model
+// them as staying.
+func recursRejection(ac *v1alpha1.KrakenDAutoConfig, writes []*v1alpha1.KrakenDEndpoint) bool {
+	for _, f := range ac.Status.FailedOperations {
+		if f.Reason != v1alpha1.ReasonEndpointRejected {
+			continue
+		}
+		if slices.ContainsFunc(writes, func(ep *v1alpha1.KrakenDEndpoint) bool { return ep.Name == f.Endpoint }) {
+			return true
+		}
+	}
+	return false
 }
 
 // endpointSpecEqual reports whether a and b serialize to the same JSON value.
