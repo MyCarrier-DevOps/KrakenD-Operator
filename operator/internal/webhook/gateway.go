@@ -1173,9 +1173,10 @@ func versionWarning(gw, old *v1alpha1.KrakenDGateway) admission.Warnings {
 
 // authorizePostRestartJob requires the requester to be able to create pods in
 // the gateway's namespace when an enabled spec.postRestartJob would run as a
-// ServiceAccount other than the gateway's own. The operator creates the Job
-// with its own grant, so without this check a gateway writer would borrow
-// whatever ServiceAccount of the namespace they name.
+// ServiceAccount other than the gateway's own, read a Secret, or relax the
+// default security context. The operator creates the Job with its own grant,
+// so without this check a gateway writer would borrow whatever
+// ServiceAccount of the namespace they name.
 func (v *GatewayValidator) authorizePostRestartJob(ctx context.Context, old, gw *v1alpha1.KrakenDGateway) error {
 	prj := gw.Spec.PostRestartJob
 	if prj == nil || !prj.Enabled {
@@ -1207,21 +1208,92 @@ func (v *GatewayValidator) authorizePostRestartJob(ctx context.Context, old, gw 
 		gr := schema.GroupResource{Group: v1alpha1.GroupVersion.Group, Resource: "krakendgateways"}
 		return apierrors.NewForbidden(gr, gw.Name, fmt.Errorf(
 			"spec.postRestartJob: %s may not create pods in namespace %s, so the post-restart Job may not "+
-				"run as another ServiceAccount or read a Secret", req.UserInfo.Username, gw.Namespace))
+				"run as another ServiceAccount, read a Secret, or relax the operator's default security context",
+			req.UserInfo.Username, gw.Namespace))
 	}
 	return nil
 }
 
-// postRestartJobBorrowsRights reports whether the Job runs as a ServiceAccount
-// other than the gateway's own, or reads a Secret through envFrom or an env secretKeyRef. The Job on
-// the gateway's ServiceAccount with no Secret references gets nothing the
-// gateway Deployment does not already have.
+// postRestartJobBorrowsRights reports whether the Job would run as a
+// ServiceAccount other than the gateway's own, read a Secret through envFrom
+// or an env secretKeyRef, or run with a security setting outside the
+// raisesPrivileges allow-list. podLabels and the other podAnnotations are not
+// reviewed.
 func postRestartJobBorrowsRights(prj *v1alpha1.PostRestartJobSpec, gw *v1alpha1.KrakenDGateway) bool {
 	if prj.ServiceAccountName != "" && prj.ServiceAccountName != gw.Name {
+		return true
+	}
+	if raisesPrivileges(prj) {
 		return true
 	}
 	return slices.ContainsFunc(prj.EnvFrom, func(e corev1.EnvFromSource) bool { return e.SecretRef != nil }) ||
 		slices.ContainsFunc(prj.Env, func(e corev1.EnvVar) bool {
 			return e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil
 		})
+}
+
+// raisesPrivileges reports whether the Job's security contexts or pod
+// annotations set anything beyond an allow-list of settings that grant no
+// privilege: the run-as identity (root included: validatePostRestartRunAsRoot
+// makes it an acknowledged choice), the group and filesystem-group settings,
+// readOnlyRootFilesystem, allowPrivilegeEscalation false, privileged false,
+// procMount Default, a capabilities drop that keeps ALL, and the
+// runtime-default seccomp and AppArmor profiles. Any
+// other field counts, including one a later Kubernetes release adds, and so
+// does the deprecated AppArmor pod annotation, which the kubelet still honors.
+func raisesPrivileges(prj *v1alpha1.PostRestartJobSpec) bool {
+	if sc := prj.SecurityContext; sc != nil {
+		rest := *sc
+		rest.RunAsUser, rest.RunAsGroup, rest.RunAsNonRoot, rest.ReadOnlyRootFilesystem = nil, nil, nil, nil
+		if rest.AllowPrivilegeEscalation != nil && !*rest.AllowPrivilegeEscalation {
+			rest.AllowPrivilegeEscalation = nil
+		}
+		if rest.Privileged != nil && !*rest.Privileged {
+			rest.Privileged = nil
+		}
+		if rest.ProcMount != nil && *rest.ProcMount == corev1.DefaultProcMount {
+			rest.ProcMount = nil
+		}
+		if c := rest.Capabilities; c != nil && len(c.Add) == 0 && (len(c.Drop) == 0 || slices.Contains(c.Drop, "ALL")) {
+			rest.Capabilities = nil
+		}
+		rest.SeccompProfile = nonDefaultSeccomp(rest.SeccompProfile)
+		rest.AppArmorProfile = nonDefaultAppArmor(rest.AppArmorProfile)
+		if !equality.Semantic.DeepEqual(rest, corev1.SecurityContext{}) {
+			return true
+		}
+	}
+	if psc := prj.PodSecurityContext; psc != nil {
+		rest := *psc
+		rest.RunAsUser, rest.RunAsGroup, rest.RunAsNonRoot = nil, nil, nil
+		rest.FSGroup, rest.FSGroupChangePolicy, rest.SupplementalGroups, rest.SupplementalGroupsPolicy = nil, nil, nil, nil
+		rest.SeccompProfile = nonDefaultSeccomp(rest.SeccompProfile)
+		rest.AppArmorProfile = nonDefaultAppArmor(rest.AppArmorProfile)
+		if !equality.Semantic.DeepEqual(rest, corev1.PodSecurityContext{}) {
+			return true
+		}
+	}
+	for key, value := range prj.PodAnnotations {
+		if strings.HasPrefix(key, corev1.DeprecatedAppArmorBetaContainerAnnotationKeyPrefix) &&
+			value != corev1.DeprecatedAppArmorBetaProfileRuntimeDefault {
+			return true
+		}
+	}
+	return false
+}
+
+// nonDefaultSeccomp returns p unless it is the runtime-default profile.
+func nonDefaultSeccomp(p *corev1.SeccompProfile) *corev1.SeccompProfile {
+	if p != nil && p.Type == corev1.SeccompProfileTypeRuntimeDefault {
+		return nil
+	}
+	return p
+}
+
+// nonDefaultAppArmor returns p unless it is the runtime-default profile.
+func nonDefaultAppArmor(p *corev1.AppArmorProfile) *corev1.AppArmorProfile {
+	if p != nil && p.Type == corev1.AppArmorProfileTypeRuntimeDefault {
+		return nil
+	}
+	return p
 }
