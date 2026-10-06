@@ -3643,6 +3643,61 @@ func TestAutoConfigReconcile_RejectionCauseIsLoggedInFullOnceWhenItChanges(t *te
 	}
 }
 
+// capturedLog returns a context whose logger records every line, and a
+// function counting the recorded lines that contain substr.
+func capturedLog() (context.Context, func(substr string) int) {
+	var mu sync.Mutex
+	var lines []string
+	ctx := logf.IntoContext(context.Background(), funcr.New(func(prefix, args string) {
+		mu.Lock()
+		defer mu.Unlock()
+		lines = append(lines, prefix+args)
+	}, funcr.Options{}))
+	return ctx, func(substr string) int {
+		mu.Lock()
+		defer mu.Unlock()
+		n := 0
+		for _, line := range lines {
+			if strings.Contains(line, substr) {
+				n++
+			}
+		}
+		return n
+	}
+}
+
+func TestAutoConfigReconcile_HeldCauseIsLoggedAgainAfterARestart(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	g.output.Endpoints = append(g.output.Endpoints, generatedEndpoint("getB", "/b"))
+	ce.output.OperationIDs["/b:GET"] = "getB"
+	cause := strings.Repeat("c", 600)
+	rejected := apierrors.NewInvalid(schema.GroupKind{Group: v1alpha1.GroupVersion.Group, Kind: "KrakenDEndpoint"},
+		"test-ac-getb", field.ErrorList{field.Invalid(field.NewPath("spec", "endpoints").Index(0), "x", cause)})
+	var ops []string
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).
+		WithInterceptorFuncs(recordEndpointWrites(&ops, map[string]error{"test-ac-getb": rejected})).Build()
+	ctx, logged := capturedLog()
+
+	if _, err := newACReconciler(c, f, ce, fi, g).Reconcile(ctx,
+		ctrl.Request{NamespacedName: client.ObjectKeyFromObject(ac)}); err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+	if n := logged(cause); n != 1 {
+		t.Fatalf("the full cause was logged %d times on the first pass, want 1", n)
+	}
+	// A restart: the status already lists the hold, but the new process has
+	// not logged its cause.
+	if _, err := newACReconciler(c, f, ce, fi, g).Reconcile(ctx,
+		ctrl.Request{NamespacedName: client.ObjectKeyFromObject(ac)}); err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+	if n := logged(cause); n != 2 {
+		t.Errorf("the full cause was logged %d times after a restart, want 2", n)
+	}
+}
+
 func TestAutoConfigReconcile_FailedOperationsAreListedSortedAndCapped(t *testing.T) {
 	cm := testCUEDefinitionsCM()
 	ac := syncedAutoConfig(cm)
