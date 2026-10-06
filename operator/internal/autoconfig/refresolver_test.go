@@ -618,6 +618,16 @@ func TestResolveExternalRefs_ExamplesAndNameKeyedMaps(t *testing.T) {
 			wantOut: `{"example":{"$ref":"not-a-ref.json"}}`,
 		},
 		{
+			name:    "a schema keyword example is not fetched",
+			spec:    fmt.Sprintf(op, `{"schema":{"type":"object","example":{"$ref":"not-a-ref.json"}}}`),
+			wantOut: `"example":{"$ref":"not-a-ref.json"}`,
+		},
+		{
+			name:    "the value of an examples entry is not fetched",
+			spec:    fmt.Sprintf(op, `{"examples":{"e":{"value":{"$ref":"data.json"}}}}`),
+			wantOut: `{"value":{"$ref":"data.json"}}`,
+		},
+		{
 			name:     "an examples entry that is a reference is resolved",
 			spec:     fmt.Sprintf(op, `{"examples":{"one":{"$ref":"ex.json#/E"}}}`),
 			wantOut:  `{"$ref":"#/components/schemas/ex_E"}`,
