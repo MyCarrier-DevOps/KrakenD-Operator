@@ -1063,7 +1063,8 @@ func validatePostRestartWorkingDir(prj *v1alpha1.PostRestartJobSpec) string {
 // clash with it (on a CE gateway their Enterprise-only namespaces and
 // /prefix/* wildcards are refused earlier, by eeNamespacesOnCE). An update is rejected only when it turns a passing config (the root
 // with its endpoints) into a failing one; when the config already fails, only
-// the root alone is judged.
+// the root alone is judged. An update that renders the same config, such as a
+// new image or replica count, is not checked at all.
 func checkGatewayRender(
 	ctx context.Context, chk ConfigChecker, old, gw *v1alpha1.KrakenDGateway,
 ) (admission.Warnings, error) {
@@ -1091,6 +1092,13 @@ func checkGatewayRender(
 		return admission.Warnings{fmt.Sprintf(
 			"with the endpoints that already reference this gateway, its config fails validation: %s",
 			withEndpoints.Summary(warningLimit))}, nil
+	}
+	same, err := chk.SameConfig(ctx, old, gw)
+	if err != nil {
+		return nil, checkErr(err)
+	}
+	if same {
+		return nil, nil // nothing the check judges has changed
 	}
 	return ratchetRender(ctx, renderChecks{
 		after:      bindCheck(chk.CheckGateway, gw, nil),
