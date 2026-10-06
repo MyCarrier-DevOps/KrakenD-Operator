@@ -17,7 +17,9 @@ limitations under the License.
 package controller
 
 import (
+	"cmp"
 	"fmt"
+	"slices"
 
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 	"k8s.io/apimachinery/pkg/types"
@@ -25,10 +27,13 @@ import (
 
 // schemaConflictMessages returns, for each endpoint that defines a component
 // schema differently from the endpoint the gateway's documentation takes it
-// from, the message its Accepted condition carries.
+// from, the message its Accepted condition carries. Schema names are sorted, so
+// identical renders give identical messages.
 func schemaConflictMessages(conflicts []renderer.SchemaConflict) map[types.NamespacedName]string {
 	byEndpoint := map[types.NamespacedName][]string{}
-	for _, c := range conflicts {
+	sorted := slices.Clone(conflicts)
+	slices.SortStableFunc(sorted, func(a, b renderer.SchemaConflict) int { return cmp.Compare(a.Schema, b.Schema) })
+	for _, c := range sorted {
 		byEndpoint[c.Endpoint] = append(byEndpoint[c.Endpoint],
 			fmt.Sprintf("%q (published from %s)", c.Schema, c.Winner))
 	}
