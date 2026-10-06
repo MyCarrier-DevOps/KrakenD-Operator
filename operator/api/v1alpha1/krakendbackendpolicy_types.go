@@ -91,7 +91,8 @@ type KrakenDBackendPolicyStatus struct {
 // +kubebuilder:printcolumn:name="ReferencedBy",type=integer,JSONPath=`.status.referencedBy`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
-// KrakenDBackendPolicy is the Schema for the krakendbackendpolicies API.
+// KrakenDBackendPolicy defines circuit-breaker and rate-limit settings that
+// KrakenDEndpoints reference by name for their backends.
 // +operator-sdk:csv:customresourcedefinitions:displayName="KrakenD Backend Policy"
 type KrakenDBackendPolicy struct {
 	metav1.TypeMeta   `json:",inline"`
