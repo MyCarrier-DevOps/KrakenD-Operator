@@ -24,6 +24,8 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -5566,5 +5568,55 @@ func TestAutoConfigReconcile_FetchTimeoutBoundsFetchAndResolve(t *testing.T) {
 				t.Errorf("expected SpecAvailable False/SpecFetchFailed, got %+v", cond)
 			}
 		})
+	}
+}
+
+// peakChecker is an AutoConfigChecker that holds every check for a moment and
+// records the most checks it ever ran at once.
+type peakChecker struct {
+	running, peak atomic.Int32
+}
+
+func (p *peakChecker) CheckGateway(
+	_ context.Context,
+	_ *v1alpha1.KrakenDGateway,
+	_ []v1alpha1.KrakenDEndpoint,
+) (configcheck.Verdict, error) {
+	now := p.running.Add(1)
+	defer p.running.Add(-1)
+	for peak := p.peak.Load(); now > peak && !p.peak.CompareAndSwap(peak, now); peak = p.peak.Load() {
+	}
+	time.Sleep(100 * time.Millisecond)
+	return configcheck.Verdict{OK: true}, nil
+}
+
+// The pod's one checker has 3 slots and admission shares them, so however many
+// workers prechecks, they never hold more than CheckSlots' capacity (2 in the
+// wiring), which leaves a slot free for admission.
+func TestAutoConfigPrecheck_ConcurrentWorkersNeverExceedCheckSlots(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	c := fakeClientBuilder().WithObjects(ac, cm, testGateway()).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	checker := &peakChecker{}
+	r.Checker = checker
+	r.CheckSlots = make(chan struct{}, 2)
+	writes := []*v1alpha1.KrakenDEndpoint{generatedEndpoint("getA", "/a")}
+
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := r.precheck(context.Background(), ac, writes, nil, false); err != nil {
+				t.Errorf("precheck: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if got := checker.peak.Load(); got != 2 {
+		t.Errorf("peak concurrent checks = %d, want 2", got)
 	}
 }
