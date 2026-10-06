@@ -189,7 +189,9 @@ from the verbs the controllers use.
 
 4. **Check for error events**:
    ```bash
-   kubectl get events -A --field-selector reason=ConfigValidationFailed,reason=RolloutFailed --sort-by='.lastTimestamp'
+   kubectl get events -A -o json | jq -r '
+     .items[] | select(.reason == "ConfigValidationFailed" or .reason == "RolloutFailed")
+     | "\(.lastTimestamp)\t\(.involvedObject.namespace)/\(.involvedObject.name)\t\(.reason)"' | sort
    ```
 
 ---
