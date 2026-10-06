@@ -93,3 +93,21 @@ func TestGatewayAdmission_PostRestartJobReviewIsOfTheRequesterToCreatePods(t *te
 		t.Errorf("review = %+v, want alice to create pods in namespace default", spec)
 	}
 }
+
+func TestGatewayAdmission_PostRestartJobSecretReferencesNeedPodCreateRights(t *testing.T) {
+	cases := map[string]func(*v1alpha1.PostRestartJobSpec){
+		"envFrom a Secret": func(p *v1alpha1.PostRestartJobSpec) { p.EnvFrom = secretEnvFrom("db-credentials") },
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			var reviews []authorizationv1.SubjectAccessReview
+			v := &GatewayValidator{Client: reviewingClient(false, &reviews), Checker: &scriptedChecker{}}
+
+			resp := review(t, v, "alice", gatewayWithJob(mutate), nil)
+
+			if resp.Allowed || resp.Result.Code != http.StatusForbidden {
+				t.Errorf("response = %+v, want a 403 denial", resp.Result)
+			}
+		})
+	}
+}
