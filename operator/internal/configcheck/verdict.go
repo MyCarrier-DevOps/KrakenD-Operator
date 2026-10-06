@@ -83,7 +83,27 @@ type Refusal struct {
 // findings name the entries of in's endpoints as they are now.
 func Rejected(rejection *renderer.ValidationError, in renderer.RenderInput, out *renderer.RenderOutput) Verdict {
 	atts := renderer.Attribute(out.JSON, out.Sources, rejection.Output)
-	return Verdict{Findings: findingsFrom(atts, out.JSON, in.Endpoints, rejection.Output), Rejection: rejection}
+	return Verdict{
+		Findings: findingsFrom(atts, out.JSON, in.Endpoints, rejection.Output), Rejection: rejection,
+		Stage: rejection.Stage, Refusals: refusalsFrom(rejection.Refusals, out.Sources),
+		RefusalsCapped: rejection.RefusalsCapped,
+	}
+}
+
+// refusalsFrom names, for each refusal, the KrakenDEndpoints that produced the
+// entries it points at. sources is index-aligned with the rendered endpoints.
+func refusalsFrom(refusals []renderer.RouteRefusal, sources []types.NamespacedName) []Refusal {
+	var out []Refusal
+	for _, r := range refusals {
+		refusal := Refusal{Message: r.Message}
+		for _, i := range r.Indices {
+			if i >= 0 && i < len(sources) {
+				refusal.Endpoints = append(refusal.Endpoints, sources[i])
+			}
+		}
+		out = append(out, refusal)
+	}
+	return out
 }
 
 // Summary joins the findings into one message, cut at a finding boundary and
