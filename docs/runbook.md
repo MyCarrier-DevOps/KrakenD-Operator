@@ -452,7 +452,12 @@ when the operator could not write it. The Deployment and the post-restart Job ru
 as that ServiceAccount, so both are left as they are: running pods keep
 running, and a new gateway gets no Deployment (`Ready` reads
 `AwaitingAvailability`). The error keeps `status.observedGeneration` behind
-`metadata.generation`, and the reconcile is retried with backoff.
+`metadata.generation` only for a new gateway or after an edit of the gateway's
+own spec; otherwise the status shows nothing (`Ready` can stay `True` while the
+Deployment keeps what it runs) and this log line is the only sign of the hold.
+The reconcile is retried with backoff. Neither the hold nor its end emits an
+event: once the conflict is resolved, the rollout of the config applied meanwhile
+shows only as `Progressing` (`DeploymentUpdated`).
 
 Diagnose with `kubectl get serviceaccount <name> -n <ns> -o yaml` (the
 controller owner reference). Rename the gateway, or remove the ServiceAccount's
@@ -625,8 +630,9 @@ the gateway root or an endpoint outside the policy's namespace are only counted
 shown`); findings about endpoints in the policy's namespace, and route or
 wildcard refusals, are quoted.
 
-**Resolution:** Fix the policy for the findings shown. For the withheld ones,
-ask the gateway's owner, who can read `status.conditions` (`ConfigValid`).
+**Resolution:** Fix the policy for the findings shown. The withheld ones are not
+recorded anywhere: they are findings of the gateway rendered with the change,
+which the operator never applies, so the gateway's `ConfigValid` does not carry them.
 
 ### A KrakenDBackendPolicy is stuck in `Terminating`
 
