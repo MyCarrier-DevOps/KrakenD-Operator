@@ -9,7 +9,11 @@ import (
 const rootlessPodmanHost = "unix:///run/user/1000/podman/podman.sock"
 
 func TestK3sArgsFor_NoRootlessArgsOutsideRootlessPodman(t *testing.T) {
-	for _, host := range []string{"", "unix:///var/run/docker.sock", "unix:///run/podman/podman.sock"} {
+	for _, host := range []string{
+		"", "unix:///var/run/docker.sock", "unix:///run/podman/podman.sock",
+		"unix:///home/dev/.local/share/containers/podman/machine/qemu/podman.sock",
+		"unix:///tmp/podman-rootful.sock",
+	} {
 		for _, arg := range k3sArgsFor(host) {
 			if strings.HasPrefix(arg, "--kubelet-arg=") {
 				t.Errorf("DOCKER_HOST=%q: unexpected %s", host, arg)
