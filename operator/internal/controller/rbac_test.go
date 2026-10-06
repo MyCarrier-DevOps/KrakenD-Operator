@@ -35,9 +35,9 @@ var managerRoleVerbs = map[string][]string{
 	"/configmaps":                           {"create", "delete", "get", "list", "watch"},
 	"/events":                               {"create", "patch"},
 	"/secrets":                              {"get", "list", "watch"},
-	"/serviceaccounts":                      {"create", "get", "list", "update", "watch"},
-	"/services":                             {"create", "get", "list", "update", "watch"},
-	"apps/deployments":                      {"create", "get", "list", "update", "watch"},
+	"/serviceaccounts":                      {"create", "delete", "get", "list", "update", "watch"},
+	"/services":                             {"create", "delete", "get", "list", "update", "watch"},
+	"apps/deployments":                      {"create", "delete", "get", "list", "update", "watch"},
 	"apps/replicasets":                      {"list"},
 	"autoscaling/horizontalpodautoscalers":  {"create", "delete", "get", "list", "update", "watch"},
 	"batch/jobs":                            {"create", "delete", "get", "list", "watch"},
@@ -54,7 +54,7 @@ var managerRoleVerbs = map[string][]string{
 	"gateway.krakend.io/krakendgateways/finalizers":    {"update"},
 	"gateway.krakend.io/krakendgateways/status":        {"update"},
 	"networking.istio.io/virtualservices":              {"create", "delete", "get", "list", "update", "watch"},
-	"policy/poddisruptionbudgets":                      {"create", "get", "list", "update", "watch"},
+	"policy/poddisruptionbudgets":                      {"create", "delete", "get", "list", "update", "watch"},
 }
 
 // TestManagerRoleGrantsOnlyUsedVerbs pins config/rbac/role.yaml, generated
