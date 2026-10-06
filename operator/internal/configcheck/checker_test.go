@@ -229,6 +229,12 @@ func TestSameConfig(t *testing.T) {
 			gw.Spec.Image = "registry/krakend:other"
 			gw.Spec.Replicas = ptr.To[int32](5)
 		}, true},
+		{"a root setting reaches the config", func(gw *v1alpha1.KrakenDGateway) {
+			gw.Spec.Config.Timeout = "5s"
+		}, false},
+		{"the edition changes the validation even when the bytes match", func(gw *v1alpha1.KrakenDGateway) {
+			gw.Spec.Edition = v1alpha1.EditionEE
+		}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
