@@ -106,3 +106,35 @@ func TestReconcileInfrastructure_FailedServiceAccountWriteHoldsTheDeployment(t *
 		t.Fatal(err)
 	}
 }
+
+// The decision uses the object the write left behind: a new gateway, whose
+// ServiceAccount this pass creates, gets its Deployment in the same pass, and
+// an unowned same-named ServiceAccount is still adopted.
+func TestReconcileInfrastructure_ServiceAccountCreatedOrAdoptedIsUsedInTheSamePass(t *testing.T) {
+	for name, existing := range map[string]*corev1.ServiceAccount{
+		"created": nil,
+		"adopted": {ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "ns"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			gw := makeGWWithJob("echo ok")
+			b := fakeClientBuilder().WithObjects(gw)
+			if existing != nil {
+				b = b.WithObjects(existing)
+			}
+			c := b.Build()
+			r := &KrakenDGatewayReconciler{Client: c, APIReader: c, Scheme: testScheme(), Recorder: fakeRecorder()}
+			in := convergedInputs("abc123")
+			in.configMapName = "gw-config-abc123"
+
+			if _, err := r.reconcileInfrastructure(ctx, gw, in); err != nil {
+				t.Fatalf("reconcileInfrastructure: %v", err)
+			}
+
+			var d appsv1.Deployment
+			if err := c.Get(ctx, types.NamespacedName{Namespace: "ns", Name: "gw"}, &d); err != nil {
+				t.Fatalf("the Deployment must be created in the same pass: %v", err)
+			}
+		})
+	}
+}
