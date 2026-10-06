@@ -966,7 +966,10 @@ spec in full:
   old config ConfigMaps that cannot be deleted), or
 - the Deployment is held because no ConfigMap can hold the applied config
   although the render is the applied config (a ConfigMap that someone else
-  owns sits at `<gateway>-config-<hash>`).
+  owns sits at `<gateway>-config-<hash>`, or a copy with another payload
+  cannot be replaced). `Ready` and `ConfigValid` now read `Unknown` with
+  reason `ConfigPublishFailed` in this case, where `Ready` used to stay
+  `True` behind the lagging `observedGeneration`.
 
 In both cases the error is logged and the gateway is requeued, so kstatus and
 Flux report the gateway as in progress, not as current, until the error
@@ -974,9 +977,9 @@ clears; then `observedGeneration` catches up. A stuck `observedGeneration`
 behind `metadata.generation`, together with an error in the operator log,
 means a child resource or the applied config's ConfigMap cannot be
 reconciled. A rejected config (`ConfigValid=False`), an unavailable validator,
-a validated config that cannot be published (`ConfigPublishFailed`, below) and
-a missing plugin ConfigMap do not hold it back: they are verdicts on the
-current generation, and `Ready` reports them.
+a new render that passed validation but cannot be published
+(`ConfigPublishFailed`, below) and a missing plugin ConfigMap do not hold it
+back: they are verdicts on the current generation, and `Ready` reports them.
 
 ### A validated config that cannot be published is reported
 
