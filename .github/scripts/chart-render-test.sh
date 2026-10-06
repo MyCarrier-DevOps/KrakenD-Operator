@@ -186,6 +186,9 @@ else
 fi
 
 # --- RBAC ---------------------------------------------------------------
+expect_equal "the chart's manager ClusterRole matches config/rbac/role.yaml" \
+	"$(rules_block <operator/config/rbac/role.yaml)" \
+	"$(manifest ClusterRole t-krakend-operator-manager-role | rules_block)"
 expect_equal "the leader-election Role grants nothing on configmaps" "0" \
 	"$(manifest Role t-krakend-operator-leader-election-role | grep -c -- '- configmaps' || true)"
 expect_equal "the chart's leader-election Role matches config/rbac" \
