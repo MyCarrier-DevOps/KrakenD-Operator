@@ -1632,15 +1632,28 @@ when the gateway's config passed before the change and fails after it, with one
 cause per offending entry (`spec.endpoints[1]: <finding>`); a finding about
 another endpoint in the requester's namespace is reported on `spec.endpoints`.
 `krakend check` prints the values it refuses, and the writer may not read the
-gateway or another namespace's endpoints, so a `krakend check` finding about
-the gateway root or about an endpoint in another namespace is counted, never
-quoted (`... also fails krakend check on N findings about the gateway root or
-endpoints in other namespaces, which are not shown`). When any is withheld the
-denial adds what the gateway root plus this endpoint alone fails, which is the
-requester's own errors. The route and Enterprise wildcard refusals, which only
-print methods and paths, are quoted. The warning that a gateway already fails
-follows the same rule, for endpoint and policy writes; a gateway write's
-warning, whose writer can read the gateway, is unchanged. If the
+gateway or another namespace's endpoints. A finding of the whole-gateway check
+that names no endpoint of the requester's namespace is therefore not quoted
+from that check: it is counted (`N findings that name no endpoint of namespace
+<ns> are not shown`), unless the root-alone check below shows it as this
+endpoint's, in which case it is quoted as the endpoint's and not counted. Such
+a finding names an endpoint of another namespace, or none at all, which is how
+krakend reports the gateway root and also some errors of an endpoint, such as
+an invalid backend host. When any is withheld, the denial adds what the
+gateway root plus this endpoint alone fails (`the gateway root with this
+endpoint alone fails krakend check: ...`).
+- If the root passes on its own, all of that is quoted. A line that names no
+  endpoint is then shown as this endpoint's (`<ns>/<name>: ...`), and the
+  whole-gateway check's copy of it is no longer counted.
+- If the root fails on its own, its lines stay withheld.
+
+A line that fails only in combination with a gateway-root setting is quoted
+too, and can quote or reveal that setting; for example, the root's `no-op`
+output encoding with an entry of two backends. The route and Enterprise
+wildcard refusals, which only print methods and paths, are quoted. The warning
+that a gateway already fails counts withheld findings the same way, for
+endpoint and policy writes. A gateway write's warning, whose writer can read
+the gateway, is unchanged. If the
 gateway already fails without the change (because of another object, or of the
 endpoint's own stored version), the change is judged with the gateway root
 alone: it is admitted with a warning that names the existing failure, unless
@@ -1926,8 +1939,8 @@ on its own too (then its gateways decide). A change to a policy that endpoints r
 gateway of those endpoints and refused if it breaks one that passed
 (`breaks gateway ns/name: ...`); a gateway that already fails for another reason
 gets a warning instead. Both the denial and the warning count rather than quote
-the `krakend check` findings about the gateway root or an endpoint outside the
-policy's namespace (see *Endpoint writes are checked against the whole
+the `krakend check` findings that name no endpoint of the policy's
+namespace (see *Endpoint writes are checked against the whole
 gateway*), since the policy's writer may not read them. The denial lists at most 20 gateways and the warnings
 name at most 5, each counting the rest, in at most 4 KiB together (past that
 the API server would cut every warning to 256 characters).
