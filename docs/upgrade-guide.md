@@ -1738,7 +1738,9 @@ variants the Enterprise binary allows.
 **Gateway writes are checked too.** A new KrakenDGateway's root config
 (`spec.config`, including `extraConfig`) must pass `krakend check` on its own.
 Endpoints that already reference the gateway and clash with that root do not
-block the create: a warning names them.
+block the create: a warning names them. On a CE gateway, though, the create is
+refused while those endpoints, or the policies they reference, use
+Enterprise-only namespaces or `/prefix/*` wildcards (below).
 An update that renders the same config as the stored object (a new
 `spec.image`, `spec.version`, replica count, resource, probe or
 `postRestartJob`) is not checked, so it is never refused with a `500` because
