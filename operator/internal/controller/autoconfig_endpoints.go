@@ -35,6 +35,7 @@ import (
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/autoconfig"
@@ -551,6 +552,39 @@ func (o creationOrder) createdAt(name string) int64 {
 	return notYetCreated
 }
 
+// withUncontrolled returns controlled plus the stored copy of each desired
+// endpoint that exists but is not controlled: a label-matched orphan that
+// writeEndpoint takes over, or an endpoint of that name nobody labelled. The
+// cluster keeps the creation time of both, so the order must know it. A name
+// that is not found is new. Any other read error leaves the name unknown, as
+// a new one, and is logged: it cannot fail the sync.
+func (r *KrakenDAutoConfigReconciler) withUncontrolled(
+	ctx context.Context,
+	controlled []v1alpha1.KrakenDEndpoint,
+	desired []*v1alpha1.KrakenDEndpoint,
+) []v1alpha1.KrakenDEndpoint {
+	known := make(map[string]bool, len(controlled))
+	for i := range controlled {
+		known[controlled[i].Name] = true
+	}
+	all := slices.Clone(controlled)
+	for _, ep := range desired {
+		if known[ep.Name] {
+			continue
+		}
+		var stored v1alpha1.KrakenDEndpoint
+		err := r.Get(ctx, client.ObjectKeyFromObject(ep), &stored)
+		switch {
+		case err == nil:
+			all = append(all, stored)
+		case !apierrors.IsNotFound(err):
+			logf.FromContext(ctx).V(1).Info("treating the endpoint as new in the creation order",
+				"endpoint", ep.Name, "error", err.Error())
+		}
+	}
+	return all
+}
+
 // timestamp is the creationTimestamp the cluster gives the endpoint name:
 // its own when it exists, otherwise one after every existing endpoint's.
 func (o creationOrder) timestamp(name string) metav1.Time {
@@ -620,12 +654,13 @@ func (r *KrakenDAutoConfigReconciler) reconcileEndpoints(
 	// An endpoint that loses its route to another is held whether or not it
 	// would be written. The holds go in before the check, so it sees the stale
 	// endpoints as they stay and checks only the endpoints still to be written.
-	maps.Copy(outcome.rejected, routeCollisions(desired, controlled))
+	existing := r.withUncontrolled(ctx, controlled, desired)
+	maps.Copy(outcome.rejected, routeCollisions(desired, existing))
 	writes = slices.DeleteFunc(slices.Clone(writes), func(ep *v1alpha1.KrakenDEndpoint) bool {
 		_, ok := outcome.rejected[ep.Name]
 		return ok
 	})
-	checked, err := r.precheck(ctx, ac, writes, stale, newCreationOrder(controlled),
+	checked, err := r.precheck(ctx, ac, writes, stale, newCreationOrder(existing),
 		held || outcome.failed() || recursRejection(ac, writes))
 	if err != nil {
 		return outcome, err
