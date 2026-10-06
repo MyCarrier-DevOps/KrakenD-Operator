@@ -366,6 +366,21 @@ idle.
   resolution cycle, or a schema-name collision between two `$ref`s remain
   warnings, not failures, listed in `status.warnings`. See *Before upgrading*
   below.
+- A `$ref`-shaped value inside example data is no longer fetched. The value
+  of an `example` field, the content of an `examples` field and the `value` of
+  an Example Object are data, so a `{"$ref": "…"}` in them is neither resolved
+  nor rewritten, and a fetch that cannot succeed no longer fails the sync
+  (this fixes a regression in the fail-closed behaviour above: such a spec
+  went to `SpecFetchFailed` on every resync). An Example Object's own `$ref`,
+  an entry of `examples` or of `components.examples` that is itself a
+  `{"$ref": "…"}`, is still resolved and still fails the sync closed. A
+  schema, response, header or other member of a name-keyed map (for example
+  `components.schemas.example`) is an object whatever it is named, so it is
+  still resolved too.
+- A skipped HEAD, OPTIONS or TRACE operation now carries its own `operationId`
+  and tags when the URL transform puts two of them on one route, so
+  `spec.filter` `excludeOperationIds` and `includeTags` judge each skip as
+  itself rather than as the other operation.
 - A spec fetch failure now also sets `Synced=False` (reason
   `SpecFetchFailed`) alongside `SpecAvailable=False`, instead of leaving the
   last successful sync's `Synced=True`, so health checks that read
