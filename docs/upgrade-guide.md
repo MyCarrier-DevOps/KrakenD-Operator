@@ -1746,8 +1746,8 @@ is judged on the root alone, against the stored root, and the existing failure
 is a warning. A `spec.version` other than 2.13.x gets a warning when it is set
 or changed: validation uses the pinned 2.13 binary. **On a CE gateway,
 Enterprise-only namespaces are rejected** in `spec.config.extraConfig` when it
-is set or changed, and switching `edition: EE` to `CE` is rejected while the
-gateway's KrakenDEndpoints or their KrakenDBackendPolicies use one, or any of
+is set or changed, and creating a CE gateway, or switching `edition: EE` to
+`CE`, is rejected while the gateway's KrakenDEndpoints or their KrakenDBackendPolicies use one, or any of
 its endpoints is a `/prefix/*` wildcard, even when the gateway's config already
 fails; the denial lists each object, field and namespace. So are the typed Enterprise fields
 `spec.redis`, `spec.config.documentation`, `spec.openapi.enabled: true` and
