@@ -2379,10 +2379,14 @@ another controller owns is neither adopted nor run as:
   serviceaccount <ns>/<name> is not controlled by gateway <name>`, and still
   reconciles the Service, PodDisruptionBudget, Dragonfly, ExternalSecret and
   VirtualService.
-- The hold returns an error, like any other failed child. The gateway's
-  `status.observedGeneration` stays behind `metadata.generation`, so kstatus and
-  Flux show it in progress, and a new gateway's `Ready` reads
-  `AwaitingAvailability`. The reconcile is retried with backoff, which is what
+- The hold returns an error, like any other failed child. A new gateway's
+  `Ready` reads `AwaitingAvailability`. `status.observedGeneration` stays behind
+  `metadata.generation`, so kstatus and Flux show the gateway in progress, only
+  for a new gateway or after an edit of the gateway's own spec. Otherwise (an
+  endpoint, policy, license Secret or plugin ConfigMap change, a CE-fallback flip,
+  or nothing pending) the status shows nothing: `Ready` can stay `True` while the
+  Deployment keeps what it runs, and only the operator log names the hold. The
+  reconcile is retried with backoff, which is what
   recovers it once the conflict is gone, because nothing watches a ServiceAccount
   the gateway does not own.
 - A Deployment that already runs as that ServiceAccount is held as it is, and
