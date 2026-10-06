@@ -96,9 +96,10 @@ type KrakenDAutoConfigReconciler struct {
 	// MaxConcurrentReconciles is how many AutoConfigs reconcile at once;
 	// zero means one.
 	MaxConcurrentReconciles int
-	// heldLogged remembers, per AutoConfig UID, the held operations' causes
-	// this process last logged (a heldLog), so a cause is logged once per
-	// change per process. It is safe for the concurrent workers.
+	// heldLogged remembers, per AutoConfig namespace/name, a digest of the held
+	// operations' causes this process last logged, so a cause is logged once per
+	// change per process. A recreated AutoConfig overwrites its predecessor's
+	// entry. It is safe for the concurrent workers.
 	heldLogged sync.Map
 	// FetchTimeout bounds fetching the OpenAPI spec and resolving its
 	// external $refs; zero means defaultFetchTimeout.
@@ -143,7 +144,7 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	if err := r.Get(ctx, req.NamespacedName, &ac); err != nil {
 		if errors.IsNotFound(err) {
 			autoConfigSynced.DeleteLabelValues(req.Namespace, req.Name)
-			r.forgetHeldCauses(req.NamespacedName)
+			r.heldLogged.Delete(req.NamespacedName)
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("getting autoconfig %s: %w", req.NamespacedName, err)
@@ -154,7 +155,7 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// would recreate each one as it goes.
 	if !ac.DeletionTimestamp.IsZero() {
 		autoConfigSynced.DeleteLabelValues(ac.Namespace, ac.Name)
-		r.heldLogged.Delete(ac.UID)
+		r.heldLogged.Delete(req.NamespacedName)
 		return ctrl.Result{}, nil
 	}
 
@@ -923,23 +924,6 @@ func cueEnvironment(ac *v1alpha1.KrakenDAutoConfig) string {
 	return ac.Spec.CUE.Environment
 }
 
-// heldLog is what logHeldCauses last logged for one AutoConfig.
-type heldLog struct {
-	owner  types.NamespacedName
-	digest string
-}
-
-// forgetHeldCauses forgets what was logged for the AutoConfig named owner,
-// which no longer exists: its UID is gone with it, so it is found by name.
-func (r *KrakenDAutoConfigReconciler) forgetHeldCauses(owner types.NamespacedName) {
-	r.heldLogged.Range(func(uid, entry any) bool {
-		if logged, ok := entry.(heldLog); ok && logged.owner == owner {
-			r.heldLogged.Delete(uid)
-		}
-		return true
-	})
-}
-
 // heldCause is the full cause of one held operation, for the log.
 type heldCause struct {
 	// operation names the operation: an endpoint, or "METHOD path (operationId)"
@@ -980,7 +964,7 @@ func (r *KrakenDAutoConfigReconciler) logHeldCauses(
 ) {
 	held := heldCauses(failedOps, rejected)
 	if len(held) == 0 {
-		r.heldLogged.Delete(ac.UID)
+		r.heldLogged.Delete(client.ObjectKeyFromObject(ac))
 		return
 	}
 	var joined strings.Builder
@@ -988,12 +972,11 @@ func (r *KrakenDAutoConfigReconciler) logHeldCauses(
 		joined.WriteString(h.operation + "\x00" + h.cause + "\x00")
 	}
 	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(joined.String())))
-	if prev, ok := r.heldLogged.Load(ac.UID); ok {
-		if logged, isLog := prev.(heldLog); isLog && logged.digest == digest {
-			return
-		}
+	key := client.ObjectKeyFromObject(ac)
+	if prev, ok := r.heldLogged.Load(key); ok && prev == digest {
+		return
 	}
-	r.heldLogged.Store(ac.UID, heldLog{owner: client.ObjectKeyFromObject(ac), digest: digest})
+	r.heldLogged.Store(key, digest)
 	log := logf.FromContext(ctx)
 	for _, h := range held {
 		log.Info("operation held", "operation", h.operation, "error", h.cause)

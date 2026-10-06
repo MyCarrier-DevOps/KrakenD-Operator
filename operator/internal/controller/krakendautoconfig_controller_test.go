@@ -3783,7 +3783,7 @@ func TestAutoConfigReconcile_DeletedAutoConfigIsForgottenByTheCauseLog(t *testin
 	if _, err := reconcileAC(r, ac); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if _, ok := r.heldLogged.Load(ac.UID); !ok {
+	if _, ok := r.heldLogged.Load(client.ObjectKeyFromObject(ac)); !ok {
 		t.Fatal("expected the held cause remembered")
 	}
 
@@ -3793,7 +3793,7 @@ func TestAutoConfigReconcile_DeletedAutoConfigIsForgottenByTheCauseLog(t *testin
 	if _, err := reconcileAC(r, ac); err != nil {
 		t.Fatalf("reconcile after delete: %v", err)
 	}
-	if _, ok := r.heldLogged.Load(ac.UID); ok {
+	if _, ok := r.heldLogged.Load(client.ObjectKeyFromObject(ac)); ok {
 		t.Error("expected a deleted autoconfig forgotten")
 	}
 }
@@ -3836,12 +3836,12 @@ func TestAutoConfigReconcile_TerminatingAutoConfigIsForgottenByTheCauseLog(t *te
 	ac.Finalizers = []string{"test/hold"}
 	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).Build()
 	r := newACReconciler(c, f, ce, fi, g)
-	r.heldLogged.Store(ac.UID, heldLog{owner: client.ObjectKeyFromObject(ac), digest: "d"})
+	r.heldLogged.Store(client.ObjectKeyFromObject(ac), "d")
 
 	if _, err := reconcileAC(r, ac); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if _, ok := r.heldLogged.Load(ac.UID); ok {
+	if _, ok := r.heldLogged.Load(client.ObjectKeyFromObject(ac)); ok {
 		t.Error("expected a terminating autoconfig forgotten")
 	}
 }
