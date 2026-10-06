@@ -76,7 +76,13 @@ flowchart TD
 
 ```go
 mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
-    Scheme:                 scheme,
+    Scheme: scheme,
+    // Secrets and ConfigMaps are read live, never from the cache, and the
+    // cache keeps their metadata without annotations and managedFields.
+    Client: client.Options{
+        Cache: &client.CacheOptions{DisableFor: controller.UncachedObjects()},
+    },
+    Cache:                  cache.Options{ByObject: controller.CacheByObject()},
     Metrics:                metricsServerOptions,
     WebhookServer:          webhookServer,
     HealthProbeBindAddress: probeAddr,
@@ -84,6 +90,8 @@ mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
     LeaderElectionID:       "krakend-operator-leader",
 })
 ```
+
+The controllers watch Secrets and ConfigMaps as metadata only (`builder.OnlyMetadata`), so no Secret `data` or ConfigMap payload is cached. `UncachedObjects` makes every `Get` and `List` of those kinds through the manager's client a live API request, and `CacheByObject` strips the annotations and `managedFields` from the metadata that is cached: a client-side `kubectl apply` repeats the whole object, data included, in the `kubectl.kubernetes.io/last-applied-configuration` annotation. The names, labels and owner references of every Secret and ConfigMap in the cluster stay cached, because the watches cannot select the user-named license Secrets and plugin ConfigMaps they follow. The same options are set on the integration suite's manager, which records any typed Secret or ConfigMap cache request (`TestManager_CachesNoSecretOrConfigMapContent`).
 
 ### Shared Dependency Wiring
 
@@ -828,7 +836,7 @@ func (r *KrakenDGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
         For(&v1alpha1.KrakenDGateway{}).
         Owns(&appsv1.Deployment{}).
         Owns(&corev1.Service{}).
-        Owns(&corev1.ConfigMap{}).
+        Owns(&corev1.ConfigMap{}, builder.OnlyMetadata).
         Owns(&corev1.ServiceAccount{}).
         Owns(&policyv1.PodDisruptionBudget{}).
         Owns(&autoscalingv2.HorizontalPodAutoscaler{}).
@@ -846,10 +854,12 @@ func (r *KrakenDGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
         Watches(
             &corev1.Secret{},
             handler.EnqueueRequestsFromMapFunc(r.licenseSecretToGateway),
+            builder.OnlyMetadata,
         ).
         Watches(
             &corev1.ConfigMap{},
             handler.EnqueueRequestsFromMapFunc(r.pluginConfigMapToGateway),
+            builder.OnlyMetadata,
         )
 
     // Dragonfly, ExternalSecret and VirtualService are owned as
@@ -1134,6 +1144,8 @@ func (r *KrakenDGatewayReconciler) licenseSecretToGateway(
     return requests
 }
 ```
+
+The Secret and ConfigMap watches are metadata-only, so the mappers receive a `*metav1.PartialObjectMetadata`, never a typed object. They use only `GetName` and `GetNamespace` (`TestGatewayMappers_AcceptMetadataOnlyObjects`), and a mapper must not type-assert `*corev1.Secret` or `*corev1.ConfigMap`. The `Owns(&v1alpha1.KrakenDEndpoint{})` watches elsewhere stay typed: their predicates and the controller-UID index read the typed object.
 
 ### Owned Resource Reconciliation
 
@@ -1457,6 +1469,7 @@ func (r *KrakenDAutoConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
         Watches(
             &corev1.ConfigMap{},
             handler.EnqueueRequestsFromMapFunc(r.configMapToAutoConfigs),
+            builder.OnlyMetadata,
         ).
         WithOptions(crcontroller.Options{
             RateLimiter:             newAutoConfigRateLimiter(), // per-item backoff capped at defaultResyncInterval
@@ -1467,7 +1480,7 @@ func (r *KrakenDAutoConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 ```
 
-The `For` predicate ignores status-only updates, so the reconciler's own status writes never re-enqueue the AutoConfig. Generation covers spec edits, labels are included because application deploys relabel the AutoConfig, and annotations let `kubectl annotate` force an immediate reconcile. The `Owns(&v1alpha1.KrakenDEndpoint{})` watch (`ownedEndpointPredicate`) re-enqueues the owning AutoConfig when a generated endpoint is deleted, its spec changes (a generation bump), its labels change, or its readiness changes (`endpointReadinessKey`: the observed generation and the `Ready` status and reason, not the message) — other status updates are ignored — so a hand-edited, relabelled or deleted endpoint is restored and `EndpointsReady` stays current (a failed sync refreshes it too, from the endpoints the AutoConfig controls then). `Owns` matches the controller owner reference, so endpoints the AutoConfig does not control are not watched: a label-matched orphan is adopted on the next reconcile. The `Watches(&corev1.ConfigMap{})` watch maps a changed ConfigMap to every AutoConfig in its namespace that depends on it: the default `krakend-cue-definitions` ConfigMap, a custom CUE ConfigMap referenced by `cue.definitionsConfigMapRef`, or an OpenAPI spec ConfigMap referenced by `openapi.configMapRef`.
+The `For` predicate ignores status-only updates, so the reconciler's own status writes never re-enqueue the AutoConfig. Generation covers spec edits, labels are included because application deploys relabel the AutoConfig, and annotations let `kubectl annotate` force an immediate reconcile. The `Owns(&v1alpha1.KrakenDEndpoint{})` watch (`ownedEndpointPredicate`) re-enqueues the owning AutoConfig when a generated endpoint is deleted, its spec changes (a generation bump), its labels change, or its readiness changes (`endpointReadinessKey`: the observed generation and the `Ready` status and reason, not the message) — other status updates are ignored — so a hand-edited, relabelled or deleted endpoint is restored and `EndpointsReady` stays current (a failed sync refreshes it too, from the endpoints the AutoConfig controls then). `Owns` matches the controller owner reference, so endpoints the AutoConfig does not control are not watched: a label-matched orphan is adopted on the next reconcile. The `Watches(&corev1.ConfigMap{})` watch maps a changed ConfigMap to every AutoConfig in its namespace that depends on it: the default `krakend-cue-definitions` ConfigMap, a custom CUE ConfigMap referenced by `cue.definitionsConfigMapRef`, or an OpenAPI spec ConfigMap referenced by `openapi.configMapRef`. The watch is metadata-only, so `configMapToAutoConfigs` reads only the ConfigMap's name and namespace (`TestAutoConfigMapper_ConfigMapToAutoConfigs_MetadataOnly`). The AutoConfig controller reads its Secrets and ConfigMaps live: the CUE definitions ConfigMaps as metadata on every reconcile (their resource versions feed the sync checksum), then in full when a sync loads custom definitions, and the spec and auth sources in full when it fetches them.
 
 ---
 
@@ -2668,8 +2681,8 @@ All external dependencies are abstracted behind interfaces, injected via struct 
 | `Generator` | `internal/autoconfig` | Endpoint entries → `KrakenDEndpoint` CRDs with metadata | `autoconfig.endpointGenerator` |
 | `LicenseParser` | `internal/util/license` | Parse X.509 license certificates | `license.x509LicenseParser` |
 | `clock.Clock` | `k8s.io/utils/clock` | Time abstraction for license checks and periodic reconcile scheduling | `clock.RealClock` |
-| `client.Client` | `sigs.k8s.io/controller-runtime` | Kubernetes API client | Manager's cached client |
-| `client.Reader` | `sigs.k8s.io/controller-runtime` | Uncached reads where the cache can lag: the policy controller's release check and `EndpointValidator.APIReader` | `mgr.GetAPIReader()` |
+| `client.Client` | `sigs.k8s.io/controller-runtime` | Kubernetes API client | Manager's client: cached reads, except Secrets and ConfigMaps, which are read live (`DisableFor`) |
+| `client.Reader` | `sigs.k8s.io/controller-runtime` | Uncached reads where the cache can lag: the policy controller's release check, `EndpointValidator.APIReader`, the gateway's ReplicaSet list and the config ConfigMap lost-create-race check | `mgr.GetAPIReader()` |
 | `record.EventRecorder` | `client-go/tools/record` | Kubernetes event emission | Manager's event recorder |
 
 ### Test Doubles
