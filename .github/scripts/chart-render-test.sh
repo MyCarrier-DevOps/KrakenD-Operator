@@ -215,6 +215,9 @@ expect_equal "the metrics auth ClusterRole is bound to the operator ServiceAccou
 expect_contains "a metrics-reader ClusterRole allows GET /metrics" "- /metrics" \
 	--show-only templates/metrics-rbac.yaml
 expect_absent "metrics.enabled=false renders no metrics RBAC" "tokenreviews" --set metrics.enabled=false
+expect_equal "the chart's metrics auth ClusterRole matches config/rbac" \
+	"$(rules_block <operator/config/rbac/metrics_auth_role.yaml)" \
+	"$(manifest ClusterRole t-krakend-operator-metrics-auth-role | rules_block)"
 
 if [ "$failures" -gt 0 ]; then
 	printf '%d chart render test(s) failed\n' "$failures"
