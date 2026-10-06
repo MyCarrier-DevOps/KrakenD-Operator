@@ -35,6 +35,7 @@ import (
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
+	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 )
 
 func rootFailure(msg string) configcheck.Verdict {
@@ -88,6 +89,55 @@ func TestGatewayAdmission_Render(t *testing.T) {
 			}
 			if tt.warns != "" && (len(resp.Warnings) == 0 || !strings.Contains(resp.Warnings[0], tt.warns)) {
 				t.Errorf("warnings = %v, want %q", resp.Warnings, tt.warns)
+			}
+		})
+	}
+}
+
+// routeRejection is a verdict of the route check that refused each of the
+// given groups of endpoints (the refused one, then the one it clashes with),
+// blaming every endpoint they name.
+func routeRejection(refusals ...[]string) configcheck.Verdict {
+	v := configcheck.Verdict{Stage: renderer.StageRoute}
+	for _, names := range refusals {
+		refusal := configcheck.Refusal{Message: "route refused"}
+		for _, name := range names {
+			key := types.NamespacedName{Namespace: "default", Name: name}
+			refusal.Endpoints = append(refusal.Endpoints, key)
+			v.Findings = append(v.Findings, configcheck.Finding{Endpoint: key, Message: "route refused"})
+		}
+		v.Refusals = append(v.Refusals, refusal)
+	}
+	return v
+}
+
+// On a gateway that already fails, a gateway change is denied when it makes
+// the route check refuse endpoints that were not refused before it, which the
+// root-alone check cannot see.
+func TestGatewayAdmission_FailingGatewayDeniesNewRouteRefusals(t *testing.T) {
+	old := testGateway()
+	edited := old.DeepCopy()
+	edited.Spec.Config.Timeout = "5s"
+	tests := []struct {
+		name          string
+		before, after configcheck.Verdict
+		allowed       bool
+	}{
+		{"healthy endpoints newly clash",
+			routeRejection([]string{"x1", "x2"}),
+			routeRejection([]string{"x1", "x2"}, []string{"c", "b"}), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			chk := &scriptedChecker{verdicts: []configcheck.Verdict{tt.after, tt.before}}
+
+			resp := review(t, &GatewayValidator{Client: fakeClient(), Checker: chk}, "alice", edited, old)
+
+			if resp.Allowed != tt.allowed {
+				t.Errorf("allowed = %v, want %v (%+v)", resp.Allowed, tt.allowed, resp.Result)
+			}
+			if !tt.allowed && resp.Result.Code != http.StatusUnprocessableEntity {
+				t.Errorf("code = %d, want 422", resp.Result.Code)
 			}
 		})
 	}
