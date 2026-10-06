@@ -1195,16 +1195,18 @@ func (v *GatewayValidator) authorizePostRestartJob(ctx context.Context, old, gw 
 	for k, val := range req.UserInfo.Extra {
 		extra[k] = authorizationv1.ExtraValue(val)
 	}
+	createPods := &authorizationv1.ResourceAttributes{Namespace: gw.Namespace, Verb: "create", Resource: "pods"}
 	sar := &authorizationv1.SubjectAccessReview{Spec: authorizationv1.SubjectAccessReviewSpec{
 		User: req.UserInfo.Username, Groups: req.UserInfo.Groups, UID: req.UserInfo.UID, Extra: extra,
-		ResourceAttributes: &authorizationv1.ResourceAttributes{Namespace: gw.Namespace, Verb: "create", Resource: "pods"},
+		ResourceAttributes: createPods,
 	}}
 	if err := v.Create(ctx, sar); err != nil {
 		return unavailable(fmt.Errorf("reviewing the requester's access: %w", err))
 	}
 	if !sar.Status.Allowed {
-		return apierrors.NewForbidden(schema.GroupResource{Group: v1alpha1.GroupVersion.Group, Resource: "krakendgateways"},
-			gw.Name, fmt.Errorf("spec.postRestartJob: %s may not create pods in namespace %s, so the post-restart Job may not "+
+		gr := schema.GroupResource{Group: v1alpha1.GroupVersion.Group, Resource: "krakendgateways"}
+		return apierrors.NewForbidden(gr, gw.Name, fmt.Errorf(
+			"spec.postRestartJob: %s may not create pods in namespace %s, so the post-restart Job may not "+
 				"run as another ServiceAccount or read a Secret", req.UserInfo.Username, gw.Namespace))
 	}
 	return nil
