@@ -704,7 +704,7 @@ func (r *KrakenDGatewayReconciler) validateAndApply(
 	// Publish before recording the checksum as applied: status must never
 	// name a config that no ConfigMap holds.
 	if err := r.publishConfig(ctx, gw, output.JSON, output.Checksum); err != nil {
-		return nil, err
+		return nil, r.handleConfigPublishFailed(gw, before, err)
 	}
 	markConfigApplied(gw, output.Checksum, edition)
 	return map[types.NamespacedName]string{}, nil
@@ -829,20 +829,48 @@ func (r *KrakenDGatewayReconciler) handleValidatorUnavailable(
 	before *v1alpha1.KrakenDGatewayStatus,
 	cause error,
 ) error {
-	message := truncateMessage(
+	r.recordConfigUnjudged(gw, before, v1alpha1.ReasonValidatorUnavailable,
 		fmt.Sprintf("config validator unavailable, retrying: %v", cause))
+	return fmt.Errorf("validating config: %w", cause)
+}
+
+// handleConfigPublishFailed records that the rendered config passed
+// validation but its ConfigMap could not be published, so it is not the
+// applied config. The applied config keeps serving, and ConfigValid goes
+// Unknown with reason ConfigPublishFailed so Ready does not report the old
+// config as the newest. It returns the error, so the reconcile is retried
+// with backoff.
+func (r *KrakenDGatewayReconciler) handleConfigPublishFailed(
+	gw *v1alpha1.KrakenDGateway,
+	before *v1alpha1.KrakenDGatewayStatus,
+	cause error,
+) error {
+	r.recordConfigUnjudged(gw, before, v1alpha1.ReasonConfigPublishFailed,
+		fmt.Sprintf("the newest config passed validation but its ConfigMap could not be published, retrying: %v",
+			cause))
+	return fmt.Errorf("publishing config: %w", cause)
+}
+
+// recordConfigUnjudged sets ConfigValid=Unknown with reason and message
+// (bounded by truncateMessage), and emits a Warning event when the reason
+// changes from the one in before.
+func (r *KrakenDGatewayReconciler) recordConfigUnjudged(
+	gw *v1alpha1.KrakenDGateway,
+	before *v1alpha1.KrakenDGatewayStatus,
+	reason, message string,
+) {
+	message = truncateMessage(message)
 	prev := meta.FindStatusCondition(before.Conditions, v1alpha1.ConditionConfigValid)
 	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
 		Type:               v1alpha1.ConditionConfigValid,
 		Status:             metav1.ConditionUnknown,
 		ObservedGeneration: gw.Generation,
-		Reason:             v1alpha1.ReasonValidatorUnavailable,
+		Reason:             reason,
 		Message:            message,
 	})
-	if prev == nil || prev.Reason != v1alpha1.ReasonValidatorUnavailable {
-		r.Recorder.Event(gw, "Warning", v1alpha1.ReasonValidatorUnavailable, message)
+	if prev == nil || prev.Reason != reason {
+		r.Recorder.Event(gw, "Warning", reason, message)
 	}
-	return fmt.Errorf("validating config: %w", cause)
 }
 
 // updateStatusIfChanged writes gw's status only when it differs from
