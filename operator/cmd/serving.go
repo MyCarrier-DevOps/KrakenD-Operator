@@ -18,6 +18,9 @@ package main
 
 import (
 	"crypto/tls"
+	"fmt"
+	"os"
+	"path/filepath"
 
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -64,5 +67,11 @@ func metricsServerOptions(
 // self-signed certificate (metrics) or fail late (webhook) on a wrong file
 // name, so startup checks them to fail fast.
 func checkServingFiles(dir, certName, keyName string) error {
+	for _, name := range []string{certName, keyName} {
+		path := filepath.Join(dir, name)
+		if _, err := os.Stat(path); err != nil {
+			return fmt.Errorf("serving file: %w", err)
+		}
+	}
 	return nil
 }
