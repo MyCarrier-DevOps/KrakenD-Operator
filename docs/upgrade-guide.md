@@ -164,7 +164,11 @@ The manager's ClusterRole exists in three places, all generated from the
 `config/rbac/role.yaml`, the chart copy or the OLM bundle's
 ClusterServiceVersion is stale, and
 `TestManagerRoleGrantsOnlyUsedVerbs` fails when the generated role differs
-from the verbs the controllers use.
+from the hand-kept table of verbs the controllers use. The integration suite
+runs its manager under that role against K3s, with the VirtualService CRD
+installed, so a verb that is missing for a path the suite runs fails there.
+Dragonfly, ExternalSecret and the optional kinds' `delete` are covered by the
+table alone.
 
 ---
 
@@ -2134,7 +2138,7 @@ OLM upgrade applies the permissions in the new bundle's ClusterServiceVersion.
 a copy of the generated role instead of a hand-maintained list, so a chart
 release can no longer grant more, or less, than the operator binary needs.
 
-### The OLM bundle matches the Helm and kustomize installs
+### The OLM bundle matches the kustomize install
 
 The bundle's ClusterServiceVersion is regenerated from source and checked by
 `make verify-manifests`. It had drifted: an OLM install ran without the
@@ -2142,8 +2146,10 @@ admission webhooks, could not create post-restart Jobs (the `batch/jobs`
 permission was missing) and capped the operator at 128Mi of memory. The
 bundle now declares the four validating webhooks, grants the Job permission
 and uses the same memory (512Mi limit, 128Mi request) and node affinity as the
-other installs. OLM provides and mounts the webhook certificates, so the
-bundle carries no cert-manager dependency.
+kustomize install. Like kustomize, OLM keeps one replica, with no
+PodDisruptionBudget and no anti-affinity: only the Helm chart gets the
+availability defaults below. OLM provides and mounts the webhook certificates,
+so the bundle carries no cert-manager dependency.
 
 For OLM users: writes to the four KrakenD kinds are now validated before they
 are stored, and the webhooks use `failurePolicy: Fail`. While the operator is
@@ -2192,8 +2198,24 @@ selects only that Service.
 
 `/readyz` now includes a `webhook` check that passes once the pod's
 admission webhook server accepts TLS connections. During rollouts and
-restarts, admission requests are no longer sent to a pod that cannot answer
-them (with `failurePolicy: Fail` those requests used to be rejected).
+restarts, admission requests are no longer sent to a pod whose webhook server
+is not listening (with `failurePolicy: Fail` those requests used to be
+rejected). Readiness does not cover cache sync: a request that arrives before
+the caches have synced waits up to the 12 s budget, then fails closed with a
+500.
+
+### Every replica reloads the webhook and metrics certificates
+
+With `--webhook-cert-path` or `--metrics-cert-path` set, the webhook and
+metrics servers now start their own certificate watchers, which run on every
+replica. Before, the operator added a watcher to the manager, which ran only
+on the leader: with two replicas, a standby kept the certificate it read at
+startup, and after a cert-manager renewal about half of the admission
+requests failed with x509 errors under `failurePolicy: Fail`. The standby
+still showed Ready, because the readiness check does not verify the
+certificate. No configuration change is needed. If you are on an older
+version with more than one replica, restart the operator pods after each
+certificate renewal.
 
 ### Helm chart: two replicas, a PodDisruptionBudget and anti-affinity by default
 
