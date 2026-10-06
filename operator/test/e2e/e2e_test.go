@@ -454,8 +454,12 @@ metadata:
   name: e2e-dragonfly
 spec:
   version: "2.9"
-  edition: CE
+  edition: EE
   config: {}
+  license:
+    secretRef:
+      name: e2e-license
+      key: license.lic
   dragonfly:
     enabled: true
     replicas: 1
@@ -472,6 +476,18 @@ spec:
 				g.Expect(output).To(Equal("e2e-dragonfly"))
 			}
 			Eventually(verifyDeployment).Should(Succeed())
+
+			By("verifying the missing license Secret is reported and does not fall back to CE")
+			verifyLicenseState := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "krakendgateway", "e2e-dragonfly",
+					"-n", testNamespace, "-o",
+					"jsonpath={.status.conditions[?(@.type==\"LicenseSecretUnavailable\")].status}"+
+						"{.status.conditions[?(@.type==\"CEFallbackApplied\")].status}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("True"))
+			}
+			Eventually(verifyLicenseState).Should(Succeed())
 
 			By("verifying the Dragonfly CR is created")
 			verifyDragonfly := func(g Gomega) {
@@ -627,8 +643,12 @@ metadata:
   name: e2e-full
 spec:
   version: "2.9"
-  edition: CE
+  edition: EE
   config: {}
+  license:
+    secretRef:
+      name: e2e-license
+      key: license.lic
   dragonfly:
     enabled: true
     replicas: 1
