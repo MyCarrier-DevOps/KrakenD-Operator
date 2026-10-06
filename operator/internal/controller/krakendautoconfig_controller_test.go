@@ -5692,3 +5692,48 @@ func TestAutoConfigCheckGateway_GivesUpWaitingForASlotWhenContextEnds(t *testing
 		t.Errorf("expected no check to run, got %d", len(checker.calls))
 	}
 }
+
+// slotHeldChecker is an AutoConfigChecker that records, for each call, how many
+// of slots were held when it ran, and returns verdicts in order.
+type slotHeldChecker struct {
+	slots    chan struct{}
+	verdicts []configcheck.Verdict
+	held     []int
+}
+
+func (s *slotHeldChecker) CheckGateway(
+	_ context.Context,
+	_ *v1alpha1.KrakenDGateway,
+	_ []v1alpha1.KrakenDEndpoint,
+) (configcheck.Verdict, error) {
+	s.held = append(s.held, len(s.slots))
+	v := s.verdicts[0]
+	s.verdicts = s.verdicts[1:]
+	return v, nil
+}
+
+// Every gateway check a sync runs holds a check slot, the baseline check that
+// follows a failure no candidate owns included.
+func TestAutoConfigReconcile_BaselineCheckHoldsACheckSlot(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	c := fakeClientBuilder().WithObjects(ac, cm, testGateway()).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.CheckSlots = make(chan struct{}, 1)
+	checker := &slotHeldChecker{slots: r.CheckSlots, verdicts: []configcheck.Verdict{
+		{Findings: []configcheck.Finding{{
+			Endpoint: types.NamespacedName{Namespace: "default", Name: "unrelated"}, Index: 0, Message: "broken",
+		}}},
+		{OK: true},
+	}}
+	r.Checker = checker
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	if !slices.Equal(checker.held, []int{1, 1}) {
+		t.Errorf("slots held during the round and baseline checks = %v, want [1 1]", checker.held)
+	}
+}
