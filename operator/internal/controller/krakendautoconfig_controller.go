@@ -927,7 +927,7 @@ func (r *KrakenDAutoConfigReconciler) reconcileEndpoints(
 		_, ok := outcome.rejected[ep.Name]
 		return ok
 	})
-	checked, err := r.precheck(ctx, ac, writes, stale, held || outcome.failed())
+	checked, err := r.precheck(ctx, ac, writes, stale, newCreationOrder(controlled), held || outcome.failed())
 	if err != nil {
 		return outcome, err
 	}

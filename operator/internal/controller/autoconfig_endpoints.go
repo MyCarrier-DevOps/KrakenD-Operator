@@ -25,6 +25,7 @@ import (
 	"math"
 	"slices"
 	"strings"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -309,6 +310,7 @@ func (r *KrakenDAutoConfigReconciler) precheck(
 	ac *v1alpha1.KrakenDAutoConfig,
 	writes []*v1alpha1.KrakenDEndpoint,
 	stale []v1alpha1.KrakenDEndpoint,
+	order creationOrder,
 	held bool,
 ) (map[string]rejection, error) {
 	rejected := map[string]rejection{}
@@ -352,7 +354,7 @@ func (r *KrakenDAutoConfigReconciler) precheck(
 			hold(rejected, candidates, message, errors.New(message))
 			return rejected, nil
 		}
-		verdict, err := r.checkGateway(ctx, &gw, checkSet(candidates, stale, !held && len(rejected) == 0))
+		verdict, err := r.checkGateway(ctx, &gw, checkSet(candidates, stale, order, !held && len(rejected) == 0))
 		if err != nil {
 			return nil, &validatorUnavailableError{err: err}
 		}
@@ -451,15 +453,21 @@ func ceIgnoredNamespaces(ep *v1alpha1.KrakenDEndpoint) []string {
 
 // checkSet is the replace set for one precheck round: the candidates, plus,
 // when withoutStale, an empty copy of each stale endpoint, which renders no
-// route and no schema.
+// route and no schema. Each candidate carries the creationTimestamp the
+// cluster gives it (order), because the renderer serves the oldest of the
+// endpoints that share a route: a candidate left without one would win
+// every route against the endpoints that exist.
 func checkSet(
 	candidates []*v1alpha1.KrakenDEndpoint,
 	stale []v1alpha1.KrakenDEndpoint,
+	order creationOrder,
 	withoutStale bool,
 ) []v1alpha1.KrakenDEndpoint {
 	set := make([]v1alpha1.KrakenDEndpoint, 0, len(candidates)+len(stale))
 	for _, ep := range candidates {
-		set = append(set, *ep.DeepCopy())
+		candidate := ep.DeepCopy()
+		candidate.CreationTimestamp = order.timestamp(candidate.Name)
+		set = append(set, *candidate)
 	}
 	if !withoutStale {
 		return set
@@ -516,6 +524,10 @@ func attributeFindings(
 // and sorts after every one that does.
 type creationOrder map[string]int64
 
+// notYetCreated is the creation time, in Unix seconds, of an endpoint that
+// does not exist yet: the end of year 9999, after any that does.
+const notYetCreated int64 = 253402300799
+
 // newCreationOrder records the creation time of each of existing.
 func newCreationOrder(existing []v1alpha1.KrakenDEndpoint) creationOrder {
 	order := make(creationOrder, len(existing))
@@ -534,7 +546,13 @@ func (o creationOrder) createdAt(name string) int64 {
 	if t, ok := o[name]; ok {
 		return t
 	}
-	return math.MaxInt64
+	return notYetCreated
+}
+
+// timestamp is the creationTimestamp the cluster gives the endpoint name:
+// its own when it exists, otherwise one after every existing endpoint's.
+func (o creationOrder) timestamp(name string) metav1.Time {
+	return metav1.NewTime(time.Unix(o.createdAt(name), 0))
 }
 
 // routeCollisions returns, keyed by name, the desired endpoints that lose

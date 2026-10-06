@@ -5673,7 +5673,7 @@ func TestAutoConfigPrecheck_ConcurrentWorkersNeverExceedCheckSlots(t *testing.T)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := r.precheck(context.Background(), ac, writes, nil, false); err != nil {
+			if _, err := r.precheck(context.Background(), ac, writes, nil, nil, false); err != nil {
 				t.Errorf("precheck: %v", err)
 			}
 		}()
