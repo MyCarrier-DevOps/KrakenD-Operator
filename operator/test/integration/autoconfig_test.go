@@ -664,6 +664,11 @@ func TestAutoConfig_SlowUpstreamDoesNotBlockOtherAutoConfigs(t *testing.T) {
 	if err := k8sClient.Create(ctx, slow); err != nil {
 		t.Fatalf("create slow autoconfig: %v", err)
 	}
+	// Do not leave the slow fetch holding a worker for the tests that follow.
+	t.Cleanup(func() {
+		_ = k8sClient.Delete(ctx, slow)
+		slowFetcher.Release()
+	})
 	eventuallyWithin(t, 30*time.Second, func() error {
 		if slowFetcher.held.Load() == 0 {
 			return fmt.Errorf("slow fetch not started yet")
