@@ -328,7 +328,10 @@ func (r *KrakenDGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			&corev1.ConfigMap{},
 			handler.EnqueueRequestsFromMapFunc(r.pluginConfigMapToGateway),
 		).
-		WithOptions(crcontroller.Options{RateLimiter: newGatewayRateLimiter()}).
+		WithOptions(crcontroller.Options{
+			RateLimiter:             newGatewayRateLimiter(),
+			MaxConcurrentReconciles: r.MaxConcurrentReconciles,
+		}).
 		Named("krakendgateway")
 
 	installed, missing, err := installedOptionalKinds(mgr.GetRESTMapper())
