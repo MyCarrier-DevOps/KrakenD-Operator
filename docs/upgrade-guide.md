@@ -973,9 +973,38 @@ Flux report the gateway as in progress, not as current, until the error
 clears; then `observedGeneration` catches up. A stuck `observedGeneration`
 behind `metadata.generation`, together with an error in the operator log,
 means a child resource or the applied config's ConfigMap cannot be
-reconciled. A rejected config (`ConfigValid=False`), an unavailable validator
-and a missing plugin ConfigMap do not hold it back: they are verdicts on the
+reconciled. A rejected config (`ConfigValid=False`), an unavailable validator,
+a validated config that cannot be published (`ConfigPublishFailed`, below) and
+a missing plugin ConfigMap do not hold it back: they are verdicts on the
 current generation, and `Ready` reports them.
+
+### A validated config that cannot be published is reported
+
+A render can pass `krakend check` and still not be applied, because its
+content-addressed ConfigMap cannot be published:
+
+- a ConfigMap the gateway does not control, or one whose checksum annotation
+  differs, sits at `<gateway>-config-<hash>`;
+- a `count/configmaps` ResourceQuota is exhausted;
+- the rendered config exceeds the 1 MiB ConfigMap limit;
+- a ConfigMap at that name holds another payload and cannot be deleted (see
+  *Config ConfigMaps are immutable and content-addressed*).
+
+The gateway used to keep `Ready=True` and `ConfigValid=True`/`ConfigApplied`
+for the previous config, with `observedGeneration` current, while only the
+operator log and the retry backoff showed that the newest render was not
+applied. It now sets `ConfigValid=Unknown` with reason `ConfigPublishFailed`.
+The message carries the cause, bounded to 4 KiB, for example `the newest
+config passed validation but its ConfigMap could not be published, retrying:
+configmap default/gw-config-0123456789 exists but is not controlled by
+gateway gw`. `Ready` follows as `Unknown` with the same reason and the
+serving phase, whatever drove the render: a gateway spec edit, a
+KrakenDEndpoint, an AutoConfig or a policy change. The previous config keeps
+serving, a Warning event `ConfigPublishFailed` fires when the gateway enters
+the state, and the reconcile is retried with backoff. `observedGeneration` is
+not held back, as for `ValidatorUnavailable`. Alerts on `Ready=True` or on a
+Healthy kstatus now see the gateway as in progress until the ConfigMap can be
+published.
 
 The infrastructure stage now attempts every independent child on each pass
 and reports all the errors together, so one failing child no longer stops
@@ -1041,6 +1070,27 @@ The old `<gateway>` ConfigMap never counts toward the three. Rolling a
 gateway back means reverting its CRs. `kubectl rollout undo` to an old
 ReplicaSet is not supported: the operator restores its own pod template, and
 the undone revision's ConfigMap may already be gone.
+
+**The payload is verified, not only the metadata.** An existing ConfigMap at
+the name is accepted only when the gateway controls it, it carries the
+checksum annotation, and its `krakend.json` hashes (SHA-256) to the checksum.
+The owner reference and the annotation can be copied by anyone who can create
+ConfigMaps in the namespace; the payload cannot. A ConfigMap that fails the
+hash is deleted and created again from the render, once; if it cannot be
+deleted, `ConfigValid` reads `Unknown`/`ConfigPublishFailed`, never
+`ConfigApplied`. When the applied config's ConfigMap fails the hash on a pass
+that has no applied render to create it from (the newest render is rejected or
+could not be validated), it is deleted and the Deployment is held as it is
+until a render that passes is published (see *Gateway Deployment not updated*
+in the runbook).
+
+The payload is read in full once per stored version of a ConfigMap (its UID
+and resource version). The operator remembers the versions it has hashed, and
+the ones it created itself, so a steady reconcile still reads only the
+ConfigMap's metadata. The memory is per gateway, bounded, and lost on restart,
+after which each ConfigMap is read once more. The cost is one full read of the
+rendered config (up to 1 MiB) per published revision and per operator
+restart, plus one when someone edits or recreates a config ConfigMap.
 
 **RBAC:** the operator's ClusterRole gains `list` on `apps/replicasets`. The
 Helm chart ships it. If you maintain your own copy of the role, add it.
@@ -1359,6 +1409,18 @@ created for it, but only a resource the gateway controls:
 
 Previously these stayed behind. An orphaned HPA kept scaling the Deployment,
 and an orphaned VirtualService kept claiming its hosts.
+
+**How the operator finds what to delete.** For a Dragonfly, ExternalSecret or
+VirtualService CRD that was installed when the operator started, the lookup
+reads the informer cache, with no API request. A child the cache does not hold
+yet cannot be orphaned: its creation event reaches the gateway's watch and
+that pass deletes it. For any other optional kind the lookup asks API
+discovery whether the CRD exists. An answer of "not installed" is remembered
+for one minute, for the delete path only: while the CRD is absent no child can
+exist. Enabling a feature always asks discovery again, and a CRD it finds
+installed clears the memory. A CRD installed after the operator started, with
+its feature off, costs one live GET per reconcile until the operator restarts,
+which the startup log already asks for.
 
 - **Replicas.** Once the HPA is deleted the Deployment returns to
   `spec.replicas`. While the Deployment is held it keeps the HPA's last
@@ -2046,7 +2108,20 @@ endpoints are serving.
   reads "not checked: N other operations failed the gateway config check
   first". Findings that name no written endpoint proceed when the gateway
   already fails without the change; otherwise every write in that round is
-  held. When the checker is unavailable, nothing is written or deleted, and
+  held. The hold never repeats `krakend check` output about another
+  endpoint: krakend prints the value it refuses (a backend host with
+  credentials, say), and a change can un-hide an older entry of another
+  namespace that lost a route. After the baseline passes, the writes are
+  checked once more alone, with only the gateway root, those endpoints and the
+  policies they reference. If that check fails, the hold shows its summary, cut
+  at 200 bytes, so the AutoConfig's own errors stay visible. If it passes, the
+  failure needs other endpoints (a route the change releases, or a stale
+  endpoint it removes) and the hold reads "the change fails the gateway config
+  check only together with other endpoints on the gateway (see the operator
+  log)"; the full check output is logged. A policy the writes reference can
+  still print its own values. The extra check holds a check slot like the
+  others, and when it cannot run the sync fails as `ValidatorUnavailable`.
+  When the checker is unavailable, nothing is written or deleted, and
   `Synced=False` has reason `ValidatorUnavailable` (retried with backoff);
   it may still adopt label-matched orphans, which changes owner references
   only. A write the API server rejects after a passing check keeps its stale
@@ -2258,8 +2333,13 @@ the user-named license Secrets and plugin ConfigMaps they follow.
 Each reconcile pass now makes these live API requests:
 
 - Gateway: the plugin ConfigMaps and the license Secret in full; the config
-  ConfigMap's existence and the list used to collect old config ConfigMaps as
-  metadata only.
+  ConfigMap's owner and checksum annotation, and the list used to collect old
+  config ConfigMaps, as metadata only. A config ConfigMap's payload is read in
+  full once per stored version, to hash it (see *Config ConfigMaps are
+  immutable and content-addressed*). The children of disabled optional
+  features come from the informer cache, or from API discovery with a
+  one-minute memory of an absent CRD (see *Disabling a feature deletes what it
+  created*).
 - AutoConfig: the namespace's `krakend-cue-definitions` ConfigMap once, in full,
   falling back to the embedded definitions when it is absent, and the
   `cue.definitionsConfigMapRef` ConfigMap once, in full, when it is set (a
