@@ -1779,7 +1779,8 @@ on its own too (then its gateways decide). A change to a policy that endpoints r
 gateway of those endpoints and refused if it breaks one that passed
 (`breaks gateway ns/name: ...`); a gateway that already fails for another reason
 gets a warning instead. The denial lists at most 20 gateways and the warnings
-name at most 5, each counting the rest.
+name at most 5, each counting the rest, in at most 4 KiB together (past that
+the API server would cut every warning to 256 characters).
 A new or changed `raw` with Enterprise-only namespaces, for example `auth/gcp`, or
 Enterprise-only keys such as `proxy_address` in `backend/http/client`, is
 refused while a CE gateway uses the policy (`gateway ns/name runs CE, which
