@@ -5987,7 +5987,7 @@ func (p *peakChecker) CheckGateway(
 
 // The pod's one checker has a fixed number of slots and admission shares them,
 // so however many workers run prechecks at once, they never hold more checker
-// slots than CheckSlots' capacity, which leaves the rest to admission.
+// slots than CheckSlots' capacity, which leaves the rest to others.
 func TestAutoConfigPrecheck_ConcurrentWorkersNeverExceedCheckSlots(t *testing.T) {
 	cm := testCUEDefinitionsCM()
 	ac := syncedAutoConfig(cm)
