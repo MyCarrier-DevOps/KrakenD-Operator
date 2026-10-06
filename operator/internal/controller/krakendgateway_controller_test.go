@@ -2031,3 +2031,30 @@ func TestGatewayReconcile_NotReadyWhenDeploymentLosesAvailability(t *testing.T) 
 		t.Errorf("Ready = %+v, want False/MinimumReplicasUnavailable", ready)
 	}
 }
+
+func TestGatewayReconcile_SchemaConflictSetsAcceptedReason(t *testing.T) {
+	gw := reconciledGateway()
+	winner := gatewayEndpoint("a-users", 1)
+	loser := gatewayEndpoint("b-users", 1)
+	c := fakeClientBuilder().
+		WithObjects(gw, winner, loser).
+		WithStatusSubresource(gw, winner, loser).
+		Build()
+	winnerKey, loserKey := client.ObjectKeyFromObject(winner), client.ObjectKeyFromObject(loser)
+	r := acceptanceReconciler(c, fakeRecorder(), &renderer.RenderOutput{
+		JSON: []byte(`{"version":3}`), Checksum: "cs1",
+		SchemaConflicts: []renderer.SchemaConflict{{Endpoint: loserKey, Schema: "User", Winner: winnerKey}},
+	})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if got := storedAccepted(t, c, winnerKey); got == nil || got.Reason != v1alpha1.ReasonAccepted {
+		t.Errorf("a-users: Accepted = %+v, want True/Accepted", got)
+	}
+	got := storedAccepted(t, c, loserKey)
+	if got == nil || got.Status != metav1.ConditionTrue || got.Reason != v1alpha1.ReasonSchemaNameConflict ||
+		!strings.Contains(got.Message, `"User" (published from default/a-users)`) {
+		t.Errorf("b-users: Accepted = %+v, want True/SchemaNameConflict naming User and a-users", got)
+	}
+}
