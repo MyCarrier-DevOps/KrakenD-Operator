@@ -21,10 +21,12 @@ See [values.yaml](values.yaml) for the full list of configurable parameters.
 
 | Parameter | Description | Default |
 |---|---|---|
-| `replicaCount` | Number of operator pods | `1` |
+| `replicaCount` | Number of operator pods. More than one requires `leaderElection.enabled` | `2` |
 | `image.repository` | Operator image repository | `ghcr.io/mycarrier-devops/krakend-operator` |
 | `image.tag` | Operator image tag (defaults to chart appVersion) | `""` |
 | `leaderElection.enabled` | Enable leader election | `true` |
+| `podDisruptionBudget.enabled` | Create a PodDisruptionBudget (`maxUnavailable: 1`) when `replicaCount` > 1 | `true` |
+| `affinity` | Pod affinity; when empty, replicas prefer different nodes | `{}` |
 | `metrics.enabled` | Expose Prometheus metrics | `true` |
 | `metrics.serviceMonitor.enabled` | Create a Prometheus Operator `ServiceMonitor` for the operator's metrics (needs the `monitoring.coreos.com` CRDs) | `false` |
 | `metrics.serviceMonitor.additionalLabels` | Extra labels for the `ServiceMonitor` (for example the one your Prometheus selects on) | `{}` |
