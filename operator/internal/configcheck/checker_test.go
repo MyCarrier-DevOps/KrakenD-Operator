@@ -19,6 +19,7 @@ package configcheck
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -199,6 +200,21 @@ func TestCheckGateway_RouteClashAcrossEndpointsNamesBothEntries(t *testing.T) {
 	a, b := types.NamespacedName{Namespace: "ns", Name: "a"}, types.NamespacedName{Namespace: "ns", Name: "b"}
 	if verdict.OK || len(got) != 2 || got[a] != 0 || got[b] != 1 {
 		t.Errorf("findings = %+v, want ns/a entry 0 and ns/b entry 1", verdict.Findings)
+	}
+}
+
+func TestCheckGateway_RouteRefusalsNameTheEndpointsOfEachClash(t *testing.T) {
+	c := newChecker(realValidator(), endpoint("a", "/users/{id}"), endpoint("b", "/users/{userId}/orders"))
+
+	verdict, err := c.CheckGateway(context.Background(), gateway(v1alpha1.EditionCE), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, b := types.NamespacedName{Namespace: "ns", Name: "a"}, types.NamespacedName{Namespace: "ns", Name: "b"}
+	if verdict.Stage != renderer.StageRoute || len(verdict.Refusals) != 1 ||
+		!reflect.DeepEqual(verdict.Refusals[0].Endpoints, []types.NamespacedName{b, a}) {
+		t.Errorf("stage = %d, refusals = %+v, want the route stage and one refusal naming ns/b, then ns/a",
+			verdict.Stage, verdict.Refusals)
 	}
 }
 
