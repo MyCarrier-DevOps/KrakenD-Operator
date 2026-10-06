@@ -168,7 +168,8 @@ wired.Gateway.SetupWithManager(mgr)
 
 wired.AutoConfig.SetupWithManager(mgr)
 
-// Registers the four validators only when --enable-webhooks is true (the default).
+// Registers the four validators, and a `webhook` readiness check that passes once the
+// webhook server accepts connections, only when --enable-webhooks is true (the default).
 registerWebhooks(mgr, enableWebhooks, func(m ctrl.Manager) error {
     return webhooksetup.SetupWebhooks(m, wired.Validators)
 })
