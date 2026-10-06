@@ -2130,10 +2130,9 @@ unavailable, creating or updating those resources is rejected.
 
 The operator used to cache every Secret and ConfigMap in the cluster, data
 included. It now watches them as metadata only and reads the content it needs
-directly from the API server, so its memory no longer grows with the number or
-size of Secrets and ConfigMaps in the cluster, and no Secret `data` or
-ConfigMap payload is held in operator memory. No configuration change is
-needed, and the RBAC is unchanged: a metadata watch still needs `list` and
+directly from the API server, so no Secret `data` or ConfigMap payload is
+cached, and operator memory no longer grows with their size. No configuration
+change is needed, and the RBAC is unchanged: a metadata watch still needs `list` and
 `watch`.
 
 The metadata the operator does keep is stripped of its annotations and
@@ -2141,16 +2140,17 @@ The metadata the operator does keep is stripped of its annotations and
 client-side (`kubectl apply`) repeats its whole body, data included, in the
 `kubectl.kubernetes.io/last-applied-configuration` annotation. What remains
 cached is the name, namespace, labels and owner references of every Secret and
-ConfigMap in the cluster: the watches cannot select the user-named license
-Secrets and plugin ConfigMaps they follow.
+ConfigMap in the cluster (one small entry per object): the watches cannot select
+the user-named license Secrets and plugin ConfigMaps they follow.
 
 Each reconcile pass now makes these live API requests:
 
 - Gateway: the plugin ConfigMaps and the license Secret in full; the config
   ConfigMap's existence and the list used to collect old config ConfigMaps as
   metadata only.
-- AutoConfig: the CUE definitions ConfigMaps as metadata (their resource
-  versions), then in full when the AutoConfig sets custom definitions; the spec
+- AutoConfig: the namespace's `krakend-cue-definitions` ConfigMap once, in full,
+  falling back to the embedded definitions when it is absent, and the
+  `cue.definitionsConfigMapRef` ConfigMap the same way when it is set; the spec
   and auth sources in full.
 
 ### Helm chart: metrics can be scraped
