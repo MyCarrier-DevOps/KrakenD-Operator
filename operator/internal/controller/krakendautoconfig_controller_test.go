@@ -5154,13 +5154,18 @@ func TestSummarizeReadiness(t *testing.T) {
 	updated.Generation = 2 // changed since the endpoint controller last reported
 	gone := readyEndpoint(generatedEndpoint("c", "/c"), metav1.ConditionTrue, "Ready")
 
-	created := *generatedEndpoint("d", "/d") // no status yet
-	got := summarizeReadiness(
-		[]v1alpha1.KrakenDEndpoint{*a, *updated, *gone, created},
-		map[string]bool{"test-ac-c": true},
-	)
+	// Five endpoints with no status yet, listed out of name order: the
+	// summary must name them sorted whatever order the cache lists them in.
+	controlled := []v1alpha1.KrakenDEndpoint{*updated, *a, *gone}
+	for _, name := range []string{"f", "d", "g", "e", "h"} {
+		controlled = append(controlled, *generatedEndpoint(name, "/"+name))
+	}
+	got := summarizeReadiness(controlled, map[string]bool{"test-ac-c": true})
 
-	want := endpointReadiness{total: 3, ready: 1, notReady: []string{"test-ac-b: Pending", "test-ac-d: Pending"}}
+	want := endpointReadiness{total: 7, ready: 1, notReady: []string{
+		"test-ac-b: Pending", "test-ac-d: Pending", "test-ac-e: Pending", "test-ac-f: Pending",
+		"test-ac-g: Pending", "test-ac-h: Pending",
+	}}
 	if got.total != want.total || got.ready != want.ready || !slices.Equal(got.notReady, want.notReady) {
 		t.Errorf("summarizeReadiness = %+v, want %+v", got, want)
 	}
