@@ -147,9 +147,9 @@ func (r *KrakenDGatewayReconciler) publishConfig(
 	case err == nil:
 		return nil
 	case errors.IsAlreadyExists(err):
-		// The cache has not seen the ConfigMap that is already there: it may
-		// be this controller's own earlier create or someone else's. Verify
-		// it live rather than trust it.
+		// A ConfigMap of that name appeared after the existence check above
+		// (a lost create race): it may be this controller's own earlier
+		// create or someone else's. Verify it through the uncached reader.
 		found, err := r.verifyExistingConfigMap(ctx, r.APIReader, gw, checksum)
 		if err == nil && !found {
 			return fmt.Errorf("configmap %s was deleted after a create found it existing", name)
@@ -161,30 +161,33 @@ func (r *KrakenDGatewayReconciler) publishConfig(
 }
 
 // verifyExistingConfigMap looks up the config ConfigMap for checksum through
-// reader. found says whether one exists; when it does, err says whether it is
-// this gateway's copy of that config.
+// reader, as metadata only: the rendered config can be large and its content
+// is addressed by the name. found says whether one exists; when it does, err
+// says whether it is this gateway's copy of that config.
 func (r *KrakenDGatewayReconciler) verifyExistingConfigMap(
 	ctx context.Context, reader client.Reader, gw *v1alpha1.KrakenDGateway, checksum string,
 ) (found bool, err error) {
 	name := resources.ConfigMapName(gw, checksum)
-	var cm corev1.ConfigMap
-	if err := reader.Get(ctx, types.NamespacedName{Name: name, Namespace: gw.Namespace}, &cm); err != nil {
+	cm := &metav1.PartialObjectMetadata{}
+	cm.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("ConfigMap"))
+	if err := reader.Get(ctx, types.NamespacedName{Name: name, Namespace: gw.Namespace}, cm); err != nil {
 		if errors.IsNotFound(err) {
 			return false, nil
 		}
 		return false, fmt.Errorf("getting configmap %s: %w", name, err)
 	}
-	return true, verifyConfigMap(&cm, gw, checksum)
+	return true, verifyConfigMap(cm, gw, checksum)
 }
 
 // verifyConfigMap rejects a ConfigMap that has the content-addressed name for
 // checksum but is not this gateway's copy of that config.
-func verifyConfigMap(cm *corev1.ConfigMap, gw *v1alpha1.KrakenDGateway, checksum string) error {
+func verifyConfigMap(cm metav1.Object, gw *v1alpha1.KrakenDGateway, checksum string) error {
 	if !metav1.IsControlledBy(cm, gw) {
-		return fmt.Errorf("configmap %s/%s exists but is not controlled by gateway %s", cm.Namespace, cm.Name, gw.Name)
+		return fmt.Errorf(
+			"configmap %s/%s exists but is not controlled by gateway %s", cm.GetNamespace(), cm.GetName(), gw.Name)
 	}
-	if got := cm.Annotations[resources.PostRestartJobChecksumAnnotation]; got != checksum {
-		return fmt.Errorf("configmap %s/%s holds config %s, not %s", cm.Namespace, cm.Name, got, checksum)
+	if got := cm.GetAnnotations()[resources.PostRestartJobChecksumAnnotation]; got != checksum {
+		return fmt.Errorf("configmap %s/%s holds config %s, not %s", cm.GetNamespace(), cm.GetName(), got, checksum)
 	}
 	return nil
 }
