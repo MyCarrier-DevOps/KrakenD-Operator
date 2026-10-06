@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 
@@ -130,21 +131,42 @@ const MaxRouteRefusals = 21
 // never registers and the runtime panics on: the health endpoint and the
 // auto_options routes.
 func routeConflicts(ctx context.Context, doc []byte) ([]string, error) {
+	refusals, capped, err := routeRefusals(ctx, doc)
+	if err != nil {
+		return nil, err
+	}
+	return refusalLines(refusals, capped), nil
+}
+
+// refusalLines flattens refusals into lint lines, ending with the stop notice
+// when the check stopped at MaxRouteRefusals.
+func refusalLines(refusals []RouteRefusal, capped bool) []string {
+	var lines []string
+	for _, r := range refusals {
+		lines = append(lines, strings.Split(r.Message, "\n")...)
+	}
+	if capped {
+		lines = append(lines, fmt.Sprintf("- route check stopped after %d refused routes", MaxRouteRefusals))
+	}
+	return lines
+}
+
+// routeRefusals is routeConflicts' work, grouped by refused registration.
+// capped is set when it stopped at MaxRouteRefusals.
+func routeRefusals(ctx context.Context, doc []byte) (refusals []RouteRefusal, capped bool, err error) {
 	var cfg routedConfig
 	if err := json.Unmarshal(doc, &cfg); err != nil {
 		var typeErr *json.UnmarshalTypeError
 		if errors.As(err, &typeErr) {
-			return nil, nil // a wrongly typed field is the schema lint's to report
+			return nil, false, nil // a wrongly typed field is the schema lint's to report
 		}
-		return nil, fmt.Errorf("decoding config for the route check: %w", err)
+		return nil, false, fmt.Errorf("decoding config for the route check: %w", err)
 	}
-	var lines []string
 	var accepted []ginRoute
-	refused := 0
 	engine := gin.New()
 	for _, r := range ginRoutesOf(cfg) {
 		if err := ctx.Err(); err != nil {
-			return nil, fmt.Errorf("route check did not finish: %w", err)
+			return nil, false, fmt.Errorf("route check did not finish: %w", err)
 		}
 		refusal := registerRoute(engine, r)
 		if refusal == "" {
@@ -153,20 +175,31 @@ func routeConflicts(ctx context.Context, doc []byte) ([]string, error) {
 		}
 		clashes, err := clashRefusals(ctx, accepted, r, refusal)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
-		for _, f := range clashes {
-			lines = append(lines, f.line(r))
-		}
-		refused++
-		if refused == MaxRouteRefusals {
-			lines = append(lines, fmt.Sprintf("- route check stopped after %d refused routes", refused))
-			break
+		refusals = append(refusals, groupRefusal(r, clashes))
+		if len(refusals) == MaxRouteRefusals {
+			return refusals, true, nil
 		}
 		// gin can leave its tree half-updated after refusing a route; rebuild it.
 		engine = engineWith(accepted)
 	}
-	return lines, nil
+	return refusals, false, nil
+}
+
+// groupRefusal joins the refusals of one registration of r into a
+// RouteRefusal, naming each endpoint entry once.
+func groupRefusal(r ginRoute, clashes []routeRefusal) RouteRefusal {
+	var group RouteRefusal
+	lines := make([]string, 0, len(clashes))
+	for _, f := range clashes {
+		lines = append(lines, f.line(r))
+		if f.index != gatewayRoute && !slices.Contains(group.Indices, f.index) {
+			group.Indices = append(group.Indices, f.index)
+		}
+	}
+	group.Message = strings.Join(lines, "\n")
+	return group
 }
 
 // ginRoutesOf lists the routes the runtime registers, in its order: the

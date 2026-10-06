@@ -112,12 +112,15 @@ func (v *KrakenDValidator) validate(
 	if len(findings) > 0 {
 		return &ValidationError{Output: strings.Join(findings, "\n"), Err: errEEWildcardRule}
 	}
-	conflicts, err := routeConflicts(ctx, doc)
+	refusals, capped, err := routeRefusals(ctx, doc)
 	if err != nil {
 		return fmt.Errorf("checking routes: %w", err)
 	}
-	if len(conflicts) > 0 {
-		return &ValidationError{Output: strings.Join(conflicts, "\n"), Err: errRouteConflict}
+	if len(refusals) > 0 {
+		return &ValidationError{
+			Output: strings.Join(refusalLines(refusals, capped), "\n"), Err: errRouteConflict,
+			Stage: StageRoute, Refusals: refusals, RefusalsCapped: capped,
+		}
 	}
 	return v.check(ctx, doc, flags...)
 }
