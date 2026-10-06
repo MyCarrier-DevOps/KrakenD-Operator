@@ -1142,8 +1142,10 @@ you *which* KrakenDEndpoint to fix:
   endpoint), bounded to 4 KiB.
 - Each named endpoint gets `Accepted=False` with reason
   `GatewayConfigRejected` and the findings that name it. Findings are mapped
-  from `/endpoints/<i>/…` pointers and from `METHOD /path` or `path '…'` in
-  router errors. A route conflict names both endpoints involved.
+  from `/endpoints/<i>/…` pointers, from the method and path krakend prints
+  for its own failing endpoint (compared by the router's path shape), and
+  from `path '…'` in router errors. A route conflict names both endpoints
+  involved.
 - Endpoints no finding names keep the verdict of the last applied config,
   except that a `GatewayConfigRejected` left by an earlier rejection is
   removed once no finding names the endpoint any more (its `Ready` is then
@@ -1259,6 +1261,11 @@ refuses unnamed wildcards. Validation of an EE config now works like this:
   endpoints are named in the gateway's `ConfigValid` message and get
   `Accepted=False/GatewayConfigRejected`. A wildcard endpoint with more
   than one backend is rejected the same way, because EE allows only one.
+  Paths are compared as the router registers them: a brace group the
+  router does not read as a parameter (`/v1/jobs{x}/*` next to
+  `/v1/jobs:x/y`, or `{user.id}` next to `:user.id`) is literal text, so it
+  no longer conflicts with the colon spelling, while `/v1/{id}/*` next to
+  `/v1/{id}/x` still does.
 - **Everything else is checked by `krakend check`.** For the check only,
   each wildcard is modelled as a path parameter, so the wildcard endpoints'
   backends and `extra_config` are linted and parsed too. That parameter does
