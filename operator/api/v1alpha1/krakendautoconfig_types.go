@@ -484,7 +484,8 @@ type KrakenDAutoConfigStatus struct {
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
-// KrakenDAutoConfig is the Schema for the krakendautoconfigs API.
+// KrakenDAutoConfig generates the KrakenDEndpoints of a gateway from an OpenAPI
+// specification and keeps them in sync with it.
 // +operator-sdk:csv:customresourcedefinitions:displayName="KrakenD AutoConfig"
 // +kubebuilder:validation:XValidation:rule="size(self.metadata.name) <= 63",message="name must be at most 63 characters: it is a label value on generated endpoints"
 type KrakenDAutoConfig struct {
