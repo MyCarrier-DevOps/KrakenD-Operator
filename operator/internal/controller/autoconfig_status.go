@@ -203,10 +203,10 @@ func endpointsReadyCondition(r endpointReadiness, generation int64) metav1.Condi
 	c := metav1.Condition{Type: v1alpha1.ConditionEndpointsReady, ObservedGeneration: generation}
 	if len(r.notReady) == 0 {
 		c.Status, c.Reason = metav1.ConditionTrue, v1alpha1.ReasonAllEndpointsReady
-		c.Message = fmt.Sprintf("%d of %d endpoints ready", r.ready, r.total)
+		c.Message = fmt.Sprintf("%d of %s ready", r.ready, counted(r.total, "endpoint"))
 		return c
 	}
 	c.Status, c.Reason = metav1.ConditionFalse, v1alpha1.ReasonEndpointsNotReady
-	c.Message = fmt.Sprintf("%d of %d endpoints not ready: %s", len(r.notReady), r.total, listed(r.notReady))
+	c.Message = fmt.Sprintf("%d of %s not ready: %s", len(r.notReady), counted(r.total, "endpoint"), listed(r.notReady))
 	return c
 }
