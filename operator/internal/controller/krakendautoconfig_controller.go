@@ -144,6 +144,7 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	if err := r.Get(ctx, req.NamespacedName, &ac); err != nil {
 		if errors.IsNotFound(err) {
 			autoConfigSynced.DeleteLabelValues(req.Namespace, req.Name)
+			r.forgetHeldCauses(req.NamespacedName)
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("getting autoconfig %s: %w", req.NamespacedName, err)
@@ -154,6 +155,7 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// would recreate each one as it goes.
 	if !ac.DeletionTimestamp.IsZero() {
 		autoConfigSynced.DeleteLabelValues(ac.Namespace, ac.Name)
+		r.heldLogged.Delete(ac.UID)
 		return ctrl.Result{}, nil
 	}
 
@@ -1211,6 +1213,17 @@ func cueEnvironment(ac *v1alpha1.KrakenDAutoConfig) string {
 type heldLog struct {
 	owner  types.NamespacedName
 	digest string
+}
+
+// forgetHeldCauses forgets what was logged for the AutoConfig named owner,
+// which no longer exists: its UID is gone with it, so it is found by name.
+func (r *KrakenDAutoConfigReconciler) forgetHeldCauses(owner types.NamespacedName) {
+	r.heldLogged.Range(func(uid, entry any) bool {
+		if entry.(heldLog).owner == owner {
+			r.heldLogged.Delete(uid)
+		}
+		return true
+	})
 }
 
 // heldCause is the full cause of one held operation, for the log.
