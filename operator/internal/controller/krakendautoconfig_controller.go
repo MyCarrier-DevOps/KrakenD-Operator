@@ -900,9 +900,11 @@ func syncedCondition(res syncResult, generation int64) metav1.Condition {
 		return metav1.Condition{
 			Type: v1alpha1.ConditionSynced, Status: metav1.ConditionFalse, ObservedGeneration: generation,
 			Reason: v1alpha1.ReasonOperationsFailed,
-			Message: fmt.Sprintf("%d operations failed; they keep their last-synced endpoints and no stale "+
-				"endpoint is deleted until they recover (see status.failedOperations): %s",
-				len(res.failed), listed(labels)),
+			Message: fmt.Sprintf("%s failed; %s and no stale endpoint is deleted until %s "+
+				"(see status.failedOperations): %s",
+				counted(len(res.failed), "operation"),
+				plural(len(res.failed), "it keeps its last-synced endpoint", "they keep their last-synced endpoints"),
+				plural(len(res.failed), "it recovers", "they recover"), listed(labels)),
 		}
 	}
 	c := metav1.Condition{
