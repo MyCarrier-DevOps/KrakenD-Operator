@@ -236,6 +236,7 @@ func TestEndpointCRD_Rules(t *testing.T) {
 		{"backend encoding", endpointHead + `[{endpoint: "/a", method: GET, backends: [{host: ["http://svc"], urlPattern: "/", encoding: jsn}]}]}}`, "Unsupported value: \"jsn\""},
 		{"service discovery", endpointHead + `[{endpoint: "/a", method: GET, backends: [{host: ["http://svc"], urlPattern: "/", sd: consul}]}]}}`, "Unsupported value: \"consul\""},
 		{"backend method", endpointHead + `[{endpoint: "/a", method: GET, backends: [{host: ["http://svc"], urlPattern: "/", method: get}]}]}}`, "Unsupported value: \"get\""},
+		{"backend host with a space", endpointHead + `[{endpoint: "/a", method: GET, backends: [{host: ["http://x GET /a"], urlPattern: "/"}]}]}}`, "spec.endpoints[0].backends[0].host[0]"},
 		{"empty gateway name", `{apiVersion: gateway.krakend.io/v1alpha1, kind: KrakenDEndpoint, metadata: {name: e}, spec: {gatewayRef: {name: ""}, endpoints: [{endpoint: "/a", method: GET, ` + okBackend + `}]}}`, "at least 1 chars long"},
 		{"empty policy name", endpointHead + `[{endpoint: "/a", method: GET, backends: [{host: ["http://svc"], urlPattern: "/", policyRef: {name: ""}}]}]}}`, "at least 1 chars long"},
 	})
