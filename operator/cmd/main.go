@@ -71,6 +71,7 @@ func main() {
 	var enableHTTP2 bool
 	var enableWebhooks bool
 	var operatorUsername string
+	var autoConfigMaxConcurrentReconciles int
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -96,6 +97,9 @@ func main() {
 		"Username of the operator's own API requests. Its writes to KrakenDEndpoints a KrakenDAutoConfig "+
 			"controls skip the admission render check. Defaults to the pod's ServiceAccount "+
 			"(system:serviceaccount:$POD_NAMESPACE:$POD_SERVICE_ACCOUNT); empty disables the exemption.")
+	flag.IntVar(&autoConfigMaxConcurrentReconciles, "autoconfig-max-concurrent-reconciles", 4,
+		"How many KrakenDAutoConfigs reconcile at once. Each reconcile fetches its OpenAPI spec over the network; "+
+			"values below 1 mean 1.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -232,6 +236,7 @@ func main() {
 	// executions across the gateway controller, the AutoConfig controller and
 	// the admission webhooks.
 	wired := wireValidation(mgr, krakendRenderer, krakendValidator, operatorUsername)
+	wired.AutoConfig.MaxConcurrentReconciles = autoConfigMaxConcurrentReconciles
 	if enableWebhooks && operatorUsername == "" {
 		setupLog.Info("no operator username: every KrakenDEndpoint write gets the admission render check")
 	} else if enableWebhooks {
