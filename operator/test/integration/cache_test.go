@@ -73,7 +73,15 @@ func TestManager_CachesNoLastAppliedAnnotation(t *testing.T) {
 	const lastApplied = "kubectl.kubernetes.io/last-applied-configuration"
 	for _, kind := range []string{"Secret", "ConfigMap"} {
 		t.Run(kind, func(t *testing.T) {
+			// A live owner, so the garbage collector keeps the probe.
+			owner := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "owner-" + strings.ToLower(kind), Namespace: ns}}
+			if err := k8sClient.Create(ctx, owner); err != nil {
+				t.Fatalf("create owner: %v", err)
+			}
 			meta := metav1.ObjectMeta{
+				OwnerReferences: []metav1.OwnerReference{{
+					APIVersion: "v1", Kind: "ConfigMap", Name: owner.Name, UID: owner.UID,
+				}},
 				Name: "applied-" + strings.ToLower(kind), Namespace: ns,
 				Labels:      map[string]string{"app": "probe"},
 				Annotations: map[string]string{lastApplied: `{"data":{"token":"s3cret"}}`, "keep": "me"},
@@ -96,6 +104,9 @@ func TestManager_CachesNoLastAppliedAnnotation(t *testing.T) {
 			}
 			if got := cached.GetLabels()["app"]; got != "probe" {
 				t.Errorf("the cached %s lost its labels: %v", kind, cached.GetLabels())
+			}
+			if got := cached.GetOwnerReferences(); len(got) != 1 || got[0].UID != owner.UID {
+				t.Errorf("the cached %s lost its owner references: %v", kind, got)
 			}
 			if n := len(cached.GetManagedFields()); n != 0 {
 				t.Errorf("the cached %s holds %d managedFields entries", kind, n)
