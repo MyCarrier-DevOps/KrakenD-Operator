@@ -17,6 +17,7 @@ limitations under the License.
 package configcheck
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"errors"
@@ -100,8 +101,24 @@ func (c *Checker) CheckIsolated(ctx context.Context, gw *v1alpha1.KrakenDGateway
 // SameConfig reports whether gw and old, two versions of one gateway, render
 // the same config for the same edition from the same endpoints and policies.
 // It renders in process: no validation slot is held and nothing is executed.
-func (c *Checker) SameConfig(_ context.Context, _, _ *v1alpha1.KrakenDGateway) (bool, error) {
-	return false, nil
+func (c *Checker) SameConfig(ctx context.Context, old, gw *v1alpha1.KrakenDGateway) (bool, error) {
+	// Nothing read here leaves the Checker and the renderer never mutates its
+	// inputs, so the cache's objects can be used without copying them.
+	in, err := c.gather(ctx, gw, nil, nil, client.UnsafeDisableDeepCopy)
+	if err != nil {
+		return false, err
+	}
+	out, err := c.renderer.Render(in)
+	if err != nil {
+		return false, fmt.Errorf("rendering config: %w", err)
+	}
+	before := in
+	before.Gateway, before.CEFallback = old, ceFallback(old)
+	oldOut, err := c.renderer.Render(before)
+	if err != nil {
+		return false, fmt.Errorf("rendering config: %w", err)
+	}
+	return bytes.Equal(out.JSON, oldOut.JSON), nil
 }
 
 // CheckGatewayPolicy lints gw's config with policy in place of the stored
