@@ -147,6 +147,7 @@ spec:
           - services
           verbs:
           - create
+          - delete
           - get
           - list
           - update
@@ -157,6 +158,7 @@ spec:
           - deployments
           verbs:
           - create
+          - delete
           - get
           - list
           - update
@@ -272,6 +274,7 @@ spec:
           - poddisruptionbudgets
           verbs:
           - create
+          - delete
           - get
           - list
           - update
