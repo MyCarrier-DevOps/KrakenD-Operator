@@ -23,10 +23,12 @@ import (
 	"slices"
 	"strings"
 
+	authorizationv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/validation"
@@ -107,6 +109,9 @@ func (v *GatewayValidator) admit(
 	ctx, cancel := context.WithTimeout(ctx, admissionBudget)
 	defer cancel()
 
+	if err := v.authorizePostRestartJob(ctx, old, gw); err != nil {
+		return nil, err
+	}
 	warnings, errs := v.validate(gw, old)
 	if old != nil {
 		errs = newErrors(errs, v.storedErrors(gw, old))
@@ -1162,4 +1167,42 @@ func versionWarning(gw, old *v1alpha1.KrakenDGateway) admission.Warnings {
 	version := truncate(gw.Spec.Version, echoLimit)
 	return admission.Warnings{fmt.Sprintf("spec.version %s: configs are validated with KrakenD %s; "+
 		"the checks may not match what %s accepts", version, configcheck.ValidatorVersion, version)}
+}
+
+// +kubebuilder:rbac:groups=authorization.k8s.io,resources=subjectaccessreviews,verbs=create
+
+// authorizePostRestartJob requires the requester to be able to create pods in
+// the gateway's namespace when an enabled spec.postRestartJob would run as a
+// ServiceAccount other than the gateway's own. The operator creates the Job
+// with its own grant, so without this check a gateway writer would borrow
+// whatever ServiceAccount of the namespace they name.
+func (v *GatewayValidator) authorizePostRestartJob(ctx context.Context, old, gw *v1alpha1.KrakenDGateway) error {
+	prj := gw.Spec.PostRestartJob
+	if prj == nil || !prj.Enabled {
+		return nil
+	}
+	if prj.ServiceAccountName == "" || prj.ServiceAccountName == gw.Name {
+		return nil
+	}
+	req, err := admission.RequestFromContext(ctx)
+	if err != nil {
+		return unavailable(err)
+	}
+	extra := make(map[string]authorizationv1.ExtraValue, len(req.UserInfo.Extra))
+	for k, val := range req.UserInfo.Extra {
+		extra[k] = authorizationv1.ExtraValue(val)
+	}
+	sar := &authorizationv1.SubjectAccessReview{Spec: authorizationv1.SubjectAccessReviewSpec{
+		User: req.UserInfo.Username, Groups: req.UserInfo.Groups, UID: req.UserInfo.UID, Extra: extra,
+		ResourceAttributes: &authorizationv1.ResourceAttributes{Namespace: gw.Namespace, Verb: "create", Resource: "pods"},
+	}}
+	if err := v.Create(ctx, sar); err != nil {
+		return unavailable(fmt.Errorf("reviewing the requester's access: %w", err))
+	}
+	if !sar.Status.Allowed {
+		return apierrors.NewForbidden(schema.GroupResource{Group: v1alpha1.GroupVersion.Group, Resource: "krakendgateways"},
+			gw.Name, fmt.Errorf("spec.postRestartJob: %s may not create pods in namespace %s, so the post-restart Job may not "+
+				"run as another ServiceAccount or read a Secret", req.UserInfo.Username, gw.Namespace))
+	}
+	return nil
 }
