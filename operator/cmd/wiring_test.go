@@ -117,9 +117,10 @@ func TestWireValidation_AutoConfigAndGatewayChecksLeaveAnAdmissionSlot(t *testin
 
 	w := wireValidation(mgr, renderer.New(renderer.Options{}), nil, "")
 
-	if held := cap(w.AutoConfig.CheckSlots) + gatewayCheckWorkers; held > configCheckSlots-1 {
+	gatewayWorkers := w.Gateway.MaxConcurrentReconciles
+	if held := cap(w.AutoConfig.CheckSlots) + gatewayWorkers; held > configCheckSlots-1 {
 		t.Errorf("AutoConfig prechecks (%d slots) and gateway checks (%d) can hold %d of %d checker slots, "+
-			"leaving admission none", cap(w.AutoConfig.CheckSlots), gatewayCheckWorkers, held, configCheckSlots)
+			"leaving admission none", cap(w.AutoConfig.CheckSlots), gatewayWorkers, held, configCheckSlots)
 	}
 }
 
