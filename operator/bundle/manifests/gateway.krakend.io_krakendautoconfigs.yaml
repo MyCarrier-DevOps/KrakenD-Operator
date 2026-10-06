@@ -39,7 +39,9 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: KrakenDAutoConfig is the Schema for the krakendautoconfigs API.
+        description: |-
+          KrakenDAutoConfig generates the KrakenDEndpoints of a gateway from an OpenAPI
+          specification and keeps them in sync with it.
         properties:
           apiVersion:
             description: |-

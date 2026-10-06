@@ -40,7 +40,9 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: KrakenDEndpoint is the Schema for the krakendendpoints API.
+        description: |-
+          KrakenDEndpoint declares one KrakenD endpoint (path, method and backends) for a
+          gateway. The operator renders it into the gateway's krakend.json.
         properties:
           apiVersion:
             description: |-

@@ -32,8 +32,9 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: KrakenDBackendPolicy is the Schema for the krakendbackendpolicies
-          API.
+        description: |-
+          KrakenDBackendPolicy defines circuit-breaker and rate-limit settings that
+          KrakenDEndpoints reference by name for their backends.
         properties:
           apiVersion:
             description: |-
