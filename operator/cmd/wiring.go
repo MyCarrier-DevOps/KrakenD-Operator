@@ -65,7 +65,10 @@ func wireValidation(
 			Filter:       autoconfig.NewFilter(),
 			Generator:    autoconfig.NewGenerator(),
 			Checker:      checker,
-			Clock:        clock.RealClock{},
+			// The AutoConfig workers leave one of the checker's slots to
+			// admission, which waits against a short deadline.
+			CheckSlots: make(chan struct{}, max(configCheckSlots-1, 1)),
+			Clock:      clock.RealClock{},
 		},
 		Validators: webhooksetup.NewValidators(mgr.GetClient(), mgr.GetAPIReader(), checker, operatorUsername),
 	}
