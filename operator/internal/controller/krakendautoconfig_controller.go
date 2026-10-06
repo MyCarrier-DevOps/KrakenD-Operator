@@ -909,13 +909,13 @@ func syncedCondition(res syncResult, generation int64) metav1.Condition {
 	}
 	c := metav1.Condition{
 		Type: v1alpha1.ConditionSynced, Status: metav1.ConditionTrue, ObservedGeneration: generation, Reason: "Synced",
-		Message: fmt.Sprintf("Generated %d endpoints", res.generated),
+		Message: "Generated " + counted(res.generated, "endpoint"),
 	}
 	if n := len(res.skipped); n > 0 {
-		c.Message += fmt.Sprintf("; %d operations skipped (see status.skipped)", n)
+		c.Message += "; " + counted(n, "operation") + " skipped (see status.skipped)"
 	}
 	if n := len(res.warnings); n > 0 {
-		c.Message += fmt.Sprintf("; %d spec warnings (see status.warnings)", n)
+		c.Message += "; " + counted(n, "spec warning") + " (see status.warnings)"
 	}
 	return c
 }
