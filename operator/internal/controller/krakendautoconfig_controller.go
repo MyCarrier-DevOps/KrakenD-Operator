@@ -320,6 +320,7 @@ func (r *KrakenDAutoConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(
 			&corev1.ConfigMap{},
 			handler.EnqueueRequestsFromMapFunc(r.configMapToAutoConfigs),
+			builder.OnlyMetadata,
 		).
 		WithOptions(crcontroller.Options{
 			RateLimiter:             newAutoConfigRateLimiter(),
