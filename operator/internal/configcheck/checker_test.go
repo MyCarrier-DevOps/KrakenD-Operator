@@ -225,9 +225,11 @@ func TestSameConfig(t *testing.T) {
 		edit func(gw *v1alpha1.KrakenDGateway)
 		want bool
 	}{
-		{"image, version and replicas do not reach the config", func(gw *v1alpha1.KrakenDGateway) {
+		{"image, version, replicas and postRestartJob do not reach the config", func(gw *v1alpha1.KrakenDGateway) {
 			gw.Spec.Image = "registry/krakend:other"
+			gw.Spec.Version = "2.12"
 			gw.Spec.Replicas = ptr.To[int32](5)
+			gw.Spec.PostRestartJob = &v1alpha1.PostRestartJobSpec{Enabled: true, Script: "true"}
 		}, true},
 		{"a root setting reaches the config", func(gw *v1alpha1.KrakenDGateway) {
 			gw.Spec.Config.Timeout = "5s"
