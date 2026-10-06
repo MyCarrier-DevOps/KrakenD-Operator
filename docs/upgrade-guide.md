@@ -1772,6 +1772,26 @@ has no effect, and the Dragonfly instance runs for nothing); turning either off
 is admitted. An entry's `documentation/openapi`
 (which AutoConfig generates) is not refused: a CE render drops it.
 
+**A post-restart Job that borrows rights needs `create pods`.** The operator
+creates the `spec.postRestartJob` Job with its own permissions, so the Job's
+ServiceAccount and Secret references used to be honored whoever wrote the
+gateway. The gateway webhook now answers `403 Forbidden` (`spec.postRestartJob:
+<user> may not create pods in namespace <ns>, so the post-restart Job may not
+run as another ServiceAccount or read a Secret`) when an enabled
+`spec.postRestartJob` sets a `serviceAccountName` other than the gateway's own
+name, takes `envFrom` from a Secret, or has an `env` `secretKeyRef`, and the
+requesting user (the identity the API server authenticated, not the operator)
+may not create pods in the gateway's namespace. The webhook asks the API server
+with a SubjectAccessReview, which needs the new `create` permission on
+`authorization.k8s.io/subjectaccessreviews` in the operator's ClusterRole (see
+*Operator RBAC, caching and availability*). A post-restart Job on the gateway's
+own ServiceAccount, with no Secret reference, needs no review. The review runs
+when the `postRestartJob` is new or changed, so scaling or relabeling a gateway
+that already has such a Job is not blocked. Before upgrading, check who writes
+KrakenDGateways that use these fields. A GitOps controller's ServiceAccount, for
+example, needs `create` on `pods` in the gateway's namespace (for instance
+through the `edit` ClusterRole), or its sync of that gateway is refused.
+
 **Policy writes are checked alone and in every gateway that uses them.** A
 KrakenDBackendPolicy whose `raw` (or typed fields) KrakenD rejects is refused on
 its own, before anything references it, unless the stored policy already failed
@@ -2159,7 +2179,12 @@ ServiceAccounts and PodDisruptionBudgets, because clusters that enable the
 gateway adopts a same-named object. `list` on ReplicaSets lets config
 ConfigMap garbage collection see which revisions running pods still mount.
 The leader-election Role drops ConfigMaps and keeps `get`, `create` and
-`update` on Leases.
+`update` on Leases. The role also gains one rule: `create` on
+`authorization.k8s.io/subjectaccessreviews`, which the gateway webhook uses to
+check that a user who sets a post-restart Job's ServiceAccount or Secret
+references may create pods (see *Complete admission*). The chart used to grant
+SubjectAccessReviews only with `metrics.enabled`, for the metrics endpoint; the
+manager role now carries the grant on every install.
 
 Upgrading applies the new rules with no other change: `helm upgrade` and
 `make deploy` apply them from the chart and the kustomize manifests, and an
@@ -2189,6 +2214,20 @@ kustomize install. Like kustomize, OLM keeps one replica, with no
 PodDisruptionBudget and no anti-affinity: only the Helm chart gets the
 availability defaults below. OLM provides and mounts the webhook certificates,
 so the bundle carries no cert-manager dependency.
+
+The Job permission means that, on OLM, the right to write a KrakenDGateway
+reaches the operator's `batch/jobs` grant, which an OLM install did not have
+before. The gateway webhook now reviews the requester's access for a
+post-restart Job that runs as another ServiceAccount or reads a Secret (see
+*Complete admission*), so a gateway writer cannot use the operator to borrow
+rights they lack. One adoption path is not closed by that, and it is the same on
+every install method: the gateway reconciler creates or updates a ServiceAccount
+named like the gateway and adopts one that already exists with no controller, so
+a user who may create KrakenDGateways in a namespace can run `spec.image` as
+any such ServiceAccount by giving the gateway its name. A ServiceAccount that
+another controller owns cannot be adopted this way. Treat the right to create
+KrakenDGateways in a namespace as the right to run pods as that namespace's
+unowned ServiceAccounts, and grant it accordingly.
 
 For OLM users: the bundle now supports only the `AllNamespaces` install mode.
 The operator watches every namespace, and under `OwnNamespace` or
