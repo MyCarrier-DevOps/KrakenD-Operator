@@ -569,6 +569,21 @@ func TestEndpointAdmission_BrokenGatewayDeniesACandidateTheChangeNewlyBlames(t *
 	}
 }
 
+// A candidate that was already blamed before the change is not newly to blame:
+// the write may be the fix.
+func TestEndpointAdmission_BrokenGatewayAdmitsACandidateItAlreadyBlamed(t *testing.T) {
+	blamesNew := configcheck.Verdict{Findings: append(slices.Clone(failing("other", 0, "broken elsewhere").Findings),
+		failing("new", 0, "clashes with default/other").Findings...)}
+	chk := &scriptedChecker{verdicts: []configcheck.Verdict{blamesNew, blamesNew}}
+	v := &EndpointValidator{Client: fakeClient(testGateway()), Checker: chk}
+
+	resp := review(t, v, "alice", testEndpoint("new", "/a"), testEndpoint("new", "/old"))
+
+	if !resp.Allowed || len(resp.Warnings) != 1 {
+		t.Errorf("response = %+v, warnings %v, want an admission with the pre-existing failure", resp.Result, resp.Warnings)
+	}
+}
+
 // A checker that cannot get a slot in time is a transient 500: the request is
 // not judged, and clients retry.
 func TestEndpointAdmission_ValidatorUnavailableIs500(t *testing.T) {
