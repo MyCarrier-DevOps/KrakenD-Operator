@@ -151,20 +151,40 @@ func TestGatewayReconcile_StepsThatConsumeTheDeploymentWaitForIt(t *testing.T) {
 }
 
 // foreignConfigMap is a ConfigMap the gateway does not control, at the
-// content-addressed name of config checksum.
-func foreignConfigMap(gw *v1alpha1.KrakenDGateway, checksum string) *corev1.ConfigMap {
+// content-addressed name of config and holding its exact bytes: the payload
+// is right and only the metadata is not the gateway's. (A ConfigMap at that
+// name with other bytes is deleted and published again.)
+func foreignConfigMap(gw *v1alpha1.KrakenDGateway, config string) *corev1.ConfigMap {
 	return &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{Name: resources.ConfigMapName(gw, checksum), Namespace: gw.Namespace},
-		Data:       map[string]string{resources.ConfigKey: `{"someone":"else"}`},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: resources.ConfigMapName(gw, hash.SHA256Hex([]byte(config))), Namespace: gw.Namespace,
+		},
+		Data: map[string]string{resources.ConfigKey: config},
 	}
 }
 
+// configB is a newer config whose ConfigMap name a foreign ConfigMap holds.
+const configB = `{"version":3,"name":"B"}`
+
+// configA is the config newerSpecGatewayServingA serves, under its real checksum.
+const configA = `{"version":3,"name":"A"}`
+
+// newerSpecGatewayServingA is newerSpecGateway serving configA under its real
+// checksum, so that a ConfigMap can hold its exact bytes.
+func newerSpecGatewayServingA() *v1alpha1.KrakenDGateway {
+	gw := servingGateway(hash.SHA256Hex([]byte(configA)), convergedImage)
+	gw.Generation = 2
+	gw.Status.ObservedGeneration = 1
+	return gw
+}
+
 func TestGatewayReconcile_AnAppliedConfigThatCannotBePublishedKeepsObservedGenerationBehind(t *testing.T) {
-	gw := newerSpecGateway()
+	gw := newerSpecGatewayServingA()
 	gw.Spec.Replicas = new(int32(3)) // the edit at generation 2, which the held Deployment never receives
-	c := fakeClientBuilder().WithObjects(gw, settledDeployment(gw, "A"), foreignConfigMap(gw, "A")).
+	c := fakeClientBuilder().
+		WithObjects(gw, settledDeployment(gw, gw.Status.ConfigChecksum), foreignConfigMap(gw, configA)).
 		WithStatusSubresource(gw).Build()
-	r := newTestGatewayReconciler(c, renderOutput("A"), &mockValidator{})
+	r := newTestGatewayReconciler(c, renderOf(configA), &mockValidator{})
 
 	if err := reconcileGateway(t, r, gw); err == nil {
 		t.Fatal("a foreign ConfigMap at the applied config's name must fail the pass so it is retried")
@@ -178,10 +198,11 @@ func TestGatewayReconcile_AnAppliedConfigThatCannotBePublishedKeepsObservedGener
 }
 
 func TestGatewayReconcile_ObservedGenerationCatchesUpOnceTheErrorClears(t *testing.T) {
-	gw := newerSpecGateway()
-	c := fakeClientBuilder().WithObjects(gw, settledDeployment(gw, "A"), foreignConfigMap(gw, "A")).
+	gw := newerSpecGatewayServingA()
+	c := fakeClientBuilder().
+		WithObjects(gw, settledDeployment(gw, gw.Status.ConfigChecksum), foreignConfigMap(gw, configA)).
 		WithStatusSubresource(gw).Build()
-	r := newTestGatewayReconciler(c, renderOutput("A"), &mockValidator{})
+	r := newTestGatewayReconciler(c, renderOf(configA), &mockValidator{})
 	if err := reconcileGateway(t, r, gw); err == nil {
 		t.Fatal("a foreign ConfigMap at the applied config's name must fail the pass")
 	}
@@ -189,7 +210,7 @@ func TestGatewayReconcile_ObservedGenerationCatchesUpOnceTheErrorClears(t *testi
 		t.Fatalf("observedGeneration = %d while the error persists, want 1", got)
 	}
 
-	if err := c.Delete(context.Background(), foreignConfigMap(gw, "A")); err != nil {
+	if err := c.Delete(context.Background(), foreignConfigMap(gw, configA)); err != nil {
 		t.Fatal(err)
 	}
 	if err := reconcileGateway(t, r, gw); err != nil {
@@ -278,9 +299,9 @@ func TestGatewayReconcile_AValidRenderThatCannotBePublishedIsNotReported(t *test
 			gw := tc.gw()
 			c := fakeClientBuilder().
 				WithObjects(gw, settledDeployment(gw, "A"), publishedConfigMap(t, gw, `{"applied":true}`, "A"),
-					foreignConfigMap(gw, "B")).
+					foreignConfigMap(gw, configB)).
 				WithStatusSubresource(gw).Build()
-			r := newTestGatewayReconciler(c, renderOutput("B"), &mockValidator{}) // B passes validation
+			r := newTestGatewayReconciler(c, renderOf(configB), &mockValidator{}) // B passes validation
 
 			err := reconcileGateway(t, r, gw)
 			if err == nil {
@@ -312,9 +333,9 @@ func TestGatewayReconcile_APublishFailureWarnsOnceUntilItsReasonChanges(t *testi
 	gw.Generation, gw.Status.ObservedGeneration = 1, 1
 	c := fakeClientBuilder().
 		WithObjects(gw, settledDeployment(gw, "A"), publishedConfigMap(t, gw, `{"applied":true}`, "A"),
-			foreignConfigMap(gw, "B")).
+			foreignConfigMap(gw, configB)).
 		WithStatusSubresource(gw).Build()
-	r := newTestGatewayReconciler(c, renderOutput("B"), &mockValidator{})
+	r := newTestGatewayReconciler(c, renderOf(configB), &mockValidator{})
 
 	for range 2 {
 		if err := reconcileGateway(t, r, gw); err == nil {
