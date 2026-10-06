@@ -178,6 +178,7 @@ func (r *KrakenDGatewayReconciler) applyOptional(
 	if !available {
 		return nil, false, nil
 	}
+	r.absentKinds.forget(gvk)
 	u = &unstructured.Unstructured{}
 	u.SetGroupVersionKind(gvk)
 	u.SetName(name)
