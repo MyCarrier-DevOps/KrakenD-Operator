@@ -230,23 +230,29 @@ const maxEntryCauses = 20
 
 // renderDenial rejects ep with one cause per entry of ep the verdict blames,
 // its findings joined and cut to the warning limit, for the first
-// maxEntryCauses entries. Findings about other objects or the gateway root, and
+// maxEntryCauses entries. Findings about other objects in ep's namespace, and
 // those of the entries beyond the limit, go on spec.endpoints as a bounded
-// summary that counts what it leaves out.
+// summary that counts what it leaves out. krakend check prints the values it
+// refuses, so its findings about the gateway root or about an endpoint in
+// another namespace are only counted.
 func renderDenial(ep *v1alpha1.KrakenDEndpoint, verdict configcheck.Verdict) error {
 	self := types.NamespacedName{Namespace: ep.Namespace, Name: ep.Name}
 	byEntry := map[int][]configcheck.Finding{}
 	var blamed []int
 	var others []configcheck.Finding
+	withheld := 0
 	for _, f := range verdict.Findings {
-		if f.Endpoint != self || f.Index < 0 || f.Index >= len(ep.Spec.Endpoints) {
+		switch {
+		case f.Endpoint == self && f.Index >= 0 && f.Index < len(ep.Spec.Endpoints):
+			if _, ok := byEntry[f.Index]; !ok {
+				blamed = append(blamed, f.Index)
+			}
+			byEntry[f.Index] = append(byEntry[f.Index], f)
+		case foreignCheckOutput(verdict.Stage, f, ep.Namespace):
+			withheld++
+		default:
 			others = append(others, f)
-			continue
 		}
-		if _, ok := byEntry[f.Index]; !ok {
-			blamed = append(blamed, f.Index)
-		}
-		byEntry[f.Index] = append(byEntry[f.Index], f)
 	}
 	slices.Sort(blamed)
 	var errs field.ErrorList
@@ -269,6 +275,11 @@ func renderDenial(ep *v1alpha1.KrakenDEndpoint, verdict configcheck.Verdict) err
 		errs = append(errs, field.Invalid(field.NewPath("spec", "endpoints"), field.OmitValueType{},
 			"with this change the gateway's config fails krakend check: "+
 				configcheck.Verdict{Findings: others}.Summary(warningLimit)))
+	}
+	if withheld > 0 {
+		errs = append(errs, field.Invalid(field.NewPath("spec", "endpoints"), field.OmitValueType{},
+			fmt.Sprintf("with this change the gateway's config also fails krakend check on %d findings "+
+				"about the gateway root or endpoints in other namespaces, which are not shown", withheld)))
 	}
 	return invalid(kindEndpoint, ep.Name, errs)
 }

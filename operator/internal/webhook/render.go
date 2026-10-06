@@ -49,6 +49,18 @@ func bindCheck(
 	return func(ctx context.Context) (configcheck.Verdict, error) { return run(ctx, gw, eps) }
 }
 
+// foreignCheckOutput reports whether f is krakend check output about the
+// gateway root or about an endpoint outside namespace ns. krakend check prints
+// the values it refuses, and a writer in ns may read neither the gateway nor
+// that endpoint. The route and EE wildcard checks print only methods and paths,
+// so their findings are not foreign.
+func foreignCheckOutput(stage renderer.RejectionStage, f configcheck.Finding, ns string) bool {
+	if stage == renderer.StageRoute || stage == renderer.StageEEWildcard {
+		return false
+	}
+	return f.Endpoint.Name == "" || f.Endpoint.Namespace != ns
+}
+
 // ratchetRender rejects a change only when it turns a passing config into a
 // failing one. It runs after, then before; when before fails too the failure
 // is a warning (preexisting words it from before's verdict) unless newFailure
