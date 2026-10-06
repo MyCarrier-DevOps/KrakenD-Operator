@@ -154,7 +154,8 @@ func checkPolicyRender(
 		},
 			func(after configcheck.Verdict) error {
 				cause(field.Invalid(field.NewPath("spec"), field.OmitValueType{},
-					fmt.Sprintf("breaks gateway %s/%s: %s", gw.Namespace, gw.Name, after.Summary(warningLimit))))
+					fmt.Sprintf("breaks gateway %s/%s: %s", gw.Namespace, gw.Name,
+						shownSummary(after, policy.Namespace, warningLimit))))
 				return errPolicyBreaksGateway
 			},
 			func(before configcheck.Verdict) string {
