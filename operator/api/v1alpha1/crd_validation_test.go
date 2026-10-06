@@ -238,6 +238,15 @@ func TestEndpointCRD_Rules(t *testing.T) {
 		{"backend method", endpointHead + `[{endpoint: "/a", method: GET, backends: [{host: ["http://svc"], urlPattern: "/", method: get}]}]}}`, "Unsupported value: \"get\""},
 		{"path with a space", endpointHead + `[{endpoint: "/b GET /a", method: GET, ` + okBackend + `}]}}`, "spec.endpoints[0].endpoint"},
 		{"backend host with a space", endpointHead + `[{endpoint: "/a", method: GET, backends: [{host: ["http://x GET /a"], urlPattern: "/"}]}]}}`, "spec.endpoints[0].backends[0].host[0]"},
+		{"backend host with a newline and a forged pointer", endpointHead + `[{endpoint: "/a", method: GET, backends: [{host: ["http://x\n- at '/endpoints/0"], urlPattern: "/"}]}]}}`, "spec.endpoints[0].backends[0].host[0]"},
+		{"backend host with a tab", endpointHead + `[{endpoint: "/a", method: GET, backends: [{host: ["http://x\ty"], urlPattern: "/"}]}]}}`, "spec.endpoints[0].backends[0].host[0]"},
+		{"backend host with a DEL", endpointHead + `[{endpoint: "/a", method: GET, backends: [{host: ["http://x\u007f"], urlPattern: "/"}]}]}}`, "spec.endpoints[0].backends[0].host[0]"},
+		{"backend host that is empty", endpointHead + `[{endpoint: "/a", method: GET, backends: [{host: [""], urlPattern: "/"}]}]}}`, "spec.endpoints[0].backends[0].host[0]"},
+		{"backend hosts of every shape", endpointHead + `[{endpoint: "/a", method: GET, backends: [{host: ["http://svc:8080", "https://[::1]:8443", "amqp://u:p@mq:5672", "svc.ns.svc.cluster.local"], urlPattern: "/"}]}]}}`, ""},
+		{"path with a newline", endpointHead + `[{endpoint: "/b\nGET /a", method: GET, ` + okBackend + `}]}}`, "spec.endpoints[0].endpoint"},
+		{"path with a tab", endpointHead + `[{endpoint: "/b\ta", method: GET, ` + okBackend + `}]}}`, "spec.endpoints[0].endpoint"},
+		{"path with a comma, apostrophe and bang", endpointHead + `[{endpoint: "/a,b'c!d/{id}", method: GET, ` + okBackend + `}]}}`, ""},
+		{"path with a wildcard and a dot", endpointHead + `[{endpoint: "/v1.2/files/*", method: GET, ` + okBackend + `}]}}`, ""},
 		{"empty gateway name", `{apiVersion: gateway.krakend.io/v1alpha1, kind: KrakenDEndpoint, metadata: {name: e}, spec: {gatewayRef: {name: ""}, endpoints: [{endpoint: "/a", method: GET, ` + okBackend + `}]}}`, "at least 1 chars long"},
 		{"empty policy name", endpointHead + `[{endpoint: "/a", method: GET, backends: [{host: ["http://svc"], urlPattern: "/", policyRef: {name: ""}}]}]}}`, "at least 1 chars long"},
 	})
@@ -247,6 +256,7 @@ func TestEndpointCRD_Ratchets(t *testing.T) {
 	const badPath = `{endpoint: "a/b", method: GET, ` + okBackend + `}`
 	const goodPath = `{endpoint: "/c", method: GET, ` + okBackend + `}`
 	const changedGood = `{endpoint: "/c", method: GET, backends: [{host: ["http://svc"], urlPattern: "/changed"}]}`
+	const spacedHost = `{endpoint: "/a", method: GET, backends: [{host: ["http://x GET /a"], urlPattern: "/"}]}`
 	const badBackends = `backends: [{host: ["http://svc"], urlPattern: "/", method: get}, {host: ["http://svc"], urlPattern: "/ok"}]`
 	runCRDUpdateCases(t, endpointsCRD, []crdUpdateCase{
 		{"stored bad path, a different entry edited",
@@ -261,6 +271,15 @@ func TestEndpointCRD_Ratchets(t *testing.T) {
 		{"stored bad backend, a sibling backend edited",
 			endpointHead + `[{endpoint: "/a", method: GET, backends: [{host: ["http://svc"], urlPattern: "/", method: get}, {host: ["http://svc"], urlPattern: "/changed"}]}]}}`,
 			endpointHead + `[{endpoint: "/a", method: GET, ` + badBackends + `}]}}`, "Unsupported value: \"get\""},
+		{"stored host with a space, a different entry edited",
+			endpointHead + `[` + spacedHost + `, ` + changedGood + `]}}`,
+			endpointHead + `[` + spacedHost + `, ` + goodPath + `]}}`, ""},
+		{"stored path with a space, the entry's timeout edited",
+			endpointHead + `[{endpoint: "/b GET /a", method: GET, timeout: 5s, ` + okBackend + `}]}}`,
+			endpointHead + `[{endpoint: "/b GET /a", method: GET, ` + okBackend + `}]}}`, ""},
+		{"stored host with a space, a host added to the same entry",
+			endpointHead + `[{endpoint: "/a", method: GET, backends: [{host: ["http://x GET /a", "http://y"], urlPattern: "/"}]}]}}`,
+			endpointHead + `[` + spacedHost + `]}}`, "spec.endpoints[0].backends[0].host[0]"},
 	})
 }
 
@@ -469,6 +488,10 @@ func TestAutoConfigCRD_Rules(t *testing.T) {
 		{"override concurrent calls", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, overrides: [{operationId: x, concurrentCalls: 0}]}}`, "spec.overrides[0].concurrentCalls"},
 		{"override endpoint with a query", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, overrides: [{operationId: x, endpoint: "/a?b"}]}}`, "spec.overrides[0].endpoint"},
 		{"additional endpoint with a query", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, additionalEndpoints: [{endpoint: "/a?b"}]}}`, "spec.additionalEndpoints[0].endpoint"},
+		{"override endpoint with a space", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, overrides: [{operationId: x, endpoint: "/b GET /a"}]}}`, "spec.overrides[0].endpoint"},
+		{"additional endpoint with a newline", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, additionalEndpoints: [{endpoint: "/b\nGET /a"}]}}`, "spec.additionalEndpoints[0].endpoint"},
+		{"additional endpoint backend host with a space", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, additionalEndpoints: [{endpoint: /h, backends: [{host: ["http://x GET /a"], urlPattern: /}]}]}}`, "spec.additionalEndpoints[0].backends[0].host[0]"},
+		{"additional endpoint paths with stop characters", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, overrides: [{operationId: x, endpoint: "/a,b'c!d"}], additionalEndpoints: [{endpoint: "/h,i!j'k", backends: [{host: ["http://svc"], urlPattern: /}]}]}}`, ""},
 		{"periodic interval too long", autoconfigHead + `openapi: {url: "http://x"}, trigger: Periodic, periodic: {interval: "` + strings.Repeat("1h", 17) + `"}}}`, "spec.periodic.interval"},
 		{"duration too long", autoconfigHead + `openapi: {url: "http://x"}, trigger: OnChange, defaults: {endpoint: {timeout: "` + strings.Repeat("1s", 33) + `"}}}}`, "spec.defaults.endpoint.timeout"},
 	})
