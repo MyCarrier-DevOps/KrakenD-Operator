@@ -341,7 +341,9 @@ kubectl get events --field-selector involvedObject.name=<name> --sort-by='.lastT
   for clashes under `router.auto_options`. The route check is shared with
   admission and stops after 21 refused routes, ending with `route check stopped
   after 21 refused routes`, so the message and `GatewayConfigRejected` name at
-  most the first 21, in a deterministic order. The full
+  most the first 21, in a deterministic order. The EE wildcard rule stops the
+  same way, after 21 conflicts, with `EE wildcard check stopped after 21
+  conflicts`. The full
   output is in the operator log, message `validation rejected the rendered config`. The gateway
   keeps serving the last applied config (`status.configChecksum`), and its
   Deployment (unless a plugin ConfigMap is missing, which holds it), Service
