@@ -5621,3 +5621,44 @@ func TestAutoConfigPrecheck_ConcurrentWorkersNeverExceedCheckSlots(t *testing.T)
 		t.Errorf("peak concurrent checks = %d, want between 1 and %d", got, slots)
 	}
 }
+
+// delayFetcher answers every fetch after delay (or when its context ends):
+// the test AutoConfig's spec URL with main, any other URL with refDoc.
+type delayFetcher struct {
+	delay        time.Duration
+	main, refDoc []byte
+}
+
+func (d delayFetcher) Fetch(ctx context.Context, source autoconfig.FetchSource) (*autoconfig.FetchResult, error) {
+	select {
+	case <-time.After(d.delay):
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	if source.URL == "https://example.com/api.json" {
+		return &autoconfig.FetchResult{Data: d.main}, nil
+	}
+	return &autoconfig.FetchResult{Data: d.refDoc}, nil
+}
+
+// One deadline covers the spec fetch and the $ref fetches together: two
+// fetches that each fit the timeout but together exceed it still fail.
+func TestAutoConfigReconcile_FetchTimeoutIsOverallNotPerRequest(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	_, ce, fi, g := defaultMocks()
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, &mockFetcher{}, ce, fi, g)
+	r.Fetcher = delayFetcher{
+		delay:  300 * time.Millisecond,
+		main:   []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"$ref":"schemas.json#/R"}}}}}}`),
+		refDoc: []byte(`{"R":{"type":"string"}}`),
+	}
+	r.FetchTimeout = 500 * time.Millisecond
+
+	_, err := reconcileAC(r, ac)
+
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("expected a deadline error from two 300ms fetches under a 500ms timeout, got %v", err)
+	}
+}
