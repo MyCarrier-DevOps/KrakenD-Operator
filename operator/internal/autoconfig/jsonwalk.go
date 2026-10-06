@@ -38,12 +38,24 @@ func walkJSON(node any, visit func(key string, value any) bool) {
 	}
 }
 
+// nameKeyedMaps are the keys whose object value maps names a spec author
+// chooses to objects: the JSON Schema keywords that map names to schemas, and
+// the OpenAPI (and Swagger 2.0) maps of paths, webhooks, components, headers,
+// links, callbacks, media types and encodings. A member of such a map is an
+// object whatever it is called, so a schema, response or header named
+// "example" is not taken for example data. "examples" is not one of them: its
+// members are Example Objects, of which only a $ref is a reference.
+var nameKeyedMaps = append(slices.Clone(schemaMapKeywords), "dependencies",
+	"paths", "webhooks", "schemas", "responses", "parameters", "requestBodies",
+	"headers", "securitySchemes", "links", "callbacks", "pathItems", "content", "encoding")
+
 // examplePayload reports whether value, the member key of an object, is
 // example data rather than part of the spec's structure, and returns the
 // $refs that are real references inside it. The payload is the value of an
 // "example" key and the content of an "examples" key, except that each entry
-// of an "examples" object may itself be a $ref to an Example Object. A schema
-// property literally named "example" or "examples" is taken for a payload too.
+// of an "examples" object may itself be a $ref to an Example Object. Callers
+// apply it to the fields of an object, not to the members of a name-keyed map
+// (see nameKeyedMaps), which are objects whatever they are named.
 func examplePayload(key string, value any) (isPayload bool, refs []string) {
 	switch key {
 	case "example":
