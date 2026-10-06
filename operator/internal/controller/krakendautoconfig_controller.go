@@ -698,28 +698,36 @@ func (r *KrakenDAutoConfigReconciler) requeueResult(ac *v1alpha1.KrakenDAutoConf
 	return ctrl.Result{RequeueAfter: defaultResyncInterval}
 }
 
+// getCUEDefsResourceVersion returns the resource versions of the CUE
+// definitions ConfigMaps, read as metadata only: the definitions themselves
+// are loaded when a sync needs them.
 func (r *KrakenDAutoConfigReconciler) getCUEDefsResourceVersion(
 	ctx context.Context,
 	ac *v1alpha1.KrakenDAutoConfig,
 ) string {
 	rv := ""
-	var cm corev1.ConfigMap
-	if err := r.Get(ctx, types.NamespacedName{
-		Name:      defaultCUEDefinitionsConfigMap,
-		Namespace: ac.Namespace,
-	}, &cm); err == nil {
-		rv = cm.ResourceVersion
+	if v, ok := r.configMapResourceVersion(ctx, ac.Namespace, defaultCUEDefinitionsConfigMap); ok {
+		rv = v
 	}
 	if ac.Spec.CUE != nil && ac.Spec.CUE.DefinitionsConfigMapRef != nil {
-		var customCM corev1.ConfigMap
-		if err := r.Get(ctx, types.NamespacedName{
-			Name:      ac.Spec.CUE.DefinitionsConfigMapRef.Name,
-			Namespace: ac.Namespace,
-		}, &customCM); err == nil {
-			rv += ":" + customCM.ResourceVersion
+		if v, ok := r.configMapResourceVersion(ctx, ac.Namespace, ac.Spec.CUE.DefinitionsConfigMapRef.Name); ok {
+			rv += ":" + v
 		}
 	}
 	return rv
+}
+
+// configMapResourceVersion returns the resource version of a ConfigMap, and
+// false when it cannot be read.
+func (r *KrakenDAutoConfigReconciler) configMapResourceVersion(
+	ctx context.Context, namespace, name string,
+) (string, bool) {
+	cm := &metav1.PartialObjectMetadata{}
+	cm.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("ConfigMap"))
+	if err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, cm); err != nil {
+		return "", false
+	}
+	return cm.ResourceVersion, true
 }
 
 func (r *KrakenDAutoConfigReconciler) loadCUEDefinitions(
