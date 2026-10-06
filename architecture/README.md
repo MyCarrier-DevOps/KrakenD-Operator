@@ -750,7 +750,7 @@ sequenceDiagram
             Op->>CM: Create the immutable ConfigMap gateway-config-hash with the new krakend.json
             Op->>K8s: Write status.configChecksum = newChecksum
             Op->>Dep: Patch Deployment: pod annotations<br/>checksum/config + checksum/plugins,<br/>container image (all to desired state)
-            Op->>K8s: Patch Accepted on each endpoint of the render, only on change:<br/>True (Accepted or PartiallyAccepted), False (EndpointConflict), or removed (missing policy), plus status.conflicts
+            Op->>K8s: Patch Accepted on each endpoint of the render, only on change:<br/>True (Accepted, PartiallyAccepted or SchemaNameConflict), False (EndpointConflict), EEFeaturesStripped in a CE fallback, or removed (missing policy), plus status.conflicts
             Note over Op: Requeue: wait for Deployment rollout
             Dep->>Pod: Rolling update (new pods with new config)
             Pod->>Pod: KrakenD starts, loads config
@@ -1287,9 +1287,9 @@ flowchart TD
     BB -->|No| C
     BC --> C[Resolve KrakenDBackendPolicy<br/>references]
     C --> CA{Missing policyRef?}
-    CA -->|Yes| CB[Mark affected endpoints<br/>as Invalid]
+    CA -->|Yes| CB[Exclude the endpoint and drop its Accepted<br/>the endpoint controller reports ResolvedRefs=False]
     CA -->|No| D
-    CB --> D[Build internal config model<br/>excluding Conflicted and Invalid endpoints]
+    CB --> D[Build internal config model<br/>without the lost entries and the<br/>endpoints with a missing policy]
 
     D --> E{dragonfly.enabled?}
     E -->|true| F[Derive redis connection pool<br/>from Dragonfly Service DNS convention]
@@ -1297,7 +1297,7 @@ flowchart TD
     F --> H[Merge service-level extra_config]
     FB --> H
 
-    H --> I[Build endpoints array<br/>from non-conflicted KrakenDEndpoints]
+    H --> I[Build endpoints array<br/>from the entries that won their route]
     I --> J[Apply backend policies<br/>merge extraConfig + policyRef<br/>inline extraConfig takes precedence on key collision]
     J --> K[Inject TLS config<br/>if tls.enabled and NOT istio]
     K --> K1[Inject plugin block<br/>if plugins configured]
@@ -1839,7 +1839,7 @@ A verb is granted only when a call site needs it. `get`/`list`/`watch` are neede
 
 Not granted: `create`/`update`/`patch`/`delete` on the four CRDs' main resources except where listed; `patch` everywhere except events and the endpoint status subresource; `update` on configmaps and on the endpoint status subresource; `get` on every status subresource; `krakendendpoints/finalizers` and `krakendbackendpolicies/finalizers` (neither kind owns anything).
 
-Secrets and ConfigMaps are watched as metadata only (`builder.OnlyMetadata`) and read live from the API server (`client.CacheOptions.DisableFor`), so no Secret data or ConfigMap payload is cached; the grants stay `get`/`list`/`watch` because metadata watches still list and watch. The cached metadata also loses its annotations and `managedFields` (`controller.CacheByObject`), because an object applied client-side repeats its body in the `kubectl.kubernetes.io/last-applied-configuration` annotation. The residual: the names, labels and owner references of every Secret and ConfigMap in the cluster stay cached. Per reconcile pass the live reads are: gateway, the plugin ConfigMaps and the license Secret in full, and the config ConfigMap's existence and the garbage-collection list as metadata; AutoConfig, the namespace's `krakend-cue-definitions` ConfigMap once in full (falling back to the embedded definitions), the `cue.definitionsConfigMapRef` ConfigMap the same way when set, and the spec and auth sources in full.
+Secrets and ConfigMaps are watched as metadata only (`builder.OnlyMetadata`) and read live from the API server (`client.CacheOptions.DisableFor`), so no Secret data or ConfigMap payload is cached; the grants stay `get`/`list`/`watch` because metadata watches still list and watch. The cached metadata also loses its annotations and `managedFields` (`controller.CacheByObject`), because an object applied client-side repeats its body in the `kubectl.kubernetes.io/last-applied-configuration` annotation. The residual: the names, labels and owner references of every Secret and ConfigMap in the cluster stay cached. Per reconcile pass the live reads are: gateway, the plugin ConfigMaps and the license Secret in full, and the config ConfigMap's existence and the garbage-collection list as metadata; AutoConfig, the namespace's `krakend-cue-definitions` ConfigMap once in full (falling back to the embedded definitions), the `cue.definitionsConfigMapRef` ConfigMap once in full when set (a missing one fails the sync with `CUEEvaluationFailed`), and the spec and auth sources in full.
 
 ### Leader election (namespaced Role)
 
@@ -1933,13 +1933,13 @@ shares the other selector labels, is never scraped.
 | `krakend_operator_reconcile_duration_seconds` | Histogram | Reconciliation loop latency |
 | `krakend_operator_dragonfly_ready` | Gauge | 1 if Dragonfly is ready, 0 otherwise |
 | `krakend_operator_gateway_config_valid` | Gauge | 1 while the gateway's newest config passed validation, 0 otherwise (labels: `namespace`, `name`); removed when the gateway is deleted |
-| `krakend_operator_autoconfig_synced` | Gauge | 1 after a `KrakenDAutoConfig`'s last reconcile synced successfully, 0 while it is failing (labels: `namespace`, `name`); the series is removed when the AutoConfig is deleted |
+| `krakend_operator_autoconfig_synced` | Gauge | 1 after a `KrakenDAutoConfig`'s last reconcile synced successfully, 0 while it is failing or any of its operations is held (labels: `namespace`, `name`); the series is removed when the AutoConfig is deleted |
 
 Per-gateway series (`namespace`, `name` labels) are removed when the gateway is deleted or starts terminating.
 
 ### Kubernetes Events
 
-The operator emits events on the resource a condition or action concerns. Events on a KrakenDEndpoint are `EndpointConflict`, `Accepted` (emitted by the gateway controller), and `GatewayNotFound`, `PolicyNotFound` and `RefsResolved` (emitted by the endpoint controller). Events on a KrakenDBackendPolicy are `InvalidCircuitBreaker`, `InvalidRateLimit` and `Ready`. Events on a KrakenDAutoConfig are the AutoConfig rows (`SpecFetched` through `DuplicateOperationId`) and `ValidatorUnavailable`. All other rows are emitted on the KrakenDGateway. Condition-transition events (endpoint `ResolvedRefs`, policy `Ready`) fire on the transition only: a Warning when the condition becomes `False` or changes reason, and a Normal event when it recovers.
+The operator emits events on the resource a condition or action concerns. Events on a KrakenDEndpoint are `EndpointConflict`, `PartiallyAccepted`, `Accepted` (emitted by the gateway controller), and `GatewayNotFound`, `PolicyNotFound` and `RefsResolved` (emitted by the endpoint controller). Events on a KrakenDBackendPolicy are `InvalidCircuitBreaker`, `InvalidRateLimit` and `Ready`. Events on a KrakenDAutoConfig are the AutoConfig rows (`SpecFetched` through `DuplicateOperationId`) and `ValidatorUnavailable`. All other rows are emitted on the KrakenDGateway. Condition-transition events (endpoint `ResolvedRefs`, policy `Ready`) fire on the transition only: a Warning when the condition becomes `False` or changes reason, and a Normal event when it recovers.
 
 A gateway event backed by a condition (`RolloutFailed`,
 `IstioVirtualServiceCreated`, `DragonflyNotReady`, `DragonflyReady`, the license
@@ -2395,7 +2395,7 @@ The autoconfig controller runs as part of the main operator process (same binary
 
 - Uses a separate work queue keyed by `KrakenDAutoConfig` namespace/name
 - Does NOT trigger gateway reconciliation directly — generated `KrakenDEndpoint` creates/updates trigger the normal endpoint controller watch, which in turn triggers the gateway reconciler
-- Runs with the same RBAC permissions as the gateway controller (it creates `KrakenDEndpoint` resources, which requires `create/update/patch/delete` on `krakendendpoints`)
+- Runs with the same RBAC permissions as the gateway controller (it creates, updates and deletes `KrakenDEndpoint` resources, which requires `create`, `update` and `delete` on `krakendendpoints`)
 
 ### SSRF Mitigation
 
