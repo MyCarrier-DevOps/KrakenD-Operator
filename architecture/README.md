@@ -1464,8 +1464,9 @@ A rejection's krakend check output can be far larger than a condition allows (on
 When validation fails, the rendered config is not applied and the gateway
 keeps serving the last applied one; there is no per-endpoint quarantine.
 `RenderOutput.Sources` is index-aligned with the rendered `endpoints` array,
-so each `krakend check` finding (a `/endpoints/<i>` pointer, or a
-`METHOD /path` or `path '…'` in router errors) maps back to its
+so each `krakend check` finding (a `/endpoints/<i>` pointer, the method and
+path krakend prints for its own failing endpoint, or the `path '…'` of a
+router error) maps back to its
 KrakenDEndpoint and to the entry of its `spec.endpoints` the finding names
 (`spec.endpoints[i]`). Those endpoints get `Accepted=False/GatewayConfigRejected`,
 and every other endpoint keeps the verdict of the applied config, except
