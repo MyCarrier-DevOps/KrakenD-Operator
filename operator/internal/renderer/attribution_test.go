@@ -316,6 +316,13 @@ func TestAttribute_ShapeFollowsLurasParameters(t *testing.T) {
 			output:    "ERROR parsing the configuration file:\t'krakend.json': ignoring the 'POST /__debug/{x}' endpoint, since it is invalid!!!\n",
 			wantIndex: []int{1},
 		},
+		{
+			name:     "a brace after the query mark is printed unconverted",
+			rendered: `{"endpoints":[{"endpoint":"/a","method":"GET"},{"endpoint":"/a/{id}/b?x={id}","method":"GET"}]}`,
+			output: "ERROR parsing the configuration file:\t'krakend.json': undefined output param 'missing'! " +
+				"endpoint: GET /a/:id/b?x={id}, backend: 0. input: [id], output: [missing]\n",
+			wantIndex: []int{1},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
