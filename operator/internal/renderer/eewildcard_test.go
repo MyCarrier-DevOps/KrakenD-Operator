@@ -20,6 +20,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -58,5 +60,37 @@ func TestEEWildcardFindings_ShapesAreComputedPerRouteNotPerPair(t *testing.T) {
 	if limit := 2 * (others + wildcards); calls > limit {
 		t.Errorf("%d shape computations for %d wildcards over %d routes, want at most %d (per route, not per pair)",
 			calls, wildcards, others+wildcards, limit)
+	}
+}
+
+func TestEEWildcardFindings_StopsAfterTheFirstConflicts(t *testing.T) {
+	const depth = 300
+	endpoints := make([]any, 0, 2*depth)
+	for i := 1; i <= depth; i++ {
+		prefix := "/n/" + strings.Repeat("a/", i)
+		endpoints = append(endpoints,
+			map[string]any{"endpoint": prefix + "*", "method": "GET"},
+			map[string]any{"endpoint": prefix + "x", "method": "GET"})
+	}
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+
+	findings, err := eeWildcardFindings(context.Background(), endpoints)
+
+	runtime.ReadMemStats(&after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Each conflict yields one line per endpoint, then the stop notice.
+	if want := 2*MaxRouteRefusals + 1; len(findings) != want {
+		t.Fatalf("%d findings, want %d: %d conflicts and the stop notice", len(findings), want, MaxRouteRefusals)
+	}
+	wantNotice := fmt.Sprintf("- EE wildcard check stopped after %d conflicts", MaxRouteRefusals)
+	if last := findings[len(findings)-1]; last != wantNotice {
+		t.Errorf("last finding = %q, want %q", last, wantNotice)
+	}
+	const budget = 8 << 20
+	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > budget {
+		t.Errorf("%d bytes allocated for %d routes, want at most %d", allocated, len(endpoints), budget)
 	}
 }
