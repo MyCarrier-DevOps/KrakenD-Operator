@@ -2218,3 +2218,26 @@ func TestSchemaConflictMessages_AreBoundedByTheConditionCap(t *testing.T) {
 		t.Errorf("message is %d bytes, want at most %d", len(got), maxConditionMessageBytes)
 	}
 }
+
+func TestGatewayMappers_AcceptMetadataOnlyObjects(t *testing.T) {
+	gw := testGateway()
+	gw.Spec.License = &v1alpha1.LicenseConfig{
+		SecretRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "lic"}},
+	}
+	gw.Spec.Plugins = &v1alpha1.PluginsSpec{Sources: []v1alpha1.PluginSource{
+		{ConfigMapRef: &v1alpha1.ConfigMapKeyRef{Name: "plugins"}},
+	}}
+	r := &KrakenDGatewayReconciler{Client: fakeClientBuilder().WithObjects(gw).Build(), Scheme: testScheme()}
+	partial := func(kind, name string) *metav1.PartialObjectMetadata {
+		m := &metav1.PartialObjectMetadata{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: gw.Namespace}}
+		m.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind(kind))
+		return m
+	}
+
+	if got := r.licenseSecretToGateway(context.Background(), partial("Secret", "lic")); len(got) != 1 {
+		t.Errorf("license Secret mapper: %v, want one request", got)
+	}
+	if got := r.pluginConfigMapToGateway(context.Background(), partial("ConfigMap", "plugins")); len(got) != 1 {
+		t.Errorf("plugin ConfigMap mapper: %v, want one request", got)
+	}
+}
