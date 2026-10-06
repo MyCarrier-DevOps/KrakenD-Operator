@@ -15,6 +15,8 @@
 # and cross-method auto_options clashes are not checked.
 # Checks:
 #   KrakenDEndpoint / KrakenDGateway / KrakenDAutoConfig   the CRD schema and CEL rules
+#   ... .host[N] ...                                       a backend host (or an endpoint path) holding whitespace or a
+#                                                          control character, which krakend prints verbatim in its errors
 #   gateway ns/name: A vs B                                 entries one gateway would route as one
 #   KrakenDAutoConfig ns/name: endpoints share a route ...  endpoints it controls that one route serves
 #   KrakenDEndpoint ...: ... health path of gateway ...    a GET on the gateway's health endpoint
@@ -119,6 +121,8 @@ def backend_problems($q):
   (.encoding // empty | enum_problem("\($q).encoding"; backend_encodings)),
   (.sd // empty | enum_problem("\($q).sd"; discoveries)),
   (.method // empty | enum_problem("\($q).method"; backend_methods)),
+  ((.host // []) | to_entries[] | select(.value | crd_test($host_re) | not)
+    | "\($q).host[\(.key)] \(.value | tojson)"),
   (if .policyRef != null and (.policyRef.name // "") == "" then "\($q).policyRef.name is empty" else empty end);
 # The route KrakenD registers for an endpoint path: parameter names erased and
 # the path cleaned the way its router cleans it (renderer.ConflictKey).
