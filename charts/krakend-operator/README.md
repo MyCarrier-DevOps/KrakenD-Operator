@@ -40,8 +40,11 @@ See [values.yaml](values.yaml) for the full list of configurable parameters.
 The metrics endpoint (HTTPS, port `metrics.service.port`) authorizes each
 request. The chart lets the operator create the TokenReviews and
 SubjectAccessReviews this needs, and ships a `<fullname>-metrics-reader`
-ClusterRole (`<fullname>` is `<release>-krakend-operator` unless you override
-it). Bind that role to the ServiceAccount that scrapes the operator:
+ClusterRole. `<fullname>` is `fullnameOverride` when set. Otherwise it is the
+release name when that already contains `krakend-operator` (or `nameOverride`,
+when set), so the install command above gives `krakend-operator-metrics-reader`,
+and `<release>-krakend-operator` when it does not. Bind that role to the
+ServiceAccount that scrapes the operator:
 
 ```bash
 kubectl create clusterrolebinding krakend-operator-metrics-reader \
@@ -52,6 +55,13 @@ kubectl create clusterrolebinding krakend-operator-metrics-reader \
 With `metrics.serviceMonitor.enabled=true` the chart also creates a
 `ServiceMonitor` that selects only the metrics Service
 (`app.kubernetes.io/component: metrics`), not the webhook Service.
+
+The `ServiceMonitor` scrapes over HTTPS with TLS verification off
+(`insecureSkipVerify: true`), because the metrics server presents a self-signed
+certificate, and it sends the Prometheus ServiceAccount's token as the bearer
+token. Anything that can answer on the metrics endpoint can therefore capture
+that token. Enable `metrics.serviceMonitor` only where the pod network is
+trusted.
 
 ## Uninstall
 
