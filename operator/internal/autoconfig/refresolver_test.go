@@ -627,6 +627,7 @@ func TestResolveExternalRefs_ExamplesAndNameKeyedMaps(t *testing.T) {
 	docs := map[string][]byte{
 		"https://schemas.example.com/x.json": []byte(`{"X":{"type":"string"}}`),
 		"https://api.example.com/ex.json":    []byte(`{"E":{"value":1}}`),
+		"https://api.example.com/exv.json":   []byte(`{"E":{"value":{"$ref":"data.json"}}}`),
 	}
 	tests := []struct {
 		name     string
@@ -656,6 +657,13 @@ func TestResolveExternalRefs_ExamplesAndNameKeyedMaps(t *testing.T) {
 			name:     "an examples entry that is a reference is resolved",
 			spec:     fmt.Sprintf(op, `{"examples":{"one":{"$ref":"ex.json#/E"}}}`),
 			wantOut:  `{"$ref":"#/components/examples/ex_E"}`,
+			wantHits: 1,
+		},
+		{
+			name:     "the value of an external Example Object is not fetched",
+			spec:     fmt.Sprintf(op, `{"examples":{"one":{"$ref":"exv.json#/E"}}}`),
+			wantOut:  `{"$ref":"#/components/examples/exv_E"}`,
+			wantAlso: `"examples":{"exv_E":{"value":{"$ref":"data.json"}}}`,
 			wantHits: 1,
 		},
 		{

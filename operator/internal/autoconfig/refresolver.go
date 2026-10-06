@@ -332,9 +332,11 @@ func (r *refResolver) resolveExternal(ref, base string, role refRole) (string, e
 	// Deep-clone the target before walking so the cached document is not mutated.
 	target = deepCloneJSON(target)
 
-	// Walk the cloned node so nested external refs are resolved, relative to
-	// the document they appear in.
-	r.walk(target, absolute)
+	// Walk the cloned schema so nested external refs are resolved, relative to
+	// the document they appear in. An Example Object is data and is not walked.
+	if role == schemaRole {
+		r.walk(target, absolute)
+	}
 
 	if r.resolved == nil {
 		r.resolved = map[string]string{}
