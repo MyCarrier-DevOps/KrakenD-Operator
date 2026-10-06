@@ -61,3 +61,17 @@ func TestMetricsServerOptions_CertPathGoesToServer(t *testing.T) {
 		t.Error("TLSOpts set GetCertificate, which bypasses the server's own certificate watcher")
 	}
 }
+
+func TestMetricsServerOptions_SecureServingIsAuthenticated(t *testing.T) {
+	secure := metricsServerOptions(":8443", true, "", "tls.crt", "tls.key", nil)
+	if secure.FilterProvider == nil {
+		t.Error("secure metrics have no authn/authz filter")
+	}
+	insecure := metricsServerOptions(":8080", false, "", "tls.crt", "tls.key", nil)
+	if insecure.FilterProvider != nil || insecure.SecureServing {
+		t.Error("insecure metrics must not carry the filter or serve TLS")
+	}
+	if insecure.CertDir != "" {
+		t.Errorf("CertDir = %q, want none without a cert path", insecure.CertDir)
+	}
+}
