@@ -91,8 +91,9 @@ type KrakenDAutoConfigReconciler struct {
 	// CheckSlots bounds how many gateway config checks this reconciler's
 	// workers run at once; nil means no bound. The pod's one Checker is shared
 	// with the gateway controller and the admission webhooks, so a bound set
-	// below its slot count, less what the others hold, keeps a slot free for
-	// admission however many workers there are.
+	// below its slot count, less what the others hold, means the controllers
+	// never hold all of them, however many workers there are. Concurrent
+	// admission requests can still take the rest.
 	CheckSlots chan struct{}
 	Clock      utilclock.Clock
 	// MaxConcurrentReconciles is how many AutoConfigs reconcile at once;
