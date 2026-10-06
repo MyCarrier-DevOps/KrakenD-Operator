@@ -1618,7 +1618,17 @@ validates it with `krakend check -n` and the route check, which together cover
 what the controller's `krakend check -t -n` finds. The write is rejected only
 when the gateway's config passed before the change and fails after it, with one
 cause per offending entry (`spec.endpoints[1]: <finding>`); a finding about
-another endpoint or the gateway root is reported on `spec.endpoints`. If the
+another endpoint in the requester's namespace is reported on `spec.endpoints`.
+`krakend check` prints the values it refuses, and the writer may not read the
+gateway or another namespace's endpoints, so a `krakend check` finding about
+the gateway root or about an endpoint in another namespace is counted, never
+quoted (`... also fails krakend check on N findings about the gateway root or
+endpoints in other namespaces, which are not shown`). When any is withheld the
+denial adds what the gateway root plus this endpoint alone fails, which is the
+requester's own errors. The route and Enterprise wildcard refusals, which only
+print methods and paths, are quoted. The warning that a gateway already fails
+follows the same rule, for endpoint and policy writes; a gateway write's
+warning, whose writer can read the gateway, is unchanged. If the
 gateway already fails without the change (because of another object, or of the
 endpoint's own stored version), the change is judged with the gateway root
 alone: it is admitted with a warning that names the existing failure, unless
@@ -1903,7 +1913,9 @@ its own, before anything references it, unless the stored policy already failed
 on its own too (then its gateways decide). A change to a policy that endpoints reference is rendered in each
 gateway of those endpoints and refused if it breaks one that passed
 (`breaks gateway ns/name: ...`); a gateway that already fails for another reason
-gets a warning instead. The denial lists at most 20 gateways and the warnings
+gets a warning instead, which counts rather than quotes the `krakend check`
+findings about the gateway root or another namespace's endpoints (see *Endpoint
+writes are checked against the whole gateway*). The denial lists at most 20 gateways and the warnings
 name at most 5, each counting the rest, in at most 4 KiB together (past that
 the API server would cut every warning to 256 characters).
 A new or changed `raw` with Enterprise-only namespaces, for example `auth/gcp`, or
