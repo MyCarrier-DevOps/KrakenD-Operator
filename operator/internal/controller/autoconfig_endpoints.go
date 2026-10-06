@@ -553,10 +553,11 @@ func (o creationOrder) createdAt(name string) int64 {
 }
 
 // withUncontrolled returns controlled plus the stored copy of each desired
-// endpoint that exists but is not controlled: a label-matched orphan that
-// writeEndpoint takes over, or an endpoint of that name nobody labelled. The
-// cluster keeps the creation time of both, so the order must know it. A name
-// that is not found is new. Any other read error leaves the name unknown, as
+// endpoint that exists and that no object controls: a label-matched orphan
+// that writeEndpoint takes over, or an endpoint of that name nobody labelled.
+// The cluster keeps the creation time of both, so the order must know it. An
+// endpoint another object controls is left out: writeEndpoint refuses it, so
+// ours never takes its age. A name that is not found is new. Any other read error leaves the name unknown, as
 // a new one, and is logged: it cannot fail the sync.
 func (r *KrakenDAutoConfigReconciler) withUncontrolled(
 	ctx context.Context,
@@ -576,7 +577,9 @@ func (r *KrakenDAutoConfigReconciler) withUncontrolled(
 		err := r.Get(ctx, client.ObjectKeyFromObject(ep), &stored)
 		switch {
 		case err == nil:
-			all = append(all, stored)
+			if metav1.GetControllerOf(&stored) == nil {
+				all = append(all, stored)
+			}
 		case !apierrors.IsNotFound(err):
 			logf.FromContext(ctx).V(1).Info("treating the endpoint as new in the creation order",
 				"endpoint", ep.Name, "error", err.Error())
