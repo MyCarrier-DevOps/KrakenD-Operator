@@ -5616,6 +5616,12 @@ func TestAutoConfigReconcile_PrecheckKeepsAnOlderLabelMatchedOrphansRoute(t *tes
 	holdsSiblingOfOlderUncontrolledEndpoint(t, orphan)
 }
 
+func TestAutoConfigReconcile_PrecheckKeepsAnOlderUnlabelledEndpointsRoute(t *testing.T) {
+	unlabelled := generatedEndpoint("getUser", "/users/{id}")
+	unlabelled.Labels = nil
+	holdsSiblingOfOlderUncontrolledEndpoint(t, unlabelled)
+}
+
 func TestAttributeFindings_CauseCarriesEveryFindingInOrder(t *testing.T) {
 	a := generatedEndpoint("a", "/a")
 	key := types.NamespacedName{Namespace: "default", Name: "test-ac-a"}
