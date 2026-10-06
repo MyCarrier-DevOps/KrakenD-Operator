@@ -530,7 +530,12 @@ object, or of the endpoint's own stored version) does not block the write: the
 change is judged with the gateway root alone and admitted with a warning
 `gateway <ns>/<name> already fails validation without this change`, unless the
 candidate fails there when its stored version did not (for a create or a move,
-the baseline is the root by itself).
+the baseline is the root by itself), or unless the full check blames the
+candidate's own endpoint after the change and did not before it: the isolated
+check cannot see a clash with another endpoint, so that write is denied.
+A gateway change is denied the same way when it makes two healthy endpoints
+clash (for example turning on `router.auto_options`, or moving `health_path`
+onto an endpoint's route) on a gateway that already fails elsewhere.
 Fix the object the warning names, because until then the controller keeps the
 gateway at its last-known-good config.
 
