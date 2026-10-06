@@ -90,6 +90,24 @@ func (v *PolicyValidator) ValidateDelete(context.Context, runtime.Object) (admis
 // names in warnings; the rest are counted in one more.
 const maxPolicyWarnings = 5
 
+// policyWarningBytes bounds the warnings of one policy write together. Past
+// 4096 characters in all the API server cuts every warning of the response to
+// 256, which drops each one's count of findings left out.
+const policyWarningBytes = 4096
+
+// countWarningBytes is room kept for the closing warning that counts the
+// gateways left out.
+const countWarningBytes = 96
+
+// policyWarningLimit bounds one gateway's warning, so that maxPolicyWarnings of
+// them and the closing count fit in policyWarningBytes.
+const policyWarningLimit = (policyWarningBytes - countWarningBytes) / maxPolicyWarnings
+
+// policySummaryLimit bounds the findings a gateway's warning quotes: the
+// rest of the warning, the gateway's name and the cut marker, fits in what
+// policyWarningLimit leaves.
+const policySummaryLimit = policyWarningLimit / 2
+
 // checkPolicyRender validates policy on its own and in every gateway that
 // renders it. It rejects a request only for a pass-to-fail change: a policy
 // that already failed alone (old) is judged by its gateways, and a gateway
@@ -140,8 +158,8 @@ func checkPolicyRender(
 				return errPolicyBreaksGateway
 			},
 			func(before configcheck.Verdict) string {
-				return fmt.Sprintf("gateway %s/%s already fails validation: %s",
-					gw.Namespace, gw.Name, before.Summary(warningLimit))
+				return truncate(fmt.Sprintf("gateway %s/%s already fails validation: %s",
+					gw.Namespace, gw.Name, before.Summary(policySummaryLimit)), policyWarningLimit)
 			})
 		if err != nil && !errors.Is(err, errPolicyBreaksGateway) {
 			return nil, err
