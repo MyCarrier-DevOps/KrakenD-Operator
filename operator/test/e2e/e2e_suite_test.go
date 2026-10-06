@@ -59,12 +59,7 @@ var _ = BeforeSuite(func() {
 
 	By("starting an ephemeral K3s cluster")
 	var err error
-	k3sContainer, err = k3s.Run(ctx, "rancher/k3s:v1.31.6-k3s1",
-		testcontainers.WithCmdArgs(
-			"--disable=traefik",
-			"--disable=metrics-server",
-		),
-	)
+	k3sContainer, err = k3s.Run(ctx, utils.K3sImage, testcontainers.WithCmdArgs(utils.K3sArgs()...))
 	Expect(err).NotTo(HaveOccurred(), "Failed to start K3s container")
 
 	By("extracting kubeconfig from the K3s cluster")
