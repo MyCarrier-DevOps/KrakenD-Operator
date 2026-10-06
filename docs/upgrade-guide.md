@@ -1739,8 +1739,11 @@ variants the Enterprise binary allows.
 (`spec.config`, including `extraConfig`) must pass `krakend check` on its own.
 Endpoints that already reference the gateway and clash with that root do not
 block the create: a warning names them.
-An update is rejected if it turns the gateway's passing config, with its
-endpoints, into a failing one, for example a `router.healthPath` onto an
+An update that renders the same config as the stored object (a new
+`spec.image`, `spec.version`, replica count, resource, probe or
+`postRestartJob`) is not checked, so it is never refused with a `500` because
+the validator is unavailable. Any other update is rejected if it turns the
+gateway's passing config, with its endpoints, into a failing one, for example a `router.healthPath` onto an
 existing route, or switching `edition: EE` to `CE` while `/prefix/*` endpoints
 exist. The denial puts the root findings on `spec.config` (at most 20, each cut
 to a bounded length) and the endpoints the change breaks, which can belong to
