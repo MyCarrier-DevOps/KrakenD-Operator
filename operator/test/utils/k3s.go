@@ -1,5 +1,7 @@
 package utils
 
+import "os"
+
 // K3sImage is the K3s image both the integration and the e2e suites start.
 // K3s 1.32.x is used instead of 1.33.x because K8s 1.33 removed the
 // KubeletInUserNamespace feature gate (graduated to GA), which rootless podman
@@ -17,6 +19,10 @@ const K3sImage = "rancher/k3s:v1.32.13-k3s1"
 // plugin (OpenShift by default) require delete on any object whose
 // ownerReferences an update changes, so the suites enable it.
 func K3sArgs() []string {
+	return k3sArgsFor(os.Getenv("DOCKER_HOST"))
+}
+
+func k3sArgsFor(dockerHost string) []string {
 	return []string{
 		"--disable=traefik",
 		"--disable=metrics-server",
