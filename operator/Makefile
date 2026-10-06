@@ -208,7 +208,7 @@ vet: ## Run go vet against code.
 
 .PHONY: test
 test: manifests generate fmt vet ## Run unit tests.
-	go test $$(go list ./... | grep -v /test/) -coverprofile cover.out
+	go test ./... -coverprofile cover.out
 
 # Integration tests use testcontainers-go with an ephemeral K3s cluster
 # and run controllers in-process. Requires a container runtime (docker/podman).
