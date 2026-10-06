@@ -28,6 +28,12 @@ metrics:
 healthProbes:
   port: 8081
 
+autoconfig:
+  # How many KrakenDAutoConfigs the operator reconciles at once. Each
+  # reconcile fetches its OpenAPI spec (and external $ref documents) over the
+  # network, so one slow upstream does not delay the others.
+  maxConcurrentReconciles: 4
+
 webhooks:
   enabled: true
   # failurePolicy determines what happens when the webhook is unavailable.
