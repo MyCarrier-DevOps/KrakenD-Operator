@@ -28,6 +28,11 @@ import (
 	webhooksetup "github.com/mycarrier-devops/krakend-operator/internal/webhook"
 )
 
+// gatewayCheckWorkers is how many gateway checks the gateway controller runs at
+// once: it reconciles with one worker (no MaxConcurrentReconciles is set on
+// its controller) and each reconcile holds one checker slot at a time.
+const gatewayCheckWorkers = 1
+
 // validation is everything that holds the pod's one config checker.
 type validation struct {
 	Checker    *configcheck.Checker
