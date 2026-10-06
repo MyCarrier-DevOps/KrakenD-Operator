@@ -33,6 +33,11 @@ import (
 // its controller) and each reconcile holds one checker slot at a time.
 const gatewayCheckWorkers = 1
 
+// autoConfigCheckSlots is how many checker slots the AutoConfig prechecks may
+// hold at once: the checker's slots, less one kept free for admission (which
+// waits against a short deadline), less the gateway controller's.
+const autoConfigCheckSlots = configCheckSlots - 1 - gatewayCheckWorkers
+
 // validation is everything that holds the pod's one config checker.
 type validation struct {
 	Checker    *configcheck.Checker
@@ -70,9 +75,9 @@ func wireValidation(
 			Filter:       autoconfig.NewFilter(),
 			Generator:    autoconfig.NewGenerator(),
 			Checker:      checker,
-			// The AutoConfig workers leave one of the checker's slots to
-			// admission, which waits against a short deadline.
-			CheckSlots: make(chan struct{}, max(configCheckSlots-1, 1)),
+			// The AutoConfig prechecks hold at most autoConfigCheckSlots of the
+			// checker's slots, however many workers there are.
+			CheckSlots: make(chan struct{}, autoConfigCheckSlots),
 			Clock:      clock.RealClock{},
 		},
 		Validators: webhooksetup.NewValidators(mgr.GetClient(), mgr.GetAPIReader(), checker, operatorUsername),
