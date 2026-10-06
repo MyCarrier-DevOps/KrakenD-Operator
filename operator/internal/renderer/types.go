@@ -97,6 +97,20 @@ type RenderOutput struct {
 	// entries in order, then the gateway level. The entries' docs-only namespaces
 	// (documentation/openapi) are dropped without being listed.
 	StrippedEEFeatures []StrippedEEFeature
+	// SchemaConflicts lists the component schemas an endpoint defines
+	// differently from the endpoint the rendered documentation takes that
+	// schema name from (first seen, in endpoint order). It is empty unless the
+	// render publishes docs.
+	SchemaConflicts []SchemaConflict
+}
+
+// SchemaConflict is a component schema Endpoint defines under a name whose
+// rendered definition comes from Winner, with a different body. Endpoint's
+// documentation then shows Winner's schema.
+type SchemaConflict struct {
+	Endpoint types.NamespacedName
+	Schema   string
+	Winner   types.NamespacedName
 }
 
 // Options configures the renderer (reserved for future use).
