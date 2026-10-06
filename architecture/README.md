@@ -1913,6 +1913,15 @@ re-reads and retries.
 
 ### Operator Metrics (Prometheus)
 
+Scrapes are authenticated and authorized: the operator creates a TokenReview
+and a SubjectAccessReview for each one, and the scraper needs `get` on the
+non-resource URL `/metrics` (the `metrics-reader` ClusterRole). The Helm chart
+and the kustomize manifests carry the same two ClusterRoles, and the chart
+render test pins the chart's copies to `config/rbac`. The chart's optional
+`ServiceMonitor` selects the metrics Service by its
+`app.kubernetes.io/component: metrics` label, so the webhook Service, which
+shares the other selector labels, is never scraped.
+
 | Metric | Type | Description |
 |---|---|---|
 | `krakend_operator_gateway_info` | Gauge | Gateway metadata labels (edition, version, namespace) |
