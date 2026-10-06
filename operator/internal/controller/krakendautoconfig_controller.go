@@ -27,6 +27,8 @@ import (
 	"reflect"
 	"slices"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -95,6 +97,10 @@ type KrakenDAutoConfigReconciler struct {
 	// MaxConcurrentReconciles is how many AutoConfigs reconcile at once;
 	// zero means one.
 	MaxConcurrentReconciles int
+	// heldLogged remembers, per AutoConfig UID, the held operations' causes
+	// this process last logged (a heldLog), so a cause is logged once per
+	// change per process. It is safe for the concurrent workers.
+	heldLogged sync.Map
 	// FetchTimeout bounds fetching the OpenAPI spec and resolving its
 	// external $refs; zero means defaultFetchTimeout.
 	FetchTimeout time.Duration
@@ -288,13 +294,7 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}, warnings); err != nil {
 		return statusWriteFailure(ctx, err)
 	}
-	if !slices.Equal(origStatus.FailedOperations, ac.Status.FailedOperations) {
-		// The status keeps a cut message: the full cause is logged once per
-		// change of the failed list.
-		for _, name := range slices.Sorted(maps.Keys(outcome.rejected)) {
-			log.Info("endpoint rejected; holding it", "endpoint", name, "error", outcome.rejected[name].cause.Error())
-		}
-	}
+	r.logHeldCauses(ctx, &ac, outcome.rejected)
 
 	log.V(1).Info("autoconfig reconciled",
 		"phase", ac.Status.Phase,
@@ -1204,4 +1204,39 @@ func cueEnvironment(ac *v1alpha1.KrakenDAutoConfig) string {
 		return ""
 	}
 	return ac.Spec.CUE.Environment
+}
+
+// heldLog is what logHeldCauses last logged for one AutoConfig.
+type heldLog struct {
+	owner  types.NamespacedName
+	digest string
+}
+
+// logHeldCauses logs the full cause of every operation ac holds. The status
+// keeps a cut message, so the log is where the whole text lives. It logs when
+// the causes differ from what this process last logged for ac, so a restart
+// logs them once more, and forgets ac once nothing is held.
+func (r *KrakenDAutoConfigReconciler) logHeldCauses(
+	ctx context.Context,
+	ac *v1alpha1.KrakenDAutoConfig,
+	rejected map[string]rejection,
+) {
+	var causes []string
+	for _, name := range slices.Sorted(maps.Keys(rejected)) {
+		causes = append(causes, name+": "+rejected[name].cause.Error())
+	}
+	if len(causes) == 0 {
+		r.heldLogged.Delete(ac.UID)
+		return
+	}
+	sum := sha256.Sum256([]byte(strings.Join(causes, "\x00")))
+	digest := fmt.Sprintf("%x", sum)
+	if prev, ok := r.heldLogged.Load(ac.UID); ok && prev.(heldLog).digest == digest {
+		return
+	}
+	r.heldLogged.Store(ac.UID, heldLog{owner: client.ObjectKeyFromObject(ac), digest: digest})
+	log := logf.FromContext(ctx)
+	for _, name := range slices.Sorted(maps.Keys(rejected)) {
+		log.Info("endpoint rejected; holding it", "endpoint", name, "error", rejected[name].cause.Error())
+	}
 }
