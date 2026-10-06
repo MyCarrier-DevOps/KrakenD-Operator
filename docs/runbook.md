@@ -510,6 +510,26 @@ until the other is done. Keep such routes in one KrakenDEndpoint and rename them
 in one apply, or delete the second KrakenDEndpoint, rename the first, then
 recreate the second with the new name.
 
+### Admission refuses a post-restart Job with `403 Forbidden`
+
+**Symptom:** `kubectl apply` of a KrakenDGateway fails with `krakendgateways.gateway.krakend.io "x" is forbidden: spec.postRestartJob: <user> may not create pods in namespace <ns>, so the post-restart Job may not run as another ServiceAccount or read a Secret`.
+
+**Cause:** The enabled `spec.postRestartJob` sets a `serviceAccountName` other
+than the gateway's name, takes `envFrom` from a Secret, or has an `env`
+`secretKeyRef`, and the user making the request may not create pods in the
+gateway's namespace. The operator creates the Job with its own permissions, so
+the webhook asks the API server (SubjectAccessReview) whether the requester
+could create such a pod themselves. A Job on the gateway's own ServiceAccount
+with no Secret reference is not reviewed.
+
+**Resolution:** Have a user who may create pods in the namespace make the
+change, or grant the requester (for a GitOps controller, its ServiceAccount)
+`create` on `pods` in that namespace. Or drop the field: use the gateway's
+ServiceAccount, and inject secrets by another route (for example the Vault
+annotations the ReadMe publisher uses). A `500` with `reviewing the requester's
+access` instead means the review itself failed: check that the operator's role
+has `create` on `subjectaccessreviews`.
+
 ### Admission rejects an endpoint with a krakend finding
 
 **Symptom:** `kubectl apply` of a KrakenDEndpoint fails with `The
