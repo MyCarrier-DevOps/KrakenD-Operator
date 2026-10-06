@@ -150,25 +150,15 @@ func documentationRefs(entry v1alpha1.EndpointEntry) []string {
 	return refs
 }
 
-// schemaMapKeywords are the JSON Schema keywords whose value is a map from a
-// name to a schema.
-var schemaMapKeywords = []string{"properties", "patternProperties", "$defs", "definitions", "dependentSchemas"}
-
 // schemaRefs returns the local "#/..." $ref pointers inside a JSON schema.
 // Examples are data and are not searched, but the members of a keyword that
-// holds a map of schemas (see schemaMapKeywords) are schemas whatever they are
+// holds a map of schemas (see nameKeyedMaps) are schemas whatever they are
 // named, so a property called "example" is searched like any other. A "$ref"
 // key inside default, const or enum data is collected too; that is rare and
 // accepted.
 func schemaRefs(schema any) []string {
 	var refs []string
 	walkJSON(schema, func(key string, value any) bool {
-		if members, ok := value.(map[string]any); ok && slices.Contains(schemaMapKeywords, key) {
-			for _, name := range slices.Sorted(maps.Keys(members)) {
-				refs = append(refs, schemaRefs(members[name])...)
-			}
-			return false
-		}
 		if payload, _ := examplePayload(key, value); payload {
 			return false
 		}
