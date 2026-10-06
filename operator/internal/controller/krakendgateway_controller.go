@@ -94,6 +94,9 @@ type KrakenDGatewayReconciler struct {
 	// absentKinds remembers the optional kinds discovery found absent, for
 	// the delete path of a disabled feature only.
 	absentKinds absentKindMemo
+	// verified remembers which version of each config ConfigMap had its
+	// payload hashed, so a steady pass does not read it again.
+	verified verifiedConfigMaps
 }
 
 // ConfigChecker gathers a gateway's render inputs and validates what they
@@ -375,6 +378,7 @@ func (r *KrakenDGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 func (r *KrakenDGatewayReconciler) forgetGateway(key types.NamespacedName) {
 	deleteGatewayMetrics(key.Namespace, key.Name)
 	r.rejections.forget(key)
+	r.verified.forgetGateway(key)
 }
 
 // crdAvailable checks whether the given GVK is registered in the cluster's
