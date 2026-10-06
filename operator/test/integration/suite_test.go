@@ -39,6 +39,7 @@ import (
 	"github.com/mycarrier-devops/krakend-operator/internal/controller"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 	licenseutil "github.com/mycarrier-devops/krakend-operator/internal/util/license"
+	"github.com/mycarrier-devops/krakend-operator/test/utils"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/k3s"
 	appsv1 "k8s.io/api/apps/v1"
@@ -99,27 +100,10 @@ func runTests(m *testing.M) int {
 	_ = clientgoscheme.AddToScheme(scheme)
 	_ = v1alpha1.AddToScheme(scheme)
 
-	// Start an ephemeral K3s cluster via testcontainers.
-	// K3s 1.32.x is used instead of 1.33.x because K8s 1.33 removed the
-	// KubeletInUserNamespace feature gate (graduated to GA).
-	// client-go v0.33.0 supports +/-1 minor version skew per the K8s policy.
-	// Kubelet args work around rootless podman constraints:
-	//   - KubeletInUserNamespace: graceful fallback when /dev/kmsg unavailable
-	//   - cgroups-per-qos=false + enforce-node-allocatable="": skip cgroup
-	//     hierarchy creation that fails in rootless cgroupv2 containers
+	// Start an ephemeral K3s cluster via testcontainers, with the image and
+	// args the e2e suite shares (see utils.K3sImage and utils.K3sArgs).
 	var err error
-	k3sContainer, err = k3s.Run(ctx, "rancher/k3s:v1.32.13-k3s1",
-		testcontainers.WithCmdArgs(
-			"--disable=traefik",
-			"--disable=metrics-server",
-			// Clusters that enable this plugin (OpenShift by default) require
-			// delete on any object whose ownerReferences an update changes.
-			"--kube-apiserver-arg=enable-admission-plugins=OwnerReferencesPermissionEnforcement",
-			"--kubelet-arg=feature-gates=KubeletInUserNamespace=true",
-			"--kubelet-arg=cgroups-per-qos=false",
-			"--kubelet-arg=enforce-node-allocatable=",
-		),
-	)
+	k3sContainer, err = k3s.Run(ctx, utils.K3sImage, testcontainers.WithCmdArgs(utils.K3sArgs()...))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to start K3s container: %v\n", err)
 		return 1
