@@ -108,14 +108,17 @@ func TestWireValidation_EndpointValidatorReadsPoliciesUncached(t *testing.T) {
 	}
 }
 
-// The AutoConfig controller's workers share the pod's checker with admission,
-// so their prechecks may hold all but one of its slots.
-func TestWireValidation_AutoConfigPrecheckLeavesAnAdmissionSlot(t *testing.T) {
+// The pod's checker is shared by the gateway controller, the AutoConfig
+// controller and admission. The AutoConfig prechecks and the gateway checks
+// together may hold at most all but one of its slots, so admission always finds
+// a free one.
+func TestWireValidation_AutoConfigAndGatewayChecksLeaveAnAdmissionSlot(t *testing.T) {
 	mgr := stubManager{client: fake.NewClientBuilder().Build()}
 
 	w := wireValidation(mgr, renderer.New(renderer.Options{}), nil, "")
 
-	if got, want := cap(w.AutoConfig.CheckSlots), configCheckSlots-1; got != want {
-		t.Errorf("AutoConfig check slots = %d, want %d", got, want)
+	if held := cap(w.AutoConfig.CheckSlots) + gatewayCheckWorkers; held > configCheckSlots-1 {
+		t.Errorf("AutoConfig prechecks (%d slots) and gateway checks (%d) can hold %d of %d checker slots, "+
+			"leaving admission none", cap(w.AutoConfig.CheckSlots), gatewayCheckWorkers, held, configCheckSlots)
 	}
 }
