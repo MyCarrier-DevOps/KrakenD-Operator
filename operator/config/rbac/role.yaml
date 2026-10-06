@@ -36,6 +36,7 @@ rules:
   - services
   verbs:
   - create
+  - delete
   - get
   - list
   - update
@@ -46,6 +47,7 @@ rules:
   - deployments
   verbs:
   - create
+  - delete
   - get
   - list
   - update
@@ -161,6 +163,7 @@ rules:
   - poddisruptionbudgets
   verbs:
   - create
+  - delete
   - get
   - list
   - update
