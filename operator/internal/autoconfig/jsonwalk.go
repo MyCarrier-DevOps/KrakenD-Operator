@@ -54,9 +54,11 @@ func walkJSON(node any, visit func(key string, value any) bool) {
 // object whatever it is called, so a schema, response or header named
 // "example" is not taken for example data. "examples" is not one of them: its
 // members are Example Objects, of which only a $ref is a reference.
-var nameKeyedMaps = append(slices.Clone(schemaMapKeywords), "dependencies",
+var nameKeyedMaps = []string{
+	"properties", "patternProperties", "$defs", "definitions", "dependentSchemas", "dependencies",
 	"paths", "webhooks", "schemas", "responses", "parameters", "requestBodies",
-	"headers", "securitySchemes", "links", "callbacks", "pathItems", "content", "encoding")
+	"headers", "securitySchemes", "links", "callbacks", "pathItems", "content", "encoding",
+}
 
 // examplePayload reports whether value, the member key of an object, is
 // example data rather than part of the spec's structure, and returns the
