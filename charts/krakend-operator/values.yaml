@@ -30,6 +30,9 @@ metrics:
     # Create a Prometheus Operator ServiceMonitor (needs the
     # monitoring.coreos.com CRDs). Bind the <fullname>-metrics-reader
     # ClusterRole to the scraping ServiceAccount.
+    # The scrape skips TLS verification (the metrics server's certificate is
+    # self-signed) and sends Prometheus's ServiceAccount token to the
+    # endpoint, so enable it only where the pod network is trusted.
     enabled: false
     additionalLabels: {}
 
