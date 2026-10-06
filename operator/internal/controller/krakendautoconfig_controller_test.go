@@ -3698,6 +3698,31 @@ func TestAutoConfigReconcile_HeldCauseIsLoggedAgainAfterARestart(t *testing.T) {
 	}
 }
 
+func TestAutoConfigReconcile_CUEFailedCauseIsLoggedInFull(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	cause := strings.Repeat("d", 600)
+	ce.output.Failed = []autoconfig.OperationIssue{{
+		Operation: autoconfig.Operation{Method: "GET", Path: "/a", OperationID: "getA"},
+		Reason:    v1alpha1.ReasonCUEEvaluationFailed,
+		Message:   cause,
+	}}
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).Build()
+	ctx, logged := capturedLog()
+
+	if _, err := newACReconciler(c, f, ce, fi, g).Reconcile(ctx,
+		ctrl.Request{NamespacedName: client.ObjectKeyFromObject(ac)}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if n := logged(cause); n != 1 {
+		t.Errorf("the full CUE failure was logged %d times, want 1", n)
+	}
+	if got := getAC(t, c, ac).Status.FailedOperations[0].Message; len(got) > maxStatusMessageLen {
+		t.Errorf("status message is %d bytes, want at most %d", len(got), maxStatusMessageLen)
+	}
+}
+
 func TestAutoConfigReconcile_FailedOperationsAreListedSortedAndCapped(t *testing.T) {
 	cm := testCUEDefinitionsCM()
 	ac := syncedAutoConfig(cm)
