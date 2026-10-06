@@ -5663,6 +5663,35 @@ func TestAutoConfigReconcile_PrecheckIgnoresTheAgeOfAnEndpointAnotherObjectContr
 	}
 }
 
+func TestAutoConfigReconcile_PrecheckGivesTheCheckAnOlderOrphansAge(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	// The orphan getUser is older than the tenant's endpoint, so the cluster
+	// serves /users/{id} and the sibling's /users/{id}/orders fits it. Judged
+	// as a new endpoint, the orphan would lose to the tenant's /users/{tid} and
+	// the sibling would be held for a clash that does not exist.
+	orphan := generatedEndpoint("getUser", "/users/{id}")
+	orphan.CreationTimestamp = metav1.NewTime(time.Unix(1000, 0))
+	tenant := generatedEndpoint("tenantUser", "/users/{tid}")
+	tenant.Name, tenant.Labels = "tenant-user", nil
+	tenant.CreationTimestamp = metav1.NewTime(time.Unix(2000, 0))
+	g.output.Endpoints = []*v1alpha1.KrakenDEndpoint{
+		generatedEndpoint("getUser", "/users/{id}"),
+		generatedEndpoint("getUserOrders", "/users/{id}/orders"),
+	}
+	c := fakeClientBuilder().WithObjects(ac, cm, orphan, tenant, testGateway()).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Checker = realRouteChecker(c)
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if got := getAC(t, c, ac).Status.FailedOperations; len(got) != 0 || !endpointExists(t, c, "test-ac-getuserorders") {
+		t.Errorf("failed operations = %+v, want the sibling written and nothing held", got)
+	}
+}
+
 func TestAttributeFindings_CauseCarriesEveryFindingInOrder(t *testing.T) {
 	a := generatedEndpoint("a", "/a")
 	key := types.NamespacedName{Namespace: "default", Name: "test-ac-a"}
