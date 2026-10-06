@@ -959,7 +959,9 @@ func namespacedNameSet(names []types.NamespacedName) map[types.NamespacedName]st
 // reconcileEndpointAcceptance writes the gateway's Accepted verdict on every
 // endpoint of this render. It is called only when the render is the gateway's
 // applied configuration. Every endpoint is attempted, and the errors are
-// returned together.
+// returned together. An endpoint that would be plain Accepted gets reason
+// SchemaNameConflict, still True, when the documentation takes a component
+// schema it defines from another endpoint; every other verdict outranks it.
 func (r *KrakenDGatewayReconciler) reconcileEndpointAcceptance(
 	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
@@ -967,9 +969,14 @@ func (r *KrakenDGatewayReconciler) reconcileEndpointAcceptance(
 	output *renderer.RenderOutput,
 ) error {
 	rv := newRenderVerdicts(output)
+	schemaMsgs := schemaConflictMessages(output.SchemaConflicts)
 	var errs []error
 	for i := range endpoints {
 		a := endpointAccepted(gw, &endpoints[i], rv)
+		if msg, ok := schemaMsgs[client.ObjectKeyFromObject(&endpoints[i])]; ok &&
+			a.condition != nil && a.condition.Reason == v1alpha1.ReasonAccepted {
+			a.condition.Reason, a.condition.Message = v1alpha1.ReasonSchemaNameConflict, msg
+		}
 		if err := r.writeEndpointAccepted(ctx, &endpoints[i], a, nil); err != nil {
 			errs = append(errs, err)
 		}
