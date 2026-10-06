@@ -197,3 +197,34 @@ func TestClashRefusals_ACancelledContextIsAnError(t *testing.T) {
 		t.Errorf("clashRefusals = %v, %v, want the context error", got, err)
 	}
 }
+
+func TestRouteRefusals_ReportsWhenItStoppedAtTheCap(t *testing.T) {
+	var b strings.Builder
+	b.WriteString(`{"endpoints":[{"endpoint":"/dup","method":"GET"}`)
+	for i := 0; i < MaxRouteRefusals+3; i++ {
+		b.WriteString(`,{"endpoint":"/dup","method":"GET"}`)
+	}
+	b.WriteString(`]}`)
+
+	refusals, capped, err := routeRefusals(context.Background(), []byte(b.String()))
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refusals) != MaxRouteRefusals || !capped {
+		t.Errorf("%d refusals, capped %t, want %d and capped", len(refusals), capped, MaxRouteRefusals)
+	}
+}
+
+func TestRouteRefusals_AGatewayRouteRefusalNamesNoEntry(t *testing.T) {
+	doc := `{"debug_endpoint":true,"extra_config":{"router":{"health_path":"/__debug/x"}},"endpoints":[]}`
+
+	refusals, capped, err := routeRefusals(context.Background(), []byte(doc))
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refusals) != 1 || len(refusals[0].Indices) != 0 || capped {
+		t.Errorf("refusals = %+v, capped %t, want one that names no entry", refusals, capped)
+	}
+}
