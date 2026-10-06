@@ -287,8 +287,11 @@ func (r *refResolver) resolveExternal(ref, base string, role refRole) (string, e
 
 	// Fast path: if this exact ref was already fully resolved, return the
 	// cached name without re-walking or emitting false collision warnings.
+	// Both caches are keyed by role too: a fragment reached as a schema and as
+	// an Example Object yields two bodies, one walked and one not.
 	refKey := absolute + "#" + fragment
-	if name, ok := r.resolved[refKey]; ok {
+	cacheKey := fmt.Sprintf("%d %s", role, refKey)
+	if name, ok := r.resolved[cacheKey]; ok {
 		return name, nil
 	}
 
@@ -322,15 +325,15 @@ func (r *refResolver) resolveExternal(ref, base string, role refRole) (string, e
 	// Cycle detection: if we are already resolving this ref, short-circuit.
 	// Do NOT write to r.inlined here — the outer (first) call will store
 	// the properly-walked clone after its r.walk completes.
-	if r.resolving[refKey] {
+	if r.resolving[cacheKey] {
 		r.warnings = append(r.warnings, fmt.Sprintf("cycle detected for %s, skipping recursive resolution", refKey))
 		return name, nil
 	}
 	if r.resolving == nil {
 		r.resolving = map[string]bool{}
 	}
-	r.resolving[refKey] = true
-	defer delete(r.resolving, refKey)
+	r.resolving[cacheKey] = true
+	defer delete(r.resolving, cacheKey)
 
 	// Deep-clone the target before walking so the cached document is not mutated.
 	target = deepCloneJSON(target)
@@ -353,7 +356,7 @@ func (r *refResolver) resolveExternal(ref, base string, role refRole) (string, e
 			r.inlinedExamples = map[string]any{}
 		}
 		r.inlinedExamples[name] = target
-		r.resolved[refKey] = name
+		r.resolved[cacheKey] = name
 		return name, nil
 	}
 	if r.inlined == nil {
@@ -367,7 +370,7 @@ func (r *refResolver) resolveExternal(ref, base string, role refRole) (string, e
 	} else {
 		r.inlined[name] = target
 	}
-	r.resolved[refKey] = name
+	r.resolved[cacheKey] = name
 	return name, nil
 }
 

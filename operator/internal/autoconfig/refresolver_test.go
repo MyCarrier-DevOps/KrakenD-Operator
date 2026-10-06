@@ -630,6 +630,8 @@ func TestResolveExternalRefs_ExamplesAndNameKeyedMaps(t *testing.T) {
 		"https://api.example.com/exv.json":   []byte(`{"E":{"value":{"$ref":"data.json"}}}`),
 		"https://api.example.com/a.json":     []byte(`{"$ref":"b.json#/E"}`),
 		"https://api.example.com/b.json":     []byte(`{"E":{"value":{"$ref":"data.json"}}}`),
+		"https://api.example.com/y.json":     []byte(`{"Y":{"properties":{"p":{"$ref":"z.json#/Z"}}}}`),
+		"https://api.example.com/z.json":     []byte(`{"Z":{"type":"string"}}`),
 		"https://api.example.com/a2.json":    []byte(`{"$ref":"gone.json#/E"}`),
 		"https://api.example.com/payload.json": []byte(
 			`{"type":"object","properties":{"a":{"$ref":"common.json#/A"}}}`),
@@ -696,6 +698,16 @@ func TestResolveExternalRefs_ExamplesAndNameKeyedMaps(t *testing.T) {
 			name:     "an unreachable link of a reference chain fails closed",
 			spec:     fmt.Sprintf(op, `{"examples":{"one":{"$ref":"a2.json"}}}`),
 			wantErr:  "fetching https://api.example.com/gone.json",
+			wantHits: 2,
+		},
+		{
+			name: "one fragment reached as a schema and as an example is walked only as a schema",
+			spec: `{"components":{"schemas":{"S":{"$ref":"y.json#/Y"}},` +
+				`"examples":{"E":{"$ref":"y.json#/Y"}}}}`,
+			wantOut: `"examples":{"E":{"$ref":"#/components/examples/y_Y"},` +
+				`"y_Y":{"properties":{"p":{"$ref":"z.json#/Z"}}}}`,
+			wantAlso: `"y_Y":{"properties":{"p":{"$ref":"#/components/schemas/z_Z"}}}`,
+			noWarn:   "collision",
 			wantHits: 2,
 		},
 		{
