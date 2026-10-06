@@ -41,6 +41,19 @@ const (
 // maxConditionListed caps the items a condition message names.
 const maxConditionListed = 5
 
+// plural returns one when n is 1, many otherwise.
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
+}
+
+// counted formats n of noun, pluralized: "1 operation", "2 operations".
+func counted(n int, noun string) string {
+	return fmt.Sprintf("%d %s", n, plural(n, noun, noun+"s"))
+}
+
 // operationLabel names an operation in a condition message:
 // "METHOD /path (operationId): Reason".
 func operationLabel(s v1alpha1.OperationStatus) string {
