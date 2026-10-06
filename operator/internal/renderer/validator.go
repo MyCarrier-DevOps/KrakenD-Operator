@@ -198,7 +198,7 @@ func classifyCheckError(ctx context.Context, output []byte, err error) error {
 	}
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) && exitErr.ExitCode() > 0 {
-		return &ValidationError{Output: string(output), Err: err}
+		return &ValidationError{Output: string(output), Err: err, Stage: StageCheck}
 	}
 	return fmt.Errorf("running krakend check: %w", err)
 }
