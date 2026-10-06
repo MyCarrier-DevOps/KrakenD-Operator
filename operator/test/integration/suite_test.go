@@ -196,6 +196,7 @@ func runTests(m *testing.M) int {
 		Client: client.Options{
 			Cache: &client.CacheOptions{DisableFor: controller.UncachedObjects()},
 		},
+		Cache: cache.Options{ByObject: controller.CacheByObject()},
 		NewCache: func(config *rest.Config, opts cache.Options) (cache.Cache, error) {
 			c, err := cache.New(config, opts)
 			if err != nil {
