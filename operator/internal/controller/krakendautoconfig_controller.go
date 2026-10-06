@@ -461,10 +461,10 @@ func (r *KrakenDAutoConfigReconciler) handleEndpointError(
 
 // recordSyncedFailure records a failed sync: the synced gauge 0, the Synced
 // condition False with the given reason and message (bounded by
-// truncateMessage), and the Ready, phase and observedGeneration derived from
-// it, then, once that status write succeeds, the buffered input warnings
-// followed by a Warning event with the same message. It
-// returns the status write's error, if any, other than a Conflict: a
+// truncateMessage), the endpoint readiness as of now (refreshReadiness), and
+// the Ready, phase and observedGeneration derived from them, then, once that
+// status write succeeds, the buffered input warnings followed by a Warning
+// event with the same message. It returns the status write's error, if any, other than a Conflict: a
 // reconcile whose failure-status write conflicts read a stale copy of the
 // AutoConfig, but its sync failed all the same, so it records no events and
 // its caller returns the failure's own result. The quiet conflictRequeueDelay
@@ -488,6 +488,7 @@ func (r *KrakenDAutoConfigReconciler) recordSyncedFailure(
 		Reason:             reason,
 		Message:            message,
 	})
+	r.refreshReadiness(ctx, ac)
 	setAutoConfigReadiness(ac)
 	// The sync has failed whether or not its status write succeeds.
 	autoConfigSynced.WithLabelValues(ac.Namespace, ac.Name).Set(0)
@@ -500,6 +501,24 @@ func (r *KrakenDAutoConfigReconciler) recordSyncedFailure(
 	warnings.emit(r.Recorder, ac)
 	r.Recorder.Event(ac, "Warning", reason, message)
 	return nil
+}
+
+// refreshReadiness sets ac's readyEndpoints and EndpointsReady condition from
+// the endpoints it controls now, found by the controller UID index without
+// adopting any, so a failed sync does not leave them as the last sync saw
+// them. When the list fails they keep their last-known values: the failure
+// status is written regardless.
+func (r *KrakenDAutoConfigReconciler) refreshReadiness(ctx context.Context, ac *v1alpha1.KrakenDAutoConfig) {
+	var owned v1alpha1.KrakenDEndpointList
+	if err := r.List(ctx, &owned, client.InNamespace(ac.Namespace),
+		client.MatchingFields{fieldindex.EndpointController: string(ac.UID)},
+	); err != nil {
+		logf.FromContext(ctx).V(1).Info("keeping the last-known endpoint readiness", "error", err.Error())
+		return
+	}
+	readiness := summarizeReadiness(owned.Items, nil)
+	ac.Status.ReadyEndpoints = readiness.ready
+	meta.SetStatusCondition(&ac.Status.Conditions, endpointsReadyCondition(readiness, ac.Generation))
 }
 
 // statusWriteFailure returns the reconcile result for a failed AutoConfig
