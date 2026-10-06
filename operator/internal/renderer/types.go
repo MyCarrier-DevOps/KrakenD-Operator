@@ -134,10 +134,40 @@ type CommandExecutor interface {
 	Execute(ctx context.Context, name string, args ...string) ([]byte, error)
 }
 
-// ValidationError wraps a failed krakend check output.
+// RejectionStage names the check that rejected a config.
+type RejectionStage int
+
+const (
+	// StageUnknown is a rejection that does not say which check made it.
+	StageUnknown RejectionStage = iota
+	// StageEEWildcard is the EE router's wildcard rule, applied in Go.
+	StageEEWildcard
+	// StageRoute is the route check, run in an in-process gin engine.
+	StageRoute
+	// StageCheck is krakend check itself.
+	StageCheck
+)
+
+// RouteRefusal is one registration the route check refused: the positions, in
+// the rendered endpoints array, of the entries it names (the refused one,
+// then the accepted one it clashes with, if any), and its lint lines joined
+// with newlines. A refusal of a route the gateway itself registers names no
+// entry.
+type RouteRefusal struct {
+	Indices []int
+	Message string
+}
+
+// ValidationError wraps a failed krakend check output. Stage says which check
+// rejected the config. For a route check rejection, Refusals lists what it
+// refused, and RefusalsCapped is set when the check stopped at MaxRouteRefusals,
+// so refusals past those listed are unknown.
 type ValidationError struct {
-	Output string
-	Err    error
+	Output         string
+	Err            error
+	Stage          RejectionStage
+	Refusals       []RouteRefusal
+	RefusalsCapped bool
 }
 
 func (e *ValidationError) Error() string {

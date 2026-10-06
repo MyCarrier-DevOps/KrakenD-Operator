@@ -586,6 +586,31 @@ func TestValidate_EERootWildcardIsRefusedByTheRouteCheck(t *testing.T) {
 	}
 }
 
+func TestValidate_RouteRejectionNamesTheRefusedEntries(t *testing.T) {
+	v := NewValidator(ValidatorOptions{Executor: &capturingExecutor{}, BinaryPath: "krakend"})
+	rendered := []byte(`{"version":3,"endpoints":[` +
+		`{"endpoint":"/users/{id}","method":"GET"},{"endpoint":"/users/{userId}/orders","method":"GET"}]}`)
+
+	err := v.Validate(context.Background(), rendered, v1alpha1.EditionCE)
+
+	var verr *ValidationError
+	if !errors.As(err, &verr) {
+		t.Fatalf("Validate = %v, want a ValidationError", err)
+	}
+	if verr.Stage != StageRoute {
+		t.Errorf("Stage = %d, want StageRoute (%d)", verr.Stage, StageRoute)
+	}
+	if len(verr.Refusals) != 1 || !slices.Equal(verr.Refusals[0].Indices, []int{1, 0}) {
+		t.Fatalf("Refusals = %+v, want one naming the refused entry 1, then the accepted entry 0", verr.Refusals)
+	}
+	if verr.Refusals[0].Message != verr.Output {
+		t.Errorf("Refusals[0].Message = %q, want the output %q", verr.Refusals[0].Message, verr.Output)
+	}
+	if verr.RefusalsCapped {
+		t.Error("RefusalsCapped = true for one refusal")
+	}
+}
+
 func TestEditionFor(t *testing.T) {
 	cases := []struct {
 		name       string
