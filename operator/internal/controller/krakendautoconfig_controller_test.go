@@ -5520,3 +5520,49 @@ func TestAutoConfigReconcile_NoEndpointsIsReady(t *testing.T) {
 		t.Errorf("expected Ready True with nothing to wait for")
 	}
 }
+
+// blockingFetcher returns main for the test AutoConfig's spec URL and blocks
+// every other fetch — every fetch, when main is nil — until its context ends.
+type blockingFetcher struct{ main []byte }
+
+func (b blockingFetcher) Fetch(ctx context.Context, source autoconfig.FetchSource) (*autoconfig.FetchResult, error) {
+	if b.main != nil && source.URL == "https://example.com/api.json" {
+		return &autoconfig.FetchResult{Data: b.main}, nil
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestAutoConfigReconcile_FetchTimeoutBoundsFetchAndResolve(t *testing.T) {
+	for name, fetcher := range map[string]blockingFetcher{
+		"spec fetch hangs": {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cm := testCUEDefinitionsCM()
+			ac := syncedAutoConfig(cm)
+			_, ce, fi, g := defaultMocks()
+			c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).Build()
+			r := newACReconciler(c, &mockFetcher{}, ce, fi, g)
+			r.Fetcher = fetcher
+			r.FetchTimeout = 50 * time.Millisecond
+
+			done := make(chan error, 1)
+			go func() {
+				_, err := reconcileAC(r, ac)
+				done <- err
+			}()
+			select {
+			case err := <-done:
+				if !errors.Is(err, context.DeadlineExceeded) {
+					t.Errorf("expected a deadline error, got %v", err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("reconcile did not return within 5s of a 50ms fetch timeout")
+			}
+			cond := meta.FindStatusCondition(getAC(t, c, ac).Status.Conditions, v1alpha1.ConditionSpecAvailable)
+			if cond == nil || cond.Reason != v1alpha1.ReasonSpecFetchFailed {
+				t.Errorf("expected SpecAvailable False/SpecFetchFailed, got %+v", cond)
+			}
+		})
+	}
+}
