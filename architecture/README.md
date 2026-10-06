@@ -1818,11 +1818,11 @@ A verb is granted only when a call site needs it. `get`/`list`/`watch` are neede
 |---|---|---|
 | `""/configmaps` | get list watch create delete | immutable config ConfigMaps via `Create` (never updated); garbage collection of unreferenced config ConfigMaps (delete, label-selected list); plugin ConfigMaps and AutoConfig spec/CUE ConfigMaps (get); metadata watches (list/watch) |
 | `""/secrets` | get list watch | license Secret reads, AutoConfig auth Secret reads (get); the gateway controller's license-Secret metadata watch (list/watch) |
-| `""/serviceaccounts`, `""/services` | get list watch create update | gateway `CreateOrUpdate` + `Owns` |
+| `""/serviceaccounts`, `""/services` | get list watch create update delete | gateway `CreateOrUpdate` + `Owns`; `delete` is never called: the `OwnerReferencesPermissionEnforcement` admission plugin requires it on an object whose `ownerReferences` an update changes (adopting a same-named object) |
 | `""/events` | create patch | every `EventRecorder` |
-| `apps/deployments` | get list watch create update | gateway `CreateOrUpdate` + `Owns` |
+| `apps/deployments` | get list watch create update delete | gateway `CreateOrUpdate` + `Owns`; `delete` is never called: the `OwnerReferencesPermissionEnforcement` admission plugin requires it on an object whose `ownerReferences` an update changes (adopting a same-named object) |
 | `apps/replicasets` | list | config ConfigMap garbage collection: live ReplicaSets that still mount a config ConfigMap, listed through the uncached `APIReader` (no watch, no cache) |
-| `policy/poddisruptionbudgets` | get list watch create update | gateway `CreateOrUpdate` + `Owns` (always built, never deleted) |
+| `policy/poddisruptionbudgets` | get list watch create update delete | gateway `CreateOrUpdate` + `Owns` (always built, never deleted); `delete` is never called: the `OwnerReferencesPermissionEnforcement` admission plugin requires it on an object whose `ownerReferences` an update changes (adopting a same-named object) |
 | `autoscaling/horizontalpodautoscalers` | get list watch create update delete | `CreateOrUpdate` + `Owns`; delete when autoscaling is removed |
 | `batch/jobs` | get list watch create delete | post-restart Job `Create`; failed-revision recreate `Delete` |
 | `dragonflydb.io/dragonflies`, `external-secrets.io/externalsecrets`, `networking.istio.io/virtualservices` | get list watch create update delete | `CreateOrUpdate`; watches; delete when the feature is disabled |
@@ -1837,13 +1837,13 @@ A verb is granted only when a call site needs it. `get`/`list`/`watch` are neede
 | `gateway.krakend.io/krakendautoconfigs/status` | update | AutoConfig controller `Status().Update` |
 | `gateway.krakend.io/krakendautoconfigs/finalizers` | update | `blockOwnerDeletion` on generated endpoints |
 
-Not granted: `create`/`update`/`patch`/`delete` on the four CRDs' main resources except where listed; `patch` everywhere except events and the endpoint status subresource; `update` on configmaps and on the endpoint status subresource; `delete` on deployments, services, serviceaccounts and PDBs; `get` on every status subresource; `krakendendpoints/finalizers` and `krakendbackendpolicies/finalizers` (neither kind owns anything).
+Not granted: `create`/`update`/`patch`/`delete` on the four CRDs' main resources except where listed; `patch` everywhere except events and the endpoint status subresource; `update` on configmaps and on the endpoint status subresource; `get` on every status subresource; `krakendendpoints/finalizers` and `krakendbackendpolicies/finalizers` (neither kind owns anything).
 
 ### Leader election (namespaced Role)
 
 `coordination.k8s.io/leases`: `get`, `create`, `update`; `events`: `create`, `patch`. controller-runtime uses a Lease; no ConfigMap lock.
 
-The ClusterRole is generated from the `+kubebuilder:rbac` markers into `operator/config/rbac/role.yaml`. `TestManagerRoleGrantsOnlyUsedVerbs` pins it to the table above, and the integration suite runs its manager as a ServiceAccount bound to exactly that role, so a missing or surplus verb fails a test.
+The ClusterRole is generated from the `+kubebuilder:rbac` markers into `operator/config/rbac/role.yaml`. `TestManagerRoleGrantsOnlyUsedVerbs` pins it to the table above, and the integration suite runs its manager as a ServiceAccount bound to exactly that role, so a missing or surplus verb fails a test. The suite runs against K3s with the `OwnerReferencesPermissionEnforcement` admission plugin enabled. Three paths stay outside it: the admission webhooks run only in the end-to-end tests, the CRDs of the optional kinds (Dragonfly, ExternalSecret, VirtualService) are not installed there, so their verbs are pinned by the table alone, and a Lease election is not contested.
 
 ---
 
