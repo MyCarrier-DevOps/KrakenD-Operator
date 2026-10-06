@@ -1094,14 +1094,21 @@ the undone revision's ConfigMap may already be gone.
 the name is accepted only when the gateway controls it, it carries the
 checksum annotation, and its `krakend.json` hashes (SHA-256) to the checksum.
 The owner reference and the annotation can be copied by anyone who can create
-ConfigMaps in the namespace; the payload cannot. A ConfigMap that fails the
-hash is deleted and created again from the render, once; if it cannot be
-deleted, `ConfigValid` reads `Unknown`/`ConfigPublishFailed`, never
-`ConfigApplied`. When the applied config's ConfigMap fails the hash on a pass
-that has no applied render to create it from (the newest render is rejected or
-could not be validated), it is deleted and the Deployment is held as it is
-until a render that passes is published (see *Gateway Deployment not updated*
-in the runbook).
+ConfigMaps in the namespace; the payload cannot. The pods load the payload
+whatever the metadata says, so the payload of any ConfigMap at the gateway's
+content address is hashed, whoever owns it and whatever its annotation holds. A
+ConfigMap that fails the hash is deleted, with a UID precondition, and created
+again from the render, once. The operator emits a Warning event
+`ConfigMapTampered` on the gateway that names the deleted ConfigMap. If it
+cannot be deleted, `ConfigValid` reads `Unknown`/`ConfigPublishFailed`, never
+`ConfigApplied`. A ConfigMap that holds the right bytes but is not the gateway's
+copy (no owner reference, or another annotation) is not deleted: it is
+reported as `ConfigPublishFailed`, and the Deployment is held as it is,
+mounting the right bytes. When the applied config's ConfigMap fails the hash on
+a pass that has no applied render to create it from (the newest render is
+rejected or could not be validated), it is deleted and the Deployment is held
+as it is until a render that passes is published (see *Gateway Deployment not
+updated* in the runbook).
 
 The payload is read in full once per stored version of a ConfigMap (its UID
 and resource version). The operator remembers the versions it has hashed, and
