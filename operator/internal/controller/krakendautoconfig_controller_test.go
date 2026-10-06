@@ -863,7 +863,7 @@ func TestAutoConfigReconcile_RecreatesDeletedEndpointWhenInputsUnchanged(t *test
 	}, &ep); err != nil {
 		t.Fatalf("expected deleted endpoint to be recreated: %v", err)
 	}
-	wantEvent := "Normal EndpointsGenerated Generated 1 endpoints (1 created, 0 updated, 0 deleted, 0 skipped)"
+	wantEvent := "Normal EndpointsGenerated Generated 1 endpoint (1 created, 0 updated, 0 deleted, 0 skipped)"
 	if events := drainEvents(rec); !slices.Contains(events, wantEvent) {
 		t.Errorf("expected event %q, got %v", wantEvent, events)
 	}
@@ -940,7 +940,7 @@ func TestAutoConfigReconcile_RevertsModifiedEndpointWhenInputsUnchanged(t *testi
 	if !equality.Semantic.DeepEqual(ep.Spec, want.Spec) {
 		t.Errorf("expected endpoint spec restored to %+v, got %+v", want.Spec, ep.Spec)
 	}
-	wantEvent := "Normal EndpointsGenerated Generated 1 endpoints (0 created, 1 updated, 0 deleted, 0 skipped)"
+	wantEvent := "Normal EndpointsGenerated Generated 1 endpoint (0 created, 1 updated, 0 deleted, 0 skipped)"
 	if events := drainEvents(rec); !slices.Contains(events, wantEvent) {
 		t.Errorf("expected event %q, got %v", wantEvent, events)
 	}
@@ -978,7 +978,7 @@ func TestAutoConfigReconcile_RestoresEndpointLabelsWhenInputsUnchanged(t *testin
 	if !maps.Equal(ep.Labels, want.Labels) {
 		t.Errorf("expected endpoint labels restored to %v, got %v", want.Labels, ep.Labels)
 	}
-	wantEvent := "Normal EndpointsGenerated Generated 1 endpoints (0 created, 1 updated, 0 deleted, 0 skipped)"
+	wantEvent := "Normal EndpointsGenerated Generated 1 endpoint (0 created, 1 updated, 0 deleted, 0 skipped)"
 	if events := drainEvents(rec); !slices.Contains(events, wantEvent) {
 		t.Errorf("expected event %q, got %v", wantEvent, events)
 	}
@@ -1030,7 +1030,7 @@ func TestAutoConfigReconcile_DeletesStrayEndpointWhenInputsUnchanged(t *testing.
 	}, &ep); !apierrors.IsNotFound(err) {
 		t.Errorf("expected stray endpoint to be deleted, got err %v", err)
 	}
-	wantEvent := "Normal EndpointsGenerated Generated 1 endpoints (0 created, 0 updated, 1 deleted, 0 skipped)"
+	wantEvent := "Normal EndpointsGenerated Generated 1 endpoint (0 created, 0 updated, 1 deleted, 0 skipped)"
 	if events := drainEvents(rec); !slices.Contains(events, wantEvent) {
 		t.Errorf("expected event %q, got %v", wantEvent, events)
 	}
