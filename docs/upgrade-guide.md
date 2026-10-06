@@ -2073,17 +2073,23 @@ as for any CRD change (see *CRD Upgrades*).
 The manager ClusterRole no longer grants `create`, `update`, `patch` or
 `delete` on the four KrakenD kinds beyond what the controllers call (for
 example it can no longer create or delete a `KrakenDGateway`), no longer
-grants `delete` on Deployments, Services, ServiceAccounts or
-PodDisruptionBudgets, no longer grants `update` on ConfigMaps (config
-ConfigMaps are immutable), and no longer grants `patch` except on events and
-the KrakenDEndpoint status subresource. `delete` stays on
+grants `update` on Jobs or on ConfigMaps (config ConfigMaps are immutable),
+no longer grants `patch` except on events and the KrakenDEndpoint status
+subresource, and drops the `finalizers` grants on `KrakenDEndpoint` and
+`KrakenDBackendPolicy`, which own nothing. `delete` stays on
 HorizontalPodAutoscalers, Dragonfly, ExternalSecret and VirtualService
 objects (removed when their feature is disabled), on Jobs and on the
-gateway's config ConfigMaps; `list` on ReplicaSets lets config ConfigMap
-garbage collection see which revisions running pods still mount. The
-leader-election Role drops ConfigMaps and keeps `get`, `create` and `update`
-on Leases. `helm upgrade` or `make deploy` applies the new rules; nothing
-else needs to change.
+gateway's config ConfigMaps. It also stays on Deployments, Services,
+ServiceAccounts and PodDisruptionBudgets, because clusters that enable the
+`OwnerReferencesPermissionEnforcement` admission plugin require it when a
+gateway adopts a same-named object. `list` on ReplicaSets lets config
+ConfigMap garbage collection see which revisions running pods still mount.
+The leader-election Role drops ConfigMaps and keeps `get`, `create` and
+`update` on Leases.
+
+Upgrading applies the new rules with no other change: `helm upgrade` and
+`make deploy` apply them from the chart and the kustomize manifests, and an
+OLM upgrade applies the permissions in the new bundle's ClusterServiceVersion.
 
 ---
 
