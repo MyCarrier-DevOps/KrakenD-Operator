@@ -84,6 +84,13 @@ type KrakenDGatewayReconciler struct {
 	// rejections remembers each gateway's last rejected validation input,
 	// so an unchanged bad render is not re-validated on every event.
 	rejections rejectionMemo
+
+	// cachedOptionalKinds are the optional kinds whose CRDs were installed
+	// at startup, so an informer runs for them (the Owns watches).
+	// optionalCache reads them through that informer. A kind outside the set
+	// is read live.
+	cachedOptionalKinds map[schema.GroupVersionKind]struct{}
+	optionalCache       client.Reader
 }
 
 // ConfigChecker gathers a gateway's render inputs and validates what they

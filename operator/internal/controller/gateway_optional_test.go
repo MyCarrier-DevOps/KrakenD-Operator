@@ -211,6 +211,62 @@ func TestGatewayReconcile_DeletesWithAUIDPrecondition(t *testing.T) {
 	}
 }
 
+// countingReader counts the unstructured reads served through it.
+type countingReader struct {
+	client.Reader
+	reads int
+}
+
+func (c *countingReader) Get(
+	ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption,
+) error {
+	if _, ok := obj.(*unstructured.Unstructured); ok {
+		c.reads++
+	}
+	return c.Reader.Get(ctx, key, obj, opts...)
+}
+
+// A disabled feature's child of a kind that has an informer is looked up
+// through the cache, not with a live GET on every reconcile; a child that
+// exists is still deleted.
+func TestGatewayReconcile_DisabledOptionalKindsAreReadThroughTheCache(t *testing.T) {
+	gw := reconciledGateway()
+	gw.UID = "gw-uid"
+	gw.Status.ConfigChecksum = "applied"
+	vs := controlledChild(gw, virtualServiceGVK, gw.Name)
+	base := fakeClientBuilder().WithRESTMapper(optionalCRDMapper(optionalOwnedGVKs...)).
+		WithObjects(gw, vs).WithStatusSubresource(gw).Build()
+	liveReads := 0
+	c := interceptor.NewClient(base, interceptor.Funcs{Get: func(
+		ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption,
+	) error {
+		if _, ok := obj.(*unstructured.Unstructured); ok {
+			liveReads++
+		}
+		return cl.Get(ctx, key, obj, opts...)
+	}})
+	cached := &countingReader{Reader: base}
+	r := newTestGatewayReconciler(c, renderOutput("applied"), &mockValidator{})
+	r.optionalCache = cached
+	r.cachedOptionalKinds = map[schema.GroupVersionKind]struct{}{
+		dragonflyGVK: {}, externalSecretGVK: {}, virtualServiceGVK: {},
+	}
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	if liveReads != 0 {
+		t.Errorf("live reads of optional kinds = %d, want 0: the informer already holds them", liveReads)
+	}
+	if cached.reads != 3 {
+		t.Errorf("cached reads of optional kinds = %d, want 3 (one per disabled feature)", cached.reads)
+	}
+	if err := base.Get(context.Background(), client.ObjectKeyFromObject(vs), vs.DeepCopy()); !apierrors.IsNotFound(err) {
+		t.Errorf("VirtualService Get = %v; the child of a disabled feature must still be deleted", err)
+	}
+}
+
 func TestGatewayReconcile_NoCRDNeverReadsLive(t *testing.T) {
 	gw := reconciledGateway()
 	gw.UID = "gw-uid"
