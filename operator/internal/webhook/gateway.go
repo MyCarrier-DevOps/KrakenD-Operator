@@ -1184,6 +1184,9 @@ func (v *GatewayValidator) authorizePostRestartJob(ctx context.Context, old, gw 
 	if !postRestartJobBorrowsRights(prj, gw) {
 		return nil
 	}
+	if old != nil && equality.Semantic.DeepEqual(old.Spec.PostRestartJob, prj) {
+		return nil // the requester did not touch it
+	}
 	req, err := admission.RequestFromContext(ctx)
 	if err != nil {
 		return unavailable(err)
