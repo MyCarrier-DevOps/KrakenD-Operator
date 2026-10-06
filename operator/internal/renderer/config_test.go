@@ -1171,6 +1171,7 @@ func TestRender_SchemaConflictsOnlyWhereDocsArePublished(t *testing.T) {
 		want       int
 	}{
 		{"EE publishing docs", v1alpha1.EditionEE, true, false, 1},
+		{"EE in CE fallback", v1alpha1.EditionEE, true, true, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			gw := minimalGateway()
