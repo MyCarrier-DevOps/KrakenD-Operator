@@ -1,3 +1,6 @@
+{{- if and (gt (int .Values.replicaCount) 1) (not .Values.leaderElection.enabled) }}
+{{- fail "replicaCount > 1 requires leaderElection.enabled=true: without it every replica runs the controllers" }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
