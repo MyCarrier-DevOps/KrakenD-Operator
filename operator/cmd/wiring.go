@@ -34,8 +34,10 @@ import (
 const gatewayCheckWorkers = 1
 
 // autoConfigCheckSlots is how many checker slots the AutoConfig prechecks may
-// hold at once: the checker's slots, less one kept free for admission (which
-// waits against a short deadline), less the gateway controller's.
+// hold at once: the checker's slots, less one the controllers never take, left
+// to admission (which waits against a short deadline), less the gateway
+// controller's. Together the controllers never hold more than all but one
+// slot; concurrent admission requests can still take the rest.
 const autoConfigCheckSlots = configCheckSlots - 1 - gatewayCheckWorkers
 
 // validation is everything that holds the pod's one config checker.
