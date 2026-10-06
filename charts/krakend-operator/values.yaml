@@ -87,4 +87,5 @@ nodeSelector: {}
 
 tolerations: []
 
+# When empty, replicas prefer to run on different nodes.
 affinity: {}
