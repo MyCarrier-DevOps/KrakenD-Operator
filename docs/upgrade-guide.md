@@ -120,6 +120,9 @@ make deploy IMG=ghcr.io/mycarrier-devops/krakend-operator:<new-version>
      to 2. Set `replicaCount: 1` or re-enable leader election before
      upgrading. Otherwise the operator Deployment goes from 1 to 2 pods and a
      PodDisruptionBudget appears.
+   - If you set `resources` for the operator in your own values or manifests,
+     raise the memory limit to 512Mi (the default was 256Mi): up to three
+     `krakend check` runs share the container.
    - Metrics scrapes start succeeding once the scraper's ServiceAccount is
      bound to the `<fullname>-metrics-reader` ClusterRole.
    - OLM installs gain the admission webhooks (`failurePolicy: Fail`), so
@@ -348,7 +351,7 @@ idle.
   recreate generated endpoints while garbage collection deletes them.
 - `status.phase` no longer transitions through `Fetching`/`Rendering` — those
   enum values remain for compatibility, but the controller now only sets
-  `Pending`, `Synced`, or `Error`.
+  `Synced` or `Error`, and the phase is empty before the first sync.
 - Spec fetch, CUE, unmatched-override, ambiguous-override, and
   additional-endpoint scope failures retry via controller-runtime's
   exponential backoff (`OnChange`) or at `spec.periodic.interval`
@@ -509,7 +512,9 @@ every validation. Validation no longer needs egress from the operator pod,
 no longer fails while that site is unreachable, and its verdict changes only
 with an operator upgrade. The built-in schema gave the same verdict as the
 online one on every config tested. Each validation run is limited to 30
-seconds.
+seconds. This is the gateway controller's check. Admission runs the same
+checker without `-t` (`krakend check -n`) and relies on the route check for
+what `-t` catches (see *Complete admission*).
 
 **On upgrade:** a gateway reporting `ConfigValid=False` only because the
 online schema could not be fetched is re-validated on the first reconcile
@@ -538,10 +543,12 @@ pass, continuously, until the input was fixed. Now:
   The values remain in the API for compatibility. A value persisted by an
   older operator version stays until the gateway's next verdict replaces it.
 - Gateway status is written only when it changes.
-- The operator remembers the exact input the validator rejected and does not
-  run the validation again for it. It validates again as soon as any input
-  changes, including a switch to or from CE fallback, and once after an
-  operator restart.
+- The operator remembers, in memory and per gateway, the render checksum and
+  edition the validator rejected, and does not run the validation again for
+  that pair. It validates again as soon as the render or the edition changes,
+  including a switch to or from CE fallback, and once after an operator
+  restart. The findings are rebuilt from the remembered rejection each time,
+  so the entry indices they name follow the current endpoints.
 - `ConfigValidationFailed` fires when the verdict or its message changes,
   not on every reconcile.
 - `krakend_operator_config_validation_failures_total` counts each rejected input once, not
@@ -564,24 +571,26 @@ Only a completed krakend check run that rejects the config marks it invalid
 (`ConfigValid=False`, reason `ConfigValidationFailed`, phase `Error`). When
 the check cannot run to completion (the binary is missing, the 30-second
 limit is hit, the process is killed, the temp directory is unwritable or
-full, or the validation copy cannot be prepared), the gateway now reports
+full, or the validation copy or the route check cannot complete), the gateway
+now reports
 `ConfigValid=Unknown` with reason `ValidatorUnavailable`, emits one
 `ValidatorUnavailable` Warning event, keeps its phase and its applied
 config, and retries with exponential backoff. Previously such failures were
 reported as an invalid config (and re-run in a status-write loop).
 
 `krakend_operator_config_validation_failures_total` counts only a fresh verdict from the
-validator (`krakend check`, or the EE wildcard rules applied before it).
-Failures to prepare the validation copy and other errors that are not
-verdicts, such as an unavailable validator, do not increment it.
+validator (the EE wildcard rules or the route check applied before it, or
+`krakend check`). Failures to prepare the validation copy and other errors
+that are not verdicts, such as an unavailable validator, do not increment it.
 
 ### Validation messages are capped at 4 KiB
 
 The `ConfigValid` condition message and the `ConfigValidationFailed` event
 now carry at most 4 KiB: a summary line, then one line per finding, as many
 whole lines as fit, followed by `(output truncated, N more lines)`. Each line
-reads `namespace/name spec.endpoints[i]: <finding>`, or `gateway: <finding>`
-when it names no endpoint. The full output is logged by
+reads `namespace/name spec.endpoints[i]: <finding>`, `namespace/name:
+<finding>` when the endpoint is known but no entry of it matches, or
+`gateway: <finding>` when it names no endpoint. The full output is logged by
 the operator as `validation rejected the rendered config`. Previously an
 output over the CRD's 32768-character limit (for example one bad key in a
 policy used by many backends) made the status write fail, so the rejection
@@ -698,6 +707,15 @@ kubectl patch <kind>/<name> -n <ns> --subresource=status --type=json \
   - `False`, reason `EndpointConflict`: older endpoints own all of its
     (path, method) pairs; none is served. A resolved conflict now clears by
     itself.
+  - `False`, reason `GatewayConfigRejected`: the gateway's newest
+    configuration was rejected and a finding names this endpoint (see "A
+    rejected config names the endpoints at fault").
+  - reason `EEFeaturesStripped`: a CE fallback render removed Enterprise-only
+    features from it. `True` while some of its entries are still served,
+    `False` when all of them were wildcards.
+  - `True`, reason `SchemaNameConflict`: it is served, but defines a component
+    schema differently from the endpoint the gateway's documentation takes
+    that name from.
   - removed: a policy it references is missing, so it is not in the
     configuration (the endpoint controller reports why).
 - `Accepted` is written only for a configuration that passed validation, or
@@ -1009,8 +1027,9 @@ you *which* KrakenDEndpoint to fix:
 - The gateway's `ConfigValid=False` message starts with the KrakenDEndpoints
   the findings name, for example `Rejected by krakend check; findings name
   KrakenDEndpoint(s) team-a/orders.`, followed by one line per finding,
-  `team-a/orders spec.endpoints[1]: <finding>` (`gateway: <finding>` when it
-  names no endpoint), bounded to 4 KiB.
+  `team-a/orders spec.endpoints[1]: <finding>` (`team-a/orders: <finding>`
+  when no entry of the endpoint matches, `gateway: <finding>` when it names no
+  endpoint), bounded to 4 KiB.
 - Each named endpoint gets `Accepted=False` with reason
   `GatewayConfigRejected` and the findings that name it. Findings are mapped
   from `/endpoints/<i>/…` pointers and from `METHOD /path` or `path '…'` in
@@ -1263,7 +1282,9 @@ dropped.
   The pool connects without them. A Dragonfly that requires a password (the
   operator sets it from `dragonfly.authentication.passwordFromSecret`) refuses
   the now-active pool with `NOAUTH`, and an unreachable pool only logs at
-  startup without affecting health. The gateway webhook warns when these are set.
+  startup without affecting health. Setting or changing these is rejected
+  (see *Complete admission*); a value stored before that rule keeps being
+  accepted on unrelated updates, and the gateway webhook warns about it.
 - A raw `backend/redis` key in `spec.config.extraConfig` is no longer stripped
   before validation, so it now fails with `additional properties
   'backend/redis' not allowed`. Remove it and use `spec.redis` or Dragonfly.
@@ -2150,8 +2171,9 @@ Each reconcile pass now makes these live API requests:
   metadata only.
 - AutoConfig: the namespace's `krakend-cue-definitions` ConfigMap once, in full,
   falling back to the embedded definitions when it is absent, and the
-  `cue.definitionsConfigMapRef` ConfigMap the same way when it is set; the spec
-  and auth sources in full.
+  `cue.definitionsConfigMapRef` ConfigMap once, in full, when it is set (a
+  missing one fails the sync with `CUEEvaluationFailed`, with no fallback); the
+  spec and auth sources in full.
 
 ### Helm chart: metrics can be scraped
 
