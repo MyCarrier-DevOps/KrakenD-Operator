@@ -209,8 +209,8 @@ func (r *KrakenDGatewayReconciler) verifyExistingConfigMap(
 }
 
 // verifyPayload hashes the krakend.json of the ConfigMap name and deletes it
-// when the hash is not checksum. found is false when the ConfigMap is gone
-// or was deleted here.
+// when the hash is not checksum, with a Warning event on the gateway. found is
+// false when the ConfigMap is gone or was deleted here.
 func (r *KrakenDGatewayReconciler) verifyPayload(
 	ctx context.Context, reader client.Reader, gw *v1alpha1.KrakenDGateway, name, checksum string,
 ) (found bool, err error) {
@@ -231,6 +231,8 @@ func (r *KrakenDGatewayReconciler) verifyPayload(
 	if err := r.Delete(ctx, full, client.Preconditions{UID: &uid}); err != nil && !errors.IsNotFound(err) {
 		return true, fmt.Errorf("deleting configmap %s whose data does not match its checksum: %w", name, err)
 	}
+	r.Recorder.Eventf(gw, corev1.EventTypeWarning, v1alpha1.ReasonConfigMapTampered,
+		"Deleted configmap %s: its %s does not hash to the checksum its name addresses", name, resources.ConfigKey)
 	return false, nil
 }
 
