@@ -589,7 +589,7 @@ func TestJudgeEndpoints_ExcludesOnlyTheFailingVerdicts(t *testing.T) {
 		"pol": {Reason: v1alpha1.ReasonPolicyInvalid, Policies: []types.NamespacedName{policy}},
 	}}}
 
-	excluded, err := r.judgeEndpoints(context.Background(), gw, renderer.RenderInput{}, endpoints, nil)
+	excluded, err := r.judgeEndpoints(context.Background(), "suspects", gw, renderer.RenderInput{}, endpoints, nil)
 
 	if err != nil {
 		t.Fatal(err)

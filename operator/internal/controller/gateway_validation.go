@@ -22,6 +22,8 @@ import (
 	"slices"
 	"strings"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -32,6 +34,7 @@ import (
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
+	"github.com/mycarrier-devops/krakend-operator/internal/tracing"
 )
 
 // decision is what the config stage concludes about the newest render.
@@ -102,7 +105,7 @@ func (r *KrakenDGatewayReconciler) decide(
 	masked := suspectsOf(in.Endpoints, rendered)
 	if isApplied(gw, full, edition) {
 		var excluded map[types.NamespacedName]configcheck.EndpointVerdict
-		if excluded, err = r.judgeEndpoints(ctx, gw, in, masked, counted); err != nil {
+		if excluded, err = r.judgeEndpoints(ctx, "masked", gw, in, masked, counted); err != nil {
 			return decision{}, err
 		}
 		if len(excluded) == 0 {
@@ -123,7 +126,7 @@ func (r *KrakenDGatewayReconciler) decide(
 		return decision{}, err
 	}
 	whole.Masked = rendered.Masked
-	excluded, err := r.judgeEndpoints(ctx, gw, in, suspectsOf(in.Endpoints, whole), counted)
+	excluded, err := r.judgeEndpoints(ctx, "suspects", gw, in, suspectsOf(in.Endpoints, whole), counted)
 	if err != nil {
 		return decision{}, err
 	}
@@ -158,11 +161,17 @@ func (r *KrakenDGatewayReconciler) decide(
 // failing verdict is returned: an excluded endpoint's condition takes its
 // reason from the verdict, and an OK one has none, which the API server
 // rejects. An endpoint whose policy is missing is not judged: the render
-// already leaves it out.
+// already leaves it out. The pass is a gateway.judge_endpoints span whose
+// gateway.judge.pass attribute says which endpoints it judges: "masked", those
+// the applied render leaves an entry of out, or "suspects", those the whole
+// render's check left unjudged.
 func (r *KrakenDGatewayReconciler) judgeEndpoints(
-	ctx context.Context, gw *v1alpha1.KrakenDGateway, in renderer.RenderInput,
+	ctx context.Context, pass string, gw *v1alpha1.KrakenDGateway, in renderer.RenderInput,
 	suspects []v1alpha1.KrakenDEndpoint, memo configcheck.Memo,
-) (map[types.NamespacedName]configcheck.EndpointVerdict, error) {
+) (_ map[types.NamespacedName]configcheck.EndpointVerdict, retErr error) {
+	ctx, span := tracing.Start(ctx, r.Tracer, "gateway.judge_endpoints",
+		trace.WithAttributes(attribute.String("gateway.judge.pass", pass)))
+	defer func() { tracing.End(span, retErr) }()
 	excluded := map[types.NamespacedName]configcheck.EndpointVerdict{}
 	for i := range suspects {
 		ep := &suspects[i]
