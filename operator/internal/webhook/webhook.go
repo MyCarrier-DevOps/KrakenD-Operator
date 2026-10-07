@@ -175,7 +175,7 @@ func SetupWebhooks(mgr ctrl.Manager, validators Validators) error {
 
 	if err := ctrl.NewWebhookManagedBy(mgr).
 		For(&v1alpha1.KrakenDBackendPolicy{}).
-		WithValidator(validators.Policy).
+		WithValidator(tracedValidator{kind: "KrakenDBackendPolicy", next: validators.Policy, tracer: validators.Tracer}).
 		Complete(); err != nil {
 		return fmt.Errorf("setting up policy webhook: %w", err)
 	}
