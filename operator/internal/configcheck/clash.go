@@ -21,13 +21,23 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 )
+
+// NotYetCreated is the creationTimestamp to give an endpoint that has none
+// when it is rendered with endpoints that do: the end of year 9999, after any
+// real one. The API server sets an object's creationTimestamp before
+// admission sees it, so only a caller that builds an endpoint itself (a test,
+// or the AutoConfig precheck for an endpoint it has yet to create) hands one
+// over without it; a zero timestamp would rank it the oldest of all.
+var NotYetCreated = metav1.NewTime(time.Unix(253402300799, 0))
 
 // RouteConflicts is what a render of a gateway leaves out. Lost holds, by the
 // KrakenDEndpoint that loses them, the entries the render does not serve
