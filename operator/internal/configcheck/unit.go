@@ -25,6 +25,7 @@ import (
 	"strings"
 
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/fieldindex"
@@ -112,8 +113,17 @@ type EndpointVerdict struct {
 	Output string
 }
 
-// Message says why v is not OK in words its endpoint's owner may read.
+// Message says why v is not OK in words its endpoint's owner may read: the
+// policies at fault by name, never their content.
 func (v EndpointVerdict) Message(int) string {
+	names := make([]string, len(v.Policies))
+	for i, p := range v.Policies {
+		names[i] = p.String()
+	}
+	if v.Reason == v1alpha1.ReasonPolicyInvalid && v.PoliciesFailAlone {
+		return fmt.Sprintf("references KrakenDBackendPolicy %s, which fails krakend check on its own",
+			strings.Join(names, ", "))
+	}
 	return ""
 }
 
@@ -150,21 +160,35 @@ func (c *Checker) CheckPolicy(ctx context.Context, policy *v1alpha1.KrakenDBacke
 	return c.lintInput(ctx, policyAlone(policy), memo)
 }
 
-// CheckEndpoint judges u.Endpoint on its own: the gateway root with the
-// endpoint and the policies it references (lint). A rejection is the
-// endpoint's own fault (EndpointInvalid, quoting the check). An endpoint that
-// references a policy that does not exist is not judged: no render includes
-// it, and the endpoint controller reports the missing policy. Its verdict is
-// OK.
+// CheckEndpoint judges u.Endpoint on its own: first each policy it references,
+// alone (CheckPolicy), where one that fails makes the verdict PolicyInvalid,
+// naming it; then the gateway root with the endpoint and its policies (lint),
+// whose rejection is the endpoint's own fault (EndpointInvalid, quoting the
+// check). An endpoint that references a policy that does not exist is not
+// judged: no render includes it, and the endpoint controller reports the
+// missing policy. Its verdict is OK.
 func (c *Checker) CheckEndpoint(ctx context.Context, u EndpointUnit, memo Memo) (EndpointVerdict, error) {
 	policies, err := c.unitPolicies(ctx, u)
 	if err != nil {
 		return EndpointVerdict{}, err
 	}
-	for _, key := range fieldindex.EndpointPolicyKeys(u.Endpoint) {
-		if _, ok := policies[key]; !ok {
+	keys := fieldindex.EndpointPolicyKeys(u.Endpoint)
+	var failing []types.NamespacedName
+	for _, key := range keys {
+		policy, ok := policies[key]
+		if !ok {
 			return EndpointVerdict{OK: true}, nil
 		}
+		alone, err := c.CheckPolicy(ctx, policy, memo)
+		if err != nil {
+			return EndpointVerdict{}, err
+		}
+		if !alone.OK {
+			failing = append(failing, client.ObjectKeyFromObject(policy))
+		}
+	}
+	if len(failing) > 0 {
+		return EndpointVerdict{Reason: v1alpha1.ReasonPolicyInvalid, Policies: failing, PoliciesFailAlone: true}, nil
 	}
 	in := renderer.RenderInput{
 		Gateway: u.Gateway, Endpoints: []v1alpha1.KrakenDEndpoint{*u.Endpoint},
