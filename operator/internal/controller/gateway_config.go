@@ -276,7 +276,9 @@ const configMapHistoryLimit = 3
 // is collected on the same terms, but never counts toward the history.
 func (r *KrakenDGatewayReconciler) collectConfigMaps(
 	ctx context.Context, gw *v1alpha1.KrakenDGateway, inUse string,
-) error {
+) (retErr error) {
+	ctx, span := tracing.Start(ctx, r.Tracer, "gateway.collect_configmaps")
+	defer func() { tracing.End(span, retErr) }()
 	list := &metav1.PartialObjectMetadataList{}
 	list.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("ConfigMapList"))
 	if err := r.List(ctx, list, client.InNamespace(gw.Namespace),
