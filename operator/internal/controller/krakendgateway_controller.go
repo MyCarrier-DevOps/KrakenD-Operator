@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"cmp"
 	"context"
 	stderrors "errors"
 	"fmt"
@@ -561,7 +562,9 @@ func (r *KrakenDGatewayReconciler) detectDragonflyState(
 // lowered once the Deployment has converged, so a rollout stays reported
 // across a failed status write and a lagging cache. A pass that did not
 // reconcile the Deployment (held, or the step failed) starts no rollout, so
-// it never raises Progressing; it reads the cached Deployment for the rest.
+// it does not raise Progressing, except that a failed step raises it while the
+// Deployment still mounts an older config than the applied one; it reads the
+// cached Deployment for the rest.
 func (r *KrakenDGatewayReconciler) inspectDeploymentStatus(
 	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
@@ -590,7 +593,15 @@ func (r *KrakenDGatewayReconciler) inspectDeploymentStatus(
 
 	// A failed Deployment step leaves Progressing and Available as they were:
 	// the cached Deployment is from before the write the step could not make.
+	// Unless the Deployment still mounts an older config than the applied one:
+	// then the rollout the pass was to start is still owed, and Ready must not
+	// read True beside the new checksum.
 	if obs.failed {
+		if want.configMapName != "" && want.mountedConfigMap != want.configMapName {
+			raiseProgressing(gw, cmp.Or(note, &rolloutNote{
+				reason: v1alpha1.ReasonConfigDeployed, message: "Configuration updated, rolling deployment",
+			}))
+		}
 		return
 	}
 
@@ -810,11 +821,13 @@ func (r *KrakenDGatewayReconciler) confirmStoredConfig(
 // stored status says a rollout is starting: the write is a copy with
 // Progressing=True/ConfigDeployed, and Ready derives from that copy as False
 // and the phase as Deploying. gw itself keeps the pass's own state; the end of
-// the pass decides Progressing from the Deployment step. If the end-of-pass
-// write is then lost as well, the stored Progressing=True lingers until the
-// rollout converges; on a plugin or ServiceAccount hold that is until the hold
-// ends, and Ready is still right because PluginsResolved=False and
-// ResourcesControlled=False outrank Progressing.
+// the pass decides Progressing from the Deployment step, and when that step
+// fails while the Deployment still mounts the older config it keeps the
+// Progressing=True this write stored. If the end-of-pass write is lost, the
+// stored Progressing=True lingers until the rollout converges; on a plugin or
+// ServiceAccount hold that is until the hold ends, and Ready is still right
+// because PluginsResolved=False and ResourcesControlled=False outrank
+// Progressing.
 func (r *KrakenDGatewayReconciler) recordApplied(
 	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
@@ -1386,7 +1399,10 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 		}
 		errs = append(errs,
 			r.reconcileDragonfly(ctx, gw), r.reconcileExternalSecret(ctx, gw), r.reconcileVirtualService(ctx, gw))
-		return deploymentObservation{}, stderrors.Join(errs...)
+		// A step that failed without a refusal leaves the Deployment as it was
+		// just like a failed Deployment step; a refusal is reported by
+		// ResourcesControlled, which outranks Progressing.
+		return deploymentObservation{failed: len(notControlledIn(coreErr)) == 0}, stderrors.Join(errs...)
 	}
 
 	obs, gcErr, deploymentErr := r.reconcileDeploymentUnlessHeld(ctx, gw, in)
