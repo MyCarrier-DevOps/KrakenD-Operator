@@ -165,8 +165,11 @@ func (c *Checker) run(ctx context.Context, in renderer.RenderInput, out *rendere
 	return nil, err
 }
 
-// acquire takes a validation slot, giving up when ctx ends.
-func (c *Checker) acquire(ctx context.Context) error {
+// acquire takes a validation slot, giving up when ctx ends. The wait is a
+// span of its own, so a check queued behind others shows as such.
+func (c *Checker) acquire(ctx context.Context) (retErr error) {
+	_, span := tracing.Start(ctx, c.tracer, "configcheck.slot")
+	defer func() { tracing.End(span, retErr) }()
 	select {
 	case c.slots <- struct{}{}:
 		return nil
