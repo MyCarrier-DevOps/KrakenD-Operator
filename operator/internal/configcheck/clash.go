@@ -23,6 +23,7 @@ import (
 	"slices"
 
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
@@ -97,8 +98,20 @@ func NewClashes(before, after RouteConflicts, involving map[types.NamespacedName
 	return out
 }
 
-// Conflicts renders gw.
-func (c *Checker) Conflicts(context.Context, *v1alpha1.KrakenDGateway,
-	[]v1alpha1.KrakenDEndpoint) (RouteConflicts, error) {
-	return RouteConflicts{}, nil
+// Conflicts renders gw's endpoints, with replace substituted or added by
+// namespace/name, and returns what the render leaves out. It renders in
+// process: no validation slot is held and nothing is executed.
+func (c *Checker) Conflicts(ctx context.Context, gw *v1alpha1.KrakenDGateway,
+	replace []v1alpha1.KrakenDEndpoint) (RouteConflicts, error) {
+	// Nothing read here leaves the Checker and the renderer never mutates its
+	// inputs, so the cache's objects can be used without copying them.
+	in, err := c.gather(ctx, gw, replace, nil, client.UnsafeDisableDeepCopy)
+	if err != nil {
+		return RouteConflicts{}, err
+	}
+	out, err := c.renderer.Render(in)
+	if err != nil {
+		return RouteConflicts{}, fmt.Errorf("rendering config: %w", err)
+	}
+	return RouteConflicts{Lost: out.EntryConflicts}, nil
 }
