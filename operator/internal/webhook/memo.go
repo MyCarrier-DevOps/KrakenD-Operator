@@ -16,14 +16,41 @@ limitations under the License.
 
 package webhook
 
-import "github.com/mycarrier-devops/krakend-operator/internal/configcheck"
+import (
+	"k8s.io/utils/lru"
 
+	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
+)
+
+// admissionMemoSize is how many verdicts the admission webhooks remember, the
+// most recent first, shared by every request the pod admits. A verdict
+// depends only on its content key, so a remembered one is as good as a run.
+// Each verdict keeps at most 16 KiB of output (configcheck caps it before it
+// is stored), so the memo stays within a few MiB.
 const admissionMemoSize = 256
 
-type lruMemo struct{}
+// lruMemo is the admission webhooks' configcheck.Memo: the most recent
+// verdicts, safe for concurrent requests.
+type lruMemo struct {
+	cache *lru.Cache
+}
 
-func newAdmissionMemo() *lruMemo { return &lruMemo{} }
+func newAdmissionMemo() *lruMemo {
+	return &lruMemo{cache: lru.New(admissionMemoSize)}
+}
 
-func (m *lruMemo) Lookup(string) (configcheck.Verdict, bool) { return configcheck.Verdict{}, false }
+// Lookup returns the remembered verdict for key.
+func (m *lruMemo) Lookup(key string) (configcheck.Verdict, bool) {
+	v, ok := m.cache.Get(key)
+	if !ok {
+		return configcheck.Verdict{}, false
+	}
+	verdict, ok := v.(configcheck.Verdict)
+	return verdict, ok
+}
 
-func (m *lruMemo) Store(string, configcheck.Verdict) {}
+// Store remembers v for key, forgetting the least recent verdict past the
+// memo's size.
+func (m *lruMemo) Store(key string, v configcheck.Verdict) {
+	m.cache.Add(key, v)
+}
