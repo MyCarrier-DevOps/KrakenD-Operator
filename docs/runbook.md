@@ -867,7 +867,10 @@ validator itself failed. This is transient and `kubectl` does not retry it, so
 run the command again. Controllers and GitOps tools retry on their own. A
 gateway edit that cannot change the rendered config (image, version, replicas,
 resources, probes, `postRestartJob`) is not checked and never draws this error. If it
-repeats, check the operator pod's CPU and memory.
+repeats, check the operator pod's CPU and memory. A
+write that breaks endpoints which pass today is refused with a `422` naming
+the endpoints the check reached, even when the budget runs out first; the
+`500` that remains is described under `breaks gateway` below.
 
 ### Admission refuses a policy with `breaks gateway`
 
@@ -884,10 +887,14 @@ breaks gateway <ns>/<name>: ...`.
   for example when the 12 s budget ran out (a denial prints at most one of the
   two). Either way the change breaks at least the endpoints named;
 - `500 Internal Error` with no endpoint named means the checks could not finish
-  before the budget, or could not run, before any broken endpoint was found. On
-  a gateway with many endpoints that already fail but are not yet recorded as
-  excluded (for example right after their owners changed them), this repeats
-  until the gateway controller records their exclusions; retry after its next
+  before the budget, or could not run, before any broken endpoint was found and
+  before the change was decided. A change that breaks endpoints which pass
+  today is refused with a `422` even when the budget ends first, so this `500`
+  needs endpoints that already fail but are not yet recorded as excluded (for
+  example right after their owners changed them). Each request scans the
+  endpoints in a random order, so a retry also reaches others; but on a gateway
+  of several hundred served endpoints it may not converge. It stops when the
+  gateway controller records their exclusions: retry after its next
   reconcile;
 - fix the policy, or ask those endpoints' owners;
 - a gateway whose root fails on its own, or whose failing endpoints all already
