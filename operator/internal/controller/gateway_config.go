@@ -53,6 +53,10 @@ type configResult struct {
 	// output is the render the rest of the pass reports on: the applied
 	// config when this pass applied or kept it, otherwise the newest render.
 	output *renderer.RenderOutput
+	// served says output is the config the gateway serves after this pass:
+	// the one it applied or kept serving. It is false when the pass applied
+	// nothing, even if the newest render happens to equal the applied config.
+	served bool
 	// excluded are the endpoints this pass found failing on their own.
 	excluded map[types.NamespacedName]configcheck.EndpointVerdict
 	// judged says every endpoint was judged this pass.
