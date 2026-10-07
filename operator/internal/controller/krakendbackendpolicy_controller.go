@@ -162,6 +162,11 @@ func (r *KrakenDBackendPolicyReconciler) SetupWithManager(mgr ctrl.Manager) erro
 		Complete(r)
 }
 
+// newPolicyRateLimiter is the policy controller's retry backoff.
+func newPolicyRateLimiter() workqueue.TypedRateLimiter[reconcile.Request] {
+	return workqueue.DefaultTypedControllerRateLimiter[reconcile.Request]()
+}
+
 // maxNamedReferrers bounds the endpoints named in the deletion-blocked event.
 const maxNamedReferrers = 5
 
