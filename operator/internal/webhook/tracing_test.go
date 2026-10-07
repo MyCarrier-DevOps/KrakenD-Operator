@@ -20,8 +20,10 @@ import (
 	"context"
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 	"github.com/mycarrier-devops/krakend-operator/internal/telemetry"
@@ -70,4 +72,17 @@ func TestGatewayAdmission_IsOneSpanAboveItsRulesAndKrakendRun(t *testing.T) {
 	spans := rec.Ended()
 	spans.RequireChild(t, "admission.validate KrakenDGateway", "admission.structural")
 	spans.RequireAncestors(t, "krakend check", "configcheck.", "admission.validate KrakenDGateway")
+}
+
+func TestAutoConfigAdmission_RulesAreAStructuralSpan(t *testing.T) {
+	rec := tracingtest.New(t)
+	gw := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "test-gw", Namespace: "default"}}
+	v := tracedValidators(rec, gw)
+	admit := tracedValidator{kind: "KrakenDAutoConfig", next: v.AutoConfig, tracer: rec.Tracer()}
+
+	if _, err := admit.ValidateCreate(context.Background(), newAutoConfigForAdditional(nil)); err != nil {
+		t.Fatal(err)
+	}
+
+	rec.Ended().RequireChild(t, "admission.validate KrakenDAutoConfig", "admission.structural")
 }
