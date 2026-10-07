@@ -27,8 +27,10 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/mycarrier-devops/krakend-operator/internal/telemetry"
 	"github.com/mycarrier-devops/krakend-operator/internal/tracing/tracingtest"
@@ -106,5 +108,29 @@ func TestTraceKubeAPI_RequestWithoutASpanStartsNoTrace(t *testing.T) {
 	}
 	if len(api.traceparents) != 1 || api.traceparents[0] != "" {
 		t.Errorf("API server got traceparent headers %q, want none", api.traceparents)
+	}
+}
+
+func TestReadEvents_AReadAddsAnEventToTheActiveSpan(t *testing.T) {
+	rec := tracingtest.New(t)
+	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "cm"}}
+	c := telemetry.ReadEvents(fake.NewClientBuilder().WithScheme(clientgoscheme.Scheme).WithObjects(cm).Build())
+	ctx, span := rec.Tracer().Start(context.Background(), "reconcile")
+
+	if err := c.Get(ctx, client.ObjectKeyFromObject(cm), &corev1.ConfigMap{}); err != nil {
+		t.Fatal(err)
+	}
+	span.End()
+
+	events := rec.Ended().One(t, "reconcile").Events()
+	if len(events) != 1 || events[0].Name != "k8s.client.get" {
+		t.Fatalf("events = %+v, want one k8s.client.get", events)
+	}
+	attrs := map[string]string{}
+	for _, kv := range events[0].Attributes {
+		attrs[string(kv.Key)] = kv.Value.String()
+	}
+	if attrs["k8s.object.kind"] != "ConfigMap" || attrs["k8s.object.name"] != "cm" || attrs["found"] != "true" {
+		t.Errorf("event attributes = %v, want ConfigMap ns/cm found", attrs)
 	}
 }
