@@ -49,6 +49,10 @@ type ConfigChecker interface {
 		policy *v1alpha1.KrakenDBackendPolicy) (configcheck.Verdict, error)
 	LintPolicy(ctx context.Context, policy *v1alpha1.KrakenDBackendPolicy) (configcheck.Verdict, error)
 	SameConfig(ctx context.Context, old, gw *v1alpha1.KrakenDGateway) (bool, error)
+	// Conflicts renders gw's endpoints with replace substituted in process
+	// and returns what the render leaves out (configcheck.Checker).
+	Conflicts(ctx context.Context, gw *v1alpha1.KrakenDGateway,
+		replace []v1alpha1.KrakenDEndpoint) (configcheck.RouteConflicts, error)
 }
 
 // invalid is the admission error for field errors: 422 Invalid with one

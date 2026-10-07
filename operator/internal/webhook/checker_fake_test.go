@@ -45,6 +45,26 @@ type scriptedChecker struct {
 	// versions render the same config, or why that could not be told.
 	same    bool
 	sameErr error
+	// conflicts answers Conflicts from the gateway and the replace set it is
+	// handed; nil answers none. conflictErr fails every Conflicts call.
+	// conflictCalls records each call's replace set. Conflicts is not a check:
+	// it is recorded neither in calls nor in deadlines.
+	conflicts     func(gw *v1alpha1.KrakenDGateway, replace []v1alpha1.KrakenDEndpoint) configcheck.RouteConflicts
+	conflictErr   error
+	conflictCalls [][]v1alpha1.KrakenDEndpoint
+}
+
+func (s *scriptedChecker) Conflicts(
+	_ context.Context, gw *v1alpha1.KrakenDGateway, replace []v1alpha1.KrakenDEndpoint,
+) (configcheck.RouteConflicts, error) {
+	s.conflictCalls = append(s.conflictCalls, replace)
+	if s.conflictErr != nil {
+		return configcheck.RouteConflicts{}, s.conflictErr
+	}
+	if s.conflicts == nil {
+		return configcheck.RouteConflicts{}, nil
+	}
+	return s.conflicts(gw, replace), nil
 }
 
 // SameConfig answers from same and sameErr and records nothing: it runs no check.
