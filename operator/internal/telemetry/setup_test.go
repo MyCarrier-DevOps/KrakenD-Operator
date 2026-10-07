@@ -19,10 +19,8 @@ package telemetry_test
 import (
 	"bytes"
 	"context"
-	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -44,6 +42,7 @@ func cleanOTelEnv(t *testing.T) {
 	t.Helper()
 	for _, name := range []string{
 		"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_PROTOCOL", "OTEL_EXPORTER_OTLP_HEADERS",
+		"OTEL_EXPORTER_OTLP_TRACES_HEADERS", "OTEL_EXPORTER_OTLP_METRICS_HEADERS", "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
 		"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
 		"OTEL_EXPORTER_OTLP_TRACES_PROTOCOL", "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL", "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL",
 		"OTEL_TRACES_EXPORTER", "OTEL_METRICS_EXPORTER", "OTEL_LOGS_EXPORTER",
@@ -227,34 +226,22 @@ func TestSetup_AMalformedResourceAttributeIsAWarning(t *testing.T) {
 	}
 }
 
-// captureStderr sends what the process writes to os.Stderr into a pipe. The
-// function it returns, or the end of t, restores os.Stderr; the function
-// returns what was written.
-func captureStderr(t *testing.T) func() string {
+// captureOTelDiagnostics installs an OpenTelemetry logger and error handler
+// that write into the returned buffer, so what the SDK reports while Setup
+// builds the exporters can be inspected. It restores quiet ones when t ends.
+// Whatever the SDK would write to os.Stderr before this is installed is not
+// captured: its default logger holds the original file from init.
+func captureOTelDiagnostics(t *testing.T) *bytes.Buffer {
 	t.Helper()
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	orig := os.Stderr
-	os.Stderr = w
-	var written bytes.Buffer
-	copied := make(chan struct{})
-	go func() {
-		_, _ = io.Copy(&written, r)
-		close(copied)
-	}()
-	var once sync.Once
-	restore := func() string {
-		once.Do(func() {
-			os.Stderr = orig
-			_ = w.Close()
-			<-copied
-		})
-		return written.String()
-	}
-	t.Cleanup(func() { restore() })
-	return restore
+	var diagnostics bytes.Buffer
+	otel.SetLogger(funcr.New(func(prefix, args string) { diagnostics.WriteString(prefix + " " + args + "\n") },
+		funcr.Options{Verbosity: 8}))
+	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) { diagnostics.WriteString(err.Error() + "\n") }))
+	t.Cleanup(func() {
+		otel.SetLogger(logr.Discard())
+		otel.SetErrorHandler(otel.ErrorHandlerFunc(func(error) {}))
+	})
+	return &diagnostics
 }
 
 // A collector credential written as "Authorization: Bearer <token>" instead
@@ -266,23 +253,14 @@ func TestSetup_AMalformedHeaderNeverReachesTheOutput(t *testing.T) {
 	const secret = "s3cr3t-token"
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:1")
 	t.Setenv("OTEL_EXPORTER_OTLP_HEADERS", "Authorization: Bearer "+secret)
-	// What the OpenTelemetry SDK reports while the exporters are built.
-	var diagnostics bytes.Buffer
-	otel.SetLogger(funcr.New(func(prefix, args string) { diagnostics.WriteString(prefix + " " + args + "\n") },
-		funcr.Options{Verbosity: 8}))
-	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) { diagnostics.WriteString(err.Error() + "\n") }))
-	t.Cleanup(func() {
-		otel.SetLogger(logr.Discard())
-		otel.SetErrorHandler(otel.ErrorHandlerFunc(func(error) {}))
-	})
-	stderr := captureStderr(t)
+	diagnostics := captureOTelDiagnostics(t)
 	var out bytes.Buffer
 
 	tel := setup(t, &out)
 	tel.Logger.Info("started")
 
 	for name, written := range map[string]string{
-		"the OpenTelemetry diagnostics": diagnostics.String(), "stdout": out.String(), "stderr": stderr(),
+		"the OpenTelemetry diagnostics": diagnostics.String(), "stdout": out.String(),
 	} {
 		if strings.Contains(written, secret) {
 			t.Errorf("%s carry the header's value:\n%s", name, written)
