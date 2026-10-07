@@ -394,6 +394,9 @@ func (r *KrakenDAutoConfigReconciler) judgeCandidates(
 	order creationOrder,
 ) (held map[string]rejection, err error) {
 	held = map[string]rejection{}
+	if len(candidates) == 0 {
+		return held, nil
+	}
 	ceFallback := configcheck.CEFallback(gw)
 	root, err := withCheckSlot(ctx, r.CheckSlots, func() (configcheck.Verdict, error) {
 		return r.Checker.CheckRoot(ctx, configcheck.Root{Gateway: gw, CEFallback: ceFallback}, nil)
