@@ -143,7 +143,10 @@ func wireReferenceControllers(
 }
 
 // newKrakenDValidator returns the validator that runs the krakend binary at
-// path. It is a stub: its runs are not spans.
-func newKrakenDValidator(path string, _ trace.Tracer) *renderer.KrakenDValidator {
-	return renderer.NewValidator(renderer.ValidatorOptions{Executor: renderer.NewKrakenDExecutor(path), BinaryPath: path})
+// path, each run a span of tracer.
+func newKrakenDValidator(path string, tracer trace.Tracer) *renderer.KrakenDValidator {
+	return renderer.NewValidator(renderer.ValidatorOptions{
+		Executor:   telemetry.TraceExecutor(renderer.NewKrakenDExecutor(path), tracer),
+		BinaryPath: path,
+	})
 }
