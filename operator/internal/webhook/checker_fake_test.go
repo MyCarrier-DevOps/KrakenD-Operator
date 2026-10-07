@@ -32,7 +32,7 @@ import (
 // how much of its deadline each call had left and which endpoint entries it
 // was handed ("ns/name[METHOD /path ...]"; "-" for none). err fails the call
 // numbered failCall (1-based; 0 means the first). gateways records, for each
-// gateway or isolated check, the gateway it was handed as "edition/timeout".
+// root, group or endpoint check, the gateway it was handed as "edition/timeout".
 type scriptedChecker struct {
 	verdicts  []configcheck.Verdict
 	err       error
@@ -131,6 +131,7 @@ func (s *scriptedChecker) CheckRoot(
 func (s *scriptedChecker) CheckEndpoint(
 	ctx context.Context, u configcheck.EndpointUnit, memo configcheck.Memo,
 ) (configcheck.EndpointVerdict, error) {
+	s.gateways = append(s.gateways, string(u.Gateway.Spec.Edition)+"/"+u.Gateway.Spec.Config.Timeout)
 	s.memos = append(s.memos, memo != nil)
 	err := s.record(ctx, "endpoint", []v1alpha1.KrakenDEndpoint{*u.Endpoint})
 	override := "-"
