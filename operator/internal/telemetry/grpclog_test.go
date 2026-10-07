@@ -74,3 +74,18 @@ func TestInstallGRPCLogging_InfoIsVerbosityTwo(t *testing.T) {
 		})
 	}
 }
+
+// grpc-go logs through grpclog.Component, which prefixes the component name:
+// that is the path its own code takes, not the package-level functions.
+func TestInstallGRPCLogging_AComponentsErrorIsARecordWithItsPrefix(t *testing.T) {
+	logger, out := newStdoutLogger(t, otellog.SeverityInfo)
+	telemetry.InstallGRPCLogging(logger)
+	discardGRPCLogs(t)
+
+	grpclog.Component("transport").Errorf("connection closed: %s", "EOF")
+
+	got := records(t, out)
+	if len(got) != 1 || got[0].Body.Value != "[transport] connection closed: EOF" || got[0].SeverityText != "ERROR" {
+		t.Errorf("records = %+v, want one ERROR record, prefixed [transport]", got)
+	}
+}
