@@ -81,6 +81,7 @@ type validation struct {
 	Checker    *configcheck.Checker
 	Gateway    *controller.KrakenDGatewayReconciler
 	AutoConfig *controller.KrakenDAutoConfigReconciler
+	Policy     *controller.KrakenDBackendPolicyReconciler
 	Validators webhooksetup.Validators
 }
 
