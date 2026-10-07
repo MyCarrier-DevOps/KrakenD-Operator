@@ -21,8 +21,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
+
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -55,10 +58,16 @@ func (s *fakeAPIServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // through TraceKubeAPI, and the server.
 func tracedClient(t *testing.T, rec *tracingtest.Recorder) (client.Client, *fakeAPIServer) {
 	t.Helper()
+	return tracedClientAt(t, rec, "")
+}
+
+// tracedClientAt is tracedClient for a host with a path prefix.
+func tracedClientAt(t *testing.T, rec *tracingtest.Recorder, prefix string) (client.Client, *fakeAPIServer) {
+	t.Helper()
 	api := &fakeAPIServer{}
 	srv := httptest.NewServer(api)
 	t.Cleanup(srv.Close)
-	cfg := &rest.Config{Host: srv.URL}
+	cfg := &rest.Config{Host: srv.URL + prefix}
 	telemetry.TraceKubeAPI(cfg, rec.Provider())
 	// A static mapper: the fake server answers no discovery request.
 	mapper := meta.NewDefaultRESTMapper(nil)
@@ -132,5 +141,32 @@ func TestReadEvents_AReadAddsAnEventToTheActiveSpan(t *testing.T) {
 	}
 	if attrs["k8s.object.kind"] != "ConfigMap" || attrs["k8s.object.name"] != "cm" || attrs["found"] != "true" {
 		t.Errorf("event attributes = %v, want ConfigMap ns/cm found", attrs)
+	}
+}
+
+// attrsOf returns the attributes of span as strings by key.
+func attrsOf(span sdktrace.ReadOnlySpan) map[string]string {
+	attrs := map[string]string{}
+	for _, kv := range span.Attributes() {
+		attrs[string(kv.Key)] = kv.Value.Emit()
+	}
+	return attrs
+}
+
+func TestTraceKubeAPI_NoAttributeCarriesAQueryValue(t *testing.T) {
+	rec := tracingtest.New(t)
+	c, _ := tracedClient(t, rec)
+	ctx, parent := rec.Tracer().Start(context.Background(), "reconcile")
+
+	// The fake answers a ConfigMap, so decoding the list may fail; the
+	// request is what matters.
+	_ = c.List(ctx, &corev1.ConfigMapList{}, client.InNamespace("ns"),
+		client.MatchingLabels{"secret-key": "secret-value"})
+	parent.End()
+
+	for key, value := range attrsOf(rec.Ended().One(t, "k8s list configmaps")) {
+		if strings.Contains(value, "secret-value") {
+			t.Errorf("attribute %s = %q carries a query value", key, value)
+		}
 	}
 }
