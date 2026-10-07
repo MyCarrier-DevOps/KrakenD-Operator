@@ -1259,7 +1259,9 @@ func (r *KrakenDGatewayReconciler) reconcileDeploymentUnlessHeld(
 // Every child is attempted, and the errors are joined: a child that keeps
 // failing must not starve the ones after it. Three steps wait for the
 // Deployment step instead, because they consume it:
-//   - ConfigMap collection, after a successful Deployment reconcile;
+//   - ConfigMap collection, after a successful Deployment reconcile (while the
+//     Deployment is held it runs without one, keeping the revision the held
+//     template mounts);
 //   - the deletion of an HPA the gateway no longer wants, so the Deployment
 //     carries the replica count before the HPA stops managing it;
 //   - the post-restart Job, which runs against the Deployment's pods.
