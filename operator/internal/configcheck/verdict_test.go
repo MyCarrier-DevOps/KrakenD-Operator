@@ -89,4 +89,17 @@ func TestVerdictExcerpt_MarksASingleCutLineTruncated(t *testing.T) {
 	if !strings.HasSuffix(got, " (truncated)") || strings.Contains(got, "+0") {
 		t.Errorf("excerpt = %q, want it to end with \" (truncated)\"", got)
 	}
+	if want := strings.Repeat("x", 20) + " (truncated)"; got != want {
+		t.Errorf("excerpt = %q, want the cut line kept: %q", got, want)
+	}
+}
+
+func TestVerdictExcerpt_KeepsAValidPrefixOfAnOversizedFirstLine(t *testing.T) {
+	v := Verdict{Output: "- at '/a': " + strings.Repeat("é", 50) + "\n- at '/b': second"}
+
+	got := v.Excerpt(30)
+
+	if !utf8.ValidString(got) || !strings.HasSuffix(got, " (+1 more)") || !strings.HasPrefix(got, "- at '/a': é") {
+		t.Errorf("excerpt = %q, want a rune-safe prefix of the first line and \" (+1 more)\"", got)
+	}
 }
