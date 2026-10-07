@@ -38,7 +38,8 @@ var ErrParameterRefsTooLarge = errors.New("dereferenced parameters exceed the sp
 // CUE definitions see each parameter's name and location: they decide the
 // query strings and headers an endpoint forwards. Only targets under
 // #/components/ are followed, which is where ResolveExternalRefs rewrites the
-// external refs it resolves; a ref into any other section is not a parameter.
+// external refs it resolves, and the "#/" refs inside fetched documents with
+// them; a ref into any other section is not a parameter.
 //
 // It returns specData unchanged when no parameter is a $ref. A ref it cannot
 // resolve is left in place and reported in warnings, in path and method
