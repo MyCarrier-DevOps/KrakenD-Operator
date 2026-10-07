@@ -1124,7 +1124,9 @@ func checkGatewayRender(
 // refuseNewGatewayClashes rejects gw when its root makes KrakenD's router
 // unable to serve an entry next to another endpoint's that the stored root
 // serves together, as turning router.auto_options on can: one of the two would
-// no longer be served. The denial names the endpoints and their paths.
+// no longer be served. The denial names the endpoints and their paths. While
+// the render stops resolving clashes at its cap, a new one cannot be told
+// apart, so gw is rejected.
 func refuseNewGatewayClashes(ctx context.Context, chk ConfigChecker, old, gw *v1alpha1.KrakenDGateway) error {
 	before, err := chk.Conflicts(ctx, old, nil)
 	if err != nil {
@@ -1134,11 +1136,11 @@ func refuseNewGatewayClashes(ctx context.Context, chk ConfigChecker, old, gw *v1
 	if err != nil {
 		return checkErr(err)
 	}
-	clashes := configcheck.NewClashes(before, after, nil)
-	if len(clashes) == 0 {
+	errs := clashErrors(field.NewPath("spec", "config"), configcheck.NewClashes(before, after, nil), after.Capped)
+	if len(errs) == 0 {
 		return nil
 	}
-	return invalid("KrakenDGateway", gw.Name, clashErrors(field.NewPath("spec", "config"), clashes))
+	return invalid("KrakenDGateway", gw.Name, errs)
 }
 
 // gatewayRenderDenial rejects gw: gateway-root findings on spec.config, the

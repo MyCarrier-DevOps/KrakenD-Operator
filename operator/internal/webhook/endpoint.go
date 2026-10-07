@@ -256,16 +256,13 @@ func (v *EndpointValidator) refuseNewClashes(
 	if err != nil {
 		return checkErr(err)
 	}
-	if after.Capped {
-		return invalid(kindEndpoint, ep.Name, field.ErrorList{field.Invalid(field.NewPath("spec", "endpoints"),
-			field.OmitValueType{}, configcheck.ClashesCapped)})
-	}
 	self := types.NamespacedName{Namespace: ep.Namespace, Name: ep.Name}
 	clashes := configcheck.NewClashes(before, after, map[types.NamespacedName]bool{self: true})
-	if len(clashes) == 0 {
+	errs := clashErrors(field.NewPath("spec", "endpoints"), clashes, after.Capped)
+	if len(errs) == 0 {
 		return nil
 	}
-	return invalid(kindEndpoint, ep.Name, clashErrors(field.NewPath("spec", "endpoints"), clashes))
+	return invalid(kindEndpoint, ep.Name, errs)
 }
 
 // maxEntryCauses is how many entries of the candidate a denial lists as causes

@@ -225,8 +225,13 @@ func newRouteRefusals(before, after configcheck.Verdict) bool {
 
 // clashErrors reports router clashes on p: the first maxEntryCauses as causes
 // of their own, cut to the warning limit, the rest counted in one more. A
-// clash names endpoints, methods and paths only.
-func clashErrors(p *field.Path, clashes []configcheck.Clash) field.ErrorList {
+// clash names endpoints, methods and paths only. When capped, the render
+// stopped resolving clashes, so a new one cannot be told apart from those it
+// left unresolved: that is the one cause.
+func clashErrors(p *field.Path, clashes []configcheck.Clash, capped bool) field.ErrorList {
+	if capped {
+		return field.ErrorList{field.Invalid(p, field.OmitValueType{}, configcheck.ClashesCapped)}
+	}
 	var errs field.ErrorList
 	for i, c := range clashes {
 		if i == maxEntryCauses {
