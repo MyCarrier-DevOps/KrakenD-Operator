@@ -2816,3 +2816,73 @@ func TestGatewayReconcile_CollectsConfigRevisionsWhileTheDeploymentIsHeld(t *tes
 		})
 	}
 }
+
+// failingGatewayStatusWrites makes the gateway status write fail with a
+// conflict while *fail is set, as it does when the gateway was written during
+// the pass.
+func failingGatewayStatusWrites(base client.WithWatch, fail *bool) client.Client {
+	return interceptor.NewClient(base, interceptor.Funcs{
+		SubResourceUpdate: func(
+			ctx context.Context, c client.Client, sub string, obj client.Object, opts ...client.SubResourceUpdateOption,
+		) error {
+			if gw, ok := obj.(*v1alpha1.KrakenDGateway); ok && *fail {
+				return apierrors.NewConflict(v1alpha1.GroupVersion.WithResource("krakendgateways").GroupResource(), gw.Name,
+					errors.New("the object has been modified"))
+			}
+			return c.SubResource(sub).Update(ctx, obj, opts...)
+		},
+	})
+}
+
+// assertServesStoredConfig fails unless the Deployment mounts the config the
+// gateway's stored status names, and ep is not claimed as included.
+func assertServesStoredConfig(
+	t *testing.T, c client.Client, gw *v1alpha1.KrakenDGateway, ep *v1alpha1.KrakenDEndpoint, want string,
+) {
+	t.Helper()
+	stored := getGateway(t, c, gw).Status.ConfigChecksum
+	if stored != hash.SHA256Hex([]byte(want)) {
+		t.Errorf("stored checksum = %q, want the checksum of %s", stored, want)
+	}
+	if got, want := mountedConfig(t, c, gw), resources.ConfigMapName(gw, stored); got != want {
+		t.Errorf("Deployment mounts %q, want the stored checksum's %q", got, want)
+	}
+	var got v1alpha1.KrakenDEndpoint
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(ep), &got); err != nil {
+		t.Fatal(err)
+	}
+	if cond := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionAccepted); cond != nil &&
+		cond.Status == metav1.ConditionTrue {
+		t.Errorf("endpoint %s is Accepted=True (%q) although the stored config does not include it",
+			ep.Name, cond.Message)
+	}
+}
+
+func TestGatewayReconcile_ALostStatusWriteDoesNotRollTheDeploymentBack(t *testing.T) {
+	const c1, c2, c3 = `{"version":3,"name":"c1"}`, `{"version":3,"name":"c2"}`, `{"version":3,"name":"c3"}`
+	gw := reconciledGateway()
+	base := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw, &v1alpha1.KrakenDEndpoint{}).Build().(client.WithWatch)
+	failWrites := false
+	rend, val := renderOf(c1), &countingValidator{}
+	r := newTestGatewayReconciler(base, rend, val)
+	r.Client = failingGatewayStatusWrites(base, &failWrites)
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	ep := testEndpoint("ep-new", "/new")
+	if err := base.Create(context.Background(), ep); err != nil {
+		t.Fatal(err)
+	}
+
+	// The next render is published, but the write that records it is lost.
+	failWrites, rend.output = true, renderOf(c2).output
+	if err := reconcileGateway(t, r, gw); err == nil {
+		t.Fatal("the lost status write must fail the pass")
+	}
+	assertServesStoredConfig(t, base, gw, ep, c1)
+
+	// A later pass cannot apply its render.
+	failWrites, rend.output, val.err = false, renderOf(c3).output, rejectedBy("- at '/endpoints/0/endpoint': bad")
+	_ = reconcileGateway(t, r, gw)
+	assertServesStoredConfig(t, base, gw, ep, c1)
+}
