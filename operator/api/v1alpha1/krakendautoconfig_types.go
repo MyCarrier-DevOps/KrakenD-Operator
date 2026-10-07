@@ -96,8 +96,8 @@ type KrakenDAutoConfigSpec struct {
 
 	// AdditionalEndpointsBasePath overrides the auto-derived base path used to
 	// scope AdditionalEndpoints under the application. When empty, the base is
-	// derived from the generated endpoints' common parent directory. Must start
-	// with "/".
+	// derived from the common parent directory of the generated endpoints and
+	// the operations held by a failure. Must start with "/".
 	// +optional
 	// +kubebuilder:validation:Pattern=`^/`
 	AdditionalEndpointsBasePath string `json:"additionalEndpointsBasePath,omitempty"`
