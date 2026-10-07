@@ -40,6 +40,7 @@ import (
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/fieldindex"
+	"github.com/mycarrier-devops/krakend-operator/internal/tracing"
 )
 
 // KrakenDEndpointReconciler reconciles a KrakenDEndpoint object.
@@ -66,7 +67,9 @@ type KrakenDEndpointReconciler struct {
 // with an optimistic lock, only when the status changed, so it never
 // overwrites the gateway's Accepted condition. The legacy Available condition
 // is dropped on the first reconcile.
-func (r *KrakenDEndpointReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *KrakenDEndpointReconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Result, retErr error) {
+	ctx, span := startReconcile(ctx, r.Tracer, "KrakenDEndpoint", req)
+	defer func() { tracing.End(span, retErr) }()
 	log := logf.FromContext(ctx)
 
 	var ep v1alpha1.KrakenDEndpoint
@@ -76,6 +79,7 @@ func (r *KrakenDEndpointReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		}
 		return ctrl.Result{}, fmt.Errorf("getting endpoint %s: %w", req.NamespacedName, err)
 	}
+	spanGeneration(ctx, ep.Generation)
 	base := ep.DeepCopy()
 
 	resolved, err := r.resolveRefs(ctx, &ep)
@@ -87,12 +91,14 @@ func (r *KrakenDEndpointReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		log.V(1).Info("endpoint status unchanged", "phase", ep.Status.Phase)
 		return ctrl.Result{}, nil
 	}
-	if err := r.Status().Patch(ctx, &ep,
-		client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil {
-		if errors.IsConflict(err) {
-			return lostWriteRace(ctx, err)
+	sctx, status := tracing.Start(ctx, r.Tracer, "endpoint.status")
+	patchErr := r.Status().Patch(sctx, &ep, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{}))
+	tracing.End(status, patchErr)
+	if patchErr != nil {
+		if errors.IsConflict(patchErr) {
+			return lostWriteRace(ctx, patchErr)
 		}
-		return ctrl.Result{}, fmt.Errorf("patching endpoint status: %w", err)
+		return ctrl.Result{}, fmt.Errorf("patching endpoint status: %w", patchErr)
 	}
 
 	recordConditionTransition(r.Recorder, &ep,
@@ -129,7 +135,9 @@ func (r *KrakenDEndpointReconciler) SetupWithManager(mgr ctrl.Manager) error {
 // than NotFound is returned, so the reconcile is retried.
 func (r *KrakenDEndpointReconciler) resolveRefs(
 	ctx context.Context, ep *v1alpha1.KrakenDEndpoint,
-) (metav1.Condition, error) {
+) (_ metav1.Condition, retErr error) {
+	ctx, span := tracing.Start(ctx, r.Tracer, "endpoint.resolve_refs")
+	defer func() { tracing.End(span, retErr) }()
 	cond := metav1.Condition{
 		Type:               v1alpha1.ConditionResolvedRefs,
 		Status:             metav1.ConditionTrue,
