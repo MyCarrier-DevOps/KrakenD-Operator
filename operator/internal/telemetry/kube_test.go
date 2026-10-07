@@ -348,7 +348,7 @@ func TestReadEvents_AListAddsAnEventToTheActiveSpan(t *testing.T) {
 	span.End()
 
 	attrs := eventAttrs(t, rec, "reconcile", "k8s.client.list")
-	if attrs["k8s.object.kind"] != "ConfigMap" || attrs["k8s.namespace.name"] != "ns" || attrs["succeeded"] != "true" {
+	if attrs["k8s.object.kind"] != "ConfigMap" || attrs["k8s.namespace.name"] != "ns" || attrs["k8s.client.succeeded"] != "true" {
 		t.Errorf("event attributes = %v, want kind ConfigMap, namespace ns, succeeded", attrs)
 	}
 }
