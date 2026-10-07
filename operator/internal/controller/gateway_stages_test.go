@@ -2886,3 +2886,69 @@ func TestGatewayReconcile_ALostStatusWriteDoesNotRollTheDeploymentBack(t *testin
 	_ = reconcileGateway(t, r, gw)
 	assertServesStoredConfig(t, base, gw, ep, c1)
 }
+
+func TestGatewayReconcile_AStaleGatewayReadDoesNotRollTheDeploymentBack(t *testing.T) {
+	const c1, c2, c3 = `{"version":3,"name":"c1"}`, `{"version":3,"name":"c2"}`, `{"version":3,"name":"c3"}`
+	gw := reconciledGateway()
+	base := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).Build().(client.WithWatch)
+	rend, val := renderOf(c1), &countingValidator{}
+	r := newTestGatewayReconciler(base, rend, val)
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	// The cache still holds the gateway as the first pass left it when the
+	// third pass reads it.
+	behind := getGateway(t, base, gw)
+	rend.output = renderOf(c2).output
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+	r.Client = interceptor.NewClient(base, interceptor.Funcs{
+		Get: func(
+			ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption,
+		) error {
+			if g, ok := obj.(*v1alpha1.KrakenDGateway); ok {
+				behind.DeepCopyInto(g)
+				return nil
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	})
+
+	rend.output, val.err = renderOf(c3).output, rejectedBy("- at '/endpoints/0/endpoint': bad")
+	_ = reconcileGateway(t, r, gw)
+
+	if got, want := mountedConfig(t, base, gw), resources.ConfigMapName(gw, hash.SHA256Hex([]byte(c2))); got != want {
+		t.Errorf("Deployment mounts %q, want the stored config's %q", got, want)
+	}
+}
+
+func TestGatewayReconcile_TheAppliedConfigIsWrittenOnlyWhenTheChecksumChanges(t *testing.T) {
+	gw := reconciledGateway()
+	writes := 0
+	c := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).
+		WithInterceptorFuncs(countStatusWrites[*v1alpha1.KrakenDGateway](&writes)).Build()
+	rend := renderOf(`{"version":3,"name":"c1"}`)
+	r := newTestGatewayReconciler(c, rend, &mockValidator{})
+
+	for range 2 { // the first pass applies; the second settles its status
+		if err := reconcileGateway(t, r, gw); err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+	}
+	settled := writes
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if writes != settled {
+		t.Errorf("an identical pass wrote the gateway status %d time(s), want none", writes-settled)
+	}
+
+	rend.output = renderOf(`{"version":3,"name":"c2"}`).output
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if got := writes - settled; got != 2 {
+		t.Errorf("a changed config wrote the gateway status %d time(s), want 2: the applied config, then the rest", got)
+	}
+}
