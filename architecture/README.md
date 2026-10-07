@@ -1371,8 +1371,12 @@ Deployment is not moved, and the error is returned so the next pass, reading a
 fresh gateway, applies it. A pass that applies the config already stored
 writes nothing extra, so the record costs one status write per newly applied
 config. Until the Deployment moves on, that stored status reads as a rollout
-under way (`Progressing=True`, `Ready=False` with reason `ConfigDeployed`, phase
-`Deploying`), never `Ready=True` beside the new checksum.
+under way (`Progressing=True`, reason `ConfigDeployed`), so `Ready` is not
+`True` beside the new checksum. It reads `False` and `Deploying`, or `Degraded`
+or `Error` when the gateway is on a CE fallback or `Available=False`. A pass
+whose Deployment step fails, or whose ServiceAccount step fails without a
+refusal, keeps that reading for as long as the Deployment mounts the older
+config.
 
 A pass that applies nothing also guards the other direction. When the
 Deployment carries a config checksum other than the cached gateway's, it reads
