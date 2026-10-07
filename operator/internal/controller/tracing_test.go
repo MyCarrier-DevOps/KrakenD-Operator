@@ -981,3 +981,41 @@ func TestAutoConfigReconcile_ARefFetchIsASpanOfTheRefResolution(t *testing.T) {
 			"autoconfig.resolve_refs; spans: %s", parents, spans)
 	}
 }
+
+// A CUE evaluation or a generation failure can quote the AutoConfig's spec or
+// the fetched document. The span of the stage that failed says only that it
+// did: it carries no tenant value in its status and records no exception.
+func TestAutoConfigReconcile_AFailedStageSpanCarriesNoTenantText(t *testing.T) {
+	for _, tc := range []struct {
+		span  string
+		setup func(ce *mockCUEEvaluator, g *mockGenerator)
+	}{
+		{"autoconfig.evaluate", func(ce *mockCUEEvaluator, _ *mockGenerator) { ce.err = errors.New("SPECSECRET") }},
+		{"autoconfig.generate", func(_ *mockCUEEvaluator, g *mockGenerator) { g.err = errors.New("SPECSECRET") }},
+	} {
+		t.Run(tc.span, func(t *testing.T) {
+			ac := testAutoConfig()
+			c := fakeClientBuilder().WithObjects(ac, testCUEDefinitionsCM()).WithStatusSubresource(ac).Build()
+			f, ce, fi, g := defaultMocks()
+			tc.setup(ce, g)
+			r := newACReconciler(c, f, ce, fi, g)
+			rec := tracingtest.New(t)
+			r.Tracer = rec.Tracer()
+
+			if _, err := reconcileAC(r, ac); err == nil || !strings.Contains(err.Error(), "SPECSECRET") {
+				t.Fatalf("Reconcile error = %v, want the failure itself, unchanged", err)
+			}
+
+			span := rec.Ended().One(t, tc.span)
+			if got := span.Status().Code; got != codes.Error {
+				t.Errorf("%s status = %v, want %v", tc.span, got, codes.Error)
+			}
+			if desc := span.Status().Description; desc == "" || strings.Contains(desc, "SPECSECRET") {
+				t.Errorf("%s status description = %q, want fixed text without the tenant's text", tc.span, desc)
+			}
+			if events := span.Events(); len(events) != 0 {
+				t.Errorf("%s has events %v, want none", tc.span, events)
+			}
+		})
+	}
+}
