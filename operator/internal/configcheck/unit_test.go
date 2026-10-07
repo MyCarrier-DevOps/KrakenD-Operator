@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -630,5 +631,45 @@ func TestEndpointVerdictMessage(t *testing.T) {
 		if got := tt.v.Message(1024); got != tt.want {
 			t.Errorf("Message(%+v) = %q, want %q", tt.v, got, tt.want)
 		}
+	}
+}
+
+func TestCheckEndpoint_NeverChangesTheCallersPolicies(t *testing.T) {
+	// Without an override the foreign stub is the only write to guard against;
+	// with one, the override is written too.
+	for _, withOverride := range []bool{false, true} {
+		t.Run(fmt.Sprintf("override=%t", withOverride), func(t *testing.T) {
+			own := policy("p")
+			foreign := policy("q")
+			foreign.Namespace = "other"
+			foreign.Spec.Raw = &runtime.RawExtension{Raw: []byte(`{"x/foreign":{}}`)}
+			ep := withPolicy(endpoint("mine", "/a", "/b"), "p")
+			ep.Spec.Endpoints[1].Backends[0].PolicyRef = &v1alpha1.PolicyRef{Name: "q", Namespace: "other"}
+			// Fails the whole check only, so the stubbed re-run runs and passes.
+			val := &judgeValidator{judge: func(config string) error {
+				if strings.Contains(config, "x/foreign") && strings.Contains(config, `"/a"`) {
+					return rejectedOutput("fails only together")
+				}
+				return nil
+			}}
+			held := map[string]*v1alpha1.KrakenDBackendPolicy{"ns/p": own, "other/q": foreign}
+			unit := EndpointUnit{Gateway: gateway(v1alpha1.EditionCE), Endpoint: ep, Policies: held}
+			if withOverride {
+				unit.Override = policy("p")
+				unit.Override.Spec.CircuitBreaker.MaxErrors = 99
+			}
+
+			v, err := newChecker(val).CheckEndpoint(context.Background(), unit, nil)
+
+			if err != nil || v.Reason != v1alpha1.ReasonPolicyInvalid || v.PoliciesFailAlone {
+				t.Fatalf("verdict = %+v, %v; want PolicyInvalid for failing only together (the stubbed re-run)", v, err)
+			}
+			if len(held) != 2 || held["ns/p"] != own || held["other/q"] != foreign {
+				t.Errorf("the caller's map now holds %v; want its original policies under both keys", held)
+			}
+			if own.Spec.CircuitBreaker.MaxErrors != 3 || string(foreign.Spec.Raw.Raw) != `{"x/foreign":{}}` {
+				t.Errorf("the caller's policies were changed: %+v, %+v", own.Spec, foreign.Spec)
+			}
+		})
 	}
 }
