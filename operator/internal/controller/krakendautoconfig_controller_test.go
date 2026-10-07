@@ -5871,14 +5871,16 @@ func TestAutoConfigReconcile_PrecheckIgnoresTheAgeOfAnEndpointAnotherObjectContr
 	}
 }
 
-func TestAutoConfigReconcile_PrecheckGivesTheCheckAnOlderOrphansAge(t *testing.T) {
+func TestAutoConfigReconcile_PrecheckHoldsASiblingThatADormantDuplicateBreaks(t *testing.T) {
 	cm := testCUEDefinitionsCM()
 	ac := syncedAutoConfig(cm)
 	f, ce, fi, g := defaultMocks()
 	// The orphan getUser is older than the tenant's endpoint, so the cluster
-	// serves /users/{id} and the sibling's /users/{id}/orders fits it. Judged
-	// as a new endpoint, the orphan would lose to the tenant's /users/{tid} and
-	// the sibling would be held for a clash that does not exist.
+	// serves /users/{id}, and the tenant's /users/{tid}, the same route shape,
+	// is left out. The sibling's /users/{id}/orders fits the served route but
+	// not the tenant's: it loses to that older entry whether or not it is
+	// served, or deleting getUser would promote /users/{tid} and push the
+	// sibling out. So the sibling is held, naming the tenant's endpoint.
 	orphan := generatedEndpoint("getUser", "/users/{id}")
 	orphan.CreationTimestamp = metav1.NewTime(time.Unix(1000, 0))
 	tenant := generatedEndpoint("tenantUser", "/users/{tid}")
@@ -5895,8 +5897,12 @@ func TestAutoConfigReconcile_PrecheckGivesTheCheckAnOlderOrphansAge(t *testing.T
 	if _, err := reconcileAC(r, ac); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if got := getAC(t, c, ac).Status.FailedOperations; len(got) != 0 || !endpointExists(t, c, "test-ac-getuserorders") {
-		t.Errorf("failed operations = %+v, want the sibling written and nothing held", got)
+	failed := getAC(t, c, ac).Status.FailedOperations
+	if len(failed) != 1 || failed[0].Endpoint != "test-ac-getuserorders" ||
+		failed[0].Reason != v1alpha1.ReasonConfigValidationFailed ||
+		!strings.Contains(failed[0].Message, "cannot be routed next to KrakenDEndpoint default/tenant-user,") ||
+		endpointExists(t, c, "test-ac-getuserorders") {
+		t.Errorf("failed operations = %+v, want only the sibling held, unwritten, for the tenant's /users/{tid}", failed)
 	}
 }
 
