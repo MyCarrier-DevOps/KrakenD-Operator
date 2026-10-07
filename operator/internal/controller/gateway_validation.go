@@ -97,7 +97,9 @@ func (r *KrakenDGatewayReconciler) decide(
 	defer func() { r.verdicts.end(key, pass, err != nil) }()
 	counted := countedPass{pass}
 
-	masked := maskedEndpoints(in.Endpoints, full)
+	// A check of a render says nothing of the endpoints it left out of it.
+	rendered := configcheck.Verdict{OK: true, Masked: configcheck.MaskedEndpoints(full)}
+	masked := suspectsOf(in.Endpoints, rendered)
 	if isApplied(gw, full, edition) {
 		var excluded map[types.NamespacedName]configcheck.EndpointVerdict
 		if excluded, err = r.judgeEndpoints(ctx, gw, in, masked, counted); err != nil {
@@ -120,11 +122,8 @@ func (r *KrakenDGatewayReconciler) decide(
 	if err != nil {
 		return decision{}, err
 	}
-	suspects := masked
-	if !whole.OK {
-		suspects = in.Endpoints
-	}
-	excluded, err := r.judgeEndpoints(ctx, gw, in, suspects, counted)
+	whole.Masked = rendered.Masked
+	excluded, err := r.judgeEndpoints(ctx, gw, in, suspectsOf(in.Endpoints, whole), counted)
 	if err != nil {
 		return decision{}, err
 	}
@@ -180,12 +179,11 @@ func (r *KrakenDGatewayReconciler) judgeEndpoints(
 	return excluded, nil
 }
 
-// maskedEndpoints returns the endpoints that lost an entry in full
-// (configcheck.MaskedEndpoints), in their order in endpoints.
-func maskedEndpoints(endpoints []v1alpha1.KrakenDEndpoint, full *renderer.RenderOutput) []v1alpha1.KrakenDEndpoint {
-	masked := configcheck.MaskedEndpoints(full)
+// suspectsOf returns the endpoints that verdict, the check of them as a group,
+// did not judge (Verdict.Suspect), in their order in endpoints.
+func suspectsOf(endpoints []v1alpha1.KrakenDEndpoint, verdict configcheck.Verdict) []v1alpha1.KrakenDEndpoint {
 	return slices.DeleteFunc(slices.Clone(endpoints), func(ep v1alpha1.KrakenDEndpoint) bool {
-		return !slices.Contains(masked, client.ObjectKeyFromObject(&ep))
+		return !verdict.Suspect(client.ObjectKeyFromObject(&ep))
 	})
 }
 
