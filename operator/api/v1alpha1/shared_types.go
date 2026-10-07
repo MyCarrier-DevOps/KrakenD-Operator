@@ -213,6 +213,17 @@ const (
 	// and the reconcile is retried with backoff.
 	ReasonConfigPublishFailed = "ConfigPublishFailed"
 
+	// ReasonGatewayRootInvalid backs ConfigValid=False when the gateway root,
+	// rendered with no endpoint, fails krakend check on its own. No endpoint
+	// is judged or blamed, and the applied config keeps serving.
+	ReasonGatewayRootInvalid = "GatewayRootInvalid"
+
+	// ReasonCombinedConfigInvalid backs ConfigValid=False when every endpoint
+	// passes on its own but the gateway's config fails with them together. No
+	// endpoint is blamed, the applied config keeps serving, and the check's
+	// output is only in the operator log.
+	ReasonCombinedConfigInvalid = "CombinedConfigInvalid"
+
 	// ReasonConfigMapTampered is the event reason for a config ConfigMap that
 	// the operator deleted because its krakend.json does not hash to the
 	// checksum its name addresses. The operator then publishes the config
