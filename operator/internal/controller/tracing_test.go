@@ -790,3 +790,35 @@ func TestEndpointReconcile_AFailedStatusWriteMarksOnlyItsOwnStage(t *testing.T) 
 		}
 	}
 }
+
+// A refused status update is the status stage's error and the reconcile's; the
+// protection stage before it carries none.
+func TestPolicyReconcile_AFailedStatusWriteMarksOnlyItsOwnStage(t *testing.T) {
+	policy := &v1alpha1.KrakenDBackendPolicy{ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "default"}}
+	c := fakeClientBuilder().WithObjects(policy).WithStatusSubresource(policy).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourceUpdate: func(
+				context.Context, client.Client, string, client.Object, ...client.SubResourceUpdateOption,
+			) error {
+				return errors.New("status refused")
+			},
+		}).Build()
+	rec := tracingtest.New(t)
+	r := &KrakenDBackendPolicyReconciler{
+		Client: c, Scheme: testScheme(), Recorder: fakeRecorder(), APIReader: c, Tracer: rec.Tracer(),
+	}
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(policy)}); err == nil {
+		t.Fatal("a refused status update must fail the reconcile")
+	}
+
+	want := map[string]codes.Code{
+		"reconcile KrakenDBackendPolicy": codes.Error, "policy.status": codes.Error, "policy.protection": codes.Unset,
+	}
+	got := spanCodes(t, rec.Ended(), "reconcile KrakenDBackendPolicy", "policy.status", "policy.protection")
+	for span, code := range want {
+		if got[span] != code {
+			t.Errorf("%s status = %v, want %v", span, got[span], code)
+		}
+	}
+}
