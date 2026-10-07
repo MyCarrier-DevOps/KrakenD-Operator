@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -476,4 +477,35 @@ func TestCheckEndpoint_AnInvalidPolicyIsNamedNotQuoted(t *testing.T) {
 	if msg := v.Message(1024); !strings.Contains(msg, "ns/p") || strings.Contains(msg, "SECRET") {
 		t.Errorf("message %q must name ns/p and quote none of its output", msg)
 	}
+}
+
+func TestCheckEndpoint_AForeignPolicyIsRenderedEmptyForTheOwnersOwnText(t *testing.T) {
+	foreign := policy("q")
+	foreign.Namespace = "other"
+	foreign.Spec.Raw = &runtime.RawExtension{Raw: []byte(`{"x/foreign":{}}`)}
+	ep := withPolicy(hostedAt(endpoint("mine", "/orders"), "http://own-bad.invalid"), "q")
+	ep.Spec.Endpoints[0].Backends[0].PolicyRef.Namespace = "other"
+	val := &judgeValidator{judge: func(config string) error {
+		if strings.Contains(config, "own-bad.invalid") {
+			return rejectedOutput("- at '/endpoints/0/backend/0/host/0': own-bad.invalid is not a host")
+		}
+		return nil
+	}}
+	chk := newChecker(val, foreign)
+
+	v, err := chk.CheckEndpoint(context.Background(), EndpointUnit{Gateway: gateway(v1alpha1.EditionCE), Endpoint: ep}, nil)
+
+	if err != nil || v.Reason != v1alpha1.ReasonEndpointInvalid || !strings.Contains(v.Output, "own-bad.invalid") {
+		t.Fatalf("verdict = %+v, %v; want the endpoint's own fault, quoted", v, err)
+	}
+	last := val.seen[len(val.seen)-1]
+	if strings.Contains(last, "x/foreign") || !slices.Equal(renderedPaths(t, last), []string{"/orders"}) {
+		t.Errorf("the quoted check rendered %v and the foreign policy's content; want the endpoint's entries with the policy empty",
+			renderedPaths(t, last))
+	}
+}
+
+func hostedAt(ep *v1alpha1.KrakenDEndpoint, host string) *v1alpha1.KrakenDEndpoint {
+	ep.Spec.Endpoints[0].Backends[0].Host = []string{host}
+	return ep
 }
