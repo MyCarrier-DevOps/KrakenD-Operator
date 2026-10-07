@@ -933,7 +933,7 @@ func (r *KrakenDGatewayReconciler) updateStatusIfChanged(
 	ctx, span := tracing.Start(ctx, r.Tracer, "gateway.status")
 	defer func() { tracing.End(span, retErr) }()
 	changed := gatewayStatusChanged(before, &gw.Status)
-	span.SetAttributes(attribute.Bool("written", changed))
+	span.SetAttributes(attribute.Bool("gateway.status.written", changed))
 	if !changed {
 		return nil
 	}
