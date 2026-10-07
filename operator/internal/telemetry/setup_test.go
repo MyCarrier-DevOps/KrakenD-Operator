@@ -19,14 +19,19 @@ package telemetry_test
 import (
 	"bytes"
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/go-logr/logr"
+	"github.com/go-logr/logr/funcr"
 	"github.com/prometheus/client_golang/prometheus"
+	"go.opentelemetry.io/otel"
 	otellog "go.opentelemetry.io/otel/log"
 	"go.opentelemetry.io/otel/trace/noop"
 
@@ -219,5 +224,76 @@ func TestSetup_AMalformedResourceAttributeIsAWarning(t *testing.T) {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("record lacks %s:\n%s", want, out.String())
 		}
+	}
+}
+
+// captureStderr sends what the process writes to os.Stderr into a pipe. The
+// function it returns, or the end of t, restores os.Stderr; the function
+// returns what was written.
+func captureStderr(t *testing.T) func() string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := os.Stderr
+	os.Stderr = w
+	var written bytes.Buffer
+	copied := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(&written, r)
+		close(copied)
+	}()
+	var once sync.Once
+	restore := func() string {
+		once.Do(func() {
+			os.Stderr = orig
+			_ = w.Close()
+			<-copied
+		})
+		return written.String()
+	}
+	t.Cleanup(func() { restore() })
+	return restore
+}
+
+// A collector credential written as "Authorization: Bearer <token>" instead
+// of name=value must not be printed: the OTLP exporters log a header they
+// cannot read with its value. The signal is not exported, and the warning
+// names the variable, never its value.
+func TestSetup_AMalformedHeaderNeverReachesTheOutput(t *testing.T) {
+	cleanOTelEnv(t)
+	const secret = "s3cr3t-token"
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:1")
+	t.Setenv("OTEL_EXPORTER_OTLP_HEADERS", "Authorization: Bearer "+secret)
+	// What the OpenTelemetry SDK reports while the exporters are built.
+	var diagnostics bytes.Buffer
+	otel.SetLogger(funcr.New(func(prefix, args string) { diagnostics.WriteString(prefix + " " + args + "\n") },
+		funcr.Options{Verbosity: 8}))
+	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) { diagnostics.WriteString(err.Error() + "\n") }))
+	t.Cleanup(func() {
+		otel.SetLogger(logr.Discard())
+		otel.SetErrorHandler(otel.ErrorHandlerFunc(func(error) {}))
+	})
+	stderr := captureStderr(t)
+	var out bytes.Buffer
+
+	tel := setup(t, &out)
+	tel.Logger.Info("started")
+
+	for name, written := range map[string]string{
+		"the OpenTelemetry diagnostics": diagnostics.String(), "stdout": out.String(), "stderr": stderr(),
+	} {
+		if strings.Contains(written, secret) {
+			t.Errorf("%s carry the header's value:\n%s", name, written)
+		}
+	}
+	if tel.Warning == nil || !strings.Contains(tel.Warning.Error(), "OTEL_EXPORTER_OTLP_HEADERS") ||
+		strings.Contains(tel.Warning.Error(), secret) {
+		t.Errorf("Warning = %v, want the variable named without its value", tel.Warning)
+	}
+	if _, ok := tel.TracerProvider.(noop.TracerProvider); !ok {
+		t.Errorf("TracerProvider = %T, want the no-op provider: traces are not exported with headers it cannot read",
+			tel.TracerProvider)
 	}
 }
