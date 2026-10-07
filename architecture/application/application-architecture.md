@@ -574,6 +574,9 @@ const (
     ConditionCEFallbackApplied        = "CEFallbackApplied"
     ConditionResolvedRefs             = "ResolvedRefs" // endpoints
     ConditionAccepted                 = "Accepted"     // endpoints, written by the gateway controller
+    // gateway: True while it leaves out endpoints that fail validation on
+    // their own (Accepted EndpointInvalid or PolicyInvalid); absent otherwise
+    ConditionEndpointsExcluded        = "EndpointsExcluded"
 )
 ```
 
@@ -586,7 +589,22 @@ they carry no reason constant.
 ```go
 const (
     ReasonConfigDeployed                = "ConfigDeployed"
-    ReasonConfigValidationFailed        = "ConfigValidationFailed"
+    ReasonConfigValidationFailed        = "ConfigValidationFailed" // AutoConfig hold reason
+    // ConfigValid=False: the gateway root fails on its own; no endpoint is
+    // judged and the applied config keeps serving
+    ReasonGatewayRootInvalid            = "GatewayRootInvalid"
+    // ConfigValid=False: every endpoint passes on its own but the config
+    // fails with them together; the output is only in the operator log
+    ReasonCombinedConfigInvalid         = "CombinedConfigInvalid"
+    // EndpointsExcluded=True
+    ReasonInvalidEndpointsExcluded      = "InvalidEndpointsExcluded"
+    // Accepted=False: the endpoint fails krakend check on its own (the
+    // gateway root with it and its policies); the gateway leaves it out
+    ReasonEndpointInvalid               = "EndpointInvalid"
+    // Accepted=False: a policy the endpoint references fails on its own, or
+    // the endpoint fails only together with a policy of another namespace;
+    // the message names the policy and never quotes it
+    ReasonPolicyInvalid                 = "PolicyInvalid"
     ReasonLicenseExpiringSoon           = "LicenseExpiringSoon"
     ReasonLicenseFallbackCE             = "LicenseFallbackCE"
     ReasonLicenseExpiredNoFallback      = "LicenseExpiredNoFallback"
@@ -948,7 +966,7 @@ graph TB
 
 ## 5. Gateway Controller
 
-**Files:** `internal/controller/krakendgateway_controller.go`, `gateway_config.go` (the config stage), `gateway_license.go`, `gateway_optional.go`, `gateway_events.go`, `rejection_memo.go`
+**Files:** `internal/controller/krakendgateway_controller.go`, `gateway_config.go` (the config stage), `gateway_license.go`, `gateway_optional.go`, `gateway_events.go`, `gateway_validation.go` (the per-endpoint pipeline and the exclusion signals), `verdict_memo.go`
 
 The gateway controller is the primary reconciler. It orchestrates the full rendering pipeline (operator architecture §10), manages all owned Kubernetes resources, and handles edition-specific logic. Each reconcile runs two stages: the config stage decides and publishes the applied config, and the infrastructure stage always runs and deploys it.
 
@@ -972,16 +990,21 @@ type KrakenDGatewayReconciler struct {
     // means one. Each reconcile holds one config checker slot at a time.
     MaxConcurrentReconciles int
 
-    // rejections remembers each gateway's last rejected validation input
-    rejections rejectionMemo
+    // verdicts remembers, per gateway, the config checks its last pass ran,
+    // so a gateway whose inputs did not change runs none
+    verdicts verdictMemo
 }
 
-// ConfigChecker is the controller's port to configcheck.Checker.
+// ConfigChecker is the controller's port to configcheck.Checker: the gateway
+// root alone, each endpoint alone, and the whole render.
 type ConfigChecker interface {
     Gather(ctx context.Context, gw *v1alpha1.KrakenDGateway,
         replace []v1alpha1.KrakenDEndpoint) (renderer.RenderInput, error)
-    CheckRendered(ctx context.Context, in renderer.RenderInput,
-        out *renderer.RenderOutput) (configcheck.Verdict, error)
+    CheckRoot(ctx context.Context, root configcheck.Root, memo configcheck.Memo) (configcheck.Verdict, error)
+    CheckEndpoint(ctx context.Context, u configcheck.EndpointUnit,
+        memo configcheck.Memo) (configcheck.EndpointVerdict, error)
+    CheckRendered(ctx context.Context, in renderer.RenderInput, out *renderer.RenderOutput,
+        memo configcheck.Memo) (configcheck.Verdict, error)
 }
 ```
 
@@ -992,19 +1015,20 @@ The `Reconcile` method follows the pipeline described in operator architecture �
 ```mermaid
 flowchart TD
     A[Fetch KrakenDGateway] --> B{Found and<br/>not terminating?}
-    B -->|No| Z[Forget the gateway<br/>metrics and rejection memo<br/>Return]
+    B -->|No| Z[Forget the gateway<br/>metrics and verdict memo<br/>Return]
     B -->|Yes| C[Checker.Gather: list KrakenDEndpoints by gatewayRef,<br/>fetch referenced KrakenDBackendPolicies]
     C --> C2[reconcileLicense: License* conditions<br/>and the CE fallback verdict,<br/>which replaces the one Gather read from status]
     C2 --> C3[Gather plugin ConfigMaps, set PluginsResolved,<br/>detect the Dragonfly state]
     C3 --> F[Call Renderer.Render for the edition:<br/>CE for a CE gateway or a CE fallback, else EE.<br/>The renderer detects conflicts internally]
     F --> G{Render and edition<br/>are the applied config?}
-    G -->|Yes| H[Republish the ConfigMap if it is missing or<br/>its payload does not hash to the checksum,<br/>then ConfigValid=True, or ConfigPublishFailed if that fails]
-    G -->|No| J1{Same render and edition<br/>already rejected?}
-    J1 -->|Yes| L[ConfigValid=False,<br/>Warning event only if the verdict changed,<br/>keep the applied config]
-    J1 -->|No| J[Checker.CheckRendered as the render's edition,<br/>holding one of the pod's 3 slots:<br/>route check, then krakend check -t -n -c on the copy]
+    G -->|Yes| G1[Judge the endpoints that lost an entry,<br/>from the verdict memo]
+    G1 --> G2{Any fails on its own?}
+    G2 -->|No| H[Republish the ConfigMap if it is missing or<br/>its payload does not hash to the checksum,<br/>then ConfigValid=True, or ConfigPublishFailed if that fails]
+    G2 -->|Yes| J
+    G -->|No| J[decide, every check through the verdict memo<br/>and holding one of the pod's 3 slots:<br/>root alone, then the whole render with krakend check -t -n -c,<br/>then each endpoint alone: all on failure,<br/>those that lost an entry on success.<br/>Exclude the failures, render the rest, full check again]
     J --> K{Verdict?}
-    K -->|Rejected| L
-    K -->|Unavailable| L2[Set ConfigValid=Unknown<br/>reason ValidatorUnavailable,<br/>Ready Unknown, keep applied config,<br/>one Warning event on entering,<br/>the error is returned after the infrastructure stage]
+    K -->|Root fails alone, or the<br/>endpoints fail only together| L[ConfigValid=False<br/>GatewayRootInvalid or CombinedConfigInvalid,<br/>Warning event only if the verdict changed,<br/>keep the applied config]
+    K -->|Unavailable| L2[Set ConfigValid=Unknown<br/>reason ValidatorUnavailable,<br/>Ready Unknown, keep applied config and exclusions,<br/>one Warning event on entering,<br/>the error is returned after the infrastructure stage]
     K -->|Valid| K2{Publish the immutable ConfigMap<br/>gateway-config-hash?}
     K2 -->|Published| M[Write status.configChecksum<br/>and configEdition, ConfigValid=True,<br/>Progressing=True reason ConfigDeployed]
     K2 -->|Failed| L3[Set ConfigValid=Unknown<br/>reason ConfigPublishFailed,<br/>Ready Unknown, keep applied config,<br/>one Warning event on a change of reason,<br/>the error is returned after the infrastructure stage]
@@ -1012,11 +1036,14 @@ flowchart TD
     L --> N
     L2 --> N
     L3 --> N
-    M --> N[Report CEFallbackApplied. Record Accepted on each<br/>endpoint of an applied render, or<br/>GatewayConfigRejected on the endpoints a rejection names]
+    M --> N[Report CEFallbackApplied. Record Accepted on each endpoint,<br/>EndpointInvalid or PolicyInvalid on one that fails on its own,<br/>then reportExclusions sets EndpointsExcluded and the gauge]
     N --> I[Infrastructure stage on the applied config:<br/>SA, Service, PDB, Deployment unless held, config GC,<br/>HPA, post-restart Job, Dragonfly CR,<br/>ExternalSecret, VirtualService.<br/>Children of disabled features are deleted]
     I --> R[Inspect the Deployment status, then derive Ready and<br/>the phase from the conditions via gatewayReadinessFor<br/>and update the gateway status only if it changed]
     R --> S[Return the config, acceptance and infrastructure<br/>errors if any, otherwise RequeueAfter<br/>the license's next stage boundary]
 ```
+
+- Record `Accepted`; an endpoint that fails on its own gets `EndpointInvalid` or `PolicyInvalid`, worded "Not served by gateway …" when the pass applied its config and "Will not be served when gateway … next applies its config" otherwise (`configResult.served`: the second wording appears only when nothing was served, and a validator outage never lifts an exclusion). `reportExclusions` sets `EndpointsExcluded` and the excluded-endpoints gauge from the endpoints' `Accepted` reasons.
+- The root and endpoint checks carry the Dragonfly state the reconcile detected (`configcheck.Root.Dragonfly`, `EndpointUnit.Dragonfly`); admission and the AutoConfig precheck pass none.
 
 ### Key Implementation Details
 
@@ -1028,7 +1055,11 @@ flowchart TD
 
 **CE fallback determination** — Before calling `Renderer.Render`, the controller calls `reconcileLicense`, which evaluates the license stage and returns the `ceFallback` verdict (the stage decision; while the license is unreadable, the stage judged from the last known expiry in `status.licenseExpiry` once that is inside the safety buffer or past, otherwise the last recorded decision). The verdict replaces the `CEFallback` that `Checker.Gather` read from status (`in.CEFallback`) and is passed on as `RenderInput.CEFallback`, which makes the renderer strip every Enterprise-only feature (wildcard endpoints and Enterprise-only `extra_config`). The image does not follow the verdict directly: `appliedImage` takes it from the applied config's edition (see "Image follows the applied edition" below).
 
-**Applied config** — The config stage (`reconcileConfig`) is the only code that decides the applied config. `status.configChecksum` is the checksum of the render the gateway serves and `status.configEdition` the edition it was validated for. A render that is not the applied one (a different checksum, or the same checksum for another edition) is validated as the edition it was rendered for; a verdict is deterministic for (checksum, edition), so a rejected input is remembered per gateway and not validated again until an input changes. The memo keeps the validator's raw rejection; each time it answers, the findings are rebuilt from it against the current endpoints (`configcheck.Rejected`), so the `spec.endpoints[i]` indices in the messages are never stale. Only a passing render is published and recorded as applied. A rejected render (`ConfigValid=False`) or one that could not be judged (`ConfigValid=Unknown`) leaves the applied config in place, and the infrastructure stage still runs, so the other resources keep converging and an image, plugin or license change still rolls. A `GatewayConfigRejected` verdict is written on each endpoint the rejection names (see `Attribute`, §10).
+**Applied config** — The config stage (`reconcileConfig`) is the only code that decides the applied config. `status.configChecksum` is the checksum of the render the gateway serves and `status.configEdition` the edition it was validated for. `decide` judges a render that is not the applied one (a different checksum, or the same checksum for another edition) as the edition it was rendered for, in this order: the gateway root on its own (a failure is `GatewayRootInvalid`, blames no endpoint, and judges nothing more), the whole render with `krakend check -t -n`, then each endpoint on its own (`judgeEndpoints`, `configcheck.CheckEndpoint`): every endpoint when the whole render failed, otherwise those that lost an entry in it, because a passing check says nothing about the entries it left out. An endpoint that fails on its own is excluded, and the render without the excluded endpoints is checked once more (not when it is the applied config). When that still fails, or the whole render failed and no endpoint fails alone, the endpoints fail only together: `CombinedConfigInvalid`, whose message quotes nothing, the output being logged. When the render is the applied config, only the endpoints that lost an entry are judged, from the memo. Only a passing render, less its excluded endpoints, is published and recorded as applied. A root or combined failure (`ConfigValid=False`) or a render that could not be judged (`ConfigValid=Unknown`) leaves the applied config in place, and the infrastructure stage still runs, so the other resources keep converging and an image, plugin or license change still rolls. A validator that cannot run excludes no endpoint and lifts no exclusion.
+
+**`verdictMemo`** — Every check answers from a per-gateway memo of verdicts keyed by content (`<sha256 of the render>/<edition>/<lint|validate>`). A pass keeps the checks it used, so the memo never holds more than the last pass's; a pass that fails keeps the union with what the last pass kept, so verdicts judged before the failure are not run again. It is dropped with the gateway, lives in memory only, and each remembered verdict keeps at most 16 KiB of output. `Verdict.Masked` is computed from each call's own render and never remembered, because the same content can come from inputs that mask different endpoints. A memo is untrusted: an entry that is neither a plain acceptance nor a plain rejection is a miss and the check runs again. A steady gateway runs no check, even while it excludes endpoints. The gateway root and endpoint checks use a `countedPass` (`config_validation_failures_total` counts a fresh rejection there once); the full checks use the plain `passMemo` and are never counted.
+
+**Cost of the memo being in memory** — After a restart, a leader failover, or an edit of the root or edition, a gateway whose full render fails runs every endpoint check once more, serially on the gateway worker (about 0.1 s each at the 500m CPU limit, about 50–60 s for 500 endpoints). The checks are neither split into groups, run in parallel, nor stored in status.
 
 **Content-addressed config ConfigMaps** — `publishConfig` creates the ConfigMap `<gateway>-config-<10 hex of the checksum>`. It is immutable, owned by the gateway and carries the checksum in an annotation; an existing one is verified, never updated: the gateway must control it, its annotation must hold the checksum, and its `krakend.json` must hash (SHA-256) to the checksum, because the owner reference and the annotation can be copied and the payload cannot (`verifyExistingConfigMap`, `verifyPayload`). The payload of any ConfigMap at that name is hashed, whatever its owner or annotation, because the pods load the payload. One that fails the hash is deleted, with a UID precondition, and created again, and a Warning event `ConfigMapTampered` on the gateway names it; if it cannot be deleted, the failure is a publish failure. One that holds the right bytes but is not the gateway's copy is not deleted: it is a publish failure, and the Deployment is held as it is, mounting the right bytes. The full read happens once per stored version: `verifiedConfigMaps` keeps, per gateway and in memory, the UID and resource version of each ConfigMap it hashed or created, so a steady pass reads only metadata. The Deployment mounts the applied config's ConfigMap by name, so a config change is a pod-template change and rolls like any other. `collectConfigMaps` deletes the gateway's config ConfigMaps that nothing can still mount: it keeps the applied one, the most recent revisions (three in all), and every ConfigMap that a live ReplicaSet of the Deployment mounts (ReplicaSets are read through `APIReader`, never cached). The ConfigMap an earlier operator version kept under the gateway's own name is seeded into the new name when the first render after an upgrade is rejected, and collected on the same terms.
 
@@ -1387,8 +1418,12 @@ type KrakenDAutoConfigReconciler struct {
 
 // AutoConfigChecker is declared by the AutoConfig controller, which consumes it.
 type AutoConfigChecker interface {
-    CheckGateway(ctx context.Context, gw *v1alpha1.KrakenDGateway,
-        replace []v1alpha1.KrakenDEndpoint) (configcheck.Verdict, error)
+    Conflicts(ctx context.Context, gw *v1alpha1.KrakenDGateway,
+        replace []v1alpha1.KrakenDEndpoint) (configcheck.RouteConflicts, error)
+    CheckRoot(ctx context.Context, r configcheck.Root, memo configcheck.Memo) (configcheck.Verdict, error)
+    CheckGroup(ctx context.Context, g configcheck.Group, memo configcheck.Memo) (configcheck.Verdict, error)
+    CheckEndpoint(ctx context.Context, u configcheck.EndpointUnit,
+        memo configcheck.Memo) (configcheck.EndpointVerdict, error)
 }
 ```
 
@@ -1432,7 +1467,7 @@ flowchart TD
     O1 -->|Yes| O3[Buffer SpecWarning and DuplicateOperationId<br/>events if inputsChanged]
     O3 --> K[List the endpoints the AutoConfig controls<br/>by controller UID, adopt label-matched<br/>orphans it does not write]
     K --> K1[Hold desired endpoints that lose their route<br/>to another desired endpoint:<br/>ConfigValidationFailed]
-    K1 --> K2[Precheck: gateway config check over the writes<br/>up to 5 rounds, candidates carry their creation time,<br/>stale endpoints modelled as gone unless this pass keeps them<br/>CE gateway: Enterprise-only namespaces are held<br/>as EndpointRejected without a write]
+    K1 --> K2[Precheck: CE namespace holds, router clash holds,<br/>then root alone, candidates together,<br/>each candidate alone when they fail or lost an entry.<br/>Candidates carry their creation time,<br/>stale endpoints modelled as gone unless this pass keeps them<br/>CE gateway: Enterprise-only namespaces are held<br/>as EndpointRejected without a write]
     K2 --> K3{Check could run?}
     K3 -->|No| K4[Fail sync:<br/>ValidatorUnavailable]
     K3 -->|Yes| Q[Write every endpoint that is not held<br/>CreateOrUpdate: merged labels, spec by JSON value,<br/>controller reference<br/>an invalid rejection is held as EndpointRejected]
@@ -1460,14 +1495,14 @@ A terminating AutoConfig (`deletionTimestamp` set) is not reconciled. Under fore
 
 **Files:** `internal/controller/autoconfig_endpoints.go`, `autoconfig_status.go`, `schema_conflicts.go`
 
-`Reconcile` splits an operation's fate from the sync's. An operation that fails CUE evaluation (`CUEOutput.Failed`, reason `CUEEvaluationFailed`), fails the gateway config check or loses its route to another desired endpoint (`routeCollisions`, `precheck`, reason `ConfigValidationFailed`), or whose endpoint the API server rejects as invalid or another object controls (`endpointOutcome.record`, reason `EndpointRejected`), is held: `reconcileEndpoints` does not write it, so its endpoint stays as it was, and it deletes no stale endpoint while `held || outcome.failed()`. `recordSync` then sets `Synced` `False` with reason `OperationsFailed` (`syncedCondition`, naming at most 5 operations) and lists each operation in `status.failedOperations` (`rejectedStatuses` for the endpoint holds, `operationStatuses` for the CUE ones). The reconcile returns no error, so a held operation is not retried with backoff. Operations `spec.filter` excludes are dropped first (`inScope`), so they are neither listed nor hold anything.
+`Reconcile` splits an operation's fate from the sync's. An operation that fails CUE evaluation (`CUEOutput.Failed`, reason `CUEEvaluationFailed`), fails krakend check on its own, would take part in a new router clash, or loses its route to another desired endpoint (`routeCollisions`, `precheck`, reason `ConfigValidationFailed`), or whose endpoint the API server rejects as invalid or another object controls (`endpointOutcome.record`, reason `EndpointRejected`), is held: `reconcileEndpoints` does not write it, so its endpoint stays as it was, and it deletes no stale endpoint while `held || outcome.failed()`. `recordSync` then sets `Synced` `False` with reason `OperationsFailed` (`syncedCondition`, naming at most 5 operations) and lists each operation in `status.failedOperations` (`rejectedStatuses` for the endpoint holds, `operationStatuses` for the CUE ones). The reconcile returns no error, so a held operation is not retried with backoff. Operations `spec.filter` excludes are dropped first (`inScope`), so they are neither listed nor hold anything.
 
 `reconcileEndpoints` orders its work for make-before-break:
 
 1. `claimEndpoints` lists the endpoints the AutoConfig controls through the `fieldindex.EndpointController` index (namespace-scoped), and adopts each label-matched orphan it does not itself want to write (both managed labels, no controller, not terminating) as a ReplicaSet adopts pods. An endpoint controlled by another object is never touched.
 2. `planEndpoints` splits the desired endpoints into writes (missing, label-short or spec-different by JSON value) and stale endpoints.
 3. `routeCollisions` groups the desired endpoints by method and `renderer.ConflictKey` of the path. The survivor of a group is the one the renderer serves (the oldest stored `creationTimestamp`, then the lowest name; `creationOrder` takes the stored time of every controlled endpoint and of every existing desired endpoint that no other object controls (`withUncontrolled`: an orphan `writeEndpoint` takes over, or an unlabelled endpoint of that name), and a new one sorts last). Every other member is held, written or not. The holds enter `precheck` as holds, so the stale endpoints stay in the check.
-4. `precheck` runs `Checker.CheckGateway` over the writes, within `CheckSlots`, in at most `maxPrecheckRounds` (5) rounds. Each round attributes findings to the candidates by `Finding.Endpoint`, holds those, and re-checks the rest. When the sync will also delete the stale endpoints, the round sees them as empty copies (`checkSet`); the stale endpoints stay in the check when an operation is held or a write names an endpoint the last status recorded as `EndpointRejected` (`recursRejection`). `checkSet` also gives each candidate the creation time the cluster will give it (`creationOrder.timestamp`: an existing endpoint's own, a new one after every existing one), because the renderer serves the oldest of the endpoints that share a route. A rename and a brand-new rejection in one pass is not predicted, and the gateway keeps its applied config with `ConfigValid=False` until the cause is fixed. A finding that names no candidate is judged against a baseline check without the writes: when the gateway fails there too, the candidates are written, and otherwise all of them are held. After the baseline passes, `unattributedFailure` runs `CheckIsolated` over the candidates alone (the gateway root, the candidates and the policies they reference), through `CheckSlots` like every check. A failing isolated check puts its summary, cut at 200 bytes, in the hold, so the AutoConfig's own errors stay visible; a passing one means the failure needs other endpoints, and the hold is fixed text with no `krakend check` output, so another endpoint's echoed value never reaches this AutoConfig's status. The combined check's full text stays in the cause for the log. A gateway that does not exist is not checked.
+4. `precheck` holds, in order: the candidates that use Enterprise-only namespaces on a CE gateway; the candidates that would newly clash in the router (`routerClashes`: `configcheck.NewClashes` over `Conflicts` before and after, every write held when the render's clash resolution is capped); then `judgeCandidates` (the gateway root alone, which when it fails holds nobody; the root with every candidate together; each candidate alone when they fail, or each candidate that lost an entry when they pass). Every check goes through `withCheckSlot` (`CheckSlots`) and the AutoConfig's verdict memo. After any hold, the clash check runs again over the remaining writes, with the stale endpoints and the held candidates' stored versions kept, until it holds no more. When the sync will also delete the stale endpoints, the first clash render sees them as empty copies (`checkSet`); they stay when an operation is held or a write names an endpoint the last status recorded as `EndpointRejected` (`recursRejection`). `checkSet` also gives each candidate the creation time the cluster will give it (`creationOrder.timestamp`: an existing endpoint's own, a new one after every existing one), because the renderer serves the oldest of the endpoints that share a route. A rename and a brand-new rejection in one pass is not predicted: the gateway renders the old and the new endpoints together, and the older one's entry is served until the cause is fixed. A hold quotes only the candidate's own output, cut to fit the 256-byte status entry (`holdMessageLimit`; the log keeps the full text), or names the policy at fault, so no other endpoint's content reaches this AutoConfig's status. A gateway that does not exist is not checked.
 5. `writeEndpoint` writes every candidate that passed with `CreateOrUpdate`: it merges the managed labels into the live ones and makes the AutoConfig its controller. `endpointOutcome.record` classifies each failure: `Conflict` and `AlreadyExists` as raced (a quiet requeue), `IsInvalid` and `AlreadyOwnedError` as rejected (held), anything else as transient (`EndpointReconcileFailed`, with backoff, naming five failures and counting the rest).
 6. `deleteEndpoint` removes each stale endpoint, preconditioned on its UID, only when nothing is held and no write failed.
 
@@ -1593,15 +1628,18 @@ type RenderOutput struct {
     ConflictedEndpoints []types.NamespacedName
     InvalidEndpoints    []types.NamespacedName
     // EntryConflicts: for each KrakenDEndpoint that lost an entry, the
-    // entries it lost and the KrakenDEndpoint that serves each
+    // entries it lost, one for every older KrakenDEndpoint the entry clashes
+    // with (the winner). Detail is the router's refusal when the entries do
+    // not share a route shape but KrakenD cannot serve both: a router clash,
+    // an EE wildcard overlap or an auto_options OPTIONS route
     EntryConflicts map[types.NamespacedName][]EntryConflict
-    // Sources[i] is the KrakenDEndpoint that produced endpoints[i] of the
-    // rendered config; Attribute uses it to blame a krakend check finding
-    // on a KrakenDEndpoint
-    Sources []types.NamespacedName
     // StrippedEEFeatures: what a CE-fallback render removed because only
     // KrakenD Enterprise supports it
     StrippedEEFeatures []StrippedEEFeature
+    // RouteResolutionCapped: the render stopped resolving router clashes
+    // between endpoints after 21 left-out entries; later entries are rendered
+    // as they are, and every consumer fails closed
+    RouteResolutionCapped bool
 }
 ```
 
@@ -1655,7 +1693,7 @@ type Validator interface {
 | `plugins.go` | Builds the `plugin` root key when plugins are configured. Computes plugin checksum from ConfigMap data hashes and OCI image tags |
 | `eestrip.go` | Strips the Enterprise-only features from a CE-fallback render and lists them (`StrippedEEFeatures`); exports the Enterprise-only namespace lists (`EEOnlyNamespaces`) |
 | `eewildcard.go` | The EE wildcard rules applied when an EE render is validated with the CE binary |
-| `attribution.go` | `Attribute` maps `krakend check` findings to the KrakenDEndpoints that caused them, through `RenderOutput.Sources` |
+| `routeadmit.go` | `routeLosers` admits entries to the router in serving order (oldest first): a newer entry loses to any older entry it clashes with, served or not, checked pairwise against the older entries left out and by registration in the served engine; an entry gin refuses on its own or next to its own endpoint's entries is left in for that endpoint's own check and not counted |
 | `validator.go` | Wraps `krakend check -t -n -c` execution via the `CommandExecutor` interface |
 
 ### Deterministic Serialization
@@ -1746,13 +1784,23 @@ func (v *KrakenDValidator) check(ctx context.Context, jsonData []byte) error {
 
 `classifyCheckError` returns a `*ValidationError` only when the process exited with a status above zero before the timeout (30 seconds by default). A missing binary, a deadline overrun or a signal kill comes back as a plain wrapped error: the config was not judged and the caller retries.
 
+`configcheck.Checker` runs these as one check per unit, and every caller (admission, the gateway controller, the AutoConfig precheck) uses the same ones, so all of them blame the same object. The output of `krakend check` is never parsed to decide blame: an object is invalid when it fails on its own.
+
+| Unit | Rendered | Check | Its output goes to |
+|---|---|---|---|
+| root | the gateway with no endpoint (the controller adds the Dragonfly Redis address; admission renders none) | `krakend check -n` after the EE and route rules | the gateway (ConfigValid, gateway admission) |
+| policy | a synthetic CE gateway whose one backend references it | `-n` | policy admission only |
+| endpoint | root + the endpoint + its policies, each policy checked alone first; when it fails and references a policy of another namespace, again with that policy rendered empty | `-n` | the endpoint (Accepted, endpoint admission) |
+| group | root + a set of endpoints (+ one policy override) | `-n` | nobody: a pass vouches for each endpoint that lost no entry in it |
+| full | the controller's render | `-t -n` | the operator log only |
+
 ### EE Wildcard Handling
 
 EE configurations containing wildcard endpoints are handled by
 `KrakenDValidator.Validate(ctx, json, edition)`. For
 `EditionEE` it first applies the rules EE enforces for wildcard endpoints and
 the CE binary cannot test (`eeWildcardFindings`). Each finding is a
-krakend-style lint-pointer line, so `Attribute` maps it like any other:
+krakend-style lint-pointer line. Between two endpoints the EE rule is also applied at render time, oldest first (`routeadmit.go`):
 
 - **Route conflict.** EE registers `/p/*` as the catch-all `/p/*Wildcard`
   in its method's route tree, so `/p/*` conflicts with any other route of the
@@ -1958,6 +2006,8 @@ Kubernetes 1.33 ratchets these rules: an update that leaves an already-invalid f
 type GatewayValidator struct {
     client.Client
     Checker ConfigChecker
+    // Memo remembers recent config verdicts across requests (the shared lruMemo)
+    Memo configcheck.Memo
 }
 
 type EndpointValidator struct {
@@ -1971,12 +2021,14 @@ type EndpointValidator struct {
     // Its writes to endpoints a KrakenDAutoConfig controls skip the render
     // check; empty disables the exemption.
     OperatorUsername string
+    Memo             configcheck.Memo
 }
 
 type PolicyValidator struct {
     client.Client
-    // Checker renders the policy alone and in every gateway that uses it.
+    // Checker checks the policy alone and in every gateway that uses it.
     Checker ConfigChecker
+    Memo    configcheck.Memo
 }
 
 type AutoConfigValidator struct {
@@ -2003,21 +2055,23 @@ Every validator follows the same rules (`admission.go`, `webhook.go`):
 - **Ratchet.** `ValidateUpdate` first admits an update to a terminating object that leaves the spec alone (`terminatingWithUnchangedSpec`, so a finalizer can be removed), then admits an update whose spec is unchanged without running a rule. A field rule rejects an update only for errors the stored object did not already have (`newErrors`, matched on the error's field, type, value and detail). References are checked only when added or changed, and endpoint entries are matched on (`endpoint`, `method`), so a reorder is not a change.
 - **Responses.** A rejected field is a `422 Invalid` with one cause per field error (`invalid`). A failed lookup, or a config check that cannot run or cannot get a validation slot, is a `500` (`unavailable`, `checkErr`): the request was not judged and is retried.
 - **Budget.** The three validators that run a render check (endpoint, gateway and policy) stop their work after `admissionBudget` (12 s), inside the API server's 15 s `timeoutSeconds`, so the answer is a clear `500` and not a generic timeout.
-- **Render checks.** The validators depend on one port, `ConfigChecker`, implemented by the `configcheck.Checker` the gateway controller also uses:
+- **Render checks.** The validators depend on one port, `ConfigChecker`, implemented by the `configcheck.Checker` the gateway controller also uses. Every check also takes the shared `lruMemo` (the 256 most recent verdicts of the pod, keyed by content, each keeping at most 16 KiB of output, untrusted: an inconsistent entry is a miss):
 
 ```go
 type ConfigChecker interface {
-    CheckGateway(ctx context.Context, gw *v1alpha1.KrakenDGateway,
-        replace []v1alpha1.KrakenDEndpoint) (configcheck.Verdict, error)
-    CheckIsolated(ctx context.Context, gw *v1alpha1.KrakenDGateway,
-        eps []v1alpha1.KrakenDEndpoint) (configcheck.Verdict, error)
-    CheckGatewayPolicy(ctx context.Context, gw *v1alpha1.KrakenDGateway,
-        policy *v1alpha1.KrakenDBackendPolicy) (configcheck.Verdict, error)
-    LintPolicy(ctx context.Context, policy *v1alpha1.KrakenDBackendPolicy) (configcheck.Verdict, error)
+    SameConfig(ctx context.Context, old, gw *v1alpha1.KrakenDGateway) (bool, error)
+    Conflicts(ctx context.Context, gw *v1alpha1.KrakenDGateway,
+        replace []v1alpha1.KrakenDEndpoint) (configcheck.RouteConflicts, error)
+    CheckPolicy(ctx context.Context, policy *v1alpha1.KrakenDBackendPolicy,
+        memo configcheck.Memo) (configcheck.Verdict, error)
+    CheckGroup(ctx context.Context, g configcheck.Group, memo configcheck.Memo) (configcheck.Verdict, error)
+    CheckRoot(ctx context.Context, r configcheck.Root, memo configcheck.Memo) (configcheck.Verdict, error)
+    CheckEndpoint(ctx context.Context, u configcheck.EndpointUnit,
+        memo configcheck.Memo) (configcheck.EndpointVerdict, error)
 }
 ```
 
-A check renders the gateway with the change and lints it with `krakend check -n` plus the in-process route check. `ratchetRender` (`render.go`) turns verdicts into a decision: it rejects only when the config passes without the change and fails with it. When the config already fails, the failure is a warning, unless the change fails on an isolated baseline (the gateway root plus the change alone) where its own baseline passed. A denial is bounded: at most 20 causes, each cut to `warningLimit`, the rest folded into a summary. The route check is bounded too: it stops after 21 refused routes with a notice line and ends with the context's error when the request's context ends, so one config cannot hold a validation slot past the admission budget.
+Each object is judged on its own, and a denial quotes only the output of the object that was written. An **endpoint** write refuses a new router clash (`refuseNewClashes`), then checks the gateway root alone and the endpoint with that root and the policies it references (`checkRender`); it is denied with its own output, and admitted with a warning when the root fails on its own or the stored version fails too. A **policy** or **gateway** write has two phases. First every gateway's root and group are checked (`screenPolicyUse`, `checkGatewayRender`). Then `failingEndpoints` checks each suspect (every served endpoint when the group fails, the group's masked endpoints when it passes) with the new and, on failure, the stored object, and stops at `maxEntryCauses` names or at the request's deadline. A newly broken endpoint is a denial that stands whatever happens later, and it is found even when another endpoint already fails; an unfinished scan with none is a `500`. The names are bounded by bytes (`brokenList`): names that were found broken but do not fit fold into `(+N more)`, and the counts of endpoints not checked always survive. Both phases check an endpoint that already fails before the endpoints together, so while such an endpoint is not yet recorded as excluded, a write that makes the others fail only together is admitted with a warning and the gateway later reports `CombinedConfigInvalid`. A denial is bounded: at most 20 causes, each cut to `warningLimit`. The route check is bounded too: it stops after 21 refused routes with a notice line and ends with the context's error when the request's context ends, so one config cannot hold a validation slot past the admission budget.
 
 ### Validation Rules
 
@@ -2045,12 +2099,12 @@ func (v *GatewayValidator) admit(
     if len(errs) > 0 {
         return warnings, invalid("KrakenDGateway", gw.Name, errs)
     }
-    renderWarnings, err := checkGatewayRender(ctx, v.Checker, old, gw)
+    renderWarnings, err := checkGatewayRender(ctx, v.Client, v.Checker, v.Memo, old, gw)
     return append(append(warnings, renderWarnings...), versionWarning(gw, old)...), err
 }
 ```
 
-A create must render with the gateway root alone (`CheckIsolated`), and endpoints that already name the gateway and clash with it draw a bounded warning (`CheckGateway`); an update is judged with the gateway's endpoints (`CheckGateway`). Root findings go on `spec.config`, findings about endpoints on `spec`.
+The root must pass on its own (`CheckRoot`; the denial quotes it, and an update whose stored root fails too only warns). An update that would make two endpoints' routes clash in the router is refused (`refuseNewGatewayClashes`). Then the root with the endpoints the gateway serves is checked as a group, and the endpoints it leaves unjudged are judged on their own: an update is denied, naming the endpoints and quoting nothing, when one fails with it and passed with the stored root (`judgeServed`); a create only draws a warning about the endpoints that already name the gateway (`warnWaiting`). Root findings go on `spec.config`, findings about endpoints on `spec`.
 
 **KrakenDEndpoint:**
 
@@ -2081,7 +2135,7 @@ func (v *EndpointValidator) admit(
 }
 ```
 
-`check` runs, in order: the `gatewayRef` lookup (an error only when the request sets or changes it), the `policyRef` checks (a policy that is missing or terminating, for references the stored object lacks), then, for the entries that are new or differ from the stored entry with the same (`endpoint`, `method`), the audience shape check, the entry rules (`validateEntries`: reserved paths, the gateway's health path, `/*`, unnamed wildcards and Enterprise-only namespaces on CE, unknown placeholders), and, on a CE gateway, `validatePolicyNamespaces` for a backend `policyRef` the stored object lacks whose policy carries what a CE render drops; and route uniqueness (`validateRouteUniqueness`). A request that survives those is rendered (`checkRender`), unless it is the operator's own write to an endpoint a `KrakenDAutoConfig` controls (`trustedWrite`). When the gateway already fails without the change, `checkRender` judges the entry in isolation, so a pre-existing failure is a warning. A move to another gateway puts every entry through the new gateway's rules.
+`check` runs, in order: the `gatewayRef` lookup (an error only when the request sets or changes it), the `policyRef` checks (a policy that is missing or terminating, for references the stored object lacks), then, for the entries that are new or differ from the stored entry with the same (`endpoint`, `method`), the audience shape check, the entry rules (`validateEntries`: reserved paths, the gateway's health path, `/*`, unnamed wildcards and Enterprise-only namespaces on CE, unknown placeholders), and, on a CE gateway, `validatePolicyNamespaces` for a backend `policyRef` the stored object lacks whose policy carries what a CE render drops; and route uniqueness (`validateRouteUniqueness`). A request that survives those is judged on its own (`checkRender`), unless it is the operator's own write to an endpoint a `KrakenDAutoConfig` controls (`trustedWrite`): a new router clash is refused first, then the gateway root alone and the endpoint with the root and its policies. A gateway whose root fails on its own, or a stored version that fails too, makes the failure a warning. A move to another gateway puts every entry through the new gateway's rules.
 
 Route uniqueness rejects a changed entry whose method and route shape (paths that differ only in parameter names or repeated slashes) another entry on the gateway already has, in this or another KrakenDEndpoint. The list comes from the `fieldindex.EndpointGateway` index, cluster-wide. Against other KrakenDEndpoints only routes new to the stored object are checked, and endpoints with the same controller are exempt: one AutoConfig renaming an operation has the old and the new endpoint for a while. The renderer keeps oldest-wins as the fallback.
 
@@ -2102,11 +2156,11 @@ func (v *PolicyValidator) ValidateUpdate(
     }
     ctx, cancel := context.WithTimeout(ctx, admissionBudget)
     defer cancel()
-    return checkPolicyRender(ctx, v.Client, v.Checker, old, policy)
+    return checkPolicyRender(ctx, v.Client, v.Checker, v.Memo, old, policy)
 }
 ```
 
-`checkPolicyRender` renders the policy on its own (`LintPolicy`: one synthetic endpoint on a default CE gateway whose only backend references it) and rejects it when `krakend check -n` fails, unless the stored policy already failed too. For a change to a policy that endpoints reference, it finds the gateways of the referencing endpoints through the `fieldindex.EndpointPolicy` index and renders each with the new policy in place of the stored one (`CheckGatewayPolicy`), one gateway after another under the 12 s budget. It rejects only when a gateway passed before and fails after (`ratchetRender` without an isolated baseline, so a gateway that already fails earns a warning). A new or changed `raw` that holds what a CE render drops (`renderer.CEDrops` at the backend level) is rejected while a CE gateway uses the policy. Causes are one per gateway, at most 20, and warnings name at most 5 failing gateways (`maxPolicyWarnings`).
+`checkPolicyRender` checks the policy on its own (`CheckPolicy`: one synthetic endpoint on a default CE gateway whose only backend references it) and rejects it when `krakend check -n` fails, unless the stored policy already failed too. For a change to a policy that endpoints reference, it finds the gateways of the referencing endpoints through the `fieldindex.EndpointPolicy` index and screens every gateway first (`screenPolicyUse`: the root alone, then the root with the endpoints that use the policy and that the gateway serves, with the new policy in place of the stored one), then names the endpoints each gateway's change breaks (`judgePolicyUse`, `failingEndpoints`). It denies when an endpoint fails with the new policy and passes with the stored one; when every endpoint that fails already failed, or the gateway root fails on its own, the write only draws a warning. On a create the baseline is the policy with its identity and no content, so an endpoint that fails whatever the policy holds only draws the warning; a failure only together is still denied. A new or changed `raw` that holds what a CE render drops (`renderer.CEDrops` at the backend level) is rejected while a CE gateway uses the policy. Causes are one per gateway, at most 20, and warnings name at most 5 failing gateways (`maxPolicyWarnings`).
 
 **KrakenDBackendPolicy (DELETE):**
 
@@ -2697,12 +2751,13 @@ All external dependencies are abstracted behind interfaces, injected via struct 
 |---|---|---|---|
 | `Renderer` | `internal/renderer` | Build `krakend.json` from CRD state | `renderer.configRenderer` |
 | `Validator` | `internal/renderer` | Validate rendered config via `krakend check -t -n -c` (`Validate`) or lint it with `krakend check -n` (`Lint`) | `renderer.KrakenDValidator` |
-| `ConfigChecker` | `internal/controller` | Gather a gateway's render inputs and validate the render, behind the pod's shared validation slots | `configcheck.Checker` |
-| `ConfigChecker` | `internal/webhook` | Render a gateway with a proposed change and validate it (`CheckGateway`, `CheckIsolated`), render a policy in a gateway (`CheckGatewayPolicy`) or alone (`LintPolicy`), all with `krakend check -n` and the route check | `configcheck.Checker` (the same instance the controller's port uses) |
+| `ConfigChecker` | `internal/controller` | Gather a gateway's render inputs and judge them: `CheckRoot(ctx, configcheck.Root, Memo)`, `CheckEndpoint(ctx, configcheck.EndpointUnit, Memo)` and `CheckRendered(ctx, in, out, Memo)`, behind the pod's shared validation slots | `configcheck.Checker` |
+| `ConfigChecker` | `internal/webhook` | Judge each object on its own and a group of them: `CheckRoot`, `CheckPolicy`, `CheckEndpoint`, `CheckGroup`, `Conflicts` (in process), `SameConfig`, all with `krakend check -n` and the route check | `configcheck.Checker` (the same instance the controller's port uses) |
 | `CommandExecutor` | `internal/renderer` | Execute shell commands (krakend check) | `renderer.KrakenDExecutor` |
 | `Fetcher` | `internal/autoconfig` | Fetch OpenAPI specs (HTTP + ConfigMap) | `autoconfig.httpFetcher` |
 | `CUEEvaluator` | `internal/autoconfig` | Evaluate CUE definitions + OpenAPI spec → `EndpointEntry` objects | `autoconfig.cueEvaluator` |
-| `AutoConfigChecker` | `internal/controller` | The gateway config checks over the endpoints a sync is about to write (`CheckGateway`, and `CheckIsolated` for the candidates alone), the AutoConfig controller's own port | `configcheck.Checker` (the pod's one instance, behind `CheckSlots`) |
+| `AutoConfigChecker` | `internal/controller` | The checks over the endpoints a sync is about to write (`Conflicts`, `CheckRoot`, `CheckGroup`, `CheckEndpoint`), the AutoConfig controller's own port | `configcheck.Checker` (the pod's one instance, behind `CheckSlots`) |
+| `configcheck.Memo` | `internal/configcheck` | Remember a verdict by the content it judged (`Lookup`, `Store`); the consumer is `configcheck`, which treats an inconsistent entry as a miss | `controller.passMemo`, `controller.countedPass`, `webhook.lruMemo` |
 | `Filter` | `internal/autoconfig` | Include/exclude operations | `autoconfig.operationFilter` |
 | `Generator` | `internal/autoconfig` | Endpoint entries → `KrakenDEndpoint` CRDs with metadata | `autoconfig.endpointGenerator` |
 | `LicenseParser` | `internal/util/license` | Parse X.509 license certificates | `license.x509LicenseParser` |
@@ -2725,6 +2780,8 @@ func (f *fakeRenderer) Render(input renderer.RenderInput) (*renderer.RenderOutpu
     return f.result, f.err
 }
 ```
+
+The checker ports have doubles of their own: `contentValidator` (a validator that judges by content), `fakeChecker` (the AutoConfig port, with fields for each new check), `scriptedChecker` (the webhook port, with scripted calls), `judgingExecutor` (a command executor whose verdict follows the config it is given) and `verdictRecorder` (a memo that records what it is asked).
 
 For the Kubernetes client, tests use the controller-runtime `fake.NewClientBuilder()`:
 
@@ -2806,7 +2863,7 @@ var (
 
     configValidationFailures = prometheus.NewCounter(prometheus.CounterOpts{
         Name: "krakend_operator_config_validation_failures_total",
-        Help: "Validation failures (broken configs blocked)",
+        Help: "Fresh rejections of a gateway root, a policy or an endpoint checked on its own",
     })
 
     rollingRestarts = prometheus.NewCounter(prometheus.CounterOpts{
@@ -2845,6 +2902,11 @@ var (
         Help: "1 while the gateway's newest rendered config passed validation (ConfigValid=True), 0 otherwise",
     }, []string{"namespace", "name"})
 
+    gatewayExcludedEndpoints = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+        Name: "krakend_operator_gateway_excluded_endpoints",
+        Help: "KrakenDEndpoints a gateway leaves out of its config because they fail validation on their own, by Accepted reason",
+    }, []string{"namespace", "gateway", "reason"})
+
     autoConfigSynced = prometheus.NewGaugeVec(prometheus.GaugeOpts{
         Name: "krakend_operator_autoconfig_synced",
         Help: "1 if the KrakenDAutoConfig's last reconcile synced successfully, 0 if it is failing",
@@ -2857,7 +2919,7 @@ var (
 | Metric | Instrumented In | When |
 |---|---|---|
 | `krakend_operator_config_renders_total` | `KrakenDGatewayReconciler.Reconcile` | After calling `Renderer.Render` |
-| `krakend_operator_config_validation_failures_total` | `KrakenDGatewayReconciler.validateConfig` | Once for each rejected (render, edition) input, when `Checker.CheckRendered` returns a rejected verdict (`ValidationError`); a remembered rejection is not counted again |
+| `krakend_operator_config_validation_failures_total` | `countedPass.Store` | Once for each fresh rejection of the gateway root, a policy alone or an endpoint alone: `countedPass` wraps the memo of the root and endpoint checks only. The full checks use the plain `passMemo` and are never counted, and a remembered rejection is not counted again |
 | `krakend_operator_rolling_restarts_total` | `KrakenDGatewayReconciler.reconcileDeployment` | Once per Deployment write that changed the pod template, judged by comparing the template read before the write with the server's response. A creation does not count, and drift in the template that the write reverts does |
 | `krakend_operator_license_expiry_seconds` | `KrakenDGatewayReconciler.reconcileLicense` | After parsing the license certificate (from the last known expiry while the license is unreadable); the series is removed with the gateway, and when the gateway is not EE |
 | `krakend_operator_endpoints` | `recordGatewayMetrics` | At the end of each reconcile, from the endpoints listed for the gateway |
@@ -2865,6 +2927,7 @@ var (
 | `krakend_operator_dragonfly_ready` | `KrakenDGatewayReconciler.detectDragonflyState` | After checking Dragonfly CR status |
 | `krakend_operator_gateway_info` | `recordGatewayMetrics` | At the end of each reconcile; the gateway's earlier series is deleted first, so one series is left after a version or edition change |
 | `krakend_operator_gateway_config_valid` | `recordGatewayMetrics` | At the end of each reconcile: 1 while `ConfigValid` is `True`, 0 while it is `False` or `Unknown` or absent |
+| `krakend_operator_gateway_excluded_endpoints` | `reportExclusions` | After every pass that reaches the report: one series per `Accepted` reason (`EndpointInvalid`, `PolicyInvalid`) that has endpoints, counted from the endpoints' `Accepted` conditions as soon as an exclusion is recorded; absent while none; deleted in `deleteGatewayMetrics` |
 | `krakend_operator_autoconfig_synced` | `KrakenDAutoConfigReconciler` | 1 after a successful sync, 0 while it fails or any operation is held; removed when the AutoConfig is deleted |
 
 Every per-gateway series is removed when the gateway is deleted or terminating (`deleteGatewayMetrics`).
@@ -2901,6 +2964,7 @@ Unit tests cover all pure-function logic with no Kubernetes API dependency:
 |---|---|
 | `internal/renderer` | Deterministic JSON output; endpoint sorting; extra_config merge precedence; wildcard stripping; plugin block injection; checksum computation |
 | `internal/autoconfig` | SSRF rejection (loopback, link-local, ULA, RFC 1918); IPv4-mapped IPv6 normalization; redirect validation; scheme restriction; default definitions produce valid `EndpointEntry` objects; custom definitions unify with defaults; per-environment host resolution via `_env` field injection; CR override application; CUE constraint violation produces structured error; host auto-inference when hostMapping omitted; path prefix strip/add; tag annotation for filter stage; include/exclude paths; include/exclude methods; include/exclude tags; include/exclude operationIds; glob matching; endpoint name generation (with operationId, without); duplicate operationId handling; label assignment; owner reference wiring |
+| `cmd` | `TestBlame_AdmissionAndTheControllerAgree`: admission and the gateway controller, over one checker, judge the same endpoints and the same configs alike |
 | `internal/util/hash` | SHA-256 consistency; plugin checksum determinism across ConfigMap/OCI ordering |
 | `internal/util/license` | X.509 certificate parsing; PEM decoding; expired cert detection; malformed input |
 | `internal/resources` | Deployment spec (security context, volumes, probes, rolling update strategy); Service spec; PDB spec; label assignment; image selection logic |
@@ -2980,6 +3044,7 @@ func TestGatewayReconciler_CreatesOwnedResources(t *testing.T) {
 | Policy update → all gateways with referencing endpoints re-queued → ConfigMap updated | `policyToGateways` mapper, namespace-scoped list, re-render |
 | Policy delete while an endpoint references it → held Terminating with a `DeletionBlocked` event, then released when the last reference goes | Protection finalizer, endpoint watch, uncached confirmation before release |
 | Config validation failure → Error phase, no Deployment update | Validation pipeline, error handling |
+| An invalid endpoint is excluded and the rest applied (`TestExclusion_AnInvalidEndpointIsExcludedAndTheRestApplied`); an endpoint of an invalid policy is excluded by name (`TestExclusion_AnEndpointOfAnInvalidPolicyIsExcludedByName`) | Per-object validation, `EndpointInvalid` / `PolicyInvalid`, `EndpointsExcluded`, the excluded-endpoints gauge |
 | License expiry → CE fallback (image + config change) | License evaluation inside the gateway reconcile |
 | EE recovery → restored image + full config | License restoration flow |
 | Gateway deletion → orphaned endpoints marked Detached | Endpoint controller gateway watch, Detached phase |
