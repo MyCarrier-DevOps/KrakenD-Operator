@@ -58,6 +58,9 @@ type scriptedChecker struct {
 	// overrides records, for each endpoint check, the namespace/name of the
 	// policy override it was handed, "-" for none.
 	overrides []string
+	// groupOverrides records, for each group check, the namespace/name of the
+	// policy override it was handed, "-" for none.
+	groupOverrides []string
 	// delay holds every check that long, giving up when its context ends.
 	delay time.Duration
 	// failOnly makes err fail call failCall alone, not every call after it.
@@ -167,10 +170,12 @@ func (s *scriptedChecker) CheckGroup(
 	s.gateways = append(s.gateways, string(g.Gateway.Spec.Edition)+"/"+g.Gateway.Spec.Config.Timeout)
 	s.memos = append(s.memos, memo != nil)
 	v, err := s.next(ctx, "group", g.Endpoints)
-	raw := "-"
+	raw, override := "-", "-"
 	if g.Override != nil {
 		raw = rawOf(g.Override)
+		override = g.Override.Namespace + "/" + g.Override.Name
 	}
+	s.groupOverrides = append(s.groupOverrides, override)
 	s.args[len(s.args)-1] = g.Gateway.Namespace + "/" + g.Gateway.Name + ":" + raw
 	return v, err
 }
