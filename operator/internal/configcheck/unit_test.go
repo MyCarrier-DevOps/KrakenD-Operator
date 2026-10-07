@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
@@ -97,5 +98,28 @@ func TestCheckRoot_AnUnjudgedCheckIsNotRemembered(t *testing.T) {
 
 	if len(val.calls) != 2 || len(memo) != 0 {
 		t.Errorf("ran %d times and remembered %d verdicts, want 2 runs and nothing remembered", len(val.calls), len(memo))
+	}
+}
+
+func TestCheckGroup_ChecksOnlyItsEndpointsWithTheOverride(t *testing.T) {
+	val := &fakeValidator{}
+	stored := policy("p")
+	chk := newChecker(val, stored, endpoint("other", "/other"))
+	changed := policy("p")
+	changed.Spec.CircuitBreaker.MaxErrors = 99
+
+	_, err := chk.CheckGroup(context.Background(), Group{
+		Gateway: gateway(v1alpha1.EditionCE), Endpoints: []v1alpha1.KrakenDEndpoint{*withPolicy(endpoint("mine", "/mine"), "p")},
+		Override: changed,
+	}, nil)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if paths := renderedPaths(t, val.seen[0]); !reflect.DeepEqual(paths, []string{"/mine"}) {
+		t.Errorf("checked endpoints %v, want only the group's", paths)
+	}
+	if !strings.Contains(val.seen[0], `"max_errors": 99`) {
+		t.Errorf("checked config does not carry the override:\n%s", val.seen[0])
 	}
 }
