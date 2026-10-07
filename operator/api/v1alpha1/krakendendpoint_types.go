@@ -165,14 +165,17 @@ type BackendSpec struct {
 	ExtraConfig *runtime.RawExtension `json:"extraConfig,omitempty"`
 }
 
-// EndpointConflict is one entry of a KrakenDEndpoint that its gateway does not
-// serve, because an older KrakenDEndpoint serves the same endpoint and method.
+// EndpointConflict is one entry of a KrakenDEndpoint that its gateway leaves
+// out, because an older KrakenDEndpoint has the same endpoint and method or
+// its route clashes with an older entry's route in the router. An entry is
+// recorded once for each older KrakenDEndpoint it loses to.
 type EndpointConflict struct {
 	// Endpoint is the entry's path.
 	Endpoint string `json:"endpoint"`
 	// Method is the entry's HTTP method.
 	Method string `json:"method"`
-	// Winner is the namespace/name of the KrakenDEndpoint whose entry is served.
+	// Winner is the namespace/name of the older KrakenDEndpoint this entry
+	// loses to. Its entry may itself be left out.
 	Winner string `json:"winner"`
 }
 
@@ -189,8 +192,10 @@ type KrakenDEndpointStatus struct {
 	// +listType=map
 	// +listMapKey=type
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
-	// Conflicts lists this endpoint's entries that its gateway does not serve
-	// because an older KrakenDEndpoint serves the same endpoint and method.
+	// Conflicts lists this endpoint's entries that its gateway leaves out,
+	// because an older KrakenDEndpoint has the same endpoint and method or
+	// its route clashes with an older entry's route in the router. An entry
+	// is listed once for each older KrakenDEndpoint it loses to.
 	// The gateway controller writes it together with the Accepted condition.
 	// +listType=atomic
 	// +optional
