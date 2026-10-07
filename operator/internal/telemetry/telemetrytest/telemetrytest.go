@@ -18,11 +18,20 @@ limitations under the License.
 // run telemetry.Setup.
 package telemetrytest
 
-import "testing"
+import (
+	"os"
+	"strings"
+	"testing"
+)
 
 // ClearOTelEnv unsets every OTEL_* environment variable for the test, so the
 // developer's or the CI runner's environment cannot change its outcome. t
 // restores them when it ends.
 func ClearOTelEnv(t testing.TB) {
 	t.Helper()
+	for _, kv := range os.Environ() {
+		if name, _, _ := strings.Cut(kv, "="); strings.HasPrefix(name, "OTEL_") {
+			t.Setenv(name, "")
+		}
+	}
 }
