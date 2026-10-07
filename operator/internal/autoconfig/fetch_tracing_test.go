@@ -110,3 +110,24 @@ func TestFetcher_AParseErrorCarriesNoCredentials(t *testing.T) {
 		t.Errorf("error %q carries a credential", msg)
 	}
 }
+
+func TestNewFetcher_FetchIsASpanAboveItsHTTPRequest(t *testing.T) {
+	rec := tracingtest.New(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"openapi":"3.0.0"}`))
+	}))
+	defer srv.Close()
+	f := NewFetcher(fakeClient(), rec.Tracer()).(*httpFetcher)
+	// The SSRF guard refuses loopback: keep the traced wrapper, swap what it wraps.
+	f.lenientClient.Transport = clientSpans{next: http.DefaultTransport, tracer: rec.Tracer()}
+
+	if _, err := f.Fetch(context.Background(), FetchSource{URL: srv.URL + "/spec.json?token=abc123", AllowClusterLocal: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	spans := rec.Ended()
+	spans.RequireChild(t, "autoconfig.fetch", "HTTP GET")
+	if _, ok := NewFetcher(fakeClient(), nil).(*httpFetcher).strictClient.Transport.(clientSpans); !ok {
+		t.Error("the strict client's transport is not traced")
+	}
+}
