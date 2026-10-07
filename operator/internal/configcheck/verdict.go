@@ -60,7 +60,12 @@ type Verdict struct {
 	// Output is the rejection's text when OK is false: what krakend check,
 	// the route check or the EE wildcard rule printed for the config that was
 	// checked. Only the owner of that config may be shown it.
-	Output   string
+	Output string
+	// Masked are the endpoints that lost an entry in the checked render
+	// (MaskedEndpoints). They come from this check's render, never from a
+	// memo: the same content can be rendered from inputs that mask different
+	// endpoints.
+	Masked   []types.NamespacedName
 	Findings []Finding
 	// Rejection is the validator's rejection behind a verdict that is not OK.
 	// A caller that remembers it can rebuild the findings with Rejected

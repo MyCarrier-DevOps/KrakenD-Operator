@@ -24,6 +24,8 @@ import (
 	"strings"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/types"
+
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 )
@@ -192,5 +194,34 @@ func TestCheckRoot_KeepsABoundedOutput(t *testing.T) {
 	}
 	if len(v.Output) > maxStoredOutput || !strings.HasSuffix(v.Output, "...") {
 		t.Errorf("verdict output is %d bytes, want it cut to %d with an ellipsis", len(v.Output), maxStoredOutput)
+	}
+}
+
+func TestCheckGroup_NamesTheEndpointsThatLostAnEntry(t *testing.T) {
+	val := &fakeValidator{}
+	chk := newChecker(val)
+	memo := mapMemo{}
+	gw := gateway(v1alpha1.EditionCE)
+	older, newer := endpoint("a", "/same"), endpoint("b", "/same")
+
+	alone, err := chk.CheckGroup(context.Background(), Group{Gateway: gw, Endpoints: []v1alpha1.KrakenDEndpoint{*older}}, memo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	both, err := chk.CheckGroup(context.Background(), Group{
+		Gateway: gw, Endpoints: []v1alpha1.KrakenDEndpoint{*older, *newer},
+	}, memo)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(val.calls) != 1 {
+		t.Fatalf("ran %d checks, want 1: both groups render the same config", len(val.calls))
+	}
+	if len(alone.Masked) != 0 {
+		t.Errorf("alone.Masked = %v, want none", alone.Masked)
+	}
+	if want := []types.NamespacedName{{Namespace: "ns", Name: "b"}}; !reflect.DeepEqual(both.Masked, want) {
+		t.Errorf("both.Masked = %v, want %v from this render, not the remembered verdict", both.Masked, want)
 	}
 }
