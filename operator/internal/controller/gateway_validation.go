@@ -1,0 +1,112 @@
+/*
+Copyright 2026 The KrakenD Operator Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package controller
+
+import (
+	"context"
+	"strings"
+
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
+
+	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
+	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
+)
+
+// decision is what the config stage concludes about the newest render.
+type decision struct {
+	// output is the render to apply: the gathered endpoints less excluded.
+	// It is nil when failure is set.
+	output *renderer.RenderOutput
+	// excluded are the endpoints that fail validation on their own, with why.
+	excluded map[types.NamespacedName]configcheck.EndpointVerdict
+	// judged says every endpoint was checked on its own, or passed as part of
+	// the whole render, so one missing from excluded passes.
+	judged bool
+	// failure is set when nothing can be applied: the gateway root fails on
+	// its own, or the endpoints fail only together.
+	failure *gatewayFailure
+}
+
+// gatewayFailure is ConfigValid's verdict on a render none of which can be
+// applied. It blames no endpoint.
+type gatewayFailure struct {
+	reason, message string
+}
+
+// combinedFailureMessage is ConfigValid's message when every endpoint passes
+// on its own but the gateway's config fails with them together. It quotes
+// nothing: that output quotes the endpoints' values, which the gateway's
+// readers may not be allowed to read, so it goes to the operator log.
+const combinedFailureMessage = "Every endpoint passes krakend check on its own, but the gateway's config fails " +
+	"it with them together, so the last applied config keeps serving. The check's output quotes the endpoints' " +
+	"values and is only in the operator log (\"the gateway's config fails krakend check only together\")."
+
+// decide judges the newest render, full, which is not the applied config:
+// first the gateway root on its own, which blames no endpoint when it fails,
+// then the render as a whole, with the full check. Every check answers from
+// the gateway's verdict memo when it already judged the same content. An
+// error means a check could not run: nothing is decided, and the verdicts
+// judged before it are kept for the next pass.
+func (r *KrakenDGatewayReconciler) decide(
+	ctx context.Context, gw *v1alpha1.KrakenDGateway, in renderer.RenderInput,
+	full *renderer.RenderOutput, edition v1alpha1.Edition,
+) (d decision, err error) {
+	key := client.ObjectKeyFromObject(gw)
+	pass := r.verdicts.begin(key)
+	defer func() { r.verdicts.end(key, pass, err != nil) }()
+	counted := countedPass{pass}
+
+	root, err := r.Checker.CheckRoot(ctx, configcheck.Root{Gateway: gw, CEFallback: in.CEFallback}, counted)
+	if err != nil {
+		return decision{}, err
+	}
+	if !root.OK {
+		return decision{failure: rootFailure(root)}, nil
+	}
+	whole, err := r.Checker.CheckRendered(ctx, in, full, counted)
+	if err != nil {
+		return decision{}, err
+	}
+	if !whole.OK {
+		logCombinedFailure(ctx, whole)
+		return decision{failure: combinedFailure()}, nil
+	}
+	return decision{output: full, judged: true}, nil
+}
+
+// rootFailure is ConfigValid's verdict when the gateway root fails on its
+// own. The root is the gateway's, so its output is shown.
+func rootFailure(v configcheck.Verdict) *gatewayFailure {
+	return &gatewayFailure{reason: v1alpha1.ReasonGatewayRootInvalid,
+		message: "The gateway root (the gateway with no endpoint) fails krakend check, so no endpoint was " +
+			"judged and the last applied config keeps serving:\n" + strings.TrimSpace(v.Output)}
+}
+
+// combinedFailure is ConfigValid's verdict when the endpoints fail only
+// together.
+func combinedFailure() *gatewayFailure {
+	return &gatewayFailure{reason: v1alpha1.ReasonCombinedConfigInvalid, message: combinedFailureMessage}
+}
+
+// logCombinedFailure logs the output of a full check that fails only with
+// several endpoints together.
+func logCombinedFailure(ctx context.Context, v configcheck.Verdict) {
+	logf.FromContext(ctx).Info("the gateway's config fails krakend check only together", "output", v.Output)
+}
