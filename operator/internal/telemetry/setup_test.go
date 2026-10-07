@@ -87,3 +87,16 @@ func TestSetup_ResourceNamesTheOperatorItsVersionAndPod(t *testing.T) {
 		}
 	}
 }
+
+func TestSetup_ServiceNameFromTheEnvironmentWins(t *testing.T) {
+	cleanOTelEnv(t)
+	t.Setenv("OTEL_SERVICE_NAME", "operator-staging")
+	var out bytes.Buffer
+	tel := setup(t, &out)
+
+	tel.Logger.Info("hello")
+
+	if want := `"Value":"operator-staging"`; !strings.Contains(out.String(), want) {
+		t.Errorf("record lacks %s:\n%s", want, out.String())
+	}
+}
