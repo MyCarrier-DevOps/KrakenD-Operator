@@ -558,3 +558,40 @@ func TestGatewayReconcile_AnEndpointThatPassesAgainLosesItsExclusionOnAFailedPas
 		t.Errorf("Accepted = %+v, want the stale exclusion lifted: the endpoint passes on its own", cond)
 	}
 }
+
+// verdictsByName is a ConfigChecker whose endpoint units answer from verdicts,
+// keyed by endpoint name.
+type verdictsByName struct {
+	ConfigChecker
+	verdicts map[string]configcheck.EndpointVerdict
+}
+
+func (v verdictsByName) CheckEndpoint(_ context.Context, u configcheck.EndpointUnit,
+	_ configcheck.Memo) (configcheck.EndpointVerdict, error) {
+	return v.verdicts[u.Endpoint.Name], nil
+}
+
+func TestJudgeEndpoints_ExcludesOnlyTheFailingVerdicts(t *testing.T) {
+	gw := testGateway()
+	endpoints := []v1alpha1.KrakenDEndpoint{*testEndpoint("ok", "/a"), *testEndpoint("bad", "/b"), *testEndpoint("pol", "/c")}
+	policy := types.NamespacedName{Namespace: "default", Name: "p"}
+	r := &KrakenDGatewayReconciler{Checker: verdictsByName{verdicts: map[string]configcheck.EndpointVerdict{
+		"ok":  {OK: true},
+		"bad": {Reason: v1alpha1.ReasonEndpointInvalid, Output: "- at '/endpoints/0': bad"},
+		"pol": {Reason: v1alpha1.ReasonPolicyInvalid, Policies: []types.NamespacedName{policy}},
+	}}}
+
+	excluded, err := r.judgeEndpoints(context.Background(), gw, renderer.RenderInput{}, endpoints, nil)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := excluded[types.NamespacedName{Namespace: "default", Name: "ok"}]; ok || len(excluded) != 2 {
+		t.Errorf("excluded = %+v, want only bad and pol: an OK verdict has no reason for a condition", excluded)
+	}
+	for key, v := range excluded {
+		if v.OK || v.Reason == "" || v.Reason == v1alpha1.ReasonPolicyInvalid && len(v.Policies) == 0 {
+			t.Errorf("excluded[%s] = %+v, want a failing verdict with its reason and policies", key, v)
+		}
+	}
+}
