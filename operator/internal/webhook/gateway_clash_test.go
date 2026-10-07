@@ -42,3 +42,18 @@ func TestGatewayAdmission_RefusesARootThatMakesEndpointsClash(t *testing.T) {
 		t.Errorf("checks = %v, want none after a structural refusal", chk.calls)
 	}
 }
+
+func TestGatewayAdmission_AClashTheStoredRootAlreadyHasIsNotTheChanges(t *testing.T) {
+	always := func(*v1alpha1.KrakenDGateway, []v1alpha1.KrakenDEndpoint) configcheck.RouteConflicts {
+		return clashWithAutoOptions(routerOf(testGateway(), v1alpha1.RouterConfig{AutoOptions: true}), nil)
+	}
+	chk := &scriptedChecker{conflicts: always}
+	old := routerOf(testGateway(), v1alpha1.RouterConfig{AutoOptions: true})
+	gw := routerOf(testGateway(), v1alpha1.RouterConfig{AutoOptions: true, HealthPath: "/status"})
+
+	resp := review(t, &GatewayValidator{Client: fakeClient(old), Checker: chk}, "alice", gw, old)
+
+	if !resp.Allowed {
+		t.Errorf("an edit that keeps a stored clash was denied: %+v", resp.Result)
+	}
+}
