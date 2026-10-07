@@ -43,6 +43,9 @@ func TestNewClashes_KeepsTheNewRouterClashesOfTheGivenEndpoints(t *testing.T) {
 			{Loser: b, Method: "GET", Endpoint: "/u/{n}/x", Winner: a, Detail: "wildcard conflict"},
 			{Loser: c, Method: "GET", Endpoint: "/u/{n}/x", Winner: a, Detail: "wildcard conflict"},
 		}},
+		{"only those of the loser asked about", RouteConflicts{}, map[types.NamespacedName]bool{b: true}, []Clash{
+			{Loser: b, Method: "GET", Endpoint: "/u/{n}/x", Winner: a, Detail: "wildcard conflict"},
+		}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
