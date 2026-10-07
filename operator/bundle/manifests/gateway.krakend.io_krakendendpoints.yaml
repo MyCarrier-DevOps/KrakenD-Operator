@@ -377,13 +377,17 @@ spec:
                 x-kubernetes-list-type: map
               conflicts:
                 description: |-
-                  Conflicts lists this endpoint's entries that its gateway does not serve
-                  because an older KrakenDEndpoint serves the same endpoint and method.
+                  Conflicts lists this endpoint's entries that its gateway leaves out,
+                  because an older KrakenDEndpoint has the same endpoint and method or
+                  its route clashes with an older entry's route in the router. An entry
+                  is listed once for each older KrakenDEndpoint it loses to.
                   The gateway controller writes it together with the Accepted condition.
                 items:
                   description: |-
-                    EndpointConflict is one entry of a KrakenDEndpoint that its gateway does not
-                    serve, because an older KrakenDEndpoint serves the same endpoint and method.
+                    EndpointConflict is one entry of a KrakenDEndpoint that its gateway leaves
+                    out, because an older KrakenDEndpoint has the same endpoint and method or
+                    its route clashes with an older entry's route in the router. An entry is
+                    recorded once for each older KrakenDEndpoint it loses to.
                   properties:
                     endpoint:
                       description: Endpoint is the entry's path.
@@ -392,8 +396,9 @@ spec:
                       description: Method is the entry's HTTP method.
                       type: string
                     winner:
-                      description: Winner is the namespace/name of the KrakenDEndpoint
-                        whose entry is served.
+                      description: |-
+                        Winner is the namespace/name of the older KrakenDEndpoint this entry
+                        loses to. Its entry may itself be left out.
                       type: string
                   required:
                   - endpoint
