@@ -1438,6 +1438,7 @@ func (r *KrakenDGatewayReconciler) reconcilePostRestartJob(
 		return fmt.Errorf("computing post-restart job checksum: %w", err)
 	}
 	jobName := resources.PostRestartJobName(gw, jobChecksum)
+	span.SetAttributes(tracing.KeyName.String(jobName))
 
 	if gw.Status.LastPostRestartJobChecksum == jobChecksum {
 		return r.reconcileExistingPostRestartRevision(ctx, gw, spec, jobName, jobChecksum, in)
