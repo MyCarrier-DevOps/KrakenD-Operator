@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"go.opentelemetry.io/otel/trace"
 	corev1 "k8s.io/api/core/v1"
@@ -34,6 +35,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	crcontroller "sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -158,13 +160,20 @@ func (r *KrakenDBackendPolicyReconciler) SetupWithManager(mgr ctrl.Manager) erro
 			r.endpointPolicyHandler(),
 			builder.WithPredicates(policyEndpointPredicate()),
 		).
+		WithOptions(crcontroller.Options{RateLimiter: newPolicyRateLimiter()}).
 		Named("krakendbackendpolicy").
 		Complete(r)
 }
 
-// newPolicyRateLimiter is the policy controller's retry backoff.
+// policyMaxBackoff caps the retry backoff of a policy whose check could not
+// run, as for the gateway and AutoConfig controllers, so it recovers within
+// this long of the validator coming back.
+const policyMaxBackoff = 5 * time.Minute
+
+// newPolicyRateLimiter is controller-runtime's default rate limiter with the
+// per-item backoff capped at policyMaxBackoff instead of 1000s.
 func newPolicyRateLimiter() workqueue.TypedRateLimiter[reconcile.Request] {
-	return workqueue.DefaultTypedControllerRateLimiter[reconcile.Request]()
+	return cappedRateLimiter(policyMaxBackoff)
 }
 
 // maxNamedReferrers bounds the endpoints named in the deletion-blocked event.
