@@ -205,6 +205,9 @@ func autoConfigController(ep *v1alpha1.KrakenDEndpoint) bool {
 func (v *EndpointValidator) checkRender(
 	ctx context.Context, stored, ep *v1alpha1.KrakenDEndpoint, gw *v1alpha1.KrakenDGateway,
 ) (admission.Warnings, error) {
+	if err := v.refuseNewClashes(ctx, ep, gw); err != nil {
+		return nil, err
+	}
 	var baseline []v1alpha1.KrakenDEndpoint
 	if stored != nil {
 		baseline = []v1alpha1.KrakenDEndpoint{*stored}
@@ -229,6 +232,45 @@ func (v *EndpointValidator) checkRender(
 			return fmt.Sprintf("gateway %s/%s already fails validation without this change: %s",
 				gw.Namespace, gw.Name, shownSummary(before, ep.Namespace, warningLimit))
 		})
+}
+
+// refuseNewClashes rejects ep when, rendered with it, KrakenD's router can no
+// longer serve an entry next to another endpoint's that it serves without it:
+// whichever of the two the render keeps, the other is no longer served. A
+// clash the gateway already has is not the change's. ep is rendered at its
+// creationTimestamp, or after every endpoint that exists when it has none, as
+// the cluster orders it.
+func (v *EndpointValidator) refuseNewClashes(
+	ctx context.Context, ep *v1alpha1.KrakenDEndpoint, gw *v1alpha1.KrakenDGateway,
+) error {
+	before, err := v.Checker.Conflicts(ctx, gw, nil)
+	if err != nil {
+		return checkErr(err)
+	}
+	candidate := ep.DeepCopy()
+	if candidate.CreationTimestamp.IsZero() {
+		candidate.CreationTimestamp = configcheck.NotYetCreated
+	}
+	after, err := v.Checker.Conflicts(ctx, gw, []v1alpha1.KrakenDEndpoint{*candidate})
+	if err != nil {
+		return checkErr(err)
+	}
+	self := types.NamespacedName{Namespace: ep.Namespace, Name: ep.Name}
+	clashes := configcheck.NewClashes(before, after, map[types.NamespacedName]bool{self: true})
+	if len(clashes) == 0 {
+		return nil
+	}
+	var errs field.ErrorList
+	for i, c := range clashes {
+		if i == maxEntryCauses {
+			errs = append(errs, field.Invalid(field.NewPath("spec", "endpoints"), field.OmitValueType{},
+				fmt.Sprintf("%d more entries clash the same way", len(clashes)-i)))
+			break
+		}
+		errs = append(errs, field.Invalid(field.NewPath("spec", "endpoints"), field.OmitValueType{},
+			truncate("KrakenD's router cannot serve both: "+c.String(), warningLimit)))
+	}
+	return invalid(kindEndpoint, ep.Name, errs)
 }
 
 // maxEntryCauses is how many entries of the candidate a denial lists as causes
