@@ -60,10 +60,9 @@ func (r *krakendRenderer) Render(input RenderInput) (*RenderOutput, error) {
 		eeWildcards: gw.Spec.Edition == v1alpha1.EditionEE && !input.CEFallback,
 	})
 
-	// Build endpoints array, recording each entry's source in the same order.
-	// A CE-fallback render drops Enterprise-only features and lists them.
+	// Build endpoints array. A CE-fallback render drops Enterprise-only
+	// features and lists them.
 	endpointsJSON := make([]any, 0, len(flat))
-	sources := make([]types.NamespacedName, 0, len(flat))
 	var stripped []StrippedEEFeature
 	for _, fe := range flat {
 		if input.CEFallback && IsEEWildcard(fe.Entry.Endpoint) {
@@ -85,7 +84,6 @@ func (r *krakendRenderer) Render(input RenderInput) (*RenderOutput, error) {
 			stripped = append(stripped, stripEndpointEEFeatures(ep, fe)...)
 		}
 		endpointsJSON = append(endpointsJSON, ep)
-		sources = append(sources, fe.Source)
 	}
 	config["endpoints"] = endpointsJSON
 
@@ -141,7 +139,6 @@ func (r *krakendRenderer) Render(input RenderInput) (*RenderOutput, error) {
 		EntryConflicts:        conflicted,
 		RouteResolutionCapped: capped,
 		InvalidEndpoints:      invalidSlice,
-		Sources:               sources,
 		StrippedEEFeatures:    stripped,
 		SchemaConflicts:       schemaConflicts,
 	}, nil

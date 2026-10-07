@@ -88,10 +88,6 @@ type RenderOutput struct {
 	// entry that clashes with several older entries is listed once for each
 	// KrakenDEndpoint they belong to. Its keys are ConflictedEndpoints.
 	EntryConflicts map[types.NamespacedName][]EntryConflict
-	// Sources is index-aligned with the rendered "endpoints" array:
-	// Sources[i] is the KrakenDEndpoint that produced endpoints[i]. It is the
-	// only way back from a krakend check finding to the CR at fault.
-	Sources []types.NamespacedName
 	// StrippedEEFeatures lists what a CE-fallback render (RenderInput.CEFallback)
 	// removed because only KrakenD Enterprise supports it: EE wildcard entries
 	// and EE-only extra_config namespaces, or only the EE-only keys of a block
