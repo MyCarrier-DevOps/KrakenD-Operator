@@ -2135,6 +2135,9 @@ endpoints are serving.
   `status.warnings`, and the operation using it is held; an unresolvable
   **path-level** ref fails every operation on that path. A spec that
   dereferencing would grow past 10 MiB fails the sync (`SpecFetchFailed`).
+  A `#/…` ref inside a fetched document, such as an alias to another
+  parameter in that document, is resolved against that document, so the
+  operation forwards the alias target's own name and location.
 - **Spec problems are persistent** in `status.warnings` (distinct, sorted,
   capped at 20 entries of 256 bytes), with a `SpecWarning` event when the
   inputs change (a sync emits at most 20 input warning events in all, `SpecWarning`,
@@ -2142,7 +2145,9 @@ endpoints are serving.
   failure or `OperationsFailed` event):
   - `$ref`s the resolver could not honour;
   - name collisions between inlined schemas;
-  - `#/…` refs inside fetched documents, which resolve against the main spec;
+  - `#/…` refs inside fetched documents whose pointer is not in that
+    document, which resolve against the main spec instead (a pointer that is
+    in its document resolves against it, with no warning);
   - external `$ref`s in a ConfigMap-sourced spec;
   - parameter `$ref`s that do not resolve;
   - schema references that `components/schemas` does not define;
