@@ -32,7 +32,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 )
@@ -419,17 +418,6 @@ func TestValidate_EEWildcardConflictsWithSameMethodRouteUnderPrefix(t *testing.T
 			t.Errorf("output %q blames %s, which the EE router accepts", verr.Output, accepted)
 		}
 	}
-	sources := []types.NamespacedName{
-		{Namespace: "ns", Name: "p"}, {Namespace: "ns", Name: "wild"}, {Namespace: "ns", Name: "static"},
-		{Namespace: "ns", Name: "post"}, {Namespace: "ns", Name: "pq"},
-	}
-	blamed := map[types.NamespacedName]bool{}
-	for _, a := range Attribute(rendered, sources, verr.Output) {
-		blamed[a.Endpoint] = true
-	}
-	if len(blamed) != 2 || !blamed[sources[1]] || !blamed[sources[2]] {
-		t.Errorf("findings blame %v, want exactly %s and %s", blamed, sources[1], sources[2])
-	}
 	if len(exec.checked) != 0 {
 		t.Errorf("krakend check ran %d time(s); the verdict was already known", len(exec.checked))
 	}
@@ -451,20 +439,18 @@ func (e lintingExecutor) Execute(_ context.Context, _ string, args ...string) ([
 		exitError(e.t, 1)
 }
 
-func TestValidate_FindingAfterWildcardEntriesBlamesItsOwnEndpoint(t *testing.T) {
+func TestValidate_FindingAfterWildcardEntriesNamesItsOwnPosition(t *testing.T) {
 	v := NewValidator(ValidatorOptions{Executor: lintingExecutor{t: t}, BinaryPath: "krakend"})
 	rendered := []byte(`{"version":3,"endpoints":[` +
 		`{"endpoint":"/v1/*","method":"GET"},{"endpoint":"/later","method":"GET"}]}`)
-	sources := []types.NamespacedName{{Namespace: "ns", Name: "prefix"}, {Namespace: "ns", Name: "later"}}
 
 	err := v.Validate(context.Background(), rendered, v1alpha1.EditionEE)
 	var verr *ValidationError
 	if !errors.As(err, &verr) {
 		t.Fatalf("Validate = %v, want a ValidationError", err)
 	}
-	got := Attribute(rendered, sources, verr.Output)
-	if len(got) != 1 || got[0].Endpoint != sources[1] {
-		t.Errorf("attribution = %+v, want the single finding blamed on %s, not a neighbour", got, sources[1])
+	if !strings.HasPrefix(verr.Output, "- at '/endpoints/1/extra_config'") {
+		t.Errorf("output = %q, want the finding at /later's rendered position 1, not a neighbour's", verr.Output)
 	}
 }
 
@@ -474,16 +460,15 @@ func TestValidate_EEWildcardParameterIsNotAnOutputParam(t *testing.T) {
 	rendered := []byte(`{"version":3,"endpoints":[` +
 		`{"endpoint":"/ok","method":"GET","backend":[{"url_pattern":"/ok"}]},` +
 		`{"endpoint":"/v1/*","method":"GET","backend":[{"url_pattern":"/x/{Wildcard}"}]}]}`)
-	sources := []types.NamespacedName{{Namespace: "ns", Name: "ok"}, {Namespace: "ns", Name: "wild"}}
 
 	err := v.Validate(context.Background(), rendered, v1alpha1.EditionEE)
 	var verr *ValidationError
 	if !errors.As(err, &verr) {
 		t.Fatalf("Validate = %v; EE has no input parameter named Wildcard, so /x/{Wildcard} is undefined there", err)
 	}
-	got := Attribute(rendered, sources, verr.Output)
-	if len(got) != 1 || got[0].Endpoint != sources[1] {
-		t.Errorf("attribution = %+v, want one finding blamed on %s", got, sources[1])
+	if !strings.HasPrefix(verr.Output, "- at '/endpoints/1/backend/0/url_pattern'") ||
+		strings.Contains(verr.Output, "/endpoints/0/") {
+		t.Errorf("output = %q, want one line at the wildcard entry, 1", verr.Output)
 	}
 	if len(exec.checked) != 0 {
 		t.Errorf("krakend check ran %d time(s); the verdict was already known", len(exec.checked))
@@ -496,7 +481,6 @@ func TestValidate_EEWildcardEndpointAllowsOneBackend(t *testing.T) {
 	rendered := []byte(`{"version":3,"endpoints":[` +
 		`{"endpoint":"/ok","method":"GET","backend":[{"url_pattern":"/a"},{"url_pattern":"/b"}]},` +
 		`{"endpoint":"/v1/*","method":"GET","backend":[{"url_pattern":"/x"},{"url_pattern":"/y"}]}]}`)
-	sources := []types.NamespacedName{{Namespace: "ns", Name: "ok"}, {Namespace: "ns", Name: "wild"}}
 
 	err := v.Validate(context.Background(), rendered, v1alpha1.EditionEE)
 	var verr *ValidationError
@@ -506,9 +490,8 @@ func TestValidate_EEWildcardEndpointAllowsOneBackend(t *testing.T) {
 	if !strings.Contains(verr.Output, "wildcard endpoint can only have 1 backend") {
 		t.Errorf("output %q lacks EE's message", verr.Output)
 	}
-	got := Attribute(rendered, sources, verr.Output)
-	if len(got) != 1 || got[0].Endpoint != sources[1] {
-		t.Errorf("attribution = %+v, want one finding blamed on %s", got, sources[1])
+	if !strings.HasPrefix(verr.Output, "- at '/endpoints/1/endpoint'") || strings.Contains(verr.Output, "/endpoints/0/") {
+		t.Errorf("output = %q, want one line at the wildcard entry, 1", verr.Output)
 	}
 }
 
@@ -615,14 +598,10 @@ func TestValidate_RouteRejectionNamesTheRefusedEntries(t *testing.T) {
 	if verr.Stage != StageRoute {
 		t.Errorf("Stage = %d, want StageRoute (%d)", verr.Stage, StageRoute)
 	}
-	if len(verr.Refusals) != 1 || !slices.Equal(verr.Refusals[0].Indices, []int{1, 0}) {
-		t.Fatalf("Refusals = %+v, want one naming the refused entry 1, then the accepted entry 0", verr.Refusals)
-	}
-	if verr.Refusals[0].Message != verr.Output {
-		t.Errorf("Refusals[0].Message = %q, want the output %q", verr.Refusals[0].Message, verr.Output)
-	}
-	if verr.RefusalsCapped {
-		t.Error("RefusalsCapped = true for one refusal")
+	lines := strings.Split(verr.Output, "\n")
+	if len(lines) != 2 || !strings.HasPrefix(lines[0], "- at '/endpoints/1/endpoint'") ||
+		!strings.HasPrefix(lines[1], "- at '/endpoints/0/endpoint'") {
+		t.Errorf("output = %q, want the refused entry 1, then the accepted entry 0 it clashes with", verr.Output)
 	}
 }
 
