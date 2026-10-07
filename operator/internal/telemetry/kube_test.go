@@ -100,8 +100,10 @@ func TestTraceKubeAPI_RequestUnderASpanIsItsChildAndCarriesTheTrace(t *testing.T
 
 	spans := rec.Ended()
 	spans.RequireChild(t, "reconcile", "k8s update configmaps")
-	if len(api.traceparents) != 1 || api.traceparents[0] == "" {
-		t.Errorf("API server got traceparent headers %q, want one", api.traceparents)
+	sc := spans.One(t, "k8s update configmaps").SpanContext()
+	want := "00-" + sc.TraceID().String() + "-" + sc.SpanID().String() + "-01"
+	if len(api.traceparents) != 1 || api.traceparents[0] != want {
+		t.Errorf("API server got traceparent headers %q, want [%s] (the client span)", api.traceparents, want)
 	}
 }
 
