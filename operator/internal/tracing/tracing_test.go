@@ -45,3 +45,12 @@ func TestStart_RebindsTheContextLoggerToTheNewSpan(t *testing.T) {
 		t.Errorf("log lines = %q, want one carrying span ID %s", lines, span.SpanContext().SpanID())
 	}
 }
+
+func TestStart_NilTracerStartsANoOpSpan(t *testing.T) {
+	_, span := tracing.Start(context.Background(), nil, "anything")
+	defer span.End()
+
+	if span.IsRecording() {
+		t.Error("a nil tracer started a recording span")
+	}
+}
