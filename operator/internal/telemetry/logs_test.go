@@ -99,7 +99,10 @@ func TestLogger_RecordWithACancelledContextStillReachesStdout(t *testing.T) {
 	ctx, cancel := context.WithCancel(logf.IntoContext(context.Background(), logger))
 	cancel()
 
-	logf.FromContext(tracing.WithLogContext(ctx)).Info("after the deadline")
+	ctx, span := tracing.Start(ctx, nil, "reconcile")
+	defer span.End()
+
+	logf.FromContext(ctx).Info("after the deadline")
 
 	if got := records(t, out); len(got) != 1 || got[0].Body.Value != "after the deadline" {
 		t.Errorf("records = %+v, want the one logged after cancellation", got)
