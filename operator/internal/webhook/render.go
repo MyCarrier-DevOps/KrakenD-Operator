@@ -22,13 +22,16 @@ import (
 	"slices"
 	"strings"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
+	"github.com/mycarrier-devops/krakend-operator/internal/fieldindex"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 )
 
@@ -110,6 +113,9 @@ type scan struct {
 	stopped error
 }
 
+// cutShort says the scan ended on a check that could not run.
+func (s *scan) cutShort() bool { return s.stopped != nil }
+
 // failingEndpoints judges each suspect on its own with a write (now, with the
 // suspect as its endpoint) and, when that fails, without it (was; nil when
 // there is nothing to compare with: nothing was stored before, or the stored
@@ -160,36 +166,90 @@ func (s *scan) judge(ctx context.Context, chk ConfigChecker, memo configcheck.Me
 
 // failingEndpointsDecidingFirst is failingEndpoints for a write whose group
 // check failed, given the check of the same endpoints as a group with the
-// stored config (before). When that passes, every endpoint it did not mask
-// passes on its own with the stored config, so only a masked one can have
-// failed before the write: those are judged first. If none of them failed
-// both ways, the write is the cause of the failure, whichever endpoints the
-// rest of the scan reaches, and decided is true: a scan the admission
-// deadline cuts off then changes no verdict, only how many endpoints are
-// named. When before fails, nothing is decided, and the suspects are judged in
-// their order.
-func failingEndpointsDecidingFirst(ctx context.Context, chk ConfigChecker, memo configcheck.Memo,
-	now configcheck.EndpointUnit, was *configcheck.EndpointUnit, before configcheck.Verdict,
-	suspects []v1alpha1.KrakenDEndpoint) (s scan, decided bool) {
+// stored config (before). When that passes, an endpoint it did not mask passes
+// on its own with the stored config unless it references a policy that fails
+// krakend check alone, which no group check judges. So only the endpoints it
+// masked and those that use such a policy (checked with the stored policies;
+// baseline stands for the stored policy being written, nil for a gateway
+// write) can have failed before the write: they are judged first. If none of
+// them failed both ways, the write is the cause of the failure, whichever
+// endpoints the rest of the scan reaches, and decided is true: a scan the
+// admission deadline cuts off then changes no verdict, only how many
+// endpoints are named. The decision is withdrawn when any endpoint turns out
+// to fail both ways. When before fails, nothing is decided, and the suspects
+// are judged in their order.
+func failingEndpointsDecidingFirst(ctx context.Context, c client.Reader, chk ConfigChecker, memo configcheck.Memo,
+	now configcheck.EndpointUnit, was *configcheck.EndpointUnit, baseline *v1alpha1.KrakenDBackendPolicy,
+	before configcheck.Verdict, suspects []v1alpha1.KrakenDEndpoint) (s scan, decided bool, err error) {
 	if !before.OK {
-		return failingEndpoints(ctx, chk, memo, now, was, suspects), false
+		return failingEndpoints(ctx, chk, memo, now, was, suspects), false, nil
 	}
-	var masked, rest []v1alpha1.KrakenDEndpoint
+	users, err := usersOfFailingPolicies(ctx, c, chk, memo, baseline, suspects)
+	if err != nil {
+		return scan{}, false, err
+	}
+	var first, rest []v1alpha1.KrakenDEndpoint
 	for _, ep := range suspects {
-		if before.Suspect(types.NamespacedName{Namespace: ep.Namespace, Name: ep.Name}) {
-			masked = append(masked, ep)
+		name := types.NamespacedName{Namespace: ep.Namespace, Name: ep.Name}
+		if before.Suspect(name) || users[name] {
+			first = append(first, ep)
 		} else {
 			rest = append(rest, ep)
 		}
 	}
-	s.judge(ctx, chk, memo, now, was, masked)
-	decided = !s.already && s.stopped == nil
-	if s.stopped != nil {
+	s.judge(ctx, chk, memo, now, was, first)
+	if s.cutShort() {
 		s.unchecked += len(rest)
-		return s, false
+		return s, false, nil
 	}
+	decided = !s.already
 	s.judge(ctx, chk, memo, now, was, rest)
-	return s, decided
+	return s, decided && !s.already, nil
+}
+
+// usersOfFailingPolicies returns the endpoints of eps that reference a policy
+// failing krakend check on its own: each distinct policy is checked once, as
+// stored, or as baseline when it is the policy a write replaces. A policy
+// that no longer exists fails nothing: the endpoint reports it missing.
+func usersOfFailingPolicies(ctx context.Context, c client.Reader, chk ConfigChecker, memo configcheck.Memo,
+	baseline *v1alpha1.KrakenDBackendPolicy, eps []v1alpha1.KrakenDEndpoint) (map[types.NamespacedName]bool, error) {
+	fails := make(map[string]bool)
+	users := make(map[types.NamespacedName]bool)
+	for i := range eps {
+		for _, key := range fieldindex.EndpointPolicyKeys(&eps[i]) {
+			failing, known := fails[key]
+			if !known {
+				var err error
+				if failing, err = policyFailsAlone(ctx, c, chk, memo, baseline, key); err != nil {
+					return nil, err
+				}
+				fails[key] = failing
+			}
+			if failing {
+				users[types.NamespacedName{Namespace: eps[i].Namespace, Name: eps[i].Name}] = true
+			}
+		}
+	}
+	return users, nil
+}
+
+// policyFailsAlone checks the policy of key ("namespace/name"), read through
+// c, unless it is baseline's own.
+func policyFailsAlone(ctx context.Context, c client.Reader, chk ConfigChecker, memo configcheck.Memo,
+	baseline *v1alpha1.KrakenDBackendPolicy, key string) (bool, error) {
+	policy := baseline
+	if policy == nil || policy.Namespace+"/"+policy.Name != key {
+		namespace, name, _ := strings.Cut(key, "/")
+		policy = &v1alpha1.KrakenDBackendPolicy{}
+		if err := c.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, policy); err != nil {
+			if apierrors.IsNotFound(err) {
+				return false, nil
+			}
+			return false, unavailable(err)
+		}
+	}
+	alone, err := chk.CheckPolicy(ctx, policy, memo)
+	return !alone.OK, err
 }
 
 // brokenList names the endpoints a write breaks, quoting nothing of them, in
@@ -197,10 +257,10 @@ func failingEndpointsDecidingFirst(ctx context.Context, chk ConfigChecker, memo 
 // maxEntryCauses, or once a check could not run. That count always survives
 // whole; names that do not fit are folded into a count of their own, which
 // says they were checked.
-func brokenList(s scan, room int) string {
+func brokenList(s scan, subject string, room int) string {
 	header := "with this change these KrakenDEndpoints fail validation: "
 	if len(s.broken) == 0 {
-		header = "with this change the gateway's endpoints fail validation"
+		header = "with this change " + subject + " fail validation"
 	}
 	var unchecked string
 	switch {

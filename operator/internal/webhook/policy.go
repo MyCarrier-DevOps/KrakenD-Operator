@@ -166,7 +166,7 @@ func checkPolicyRender(ctx context.Context, tracer trace.Tracer, c client.Reader
 	for _, use := range screened {
 		jctx, span := tracing.Start(ctx, tracer, "admission.judge_policy",
 			trace.WithAttributes(tracing.Object("KrakenDGateway", use.gateway)...))
-		broken, warning, err := judgePolicyUse(jctx, chk, memo, use, old, policy)
+		broken, warning, err := judgePolicyUse(jctx, c, chk, memo, use, old, policy)
 		endDecision(span, checkErr(err))
 		if err != nil {
 			unchecked++
@@ -255,15 +255,22 @@ func screenPolicyUse(ctx context.Context, chk ConfigChecker, memo configcheck.Me
 // judgePolicyUse names the endpoints of a screened gateway that policy
 // breaks: each suspect is checked on its own with policy and, when that
 // fails, with the stored policy (old; on a create, with the policy rendered
-// empty, since nothing rendered them with it before). One that fails only with policy is broken, and any one makes
-// the returned cause, which names endpoints and quotes none. When every
-// suspect that fails failed with the stored policy too, the write only draws
-// a warning. When the group failed but no suspect fails on its own, the group
+// empty, since nothing rendered them with it before). One that fails only with
+// policy is broken, and any one makes the returned cause, which names
+// endpoints and quotes none. When every suspect that fails failed with the
+// stored policy too, the write only draws a warning.
+//
+// When the group failed, the group with the stored policy is checked first
+// (failingEndpointsDecidingFirst). If it passes and no endpoint it masked, or
+// that uses a policy failing on its own, fails with the stored policy too, the
+// write causes the failure: it is refused however the rest of the scan ends,
+// including when the admission time runs out before the scan names an
+// endpoint. When the group failed but no suspect fails on its own, the group
 // with the stored policy tells whether failing together is the write's doing.
 // A check that cannot run is returned as err, unless a broken endpoint was
-// already found: that denial stands.
-func judgePolicyUse(ctx context.Context, chk ConfigChecker, memo configcheck.Memo, use policyUse,
-	old, policy *v1alpha1.KrakenDBackendPolicy) (cause, warning string, err error) {
+// already found or the write was decided: that denial stands.
+func judgePolicyUse(ctx context.Context, c client.Reader, chk ConfigChecker, memo configcheck.Memo,
+	use policyUse, old, policy *v1alpha1.KrakenDBackendPolicy) (cause, warning string, err error) {
 	if use.err != nil || use.warning != "" {
 		return "", use.warning, use.err
 	}
@@ -288,14 +295,17 @@ func judgePolicyUse(ctx context.Context, chk ConfigChecker, memo configcheck.Mem
 		if err != nil {
 			return "", "", err
 		}
-		s, decided = failingEndpointsDecidingFirst(ctx, chk, memo, now, was, before, use.suspects)
+		if s, decided, err = failingEndpointsDecidingFirst(ctx, c, chk, memo, now, was, baseline, before,
+			use.suspects); err != nil {
+			return "", "", err
+		}
 	} else {
 		s = failingEndpoints(ctx, chk, memo, now, was, use.suspects)
 	}
 	switch {
 	case len(s.broken) > 0, s.stopped != nil && decided:
 		prefix := fmt.Sprintf("breaks gateway %s/%s: ", gw.Namespace, gw.Name)
-		return prefix + brokenList(s, warningLimit-len(prefix)), "", nil
+		return prefix + brokenList(s, "the endpoints that use the policy", warningLimit-len(prefix)), "", nil
 	case s.stopped != nil:
 		return "", "", s.stopped
 	case s.already && old == nil:
