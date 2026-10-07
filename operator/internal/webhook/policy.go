@@ -160,14 +160,14 @@ func checkPolicyRender(ctx context.Context, tracer trace.Tracer, c client.Reader
 		sctx, span := tracing.Start(ctx, tracer, "admission.screen_policy",
 			trace.WithAttributes(tracing.Object("KrakenDGateway", gw)...))
 		use := screenPolicyUse(sctx, chk, memo, gw, uses[i].endpoints, policy)
-		endDecision(span, use.err)
+		endDecision(span, checkErr(use.err))
 		screened = append(screened, use)
 	}
 	for _, use := range screened {
 		jctx, span := tracing.Start(ctx, tracer, "admission.judge_policy",
 			trace.WithAttributes(tracing.Object("KrakenDGateway", use.gateway)...))
 		broken, warning, err := judgePolicyUse(jctx, chk, memo, use, old, policy)
-		endDecision(span, err)
+		endDecision(span, checkErr(err))
 		if err != nil {
 			unchecked++
 			if stopped == nil {
