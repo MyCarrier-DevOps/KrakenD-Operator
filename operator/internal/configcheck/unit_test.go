@@ -242,3 +242,34 @@ func TestCheckRoot_RendersTheDragonflyAddress(t *testing.T) {
 		t.Errorf("checked root does not carry the Dragonfly address:\n%s", val.seen[0])
 	}
 }
+
+// inNamespace returns ep moved to ns.
+func inNamespace(ep *v1alpha1.KrakenDEndpoint, ns string) v1alpha1.KrakenDEndpoint {
+	moved := *ep.DeepCopy()
+	moved.Namespace = ns
+	return moved
+}
+
+func TestCheckGroup_ARememberedVerdictNamesOnlyItsOwnEndpoints(t *testing.T) {
+	val := &fakeValidator{err: rejectedOutput("- at '/endpoints/0': bad")}
+	chk := newChecker(val)
+	memo := mapMemo{}
+	gw := gateway(v1alpha1.EditionCE)
+	mine := endpoint("same", "/same")
+
+	for _, ns := range []string{"tenant-a", "tenant-b"} {
+		v, err := chk.CheckGroup(context.Background(), Group{
+			Gateway: gw, Endpoints: []v1alpha1.KrakenDEndpoint{inNamespace(mine, ns)},
+		}, memo)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(v.Findings) != 1 || v.Findings[0].Endpoint.Namespace != ns {
+			t.Errorf("findings for %s = %+v, want only its own endpoint", ns, v.Findings)
+		}
+	}
+
+	if len(val.calls) != 1 {
+		t.Errorf("ran %d checks, want 1: both namespaces render the same config", len(val.calls))
+	}
+}
