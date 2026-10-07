@@ -23,6 +23,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"time"
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -169,5 +170,34 @@ func TestSetup_ExportsEverySignalOverOTLP(t *testing.T) {
 		if posts[path] == 0 {
 			t.Errorf("no POST to %s; the collector got %v", path, posts)
 		}
+	}
+}
+
+// A collector that accepts connections and never answers must not hold the
+// operator's shutdown past its deadline.
+func TestSetup_ShutdownWithAnUnreachableCollectorReturnsByTheDeadline(t *testing.T) {
+	cleanOTelEnv(t)
+	hung := make(chan struct{})
+	collector := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-hung }))
+	defer collector.Close()
+	defer close(hung)
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", collector.URL)
+	tel, err := telemetry.Setup(context.Background(), telemetry.Config{
+		LogLevel: otellog.SeverityInfo, Stdout: &bytes.Buffer{}, Registerer: prometheus.NewRegistry(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, span := tel.TracerProvider.Tracer("t").Start(context.Background(), "pending")
+	span.End()
+	tel.Logger.Info("pending")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	_ = tel.Shutdown(ctx)
+
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Errorf("Shutdown took %v with a 2s deadline", elapsed)
 	}
 }
