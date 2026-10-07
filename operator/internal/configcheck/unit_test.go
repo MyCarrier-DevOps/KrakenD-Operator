@@ -287,3 +287,29 @@ func TestCheckGroup_ARememberedVerdictNamesOnlyItsOwnEndpoints(t *testing.T) {
 		t.Errorf("ran %d checks, want 1: both namespaces render the same config", len(val.calls))
 	}
 }
+
+func TestCheckRoot_KeepsBoundedRefusals(t *testing.T) {
+	refused := &renderer.ValidationError{
+		Err: errors.New("exit status 1"), Stage: renderer.StageRoute,
+		Refusals: []renderer.RouteRefusal{{Message: strings.Repeat("y", maxStoredOutput+1)}},
+	}
+	chk := newChecker(&fakeValidator{err: refused})
+	memo := mapMemo{}
+
+	v, err := chk.CheckRoot(context.Background(), Root{Gateway: gateway(v1alpha1.EditionCE)}, memo)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, kept := range memo {
+		if got := len(kept.Rejection.Refusals[0].Message); got > maxStoredOutput {
+			t.Errorf("memo keeps a %d byte refusal under %s, want at most %d", got, key, maxStoredOutput)
+		}
+	}
+	if got := len(v.Refusals[0].Message); got > maxStoredOutput {
+		t.Errorf("verdict refusal is %d bytes, want at most %d", got, maxStoredOutput)
+	}
+	if refused.Refusals[0].Message != strings.Repeat("y", maxStoredOutput+1) {
+		t.Error("bounding a refusal changed the validator's own rejection")
+	}
+}
