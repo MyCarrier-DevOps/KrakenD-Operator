@@ -97,7 +97,8 @@ func servedByLastConfig(ep v1alpha1.KrakenDEndpoint) bool {
 // scan is what failingEndpoints found among the suspects of a write.
 type scan struct {
 	// broken are the suspects the write breaks, by namespace/name: each fails
-	// on its own with the write and passed without it. At most maxEntryCauses.
+	// on its own with the write and did not fail without it (or was judged
+	// with nothing to compare it with). At most maxEntryCauses.
 	broken []string
 	// already says a suspect fails on its own both with and without the write.
 	already bool
@@ -111,7 +112,9 @@ type scan struct {
 
 // failingEndpoints judges each suspect on its own with a write (now, with the
 // suspect as its endpoint) and, when that fails, without it (was; nil when
-// nothing was stored before, so that every failure is the write's). It stops
+// there is nothing to compare with: nothing was stored before, or the stored
+// root fails and the suspect was served by the last applied config, so that
+// every failure is the write's). It stops
 // at maxEntryCauses broken endpoints, or at the first check that cannot run,
 // which includes one the admission deadline cuts off, and counts the suspects
 // left. A caller keeps a denial the scan found however the scan ended.
