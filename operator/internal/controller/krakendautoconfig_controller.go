@@ -107,8 +107,7 @@ type KrakenDAutoConfigReconciler struct {
 	// FetchTimeout bounds fetching the OpenAPI spec and resolving its
 	// external $refs; zero means defaultFetchTimeout.
 	FetchTimeout time.Duration
-	// Metrics records the controller's metric; nil records it in the
-	// package's Prometheus collectors.
+	// Metrics records the controller's metric; nil records nothing.
 	Metrics AutoConfigMetrics
 }
 
