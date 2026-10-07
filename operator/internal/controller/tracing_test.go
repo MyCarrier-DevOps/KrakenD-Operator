@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"go.opentelemetry.io/otel/attribute"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
@@ -329,5 +330,28 @@ func TestGatewayReconcile_EachCRDLookupIsADiscoverySpanOfItsStage(t *testing.T) 
 				t.Errorf("no k8s.discovery span of %s under %q; spans: %s", tc.kind, tc.parent, spans)
 			}
 		})
+	}
+}
+
+// A reconcile started inside another trace is still the root of one of its
+// own: a trace per reconcile, whatever context the manager hands it.
+func TestGatewayReconcile_StartsANewTraceWhateverTheContextCarries(t *testing.T) {
+	gw := testGateway()
+	c, _ := gatewayStatusWrites(gw, testEndpoint("e", "/e"))
+	rec := tracingtest.New(t)
+	ctx, outer := rec.Tracer().Start(context.Background(), "outer")
+	defer outer.End()
+	r := tracedGatewayReconciler(c, krakendValidator(rec), rec)
+
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(gw)}); err != nil {
+		t.Fatal(err)
+	}
+
+	root := rec.Ended().One(t, "reconcile KrakenDGateway")
+	if root.Parent().IsValid() {
+		t.Errorf("the reconcile span has parent %v, want a root", root.Parent())
+	}
+	if root.SpanContext().TraceID() == outer.SpanContext().TraceID() {
+		t.Errorf("the reconcile span joined the trace %v of its context, want a trace of its own", root.SpanContext().TraceID())
 	}
 }
