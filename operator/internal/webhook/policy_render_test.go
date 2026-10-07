@@ -407,3 +407,41 @@ func TestPolicyAdmission_TheDenialNamesTheBrokenEndpointsAndQuotesNone(t *testin
 			"with the change and with the stored policy", got)
 	}
 }
+
+// policyUsers returns the gateway and, for each name, an endpoint on it that
+// references policy p, in name order.
+func policyUsers(names ...string) []client.Object {
+	objs := []client.Object{testGateway()}
+	for i, name := range names {
+		ep := testEndpoint(name, fmt.Sprintf("/u%d", i))
+		ep.Spec.Endpoints[0].Backends[0].PolicyRef = &v1alpha1.PolicyRef{Name: "p"}
+		objs = append(objs, ep)
+	}
+	return objs
+}
+
+// An endpoint that failed before the change, and that its gateway has not
+// excluded yet, must not hide one that the change breaks.
+func TestPolicyAdmission_AnAlreadyFailingEndpointDoesNotHideABrokenOne(t *testing.T) {
+	epFail := configcheck.EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid}
+	chk := &scriptedChecker{
+		// The policy alone, the root, the group with the change; then the
+		// group with the stored policy, which stale fails too: a judgement
+		// that would hide victim, so the webhook must not rely on it.
+		verdicts: []configcheck.Verdict{{OK: true}, {OK: true}, {Output: "x"}, {Output: "x"}},
+		endpointVerdicts: []configcheck.EndpointVerdict{
+			epFail, epFail, // stale: fails with the change and without it
+			epFail, {OK: true}, // victim: fails only with the change
+		},
+	}
+	v := &PolicyValidator{Client: fakeClient(policyUsers("stale", "victim")...), Checker: chk}
+
+	resp := review(t, v, "alice", testPolicy(`{"x":{}}`), testPolicy(`{}`))
+
+	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("response = %+v, warnings %q; want a 422", resp.Result, resp.Warnings)
+	}
+	if text := responseText(resp); !strings.Contains(text, "default/victim") || strings.Contains(text, "default/stale") {
+		t.Errorf("denial = %q, want it to name default/victim only", text)
+	}
+}
