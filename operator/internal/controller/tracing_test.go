@@ -97,6 +97,7 @@ func TestGatewayReconcile_SpansEachStageUnderItsParent(t *testing.T) {
 		{"configcheck.CheckRoot", "gateway.config", nil},
 		{"configcheck.CheckRendered", "gateway.config", nil},
 		{"gateway.judge_endpoints", "gateway.config", nil},
+		{"gateway.publish_configmap", "gateway.config", nil},
 	} {
 		t.Run(tc.span, func(t *testing.T) {
 			gw := testGateway()
