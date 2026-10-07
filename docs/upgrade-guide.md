@@ -1130,9 +1130,9 @@ Old revisions keep whatever the rendered config embeds, credentials
 included. A revision is kept for up to three config changes, plus any a live
 ReplicaSet or the held Deployment's template still mounts, so a credential
 embedded in the rendered config outlives its rotation by up to two config
-changes, or for as long as a hold keeps a Deployment on the old revision. Keep secrets out of the
-rendered config, or restrict who can read ConfigMaps in the gateway's
-namespace.
+changes, or for as long as a hold keeps a Deployment on the old revision. Keep
+secrets out of the rendered config, or restrict who can read ConfigMaps in the
+gateway's namespace.
 
 The old `<gateway>` ConfigMap never counts toward the three. Rolling a
 gateway back means reverting its CRs. `kubectl rollout undo` to an old
@@ -2036,11 +2036,12 @@ position and it is rejected until it is fixed. On an additional endpoint it is
 matched by the entry's `endpoint` and `method`, like the list's map key:
 removing, inserting or reordering other additional endpoints does not affect
 it, while a new entry, or an entry whose content changed, is checked in full.
-The audit in the Pre-Upgrade Checklist lists these lists. A `policyRef` in `defaults`, `overrides` or
-`additionalEndpoints` that names no existing policy now produces an admission
-warning (at most five, then a count), not a rejection: a release may create the
-policy after the AutoConfig, and the generated endpoints are rejected until it
-exists (the AutoConfig holds each as `EndpointRejected` in
+The override audit in the Pre-Upgrade Checklist lists every AutoConfig's
+overrides, so it finds stored lists like these. A `policyRef` in `defaults`,
+`overrides` or `additionalEndpoints` that names no existing policy now produces
+an admission warning (at most five, then a count), not a rejection: a release
+may create the policy after the AutoConfig, and the generated endpoints are
+rejected until it exists (the AutoConfig holds each as `EndpointRejected` in
 `status.failedOperations` and reports `OperationsFailed`).
 
 ---
@@ -2480,7 +2481,9 @@ reports it.
   message names each refused object's kind and `<namespace>/<name>` and its
   controller if it has one, then the remedy: rename the gateway, or label the
   object to hand it over. `Ready` carries the same reason, with phase `Error`.
-  The condition is `True` while nothing is refused.
+  The condition is `True` once a pass refuses nothing, fails nothing and writes
+  the Deployment. A pass that fails otherwise or holds the Deployment leaves it
+  as it was (absent on a new gateway).
 - A ServiceAccount the gateway does not control holds the Deployment and the
   post-restart Job, whether another controller owns it or nothing does. The
   operator logs `holding the Deployment and the post-restart Job:
@@ -2538,8 +2541,8 @@ kubectl get rolebindings,clusterrolebindings -A -o json \
   | jq -r --rawfile sas gateway-serviceaccounts.txt '
     ($sas | split("\n") | map(select(. != ""))) as $gw
     | .items[] | . as $b | .subjects[]?
-    | select(.kind == "ServiceAccount" and ("\(.namespace)/\(.name)" | IN($gw[])))
-    | "\($b.kind) \($b.metadata.namespace // "-")/\($b.metadata.name) -> \(.namespace)/\(.name)"'
+    | select(.kind == "ServiceAccount" and ("\(.namespace // $b.metadata.namespace)/\(.name)" | IN($gw[])))
+    | "\($b.kind) \($b.metadata.namespace // "-")/\($b.metadata.name) -> \(.namespace // $b.metadata.namespace)/\(.name)"'
 ```
 
 To give a ServiceAccount back, remove the gateway's owner reference and the two
