@@ -182,7 +182,7 @@ func SetupWebhooks(mgr ctrl.Manager, validators Validators) error {
 
 	if err := ctrl.NewWebhookManagedBy(mgr).
 		For(&v1alpha1.KrakenDAutoConfig{}).
-		WithValidator(validators.AutoConfig).
+		WithValidator(tracedValidator{kind: "KrakenDAutoConfig", next: validators.AutoConfig, tracer: validators.Tracer}).
 		Complete(); err != nil {
 		return fmt.Errorf("setting up autoconfig webhook: %w", err)
 	}
