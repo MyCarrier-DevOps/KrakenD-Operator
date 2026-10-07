@@ -20,6 +20,7 @@ import (
 	"context"
 	stderrors "errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -200,6 +201,57 @@ func refuseUncontrolled(gw *v1alpha1.KrakenDGateway, obj client.Object, kind str
 		refused.controller = owner.Kind + "/" + owner.Name
 	}
 	return refused
+}
+
+// notControlledIn returns every notControlledError in err's tree.
+func notControlledIn(err error) []*notControlledError {
+	switch e := err.(type) {
+	case nil:
+		return nil
+	case *notControlledError:
+		return []*notControlledError{e}
+	case interface{ Unwrap() []error }:
+		var all []*notControlledError
+		for _, inner := range e.Unwrap() {
+			all = append(all, notControlledIn(inner)...)
+		}
+		return all
+	case interface{ Unwrap() error }:
+		return notControlledIn(e.Unwrap())
+	}
+	return nil
+}
+
+// setResourcesControlled records on gw which existing objects this pass left
+// alone, found in the errors err carries: False, naming each and what to do,
+// while there is one, True otherwise.
+func (r *KrakenDGatewayReconciler) setResourcesControlled(gw *v1alpha1.KrakenDGateway, err error) {
+	refused := notControlledIn(err)
+	if len(refused) == 0 {
+		r.setConditionWithEvent(gw, metav1.Condition{
+			Type:               v1alpha1.ConditionResourcesControlled,
+			Status:             metav1.ConditionTrue,
+			ObservedGeneration: gw.Generation,
+			Reason:             v1alpha1.ReasonResourcesControlled,
+			Message:            "every object the gateway writes is controlled by it",
+		})
+		return
+	}
+	named := make([]string, len(refused))
+	for i, e := range refused {
+		named[i] = e.Error()
+	}
+	slices.Sort(named)
+	selector := labels.Set(resources.SelectorLabels(gw)).String()
+	r.setConditionWithEvent(gw, metav1.Condition{
+		Type:               v1alpha1.ConditionResourcesControlled,
+		Status:             metav1.ConditionFalse,
+		ObservedGeneration: gw.Generation,
+		Reason:             v1alpha1.ReasonResourceNotControlled,
+		Message: fmt.Sprintf("the gateway leaves existing objects with its name alone: %s. "+
+			"Rename the gateway, or give an object that has no controller the labels %s to hand it over",
+			strings.Join(named, "; "), selector),
+	})
 }
 
 // applyOwned creates or updates obj, which gw controls, with what build sets.
