@@ -242,7 +242,7 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// status write does not stop the infrastructure stage or the gateway
 	// status; it is returned after them so the reconcile is retried.
 	var acceptanceErr error
-	if isApplied(&gw, output, edition) {
+	if cfg.served {
 		acceptanceErr = r.reconcileEndpointAcceptance(ctx, &gw, endpoints, output, cfg.excluded)
 	} else {
 		never, neverErr := r.neverApplied(ctx, &gw)
@@ -716,7 +716,7 @@ func (r *KrakenDGatewayReconciler) reconcileConfig(
 	}
 	markConfigApplied(gw, d.output.Checksum, edition)
 	return configResult{appliedConfigMap: resources.ConfigMapName(gw, d.output.Checksum),
-		output: d.output, excluded: d.excluded, judged: d.judged}, nil
+		output: d.output, excluded: d.excluded, judged: d.judged, served: true}, nil
 }
 
 // serveApplied is the outcome of a pass whose render, after exclusion, is the
@@ -730,7 +730,7 @@ func (r *KrakenDGatewayReconciler) serveApplied(
 ) (configResult, error) {
 	gw.Status.ConfigEdition = edition
 	res, err := r.publishApplied(ctx, gw, output)
-	res.output, res.excluded, res.judged = output, excluded, true
+	res.output, res.excluded, res.judged, res.served = output, excluded, true, true
 	if err != nil {
 		// The ConfigMap does not hold this config, so it is not reported as
 		// the applied one.
