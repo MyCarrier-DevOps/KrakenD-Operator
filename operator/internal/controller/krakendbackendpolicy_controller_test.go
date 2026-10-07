@@ -22,6 +22,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
@@ -841,4 +842,19 @@ func TestPolicyReconcile_TheCheckIsAChildOfTheReconcileSpan(t *testing.T) {
 	}
 
 	rec.Ended().RequireChild(t, "reconcile KrakenDBackendPolicy", "configcheck.CheckPolicy")
+}
+
+func TestNewPolicyRateLimiter_CapsBackoffAtFiveMinutes(t *testing.T) {
+	limiter := newPolicyRateLimiter()
+	req := reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: "pol1"}}
+	if first := limiter.When(req); first != 5*time.Millisecond {
+		t.Fatalf("first delay = %v, want 5ms", first)
+	}
+	var delay time.Duration
+	for range 30 {
+		delay = limiter.When(req)
+	}
+	if delay != 5*time.Minute {
+		t.Fatalf("delay after 30 failures = %v, want the 5m cap", delay)
+	}
 }
