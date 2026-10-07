@@ -248,9 +248,9 @@ func (c *Checker) CheckEndpoint(ctx context.Context, u EndpointUnit, memo Memo) 
 // already judged the same content. The verdict's Masked comes from this
 // render, never from the memo.
 func (c *Checker) lintInput(ctx context.Context, in renderer.RenderInput, memo Memo) (Verdict, error) {
-	out, err := c.renderer.Render(in)
+	out, err := c.render(ctx, in)
 	if err != nil {
-		return Verdict{}, fmt.Errorf("rendering config: %w", err)
+		return Verdict{}, err
 	}
 	v, err := c.remembered(ctx, in, out, modeLint, c.validator.Lint, memo)
 	if err != nil {
