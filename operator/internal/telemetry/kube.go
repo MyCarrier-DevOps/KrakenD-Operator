@@ -100,7 +100,7 @@ func (c readEvents) List(ctx context.Context, list client.ObjectList, opts ...cl
 	err := c.Client.List(ctx, list, opts...)
 	listOpts := (&client.ListOptions{}).ApplyOptions(opts)
 	c.event(ctx, "k8s.client.list", list, semconv.K8SNamespaceName(listOpts.Namespace),
-		attribute.Bool("succeeded", err == nil))
+		attribute.Bool("k8s.client.succeeded", err == nil))
 	return err
 }
 
