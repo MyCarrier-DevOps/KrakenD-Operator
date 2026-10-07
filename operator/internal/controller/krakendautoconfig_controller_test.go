@@ -5636,7 +5636,8 @@ func TestAutoConfigReconcile_PrecheckHoldsASiblingThatTheOlderRouteOwnerBreaks(t
 		}
 	}
 	if held == nil || held.Reason != v1alpha1.ReasonConfigValidationFailed ||
-		!strings.Contains(held.Message, "':userId'") || !strings.Contains(held.Message, "conflicts with existing wildcard ':id'") {
+		!strings.Contains(held.Message, "cannot be routed next to KrakenDEndpoint default/test-ac-getuser,") ||
+		!strings.Contains(held.Message, "GET /users/:userId/orders clashes with GET /users/:id") {
 		t.Errorf("sibling failure = %+v, want ConfigValidationFailed naming the wildcard clash", held)
 	}
 }
