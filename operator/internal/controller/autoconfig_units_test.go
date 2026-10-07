@@ -159,3 +159,28 @@ func TestAutoConfigReconcile_ACappedRenderHoldsEveryWriteBeforeAnyCheck(t *testi
 		t.Errorf("failedOperations = %+v, want listusers held for the capped render", failed)
 	}
 }
+
+func TestAutoConfigReconcile_AnUnchangedSyncThatHoldsRunsNoCheckAgain(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	bad := generatedEndpoint("getB", "/b")
+	bad.Spec.Endpoints[0].Backends[0].Host = []string{"http://invalid.test"}
+	g.output.Endpoints = append(g.output.Endpoints, bad)
+	val := rejectsBadHosts()
+	c := fakeClientBuilder().WithObjects(ac, cm, testGateway()).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Checker = newTestChecker(c, val)
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatal(err)
+	}
+	lints := val.lints
+
+	if _, err := reconcileAC(r, getAC(t, c, ac)); err != nil {
+		t.Fatal(err)
+	}
+
+	if val.lints != lints {
+		t.Errorf("the unchanged sync ran %d checks again, want none", val.lints-lints)
+	}
+}
