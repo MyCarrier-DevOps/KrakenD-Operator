@@ -143,8 +143,9 @@ type ConfigChecker interface {
 func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 	start := time.Now()
-	// A gateway that is gone or terminating has its series deleted below;
-	// observing the duration afterwards would recreate one.
+	// A gateway that is gone or terminating is forgotten below and observes no
+	// duration: the histogram cannot drop its series, so it must at least stop
+	// changing.
 	recordDuration := true
 	defer func() {
 		if recordDuration {
@@ -391,7 +392,8 @@ func (r *KrakenDGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 // forgetGateway drops what the controller keeps per gateway once the gateway
-// is gone or terminating: its metric series and its remembered verdicts.
+// is gone or terminating: its metric series, except the reconcile-duration
+// histogram's, which cannot drop one, and its remembered verdicts.
 func (r *KrakenDGatewayReconciler) forgetGateway(key types.NamespacedName) {
 	r.metrics().ForgetGateway(key)
 	r.verdicts.forget(key)
