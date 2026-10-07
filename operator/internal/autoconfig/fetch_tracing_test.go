@@ -365,3 +365,16 @@ func TestFetch_ASchemeThatIsATokenIsNotEchoed(t *testing.T) {
 		t.Errorf("error %q echoes the scheme", msg)
 	}
 }
+
+// A request that cannot be created is named once, redacted, as well.
+func TestFetch_ARequestThatCannotBeCreatedNamesTheURLOnce(t *testing.T) {
+	f := &httpFetcher{}
+	var noContext context.Context
+
+	_, err := f.fetchFromURL(noContext, FetchSource{URL: "https://user:pw@example.com/spec.json?token=TOKVAL"})
+
+	want := "fetching https://example.com/spec.json?token=REDACTED: creating request: "
+	if err == nil || !strings.HasPrefix(err.Error(), want) || strings.Count(err.Error(), "fetching ") != 1 {
+		t.Errorf("error = %v, want it to start with %q", err, want)
+	}
+}
