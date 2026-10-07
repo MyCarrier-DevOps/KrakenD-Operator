@@ -686,3 +686,39 @@ func TestAutoConfigReconcile_TheSpansOfAWriteNameTheEndpoint(t *testing.T) {
 		}
 	}
 }
+
+// spanCodes returns the status code of each of the named spans.
+func spanCodes(t *testing.T, spans tracingtest.Spans, names ...string) map[string]codes.Code {
+	t.Helper()
+	got := map[string]codes.Code{}
+	for _, name := range names {
+		got[name] = spans.One(t, name).Status().Code
+	}
+	return got
+}
+
+// A failed fetch is the fetch stage's error and the reconcile's: the status
+// write that records the failure carries only its own.
+func TestAutoConfigReconcile_AFailedFetchMarksOnlyItsOwnStage(t *testing.T) {
+	ac := testAutoConfig()
+	c := fakeClientBuilder().WithObjects(ac, testCUEDefinitionsCM()).WithStatusSubresource(ac).Build()
+	f, ce, fi, g := defaultMocks()
+	f.err = errors.New("the spec host is unreachable")
+	r := newACReconciler(c, f, ce, fi, g)
+	rec := tracingtest.New(t)
+	r.Tracer = rec.Tracer()
+
+	if _, err := reconcileAC(r, ac); err == nil {
+		t.Fatal("a failed fetch must fail the sync")
+	}
+
+	want := map[string]codes.Code{
+		"reconcile KrakenDAutoConfig": codes.Error, "autoconfig.fetch_spec": codes.Error, "autoconfig.status": codes.Unset,
+	}
+	got := spanCodes(t, rec.Ended(), "reconcile KrakenDAutoConfig", "autoconfig.fetch_spec", "autoconfig.status")
+	for span, code := range want {
+		if got[span] != code {
+			t.Errorf("%s status = %v, want %v", span, got[span], code)
+		}
+	}
+}
