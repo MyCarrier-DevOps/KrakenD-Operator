@@ -17,11 +17,13 @@ limitations under the License.
 package controller
 
 import (
+	"errors"
 	"slices"
 	"testing"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/types"
 )
 
@@ -182,5 +184,27 @@ func TestAutoConfigReconcile_AnUnchangedSyncThatHoldsRunsNoCheckAgain(t *testing
 
 	if val.lints != lints {
 		t.Errorf("the unchanged sync ran %d checks again, want none", val.lints-lints)
+	}
+}
+
+func TestAutoConfigReconcile_AnEndpointCheckThatCannotRunFailsTheSync(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	checker := &fakeChecker{
+		group:       func([]v1alpha1.KrakenDEndpoint) configcheck.Verdict { return configcheck.Verdict{Output: "x"} },
+		endpointErr: errors.New("fork/exec krakend: resource temporarily unavailable"),
+	}
+	c := fakeClientBuilder().WithObjects(ac, cm, testGateway()).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Checker = checker
+
+	if _, err := reconcileAC(r, ac); err == nil {
+		t.Fatal("reconcile succeeded although an endpoint check could not run")
+	}
+
+	synced := meta.FindStatusCondition(getAC(t, c, ac).Status.Conditions, v1alpha1.ConditionSynced)
+	if synced == nil || synced.Reason != v1alpha1.ReasonValidatorUnavailable || endpointExists(t, c, "test-ac-listusers") {
+		t.Errorf("Synced = %+v; want ValidatorUnavailable and nothing written", synced)
 	}
 }
