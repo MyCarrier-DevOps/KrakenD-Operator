@@ -85,3 +85,15 @@ func TestEndpointAdmission_AnUpdateThatStillFailsOnlyWarns(t *testing.T) {
 		t.Errorf("checks = %s, want the root, the update, then the stored version", got)
 	}
 }
+
+func TestEndpointAdmission_AnUpdateThatNewlyFailsIsDenied(t *testing.T) {
+	stored := testEndpoint("ep", "/a")
+	updated := stored.DeepCopy()
+	updated.Spec.Endpoints[0].Backends[0].URLPattern = "/b"
+	chk := &scriptedChecker{endpointVerdicts: []configcheck.EndpointVerdict{ownFailure("newly bad"), {OK: true}}}
+	v := &EndpointValidator{Client: fakeClient(testGateway(), stored), Checker: chk}
+
+	if resp := review(t, v, "alice", updated, stored); resp.Allowed {
+		t.Errorf("an update that newly fails on its own was admitted: %v", resp.Warnings)
+	}
+}
