@@ -69,3 +69,25 @@ func TestAutoConfigReconcile_HoldsACandidateThatWouldLoseARouterClash(t *testing
 		t.Errorf("failedOperations = %+v, want getb held, naming default/users and the router's refusal", failed)
 	}
 }
+
+func TestAutoConfigReconcile_HoldsACandidateThatWouldPushAnotherEndpointOut(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	g.output.Endpoints = append(g.output.Endpoints, generatedEndpoint("getB", "/b/{id}"))
+	checker := &fakeChecker{conflicts: clashOf("test-ac-getb", map[types.NamespacedName][]renderer.EntryConflict{
+		{Namespace: "tenant-z", Name: "orders"}: {{Endpoint: "/b/{userId}/x", Method: "GET",
+			Winner: types.NamespacedName{Namespace: "default", Name: "test-ac-getb"}, Detail: routerRefusal}},
+	})}
+	c := fakeClientBuilder().WithObjects(ac, cm, testGateway()).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Checker = checker
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	if endpointExists(t, c, "test-ac-getb") {
+		t.Error("getb was written although it would keep tenant-z/orders out of the router")
+	}
+}
