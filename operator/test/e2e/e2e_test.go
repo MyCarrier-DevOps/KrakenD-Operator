@@ -227,12 +227,8 @@ var _ = Describe("KrakenD Operator", Ordered, func() {
 				cmd := exec.Command("kubectl", "logs", controllerPodName, "-n", namespace)
 				output, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).To(ContainSubstring(`"Value":"Serving metrics server"`),
-					"Metrics server not yet started")
-				g.Expect(output).To(ContainSubstring(`"Name":"krakend-operator/controller-runtime/metrics"`),
-					"the metrics server's record does not carry its logger name")
-				g.Expect(output).To(ContainSubstring(`{"Key":"service.name","Value":{"Type":"STRING","Value":"krakend-operator"}}`),
-					"records do not name the operator's service")
+				g.Expect(hasMetricsServerRecord(output)).To(BeTrue(),
+					"no single record has the body, the logger name and the service name of the metrics server start")
 			}
 			Eventually(verifyMetricsServerStarted).Should(Succeed())
 
@@ -800,4 +796,31 @@ type tokenRequest struct {
 	Status struct {
 		Token string `json:"token"`
 	} `json:"status"`
+}
+
+// hasMetricsServerRecord reports whether one line of the operator's JSON logs,
+// one record per line, is the metrics server's start: its body, the logger
+// name of its scope and the operator's service name all on the same record.
+func hasMetricsServerRecord(logs string) bool {
+	for _, line := range strings.Split(logs, "\n") {
+		var record struct {
+			Body     struct{ Value any }
+			Resource []struct {
+				Key   string
+				Value struct{ Value any }
+			}
+			Scope struct{ Name string }
+		}
+		if json.Unmarshal([]byte(line), &record) != nil ||
+			record.Body.Value != "Serving metrics server" ||
+			record.Scope.Name != "krakend-operator/controller-runtime/metrics" {
+			continue
+		}
+		for _, attr := range record.Resource {
+			if attr.Key == "service.name" && attr.Value.Value == "krakend-operator" {
+				return true
+			}
+		}
+	}
+	return false
 }
