@@ -26,6 +26,8 @@ import (
 	"testing"
 
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -64,11 +66,17 @@ func tracedClient(t *testing.T, rec *tracingtest.Recorder) (client.Client, *fake
 // tracedClientAt is tracedClient for a host with a path prefix.
 func tracedClientAt(t *testing.T, rec *tracingtest.Recorder, prefix string) (client.Client, *fakeAPIServer) {
 	t.Helper()
+	return tracedClientWith(t, rec.Provider(), prefix)
+}
+
+// tracedClientWith is tracedClientAt for any tracer provider.
+func tracedClientWith(t *testing.T, tp trace.TracerProvider, prefix string) (client.Client, *fakeAPIServer) {
+	t.Helper()
 	api := &fakeAPIServer{}
 	srv := httptest.NewServer(api)
 	t.Cleanup(srv.Close)
 	cfg := &rest.Config{Host: srv.URL + prefix}
-	telemetry.TraceKubeAPI(cfg, rec.Provider())
+	telemetry.TraceKubeAPI(cfg, tp)
 	// A static mapper: the fake server answers no discovery request.
 	mapper := meta.NewDefaultRESTMapper(nil)
 	mapper.Add(corev1.SchemeGroupVersion.WithKind("ConfigMap"), meta.RESTScopeNamespace)
@@ -307,5 +315,31 @@ func TestReadEvents_AListAddsAnEventToTheActiveSpan(t *testing.T) {
 	attrs := eventAttrs(t, rec, "reconcile", "k8s.client.list")
 	if attrs["k8s.namespace.name"] != "ns" || attrs["succeeded"] != "true" {
 		t.Errorf("event attributes = %v, want namespace ns, succeeded", attrs)
+	}
+}
+
+func TestTraceKubeAPI_UnsampledParentRecordsNoSpanAndPassesTheDecisionOn(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.NeverSample())),
+		sdktrace.WithSyncer(exporter))
+	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
+	c, api := tracedClientWith(t, tp, "")
+	traceID, _ := trace.TraceIDFromHex("0102030405060708090a0b0c0d0e0f10")
+	spanID, _ := trace.SpanIDFromHex("1112131415161718")
+	ctx := trace.ContextWithSpanContext(context.Background(), trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID: traceID, SpanID: spanID, Remote: true, // no TraceFlags: not sampled
+	}))
+
+	if err := updateConfigMap(ctx, c); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := exporter.GetSpans(); len(got) != 0 {
+		t.Errorf("spans = %v, want none under an unsampled parent", got)
+	}
+	if len(api.traceparents) != 1 || !strings.HasPrefix(api.traceparents[0], "00-"+traceID.String()+"-") ||
+		!strings.HasSuffix(api.traceparents[0], "-00") {
+		t.Errorf("API server got traceparent headers %q, want one for the parent's trace with flags 00", api.traceparents)
 	}
 }
