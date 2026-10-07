@@ -77,8 +77,10 @@ const combinedFailureMessage = "Every endpoint passes krakend check on its own, 
 //     endpoints fail only together, which is the gateway's failure.
 //
 // Every check answers from the gateway's verdict memo when it already judged
-// the same content, so a gateway whose inputs did not change runs none. An
-// error means a check could not run: nothing is decided, and the verdicts
+// the same content, so a gateway whose inputs did not change runs none. The
+// checks of one object on its own are counted in
+// config_validation_failures_total (countedPass); the whole render's are not.
+// An error means a check could not run: nothing is decided, and the verdicts
 // judged before it are kept for the next pass.
 func (r *KrakenDGatewayReconciler) decide(
 	ctx context.Context, gw *v1alpha1.KrakenDGateway, in renderer.RenderInput,
@@ -106,7 +108,7 @@ func (r *KrakenDGatewayReconciler) decide(
 	if !root.OK {
 		return decision{failure: rootFailure(root)}, nil
 	}
-	whole, err := r.Checker.CheckRendered(ctx, in, full, counted)
+	whole, err := r.Checker.CheckRendered(ctx, in, full, pass)
 	if err != nil {
 		return decision{}, err
 	}
@@ -133,7 +135,7 @@ func (r *KrakenDGatewayReconciler) decide(
 	}
 	if !isApplied(gw, out, edition) {
 		var safety configcheck.Verdict
-		if safety, err = r.Checker.CheckRendered(ctx, rest, out, counted); err != nil {
+		if safety, err = r.Checker.CheckRendered(ctx, rest, out, pass); err != nil {
 			return decision{}, err
 		}
 		if !safety.OK {
