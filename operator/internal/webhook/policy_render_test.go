@@ -82,6 +82,8 @@ func TestPolicyAdmission_Render(t *testing.T) {
 			"already fail validation together"},
 		{"they fail only together with the change", referencing(), testPolicy(`{}`),
 			[]configcheck.Verdict{ok, ok, fail, ok}, nil, false, "policy,root,group,endpoint,group", ""},
+		{"the gateway root fails alone", referencing(), testPolicy(`{}`),
+			[]configcheck.Verdict{ok, fail}, nil, true, "policy,root", "fails validation on its own"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
