@@ -49,6 +49,24 @@ type instrumentation struct {
 	Metrics *telemetry.OperatorMetrics
 }
 
+// gatewayMetrics is the gateway controller's port, nil without a recorder: a
+// nil *OperatorMetrics in the interface would not be nil.
+func (i instrumentation) gatewayMetrics() controller.GatewayMetrics {
+	if i.Metrics == nil {
+		return nil
+	}
+	return i.Metrics
+}
+
+// autoConfigMetrics is the AutoConfig controller's port, nil without a
+// recorder.
+func (i instrumentation) autoConfigMetrics() controller.AutoConfigMetrics {
+	if i.Metrics == nil {
+		return nil
+	}
+	return i.Metrics
+}
+
 // validation is everything that holds the pod's one config checker.
 type validation struct {
 	Checker    *configcheck.Checker
@@ -79,7 +97,7 @@ func wireValidation(
 			// Each gateway reconcile holds one checker slot, so the workers
 			// are the slots the AutoConfig bound leaves the gateway.
 			MaxConcurrentReconciles: gatewayCheckWorkers,
-			Metrics:                 inst.Metrics,
+			Metrics:                 inst.gatewayMetrics(),
 			Tracer:                  inst.Tracer,
 		},
 		AutoConfig: &controller.KrakenDAutoConfigReconciler{
@@ -95,7 +113,7 @@ func wireValidation(
 			// checker's slots, however many workers there are.
 			CheckSlots: make(chan struct{}, autoConfigCheckSlots),
 			Clock:      clock.RealClock{},
-			Metrics:    inst.Metrics,
+			Metrics:    inst.autoConfigMetrics(),
 			Tracer:     inst.Tracer,
 		},
 		Validators: webhooksetup.NewValidators(
