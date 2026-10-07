@@ -161,7 +161,7 @@ func SetupWebhooks(mgr ctrl.Manager, validators Validators) error {
 
 	if err := ctrl.NewWebhookManagedBy(mgr).
 		For(&v1alpha1.KrakenDGateway{}).
-		WithValidator(validators.Gateway).
+		WithValidator(tracedValidator{kind: "KrakenDGateway", next: validators.Gateway, tracer: validators.Tracer}).
 		Complete(); err != nil {
 		return fmt.Errorf("setting up gateway webhook: %w", err)
 	}
