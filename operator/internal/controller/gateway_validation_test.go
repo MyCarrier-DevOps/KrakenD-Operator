@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -16,7 +17,6 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
-	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
@@ -749,10 +749,11 @@ func TestGatewayReconcile_ASafetyNetFailureOnTheFastPathDoesNotHoldTheGeneration
 	}
 }
 
-// excludedSeries returns the gateway's excluded-endpoints gauge, by reason.
-func excludedSeries(t *testing.T, namespace, gateway string) map[string]float64 {
+// excludedSeries returns the gateway's excluded-endpoints gauge in g, by
+// reason.
+func excludedSeries(t *testing.T, g prometheus.Gatherer, namespace, gateway string) map[string]float64 {
 	t.Helper()
-	families, err := ctrlmetrics.Registry.Gather()
+	families, err := g.Gather()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -782,7 +783,8 @@ func TestGatewayReconcile_ReportsTheExcludedEndpoints(t *testing.T) {
 	c := fakeClientBuilder().WithObjects(gw, good, bad).WithStatusSubresource(gw, good, bad).Build()
 	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}), rejectsBadHosts())
 	rec := r.Recorder.(*record.FakeRecorder)
-	t.Cleanup(func() { deleteGatewayMetrics(gw.Namespace, gw.Name) })
+	m, reg := testMetrics(t)
+	r.Metrics = m
 
 	for range 2 {
 		if err := reconcileGateway(t, r, gw); err != nil {
@@ -798,7 +800,7 @@ func TestGatewayReconcile_ReportsTheExcludedEndpoints(t *testing.T) {
 	if n := eventsWithReason(rec, v1alpha1.ReasonInvalidEndpointsExcluded); n != 1 {
 		t.Errorf("%d %s events over two passes, want 1", n, v1alpha1.ReasonInvalidEndpointsExcluded)
 	}
-	if got := excludedSeries(t, gw.Namespace, gw.Name); len(got) != 1 || got[v1alpha1.ReasonEndpointInvalid] != 1 {
+	if got := excludedSeries(t, reg, gw.Namespace, gw.Name); len(got) != 1 || got[v1alpha1.ReasonEndpointInvalid] != 1 {
 		t.Errorf("gauge = %v, want EndpointInvalid=1", got)
 	}
 
@@ -830,11 +832,11 @@ func TestGatewayReconcile_ExclusionSignalsSurviveARestartThatAppliesNothing(t *t
 	good, bad := testEndpoint("good", "/a"), badHosted("bad", "/b")
 	good.Namespace, bad.Namespace = gw.Namespace, gw.Namespace
 	c := fakeClientBuilder().WithObjects(gw, good, bad).WithStatusSubresource(gw, good, bad).Build()
-	t.Cleanup(func() { deleteGatewayMetrics(gw.Namespace, gw.Name) })
-	if err := reconcileGateway(t, newTestGatewayReconciler(c, renderer.New(renderer.Options{}), rejectsBadHosts()), gw); err != nil {
+	before := newTestGatewayReconciler(c, renderer.New(renderer.Options{}), rejectsBadHosts())
+	before.Metrics, _ = testMetrics(t)
+	if err := reconcileGateway(t, before, gw); err != nil {
 		t.Fatal(err)
 	}
-	deleteGatewayMetrics(gw.Namespace, gw.Name) // the restarted process starts with no series
 	stored := getGateway(t, c, gw)
 	stored.Spec.Config.ExtraConfig = &runtime.RawExtension{Raw: []byte(`{"test/root-bad":{}}`)}
 	stored.Generation++
@@ -842,8 +844,12 @@ func TestGatewayReconcile_ExclusionSignalsSurviveARestartThatAppliesNothing(t *t
 		t.Fatal(err)
 	}
 	val := &contentValidator{markers: map[string]string{"invalid.test": badHostOutput, "test/root-bad": "root refused"}}
+	// The restarted process has a recorder of its own, with no series yet.
+	restarted := newTestGatewayReconciler(c, renderer.New(renderer.Options{}), val)
+	m, reg := testMetrics(t)
+	restarted.Metrics = m
 
-	if err := reconcileGateway(t, newTestGatewayReconciler(c, renderer.New(renderer.Options{}), val), gw); err != nil {
+	if err := reconcileGateway(t, restarted, gw); err != nil {
 		t.Fatal(err)
 	}
 
@@ -853,7 +859,7 @@ func TestGatewayReconcile_ExclusionSignalsSurviveARestartThatAppliesNothing(t *t
 			"its config: survives/bad" {
 		t.Errorf("EndpointsExcluded = %+v, want it kept, worded for a pass that applies nothing", cond)
 	}
-	if got := excludedSeries(t, gw.Namespace, gw.Name); got[v1alpha1.ReasonEndpointInvalid] != 1 {
+	if got := excludedSeries(t, reg, gw.Namespace, gw.Name); got[v1alpha1.ReasonEndpointInvalid] != 1 {
 		t.Errorf("gauge = %v, want EndpointInvalid=1 from bad's stored verdict", got)
 	}
 }
@@ -868,7 +874,8 @@ func TestGatewayReconcile_ExclusionSignalsFollowTheEndpoints(t *testing.T) {
 	c := fakeClientBuilder().WithObjects(gw, good, bad, badPolicy).WithStatusSubresource(gw, good, bad).Build()
 	val := &contentValidator{markers: map[string]string{"invalid.test": badHostOutput, "x/bad-policy": "policy refused"}}
 	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}), val)
-	t.Cleanup(func() { deleteGatewayMetrics(gw.Namespace, gw.Name) })
+	m, reg := testMetrics(t)
+	r.Metrics = m
 	edit := func(change func(*v1alpha1.KrakenDEndpoint)) {
 		t.Helper()
 		var stored v1alpha1.KrakenDEndpoint
@@ -893,7 +900,7 @@ func TestGatewayReconcile_ExclusionSignalsFollowTheEndpoints(t *testing.T) {
 		ep.Spec.Endpoints[0].Backends[0].Host = []string{"http://svc:8080"}
 		ep.Spec.Endpoints[0].Backends[0].PolicyRef = &v1alpha1.PolicyRef{Name: "p"}
 	})
-	if got := excludedSeries(t, gw.Namespace, gw.Name); len(got) != 1 || got[v1alpha1.ReasonPolicyInvalid] != 1 {
+	if got := excludedSeries(t, reg, gw.Namespace, gw.Name); len(got) != 1 || got[v1alpha1.ReasonPolicyInvalid] != 1 {
 		t.Errorf("after the reason changed, gauge = %v, want PolicyInvalid=1 and no EndpointInvalid series", got)
 	}
 
@@ -908,7 +915,7 @@ func TestGatewayReconcile_ExclusionSignalsFollowTheEndpoints(t *testing.T) {
 		v1alpha1.ConditionEndpointsExcluded); cond != nil {
 		t.Errorf("EndpointsExcluded = %+v after the excluded endpoint is gone, want it removed", cond)
 	}
-	if got := excludedSeries(t, gw.Namespace, gw.Name); len(got) != 0 {
+	if got := excludedSeries(t, reg, gw.Namespace, gw.Name); len(got) != 0 {
 		t.Errorf("gauge = %v after the excluded endpoint is gone, want no series", got)
 	}
 }
@@ -920,8 +927,13 @@ func TestGatewayReconcile_ADeletedGatewayDropsItsExcludedSeries(t *testing.T) {
 	bad.Namespace = gw.Namespace
 	c := fakeClientBuilder().WithObjects(gw, bad).WithStatusSubresource(gw, bad).Build()
 	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}), rejectsBadHosts())
+	m, reg := testMetrics(t)
+	r.Metrics = m
 	if err := reconcileGateway(t, r, gw); err != nil {
 		t.Fatal(err)
+	}
+	if got := excludedSeries(t, reg, gw.Namespace, gw.Name); got[v1alpha1.ReasonEndpointInvalid] != 1 {
+		t.Fatalf("gauge = %v before the delete, want EndpointInvalid=1", got)
 	}
 
 	if err := c.Delete(context.Background(), gw); err != nil {
@@ -931,7 +943,7 @@ func TestGatewayReconcile_ADeletedGatewayDropsItsExcludedSeries(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got := excludedSeries(t, gw.Namespace, gw.Name); len(got) != 0 {
+	if got := excludedSeries(t, reg, gw.Namespace, gw.Name); len(got) != 0 {
 		t.Errorf("gauge = %v for a deleted gateway, want no series", got)
 	}
 }
@@ -939,7 +951,6 @@ func TestGatewayReconcile_ADeletedGatewayDropsItsExcludedSeries(t *testing.T) {
 func TestReportExclusions_NamesTheFirstTenSortedAndCountsTheRest(t *testing.T) {
 	gw := reconciledGateway()
 	gw.Namespace = "capped"
-	t.Cleanup(func() { deleteGatewayMetrics(gw.Namespace, gw.Name) })
 	var endpoints []v1alpha1.KrakenDEndpoint
 	for _, name := range []string{"k", "c", "a", "j", "e", "b", "i", "g", "d", "h", "f"} {
 		ep := withAccepted(badHosted(name, "/"+name), metav1.ConditionFalse, v1alpha1.ReasonEndpointInvalid)
