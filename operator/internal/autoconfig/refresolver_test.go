@@ -41,7 +41,7 @@ func (s *stubFetcher) Fetch(_ context.Context, source FetchSource) (*FetchResult
 	s.hits[source.URL]++
 	body, ok := s.docs[source.URL]
 	if !ok {
-		return nil, fmt.Errorf("not found: %s", source.URL)
+		return nil, fmt.Errorf("fetching %s: not found", source.URL)
 	}
 	return &FetchResult{Data: body, Checksum: fmt.Sprintf("%x", sha256.Sum256(body))}, nil
 }

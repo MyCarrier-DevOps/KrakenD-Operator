@@ -58,7 +58,8 @@ type FetchResult struct {
 	Checksum string
 }
 
-// Fetcher fetches OpenAPI specs from URLs or ConfigMaps.
+// Fetcher fetches OpenAPI specs from URLs or ConfigMaps. Its errors name a URL
+// only through RedactURL: they become status messages and span events.
 type Fetcher interface {
 	Fetch(ctx context.Context, source FetchSource) (*FetchResult, error)
 }
