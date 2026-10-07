@@ -2986,3 +2986,79 @@ func TestGatewayReconcile_ARejectedRenderStillRevertsARolloutUndo(t *testing.T) 
 		t.Errorf("Deployment mounts %q, want the stored config's %q restored", got, want)
 	}
 }
+
+// firstGatewayStatusWrite records the first gateway status write of a pass,
+// with the config ConfigMap the Deployment mounts at that moment.
+type firstGatewayStatusWrite struct {
+	status  *v1alpha1.KrakenDGatewayStatus
+	mounted string
+}
+
+func (w *firstGatewayStatusWrite) funcs(base client.Client) interceptor.Funcs {
+	return interceptor.Funcs{
+		SubResourceUpdate: func(
+			ctx context.Context, c client.Client, sub string, obj client.Object, opts ...client.SubResourceUpdateOption,
+		) error {
+			if gw, ok := obj.(*v1alpha1.KrakenDGateway); ok && w.status == nil {
+				w.status = gw.Status.DeepCopy()
+				var dep appsv1.Deployment
+				if err := base.Get(ctx, client.ObjectKeyFromObject(gw), &dep); err == nil {
+					w.mounted = resources.MountedConfigMapName(&dep.Spec.Template.Spec)
+				}
+			}
+			return c.SubResource(sub).Update(ctx, obj, opts...)
+		},
+	}
+}
+
+// requireRolloutPending fails when the first status write reads as Ready or
+// Running while the Deployment still mounts a config other than want.
+func (w *firstGatewayStatusWrite) requireRolloutPending(t *testing.T, want string) {
+	t.Helper()
+	if w.status == nil {
+		t.Fatal("the gateway status was never written")
+	}
+	if w.mounted == want {
+		t.Fatalf("the Deployment already mounts %q at the first write; the case does not exercise the gap", want)
+	}
+	ready := meta.FindStatusCondition(w.status.Conditions, v1alpha1.ConditionReady)
+	if ready == nil || ready.Status == metav1.ConditionTrue || w.status.Phase == v1alpha1.PhaseRunning {
+		t.Errorf("first write: Ready = %+v, phase %q while the Deployment mounts %q, not %q; want not Ready and not Running",
+			ready, w.status.Phase, w.mounted, want)
+	}
+}
+
+func TestGatewayReconcile_TheAppliedRecordIsNotReadyUntilTheDeploymentMovesOn(t *testing.T) {
+	const a, b = `{"version":3,"name":"a"}`, `{"version":3,"name":"b"}`
+	sumA := hash.SHA256Hex([]byte(a))
+	cases := []struct {
+		name  string
+		start func(gw *v1alpha1.KrakenDGateway)
+	}{
+		{"from a running gateway", func(*v1alpha1.KrakenDGateway) {}},
+		{"from a rejected config", func(gw *v1alpha1.KrakenDGateway) {
+			meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+				Type: v1alpha1.ConditionConfigValid, Status: metav1.ConditionFalse,
+				Reason: v1alpha1.ReasonCombinedConfigInvalid, Message: "rejected",
+			})
+			setGatewayReadiness(gw, 1)
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gw := servingGateway(sumA, convergedImage)
+			gw.Generation, gw.Status.ObservedGeneration = 1, 1
+			tc.start(gw)
+			base := fakeClientBuilder().WithObjects(gw, settledDeployment(gw, sumA)).
+				WithStatusSubresource(gw).Build().(client.WithWatch)
+			first := &firstGatewayStatusWrite{}
+			r := newTestGatewayReconciler(base, renderOf(b), &mockValidator{})
+			r.Client = interceptor.NewClient(base, first.funcs(base))
+
+			if err := reconcileGateway(t, r, gw); err != nil {
+				t.Fatalf("reconcile: %v", err)
+			}
+			first.requireRolloutPending(t, resources.ConfigMapName(gw, hash.SHA256Hex([]byte(b))))
+		})
+	}
+}
