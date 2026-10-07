@@ -595,3 +595,55 @@ func TestJudgeEndpoints_ExcludesOnlyTheFailingVerdicts(t *testing.T) {
 		}
 	}
 }
+
+// safetyFailsWithoutE passes every full check of a config that serves /e and
+// rejects one that does not, as the safety net of a render without e does.
+type safetyFailsWithoutE struct{ *contentValidator }
+
+func (v safetyFailsWithoutE) Validate(_ context.Context, data []byte, _ v1alpha1.Edition) error {
+	if !strings.Contains(string(data), `"/e"`) {
+		return rejectedBy("SAFETY NET")
+	}
+	return nil
+}
+
+func TestGatewayReconcile_ASafetyNetFailureOnTheFastPathReportsAnUnappliedExclusion(t *testing.T) {
+	gw := reconciledGateway()
+	older, newer := maskingEndpoints()
+	c := fakeClientBuilder().WithObjects(gw, older, newer).WithStatusSubresource(gw, older, newer).Build()
+	if err := reconcileGateway(t, newTestGatewayReconciler(c, renderer.New(renderer.Options{}),
+		&contentValidator{}), gw); err != nil {
+		t.Fatal(err)
+	}
+	applied := getGateway(t, c, gw).Status.ConfigChecksum
+	var live v1alpha1.KrakenDEndpoint
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(newer), &live); err != nil {
+		t.Fatal(err)
+	}
+	conflicts := live.Status.Conflicts
+	if len(conflicts) == 0 {
+		t.Fatal("the first pass left e no conflicts to keep")
+	}
+
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}), safetyFailsWithoutE{rejectsBadHosts()})
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+
+	stored := getGateway(t, c, gw)
+	cv := meta.FindStatusCondition(stored.Status.Conditions, v1alpha1.ConditionConfigValid)
+	if cv == nil || cv.Reason != v1alpha1.ReasonCombinedConfigInvalid || stored.Status.ConfigChecksum != applied {
+		t.Errorf("ConfigValid = %+v, checksum %s (was %s); want %s with the applied config kept",
+			cv, stored.Status.ConfigChecksum, applied, v1alpha1.ReasonCombinedConfigInvalid)
+	}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(newer), &live); err != nil {
+		t.Fatal(err)
+	}
+	if cond := meta.FindStatusCondition(live.Status.Conditions, v1alpha1.ConditionAccepted); cond == nil ||
+		!strings.HasPrefix(cond.Message, "Will not be served when gateway default/test-gw next applies its config: ") {
+		t.Errorf("e Accepted = %+v, want worded for a config not yet applied: the gateway still serves e", cond)
+	}
+	if !reflect.DeepEqual(live.Status.Conflicts, conflicts) {
+		t.Errorf("status.conflicts = %+v, want the live %+v kept", live.Status.Conflicts, conflicts)
+	}
+}
