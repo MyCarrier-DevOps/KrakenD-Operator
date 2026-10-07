@@ -57,3 +57,17 @@ func TestEndpointAdmission_IsOneSpanAboveItsRulesAndKrakendRun(t *testing.T) {
 	spans.RequireParent(t, "admission.validate KrakenDEndpoint", "configcheck.CheckRoot")
 	spans.RequireParent(t, "admission.validate KrakenDEndpoint", "configcheck.CheckEndpoint")
 }
+
+func TestGatewayAdmission_IsOneSpanAboveItsRulesAndKrakendRun(t *testing.T) {
+	rec := tracingtest.New(t)
+	v := tracedValidators(rec)
+	admit := tracedValidator{kind: "KrakenDGateway", next: v.Gateway, tracer: rec.Tracer()}
+
+	if _, err := admit.ValidateCreate(context.Background(), testGateway()); err != nil {
+		t.Fatal(err)
+	}
+
+	spans := rec.Ended()
+	spans.RequireChild(t, "admission.validate KrakenDGateway", "admission.structural")
+	spans.RequireAncestors(t, "krakend check", "configcheck.", "admission.validate KrakenDGateway")
+}
