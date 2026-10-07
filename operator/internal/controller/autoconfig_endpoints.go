@@ -378,8 +378,10 @@ func (r *KrakenDAutoConfigReconciler) precheck(
 	return rejected, nil
 }
 
-// holdMessageLimit bounds a held candidate's own krakend output, in bytes.
-const holdMessageLimit = 1024
+// holdMessageLimit bounds a held candidate's own krakend output, in bytes, so
+// that the whole message, with the words that introduce the output and the
+// count of findings left out, fits the status without a cut mid-finding.
+const holdMessageLimit = maxStatusMessageLen - len("fails krakend check on its own: ") - len(" (+999 more)")
 
 // judgeCandidates holds each candidate that fails validation on its own,
 // with its own message, in the order that runs the fewest checks:
