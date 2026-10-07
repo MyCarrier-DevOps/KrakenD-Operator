@@ -588,3 +588,38 @@ func TestPolicyAdmission_AGatewayThatCannotBeCheckedDoesNotHideADenial(t *testin
 		t.Errorf("denial = %q, want default/uses-p-gw-a named and the unchecked gateway counted", text)
 	}
 }
+
+// A scan that stopped without finding a broken endpoint judged nothing of the
+// endpoints it left: the request is a 500, never an admission, whatever it
+// found before it stopped.
+func TestPolicyAdmission_AScanThatStoppedWithoutADenialIs500(t *testing.T) {
+	epFail := configcheck.EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid}
+	tests := []struct {
+		name string
+		objs []client.Object
+		// group is the group verdict; the check that cannot run is call failCall.
+		group    configcheck.Verdict
+		verdicts []configcheck.EndpointVerdict
+		failCall int
+	}{
+		{"after an endpoint that already failed", policyUsers("stale", "zz-next"),
+			configcheck.Verdict{Output: "x"}, []configcheck.EndpointVerdict{epFail, epFail}, 6},
+		{"on a masked endpoint", referencing(),
+			configcheck.Verdict{OK: true, Masked: []types.NamespacedName{{Namespace: "default", Name: "uses-p"}}},
+			nil, 4},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			chk := &scriptedChecker{err: errors.New("no slot"), failCall: tt.failCall, failOnly: true,
+				verdicts:         []configcheck.Verdict{{OK: true}, {OK: true}, tt.group},
+				endpointVerdicts: tt.verdicts}
+			v := &PolicyValidator{Client: fakeClient(tt.objs...), Checker: chk}
+
+			resp := review(t, v, "alice", testPolicy(`{"x":{}}`), testPolicy(`{}`))
+
+			if resp.Allowed || resp.Result.Code != http.StatusInternalServerError {
+				t.Errorf("response = %+v, warnings %q; want a 500", resp.Result, resp.Warnings)
+			}
+		})
+	}
+}
