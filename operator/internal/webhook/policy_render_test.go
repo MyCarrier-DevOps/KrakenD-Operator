@@ -275,9 +275,9 @@ func referencingGateways(names ...string) []client.Object {
 	return objs
 }
 
-// Each gateway is judged with the new policy, and the endpoints of those that
-// fail are checked with the new policy and the stored one: the breaking
-// gateway is the one cause, the already failing one a warning.
+// Each gateway is screened with the new policy first; then the endpoints of
+// those that fail are checked with the new policy and the stored one: the
+// breaking gateway is the one cause, the already failing one a warning.
 func TestPolicyAdmission_JudgesEachGatewayWithTheRightPolicy(t *testing.T) {
 	const stored, changed = `{}`, `{"x":{}}`
 	ok, fail := configcheck.Verdict{OK: true}, configcheck.Verdict{Output: "x"}
@@ -311,9 +311,9 @@ func TestPolicyAdmission_JudgesEachGatewayWithTheRightPolicy(t *testing.T) {
 	wantArgs := []string{
 		"policy:" + changed,
 		"-", "default/gw-a:" + changed,
-		"default/uses-p-gw-a[GET /a]:" + changed, "default/uses-p-gw-a[GET /a]:" + stored,
 		"-", "default/gw-b:" + changed,
 		"-", "default/gw-c:" + changed,
+		"default/uses-p-gw-a[GET /a]:" + changed, "default/uses-p-gw-a[GET /a]:" + stored,
 		"default/uses-p-gw-c[GET /a]:" + changed, "default/uses-p-gw-c[GET /a]:" + stored,
 	}
 	if got := strings.Join(chk.args, " "); got != strings.Join(wantArgs, " ") {
@@ -337,7 +337,7 @@ func TestPolicyAdmission_CheckerErrorMidFanOutIs500(t *testing.T) {
 	if resp.Allowed || resp.Result.Code != http.StatusInternalServerError {
 		t.Errorf("response = %+v, want 500", resp.Result)
 	}
-	if got := strings.Join(chk.calls, ","); got != "policy,root,group" {
+	if got := strings.Join(chk.calls, ","); got != "policy,root,group,root" {
 		t.Errorf("checks = %s, want every gateway screened, each stopping at the check that cannot run", got)
 	}
 }
