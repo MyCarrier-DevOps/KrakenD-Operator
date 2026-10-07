@@ -206,7 +206,8 @@ func routesOf(routed []routedRoute) []ginRoute {
 
 // eeWildcardOverlap applies the EE router's wildcard rule (eeWildcardFindings)
 // between entry and the older entries of other KrakenDEndpoints. It reports
-// the first that is an EE wildcard of the method entry lies under.
+// the first that is an EE wildcard of the method entry lies under, or that
+// lies under entry when entry is an EE wildcard.
 func eeWildcardOverlap(older []routedEntry, entry routedEntry) (types.NamespacedName, string, bool) {
 	for _, o := range older {
 		if o.method != entry.method || o.source == entry.source {
@@ -215,6 +216,12 @@ func eeWildcardOverlap(older []routedEntry, entry routedEntry) (types.Namespaced
 		if prefix := strings.TrimSuffix(o.path, "*"); IsEEWildcard(o.path) &&
 			strings.HasPrefix(entry.shape, shapeOf(prefix)) {
 			return o.source, fmt.Sprintf("'%s %s' conflicts with EE wildcard '%s %s': "+
+				"the EE router accepts no other %s route under %s",
+				entry.method, entry.path, o.method, o.path, entry.method, prefix), true
+		}
+		if prefix := strings.TrimSuffix(entry.path, "*"); IsEEWildcard(entry.path) &&
+			strings.HasPrefix(o.shape, shapeOf(prefix)) {
+			return o.source, fmt.Sprintf("EE wildcard '%s %s' conflicts with '%s %s': "+
 				"the EE router accepts no other %s route under %s",
 				entry.method, entry.path, o.method, o.path, entry.method, prefix), true
 		}
