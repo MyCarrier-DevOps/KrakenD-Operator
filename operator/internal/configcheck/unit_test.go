@@ -353,8 +353,8 @@ func TestCheckPolicy_ARememberedVerdictNamesOnlyItsOwnNamespace(t *testing.T) {
 	}
 }
 
-func TestCheckRoot_AMemoEntryWithoutARejectionIsNotATrustedRejection(t *testing.T) {
-	val := &fakeValidator{}
+func TestCheckRoot_AMemoEntryWithoutARejectionIsAMiss(t *testing.T) {
+	val := &fakeValidator{err: rejectedOutput("really bad")}
 	chk := newChecker(val)
 	memo := mapMemo{}
 	root := Root{Gateway: gateway(v1alpha1.EditionCE)}
@@ -367,7 +367,12 @@ func TestCheckRoot_AMemoEntryWithoutARejectionIsNotATrustedRejection(t *testing.
 
 	v, err := chk.CheckRoot(context.Background(), root, memo)
 
-	if err != nil || !v.OK {
-		t.Errorf("CheckRoot = %+v, %v; want OK: an entry with no rejection judged nothing against the config", v, err)
+	if err != nil || v.OK || len(val.calls) != 2 {
+		t.Errorf("CheckRoot = %+v, %v after %d checks; want the validator's rejection from a re-run", v, err, len(val.calls))
+	}
+	for _, kept := range memo {
+		if kept.Rejection == nil {
+			t.Errorf("memo entry %+v was not replaced with the real answer", kept)
+		}
 	}
 }
