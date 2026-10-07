@@ -94,6 +94,141 @@ func TestGatewayAdmission_AnAlreadyFailingEndpointDoesNotHideABrokenOne(t *testi
 	}
 }
 
+// servedByLastConfig is testEndpoint as the gateway reports an endpoint its
+// last applied config serves: Accepted for its current generation.
+func servedByLastConfig(name, path string) *v1alpha1.KrakenDEndpoint {
+	ep := testEndpoint(name, path)
+	ep.Generation = 2
+	ep.Status.Conditions = []metav1.Condition{{Type: v1alpha1.ConditionAccepted, Status: metav1.ConditionTrue,
+		Reason: v1alpha1.ReasonAccepted, ObservedGeneration: 2}}
+	return ep
+}
+
+// With a stored root that passes, an update that breaks a served endpoint is
+// denied by name: the control of the cases below, where the stored root fails.
+func TestGatewayAdmission_AServedEndpointItBreaksIsDeniedWhenTheStoredRootPasses(t *testing.T) {
+	old, gw := editedGateway()
+	chk := &scriptedChecker{verdicts: []configcheck.Verdict{{OK: true}, {Output: "x"}, {OK: true}},
+		endpointVerdicts: []configcheck.EndpointVerdict{{Reason: v1alpha1.ReasonEndpointInvalid}, {OK: true}}}
+	v := &GatewayValidator{Client: fakeClient(old, servedByLastConfig("ep", "/a")), Checker: chk}
+
+	resp := review(t, v, "alice", gw, old)
+
+	if resp.Allowed || !strings.Contains(responseText(resp), "default/ep") {
+		t.Errorf("response = %+v, warnings %q; want a denial naming default/ep", resp.Result, resp.Warnings)
+	}
+}
+
+// A stored root that fails on its own makes every endpoint fail with it, so
+// that says nothing about an endpoint the last applied config served: it
+// failing with the new root is the update's doing.
+func TestGatewayAdmission_AServedEndpointIsDeniedWhenTheStoredRootFails(t *testing.T) {
+	old, gw := editedGateway()
+	epFail := configcheck.EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid}
+	chk := &scriptedChecker{
+		verdicts:         []configcheck.Verdict{{OK: true}, {Output: "x"}, {Output: "the stored root fails"}},
+		endpointVerdicts: []configcheck.EndpointVerdict{epFail, epFail},
+	}
+	v := &GatewayValidator{Client: fakeClient(old, servedByLastConfig("ep", "/a")), Checker: chk}
+
+	resp := review(t, v, "alice", gw, old)
+
+	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity ||
+		!strings.Contains(responseText(resp), "default/ep") {
+		t.Errorf("response = %+v, warnings %q; want a 422 naming default/ep", resp.Result, resp.Warnings)
+	}
+	if got := strings.Join(chk.calls, ","); got != "root,group,root,endpoint" {
+		t.Errorf("checks = %s, want the stored root checked alone, and the endpoint with the new root only", got)
+	}
+}
+
+// An endpoint no applied config served (never judged, or changed since) is
+// not known to have passed, so with a failing stored root it only draws the
+// warning, and it must not hide a served endpoint the update breaks.
+func TestGatewayAdmission_AnEndpointNoConfigServedOnlyWarnsWhenTheStoredRootFails(t *testing.T) {
+	old, gw := editedGateway()
+	epFail := configcheck.EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid}
+	changed := servedByLastConfig("changed", "/b")
+	changed.Generation = 3 // Accepted is for generation 2
+	unjudged := testEndpoint("unjudged", "/c")
+	tests := []struct {
+		name string
+		ep   *v1alpha1.KrakenDEndpoint
+	}{
+		{"one never judged", unjudged},
+		{"one changed since it was judged", changed},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			chk := &scriptedChecker{
+				verdicts:         []configcheck.Verdict{{OK: true}, {Output: "x"}, {Output: "the stored root fails"}},
+				endpointVerdicts: []configcheck.EndpointVerdict{epFail, epFail},
+			}
+			v := &GatewayValidator{Client: fakeClient(old, tt.ep), Checker: chk}
+
+			resp := review(t, v, "alice", gw, old)
+
+			if !resp.Allowed || len(resp.Warnings) != 1 || !strings.Contains(resp.Warnings[0], "already fail validation") {
+				t.Errorf("response = %+v, warnings %q; want it admitted with the already-failing warning",
+					resp.Result, resp.Warnings)
+			}
+		})
+	}
+}
+
+func TestGatewayAdmission_AServedEndpointIsNamedAlongsideOneNoConfigServed(t *testing.T) {
+	old, gw := editedGateway()
+	epFail := configcheck.EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid}
+	chk := &scriptedChecker{
+		verdicts:         []configcheck.Verdict{{OK: true}, {Output: "x"}, {Output: "the stored root fails"}},
+		endpointVerdicts: []configcheck.EndpointVerdict{epFail, epFail, epFail, epFail},
+	}
+	v := &GatewayValidator{Client: fakeClient(old, testEndpoint("a-waiting", "/a"), servedByLastConfig("b-served", "/b")),
+		Checker: chk}
+
+	resp := review(t, v, "alice", gw, old)
+
+	if text := responseText(resp); resp.Allowed || !strings.Contains(text, "default/b-served") ||
+		strings.Contains(text, "default/a-waiting") {
+		t.Errorf("response = %+v, warnings %q; want a denial naming default/b-served only", resp.Result, resp.Warnings)
+	}
+}
+
+// With a failing stored root, the stored group fails too, so it cannot say the
+// endpoints failed together before: failing together with the new root is the
+// update's doing.
+func TestGatewayAdmission_AFailureOnlyTogetherIsDeniedWhenTheStoredRootFails(t *testing.T) {
+	old, gw := editedGateway()
+	chk := &scriptedChecker{verdicts: []configcheck.Verdict{{OK: true}, {Output: "x"}, {Output: "the stored root fails"}}}
+	v := &GatewayValidator{Client: fakeClient(old, servedByLastConfig("ep", "/a")), Checker: chk}
+
+	resp := review(t, v, "alice", gw, old)
+
+	if resp.Allowed || !strings.Contains(responseText(resp), "fail validation together") {
+		t.Errorf("response = %+v, warnings %q; want a denial that they fail together", resp.Result, resp.Warnings)
+	}
+	if got := strings.Join(chk.calls, ","); got != "root,group,root,endpoint" {
+		t.Errorf("checks = %s, want no check of the group with the stored root", got)
+	}
+}
+
+// A stored root check that cannot run leaves the update unjudged: a 500.
+func TestGatewayAdmission_AStoredRootCheckThatCannotRunIs500(t *testing.T) {
+	old, gw := editedGateway()
+	chk := &scriptedChecker{err: errors.New("no slot"), failCall: 3, failOnly: true,
+		verdicts: []configcheck.Verdict{{OK: true}, {Output: "x"}}}
+
+	resp := review(t, &GatewayValidator{Client: fakeClient(old, servedByLastConfig("ep", "/a")), Checker: chk},
+		"alice", gw, old)
+
+	if resp.Allowed || resp.Result.Code != http.StatusInternalServerError {
+		t.Errorf("response = %+v, warnings %q; want a 500", resp.Result, resp.Warnings)
+	}
+	if got := strings.Join(chk.calls, ","); got != "root,group,root" {
+		t.Errorf("checks = %s, want the one that failed to be the stored root", got)
+	}
+}
+
 func TestGatewayAdmission_AMaskedEndpointIsJudgedOnItsOwn(t *testing.T) {
 	old, gw := editedGateway()
 	chk := &scriptedChecker{
