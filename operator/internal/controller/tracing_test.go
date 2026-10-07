@@ -20,6 +20,7 @@ import (
 	"context"
 	"testing"
 
+	"go.opentelemetry.io/otel/attribute"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
@@ -162,4 +163,31 @@ func TestGatewayReconcile_AKrakendRunIsBelowItsCheckInTheConfigStage(t *testing.
 	spans := reconcileTraced(t, testGateway(), testEndpoint("e", "/e"))
 
 	spans.RequireAncestors(t, "krakend check", "configcheck.", "gateway.config", "reconcile KrakenDGateway")
+}
+
+// Each judging pass says which endpoints it judges: the first reconcile judges
+// the suspects of the whole render's check; once that config is applied, the
+// next judges only the endpoints the applied render leaves an entry of out.
+func TestGatewayReconcile_EachJudgingPassNamesItsEndpoints(t *testing.T) {
+	gw := testGateway()
+	c, _ := gatewayStatusWrites(gw, testEndpoint("e", "/e"))
+	first := tracingtest.New(t)
+	r := tracedGatewayReconciler(c, krakendValidator(first), first)
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+	second := tracingtest.New(t)
+	r.Tracer = second.Tracer()
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+
+	for rec, pass := range map[*tracingtest.Recorder]string{first: "suspects", second: "masked"} {
+		spans := rec.Ended()
+		judged := spans.Named("gateway.judge_endpoints").With(attribute.String("gateway.judge.pass", pass))
+		if n := len(judged); n != 1 {
+			t.Errorf("%d judging passes of %q, want 1; spans: %s", n, pass, spans)
+		}
+	}
 }
