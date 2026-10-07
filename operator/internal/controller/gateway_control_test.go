@@ -204,3 +204,42 @@ func TestGatewayReconcile_ServiceTheGatewayMayControlIsRewritten(t *testing.T) {
 		})
 	}
 }
+
+// An orphaned Dragonfly still carries the labels the operator stamps on that
+// kind, which are not the gateway's selector labels: it is taken back, and one
+// that carries only the selector labels is somebody else's.
+func TestReconcileDragonfly_TakesOverOnlyWhatCarriesItsOwnLabels(t *testing.T) {
+	for name, tc := range map[string]struct {
+		labels  func(gw *v1alpha1.KrakenDGateway) map[string]string
+		refused bool
+	}{
+		"its own labels":      {labels: resources.DragonflyLabels},
+		"the selector labels": {labels: resources.SelectorLabels, refused: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			gw := reconciledGateway()
+			gw.UID = "gw-uid"
+			gw.Spec.Dragonfly = &v1alpha1.DragonflySpec{Enabled: true}
+			orphan := controlledChild(gw, dragonflyGVK, resources.DragonflyName(gw))
+			orphan.SetOwnerReferences(nil)
+			orphan.SetLabels(tc.labels(gw))
+			c := fakeClientBuilder().WithRESTMapper(optionalCRDMapper(optionalOwnedGVKs...)).
+				WithObjects(gw, orphan).WithStatusSubresource(gw).Build()
+			r := newTestGatewayReconciler(c, renderOutput("applied"), &mockValidator{})
+
+			err := r.reconcileDragonfly(context.Background(), gw)
+
+			if got := errors.Is(err, errNotControlled); got != tc.refused {
+				t.Fatalf("errors.Is(err, errNotControlled) = %v (err = %v), want %v", got, err, tc.refused)
+			}
+			stored := &unstructured.Unstructured{}
+			stored.SetGroupVersionKind(dragonflyGVK)
+			if err := c.Get(context.Background(), client.ObjectKeyFromObject(orphan), stored); err != nil {
+				t.Fatal(err)
+			}
+			if got := metav1.IsControlledBy(stored, gw); got == tc.refused {
+				t.Errorf("controlled by the gateway = %v, want %v", got, !tc.refused)
+			}
+		})
+	}
+}
