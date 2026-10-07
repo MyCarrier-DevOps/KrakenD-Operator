@@ -133,6 +133,8 @@ func TestLogger_ValuesAreConvertedToWhatTheyRead(t *testing.T) {
 		{"panicking marshaler", brokenMarshaler{}, "{}"},
 		{"map with struct keys", map[point]string{{"a", 1}: "b"},
 			[]any{map[string]any{"Key": "{A:a B:1}", "Value": stringValue("b")}}},
+		{"slice of durations", []time.Duration{time.Second},
+			[]any{map[string]any{"Type": "INT64", "Value": float64(1e9)}}},
 		{"marshaler of a UID", marshaled{types.UID("u1")}, "u1"},
 		{"marshaler of a map", marshaled{map[string]any{"id": types.UID("u1")}},
 			[]any{map[string]any{"Key": "id", "Value": stringValue("u1")}}},
