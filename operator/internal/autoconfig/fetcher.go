@@ -27,6 +27,9 @@ import (
 	"time"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/tracing"
+	"go.opentelemetry.io/otel/attribute"
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 	"go.opentelemetry.io/otel/trace"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -73,12 +76,12 @@ func NewFetcher(k8sClient client.Client, tracer trace.Tracer) Fetcher {
 	return &httpFetcher{
 		client: k8sClient,
 		strictClient: &http.Client{
-			Transport:     SSRFSafeTransportWithPolicy(false),
+			Transport:     clientSpans{next: SSRFSafeTransportWithPolicy(false), tracer: tracer},
 			Timeout:       fetchTimeout,
 			CheckRedirect: checkRedirect,
 		},
 		lenientClient: &http.Client{
-			Transport:     SSRFSafeTransportWithPolicy(true),
+			Transport:     clientSpans{next: SSRFSafeTransportWithPolicy(true), tracer: tracer},
 			Timeout:       fetchTimeout,
 			CheckRedirect: checkRedirect,
 		},
@@ -93,7 +96,15 @@ type httpFetcher struct {
 	tracer        trace.Tracer
 }
 
-func (f *httpFetcher) Fetch(ctx context.Context, source FetchSource) (*FetchResult, error) {
+func (f *httpFetcher) Fetch(ctx context.Context, source FetchSource) (_ *FetchResult, retErr error) {
+	attrs := []attribute.KeyValue{attribute.String("autoconfig.source", "url"), semconv.URLFull(RedactURL(source.URL))}
+	if source.ConfigMapRef != nil {
+		attrs = []attribute.KeyValue{
+			attribute.String("autoconfig.source", "configmap"), tracing.KeyName.String(source.ConfigMapRef.Name),
+		}
+	}
+	ctx, span := tracing.Start(ctx, f.tracer, "autoconfig.fetch", trace.WithAttributes(attrs...))
+	defer func() { tracing.End(span, retErr) }()
 	if source.ConfigMapRef != nil {
 		return f.fetchFromConfigMap(ctx, source)
 	}
