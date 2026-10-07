@@ -1179,7 +1179,9 @@ func warnWaiting(ctx context.Context, chk ConfigChecker, memo configcheck.Memo, 
 // fails, with the stored gateway (old). One that fails only with the update
 // is broken by it: the update is refused, naming it and quoting nothing of
 // it. When every endpoint that fails failed with the stored gateway too, the
-// update only draws a warning.
+// update only draws a warning. When the group failed but no endpoint fails on
+// its own, the group with the stored gateway tells whether failing together is
+// the update's doing.
 func judgeServed(ctx context.Context, chk ConfigChecker, memo configcheck.Memo, now configcheck.EndpointUnit,
 	old *v1alpha1.KrakenDGateway, group configcheck.Verdict, served []v1alpha1.KrakenDEndpoint,
 ) (admission.Warnings, error) {
@@ -1207,7 +1209,9 @@ func judgeServed(ctx context.Context, chk ConfigChecker, memo configcheck.Memo, 
 		return admission.Warnings{"the gateway's endpoints already fail validation together with the stored " +
 			"config, though each passes on its own"}, nil
 	}
-	return nil, nil
+	return nil, invalid("KrakenDGateway", now.Gateway.Name, field.ErrorList{field.Invalid(field.NewPath("spec"),
+		field.OmitValueType{}, "with this change the gateway's endpoints fail validation together, though each "+
+			"passes on its own")})
 }
 
 // refuseNewGatewayClashes rejects gw when its root makes KrakenD's router
