@@ -165,6 +165,7 @@ func TestSetupWebhooks_EachValidatorSpanIsAChildOfItsRequestsServerSpan(t *testi
 		obj  client.Object
 	}{
 		{"KrakenDGateway", testGateway()},
+		{"KrakenDEndpoint", testEndpoint("e", "/e")},
 	} {
 		t.Run(tc.kind, func(t *testing.T) {
 			rec := tracingtest.New(t)
