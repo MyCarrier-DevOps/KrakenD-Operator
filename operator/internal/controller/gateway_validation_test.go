@@ -793,6 +793,27 @@ func TestGatewayReconcile_ReportsTheExcludedEndpoints(t *testing.T) {
 	if got := excludedSeries(t, gw.Namespace, gw.Name); len(got) != 1 || got[v1alpha1.ReasonEndpointInvalid] != 1 {
 		t.Errorf("gauge = %v, want EndpointInvalid=1", got)
 	}
+
+	// A second endpoint fails: the message changes, so one more event.
+	var stored v1alpha1.KrakenDEndpoint
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(good), &stored); err != nil {
+		t.Fatal(err)
+	}
+	stored.Spec.Endpoints[0].Backends[0].Host = []string{"http://invalid.test"}
+	stored.Generation++
+	if err := c.Update(context.Background(), &stored); err != nil {
+		t.Fatal(err)
+	}
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+	cond = meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionEndpointsExcluded)
+	if cond == nil || cond.Message != "2 KrakenDEndpoint(s) fail validation and are not served: excluded/bad, excluded/good" {
+		t.Errorf("EndpointsExcluded = %+v, want both endpoints named", cond)
+	}
+	if n := eventsWithReason(rec, v1alpha1.ReasonInvalidEndpointsExcluded); n != 1 {
+		t.Errorf("%d %s events after the message changed, want 1", n, v1alpha1.ReasonInvalidEndpointsExcluded)
+	}
 }
 
 func TestGatewayReconcile_ExclusionSignalsSurviveARestartThatAppliesNothing(t *testing.T) {
