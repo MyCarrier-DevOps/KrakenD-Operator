@@ -33,15 +33,15 @@ func TestGRPCLogger_FatalLogsThenExits(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			var logged []string
-			code := 0
+			code, loggedBeforeExit := 0, 0
 			g := grpcLogger{
 				logger: funcr.New(func(_, args string) { logged = append(logged, args) }, funcr.Options{}),
-				exit:   func(c int) { code = c },
+				exit:   func(c int) { code, loggedBeforeExit = c, len(logged) },
 			}
 
 			fatal(g)
 
-			if len(logged) != 1 || !strings.Contains(logged[0], `"msg"="cannot go on"`) || code != 1 {
+			if loggedBeforeExit != 1 || len(logged) != 1 || !strings.Contains(logged[0], `"msg"="cannot go on"`) || code != 1 {
 				t.Errorf("logged %q and exited with %d, want the message logged, then exit status 1", logged, code)
 			}
 		})
