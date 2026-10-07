@@ -1259,7 +1259,7 @@ Error records, unlike spans, can quote krakend's output, which may hold tenant v
 **Diagnosing the telemetry itself.**
 - A failure of the OTLP export (a collector that cannot be reached, a rejected batch) is an `ERROR` record with the message `OpenTelemetry pipeline error` and the scope `opentelemetry`. It is written to stdout only, never to OTLP, so a failing exporter cannot queue records for itself.
 - A malformed OTLP header or endpoint variable does not stop the operator: that signal is not exported over OTLP, and the startup `ERROR` record `ignoring part of the telemetry configuration` names the variable, never its value. A malformed `OTEL_RESOURCE_ATTRIBUTES` entry is left out and named in the same record.
-- grpc-go's own log, which the OTLP gRPC exporters use, goes through the pipeline as the `krakend-operator/grpc` logger (its info records at verbosity 2).
+- grpc-go's own log, which the OTLP gRPC exporters use, goes to stdout only, never to OTLP, as the `opentelemetry/grpc` logger: a collector that cannot be reached makes grpc-go warn at every reconnect, and those records must not queue for the exporter that failed. Its info records are at verbosity 2. Until logging is installed, while the exporters are built, they are dropped.
 
 **Lines that do not go through OpenTelemetry.** These are written to stderr; a dependency that wrote to stderr directly would add one:
 - flag parsing errors and `--help` (`--help` exits 0, a flag error exits 2);
