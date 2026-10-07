@@ -25,6 +25,7 @@ import (
 	"sync"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
@@ -451,5 +452,28 @@ func TestCheckEndpoint_AMissingPolicyIsNotJudged(t *testing.T) {
 
 	if err != nil || !v.OK || len(val.calls) != 0 {
 		t.Errorf("verdict = %+v, %v after %d checks; want OK and nothing run", v, err, len(val.calls))
+	}
+}
+
+func TestCheckEndpoint_AnInvalidPolicyIsNamedNotQuoted(t *testing.T) {
+	bad := policy("p")
+	bad.Spec.Raw = &runtime.RawExtension{Raw: []byte(`{"x/bad-policy":{}}`)}
+	val := &judgeValidator{judge: func(config string) error {
+		if strings.Contains(config, "x/bad-policy") {
+			return rejectedOutput("SECRET-POLICY-VALUE is not allowed")
+		}
+		return nil
+	}}
+	chk := newChecker(val, bad)
+
+	v, err := chk.CheckEndpoint(context.Background(), EndpointUnit{
+		Gateway: gateway(v1alpha1.EditionCE), Endpoint: withPolicy(endpoint("uses-p", "/a"), "p"),
+	}, nil)
+
+	if err != nil || v.Reason != v1alpha1.ReasonPolicyInvalid || !v.PoliciesFailAlone {
+		t.Fatalf("verdict = %+v, %v; want PolicyInvalid for a policy that fails alone", v, err)
+	}
+	if msg := v.Message(1024); !strings.Contains(msg, "ns/p") || strings.Contains(msg, "SECRET") {
+		t.Errorf("message %q must name ns/p and quote none of its output", msg)
 	}
 }

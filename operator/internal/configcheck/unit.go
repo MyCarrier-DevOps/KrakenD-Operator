@@ -112,6 +112,11 @@ type EndpointVerdict struct {
 	Output string
 }
 
+// Message says why v is not OK in words its endpoint's owner may read.
+func (v EndpointVerdict) Message(int) string {
+	return ""
+}
+
 // Root is a gateway's root on its own: what Gateway renders with no endpoint,
 // as the edition CEFallback makes it. Dragonfly is the Dragonfly state the
 // gateway controller detected, which sets the Redis address; nil renders
