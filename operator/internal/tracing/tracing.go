@@ -80,6 +80,16 @@ func End(span trace.Span, err error) {
 	span.End()
 }
 
+// EndFailed ends span, marking it an error with the fixed description when err
+// is not nil. It records neither err's text nor an exception event: use it for
+// a failure whose text can quote the tenant's values.
+func EndFailed(span trace.Span, err error, description string) {
+	if err != nil {
+		span.SetStatus(codes.Error, description)
+	}
+	span.End()
+}
+
 // Object returns the attributes naming obj, of the given kind: its namespace,
 // name, kind and generation.
 func Object(kind string, obj client.Object) []attribute.KeyValue {
