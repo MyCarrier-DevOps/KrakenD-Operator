@@ -23,6 +23,7 @@ import (
 	"slices"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
@@ -919,8 +920,12 @@ func (r *KrakenDGatewayReconciler) updateStatusIfChanged(
 	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
 	before *v1alpha1.KrakenDGatewayStatus,
-) error {
-	if !gatewayStatusChanged(before, &gw.Status) {
+) (retErr error) {
+	ctx, span := tracing.Start(ctx, r.Tracer, "gateway.status")
+	defer func() { tracing.End(span, retErr) }()
+	changed := gatewayStatusChanged(before, &gw.Status)
+	span.SetAttributes(attribute.Bool("written", changed))
+	if !changed {
 		return nil
 	}
 	return r.Status().Update(ctx, gw)
