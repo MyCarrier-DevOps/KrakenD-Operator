@@ -348,3 +348,22 @@ func TestRender_AnEndpointsOwnClashesDoNotCountTowardTheCap(t *testing.T) {
 		t.Errorf("newer lost %+v, want GET /t/{name}/x to ns/older", lost)
 	}
 }
+
+// TestRender_ASameShapeDuplicateTheRouterRefusesKeepsNothingOut pins that a
+// same-shape loser gin refuses on its own records no route, like an entry
+// left in for its own check: q's GET /a/{y}/* duplicates p's, which p's own
+// check refuses, and r's GET /a/{id} is served.
+func TestRender_ASameShapeDuplicateTheRouterRefusesKeepsNothingOut(t *testing.T) {
+	in := RenderInput{Gateway: routedGateway(v1alpha1.EditionCE, nil), Endpoints: []v1alpha1.KrakenDEndpoint{
+		routed("p", 0, "GET", "/a/{x}/*"), routed("q", 1, "GET", "/a/{y}/*"), routed("r", 2, "GET", "/a/{id}"),
+	}}
+
+	out, err := New(Options{}).Render(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if lost := out.EntryConflicts[types.NamespacedName{Namespace: "ns", Name: "r"}]; len(lost) != 0 {
+		t.Errorf("r lost %+v, want GET /a/{id} served: q's route is refused on its own and records nothing", lost)
+	}
+}
