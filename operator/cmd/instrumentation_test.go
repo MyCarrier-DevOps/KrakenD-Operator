@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	otellog "go.opentelemetry.io/otel/log"
 	"k8s.io/apimachinery/pkg/types"
@@ -134,4 +135,23 @@ func TestNewInstrumentation_ServesEveryOperatorFamilyOnTheRegistry(t *testing.T)
 			t.Errorf("%s is served but is not in the golden shape", name)
 		}
 	}
+	if leaked := operatorFamilies(t, ctrlmetrics.Registry); len(leaked) != 0 {
+		t.Errorf("the test left %d operator families on the process-wide registry", len(leaked))
+	}
+}
+
+// operatorFamilies returns the operator's metric families that reg serves.
+func operatorFamilies(t *testing.T, reg prometheus.Gatherer) []*dto.MetricFamily {
+	t.Helper()
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found []*dto.MetricFamily
+	for _, family := range families {
+		if strings.HasPrefix(family.GetName(), "krakend_operator_") {
+			found = append(found, family)
+		}
+	}
+	return found
 }
