@@ -664,3 +664,23 @@ func TestPolicyAdmission_TheCauseKeepsItsCountOfEndpointsNotChecked(t *testing.T
 		})
 	}
 }
+
+// A verdict recorded for an older generation says nothing of the endpoint as
+// it stands: the gateway has not judged it yet, so it still counts as served.
+func TestPolicyAdmission_AnEndpointChangedSinceItsVerdictIsStillJudged(t *testing.T) {
+	stored := testPolicy(`{"qos/http-cache":{"shared":true}}`)
+	changed := testPolicy(`{"qos/http-cache":{"shared":false}}`)
+	objs := referencing()
+	ep := objs[1].(*v1alpha1.KrakenDEndpoint)
+	ep.Generation = 2
+	ep.Status.Conditions = []metav1.Condition{{Type: v1alpha1.ConditionAccepted, Status: metav1.ConditionFalse,
+		Reason: v1alpha1.ReasonEndpointInvalid, ObservedGeneration: 1}}
+	chk := &scriptedChecker{}
+	v := &PolicyValidator{Client: fakeClient(append(objs, stored)...), Checker: chk}
+
+	if resp := review(t, v, "alice", changed, stored); !resp.Allowed ||
+		strings.Join(chk.calls, ",") != "policy,root,group" {
+		t.Errorf("allowed = %v, checks = %v; want admitted with the endpoint still judged (policy,root,group)",
+			resp.Allowed, chk.calls)
+	}
+}
