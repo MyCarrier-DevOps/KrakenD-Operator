@@ -265,9 +265,13 @@ func (c *Checker) lintInput(ctx context.Context, in renderer.RenderInput, memo M
 // An error is never stored: the check did not judge. The memo holds only what
 // the content decides: acceptance, or the bounded output and stage of the
 // rejection. Masked is not part of it, so a hit shares nothing with the
-// verdict it returned before.
+// verdict it returned before. The check is a span named after its mode
+// (configcheck.lint or configcheck.validate), with the slot wait and the
+// krakend run below it.
 func (c *Checker) remembered(ctx context.Context, in renderer.RenderInput, out *renderer.RenderOutput, mode string,
-	validate func(context.Context, []byte, v1alpha1.Edition) error, memo Memo) (Verdict, error) {
+	validate func(context.Context, []byte, v1alpha1.Edition) error, memo Memo) (v Verdict, retErr error) {
+	ctx, span := tracing.Start(ctx, c.tracer, "configcheck."+mode)
+	defer func() { endCheck(span, v.OK, retErr) }()
 	key := contentKey(out, renderer.EditionFor(in.Gateway, in.CEFallback), mode)
 	if memo != nil {
 		if kept, ok := memo.Lookup(key); ok && judged(kept) {
