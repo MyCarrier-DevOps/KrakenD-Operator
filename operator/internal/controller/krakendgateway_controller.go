@@ -216,9 +216,9 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	in.PluginConfigMaps = pluginConfigMaps
 
 	// Render configuration
-	output, err := r.Renderer.Render(in)
+	output, err := r.render(ctx, in)
 	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("rendering config: %w", err)
+		return ctrl.Result{}, err
 	}
 	r.metrics().ConfigRendered(ctx)
 
@@ -736,6 +736,20 @@ func (r *KrakenDGatewayReconciler) reconcileConfig(
 	markConfigApplied(gw, d.output.Checksum, edition)
 	return configResult{appliedConfigMap: resources.ConfigMapName(gw, d.output.Checksum),
 		output: d.output, excluded: d.excluded, judged: d.judged, served: true}, nil
+}
+
+// render renders in inside a gateway.render span: the newest render, and the
+// render without the endpoints decide excludes. It runs in process.
+func (r *KrakenDGatewayReconciler) render(
+	ctx context.Context, in renderer.RenderInput,
+) (_ *renderer.RenderOutput, retErr error) {
+	_, span := tracing.Start(ctx, r.Tracer, "gateway.render")
+	defer func() { tracing.End(span, retErr) }()
+	out, err := r.Renderer.Render(in)
+	if err != nil {
+		return nil, fmt.Errorf("rendering config: %w", err)
+	}
+	return out, nil
 }
 
 // serveApplied is the outcome of a pass whose render, after exclusion, is the
