@@ -29,6 +29,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
@@ -355,6 +356,76 @@ func TestGatewayAdmission_AnEndpointMaskedBeforeAndFailingBothWaysOnlyWarns(t *t
 	}
 }
 
+// An endpoint that references a policy failing krakend check on its own fails
+// with the stored gateway too, though the stored group passed: the update only
+// warns when the scan finishes, so it is never a 422 when the admission time
+// ends first.
+func TestGatewayAdmission_AnEndpointWhoseStoredPolicyFailsAloneIsNotDecidedByTheGroup(t *testing.T) {
+	policyAlone := configcheck.EndpointVerdict{Reason: v1alpha1.ReasonPolicyInvalid, PoliciesFailAlone: true}
+	run := func(t *testing.T, delay time.Duration, deadline time.Duration) (admission.Warnings, error) {
+		t.Helper()
+		old, gw := editedGateway()
+		objs := []client.Object{old, testPolicy(`{"x":{}}`)}
+		for i := range 300 {
+			objs = append(objs, testEndpoint(fmt.Sprintf("ep-%03d", i), fmt.Sprintf("/e%d", i)))
+		}
+		user := testEndpoint("zz-user", "/zz")
+		user.Spec.Endpoints[0].Backends[0].PolicyRef = &v1alpha1.PolicyRef{Name: "p"}
+		objs = append(objs, user)
+		chk := &scriptedChecker{delay: delay,
+			verdicts:         []configcheck.Verdict{{OK: true}, {Output: "x"}, {OK: true}, {OK: true}, {Output: "policy"}},
+			endpointVerdicts: []configcheck.EndpointVerdict{policyAlone, policyAlone}}
+		ctx, cancel := context.WithTimeout(context.Background(), deadline)
+		defer cancel()
+		return (&GatewayValidator{Client: fakeClient(objs...), Checker: chk}).ValidateUpdate(ctx, old, gw)
+	}
+
+	warnings, err := run(t, 0, time.Minute)
+	if err != nil || len(warnings) != 1 || !strings.Contains(warnings[0], "already fail validation") {
+		t.Fatalf("complete scan: warnings %q, err %v; want admitted with the already-fail warning", warnings, err)
+	}
+	_, err = run(t, 30*time.Millisecond, 2*time.Second)
+	if err == nil || apierrors.IsInvalid(err) {
+		t.Errorf("scan cut off: err = %v, want a 500: the complete scan admits", err)
+	}
+}
+
+// An endpoint the stored render masked, failing both ways, keeps the update
+// from being decided: a scan that ends by the deadline is a 500.
+func TestGatewayAdmission_AMaskedEndpointFailingBothWaysLeavesACutOffScanUndecided(t *testing.T) {
+	old, gw := editedGateway()
+	masked := configcheck.Verdict{OK: true, Masked: []types.NamespacedName{{Namespace: "default", Name: "ep"}}}
+	epFail := configcheck.EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid}
+	// Calls: root, group, stored root, stored group, ep, ep with the stored
+	// gateway, then zz-other, which cannot run.
+	chk := &scriptedChecker{err: errors.New("no slot"), failCall: 7, failOnly: true,
+		verdicts:         []configcheck.Verdict{{OK: true}, {Output: "x"}, {OK: true}, masked},
+		endpointVerdicts: []configcheck.EndpointVerdict{epFail, epFail}}
+	objs := []client.Object{old, testEndpoint("ep", "/a"), testEndpoint("zz-other", "/b")}
+
+	resp := review(t, &GatewayValidator{Client: fakeClient(objs...), Checker: chk}, "alice", gw, old)
+
+	if resp.Allowed || resp.Result.Code != http.StatusInternalServerError {
+		t.Errorf("response = %+v, warnings %q; want a 500", resp.Result, resp.Warnings)
+	}
+}
+
+// A masked endpoint whose own check cannot run leaves the update undecided: a
+// 500, not a 422 that counts it as not checked.
+func TestGatewayAdmission_AMaskedEndpointThatCannotBeCheckedLeavesTheUpdateUndecided(t *testing.T) {
+	old, gw := editedGateway()
+	masked := configcheck.Verdict{OK: true, Masked: []types.NamespacedName{{Namespace: "default", Name: "ep"}}}
+	chk := &scriptedChecker{err: errors.New("no slot"), failCall: 5, failOnly: true,
+		verdicts: []configcheck.Verdict{{OK: true}, {Output: "x"}, {OK: true}, masked}}
+	objs := []client.Object{old, testEndpoint("ep", "/a"), testEndpoint("zz-other", "/b")}
+
+	resp := review(t, &GatewayValidator{Client: fakeClient(objs...), Checker: chk}, "alice", gw, old)
+
+	if resp.Allowed || resp.Result.Code != http.StatusInternalServerError {
+		t.Errorf("response = %+v, warnings %q; want a 500", resp.Result, resp.Warnings)
+	}
+}
+
 func TestGatewayAdmission_ALargeGatewayThatPassesRunsTwoChecks(t *testing.T) {
 	old, gw := editedGateway()
 	objs := []client.Object{old}
@@ -397,13 +468,14 @@ func TestGatewayAdmission_AScanThatStoppedWithoutADenialIs500(t *testing.T) {
 		verdicts []configcheck.EndpointVerdict
 		failCall int
 	}{
-		// The stored group fails too, so the update is not decided before the scan.
+		// The stored group fails too, so the update is not decided before the scan; with
+		// the group passing, as in the second case, no stored group is checked.
 		{"after an endpoint that already failed", []string{"stale", "zz-next"},
 			configcheck.Verdict{Output: "x"}, configcheck.Verdict{Output: "x"},
 			[]configcheck.EndpointVerdict{epFail, epFail}, 7},
 		{"on a masked endpoint", []string{"ep"},
 			configcheck.Verdict{OK: true, Masked: []types.NamespacedName{{Namespace: "default", Name: "ep"}}},
-			configcheck.Verdict{OK: true}, nil, 4},
+			configcheck.Verdict{}, nil, 4},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
