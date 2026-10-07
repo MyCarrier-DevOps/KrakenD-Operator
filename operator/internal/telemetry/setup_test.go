@@ -441,3 +441,21 @@ func TestSetup_ExporterNoneDisablesOnlyThatSignal(t *testing.T) {
 		})
 	}
 }
+
+// An exporter other than otlp or none is a configuration the operator cannot
+// honour: Setup fails and names the variable rather than ignore it.
+func TestSetup_RejectsAnUnsupportedExporter(t *testing.T) {
+	for _, signal := range otlpSignals {
+		t.Run(signal.name, func(t *testing.T) {
+			cleanOTelEnv(t)
+			variable := "OTEL_" + signal.name + "_EXPORTER"
+			t.Setenv(variable, "jaeger")
+
+			_, err := telemetry.Setup(context.Background(), telemetry.Config{Registerer: prometheus.NewRegistry()})
+
+			if err == nil || !strings.Contains(err.Error(), variable) {
+				t.Errorf("err = %v, want %s named", err, variable)
+			}
+		})
+	}
+}
