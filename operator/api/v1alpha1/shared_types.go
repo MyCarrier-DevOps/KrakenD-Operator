@@ -139,8 +139,10 @@ const (
 
 	// ConditionResourcesControlled is False while the gateway leaves an
 	// existing object alone because the name it would write is taken by one it
-	// does not control; its message names each. It is True otherwise. Only the
-	// gateway controller writes it.
+	// does not control; its message names each. It is True once a pass refuses
+	// nothing, fails nothing and writes the Deployment; a pass that fails
+	// otherwise or holds the Deployment leaves it as it was. Only the gateway
+	// controller writes it.
 	ConditionResourcesControlled = "ResourcesControlled"
 
 	// ConditionEndpointsExcluded is True while the gateway leaves out one or
