@@ -120,3 +120,11 @@ func wireValidation(
 			mgr.GetClient(), mgr.GetAPIReader(), checker, operatorUsername, inst.Tracer),
 	}
 }
+
+// wireReferenceControllers builds the endpoint and policy reconcilers. It is
+// a stub: they are empty.
+func wireReferenceControllers(
+	ctrl.Manager, instrumentation,
+) (*controller.KrakenDEndpointReconciler, *controller.KrakenDBackendPolicyReconciler) {
+	return &controller.KrakenDEndpointReconciler{}, &controller.KrakenDBackendPolicyReconciler{}
+}

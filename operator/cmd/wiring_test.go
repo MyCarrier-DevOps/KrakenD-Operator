@@ -195,3 +195,17 @@ func TestWireValidation_NoRecorderLeavesTheMetricsPortsNil(t *testing.T) {
 		t.Errorf("AutoConfig Metrics = %#v, want a nil port", w.AutoConfig.Metrics)
 	}
 }
+
+func TestWireReferenceControllers_InstrumentsBoth(t *testing.T) {
+	mgr := stubManager{client: fake.NewClientBuilder().Build()}
+	inst := testInstrumentation(t, tracingtest.New(t))
+
+	endpoints, policies := wireReferenceControllers(mgr, inst)
+
+	if endpoints.Tracer != inst.Tracer || policies.Tracer != inst.Tracer {
+		t.Error("the endpoint and policy reconcilers are not given the pod's tracer")
+	}
+	if policies.APIReader != mgr.GetAPIReader() {
+		t.Error("the policy reconciler does not read through the manager's API reader")
+	}
+}
