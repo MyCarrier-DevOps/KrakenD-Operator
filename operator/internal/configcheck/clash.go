@@ -39,6 +39,12 @@ import (
 // over without it; a zero timestamp would rank it the oldest of all.
 var NotYetCreated = metav1.NewTime(time.Unix(253402300799, 0))
 
+// ClashesCapped says why a write is refused while a gateway's render stops
+// resolving router clashes at its cap (RouteConflicts.Capped).
+const ClashesCapped = "the gateway has more router clashes than the operator resolves at once, " +
+	"so a new one cannot be told apart from them; delete the clashing KrakenDEndpoints first " +
+	"(a delete is always admitted)"
+
 // RouteConflicts is what a render of a gateway leaves out. Lost holds, by the
 // KrakenDEndpoint that loses them, the entries the render does not serve
 // because they share a route shape with, or clash in the router with, an
