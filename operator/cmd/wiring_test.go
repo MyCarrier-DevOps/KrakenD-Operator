@@ -227,3 +227,21 @@ func TestNewKrakenDValidator_EachRunIsASpan(t *testing.T) {
 		t.Errorf("spans = %s, want one \"true check\"", rec.Ended())
 	}
 }
+
+// Validate and Lint run krakend through the one executor, so both are spans.
+func TestNewKrakenDValidator_ValidateIsASpanToo(t *testing.T) {
+	path, err := exec.LookPath("true")
+	if err != nil {
+		t.Skip("no true binary on this host")
+	}
+	rec := tracingtest.New(t)
+
+	if err := newKrakenDValidator(path, rec.Tracer()).Validate(context.Background(),
+		[]byte(`{"version":3,"endpoints":[]}`), gatewayv1alpha1.EditionCE); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(rec.Ended().Named("true check")) != 1 {
+		t.Errorf("spans = %s, want one \"true check\"", rec.Ended())
+	}
+}
