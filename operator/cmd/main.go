@@ -17,8 +17,10 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"flag"
+	"fmt"
 	"io"
 	"os"
 	"time"
@@ -256,6 +258,13 @@ func main() {
 	}
 }
 
-// flushTelemetry flushes the telemetry still buffered. It is a stub: it
-// flushes nothing.
-func flushTelemetry(*telemetry.Telemetry, time.Duration, io.Writer) {}
+// flushTelemetry flushes the traces, metrics and logs still buffered, waiting
+// at most timeout. A failed flush is written to stderr: the log pipeline is
+// what is being shut down.
+func flushTelemetry(tel *telemetry.Telemetry, timeout time.Duration, stderr io.Writer) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if err := tel.Shutdown(ctx); err != nil {
+		fmt.Fprintln(stderr, "flushing telemetry:", err)
+	}
+}
