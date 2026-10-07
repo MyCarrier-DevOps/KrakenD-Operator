@@ -210,5 +210,10 @@ func nameOf(span sdktrace.ReadOnlySpan) string {
 
 // Attr returns the value of span's attribute key, and whether it has one.
 func Attr(span sdktrace.ReadOnlySpan, key string) (attribute.Value, bool) {
+	for _, kv := range span.Attributes() {
+		if string(kv.Key) == key {
+			return kv.Value, true
+		}
+	}
 	return attribute.Value{}, false
 }
