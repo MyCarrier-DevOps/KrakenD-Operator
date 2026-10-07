@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/resources"
@@ -87,7 +88,7 @@ func (v licenseVerdict) checksumFor(deployed string) string {
 // time-driven changes through requeueAfter.
 func (r *KrakenDGatewayReconciler) reconcileLicense(ctx context.Context, gw *v1alpha1.KrakenDGateway) licenseVerdict {
 	if gw.Spec.Edition != v1alpha1.EditionEE {
-		forgetLicense(gw)
+		r.forgetLicense(gw)
 		return licenseVerdict{}
 	}
 	window := license.Window{Warning: expiryWarning(gw), SafetyBuffer: licenseSafetyBuffer}
@@ -99,7 +100,7 @@ func (r *KrakenDGatewayReconciler) reconcileLicense(ctx context.Context, gw *v1a
 		return verdict
 	}
 	gw.Status.LicenseExpiry = &metav1.Time{Time: notAfter}
-	licenseExpirySeconds.WithLabelValues(gw.Namespace, gw.Name).Set(notAfter.Sub(now).Seconds())
+	r.metrics().SetLicenseExpiry(client.ObjectKeyFromObject(gw), notAfter.Sub(now))
 	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
 		Type:               v1alpha1.ConditionLicenseSecretUnavailable,
 		Status:             metav1.ConditionFalse,
@@ -143,11 +144,11 @@ func (r *KrakenDGatewayReconciler) reconcileUnreadableLicense(
 	}
 	if gw.Status.LicenseExpiry == nil {
 		r.setLicenseValidUnknown(gw, readErr)
-		licenseExpirySeconds.DeleteLabelValues(gw.Namespace, gw.Name)
+		r.metrics().ForgetLicenseExpiry(client.ObjectKeyFromObject(gw))
 		return verdict
 	}
 	known := gw.Status.LicenseExpiry.Time
-	licenseExpirySeconds.WithLabelValues(gw.Namespace, gw.Name).Set(known.Sub(now).Seconds())
+	r.metrics().SetLicenseExpiry(client.ObjectKeyFromObject(gw), known.Sub(now))
 	verdict.requeueAfter = nextLicenseCheck(window, known, now)
 	if stage := window.StageAt(known, now); stage == license.StagePreExpiry || stage == license.StageExpired {
 		verdict.ceFallback = r.applyLicenseStage(gw, stage, known)
@@ -174,7 +175,7 @@ func (r *KrakenDGatewayReconciler) setLicenseValidUnknown(gw *v1alpha1.KrakenDGa
 // forgetLicense drops the license state of a gateway that is not EE (for
 // instance one switched from EE to CE), so a stale LicenseExpired cannot keep
 // it out of Ready.
-func forgetLicense(gw *v1alpha1.KrakenDGateway) {
+func (r *KrakenDGatewayReconciler) forgetLicense(gw *v1alpha1.KrakenDGateway) {
 	gw.Status.Conditions = slices.DeleteFunc(gw.Status.Conditions, func(c metav1.Condition) bool {
 		switch c.Type {
 		case v1alpha1.ConditionLicenseValid, v1alpha1.ConditionLicenseExpired,
@@ -184,7 +185,7 @@ func forgetLicense(gw *v1alpha1.KrakenDGateway) {
 		return false
 	})
 	gw.Status.LicenseExpiry = nil
-	licenseExpirySeconds.DeleteLabelValues(gw.Namespace, gw.Name)
+	r.metrics().ForgetLicenseExpiry(client.ObjectKeyFromObject(gw))
 }
 
 // applyLicenseStage sets LicenseValid, LicenseExpired and LicenseDegraded for
