@@ -29,7 +29,17 @@ import (
 // freshContexts are the production calls to context.Background or
 // context.TODO allowed per file, with why. Anything else takes its caller's
 // context, so the caller's span and deadline reach every call below it.
-var freshContexts = map[string]int{}
+var freshContexts = map[string]int{
+	// Field indexes are registered once at startup, before any request.
+	"internal/fieldindex/fieldindex.go": 3,
+	// The unlabelled counters are given their zero when they are created.
+	"internal/telemetry/metrics.go": 1,
+	// The test span recorder is shut down when its test ends.
+	"internal/tracing/tracingtest/tracingtest.go": 1,
+	// Telemetry is set up before the signal context exists, and flushed after
+	// it is cancelled.
+	"cmd/main.go": 2,
+}
 
 func TestNoRequestPathStartsAFreshContext(t *testing.T) {
 	root := filepath.Join("..", "..")
