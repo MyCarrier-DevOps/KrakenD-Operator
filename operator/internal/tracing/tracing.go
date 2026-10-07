@@ -58,12 +58,12 @@ func Start(
 	}
 	// The span is returned: the caller ends it.
 	ctx, span := tracer.Start(ctx, name, opts...) //nolint:spancheck // see above
-	return WithLogContext(ctx), span              //nolint:spancheck // see above
+	return withLogContext(ctx), span              //nolint:spancheck // see above
 }
 
-// WithLogContext rebinds the logger in ctx, if any, to ctx, so records it
+// withLogContext rebinds the logger in ctx, if any, to ctx, so records it
 // logs carry the span ctx holds.
-func WithLogContext(ctx context.Context) context.Context {
+func withLogContext(ctx context.Context) context.Context {
 	logger, err := logr.FromContext(ctx)
 	if err != nil {
 		return ctx
