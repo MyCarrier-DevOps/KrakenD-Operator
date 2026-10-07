@@ -23,6 +23,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
@@ -137,18 +138,101 @@ func recordExcludedEndpoints(gw *v1alpha1.KrakenDGateway, counts map[string]int)
 	}
 }
 
+// promMetrics records into the package's Prometheus collectors. It is the
+// recorder of a reconciler given none while the collectors still exist.
+type promMetrics struct{}
+
+func (promMetrics) ConfigRendered(context.Context) { configRenders.Inc() }
+func (promMetrics) ConfigRejected(context.Context) { configValidationFailures.Inc() }
+func (promMetrics) RollingRestart(context.Context) { rollingRestarts.Inc() }
+
+func (promMetrics) GatewayReconciled(_ context.Context, gw types.NamespacedName, d time.Duration) {
+	reconcileDuration.WithLabelValues("gateway", gw.Namespace, gw.Name).Observe(d.Seconds())
+}
+
+func (promMetrics) SetLicenseExpiry(gw types.NamespacedName, left time.Duration) {
+	licenseExpirySeconds.WithLabelValues(gw.Namespace, gw.Name).Set(left.Seconds())
+}
+
+func (promMetrics) ForgetLicenseExpiry(gw types.NamespacedName) {
+	licenseExpirySeconds.DeleteLabelValues(gw.Namespace, gw.Name)
+}
+
+func (promMetrics) SetEndpoints(gw types.NamespacedName, n int) {
+	endpointsPerGateway.WithLabelValues(gw.Namespace, gw.Name).Set(float64(n))
+}
+
+func (promMetrics) SetDragonflyReady(gw types.NamespacedName, ready bool) {
+	dragonflyReady.WithLabelValues(gw.Namespace, gw.Name).Set(gaugeOf(ready))
+}
+
+func (promMetrics) ForgetDragonflyReady(gw types.NamespacedName) {
+	dragonflyReady.DeleteLabelValues(gw.Namespace, gw.Name)
+}
+
+func (promMetrics) SetConfigValid(gw types.NamespacedName, valid bool) {
+	gatewayConfigValid.WithLabelValues(gw.Namespace, gw.Name).Set(gaugeOf(valid))
+}
+
+func (promMetrics) SetGatewayInfo(gw types.NamespacedName, edition, version string) {
+	gatewayInfo.DeletePartialMatch(prometheus.Labels{"namespace": gw.Namespace, "name": gw.Name})
+	gatewayInfo.WithLabelValues(gw.Namespace, gw.Name, edition, version).Set(1)
+}
+
+func (promMetrics) SetExcludedEndpoints(gw types.NamespacedName, byReason map[string]int) {
+	gatewayExcludedEndpoints.DeletePartialMatch(prometheus.Labels{"namespace": gw.Namespace, "gateway": gw.Name})
+	for reason, n := range byReason {
+		if n > 0 {
+			gatewayExcludedEndpoints.WithLabelValues(gw.Namespace, gw.Name, reason).Set(float64(n))
+		}
+	}
+}
+
+func (promMetrics) ForgetGateway(gw types.NamespacedName) {
+	deleteGatewayMetrics(gw.Namespace, gw.Name)
+}
+
+func (promMetrics) SetAutoConfigSynced(ac types.NamespacedName, synced bool) {
+	autoConfigSynced.WithLabelValues(ac.Namespace, ac.Name).Set(gaugeOf(synced))
+}
+
+func (promMetrics) ForgetAutoConfig(ac types.NamespacedName) {
+	autoConfigSynced.DeleteLabelValues(ac.Namespace, ac.Name)
+}
+
+// metrics returns r's recorder, or the Prometheus collectors when it has none.
+func (r *KrakenDGatewayReconciler) metrics() GatewayMetrics {
+	if r.Metrics == nil {
+		return promMetrics{}
+	}
+	return r.Metrics
+}
+
+// metrics returns r's recorder, or the Prometheus collectors when it has none.
+func (r *KrakenDAutoConfigReconciler) metrics() AutoConfigMetrics {
+	if r.Metrics == nil {
+		return promMetrics{}
+	}
+	return r.Metrics
+}
+
+// gaugeOf is 1 for true and 0 for false.
+func gaugeOf(b bool) float64 {
+	if b {
+		return 1
+	}
+	return 0
+}
+
 // recordGatewayMetrics sets the gateway's per-gateway series from its status.
 // gateway_info is replaced, not added to, so a version or edition change
 // leaves one series.
-func recordGatewayMetrics(gw *v1alpha1.KrakenDGateway, endpoints int) {
-	endpointsPerGateway.WithLabelValues(gw.Namespace, gw.Name).Set(float64(endpoints))
-	gatewayInfo.DeletePartialMatch(prometheus.Labels{"namespace": gw.Namespace, "name": gw.Name})
-	gatewayInfo.WithLabelValues(gw.Namespace, gw.Name, string(gw.Spec.Edition), gw.Spec.Version).Set(1)
-	valid := 0.0
-	if meta.IsStatusConditionTrue(gw.Status.Conditions, v1alpha1.ConditionConfigValid) {
-		valid = 1
-	}
-	gatewayConfigValid.WithLabelValues(gw.Namespace, gw.Name).Set(valid)
+func (r *KrakenDGatewayReconciler) recordGatewayMetrics(gw *v1alpha1.KrakenDGateway, endpoints int) {
+	key := client.ObjectKeyFromObject(gw)
+	m := r.metrics()
+	m.SetEndpoints(key, endpoints)
+	m.SetGatewayInfo(key, string(gw.Spec.Edition), gw.Spec.Version)
+	m.SetConfigValid(key, meta.IsStatusConditionTrue(gw.Status.Conditions, v1alpha1.ConditionConfigValid))
 }
 
 func init() { //nolint:gochecknoinits // required by prometheus metric registration

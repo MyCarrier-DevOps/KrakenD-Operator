@@ -277,7 +277,7 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	// Update final status
 	gw.Status.EndpointCount = int32(len(endpoints))
-	recordGatewayMetrics(&gw, len(endpoints))
+	r.recordGatewayMetrics(&gw, len(endpoints))
 	// This generation is not applied while a child resource cannot be
 	// reconciled, nor while the Deployment is held because the applied
 	// config's ConfigMap cannot be published or verified although the render
