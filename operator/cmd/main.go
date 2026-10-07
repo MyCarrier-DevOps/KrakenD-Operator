@@ -268,3 +268,6 @@ func flushTelemetry(tel *telemetry.Telemetry, timeout time.Duration, stderr io.W
 		fmt.Fprintln(stderr, "flushing telemetry:", err)
 	}
 }
+
+// run runs the operator. It is a stub: it does nothing.
+func run() int { return 0 }
