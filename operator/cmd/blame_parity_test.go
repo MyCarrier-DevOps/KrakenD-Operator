@@ -18,6 +18,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -55,7 +57,11 @@ import (
 
 // judgingExecutor stands in for the krakend binary: it reads the config named
 // by -c and, when judge refuses it, exits 1 printing judge's output, as
-// krakend check does.
+// krakend check does. The output ends with a digest of the config, so that two
+// refusals are equal only when both paths rendered the same config. That holds
+// across the controller and admission only in this world (CE, no Dragonfly):
+// admission renders no Dragonfly and reads the CE fallback from status, so a
+// Dragonfly fixture must not reuse this equality.
 type judgingExecutor struct {
 	judge func(config string) (output string, refused bool)
 }
@@ -66,7 +72,9 @@ func (e judgingExecutor) Execute(ctx context.Context, _ string, args ...string) 
 		return nil, err
 	}
 	if output, refused := e.judge(string(config)); refused {
-		return []byte(output), exec.CommandContext(ctx, "sh", "-c", "exit 1").Run()
+		sum := sha256.Sum256([]byte(config))
+		return []byte(output + " #" + hex.EncodeToString(sum[:6])),
+			exec.CommandContext(ctx, "sh", "-c", "exit 1").Run()
 	}
 	return []byte("Syntax OK!"), nil
 }
@@ -87,6 +95,21 @@ func (v *verdictRecorder) CheckEndpoint(ctx context.Context, u configcheck.Endpo
 	key := u.Endpoint.Namespace + "/" + u.Endpoint.Name
 	v.verdicts[key] = append(v.verdicts[key], verdict)
 	return verdict, err
+}
+
+// take returns the verdicts recorded for the endpoint key (namespace/name) and
+// forgets them.
+func (v *verdictRecorder) take(key string) []configcheck.EndpointVerdict {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	taken := v.verdicts[key]
+	delete(v.verdicts, key)
+	return taken
+}
+
+// sawVerdict reports whether verdicts holds one equal to want.
+func sawVerdict(verdicts []configcheck.EndpointVerdict, want configcheck.EndpointVerdict) bool {
+	return slices.ContainsFunc(verdicts, func(v configcheck.EndpointVerdict) bool { return reflect.DeepEqual(v, want) })
 }
 
 // blameWorld is gateway infra/gw (CE) with its tenants' objects, written past
@@ -195,6 +218,8 @@ func TestBlame_AdmissionAndTheControllerAgree(t *testing.T) {
 				t.Errorf("attacker Accepted = %+v, want EndpointInvalid", got)
 			}
 
+			controllerSaw := w.checker.take("tenant-a/orders-a")
+
 			// Admission lets the victim's tenant write while the attacker is
 			// stored, and judges the attacker as the controller did.
 			if _, err := w.endpoints.ValidateCreate(ctx,
@@ -208,12 +233,15 @@ func TestBlame_AdmissionAndTheControllerAgree(t *testing.T) {
 			if err != nil || len(warnings) != 1 || !strings.Contains(warnings[0], "fails krakend check on its own") {
 				t.Errorf("attacker update: %v, %v; want admitted with a warning quoting its own output", warnings, err)
 			}
-			got := w.checker.verdicts["tenant-a/orders-a"]
-			// The controller's verdict, then admission's on the update, then
-			// admission's on the stored version, which is the controller's
-			// endpoint as it is stored.
-			if len(got) != 3 || !reflect.DeepEqual(got[0], got[2]) {
-				t.Errorf("attacker verdicts = %+v, want the controller's and admission's on the stored version equal", got)
+			// The controller's verdict carries a digest of the config it judged.
+			// Admission judged the update and then the stored version, which is
+			// the controller's endpoint as it is stored: its verdict is among the
+			// controller's.
+			admissionSaw := w.checker.take("tenant-a/orders-a")
+			if len(controllerSaw) == 0 || len(admissionSaw) == 0 ||
+				!sawVerdict(controllerSaw, admissionSaw[len(admissionSaw)-1]) {
+				t.Errorf("attacker verdicts: controller %+v, admission %+v; want admission's on the stored version "+
+					"among the controller's", controllerSaw, admissionSaw)
 			}
 		})
 	}
@@ -414,7 +442,7 @@ func TestBlame_AMaskedEndpointIsJudgedAlikeOnBothPaths(t *testing.T) {
 			if got := w.accepted(t, e); got == nil || got.Reason != v1alpha1.ReasonEndpointInvalid {
 				t.Fatalf("e Accepted = %+v, want EndpointInvalid: the render that passed left its failing entry out", got)
 			}
-			judged := len(w.checker.verdicts["tenant-e/e"])
+			controllerSaw := w.checker.take("tenant-e/e")
 			stored := w.stored(t, e)
 			updated := stored.DeepCopy()
 			updated.Spec.Endpoints[0].Backends[0].URLPattern = "/y"
@@ -422,11 +450,13 @@ func TestBlame_AMaskedEndpointIsJudgedAlikeOnBothPaths(t *testing.T) {
 			if err != nil || len(warnings) != 1 || !strings.Contains(warnings[0], "fails krakend check on its own") {
 				t.Errorf("e's update: %v, %v; want admitted with a warning quoting its own output", warnings, err)
 			}
-			// The controller's verdicts, then admission's on the update, then
-			// admission's on the stored e.
-			got := w.checker.verdicts["tenant-e/e"]
-			if judged == 0 || len(got) != judged+2 || !reflect.DeepEqual(got[judged-1], got[judged+1]) {
-				t.Errorf("e's verdicts = %+v, want the controller's last and admission's on the stored e equal", got)
+			// Admission judged the update and then the stored e, whose verdict is
+			// among the controller's.
+			admissionSaw := w.checker.take("tenant-e/e")
+			if len(controllerSaw) == 0 || len(admissionSaw) == 0 ||
+				!sawVerdict(controllerSaw, admissionSaw[len(admissionSaw)-1]) {
+				t.Errorf("e's verdicts: controller %+v, admission %+v; want admission's on the stored e "+
+					"among the controller's", controllerSaw, admissionSaw)
 			}
 		})
 	}
