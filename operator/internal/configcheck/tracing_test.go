@@ -179,3 +179,21 @@ func TestChecker_EachContentCheckSaysWhetherTheMemoAnsweredIt(t *testing.T) {
 		t.Errorf("krakend check has parent %v, want the check that ran; spans: %s", parent, spans)
 	}
 }
+
+// An endpoint's check judges each policy it references on its own first:
+// those checks are spans below the endpoint's.
+func TestChecker_CheckEndpointSpansItsPolicyChecksBelowIt(t *testing.T) {
+	rec := tracingtest.New(t)
+	c := New(newReader(policy("p")), renderer.New(renderer.Options{}), &fakeValidator{}, 1, rec.Tracer())
+	unit := EndpointUnit{Gateway: gateway(v1alpha1.EditionCE), Endpoint: withPolicy(endpoint("a", "/a"), "p")}
+
+	if _, err := c.CheckEndpoint(context.Background(), unit, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	spans := rec.Ended()
+	spans.RequireChild(t, "configcheck.CheckEndpoint", "configcheck.CheckPolicy")
+	if len(spans.Named("configcheck.lint")) != 2 {
+		t.Errorf("want one lint below the policy's check and one below the endpoint's; spans: %s", spans)
+	}
+}
