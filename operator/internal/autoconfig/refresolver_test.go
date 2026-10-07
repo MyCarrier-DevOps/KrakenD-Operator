@@ -20,10 +20,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"maps"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -886,16 +886,20 @@ type failingFetcher struct{ err error }
 
 func (f failingFetcher) Fetch(context.Context, FetchSource) (*FetchResult, error) { return nil, f.err }
 
-func TestResolveExternalRefs_AFailedFetchErrorCarriesNoCredentials(t *testing.T) {
-	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"$ref":"` + refWithSecrets + `#/A"}}}}}}`)
+// plainFetcher is the real fetcher over a client that reaches loopback hosts.
+func plainFetcher() *httpFetcher {
+	return &httpFetcher{strictClient: &http.Client{Transport: http.DefaultTransport, Timeout: fetchTimeout}}
+}
 
-	_, _, err := ResolveExternalRefs(context.Background(), main, "https://api.example.com/openapi.json",
-		failingFetcher{err: errors.New("fetching https://schemas.example.com/x.json?token=REDACTED: boom")},
-		FetchSource{})
+func TestResolveExternalRefs_AFailedFetchErrorCarriesNoCredentials(t *testing.T) {
+	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"$ref":"http://user:pw@127.0.0.1:1/x.json?token=secret#/A"}}}}}}`)
+
+	_, _, err := ResolveExternalRefs(context.Background(), main, "http://127.0.0.1:1/openapi.json",
+		plainFetcher(), FetchSource{})
 
 	requireNoSecrets(t, err)
-	if !strings.Contains(err.Error(), "https://schemas.example.com/x.json") {
-		t.Errorf("error %q does not name the document", err)
+	if want := "fetching http://127.0.0.1:1/x.json?token=REDACTED: "; !strings.Contains(err.Error(), want) {
+		t.Errorf("error %q does not contain %q", err, want)
 	}
 }
 
@@ -980,7 +984,7 @@ func TestResolveExternalRefs_AnOpaqueRefCarriesNoCredentials(t *testing.T) {
 	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"$ref":"https:user:pw@schemas.example.com/x.json?token=secret#/A"}}}}}}`)
 
 	_, _, err := ResolveExternalRefs(context.Background(), main, "https://api.example.com/openapi.json",
-		failingFetcher{err: errors.New("boom")}, FetchSource{})
+		plainFetcher(), FetchSource{})
 
 	requireNoSecrets(t, err)
 }
@@ -1006,18 +1010,32 @@ func TestRedactRef(t *testing.T) {
 	}
 }
 
-// The fetcher's error already names the document: the resolver does not
-// repeat it.
+// The fetcher's error names the document, whichever step of the fetch failed:
+// the resolver does not repeat it.
 func TestResolveExternalRefs_AFetchErrorNamesTheDocumentOnce(t *testing.T) {
-	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"$ref":"http://127.0.0.1:1/x.json#/A"}}}}}}`)
-	f := &httpFetcher{strictClient: &http.Client{Transport: http.DefaultTransport, Timeout: fetchTimeout}}
+	short := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", "100")
+		_, _ = w.Write([]byte("x"))
+		w.(http.Flusher).Flush()
+		panic(http.ErrAbortHandler)
+	}))
+	defer short.Close()
+	for name, doc := range map[string]string{
+		"a request that fails":   "http://127.0.0.1:1/x.json",
+		"a body that ends early": short.URL + "/x.json",
+	} {
+		t.Run(name, func(t *testing.T) {
+			main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"$ref":"` + doc + `#/A"}}}}}}`)
 
-	_, _, err := ResolveExternalRefs(context.Background(), main, "http://127.0.0.1:1/openapi.json", f, FetchSource{})
+			_, _, err := ResolveExternalRefs(context.Background(), main, "http://127.0.0.1:1/openapi.json",
+				plainFetcher(), FetchSource{})
 
-	if err == nil {
-		t.Fatal("expected an error")
-	}
-	if n := strings.Count(err.Error(), "http://127.0.0.1:1/x.json"); n != 1 {
-		t.Errorf("error %q names the document %d times, want once", err, n)
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			if n := strings.Count(err.Error(), doc); n != 1 {
+				t.Errorf("error %q names the document %d times, want once", err, n)
+			}
+		})
 	}
 }
