@@ -1384,7 +1384,9 @@ func (r *KrakenDGatewayReconciler) reconcilePostRestartJob(
 	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
 	in infraInputs,
-) error {
+) (retErr error) {
+	ctx, span := tracing.Start(ctx, r.Tracer, "apply job")
+	defer func() { tracing.End(span, retErr) }()
 	configChecksum := in.appliedChecksum
 	spec := gw.Spec.PostRestartJob
 	if spec == nil || !spec.Enabled || spec.Script == "" {
