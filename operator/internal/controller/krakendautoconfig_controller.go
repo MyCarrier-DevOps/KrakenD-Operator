@@ -255,13 +255,15 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	componentSchemas := autoconfig.ExtractComponentSchemas(fetchResult.Data)
 
 	// Generate endpoint CRs
-	genOutput, err := r.Generator.Generate(ctx, autoconfig.GenerateInput{
+	gctx, generate := tracing.Start(ctx, r.Tracer, "autoconfig.generate")
+	genOutput, err := r.Generator.Generate(gctx, autoconfig.GenerateInput{
 		AutoConfig:       &ac,
 		Entries:          filtered,
 		OperationIDs:     cueOutput.OperationIDs,
 		GatewayRef:       ac.Spec.GatewayRef,
 		ComponentSchemas: componentSchemas,
 	})
+	tracing.End(generate, err)
 	if err != nil {
 		return r.handleCUEError(ctx, &ac, fmt.Errorf("generating endpoints: %w", err), warnings)
 	}
