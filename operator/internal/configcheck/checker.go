@@ -88,7 +88,7 @@ func (c *Checker) CheckGateway(ctx context.Context, gw *v1alpha1.KrakenDGateway,
 // CheckIsolated lints gw's root config with eps as its only endpoints.
 func (c *Checker) CheckIsolated(ctx context.Context, gw *v1alpha1.KrakenDGateway,
 	eps []v1alpha1.KrakenDEndpoint) (Verdict, error) {
-	in, err := c.inputFor(ctx, gw, slices.Clone(eps), nil, ceFallback(gw))
+	in, err := c.inputFor(ctx, gw, slices.Clone(eps), nil, CEFallback(gw))
 	if err != nil {
 		return Verdict{}, err
 	}
@@ -110,7 +110,7 @@ func (c *Checker) SameConfig(ctx context.Context, old, gw *v1alpha1.KrakenDGatew
 		return false, fmt.Errorf("rendering config: %w", err)
 	}
 	before := in
-	before.Gateway, before.CEFallback = old, ceFallback(old)
+	before.Gateway, before.CEFallback = old, CEFallback(old)
 	oldOut, err := c.renderer.Render(before)
 	if err != nil {
 		return false, fmt.Errorf("rendering config: %w", err)
@@ -242,7 +242,7 @@ func (c *Checker) gather(ctx context.Context, gw *v1alpha1.KrakenDGateway, repla
 	if err := c.reader.List(ctx, &list, opts...); err != nil {
 		return renderer.RenderInput{}, fmt.Errorf("listing endpoints of gateway %s/%s: %w", gw.Namespace, gw.Name, err)
 	}
-	return c.inputFor(ctx, gw, substitute(list.Items, replace), override, ceFallback(gw))
+	return c.inputFor(ctx, gw, substitute(list.Items, replace), override, CEFallback(gw))
 }
 
 // inputFor is the render input of gw with endpoints as its only endpoints,
@@ -326,12 +326,12 @@ func sortEndpoints(endpoints []v1alpha1.KrakenDEndpoint) {
 	})
 }
 
-// ceFallback reads CE fallback from gw's status, for an EE gateway only: the
+// CEFallback reads CE fallback from gw's status, for an EE gateway only: the
 // gateway controller never reports it for a CE gateway, whose condition may
 // be a stale one from before an edition switch. The controller overrides it
 // with its own in-reconcile license verdict; admission sees the last one
 // recorded.
-func ceFallback(gw *v1alpha1.KrakenDGateway) bool {
+func CEFallback(gw *v1alpha1.KrakenDGateway) bool {
 	return gw.Spec.Edition == v1alpha1.EditionEE &&
 		meta.IsStatusConditionTrue(gw.Status.Conditions, v1alpha1.ConditionLicenseDegraded)
 }
