@@ -760,3 +760,33 @@ func TestAutoConfigReconcile_AFailedWriteMarksOnlyItsOwnStage(t *testing.T) {
 	}
 	rec.Ended().RequireParent(t, "reconcile KrakenDAutoConfig", "autoconfig.status")
 }
+
+// A refused status patch is the status stage's error and the reconcile's; the
+// stage that resolved the references before it carries none.
+func TestEndpointReconcile_AFailedStatusWriteMarksOnlyItsOwnStage(t *testing.T) {
+	ep := endpointOnGW1(1)
+	c := fakeClientBuilder().WithObjects(testGW1(), ep).WithStatusSubresource(ep).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourcePatch: func(
+				context.Context, client.Client, string, client.Object, client.Patch, ...client.SubResourcePatchOption,
+			) error {
+				return errors.New("status refused")
+			},
+		}).Build()
+	rec := tracingtest.New(t)
+	r := &KrakenDEndpointReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder(), Tracer: rec.Tracer()}
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(ep)}); err == nil {
+		t.Fatal("a refused status patch must fail the reconcile")
+	}
+
+	want := map[string]codes.Code{
+		"reconcile KrakenDEndpoint": codes.Error, "endpoint.status": codes.Error, "endpoint.resolve_refs": codes.Unset,
+	}
+	got := spanCodes(t, rec.Ended(), "reconcile KrakenDEndpoint", "endpoint.status", "endpoint.resolve_refs")
+	for span, code := range want {
+		if got[span] != code {
+			t.Errorf("%s status = %v, want %v", span, got[span], code)
+		}
+	}
+}
