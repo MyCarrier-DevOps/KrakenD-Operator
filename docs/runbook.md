@@ -538,26 +538,47 @@ operator emits a Warning event `ConfigMapTampered` on the gateway naming the
 deleted ConfigMap (`kubectl get events --field-selector reason=ConfigMapTampered`);
 when the pass publishes the config again, the status ends `ConfigApplied` and the event is the only trace.
 
-### Gateway Deployment held: "serviceaccount is not controlled by gateway"
+### Gateway reports `ResourceNotControlled`
 
-The operator logs `holding the Deployment and the post-restart Job:
-serviceaccount <ns>/<name> is not controlled by gateway <name>` when a
-ServiceAccount named like the gateway exists and another controller owns it, or
-when the operator could not write it. The Deployment and the post-restart Job run
-as that ServiceAccount, so both are left as they are: running pods keep
-running, and a new gateway gets no Deployment (`Ready` reads
-`AwaitingAvailability`). The error keeps `status.observedGeneration` behind
-`metadata.generation` only for a new gateway or after an edit of the gateway's
-own spec; otherwise the status shows nothing (`Ready` can stay `True` while the
-Deployment keeps what it runs) and this log line is the only sign of the hold.
-The reconcile is retried with backoff. Neither the hold nor its end emits an
-event: once the conflict is resolved, the rollout of the config applied meanwhile
-shows only as `Progressing` (`DeploymentUpdated`).
+An object already exists with the gateway's name, and the gateway does not take
+it over. It writes an existing ServiceAccount, Service, PodDisruptionBudget,
+HorizontalPodAutoscaler, Deployment, Dragonfly, ExternalSecret or VirtualService
+only when it controls it, or when the object has no controller and carries the
+labels `app.kubernetes.io/instance=<gateway>` and
+`app.kubernetes.io/managed-by=krakend-operator`.
 
-Diagnose with `kubectl get serviceaccount <name> -n <ns> -o yaml` (the
-controller owner reference). Rename the gateway, or remove the ServiceAccount's
-other owner, and the next retry recovers it; restarting the operator retries at
-once.
+**Symptom:** `ResourcesControlled` is `False` with reason `ResourceNotControlled`,
+and `Ready` carries the same reason (phase `Error`). The message names each
+refused object (kind and `<namespace>/<name>`) and its controller if it has one:
+
+```bash
+kubectl get krakendgateway <name> -n <ns> \
+  -o jsonpath='{.status.conditions[?(@.type=="ResourcesControlled")].message}'
+```
+
+The operator also logs `reconciling <kind>: <kind> <ns>/<name> ...`. When the
+refused object is the ServiceAccount, it logs `holding the Deployment and the
+post-restart Job: serviceaccount <ns>/<name> is not controlled by gateway
+<name>`: the Deployment and the post-restart Job run as that ServiceAccount, so
+both are left as they are. Running pods keep running, and a new gateway gets no
+Deployment. A ServiceAccount the operator could not write holds them too, and
+then the condition stays `True`: only the log names it.
+
+**Fix:** either of:
+
+- Rename the gateway, so its name no longer collides.
+- Hand the object over. If it has no controller (`kubectl get <kind> <name> -n
+  <ns> -o jsonpath='{.metadata.ownerReferences}'` prints nothing), label it:
+  `kubectl label <kind> <name> -n <ns> app.kubernetes.io/instance=<gateway>
+  app.kubernetes.io/managed-by=krakend-operator`. The gateway takes it over, and
+  deleting the gateway then deletes it. An object that another controller owns
+  cannot be handed over: remove its other owner or rename the gateway.
+
+Nothing watches an object the gateway does not control, so the reconcile is
+retried with backoff. Edit the gateway or restart the operator to retry at once.
+The condition turning `False` raises a Warning event with the same reason, and
+turning `True` again a Normal one. Once the conflict is resolved, the rollout of
+the config applied meanwhile shows only as `Progressing` (`DeploymentUpdated`).
 
 ### Endpoint shows `Invalid`
 
