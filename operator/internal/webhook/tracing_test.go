@@ -326,12 +326,17 @@ const krakendOutput = "SECRET-KRAKEND-OUTPUT"
 type rejectingExecutor struct {
 	reject func(config string) bool
 	broken error
+	// unrunnable, when set, picks the configs krakend fails to run on.
+	unrunnable func(config string) bool
 }
 
 func (e rejectingExecutor) Execute(_ context.Context, _ string, args ...string) ([]byte, error) {
 	config, err := os.ReadFile(args[len(args)-1])
 	if err != nil {
 		return nil, err
+	}
+	if e.unrunnable != nil && e.unrunnable(string(config)) {
+		return []byte(krakendOutput), errors.New("SECRET-NO-BINARY")
 	}
 	if e.reject(string(config)) {
 		if e.broken != nil {
@@ -751,5 +756,35 @@ func TestEndRules_RecordsAFailureWithoutAStatusErrorsText(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A gateway update whose stored root cannot be checked, once the endpoints are
+// found to fail, is a 500; the judging span and the admission's are marked, and
+// neither records the text of what failed.
+func TestGatewayAdmission_AFailedJudgingMarksItsSpansWithoutTheText(t *testing.T) {
+	rec := tracingtest.New(t)
+	old, gw := editedGateway()
+	executor := rejectingExecutor{
+		reject:     rejectsWith("/bad", "1s"),
+		unrunnable: func(config string) bool { return !strings.Contains(config, "1s") },
+	}
+	v := tracedValidatorsRunning(rec, executor, old, testEndpoint("e", "/bad"))
+	admit := tracedValidator{kind: "KrakenDGateway", next: v.Gateway, tracer: rec.Tracer()}
+
+	_, err := admit.ValidateUpdate(context.Background(), old, gw)
+
+	if !apierrors.IsInternalError(err) {
+		t.Fatalf("err = %v, want a 500", err)
+	}
+	spans := rec.Ended()
+	for _, name := range []string{"admission.validate KrakenDGateway", "admission.judge_served"} {
+		span := spans.One(t, name)
+		if got := span.Status(); got.Code != codes.Error || got.Description != decisionFailed {
+			t.Errorf("span %q status = %+v, want an error described %q", name, got, decisionFailed)
+		}
+		if len(span.Events()) != 0 {
+			t.Errorf("span %q has events %v, want none", name, span.Events())
+		}
 	}
 }
