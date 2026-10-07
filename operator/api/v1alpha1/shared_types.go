@@ -137,6 +137,12 @@ const (
 	// gateway mounts exists. Only the gateway controller writes it.
 	ConditionPluginsResolved = "PluginsResolved"
 
+	// ConditionResourcesControlled is False while the gateway leaves an
+	// existing object alone because the name it would write is taken by one it
+	// does not control; its message names each. It is True otherwise. Only the
+	// gateway controller writes it.
+	ConditionResourcesControlled = "ResourcesControlled"
+
 	// ConditionEndpointsExcluded is True while the gateway leaves out one or
 	// more of its KrakenDEndpoints because they fail validation on their own
 	// (Accepted reason EndpointInvalid or PolicyInvalid); its message counts
@@ -277,6 +283,14 @@ const (
 	// ReasonAwaitingAvailability is the reason of a gateway's Ready=False
 	// while its Deployment has not reported available replicas.
 	ReasonAwaitingAvailability = "AwaitingAvailability"
+
+	// ReasonResourceNotControlled is the reason of a gateway's
+	// ResourcesControlled=False and of the Ready=False that follows it.
+	ReasonResourceNotControlled = "ResourceNotControlled"
+
+	// ReasonResourcesControlled is the reason of a gateway's
+	// ResourcesControlled=True.
+	ReasonResourcesControlled = "ResourcesControlled"
 )
 
 // Reasons of the LicenseValid, LicenseExpired and LicenseDegraded conditions.
