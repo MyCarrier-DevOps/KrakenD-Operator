@@ -95,7 +95,7 @@ func (c readEvents) event(ctx context.Context, name string, obj runtime.Object, 
 		return
 	}
 	if gvk, err := c.GroupVersionKindFor(obj); err == nil {
-		attrs = append(attrs, tracing.KeyKind.String(gvk.Kind))
+		attrs = append(attrs, tracing.KeyKind.String(strings.TrimSuffix(gvk.Kind, "List")))
 	}
 	span.AddEvent(name, trace.WithAttributes(attrs...))
 }
