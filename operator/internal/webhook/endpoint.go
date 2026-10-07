@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"slices"
 
+	"go.opentelemetry.io/otel/trace"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -55,6 +56,8 @@ type EndpointValidator struct {
 	// Memo remembers recent config verdicts across requests. Nil remembers
 	// nothing.
 	Memo configcheck.Memo
+	// Tracer records the structural rules as a span; nil records none.
+	Tracer trace.Tracer
 }
 
 // ValidateCreate validates a new KrakenDEndpoint.

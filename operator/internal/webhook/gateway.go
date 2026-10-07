@@ -23,6 +23,7 @@ import (
 	"slices"
 	"strings"
 
+	"go.opentelemetry.io/otel/trace"
 	authorizationv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -50,6 +51,8 @@ type GatewayValidator struct {
 	// Memo remembers recent config verdicts across requests. Nil remembers
 	// nothing.
 	Memo configcheck.Memo
+	// Tracer records the structural rules as a span; nil records none.
+	Tracer trace.Tracer
 }
 
 // ValidateCreate validates a new KrakenDGateway. There is no "old" object on

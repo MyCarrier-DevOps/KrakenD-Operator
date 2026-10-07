@@ -2433,7 +2433,7 @@ func TestGatewayAdmission_ChangedPostRestartRunAsStillUnacknowledgedIsRejected(t
 func TestNewValidators_HandTheCheckerToTheEndpointValidator(t *testing.T) {
 	chk := &scriptedChecker{}
 
-	v := NewValidators(fakeClient(), fakeClient(), chk, "")
+	v := NewValidators(fakeClient(), fakeClient(), chk, "", nil)
 
 	if v.Endpoint.Checker != ConfigChecker(chk) {
 		t.Errorf("the endpoint validator's checker = %v, want the one passed in", v.Endpoint.Checker)
@@ -2443,7 +2443,7 @@ func TestNewValidators_HandTheCheckerToTheEndpointValidator(t *testing.T) {
 func TestNewValidators_HandTheCheckerToThePolicyValidator(t *testing.T) {
 	chk := &scriptedChecker{}
 
-	v := NewValidators(fakeClient(), fakeClient(), chk, "")
+	v := NewValidators(fakeClient(), fakeClient(), chk, "", nil)
 
 	if v.Policy.Checker != ConfigChecker(chk) {
 		t.Errorf("the policy validator's checker = %v, want the one passed in", v.Policy.Checker)
@@ -2451,7 +2451,7 @@ func TestNewValidators_HandTheCheckerToThePolicyValidator(t *testing.T) {
 }
 
 func TestNewValidators_GiveTheEndpointValidatorAVerdictMemo(t *testing.T) {
-	v := NewValidators(fakeClient(), fakeClient(), &scriptedChecker{}, "")
+	v := NewValidators(fakeClient(), fakeClient(), &scriptedChecker{}, "", nil)
 
 	if v.Endpoint.Memo == nil {
 		t.Error("the endpoint validator has no verdict memo, so every write runs every check again")
@@ -2459,7 +2459,7 @@ func TestNewValidators_GiveTheEndpointValidatorAVerdictMemo(t *testing.T) {
 }
 
 func TestNewValidators_GiveTheGatewayValidatorAVerdictMemo(t *testing.T) {
-	v := NewValidators(fakeClient(), fakeClient(), &scriptedChecker{}, "")
+	v := NewValidators(fakeClient(), fakeClient(), &scriptedChecker{}, "", nil)
 
 	if v.Gateway.Memo == nil {
 		t.Error("the gateway validator has no verdict memo, so every write runs every check again")
@@ -2467,7 +2467,7 @@ func TestNewValidators_GiveTheGatewayValidatorAVerdictMemo(t *testing.T) {
 }
 
 func TestNewValidators_GiveThePolicyValidatorAVerdictMemo(t *testing.T) {
-	v := NewValidators(fakeClient(), fakeClient(), &scriptedChecker{}, "")
+	v := NewValidators(fakeClient(), fakeClient(), &scriptedChecker{}, "", nil)
 
 	if v.Policy.Memo == nil {
 		t.Error("the policy validator has no verdict memo, so every write runs every check again")

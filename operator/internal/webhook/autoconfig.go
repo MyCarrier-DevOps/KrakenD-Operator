@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 
+	"go.opentelemetry.io/otel/trace"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -35,6 +36,8 @@ import (
 // AutoConfigValidator validates KrakenDAutoConfig resources.
 type AutoConfigValidator struct {
 	client.Client
+	// Tracer records the rules as a structural span; nil records none.
+	Tracer trace.Tracer
 }
 
 // ValidateCreate validates a new KrakenDAutoConfig.

@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"slices"
 
+	"go.opentelemetry.io/otel/trace"
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -121,6 +122,8 @@ type Validators struct {
 	Endpoint   *EndpointValidator
 	Policy     *PolicyValidator
 	AutoConfig *AutoConfigValidator
+	// Tracer records each admission decision as a span; nil records none.
+	Tracer trace.Tracer
 }
 
 // NewValidators builds the validators over c. apiReader reads uncached; see
@@ -128,18 +131,21 @@ type Validators struct {
 // controller uses too, so the validators and the controller share its
 // validation slots.
 // operatorUsername is the username of the operator's own requests; see
-// EndpointValidator.OperatorUsername.
+// EndpointValidator.OperatorUsername. Each admission decision, and the rules
+// in it, is a span of tracer; a nil tracer records none.
 func NewValidators(
-	c client.Client, apiReader client.Reader, checker ConfigChecker, operatorUsername string,
+	c client.Client, apiReader client.Reader, checker ConfigChecker, operatorUsername string, tracer trace.Tracer,
 ) Validators {
 	memo := newAdmissionMemo()
 	return Validators{
-		Gateway: &GatewayValidator{Client: c, Checker: checker, Memo: memo},
+		Gateway: &GatewayValidator{Client: c, Checker: checker, Memo: memo, Tracer: tracer},
 		Endpoint: &EndpointValidator{
 			Client: c, APIReader: apiReader, Checker: checker, OperatorUsername: operatorUsername, Memo: memo,
+			Tracer: tracer,
 		},
 		Policy:     &PolicyValidator{Client: c, Checker: checker, Memo: memo},
-		AutoConfig: &AutoConfigValidator{Client: c},
+		AutoConfig: &AutoConfigValidator{Client: c, Tracer: tracer},
+		Tracer:     tracer,
 	}
 }
 

@@ -85,6 +85,6 @@ func wireValidation(
 			CheckSlots: make(chan struct{}, autoConfigCheckSlots),
 			Clock:      clock.RealClock{},
 		},
-		Validators: webhooksetup.NewValidators(mgr.GetClient(), mgr.GetAPIReader(), checker, operatorUsername),
+		Validators: webhooksetup.NewValidators(mgr.GetClient(), mgr.GetAPIReader(), checker, operatorUsername, nil),
 	}
 }
