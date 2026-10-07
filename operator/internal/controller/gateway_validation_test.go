@@ -337,3 +337,30 @@ func TestGatewayReconcile_CountsOnlyTheRejectionsOfObjectsOnTheirOwn(t *testing.
 		t.Errorf("counted %v rejections, want 1", got)
 	}
 }
+
+// dragonflyGateway is the test gateway with Dragonfly enabled, and a client
+// whose cluster has the Dragonfly CRD but no Dragonfly yet, so the
+// controller renders the Dragonfly address it will serve.
+func dragonflyGateway(objs ...client.Object) (*v1alpha1.KrakenDGateway, client.Client) {
+	gw := reconciledGateway()
+	gw.Spec.Dragonfly = &v1alpha1.DragonflySpec{Enabled: true}
+	c := fakeClientBuilder().WithRESTMapper(optionalCRDMapper(dragonflyGVK)).
+		WithObjects(append([]client.Object{gw}, objs...)...).WithStatusSubresource(append([]client.Object{gw}, objs...)...).Build()
+	return gw, c
+}
+
+func TestGatewayReconcile_TheRootIsCheckedWithTheDetectedDragonfly(t *testing.T) {
+	gw, c := dragonflyGateway(testEndpoint("good", "/a"))
+	dns := resources.DragonflyServiceDNS(gw)
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}),
+		&contentValidator{markers: map[string]string{dns: "- at '/extra_config/redis': " + dns + " refused"}})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+
+	if cv := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionConfigValid); cv == nil ||
+		cv.Reason != v1alpha1.ReasonGatewayRootInvalid || !strings.Contains(cv.Message, dns) {
+		t.Errorf("ConfigValid = %+v, want %s quoting the Dragonfly address", cv, v1alpha1.ReasonGatewayRootInvalid)
+	}
+}
