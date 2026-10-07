@@ -101,6 +101,9 @@ type KrakenDAutoConfigReconciler struct {
 	// change per process. A recreated AutoConfig overwrites its predecessor's
 	// entry. It is safe for the concurrent workers.
 	heldLogged sync.Map
+	// verdicts remembers, per AutoConfig, the config checks its last precheck
+	// ran, so an unchanged sync that holds a candidate runs none again.
+	verdicts verdictMemo
 	// FetchTimeout bounds fetching the OpenAPI spec and resolving its
 	// external $refs; zero means defaultFetchTimeout.
 	FetchTimeout time.Duration
@@ -145,6 +148,7 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		if errors.IsNotFound(err) {
 			autoConfigSynced.DeleteLabelValues(req.Namespace, req.Name)
 			r.heldLogged.Delete(req.NamespacedName)
+			r.verdicts.forget(req.NamespacedName)
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("getting autoconfig %s: %w", req.NamespacedName, err)
@@ -156,6 +160,7 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	if !ac.DeletionTimestamp.IsZero() {
 		autoConfigSynced.DeleteLabelValues(ac.Namespace, ac.Name)
 		r.heldLogged.Delete(req.NamespacedName)
+		r.verdicts.forget(req.NamespacedName)
 		return ctrl.Result{}, nil
 	}
 
