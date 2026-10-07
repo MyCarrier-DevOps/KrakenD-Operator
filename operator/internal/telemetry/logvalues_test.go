@@ -49,6 +49,20 @@ type codeError string
 
 func (e codeError) Error() string { return "code " + string(e) }
 
+// namedComplex is a kind the bridge has no conversion for.
+type namedComplex complex128
+
+// point is a struct with exported fields and no methods.
+type point struct {
+	A string
+	B int
+}
+
+// label is a Stringer whose value receiver panics on a nil pointer.
+type label struct{ name string }
+
+func (l label) String() string { return l.name }
+
 // marshaled is a logr.Marshaler that logs as the value it holds.
 type marshaled struct{ as any }
 
@@ -84,6 +98,13 @@ func TestLogger_ValuesAreConvertedToWhatTheyRead(t *testing.T) {
 		{"time.Time", time.Unix(1700000000, 0), float64(1.7e18)},
 		{"slice of UIDs", []types.UID{"u1", "u2"}, []any{stringValue("u1"), stringValue("u2")}},
 		{"pointer to a UID", ptrTo(types.UID("u1")), "u1"},
+		{"named complex", namedComplex(1 + 2i), "(1+2i)"},
+		{"nil pointer to a Stringer", (*label)(nil), "<nil>"},
+		{"struct", point{"a", 1}, "{A:a B:1}"},
+		{"pointer to a struct", &point{"a", 1}, "{A:a B:1}"},
+		{"slice of strings", []string{"a"}, []any{stringValue("a")}},
+		{"map of strings", map[string]string{"a": "b"},
+			[]any{map[string]any{"Key": "a", "Value": stringValue("b")}}},
 		{"marshaler of a UID", marshaled{types.UID("u1")}, "u1"},
 		{"marshaler of a map", marshaled{map[string]any{"id": types.UID("u1")}},
 			[]any{map[string]any{"Key": "id", "Value": stringValue("u1")}}},
