@@ -20,7 +20,9 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
+	"strings"
 
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 	"go.opentelemetry.io/otel/trace"
@@ -32,10 +34,11 @@ import (
 const redactedValue = "REDACTED"
 
 // RedactURL returns raw without its user information, with each query value
-// replaced by REDACTED and without its fragment, for errors, logs and spans:
-// an OpenAPI URL can carry credentials in any of them. A URL that does not
-// parse, or that has no "//" after its scheme (the opaque form, whose
-// credentials parse as part of the path), is reduced to "<unparseable URL>".
+// replaced by REDACTED (a bare key, as in "?token", included) and without its
+// fragment, for errors, logs and spans: an OpenAPI URL can carry credentials
+// in any of them. A URL that does not parse, or that has no "//" after its
+// scheme (the opaque form, whose credentials parse as part of the path), is
+// reduced to "<unparseable URL>".
 func RedactURL(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil {
@@ -53,14 +56,26 @@ func redact(u *url.URL) string {
 	}
 	r := *u
 	r.User, r.Fragment, r.RawFragment = nil, "", ""
-	if r.RawQuery != "" {
-		q := r.Query()
-		for k := range q {
-			q[k] = []string{redactedValue}
-		}
-		r.RawQuery = q.Encode()
-	}
+	r.RawQuery = redactQuery(r.RawQuery)
 	return r.String()
+}
+
+// redactQuery replaces the value of each "key=value" pair of query with
+// REDACTED, keeping its key, and a bare key, which is a token as much as a
+// value is, with REDACTED. The pairs come back sorted, without repeats.
+func redactQuery(query string) string {
+	var pairs []string
+	for _, pair := range strings.Split(query, "&") {
+		switch key, _, hasValue := strings.Cut(pair, "="); {
+		case pair == "":
+		case hasValue:
+			pairs = append(pairs, key+"="+redactedValue)
+		default:
+			pairs = append(pairs, redactedValue)
+		}
+	}
+	slices.Sort(pairs)
+	return strings.Join(slices.Compact(pairs), "&")
 }
 
 // withoutURL returns err without the *url.Error wrapper net/http and
