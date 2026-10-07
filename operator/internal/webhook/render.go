@@ -232,13 +232,38 @@ type scan struct {
 
 // failingEndpoints judges each suspect on its own with a write (now, with the
 // suspect as its endpoint) and, when that fails, without it (was; nil when
-// nothing was stored before, so that every failure is the write's).
-func failingEndpoints(context.Context, ConfigChecker, configcheck.Memo,
-	configcheck.EndpointUnit, *configcheck.EndpointUnit, []v1alpha1.KrakenDEndpoint) scan {
-	return scan{}
+// nothing was stored before, so that every failure is the write's). It stops
+// at the first check that cannot run, which includes one the admission
+// deadline cuts off, and counts the suspects left.
+func failingEndpoints(ctx context.Context, chk ConfigChecker, memo configcheck.Memo,
+	now configcheck.EndpointUnit, was *configcheck.EndpointUnit, suspects []v1alpha1.KrakenDEndpoint) scan {
+	var s scan
+	for i := range suspects {
+		ep := &suspects[i]
+		now.Endpoint = ep
+		v, err := chk.CheckEndpoint(ctx, now, memo)
+		if err == nil && !v.OK && was != nil {
+			before := *was
+			before.Endpoint = ep
+			var stored configcheck.EndpointVerdict
+			stored, err = chk.CheckEndpoint(ctx, before, memo)
+			if err == nil && !stored.OK {
+				s.already = true
+				continue
+			}
+		}
+		if err != nil {
+			s.unchecked, s.stopped = len(suspects)-i, err
+			return s
+		}
+		if !v.OK {
+			s.broken = append(s.broken, ep.Namespace+"/"+ep.Name)
+		}
+	}
+	return s
 }
 
 // brokenList names the endpoints a write breaks, quoting nothing of them.
-func brokenList(scan) string {
-	return ""
+func brokenList(s scan) string {
+	return "with this change these KrakenDEndpoints fail validation: " + strings.Join(s.broken, ", ")
 }
