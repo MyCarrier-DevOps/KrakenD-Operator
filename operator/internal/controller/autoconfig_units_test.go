@@ -22,6 +22,7 @@ import (
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 func TestAutoConfigReconcile_PrecheckHoldsTheCandidatesThatFailOnTheirOwn(t *testing.T) {
@@ -94,5 +95,41 @@ func TestAutoConfigReconcile_AGroupThatPassesRunsNoEndpointCheck(t *testing.T) {
 
 	if want := []string{"root", "group:test-ac-listusers"}; !slices.Equal(checker.checks, want) {
 		t.Errorf("checks = %v, want %v: candidates that pass together are not checked one by one", checker.checks, want)
+	}
+}
+
+// A group verdict says nothing about the entries its render left out: a
+// candidate that lost an entry in the group's render is judged on its own
+// even though the group passes, as the gateway controller judges it.
+func TestAutoConfigReconcile_AMaskedCandidateThatFailsOnItsOwnIsHeld(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	g.output.Endpoints = append(g.output.Endpoints, generatedEndpoint("getB", "/b"))
+	checker := &fakeChecker{
+		group: func([]v1alpha1.KrakenDEndpoint) configcheck.Verdict {
+			return configcheck.Verdict{OK: true, Masked: []types.NamespacedName{{Namespace: "default", Name: "test-ac-getb"}}}
+		},
+		endpoint: func(ep *v1alpha1.KrakenDEndpoint) configcheck.EndpointVerdict {
+			if ep.Name == "test-ac-getb" {
+				return configcheck.EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid, Output: "its left-out entry is bad"}
+			}
+			return configcheck.EndpointVerdict{OK: true}
+		},
+	}
+	c := fakeClientBuilder().WithObjects(ac, cm, testGateway()).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Checker = checker
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{"root", "group:test-ac-listusers,test-ac-getb", "endpoint:test-ac-getb"}
+	if !slices.Equal(checker.checks, want) {
+		t.Errorf("checks = %v, want %v: only the masked candidate is judged on its own", checker.checks, want)
+	}
+	if endpointExists(t, c, "test-ac-getb") || !endpointExists(t, c, "test-ac-listusers") {
+		t.Error("want listusers written and getb held")
 	}
 }
