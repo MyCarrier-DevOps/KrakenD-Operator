@@ -236,7 +236,9 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// Apply filters
 	filtered := cueOutput.Entries
 	if ac.Spec.Filter != nil {
+		_, filter := tracing.Start(ctx, r.Tracer, "autoconfig.filter")
 		filtered = r.Filter.Apply(cueOutput.Entries, cueOutput.Tags, cueOutput.OperationIDs, *ac.Spec.Filter)
+		filter.End()
 	}
 
 	skippedOps := r.inScope(&ac, cueOutput.Skipped)
