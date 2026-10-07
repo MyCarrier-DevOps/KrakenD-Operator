@@ -121,6 +121,7 @@ type blameWorld struct {
 	gw        *v1alpha1.KrakenDGateway
 	checker   *verdictRecorder
 	gateways  *controller.KrakenDGatewayReconciler
+	gateway   *webhook.GatewayValidator
 	endpoints *webhook.EndpointValidator
 	policies  *webhook.PolicyValidator
 }
@@ -145,6 +146,7 @@ func newBlameWorld(t *testing.T, judge func(config string) (string, bool), objs 
 		gateways: &controller.KrakenDGatewayReconciler{Client: c, APIReader: c, Scheme: scheme,
 			Recorder: record.NewFakeRecorder(100), Renderer: renderer.New(renderer.Options{}), Checker: checker,
 			Clock: clock.RealClock{}, LicenseParser: licenseutil.NewX509LicenseParser()},
+		gateway:   vs.Gateway,
 		endpoints: vs.Endpoint,
 		policies:  vs.Policy,
 	}
@@ -556,5 +558,147 @@ func TestBlame_APolicyChangeIsDeniedByTheEndpointItNewlyBreaks(t *testing.T) {
 	}
 	if got := w.accepted(t, a); got == nil || got.Reason != v1alpha1.ReasonEndpointInvalid {
 		t.Errorf("a Accepted = %+v, want EndpointInvalid", got)
+	}
+}
+
+// setTimeout sets the gateway's timeout as its owner would, past admission.
+func (w *blameWorld) setTimeout(t *testing.T, timeout string) {
+	t.Helper()
+	var gw v1alpha1.KrakenDGateway
+	if err := w.c.Get(context.Background(), client.ObjectKeyFromObject(w.gw), &gw); err != nil {
+		t.Fatal(err)
+	}
+	gw.Spec.Config.Timeout = timeout
+	if err := w.c.Update(context.Background(), &gw); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// admitTimeout is gateway admission's answer to updating the stored gateway's
+// timeout.
+func (w *blameWorld) admitTimeout(t *testing.T, timeout string) ([]string, error) {
+	t.Helper()
+	ctx := context.Background()
+	var stored v1alpha1.KrakenDGateway
+	if err := w.c.Get(ctx, client.ObjectKeyFromObject(w.gw), &stored); err != nil {
+		t.Fatal(err)
+	}
+	updated := stored.DeepCopy()
+	updated.Spec.Config.Timeout = timeout
+	warnings, err := w.gateway.ValidateUpdate(ctx, &stored, updated)
+	return warnings, err
+}
+
+// configValid reads the stored gateway's ConfigValid condition.
+func (w *blameWorld) configValid(t *testing.T) *metav1.Condition {
+	t.Helper()
+	var gw v1alpha1.KrakenDGateway
+	if err := w.c.Get(context.Background(), client.ObjectKeyFromObject(w.gw), &gw); err != nil {
+		t.Fatal(err)
+	}
+	return meta.FindStatusCondition(gw.Status.Conditions, v1alpha1.ConditionConfigValid)
+}
+
+// rootBrokenAt13s is a krakend stand-in whose root fails on its own at a
+// timeout of 13s, and with which each of the others fails once the timeout is
+// 17s (the owner's fix of the root).
+func rootBrokenAt13s(failsAt17s ...string) func(string) (string, bool) {
+	return func(config string) (string, bool) {
+		if strings.Contains(config, `"13s"`) {
+			return "root is broken", true
+		}
+		if !strings.Contains(config, `"17s"`) {
+			return "", false
+		}
+		for _, host := range failsAt17s {
+			if !strings.Contains(config, host) {
+				return "", false
+			}
+		}
+		return "fails with 17s", true
+	}
+}
+
+// TestBlame_AFailingStoredRootDoesNotHideWhatTheOwnersFixBreaks: the gateway's
+// stored root fails on its own, so the controller blames no endpoint and keeps
+// serving the last applied config. The owner writes a root that passes. An
+// endpoint that fails with it, and that the last applied config served, is
+// broken by that write: admission denies it by name, as it does when the
+// stored root passes, and the controller then excludes it.
+func TestBlame_AFailingStoredRootDoesNotHideWhatTheOwnersFixBreaks(t *testing.T) {
+	for name, storedTimeout := range map[string]string{"a stored root that passes": "5s", "a stored root that fails": "13s"} {
+		t.Run(name, func(t *testing.T) {
+			e1 := tenantEndpoint("tenant-a", "e1", "/a", "http://a-backend")
+			w := newBlameWorld(t, rootBrokenAt13s("a-backend"), e1)
+			w.setTimeout(t, "3s")
+			w.reconcile(t)
+			w.setTimeout(t, storedTimeout)
+			w.reconcile(t)
+			if got := w.served(t); !slices.Equal(got, []string{"GET /a"}) {
+				t.Fatalf("before the write the gateway serves %v, want GET /a", got)
+			}
+
+			warnings, err := w.admitTimeout(t, "17s")
+
+			if err == nil || !strings.Contains(err.Error(), "tenant-a/e1") {
+				t.Errorf("admission of 17s = warnings %q, err %v; want a denial naming tenant-a/e1", warnings, err)
+			}
+			w.setTimeout(t, "17s")
+			w.reconcile(t)
+			if c := w.accepted(t, e1); c == nil || c.Reason != v1alpha1.ReasonEndpointInvalid {
+				t.Errorf("after the write e1 Accepted = %v, want EndpointInvalid: the controller excludes what admission names", c)
+			}
+		})
+	}
+}
+
+// TestBlame_AFailingStoredRootStillOnlyWarnsAboutAnEndpointNoConfigServed: the
+// endpoint was never judged (the stored root was broken before the gateway
+// applied anything), so nothing says the owner's write is what makes it fail.
+// Admission warns, and the controller excludes the endpoint.
+func TestBlame_AFailingStoredRootStillOnlyWarnsAboutAnEndpointNoConfigServed(t *testing.T) {
+	e1 := tenantEndpoint("tenant-a", "e1", "/a", "http://a-backend")
+	w := newBlameWorld(t, rootBrokenAt13s("a-backend"), e1)
+	w.setTimeout(t, "13s")
+	w.reconcile(t)
+
+	warnings, err := w.admitTimeout(t, "17s")
+
+	if err != nil || len(warnings) == 0 {
+		t.Errorf("admission of 17s = warnings %q, err %v; want it admitted with a warning", warnings, err)
+	}
+	w.setTimeout(t, "17s")
+	w.reconcile(t)
+	if c := w.accepted(t, e1); c == nil || c.Reason != v1alpha1.ReasonEndpointInvalid {
+		t.Errorf("after the write e1 Accepted = %v, want EndpointInvalid", c)
+	}
+}
+
+// TestBlame_AFailingStoredRootDoesNotHideAFailureOnlyTogether: e1 and e2 each
+// pass with the owner's fix, and fail only together. The stored root's failure
+// says nothing about that, so admission denies the write, as it does when the
+// stored root passes, rather than calling the failure old.
+func TestBlame_AFailingStoredRootDoesNotHideAFailureOnlyTogether(t *testing.T) {
+	for name, storedTimeout := range map[string]string{"a stored root that passes": "5s", "a stored root that fails": "13s"} {
+		t.Run(name, func(t *testing.T) {
+			e1 := tenantEndpoint("tenant-a", "e1", "/a", "http://a-backend")
+			e2 := tenantEndpoint("tenant-b", "e2", "/b", "http://b-backend")
+			w := newBlameWorld(t, rootBrokenAt13s("a-backend", "b-backend"), e1, e2)
+			w.setTimeout(t, "3s")
+			w.reconcile(t)
+			w.setTimeout(t, storedTimeout)
+			w.reconcile(t)
+
+			warnings, err := w.admitTimeout(t, "17s")
+
+			if err == nil || !strings.Contains(err.Error(), "fail validation together") {
+				t.Errorf("admission of 17s = warnings %q, err %v; want a denial that they fail together", warnings, err)
+			}
+			w.setTimeout(t, "17s")
+			w.reconcile(t)
+			if c := w.configValid(t); c == nil || c.Reason != v1alpha1.ReasonCombinedConfigInvalid {
+				t.Errorf("after the write ConfigValid = %v, want CombinedConfigInvalid: the controller refuses it too", c)
+			}
+		})
 	}
 }
