@@ -67,6 +67,28 @@ type flatEndpoint struct {
 	Index int
 }
 
+// servedBefore reports whether a is served before b when their routes are the
+// same or clash: the older KrakenDEndpoint, then the lower namespace/name,
+// then the earlier entry of one KrakenDEndpoint.
+func servedBefore(a, b flatEndpoint) bool {
+	if a.CreationTimestampUnix != b.CreationTimestampUnix {
+		return a.CreationTimestampUnix < b.CreationTimestampUnix
+	}
+	if a.Source != b.Source {
+		return a.Source.String() < b.Source.String()
+	}
+	return a.Index < b.Index
+}
+
+// compareConflicts orders a KrakenDEndpoint's lost entries by endpoint, then
+// method.
+func compareConflicts(a, b EntryConflict) int {
+	if c := cmp.Compare(a.Endpoint, b.Endpoint); c != 0 {
+		return c
+	}
+	return cmp.Compare(a.Method, b.Method)
+}
+
 // flattenEndpoints flattens all KrakenDEndpoint specs into individual entries,
 // detects conflicts (entries that register the same route for one method, from
 // one or several KrakenDEndpoints), and returns the
@@ -131,17 +153,9 @@ func flattenEndpoints(
 			continue
 		}
 
-		// Sort by creation timestamp (oldest first), then by name, then by
-		// spec position for determinism
-		sort.Slice(group.entries, func(i, j int) bool {
-			if group.entries[i].CreationTimestampUnix != group.entries[j].CreationTimestampUnix {
-				return group.entries[i].CreationTimestampUnix < group.entries[j].CreationTimestampUnix
-			}
-			if group.entries[i].Source != group.entries[j].Source {
-				return group.entries[i].Source.String() < group.entries[j].Source.String()
-			}
-			return group.entries[i].Index < group.entries[j].Index
-		})
+		// Oldest KrakenDEndpoint first, then by name, then by spec position
+		// for determinism
+		sort.Slice(group.entries, func(i, j int) bool { return servedBefore(group.entries[i], group.entries[j]) })
 
 		// Keep the winner (oldest), mark the rest as conflicted
 		flat = append(flat, group.entries[0])
@@ -157,12 +171,7 @@ func flattenEndpoints(
 	// Groups come from a map: sort each loser's list so the output is
 	// deterministic.
 	for nn := range conflicted {
-		slices.SortFunc(conflicted[nn], func(a, b EntryConflict) int {
-			if c := cmp.Compare(a.Endpoint, b.Endpoint); c != 0 {
-				return c
-			}
-			return cmp.Compare(a.Method, b.Method)
-		})
+		slices.SortFunc(conflicted[nn], compareConflicts)
 	}
 
 	// Sort result by endpoint path then method for deterministic output
