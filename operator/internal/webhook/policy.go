@@ -25,6 +25,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -240,8 +241,8 @@ func screenPolicyUse(ctx context.Context, chk ConfigChecker, memo configcheck.Me
 
 // judgePolicyUse names the endpoints of a screened gateway that policy
 // breaks: each suspect is checked on its own with policy and, when that
-// fails, with the stored policy (old; nil on a create, when nothing rendered
-// them with it). One that fails only with policy is broken, and any one makes
+// fails, with the stored policy (old; on a create, with the policy rendered
+// empty, since nothing rendered them with it before). One that fails only with policy is broken, and any one makes
 // the returned cause, which names endpoints and quotes none. When every
 // suspect that fails failed with the stored policy too, the write only draws
 // a warning. When the group failed but no suspect fails on its own, the group
@@ -255,10 +256,16 @@ func judgePolicyUse(ctx context.Context, chk ConfigChecker, memo configcheck.Mem
 	}
 	gw := use.gateway
 	ceFallback := configcheck.CEFallback(gw)
-	var was *configcheck.EndpointUnit
-	if old != nil {
-		was = &configcheck.EndpointUnit{Gateway: gw, Override: old, CEFallback: ceFallback}
+	// On a create nothing rendered the endpoints with a stored policy, so the
+	// baseline is the policy with its identity and no content, as a policy of
+	// another namespace is rendered for the endpoint's owner (configcheck).
+	baseline := old
+	if baseline == nil {
+		baseline = &v1alpha1.KrakenDBackendPolicy{
+			ObjectMeta: metav1.ObjectMeta{Name: policy.Name, Namespace: policy.Namespace},
+		}
 	}
+	was := &configcheck.EndpointUnit{Gateway: gw, Override: baseline, CEFallback: ceFallback}
 	s := failingEndpoints(ctx, chk, memo,
 		configcheck.EndpointUnit{Gateway: gw, Override: policy, CEFallback: ceFallback}, was, use.suspects)
 	switch {
