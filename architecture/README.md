@@ -1605,9 +1605,19 @@ and no content: an endpoint that fails anyway only draws a warning, and a
 failure that appears only with the endpoints together is still denied. Naming
 stops at 20 endpoints or at the 12 s admission budget; a denial found by then
 stands, and the names are bounded by bytes, with the not-checked counts always
-kept. No denial and an unfinished scan is a `500` (a gateway create only warns), which a large gateway with
-many failing, not yet recorded endpoints can return until the controller
-records their exclusions.
+kept. When the group of the endpoints with the write fails, the stored group
+(the stored object, or the policy rendered empty on a policy create) is
+checked before the endpoints are scanned, and so are the endpoints it lost an
+entry in. If it passes and none of those fails both ways, the write is the
+cause of the failure whichever endpoints the scan reaches, so the write is
+refused with a `422` even when the budget ends before the scan has named an
+endpoint it breaks (`(N not checked within the admission time)`): the scan
+changes only how many endpoints are named, never the verdict. When the
+stored group fails too, or an endpoint that lost an entry fails both ways,
+nothing is decided in advance: no denial and an unfinished scan is a `500` (a
+gateway create only warns), which a large gateway with many failing, not yet
+recorded endpoints can return until the controller records their exclusions.
+A validator that cannot run before those checks finish is a `500` as well.
 
 Both check an endpoint that already fails on its own before they check the
 endpoints together. While such an endpoint is not yet recorded as excluded, a
@@ -1651,8 +1661,18 @@ On the pinned binary (KrakenD CE 2.13.11) one run takes:
 | `krakend check -n`, 500 endpoints | 0.07 s | 0.17 s |
 | `krakend check -t -n` | about 1.05 s | 1.1–1.2 s |
 
-So an admission request stays far inside the 15 s webhook timeout; waiting for
-a slot is what can delay it. The memos live in the operator's memory. After a
+One endpoint's check costs about 0.1–0.13 s at the 500m limit, and more
+while the controllers compete for the same CPU or a slot is taken. Naming the
+endpoints a write breaks, after a group check that fails, judges each served
+endpoint on its own, one run after another, so it costs about 0.1 s per served
+endpoint, plus one more for each that fails. After the root, the group and the
+stored root and group, the 12 s admission budget covers about 80–110 such
+checks, so a gateway of several hundred served endpoints cannot be named in
+full. Deciding the write does not cost that: it is four lints, about 0.5 s at
+500m, whatever the number of endpoints. So a request whose group passes stays
+far inside the 15 s webhook timeout, and one whose group fails is refused
+within the budget, naming what the scan reached; waiting for a slot can also
+delay it. The memos live in the operator's memory. After a
 restart or a leader failover, or after an edit of a gateway's root or edition,
 a gateway whose whole render fails checks every endpoint once more, one at a
 time on the gateway controller's single worker: about 50–60 s for 500
