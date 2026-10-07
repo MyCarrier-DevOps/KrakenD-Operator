@@ -61,10 +61,11 @@ type routeAdmission struct {
 
 // dropRouteLosers removes from flat the entries routeLosers leaves out, adds
 // each to its KrakenDEndpoint's conflicts, keeping each list sorted, and
-// reports whether resolution stopped at its cap.
-func dropRouteLosers(flat []flatEndpoint, conflicted map[types.NamespacedName][]EntryConflict,
+// reports whether resolution stopped at its cap. shadowed are the entries
+// that lost a same-shape conflict, which flat no longer holds.
+func dropRouteLosers(flat, shadowed []flatEndpoint, conflicted map[types.NamespacedName][]EntryConflict,
 	rules routeRules) (kept []flatEndpoint, capped bool) {
-	adm := routeLosers(flat, rules)
+	adm := routeLosers(flat, shadowed, rules)
 	if len(adm.losers) == 0 {
 		return flat, adm.capped
 	}
@@ -99,6 +100,12 @@ func dropRouteLosers(flat []flatEndpoint, conflicted map[types.NamespacedName][]
 // list the OPTIONS route of the entry's path even when a served entry already
 // added it (entryRoutes with nil options).
 //
+// The entries of shadowed lost a same-shape conflict and are left out
+// already. Each is recorded at its place in serving order as an older entry
+// left out, so a newer entry that clashes with it loses to it whether or not
+// its same-shape winner is served: removing the winner can then promote it
+// without leaving another entry out. It is neither counted nor reported again.
+//
 // An entry gin refuses on its own, or next to its own KrakenDEndpoint's
 // entries, is left in for that endpoint's own check, which refuses it; so is
 // a clash with the gateway's own routes, which are not registered here. A
@@ -106,7 +113,7 @@ func dropRouteLosers(flat []flatEndpoint, conflicted map[types.NamespacedName][]
 // Each loss, and each such clash, rebuilds the engine, so after
 // MaxRouteRefusals of them resolution stops with capped set: the remaining
 // entries are rendered as they are, and the full check reports what is left.
-func routeLosers(flat []flatEndpoint, rules routeRules) routeAdmission {
+func routeLosers(flat, shadowed []flatEndpoint, rules routeRules) routeAdmission {
 	adm := routeAdmission{losers: map[int]EntryConflict{}}
 	var served, dropped []routedRoute
 	var older []routedEntry
@@ -115,8 +122,15 @@ func routeLosers(flat []flatEndpoint, rules routeRules) routeAdmission {
 	options := map[string]bool{}
 	engine := gin.New()
 	refusals := 0
-	for _, i := range servingOrder(flat) {
-		fe := flat[i]
+	all := append(slices.Clip(flat), shadowed...)
+	for _, i := range servingOrder(all) {
+		fe := all[i]
+		if i >= len(flat) {
+			for _, r := range entryRoutes(entryMethod(fe.Entry.Method), fe.Entry.Endpoint, rules, nil) {
+				dropped = append(dropped, routedRoute{route: r, source: fe.Source})
+			}
+			continue
+		}
 		if refusals == MaxRouteRefusals {
 			adm.capped = true
 			break

@@ -45,7 +45,7 @@ func (r *krakendRenderer) Render(input RenderInput) (*RenderOutput, error) {
 	}
 
 	// Flatten and deduplicate endpoints
-	flat, _, conflicted, invalid := flattenEndpoints(input.Endpoints, input.Policies)
+	flat, shadowed, conflicted, invalid := flattenEndpoints(input.Endpoints, input.Policies)
 
 	// Build the root config object
 	config := buildRootConfig(gw)
@@ -55,7 +55,7 @@ func (r *krakendRenderer) Render(input RenderInput) (*RenderOutput, error) {
 	// next to an older endpoint's are left out, oldest first, as duplicates
 	// are.
 	gatewayEC := buildGatewayExtraConfig(gw, input.Dragonfly)
-	flat, capped := dropRouteLosers(flat, conflicted, routeRules{
+	flat, capped := dropRouteLosers(flat, shadowed, conflicted, routeRules{
 		autoOptions: routerOptionsOf(gatewayEC).AutoOptions,
 		eeWildcards: gw.Spec.Edition == v1alpha1.EditionEE && !input.CEFallback,
 	})
