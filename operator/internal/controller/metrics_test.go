@@ -10,7 +10,17 @@ import (
 )
 
 func TestConfigValidationFailures_HelpSaysItCountsChangesNotReconciles(t *testing.T) {
-	help := configValidationFailures.Desc().String()
+	_, reg := testMetrics(t)
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var help string
+	for _, f := range families {
+		if f.GetName() == "krakend_operator_config_validation_failures_total" {
+			help = f.GetHelp()
+		}
+	}
 
 	if !strings.Contains(help, "counted once per change of what the gateway controller checks, not once per reconcile; ") {
 		t.Errorf("Help = %s, want it to say a rejection is counted once per change of what the gateway "+
