@@ -89,8 +89,8 @@ func TestRender_CEFallbackStripsEEOnlyFeaturesAndListsThem(t *testing.T) {
 	if err := json.Unmarshal(out.JSON, &doc); err != nil {
 		t.Fatal(err)
 	}
-	if len(doc.Endpoints) != 1 || doc.Endpoints[0].Endpoint != "/users" || len(out.Sources) != 1 {
-		t.Fatalf("rendered endpoints = %+v (sources %v), want only /users", doc.Endpoints, out.Sources)
+	if len(doc.Endpoints) != 1 || doc.Endpoints[0].Endpoint != "/users" {
+		t.Fatalf("rendered endpoints = %+v, want only /users", doc.Endpoints)
 	}
 	if _, ok := doc.Endpoints[0].ExtraConfig["auth/api-keys"]; ok {
 		t.Error("the endpoint's auth/api-keys must be stripped")
@@ -204,9 +204,9 @@ func TestRender_WithoutFallbackKeepsEEFeatures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(out.StrippedEEFeatures) != 0 || len(out.Sources) != 2 {
-		t.Errorf("stripped %v with %d sources, want nothing stripped and both entries rendered",
-			out.StrippedEEFeatures, len(out.Sources))
+	if paths := endpointPaths(t, out.JSON); len(out.StrippedEEFeatures) != 0 || len(paths) != 2 {
+		t.Errorf("stripped %v and rendered %v, want nothing stripped and both entries rendered",
+			out.StrippedEEFeatures, paths)
 	}
 	for _, kept := range []string{`"/v1/*"`, `"auth/api-keys"`, `"redis"`, `"modifier/jmespath"`,
 		`"auth/gcp"`, `"backend/http/client"`} {
@@ -374,7 +374,7 @@ func TestRender_CEFallbackDropsEntryDocsWithoutListingThem(t *testing.T) {
 	}
 }
 
-func TestRender_CEFallbackKeepsSourcesAlignedAcrossCRs(t *testing.T) {
+func TestRender_CEFallbackLeavesOutTheStrippedWildcardEntry(t *testing.T) {
 	backend := []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/x"}}
 	in := eeFeatureInput(true)
 	// "a" sorts first and serves only an EE wildcard; "b" serves two entries.
@@ -402,12 +402,9 @@ func TestRender_CEFallbackKeepsSourcesAlignedAcrossCRs(t *testing.T) {
 	if err := json.Unmarshal(out.JSON, &doc); err != nil {
 		t.Fatal(err)
 	}
-	b := types.NamespacedName{Namespace: "ns", Name: "b"}
-	if wantSources := []types.NamespacedName{b, b}; !slices.Equal(out.Sources, wantSources) {
-		t.Errorf("Sources = %v, want %v: the stripped wildcard of ns/a is not rendered", out.Sources, wantSources)
-	}
 	if len(doc.Endpoints) != 2 || doc.Endpoints[0].Endpoint != "/m" || doc.Endpoints[1].Endpoint != "/z" {
-		t.Errorf("rendered endpoints = %+v, want /m then /z, aligned with Sources", doc.Endpoints)
+		t.Errorf("rendered endpoints = %+v, want /m then /z: the stripped wildcard of ns/a is not rendered",
+			doc.Endpoints)
 	}
 	wantStripped := []StrippedEEFeature{
 		{Source: types.NamespacedName{Namespace: "ns", Name: "a"}, Method: "GET", Endpoint: "/files/*",
