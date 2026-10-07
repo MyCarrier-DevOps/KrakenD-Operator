@@ -123,7 +123,7 @@ func existencePredicate() predicate.Predicate {
 // maxConditionMessageBytes bounds validator output copied into a condition
 // message or an event. The CRDs cap condition messages at 32768 characters,
 // and krakend check can print far more for one bad policy used by many
-// backends; the full output goes to the operator log instead.
+// backends; the message keeps the leading lines and counts the rest.
 const maxConditionMessageBytes = 4096
 
 // truncationReserve is the room kept for the "(output truncated, N more
