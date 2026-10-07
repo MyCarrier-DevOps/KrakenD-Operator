@@ -2964,11 +2964,16 @@ their paths differ in shape no longer fail the gateway's check. Examples:
   The names are bounded by bytes: names that were found broken but do not fit
   are folded into `(+N more)`, and the two not-checked counts are always
   kept. Once an endpoint the change breaks has been found, the answer is that
-  denial, even if a later check fails or the budget runs out. When the budget
-  runs out, or a check cannot run, before any is found, the answer is
-  `500 Internal Error`; retry the request. On a large gateway with many
-  endpoints that already fail but are not yet recorded as excluded (for
-  example right after they were changed), a policy or gateway write can get
+  denial, even if a later check fails or the budget runs out.
+- When the group of the endpoints with the write fails, the stored group is
+  checked first, along with the endpoints it lost an entry in. If it passes
+  and none of those fails both ways, the write is refused with `422` even when
+  the budget runs out before the scan has named an endpoint it breaks; the
+  scan only decides how many endpoints are named, not the verdict. When the
+  stored group fails too (an endpoint already fails but is not yet recorded as
+  excluded), the budget running out, or a check that cannot run, before any
+  broken endpoint is found is a `500 Internal Error`; retry the request. On a
+  large gateway with many such endpoints, a policy or gateway write can get
   that `500` until the gateway controller records their exclusion.
 - A policy or gateway write that is admitted with a warning can still lead to
   `CombinedConfigInvalid`. Both check the endpoints that already fail on their
@@ -2989,9 +2994,14 @@ their paths differ in shape no longer fail the gateway's check. Examples:
     policy write, plus 1 for the stored group when none fails on its own and
     the stored root passes.
   - On the pinned binary, at the chart's 500m CPU limit, one endpoint's check
-    takes about 0.1 s and 500 endpoints are linted together in about 0.17 s,
-    far inside the 15 s webhook timeout; what delays a request is waiting for
-    a validation slot.
+    takes about 0.1-0.13 s and 500 endpoints are linted together in about
+    0.17 s. A write whose group passes stays far inside the 15 s webhook
+    timeout. When the group fails, the decision costs four such lints (about
+    0.5 s), but naming the endpoints costs about 0.1 s per served endpoint,
+    one after another, so the 12 s admission budget names roughly 80-110 of
+    them: on a gateway of several hundred served endpoints the denial names
+    those the scan reached and counts the rest. Waiting for a validation slot
+    can delay a request too.
 
 ### Known limits
 
