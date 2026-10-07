@@ -1288,6 +1288,8 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 func (r *KrakenDGatewayReconciler) reconcileCoreResources(
 	ctx context.Context, gw *v1alpha1.KrakenDGateway, in infraInputs,
 ) (saControlled bool, err error) {
+	ctx, span := tracing.Start(ctx, r.Tracer, "gateway.core_resources")
+	defer func() { tracing.End(span, err) }()
 	named := metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace}
 	sa := &corev1.ServiceAccount{ObjectMeta: named}
 	svc := &corev1.Service{ObjectMeta: named}
