@@ -48,3 +48,29 @@ func TestInstallGRPCLogging_AnErrorIsARecordOfThePipeline(t *testing.T) {
 		t.Errorf("records = %+v, want one ERROR record from test/grpc", got)
 	}
 }
+
+// grpc-go logs a connection's every state change at info, which its own
+// default logger drops. Through the pipeline they are verbosity 2: left out
+// at the operator's default debug level (verbosity 1), shown from 2.
+func TestInstallGRPCLogging_InfoIsVerbosityTwo(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		minimum otellog.Severity
+		want    int
+	}{
+		{"at the default debug level", telemetry.LevelSeverity(1), 0},
+		{"at verbosity 2", telemetry.LevelSeverity(2), 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logger, out := newStdoutLogger(t, tc.minimum)
+			telemetry.InstallGRPCLogging(logger)
+			discardGRPCLogs(t)
+
+			grpclog.Info("[core] Channel switches to new LB policy")
+
+			if got := len(records(t, out)); got != tc.want || grpclog.V(2) != (tc.want == 1) {
+				t.Errorf("%d records, V(2) = %v; want %d", got, grpclog.V(2), tc.want)
+			}
+		})
+	}
+}
