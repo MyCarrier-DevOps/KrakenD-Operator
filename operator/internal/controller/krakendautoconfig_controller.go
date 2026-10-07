@@ -149,7 +149,7 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	var ac v1alpha1.KrakenDAutoConfig
 	if err := r.Get(ctx, req.NamespacedName, &ac); err != nil {
 		if errors.IsNotFound(err) {
-			autoConfigSynced.DeleteLabelValues(req.Namespace, req.Name)
+			r.metrics().ForgetAutoConfig(req.NamespacedName)
 			r.heldLogged.Delete(req.NamespacedName)
 			r.verdicts.forget(req.NamespacedName)
 			return ctrl.Result{}, nil
@@ -161,7 +161,7 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// lingers while garbage collection deletes its endpoints, and converging
 	// would recreate each one as it goes.
 	if !ac.DeletionTimestamp.IsZero() {
-		autoConfigSynced.DeleteLabelValues(ac.Namespace, ac.Name)
+		r.metrics().ForgetAutoConfig(req.NamespacedName)
 		r.heldLogged.Delete(req.NamespacedName)
 		r.verdicts.forget(req.NamespacedName)
 		return ctrl.Result{}, nil
@@ -502,7 +502,7 @@ func (r *KrakenDAutoConfigReconciler) recordSyncedFailure(
 	r.refreshReadiness(ctx, ac)
 	setAutoConfigReadiness(ac)
 	// The sync has failed whether or not its status write succeeds.
-	autoConfigSynced.WithLabelValues(ac.Namespace, ac.Name).Set(0)
+	r.metrics().SetAutoConfigSynced(client.ObjectKeyFromObject(ac), false)
 	if err := r.Status().Update(ctx, ac); err != nil {
 		if errors.IsConflict(err) {
 			return nil
