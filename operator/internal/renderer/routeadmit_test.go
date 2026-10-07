@@ -391,3 +391,31 @@ func TestRender_AnEntryRecordsEveryOlderEntryItClashesWith(t *testing.T) {
 		t.Errorf("big lost %+v, want its entry once to ns/s and once to ns/e, each with a detail", lost)
 	}
 }
+
+// TestRender_TheCapCountsLosingEntriesNotTheirClashes pins that an entry that
+// clashes with several older endpoints spends one refusal of the cap, not one
+// for each: with it, MaxRouteRefusals-1 losing entries stay under the cap.
+func TestRender_TheCapCountsLosingEntriesNotTheirClashes(t *testing.T) {
+	endpoints := []v1alpha1.KrakenDEndpoint{
+		routed("w1", 0, "GET", "/m/{id}"), routed("w2", 0, "GET", "/m/{id}/y"), routed("w3", 0, "GET", "/m/{id}/z"),
+		routed("a-loser", 1, "GET", "/m/{name}/q"), routed("tail", 2, "GET", "/tail"),
+	}
+	for i := range MaxRouteRefusals - 2 {
+		endpoints = append(endpoints,
+			routed(fmt.Sprintf("old-%02d", i), 0, "GET", fmt.Sprintf("/c%d/{id}", i)),
+			routed(fmt.Sprintf("new-%02d", i), 1, "GET", fmt.Sprintf("/c%d/{name}/x", i)))
+	}
+
+	out, err := New(Options{}).Render(RenderInput{Gateway: routedGateway(v1alpha1.EditionCE, nil), Endpoints: endpoints})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if n := len(out.EntryConflicts); n != MaxRouteRefusals-1 || out.RouteResolutionCapped {
+		t.Errorf("%d endpoints lost an entry (capped %v), want %d, under the cap",
+			n, out.RouteResolutionCapped, MaxRouteRefusals-1)
+	}
+	if lost := out.EntryConflicts[types.NamespacedName{Namespace: "ns", Name: "a-loser"}]; len(lost) != 3 {
+		t.Errorf("a-loser lost %+v, want one conflict for each of its three winners", lost)
+	}
+}
