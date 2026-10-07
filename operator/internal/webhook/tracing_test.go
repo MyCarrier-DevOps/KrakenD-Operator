@@ -29,6 +29,7 @@ import (
 	"strings"
 	"testing"
 
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	admissionv1 "k8s.io/api/admission/v1"
 	authorizationv1 "k8s.io/api/authorization/v1"
@@ -37,6 +38,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/client-go/rest"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
@@ -582,4 +584,72 @@ func TestPolicyAdmission_JudgingAGatewaysEndpointsIsBelowItsSpan(t *testing.T) {
 	spans := rec.Ended()
 	spans.RequireParent(t, "admission.judge_policy", "configcheck.CheckEndpoint")
 	requireCleanAdmissionSpans(t, spans)
+}
+
+// Each operation's span names the object, the operation, the dry run and the
+// request: on a delete the object is the stored one the request carries.
+func TestAdmission_SpanCarriesTheObjectTheOperationAndTheRequest(t *testing.T) {
+	ep := testEndpoint("e", "/e")
+	ep.Generation = 7
+	stored := ep.DeepCopy()
+	stored.Generation = 6
+	for _, tc := range []struct {
+		operation admissionv1.Operation
+		object    *v1alpha1.KrakenDEndpoint
+		old       *v1alpha1.KrakenDEndpoint
+		generated int64
+	}{
+		{admissionv1.Create, ep, nil, 7},
+		{admissionv1.Update, ep, stored, 7},
+		{admissionv1.Delete, nil, stored, 6},
+	} {
+		t.Run(string(tc.operation), func(t *testing.T) {
+			rec := tracingtest.New(t)
+			admit := tracedValidator{kind: kindEndpoint, next: outcomeValidator{}, tracer: rec.Tracer()}
+			req := admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{
+				UID: "request-uid", Operation: tc.operation, DryRun: ptr.To(true),
+			}}
+			if tc.object != nil {
+				req.Object = runtime.RawExtension{Raw: marshal(t, tc.object)}
+			}
+			if tc.old != nil {
+				req.OldObject = runtime.RawExtension{Raw: marshal(t, tc.old)}
+			}
+
+			resp := admission.WithCustomValidator(testScheme(), &v1alpha1.KrakenDEndpoint{}, admit).
+				Handle(context.Background(), req)
+
+			if !resp.Allowed {
+				t.Fatalf("denied: %+v", resp.Result)
+			}
+			span := rec.Ended().One(t, "admission.validate KrakenDEndpoint")
+			got := map[attribute.Key]attribute.Value{}
+			for _, kv := range span.Attributes() {
+				got[kv.Key] = kv.Value
+			}
+			want := map[attribute.Key]attribute.Value{
+				"k8s.admission.operation": attribute.StringValue(string(tc.operation)),
+				"k8s.admission.dry_run":   attribute.BoolValue(true),
+				"k8s.admission.uid":       attribute.StringValue("request-uid"),
+				"k8s.namespace.name":      attribute.StringValue("default"),
+				"k8s.object.name":         attribute.StringValue("e"),
+				"k8s.object.kind":         attribute.StringValue(kindEndpoint),
+				"k8s.object.generation":   attribute.Int64Value(tc.generated),
+			}
+			for key, value := range want {
+				if got[key] != value {
+					t.Errorf("attribute %s = %v, want %v; attributes: %v", key, got[key], value, span.Attributes())
+				}
+			}
+		})
+	}
+}
+
+func marshal(t *testing.T, obj any) []byte {
+	t.Helper()
+	raw, err := json.Marshal(obj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
 }
