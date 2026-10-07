@@ -190,6 +190,8 @@ func (r *KrakenDGatewayReconciler) publishConfig(
 func (r *KrakenDGatewayReconciler) verifyExistingConfigMap(
 	ctx context.Context, reader client.Reader, gw *v1alpha1.KrakenDGateway, checksum string,
 ) (found bool, err error) {
+	ctx, span := tracing.Start(ctx, r.Tracer, "gateway.verify_configmap")
+	defer func() { tracing.End(span, err) }()
 	name := resources.ConfigMapName(gw, checksum)
 	cm := &metav1.PartialObjectMetadata{}
 	cm.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("ConfigMap"))
