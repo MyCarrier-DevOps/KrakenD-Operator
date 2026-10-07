@@ -177,5 +177,8 @@ func bounded(rejection *renderer.ValidationError) *renderer.ValidationError {
 	cut := *rejection
 	cut.Output = TruncateEllipsis(rejection.Output, maxStoredOutput)
 	cut.Refusals = slices.Clone(rejection.Refusals)
+	for i := range cut.Refusals {
+		cut.Refusals[i].Message = TruncateEllipsis(cut.Refusals[i].Message, maxStoredOutput)
+	}
 	return &cut
 }
