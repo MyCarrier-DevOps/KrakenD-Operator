@@ -49,7 +49,7 @@ type codeError string
 
 func (e codeError) Error() string { return "code " + string(e) }
 
-// namedComplex is a kind the bridge has no conversion for.
+// namedComplex is a complex number type the bridge does not know.
 type namedComplex complex128
 
 // point is a struct with exported fields and no methods.
@@ -72,6 +72,14 @@ func (m marshaled) MarshalLog() any { return m.as }
 // a map.
 func stringValue(s string) map[string]any {
 	return map[string]any{"Type": "STRING", "Value": s}
+}
+
+// complexValue is how a complex number reads in a stdout JSON record.
+func complexValue(r, i float64) []any {
+	return []any{
+		map[string]any{"Key": "r", "Value": map[string]any{"Type": "FLOAT64", "Value": r}},
+		map[string]any{"Key": "i", "Value": map[string]any{"Type": "FLOAT64", "Value": i}},
+	}
 }
 
 func ptrTo[T any](v T) *T { return &v }
@@ -98,7 +106,8 @@ func TestLogger_ValuesAreConvertedToWhatTheyRead(t *testing.T) {
 		{"time.Time", time.Unix(1700000000, 0), float64(1.7e18)},
 		{"slice of UIDs", []types.UID{"u1", "u2"}, []any{stringValue("u1"), stringValue("u2")}},
 		{"pointer to a UID", ptrTo(types.UID("u1")), "u1"},
-		{"named complex", namedComplex(1 + 2i), "(1+2i)"},
+		{"complex128", complex128(1 + 2i), complexValue(1, 2)},
+		{"named complex", namedComplex(1 + 2i), complexValue(1, 2)},
 		{"nil pointer to a Stringer", (*label)(nil), "<nil>"},
 		{"struct", point{"a", 1}, "{A:a B:1}"},
 		{"pointer to a struct", &point{"a", 1}, "{A:a B:1}"},
