@@ -462,6 +462,8 @@ func (r *KrakenDGatewayReconciler) detectDragonflyState(
 	if gw.Spec.Dragonfly == nil || !gw.Spec.Dragonfly.Enabled {
 		return nil
 	}
+	ctx, span := tracing.Start(ctx, r.Tracer, "gateway.dragonfly")
+	defer span.End()
 
 	log := logf.FromContext(ctx)
 	available, err := r.crdAvailable(dragonflyGVK)
