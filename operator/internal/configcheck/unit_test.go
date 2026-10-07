@@ -343,3 +343,25 @@ func TestCheckRoot_AHitSharesNothingWithAnEarlierVerdict(t *testing.T) {
 		t.Error("an edit of a verdict reached the validator's own rejection")
 	}
 }
+
+func TestCheckPolicy_ARememberedVerdictNamesOnlyItsOwnNamespace(t *testing.T) {
+	val := &fakeValidator{err: rejectedOutput("- at '/endpoints/0': bad")}
+	chk := newChecker(val)
+	memo := mapMemo{}
+
+	for _, ns := range []string{"tenant-a", "tenant-b"} {
+		p := policy("p")
+		p.Namespace = ns
+		v, err := chk.CheckPolicy(context.Background(), p, memo)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(v.Findings) != 1 || v.Findings[0].Endpoint.Namespace != ns {
+			t.Errorf("findings for %s = %+v, want only its own synthetic endpoint", ns, v.Findings)
+		}
+	}
+
+	if len(val.calls) != 1 {
+		t.Errorf("ran %d checks, want 1: both namespaces render the same config", len(val.calls))
+	}
+}
