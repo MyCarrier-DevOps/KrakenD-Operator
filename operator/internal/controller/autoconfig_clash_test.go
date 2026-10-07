@@ -90,6 +90,15 @@ func TestAutoConfigReconcile_HoldsACandidateThatWouldPushAnotherEndpointOut(t *t
 	if endpointExists(t, c, "test-ac-getb") {
 		t.Error("getb was written although it would keep tenant-z/orders out of the router")
 	}
+	if !endpointExists(t, c, "test-ac-listusers") {
+		t.Error("listusers was held although it takes part in no clash")
+	}
+	failed := getAC(t, c, ac).Status.FailedOperations
+	if len(failed) != 1 || failed[0].Endpoint != "test-ac-getb" ||
+		failed[0].Reason != v1alpha1.ReasonConfigValidationFailed ||
+		!strings.Contains(failed[0].Message, "tenant-z/orders") {
+		t.Errorf("failedOperations = %+v, want only getb held, naming tenant-z/orders", failed)
+	}
 }
 
 func TestAutoConfigReconcile_AStoredRouterClashHoldsNothing(t *testing.T) {
