@@ -56,14 +56,14 @@ func (c Clash) String() string {
 }
 
 // NewClashes returns the router clashes of after that involve one of
-// involving as the loser; a nil involving takes every endpoint. Same-shape
+// involving as the loser or as the winner; a nil involving takes every endpoint. Same-shape
 // conflicts are left out: the route uniqueness rules and the oldest-wins
 // render settle those. The result is sorted by loser, endpoint and method.
 func NewClashes(_, after RouteConflicts, involving map[types.NamespacedName]bool) []Clash {
 	var out []Clash
 	for loser, lost := range after.Lost {
 		for _, e := range lost {
-			if e.Detail == "" || involving != nil && !involving[loser] {
+			if e.Detail == "" || involving != nil && !involving[loser] && !involving[e.Winner] {
 				continue
 			}
 			out = append(out, Clash{
