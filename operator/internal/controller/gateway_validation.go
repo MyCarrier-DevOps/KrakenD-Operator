@@ -223,7 +223,9 @@ const maxExcludedNamed = 10
 // pass: decided holds what this pass set (nil: removed), and an endpoint it
 // did not decide keeps its stored verdict. Both therefore follow the
 // endpoints on every pass, including one that applies nothing, and after an
-// operator restart. A Warning event marks the condition appearing or its
+// operator restart. applied says the pass's render is the gateway's applied
+// config; otherwise the message says the endpoints are left out when the
+// gateway next applies one. A Warning event marks the condition appearing or its
 // message changing.
 func (r *KrakenDGatewayReconciler) reportExclusions(gw *v1alpha1.KrakenDGateway,
 	endpoints []v1alpha1.KrakenDEndpoint, decided map[types.NamespacedName]*metav1.Condition, applied bool) {
@@ -250,13 +252,17 @@ func (r *KrakenDGatewayReconciler) reportExclusions(gw *v1alpha1.KrakenDGateway,
 	if len(names) > maxExcludedNamed {
 		listed, more = names[:maxExcludedNamed], fmt.Sprintf(" (+%d more)", len(names)-maxExcludedNamed)
 	}
+	served := "are not served"
+	if !applied {
+		served = "will not be served when the gateway next applies its config"
+	}
 	cond := metav1.Condition{
 		Type:               v1alpha1.ConditionEndpointsExcluded,
 		Status:             metav1.ConditionTrue,
 		ObservedGeneration: gw.Generation,
 		Reason:             v1alpha1.ReasonInvalidEndpointsExcluded,
-		Message: fmt.Sprintf("%d KrakenDEndpoint(s) fail validation and are not served: %s%s",
-			len(names), strings.Join(listed, ", "), more),
+		Message: fmt.Sprintf("%d KrakenDEndpoint(s) fail validation and %s: %s%s",
+			len(names), served, strings.Join(listed, ", "), more),
 	}
 	prev := meta.FindStatusCondition(gw.Status.Conditions, cond.Type).DeepCopy()
 	meta.SetStatusCondition(&gw.Status.Conditions, cond)
