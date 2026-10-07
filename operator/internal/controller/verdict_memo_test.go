@@ -3,7 +3,6 @@ package controller
 import (
 	"testing"
 
-	"github.com/prometheus/client_golang/prometheus/testutil"
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
@@ -72,8 +71,8 @@ func TestVerdictMemo_ForgetDropsTheOwnerAndOwnersAreApart(t *testing.T) {
 
 func TestCountedPass_CountsEachFreshRejection(t *testing.T) {
 	var m verdictMemo
-	before := testutil.ToFloat64(configValidationFailures)
-	p := countedPass{m.begin(memoOwner)}
+	rejections := 0
+	p := countedPass{passMemo: m.begin(memoOwner), rejected: func() { rejections++ }}
 
 	p.Store("ok", configcheck.Verdict{OK: true})
 	p.Store("bad", configcheck.Verdict{Output: "bad"})
@@ -81,7 +80,7 @@ func TestCountedPass_CountsEachFreshRejection(t *testing.T) {
 		t.Fatal("the stored rejection is not remembered")
 	}
 
-	if got := testutil.ToFloat64(configValidationFailures) - before; got != 1 {
-		t.Errorf("counted %v rejections, want 1", got)
+	if rejections != 1 {
+		t.Errorf("counted %d rejections, want 1", rejections)
 	}
 }

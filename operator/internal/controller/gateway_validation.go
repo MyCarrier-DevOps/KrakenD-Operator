@@ -95,7 +95,7 @@ func (r *KrakenDGatewayReconciler) decide(
 	key := client.ObjectKeyFromObject(gw)
 	pass := r.verdicts.begin(key)
 	defer func() { r.verdicts.end(key, pass, err != nil) }()
-	counted := countedPass{pass}
+	counted := countedPass{passMemo: pass, rejected: func() { r.metrics().ConfigRejected(ctx) }}
 
 	// A check of a render says nothing of the endpoints it left out of it.
 	rendered := configcheck.Verdict{OK: true, Masked: configcheck.MaskedEndpoints(full)}

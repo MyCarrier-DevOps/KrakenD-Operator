@@ -97,16 +97,22 @@ func (m *verdictMemo) forget(owner types.NamespacedName) {
 
 // countedPass is the memo a gateway pass hands the checks of one object on
 // its own: the gateway root, a policy, an endpoint. Every verdict stored in
-// it was just judged, so each rejection among them is counted once in
-// config_validation_failures_total. The whole render's checks use the plain
-// passMemo and are not counted: their cause is counted through the objects,
-// or reported as the gateway's CombinedConfigInvalid.
-type countedPass struct{ *passMemo }
+// it was just judged, so each rejection among them is counted once, by
+// rejected, in config_validation_failures_total. The whole render's checks
+// use the plain passMemo and are not counted: their cause is counted through
+// the objects, or reported as the gateway's CombinedConfigInvalid.
+type countedPass struct {
+	*passMemo
+	// rejected counts one fresh rejection. The pass builds it over its own
+	// context, so the count is recorded under the pass's span; it is never
+	// nil.
+	rejected func()
+}
 
 // Store counts a fresh rejection and records the verdict.
 func (p countedPass) Store(key string, v configcheck.Verdict) {
 	if !v.OK {
-		configValidationFailures.Inc()
+		p.rejected()
 	}
 	p.passMemo.Store(key, v)
 }
