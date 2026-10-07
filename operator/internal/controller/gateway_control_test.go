@@ -35,6 +35,7 @@ import (
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 	"github.com/mycarrier-devops/krakend-operator/internal/resources"
+	"github.com/mycarrier-devops/krakend-operator/internal/util/hash"
 )
 
 // A Service named like the gateway that nothing controls and that does not
@@ -311,5 +312,31 @@ func TestGatewayReconcile_AFailedWriteDoesNotClearResourcesControlled(t *testing
 	cond := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionResourcesControlled)
 	if cond == nil || cond.Status != metav1.ConditionFalse {
 		t.Errorf("ResourcesControlled = %+v, want it to stay False", cond)
+	}
+}
+
+// A Deployment the pass never wrote, because a hold applies, is not one the
+// gateway is known to control: the condition does not turn True on it.
+func TestGatewayReconcile_AHeldDeploymentDoesNotSetResourcesControlled(t *testing.T) {
+	gw := reconciledGateway()
+	const config = `{"version":3,"name":"with-plugins"}`
+	gw.Status.ConfigChecksum = hash.SHA256Hex([]byte(config))
+	gw.Spec.Plugins = &v1alpha1.PluginsSpec{Sources: []v1alpha1.PluginSource{
+		{ConfigMapRef: &v1alpha1.ConfigMapKeyRef{Name: "plugins-a", Key: "auth.so"}},
+	}}
+	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+		Type: v1alpha1.ConditionResourcesControlled, Status: metav1.ConditionFalse,
+		Reason: v1alpha1.ReasonResourceNotControlled, Message: "deployment default/test-gw is somebody else's",
+	})
+	c := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderOf(config), &mockValidator{})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	cond := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionResourcesControlled)
+	if cond == nil || cond.Status != metav1.ConditionFalse {
+		t.Errorf("ResourcesControlled = %+v, want it to stay False while the Deployment is held", cond)
 	}
 }
