@@ -2095,9 +2095,9 @@ Both writers patch status with an optimistic lock (`MergeFromWithOptimisticLock`
 so neither can overwrite the other's condition; a writer that lost the race
 re-reads and retries.
 
-### Operator Metrics (Prometheus)
+### Operator Metrics
 
-Scrapes are authenticated and authorized: the operator creates a TokenReview
+The metrics are OpenTelemetry instruments (`telemetry.OperatorMetrics`), exported to `/metrics` by OpenTelemetry's Prometheus exporter in controller-runtime's registry, with names, labels and help text unchanged (pinned by `TestMetricsExposition_MatchesGolden`). Gauges are observable, so a deleted object's series disappears. The reconcile-duration histogram keeps a deleted gateway's series until restart. Scrapes are authenticated and authorized: the operator creates a TokenReview
 and a SubjectAccessReview for each one, and the scraper needs `get` on the
 non-resource URL `/metrics` (the `metrics-reader` ClusterRole). The Helm chart
 and the kustomize manifests carry the same two ClusterRoles, and the chart
@@ -2120,7 +2120,20 @@ shares the other selector labels, is never scraped.
 | `krakend_operator_gateway_excluded_endpoints` | Gauge | KrakenDEndpoints a gateway leaves out because they fail validation on their own, by `Accepted` reason (`EndpointInvalid`, `PolicyInvalid`) (labels: `namespace`, `gateway`, `reason`); absent while none; removed with the gateway |
 | `krakend_operator_autoconfig_synced` | Gauge | 1 after a `KrakenDAutoConfig`'s last reconcile synced successfully, 0 while it is failing or any of its operations is held (labels: `namespace`, `name`); the series is removed when the AutoConfig is deleted |
 
-Per-gateway series (`namespace`, `name` labels) are removed when the gateway is deleted or starts terminating.
+Per-gateway gauge series (`namespace`, `name` labels) are removed when the gateway is deleted or starts terminating (`GatewayMetrics.ForgetGateway`). The reconcile-duration histogram's series is not: an OpenTelemetry synchronous instrument cannot drop a series, so a deleted gateway's series stays until the operator restarts. The meter provider sets no cardinality limit, so a long-lived operator never folds new gateways into an overflow series.
+
+### Telemetry (OpenTelemetry)
+
+`internal/telemetry` builds the providers and is used only by `cmd`; the rest of the operator depends on the OpenTelemetry API alone, through `internal/tracing` (`Start`, `End`, `Object`) and the `GatewayMetrics` and `AutoConfigMetrics` ports of the controller package. Every component gets its tracer and recorder by injection.
+
+1. **Providers.** `telemetry.Setup` builds the tracer, meter and logger providers from the standard `OTEL_*` variables and a resource (`service.name`, `service.version`, `k8s.pod.name` and `k8s.namespace.name` from the downward API). A signal is exported over OTLP only when an endpoint is configured for it and `OTEL_<SIGNAL>_EXPORTER` is not `none`; without one, traces use a no-op provider, metrics are still served on `/metrics` and logs still go to stdout. An unsupported exporter or protocol stops startup. A malformed OTLP header or endpoint variable stops that signal's export instead, because the OTLP exporters would log its value, which can hold a credential: the operator keeps running, and the startup warning names the variable and never quotes its value.
+2. **The span tree.** The runbook's Tracing table lists every span. Each reconcile is a new root; each admission request is a root, or a child of the API server's span. A config rejected by `krakend check` is an answer: its span records `configcheck.ok=false` and no error. A content check answered from the verdict memo is marked `configcheck.memo_hit=true` and runs no krakend. Spans carry object identity, never what the object says: a denied admission records `admission.allowed` and `admission.code` but no status, no event and no text, and no span carries a denial, a warning or krakend's output.
+3. **Kubernetes client spans.** `telemetry.TraceKubeAPI` wraps the `rest.Config` transport so a request sent under an active span is a client span of it, named `k8s <verb> <resource>`, with the trace context passed on. Not traced, because they run under no span: informer list and watch, leader-election renewals, the metrics endpoint's TokenReview and SubjectAccessReview, and events (raised inside a reconcile, written asynchronously without a span, since the event recorder takes no context). Reads through the manager's client are span events (`k8s.client.get`, `k8s.client.list`), because the cache answers without a request. Lookups of an optional CRD during a reconcile are `k8s.discovery` spans, since client-go sends the discovery request without a context.
+4. **Admission.** `telemetry.TraceWebhookServer` makes each request a server span that continues the API server's trace when it sends one. The sampler is parent-based by default, so an unsampled API server trace leaves the admission subtree unrecorded; `OTEL_TRACES_SAMPLER` changes that. `client.address` is the first `X-Forwarded-For` value, which a caller can set.
+5. **AutoConfig fetches.** The spec and `$ref` requests send no trace header. Each request, and each redirect hop, is an `HTTP GET` client span under `autoconfig.fetch`. A URL is recorded, and shown in errors and status, without user information and fragment, with every query value replaced by `REDACTED` (`autoconfig.RedactURL`).
+6. **Logs.** Every logger goes through one `otellogr` bridge: logr (and so controller-runtime and the operator), klog, the standard library's `log`, grpc-go's `grpclog` and the OpenTelemetry SDK's own diagnostics (on a logger that writes to stdout only, so a failing OTLP exporter cannot queue records for itself). A level processor sets a severity floor from `--zap-log-level` and `--zap-devel`, fills in the timestamp and severity text, and exports with a context that is never cancelled, so a timed-out reconcile's records are not dropped. Stdout is a synchronous JSON exporter (`--log-format=pretty` indents it); OTLP is batched. Errors are the `exception.message` and `exception.type` attributes; there are no stack traces.
+7. **Process-wide settings.** `InstallGRPCLogging` (the first call of `run()`, because grpc-go requires its logger before any gRPC call) and `InstallLogging` (controller-runtime, klog, `log` and the SDK's error handler) are the only places a global is set. Nothing else in the operator reads a global logger, tracer or meter provider.
+8. **Shutdown and the stderr exceptions.** `run()` sets telemetry up after parsing flags, because the log level and format come from them, and defers a flush of all three signals that waits at most 5 seconds, so manager stop plus flush fit the pod's 10 second grace period. Stdout is synchronous; only batched OTLP data can be cut off. These are written to stderr, because the log pipeline is not available or is what failed: flag errors and `--help`, an invalid logging flag, an unusable `OTEL_*` setting (exit status 1), the SDK's warnings about its `OTEL_*` variables while the exporters start, a failed flush, and Go runtime crashes.
 
 ### Kubernetes Events
 
@@ -2655,6 +2668,9 @@ Go project layout following [Standard Go Project Layout](https://github.com/gola
 │   │       └── zz_generated.deepcopy.go        # Generated deep copy methods
 │   ├── cmd/
 │   │   ├── main.go                             # Entrypoint
+│   │   ├── logflags.go                         # --log-format and the kept --zap-* flags
+│   │   ├── version.go                          # main.version, set by the build
+│   │   ├── serving.go                          # Webhook and metrics server options and certificate checks
 │   │   ├── wiring.go                           # wireValidation: the one config checker, the gateway and AutoConfig reconcilers and the webhook validators
 │   │   └── webhooks.go                         # registerWebhooks: sets the webhooks up and gates readiness on them, only when enabled
 │   ├── internal/
@@ -2677,6 +2693,8 @@ Go project layout following [Standard Go Project Layout](https://github.com/gola
 │   │   │   ├── unit.go                         # Per-object checks and the verdict memo port
 │   │   │   ├── clash.go                        # Router clashes a change adds
 │   │   │   └── verdict.go                      # Verdict: what a check found, with the endpoints that lost an entry
+│   │   ├── telemetry/                          # OpenTelemetry providers, log pipeline, OperatorMetrics, Kubernetes, webhook and exec instrumentation (used only by cmd)
+│   │   ├── tracing/                            # Span helpers on the OpenTelemetry API (Start, End, Object) and tracingtest
 │   │   ├── fieldindex/
 │   │   │   └── fieldindex.go                   # KrakenDEndpoint field indexes (gateway, policy) shared by controllers, webhooks and checker
 │   │   ├── autoconfig/
