@@ -251,19 +251,21 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// EndpointsExcluded condition and gauge follow. A failed endpoint status
 	// write does not stop the infrastructure stage or the gateway status; it
 	// is returned after them so the reconcile is retried.
+	sctx, acceptance := tracing.Start(ctx, r.Tracer, "gateway.acceptance")
 	var (
 		acceptanceErr error
 		decided       map[types.NamespacedName]*metav1.Condition
 	)
 	if cfg.served {
-		decided, acceptanceErr = r.reconcileEndpointAcceptance(ctx, &gw, endpoints, output, cfg.excluded)
+		decided, acceptanceErr = r.reconcileEndpointAcceptance(sctx, &gw, endpoints, output, cfg.excluded)
 	} else {
-		never, neverErr := r.neverApplied(ctx, &gw)
+		never, neverErr := r.neverApplied(sctx, &gw)
 		var recordErr error
-		decided, recordErr = r.recordExclusions(ctx, &gw, endpoints, cfg, never)
+		decided, recordErr = r.recordExclusions(sctx, &gw, endpoints, cfg, never)
 		acceptanceErr = stderrors.Join(neverErr, recordErr)
 	}
 	r.reportExclusions(&gw, endpoints, decided, cfg.served)
+	tracing.End(acceptance, acceptanceErr)
 
 	// Infrastructure stage: always runs, and deploys the applied config.
 	infra := infraInputs{
