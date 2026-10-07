@@ -166,16 +166,19 @@ type BackendSpec struct {
 }
 
 // EndpointConflict is one entry of a KrakenDEndpoint that its gateway leaves
-// out, because an older KrakenDEndpoint has the same endpoint and method or
-// its route clashes with an older entry's route in the router. An entry is
-// recorded once for each older KrakenDEndpoint it loses to.
+// out, because an older entry has the same route shape (endpoint paths that
+// differ only in parameter names) and method, or its route clashes with an
+// older entry's route in the router. An entry is recorded once for each
+// KrakenDEndpoint it loses to.
 type EndpointConflict struct {
 	// Endpoint is the entry's path.
 	Endpoint string `json:"endpoint"`
 	// Method is the entry's HTTP method.
 	Method string `json:"method"`
-	// Winner is the namespace/name of the older KrakenDEndpoint this entry
-	// loses to. Its entry may itself be left out.
+	// Winner is the namespace/name of the KrakenDEndpoint whose entry this one
+	// loses to. That is an older KrakenDEndpoint, or this one when an earlier
+	// entry of it has the same route shape and method. The winner's entry may
+	// itself be left out.
 	Winner string `json:"winner"`
 }
 
@@ -193,9 +196,10 @@ type KrakenDEndpointStatus struct {
 	// +listMapKey=type
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 	// Conflicts lists this endpoint's entries that its gateway leaves out,
-	// because an older KrakenDEndpoint has the same endpoint and method or
-	// its route clashes with an older entry's route in the router. An entry
-	// is listed once for each older KrakenDEndpoint it loses to.
+	// because an older entry has the same route shape (endpoint paths that
+	// differ only in parameter names) and method, or its route clashes with
+	// an older entry's route in the router. An entry is listed once for each
+	// KrakenDEndpoint it loses to, which may be this one.
 	// The gateway controller writes it together with the Accepted condition.
 	// +listType=atomic
 	// +optional
