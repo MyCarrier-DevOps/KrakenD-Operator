@@ -285,9 +285,6 @@ func (f endpointFailuresError) Summary() string {
 	return listed(messages)
 }
 
-// unattributedSummaryLimit bounds the findings text of a hold, in bytes.
-const unattributedSummaryLimit = 200
-
 // validatorUnavailableError marks a reconcileEndpoints failure caused by the
 // gateway config check being unavailable (a transient condition).
 type validatorUnavailableError struct{ err error }
@@ -518,87 +515,6 @@ func (r *KrakenDAutoConfigReconciler) routerClashes(
 	return held, nil
 }
 
-// checkGateway runs the gateway config check holding one of CheckSlots, so
-// all of the reconciler's workers together never hold more checker slots than
-// that. It gives up when ctx ends while waiting.
-func (r *KrakenDAutoConfigReconciler) checkGateway(
-	ctx context.Context,
-	gw *v1alpha1.KrakenDGateway,
-	replace []v1alpha1.KrakenDEndpoint,
-) (configcheck.Verdict, error) {
-	return r.checkHoldingSlot(ctx, func() (configcheck.Verdict, error) {
-		return r.Checker.CheckGateway(ctx, gw, replace)
-	})
-}
-
-// checkIsolated runs the config check of gw's root with eps as its only
-// endpoints, holding one of CheckSlots like checkGateway.
-func (r *KrakenDAutoConfigReconciler) checkIsolated(
-	ctx context.Context,
-	gw *v1alpha1.KrakenDGateway,
-	eps []v1alpha1.KrakenDEndpoint,
-) (configcheck.Verdict, error) {
-	return r.checkHoldingSlot(ctx, func() (configcheck.Verdict, error) {
-		return r.Checker.CheckIsolated(ctx, gw, eps)
-	})
-}
-
-// checkHoldingSlot runs check holding one of CheckSlots, and gives up when
-// ctx ends while waiting. Every check this reconciler runs goes through it.
-func (r *KrakenDAutoConfigReconciler) checkHoldingSlot(
-	ctx context.Context,
-	check func() (configcheck.Verdict, error),
-) (configcheck.Verdict, error) {
-	if r.CheckSlots != nil {
-		select {
-		case r.CheckSlots <- struct{}{}:
-			defer func() { <-r.CheckSlots }()
-		case <-ctx.Done():
-			return configcheck.Verdict{}, fmt.Errorf("waiting for an AutoConfig check slot: %w", ctx.Err())
-		}
-	}
-	return check()
-}
-
-// unattributedFailure handles a failed check whose findings name no
-// candidate: gateway-root findings, or findings on endpoints outside this
-// sync. When the gateway fails the check without the candidates too, the
-// failure is not theirs and they are written. Otherwise the change as a whole
-// breaks the gateway, and every candidate is held. What the hold says depends
-// on the candidates alone, so the message never carries krakend output about
-// another endpoint: a check of the gateway root with only the candidates
-// either fails, and its bounded summary is shown (the failure is in the
-// candidates' own content), or passes, and the hold says only that the
-// failure needs other endpoints. The full text of the combined check stays in
-// the cause, for the log.
-func (r *KrakenDAutoConfigReconciler) unattributedFailure(
-	ctx context.Context,
-	gw *v1alpha1.KrakenDGateway,
-	candidates []*v1alpha1.KrakenDEndpoint,
-	order creationOrder,
-	verdict configcheck.Verdict,
-	rejected map[string]rejection,
-) (map[string]rejection, error) {
-	baseline, err := r.checkGateway(ctx, gw, nil)
-	if err != nil {
-		return nil, &validatorUnavailableError{err: err}
-	}
-	if !baseline.OK {
-		return rejected, nil
-	}
-	own, err := r.checkIsolated(ctx, gw, checkSet(candidates, nil, order, false))
-	if err != nil {
-		return nil, &validatorUnavailableError{err: err}
-	}
-	const prefix = "the change fails the gateway config check"
-	message := prefix + " only together with other endpoints on the gateway (see the operator log)"
-	if !own.OK {
-		message = prefix + ": " + own.Summary(unattributedSummaryLimit)
-	}
-	hold(rejected, candidates, message, errors.New(prefix+": "+verdict.Summary(math.MaxInt)))
-	return rejected, nil
-}
-
 // hold records each endpoint in eps as failing the config check: message is
 // for the status, cause the full text for the log.
 func hold(rejected map[string]rejection, eps []*v1alpha1.KrakenDEndpoint, message string, cause error) {
@@ -658,43 +574,6 @@ func checkSet(
 		set = append(set, *gone)
 	}
 	return set
-}
-
-// attributeFindings maps each candidate a finding's Endpoint names to a
-// rejection carrying that endpoint's least finding message, so the hold reads
-// the same whatever order the findings arrive in. The rejection's cause joins
-// every finding of the endpoint, sorted, for the log. Finding.Index is the entry's
-// position in that endpoint's spec.endpoints, or -1 when unknown; a generated
-// endpoint has one entry, so either value means its single operation. A
-// gateway-root finding (empty Endpoint) names no candidate.
-func attributeFindings(
-	findings []configcheck.Finding,
-	candidates []*v1alpha1.KrakenDEndpoint,
-) map[string]rejection {
-	byKey := make(map[types.NamespacedName]*v1alpha1.KrakenDEndpoint, len(candidates))
-	for _, ep := range candidates {
-		byKey[types.NamespacedName{Namespace: ep.Namespace, Name: ep.Name}] = ep
-	}
-	attributed := map[string]rejection{}
-	all := map[string][]string{}
-	for _, f := range findings {
-		ep, ok := byKey[f.Endpoint]
-		if !ok {
-			continue
-		}
-		all[ep.Name] = append(all[ep.Name], f.String())
-		if prev, seen := attributed[ep.Name]; !seen || f.Message < prev.message {
-			attributed[ep.Name] = rejection{
-				endpoint: ep, reason: v1alpha1.ReasonConfigValidationFailed, message: f.Message,
-			}
-		}
-	}
-	for name, rej := range attributed {
-		slices.Sort(all[name])
-		rej.cause = errors.New(strings.Join(all[name], "; "))
-		attributed[name] = rej
-	}
-	return attributed
 }
 
 // creationOrder is the order in which the renderer serves endpoints that share
