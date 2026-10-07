@@ -28,6 +28,7 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 	"go.opentelemetry.io/otel/trace"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apiserver/pkg/endpoints/request"
@@ -76,8 +77,21 @@ type readEvents struct{ client.Client }
 func (c readEvents) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
 	err := c.Client.Get(ctx, key, obj, opts...)
 	c.event(ctx, "k8s.client.get", obj, semconv.K8SNamespaceName(key.Namespace),
-		tracing.KeyName.String(key.Name), attribute.Bool("found", err == nil))
+		tracing.KeyName.String(key.Name), outcome(err))
 	return err
+}
+
+// outcome is whether a Get found its object: found, not found, or the type
+// of the error that kept it from saying.
+func outcome(err error) attribute.KeyValue {
+	switch {
+	case err == nil:
+		return attribute.Bool("found", true)
+	case apierrors.IsNotFound(err):
+		return attribute.Bool("found", false)
+	default:
+		return semconv.ErrorType(err)
+	}
 }
 
 // List reads through the wrapped client and records the read.
