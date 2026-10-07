@@ -97,7 +97,7 @@ func TestGatewayReconcile_NotFound(t *testing.T) {
 	}
 }
 
-func TestGatewayReconcile_FirstReconcileWritesOnlyTheDerivedStatus(t *testing.T) {
+func TestGatewayReconcile_FirstReconcileWritesTheAppliedConfigThenTheDerivedStatus(t *testing.T) {
 	gw := testGateway()
 	gw.Generation = 1
 	writes := 0
@@ -117,8 +117,9 @@ func TestGatewayReconcile_FirstReconcileWritesOnlyTheDerivedStatus(t *testing.T)
 	if result != (ctrl.Result{}) {
 		t.Errorf("result = %+v, want none: the first reconcile runs the whole pipeline", result)
 	}
-	if writes != 1 {
-		t.Errorf("gateway status writes = %d, want 1 (no separate Pending write)", writes)
+	if writes != 2 {
+		t.Errorf("gateway status writes = %d, want 2: the applied config, then the derived status "+
+			"(no separate Pending write)", writes)
 	}
 	stored := getGateway(t, c, gw)
 	ready := meta.FindStatusCondition(stored.Status.Conditions, v1alpha1.ConditionReady)
