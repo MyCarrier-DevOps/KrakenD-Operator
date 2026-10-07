@@ -115,3 +115,32 @@ func TestAutoConfigReconcile_AStoredRouterClashHoldsNothing(t *testing.T) {
 		t.Errorf("failedOperations = %+v, want none: the clash predates this sync", failed)
 	}
 }
+
+func TestAutoConfigReconcile_HoldsEveryCandidateWhileClashResolutionIsCapped(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	// Only the render that carries the candidates is capped: the stored one,
+	// asked with no replacements, is not.
+	checker := &fakeChecker{conflicts: func(replace []v1alpha1.KrakenDEndpoint) configcheck.RouteConflicts {
+		return configcheck.RouteConflicts{Capped: len(replace) > 0}
+	}}
+	c := fakeClientBuilder().WithObjects(ac, cm, testGateway()).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Checker = checker
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	if endpointExists(t, c, "test-ac-listusers") {
+		t.Error("listusers was written while a new clash could not be told apart")
+	}
+	failed := getAC(t, c, ac).Status.FailedOperations
+	if len(failed) == 0 || !slices.ContainsFunc(failed, func(op v1alpha1.OperationStatus) bool {
+		return op.Endpoint == "test-ac-listusers" && op.Reason == v1alpha1.ReasonConfigValidationFailed &&
+			strings.Contains(op.Message, configcheck.ClashesCapped)
+	}) {
+		t.Errorf("failedOperations = %+v, want listusers held with the capped message", failed)
+	}
+}
