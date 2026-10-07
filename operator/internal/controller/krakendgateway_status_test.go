@@ -450,8 +450,11 @@ func TestGatewayReconcile_DeletedGatewayDropsItsMetrics(t *testing.T) {
 	if n := gatewaySeriesCount(t, reg, gw.Namespace, gw.Name); n < 5 {
 		t.Fatalf("a live gateway has %d metric series, want at least 5", n)
 	}
-	durations, _ := metricValue(t, reg, "krakend_operator_reconcile_duration_seconds",
+	durations, ok := metricValue(t, reg, "krakend_operator_reconcile_duration_seconds",
 		"controller", "gateway", "namespace", gw.Namespace, "name", gw.Name)
+	if !ok || durations < 1 {
+		t.Fatalf("a live gateway's reconcile observed no duration (%v, present %v)", durations, ok)
+	}
 
 	if err := c.Delete(context.Background(), gw); err != nil {
 		t.Fatal(err)
