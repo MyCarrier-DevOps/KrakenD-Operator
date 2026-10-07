@@ -31,6 +31,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -380,5 +381,22 @@ func TestReadEvents_AGetThatFailsForAnotherReasonRecordsItsErrorType(t *testing.
 	attrs := eventAttrs(t, rec, "reconcile", "k8s.client.get")
 	if _, ok := attrs["found"]; ok || attrs["error.type"] == "" {
 		t.Errorf("event attributes = %v, want error.type and no found for an error that is not NotFound", attrs)
+	}
+}
+
+func TestReadEvents_AGetOfAMissingObjectRecordsFoundFalse(t *testing.T) {
+	rec := tracingtest.New(t)
+	c := telemetry.ReadEvents(fake.NewClientBuilder().WithScheme(clientgoscheme.Scheme).Build())
+	ctx, span := rec.Tracer().Start(context.Background(), "reconcile")
+
+	err := c.Get(ctx, client.ObjectKey{Namespace: "ns", Name: "cm"}, &corev1.ConfigMap{})
+	span.End()
+
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("Get = %v, want NotFound", err)
+	}
+	attrs := eventAttrs(t, rec, "reconcile", "k8s.client.get")
+	if _, ok := attrs["error.type"]; ok || attrs["found"] != "false" {
+		t.Errorf("event attributes = %v, want found=false and no error.type", attrs)
 	}
 }
