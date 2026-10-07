@@ -828,3 +828,58 @@ func TestGatewayReconcile_ExclusionSignalsSurviveARestartThatAppliesNothing(t *t
 		t.Errorf("gauge = %v, want EndpointInvalid=1 from bad's stored verdict", got)
 	}
 }
+
+func TestGatewayReconcile_ExclusionSignalsFollowTheEndpoints(t *testing.T) {
+	gw := reconciledGateway()
+	gw.Namespace = "follows"
+	good, bad := testEndpoint("good", "/a"), badHosted("bad", "/b")
+	good.Namespace, bad.Namespace = gw.Namespace, gw.Namespace
+	badPolicy := &v1alpha1.KrakenDBackendPolicy{ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: gw.Namespace},
+		Spec: v1alpha1.KrakenDBackendPolicySpec{Raw: &runtime.RawExtension{Raw: []byte(`{"x/bad-policy":{}}`)}}}
+	c := fakeClientBuilder().WithObjects(gw, good, bad, badPolicy).WithStatusSubresource(gw, good, bad).Build()
+	val := &contentValidator{markers: map[string]string{"invalid.test": badHostOutput, "x/bad-policy": "policy refused"}}
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}), val)
+	t.Cleanup(func() { deleteGatewayMetrics(gw.Namespace, gw.Name) })
+	edit := func(change func(*v1alpha1.KrakenDEndpoint)) {
+		t.Helper()
+		var stored v1alpha1.KrakenDEndpoint
+		if err := c.Get(context.Background(), client.ObjectKeyFromObject(bad), &stored); err != nil {
+			t.Fatal(err)
+		}
+		change(&stored)
+		stored.Generation++
+		if err := c.Update(context.Background(), &stored); err != nil {
+			t.Fatal(err)
+		}
+		if err := reconcileGateway(t, r, gw); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+
+	// Its reason changes: the old reason's series goes.
+	edit(func(ep *v1alpha1.KrakenDEndpoint) {
+		ep.Spec.Endpoints[0].Backends[0].Host = []string{"http://svc:8080"}
+		ep.Spec.Endpoints[0].Backends[0].PolicyRef = &v1alpha1.PolicyRef{Name: "p"}
+	})
+	if got := excludedSeries(t, gw.Namespace, gw.Name); len(got) != 1 || got[v1alpha1.ReasonPolicyInvalid] != 1 {
+		t.Errorf("after the reason changed, gauge = %v, want PolicyInvalid=1 and no EndpointInvalid series", got)
+	}
+
+	// It is deleted: the full render is then the applied one (the fast path).
+	if err := c.Delete(context.Background(), bad); err != nil {
+		t.Fatal(err)
+	}
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+	if cond := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions,
+		v1alpha1.ConditionEndpointsExcluded); cond != nil {
+		t.Errorf("EndpointsExcluded = %+v after the excluded endpoint is gone, want it removed", cond)
+	}
+	if got := excludedSeries(t, gw.Namespace, gw.Name); len(got) != 0 {
+		t.Errorf("gauge = %v after the excluded endpoint is gone, want no series", got)
+	}
+}
