@@ -178,6 +178,32 @@ func (s *scriptedChecker) LintPolicy(
 	return v, err
 }
 
+// CheckPolicy records "policy:raw" in args.
+func (s *scriptedChecker) CheckPolicy(
+	ctx context.Context, policy *v1alpha1.KrakenDBackendPolicy, memo configcheck.Memo,
+) (configcheck.Verdict, error) {
+	s.memos = append(s.memos, memo != nil)
+	v, err := s.next(ctx, "policy", nil)
+	s.args[len(s.args)-1] = "policy:" + rawOf(policy)
+	return v, err
+}
+
+// CheckGroup records "ns/gateway:raw" in args: the gateway and the raw of the
+// policy override, "-" for none.
+func (s *scriptedChecker) CheckGroup(
+	ctx context.Context, g configcheck.Group, memo configcheck.Memo,
+) (configcheck.Verdict, error) {
+	s.gateways = append(s.gateways, string(g.Gateway.Spec.Edition)+"/"+g.Gateway.Spec.Config.Timeout)
+	s.memos = append(s.memos, memo != nil)
+	v, err := s.next(ctx, "group", g.Endpoints)
+	raw := "-"
+	if g.Override != nil {
+		raw = rawOf(g.Override)
+	}
+	s.args[len(s.args)-1] = g.Gateway.Namespace + "/" + g.Gateway.Name + ":" + raw
+	return v, err
+}
+
 // rawOf is the raw of policy as text, "-" for none.
 func rawOf(policy *v1alpha1.KrakenDBackendPolicy) string {
 	if policy.Spec.Raw == nil {
