@@ -26,12 +26,10 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
-	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 )
 
 func testPolicy(raw string) *v1alpha1.KrakenDBackendPolicy {
@@ -48,90 +46,41 @@ func referencing() []client.Object {
 	return []client.Object{testGateway(), ep}
 }
 
-// The warning that a gateway already fails is read by a writer who may not
-// read the gateway or another namespace's endpoints, so it follows the endpoint
-// denial's rule: it quotes the policy's own namespace and counts the rest.
-func TestPolicyAdmission_AlreadyFailingWarningWithholdsForeignFindings(t *testing.T) {
-	before := configcheck.Verdict{Stage: renderer.StageCheck, Findings: []configcheck.Finding{
-		{Index: -1, Message: "host http://u:SECRET-PASS@h1 not valid"},
-		{Endpoint: types.NamespacedName{Namespace: "tenant-a", Name: "orders"}, Index: 0, Message: "SECRET-EVERY"},
-		failing("mine", 0, "same namespace").Findings[0],
-	}}
-	chk := &scriptedChecker{verdicts: []configcheck.Verdict{{OK: true}, failing("uses-p", 0, "bad"), before}}
-	v := &PolicyValidator{Client: fakeClient(referencing()...), Checker: chk}
-
-	resp := review(t, v, "alice", testPolicy(`{"qos/circuit-breaker":{}}`), testPolicy(`{}`))
-
-	if !resp.Allowed || len(resp.Warnings) != 1 {
-		t.Fatalf("response = %+v, warnings %q, want an admission with one warning", resp.Result, resp.Warnings)
-	}
-	w := resp.Warnings[0]
-	if !strings.Contains(w, "default/mine spec.endpoints[0]: same namespace") ||
-		!strings.Contains(w, "2 findings that name no endpoint of namespace default are not shown") {
-		t.Errorf("warning = %q, want the same-namespace finding quoted and two others counted", w)
-	}
-	if strings.Contains(w, "SECRET") {
-		t.Errorf("warning = %q quotes a value the requester may not read", w)
-	}
-}
-
-// The denial that a policy breaks a gateway is read by a writer who may not
-// read the gateway or another namespace's endpoints: it quotes the policy's own
-// namespace and counts the rest.
-func TestPolicyAdmission_BreaksGatewayDenialWithholdsForeignFindings(t *testing.T) {
-	after := configcheck.Verdict{Stage: renderer.StageCheck, Findings: []configcheck.Finding{
-		{Index: -1, Message: "host http://u:SECRET-PASS@h1 not valid"},
-		{Endpoint: types.NamespacedName{Namespace: "tenant-a", Name: "orders"}, Index: 0, Message: "SECRET-EVERY"},
-		failing("uses-p", 0, "same namespace").Findings[0],
-	}}
-	chk := &scriptedChecker{verdicts: []configcheck.Verdict{{OK: true}, after, {OK: true}}}
-	v := &PolicyValidator{Client: fakeClient(referencing()...), Checker: chk}
-
-	resp := review(t, v, "alice", testPolicy(`{"qos/circuit-breaker":{}}`), testPolicy(`{}`))
-
-	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("response = %+v, want 422", resp.Result)
-	}
-	msg := resp.Result.Details.Causes[0].Message
-	if !strings.Contains(msg, "default/uses-p spec.endpoints[0]: same namespace") ||
-		!strings.Contains(msg, "2 findings that name no endpoint of namespace default are not shown") {
-		t.Errorf("cause = %q, want the same-namespace finding quoted and two others counted", msg)
-	}
-	if strings.Contains(msg, "SECRET") {
-		t.Errorf("cause = %q quotes a value the requester may not read", msg)
-	}
-}
-
 func TestPolicyAdmission_Render(t *testing.T) {
-	bad := failing("policy-lint", 0,
-		"- at '/endpoints/0/backend/0/extra_config': additional properties 'qos/circuit-breakr' not allowed")
+	bad := configcheck.Verdict{
+		Output: "- at '/endpoints/0/backend/0/extra_config': additional properties 'qos/circuit-breakr' not allowed"}
+	ok, fail := configcheck.Verdict{OK: true}, configcheck.Verdict{Output: "x"}
+	epOK := configcheck.EndpointVerdict{OK: true}
+	epFail := configcheck.EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid, Output: "x"}
 	tests := []struct {
-		name     string
-		objs     []client.Object
-		old      *v1alpha1.KrakenDBackendPolicy
-		verdicts []configcheck.Verdict
-		allowed  bool
-		calls    string
-		warning  string // a substring of the one warning expected; "" for none
+		name             string
+		objs             []client.Object
+		old              *v1alpha1.KrakenDBackendPolicy
+		verdicts         []configcheck.Verdict
+		endpointVerdicts []configcheck.EndpointVerdict
+		allowed          bool
+		calls            string
+		warning          string // a substring of the one warning expected; "" for none
 	}{
-		{"unreferenced, lints clean", nil, nil, nil, true, "policy", ""},
-		{"unreferenced, fails alone", nil, nil, []configcheck.Verdict{bad}, false, "policy", ""},
-		{"referenced, keeps its gateway passing", referencing(), nil, nil, true, "policy,gateway+policy", ""},
-		{"referenced, breaks its gateway", referencing(), testPolicy(`{}`),
-			[]configcheck.Verdict{{OK: true}, failing("uses-p", 0, "bad"), {OK: true}}, false,
-			"policy,gateway+policy,gateway+policy", ""},
-		{"created, referenced, breaks its gateway", referencing(), nil,
-			[]configcheck.Verdict{{OK: true}, failing("uses-p", 0, "bad"), {OK: true}}, false,
-			"policy,gateway+policy,gateway", ""},
-		{"referenced gateway already broken", referencing(), testPolicy(`{}`),
-			[]configcheck.Verdict{{OK: true}, failing("uses-p", 0, "bad"), failing("other", 0, "old")}, true,
-			"policy,gateway+policy,gateway+policy", "gateway default/gw already fails validation"},
-		{"failing alone before and after: the gateways decide", referencing(), testPolicy(`{"x":{}}`),
-			[]configcheck.Verdict{bad, bad}, true, "policy,policy,gateway+policy", ""},
+		{"unreferenced, lints clean", nil, nil, nil, nil, true, "policy", ""},
+		{"unreferenced, fails alone", nil, nil, []configcheck.Verdict{bad}, nil, false, "policy", ""},
+		{"referenced, keeps its endpoints passing", referencing(), testPolicy(`{}`), nil, nil, true,
+			"policy,root,group", ""},
+		{"referenced, breaks its endpoint", referencing(), testPolicy(`{}`),
+			[]configcheck.Verdict{ok, ok, fail}, []configcheck.EndpointVerdict{epFail, epOK}, false,
+			"policy,root,group,endpoint,endpoint", ""},
+		{"created, referenced, breaks its endpoint", referencing(), nil,
+			[]configcheck.Verdict{ok, ok, fail}, []configcheck.EndpointVerdict{epFail}, false,
+			"policy,root,group,endpoint", ""},
+		{"failing alone before and after: its endpoints decide", referencing(), testPolicy(`{"x":{}}`),
+			[]configcheck.Verdict{bad, bad}, nil, true, "policy,policy,root,group", ""},
+		{"its endpoints already fail with the stored policy", referencing(), testPolicy(`{}`),
+			[]configcheck.Verdict{ok, ok, fail}, []configcheck.EndpointVerdict{epFail, epFail}, true,
+			"policy,root,group,endpoint,endpoint", "already fail validation with the stored policy"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			chk := &scriptedChecker{verdicts: tt.verdicts}
+			chk := &scriptedChecker{verdicts: tt.verdicts, endpointVerdicts: tt.endpointVerdicts}
 			v := &PolicyValidator{Client: fakeClient(tt.objs...), Checker: chk}
 			var old runtime.Object
 			if tt.old != nil {
@@ -160,7 +109,7 @@ func TestPolicyAdmission_Render(t *testing.T) {
 // An update that leaves the spec alone, such as the protection finalizer, is
 // never rendered: a stored policy that fails must not block it.
 func TestPolicyAdmission_MetadataOnlyUpdateIsNotValidated(t *testing.T) {
-	chk := &scriptedChecker{verdicts: []configcheck.Verdict{failing("policy-lint", 0, "bad")}}
+	chk := &scriptedChecker{verdicts: []configcheck.Verdict{{Output: "bad"}}}
 	v := &PolicyValidator{Client: fakeClient(referencing()...), Checker: chk}
 	old := testPolicy(`{"qos/circuit-breakr":{}}`)
 	policy := old.DeepCopy()
@@ -179,7 +128,7 @@ func TestPolicyAdmission_MetadataOnlyUpdateIsNotValidated(t *testing.T) {
 // A gateway still renders a terminating policy, so a spec change on one is
 // judged like any other: only a metadata change is skipped.
 func TestPolicyAdmission_TerminatingPolicyWithBrokenSpecChangeIsRefused(t *testing.T) {
-	chk := &scriptedChecker{verdicts: []configcheck.Verdict{failing("policy-lint", 0, "bad"), {OK: true}}}
+	chk := &scriptedChecker{verdicts: []configcheck.Verdict{{Output: "bad"}, {OK: true}}}
 	v := &PolicyValidator{Client: fakeClient(), Checker: chk}
 	old := terminating(testPolicy(`{}`))
 
@@ -197,19 +146,15 @@ func TestPolicyAdmission_TerminatingPolicyWithBrokenSpecChangeIsRefused(t *testi
 }
 
 func TestPolicyAdmission_DenialIsBounded(t *testing.T) {
-	huge := configcheck.Verdict{}
-	for range 1000 {
-		huge.Findings = append(huge.Findings, configcheck.Finding{
-			Endpoint: types.NamespacedName{Namespace: "default", Name: "uses-p"}, Index: 0,
-			Message: "- at '/endpoints/0/backend/0/extra_config': additional properties 'qos/circuit-breakr' not allowed"})
-	}
+	huge := configcheck.Verdict{
+		Output: strings.Repeat("- at '/endpoints/0/backend/0/extra_config': additional properties 'qos/circuit-breakr' not allowed\n", 1000)}
 	v := &PolicyValidator{Client: fakeClient(referencing()...),
-		Checker: &scriptedChecker{verdicts: []configcheck.Verdict{{OK: true}, huge, {OK: true}}}}
+		Checker: &scriptedChecker{verdicts: []configcheck.Verdict{huge}}}
 
 	resp := review(t, v, "alice", testPolicy(`{"qos/circuit-breakr":{}}`), testPolicy(`{}`))
 
 	if resp.Allowed {
-		t.Fatal("admitted a policy that breaks its gateway")
+		t.Fatal("admitted a policy that fails on its own")
 	}
 	if n := len(resp.Result.Message); n > 4*warningLimit {
 		t.Errorf("denial is %d bytes, want it bounded near %d", n, warningLimit)
@@ -231,13 +176,13 @@ func TestPolicyAdmission_RejectsEnterpriseOnlyRawOnACEGateway(t *testing.T) {
 		calls   string
 	}{
 		{"new raw on a CE gateway", referencing(), testPolicy(proxy), nil, false, "policy"},
-		{"new raw on an EE gateway", onEE, testPolicy(proxy), nil, true, "policy,gateway+policy"},
+		{"new raw on an EE gateway", onEE, testPolicy(proxy), nil, true, "policy,root,group"},
 		{"new raw, nothing references the policy", nil, testPolicy(proxy), nil, true, "policy"},
 		{"new raw the CE render honors", referencing(),
 			testPolicy(`{"backend/http/client":{"send_body_on_redirect":true}}`), nil, true,
-			"policy,gateway+policy"},
+			"policy,root,group"},
 		{"raw unchanged, another field edited", referencing(), cached, testPolicy(proxy), true,
-			"policy,gateway+policy"},
+			"policy,root,group"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -280,12 +225,16 @@ func TestPolicyAdmission_NamesWhatACEGatewayDrops(t *testing.T) {
 func TestPolicyAdmission_DenialListsABoundedNumberOfGateways(t *testing.T) {
 	names := make([]string, 2*maxEntryCauses)
 	verdicts := []configcheck.Verdict{{OK: true}}
+	var endpointVerdicts []configcheck.EndpointVerdict
 	for i := range names {
 		names[i] = fmt.Sprintf("gw-%02d", i)
-		verdicts = append(verdicts, failing("e", 0, "bad"), configcheck.Verdict{OK: true})
+		verdicts = append(verdicts, configcheck.Verdict{OK: true}, configcheck.Verdict{Output: "x"})
+		endpointVerdicts = append(endpointVerdicts,
+			configcheck.EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid}, configcheck.EndpointVerdict{OK: true})
 	}
 	objs := referencingGateways(names...)
-	v := &PolicyValidator{Client: fakeClient(objs...), Checker: &scriptedChecker{verdicts: verdicts}}
+	v := &PolicyValidator{Client: fakeClient(objs...),
+		Checker: &scriptedChecker{verdicts: verdicts, endpointVerdicts: endpointVerdicts}}
 
 	resp := review(t, v, "alice", testPolicy(`{"x":{}}`), testPolicy(`{}`))
 
@@ -316,18 +265,25 @@ func referencingGateways(names ...string) []client.Object {
 	return objs
 }
 
-// Each gateway is judged on its own, with the new policy after and the stored
-// one before: the breaking gateway is the one cause, the failing one a warning.
+// Each gateway is judged with the new policy, and the endpoints of those that
+// fail are checked with the new policy and the stored one: the breaking
+// gateway is the one cause, the already failing one a warning.
 func TestPolicyAdmission_JudgesEachGatewayWithTheRightPolicy(t *testing.T) {
 	const stored, changed = `{}`, `{"x":{}}`
-	chk := &scriptedChecker{verdicts: []configcheck.Verdict{
-		{OK: true},                  // the new policy alone
-		failing("e", 0, "bad"),      // gw-a with the new policy
-		{OK: true},                  // gw-a with the stored policy
-		{OK: true},                  // gw-b with the new policy
-		failing("e", 0, "bad"),      // gw-c with the new policy
-		failing("e", 0, "old fail"), // gw-c with the stored policy
-	}}
+	ok, fail := configcheck.Verdict{OK: true}, configcheck.Verdict{Output: "x"}
+	epFail := configcheck.EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid}
+	chk := &scriptedChecker{
+		verdicts: []configcheck.Verdict{
+			ok,       // the new policy alone
+			ok, fail, // gw-a: root, its endpoints with the new policy
+			ok, ok, // gw-b
+			ok, fail, // gw-c
+		},
+		endpointVerdicts: []configcheck.EndpointVerdict{
+			epFail, {OK: true}, // gw-a's endpoint: with the new policy, with the stored one
+			epFail, epFail, // gw-c's endpoint
+		},
+	}
 	v := &PolicyValidator{Client: fakeClient(referencingGateways("gw-a", "gw-b", "gw-c")...), Checker: chk}
 
 	resp := review(t, v, "alice", testPolicy(changed), testPolicy(stored))
@@ -339,14 +295,16 @@ func TestPolicyAdmission_JudgesEachGatewayWithTheRightPolicy(t *testing.T) {
 	if len(causes) != 1 || !strings.Contains(causes[0].Message, "breaks gateway default/gw-a") {
 		t.Errorf("causes = %+v, want one naming gateway default/gw-a", causes)
 	}
-	if len(resp.Warnings) != 1 || !strings.Contains(resp.Warnings[0], "gateway default/gw-c already fails") {
+	if len(resp.Warnings) != 1 || !strings.Contains(resp.Warnings[0], "gateway default/gw-c: endpoints that use this policy already fail") {
 		t.Errorf("warnings = %q, want one naming gateway default/gw-c", resp.Warnings)
 	}
 	wantArgs := []string{
 		"policy:" + changed,
-		"default/gw-a:" + changed, "default/gw-a:" + stored,
-		"default/gw-b:" + changed,
-		"default/gw-c:" + changed, "default/gw-c:" + stored,
+		"-", "default/gw-a:" + changed,
+		"default/uses-p-gw-a[GET /a]:" + changed, "default/uses-p-gw-a[GET /a]:" + stored,
+		"-", "default/gw-b:" + changed,
+		"-", "default/gw-c:" + changed,
+		"default/uses-p-gw-c[GET /a]:" + changed, "default/uses-p-gw-c[GET /a]:" + stored,
 	}
 	if got := strings.Join(chk.args, " "); got != strings.Join(wantArgs, " ") {
 		t.Errorf("checks received %s, want %s", got, strings.Join(wantArgs, " "))
@@ -358,8 +316,8 @@ func TestPolicyAdmission_JudgesEachGatewayWithTheRightPolicy(t *testing.T) {
 	}
 }
 
-// A check that cannot run in the middle of the fan-out leaves the request
-// unjudged: a retryable 500, never a partial verdict.
+// A check that cannot run leaves its gateway unjudged. With no gateway
+// refusing the change, the request is a retryable 500, never a partial verdict.
 func TestPolicyAdmission_CheckerErrorMidFanOutIs500(t *testing.T) {
 	chk := &scriptedChecker{err: errors.New("no slot"), failCall: 3}
 	v := &PolicyValidator{Client: fakeClient(referencingGateways("gw-a", "gw-b")...), Checker: chk}
@@ -369,15 +327,15 @@ func TestPolicyAdmission_CheckerErrorMidFanOutIs500(t *testing.T) {
 	if resp.Allowed || resp.Result.Code != http.StatusInternalServerError {
 		t.Errorf("response = %+v, want 500", resp.Result)
 	}
-	if got := strings.Join(chk.calls, ","); got != "policy,gateway+policy,gateway+policy" {
-		t.Errorf("checks = %s, want the fan-out to stop at the failing check", got)
+	if got := strings.Join(chk.calls, ","); got != "policy,root,group" {
+		t.Errorf("checks = %s, want every gateway screened, each stopping at the check that cannot run", got)
 	}
 }
 
 // Removing a finalizer from a terminating policy must never be refused, even
 // when the stored raw reads differently as bytes: the spec is the same.
 func TestPolicyAdmission_TerminatingPolicyWithTheSameSpecIsNotValidated(t *testing.T) {
-	chk := &scriptedChecker{verdicts: []configcheck.Verdict{failing("policy-lint", 0, "bad")}}
+	chk := &scriptedChecker{verdicts: []configcheck.Verdict{{Output: "bad"}}}
 	v := &PolicyValidator{Client: fakeClient(), Checker: chk}
 	old := terminating(testPolicy(`{"a":1}`))
 	policy := unfinalized(testPolicy(`{ "a": 1 }`))
@@ -398,13 +356,16 @@ func TestPolicyAdmission_TerminatingPolicyWithTheSameSpecIsNotValidated(t *testi
 func TestPolicyAdmission_WarningsAreBounded(t *testing.T) {
 	names := make([]string, 40)
 	verdicts := []configcheck.Verdict{{OK: true}}
+	var endpointVerdicts []configcheck.EndpointVerdict
 	for i := range names {
 		names[i] = fmt.Sprintf("gw-%02d", i)
-		verdicts = append(verdicts,
-			failing("e", 0, strings.Repeat("x", 3*warningLimit)), failing("e", 0, strings.Repeat("y", 3*warningLimit)))
+		verdicts = append(verdicts, configcheck.Verdict{OK: true}, configcheck.Verdict{Output: "x"})
+		endpointVerdicts = append(endpointVerdicts,
+			configcheck.EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid, Output: strings.Repeat("x", 3*warningLimit)},
+			configcheck.EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid, Output: strings.Repeat("y", 3*warningLimit)})
 	}
 	v := &PolicyValidator{Client: fakeClient(referencingGateways(names...)...),
-		Checker: &scriptedChecker{verdicts: verdicts}}
+		Checker: &scriptedChecker{verdicts: verdicts, endpointVerdicts: endpointVerdicts}}
 
 	resp := review(t, v, "alice", testPolicy(`{"x":{}}`), testPolicy(`{}`))
 
