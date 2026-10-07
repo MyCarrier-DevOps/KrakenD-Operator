@@ -360,6 +360,16 @@ func (r *KrakenDAutoConfigReconciler) precheck(
 		})
 	}
 
+	clashes, err := r.routerClashes(ctx, &gw, writes, stale, order, !held && len(rejected) == 0)
+	if err != nil {
+		return nil, &validatorUnavailableError{err: err}
+	}
+	maps.Copy(rejected, clashes)
+	writes = slices.DeleteFunc(slices.Clone(writes), func(ep *v1alpha1.KrakenDEndpoint) bool {
+		_, ok := rejected[ep.Name]
+		return ok
+	})
+
 	candidates := writes
 	failedByCheck := 0
 	for round := 0; len(candidates) > 0; round++ {
@@ -388,6 +398,49 @@ func (r *KrakenDAutoConfigReconciler) precheck(
 		})
 	}
 	return rejected, nil
+}
+
+// routerClashes holds each candidate that, written, would take part in a
+// router clash the gateway does not have now: an entry KrakenD's router
+// cannot serve next to another endpoint's although their routes differ in
+// shape. The candidate that loses the clash is held. A candidate that would
+// keep an existing endpoint's entry out of the router is held too, so a write
+// never makes another endpoint lose a route. The rendering is in process and
+// holds no check slot.
+func (r *KrakenDAutoConfigReconciler) routerClashes(
+	ctx context.Context,
+	gw *v1alpha1.KrakenDGateway,
+	writes []*v1alpha1.KrakenDEndpoint,
+	stale []v1alpha1.KrakenDEndpoint,
+	order creationOrder,
+	withoutStale bool,
+) (map[string]rejection, error) {
+	held := map[string]rejection{}
+	if len(writes) == 0 {
+		return held, nil
+	}
+	before, err := r.Checker.Conflicts(ctx, gw, nil)
+	if err != nil {
+		return nil, err
+	}
+	after, err := r.Checker.Conflicts(ctx, gw, checkSet(writes, stale, order, withoutStale))
+	if err != nil {
+		return nil, err
+	}
+	candidates := make(map[types.NamespacedName]*v1alpha1.KrakenDEndpoint, len(writes))
+	involving := make(map[types.NamespacedName]bool, len(writes))
+	for _, ep := range writes {
+		key := client.ObjectKeyFromObject(ep)
+		candidates[key], involving[key] = ep, true
+	}
+	for _, c := range configcheck.NewClashes(before, after, involving) {
+		ep := candidates[c.Loser]
+		if ep == nil {
+			ep = candidates[c.Winner]
+		}
+		hold(held, []*v1alpha1.KrakenDEndpoint{ep}, c.String(), errors.New(c.String()))
+	}
+	return held, nil
 }
 
 // checkGateway runs the gateway config check holding one of CheckSlots, so
