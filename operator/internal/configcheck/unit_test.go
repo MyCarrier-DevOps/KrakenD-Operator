@@ -19,6 +19,7 @@ package configcheck
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"testing"
 
@@ -80,5 +81,21 @@ func TestCheckRoot_RemembersEachContentAndEdition(t *testing.T) {
 
 	if want := []v1alpha1.Edition{v1alpha1.EditionEE, v1alpha1.EditionCE}; !reflect.DeepEqual(val.editions, want) {
 		t.Errorf("checked as %v, want each edition once: the second EE check is remembered", val.editions)
+	}
+}
+
+func TestCheckRoot_AnUnjudgedCheckIsNotRemembered(t *testing.T) {
+	val := &fakeValidator{err: errors.New("fork/exec krakend: no such file or directory")}
+	chk := newChecker(val)
+	memo := mapMemo{}
+
+	for range 2 {
+		if _, err := chk.CheckRoot(context.Background(), Root{Gateway: gateway(v1alpha1.EditionCE)}, memo); err == nil {
+			t.Fatal("CheckRoot succeeded with a validator that cannot run")
+		}
+	}
+
+	if len(val.calls) != 2 || len(memo) != 0 {
+		t.Errorf("ran %d times and remembered %d verdicts, want 2 runs and nothing remembered", len(val.calls), len(memo))
 	}
 }
