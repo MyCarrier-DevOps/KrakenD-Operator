@@ -555,3 +555,25 @@ func TestCheckEndpoint_JudgesWithTheCallersPolicies(t *testing.T) {
 		t.Errorf("verdict = %+v, %v; want PolicyInvalid from the policies the caller holds, not the stored one", v, err)
 	}
 }
+
+func TestCheckEndpoint_TheOverrideStandsInForTheStoredPolicy(t *testing.T) {
+	changed := policy("p")
+	changed.Spec.Raw = &runtime.RawExtension{Raw: []byte(`{"x/changed":{}}`)}
+	val := &judgeValidator{judge: func(config string) error {
+		if strings.Contains(config, "x/changed") {
+			return rejectedOutput("changed raw refused")
+		}
+		return nil
+	}}
+	chk := newChecker(val, policy("p"))
+	unit := EndpointUnit{Gateway: gateway(v1alpha1.EditionCE), Endpoint: withPolicy(endpoint("uses-p", "/a"), "p")}
+
+	stored, err := chk.CheckEndpoint(context.Background(), unit, nil)
+	if err != nil || !stored.OK {
+		t.Fatalf("with the stored policy: %+v, %v; want OK", stored, err)
+	}
+	unit.Override = changed
+	if v, err := chk.CheckEndpoint(context.Background(), unit, nil); err != nil || v.Reason != v1alpha1.ReasonPolicyInvalid {
+		t.Errorf("with the override: %+v, %v; want PolicyInvalid", v, err)
+	}
+}
