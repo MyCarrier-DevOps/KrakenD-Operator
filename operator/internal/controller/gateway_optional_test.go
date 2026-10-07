@@ -24,7 +24,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus/testutil"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -398,15 +397,17 @@ func TestGatewayReconcile_DisablingDragonflyDropsItsMetricSeries(t *testing.T) {
 	gw := reconciledGateway()
 	gw.UID = "gw-uid"
 	gw.Status.ConfigChecksum = "applied"
-	dragonflyReady.WithLabelValues(gw.Namespace, gw.Name).Set(1)
+	m, reg := testMetrics(t)
+	m.SetDragonflyReady(client.ObjectKeyFromObject(gw), true)
 	c := fakeClientBuilder().WithRESTMapper(optionalCRDMapper(optionalOwnedGVKs...)).
 		WithObjects(gw).WithStatusSubresource(gw).Build()
 	r := newTestGatewayReconciler(c, renderOutput("applied"), &mockValidator{})
+	r.Metrics = m
 
 	if err := reconcileGateway(t, r, gw); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if dragonflyReady.DeleteLabelValues(gw.Namespace, gw.Name) {
+	if _, ok := metricValue(t, reg, "krakend_operator_dragonfly_ready", "namespace", gw.Namespace, "name", gw.Name); ok {
 		t.Error("the dragonfly_ready series is still reported after Dragonfly was disabled")
 	}
 }
@@ -573,16 +574,17 @@ func TestGatewayReconcile_MissingDragonflyCRDZeroesTheReadyGauge(t *testing.T) {
 	gw := reconciledGateway()
 	gw.Status.ConfigChecksum = "applied"
 	gw.Spec.Dragonfly = &v1alpha1.DragonflySpec{Enabled: true}
-	dragonflyReady.WithLabelValues(gw.Namespace, gw.Name).Set(1)
-	t.Cleanup(func() { dragonflyReady.DeleteLabelValues(gw.Namespace, gw.Name) })
+	m, reg := testMetrics(t)
+	m.SetDragonflyReady(client.ObjectKeyFromObject(gw), true)
 	c := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).Build() // no optional CRDs
 	r := newTestGatewayReconciler(c, renderOutput("applied"), &mockValidator{})
+	r.Metrics = m
 
 	if err := reconcileGateway(t, r, gw); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if got := testutil.ToFloat64(dragonflyReady.WithLabelValues(gw.Namespace, gw.Name)); got != 0 {
-		t.Errorf("dragonfly_ready = %v, want 0 while the CRD is missing", got)
+	if got, ok := metricValue(t, reg, "krakend_operator_dragonfly_ready", "namespace", gw.Namespace, "name", gw.Name); !ok || got != 0 {
+		t.Errorf("dragonfly_ready = %v (present %v), want 0 while the CRD is missing", got, ok)
 	}
 }
 
@@ -595,7 +597,6 @@ func TestGatewayReconcile_DragonflyBecomingReadyRecordsARecoveryEvent(t *testing
 	c := fakeClientBuilder().WithRESTMapper(optionalCRDMapper(dragonflyGVK)).
 		WithObjects(gw, df).WithStatusSubresource(gw).Build()
 	r := newTestGatewayReconciler(c, renderOutput("applied"), &mockValidator{})
-	t.Cleanup(func() { dragonflyReady.DeleteLabelValues(gw.Namespace, gw.Name) })
 
 	if err := reconcileGateway(t, r, gw); err != nil {
 		t.Fatalf("reconcile while not ready: %v", err)
