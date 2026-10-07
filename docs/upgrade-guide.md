@@ -644,9 +644,10 @@ or `CombinedConfigInvalid`) now carry at most 4 KiB: a summary line, then the
 root's output line by line, as many whole lines as fit, followed by
 `(output truncated, N more lines)`. An endpoint's `Accepted` message is cut to
 the same 4 KiB. A gateway root that fails is quoted in `ConfigValid` and its
-event, and an endpoint that fails in its `Accepted` message; the operator
-logs krakend output only for a failure that needs several endpoints
-together, cut at 16 KiB. Previously an
+event, and an endpoint that fails in its `Accepted` message; the gateway
+controller logs krakend output only for a failure that needs several
+endpoints together, cut at 16 KiB, and the AutoConfig controller logs a held
+operation's full error at Info. Previously an
 output over the CRD's 32768-character limit (for example one bad key in a
 policy used by many backends) made the status write fail, so the rejection
 was never recorded.
@@ -2194,7 +2195,9 @@ endpoints are serving.
   candidate together. When that fails, each candidate is checked on its own;
   when it passes, only the candidates that lost an entry in it. A hold quotes
   only that operation's own output (cut to fit the 256-byte status entry; the
-  operator log keeps the full text), or names the policy at fault; no other
+  operator log keeps the full text; the check renders the gateway root with the
+  endpoint, so output from a failure that occurs only with a root setting can
+  reveal that setting), or names the policy at fault; no other
   endpoint's content can hold a candidate or reach its message. After a hold,
   the clash check runs again over the remaining candidates, with the stale
   endpoints and the held candidates' stored versions kept, until it holds no
@@ -2620,7 +2623,8 @@ kubectl get krakendendpoints -A -o json | jq -r '
 
 - KrakenDEndpoint `Accepted=False`, reason **`EndpointInvalid`**: the endpoint
   fails krakend check on its own. The message quotes its own output, at most
-  4 KiB: `Not served by gateway <ns>/<gw>, which serves its other endpoints:
+  4 KiB (the check renders the gateway root with the endpoint, so output from a
+  failure that occurs only with a root setting can reveal that setting): `Not served by gateway <ns>/<gw>, which serves its other endpoints:
   this endpoint fails krakend check on its own: …`. While the gateway cannot
   apply its newest config (its endpoints fail only together, or its ConfigMap
   cannot be published), the message reads
@@ -2666,7 +2670,9 @@ kubectl get krakendendpoints -A -o json | jq -r '
   must select `GatewayRootInvalid` and `CombinedConfigInvalid`. Excluded
   endpoints are alerted on with the new metric. The AutoConfig controller still
   holds an operation with reason `ConfigValidationFailed`; its message now
-  quotes only that operation's own output.
+  quotes only that operation's own output (the check renders the gateway root
+  with the endpoint, so output from a failure that occurs only with a root
+  setting can reveal that setting).
 
 ### New metric, and a narrower failure counter
 
