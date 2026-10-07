@@ -96,5 +96,30 @@ func (c clientSpans) RoundTrip(r *http.Request) (resp *http.Response, err error)
 	if port, convErr := strconv.Atoi(r.URL.Port()); convErr == nil {
 		span.SetAttributes(semconv.ServerPort(port))
 	}
-	return c.next.RoundTrip(r.WithContext(ctx))
+	resp, err = c.next.RoundTrip(r.WithContext(ctx))
+	if err != nil {
+		return resp, err
+	}
+	return refuseUnparseableRedirect(r, resp)
+}
+
+// refuseUnparseableRedirect returns resp unless it redirects to a Location
+// that cannot be parsed: net/http's error for that repeats the Location, whose
+// query can carry a signature, so the redirect is refused here without it.
+func refuseUnparseableRedirect(r *http.Request, resp *http.Response) (*http.Response, error) {
+	switch resp.StatusCode {
+	case http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther,
+		http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
+	default:
+		return resp, nil
+	}
+	location := resp.Header.Get("Location")
+	if location == "" {
+		return resp, nil
+	}
+	if _, err := r.URL.Parse(location); err != nil {
+		_ = resp.Body.Close()
+		return nil, errors.New("redirect has an unparseable Location header")
+	}
+	return resp, nil
 }
