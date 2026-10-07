@@ -39,6 +39,7 @@ import (
 	"github.com/mycarrier-devops/krakend-operator/internal/controller"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 	"github.com/mycarrier-devops/krakend-operator/internal/telemetry"
+	"github.com/mycarrier-devops/krakend-operator/internal/tracing/tracingtest"
 	licenseutil "github.com/mycarrier-devops/krakend-operator/internal/util/license"
 	"github.com/mycarrier-devops/krakend-operator/test/utils"
 	"github.com/testcontainers/testcontainers-go"
@@ -85,6 +86,8 @@ var (
 	// suiteCache records typed Secret and ConfigMap requests to the
 	// manager's cache.
 	suiteCache *typedCoreReads
+	// suiteTraces records the spans of every gateway reconcile.
+	suiteTraces *tracingtest.Recorder
 )
 
 func TestMain(m *testing.M) {
@@ -179,6 +182,11 @@ func runTests(m *testing.M) int {
 		fmt.Fprintf(os.Stderr, "failed to set up operator RBAC: %v\n", err)
 		return 1
 	}
+	// Every gateway reconcile is traced to an in-memory recorder, through the
+	// same transport instrumentation the operator uses.
+	suiteTraces = tracingtest.NewRecorder()
+	defer func() { _ = suiteTraces.Shutdown(context.Background()) }()
+	telemetry.TraceKubeAPI(mgrCfg, suiteTraces.Provider())
 	mgr, err := ctrl.NewManager(mgrCfg, ctrl.Options{
 		Scheme: scheme,
 		Client: client.Options{
@@ -219,7 +227,7 @@ func runTests(m *testing.M) int {
 	// the marker validator (the krakend binary is not available here), behind
 	// one config checker.
 	krakendRenderer := renderer.New(renderer.Options{})
-	checker := configcheck.New(mgr.GetClient(), krakendRenderer, suiteValidator, 1, nil)
+	checker := configcheck.New(mgr.GetClient(), krakendRenderer, suiteValidator, 1, suiteTraces.Tracer())
 	if err := (&controller.KrakenDGatewayReconciler{
 		Client:    mgr.GetClient(),
 		Scheme:    scheme,
@@ -231,6 +239,7 @@ func runTests(m *testing.M) int {
 
 		LicenseParser: licenseutil.NewX509LicenseParser(),
 		Metrics:       operatorMetrics,
+		Tracer:        suiteTraces.Tracer(),
 	}).SetupWithManager(mgr); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to setup gateway controller: %v\n", err)
 		return 1
