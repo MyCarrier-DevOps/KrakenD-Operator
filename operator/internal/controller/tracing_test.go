@@ -85,6 +85,7 @@ func TestGatewayReconcile_IsTheRootOfATrace(t *testing.T) {
 // Each stage of a gateway reconcile is a span under the stage that runs it, so
 // the trace reads as the reconcile's waterfall.
 func TestGatewayReconcile_SpansEachStageUnderItsParent(t *testing.T) {
+	withDragonfly := func(gw *v1alpha1.KrakenDGateway) { gw.Spec.Dragonfly = &v1alpha1.DragonflySpec{Enabled: true} }
 	for _, tc := range []struct {
 		span, parent string
 		tweak        func(*v1alpha1.KrakenDGateway)
@@ -92,6 +93,7 @@ func TestGatewayReconcile_SpansEachStageUnderItsParent(t *testing.T) {
 		{"configcheck.Gather", "reconcile KrakenDGateway", nil},
 		{"gateway.license", "reconcile KrakenDGateway", nil},
 		{"gateway.plugins", "reconcile KrakenDGateway", nil},
+		{"gateway.dragonfly", "reconcile KrakenDGateway", withDragonfly},
 		{"gateway.render", "reconcile KrakenDGateway", nil},
 		{"gateway.config", "reconcile KrakenDGateway", nil},
 		{"configcheck.CheckRoot", "gateway.config", nil},
