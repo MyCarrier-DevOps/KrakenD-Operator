@@ -235,7 +235,7 @@ func (r *refResolver) walk(node any, base string) {
 					r.fatalErr = fatal.err
 				} else {
 					r.warnings = append(r.warnings,
-						fmt.Sprintf("failed to resolve external $ref %q: %v", redactRef(ref), err))
+						fmt.Sprintf("failed to resolve external $ref %q: %v", RedactRef(ref), err))
 				}
 			}
 			return
@@ -290,7 +290,7 @@ func (r *refResolver) resolveExampleRef(entry map[string]any, base string) {
 			r.fatalErr = fatal.err
 		} else {
 			r.warnings = append(r.warnings,
-				fmt.Sprintf("failed to resolve external $ref %q: %v", redactRef(ref), err))
+				fmt.Sprintf("failed to resolve external $ref %q: %v", RedactRef(ref), err))
 		}
 	}
 }
@@ -372,7 +372,7 @@ func (r *refResolver) resolveExternal(ref, base string, role refRole) (string, e
 	// r.walk completes.
 	if name, busy := r.resolving[cacheKey]; busy {
 		r.warnings = append(r.warnings,
-			fmt.Sprintf("cycle detected for %s, skipping recursive resolution", redactRef(refKey)))
+			fmt.Sprintf("cycle detected for %s, skipping recursive resolution", RedactRef(refKey)))
 		return name, nil
 	}
 	name := sanitizeRefName(absolute, fragment)
@@ -451,11 +451,11 @@ func splitRef(ref string) (docURL, fragment string) {
 	return ref[:idx], ref[idx+1:]
 }
 
-// redactRef returns ref as written when its URL part carries no credential,
+// RedactRef returns ref as written when its URL part carries no credential,
 // and otherwise with that part redacted as RedactURL does and the JSON pointer
 // kept, for the warnings that name a $ref: the URL of a $ref can carry
 // credentials.
-func redactRef(ref string) string {
+func RedactRef(ref string) string {
 	docURL, fragment := splitRef(ref)
 	if u, err := url.Parse(docURL); err == nil && u.User == nil && u.RawQuery == "" && u.Opaque == "" {
 		return ref

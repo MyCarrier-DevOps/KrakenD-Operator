@@ -997,8 +997,8 @@ func TestRedactRef(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := redactRef(tc.ref); got != tc.want {
-				t.Errorf("redactRef(%q) = %q, want %q", tc.ref, got, tc.want)
+			if got := RedactRef(tc.ref); got != tc.want {
+				t.Errorf("RedactRef(%q) = %q, want %q", tc.ref, got, tc.want)
 			}
 		})
 	}
