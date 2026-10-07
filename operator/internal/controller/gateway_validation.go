@@ -149,9 +149,11 @@ func (r *KrakenDGatewayReconciler) decide(
 }
 
 // judgeEndpoints checks each of suspects, endpoints of in, on its own
-// (configcheck.CheckEndpoint) and returns those that fail, with why. An
-// endpoint whose policy is missing is not judged: the render already leaves
-// it out.
+// (configcheck.CheckEndpoint) and returns those that fail, with why. Only a
+// failing verdict is returned: an excluded endpoint's condition takes its
+// reason from the verdict, and an OK one has none, which the API server
+// rejects. An endpoint whose policy is missing is not judged: the render
+// already leaves it out.
 func (r *KrakenDGatewayReconciler) judgeEndpoints(
 	ctx context.Context, gw *v1alpha1.KrakenDGateway, in renderer.RenderInput,
 	suspects []v1alpha1.KrakenDEndpoint, memo configcheck.Memo,
