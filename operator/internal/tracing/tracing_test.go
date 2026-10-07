@@ -18,11 +18,13 @@ package tracing_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/go-logr/logr"
 	"github.com/go-logr/logr/funcr"
+	"go.opentelemetry.io/otel/codes"
 
 	"github.com/mycarrier-devops/krakend-operator/internal/tracing"
 	"github.com/mycarrier-devops/krakend-operator/internal/tracing/tracingtest"
@@ -52,5 +54,17 @@ func TestStart_NilTracerStartsANoOpSpan(t *testing.T) {
 
 	if span.IsRecording() {
 		t.Error("a nil tracer started a recording span")
+	}
+}
+
+func TestEnd_RecordsTheErrorAsTheSpanStatus(t *testing.T) {
+	rec := tracingtest.New(t)
+	_, span := tracing.Start(context.Background(), rec.Tracer(), "failing")
+
+	tracing.End(span, errors.New("boom"))
+
+	got := rec.Ended().One(t, "failing")
+	if got.Status().Code != codes.Error || got.Status().Description != "boom" || len(got.Events()) != 1 {
+		t.Errorf("status = %+v, events = %d; want Error \"boom\" and one exception event", got.Status(), len(got.Events()))
 	}
 }
