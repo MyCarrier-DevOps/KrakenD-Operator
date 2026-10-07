@@ -1,0 +1,74 @@
+/*
+Copyright 2026 The KrakenD Operator Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package telemetry_test
+
+import (
+	"context"
+	"os/exec"
+	"slices"
+	"testing"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+
+	"github.com/mycarrier-devops/krakend-operator/internal/telemetry"
+	"github.com/mycarrier-devops/krakend-operator/internal/tracing/tracingtest"
+)
+
+// exitingExecutor runs `sh -c "exit <code>"` whatever it is asked to run.
+type exitingExecutor struct{ code string }
+
+func (e exitingExecutor) Execute(ctx context.Context, _ string, _ ...string) ([]byte, error) {
+	return exec.CommandContext(ctx, "sh", "-c", "exit "+e.code).CombinedOutput()
+}
+
+func attr(attrs []attribute.KeyValue, key string) (attribute.Value, bool) {
+	i := slices.IndexFunc(attrs, func(kv attribute.KeyValue) bool { return string(kv.Key) == key })
+	if i < 0 {
+		return attribute.Value{}, false
+	}
+	return attrs[i].Value, true
+}
+
+func TestTraceExecutor_KrakendCheckIsAChildSpanWithModeAndExitCode(t *testing.T) {
+	rec := tracingtest.New(t)
+	ctx, parent := rec.Tracer().Start(context.Background(), "configcheck.CheckRendered")
+	executor := telemetry.TraceExecutor(exitingExecutor{code: "1"}, rec.Tracer())
+
+	_, err := executor.Execute(ctx, "/usr/local/bin/krakend", "check", "-t", "-n", "-c", "/tmp/krakend-config-42.json")
+	parent.End()
+
+	if err == nil {
+		t.Fatal("want the exit error back")
+	}
+	spans := rec.Ended()
+	spans.RequireChild(t, "configcheck.CheckRendered", "krakend check")
+	span := spans.One(t, "krakend check")
+	attrs := span.Attributes()
+	if v, _ := attr(attrs, "process.exit.code"); v.AsInt64() != 1 {
+		t.Errorf("process.exit.code = %v, want 1", v.String())
+	}
+	if v, _ := attr(attrs, "krakend.check.mode"); v.AsString() != "validate" {
+		t.Errorf("krakend.check.mode = %q, want validate", v.AsString())
+	}
+	if v, _ := attr(attrs, "process.command_args"); slices.Contains(v.AsStringSlice(), "/tmp/krakend-config-42.json") {
+		t.Errorf("process.command_args = %v, want the config path reduced to its base name", v.AsStringSlice())
+	}
+	if span.Status().Code != codes.Error {
+		t.Errorf("status = %v, want Error for a failed check", span.Status())
+	}
+}
