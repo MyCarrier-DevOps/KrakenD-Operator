@@ -134,7 +134,7 @@ func NewValidators(
 ) Validators {
 	memo := newAdmissionMemo()
 	return Validators{
-		Gateway: &GatewayValidator{Client: c, Checker: checker},
+		Gateway: &GatewayValidator{Client: c, Checker: checker, Memo: memo},
 		Endpoint: &EndpointValidator{
 			Client: c, APIReader: apiReader, Checker: checker, OperatorUsername: operatorUsername, Memo: memo,
 		},
