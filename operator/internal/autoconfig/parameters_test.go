@@ -286,3 +286,21 @@ func TestDereferenceParameters_AliasInFetchedDocumentResolvesInThatDocument(t *t
 		t.Errorf("inputHeaders %v: forwards the main spec's X-Page", entries[0].InputHeaders)
 	}
 }
+
+// A bundle-style document whose alias target lives only in the main spec is
+// still forwarded, through the main spec's component.
+func TestDereferenceParameters_AliasMissingFromItsDocumentResolvesInTheMainSpec(t *testing.T) {
+	main := `{"paths":{"/pets":{"get":{"operationId":"listPets","parameters":[
+		{"$ref":"common.json#/components/parameters/Limit"}],"responses":{"200":{"description":"OK"}}}}},
+		"components":{"parameters":{"PageLimit":{"name":"limit","in":"query"}}}}`
+	common := `{"components":{"parameters":{"Limit":{"$ref":"#/components/parameters/PageLimit"}}}}`
+
+	entries := resolveAndDereference(t, main, map[string]string{"https://api.example.com/common.json": common})
+
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries, want 1", len(entries))
+	}
+	if !slices.Equal(entries[0].InputQueryStrings, []string{"limit"}) {
+		t.Errorf("inputQueryStrings = %v, want [limit]", entries[0].InputQueryStrings)
+	}
+}
