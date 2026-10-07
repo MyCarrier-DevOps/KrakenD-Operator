@@ -17,12 +17,15 @@ limitations under the License.
 package main
 
 import (
+	"os"
+
 	otellog "go.opentelemetry.io/otel/log"
 	"go.opentelemetry.io/otel/trace"
 	"k8s.io/client-go/rest"
 	"k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	"github.com/mycarrier-devops/krakend-operator/internal/autoconfig"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
@@ -165,8 +168,16 @@ func newManagerClient(config *rest.Config, options client.Options) (client.Clien
 	return telemetry.ReadEvents(c), nil
 }
 
-// telemetryConfig is the telemetry setup of the operator process. It is a
-// stub: it is empty.
-func telemetryConfig(otellog.Severity, telemetry.LogFormat) telemetry.Config {
-	return telemetry.Config{}
+// telemetryConfig is the telemetry setup of the operator process: its build
+// version, the pod the downward API names, the log level and format of its
+// flags, and controller-runtime's registry behind /metrics.
+func telemetryConfig(level otellog.Severity, format telemetry.LogFormat) telemetry.Config {
+	return telemetry.Config{
+		ServiceVersion: version,
+		PodName:        os.Getenv("POD_NAME"),
+		PodNamespace:   os.Getenv("POD_NAMESPACE"),
+		LogLevel:       level,
+		LogFormat:      format,
+		Registerer:     ctrlmetrics.Registry,
+	}
 }
