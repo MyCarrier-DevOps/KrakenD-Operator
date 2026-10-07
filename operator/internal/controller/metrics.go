@@ -32,7 +32,8 @@ var (
 
 	configValidationFailures = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "krakend_operator_config_validation_failures_total",
-		Help: "Validation failures (broken configs blocked)",
+		Help: "Fresh rejections of a gateway root, a backend policy or an endpoint checked on its own: " +
+			"each distinct config the gateway controller checked and krakend rejected counts once",
 	})
 
 	rollingRestarts = prometheus.NewCounter(prometheus.CounterOpts{
