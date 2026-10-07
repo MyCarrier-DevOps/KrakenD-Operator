@@ -72,10 +72,7 @@ func readGolden(t *testing.T) map[string]*goldenShape {
 // families are on it only through the recorder the pod's instrumentation
 // builds: a recorder that is missing serves none of them.
 func TestNewInstrumentation_ServesEveryOperatorFamilyOnTheRegistry(t *testing.T) {
-	for _, name := range []string{"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_TRACES_EXPORTER", "OTEL_METRICS_EXPORTER",
-		"OTEL_LOGS_EXPORTER", "OTEL_RESOURCE_ATTRIBUTES"} {
-		t.Setenv(name, "")
-	}
+	clearOTelEnv(t)
 	cfg := telemetryConfig(otellog.SeverityInfo, telemetry.LogFormatJSON)
 	cfg.Stdout = io.Discard
 	tel, err := telemetry.Setup(context.Background(), cfg)

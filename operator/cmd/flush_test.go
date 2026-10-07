@@ -35,10 +35,7 @@ import (
 // flushTelemetry runs when the log pipeline is the thing being shut down, so
 // a failed flush can only be reported on stderr.
 func TestFlushTelemetry_AFailedFlushIsPrintedToStderr(t *testing.T) {
-	for _, name := range []string{"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_TRACES_EXPORTER", "OTEL_METRICS_EXPORTER",
-		"OTEL_LOGS_EXPORTER", "OTEL_RESOURCE_ATTRIBUTES"} {
-		t.Setenv(name, "")
-	}
+	clearOTelEnv(t)
 	hung := make(chan struct{})
 	collector := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-hung }))
 	defer collector.Close()
@@ -62,10 +59,7 @@ func TestFlushTelemetry_AFailedFlushIsPrintedToStderr(t *testing.T) {
 }
 
 func TestFlushTelemetry_ASuccessfulFlushPrintsNothing(t *testing.T) {
-	for _, name := range []string{"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_TRACES_EXPORTER", "OTEL_METRICS_EXPORTER",
-		"OTEL_LOGS_EXPORTER", "OTEL_RESOURCE_ATTRIBUTES"} {
-		t.Setenv(name, "")
-	}
+	clearOTelEnv(t)
 	tel, err := telemetry.Setup(context.Background(), telemetry.Config{
 		LogLevel: otellog.SeverityInfo, Stdout: io.Discard, Registerer: prometheus.NewRegistry(),
 	})
