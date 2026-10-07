@@ -1102,7 +1102,11 @@ mount it. The operator keeps:
 - the three most recently created revisions, the applied one included
   (revisions created in the same second are ordered by name);
 - any revision mounted by a ReplicaSet of the gateway's Deployment that
-  still has or wants pods.
+  still has or wants pods;
+- the revision the Deployment's pod template mounts, which matters while the
+  Deployment is held (a missing plugin ConfigMap, or a ServiceAccount another
+  controller owns): collection still runs then, so a long hold does not pile
+  up revisions.
 
 Old revisions keep whatever the rendered config embeds, credentials
 included. A revision is kept for up to three config changes, plus any a live
