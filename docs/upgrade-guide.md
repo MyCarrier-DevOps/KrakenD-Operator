@@ -76,7 +76,9 @@ make deploy IMG=ghcr.io/mycarrier-devops/krakend-operator:<new-version>
    - A `duplicate entry` or `duplicate additionalEndpoint` line does not block
      writes: list-type uniqueness is skipped when the stored object already
      fails it, and server-side apply tolerates live duplicates. Remove the
-     duplicate before it fails a fresh apply.
+     duplicate before it fails a fresh apply. Entries are matched by key one
+     to one, so an edit that leaves the stored duplicates as they are is
+     accepted, while an added copy of one is a new entry and is checked.
    - A listed route conflict is rejected when either conflicting entry is
      added or changed, or its object moves to another gateway; the same holds
      for an endpoint on its gateway's health path. `overrides collide` ratchets
@@ -2034,8 +2036,7 @@ position and it is rejected until it is fixed. On an additional endpoint it is
 matched by the entry's `endpoint` and `method`, like the list's map key:
 removing, inserting or reordering other additional endpoints does not affect
 it, while a new entry, or an entry whose content changed, is checked in full.
-The audit in the Pre-Upgrade
-Checklist lists these lists. A `policyRef` in `defaults`, `overrides` or
+The audit in the Pre-Upgrade Checklist lists these lists. A `policyRef` in `defaults`, `overrides` or
 `additionalEndpoints` that names no existing policy now produces an admission
 warning (at most five, then a count), not a rejection: a release may create the
 policy after the AutoConfig, and the generated endpoints are rejected until it
