@@ -32,6 +32,7 @@ import (
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/autoconfig"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
+	"github.com/mycarrier-devops/krakend-operator/internal/tracing"
 )
 
 const (
@@ -284,7 +285,9 @@ func (r *KrakenDAutoConfigReconciler) recordSync(
 	orig *v1alpha1.KrakenDAutoConfigStatus,
 	res syncResult,
 	warnings *inputWarnings,
-) error {
+) (retErr error) {
+	ctx, span := tracing.Start(ctx, r.Tracer, "autoconfig.status")
+	defer func() { tracing.End(span, retErr) }()
 	changed := res.checksum != orig.SpecChecksum || res.changes.total() > 0
 	ac.Status.SpecChecksum = res.checksum
 	if changed {
