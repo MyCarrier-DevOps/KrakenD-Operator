@@ -400,13 +400,18 @@ func (r *KrakenDAutoConfigReconciler) precheck(
 	return rejected, nil
 }
 
+// routerClashesCappedMessage holds every candidate while the gateway's render
+// stops resolving router clashes at its cap: a new clash cannot be told apart.
+const routerClashesCappedMessage = "not written: " + configcheck.ClashesCapped
+
 // routerClashes holds each candidate that, written, would take part in a
 // router clash the gateway does not have now: an entry KrakenD's router
 // cannot serve next to another endpoint's although their routes differ in
 // shape. The candidate that loses the clash is held. A candidate that would
 // keep an existing endpoint's entry out of the router is held too, so a write
 // never makes another endpoint lose a route. The rendering is in process and
-// holds no check slot.
+// holds no check slot. While the render stops resolving clashes at its cap, a
+// new one cannot be told apart, so every candidate is held.
 func (r *KrakenDAutoConfigReconciler) routerClashes(
 	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
@@ -426,6 +431,10 @@ func (r *KrakenDAutoConfigReconciler) routerClashes(
 	after, err := r.Checker.Conflicts(ctx, gw, checkSet(writes, stale, order, withoutStale))
 	if err != nil {
 		return nil, err
+	}
+	if after.Capped {
+		hold(held, writes, routerClashesCappedMessage, errors.New(routerClashesCappedMessage))
+		return held, nil
 	}
 	candidates := make(map[types.NamespacedName]*v1alpha1.KrakenDEndpoint, len(writes))
 	involving := make(map[types.NamespacedName]bool, len(writes))
