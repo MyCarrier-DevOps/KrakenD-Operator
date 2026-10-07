@@ -22,6 +22,9 @@ import (
 	"slices"
 	"strings"
 
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -210,4 +213,54 @@ func combinedFailure() *gatewayFailure {
 // several endpoints together.
 func logCombinedFailure(ctx context.Context, v configcheck.Verdict) {
 	logf.FromContext(ctx).Info("the gateway's config fails krakend check only together", "output", v.Output)
+}
+
+// maxExcludedNamed is how many excluded endpoints EndpointsExcluded names.
+const maxExcludedNamed = 10
+
+// reportExclusions sets the gateway's EndpointsExcluded condition and its
+// excluded-endpoints gauge from the endpoints' Accepted verdicts after this
+// pass: decided holds what this pass set (nil: removed), and an endpoint it
+// did not decide keeps its stored verdict. Both therefore follow the
+// endpoints on every pass, including one that applies nothing, and after an
+// operator restart. A Warning event marks the condition appearing or its
+// message changing.
+func (r *KrakenDGatewayReconciler) reportExclusions(gw *v1alpha1.KrakenDGateway,
+	endpoints []v1alpha1.KrakenDEndpoint, decided map[types.NamespacedName]*metav1.Condition, applied bool) {
+	var names []string
+	counts := map[string]int{}
+	for i := range endpoints {
+		key := client.ObjectKeyFromObject(&endpoints[i])
+		cond, ok := decided[key]
+		if !ok {
+			cond = meta.FindStatusCondition(endpoints[i].Status.Conditions, v1alpha1.ConditionAccepted)
+		}
+		if isExclusion(cond) {
+			names = append(names, key.String())
+			counts[cond.Reason]++
+		}
+	}
+	recordExcludedEndpoints(gw, counts)
+	if len(names) == 0 {
+		meta.RemoveStatusCondition(&gw.Status.Conditions, v1alpha1.ConditionEndpointsExcluded)
+		return
+	}
+	slices.Sort(names)
+	listed, more := names, ""
+	if len(names) > maxExcludedNamed {
+		listed, more = names[:maxExcludedNamed], fmt.Sprintf(" (+%d more)", len(names)-maxExcludedNamed)
+	}
+	cond := metav1.Condition{
+		Type:               v1alpha1.ConditionEndpointsExcluded,
+		Status:             metav1.ConditionTrue,
+		ObservedGeneration: gw.Generation,
+		Reason:             v1alpha1.ReasonInvalidEndpointsExcluded,
+		Message: fmt.Sprintf("%d KrakenDEndpoint(s) fail validation and are not served: %s%s",
+			len(names), strings.Join(listed, ", "), more),
+	}
+	prev := meta.FindStatusCondition(gw.Status.Conditions, cond.Type).DeepCopy()
+	meta.SetStatusCondition(&gw.Status.Conditions, cond)
+	if prev == nil || prev.Status != metav1.ConditionTrue || prev.Message != cond.Message {
+		r.Recorder.Event(gw, corev1.EventTypeWarning, cond.Reason, cond.Message)
+	}
 }
