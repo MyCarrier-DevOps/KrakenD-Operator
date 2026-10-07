@@ -1066,88 +1066,138 @@ func validatePostRestartWorkingDir(prj *v1alpha1.PostRestartJobSpec) string {
 	)
 }
 
-// checkGatewayRender validates gw's config. A new gateway must render on its
-// own; the endpoints that already reference it only draw a warning when they
-// clash with it (on a CE gateway their Enterprise-only namespaces and
-// /prefix/* wildcards are refused earlier, by eeNamespacesOnCE). An update is rejected only when it turns a passing config (the root
-// with its endpoints) into a failing one; when the config already fails, only
-// the root alone is judged. An update that renders the same config, such as a
-// new image or replica count, is not checked at all.
-func checkGatewayRender(
-	ctx context.Context, _ client.Reader, chk ConfigChecker, _ configcheck.Memo, old, gw *v1alpha1.KrakenDGateway,
-) (admission.Warnings, error) {
-	if old == nil {
-		root, err := chk.CheckIsolated(ctx, gw, nil)
+// checkGatewayRender validates gw's config. An update that renders the same
+// config as the stored gateway is not checked. Otherwise:
+//  1. an update must not make entries clash in the router that the stored
+//     root serves together (refuseNewGatewayClashes);
+//  2. gw's root must pass on its own (rootVerdict); its owner writes the
+//     gateway, so its output is quoted;
+//  3. the root with the endpoints it serves (servedEndpoints) is checked as
+//     a group, and the endpoints that check leaves unjudged on their own:
+//     judgeServed decides an update, warnWaiting answers a create. Neither
+//     quotes an endpoint.
+func checkGatewayRender(ctx context.Context, c client.Reader, chk ConfigChecker, memo configcheck.Memo,
+	old, gw *v1alpha1.KrakenDGateway) (admission.Warnings, error) {
+	if old != nil {
+		same, err := chk.SameConfig(ctx, old, gw)
 		if err != nil {
 			return nil, checkErr(err)
 		}
-		if !root.OK {
-			return nil, gatewayRenderDenial(gw, root)
+		if same {
+			return nil, nil // nothing the check judges has changed
 		}
-		// The root is the verdict. Endpoints that named the gateway before it
-		// existed can still clash with it, and only they are to blame. Their
-		// Enterprise-only content on a CE gateway never reaches this check:
-		// eeNamespacesOnCE refuses it.
-		withEndpoints, err := chk.CheckGateway(ctx, gw, nil)
-		if err != nil {
-			//nolint:nilerr // the check is advisory: the root already passed
-			return admission.Warnings{truncate("could not check the endpoints that already reference this gateway: "+
-				err.Error(), warningLimit)}, nil
+		if err := refuseNewGatewayClashes(ctx, chk, old, gw); err != nil {
+			return nil, err
 		}
-		if withEndpoints.OK {
-			return nil, nil
-		}
-		return admission.Warnings{fmt.Sprintf(
-			"with the endpoints that already reference this gateway, its config fails validation: %s",
-			withEndpoints.Summary(warningLimit))}, nil
 	}
-	same, err := chk.SameConfig(ctx, old, gw)
+	ceFallback := configcheck.CEFallback(gw)
+	root, err := chk.CheckRoot(ctx, configcheck.Root{Gateway: gw, CEFallback: ceFallback}, memo)
 	if err != nil {
 		return nil, checkErr(err)
 	}
-	if same {
-		return nil, nil // nothing the check judges has changed
+	if !root.OK {
+		return rootVerdict(ctx, chk, memo, old, gw, root)
 	}
-	if err := refuseNewGatewayClashes(ctx, chk, old, gw); err != nil {
-		return nil, err
+	served, err := servedEndpointsOf(ctx, c, gw)
+	if err != nil {
+		return nil, unavailable(err)
 	}
-	return ratchetRender(ctx, renderChecks{
-		after:      bindCheck(chk.CheckGateway, gw),
-		before:     bindCheck(chk.CheckGateway, old),
-		isoAfter:   bindCheck(chk.CheckIsolated, gw),
-		isoBefore:  bindCheck(chk.CheckIsolated, old),
-		newFailure: newRouteRefusals,
-	},
-		func(v configcheck.Verdict) error { return gatewayRenderDenial(gw, v) },
-		func(before configcheck.Verdict) string {
-			return "the gateway's config already fails validation: " + before.Summary(warningLimit)
-		})
+	group, err := chk.CheckGroup(ctx, configcheck.Group{Gateway: gw, Endpoints: served, CEFallback: ceFallback}, memo)
+	now := configcheck.EndpointUnit{Gateway: gw, CEFallback: ceFallback}
+	if old == nil {
+		return warnWaiting(ctx, chk, memo, now, group, err, served), nil
+	}
+	if err != nil {
+		return nil, checkErr(err)
+	}
+	return judgeServed(ctx, chk, memo, now, old, group, served)
 }
 
-// rootVerdict answers a gateway write whose root fails on its own.
-func rootVerdict(context.Context, ConfigChecker, configcheck.Memo, *v1alpha1.KrakenDGateway,
-	*v1alpha1.KrakenDGateway, configcheck.Verdict) (admission.Warnings, error) {
-	return nil, nil
+// rootVerdict answers a gateway write whose root fails on its own: a denial
+// on spec.config quoting the root's own output, unless the stored root (on
+// an update) fails on its own too, which only draws a warning.
+func rootVerdict(ctx context.Context, chk ConfigChecker, memo configcheck.Memo, old, gw *v1alpha1.KrakenDGateway,
+	root configcheck.Verdict) (admission.Warnings, error) {
+	if old != nil {
+		was, err := chk.CheckRoot(ctx, configcheck.Root{Gateway: old, CEFallback: configcheck.CEFallback(old)}, memo)
+		if err != nil {
+			return nil, checkErr(err)
+		}
+		if !was.OK {
+			return admission.Warnings{"the gateway's root already fails validation on its own: " +
+				root.Excerpt(warningLimit)}, nil
+		}
+	}
+	return nil, invalid("KrakenDGateway", gw.Name, field.ErrorList{field.Invalid(field.NewPath("spec", "config"),
+		field.OmitValueType{}, "fails krakend check on its own: "+root.Excerpt(warningLimit))})
 }
 
-// servedEndpointsOf lists the endpoints of gw that it serves.
+// servedEndpointsOf lists the endpoints of gw that it serves (servedEndpoints).
 func servedEndpointsOf(
-	context.Context, client.Reader, *v1alpha1.KrakenDGateway,
+	ctx context.Context, c client.Reader, gw *v1alpha1.KrakenDGateway,
 ) ([]v1alpha1.KrakenDEndpoint, error) {
-	return nil, nil
+	var list v1alpha1.KrakenDEndpointList
+	if err := c.List(ctx, &list, client.UnsafeDisableDeepCopy,
+		client.MatchingFields{fieldindex.EndpointGateway: gw.Namespace + "/" + gw.Name}); err != nil {
+		return nil, fmt.Errorf("listing endpoints of gateway %s/%s: %w", gw.Namespace, gw.Name, err)
+	}
+	return servedEndpoints(list.Items), nil
 }
+
+// couldNotCheckWaiting begins the warning of a gateway create whose waiting
+// endpoints could not be checked: the root passed, so the create stands.
+const couldNotCheckWaiting = "could not check the endpoints that already reference this gateway: "
+
+// waitingFail begins the warning of a gateway create whose waiting endpoints
+// do not all pass with it.
+const waitingFail = "the endpoints that already reference this gateway do not all pass validation with it, " +
+	"and are left out until they do"
 
 // warnWaiting answers a gateway create about the endpoints that already
-// reference it.
-func warnWaiting(context.Context, ConfigChecker, configcheck.Memo, configcheck.EndpointUnit,
-	configcheck.Verdict, error, []v1alpha1.KrakenDEndpoint) admission.Warnings {
+// reference it (served), given the check of them as a group with it (group,
+// or groupErr when that check could not run). It only warns: they were
+// written before the gateway, so the create is not theirs to refuse. now is
+// the unit of the new gateway.
+func warnWaiting(ctx context.Context, chk ConfigChecker, memo configcheck.Memo, now configcheck.EndpointUnit,
+	group configcheck.Verdict, groupErr error, served []v1alpha1.KrakenDEndpoint) admission.Warnings {
+	if groupErr != nil {
+		return admission.Warnings{truncate(couldNotCheckWaiting+groupErr.Error(), warningLimit)}
+	}
+	if group.OK {
+		return nil
+	}
+	s := failingEndpoints(ctx, chk, memo, now, nil, served)
+	if len(s.broken) > 0 {
+		return admission.Warnings{waitingFail + ": " + brokenList(s, 2*warningLimit-len(waitingFail+": "))}
+	}
 	return nil
 }
 
-// judgeServed decides a gateway update from the endpoints gw serves.
-func judgeServed(context.Context, ConfigChecker, configcheck.Memo, configcheck.EndpointUnit,
-	*v1alpha1.KrakenDGateway, configcheck.Verdict, []v1alpha1.KrakenDEndpoint,
+// judgeServed decides a gateway update from the endpoints gw serves (served),
+// given the check of them as a group with the update (group). When it fails,
+// each endpoint is checked on its own with the update (now) and, when that
+// fails, with the stored gateway (old). One that fails only with the update
+// is broken by it: the update is refused, naming it and quoting nothing of
+// it. When every endpoint that fails failed with the stored gateway too, the
+// update only draws a warning.
+func judgeServed(ctx context.Context, chk ConfigChecker, memo configcheck.Memo, now configcheck.EndpointUnit,
+	old *v1alpha1.KrakenDGateway, group configcheck.Verdict, served []v1alpha1.KrakenDEndpoint,
 ) (admission.Warnings, error) {
+	if group.OK {
+		return nil, nil
+	}
+	was := &configcheck.EndpointUnit{Gateway: old, CEFallback: configcheck.CEFallback(old)}
+	s := failingEndpoints(ctx, chk, memo, now, was, served)
+	switch {
+	case s.stopped != nil:
+		return nil, checkErr(s.stopped)
+	case len(s.broken) > 0:
+		return nil, invalid("KrakenDGateway", now.Gateway.Name, field.ErrorList{field.Invalid(
+			field.NewPath("spec"), field.OmitValueType{}, brokenList(s, 2*warningLimit))})
+	case s.already:
+		return admission.Warnings{"some of the gateway's endpoints already fail validation with the stored " +
+			"config, and stay left out until they pass"}, nil
+	}
 	return nil, nil
 }
 
@@ -1169,36 +1219,6 @@ func refuseNewGatewayClashes(ctx context.Context, chk ConfigChecker, old, gw *v1
 	errs := clashErrors(field.NewPath("spec", "config"), configcheck.NewClashes(before, after, nil), after.Capped)
 	if len(errs) == 0 {
 		return nil
-	}
-	return invalid("KrakenDGateway", gw.Name, errs)
-}
-
-// gatewayRenderDenial rejects gw: gateway-root findings on spec.config, the
-// endpoints the change breaks on spec. The renderer builds the root from
-// spec.config (timeout, extraConfig, router), so that is where a user looks.
-// The first maxEntryCauses root findings are causes of their own, cut to the
-// warning limit; the rest go on spec.config as a bounded summary.
-func gatewayRenderDenial(gw *v1alpha1.KrakenDGateway, verdict configcheck.Verdict) error {
-	var errs field.ErrorList
-	var root, endpoints configcheck.Verdict
-	for _, f := range verdict.Findings {
-		switch {
-		case f.Endpoint.Name != "":
-			endpoints.Findings = append(endpoints.Findings, f)
-		case len(errs) < maxEntryCauses:
-			errs = append(errs, field.Invalid(field.NewPath("spec", "config"), field.OmitValueType{},
-				truncate(f.Message, warningLimit)))
-		default:
-			root.Findings = append(root.Findings, f)
-		}
-	}
-	if len(root.Findings) > 0 {
-		errs = append(errs, field.Invalid(field.NewPath("spec", "config"), field.OmitValueType{},
-			"more gateway config failures: "+root.Summary(warningLimit)))
-	}
-	if len(endpoints.Findings) > 0 {
-		errs = append(errs, field.Invalid(field.NewPath("spec"), field.OmitValueType{},
-			"with this change these endpoints fail krakend check: "+endpoints.Summary(warningLimit)))
 	}
 	return invalid("KrakenDGateway", gw.Name, errs)
 }
