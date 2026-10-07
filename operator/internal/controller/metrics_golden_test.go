@@ -18,14 +18,16 @@ package controller
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/expfmt"
-	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 // goldenMetrics is the shape of every operator metric on /metrics: each
@@ -57,27 +59,22 @@ func TestMetricsExposition_MatchesGolden(t *testing.T) {
 	}
 }
 
-// recordEveryMetric gives every operator metric at least one series and
-// returns the registry /metrics serves.
+// recordEveryMetric gives every operator metric at least one series, through
+// the recorder cmd injects, and returns the registry /metrics serves.
 func recordEveryMetric(t *testing.T) prometheus.Gatherer {
 	t.Helper()
-	const ns, name = "golden", "golden"
-	t.Cleanup(func() {
-		deleteGatewayMetrics(ns, name)
-		autoConfigSynced.DeleteLabelValues(ns, name)
-	})
-	configRenders.Add(0)
-	configValidationFailures.Add(0)
-	rollingRestarts.Add(0)
-	licenseExpirySeconds.WithLabelValues(ns, name).Set(1)
-	endpointsPerGateway.WithLabelValues(ns, name).Set(1)
-	reconcileDuration.WithLabelValues("gateway", ns, name).Observe(0.1)
-	dragonflyReady.WithLabelValues(ns, name).Set(1)
-	gatewayInfo.WithLabelValues(ns, name, "EE", "2.13").Set(1)
-	gatewayConfigValid.WithLabelValues(ns, name).Set(1)
-	gatewayExcludedEndpoints.WithLabelValues(ns, name, "golden").Set(1)
-	autoConfigSynced.WithLabelValues(ns, name).Set(1)
-	return ctrlmetrics.Registry
+	m, reg := testMetrics(t)
+	key := types.NamespacedName{Namespace: "golden", Name: "golden"}
+	ctx := context.Background()
+	m.SetLicenseExpiry(key, time.Second)
+	m.SetEndpoints(key, 1)
+	m.GatewayReconciled(ctx, key, 100*time.Millisecond)
+	m.SetDragonflyReady(key, true)
+	m.SetGatewayInfo(key, "EE", "2.13")
+	m.SetConfigValid(key, true)
+	m.SetExcludedEndpoints(key, map[string]int{"golden": 1})
+	m.SetAutoConfigSynced(key, true)
+	return reg
 }
 
 // metricsShape renders the operator's families in gatherer as the golden

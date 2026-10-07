@@ -38,10 +38,12 @@ import (
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
 	"github.com/mycarrier-devops/krakend-operator/internal/controller"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
+	"github.com/mycarrier-devops/krakend-operator/internal/telemetry"
 	licenseutil "github.com/mycarrier-devops/krakend-operator/internal/util/license"
 	"github.com/mycarrier-devops/krakend-operator/test/utils"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/k3s"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	appsv1 "k8s.io/api/apps/v1"
 	authorizationv1 "k8s.io/api/authorization/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
@@ -69,6 +71,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
 var (
@@ -196,6 +199,22 @@ func runTests(m *testing.M) int {
 		return 1
 	}
 
+	// The operator's metrics, recorded as the operator records them and served
+	// from controller-runtime's registry, the one /metrics serves and the
+	// tests read.
+	metricsReader, err := telemetry.NewPrometheusReader(ctrlmetrics.Registry)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to create the metrics reader: %v\n", err)
+		return 1
+	}
+	meterProvider := telemetry.NewMeterProvider(sdkmetric.WithReader(metricsReader))
+	defer func() { _ = meterProvider.Shutdown(context.Background()) }()
+	operatorMetrics, err := telemetry.NewOperatorMetrics(meterProvider.Meter("integration"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to create the operator's metrics: %v\n", err)
+		return 1
+	}
+
 	// Wire up the Gateway and AutoConfig controllers with a real renderer and
 	// the marker validator (the krakend binary is not available here), behind
 	// one config checker.
@@ -211,6 +230,7 @@ func runTests(m *testing.M) int {
 		Clock:     clock.RealClock{},
 
 		LicenseParser: licenseutil.NewX509LicenseParser(),
+		Metrics:       operatorMetrics,
 	}).SetupWithManager(mgr); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to setup gateway controller: %v\n", err)
 		return 1
@@ -253,6 +273,7 @@ func runTests(m *testing.M) int {
 		Clock:                   clock.RealClock{},
 		MaxConcurrentReconciles: 4,
 		FetchTimeout:            20 * time.Second,
+		Metrics:                 operatorMetrics,
 	}).SetupWithManager(mgr); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to setup autoconfig controller: %v\n", err)
 		return 1
