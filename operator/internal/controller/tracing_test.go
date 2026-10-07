@@ -941,3 +941,50 @@ func TestAutoConfigReconcile_TheSpecFetchIsASpanOfTheFetchStage(t *testing.T) {
 
 	rec.Ended().RequireChild(t, "autoconfig.fetch_spec", "autoconfig.fetch")
 }
+
+// tracedFetcher fetches through next, each fetch a span of tracer started from
+// the context it is given, named as the real fetcher's is.
+type tracedFetcher struct {
+	next   autoconfig.Fetcher
+	tracer trace.Tracer
+}
+
+func (f tracedFetcher) Fetch(ctx context.Context, source autoconfig.FetchSource) (*autoconfig.FetchResult, error) {
+	ctx, span := f.tracer.Start(ctx, "autoconfig.fetch")
+	defer span.End()
+	return f.next.Fetch(ctx, source)
+}
+
+// A document an external $ref names is fetched below the $ref resolution; the
+// spec itself, below the fetch stage.
+func TestAutoConfigReconcile_ARefFetchIsASpanOfTheRefResolution(t *testing.T) {
+	ac := testAutoConfig()
+	c := fakeClientBuilder().WithObjects(ac, testCUEDefinitionsCM(), testGateway()).WithStatusSubresource(ac).Build()
+	f, ce, fi, g := defaultMocks()
+	f.result.Data = []byte(
+		`{"paths":{"/a":{"get":{"responses":{"200":{"$ref":"https://schemas.example.com/frag.json#/A"}}}}}}`,
+	)
+	f.byURL = map[string]mockFetchOutcome{"https://schemas.example.com/frag.json": {
+		result: &autoconfig.FetchResult{Data: []byte(`{"A":{"description":"ok"}}`)},
+	}}
+	r := newACReconciler(c, f, ce, fi, g)
+	rec := tracingtest.New(t)
+	r.Tracer = rec.Tracer()
+	r.Fetcher = tracedFetcher{next: f, tracer: rec.Tracer()}
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatal(err)
+	}
+
+	spans := rec.Ended()
+	parents := map[string]int{}
+	for _, fetch := range spans.Named("autoconfig.fetch") {
+		if parent := spans.Parent(fetch); parent != nil {
+			parents[parent.Name()]++
+		}
+	}
+	if parents["autoconfig.fetch_spec"] != 1 || parents["autoconfig.resolve_refs"] != 1 {
+		t.Errorf("fetches by parent = %v, want the spec's below autoconfig.fetch_spec and the $ref's below "+
+			"autoconfig.resolve_refs; spans: %s", parents, spans)
+	}
+}
