@@ -2975,12 +2975,16 @@ their paths differ in shape no longer fail the gateway's check. Examples:
   checked first, along with the endpoints it lost an entry in. If it passes
   and none of those fails both ways, the write is refused with `422` even when
   the budget runs out before the scan has named an endpoint it breaks; the
-  scan only decides how many endpoints are named, not the verdict. When the
-  stored group fails too (an endpoint already fails but is not yet recorded as
-  excluded), the budget running out, or a check that cannot run, before any
-  broken endpoint is found is a `500 Internal Error`; retry the request. On a
-  large gateway with many such endpoints, a policy or gateway write can get
-  that `500` until the gateway controller records their exclusion.
+  scan only decides how many endpoints are named, not the verdict. The
+  endpoints judged first are those the stored render masked and those that use
+  a policy failing `krakend check` on its own. Nothing is decided in advance
+  when the stored group fails too (an endpoint already fails but is not yet
+  recorded as excluded), when one of those endpoints fails both ways, or, for
+  a gateway update, when the stored root fails on its own. Then the budget
+  running out, or a check that cannot run, before any broken endpoint is found
+  is a `500 Internal Error`; retry the request. On a large gateway with many
+  such endpoints, a policy or gateway write can get that `500` until the
+  gateway controller records their exclusion.
 - A policy or gateway write that is admitted with a warning can still lead to
   `CombinedConfigInvalid`. Both check the endpoints that already fail on their
   own before they check the endpoints together. So while an endpoint that
@@ -2992,19 +2996,21 @@ their paths differ in shape no longer fail the gateway's check. Examples:
     endpoint, plus 1 when it fails and references a policy of another
     namespace, plus the stored version's checks for a failing update;
   - a policy write: 1, plus 2 per gateway that uses it, plus 1 per endpoint
-    judged on its own (every endpoint that uses the policy there when they fail
-    together, otherwise those that lost an entry) and 1 more for each of those
+    judged on its own (every endpoint that uses the policy there when the group
+    fails, otherwise those that lost an entry) and 1 more for each of those
     that fails, plus 1 for the stored group (on a create, with the policy empty)
-    when they fail together;
+    when the group fails, and then 1 per distinct policy those endpoints use;
   - a gateway write: 2, plus 1 for the stored root when the root fails or
     when endpoints are judged on their own, plus the endpoint checks as for a
-    policy write, plus 1 for the stored group when they fail together and the
-    stored root passes.
+    policy write, plus 1 for the stored group when the group fails and the
+    stored root passes, and then 1 per distinct policy the endpoints use.
   - On the pinned binary, at the chart's 500m CPU limit, one endpoint's check
     takes about 0.1-0.13 s and 500 endpoints are linted together in about
     0.17 s. A write whose group passes stays far inside the 15 s webhook
     timeout. When the group fails, the decision costs four such lints (about
-    0.5 s), but naming the endpoints costs about 0.1 s per served endpoint,
+    0.5 s at 500 endpoints; a group lint grows with the endpoints), plus two
+    endpoint checks for each endpoint the stored render masked and one check
+    for each distinct policy they use, but naming the endpoints costs about 0.1 s per served endpoint,
     one after another, so the 12 s admission budget names roughly 80-110 of
     them: on a gateway of several hundred served endpoints the denial names
     those the scan reached and counts the rest. Waiting for a validation slot
