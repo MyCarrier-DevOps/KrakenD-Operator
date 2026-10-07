@@ -350,7 +350,7 @@ func (r *refResolver) resolveExternal(ref, base string, role refRole) (string, e
 		child.ConfigMapRef = nil
 		fetched, err := r.fetcher.Fetch(r.ctx, child)
 		if err != nil {
-			return "", &fatalRefError{fmt.Errorf("fetching %s: %w", absolute, err)}
+			return "", &fatalRefError{fmt.Errorf("fetching %s: %w", RedactURL(absolute), err)}
 		}
 		parsed, err := decodeSpec(fetched.Data)
 		if err != nil {
