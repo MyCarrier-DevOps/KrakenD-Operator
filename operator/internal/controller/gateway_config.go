@@ -54,6 +54,13 @@ type configResult struct {
 	// rejections are the endpoints krakend check blamed for the current
 	// render, with their findings.
 	rejections map[types.NamespacedName]string
+	// output is the render the rest of the pass reports on: the applied
+	// config when this pass applied or kept it, otherwise the newest render.
+	output *renderer.RenderOutput
+	// excluded are the endpoints this pass found failing on their own.
+	excluded map[types.NamespacedName]configcheck.EndpointVerdict
+	// judged says every endpoint was judged this pass.
+	judged bool
 }
 
 // publishApplied republishes the applied config. Publishing is idempotent,
@@ -469,6 +476,58 @@ func (r *KrakenDGatewayReconciler) neverApplied(
 // isConfigRejected reports whether cond is a GatewayConfigRejected verdict.
 func isConfigRejected(cond *metav1.Condition) bool {
 	return cond != nil && cond.Reason == v1alpha1.ReasonGatewayConfigRejected
+}
+
+// isExclusion reports whether cond leaves its endpoint out for failing
+// validation on its own.
+func isExclusion(cond *metav1.Condition) bool {
+	return cond != nil && cond.Status == metav1.ConditionFalse &&
+		(cond.Reason == v1alpha1.ReasonEndpointInvalid || cond.Reason == v1alpha1.ReasonPolicyInvalid)
+}
+
+// recordExclusions settles the endpoints' Accepted verdicts on a pass whose
+// render is not the applied config:
+//   - an endpoint that fails on its own (cfg.excluded) gets Accepted=False
+//     with its reason, worded for a config not yet applied, keeping its live
+//     status.conflicts;
+//   - while no config has ever been applied (neverApplied), every other
+//     endpoint loses any Accepted, for example one an earlier gateway of the
+//     same name left: there is no applied render to keep;
+//   - when every endpoint was judged (cfg.judged), one that now passes loses
+//     an exclusion it still carries, so its Ready is derived afresh;
+//   - every other endpoint keeps the verdict of the applied render.
+//
+// A removal is checked against the live condition, so a stale endpoint list
+// cannot remove a verdict it did not see. writeEndpointAccepted writes only
+// on change.
+func (r *KrakenDGatewayReconciler) recordExclusions(
+	ctx context.Context, gw *v1alpha1.KrakenDGateway, endpoints []v1alpha1.KrakenDEndpoint,
+	cfg configResult, neverApplied bool,
+) error {
+	var errs []error
+	for i := range endpoints {
+		ep := &endpoints[i]
+		cur := meta.FindStatusCondition(ep.Status.Conditions, v1alpha1.ConditionAccepted)
+		var (
+			a         acceptance
+			removable func(*metav1.Condition) bool
+		)
+		v, excluded := cfg.excluded[client.ObjectKeyFromObject(ep)]
+		switch {
+		case excluded:
+			a = acceptance{condition: exclusionCondition(gw, ep, v, false), keepConflicts: true}
+		case neverApplied && cur != nil:
+			a = acceptance{}
+		case cfg.judged && isExclusion(cur):
+			a, removable = acceptance{keepConflicts: true}, isExclusion
+		default:
+			continue
+		}
+		if err := r.writeEndpointAccepted(ctx, ep, a, removable); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return utilerrors.NewAggregate(errs)
 }
 
 // recordRejections settles the endpoints' Accepted verdicts on a pass whose
