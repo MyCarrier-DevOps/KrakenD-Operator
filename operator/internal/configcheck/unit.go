@@ -36,12 +36,12 @@ import (
 // Memo remembers what a check judged about a content, by its key: the
 // checksum of the rendered config, the edition it is validated as, and the
 // check (lint or the full check). It keeps the content's judgement only: OK,
-// or the rejection bounded to maxStoredOutput with its refusals by index.
-// Findings, refusals, endpoint names and Masked depend on the input a config
-// was rendered from, which the content does not fix, so they are rebuilt on
-// every call from that call's own input and render. What a Memo receives is a
-// partial verdict, and it is never returned as is. The implementation decides
-// how long it keeps one. A nil Memo remembers nothing.
+// or the rejection's Output bounded to maxStoredOutput, with its Stage.
+// Masked depends on the input a config was rendered from, which the content
+// does not fix, so it is rebuilt on every call from that call's own render.
+// What a Memo receives is a partial verdict, and it is never returned as is.
+// The implementation decides how long it keeps one. A nil Memo remembers
+// nothing.
 type Memo interface {
 	Lookup(key string) (Verdict, bool)
 	Store(key string, v Verdict)
@@ -250,26 +250,26 @@ func (c *Checker) lintInput(ctx context.Context, in renderer.RenderInput, memo M
 // remembered runs validate on out, rendered from in, unless memo already
 // holds the verdict on out's content in mode, and stores a fresh one in memo.
 // An error is never stored: the check did not judge. The memo holds only what
-// the content decides (acceptance, and the bounded rejection with its refusals
-// by index); the findings, refusals and their endpoint names are rebuilt from
-// in and out on every call, so a hit never names another input's endpoints
-// and shares nothing with the verdict it returned before.
+// the content decides: acceptance, or the bounded output and stage of the
+// rejection. Masked is not part of it, so a hit shares nothing with the
+// verdict it returned before.
 func (c *Checker) remembered(ctx context.Context, in renderer.RenderInput, out *renderer.RenderOutput, mode string,
 	validate func(context.Context, []byte, v1alpha1.Edition) error, memo Memo) (Verdict, error) {
 	key := contentKey(out, renderer.EditionFor(in.Gateway, in.CEFallback), mode)
 	if memo != nil {
 		if kept, ok := memo.Lookup(key); ok && judged(kept) {
-			return verdictFor(kept.Rejection, in, out), nil
+			return Verdict{OK: kept.OK, Output: kept.Output, Stage: kept.Stage}, nil
 		}
 	}
 	rejection, err := c.run(ctx, in, out, validate)
 	if err != nil {
 		return Verdict{}, err
 	}
+	verdict := verdictFor(rejection)
 	if memo != nil {
-		memo.Store(key, Verdict{OK: rejection == nil, Rejection: bounded(rejection)})
+		memo.Store(key, verdict)
 	}
-	return verdictFor(rejection, in, out), nil
+	return verdict, nil
 }
 
 // unitPolicies returns the policies u's endpoint references: u.Policies, or
@@ -330,33 +330,15 @@ func policyNames(keys []string) []types.NamespacedName {
 // judged reports whether a memo entry holds a judgement: acceptance or a
 // rejection. An entry that is neither judged nothing, so it is a miss.
 func judged(kept Verdict) bool {
-	return kept.OK || kept.Rejection != nil
+	return kept.OK || kept.Output != "" || kept.Stage != renderer.StageUnknown
 }
 
-// verdictFor is the verdict on out, rendered from in, for a check that
-// accepted it (nil rejection) or rejected it with rejection. It reads a
-// bounded copy of the rejection, so a fresh run and a hit return the same
-// text.
-func verdictFor(rejection *renderer.ValidationError, in renderer.RenderInput,
-	out *renderer.RenderOutput) Verdict {
+// verdictFor is the verdict for a check that accepted its config (nil
+// rejection) or rejected it with rejection. It keeps at most maxStoredOutput
+// of the output, so a fresh run and a memo hit return the same text.
+func verdictFor(rejection *renderer.ValidationError) Verdict {
 	if rejection == nil {
 		return Verdict{OK: true}
 	}
-	return Rejected(bounded(rejection), in, out)
-}
-
-// bounded returns a copy of rejection that shares nothing with it and keeps
-// at most maxStoredOutput of its output, nil for a nil rejection.
-func bounded(rejection *renderer.ValidationError) *renderer.ValidationError {
-	if rejection == nil {
-		return nil
-	}
-	cut := *rejection
-	cut.Output = TruncateEllipsis(rejection.Output, maxStoredOutput)
-	cut.Refusals = slices.Clone(rejection.Refusals)
-	for i := range cut.Refusals {
-		cut.Refusals[i].Message = TruncateEllipsis(cut.Refusals[i].Message, maxStoredOutput)
-		cut.Refusals[i].Indices = slices.Clone(cut.Refusals[i].Indices)
-	}
-	return &cut
+	return Verdict{Output: TruncateEllipsis(rejection.Output, maxStoredOutput), Stage: rejection.Stage}
 }
