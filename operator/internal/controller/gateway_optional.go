@@ -84,7 +84,10 @@ func kindInstalled(mapper meta.RESTMapper, gvk schema.GroupVersionKind) (bool, e
 // under the same name is left alone.
 func (r *KrakenDGatewayReconciler) deleteIfControlled(
 	ctx context.Context, reader client.Reader, gw *v1alpha1.KrakenDGateway, obj client.Object,
-) error {
+) (retErr error) {
+	ctx, span := tracing.Start(ctx, r.Tracer, "gateway.delete_child",
+		trace.WithAttributes(tracing.KeyName.String(obj.GetName())))
+	defer func() { tracing.End(span, retErr) }()
 	key := client.ObjectKeyFromObject(obj)
 	if err := reader.Get(ctx, key, obj); err != nil {
 		return client.IgnoreNotFound(err)
