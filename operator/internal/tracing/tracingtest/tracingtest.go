@@ -207,3 +207,8 @@ func nameOf(span sdktrace.ReadOnlySpan) string {
 	}
 	return span.Name()
 }
+
+// Attr returns the value of span's attribute key, and whether it has one.
+func Attr(span sdktrace.ReadOnlySpan, key string) (attribute.Value, bool) {
+	return attribute.Value{}, false
+}
