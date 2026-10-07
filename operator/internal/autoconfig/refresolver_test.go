@@ -918,3 +918,28 @@ func TestAbsolutize_ARefURLErrorCarriesNoCredentials(t *testing.T) {
 
 	requireNoSecrets(t, err)
 }
+
+func requireNoSecretWarnings(t *testing.T, warnings []string) {
+	t.Helper()
+	if len(warnings) == 0 {
+		t.Fatal("expected a warning")
+	}
+	for _, w := range warnings {
+		if strings.Contains(w, "pw@") || strings.Contains(w, "secret") {
+			t.Errorf("warning %q carries a credential", w)
+		}
+	}
+}
+
+func TestResolveExternalRefs_AFailedRefWarningCarriesNoCredentials(t *testing.T) {
+	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"$ref":"` + refWithSecrets + `#/Missing"}}}}}}`)
+	fetcher := &stubFetcher{docs: map[string][]byte{refWithSecrets: []byte(`{"A":{}}`)}}
+
+	_, warnings, err := ResolveExternalRefs(context.Background(), main, "https://api.example.com/openapi.json",
+		fetcher, FetchSource{})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireNoSecretWarnings(t, warnings)
+}
