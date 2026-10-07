@@ -23,6 +23,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -47,9 +49,15 @@ import (
 // tracedValidators returns the validators over objs, with the real checker,
 // whose spans and krakend runs go to rec.
 func tracedValidators(rec *tracingtest.Recorder, objs ...client.Object) Validators {
+	return tracedValidatorsRunning(rec, acceptingExecutor{}, objs...)
+}
+
+// tracedValidatorsRunning is tracedValidators over a krakend binary that is
+// executor.
+func tracedValidatorsRunning(rec *tracingtest.Recorder, executor renderer.CommandExecutor, objs ...client.Object) Validators {
 	c := fakeClient(objs...)
 	validator := renderer.NewValidator(renderer.ValidatorOptions{
-		Executor: telemetry.TraceExecutor(acceptingExecutor{}, rec.Tracer()), BinaryPath: "krakend",
+		Executor: telemetry.TraceExecutor(executor, rec.Tracer()), BinaryPath: "krakend",
 	})
 	checker := configcheck.New(c, renderer.New(renderer.Options{}), validator, 1, rec.Tracer())
 	return NewValidators(c, c, checker, "", rec.Tracer())
@@ -300,4 +308,84 @@ func TestAdmission_AFailureToDecideIsAnErrorWithoutItsText(t *testing.T) {
 	if n := len(span.Events()); n != 0 {
 		t.Errorf("%d events on the span, want none: %v", n, span.Events())
 	}
+}
+
+// krakendOutput is what a rejecting krakend prints: tenant-controlled text that
+// no span may carry.
+const krakendOutput = "SECRET-KRAKEND-OUTPUT"
+
+// rejectingExecutor stands in for a krakend binary that rejects the configs for
+// which reject is true, printing krakendOutput, and fails to run when broken
+// is set.
+type rejectingExecutor struct {
+	reject func(config string) bool
+	broken error
+}
+
+func (e rejectingExecutor) Execute(_ context.Context, _ string, args ...string) ([]byte, error) {
+	if e.broken != nil {
+		return []byte(krakendOutput), e.broken
+	}
+	config, err := os.ReadFile(args[len(args)-1])
+	if err != nil {
+		return nil, err
+	}
+	if e.reject(string(config)) {
+		return []byte(krakendOutput), exec.Command("sh", "-c", "exit 3").Run()
+	}
+	return []byte("Syntax OK!"), nil
+}
+
+// rejectsWith rejects the configs that contain every one of parts.
+func rejectsWith(parts ...string) func(string) bool {
+	return func(config string) bool {
+		for _, part := range parts {
+			if !strings.Contains(config, part) {
+				return false
+			}
+		}
+		return true
+	}
+}
+
+// requireCleanAdmissionSpans fails t if a span of the admission, whose
+// name starts with "admission.", carries an error status or an event, or holds
+// the krakend output in an attribute.
+func requireCleanAdmissionSpans(t *testing.T, spans tracingtest.Spans) {
+	t.Helper()
+	for _, span := range spans {
+		if !strings.HasPrefix(span.Name(), "admission.") {
+			continue
+		}
+		if got := span.Status().Code; got == codes.Error {
+			t.Errorf("span %q is an error (%q), want none: a denial is an answer", span.Name(), span.Status().Description)
+		}
+		if len(span.Events()) != 0 {
+			t.Errorf("span %q has events %v, want none", span.Name(), span.Events())
+		}
+		for _, attr := range span.Attributes() {
+			if strings.Contains(attr.Value.Emit(), "SECRET") {
+				t.Errorf("span %q has attribute %v, want none of the krakend output", span.Name(), attr)
+			}
+		}
+	}
+}
+
+// A gateway update that breaks an endpoint is denied; the denial names the
+// endpoint and is on no span of the admission.
+func TestGatewayAdmission_ADeniedUpdateIsNoErrorOnItsSpans(t *testing.T) {
+	rec := tracingtest.New(t)
+	old, gw := editedGateway()
+	rejecting := rejectingExecutor{reject: rejectsWith("/bad", "1s")}
+	v := tracedValidatorsRunning(rec, rejecting, old, testEndpoint("e", "/bad"))
+	admit := tracedValidator{kind: "KrakenDGateway", next: v.Gateway, tracer: rec.Tracer()}
+
+	_, err := admit.ValidateUpdate(context.Background(), old, gw)
+
+	if !isDenial(err) {
+		t.Fatalf("err = %v, want a denial", err)
+	}
+	spans := rec.Ended()
+	spans.RequireParent(t, "admission.judge_served", "configcheck.CheckEndpoint")
+	requireCleanAdmissionSpans(t, spans)
 }
