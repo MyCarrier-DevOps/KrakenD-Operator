@@ -275,3 +275,34 @@ func TestTraceKubeAPI_NonResourceRequestIsNamedByMethodAndPath(t *testing.T) {
 
 	rec.Ended().RequireChild(t, "reconcile", "k8s GET /apis")
 }
+
+// eventAttrs returns the attributes of the only event of the span named name.
+func eventAttrs(t *testing.T, rec *tracingtest.Recorder, name, event string) map[string]string {
+	t.Helper()
+	events := rec.Ended().One(t, name).Events()
+	if len(events) != 1 || events[0].Name != event {
+		t.Fatalf("events = %+v, want one %s", events, event)
+	}
+	attrs := map[string]string{}
+	for _, kv := range events[0].Attributes {
+		attrs[string(kv.Key)] = kv.Value.Emit()
+	}
+	return attrs
+}
+
+func TestReadEvents_AListAddsAnEventToTheActiveSpan(t *testing.T) {
+	rec := tracingtest.New(t)
+	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "cm"}}
+	c := telemetry.ReadEvents(fake.NewClientBuilder().WithScheme(clientgoscheme.Scheme).WithObjects(cm).Build())
+	ctx, span := rec.Tracer().Start(context.Background(), "reconcile")
+
+	if err := c.List(ctx, &corev1.ConfigMapList{}, client.InNamespace("ns")); err != nil {
+		t.Fatal(err)
+	}
+	span.End()
+
+	attrs := eventAttrs(t, rec, "reconcile", "k8s.client.list")
+	if attrs["k8s.namespace.name"] != "ns" || attrs["succeeded"] != "true" {
+		t.Errorf("event attributes = %v, want namespace ns, succeeded", attrs)
+	}
+}
