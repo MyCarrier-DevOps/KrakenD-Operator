@@ -104,7 +104,9 @@ func dropRouteLosers(flat, shadowed []flatEndpoint, conflicted map[types.Namespa
 // already. Each is recorded at its place in serving order as an older entry
 // left out, so a newer entry that clashes with it loses to it whether or not
 // its same-shape winner is served: removing the winner can then promote it
-// without leaving another entry out. It is neither counted nor reported again.
+// without leaving another entry out. It is neither counted nor reported
+// again, and one gin refuses on its own records nothing, like an entry left
+// in for its own check.
 //
 // An entry gin refuses on its own, or next to its own KrakenDEndpoint's
 // entries, is left in for that endpoint's own check, which refuses it; so is
@@ -126,8 +128,11 @@ func routeLosers(flat, shadowed []flatEndpoint, rules routeRules) routeAdmission
 	for _, i := range servingOrder(all) {
 		fe := all[i]
 		if i >= len(flat) {
-			for _, r := range entryRoutes(entryMethod(fe.Entry.Method), fe.Entry.Endpoint, rules, nil) {
-				dropped = append(dropped, routedRoute{route: r, source: fe.Source})
+			pair := entryRoutes(entryMethod(fe.Entry.Method), fe.Entry.Endpoint, rules, nil)
+			if !refusedAlone(pair) {
+				for _, r := range pair {
+					dropped = append(dropped, routedRoute{route: r, source: fe.Source})
+				}
 			}
 			continue
 		}
