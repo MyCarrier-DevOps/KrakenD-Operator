@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
 	"strings"
 	"time"
@@ -26,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -156,8 +158,53 @@ func (r *KrakenDGatewayReconciler) optionalReader(gvk schema.GroupVersionKind) c
 	return r.Client
 }
 
+// errNotControlled is what applyOwned and the Deployment write return, wrapped
+// in a notControlledError, for an existing object the gateway may not take
+// over.
+var errNotControlled = stderrors.New("exists and the gateway does not control it")
+
+// notControlledError names an existing object the gateway refused to take
+// over: its kind, its place, and the controller that owns it, if any.
+type notControlledError struct {
+	kind, namespace, name string
+	controller            string
+}
+
+func (e *notControlledError) Error() string {
+	if e.controller != "" {
+		return fmt.Sprintf("%s %s/%s is controlled by %s", e.kind, e.namespace, e.name, e.controller)
+	}
+	return fmt.Sprintf("%s %s/%s has no controller and does not carry the gateway's labels",
+		e.kind, e.namespace, e.name)
+}
+
+func (e *notControlledError) Unwrap() error { return errNotControlled }
+
+// refuseUncontrolled returns a notControlledError when obj, as fetched, exists
+// and gw may not take it over. The gateway controls it, or it has no
+// controller and carries the gateway's selector labels, which only someone
+// who can write the object can set: that hands it over, as an object orphaned
+// by `kubectl delete --cascade=orphan` still carries them. It must run before
+// the builder, which sets those labels on every object.
+func refuseUncontrolled(gw *v1alpha1.KrakenDGateway, obj client.Object, kind string) error {
+	if obj.GetResourceVersion() == "" || metav1.IsControlledBy(obj, gw) {
+		return nil
+	}
+	owner := metav1.GetControllerOf(obj)
+	handedOver := labels.SelectorFromSet(resources.SelectorLabels(gw)).Matches(labels.Set(obj.GetLabels()))
+	if owner == nil && handedOver {
+		return nil
+	}
+	refused := &notControlledError{kind: kind, namespace: obj.GetNamespace(), name: obj.GetName()}
+	if owner != nil {
+		refused.controller = owner.Kind + "/" + owner.Name
+	}
+	return refused
+}
+
 // applyOwned creates or updates obj, which gw controls, with what build sets.
-// kind names obj in the error.
+// kind names obj in the error. An existing obj that gw may not take over
+// (see refuseUncontrolled) is left as it is and a notControlledError returned.
 func (r *KrakenDGatewayReconciler) applyOwned(
 	ctx context.Context, gw *v1alpha1.KrakenDGateway, obj client.Object, kind string, build func(),
 ) (retErr error) {
@@ -165,6 +212,9 @@ func (r *KrakenDGatewayReconciler) applyOwned(
 		trace.WithAttributes(tracing.KeyName.String(obj.GetName())))
 	defer func() { tracing.End(span, retErr) }()
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, obj, func() error {
+		if err := refuseUncontrolled(gw, obj, kind); err != nil {
+			return err
+		}
 		build()
 		return controllerutil.SetControllerReference(gw, obj, r.Scheme)
 	}); err != nil {
