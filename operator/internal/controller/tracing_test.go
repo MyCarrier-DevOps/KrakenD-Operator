@@ -35,6 +35,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/autoconfig"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 	"github.com/mycarrier-devops/krakend-operator/internal/telemetry"
@@ -915,4 +916,28 @@ func TestWithCheckSlot_AGivenUpWaitIsAnErrorOnItsSpan(t *testing.T) {
 	if got := rec.Ended().One(t, "autoconfig.slot").Status().Code; got != codes.Error {
 		t.Errorf("autoconfig.slot status = %v, want Error", got)
 	}
+}
+
+// The fetch of an AutoConfig's spec is a span of the fetch stage: here a spec
+// in a ConfigMap, read by the real fetcher.
+func TestAutoConfigReconcile_TheSpecFetchIsASpanOfTheFetchStage(t *testing.T) {
+	ac := testAutoConfig()
+	ac.Spec.OpenAPI = v1alpha1.OpenAPISource{ConfigMapRef: &v1alpha1.ConfigMapKeyRef{Name: "spec", Key: "openapi.json"}}
+	spec := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: "spec", Namespace: ac.Namespace},
+		Data:       map[string]string{"openapi.json": `{"openapi":"3.0.0","paths":{}}`},
+	}
+	c := fakeClientBuilder().WithObjects(ac, testCUEDefinitionsCM(), testGateway(), spec).
+		WithStatusSubresource(ac).Build()
+	f, ce, fi, g := defaultMocks()
+	r := newACReconciler(c, f, ce, fi, g)
+	rec := tracingtest.New(t)
+	r.Tracer = rec.Tracer()
+	r.Fetcher = autoconfig.NewFetcher(c, rec.Tracer())
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatal(err)
+	}
+
+	rec.Ended().RequireChild(t, "autoconfig.fetch_spec", "autoconfig.fetch")
 }
