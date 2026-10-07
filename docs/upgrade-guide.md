@@ -897,8 +897,9 @@ kubectl patch <kind>/<name> -n <ns> --subresource=status --type=json \
   `False` on the first reconcile (each policy is checked once per operator
   start); list them with `kubectl get krakendbackendpolicy -A` and its
   `Ready` column.
-- When `krakend check` cannot run for a policy (no binary, a timeout, no check
-  slot), `Ready` is `Unknown` with reason `ValidatorUnavailable` and the
+- When `krakend check` cannot run for a policy (no binary, a run that timed
+  out, or the operator stopping while it waits for a check slot, which only
+  delays the check otherwise), `Ready` is `Unknown` with reason `ValidatorUnavailable` and the
   reconcile retries with backoff. It is never reported as the policy's
   failure.
 - New `status.observedGeneration`.
