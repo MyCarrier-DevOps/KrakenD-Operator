@@ -30,6 +30,7 @@ import (
 
 	"github.com/mycarrier-devops/krakend-operator/internal/telemetry"
 	"github.com/mycarrier-devops/krakend-operator/internal/tracing"
+	"github.com/mycarrier-devops/krakend-operator/internal/tracing/tracingtest"
 )
 
 // stdoutRecord is the part of a stdout JSON record the tests read.
@@ -104,5 +105,27 @@ func TestLogger_KeepsVerbosityUpToTheLevel(t *testing.T) {
 	}
 	if len(got) == 1 && (got[0].Timestamp == "" || strings.HasPrefix(got[0].Timestamp, "0001-")) {
 		t.Errorf("timestamp = %q, want the time it was logged", got[0].Timestamp)
+	}
+}
+
+func TestLogger_RecordInAChildSpanCarriesThatSpansIDs(t *testing.T) {
+	logger, out := newStdoutLogger(t, otellog.SeverityInfo)
+	rec := tracingtest.New(t)
+	ctx := logf.IntoContext(context.Background(), logger)
+	ctx, parent := tracing.Start(ctx, rec.Tracer(), "parent")
+	ctx, child := tracing.Start(ctx, rec.Tracer(), "child")
+
+	logf.FromContext(ctx).Info("inside the child")
+	child.End()
+	parent.End()
+
+	got := records(t, out)
+	if len(got) != 1 {
+		t.Fatalf("got %d records, want 1", len(got))
+	}
+	sc := child.SpanContext()
+	if got[0].TraceID != sc.TraceID().String() || got[0].SpanID != sc.SpanID().String() {
+		t.Errorf("record carries %s/%s, want the child's %s/%s",
+			got[0].TraceID, got[0].SpanID, sc.TraceID(), sc.SpanID())
 	}
 }
