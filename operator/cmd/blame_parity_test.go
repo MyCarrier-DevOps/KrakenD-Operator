@@ -355,3 +355,74 @@ func (w *blameWorld) setRouter(t *testing.T, router *v1alpha1.RouterConfig) {
 		t.Fatal(err)
 	}
 }
+
+// markApplied records the gateway's current render as its applied config, as
+// an earlier release leaves it: the next pass finds nothing new to apply.
+func (w *blameWorld) markApplied(t *testing.T) {
+	t.Helper()
+	ctx := context.Background()
+	in, err := w.checker.Gather(ctx, w.gw, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := renderer.New(renderer.Options{}).Render(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gw v1alpha1.KrakenDGateway
+	if err := w.c.Get(ctx, client.ObjectKeyFromObject(w.gw), &gw); err != nil {
+		t.Fatal(err)
+	}
+	gw.Status.ConfigChecksum, gw.Status.ConfigEdition = out.Checksum, v1alpha1.EditionCE
+	if err := w.c.Status().Update(ctx, &gw); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestBlame_AMaskedEndpointIsJudgedAlikeOnBothPaths: e's second entry, GET
+// /shared, loses to f's older GET /shared, so the gateway's render leaves it
+// out, and that render passes. The entry fails krakend check on its own (its
+// host). A passing render vouches only for what it rendered: the controller
+// judges e on its own and excludes it, also when an earlier release already
+// applied that render, and admission's update ratchet reaches the same
+// verdict on the stored e.
+func TestBlame_AMaskedEndpointIsJudgedAlikeOnBothPaths(t *testing.T) {
+	for name, alreadyApplied := range map[string]bool{"on a new render": false, "on a render already applied": true} {
+		t.Run(name, func(t *testing.T) {
+			f := aged(tenantEndpoint("tenant-f", "f", "/shared", "http://svc"), 0)
+			e := aged(tenantEndpoint("tenant-e", "e", "/e", "http://svc"), 1)
+			e.Spec.Endpoints = append(e.Spec.Endpoints, v1alpha1.EndpointEntry{Endpoint: "/shared", Method: "GET",
+				Backends: []v1alpha1.BackendSpec{{Host: []string{"http://masked.invalid"}, URLPattern: "/x"}}})
+			w := newBlameWorld(t, func(config string) (string, bool) {
+				return "- at '/endpoints/1/backend/0/host/0': masked.invalid is refused",
+					strings.Contains(config, "masked.invalid")
+			}, f, e)
+			if alreadyApplied {
+				w.markApplied(t)
+			}
+
+			w.reconcile(t)
+
+			if got := w.accepted(t, f); got == nil || got.Reason != v1alpha1.ReasonAccepted {
+				t.Errorf("f Accepted = %+v, want Accepted", got)
+			}
+			if got := w.accepted(t, e); got == nil || got.Reason != v1alpha1.ReasonEndpointInvalid {
+				t.Fatalf("e Accepted = %+v, want EndpointInvalid: the render that passed left its failing entry out", got)
+			}
+			judged := len(w.checker.verdicts["tenant-e/e"])
+			stored := w.stored(t, e)
+			updated := stored.DeepCopy()
+			updated.Spec.Endpoints[0].Backends[0].URLPattern = "/y"
+			warnings, err := w.endpoints.ValidateUpdate(context.Background(), stored, updated)
+			if err != nil || len(warnings) != 1 || !strings.Contains(warnings[0], "fails krakend check on its own") {
+				t.Errorf("e's update: %v, %v; want admitted with a warning quoting its own output", warnings, err)
+			}
+			// The controller's verdicts, then admission's on the update, then
+			// admission's on the stored e.
+			got := w.checker.verdicts["tenant-e/e"]
+			if judged == 0 || len(got) != judged+2 || !reflect.DeepEqual(got[judged-1], got[judged+1]) {
+				t.Errorf("e's verdicts = %+v, want the controller's last and admission's on the stored e equal", got)
+			}
+		})
+	}
+}
