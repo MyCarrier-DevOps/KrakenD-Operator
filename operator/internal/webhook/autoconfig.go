@@ -51,7 +51,7 @@ func (v *AutoConfigValidator) ValidateCreate(
 		return nil, fmt.Errorf("expected KrakenDAutoConfig, got %T", obj)
 	}
 	ctx, span := tracing.Start(ctx, v.Tracer, "admission.structural")
-	defer func() { tracing.End(span, retErr) }()
+	defer func() { endRules(span, retErr) }()
 	errs, err := v.validateGatewayRef(ctx, ac)
 	if err != nil {
 		return nil, unavailable(err)
@@ -87,7 +87,7 @@ func (v *AutoConfigValidator) ValidateUpdate(
 		return nil, nil
 	}
 	ctx, span := tracing.Start(ctx, v.Tracer, "admission.structural")
-	defer func() { tracing.End(span, retErr) }()
+	defer func() { endRules(span, retErr) }()
 	var errs field.ErrorList
 	if old.Spec.GatewayRef != ac.Spec.GatewayRef {
 		refErrs, err := v.validateGatewayRef(ctx, ac)

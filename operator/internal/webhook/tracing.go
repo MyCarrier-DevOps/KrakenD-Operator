@@ -93,6 +93,16 @@ func endDecision(span trace.Span, err error) {
 	span.End()
 }
 
+// endRules ends span, the span of rules that return err. A denial is an
+// answer and is not recorded; any other error is the rules' own failure.
+func endRules(span trace.Span, err error) {
+	if isDenial(err) {
+		span.End()
+		return
+	}
+	tracing.End(span, err)
+}
+
 // isDenial reports whether err is a validator's refusal of the request: a
 // status error the validator itself returned, with a 4xx code. A 500 (a check
 // that could not run) and an error that only wraps one are not.
