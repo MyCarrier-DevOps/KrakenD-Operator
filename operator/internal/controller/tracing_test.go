@@ -81,3 +81,25 @@ func TestGatewayReconcile_IsTheRootOfATrace(t *testing.T) {
 		t.Errorf("the reconcile span lacks k8s.object.generation 4: %v", root.Attributes())
 	}
 }
+
+// Each stage of a gateway reconcile is a span under the stage that runs it, so
+// the trace reads as the reconcile's waterfall.
+func TestGatewayReconcile_SpansEachStageUnderItsParent(t *testing.T) {
+	for _, tc := range []struct {
+		span, parent string
+		tweak        func(*v1alpha1.KrakenDGateway)
+	}{
+		{"gateway.license", "reconcile KrakenDGateway", nil},
+	} {
+		t.Run(tc.span, func(t *testing.T) {
+			gw := testGateway()
+			if tc.tweak != nil {
+				tc.tweak(gw)
+			}
+
+			spans := reconcileTraced(t, gw, testEndpoint("e", "/e"))
+
+			spans.RequireChild(t, tc.parent, tc.span)
+		})
+	}
+}
