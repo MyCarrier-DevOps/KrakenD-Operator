@@ -34,16 +34,23 @@ const redactedValue = "REDACTED"
 // RedactURL returns raw without its user information, with each query value
 // replaced by REDACTED and without its fragment, for errors, logs and spans:
 // an OpenAPI URL can carry credentials in any of them. A URL that does not
-// parse is reduced to "<unparseable URL>".
+// parse, or that has no "//" after its scheme (the opaque form, whose
+// credentials parse as part of the path), is reduced to "<unparseable URL>".
 func RedactURL(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil {
-		return "<unparseable URL>"
+		return unparseableURL
 	}
 	return redact(u)
 }
 
+// unparseableURL stands for a URL that cannot be shown safely.
+const unparseableURL = "<unparseable URL>"
+
 func redact(u *url.URL) string {
+	if u.Opaque != "" {
+		return unparseableURL
+	}
 	r := *u
 	r.User, r.Fragment, r.RawFragment = nil, "", ""
 	if r.RawQuery != "" {
