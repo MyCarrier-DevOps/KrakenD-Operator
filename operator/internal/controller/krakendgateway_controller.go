@@ -1231,6 +1231,7 @@ func (r *KrakenDGatewayReconciler) reconcileDeploymentUnlessHeld(
 		// A pod template that mounts a missing ConfigMap never starts
 		// (FailedMount). Leave the Deployment as it is; PluginsResolved
 		// names the ConfigMaps, and their creation reconciles the gateway.
+		gcErr = r.collectConfigMaps(ctx, gw, in.configMapName)
 	default:
 		obs, err = r.reconcileDeployment(ctx, gw, in)
 		if err != nil {
@@ -1276,7 +1277,12 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 		// (another controller owns it, or it could not be reconciled), both are
 		// held as they are.
 		errs = append(errs, fmt.Errorf("holding the Deployment and the post-restart Job: "+
-			"serviceaccount %s/%s is not controlled by gateway %s", gw.Namespace, gw.Name, gw.Name),
+			"serviceaccount %s/%s is not controlled by gateway %s", gw.Namespace, gw.Name, gw.Name))
+		// The config stage still publishes a ConfigMap per passing render.
+		if in.configMapName != "" {
+			errs = append(errs, r.collectConfigMaps(ctx, gw, in.configMapName))
+		}
+		errs = append(errs,
 			r.reconcileDragonfly(ctx, gw), r.reconcileExternalSecret(ctx, gw), r.reconcileVirtualService(ctx, gw))
 		return deploymentObservation{}, stderrors.Join(errs...)
 	}
