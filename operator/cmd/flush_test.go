@@ -80,3 +80,11 @@ func TestFlushTelemetry_ASuccessfulFlushPrintsNothing(t *testing.T) {
 		t.Errorf("stderr = %q, want nothing", stderr.String())
 	}
 }
+
+// The pod's terminationGracePeriodSeconds is 10: the manager's stop and the
+// flush together must fit in it, or the kubelet kills the process mid-flush.
+func TestTelemetryFlushTimeout_LeavesTheManagerRoomInTheGracePeriod(t *testing.T) {
+	if telemetryFlushTimeout > 5*time.Second {
+		t.Errorf("telemetryFlushTimeout = %v, want at most 5s of the pod's 10s grace period", telemetryFlushTimeout)
+	}
+}
