@@ -18,8 +18,10 @@ package telemetry_test
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 	"slices"
+	"strings"
 	"testing"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -70,5 +72,44 @@ func TestTraceExecutor_KrakendCheckIsAChildSpanWithModeAndExitCode(t *testing.T)
 	}
 	if span.Status().Code != codes.Error {
 		t.Errorf("status = %v, want Error for a failed check", span.Status())
+	}
+}
+
+// stubExecutor returns a fixed output and error, as renderer's KrakenDExecutor
+// does: the output carries krakend's findings, the error only its exit status.
+type stubExecutor struct {
+	out []byte
+	err error
+}
+
+func (e stubExecutor) Execute(context.Context, string, ...string) ([]byte, error) {
+	return e.out, e.err
+}
+
+// The output of krakend names the values of the config it rejected, which is
+// tenant data: it reaches the span nowhere, whatever failed.
+func TestTraceExecutor_TheCommandOutputIsRecordedNowhere(t *testing.T) {
+	rec := tracingtest.New(t)
+	executor := telemetry.TraceExecutor(stubExecutor{
+		out: []byte("- at '/endpoints/0': tenant-secret"), err: errors.New("exit status 1"),
+	}, rec.Tracer())
+
+	_, _ = executor.Execute(context.Background(), "krakend", "check", "-t", "-c", "/tmp/krakend-config-42.json")
+
+	span := rec.Ended().One(t, "krakend check")
+	recorded := []string{span.Status().Description}
+	for _, kv := range span.Attributes() {
+		recorded = append(recorded, string(kv.Key), kv.Value.Emit())
+	}
+	for _, event := range span.Events() {
+		recorded = append(recorded, event.Name)
+		for _, kv := range event.Attributes {
+			recorded = append(recorded, string(kv.Key), kv.Value.Emit())
+		}
+	}
+	for _, text := range recorded {
+		if strings.Contains(text, "tenant-secret") {
+			t.Errorf("the span records the command's output: %q", text)
+		}
 	}
 }
