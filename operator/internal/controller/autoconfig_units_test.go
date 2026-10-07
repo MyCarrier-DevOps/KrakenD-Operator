@@ -14,10 +14,10 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-
 package controller
 
 import (
+	"slices"
 	"testing"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
@@ -56,5 +56,25 @@ func TestAutoConfigReconcile_PrecheckHoldsTheCandidatesThatFailOnTheirOwn(t *tes
 		failed[0].Reason != v1alpha1.ReasonConfigValidationFailed ||
 		failed[0].Message != "fails krakend check on its own: 'timeout' time: unknown unit" {
 		t.Errorf("failedOperations = %+v, want getb held with its own output", failed)
+	}
+}
+
+func TestAutoConfigReconcile_ARootThatFailsAloneHoldsNoCandidate(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	checker := &fakeChecker{rootFails: true, endpoint: func(*v1alpha1.KrakenDEndpoint) configcheck.EndpointVerdict {
+		return configcheck.EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid, Output: "fails only with the root"}
+	}}
+	c := fakeClientBuilder().WithObjects(ac, cm, testGateway()).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Checker = checker
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatal(err)
+	}
+
+	if !slices.Equal(checker.checks, []string{"root"}) || !endpointExists(t, c, "test-ac-listusers") {
+		t.Errorf("checks = %v; want only the root checked and listusers written", checker.checks)
 	}
 }
