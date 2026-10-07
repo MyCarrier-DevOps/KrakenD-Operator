@@ -63,6 +63,16 @@ type label struct{ name string }
 
 func (l label) String() string { return l.name }
 
+// codeErrorPtr is an error whose value receiver panics on a nil pointer.
+type codeErrorPtr struct{ code string }
+
+func (e codeErrorPtr) Error() string { return e.code }
+
+// brokenMarshaler is a logr.Marshaler that panics.
+type brokenMarshaler struct{}
+
+func (brokenMarshaler) MarshalLog() any { panic("no log form") }
+
 // marshaled is a logr.Marshaler that logs as the value it holds.
 type marshaled struct{ as any }
 
@@ -115,6 +125,14 @@ func TestLogger_ValuesAreConvertedToWhatTheyRead(t *testing.T) {
 		{"slice of strings", []string{"a"}, []any{stringValue("a")}},
 		{"map of strings", map[string]string{"a": "b"},
 			[]any{map[string]any{"Key": "a", "Value": stringValue("b")}}},
+		{"nil pointer to a type without Stringer", (*types.UID)(nil), "<nil>"},
+		{"nil pointer to a struct", (*point)(nil), "<nil>"},
+		{"nil error pointer", (*codeErrorPtr)(nil), "<nil>"},
+		{"metav1.Time", metav1.NewTime(time.Date(2023, 11, 14, 22, 13, 20, 0, time.UTC)),
+			"2023-11-14 22:13:20 +0000 UTC"},
+		{"panicking marshaler", brokenMarshaler{}, "{}"},
+		{"map with struct keys", map[point]string{{"a", 1}: "b"},
+			[]any{map[string]any{"Key": "{A:a B:1}", "Value": stringValue("b")}}},
 		{"marshaler of a UID", marshaled{types.UID("u1")}, "u1"},
 		{"marshaler of a map", marshaled{map[string]any{"id": types.UID("u1")}},
 			[]any{map[string]any{"Key": "id", "Value": stringValue("u1")}}},
@@ -212,4 +230,23 @@ func TestLogger_AFanningOutValueIsTruncated(t *testing.T) {
 	if out := logsWithinTimeout(t, node); len(out) > 4<<20 || !strings.Contains(out, "\\u003ctruncated\\u003e") {
 		t.Errorf("output is %d bytes, want under 4MiB containing <truncated> (JSON-escaped)", len(out))
 	}
+}
+
+// A value at a disabled verbosity is never converted.
+func TestLogger_ADisabledLevelConvertsNothing(t *testing.T) {
+	logger, out := newStdoutLogger(t, otellog.SeverityInfo)
+
+	logger.V(1).Info("m", "value", forbidden{t})
+
+	if got := records(t, out); len(got) != 0 {
+		t.Errorf("got %d records, want none", len(got))
+	}
+}
+
+// forbidden fails its test if it is converted.
+type forbidden struct{ t *testing.T }
+
+func (f forbidden) String() string {
+	f.t.Error("a value at a disabled level was converted")
+	return ""
 }
