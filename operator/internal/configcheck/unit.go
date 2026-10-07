@@ -117,13 +117,16 @@ type EndpointVerdict struct {
 }
 
 // Message says why v is not OK in words its endpoint's owner may read: the
-// policies at fault by name, never their content.
-func (v EndpointVerdict) Message(int) string {
+// endpoint's own rejection cut to limit bytes, or the policies at fault by
+// name, never their content. It is "" for an OK verdict.
+func (v EndpointVerdict) Message(limit int) string {
 	names := make([]string, len(v.Policies))
 	for i, p := range v.Policies {
 		names[i] = p.String()
 	}
 	switch {
+	case v.OK:
+		return ""
 	case v.Reason == v1alpha1.ReasonPolicyInvalid && v.PoliciesFailAlone:
 		return fmt.Sprintf("references KrakenDBackendPolicy %s, which fails krakend check on its own",
 			strings.Join(names, ", "))
@@ -131,7 +134,7 @@ func (v EndpointVerdict) Message(int) string {
 		return fmt.Sprintf("fails krakend check only together with KrakenDBackendPolicy %s of another namespace, "+
 			"whose content is not shown", strings.Join(names, ", "))
 	}
-	return ""
+	return "fails krakend check on its own: " + Verdict{Output: v.Output}.Excerpt(limit)
 }
 
 // Root is a gateway's root on its own: what Gateway renders with no endpoint,
