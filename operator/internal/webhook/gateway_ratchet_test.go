@@ -41,7 +41,7 @@ func (acceptingExecutor) Execute(context.Context, string, ...string) ([]byte, er
 func realChecker(objs ...client.Object) (client.Client, *configcheck.Checker) {
 	c := fakeClient(objs...)
 	validator := renderer.NewValidator(renderer.ValidatorOptions{Executor: acceptingExecutor{}, BinaryPath: "krakend"})
-	return c, configcheck.New(c, renderer.New(renderer.Options{}), validator, 1)
+	return c, configcheck.New(c, renderer.New(renderer.Options{}), validator, 1, nil)
 }
 
 func methodEndpoint(name, method, path string) *v1alpha1.KrakenDEndpoint {

@@ -236,7 +236,7 @@ func TestConfigCheckParity(t *testing.T) {
 		}
 	})
 
-	policyChecker := configcheck.New(nil, renderer.New(renderer.Options{}), validator, 1)
+	policyChecker := configcheck.New(nil, renderer.New(renderer.Options{}), validator, 1, nil)
 	t.Run("a valid policy passes on its own", func(t *testing.T) {
 		policy := &v1alpha1.KrakenDBackendPolicy{
 			ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "parity"},
@@ -294,7 +294,7 @@ func TestConfigCheckParity(t *testing.T) {
 				WithIndex(&v1alpha1.KrakenDEndpoint{}, fieldindex.EndpointPolicy, fieldindex.EndpointPolicyKeys).
 				Build()
 			r := renderer.New(renderer.Options{})
-			checker := configcheck.New(reader, r, validator, 1)
+			checker := configcheck.New(reader, r, validator, 1, nil)
 
 			endpoints := make([]v1alpha1.KrakenDEndpoint, 0, len(tc.endpoints))
 			for _, ep := range tc.endpoints {

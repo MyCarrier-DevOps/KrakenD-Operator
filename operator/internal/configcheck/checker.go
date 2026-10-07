@@ -25,6 +25,8 @@ import (
 	"slices"
 	"strings"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -34,6 +36,7 @@ import (
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/fieldindex"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
+	"github.com/mycarrier-devops/krakend-operator/internal/tracing"
 )
 
 // ValidatorVersion is the KrakenD minor version of the krakend binary the
@@ -49,12 +52,16 @@ type Checker struct {
 	renderer  renderer.Renderer
 	validator renderer.Validator
 	slots     chan struct{}
+	tracer    trace.Tracer
 }
 
 // New returns a Checker that reads endpoints and policies through reader and
-// runs at most slots validations at a time.
-func New(reader client.Reader, r renderer.Renderer, v renderer.Validator, slots int) *Checker {
-	return &Checker{reader: reader, renderer: r, validator: v, slots: make(chan struct{}, max(slots, 1))}
+// runs at most slots validations at a time. Each check is a span of tracer;
+// a nil tracer records none.
+func New(reader client.Reader, r renderer.Renderer, v renderer.Validator, slots int, tracer trace.Tracer) *Checker {
+	return &Checker{
+		reader: reader, renderer: r, validator: v, slots: make(chan struct{}, max(slots, 1)), tracer: tracer,
+	}
 }
 
 // Gather returns the render input the gateway controller publishes gw from:
@@ -65,7 +72,9 @@ func New(reader client.Reader, r renderer.Renderer, v renderer.Validator, slots 
 // block that only a Dragonfly address would add to the controller's render is
 // not part of what is checked here.
 func (c *Checker) Gather(ctx context.Context, gw *v1alpha1.KrakenDGateway,
-	replace []v1alpha1.KrakenDEndpoint) (renderer.RenderInput, error) {
+	replace []v1alpha1.KrakenDEndpoint) (_ renderer.RenderInput, retErr error) {
+	ctx, span := c.start(ctx, "configcheck.Gather", gw)
+	defer func() { tracing.End(span, retErr) }()
 	return c.gather(ctx, gw, replace)
 }
 
@@ -74,14 +83,18 @@ func (c *Checker) Gather(ctx context.Context, gw *v1alpha1.KrakenDGateway,
 // after the route check), answering from memo when it already judged the same
 // content.
 func (c *Checker) CheckRendered(ctx context.Context, in renderer.RenderInput,
-	out *renderer.RenderOutput, memo Memo) (Verdict, error) {
+	out *renderer.RenderOutput, memo Memo) (v Verdict, retErr error) {
+	ctx, span := c.start(ctx, "configcheck.CheckRendered", in.Gateway)
+	defer func() { endCheck(span, v.OK, retErr) }()
 	return c.remembered(ctx, in, out, modeValidate, c.validator.Validate, memo)
 }
 
 // SameConfig reports whether gw and old, two versions of one gateway, render
 // the same config for the same edition from the same endpoints and policies.
 // It renders in process: no validation slot is held and nothing is executed.
-func (c *Checker) SameConfig(ctx context.Context, old, gw *v1alpha1.KrakenDGateway) (bool, error) {
+func (c *Checker) SameConfig(ctx context.Context, old, gw *v1alpha1.KrakenDGateway) (_ bool, retErr error) {
+	ctx, span := c.start(ctx, "configcheck.SameConfig", gw)
+	defer func() { tracing.End(span, retErr) }()
 	// Nothing read here leaves the Checker and the renderer never mutates its
 	// inputs, so the cache's objects can be used without copying them.
 	in, err := c.gather(ctx, gw, nil, client.UnsafeDisableDeepCopy)
@@ -262,4 +275,18 @@ func sortEndpoints(endpoints []v1alpha1.KrakenDEndpoint) {
 func CEFallback(gw *v1alpha1.KrakenDGateway) bool {
 	return gw.Spec.Edition == v1alpha1.EditionEE &&
 		meta.IsStatusConditionTrue(gw.Status.Conditions, v1alpha1.ConditionLicenseDegraded)
+}
+
+// start starts the span of a check of gw.
+func (c *Checker) start(ctx context.Context, name string, gw *v1alpha1.KrakenDGateway) (context.Context, trace.Span) {
+	return tracing.Start(ctx, c.tracer, name, trace.WithAttributes(tracing.Object("KrakenDGateway", gw)...))
+}
+
+// endCheck records whether the check passed and ends its span. A rejected
+// config is a verdict, not an error: the span's status stays unset.
+func endCheck(span trace.Span, ok bool, err error) {
+	if err == nil {
+		span.SetAttributes(attribute.Bool("configcheck.ok", ok))
+	}
+	tracing.End(span, err)
 }

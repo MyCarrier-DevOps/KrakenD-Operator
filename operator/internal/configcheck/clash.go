@@ -29,6 +29,7 @@ import (
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
+	"github.com/mycarrier-devops/krakend-operator/internal/tracing"
 )
 
 // NotYetCreated is the creationTimestamp to give an endpoint that has none
@@ -120,7 +121,9 @@ func NewClashes(before, after RouteConflicts, involving map[types.NamespacedName
 // namespace/name, and returns what the render leaves out. It renders in
 // process: no validation slot is held and nothing is executed.
 func (c *Checker) Conflicts(ctx context.Context, gw *v1alpha1.KrakenDGateway,
-	replace []v1alpha1.KrakenDEndpoint) (RouteConflicts, error) {
+	replace []v1alpha1.KrakenDEndpoint) (_ RouteConflicts, retErr error) {
+	ctx, span := c.start(ctx, "configcheck.Conflicts", gw)
+	defer func() { tracing.End(span, retErr) }()
 	// Nothing read here leaves the Checker and the renderer never mutates its
 	// inputs, so the cache's objects can be used without copying them.
 	in, err := c.gather(ctx, gw, replace, client.UnsafeDisableDeepCopy)

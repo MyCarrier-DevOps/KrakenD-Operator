@@ -24,6 +24,8 @@ import (
 	"slices"
 	"strings"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -31,6 +33,7 @@ import (
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/fieldindex"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
+	"github.com/mycarrier-devops/krakend-operator/internal/tracing"
 )
 
 // Memo remembers what a check judged about a content, by its key: the
@@ -148,14 +151,18 @@ type Root struct {
 }
 
 // CheckRoot lints r on its own.
-func (c *Checker) CheckRoot(ctx context.Context, r Root, memo Memo) (Verdict, error) {
+func (c *Checker) CheckRoot(ctx context.Context, r Root, memo Memo) (v Verdict, retErr error) {
+	ctx, span := c.start(ctx, "configcheck.CheckRoot", r.Gateway)
+	defer func() { endCheck(span, v.OK, retErr) }()
 	return c.lintInput(ctx, renderer.RenderInput{
 		Gateway: r.Gateway, CEFallback: r.CEFallback, Dragonfly: r.Dragonfly,
 	}, memo)
 }
 
 // CheckGroup lints g.
-func (c *Checker) CheckGroup(ctx context.Context, g Group, memo Memo) (Verdict, error) {
+func (c *Checker) CheckGroup(ctx context.Context, g Group, memo Memo) (v Verdict, retErr error) {
+	ctx, span := c.start(ctx, "configcheck.CheckGroup", g.Gateway)
+	defer func() { endCheck(span, v.OK, retErr) }()
 	in, err := c.inputFor(ctx, g.Gateway, slices.Clone(g.Endpoints), g.Override, g.CEFallback)
 	if err != nil {
 		return Verdict{}, err
@@ -166,7 +173,10 @@ func (c *Checker) CheckGroup(ctx context.Context, g Group, memo Memo) (Verdict, 
 // CheckPolicy lints policy on its own: one synthetic endpoint on a default CE
 // gateway, whose only backend references policy (policyAlone).
 func (c *Checker) CheckPolicy(ctx context.Context, policy *v1alpha1.KrakenDBackendPolicy,
-	memo Memo) (Verdict, error) {
+	memo Memo) (v Verdict, retErr error) {
+	ctx, span := tracing.Start(ctx, c.tracer, "configcheck.CheckPolicy",
+		trace.WithAttributes(tracing.Object("KrakenDBackendPolicy", policy)...))
+	defer func() { endCheck(span, v.OK, retErr) }()
 	return c.lintInput(ctx, policyAlone(policy), memo)
 }
 
@@ -185,7 +195,10 @@ func (c *Checker) CheckPolicy(ctx context.Context, policy *v1alpha1.KrakenDBacke
 // no render includes it, and the endpoint controller reports the missing
 // policy. Its verdict is OK. Every check answers from memo when it already
 // judged the same content.
-func (c *Checker) CheckEndpoint(ctx context.Context, u EndpointUnit, memo Memo) (EndpointVerdict, error) {
+func (c *Checker) CheckEndpoint(ctx context.Context, u EndpointUnit, memo Memo) (v EndpointVerdict, retErr error) {
+	ctx, span := c.start(ctx, "configcheck.CheckEndpoint", u.Gateway)
+	span.SetAttributes(attribute.String("configcheck.endpoint", client.ObjectKeyFromObject(u.Endpoint).String()))
+	defer func() { endCheck(span, v.OK, retErr) }()
 	policies, err := c.unitPolicies(ctx, u)
 	if err != nil {
 		return EndpointVerdict{}, err

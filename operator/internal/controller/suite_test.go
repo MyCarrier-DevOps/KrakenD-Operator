@@ -59,7 +59,7 @@ func fakeClientBuilder() *fake.ClientBuilder {
 // newTestChecker returns a config checker reading through c and validating
 // with v, as main wires it.
 func newTestChecker(c client.Client, v renderer.Validator) *configcheck.Checker {
-	return configcheck.New(c, renderer.New(renderer.Options{}), v, 1)
+	return configcheck.New(c, renderer.New(renderer.Options{}), v, 1, nil)
 }
 
 func fakeRecorder() *record.FakeRecorder {

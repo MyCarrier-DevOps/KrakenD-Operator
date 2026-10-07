@@ -55,7 +55,7 @@ type validation struct {
 func wireValidation(
 	mgr ctrl.Manager, r renderer.Renderer, v renderer.Validator, operatorUsername string,
 ) validation {
-	checker := configcheck.New(mgr.GetClient(), r, v, configCheckSlots)
+	checker := configcheck.New(mgr.GetClient(), r, v, configCheckSlots, nil)
 	return validation{
 		Checker: checker,
 		Gateway: &controller.KrakenDGatewayReconciler{

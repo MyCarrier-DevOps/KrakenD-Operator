@@ -139,7 +139,7 @@ func withPolicy(ep *v1alpha1.KrakenDEndpoint, name string) *v1alpha1.KrakenDEndp
 }
 
 func newChecker(v renderer.Validator, objs ...client.Object) *Checker {
-	return New(newReader(objs...), renderer.New(renderer.Options{}), v, 1)
+	return New(newReader(objs...), renderer.New(renderer.Options{}), v, 1, nil)
 }
 
 // The AutoConfig precheck passes an entry-less copy of a stale endpoint to
@@ -419,7 +419,7 @@ func (g *gateValidator) Lint(context.Context, []byte, v1alpha1.Edition) error {
 
 func TestCheck_RunsAtMostTheConfiguredNumberOfValidationsAtOnce(t *testing.T) {
 	v := &gateValidator{gate: make(chan struct{})}
-	c := New(newReader(endpoint("a", "/a")), renderer.New(renderer.Options{}), v, 2)
+	c := New(newReader(endpoint("a", "/a")), renderer.New(renderer.Options{}), v, 2, nil)
 
 	var wg sync.WaitGroup
 	for range 4 {
@@ -445,7 +445,7 @@ func TestCheck_RunsAtMostTheConfiguredNumberOfValidationsAtOnce(t *testing.T) {
 }
 
 func TestNew_FewerThanOneSlotMeansOne(t *testing.T) {
-	c := New(newReader(endpoint("a", "/a")), renderer.New(renderer.Options{}), &fakeValidator{}, 0)
+	c := New(newReader(endpoint("a", "/a")), renderer.New(renderer.Options{}), &fakeValidator{}, 0, nil)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
@@ -479,7 +479,7 @@ func cacheReader(shared *v1alpha1.KrakenDEndpoint) client.Reader {
 // returns must not be the cache's own objects.
 func TestGather_ReturnsCopiesTheCallerMayMutate(t *testing.T) {
 	shared := endpoint("a", "/a")
-	c := New(cacheReader(shared), renderer.New(renderer.Options{}), &fakeValidator{}, 1)
+	c := New(cacheReader(shared), renderer.New(renderer.Options{}), &fakeValidator{}, 1, nil)
 
 	in, err := c.Gather(context.Background(), gateway(v1alpha1.EditionCE), nil)
 	if err != nil {

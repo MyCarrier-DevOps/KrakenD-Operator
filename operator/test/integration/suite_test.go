@@ -219,7 +219,7 @@ func runTests(m *testing.M) int {
 	// the marker validator (the krakend binary is not available here), behind
 	// one config checker.
 	krakendRenderer := renderer.New(renderer.Options{})
-	checker := configcheck.New(mgr.GetClient(), krakendRenderer, suiteValidator, 1)
+	checker := configcheck.New(mgr.GetClient(), krakendRenderer, suiteValidator, 1, nil)
 	if err := (&controller.KrakenDGatewayReconciler{
 		Client:    mgr.GetClient(),
 		Scheme:    scheme,

@@ -140,7 +140,7 @@ func newBlameWorld(t *testing.T, judge func(config string) (string, bool), objs 
 		Build()
 	checker := &verdictRecorder{verdicts: map[string][]configcheck.EndpointVerdict{},
 		Checker: configcheck.New(c, renderer.New(renderer.Options{}), renderer.NewValidator(
-			renderer.ValidatorOptions{Executor: judgingExecutor{judge: judge}, BinaryPath: "krakend"}), 1)}
+			renderer.ValidatorOptions{Executor: judgingExecutor{judge: judge}, BinaryPath: "krakend"}), 1, nil)}
 	vs := webhook.NewValidators(c, c, checker, "")
 	return &blameWorld{c: c, gw: gw, checker: checker,
 		gateways: &controller.KrakenDGatewayReconciler{Client: c, APIReader: c, Scheme: scheme,

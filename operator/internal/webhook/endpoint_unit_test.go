@@ -172,7 +172,7 @@ func TestEndpointAdmission_TheRootAndAPolicyAreCheckedOnceForManyWrites(t *testi
 	shared := &v1alpha1.KrakenDBackendPolicy{ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "default"}}
 	c := fakeClient(testGateway(), shared)
 	chk := configcheck.New(c, renderer.New(renderer.Options{}),
-		renderer.NewValidator(renderer.ValidatorOptions{Executor: executor, BinaryPath: "krakend"}), 1)
+		renderer.NewValidator(renderer.ValidatorOptions{Executor: executor, BinaryPath: "krakend"}), 1, nil)
 	v := &EndpointValidator{Client: c, Checker: chk, Memo: newAdmissionMemo()}
 
 	for _, name := range []string{"one", "two", "three"} {
