@@ -487,3 +487,24 @@ func TestPolicyAdmission_AnExcludedEndpointIsNotJudged(t *testing.T) {
 		t.Errorf("allowed = %v, checks = %v; want admitted with only the policy and the root checked", resp.Allowed, chk.calls)
 	}
 }
+
+func TestPolicyAdmission_NamingStopsAtTwentyEndpoints(t *testing.T) {
+	names := make([]string, maxEntryCauses+5)
+	var endpointVerdicts []configcheck.EndpointVerdict
+	for i := range names {
+		names[i] = fmt.Sprintf("uses-p-%02d", i)
+		endpointVerdicts = append(endpointVerdicts,
+			configcheck.EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid}, configcheck.EndpointVerdict{OK: true})
+	}
+	chk := &scriptedChecker{verdicts: []configcheck.Verdict{{OK: true}, {OK: true}, {Output: "x"}},
+		endpointVerdicts: endpointVerdicts}
+	v := &PolicyValidator{Client: fakeClient(policyUsers(names...)...), Checker: chk}
+
+	resp := review(t, v, "alice", testPolicy(`{"x":{}}`), testPolicy(`{}`))
+
+	text := responseText(resp)
+	if resp.Allowed || !strings.Contains(text, "default/uses-p-19") || strings.Contains(text, "default/uses-p-20") ||
+		!strings.Contains(text, "(+5 more not checked)") {
+		t.Errorf("denial = %q, want the first 20 endpoints named and 5 counted", text)
+	}
+}
