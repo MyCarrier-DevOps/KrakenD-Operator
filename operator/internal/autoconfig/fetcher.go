@@ -125,7 +125,7 @@ func (f *httpFetcher) fetchFromURL(ctx context.Context, source FetchSource) (*Fe
 
 	parsed, err := url.Parse(source.URL)
 	if err != nil {
-		return nil, fmt.Errorf("parsing URL: %w", err)
+		return nil, fmt.Errorf("parsing URL: %w", withoutURL(err))
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
 		return nil, fmt.Errorf("unsupported scheme %q: only http and https are allowed", parsed.Scheme)
@@ -133,7 +133,7 @@ func (f *httpFetcher) fetchFromURL(ctx context.Context, source FetchSource) (*Fe
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, source.URL, http.NoBody)
 	if err != nil {
-		return nil, fmt.Errorf("creating request: %w", err)
+		return nil, fmt.Errorf("creating request: %w", withoutURL(err))
 	}
 
 	if source.Auth != nil {
@@ -149,7 +149,7 @@ func (f *httpFetcher) fetchFromURL(ctx context.Context, source FetchSource) (*Fe
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("fetching %s: %w", source.URL, err)
+		return nil, fmt.Errorf("fetching %s: %w", RedactURL(source.URL), withoutURL(err))
 	}
 	defer func() {
 		if cerr := resp.Body.Close(); cerr != nil {
@@ -158,7 +158,7 @@ func (f *httpFetcher) fetchFromURL(ctx context.Context, source FetchSource) (*Fe
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status %d from %s", resp.StatusCode, source.URL)
+		return nil, fmt.Errorf("unexpected status %d from %s", resp.StatusCode, RedactURL(source.URL))
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes+1))
