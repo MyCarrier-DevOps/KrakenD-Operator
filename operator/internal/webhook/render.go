@@ -245,17 +245,31 @@ func failingEndpoints(ctx context.Context, chk ConfigChecker, memo configcheck.M
 	return s
 }
 
-// brokenList names the endpoints a write breaks, quoting nothing of them, and
-// counts the suspects the scan left unjudged: past maxEntryCauses, or once a
-// check could not run.
-func brokenList(s scan) string {
-	text := "with this change these KrakenDEndpoints fail validation: " + strings.Join(s.broken, ", ")
+// brokenList names the endpoints a write breaks, quoting nothing of them, in
+// at most room bytes. It counts the suspects the scan left unjudged: past
+// maxEntryCauses, or once a check could not run. That count always survives
+// whole; names that do not fit are folded into a count of their own, which
+// says they were checked.
+func brokenList(s scan, room int) string {
+	const header = "with this change these KrakenDEndpoints fail validation: "
+	var unchecked string
 	switch {
 	case s.unchecked == 0:
 	case s.stopped != nil:
-		text += fmt.Sprintf(" (%d not checked within the admission time)", s.unchecked)
+		unchecked = fmt.Sprintf(" (%d not checked within the admission time)", s.unchecked)
 	default:
-		text += fmt.Sprintf(" (+%d more not checked)", s.unchecked)
+		unchecked = fmt.Sprintf(" (+%d more not checked)", s.unchecked)
 	}
-	return text
+	listed := func(n int) string {
+		text := header + strings.Join(s.broken[:n], ", ")
+		if n < len(s.broken) {
+			text += fmt.Sprintf(" (+%d more)", len(s.broken)-n)
+		}
+		return text + unchecked
+	}
+	n := len(s.broken)
+	for n > 0 && len(listed(n)) > room {
+		n--
+	}
+	return listed(n)
 }

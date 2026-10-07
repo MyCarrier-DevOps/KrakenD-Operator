@@ -263,7 +263,8 @@ func judgePolicyUse(ctx context.Context, chk ConfigChecker, memo configcheck.Mem
 		configcheck.EndpointUnit{Gateway: gw, Override: policy, CEFallback: ceFallback}, was, use.suspects)
 	switch {
 	case len(s.broken) > 0:
-		return fmt.Sprintf("breaks gateway %s/%s: %s", gw.Namespace, gw.Name, brokenList(s)), "", nil
+		prefix := fmt.Sprintf("breaks gateway %s/%s: ", gw.Namespace, gw.Name)
+		return prefix + brokenList(s, warningLimit-len(prefix)), "", nil
 	case s.stopped != nil:
 		return "", "", s.stopped
 	case s.already:
