@@ -2886,6 +2886,102 @@ their paths differ in shape no longer fail the gateway's check. Examples:
 
 ---
 
+## Unreleased — OpenTelemetry logs, traces and metrics
+
+The operator's logs, traces and metrics now use OpenTelemetry. The telemetry itself changes no CRD, RBAC rule or webhook. What changes on the first new pod is where the logs go and what they look like.
+
+### Logs are OpenTelemetry records, in JSON on stdout
+
+The operator wrote zap's console text to **stderr**. It now writes one OpenTelemetry log record per line, in JSON, to **stdout**, and so do controller-runtime, client-go (klog) and the Go HTTP servers inside it:
+
+```json
+{"Timestamp":"2026-10-06T12:00:00.1Z","ObservedTimestamp":"2026-10-06T12:00:00.1Z","Severity":9,"SeverityText":"INFO","Body":{"Type":"STRING","Value":"Serving metrics server"},"Attributes":[{"Key":"bindAddress","Value":{"Type":"STRING","Value":":8443"}}],"TraceID":"00000000000000000000000000000000","SpanID":"0000000000000000","TraceFlags":"00","Resource":[{"Key":"service.name","Value":{"Type":"STRING","Value":"krakend-operator"}}],"Scope":{"Name":"krakend-operator/controller-runtime/metrics","Version":"","SchemaURL":"","Attributes":{}},"DroppedAttributes":0}
+```
+
+Update log pipelines **before** upgrading:
+- read the container's stdout; a collector that reads only stderr sees nothing but the few lines below;
+- the message is `Body.Value`;
+- the level is `SeverityText`;
+- the logger name is `Scope.Name`, with `/` instead of `.`;
+- key/value pairs are in `Attributes`;
+- an error is in the `exception.message` (its text) and `exception.type` (its Go type) attributes; there is no `error` key;
+- error records carry no stack trace: the one zap added in development mode is gone.
+
+A record logged inside a reconcile or an admission request carries its trace's `TraceID` and `SpanID`.
+
+| Flag | Now |
+|---|---|
+| `--zap-log-level` | Same values and meaning (`debug` = verbosity 1; N = verbosity N) |
+| `--zap-devel` | Still on by default, so the default level stays debug; `false` logs at info |
+| `--zap-encoder` | `json` keeps JSON; `console` selects indented JSON. Prefer `--log-format`. Ignores case |
+| `--log-format` | New: `json` (default) or `pretty`. Ignores case |
+| `--zap-stacktrace-level`, `--zap-time-encoding` | Accepted and ignored; a startup record names them |
+
+grpc-go's log, which the OTLP gRPC exporters use, goes through the pipeline as the `krakend-operator/grpc` logger. These still write to stderr directly:
+- flag errors (exit status 2) and `--help` (exit status 0);
+- an invalid logging flag (exit status 2);
+- an unusable `OTEL_*` setting, such as an unsupported exporter or protocol (the operator prints `setting up telemetry: …` and exits with status 1);
+- OpenTelemetry's own warnings about its `OTEL_*` variables while the exporters start;
+- a failed final flush;
+- Go runtime crashes.
+
+### Traces
+
+Each reconcile and each admission request is a trace, with its stages, every `krakend check` run, every Kubernetes API call and every AutoConfig spec fetch below it. See the runbook's Tracing section for the span names.
+- Nothing is exported unless an OTLP endpoint is configured.
+- The trace context is sent to the Kubernetes API server and continued from it on admission requests. If the API server sends an unsampled context (for example with API server tracing at a low `samplingRatePerMillion`), the default sampler leaves the admission request unrecorded. `OTEL_TRACES_SAMPLER=always_on` (Helm: `telemetry.traces.sampler`) records it regardless.
+- It is never sent to OpenAPI spec hosts, or to the hosts of their `$ref` documents.
+- Some Kubernetes API traffic is not traced: informer list and watch requests, leader-election lease renewals, the metrics endpoint's TokenReview and SubjectAccessReview, and the discovery the operator does at startup record no span and send no trace header. Kubernetes events are raised inside a reconcile but written asynchronously, without a span.
+- A lookup of an optional CRD during a reconcile is a `k8s.discovery` span of the stage that needs it.
+- An admission request's span says whether it was allowed (`admission.allowed`) and with which status code (`admission.code`: 200, the denial's own code, or 500 when the check could not run). It never says why: no span carries a denial's text, a warning's text or krakend's output.
+- On an admission request's server span, `client.address` is the first `X-Forwarded-For` value, which any caller in the cluster can set; `network.peer.address` is the real peer.
+
+### Metrics keep their names
+
+`/metrics` serves the same `krakend_operator_*` names, labels, help text and histogram buckets as before. They are now recorded with OpenTelemetry and exported by its Prometheus exporter. No `target_info` series or `otel_scope_*` label is added. controller-runtime's own metrics are unchanged.
+
+One difference: a deleted gateway's `krakend_operator_reconcile_duration_seconds` series stays until the operator restarts. Its gauges are removed as before. This replaces the statement in "Terminating gateways are left alone; deleted gateways stop reporting metrics", above, that the duration series is removed too.
+
+With an OTLP endpoint, the metrics are also pushed over OTLP. Turn that off with `OTEL_METRICS_EXPORTER=none` (Helm: `telemetry.otlp.signals.metrics: false`).
+
+### New environment variables and chart values
+
+| Variable | Default | Effect |
+|---|---|---|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_{TRACES,METRICS,LOGS}_ENDPOINT`) | unset | Exports that signal over OTLP; unset exports nothing. One that is not a URL stops that signal's export (a startup record names the variable) |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | `http/protobuf` | `grpc` or `http/protobuf`; anything else stops startup |
+| `OTEL_EXPORTER_OTLP_HEADERS` (or a signal's own) | unset | Headers sent to the collector, as URL-encoded `name=value` pairs separated by commas. A malformed list stops that signal's export, not the operator; the startup record names the variable and never its value |
+| `OTEL_{TRACES,METRICS,LOGS}_EXPORTER` | `otlp` | `none` turns that signal's export off; any other value stops startup |
+| `OTEL_METRIC_EXPORT_INTERVAL` | `60000` (ms) | How often metrics are pushed over OTLP |
+| `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG` | `parentbased_always_on` | Trace sampling |
+| `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES` | `krakend-operator` | Override the reported resource; a malformed attribute is dropped and named at startup |
+| `POD_NAME` | from the downward API | Reported as `k8s.pod.name`; set by the chart, kustomize and the OLM bundle |
+
+The Helm chart gains a `telemetry:` block: `otlp.endpoint`, `otlp.nodeCollector`, `otlp.protocol`, `otlp.headersSecret`, `otlp.signals`, `traces.sampler`, `traces.samplerArg`, `resourceAttributes` and `logs.format`.
+- With the defaults, nothing new is rendered except `POD_NAME`.
+- If a log agent already collects the pods' stdout, set `telemetry.otlp.signals.logs: false` when enabling OTLP, so records are not delivered twice.
+- `telemetry.otlp.nodeCollector.enabled` exports to the collector on the pod's node, at `http://<node IP>:<port>` (the node IP comes from the downward API; `port` is 4318 for `http/protobuf` and 4317 for `grpc`, so set `otlp.protocol` to match). It also adds `k8s.node.name`, `k8s.pod.uid` and `k8s.pod.ip` to the resource. It takes the place of `otlp.endpoint`: setting both fails the render. IPv6-primary nodes are not supported, because the node IP would be an unbracketed address in the URL; set `otlp.endpoint` there.
+- `telemetry.resourceAttributes` values are percent-encoded for you, keys may not contain `,` or `=`, and a numeric value needs quoting (`"1234567"`) so YAML does not reformat it. A `telemetry.traces.samplerArg` of `0` is kept.
+- On a large cluster, start with `telemetry.traces.sampler: parentbased_traceidratio` and `samplerArg: "0.1"`.
+
+A bad collector Secret does not crash-loop the operator: a malformed header or endpoint variable stops that signal's export and is named in a startup record, without its value.
+
+The image now reports its version (`service.version`) from the `VERSION` build argument. `make docker-build` stamps the Makefile's `VERSION`, a plain `docker build` stamps `dev`, and a release stamps its tag.
+
+### Shutdown flushes telemetry for at most 5 seconds
+
+After the manager stops, the operator flushes the batched OTLP traces, metrics and logs, waiting at most 5 seconds, so that both fit the pod's 10 second termination grace period. Stdout logs are written as they are logged; only OTLP data can be cut off. A failed flush is printed to stderr. A second signal exits at once, without the flush.
+
+### AutoConfig fetch errors no longer show URL credentials
+
+A fetch error in an AutoConfig's status shows the spec URL without user information or fragment, and with each query value (or bare key) replaced by `REDACTED`. For example, `fetching https://specs.example/api.json?token=REDACTED: …` replaces a message that showed the token. A URL that cannot be shown safely appears as `<unparseable URL>`, and an unsupported-scheme error no longer echoes the scheme.
+
+### Rollback
+
+Rolling back restores zap's console logs on stderr. No state migrates either way.
+
+---
+
 ## v0.14.0 — openapi-serve liveness probe (one-time rollout)
 
 The `openapi-serve` sidecar now renders with a liveness probe. It previously
