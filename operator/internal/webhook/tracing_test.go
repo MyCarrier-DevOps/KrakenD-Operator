@@ -946,3 +946,56 @@ func TestAdmission_SpanSaysTheOutcomeAndTheCodeButNotTheDenial(t *testing.T) {
 		})
 	}
 }
+
+// A check that cannot run because the API refused the operator's own read is
+// a 500, whatever status the refusal wraps: the span of the phase that could
+// not run is an error, and the admission's says 500.
+func TestPolicyAdmission_ARefusedReadInAPhaseIsAFailureOnItsSpan(t *testing.T) {
+	refused := fmt.Errorf("getting policy: %w",
+		apierrors.NewForbidden(schema.GroupResource{Resource: "krakendbackendpolicies"}, "p", errors.New("no")))
+	ok, fail := configcheck.Verdict{OK: true}, configcheck.Verdict{Output: "x"}
+	for _, tc := range []struct {
+		name      string
+		checker   *scriptedChecker
+		failed    string
+		unfailing string
+	}{
+		// Calls: the policy alone, then per gateway the root and the group,
+		// then the endpoints the group did not clear.
+		{"screening", &scriptedChecker{err: refused, failCall: 2, failOnly: true}, "admission.screen_policy", ""},
+		{"judging", &scriptedChecker{
+			err: refused, failCall: 4, failOnly: true, verdicts: []configcheck.Verdict{ok, ok, fail},
+		}, "admission.judge_policy", "admission.screen_policy"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := tracingtest.New(t)
+			c := fakeClient(referencing()...)
+			v := &PolicyValidator{Client: c, Checker: tc.checker, Tracer: rec.Tracer()}
+			admit := tracedValidator{kind: "KrakenDBackendPolicy", next: v, tracer: rec.Tracer()}
+
+			_, err := admit.ValidateCreate(context.Background(), testPolicy(`{}`))
+
+			if !apierrors.IsInternalError(err) {
+				t.Fatalf("err = %v, want a 500", err)
+			}
+			spans := rec.Ended()
+			for _, name := range []string{"admission.validate KrakenDBackendPolicy", tc.failed} {
+				span := spans.One(t, name)
+				if got := span.Status(); got.Code != codes.Error || got.Description != decisionFailed {
+					t.Errorf("span %q status = %+v, want an error described %q", name, got, decisionFailed)
+				}
+				if len(spans.One(t, name).Events()) != 0 {
+					t.Errorf("span %q has events, want none", name)
+				}
+			}
+			if tc.unfailing != "" && spans.One(t, tc.unfailing).Status().Code == codes.Error {
+				t.Errorf("span %q is an error, want none: its phase ran", tc.unfailing)
+			}
+			for _, kv := range spans.One(t, "admission.validate KrakenDBackendPolicy").Attributes() {
+				if kv.Key == "admission.code" && kv.Value.AsInt64() != http.StatusInternalServerError {
+					t.Errorf("admission.code = %v, want 500", kv.Value)
+				}
+			}
+		})
+	}
+}
