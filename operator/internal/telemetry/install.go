@@ -39,7 +39,7 @@ func InstallLogging(logger, diagnostics logr.Logger) {
 	log.SetFlags(0)
 	log.SetOutput(stdlibWriter{logger: logger.WithName("stdlib")})
 	otel.SetLogger(diagnostics)
-	otel.SetErrorHandler(otel.ErrorHandlerFunc(NewErrorHandler(diagnostics)))
+	otel.SetErrorHandler(otel.ErrorHandlerFunc(newErrorHandler(diagnostics)))
 }
 
 // stdlibWriter logs each write of the standard library's log package as a

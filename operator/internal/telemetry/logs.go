@@ -104,12 +104,12 @@ func NewLogger(provider otellog.LoggerProvider, name string) logr.Logger {
 		otellogr.WithLoggerProvider(provider), otellogr.WithLevelSeverity(LevelSeverity))})
 }
 
-// NewErrorHandler returns an OpenTelemetry error handler that logs each
+// newErrorHandler returns an OpenTelemetry error handler that logs each
 // error through logger. An error raised while one is being logged is dropped,
 // so a failing log pipeline cannot report its own failures in a loop. The
 // guard is process-wide, so it also drops an unrelated error raised at the
 // same moment on another goroutine.
-func NewErrorHandler(logger logr.Logger) func(error) {
+func newErrorHandler(logger logr.Logger) func(error) {
 	var busy atomic.Bool
 	return func(err error) {
 		if !busy.CompareAndSwap(false, true) {
