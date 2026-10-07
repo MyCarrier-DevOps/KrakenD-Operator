@@ -217,7 +217,7 @@ func (r *KrakenDGatewayReconciler) reconcileDragonfly(ctx context.Context, gw *v
 	}
 	meta.RemoveStatusCondition(&gw.Status.Conditions, v1alpha1.ConditionDragonflyReady)
 	gw.Status.DragonflyAddress = ""
-	dragonflyReady.DeleteLabelValues(gw.Namespace, gw.Name)
+	r.metrics().ForgetDragonflyReady(client.ObjectKeyFromObject(gw))
 	return nil
 }
 
