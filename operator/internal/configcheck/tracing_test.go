@@ -17,6 +17,7 @@ limitations under the License.
 package configcheck
 
 import (
+	"context"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -24,6 +25,13 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
+	"github.com/mycarrier-devops/krakend-operator/internal/telemetry"
+	"github.com/mycarrier-devops/krakend-operator/internal/tracing/tracingtest"
 )
 
 // Every exported method of *Checker is a span named configcheck.<Method>,
@@ -90,4 +98,41 @@ func startsSpan(body *ast.BlockStmt, name string) bool {
 		return !found
 	})
 	return found
+}
+
+// tracedChecker returns a checker over objs, with a real validator whose
+// krakend runs are spans, recording its spans to rec.
+func tracedChecker(rec *tracingtest.Recorder, objs ...client.Object) *Checker {
+	v := renderer.NewValidator(renderer.ValidatorOptions{
+		Executor: telemetry.TraceExecutor(okExecutor{}, rec.Tracer()), BinaryPath: "krakend",
+	})
+	return New(newReader(objs...), renderer.New(renderer.Options{}), v, 1, rec.Tracer())
+}
+
+// A check is a span below the caller's, and each content check it runs is a
+// span below it, with the wait for a validation slot and the krakend run
+// below that.
+func TestChecker_CheckRenderedSpansTheSlotWaitAndTheKrakendRun(t *testing.T) {
+	rec := tracingtest.New(t)
+	c := tracedChecker(rec, endpoint("a", "/a"))
+	ctx, parent := rec.Tracer().Start(context.Background(), "reconcile KrakenDGateway")
+	in, err := c.Gather(ctx, gateway(v1alpha1.EditionCE), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := renderer.New(renderer.Options{}).Render(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := c.CheckRendered(ctx, in, out, nil); err != nil {
+		t.Fatal(err)
+	}
+	parent.End()
+
+	spans := rec.Ended()
+	spans.RequireChild(t, "reconcile KrakenDGateway", "configcheck.CheckRendered")
+	spans.RequireChild(t, "configcheck.CheckRendered", "configcheck.validate")
+	spans.RequireChild(t, "configcheck.validate", "configcheck.slot")
+	spans.RequireChild(t, "configcheck.validate", "krakend check")
 }
