@@ -93,3 +93,19 @@ with commas.
 {{- end -}}
 {{- join "," $pairs -}}
 {{- end }}
+
+{{/*
+The OTLP endpoint: telemetry.otlp.endpoint, or the collector on the node's IP
+when telemetry.otlp.nodeCollector.enabled. Empty when neither is set.
+*/}}
+{{- define "krakend-operator.otlpEndpoint" -}}
+{{- $otlp := .Values.telemetry.otlp -}}
+{{- if and $otlp.nodeCollector.enabled $otlp.endpoint -}}
+{{- fail "telemetry.otlp.endpoint and telemetry.otlp.nodeCollector.enabled are both set; use one" -}}
+{{- end -}}
+{{- if $otlp.nodeCollector.enabled -}}
+{{- printf "http://$(NODE_IP):%v" $otlp.nodeCollector.port -}}
+{{- else -}}
+{{- $otlp.endpoint -}}
+{{- end -}}
+{{- end }}
