@@ -27,78 +27,10 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
-	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
-
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 )
-
-// renderChecks are the checks of the verdict ratchet, each over a proposed
-// change: the gateway with it, and without it, then, optionally, the same two
-// on the isolated baseline used when the gateway already fails (a change with
-// no isolated form leaves isoAfter and isoBefore nil). newFailure, when set,
-// decides from the two verdicts whether a gateway that already fails is made
-// newly worse by the change, which is then denied without the isolated checks.
-type renderChecks struct {
-	after, before, isoAfter, isoBefore func(context.Context) (configcheck.Verdict, error)
-	newFailure                         func(before, after configcheck.Verdict) bool
-}
-
-// bindCheck fixes the gateway a check of its stored endpoints runs on.
-func bindCheck(
-	run func(context.Context, *v1alpha1.KrakenDGateway, []v1alpha1.KrakenDEndpoint) (configcheck.Verdict, error),
-	gw *v1alpha1.KrakenDGateway,
-) func(context.Context) (configcheck.Verdict, error) {
-	return func(ctx context.Context) (configcheck.Verdict, error) { return run(ctx, gw, nil) }
-}
-
-// ratchetRender rejects a change only when it turns a passing config into a
-// failing one. It runs after, then before; when before fails too the failure
-// is a warning (preexisting words it from before's verdict) unless newFailure
-// finds the change newly to blame, or the change fails on the isolated
-// baseline where its own baseline passed. Without an
-// isolated baseline (isoAfter nil) a preexisting failure is only a warning.
-// A check that cannot run is a 500 with no warning: the request is not
-// judged. deny builds the rejection from a failing verdict.
-func ratchetRender(
-	ctx context.Context, c renderChecks, deny func(configcheck.Verdict) error,
-	preexisting func(before configcheck.Verdict) string,
-) (admission.Warnings, error) {
-	after, err := c.after(ctx)
-	if err != nil || after.OK {
-		return nil, checkErr(err)
-	}
-	before, err := c.before(ctx)
-	if err != nil {
-		return nil, checkErr(err)
-	}
-	if before.OK {
-		return nil, deny(after)
-	}
-	if c.newFailure != nil && c.newFailure(before, after) {
-		return nil, deny(after)
-	}
-	warning := admission.Warnings{preexisting(before)}
-	if c.isoAfter == nil {
-		return warning, nil
-	}
-	isoAfter, err := c.isoAfter(ctx)
-	if err != nil {
-		return nil, checkErr(err)
-	}
-	if isoAfter.OK {
-		return warning, nil
-	}
-	isoBefore, err := c.isoBefore(ctx)
-	if err != nil {
-		return nil, checkErr(err)
-	}
-	if isoBefore.OK {
-		return nil, deny(isoAfter)
-	}
-	return warning, nil
-}
 
 // describeDrops lists what a CE render drops: a namespace, with the keys CE
 // does not honor when it honors the rest of the block.
@@ -108,40 +40,6 @@ func describeDrops(drops []renderer.CEDrop) string {
 		parts[i] = d.String()
 	}
 	return strings.Join(parts, ", ")
-}
-
-// blames reports whether v names an entry of endpoint.
-func blames(v configcheck.Verdict, endpoint types.NamespacedName) bool {
-	return slices.ContainsFunc(v.Findings, func(f configcheck.Finding) bool { return f.Endpoint == endpoint })
-}
-
-// newRouteRefusals is the gateway rule of the ratchet on a failing gateway,
-// for a change after which the route check refuses routes:
-//   - when the gateway failed before only at krakend check, its route check ran
-//     to completion without a refusal, so any refusal is the change's;
-//   - when it failed before at the route check, a refusal counts against the
-//     change when every endpoint it names was unblamed before. The route check
-//     leaves a refused route out of its engine, so a refusal that names an
-//     endpoint blamed before may only have been hidden by an earlier one, which
-//     is no fault of the change. When the check stopped at its cap before the
-//     change, which refusals it hid is unknown and this does not apply.
-//
-// In every other case the rule does not apply.
-func newRouteRefusals(before, after configcheck.Verdict) bool {
-	if after.Stage != renderer.StageRoute {
-		return false
-	}
-	switch {
-	case before.Stage == renderer.StageCheck:
-		return len(after.Refusals) > 0
-	case before.Stage == renderer.StageRoute && !before.RefusalsCapped:
-		return slices.ContainsFunc(after.Refusals, func(r configcheck.Refusal) bool {
-			return len(r.Endpoints) > 0 && !slices.ContainsFunc(r.Endpoints, func(e types.NamespacedName) bool {
-				return blames(before, e)
-			})
-		})
-	}
-	return false
 }
 
 // clashErrors reports router clashes on p: the first maxEntryCauses as causes
