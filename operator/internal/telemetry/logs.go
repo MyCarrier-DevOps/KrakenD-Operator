@@ -17,6 +17,7 @@ limitations under the License.
 package telemetry
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"strconv"
@@ -85,13 +86,20 @@ func NewStdoutProcessor(w io.Writer, format LogFormat) (sdklog.Processor, error)
 	return sdklog.NewSimpleProcessor(exporter), nil
 }
 
-// WithMinSeverity wraps next so it drops records below minimum.
-func WithMinSeverity(next sdklog.Processor, _ otellog.Severity) sdklog.Processor { return next }
+// WithMinSeverity wraps next so it drops records below minimum. Records it
+// keeps are completed for readers that expect the fields the log bridge leaves
+// unset (the timestamp and the severity text) and exported with a context that
+// is never cancelled: an exporter that honours cancellation would otherwise
+// drop the records a timed-out reconcile or admission request logs.
+func WithMinSeverity(next sdklog.Processor, minimum otellog.Severity) sdklog.Processor {
+	return &levelProcessor{Processor: next, minimum: minimum}
+}
 
 // NewLogger returns the logr.Logger every component logs through: an
 // OpenTelemetry log bridge over provider, named name.
 func NewLogger(provider otellog.LoggerProvider, name string) logr.Logger {
-	return logr.New(otellogr.NewLogSink(name, otellogr.WithLoggerProvider(provider)))
+	return logr.New(otellogr.NewLogSink(name,
+		otellogr.WithLoggerProvider(provider), otellogr.WithLevelSeverity(LevelSeverity)))
 }
 
 // NewErrorHandler returns an OpenTelemetry error handler that logs each
@@ -106,4 +114,30 @@ func NewErrorHandler(logger logr.Logger) func(error) {
 		defer busy.Store(false)
 		logger.Error(err, "OpenTelemetry pipeline error")
 	}
+}
+
+// levelProcessor is the processor WithMinSeverity returns.
+type levelProcessor struct {
+	sdklog.Processor
+	minimum otellog.Severity
+}
+
+// Enabled reports false below the minimum severity, so a disabled
+// logger.V(n) call is not even built.
+func (p *levelProcessor) Enabled(ctx context.Context, param sdklog.EnabledParameters) bool {
+	return param.Severity >= p.minimum && p.Processor.Enabled(ctx, param)
+}
+
+// OnEmit passes records at or above the minimum severity on.
+func (p *levelProcessor) OnEmit(ctx context.Context, r *sdklog.Record) error {
+	if r.Severity() < p.minimum {
+		return nil
+	}
+	if r.Timestamp().IsZero() {
+		r.SetTimestamp(r.ObservedTimestamp())
+	}
+	if r.SeverityText() == "" {
+		r.SetSeverityText(r.Severity().String())
+	}
+	return p.Processor.OnEmit(context.WithoutCancel(ctx), r)
 }
