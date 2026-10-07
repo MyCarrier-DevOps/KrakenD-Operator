@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -309,5 +310,40 @@ func TestAutoConfigReconcile_AJudgingHoldKeepsTheStaleEndpointsTheClashStageMode
 	}
 	if _, ok := held["test-ac-getb"]; !ok {
 		t.Errorf("held = %v, want getB held for its own failure", held)
+	}
+}
+
+// The status cuts a message at maxStatusMessageLen with an ellipsis, in the
+// middle of a finding. A hold's own output is bounded so that the whole
+// message fits and ends at a finding boundary, naming how many it left out.
+func TestAutoConfigReconcile_AHoldMessageEndsAtAFindingBoundaryWithinTheStatusLimit(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	var findings []string
+	for i := range 20 {
+		findings = append(findings, fmt.Sprintf("finding %02d: the host is not valid here", i))
+	}
+	checker := &fakeChecker{
+		group: func([]v1alpha1.KrakenDEndpoint) configcheck.Verdict { return configcheck.Verdict{Output: "together"} },
+		endpoint: func(*v1alpha1.KrakenDEndpoint) configcheck.EndpointVerdict {
+			return configcheck.EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid, Output: strings.Join(findings, "\n")}
+		},
+	}
+	c := fakeClientBuilder().WithObjects(ac, cm, testGateway()).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Checker = checker
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatal(err)
+	}
+
+	failed := getAC(t, c, ac).Status.FailedOperations
+	if len(failed) != 1 {
+		t.Fatalf("failedOperations = %+v, want listusers held", failed)
+	}
+	msg := failed[0].Message
+	if len(msg) > maxStatusMessageLen || strings.HasSuffix(msg, "...") || !strings.HasSuffix(msg, " more)") {
+		t.Errorf("message = %q (%d bytes), want one ending at a finding boundary with a count of the rest", msg, len(msg))
 	}
 }
