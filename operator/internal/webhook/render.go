@@ -164,6 +164,19 @@ func clashErrors(p *field.Path, clashes []configcheck.Clash, capped bool) field.
 	return errs
 }
 
+// suspectsOf returns the endpoints of served that a group check of them
+// (group) did not judge: all of them when it failed, otherwise those that
+// lost an entry in its render (Verdict.Masked), whose lost entries it never
+// checked.
+func suspectsOf(group configcheck.Verdict, served []v1alpha1.KrakenDEndpoint) []v1alpha1.KrakenDEndpoint {
+	if !group.OK {
+		return served
+	}
+	return slices.DeleteFunc(slices.Clone(served), func(ep v1alpha1.KrakenDEndpoint) bool {
+		return !slices.Contains(group.Masked, types.NamespacedName{Namespace: ep.Namespace, Name: ep.Name})
+	})
+}
+
 // scan is what failingEndpoints found among the suspects of a write.
 type scan struct {
 	// broken are the suspects the write breaks, by namespace/name: each fails
