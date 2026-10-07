@@ -154,7 +154,7 @@ func TestReadEvents_AReadAddsAnEventToTheActiveSpan(t *testing.T) {
 		attrs[string(kv.Key)] = kv.Value.String()
 	}
 	if attrs["k8s.object.kind"] != "ConfigMap" || attrs["k8s.namespace.name"] != "ns" ||
-		attrs["k8s.object.name"] != "cm" || attrs["found"] != "true" {
+		attrs["k8s.object.name"] != "cm" || attrs["k8s.client.found"] != "true" {
 		t.Errorf("event attributes = %v, want ConfigMap ns/cm found", attrs)
 	}
 }
@@ -411,7 +411,7 @@ func TestReadEvents_AGetThatFailsForAnotherReasonRecordsItsErrorType(t *testing.
 		t.Fatal("Get succeeded, want the interceptor's error")
 	}
 	attrs := eventAttrs(t, rec, "reconcile", "k8s.client.get")
-	if _, ok := attrs["found"]; ok || attrs["error.type"] == "" {
+	if _, ok := attrs["k8s.client.found"]; ok || attrs["error.type"] == "" {
 		t.Errorf("event attributes = %v, want error.type and no found for an error that is not NotFound", attrs)
 	}
 }
@@ -428,7 +428,7 @@ func TestReadEvents_AGetOfAMissingObjectRecordsFoundFalse(t *testing.T) {
 		t.Fatalf("Get = %v, want NotFound", err)
 	}
 	attrs := eventAttrs(t, rec, "reconcile", "k8s.client.get")
-	if _, ok := attrs["error.type"]; ok || attrs["found"] != "false" {
+	if _, ok := attrs["error.type"]; ok || attrs["k8s.client.found"] != "false" {
 		t.Errorf("event attributes = %v, want found=false and no error.type", attrs)
 	}
 }
