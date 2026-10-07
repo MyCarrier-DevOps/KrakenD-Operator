@@ -59,6 +59,8 @@ type scriptedChecker struct {
 	memos []bool
 	// delay holds every check that long, giving up when its context ends.
 	delay time.Duration
+	// failOnly makes err fail call failCall alone, not every call after it.
+	failOnly bool
 }
 
 func (s *scriptedChecker) Conflicts(
@@ -95,7 +97,7 @@ func (s *scriptedChecker) record(ctx context.Context, call string, eps []v1alpha
 			return ctx.Err()
 		}
 	}
-	if s.err != nil && len(s.calls) >= max(s.failCall, 1) {
+	if n, at := len(s.calls), max(s.failCall, 1); s.err != nil && (n == at || n > at && !s.failOnly) {
 		return s.err
 	}
 	return nil
