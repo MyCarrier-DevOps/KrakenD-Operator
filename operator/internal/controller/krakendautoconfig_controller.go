@@ -29,6 +29,7 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -109,6 +110,8 @@ type KrakenDAutoConfigReconciler struct {
 	FetchTimeout time.Duration
 	// Metrics records the controller's metric; nil records nothing.
 	Metrics AutoConfigMetrics
+	// Tracer records the reconcile's spans; nil records none.
+	Tracer trace.Tracer
 }
 
 // defaultFetchTimeout bounds one reconcile's spec fetch and external $ref

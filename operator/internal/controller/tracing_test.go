@@ -527,3 +527,43 @@ func TestPolicyReconcile_IsOneTraceWithItsProtectionAndStatusWrite(t *testing.T)
 	spans.RequireChild(t, "reconcile KrakenDBackendPolicy", "policy.protection")
 	spans.RequireChild(t, "reconcile KrakenDBackendPolicy", "policy.status")
 }
+
+// reconcileACTraced syncs, once, an AutoConfig with a filter, a stale endpoint
+// of its own and a gateway its candidates are checked against, holding one of
+// one check slot, and returns the sync's spans.
+func reconcileACTraced(t *testing.T) tracingtest.Spans {
+	t.Helper()
+	ac := testAutoConfig()
+	ac.Spec.Filter = &v1alpha1.FilterSpec{IncludeMethods: []string{"GET"}}
+	stale := testEndpoint("test-ac-old-endpoint", "/api/old")
+	stale.Labels = map[string]string{"gateway.krakend.io/autoconfig": ac.Name}
+	c := fakeClientBuilder().WithObjects(ac, testCUEDefinitionsCM(), testGateway(), ownedCopy(t, ac, stale)).
+		WithStatusSubresource(ac).Build()
+	f, ce, fi, g := defaultMocks()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.CheckSlots = make(chan struct{}, 1)
+	rec := tracingtest.New(t)
+	r.Tracer = rec.Tracer()
+	r.Checker = configcheck.New(c, renderer.New(renderer.Options{}), krakendValidator(rec), 1, rec.Tracer())
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatal(err)
+	}
+	return rec.Ended()
+}
+
+// An AutoConfig sync is one trace: the spec fetch with its $ref resolution,
+// CUE evaluation, the filter, generation, the endpoint pass with its precheck,
+// check-slot waits, writes and deletions, and the status write, each under the
+// stage that runs it.
+func TestAutoConfigReconcile_SpansEachStageUnderItsParent(t *testing.T) {
+	for _, tc := range []struct{ span, parent string }{
+		{"autoconfig.fetch_spec", "reconcile KrakenDAutoConfig"},
+	} {
+		t.Run(tc.span, func(t *testing.T) {
+			spans := reconcileACTraced(t)
+
+			spans.RequireParent(t, tc.parent, tc.span)
+		})
+	}
+}
