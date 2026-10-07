@@ -112,3 +112,18 @@ func TestSetup_RejectsAnUnsupportedProtocol(t *testing.T) {
 		t.Errorf("err = %v, want the unsupported protocol named", err)
 	}
 }
+
+func TestSetup_WithAnEndpointTracesAreRecorded(t *testing.T) {
+	cleanOTelEnv(t)
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:1")
+	t.Setenv("OTEL_LOGS_EXPORTER", "none")
+	t.Setenv("OTEL_METRICS_EXPORTER", "none")
+
+	tel := setup(t, &bytes.Buffer{})
+
+	_, span := tel.TracerProvider.Tracer("t").Start(context.Background(), "s")
+	defer span.End()
+	if !span.IsRecording() {
+		t.Error("span is not recording with an OTLP endpoint configured")
+	}
+}
