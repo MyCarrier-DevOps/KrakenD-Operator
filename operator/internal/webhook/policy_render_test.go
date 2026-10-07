@@ -71,22 +71,22 @@ func TestPolicyAdmission_Render(t *testing.T) {
 			"policy,root,group", ""},
 		{"referenced, breaks its endpoint", referencing(), testPolicy(`{}`),
 			[]configcheck.Verdict{ok, ok, fail}, []configcheck.EndpointVerdict{epFail, epOK}, false,
-			"policy,root,group,endpoint,endpoint", ""},
+			"policy,root,group,group,endpoint,endpoint", ""},
 		{"created, referenced, breaks its endpoint", referencing(), nil,
 			[]configcheck.Verdict{ok, ok, fail}, []configcheck.EndpointVerdict{epFail, epOK}, false,
-			"policy,root,group,endpoint,endpoint", ""},
+			"policy,root,group,group,endpoint,endpoint", ""},
 		{"created, referenced, fails together only", referencing(), nil,
-			[]configcheck.Verdict{ok, ok, fail}, nil, false, "policy,root,group,endpoint", ""},
+			[]configcheck.Verdict{ok, ok, fail}, nil, false, "policy,root,group,group,endpoint", ""},
 		{"failing alone before and after: its endpoints decide", referencing(), testPolicy(`{"x":{}}`),
 			[]configcheck.Verdict{bad, bad}, nil, true, "policy,policy,root,group", ""},
 		{"its endpoints already fail with the stored policy", referencing(), testPolicy(`{}`),
 			[]configcheck.Verdict{ok, ok, fail}, []configcheck.EndpointVerdict{epFail, epFail}, true,
-			"policy,root,group,endpoint,endpoint", "already fail validation with the stored policy"},
+			"policy,root,group,group,endpoint,endpoint", "already fail validation with the stored policy"},
 		{"they already fail together with the stored policy", referencing(), testPolicy(`{}`),
-			[]configcheck.Verdict{ok, ok, fail, fail}, nil, true, "policy,root,group,endpoint,group",
+			[]configcheck.Verdict{ok, ok, fail, fail}, nil, true, "policy,root,group,group,endpoint",
 			"already fail validation together"},
 		{"they fail only together with the change", referencing(), testPolicy(`{}`),
-			[]configcheck.Verdict{ok, ok, fail, ok}, nil, false, "policy,root,group,endpoint,group", ""},
+			[]configcheck.Verdict{ok, ok, fail, ok}, nil, false, "policy,root,group,group,endpoint", ""},
 		{"the gateway root fails alone", referencing(), testPolicy(`{}`),
 			[]configcheck.Verdict{ok, fail}, nil, true, "policy,root", "fails validation on its own"},
 	}
@@ -315,7 +315,9 @@ func TestPolicyAdmission_JudgesEachGatewayWithTheRightPolicy(t *testing.T) {
 		"-", "default/gw-a:" + changed,
 		"-", "default/gw-b:" + changed,
 		"-", "default/gw-c:" + changed,
+		"default/gw-a:" + stored,
 		"default/uses-p-gw-a[GET /a]:" + changed, "default/uses-p-gw-a[GET /a]:" + stored,
+		"default/gw-c:" + stored,
 		"default/uses-p-gw-c[GET /a]:" + changed, "default/uses-p-gw-c[GET /a]:" + stored,
 	}
 	if got := strings.Join(chk.args, " "); got != strings.Join(wantArgs, " ") {
@@ -414,7 +416,7 @@ func TestPolicyAdmission_TheDenialNamesTheBrokenEndpointsAndQuotesNone(t *testin
 	if resp.Allowed || !strings.Contains(responseText(resp), "default/uses-p") || strings.Contains(responseText(resp), "SECRET") {
 		t.Errorf("response = %+v; want a denial naming default/uses-p and quoting nothing of it", resp.Result)
 	}
-	if got := strings.Join(chk.calls, ","); got != "policy,root,group,endpoint,endpoint" {
+	if got := strings.Join(chk.calls, ","); got != "policy,root,group,group,endpoint,endpoint" {
 		t.Errorf("checks = %s, want the policy alone, the root, the group with the change, then the endpoint "+
 			"with the change and with the stored policy", got)
 	}
@@ -514,7 +516,7 @@ func TestPolicyAdmission_NamingStopsAtTwentyEndpoints(t *testing.T) {
 }
 
 func TestPolicyAdmission_ADenialSurvivesALaterCheckThatCannotRun(t *testing.T) {
-	chk := &scriptedChecker{err: errors.New("no slot"), failCall: 6,
+	chk := &scriptedChecker{err: errors.New("no slot"), failCall: 7,
 		verdicts:         []configcheck.Verdict{{OK: true}, {OK: true}, {Output: "x"}},
 		endpointVerdicts: []configcheck.EndpointVerdict{{Reason: v1alpha1.ReasonEndpointInvalid}, {OK: true}}}
 	v := &PolicyValidator{Client: fakeClient(policyUsers("victim", "zz-other")...), Checker: chk}
@@ -569,7 +571,7 @@ func TestPolicyAdmission_ScreensEveryGatewayBeforeNaming(t *testing.T) {
 	if resp.Allowed {
 		t.Errorf("admitted a policy that breaks default/uses-p-gw-a")
 	}
-	if got := strings.Join(chk.calls, ","); got != "policy,root,group,root,group,endpoint,endpoint" {
+	if got := strings.Join(chk.calls, ","); got != "policy,root,group,root,group,group,endpoint,endpoint" {
 		t.Errorf("checks = %s, want both gateways screened before any endpoint is named", got)
 	}
 }
@@ -599,21 +601,25 @@ func TestPolicyAdmission_AScanThatStoppedWithoutADenialIs500(t *testing.T) {
 	tests := []struct {
 		name string
 		objs []client.Object
-		// group is the group verdict; the check that cannot run is call failCall.
+		// group is the group verdict, and stored the stored policy's; the check
+		// that cannot run is call failCall.
 		group    configcheck.Verdict
+		stored   configcheck.Verdict
 		verdicts []configcheck.EndpointVerdict
 		failCall int
 	}{
+		// The stored group fails too, so the write is not decided before the scan.
 		{"after an endpoint that already failed", policyUsers("stale", "zz-next"),
-			configcheck.Verdict{Output: "x"}, []configcheck.EndpointVerdict{epFail, epFail}, 6},
+			configcheck.Verdict{Output: "x"}, configcheck.Verdict{Output: "x"},
+			[]configcheck.EndpointVerdict{epFail, epFail}, 7},
 		{"on a masked endpoint", referencing(),
 			configcheck.Verdict{OK: true, Masked: []types.NamespacedName{{Namespace: "default", Name: "uses-p"}}},
-			nil, 4},
+			configcheck.Verdict{OK: true}, nil, 4},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			chk := &scriptedChecker{err: errors.New("no slot"), failCall: tt.failCall, failOnly: true,
-				verdicts:         []configcheck.Verdict{{OK: true}, {OK: true}, tt.group},
+				verdicts:         []configcheck.Verdict{{OK: true}, {OK: true}, tt.group, tt.stored},
 				endpointVerdicts: tt.verdicts}
 			v := &PolicyValidator{Client: fakeClient(tt.objs...), Checker: chk}
 
@@ -635,7 +641,7 @@ func TestPolicyAdmission_TheCauseKeepsItsCountOfEndpointsNotChecked(t *testing.T
 		suffix   string
 	}{
 		{"past the cap", 0, "(+3 more) (+5 more not checked)"},
-		{"cut short by the deadline", 42, "(+3 more) (6 not checked within the admission time)"},
+		{"cut short by the deadline", 43, "(+3 more) (6 not checked within the admission time)"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -709,7 +715,7 @@ func TestPolicyAdmission_AReferrerThatFailsAnywayDoesNotBlockACreate(t *testing.
 		!strings.Contains(resp.Warnings[0], "whatever this policy holds")) {
 		t.Errorf("warning = %q, want it to say the endpoints fail whatever the policy holds, with no stored policy", resp.Warnings[0])
 	}
-	if got := strings.Join(chk.calls, ","); got != "policy,root,group,endpoint,endpoint" {
+	if got := strings.Join(chk.calls, ","); got != "policy,root,group,group,endpoint,endpoint" {
 		t.Errorf("checks = %s, want the endpoint checked with the policy and with it rendered empty", got)
 	}
 	if got := strings.Join(chk.overrides, " "); got != "default/p default/p" {
