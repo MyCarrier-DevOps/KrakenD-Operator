@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -690,4 +691,30 @@ func TestAutoConfigAdmission_AnUpdatesDenialIsNoErrorOnItsStructuralSpan(t *test
 	spans := rec.Ended()
 	spans.RequireChild(t, "admission.validate KrakenDAutoConfig", "admission.structural")
 	requireCleanAdmissionSpans(t, spans)
+}
+
+// A denial is a refusal wherever the status error sits in the chain, as
+// controller-runtime reads the response code; a 500 stays a failure even when
+// the failure it reports was a denial.
+func TestIsDenial_ReadsTheStatusErrorInTheChain(t *testing.T) {
+	denial := invalid(kindEndpoint, "e", field.ErrorList{field.Invalid(field.NewPath("spec"), "v", "d")})
+	for _, tc := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"a denial", denial, true},
+		{"a wrapped denial", fmt.Errorf("checking: %w", denial), true},
+		{"a failure", unavailable(errors.New("down")), false},
+		{"a failure wrapping a denial", unavailable(fmt.Errorf("checking: %w", denial)), false},
+		{"a wrapped failure", fmt.Errorf("checking: %w", unavailable(errors.New("down"))), false},
+		{"a plain error", errors.New("down"), false},
+		{"no error", nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isDenial(tc.err); got != tc.want {
+				t.Errorf("isDenial(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
 }
