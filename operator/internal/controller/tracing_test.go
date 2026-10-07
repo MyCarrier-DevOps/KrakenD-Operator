@@ -191,3 +191,20 @@ func TestGatewayReconcile_EachJudgingPassNamesItsEndpoints(t *testing.T) {
 		}
 	}
 }
+
+// An endpoint judged on its own is a check below the pass that judges it,
+// inside the config stage.
+func TestGatewayReconcile_AnEndpointCheckIsASpanOfItsJudgingPass(t *testing.T) {
+	gw := testGateway()
+	c, _ := gatewayStatusWrites(gw, testEndpoint("good", "/a"), badHosted("bad", "/b"))
+	rec := tracingtest.New(t)
+	r := tracedGatewayReconciler(c, rejectsBadHosts(), rec)
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+
+	spans := rec.Ended()
+	spans.RequireParent(t, "gateway.judge_endpoints", "configcheck.CheckEndpoint")
+	spans.RequireParent(t, "gateway.config", "gateway.judge_endpoints")
+}
