@@ -183,7 +183,7 @@ func parityCases() []parityCase {
 			[]*v1alpha1.KrakenDEndpoint{parityEndpoint("a", 0, "GET", "/healthz")}, false, false, ""},
 		{"auto options clash", parityGateway(v1alpha1.EditionCE, &v1alpha1.RouterConfig{AutoOptions: true}),
 			[]*v1alpha1.KrakenDEndpoint{
-				parityEndpoint("a", time.Hour, "GET", "/a/{id}"), parityEndpoint("b", 0, "POST", "/a/{name}")}, false, false, ""},
+				parityEndpoint("a", time.Hour, "GET", "/a/{id}"), parityEndpoint("b", 0, "POST", "/a/{name}")}, true, false, "b"},
 	}
 }
 
