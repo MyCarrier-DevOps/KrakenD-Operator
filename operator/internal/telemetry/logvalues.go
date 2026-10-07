@@ -75,7 +75,7 @@ const maxValueDepth = 100
 //   - a fmt.Stringer: its String(), which for the object references
 //     controller-runtime and klog log is "namespace/name";
 //   - a logr.Marshaler: the value it logs as, converted in turn;
-//   - a named string, bool, int or float type: its base type;
+//   - a named string, bool, int, float or complex type: its base type;
 //   - a map, slice, array or pointer: the same with its elements converted.
 //
 // A time.Duration and a time.Time stay as they are: the bridge records them as
@@ -109,6 +109,8 @@ func readableValue(v any, depth int) any {
 		return rv.Uint()
 	case reflect.Float32, reflect.Float64:
 		return rv.Float()
+	case reflect.Complex64, reflect.Complex128:
+		return rv.Complex()
 	case reflect.Slice, reflect.Array:
 		if rv.Type().Elem().Kind() == reflect.Uint8 {
 			return v
