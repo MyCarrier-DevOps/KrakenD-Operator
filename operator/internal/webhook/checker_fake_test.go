@@ -52,6 +52,13 @@ type scriptedChecker struct {
 	conflicts     func(gw *v1alpha1.KrakenDGateway, replace []v1alpha1.KrakenDEndpoint) configcheck.RouteConflicts
 	conflictErr   error
 	conflictCalls [][]v1alpha1.KrakenDEndpoint
+	// endpointVerdicts answer CheckEndpoint in order (OK once they run out).
+	endpointVerdicts []configcheck.EndpointVerdict
+	// memos records, for each root and endpoint check, whether it was handed
+	// a memo.
+	memos []bool
+	// delay holds every check that long, giving up when its context ends.
+	delay time.Duration
 }
 
 func (s *scriptedChecker) Conflicts(
@@ -72,7 +79,8 @@ func (s *scriptedChecker) SameConfig(context.Context, *v1alpha1.KrakenDGateway, 
 	return s.same, s.sameErr
 }
 
-func (s *scriptedChecker) next(ctx context.Context, call string, eps []v1alpha1.KrakenDEndpoint) (configcheck.Verdict, error) {
+// record notes a check and returns the error it fails with, if any.
+func (s *scriptedChecker) record(ctx context.Context, call string, eps []v1alpha1.KrakenDEndpoint) error {
 	s.calls = append(s.calls, call)
 	s.args = append(s.args, describe(eps))
 	if d, ok := ctx.Deadline(); ok {
@@ -80,14 +88,57 @@ func (s *scriptedChecker) next(ctx context.Context, call string, eps []v1alpha1.
 	} else {
 		s.deadlines = append(s.deadlines, 0)
 	}
+	if s.delay > 0 {
+		select {
+		case <-time.After(s.delay):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	if s.err != nil && len(s.calls) >= max(s.failCall, 1) {
-		return configcheck.Verdict{}, s.err
+		return s.err
+	}
+	return nil
+}
+
+func (s *scriptedChecker) next(ctx context.Context, call string, eps []v1alpha1.KrakenDEndpoint) (configcheck.Verdict, error) {
+	if err := s.record(ctx, call, eps); err != nil {
+		return configcheck.Verdict{}, err
 	}
 	if len(s.verdicts) == 0 {
 		return configcheck.Verdict{OK: true}, nil
 	}
 	v := s.verdicts[0]
 	s.verdicts = s.verdicts[1:]
+	return v, nil
+}
+
+func (s *scriptedChecker) CheckRoot(
+	ctx context.Context, r configcheck.Root, memo configcheck.Memo,
+) (configcheck.Verdict, error) {
+	s.gateways = append(s.gateways, string(r.Gateway.Spec.Edition)+"/"+r.Gateway.Spec.Config.Timeout)
+	s.memos = append(s.memos, memo != nil)
+	return s.next(ctx, "root", nil)
+}
+
+// CheckEndpoint records the endpoint, and ":raw" of the policy override when
+// there is one, in args.
+func (s *scriptedChecker) CheckEndpoint(
+	ctx context.Context, u configcheck.EndpointUnit, memo configcheck.Memo,
+) (configcheck.EndpointVerdict, error) {
+	s.memos = append(s.memos, memo != nil)
+	err := s.record(ctx, "endpoint", []v1alpha1.KrakenDEndpoint{*u.Endpoint})
+	if u.Override != nil {
+		s.args[len(s.args)-1] += ":" + rawOf(u.Override)
+	}
+	if err != nil {
+		return configcheck.EndpointVerdict{}, err
+	}
+	if len(s.endpointVerdicts) == 0 {
+		return configcheck.EndpointVerdict{OK: true}, nil
+	}
+	v := s.endpointVerdicts[0]
+	s.endpointVerdicts = s.endpointVerdicts[1:]
 	return v, nil
 }
 

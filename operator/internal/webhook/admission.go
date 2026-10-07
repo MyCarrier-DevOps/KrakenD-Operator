@@ -53,6 +53,9 @@ type ConfigChecker interface {
 	// and returns what the render leaves out (configcheck.Checker).
 	Conflicts(ctx context.Context, gw *v1alpha1.KrakenDGateway,
 		replace []v1alpha1.KrakenDEndpoint) (configcheck.RouteConflicts, error)
+	CheckRoot(ctx context.Context, r configcheck.Root, memo configcheck.Memo) (configcheck.Verdict, error)
+	CheckEndpoint(ctx context.Context, u configcheck.EndpointUnit,
+		memo configcheck.Memo) (configcheck.EndpointVerdict, error)
 }
 
 // invalid is the admission error for field errors: 422 Invalid with one
