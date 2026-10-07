@@ -6356,3 +6356,33 @@ func TestAutoConfigReconcile_EveryCheckHoldsACheckSlot(t *testing.T) {
 		t.Errorf("slots held during the checks = %v, want the one slot held by each check", checker.checksHeld)
 	}
 }
+
+// The note for an external $ref a ConfigMap-sourced spec cannot fetch names the
+// ref without its credentials, in the status and in the event.
+func TestAutoConfigReconcile_AnExternalRefNoteCarriesNoCredentials(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	f, ce, fi, g := defaultMocks()
+	configMapSpecWithExternalRef(ac, f)
+	f.result = &autoconfig.FetchResult{Data: []byte(
+		`{"paths":{"/x":{"get":{"responses":{"200":{"$ref":"https://user:pw@schemas.example.com/x.json?token=secret#/R"}}}}}}`,
+	)}
+	c := fakeClientBuilder().WithObjects(ac, cm).WithStatusSubresource(ac).Build()
+	rec := fakeRecorder()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Recorder = rec
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	got := append(getAC(t, c, ac).Status.Warnings, drainEvents(rec)...)
+	if len(got) == 0 {
+		t.Fatal("no warning was recorded")
+	}
+	for _, note := range got {
+		if strings.Contains(note, "pw@") || strings.Contains(note, "secret") {
+			t.Errorf("%q carries a credential", note)
+		}
+	}
+}
