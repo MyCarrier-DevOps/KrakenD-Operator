@@ -41,8 +41,9 @@ import (
 // controller validate every gateway with it, whatever its spec.version.
 const ValidatorVersion = "2.13"
 
-// Checker renders gateway configs and validates them. Every validation holds
-// one of a fixed number of slots shared by all callers in the pod.
+// Checker judges a gateway's root, its endpoints and policies on their own, a
+// group of them, and its whole render. Every validation holds one of a fixed
+// number of slots shared by all callers in the pod.
 type Checker struct {
 	reader    client.Reader
 	renderer  renderer.Renderer
@@ -65,7 +66,7 @@ func New(reader client.Reader, r renderer.Renderer, v renderer.Validator, slots 
 // not part of what is checked here.
 func (c *Checker) Gather(ctx context.Context, gw *v1alpha1.KrakenDGateway,
 	replace []v1alpha1.KrakenDEndpoint) (renderer.RenderInput, error) {
-	return c.gather(ctx, gw, replace, nil)
+	return c.gather(ctx, gw, replace)
 }
 
 // CheckRendered validates out, rendered from in, with the full check the
@@ -77,31 +78,13 @@ func (c *Checker) CheckRendered(ctx context.Context, in renderer.RenderInput,
 	return c.remembered(ctx, in, out, modeValidate, c.validator.Validate, memo)
 }
 
-// CheckGateway lints gw's config: its current endpoints with replace
-// substituted or added by namespace/name. A replace entry without
-// spec.endpoints means that endpoint is removed: it renders nothing.
-func (c *Checker) CheckGateway(ctx context.Context, gw *v1alpha1.KrakenDGateway,
-	replace []v1alpha1.KrakenDEndpoint) (Verdict, error) {
-	return c.lintGathered(ctx, gw, replace, nil)
-}
-
-// CheckIsolated lints gw's root config with eps as its only endpoints.
-func (c *Checker) CheckIsolated(ctx context.Context, gw *v1alpha1.KrakenDGateway,
-	eps []v1alpha1.KrakenDEndpoint) (Verdict, error) {
-	in, err := c.inputFor(ctx, gw, slices.Clone(eps), nil, CEFallback(gw))
-	if err != nil {
-		return Verdict{}, err
-	}
-	return c.lint(ctx, in)
-}
-
 // SameConfig reports whether gw and old, two versions of one gateway, render
 // the same config for the same edition from the same endpoints and policies.
 // It renders in process: no validation slot is held and nothing is executed.
 func (c *Checker) SameConfig(ctx context.Context, old, gw *v1alpha1.KrakenDGateway) (bool, error) {
 	// Nothing read here leaves the Checker and the renderer never mutates its
 	// inputs, so the cache's objects can be used without copying them.
-	in, err := c.gather(ctx, gw, nil, nil, client.UnsafeDisableDeepCopy)
+	in, err := c.gather(ctx, gw, nil, client.UnsafeDisableDeepCopy)
 	if err != nil {
 		return false, err
 	}
@@ -117,13 +100,6 @@ func (c *Checker) SameConfig(ctx context.Context, old, gw *v1alpha1.KrakenDGatew
 	}
 	return bytes.Equal(out.JSON, oldOut.JSON) &&
 		renderer.EditionFor(gw, in.CEFallback) == renderer.EditionFor(old, before.CEFallback), nil
-}
-
-// CheckGatewayPolicy lints gw's config with policy in place of the stored
-// policy of the same namespace/name.
-func (c *Checker) CheckGatewayPolicy(ctx context.Context, gw *v1alpha1.KrakenDGateway,
-	policy *v1alpha1.KrakenDBackendPolicy) (Verdict, error) {
-	return c.lintGathered(ctx, gw, nil, policy)
 }
 
 // policyAlone is the render input that checks policy on its own: one
@@ -155,39 +131,6 @@ func policyAlone(policy *v1alpha1.KrakenDBackendPolicy) renderer.RenderInput {
 	}
 }
 
-// LintPolicy lints policy on its own (policyAlone). It catches a bad policy
-// before anything references it. Its findings name no endpoint.
-func (c *Checker) LintPolicy(ctx context.Context, policy *v1alpha1.KrakenDBackendPolicy) (Verdict, error) {
-	verdict, err := c.lint(ctx, policyAlone(policy))
-	// The synthetic endpoint is not something the caller created: its
-	// findings read as policy-level.
-	for i := range verdict.Findings {
-		verdict.Findings[i].Endpoint, verdict.Findings[i].Index = types.NamespacedName{}, -1
-	}
-	return verdict, err
-}
-
-// lintGathered lints what gather returns for gw, replace and override.
-func (c *Checker) lintGathered(ctx context.Context, gw *v1alpha1.KrakenDGateway,
-	replace []v1alpha1.KrakenDEndpoint, override *v1alpha1.KrakenDBackendPolicy) (Verdict, error) {
-	// Nothing read here leaves the Checker and the renderer never mutates its
-	// inputs, so the cache's objects, and the caller's override, can be used
-	// without copying them.
-	in, err := c.gather(ctx, gw, replace, override, client.UnsafeDisableDeepCopy)
-	if err != nil {
-		return Verdict{}, err
-	}
-	return c.lint(ctx, in)
-}
-
-func (c *Checker) lint(ctx context.Context, in renderer.RenderInput) (Verdict, error) {
-	out, err := c.renderer.Render(in)
-	if err != nil {
-		return Verdict{}, fmt.Errorf("rendering config: %w", err)
-	}
-	return c.check(ctx, in, out, c.validator.Lint)
-}
-
 // check runs validate on out as the edition in is for, holding a slot.
 func (c *Checker) check(ctx context.Context, in renderer.RenderInput, out *renderer.RenderOutput,
 	validate func(context.Context, []byte, v1alpha1.Edition) error) (Verdict, error) {
@@ -196,7 +139,7 @@ func (c *Checker) check(ctx context.Context, in renderer.RenderInput, out *rende
 		return Verdict{}, err
 	}
 	if rejection != nil {
-		return Rejected(rejection, in, out), nil
+		return Verdict{Output: rejection.Output, Stage: rejection.Stage}, nil
 	}
 	return Verdict{OK: true}, nil
 }
@@ -210,7 +153,7 @@ func (c *Checker) run(ctx context.Context, in renderer.RenderInput, out *rendere
 		return nil, err
 	}
 	// The slot is freed even if validate panics (the manager recovers
-	// panics), and before attribution, which needs no slot.
+	// panics).
 	err := func() error {
 		defer func() { <-c.slots }()
 		return validate(ctx, out.JSON, edition)
@@ -232,17 +175,15 @@ func (c *Checker) acquire(ctx context.Context) error {
 	}
 }
 
-// gather lists gw's endpoints, applies replace, and gathers their policies,
-// with override (when not nil) in place of the stored policy of the same
-// namespace/name.
+// gather lists gw's endpoints, applies replace, and gathers their policies.
 func (c *Checker) gather(ctx context.Context, gw *v1alpha1.KrakenDGateway, replace []v1alpha1.KrakenDEndpoint,
-	override *v1alpha1.KrakenDBackendPolicy, opts ...client.ListOption) (renderer.RenderInput, error) {
+	opts ...client.ListOption) (renderer.RenderInput, error) {
 	var list v1alpha1.KrakenDEndpointList
 	opts = append(opts, client.MatchingFields{fieldindex.EndpointGateway: gw.Namespace + "/" + gw.Name})
 	if err := c.reader.List(ctx, &list, opts...); err != nil {
 		return renderer.RenderInput{}, fmt.Errorf("listing endpoints of gateway %s/%s: %w", gw.Namespace, gw.Name, err)
 	}
-	return c.inputFor(ctx, gw, substitute(list.Items, replace), override, CEFallback(gw))
+	return c.inputFor(ctx, gw, substitute(list.Items, replace), nil, CEFallback(gw))
 }
 
 // inputFor is the render input of gw with endpoints as its only endpoints,

@@ -123,7 +123,7 @@ func (c *Checker) Conflicts(ctx context.Context, gw *v1alpha1.KrakenDGateway,
 	replace []v1alpha1.KrakenDEndpoint) (RouteConflicts, error) {
 	// Nothing read here leaves the Checker and the renderer never mutates its
 	// inputs, so the cache's objects can be used without copying them.
-	in, err := c.gather(ctx, gw, replace, nil, client.UnsafeDisableDeepCopy)
+	in, err := c.gather(ctx, gw, replace, client.UnsafeDisableDeepCopy)
 	if err != nil {
 		return RouteConflicts{}, err
 	}
