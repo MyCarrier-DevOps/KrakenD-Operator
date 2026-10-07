@@ -297,3 +297,32 @@ func TestSetup_AMalformedHeaderNeverReachesTheOutput(t *testing.T) {
 			tel.TracerProvider)
 	}
 }
+
+// Setup reads the header and endpoint variables as the OTLP exporters do: a
+// list they accept keeps the signal exported, and every form they reject
+// (and would log with its value) keeps it from being exported.
+func TestSetup_ReadsTheHeaderAndEndpointVariablesAsTheExportersDo(t *testing.T) {
+	for _, tc := range []struct {
+		name, variable, value string
+		exported              bool
+	}{
+		{"a name=value list with an encoded value", "OTEL_EXPORTER_OTLP_HEADERS", "api-key=abc, x-team=a%20b", true},
+		{"an entry without =", "OTEL_EXPORTER_OTLP_HEADERS", "api-key=abc,Bearer xyz", false},
+		{"a name that is not a token", "OTEL_EXPORTER_OTLP_TRACES_HEADERS", "api key=abc", false},
+		{"a value that is not URL-encoded", "OTEL_EXPORTER_OTLP_HEADERS", "api-key=100%", false},
+		{"an endpoint that is not a URL", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "http://collector:4318/%zz", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cleanOTelEnv(t)
+			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:1")
+			t.Setenv(tc.variable, tc.value)
+
+			tel := setup(t, &bytes.Buffer{})
+
+			_, noTraces := tel.TracerProvider.(noop.TracerProvider)
+			if noTraces == tc.exported || (tel.Warning != nil) == tc.exported {
+				t.Errorf("traces exported = %v, warning = %v; want exported %v", !noTraces, tel.Warning, tc.exported)
+			}
+		})
+	}
+}
