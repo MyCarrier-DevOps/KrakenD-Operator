@@ -17,6 +17,7 @@ limitations under the License.
 package webhook
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"slices"
@@ -184,5 +185,33 @@ func TestEndpointAdmission_RefusesAWriteWhileClashResolutionIsCapped(t *testing.
 	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity ||
 		!strings.Contains(responseText(resp), configcheck.ClashesCapped) {
 		t.Errorf("response = %+v, want a 422 denial saying the clashes cannot be told apart", resp.Result)
+	}
+}
+
+// failsSecondConflicts fails the second Conflicts call, the render that
+// carries the write, and answers the first.
+type failsSecondConflicts struct {
+	*scriptedChecker
+	calls int
+}
+
+func (c *failsSecondConflicts) Conflicts(
+	ctx context.Context, gw *v1alpha1.KrakenDGateway, replace []v1alpha1.KrakenDEndpoint,
+) (configcheck.RouteConflicts, error) {
+	c.calls++
+	if c.calls == 2 {
+		return configcheck.RouteConflicts{}, errors.New("listing endpoints: etcd timeout")
+	}
+	return c.scriptedChecker.Conflicts(ctx, gw, replace)
+}
+
+func TestEndpointAdmission_AClashCheckOfTheWriteThatCannotRunIs500(t *testing.T) {
+	chk := &failsSecondConflicts{scriptedChecker: &scriptedChecker{}}
+	v := &EndpointValidator{Client: fakeClient(testGateway()), Checker: chk}
+
+	resp := review(t, v, "alice", testEndpoint("new", "/a"), nil)
+
+	if resp.Allowed || resp.Result.Code != http.StatusInternalServerError {
+		t.Errorf("response = %+v, want a transient 500 when the render with the write cannot run", resp.Result)
 	}
 }
