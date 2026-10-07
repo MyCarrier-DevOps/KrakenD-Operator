@@ -233,3 +233,30 @@ func TestAutoConfigReconcile_AnotherEndpointsFailureNeverReachesACandidate(t *te
 		t.Errorf("failedOperations = %+v; want listusers written: another endpoint's failure is not its", failed)
 	}
 }
+
+// A group verdict never blames anyone: when the group fails and every
+// candidate passes on its own, the failure needs other endpoints and none of
+// the candidates is held for it.
+func TestAutoConfigReconcile_AGroupFailureNoCandidateOwnsHoldsNoCandidate(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	checker := &fakeChecker{
+		group: func([]v1alpha1.KrakenDEndpoint) configcheck.Verdict { return configcheck.Verdict{Output: "together"} },
+	}
+	c := fakeClientBuilder().WithObjects(ac, cm, testGateway()).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Checker = checker
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{"root", "group:test-ac-listusers", "endpoint:test-ac-listusers"}
+	if !slices.Equal(checker.checks, want) {
+		t.Errorf("checks = %v, want %v", checker.checks, want)
+	}
+	if failed := getAC(t, c, ac).Status.FailedOperations; len(failed) != 0 || !endpointExists(t, c, "test-ac-listusers") {
+		t.Errorf("failedOperations = %+v; want listusers written: a group verdict blames no one", failed)
+	}
+}
