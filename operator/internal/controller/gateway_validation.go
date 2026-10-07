@@ -136,9 +136,9 @@ func (r *KrakenDGatewayReconciler) decide(
 	}
 	rest := in
 	rest.Endpoints = without(in.Endpoints, excluded)
-	out, err := r.Renderer.Render(rest)
+	out, err := r.render(ctx, rest)
 	if err != nil {
-		return decision{}, fmt.Errorf("rendering config: %w", err)
+		return decision{}, err
 	}
 	if !isApplied(gw, out, edition) {
 		var safety configcheck.Verdict
