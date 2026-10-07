@@ -557,3 +557,20 @@ func TestSetup_DiagnosticsAreNeverExportedOverOTLP(t *testing.T) {
 		t.Errorf("%d log POSTs carried the diagnostic; the collector got %v", n, collected.all())
 	}
 }
+
+// A whitespace-only endpoint is no endpoint: the trace and metric exporters
+// would trim it to nothing and default to localhost:4318.
+func TestSetup_AWhitespaceEndpointDoesNotEnableExport(t *testing.T) {
+	for _, variable := range []string{"OTEL_EXPORTER_OTLP_ENDPOINT"} {
+		t.Run(variable, func(t *testing.T) {
+			cleanOTelEnv(t)
+			t.Setenv(variable, " ")
+
+			tel := setup(t, &bytes.Buffer{})
+
+			if _, ok := tel.TracerProvider.(noop.TracerProvider); !ok {
+				t.Errorf("TracerProvider = %T, want the no-op provider", tel.TracerProvider)
+			}
+		})
+	}
+}
