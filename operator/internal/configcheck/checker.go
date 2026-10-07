@@ -131,19 +131,6 @@ func policyAlone(policy *v1alpha1.KrakenDBackendPolicy) renderer.RenderInput {
 	}
 }
 
-// check runs validate on out as the edition in is for, holding a slot.
-func (c *Checker) check(ctx context.Context, in renderer.RenderInput, out *renderer.RenderOutput,
-	validate func(context.Context, []byte, v1alpha1.Edition) error) (Verdict, error) {
-	rejection, err := c.run(ctx, in, out, validate)
-	if err != nil {
-		return Verdict{}, err
-	}
-	if rejection != nil {
-		return Verdict{Output: rejection.Output, Stage: rejection.Stage}, nil
-	}
-	return Verdict{OK: true}, nil
-}
-
 // run runs validate on out as the edition in is for, holding a slot. It
 // returns the validator's rejection, or nil when it accepts out.
 func (c *Checker) run(ctx context.Context, in renderer.RenderInput, out *renderer.RenderOutput,
