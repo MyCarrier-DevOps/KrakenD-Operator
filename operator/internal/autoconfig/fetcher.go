@@ -27,6 +27,7 @@ import (
 	"time"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"go.opentelemetry.io/otel/trace"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -59,8 +60,10 @@ type Fetcher interface {
 	Fetch(ctx context.Context, source FetchSource) (*FetchResult, error)
 }
 
-// NewFetcher creates a Fetcher that can read from HTTP and ConfigMaps.
-func NewFetcher(k8sClient client.Client) Fetcher {
+// NewFetcher creates a Fetcher that can read from HTTP and ConfigMaps. Each
+// fetch is a span of tracer, its HTTP request a client span below it; a nil
+// tracer records none.
+func NewFetcher(k8sClient client.Client, tracer trace.Tracer) Fetcher {
 	checkRedirect := func(_ *http.Request, via []*http.Request) error {
 		if len(via) >= maxRedirects {
 			return fmt.Errorf("too many redirects (max %d)", maxRedirects)
@@ -79,6 +82,7 @@ func NewFetcher(k8sClient client.Client) Fetcher {
 			Timeout:       fetchTimeout,
 			CheckRedirect: checkRedirect,
 		},
+		tracer: tracer,
 	}
 }
 
@@ -86,6 +90,7 @@ type httpFetcher struct {
 	client        client.Client
 	strictClient  *http.Client
 	lenientClient *http.Client
+	tracer        trace.Tracer
 }
 
 func (f *httpFetcher) Fetch(ctx context.Context, source FetchSource) (*FetchResult, error) {

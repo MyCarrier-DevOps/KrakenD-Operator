@@ -75,7 +75,7 @@ func wireValidation(
 			Client:       mgr.GetClient(),
 			Scheme:       mgr.GetScheme(),
 			Recorder:     mgr.GetEventRecorderFor("krakendautoconfig-controller"),
-			Fetcher:      autoconfig.NewFetcher(mgr.GetClient()),
+			Fetcher:      autoconfig.NewFetcher(mgr.GetClient(), nil),
 			CUEEvaluator: autoconfig.NewCUEEvaluator(),
 			Filter:       autoconfig.NewFilter(),
 			Generator:    autoconfig.NewGenerator(),

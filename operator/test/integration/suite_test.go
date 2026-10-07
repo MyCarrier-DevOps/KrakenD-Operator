@@ -260,7 +260,7 @@ func runTests(m *testing.M) int {
 	// Wire up the AutoConfig controller with the real fetcher (behind a gate
 	// for hosts that must hang), embedded CUE
 	// evaluator, filter and generator.
-	slowFetcher = &gatedFetcher{Fetcher: autoconfig.NewFetcher(mgr.GetClient())}
+	slowFetcher = &gatedFetcher{Fetcher: autoconfig.NewFetcher(mgr.GetClient(), nil)}
 	if err := (&controller.KrakenDAutoConfigReconciler{
 		Client:                  mgr.GetClient(),
 		Scheme:                  scheme,
