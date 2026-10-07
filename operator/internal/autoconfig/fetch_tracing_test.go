@@ -188,3 +188,26 @@ func TestFetch_AURLWithoutAHostIsRefusedEarly(t *testing.T) {
 		t.Errorf("%d HTTP GET spans, want none: the request is never made", n)
 	}
 }
+
+// A redirect whose Location cannot be parsed fails the fetch without repeating
+// the Location, which can carry a signature in its query.
+func TestFetch_AnUnparseableRedirectLocationLeaksNothing(t *testing.T) {
+	rec := tracingtest.New(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Location", "http://host:badport/x?sig=LOCSECRET")
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer srv.Close()
+	f := NewFetcher(fakeClient(), rec.Tracer()).(*httpFetcher)
+	f.lenientClient.Transport = clientSpans{next: http.DefaultTransport, tracer: rec.Tracer()}
+
+	_, err := f.Fetch(context.Background(), FetchSource{URL: srv.URL + "/spec.json", AllowClusterLocal: true})
+
+	if err == nil {
+		t.Fatal("Fetch succeeded")
+	}
+	if strings.Contains(err.Error(), "LOCSECRET") {
+		t.Errorf("error %q carries the Location's query", err)
+	}
+	requireNoSecretInSpans(t, rec.Ended(), "LOCSECRET")
+}
