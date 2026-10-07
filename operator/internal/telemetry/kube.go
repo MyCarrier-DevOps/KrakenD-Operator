@@ -87,9 +87,9 @@ func (c readEvents) Get(ctx context.Context, key client.ObjectKey, obj client.Ob
 func outcome(err error) attribute.KeyValue {
 	switch {
 	case err == nil:
-		return attribute.Bool("found", true)
+		return attribute.Bool("k8s.client.found", true)
 	case apierrors.IsNotFound(err):
-		return attribute.Bool("found", false)
+		return attribute.Bool("k8s.client.found", false)
 	default:
 		return semconv.ErrorType(err)
 	}
