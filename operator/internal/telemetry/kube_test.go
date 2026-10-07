@@ -18,6 +18,7 @@ package telemetry_test
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -36,6 +37,7 @@ import (
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/mycarrier-devops/krakend-operator/internal/telemetry"
 	"github.com/mycarrier-devops/krakend-operator/internal/tracing/tracingtest"
@@ -356,5 +358,27 @@ func TestTraceKubeAPI_ListRecordsNoEmptyObjectName(t *testing.T) {
 
 	if name, ok := attrsOf(rec.Ended().One(t, "k8s list configmaps"))["k8s.object.name"]; ok {
 		t.Errorf("k8s.object.name = %q on a list, want the attribute omitted", name)
+	}
+}
+
+func TestReadEvents_AGetThatFailsForAnotherReasonRecordsItsErrorType(t *testing.T) {
+	rec := tracingtest.New(t)
+	c := telemetry.ReadEvents(fake.NewClientBuilder().WithScheme(clientgoscheme.Scheme).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(context.Context, client.WithWatch, client.ObjectKey, client.Object, ...client.GetOption) error {
+				return errors.New("connection refused")
+			},
+		}).Build())
+	ctx, span := rec.Tracer().Start(context.Background(), "reconcile")
+
+	err := c.Get(ctx, client.ObjectKey{Namespace: "ns", Name: "cm"}, &corev1.ConfigMap{})
+	span.End()
+
+	if err == nil {
+		t.Fatal("Get succeeded, want the interceptor's error")
+	}
+	attrs := eventAttrs(t, rec, "reconcile", "k8s.client.get")
+	if _, ok := attrs["found"]; ok || attrs["error.type"] == "" {
+		t.Errorf("event attributes = %v, want error.type and no found for an error that is not NotFound", attrs)
 	}
 }
