@@ -88,3 +88,17 @@ func TestObject_NamesTheObject(t *testing.T) {
 		}
 	}
 }
+
+func TestEnd_LeavesASuccessfulSpanUnset(t *testing.T) {
+	rec := tracingtest.New(t)
+	_, span := tracing.Start(context.Background(), rec.Tracer(), "ok")
+	_, noop := tracing.Start(context.Background(), nil, "ok")
+
+	tracing.End(span, nil)
+	tracing.End(noop, nil)
+
+	got := rec.Ended().One(t, "ok")
+	if got.Status().Code != codes.Unset || len(got.Events()) != 0 {
+		t.Errorf("status = %+v, events = %d; want Unset and no events", got.Status(), len(got.Events()))
+	}
+}
