@@ -14,12 +14,13 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-
 package telemetry
 
 import (
 	"context"
+	"fmt"
 	"reflect"
+	"time"
 
 	"github.com/go-logr/logr"
 )
@@ -59,15 +60,40 @@ func readableKeysAndValues(keysAndValues []any) []any {
 	copy(out, keysAndValues)
 	for i := 1; i < len(out); i += 2 {
 		if _, ok := out[i].(context.Context); !ok {
-			out[i] = readableValue(out[i])
+			out[i] = readableValue(out[i], 0)
 		}
 	}
 	return out
 }
 
-// readableValue returns v, or the base type of a named string, bool, int or
-// float type.
-func readableValue(v any) any {
+// maxValueDepth bounds how deep a value that contains itself is followed.
+const maxValueDepth = 100
+
+// readableValue returns v, or what it converts to, so the log bridge renders
+// it readably:
+//   - an error: its Error();
+//   - a fmt.Stringer: its String(), which for the object references
+//     controller-runtime and klog log is "namespace/name";
+//   - a logr.Marshaler: the value it logs as, converted in turn;
+//   - a named string, bool, int or float type: its base type;
+//   - a map, slice or array: the same with its elements converted.
+//
+// A time.Duration and a time.Time stay as they are: the bridge records them as
+// numbers.
+func readableValue(v any, depth int) any {
+	if depth > maxValueDepth {
+		return "<max-depth-exceeded>"
+	}
+	switch v.(type) {
+	case nil, time.Duration, time.Time:
+		return v
+	case error:
+		return v.(error).Error()
+	case fmt.Stringer:
+		return v.(fmt.Stringer).String()
+	case logr.Marshaler:
+		return readableValue(v.(logr.Marshaler).MarshalLog(), depth+1)
+	}
 	rv := reflect.ValueOf(v)
 	switch rv.Kind() {
 	case reflect.String:
@@ -80,6 +106,12 @@ func readableValue(v any) any {
 		return rv.Uint()
 	case reflect.Float32, reflect.Float64:
 		return rv.Float()
+	case reflect.Map:
+		out := make(map[string]any, rv.Len())
+		for iter := rv.MapRange(); iter.Next(); {
+			out[fmt.Sprint(iter.Key().Interface())] = readableValue(iter.Value().Interface(), depth+1)
+		}
+		return out
 	}
 	return v
 }
