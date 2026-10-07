@@ -99,13 +99,19 @@ func endDecision(span trace.Span, err error) {
 }
 
 // endRules ends span, the span of rules that return err. A denial is an
-// answer and is not recorded; any other error is the rules' own failure.
+// answer and is not recorded. Another status error is only marked, as its text
+// can carry the tenant's values; any other error is the rules' own failure.
 func endRules(span trace.Span, err error) {
-	if isDenial(err) {
-		span.End()
+	var status apierrors.APIStatus
+	switch {
+	case isDenial(err):
+	case errors.As(err, &status):
+		span.SetStatus(codes.Error, rulesFailed)
+	default:
+		tracing.End(span, err)
 		return
 	}
-	tracing.End(span, err)
+	span.End()
 }
 
 // isDenial reports whether err is a validator's refusal of the request: a
