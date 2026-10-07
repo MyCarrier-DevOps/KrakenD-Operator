@@ -186,36 +186,21 @@ func TestCheckGateway_EmptyReplacementRemovesTheEndpoint(t *testing.T) {
 	}
 }
 
-func TestCheckGateway_RouteClashAcrossEndpointsNamesBothEntries(t *testing.T) {
+func TestCheckGateway_ARouteClashAcrossEndpointsIsResolvedOldestFirst(t *testing.T) {
 	c := newChecker(realValidator(), endpoint("a", "/users/{id}"))
+	replace := []v1alpha1.KrakenDEndpoint{*endpoint("b", "/other", "/users/{userId}/orders")}
 
-	verdict, err := c.CheckGateway(context.Background(), gateway(v1alpha1.EditionCE),
-		[]v1alpha1.KrakenDEndpoint{*endpoint("b", "/other", "/users/{userId}/orders")})
+	verdict, err := c.CheckGateway(context.Background(), gateway(v1alpha1.EditionCE), replace)
+	if err != nil || !verdict.OK {
+		t.Fatalf("verdict = %+v, %v; want OK: the render leaves the newer entry out", verdict, err)
+	}
+	conflicts, err := c.Conflicts(context.Background(), gateway(v1alpha1.EditionCE), replace)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := map[types.NamespacedName]int{}
-	for _, f := range verdict.Findings {
-		got[f.Endpoint] = f.Index
-	}
-	a, b := types.NamespacedName{Namespace: "ns", Name: "a"}, types.NamespacedName{Namespace: "ns", Name: "b"}
-	if verdict.OK || len(got) != 2 || got[a] != 0 || got[b] != 1 {
-		t.Errorf("findings = %+v, want ns/a entry 0 and ns/b entry 1", verdict.Findings)
-	}
-}
-
-func TestCheckGateway_RouteRefusalsNameTheEndpointsOfEachClash(t *testing.T) {
-	c := newChecker(realValidator(), endpoint("a", "/users/{id}"), endpoint("b", "/users/{userId}/orders"))
-
-	verdict, err := c.CheckGateway(context.Background(), gateway(v1alpha1.EditionCE), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	a, b := types.NamespacedName{Namespace: "ns", Name: "a"}, types.NamespacedName{Namespace: "ns", Name: "b"}
-	if verdict.Stage != renderer.StageRoute || len(verdict.Refusals) != 1 ||
-		!reflect.DeepEqual(verdict.Refusals[0].Endpoints, []types.NamespacedName{b, a}) {
-		t.Errorf("stage = %d, refusals = %+v, want the route stage and one refusal naming ns/b, then ns/a",
-			verdict.Stage, verdict.Refusals)
+	got := conflicts.Lost[types.NamespacedName{Namespace: "ns", Name: "b"}]
+	if len(got) != 1 || got[0].Endpoint != "/users/{userId}/orders" || got[0].Winner.Name != "a" {
+		t.Errorf("ns/b lost %+v, want GET /users/{userId}/orders to ns/a", got)
 	}
 }
 
