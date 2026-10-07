@@ -973,49 +973,7 @@ func TestAppendEndpointComponentSchemas_FirstSeenWins(t *testing.T) {
 	}
 }
 
-func TestRender_SourcesAreIndexAlignedWithEndpoints(t *testing.T) {
-	gw := &v1alpha1.KrakenDGateway{
-		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "ns"},
-		Spec:       v1alpha1.KrakenDGatewaySpec{Edition: v1alpha1.EditionCE, Version: "2.13"},
-	}
-	backend := []v1alpha1.BackendSpec{{Host: []string{"http://svc"}, URLPattern: "/x"}}
-	endpoints := []v1alpha1.KrakenDEndpoint{
-		{ObjectMeta: metav1.ObjectMeta{Name: "b", Namespace: "ns"}, Spec: v1alpha1.KrakenDEndpointSpec{
-			Endpoints: []v1alpha1.EndpointEntry{
-				{Endpoint: "/z", Method: "GET", Backends: backend},
-				{Endpoint: "/a", Method: "POST", Backends: backend},
-			},
-		}},
-		{ObjectMeta: metav1.ObjectMeta{Name: "a", Namespace: "ns"}, Spec: v1alpha1.KrakenDEndpointSpec{
-			Endpoints: []v1alpha1.EndpointEntry{{Endpoint: "/m", Method: "GET", Backends: backend}},
-		}},
-	}
-	out, err := New(Options{}).Render(RenderInput{Gateway: gw, Endpoints: endpoints})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var doc struct {
-		Endpoints []struct {
-			Endpoint string `json:"endpoint"`
-		} `json:"endpoints"`
-	}
-	if err := json.Unmarshal(out.JSON, &doc); err != nil {
-		t.Fatal(err)
-	}
-	owner := map[string]types.NamespacedName{
-		"/a": {Namespace: "ns", Name: "b"}, "/m": {Namespace: "ns", Name: "a"}, "/z": {Namespace: "ns", Name: "b"},
-	}
-	if len(out.Sources) != len(doc.Endpoints) {
-		t.Fatalf("len(Sources) = %d, want one per rendered endpoint (%d)", len(out.Sources), len(doc.Endpoints))
-	}
-	for i, ep := range doc.Endpoints {
-		if out.Sources[i] != owner[ep.Endpoint] {
-			t.Errorf("Sources[%d] = %s for %s, want %s", i, out.Sources[i], ep.Endpoint, owner[ep.Endpoint])
-		}
-	}
-}
-
-func TestRender_SourcesExcludeConflictLosersAndInvalidPolicyCRs(t *testing.T) {
+func TestRender_LeavesOutConflictLosersAndEndpointsWithAMissingPolicy(t *testing.T) {
 	earlier := metav1.NewTime(time.Now().Add(-time.Hour))
 	later := metav1.NewTime(time.Now())
 	entry := func(path, policy string) v1alpha1.EndpointEntry {
@@ -1043,9 +1001,12 @@ func TestRender_SourcesExcludeConflictLosersAndInvalidPolicyCRs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []types.NamespacedName{{Namespace: "default", Name: "winner"}}
-	if !slices.Equal(out.Sources, want) {
-		t.Errorf("Sources = %v, want only the rendered winner %v", out.Sources, want)
+	if got := endpointPaths(t, out.JSON); !slices.Equal(got, []string{"/dup"}) {
+		t.Errorf("rendered %v, want only the winner's /dup", got)
+	}
+	if got := out.EntryConflicts[types.NamespacedName{Namespace: "default", Name: "loser"}]; len(got) != 1 ||
+		got[0].Winner.Name != "winner" {
+		t.Errorf("ns/loser lost %+v, want its /dup to default/winner", got)
 	}
 }
 
