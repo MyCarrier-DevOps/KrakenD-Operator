@@ -23,8 +23,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
-	"time"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	otellog "go.opentelemetry.io/otel/log"
