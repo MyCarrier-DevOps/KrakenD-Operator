@@ -65,3 +65,20 @@ func TestCheckRoot_LintsTheGatewayWithNoEndpoint(t *testing.T) {
 		t.Errorf("checked endpoints %v, want the root with none", paths)
 	}
 }
+
+func TestCheckRoot_RemembersEachContentAndEdition(t *testing.T) {
+	val := &fakeValidator{}
+	chk := newChecker(val)
+	memo := mapMemo{}
+	gw := gateway(v1alpha1.EditionEE)
+
+	for _, fallback := range []bool{false, false, true} {
+		if _, err := chk.CheckRoot(context.Background(), Root{Gateway: gw, CEFallback: fallback}, memo); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if want := []v1alpha1.Edition{v1alpha1.EditionEE, v1alpha1.EditionCE}; !reflect.DeepEqual(val.editions, want) {
+		t.Errorf("checked as %v, want each edition once: the second EE check is remembered", val.editions)
+	}
+}
