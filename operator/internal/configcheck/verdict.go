@@ -17,9 +17,9 @@ limitations under the License.
 // Package configcheck judges KrakenD configs: a gateway's root, each of its
 // endpoints and policies on its own, a group of them, and the whole render the
 // gateway controller applies. The gateway controller, the AutoConfig
-// controller, the policy controller and the admission webhooks share one Checker, so all judge the
-// same inputs with the same renderer and the same krakend binary, and share
-// its exec slots.
+// controller, the policy controller and the admission webhooks share one
+// Checker, so all judge the same inputs with the same renderer and the same
+// krakend binary, and share its exec slots.
 package configcheck
 
 import (
