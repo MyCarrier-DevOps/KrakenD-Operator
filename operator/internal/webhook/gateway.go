@@ -1198,6 +1198,15 @@ func judgeServed(ctx context.Context, chk ConfigChecker, memo configcheck.Memo, 
 		return admission.Warnings{"some of the gateway's endpoints already fail validation with the stored " +
 			"config, and stay left out until they pass"}, nil
 	}
+	before, err := chk.CheckGroup(ctx,
+		configcheck.Group{Gateway: old, Endpoints: served, CEFallback: was.CEFallback}, memo)
+	if err != nil {
+		return nil, checkErr(err)
+	}
+	if !before.OK {
+		return admission.Warnings{"the gateway's endpoints already fail validation together with the stored " +
+			"config, though each passes on its own"}, nil
+	}
 	return nil, nil
 }
 
