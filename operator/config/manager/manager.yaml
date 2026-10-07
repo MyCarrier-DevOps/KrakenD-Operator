@@ -69,6 +69,10 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: spec.serviceAccountName
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
         image: controller:latest
         name: manager
         ports: []
