@@ -208,3 +208,25 @@ func TestGatewayReconcile_AnEndpointCheckIsASpanOfItsJudgingPass(t *testing.T) {
 	spans.RequireParent(t, "gateway.judge_endpoints", "configcheck.CheckEndpoint")
 	spans.RequireParent(t, "gateway.config", "gateway.judge_endpoints")
 }
+
+// decide checks a whole render twice when an endpoint fails on its own: the
+// render with every endpoint, then the render without the excluded ones. Each
+// check says which it is.
+func TestGatewayReconcile_NamesWhyEachRenderIsChecked(t *testing.T) {
+	gw := testGateway()
+	c, _ := gatewayStatusWrites(gw, testEndpoint("good", "/a"), badHosted("bad", "/b"))
+	rec := tracingtest.New(t)
+	r := tracedGatewayReconciler(c, rejectsBadHosts(), rec)
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+
+	spans := rec.Ended()
+	for _, purpose := range []string{"combined", "safety_net"} {
+		checks := spans.Named("configcheck.CheckRendered").With(attribute.String("configcheck.purpose", purpose))
+		if len(checks) != 1 {
+			t.Errorf("%d render checks for %q, want 1; spans: %s", len(checks), purpose, spans)
+		}
+	}
+}
