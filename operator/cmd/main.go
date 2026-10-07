@@ -269,12 +269,12 @@ func run() int {
 		setupLog.Error(err, "unable to create controller", "controller", "KrakenDGateway")
 		return 1
 	}
-	endpoints, policies := wireReferenceControllers(mgr, inst)
+	endpoints := wireEndpointController(mgr, inst)
 	if err := endpoints.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "KrakenDEndpoint")
 		return 1
 	}
-	if err := policies.SetupWithManager(mgr); err != nil {
+	if err := wired.Policy.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "KrakenDBackendPolicy")
 		return 1
 	}

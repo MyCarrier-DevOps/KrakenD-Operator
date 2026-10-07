@@ -234,17 +234,14 @@ func TestWireValidation_NoRecorderLeavesTheMetricsPortsNil(t *testing.T) {
 	}
 }
 
-func TestWireReferenceControllers_InstrumentsBoth(t *testing.T) {
+func TestWireEndpointController_IsInstrumented(t *testing.T) {
 	mgr := stubManager{client: fake.NewClientBuilder().Build()}
 	inst := testInstrumentation(t, tracingtest.New(t))
 
-	endpoints, policies := wireReferenceControllers(mgr, inst)
+	endpoints := wireEndpointController(mgr, inst)
 
-	if endpoints.Tracer != inst.Tracer || policies.Tracer != inst.Tracer {
-		t.Error("the endpoint and policy reconcilers are not given the pod's tracer")
-	}
-	if policies.APIReader != mgr.GetAPIReader() {
-		t.Error("the policy reconciler does not read through the manager's API reader")
+	if endpoints.Tracer != inst.Tracer {
+		t.Error("the endpoint reconciler is not given the pod's tracer")
 	}
 }
 

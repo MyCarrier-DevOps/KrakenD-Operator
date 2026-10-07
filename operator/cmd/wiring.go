@@ -149,25 +149,15 @@ func wireValidation(
 	}
 }
 
-// wireReferenceControllers builds the endpoint and policy reconcilers, which
-// resolve and protect references and hold no config checker.
-func wireReferenceControllers(
-	mgr ctrl.Manager, inst instrumentation,
-) (*controller.KrakenDEndpointReconciler, *controller.KrakenDBackendPolicyReconciler) {
-	endpoints := &controller.KrakenDEndpointReconciler{
+// wireEndpointController builds the endpoint reconciler, which resolves
+// references and holds no config checker.
+func wireEndpointController(mgr ctrl.Manager, inst instrumentation) *controller.KrakenDEndpointReconciler {
+	return &controller.KrakenDEndpointReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorderFor("krakendendpoint-controller"),
 		Tracer:   inst.Tracer,
 	}
-	policies := &controller.KrakenDBackendPolicyReconciler{
-		Client:    mgr.GetClient(),
-		Scheme:    mgr.GetScheme(),
-		Recorder:  mgr.GetEventRecorderFor("krakendbackendpolicy-controller"),
-		APIReader: mgr.GetAPIReader(),
-		Tracer:    inst.Tracer,
-	}
-	return endpoints, policies
 }
 
 // newKrakenDValidator returns the validator that runs the krakend binary at

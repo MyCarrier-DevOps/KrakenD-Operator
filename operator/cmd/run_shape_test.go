@@ -189,7 +189,7 @@ func TestRun_HandsThePodsInstrumentsToEveryComponent(t *testing.T) {
 		want string
 	}{
 		{"wireValidation", 4, inst},
-		{"wireReferenceControllers", 1, inst},
+		{"wireEndpointController", 1, inst},
 		{"newKrakenDValidator", 1, inst + ".Tracer"},
 	}
 	for _, c := range checks {
