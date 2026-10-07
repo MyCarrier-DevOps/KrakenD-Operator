@@ -49,7 +49,6 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
-	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 	"github.com/mycarrier-devops/krakend-operator/internal/resources"
 	"github.com/mycarrier-devops/krakend-operator/internal/util/hash"
@@ -230,9 +229,9 @@ func TestGatewayReconcile_NoDeploymentBeforeAnyConfigPasses(t *testing.T) {
 		t.Fatalf("no Deployment may exist before any config passes validation; Get returned %v", err)
 	}
 	ready := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionReady)
-	if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != v1alpha1.ReasonConfigValidationFailed {
+	if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != v1alpha1.ReasonGatewayRootInvalid {
 		t.Errorf("Ready = %+v, want False/%s: nothing is running and the config was rejected",
-			ready, v1alpha1.ReasonConfigValidationFailed)
+			ready, v1alpha1.ReasonGatewayRootInvalid)
 	}
 }
 
@@ -1291,164 +1290,6 @@ func testEndpoint(name, path string) *v1alpha1.KrakenDEndpoint {
 // when the gateway serves /a (default/good) and /b.
 const badNamespaceVerdict = "- at '/endpoints/1/extra_config': additional properties 'bad/ns' not allowed"
 
-func TestGatewayReconcile_RejectedConfigNamesTheEndpointAtFault(t *testing.T) {
-	gw := reconciledGateway()
-	good, bad := testEndpoint("good", "/a"), testEndpoint("bad", "/b")
-	c := fakeClientBuilder().WithObjects(gw, good, bad).WithStatusSubresource(gw, good, bad).Build()
-	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}),
-		&countingValidator{err: rejectedBy(badNamespaceVerdict)})
-
-	if err := reconcileGateway(t, r, gw); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
-	if cond := storedAccepted(t, c, client.ObjectKeyFromObject(bad)); cond == nil ||
-		cond.Status != metav1.ConditionFalse || cond.Reason != v1alpha1.ReasonGatewayConfigRejected ||
-		!strings.Contains(cond.Message, "bad/ns") {
-		t.Errorf("bad endpoint Accepted = %+v, want False/%s naming the finding",
-			cond, v1alpha1.ReasonGatewayConfigRejected)
-	}
-	if cond := storedAccepted(t, c, client.ObjectKeyFromObject(good)); cond != nil {
-		t.Errorf("good endpoint Accepted = %+v; an endpoint no finding names keeps the applied render's verdict (none yet)",
-			cond)
-	}
-	cv := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionConfigValid)
-	if cv == nil || !strings.Contains(cv.Message, "default/bad") {
-		t.Errorf("ConfigValid = %+v, want its message to name default/bad", cv)
-	}
-}
-
-func TestGatewayReconcile_RememberedRejectionKeepsAttribution(t *testing.T) {
-	gw := reconciledGateway()
-	good, bad := testEndpoint("good", "/a"), testEndpoint("bad", "/b")
-	endpointWrites := 0
-	c := fakeClientBuilder().WithObjects(gw, good, bad).WithStatusSubresource(gw, good, bad).
-		WithInterceptorFuncs(countStatusWrites[*v1alpha1.KrakenDEndpoint](&endpointWrites)).Build()
-	val := &countingValidator{err: rejectedBy(badNamespaceVerdict)}
-	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}), val)
-
-	if err := reconcileGateway(t, r, gw); err != nil {
-		t.Fatalf("first reconcile: %v", err)
-	}
-	writesAfterFirst := endpointWrites
-	if err := reconcileGateway(t, r, gw); err != nil {
-		t.Fatalf("second reconcile: %v", err)
-	}
-	if val.calls != 1 {
-		t.Fatalf("validator calls = %d, want 1: the rejection memo answers the second pass", val.calls)
-	}
-	if cond := storedAccepted(t, c, client.ObjectKeyFromObject(bad)); cond == nil ||
-		cond.Reason != v1alpha1.ReasonGatewayConfigRejected {
-		t.Errorf("after the remembered rejection the bad endpoint's Accepted = %+v, want it still %s",
-			cond, v1alpha1.ReasonGatewayConfigRejected)
-	}
-	if n := endpointWrites - writesAfterFirst; n != 0 {
-		t.Errorf("endpoint status writes on the remembered pass = %d, want 0", n)
-	}
-	if n := eventsWithReason(r.Recorder.(*record.FakeRecorder), v1alpha1.ReasonGatewayConfigRejected); n != 1 {
-		t.Errorf("GatewayConfigRejected events over two reconciles = %d, want 1", n)
-	}
-}
-
-func TestGatewayReconcile_AppliedConfigClearsTheBlame(t *testing.T) {
-	gw := reconciledGateway()
-	bad := testEndpoint("bad", "/b")
-	writes := 0
-	c := fakeClientBuilder().WithObjects(gw, bad).WithStatusSubresource(gw, bad).
-		WithInterceptorFuncs(countStatusWrites[*v1alpha1.KrakenDEndpoint](&writes)).Build()
-	val := &countingValidator{err: rejectedBy("- at '/endpoints/0/extra_config': additional properties 'bad/ns' not allowed")}
-	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}), val)
-	if err := reconcileGateway(t, r, gw); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
-
-	var fixed v1alpha1.KrakenDEndpoint
-	if err := c.Get(context.Background(), client.ObjectKeyFromObject(bad), &fixed); err != nil {
-		t.Fatal(err)
-	}
-	fixed.Spec.Endpoints[0].Endpoint = "/b-fixed"
-	if err := c.Update(context.Background(), &fixed); err != nil {
-		t.Fatal(err)
-	}
-	val.err = nil
-	drainEvents(r.Recorder.(*record.FakeRecorder))
-	writesBefore := writes
-	if err := reconcileGateway(t, r, gw); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
-	if cond := storedAccepted(t, c, client.ObjectKeyFromObject(bad)); cond == nil ||
-		cond.Status != metav1.ConditionTrue || cond.Reason != v1alpha1.ReasonAccepted {
-		t.Errorf("after the fix was applied, Accepted = %+v, want True/%s", cond, v1alpha1.ReasonAccepted)
-	}
-	if n := writes - writesBefore; n != 1 {
-		t.Errorf("endpoint status writes when the fix was applied = %d, want 1", n)
-	}
-	normal := 0
-	for _, e := range drainEvents(r.Recorder.(*record.FakeRecorder)) {
-		if strings.HasPrefix(e, "Normal "+v1alpha1.ReasonAccepted+" ") {
-			normal++
-		}
-	}
-	if normal != 1 {
-		t.Errorf("Normal %s events when the blame cleared = %d, want 1", v1alpha1.ReasonAccepted, normal)
-	}
-}
-
-func TestGatewayReconcile_RejectionNamingNoEndpointBlamesNone(t *testing.T) {
-	gw := reconciledGateway()
-	ep := testEndpoint("ep", "/a")
-	c := fakeClientBuilder().WithObjects(gw, ep).WithStatusSubresource(gw, ep).Build()
-	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}),
-		&countingValidator{err: rejectedBy("Parsing configuration file: krakend.json\n")})
-
-	if err := reconcileGateway(t, r, gw); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
-	if cond := storedAccepted(t, c, client.ObjectKeyFromObject(ep)); cond != nil {
-		t.Errorf("endpoint Accepted = %+v; a rejection naming no endpoint blames none", cond)
-	}
-	got := getGateway(t, c, gw)
-	cv := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionConfigValid)
-	if cv == nil || cv.Status != metav1.ConditionFalse || cv.Reason != v1alpha1.ReasonConfigValidationFailed ||
-		!strings.Contains(cv.Message, "no finding names a KrakenDEndpoint") {
-		t.Errorf("ConfigValid = %+v, want False/%s saying no finding names an endpoint",
-			cv, v1alpha1.ReasonConfigValidationFailed)
-	}
-	if got.Status.ConfigChecksum != "" {
-		t.Errorf("configChecksum = %q, want it unset: nothing was applied", got.Status.ConfigChecksum)
-	}
-}
-
-func TestGatewayReconcile_RejectedFirstRenderOverridesStaleAccepted(t *testing.T) {
-	gw := reconciledGateway() // recreated: no config has ever been applied
-	bad := testEndpoint("bad", "/b")
-	// The previous gateway of the same name accepted this endpoint.
-	bad.Status.Conditions = []metav1.Condition{
-		{Type: v1alpha1.ConditionResolvedRefs, Status: metav1.ConditionTrue, ObservedGeneration: 1,
-			Reason: v1alpha1.ReasonRefsResolved},
-		{Type: v1alpha1.ConditionAccepted, Status: metav1.ConditionTrue, ObservedGeneration: 1,
-			Reason: v1alpha1.ReasonAccepted},
-	}
-	c := fakeClientBuilder().WithObjects(gw, bad).WithStatusSubresource(gw, bad).Build()
-	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}),
-		&countingValidator{err: rejectedBy("- at '/endpoints/0/extra_config': additional properties 'bad/ns' not allowed")})
-
-	if err := reconcileGateway(t, r, gw); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
-	var stored v1alpha1.KrakenDEndpoint
-	if err := c.Get(context.Background(), client.ObjectKeyFromObject(bad), &stored); err != nil {
-		t.Fatal(err)
-	}
-	cond := meta.FindStatusCondition(stored.Status.Conditions, v1alpha1.ConditionAccepted)
-	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != v1alpha1.ReasonGatewayConfigRejected {
-		t.Errorf("Accepted = %+v, want False/%s over the previous gateway's True",
-			cond, v1alpha1.ReasonGatewayConfigRejected)
-	}
-	if status, _, _ := v1alpha1.EndpointReady(stored.Status.Conditions); status == metav1.ConditionTrue {
-		t.Error("endpoint is Ready although the new gateway rejected its config")
-	}
-}
-
 // withAccepted seeds ep's stored Accepted condition.
 func withAccepted(ep *v1alpha1.KrakenDEndpoint, status metav1.ConditionStatus, reason string) *v1alpha1.KrakenDEndpoint {
 	ep.Status.Conditions = []metav1.Condition{
@@ -1457,64 +1298,6 @@ func withAccepted(ep *v1alpha1.KrakenDEndpoint, status metav1.ConditionStatus, r
 		{Type: v1alpha1.ConditionAccepted, Status: status, ObservedGeneration: ep.Generation, Reason: reason},
 	}
 	return ep
-}
-
-func TestGatewayReconcile_RejectionLiftsABlameThatMovedAway(t *testing.T) {
-	gw := servingGateway("applied", convergedImage)
-	// An earlier rejection blamed good; the findings now name bad.
-	good := withAccepted(testEndpoint("good", "/a"), metav1.ConditionFalse, v1alpha1.ReasonGatewayConfigRejected)
-	bad := testEndpoint("bad", "/b")
-	c := fakeClientBuilder().WithObjects(gw, good, bad).WithStatusSubresource(gw, good, bad).Build()
-	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}),
-		&countingValidator{err: rejectedBy(badNamespaceVerdict)})
-
-	if err := reconcileGateway(t, r, gw); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
-	if cond := storedAccepted(t, c, client.ObjectKeyFromObject(good)); cond != nil {
-		t.Errorf("good endpoint Accepted = %+v; a blame no finding repeats must be lifted", cond)
-	}
-	if cond := storedAccepted(t, c, client.ObjectKeyFromObject(bad)); cond == nil ||
-		cond.Reason != v1alpha1.ReasonGatewayConfigRejected {
-		t.Errorf("bad endpoint Accepted = %+v, want %s", cond, v1alpha1.ReasonGatewayConfigRejected)
-	}
-}
-
-func TestGatewayReconcile_RejectionNamingNobodyLiftsAnOldBlame(t *testing.T) {
-	gw := servingGateway("applied", convergedImage)
-	ep := withAccepted(testEndpoint("ep", "/a"), metav1.ConditionFalse, v1alpha1.ReasonGatewayConfigRejected)
-	c := fakeClientBuilder().WithObjects(gw, ep).WithStatusSubresource(gw, ep).Build()
-	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}),
-		&countingValidator{err: rejectedBy("- at '/extra_config': additional properties 'bad/ns' not allowed")})
-
-	if err := reconcileGateway(t, r, gw); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
-	if cond := storedAccepted(t, c, client.ObjectKeyFromObject(ep)); cond != nil {
-		t.Errorf("Accepted = %+v; a rejection naming no endpoint must lift the old blame", cond)
-	}
-}
-
-func TestGatewayReconcile_RememberedRejectionAfterALiftedBlameWritesNothing(t *testing.T) {
-	gw := servingGateway("applied", convergedImage)
-	good := withAccepted(testEndpoint("good", "/a"), metav1.ConditionFalse, v1alpha1.ReasonGatewayConfigRejected)
-	bad := testEndpoint("bad", "/b")
-	writes := 0
-	c := fakeClientBuilder().WithObjects(gw, good, bad).WithStatusSubresource(gw, good, bad).
-		WithInterceptorFuncs(countStatusWrites[*v1alpha1.KrakenDEndpoint](&writes)).Build()
-	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}),
-		&countingValidator{err: rejectedBy(badNamespaceVerdict)})
-
-	if err := reconcileGateway(t, r, gw); err != nil {
-		t.Fatalf("first reconcile: %v", err)
-	}
-	after := writes
-	if err := reconcileGateway(t, r, gw); err != nil {
-		t.Fatalf("second reconcile: %v", err)
-	}
-	if n := writes - after; n != 0 {
-		t.Errorf("endpoint status writes on the remembered pass = %d, want 0", n)
-	}
 }
 
 func TestGatewayReconcile_NeverAppliedGatewayRemovesAStaleAccepted(t *testing.T) {
@@ -1559,49 +1342,6 @@ func TestGatewayReconcile_UnavailableValidatorOnANeverAppliedGatewayRemovesAStal
 	assertNotAccepted(t, c, stale)
 }
 
-func TestGatewayReconcile_UnavailableValidatorLiftsAnOldBlame(t *testing.T) {
-	gw := servingGateway("applied", convergedImage)
-	ep := withAccepted(testEndpoint("ep", "/a"), metav1.ConditionFalse, v1alpha1.ReasonGatewayConfigRejected)
-	c := fakeClientBuilder().WithObjects(gw, ep).WithStatusSubresource(gw, ep).Build()
-	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}),
-		&countingValidator{err: errors.New("fork/exec /usr/local/bin/krakend: no such file or directory")})
-
-	if err := reconcileGateway(t, r, gw); err == nil {
-		t.Fatal("an unavailable validator must fail the reconcile so it is retried")
-	}
-	if cond := storedAccepted(t, c, client.ObjectKeyFromObject(ep)); cond != nil {
-		t.Errorf("Accepted = %+v; the config was not judged, so the old blame must lift", cond)
-	}
-}
-
-func TestRejectionSummary_CountsFindingsNamingNoEndpoint(t *testing.T) {
-	findings := []configcheck.Finding{
-		{Endpoint: types.NamespacedName{Namespace: "default", Name: "bad"}, Index: 1, Message: "m1"},
-		{Index: -1, Message: "m2"},
-		{Index: -1, Message: "m3"},
-	}
-	want := "Rejected by krakend check; findings name KrakenDEndpoint(s) default/bad; 2 finding(s) name no endpoint."
-	if got := rejectionSummary(findings); got != want {
-		t.Errorf("rejectionSummary = %q, want %q", got, want)
-	}
-	if got := rejectionSummary(nil); !strings.Contains(got, "no finding names a KrakenDEndpoint") {
-		t.Errorf("rejectionSummary(nil) = %q", got)
-	}
-}
-
-func TestRejectionsByEndpoint_ListsEachFindingOncePerEndpoint(t *testing.T) {
-	owner := types.NamespacedName{Namespace: "default", Name: "both"}
-	// A router error blaming two entries of one CR is reported once, naming both.
-	findings := []configcheck.Finding{
-		{Endpoint: owner, Index: 0, Message: "conflict"},
-		{Endpoint: owner, Index: 1, Message: "conflict"},
-	}
-	msg := rejectionsByEndpoint(findings)[owner]
-	if strings.Count(msg, "conflict") != 1 || !strings.Contains(msg, "spec.endpoints[0], spec.endpoints[1]: conflict") {
-		t.Errorf("message = %q, want the finding once, naming both entries", msg)
-	}
-}
-
 func TestGatewayReconcile_ServingGatewayKeepsAnUnblamedVerdict(t *testing.T) {
 	gw := servingGateway("applied", convergedImage)
 	good := withAccepted(testEndpoint("good", "/a"), metav1.ConditionTrue, v1alpha1.ReasonAccepted)
@@ -1633,7 +1373,7 @@ func TestGatewayReconcile_ServingGatewayKeepsAVerdictWhileTheValidatorIsUnavaila
 
 func TestGatewayReconcile_StaleListCannotRemoveALiveAccepted(t *testing.T) {
 	gw := servingGateway("applied", convergedImage)
-	// The endpoint was blamed before; the live object has since been accepted.
+	// The endpoint was excluded before; the live object has since been accepted.
 	live := withAccepted(testEndpoint("x", "/a"), metav1.ConditionTrue, v1alpha1.ReasonAccepted)
 	staleList := interceptor.Funcs{
 		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
@@ -1642,7 +1382,7 @@ func TestGatewayReconcile_StaleListCannotRemoveALiveAccepted(t *testing.T) {
 			}
 			if eps, ok := list.(*v1alpha1.KrakenDEndpointList); ok {
 				for i := range eps.Items {
-					withAccepted(&eps.Items[i], metav1.ConditionFalse, v1alpha1.ReasonGatewayConfigRejected)
+					withAccepted(&eps.Items[i], metav1.ConditionFalse, v1alpha1.ReasonEndpointInvalid)
 				}
 			}
 			return nil
@@ -1650,8 +1390,9 @@ func TestGatewayReconcile_StaleListCannotRemoveALiveAccepted(t *testing.T) {
 	}
 	c := fakeClientBuilder().WithObjects(gw, live).WithStatusSubresource(gw, live).
 		WithInterceptorFuncs(staleList).Build()
-	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}),
-		&countingValidator{err: rejectedBy("- at '/extra_config': additional properties 'bad/ns' not allowed")})
+	// Every endpoint passes on its own and the whole render fails, so the pass
+	// judges every endpoint and tries to lift the stale exclusion.
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}), &contentValidator{failValidate: true})
 
 	if err := reconcileGateway(t, r, gw); err != nil {
 		t.Fatalf("reconcile: %v", err)
@@ -1762,49 +1503,6 @@ func TestGatewayReconcile_PartlyConflictedEndpointIsNotRewrittenOnTheNextPass(t 
 	}
 	if endpointWrites != 0 {
 		t.Errorf("second reconcile wrote endpoint status %d times, want 0 in a steady state", endpointWrites)
-	}
-}
-
-func TestGatewayReconcile_RejectedPassKeepsTheLiveConflicts(t *testing.T) {
-	gw := servingGateway("applied", convergedImage)
-	good := testEndpoint("good", "/a")
-	bad := testEndpoint("bad", "/b")
-	fresh := []v1alpha1.EndpointConflict{{Endpoint: "/b", Method: "GET", Winner: "default/fresh"}}
-	bad.Status.Conflicts = fresh
-	staleList := interceptor.Funcs{
-		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
-			if err := c.List(ctx, list, opts...); err != nil {
-				return err
-			}
-			if eps, ok := list.(*v1alpha1.KrakenDEndpointList); ok {
-				for i := range eps.Items {
-					if eps.Items[i].Name == "bad" {
-						eps.Items[i].Status.Conflicts = []v1alpha1.EndpointConflict{
-							{Endpoint: "/b", Method: "GET", Winner: "default/stale"}}
-					}
-				}
-			}
-			return nil
-		},
-	}
-	c := fakeClientBuilder().WithObjects(gw, good, bad).WithStatusSubresource(gw, good, bad).
-		WithInterceptorFuncs(staleList).Build()
-	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}),
-		&countingValidator{err: rejectedBy(badNamespaceVerdict)})
-
-	if err := reconcileGateway(t, r, gw); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
-	var got v1alpha1.KrakenDEndpoint
-	if err := c.Get(context.Background(), client.ObjectKeyFromObject(bad), &got); err != nil {
-		t.Fatal(err)
-	}
-	if cond := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionAccepted); cond == nil ||
-		cond.Reason != v1alpha1.ReasonGatewayConfigRejected {
-		t.Fatalf("Accepted = %+v, want the rejection recorded", cond)
-	}
-	if !reflect.DeepEqual(got.Status.Conflicts, fresh) {
-		t.Errorf("status.conflicts = %+v, want the live %+v kept", got.Status.Conflicts, fresh)
 	}
 }
 
@@ -2006,13 +1704,15 @@ type recordingValidator struct {
 	err      error
 }
 
+// Lint passes and records nothing: the validations it records, and err, are
+// the full checks', and the root's lint is not one.
+func (v *recordingValidator) Lint(context.Context, []byte, v1alpha1.Edition) error {
+	return nil
+}
+
 func (v *recordingValidator) Validate(_ context.Context, _ []byte, edition v1alpha1.Edition) error {
 	v.editions = append(v.editions, edition)
 	return v.err
-}
-
-func (v *recordingValidator) Lint(ctx context.Context, jsonData []byte, edition v1alpha1.Edition) error {
-	return v.Validate(ctx, jsonData, edition)
 }
 
 func TestGatewayReconcile_CEFallbackFlipRevalidatesTheSameRender(t *testing.T) {
