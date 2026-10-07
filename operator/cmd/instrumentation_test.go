@@ -25,8 +25,8 @@ import (
 	"testing"
 	"time"
 
-	otellog "go.opentelemetry.io/otel/log"
 	dto "github.com/prometheus/client_model/go"
+	otellog "go.opentelemetry.io/otel/log"
 	"k8s.io/apimachinery/pkg/types"
 	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 
