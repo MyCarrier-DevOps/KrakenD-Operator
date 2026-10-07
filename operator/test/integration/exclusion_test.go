@@ -136,7 +136,7 @@ func TestExclusion_AnInvalidEndpointIsExcludedAndTheRestApplied(t *testing.T) {
 			return fmt.Errorf("the fixed endpoint is not applied")
 		}
 		if !strings.Contains(applied, `"/good"`) {
-			return fmt.Errorf("the good endpoint is still applied")
+			return fmt.Errorf("the good endpoint is no longer applied")
 		}
 		if c := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionEndpointsExcluded); c != nil {
 			return fmt.Errorf("EndpointsExcluded = %+v, want it removed", c)
