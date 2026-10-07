@@ -343,3 +343,18 @@ func TestTraceKubeAPI_UnsampledParentRecordsNoSpanAndPassesTheDecisionOn(t *test
 		t.Errorf("API server got traceparent headers %q, want one for the parent's trace with flags 00", api.traceparents)
 	}
 }
+
+func TestTraceKubeAPI_ListRecordsNoEmptyObjectName(t *testing.T) {
+	rec := tracingtest.New(t)
+	c, _ := tracedClient(t, rec)
+	ctx, parent := rec.Tracer().Start(context.Background(), "reconcile")
+
+	// The fake answers a ConfigMap, so decoding the list may fail; the
+	// request is what matters.
+	_ = c.List(ctx, &corev1.ConfigMapList{}, client.InNamespace("ns"))
+	parent.End()
+
+	if name, ok := attrsOf(rec.Ended().One(t, "k8s list configmaps"))["k8s.object.name"]; ok {
+		t.Errorf("k8s.object.name = %q on a list, want the attribute omitted", name)
+	}
+}
