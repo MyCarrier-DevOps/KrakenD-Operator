@@ -547,10 +547,16 @@ func newRenderVerdicts(output *renderer.RenderOutput,
 const exclusionDetailLimit = maxConditionMessageBytes - 256
 
 // exclusionCondition is the Accepted verdict on ep, which fails validation
-// on its own (v): the gateway leaves it out and serves its other endpoints.
+// on its own (v). applied says the render that leaves ep out is the
+// gateway's applied config, which serves the other endpoints; otherwise the
+// gateway still serves its last applied config, and ep is left out when the
+// gateway next applies one.
 func exclusionCondition(gw *v1alpha1.KrakenDGateway, ep *v1alpha1.KrakenDEndpoint,
 	v configcheck.EndpointVerdict, applied bool) *metav1.Condition {
 	where := fmt.Sprintf("Not served by gateway %s/%s, which serves its other endpoints", gw.Namespace, gw.Name)
+	if !applied {
+		where = fmt.Sprintf("Will not be served when gateway %s/%s next applies its config", gw.Namespace, gw.Name)
+	}
 	return &metav1.Condition{
 		Type:               v1alpha1.ConditionAccepted,
 		Status:             metav1.ConditionFalse,
