@@ -48,6 +48,9 @@ func TestLogFlags(t *testing.T) {
 		ignored []string
 	}{
 		{"defaults keep today's debug level, as JSON", nil, otellog.SeverityDebug4, telemetry.LogFormatJSON, nil},
+		{"--zap-devel=false logs at info", []string{"--zap-devel=false"}, otellog.SeverityInfo, telemetry.LogFormatJSON, nil},
+		{"--zap-log-level wins over --zap-devel", []string{"--zap-log-level=error"}, otellog.SeverityError,
+			telemetry.LogFormatJSON, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			level, format, ignored, err := parseLogFlags(t, tc.args...)
