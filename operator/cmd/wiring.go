@@ -181,3 +181,12 @@ func telemetryConfig(level otellog.Severity, format telemetry.LogFormat) telemet
 		Registerer:     ctrlmetrics.Registry,
 	}
 }
+
+// instrumentationScope names the operator's tracer and meter.
+const instrumentationScope = "github.com/mycarrier-devops/krakend-operator"
+
+// newInstrumentation returns the operator's tracer and metrics recorder over
+// tel's providers. It is a stub: it returns none.
+func newInstrumentation(*telemetry.Telemetry) (instrumentation, error) {
+	return instrumentation{}, nil
+}
