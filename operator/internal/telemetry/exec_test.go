@@ -90,8 +90,9 @@ func (e stubExecutor) Execute(context.Context, string, ...string) ([]byte, error
 // tenant data: it reaches the span nowhere, whatever failed.
 func TestTraceExecutor_TheCommandOutputIsRecordedNowhere(t *testing.T) {
 	rec := tracingtest.New(t)
+	rejection := exec.Command("sh", "-c", "exit 1").Run() // an *exec.ExitError, as a rejection returns
 	executor := telemetry.TraceExecutor(stubExecutor{
-		out: []byte("- at '/endpoints/0': tenant-secret"), err: errors.New("exit status 1"),
+		out: []byte("- at '/endpoints/0': tenant-secret"), err: rejection,
 	}, rec.Tracer())
 
 	_, _ = executor.Execute(context.Background(), "krakend", "check", "-t", "-c", "/tmp/krakend-config-42.json")
