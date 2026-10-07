@@ -68,3 +68,20 @@ func TestEndpointAdmission_AGatewayRootThatFailsAloneOnlyWarns(t *testing.T) {
 		t.Errorf("checks = %s, want the root alone", got)
 	}
 }
+
+func TestEndpointAdmission_AnUpdateThatStillFailsOnlyWarns(t *testing.T) {
+	stored := testEndpoint("ep", "/a")
+	updated := stored.DeepCopy()
+	updated.Spec.Endpoints[0].Backends[0].URLPattern = "/b"
+	chk := &scriptedChecker{endpointVerdicts: []configcheck.EndpointVerdict{ownFailure("still bad"), ownFailure("was bad")}}
+	v := &EndpointValidator{Client: fakeClient(testGateway(), stored), Checker: chk}
+
+	resp := review(t, v, "alice", updated, stored)
+
+	if !resp.Allowed || len(resp.Warnings) != 1 || !strings.Contains(resp.Warnings[0], "still bad") {
+		t.Errorf("response = %+v, warnings %v; want admitted with a warning quoting its own output", resp.Result, resp.Warnings)
+	}
+	if got := strings.Join(chk.calls, ","); got != "root,endpoint,endpoint" {
+		t.Errorf("checks = %s, want the root, the update, then the stored version", got)
+	}
+}
