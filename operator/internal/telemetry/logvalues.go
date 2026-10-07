@@ -88,11 +88,14 @@ func readableValue(v any, depth int) any {
 	case nil, time.Duration, time.Time:
 		return v
 	case error:
-		return x.Error()
+		return orPlain(v, x.Error)
 	case fmt.Stringer:
-		return x.String()
+		return orPlain(v, x.String)
 	case logr.Marshaler:
-		return readableValue(x.MarshalLog(), depth+1)
+		if logged, ok := try(x.MarshalLog); ok {
+			return readableValue(logged, depth+1)
+		}
+		return plain(v)
 	}
 	rv := reflect.ValueOf(v)
 	switch rv.Kind() {
@@ -126,6 +129,31 @@ func readableValue(v any, depth int) any {
 			out[fmt.Sprint(iter.Key().Interface())] = readableValue(iter.Value().Interface(), depth+1)
 		}
 		return out
+	case reflect.Struct:
+		return v
 	}
-	return v
+	return plain(v)
+}
+
+// plain renders v as fmt prints it with field names, the form a value the
+// converter has no rule for ends up in.
+func plain(v any) string { return fmt.Sprintf("%+v", v) }
+
+// orPlain returns what method returns, or plain(v) when calling it panics, as
+// it does on a nil pointer whose method has a value receiver.
+func orPlain(v any, method func() string) string {
+	if s, ok := try(method); ok {
+		return s
+	}
+	return plain(v)
+}
+
+// try calls f and reports whether it returned rather than panicked.
+func try[T any](f func() T) (result T, ok bool) {
+	defer func() {
+		if recover() != nil {
+			ok = false
+		}
+	}()
+	return f(), true
 }
