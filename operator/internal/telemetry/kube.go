@@ -19,6 +19,7 @@ package telemetry
 import (
 	"context"
 	"net/http"
+	"net/url"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel/attribute"
@@ -104,6 +105,7 @@ type kubeAttributes struct{ next http.RoundTripper }
 
 // RoundTrip annotates the request's span and sends the request on.
 func (k kubeAttributes) RoundTrip(r *http.Request) (*http.Response, error) {
+	trace.SpanFromContext(r.Context()).SetAttributes(semconv.URLFull(redactedURL(r.URL)))
 	if info, err := apiRequests.NewRequestInfo(r); err == nil && info.IsResourceRequest {
 		trace.SpanFromContext(r.Context()).SetAttributes(
 			semconv.K8SNamespaceName(info.Namespace),
@@ -131,4 +133,17 @@ func kubeSpanName(_ string, r *http.Request) string {
 		resource += "/" + info.Subresource
 	}
 	return "k8s " + info.Verb + " " + resource
+}
+
+// redactedURL is u without userinfo and with every query value replaced, so a
+// selector or a continue token never reaches a span.
+func redactedURL(u *url.URL) string {
+	redacted := *u
+	redacted.User = nil
+	query := redacted.Query()
+	for key := range query {
+		query[key] = []string{"REDACTED"}
+	}
+	redacted.RawQuery = query.Encode()
+	return redacted.String()
 }
