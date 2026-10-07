@@ -54,6 +54,7 @@ import (
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/autoconfig"
 	"github.com/mycarrier-devops/krakend-operator/internal/fieldindex"
+	"github.com/mycarrier-devops/krakend-operator/internal/tracing"
 )
 
 const defaultCUEDefinitionsConfigMap = "krakend-cue-definitions"
@@ -145,7 +146,9 @@ const defaultFetchTimeout = 2 * time.Minute
 // config check cannot run, nothing is written or deleted and Synced is False
 // with reason ValidatorUnavailable, retried with backoff. A successful
 // reconcile that finds nothing to change writes nothing and runs no check.
-func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Result, retErr error) {
+	ctx, span := startReconcile(ctx, r.Tracer, "KrakenDAutoConfig", req)
+	defer func() { tracing.End(span, retErr) }()
 	log := logf.FromContext(ctx)
 
 	var ac v1alpha1.KrakenDAutoConfig
@@ -158,6 +161,7 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		}
 		return ctrl.Result{}, fmt.Errorf("getting autoconfig %s: %w", req.NamespacedName, err)
 	}
+	spanGeneration(ctx, ac.Generation)
 
 	// A terminating AutoConfig is left alone: under foreground deletion it
 	// lingers while garbage collection deletes its endpoints, and converging
@@ -624,7 +628,9 @@ func applyAdditionalEndpoints(
 func (r *KrakenDAutoConfigReconciler) fetchSpec(
 	ctx context.Context,
 	ac *v1alpha1.KrakenDAutoConfig,
-) (*autoconfig.FetchResult, []string, error) {
+) (_ *autoconfig.FetchResult, _ []string, retErr error) {
+	ctx, span := tracing.Start(ctx, r.Tracer, "autoconfig.fetch_spec")
+	defer func() { tracing.End(span, retErr) }()
 	log := logf.FromContext(ctx)
 	timeout := r.FetchTimeout
 	if timeout == 0 {
