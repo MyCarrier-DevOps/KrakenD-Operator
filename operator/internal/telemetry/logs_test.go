@@ -20,12 +20,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log"
 	"strings"
 	"testing"
 
 	"github.com/go-logr/logr"
 	otellog "go.opentelemetry.io/otel/log"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
+	"k8s.io/klog/v2"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/mycarrier-devops/krakend-operator/internal/telemetry"
@@ -143,5 +145,24 @@ func TestParseLogLevel(t *testing.T) {
 		if _, err := telemetry.ParseLogLevel(bad); err == nil {
 			t.Errorf("ParseLogLevel(%q) accepted it", bad)
 		}
+	}
+}
+
+// client-go logs through klog, and net/http servers report TLS handshake
+// errors through the standard library's log package: both must become records.
+func TestInstallLogging_KlogAndStdlibLogReachTheOTelPipeline(t *testing.T) {
+	logger, out := newStdoutLogger(t, otellog.SeverityInfo)
+	telemetry.InstallLogging(logger, logger)
+
+	klog.Info("from klog")
+	klog.Flush()
+	log.Print("from the standard library")
+
+	scopes := map[string]string{}
+	for _, r := range records(t, out) {
+		scopes[r.Body.Value] = r.Scope.Name
+	}
+	if scopes["from klog"] != "test/klog" || scopes["from the standard library"] != "test/stdlib" {
+		t.Errorf("records by message and scope = %v, want both, scoped test/klog and test/stdlib", scopes)
 	}
 }
