@@ -19,6 +19,7 @@ package renderer
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -417,5 +418,27 @@ func TestRender_TheCapCountsLosingEntriesNotTheirClashes(t *testing.T) {
 	}
 	if lost := out.EntryConflicts[types.NamespacedName{Namespace: "ns", Name: "a-loser"}]; len(lost) != 3 {
 		t.Errorf("a-loser lost %+v, want one conflict for each of its three winners", lost)
+	}
+}
+
+// TestRender_AnEntrysConflictsAreOrderedByWinner pins the order of the
+// conflicts one entry loses: by endpoint, then method, then the winner's
+// namespace/name, so it does not follow the order the winners were served in.
+func TestRender_AnEntrysConflictsAreOrderedByWinner(t *testing.T) {
+	in := RenderInput{Gateway: routedGateway(v1alpha1.EditionCE, nil), Endpoints: []v1alpha1.KrakenDEndpoint{
+		routed("s", 0, "GET", "/a/{id}"), routed("e", 1, "GET", "/a/{id}/y"), routed("big", 2, "GET", "/a/{name}/x"),
+	}}
+
+	out, err := New(Options{}).Render(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var got []string
+	for _, c := range out.EntryConflicts[types.NamespacedName{Namespace: "ns", Name: "big"}] {
+		got = append(got, c.Winner.String())
+	}
+	if want := []string{"ns/e", "ns/s"}; !slices.Equal(got, want) {
+		t.Errorf("winners = %v, want %v", got, want)
 	}
 }
