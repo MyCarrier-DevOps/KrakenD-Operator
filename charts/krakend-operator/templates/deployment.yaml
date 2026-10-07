@@ -79,6 +79,7 @@ spec:
                 secretKeyRef:
                   name: {{ .headersSecret.name }}
                   key: {{ .headersSecret.key }}
+                  optional: true
             {{- end }}
             {{- range $signal, $exported := .signals }}
             {{- if not $exported }}
