@@ -20,7 +20,6 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"strings"
 
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -199,42 +198,49 @@ func autoConfigController(ep *v1alpha1.KrakenDEndpoint) bool {
 	return ref != nil && ref.Kind == "KrakenDAutoConfig" && ref.APIVersion == v1alpha1.GroupVersion.String()
 }
 
-// checkRender renders ep's gateway with ep and rejects the request only when
-// that turns a passing config into a failing one. When the gateway already
-// fails without ep, ep is judged in isolation: the gateway root plus ep alone,
-// against the root plus stored alone, the stored object on an update that
-// stays on its gateway and nil otherwise (a create, or a move to another
-// gateway), where the baseline is the root by itself.
+// checkRender judges ep on its own. A write that would newly clash in the
+// router is refused first (refuseNewClashes). Then come the gateway root
+// alone and ep with that root and the policies it references
+// (configcheck.CheckEndpoint): each policy alone, then one lint, the same
+// unit the gateway controller judges ep with, all of ep's entries included.
+// ep is denied, quoting only its own krakend output, when it fails on its
+// own. An update whose stored version, on the same gateway, fails on its own
+// too only draws a warning: the endpoint stays excluded either way. When the
+// gateway root fails on its own, nothing can be judged, so ep is admitted
+// with a warning that names the gateway and quotes nothing of it.
 func (v *EndpointValidator) checkRender(
 	ctx context.Context, stored, ep *v1alpha1.KrakenDEndpoint, gw *v1alpha1.KrakenDGateway,
 ) (admission.Warnings, error) {
 	if err := v.refuseNewClashes(ctx, ep, gw); err != nil {
 		return nil, err
 	}
-	var baseline []v1alpha1.KrakenDEndpoint
+	ceFallback := configcheck.CEFallback(gw)
+	root, err := v.Checker.CheckRoot(ctx, configcheck.Root{Gateway: gw, CEFallback: ceFallback}, v.Memo)
+	if err != nil {
+		return nil, checkErr(err)
+	}
+	if !root.OK {
+		return admission.Warnings{rootInvalidWarning(gw)}, nil
+	}
+	verdict, err := v.Checker.CheckEndpoint(ctx,
+		configcheck.EndpointUnit{Gateway: gw, Endpoint: ep, CEFallback: ceFallback}, v.Memo)
+	if err != nil || verdict.OK {
+		return nil, checkErr(err)
+	}
+	message := "this endpoint " + verdict.Message(warningLimit)
 	if stored != nil {
-		baseline = []v1alpha1.KrakenDEndpoint{*stored}
+		was, err := v.Checker.CheckEndpoint(ctx,
+			configcheck.EndpointUnit{Gateway: gw, Endpoint: stored, CEFallback: ceFallback}, v.Memo)
+		if err != nil {
+			return nil, checkErr(err)
+		}
+		if !was.OK {
+			return admission.Warnings{"the stored version already fails validation, so the gateway keeps " +
+				"leaving this endpoint out until it passes: " + message}, nil
+		}
 	}
-	candidate := []v1alpha1.KrakenDEndpoint{*ep}
-	isolated := onceCheck(bindCheck(v.Checker.CheckIsolated, gw, candidate))
-	rootAlone := onceCheck(bindCheck(v.Checker.CheckIsolated, gw, nil))
-	isoBefore := bindCheck(v.Checker.CheckIsolated, gw, baseline)
-	if baseline == nil {
-		// On a create the isolated baseline is the gateway root alone.
-		isoBefore = rootAlone
-	}
-	return ratchetRender(ctx, renderChecks{
-		after:      bindCheck(v.Checker.CheckGateway, gw, candidate),
-		before:     bindCheck(v.Checker.CheckGateway, gw, nil),
-		isoAfter:   isolated,
-		isoBefore:  isoBefore,
-		newFailure: newlyBlamed(types.NamespacedName{Namespace: ep.Namespace, Name: ep.Name}),
-	},
-		func(verdict configcheck.Verdict) error { return renderDenial(ctx, ep, verdict, isolated, rootAlone) },
-		func(before configcheck.Verdict) string {
-			return fmt.Sprintf("gateway %s/%s already fails validation without this change: %s",
-				gw.Namespace, gw.Name, shownSummary(before, ep.Namespace, warningLimit))
-		})
+	return nil, invalid(kindEndpoint, ep.Name, field.ErrorList{
+		field.Invalid(field.NewPath("spec", "endpoints"), field.OmitValueType{}, message)})
 }
 
 // refuseNewClashes rejects ep when, rendered with it, KrakenD's router can no
@@ -272,126 +278,13 @@ func (v *EndpointValidator) refuseNewClashes(
 // of their own.
 const maxEntryCauses = 20
 
-// renderDenial rejects ep with one cause per entry of ep the verdict blames,
-// its findings joined and cut to the warning limit, for the first
-// maxEntryCauses entries. Findings about other objects in ep's namespace, and
-// those of the entries beyond the limit, go on spec.endpoints as a bounded
-// summary that counts what it leaves out. krakend check prints the values it
-// refuses, so its findings that name no endpoint of ep's namespace (another
-// namespace's, or none, as for the gateway root) are only counted. When there
-// are any, isolated (the gateway root and ep alone) is run so that ep's own
-// errors are still shown. Its findings that name no endpoint are quoted, as
-// ep's, only when rootAlone (the gateway root with no endpoint) passes, and
-// the combined check's copies of them are then not counted.
-func renderDenial(
-	ctx context.Context, ep *v1alpha1.KrakenDEndpoint, verdict configcheck.Verdict,
-	isolated, rootAlone func(context.Context) (configcheck.Verdict, error),
-) error {
-	self := types.NamespacedName{Namespace: ep.Namespace, Name: ep.Name}
-	byEntry := map[int][]configcheck.Finding{}
-	var blamed []int
-	var others []configcheck.Finding
-	withheld := 0
-	for _, f := range verdict.Findings {
-		switch {
-		case f.Endpoint == self && f.Index >= 0 && f.Index < len(ep.Spec.Endpoints):
-			if _, ok := byEntry[f.Index]; !ok {
-				blamed = append(blamed, f.Index)
-			}
-			byEntry[f.Index] = append(byEntry[f.Index], f)
-		case foreignCheckOutput(verdict.Stage, f, ep.Namespace):
-			withheld++
-		default:
-			others = append(others, f)
-		}
-	}
-	slices.Sort(blamed)
-	var errs field.ErrorList
-	for n, i := range blamed {
-		if n == maxEntryCauses {
-			for _, rest := range blamed[n:] {
-				others = append(others, byEntry[rest]...)
-			}
-			break
-		}
-		var messages []string
-		for _, f := range byEntry[i] {
-			messages = append(messages, f.Message)
-		}
-		entry := ep.Spec.Endpoints[i]
-		errs = append(errs, field.Invalid(field.NewPath("spec", "endpoints").Index(i),
-			entry.Method+" "+entry.Endpoint, truncate(strings.Join(messages, "; "), warningLimit)))
-	}
-	if len(others) > 0 {
-		errs = append(errs, field.Invalid(field.NewPath("spec", "endpoints"), field.OmitValueType{},
-			"with this change the gateway's config fails krakend check: "+
-				configcheck.Verdict{Findings: others}.Summary(warningLimit)))
-	}
-	if withheld > 0 {
-		own, err := isolated(ctx)
-		if err != nil {
-			return checkErr(err)
-		}
-		shown, unnamed := withholdForeign(own, ep.Namespace)
-		if unnamed > 0 {
-			root, err := rootAlone(ctx)
-			if err != nil {
-				return checkErr(err)
-			}
-			if root.OK {
-				// The gateway root passes alone, so what it fails with ep is ep's:
-				// quote it all under ep's name, and stop counting the combined
-				// check's copies of it as withheld.
-				shown = asEndpoints(own.Findings, self)
-				withheld -= repeatedUnnamed(verdict, own)
-			}
-		}
-		var parts []string
-		if withheld > 0 {
-			parts = append(parts, "with this change the gateway's config fails krakend check: "+
-				withheldNote(withheld, ep.Namespace))
-		}
-		if len(shown) > 0 {
-			parts = append(parts, "the gateway root with this endpoint alone fails krakend check: "+
-				configcheck.Verdict{Findings: shown}.Summary(warningLimit))
-		}
-		errs = append(errs, field.Invalid(field.NewPath("spec", "endpoints"), field.OmitValueType{},
-			strings.Join(parts, "; ")))
-	}
-	return invalid(kindEndpoint, ep.Name, errs)
-}
-
-// asEndpoints returns findings with each one that names no endpoint named as
-// ep's, for findings of the gateway root with ep alone when the root passes
-// alone.
-func asEndpoints(findings []configcheck.Finding, ep types.NamespacedName) []configcheck.Finding {
-	out := slices.Clone(findings)
-	for i := range out {
-		if out[i].Endpoint.Name == "" {
-			out[i].Endpoint, out[i].Index = ep, -1
-		}
-	}
-	return out
-}
-
-// repeatedUnnamed counts the findings of v that name no endpoint and repeat,
-// word for word, a finding of own that names none, each of own's once.
-// krakend check prints such a line the same way in every render it is in.
-func repeatedUnnamed(v, own configcheck.Verdict) int {
-	left := map[string]int{}
-	for _, f := range own.Findings {
-		if f.Endpoint.Name == "" {
-			left[f.Message]++
-		}
-	}
-	n := 0
-	for _, f := range v.Findings {
-		if f.Endpoint.Name == "" && left[f.Message] > 0 {
-			left[f.Message]--
-			n++
-		}
-	}
-	return n
+// rootInvalidWarning warns a writer of an endpoint of gw, whose root fails on
+// its own, that the endpoint was not checked. It names the gateway and quotes
+// nothing of it: the writer may not be allowed to read the gateway.
+func rootInvalidWarning(gw *v1alpha1.KrakenDGateway) string {
+	return fmt.Sprintf("gateway %s/%s fails validation on its own (its spec.config), so this endpoint was not "+
+		"checked; the gateway's owner must fix it, and the gateway keeps serving its last valid config meanwhile",
+		gw.Namespace, gw.Name)
 }
 
 // gatewayFor returns ep's gateway, or nil when there is none to check
