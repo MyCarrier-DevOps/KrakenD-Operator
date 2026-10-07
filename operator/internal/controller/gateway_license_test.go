@@ -23,7 +23,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus/testutil"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -400,9 +399,11 @@ func TestGatewayReconcile_CommunityGatewayDropsItsStaleLicenseState(t *testing.T
 			Type: typ, Status: metav1.ConditionTrue, Reason: "LicenseExpired",
 		})
 	}
-	licenseExpirySeconds.WithLabelValues(gw.Namespace, gw.Name).Set(-3600)
+	m, reg := testMetrics(t)
+	m.SetLicenseExpiry(client.ObjectKeyFromObject(gw), -time.Hour)
 	c := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).Build()
 	r := newTestGatewayReconciler(c, renderOutput("cs"), &mockValidator{})
+	r.Metrics = m
 
 	if err := reconcileGateway(t, r, gw); err != nil {
 		t.Fatalf("reconcile: %v", err)
@@ -419,7 +420,8 @@ func TestGatewayReconcile_CommunityGatewayDropsItsStaleLicenseState(t *testing.T
 	if got.Status.Phase == v1alpha1.PhaseError {
 		t.Errorf("phase = %s, a stale LicenseExpired must not keep a CE gateway in Error", got.Status.Phase)
 	}
-	if licenseExpirySeconds.DeleteLabelValues(gw.Namespace, gw.Name) {
+	if _, ok := metricValue(t, reg, "krakend_operator_license_expiry_seconds",
+		"namespace", gw.Namespace, "name", gw.Name); ok {
 		t.Error("the license_expiry_seconds series of a CE gateway must be removed")
 	}
 }
@@ -543,6 +545,8 @@ func TestGatewayReconcile_UnreadableLicenseWatchesTheKnownExpiry(t *testing.T) {
 	c := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).Build()
 	r := newTestGatewayReconciler(c, renderOutput("cs"), &mockValidator{})
 	r.LicenseParser = parser
+	m, reg := testMetrics(t)
+	r.Metrics = m
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(gw)})
 	if err != nil {
@@ -551,7 +555,7 @@ func TestGatewayReconcile_UnreadableLicenseWatchesTheKnownExpiry(t *testing.T) {
 	if res.RequeueAfter != 2*time.Minute {
 		t.Errorf("RequeueAfter = %s, want the 2m until the known expiry enters the safety buffer", res.RequeueAfter)
 	}
-	got := testutil.ToFloat64(licenseExpirySeconds.WithLabelValues(gw.Namespace, gw.Name))
+	got, _ := metricValue(t, reg, "krakend_operator_license_expiry_seconds", "namespace", gw.Namespace, "name", gw.Name)
 	if want := known.Sub(testNow).Seconds(); got != want {
 		t.Errorf("license_expiry_seconds = %v, want %v from the known expiry", got, want)
 	}
@@ -559,15 +563,18 @@ func TestGatewayReconcile_UnreadableLicenseWatchesTheKnownExpiry(t *testing.T) {
 
 func TestGatewayReconcile_UnreadableLicenseWithoutKnownExpiryDropsTheGauge(t *testing.T) {
 	gw, _, parser := licensedEEGateway(testNow, true) // the Secret is not created
-	licenseExpirySeconds.WithLabelValues(gw.Namespace, gw.Name).Set(42)
+	m, reg := testMetrics(t)
+	m.SetLicenseExpiry(client.ObjectKeyFromObject(gw), 42*time.Second)
 	c := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).Build()
 	r := newTestGatewayReconciler(c, renderOutput("cs"), &mockValidator{})
 	r.LicenseParser = parser
+	r.Metrics = m
 
 	if err := reconcileGateway(t, r, gw); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if licenseExpirySeconds.DeleteLabelValues(gw.Namespace, gw.Name) {
+	if _, ok := metricValue(t, reg, "krakend_operator_license_expiry_seconds",
+		"namespace", gw.Namespace, "name", gw.Name); ok {
 		t.Error("a license that was never read must leave no license_expiry_seconds series")
 	}
 }
@@ -678,7 +685,8 @@ func TestGatewayReconcile_RenewedLicenseBytesRollTheDeployment(t *testing.T) {
 func TestGatewayReconcile_UnchangedLicenseBytesRollNothing(t *testing.T) {
 	s := settleLicensedGateway(t)
 	before := s.deployment(t)
-	restartsBefore := testutil.ToFloat64(rollingRestarts)
+	m, reg := testMetrics(t)
+	s.r.Metrics = m
 
 	s.reconcileWhileCacheLags(t)
 
@@ -691,8 +699,8 @@ func TestGatewayReconcile_UnchangedLicenseBytesRollNothing(t *testing.T) {
 		progressing.Reason == "DeploymentUpdated" {
 		t.Errorf("Progressing = %+v, want no DeploymentUpdated for an unchanged license", progressing)
 	}
-	if got := testutil.ToFloat64(rollingRestarts); got != restartsBefore {
-		t.Errorf("rollingRestarts rose from %v to %v", restartsBefore, got)
+	if got, _ := metricValue(t, reg, "krakend_operator_rolling_restarts_total"); got != 0 {
+		t.Errorf("rollingRestarts rose to %v for unchanged license bytes", got)
 	}
 }
 
