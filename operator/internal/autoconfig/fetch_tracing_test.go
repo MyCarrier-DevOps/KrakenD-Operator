@@ -173,3 +173,18 @@ func TestFetch_AnOpaqueURLLeaksNoCredentials(t *testing.T) {
 	}
 	requireNoSecretInSpans(t, rec.Ended(), "user:pw", "abc")
 }
+
+// A URL without a host is refused before any request is made.
+func TestFetch_AURLWithoutAHostIsRefusedEarly(t *testing.T) {
+	rec := tracingtest.New(t)
+	f := NewFetcher(fakeClient(), rec.Tracer())
+
+	_, err := f.Fetch(context.Background(), FetchSource{URL: "https:user:pw@schemas.example.com/spec.json"})
+
+	if err == nil || !strings.Contains(err.Error(), "no host") {
+		t.Fatalf("Fetch error = %v, want a refusal naming the missing host", err)
+	}
+	if n := len(rec.Ended().Named("HTTP GET")); n != 0 {
+		t.Errorf("%d HTTP GET spans, want none: the request is never made", n)
+	}
+}
