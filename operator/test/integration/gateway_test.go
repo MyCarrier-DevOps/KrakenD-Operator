@@ -33,6 +33,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -480,7 +481,17 @@ func TestGateway_DeletedDeploymentRecreatedWhileConfigRejected(t *testing.T) {
 		t.Fatalf("get the applied ConfigMap: %v", err)
 	}
 
-	createEndpoint(t, ns, "rejected", gw.Name, rejectMarker)
+	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		var got v1alpha1.KrakenDGateway
+		if err := k8sClient.Get(ctx, gw, &got); err != nil {
+			return err
+		}
+		got.Spec.Config.ExtraConfig = rootRejecting(rejectMarker)
+		return k8sClient.Update(ctx, &got)
+	})
+	if err != nil {
+		t.Fatalf("making the gateway root fail: %v", err)
+	}
 	eventually(t, func() error {
 		var got v1alpha1.KrakenDGateway
 		if err := k8sClient.Get(ctx, gw, &got); err != nil {
