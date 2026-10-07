@@ -2586,6 +2586,30 @@ func TestEndpointAccepted_StrippedWildcardsAreNotCountedAsServed(t *testing.T) {
 	}
 }
 
+func TestEndpointAccepted_AnEntryLostToSeveralEndpointsIsCountedOnce(t *testing.T) {
+	gw := reconciledGateway()
+	ep := testEndpoint("x", "/users")
+	ep.Spec.Endpoints = append(ep.Spec.Endpoints, ep.Spec.Endpoints[0])
+	ep.Spec.Endpoints[1].Endpoint = "/orders"
+	key := client.ObjectKeyFromObject(ep)
+	first := types.NamespacedName{Namespace: "default", Name: "first"}
+	second := types.NamespacedName{Namespace: "default", Name: "second"}
+	rv := renderVerdicts{
+		conflicted: map[types.NamespacedName]struct{}{key: {}},
+		lost: map[types.NamespacedName][]renderer.EntryConflict{key: {
+			{Endpoint: "/users", Method: "GET", Winner: first, Detail: "clash with first"},
+			{Endpoint: "/users", Method: "GET", Winner: second, Detail: "clash with second"}}},
+	}
+
+	got := endpointAccepted(gw, ep, rv)
+
+	if got.condition.Status != metav1.ConditionTrue || got.condition.Reason != v1alpha1.ReasonPartiallyAccepted ||
+		!strings.Contains(got.condition.Message, "1 of 2 entries are served") || len(got.conflicts) != 2 {
+		t.Errorf("Accepted = %+v with %d conflicts, want PartiallyAccepted, 1 of 2 entries served, both winners listed",
+			got.condition, len(got.conflicts))
+	}
+}
+
 func TestReconcileCEFallbackCondition_DescribesTheAppliedConfig(t *testing.T) {
 	applied := func() *v1alpha1.KrakenDGateway {
 		gw, _, _ := licensedEEGateway(testNow.Add(-time.Minute), true)
