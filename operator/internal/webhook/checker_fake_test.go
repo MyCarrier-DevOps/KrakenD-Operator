@@ -21,8 +21,6 @@ import (
 	"strings"
 	"time"
 
-	"k8s.io/apimachinery/pkg/types"
-
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
 )
@@ -151,42 +149,6 @@ func (s *scriptedChecker) CheckEndpoint(
 	return v, nil
 }
 
-func (s *scriptedChecker) CheckGateway(
-	ctx context.Context, gw *v1alpha1.KrakenDGateway, replace []v1alpha1.KrakenDEndpoint,
-) (configcheck.Verdict, error) {
-	s.gateways = append(s.gateways, string(gw.Spec.Edition)+"/"+gw.Spec.Config.Timeout)
-	if len(replace) > 0 {
-		return s.next(ctx, "gateway+candidate", replace)
-	}
-	return s.next(ctx, "gateway", replace)
-}
-
-func (s *scriptedChecker) CheckIsolated(
-	ctx context.Context, gw *v1alpha1.KrakenDGateway, eps []v1alpha1.KrakenDEndpoint,
-) (configcheck.Verdict, error) {
-	s.gateways = append(s.gateways, string(gw.Spec.Edition)+"/"+gw.Spec.Config.Timeout)
-	return s.next(ctx, "isolated", eps)
-}
-
-// CheckGatewayPolicy records "ns/gateway:raw" in args: the gateway and the raw
-// of the policy it was handed.
-func (s *scriptedChecker) CheckGatewayPolicy(
-	ctx context.Context, gw *v1alpha1.KrakenDGateway, policy *v1alpha1.KrakenDBackendPolicy,
-) (configcheck.Verdict, error) {
-	v, err := s.next(ctx, "gateway+policy", nil)
-	s.args[len(s.args)-1] = gw.Namespace + "/" + gw.Name + ":" + rawOf(policy)
-	return v, err
-}
-
-// LintPolicy records "policy:raw" in args.
-func (s *scriptedChecker) LintPolicy(
-	ctx context.Context, policy *v1alpha1.KrakenDBackendPolicy,
-) (configcheck.Verdict, error) {
-	v, err := s.next(ctx, "policy", nil)
-	s.args[len(s.args)-1] = "policy:" + rawOf(policy)
-	return v, err
-}
-
 // CheckPolicy records "policy:raw" in args.
 func (s *scriptedChecker) CheckPolicy(
 	ctx context.Context, policy *v1alpha1.KrakenDBackendPolicy, memo configcheck.Memo,
@@ -219,13 +181,6 @@ func rawOf(policy *v1alpha1.KrakenDBackendPolicy) string {
 		return "-"
 	}
 	return string(policy.Spec.Raw.Raw)
-}
-
-// failing is a verdict that blames entry index of default/ep.
-func failing(ep string, index int, msg string) configcheck.Verdict {
-	return configcheck.Verdict{Findings: []configcheck.Finding{{
-		Endpoint: types.NamespacedName{Namespace: "default", Name: ep}, Index: index, Message: msg,
-	}}}
 }
 
 // describe lists the entries of eps as "ns/name[METHOD /path ...]", "-" for none.

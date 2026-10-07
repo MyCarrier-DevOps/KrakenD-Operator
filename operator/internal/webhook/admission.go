@@ -41,13 +41,6 @@ const warningLimit = 1024
 // ConfigChecker renders a gateway's config with a proposed change and
 // validates it. *configcheck.Checker implements it.
 type ConfigChecker interface {
-	CheckGateway(ctx context.Context, gw *v1alpha1.KrakenDGateway,
-		replace []v1alpha1.KrakenDEndpoint) (configcheck.Verdict, error)
-	CheckIsolated(ctx context.Context, gw *v1alpha1.KrakenDGateway,
-		eps []v1alpha1.KrakenDEndpoint) (configcheck.Verdict, error)
-	CheckGatewayPolicy(ctx context.Context, gw *v1alpha1.KrakenDGateway,
-		policy *v1alpha1.KrakenDBackendPolicy) (configcheck.Verdict, error)
-	LintPolicy(ctx context.Context, policy *v1alpha1.KrakenDBackendPolicy) (configcheck.Verdict, error)
 	SameConfig(ctx context.Context, old, gw *v1alpha1.KrakenDGateway) (bool, error)
 	// Conflicts renders gw's endpoints with replace substituted in process
 	// and returns what the render leaves out (configcheck.Checker).
