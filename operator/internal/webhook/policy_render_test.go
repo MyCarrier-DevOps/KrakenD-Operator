@@ -532,6 +532,50 @@ func TestPolicyAdmission_ADenialSurvivesALaterCheckThatCannotRun(t *testing.T) {
 	}
 }
 
+// The stored policy's group passes and the write's fails, so the write is the
+// cause whichever endpoint the scan would name: it is refused with a 422 when
+// the admission time ends before the scan reaches the endpoint it breaks.
+func TestPolicyAdmission_ABreakingChangeOnALargeGatewayIsRefusedWithinTheBudget(t *testing.T) {
+	names := make([]string, 300)
+	for i := range names {
+		names[i] = fmt.Sprintf("uses-p-%03d", i)
+	}
+	chk := &scriptedChecker{delay: 30 * time.Millisecond,
+		verdicts: []configcheck.Verdict{{OK: true}, {OK: true}, {Output: "x"}, {OK: true}}}
+	v := &PolicyValidator{Client: fakeClient(policyUsers(names...)...), Checker: chk}
+	const deadline = 2 * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), deadline)
+	defer cancel()
+	start := time.Now()
+
+	_, err := v.ValidateUpdate(ctx, testPolicy(`{}`), testPolicy(`{"x":{}}`))
+
+	if !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "not checked within the admission time") {
+		t.Fatalf("err = %v, want a 422 that the deadline cut short", err)
+	}
+	if took := time.Since(start); took > deadline+500*time.Millisecond {
+		t.Errorf("answered after %s, want soon after the %s deadline", took, deadline)
+	}
+}
+
+// A write that breaks nothing on a large gateway is admitted after one group
+// check, however many endpoints use the policy.
+func TestPolicyAdmission_AChangeThatBreaksNothingOnALargeGatewayIsAdmitted(t *testing.T) {
+	names := make([]string, 300)
+	for i := range names {
+		names[i] = fmt.Sprintf("uses-p-%03d", i)
+	}
+	chk := &scriptedChecker{}
+	v := &PolicyValidator{Client: fakeClient(policyUsers(names...)...), Checker: chk}
+
+	resp := review(t, v, "alice", testPolicy(`{"x":{}}`), testPolicy(`{}`))
+
+	if !resp.Allowed || strings.Join(chk.calls, ",") != "policy,root,group" {
+		t.Errorf("allowed = %v, checks = %v; want admitted after the policy, the root and one group check",
+			resp.Allowed, chk.calls)
+	}
+}
+
 func TestPolicyAdmission_NamingStopsBeforeTheBudget(t *testing.T) {
 	names := make([]string, 15)
 	var endpointVerdicts []configcheck.EndpointVerdict
