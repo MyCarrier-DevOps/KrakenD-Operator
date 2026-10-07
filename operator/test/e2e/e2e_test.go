@@ -227,8 +227,12 @@ var _ = Describe("KrakenD Operator", Ordered, func() {
 				cmd := exec.Command("kubectl", "logs", controllerPodName, "-n", namespace)
 				output, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).To(ContainSubstring("controller-runtime.metrics\tServing metrics server"),
+				g.Expect(output).To(ContainSubstring(`"Value":"Serving metrics server"`),
 					"Metrics server not yet started")
+				g.Expect(output).To(ContainSubstring(`"Name":"krakend-operator/controller-runtime/metrics"`),
+					"the metrics server's record does not carry its logger name")
+				g.Expect(output).To(ContainSubstring(`{"Key":"service.name","Value":{"Type":"STRING","Value":"krakend-operator"}}`),
+					"records do not name the operator's service")
 			}
 			Eventually(verifyMetricsServerStarted).Should(Succeed())
 
@@ -278,6 +282,12 @@ var _ = Describe("KrakenD Operator", Ordered, func() {
 			Expect(metricsOutput).To(ContainSubstring(
 				"controller_runtime_reconcile_total",
 			))
+
+			By("checking the operator's metrics keep their names and gain no exporter family")
+			Expect(metricsOutput).To(ContainSubstring("krakend_operator_config_renders_total"))
+			Expect(metricsOutput).NotTo(ContainSubstring("target_info"))
+			Expect(metricsOutput).NotTo(ContainSubstring("otel_scope_"))
+			Expect(metricsOutput).NotTo(ContainSubstring("http_server_request"))
 		})
 
 		// +kubebuilder:scaffold:e2e-webhooks-checks
