@@ -441,15 +441,11 @@ func (r *KrakenDAutoConfigReconciler) judgeCandidates(
 	return held, nil
 }
 
-// suspects returns the candidates group does not vouch for: every one when
-// the group fails; otherwise those that lost an entry in the group's render,
-// whose left-out entries the group never checked.
+// suspects returns the candidates group does not vouch for
+// (Verdict.Suspect).
 func suspects(candidates []*v1alpha1.KrakenDEndpoint, group configcheck.Verdict) []*v1alpha1.KrakenDEndpoint {
-	if !group.OK {
-		return candidates
-	}
 	return slices.DeleteFunc(slices.Clone(candidates), func(ep *v1alpha1.KrakenDEndpoint) bool {
-		return !slices.Contains(group.Masked, client.ObjectKeyFromObject(ep))
+		return !group.Suspect(client.ObjectKeyFromObject(ep))
 	})
 }
 
