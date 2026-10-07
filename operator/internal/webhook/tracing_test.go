@@ -17,11 +17,21 @@ limitations under the License.
 package webhook
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
+	admissionv1 "k8s.io/api/admission/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/rest"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
@@ -102,4 +112,73 @@ func TestPolicyAdmission_IsOneSpanAboveItsCheckAndKrakendRun(t *testing.T) {
 	spans := rec.Ended()
 	spans.RequireAncestors(t, "krakend check", "configcheck.CheckPolicy", "admission.validate KrakenDBackendPolicy")
 	spans.RequireParent(t, "admission.validate KrakenDBackendPolicy", "configcheck.CheckPolicy")
+}
+
+// webhookManager is the part of a manager SetupWebhooks uses: the scheme, the
+// webhook server, the REST config the webhook builder reads and a field
+// indexer that accepts every index. Every other method panics.
+type webhookManager struct {
+	ctrl.Manager
+	server webhook.Server
+}
+
+func (m webhookManager) GetScheme() *runtime.Scheme { return testScheme() }
+
+func (m webhookManager) GetWebhookServer() webhook.Server { return m.server }
+
+func (m webhookManager) GetConfig() *rest.Config { return &rest.Config{} }
+
+func (m webhookManager) GetFieldIndexer() client.FieldIndexer { return acceptingIndexer{} }
+
+// acceptingIndexer accepts every field index and keeps none.
+type acceptingIndexer struct{}
+
+func (acceptingIndexer) IndexField(context.Context, client.Object, string, client.IndexerFunc) error {
+	return nil
+}
+
+// createReview is the AdmissionReview the API server sends to create obj.
+func createReview(t *testing.T, obj client.Object) []byte {
+	t.Helper()
+	raw, err := json.Marshal(obj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(admissionv1.AdmissionReview{
+		TypeMeta: metav1.TypeMeta{APIVersion: "admission.k8s.io/v1", Kind: "AdmissionReview"},
+		Request: &admissionv1.AdmissionRequest{
+			UID: "uid", Operation: admissionv1.Create, Object: runtime.RawExtension{Raw: raw},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
+// Each admission request the webhook server receives reaches its validator
+// through the path SetupWebhooks registers: the validator's span is a child of
+// the request's server span, for every kind.
+func TestSetupWebhooks_EachValidatorSpanIsAChildOfItsRequestsServerSpan(t *testing.T) {
+	for _, tc := range []struct {
+		kind string
+		obj  client.Object
+	}{
+		{"KrakenDGateway", testGateway()},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			rec := tracingtest.New(t)
+			server := telemetry.TraceWebhookServer(webhook.NewServer(webhook.Options{}), rec.Provider())
+			if err := SetupWebhooks(webhookManager{server: server}, tracedValidators(rec, testGateway())); err != nil {
+				t.Fatal(err)
+			}
+			path := "/validate-gateway-krakend-io-v1alpha1-" + strings.ToLower(tc.kind)
+			req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(createReview(t, tc.obj)))
+			req.Header.Set("Content-Type", "application/json")
+
+			server.WebhookMux().ServeHTTP(httptest.NewRecorder(), req)
+
+			rec.Ended().RequireChild(t, "admission "+path, "admission.validate "+tc.kind)
+		})
+	}
 }
