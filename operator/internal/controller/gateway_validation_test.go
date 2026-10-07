@@ -47,3 +47,15 @@ func TestEndpointAccepted_AnExcludedEndpointIsNotServedForItsOwnReason(t *testin
 		})
 	}
 }
+
+func TestExclusionCondition_AnUnappliedExclusionSaysWhenItTakesEffect(t *testing.T) {
+	v := configcheck.EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid, Output: "- at '/endpoints/0': bad"}
+
+	c := exclusionCondition(testGateway(), testEndpoint("bad", "/b"), v, false)
+
+	const want = "Will not be served when gateway default/test-gw next applies its config: " +
+		"this endpoint fails krakend check on its own: - at '/endpoints/0': bad"
+	if c.Message != want {
+		t.Errorf("Message = %q, want %q", c.Message, want)
+	}
+}
