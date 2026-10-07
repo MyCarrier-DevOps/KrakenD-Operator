@@ -25,13 +25,16 @@ import (
 	"strings"
 	"testing"
 
+	"go.opentelemetry.io/otel/codes"
 	admissionv1 "k8s.io/api/admission/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
@@ -236,4 +239,41 @@ func TestPolicyAdmission_JudgesEachGatewayInASpan(t *testing.T) {
 	}
 
 	rec.Ended().RequireChild(t, "admission.validate KrakenDBackendPolicy", "admission.judge_policy")
+}
+
+// outcomeValidator stands in for a validator whose decision is err.
+type outcomeValidator struct{ err error }
+
+func (v outcomeValidator) ValidateCreate(context.Context, runtime.Object) (admission.Warnings, error) {
+	return nil, v.err
+}
+
+func (v outcomeValidator) ValidateUpdate(context.Context, runtime.Object, runtime.Object) (admission.Warnings, error) {
+	return nil, v.err
+}
+
+func (v outcomeValidator) ValidateDelete(context.Context, runtime.Object) (admission.Warnings, error) {
+	return nil, v.err
+}
+
+// A denial is the validator's answer, not a failure: its span is not an error,
+// and the denial, which can quote the tenant's object, is on no span.
+func TestAdmission_ADenialIsNoErrorAndItsTextIsOnNoSpan(t *testing.T) {
+	rec := tracingtest.New(t)
+	denial := invalid(kindEndpoint, "e",
+		field.ErrorList{field.Invalid(field.NewPath("spec"), "TENANT-VALUE", "TENANT-DETAIL")})
+	admit := tracedValidator{kind: kindEndpoint, next: outcomeValidator{err: denial}, tracer: rec.Tracer()}
+
+	_, err := admit.ValidateCreate(context.Background(), testEndpoint("e", "/e"))
+
+	if err == nil {
+		t.Fatal("the denial was swallowed")
+	}
+	span := rec.Ended().One(t, "admission.validate KrakenDEndpoint")
+	if got := span.Status().Code; got != codes.Unset {
+		t.Errorf("status = %v, want unset: a denial is not an error", got)
+	}
+	if n := len(span.Events()); n != 0 {
+		t.Errorf("%d events on the span, want none: %v", n, span.Events())
+	}
 }
