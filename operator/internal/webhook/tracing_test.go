@@ -30,6 +30,7 @@ import (
 
 	"go.opentelemetry.io/otel/codes"
 	admissionv1 "k8s.io/api/admission/v1"
+	authorizationv1 "k8s.io/api/authorization/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -403,5 +404,24 @@ func TestAutoConfigAdmission_ADenialIsNoErrorOnItsStructuralSpan(t *testing.T) {
 	}
 	spans := rec.Ended()
 	spans.RequireChild(t, "admission.validate KrakenDAutoConfig", "admission.structural")
+	requireCleanAdmissionSpans(t, spans)
+}
+
+// A post-restart Job the requester may not create is denied as forbidden; the
+// denial, which names the requester, is on no span.
+func TestGatewayAdmission_AForbiddenRequestIsNoErrorOnItsStructuralSpan(t *testing.T) {
+	rec := tracingtest.New(t)
+	var reviews []authorizationv1.SubjectAccessReview
+	v := &GatewayValidator{Client: reviewingClient(false, &reviews), Checker: &scriptedChecker{}, Tracer: rec.Tracer()}
+	admit := tracedValidator{kind: "KrakenDGateway", next: v, tracer: rec.Tracer()}
+	gw := gatewayWithJob(func(p *v1alpha1.PostRestartJobSpec) { p.ServiceAccountName = "namespace-admin" })
+
+	resp := review(t, admit, "alice", gw, nil)
+
+	if resp.Result == nil || resp.Result.Code != http.StatusForbidden {
+		t.Fatalf("response = %+v, want a 403 denial", resp.Result)
+	}
+	spans := rec.Ended()
+	spans.RequireChild(t, "admission.validate KrakenDGateway", "admission.structural")
 	requireCleanAdmissionSpans(t, spans)
 }
