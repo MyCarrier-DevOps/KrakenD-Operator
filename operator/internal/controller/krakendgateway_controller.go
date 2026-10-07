@@ -1264,10 +1264,12 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 	gw *v1alpha1.KrakenDGateway,
 	in infraInputs,
 	saControlled bool, coreErr error,
-) (_ deploymentObservation, retErr error) {
+) (deploymentObservation, error) {
 	ctx, span := tracing.Start(ctx, r.Tracer, "gateway.infrastructure")
-	defer func() { tracing.End(span, retErr) }()
+	// The core resources stage's error is returned with this stage's, but only
+	// the stage's own marks its span.
 	errs := []error{coreErr}
+	defer func() { tracing.End(span, stderrors.Join(errs[1:]...)) }()
 	if !saControlled {
 		// The Deployment and the post-restart Job run as the ServiceAccount
 		// named like the gateway. While the gateway does not control it
