@@ -17,6 +17,7 @@ limitations under the License.
 package webhook
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -125,5 +126,24 @@ func TestEndpointAdmission_APolicyAtFaultIsNamedNotQuoted(t *testing.T) {
 
 	if resp.Allowed || !strings.Contains(responseText(resp), "shared/p") {
 		t.Errorf("response = %+v; want a denial naming shared/p", resp.Result)
+	}
+}
+
+func TestEndpointAdmission_ACheckThatCannotRunIs500(t *testing.T) {
+	stored := testEndpoint("ep", "/a")
+	updated := stored.DeepCopy()
+	updated.Spec.Endpoints[0].Backends[0].URLPattern = "/b"
+	for name, failCall := range map[string]int{"the root": 1, "the endpoint": 2, "its stored version": 3} {
+		t.Run(name, func(t *testing.T) {
+			chk := &scriptedChecker{err: errors.New("no slot"), failCall: failCall,
+				endpointVerdicts: []configcheck.EndpointVerdict{ownFailure("bad")}}
+			v := &EndpointValidator{Client: fakeClient(testGateway(), stored), Checker: chk}
+
+			resp := review(t, v, "alice", updated, stored)
+
+			if resp.Allowed || resp.Result.Code != http.StatusInternalServerError || len(resp.Warnings) != 0 {
+				t.Errorf("response = %+v, warnings %v; want a 500 with no warning", resp.Result, resp.Warnings)
+			}
+		})
 	}
 }
