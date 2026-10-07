@@ -23,7 +23,9 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -523,5 +525,32 @@ func TestPolicyAdmission_ADenialSurvivesALaterCheckThatCannotRun(t *testing.T) {
 	if text := responseText(resp); !strings.Contains(text, "default/victim") ||
 		!strings.Contains(text, "(1 not checked within the admission time)") {
 		t.Errorf("denial = %q, want default/victim named and the endpoint left unchecked counted", text)
+	}
+}
+
+func TestPolicyAdmission_NamingStopsBeforeTheBudget(t *testing.T) {
+	names := make([]string, 15)
+	var endpointVerdicts []configcheck.EndpointVerdict
+	for i := range names {
+		names[i] = fmt.Sprintf("uses-p-%02d", i)
+		endpointVerdicts = append(endpointVerdicts,
+			configcheck.EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid}, configcheck.EndpointVerdict{OK: true})
+	}
+	chk := &scriptedChecker{verdicts: []configcheck.Verdict{{OK: true}, {OK: true}, {Output: "x"}},
+		endpointVerdicts: endpointVerdicts, delay: 300 * time.Millisecond}
+	v := &PolicyValidator{Client: fakeClient(policyUsers(names...)...), Checker: chk}
+	const deadline = 2500 * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), deadline)
+	defer cancel()
+	start := time.Now()
+
+	_, err := v.ValidateUpdate(ctx, testPolicy(`{}`), testPolicy(`{"x":{}}`))
+
+	if !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "not checked within the admission time") ||
+		strings.Contains(err.Error(), "more not checked)") {
+		t.Fatalf("err = %v, want a 422 that the deadline, not the cap, cut short", err)
+	}
+	if took := time.Since(start); took > deadline+500*time.Millisecond {
+		t.Errorf("answered after %s, want soon after the %s deadline", took, deadline)
 	}
 }
