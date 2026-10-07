@@ -14,7 +14,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-
 package configcheck
 
 import (
@@ -55,15 +54,33 @@ func (c Clash) String() string {
 		"which is older: %s", c.Method, c.Endpoint, c.Loser, c.Winner, c.Detail)
 }
 
-// NewClashes returns the router clashes of after that involve one of
-// involving as the loser or as the winner; a nil involving takes every endpoint. Same-shape
-// conflicts are left out: the route uniqueness rules and the oldest-wins
-// render settle those. The result is sorted by loser, endpoint and method.
-func NewClashes(_, after RouteConflicts, involving map[types.NamespacedName]bool) []Clash {
+// clashKey identifies a clash by which entry of which endpoint loses to which
+// endpoint. The router's refusal is left out: gin words it after the tree it
+// has built so far, which other routes change.
+type clashKey struct {
+	loser, winner    types.NamespacedName
+	method, endpoint string
+}
+
+// NewClashes returns the router clashes of after that before does not have,
+// among those that involve one of involving as the loser or as the winner; a
+// nil involving takes every endpoint. A clash before has is the same clash
+// when the same entry of the same endpoint loses to the same endpoint, however
+// the router words it. Same-shape conflicts are left out: the route uniqueness
+// rules and the oldest-wins render settle those. The result is sorted by
+// loser, endpoint and method.
+func NewClashes(before, after RouteConflicts, involving map[types.NamespacedName]bool) []Clash {
+	known := map[clashKey]bool{}
+	for loser, lost := range before.Lost {
+		for _, e := range lost {
+			known[clashKey{loser: loser, winner: e.Winner, method: e.Method, endpoint: e.Endpoint}] = true
+		}
+	}
 	var out []Clash
 	for loser, lost := range after.Lost {
 		for _, e := range lost {
-			if e.Detail == "" || involving != nil && !involving[loser] && !involving[e.Winner] {
+			key := clashKey{loser: loser, winner: e.Winner, method: e.Method, endpoint: e.Endpoint}
+			if e.Detail == "" || known[key] || involving != nil && !involving[loser] && !involving[e.Winner] {
 				continue
 			}
 			out = append(out, Clash{
