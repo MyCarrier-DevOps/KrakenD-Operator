@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -31,6 +32,7 @@ import (
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/resources"
+	"github.com/mycarrier-devops/krakend-operator/internal/tracing"
 )
 
 // The third-party kinds a gateway creates when the matching feature is
@@ -153,7 +155,10 @@ func (r *KrakenDGatewayReconciler) optionalReader(gvk schema.GroupVersionKind) c
 // kind names obj in the error.
 func (r *KrakenDGatewayReconciler) applyOwned(
 	ctx context.Context, gw *v1alpha1.KrakenDGateway, obj client.Object, kind string, build func(),
-) error {
+) (retErr error) {
+	ctx, span := tracing.Start(ctx, r.Tracer, "apply "+kind,
+		trace.WithAttributes(tracing.KeyName.String(obj.GetName())))
+	defer func() { tracing.End(span, retErr) }()
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, obj, func() error {
 		build()
 		return controllerutil.SetControllerReference(gw, obj, r.Scheme)
