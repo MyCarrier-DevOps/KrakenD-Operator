@@ -111,8 +111,8 @@ const policyWarningLimit = (policyWarningBytes - countWarningBytes) / maxPolicyW
 // (screenPolicyUse), and only then are the endpoints a change breaks named,
 // gateway by gateway (judgePolicyUse), so naming the endpoints of one gateway
 // cannot spend the time another gateway's checks need. A denial names
-// endpoints and quotes none of them. A check that cannot run makes the
-// request a 500.
+// endpoints and quotes none of them. A gateway that could not be checked makes
+// the request a 500 unless another gateway already refuses it.
 func checkPolicyRender(ctx context.Context, c client.Reader, chk ConfigChecker, memo configcheck.Memo,
 	old, policy *v1alpha1.KrakenDBackendPolicy) (admission.Warnings, error) {
 	if err := lintPolicyAlone(ctx, chk, memo, old, policy); err != nil {
@@ -130,7 +130,8 @@ func checkPolicyRender(ctx context.Context, c client.Reader, chk ConfigChecker, 
 	}
 	var errs field.ErrorList
 	var warnings admission.Warnings
-	omitted, unwarned := 0, 0
+	omitted, unwarned, unchecked := 0, 0, 0
+	var stopped error
 	// cause records a gateway the policy cannot go to; past maxEntryCauses the
 	// rest are only counted.
 	cause := func(e *field.Error) {
@@ -154,7 +155,11 @@ func checkPolicyRender(ctx context.Context, c client.Reader, chk ConfigChecker, 
 	for _, use := range screened {
 		broken, warning, err := judgePolicyUse(ctx, chk, memo, use, old, policy)
 		if err != nil {
-			return nil, checkErr(err)
+			unchecked++
+			if stopped == nil {
+				stopped = err
+			}
+			continue
 		}
 		if broken != "" {
 			cause(field.Invalid(field.NewPath("spec"), field.OmitValueType{}, truncate(broken, warningLimit)))
@@ -166,6 +171,13 @@ func checkPolicyRender(ctx context.Context, c client.Reader, chk ConfigChecker, 
 		default:
 			unwarned++
 		}
+	}
+	if len(errs) == 0 && stopped != nil {
+		return nil, checkErr(stopped)
+	}
+	if unchecked > 0 {
+		errs = append(errs, field.Invalid(field.NewPath("spec"), field.OmitValueType{},
+			fmt.Sprintf("%d more gateways that use the policy could not be checked", unchecked)))
 	}
 	if omitted > 0 {
 		errs = append(errs, field.Invalid(field.NewPath("spec"), field.OmitValueType{},
