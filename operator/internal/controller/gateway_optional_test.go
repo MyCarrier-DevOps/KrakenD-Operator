@@ -278,6 +278,42 @@ func TestGatewayReconcile_DisabledOptionalKindsAreReadThroughTheCache(t *testing
 	}
 }
 
+// A disabled feature's child of a kind without an informer (its CRD was
+// installed after startup) is read live through the API reader. The manager
+// client caches metadata reads, so reading it there would start an informer
+// that has no handler to enqueue the gateway.
+func TestGatewayReconcile_KindsWithoutAnInformerAreReadLiveNotThroughTheClient(t *testing.T) {
+	gw := reconciledGateway()
+	gw.UID = "gw-uid"
+	gw.Status.ConfigChecksum = "applied"
+	vs := controlledChild(gw, virtualServiceGVK, gw.Name)
+	base := fakeClientBuilder().WithRESTMapper(optionalCRDMapper(optionalOwnedGVKs...)).
+		WithObjects(gw, vs).WithStatusSubresource(gw).Build()
+	clientReads := 0
+	c := interceptor.NewClient(base, interceptor.Funcs{Get: func(
+		ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption,
+	) error {
+		if _, ok := obj.(*metav1.PartialObjectMetadata); ok &&
+			slices.Contains(optionalOwnedGVKs, obj.GetObjectKind().GroupVersionKind()) {
+			clientReads++
+		}
+		return cl.Get(ctx, key, obj, opts...)
+	}})
+	r := newTestGatewayReconciler(c, renderOutput("applied"), &mockValidator{})
+	r.APIReader = base
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	if clientReads != 0 {
+		t.Errorf("client reads of optional kinds = %d, want 0: its cache would start an informer", clientReads)
+	}
+	if err := base.Get(context.Background(), client.ObjectKeyFromObject(vs), vs.DeepCopy()); !apierrors.IsNotFound(err) {
+		t.Errorf("VirtualService Get = %v; the child of a disabled feature must still be deleted", err)
+	}
+}
+
 // countingMapper counts the kind lookups made through it.
 type countingMapper struct {
 	meta.RESTMapper
