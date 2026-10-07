@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/prometheus/client_golang/prometheus/testutil"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -337,7 +336,8 @@ func TestGatewayReconcile_CountsOnlyTheRejectionsOfObjectsOnTheirOwn(t *testing.
 	good, bad := testEndpoint("good", "/a"), badHosted("bad", "/b")
 	c := fakeClientBuilder().WithObjects(gw, good, bad).WithStatusSubresource(gw, good, bad).Build()
 	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}), rejectsBadHosts())
-	before := testutil.ToFloat64(configValidationFailures)
+	m, reg := testMetrics(t)
+	r.Metrics = m
 
 	if err := reconcileGateway(t, r, gw); err != nil {
 		t.Fatal(err)
@@ -345,8 +345,8 @@ func TestGatewayReconcile_CountsOnlyTheRejectionsOfObjectsOnTheirOwn(t *testing.
 
 	// bad's own check counts; the whole render's rejection, which bad
 	// causes, does not.
-	if got := testutil.ToFloat64(configValidationFailures) - before; got != 1 {
-		t.Errorf("counted %v rejections, want 1", got)
+	if got, _ := metricValue(t, reg, "krakend_operator_config_validation_failures_total"); got != 1 {
+		t.Errorf("counted %v rejections in the injected recorder, want 1", got)
 	}
 }
 
