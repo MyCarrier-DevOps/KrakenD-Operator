@@ -395,8 +395,8 @@ func isExclusion(cond *metav1.Condition) bool {
 		(cond.Reason == v1alpha1.ReasonEndpointInvalid || cond.Reason == v1alpha1.ReasonPolicyInvalid)
 }
 
-// recordExclusions settles the endpoints' Accepted verdicts on a pass whose
-// render is not the applied config:
+// recordExclusions settles the endpoints' Accepted verdicts on a pass that
+// serves nothing new (cfg.served is false):
 //   - an endpoint that fails on its own (cfg.excluded) gets Accepted=False
 //     with its reason, worded for a config not yet applied, keeping its live
 //     status.conflicts unless no config has ever been applied;
