@@ -664,7 +664,7 @@ erDiagram
 | **Deployment** | KrakenDGateway | Operator-managed; garbage-collected via ownerReference |
 | **Service** | KrakenDGateway | Operator-managed; garbage-collected via ownerReference |
 | **ConfigMap** | KrakenDGateway | Operator-managed; garbage-collected via ownerReference |
-| **ServiceAccount** | KrakenDGateway | Operator-managed; garbage-collected via ownerReference. An existing same-named one is taken over only if it has no controller and carries the gateway's selector labels, see below |
+| **ServiceAccount** | KrakenDGateway | Operator-managed; garbage-collected via ownerReference. An existing same-named one is taken over only if it has no controller and carries its kind's consent labels, see below |
 | **HorizontalPodAutoscaler** | KrakenDGateway | Operator-managed (when `autoscaling` is set); the operator sets Deployment `spec.replicas` only when creating it (to `minReplicas`) |
 | **PodDisruptionBudget** | KrakenDGateway | Operator-managed; garbage-collected via ownerReference |
 | **Dragonfly CR** | KrakenDGateway | Operator-managed (when `dragonfly.enabled=true`); Dragonfly Operator reconciles into StatefulSet, Service, PVC |
@@ -1385,9 +1385,12 @@ The gateway writes its children by name, so an object with that name may
 already exist. `applyOwned` (and the Deployment write) decide on the object as
 fetched, inside the `CreateOrUpdate` mutate function and before the builder
 rewrites its labels: the gateway writes it only if it already controls it, or
-it has no controller and carries the gateway's selector labels
-(`app.kubernetes.io/instance=<gateway>`, `app.kubernetes.io/managed-by=krakend-operator`).
-Those labels are the hand-over, since only someone who can write the object can
+it has no controller and carries the instance and managed-by labels the
+operator's own builder stamps on that kind (`app.kubernetes.io/instance=<gateway>`
+for every kind but the Dragonfly, whose instance is `<gateway>-dragonfly`, and
+`app.kubernetes.io/managed-by=krakend-operator`). Each call site passes its
+kind's pair, and the `notControlledError` carries it into the condition's
+message. Those labels are the hand-over, since only someone who can write the object can
 set them, and an object left by `kubectl delete --cascade=orphan` still carries
 them. Anything else is refused with a `notControlledError` and left untouched:
 an object another controller owns, and an unlabelled object nothing owns. The
@@ -1398,7 +1401,7 @@ stage turns the refusals of a pass into the `ResourcesControlled` condition
 and the remedy), which `Ready` folds in the way it folds `PluginsResolved`. The
 decision is made on the exact version the write would replace, so a stale cache
 read cannot bypass it: a missed object fails the create with `AlreadyExists`, and
-a stale controlled or labelled read fails the update on its `resourceVersion`.
+a stale controlled or labelled read fails the update on its `resourceVersion` whenever the write changes anything.
 
 ### Conflict reporting
 
@@ -2122,7 +2125,7 @@ Deployment step.
 | `LicenseDegraded` | Gateway is actively running in CE mode as a fallback because the EE license expired or entered the pre-expiry safety window (**True** when the fallback decision is made, before the CE rollout has finished, and only when `fallbackToCE=true`; `False` with reason `LicenseRestored` after recovery, or `False` with reason `LicenseExpiredNoFallback` when the license expired and `fallbackToCE` is off while the condition was already present; absent otherwise) |
 | `CEFallbackApplied` | The applied config is the CE-fallback render (reason `EEFeaturesStripped`); the message lists the Enterprise-only features it removed. Absent otherwise |
 | `PluginsResolved` | Every plugin ConfigMap the gateway mounts exists (`ConfigMapsFound`), or `False`/`ConfigMapNotFound` naming the missing ones, while the Deployment is held. Absent without ConfigMap plugin sources |
-| `ResourcesControlled` | `True` (`ResourcesControlled`) when every object the gateway writes by name is controlled by it or was handed over by its labels; `False` (`ResourceNotControlled`) naming each existing object it leaves alone (kind, `<namespace>/<name>`, its controller if any) and the remedy |
+| `ResourcesControlled` | `True` (`ResourcesControlled`) when no object the gateway wrote this pass was refused (the condition keeps its last value while the pass failed otherwise or held the Deployment); `False` (`ResourceNotControlled`) naming each existing object it leaves alone (kind, `<namespace>/<name>`, its controller if any) and the remedy |
 | `DragonflyReady` | Dragonfly CR status reports `ready` phase (watched from Dragonfly Operator); `False`/`CRDNotInstalled` when the feature is enabled but its CRD is not installed |
 | `IstioConfigured` | VirtualService was successfully created/updated; `False`/`CRDNotInstalled` when the feature is enabled but its CRD is not installed |
 | `LicenseSecretUnavailable` | `True` while the license cannot be read: the ExternalSecret failed to sync, the referenced Secret (`secretRef`) or its key does not exist, or the certificate does not parse. `LicenseValid` is `Unknown` meanwhile, unless the last known expiry (`status.licenseExpiry`) is already inside the safety buffer or past, in which case the stage verdict applies. `False` with reason `SecretAvailable` once it can be read; `True`/`CRDNotInstalled` when the license comes from an ExternalSecret whose CRD is not installed |
