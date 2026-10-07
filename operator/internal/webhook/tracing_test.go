@@ -25,6 +25,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 
@@ -452,4 +453,133 @@ func TestPolicyAdmission_AFailedCheckMarksItsSpansWithoutTheText(t *testing.T) {
 			t.Errorf("span %q has events %v, want none", name, span.Events())
 		}
 	}
+}
+
+// parentsOf returns the names of the parents of the spans named name, sorted.
+func parentsOf(spans tracingtest.Spans, name string) []string {
+	var parents []string
+	for _, span := range spans.Named(name) {
+		parent := "<root>"
+		if p := spans.Parent(span); p != nil {
+			parent = p.Name()
+		}
+		parents = append(parents, parent)
+	}
+	slices.Sort(parents)
+	return parents
+}
+
+func requireParents(t *testing.T, spans tracingtest.Spans, name string, want ...string) {
+	t.Helper()
+	if got := parentsOf(spans, name); !slices.Equal(got, want) {
+		t.Errorf("spans %q have parents %v, want %v; spans: %s", name, got, want, spans)
+	}
+}
+
+// A gateway created over endpoints that fail together is admitted with a
+// warning; the warning's checks are below the admission's own span.
+func TestGatewayAdmission_ACreateWarningsChecksAreBelowTheAdmission(t *testing.T) {
+	rec := tracingtest.New(t)
+	v := tracedValidatorsRunning(rec, rejectingExecutor{reject: rejectsWith("/bad")}, testEndpoint("e", "/bad"))
+	admit := tracedValidator{kind: "KrakenDGateway", next: v.Gateway, tracer: rec.Tracer()}
+
+	warnings, err := admit.ValidateCreate(context.Background(), testGateway())
+
+	if err != nil || len(warnings) == 0 {
+		t.Fatalf("warnings, err = %v, %v; want a warning", warnings, err)
+	}
+	spans := rec.Ended()
+	spans.RequireParent(t, "admission.validate KrakenDGateway", "configcheck.CheckGroup")
+	spans.RequireParent(t, "admission.validate KrakenDGateway", "configcheck.CheckEndpoint")
+	requireCleanAdmissionSpans(t, spans)
+}
+
+// An update of a gateway whose root fails on its own, and fails as before, is
+// admitted with a warning; the stored root's check is below the admission's span.
+func TestGatewayAdmission_AFailingRootChecksTheStoredRootBelowTheAdmission(t *testing.T) {
+	rec := tracingtest.New(t)
+	old, gw := editedGateway()
+	v := tracedValidatorsRunning(rec, rejectingExecutor{reject: func(string) bool { return true }}, old)
+	admit := tracedValidator{kind: "KrakenDGateway", next: v.Gateway, tracer: rec.Tracer()}
+
+	warnings, err := admit.ValidateUpdate(context.Background(), old, gw)
+
+	if err != nil || len(warnings) == 0 {
+		t.Fatalf("warnings, err = %v, %v; want a warning", warnings, err)
+	}
+	spans := rec.Ended()
+	requireParents(t, spans, "configcheck.CheckRoot", "admission.validate KrakenDGateway", "admission.validate KrakenDGateway")
+	requireCleanAdmissionSpans(t, spans)
+}
+
+// An update over a stored root that fails on its own judges the endpoints
+// under the failing root; every check of the judging is below its span, and
+// the stored root's is too.
+func TestGatewayAdmission_JudgingUnderAFailingStoredRootIsBelowItsSpan(t *testing.T) {
+	served := testEndpoint("e", "/bad")
+	served.Status.Conditions = []metav1.Condition{{Type: v1alpha1.ConditionAccepted, Status: metav1.ConditionTrue}}
+	for _, tc := range []struct {
+		name string
+		ep   *v1alpha1.KrakenDEndpoint
+	}{
+		{"an endpoint the last config left out", testEndpoint("e", "/bad")},
+		{"an endpoint the last config serves", served},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := tracingtest.New(t)
+			old, gw := editedGateway()
+			// The stored config lacks the edit's timeout, so it fails on its own.
+			rejecting := rejectingExecutor{reject: func(config string) bool {
+				return !strings.Contains(config, "1s") || strings.Contains(config, "/bad")
+			}}
+			v := tracedValidatorsRunning(rec, rejecting, old, tc.ep)
+			admit := tracedValidator{kind: "KrakenDGateway", next: v.Gateway, tracer: rec.Tracer()}
+
+			warnings, err := admit.ValidateUpdate(context.Background(), old, gw)
+
+			if err == nil && len(warnings) == 0 {
+				t.Fatal("admitted without a word, want a denial or a warning of the endpoints")
+			}
+			spans := rec.Ended()
+			requireParents(t, spans, "configcheck.CheckRoot",
+				"admission.judge_served", "admission.validate KrakenDGateway")
+			spans.RequireParent(t, "admission.judge_served", "configcheck.CheckEndpoint")
+			requireCleanAdmissionSpans(t, spans)
+		})
+	}
+}
+
+// An endpoint update that fails, over a stored version that failed too, is
+// admitted with a warning; both checks are below the admission's span.
+func TestEndpointAdmission_ItsStoredVersionsCheckIsBelowTheAdmission(t *testing.T) {
+	rec := tracingtest.New(t)
+	old := testEndpoint("e", "/bad")
+	v := tracedValidatorsRunning(rec, rejectingExecutor{reject: rejectsWith("/bad")}, testGateway(), old)
+	admit := tracedValidator{kind: kindEndpoint, next: v.Endpoint, tracer: rec.Tracer()}
+
+	warnings, err := admit.ValidateUpdate(context.Background(), old, testEndpoint("e", "/bad/x"))
+
+	if err != nil || len(warnings) == 0 {
+		t.Fatalf("warnings, err = %v, %v; want a warning", warnings, err)
+	}
+	spans := rec.Ended()
+	spans.RequireParent(t, "admission.validate KrakenDEndpoint", "configcheck.CheckEndpoint")
+	requireCleanAdmissionSpans(t, spans)
+}
+
+// A policy write that breaks an endpoint is denied; the judging of the
+// gateway's endpoints is below its span.
+func TestPolicyAdmission_JudgingAGatewaysEndpointsIsBelowItsSpan(t *testing.T) {
+	rec := tracingtest.New(t)
+	v := tracedValidatorsRunning(rec, rejectingExecutor{reject: rejectsWith("/a")}, referencing()...)
+	admit := tracedValidator{kind: "KrakenDBackendPolicy", next: v.Policy, tracer: rec.Tracer()}
+
+	warnings, err := admit.ValidateCreate(context.Background(), testPolicy(`{}`))
+
+	if err != nil || len(warnings) == 0 {
+		t.Fatalf("warnings, err = %v, %v; want a warning", warnings, err)
+	}
+	spans := rec.Ended()
+	spans.RequireParent(t, "admission.judge_policy", "configcheck.CheckEndpoint")
+	requireCleanAdmissionSpans(t, spans)
 }
