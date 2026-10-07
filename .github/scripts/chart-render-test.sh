@@ -216,6 +216,8 @@ expect_contains "the OTLP protocol defaults to http/protobuf" 'value: "http/prot
 expect_absent "every signal is exported by default" "S_EXPORTER" "${otlp[@]}"
 expect_contains "OTLP headers are read from the named Secret" "name: otlp-auth" "${otlp[@]}" \
 	--set telemetry.otlp.headersSecret.name=otlp-auth
+expect_contains "a missing headers Secret or key does not stop the pod from starting" "optional: true" \
+	"${otlp[@]}" --set telemetry.otlp.headersSecret.name=otlp-auth
 expect_equal "a signal turned off is not exported" '"none"' \
 	"$(render "${otlp[@]}" --set telemetry.otlp.signals.logs=false | env_value OTEL_LOGS_EXPORTER)"
 expect_absent "headers without an endpoint pass nothing" "OTEL_EXPORTER_OTLP_HEADERS" \
