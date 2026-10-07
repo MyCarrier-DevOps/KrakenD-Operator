@@ -18,9 +18,11 @@ package webhook
 
 import (
 	"context"
+	"net/http"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
@@ -30,8 +32,8 @@ import (
 
 // tracedValidator wraps a validator so each admission decision is a span
 // named "admission.validate <kind>", a child of the request's server span,
-// with the object's identity and the operation. A denial ends the span with
-// an error status.
+// with the object's identity and the operation. A denial is the validator's
+// answer, not a failure: it ends the span without an error status.
 type tracedValidator struct {
 	kind   string
 	next   admission.CustomValidator
@@ -41,7 +43,7 @@ type tracedValidator struct {
 // ValidateCreate validates obj inside a span.
 func (v tracedValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (_ admission.Warnings, retErr error) {
 	ctx, span := v.start(ctx, "CREATE", obj)
-	defer func() { tracing.End(span, retErr) }()
+	defer func() { endDecision(span, retErr) }()
 	return v.next.ValidateCreate(ctx, obj)
 }
 
@@ -50,14 +52,14 @@ func (v tracedValidator) ValidateUpdate(
 	ctx context.Context, oldObj, newObj runtime.Object,
 ) (_ admission.Warnings, retErr error) {
 	ctx, span := v.start(ctx, "UPDATE", newObj)
-	defer func() { tracing.End(span, retErr) }()
+	defer func() { endDecision(span, retErr) }()
 	return v.next.ValidateUpdate(ctx, oldObj, newObj)
 }
 
 // ValidateDelete validates obj inside a span.
 func (v tracedValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (_ admission.Warnings, retErr error) {
 	ctx, span := v.start(ctx, "DELETE", obj)
-	defer func() { tracing.End(span, retErr) }()
+	defer func() { endDecision(span, retErr) }()
 	return v.next.ValidateDelete(ctx, obj)
 }
 
@@ -73,4 +75,27 @@ func (v tracedValidator) start(
 			attribute.String("k8s.admission.uid", string(req.UID)))
 	}
 	return tracing.Start(ctx, v.tracer, "admission.validate "+v.kind, trace.WithAttributes(attrs...))
+}
+
+// endDecision ends span, the span of a decision that returned err. A denial
+// (see isDenial) is an answer, so the span records nothing of it: its text
+// can quote the tenant's object.
+func endDecision(span trace.Span, err error) {
+	if isDenial(err) {
+		span.End()
+		return
+	}
+	tracing.End(span, err)
+}
+
+// isDenial reports whether err is a validator's refusal of the request: a
+// status error the validator itself returned, with a 4xx code. A 500 (a check
+// that could not run) and an error that only wraps one are not.
+func isDenial(err error) bool {
+	status, ok := err.(apierrors.APIStatus)
+	if !ok {
+		return false
+	}
+	code := status.Status().Code
+	return code >= http.StatusBadRequest && code < http.StatusInternalServerError
 }
