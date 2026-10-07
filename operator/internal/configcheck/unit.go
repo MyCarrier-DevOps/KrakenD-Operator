@@ -327,10 +327,12 @@ func policyNames(keys []string) []types.NamespacedName {
 	return names
 }
 
-// judged reports whether a memo entry holds a judgement: acceptance or a
-// rejection. An entry that is neither judged nothing, so it is a miss.
+// judged reports whether a memo entry holds a judgement: exactly one of an
+// acceptance and a rejection. An entry that is neither, or both, is not
+// trusted: it is a miss.
 func judged(kept Verdict) bool {
-	return kept.OK || kept.Output != "" || kept.Stage != renderer.StageUnknown
+	rejected := kept.Output != "" || kept.Stage != renderer.StageUnknown
+	return kept.OK != rejected
 }
 
 // verdictFor is the verdict for a check that accepted its config (nil
