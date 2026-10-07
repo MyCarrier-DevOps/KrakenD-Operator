@@ -136,3 +136,18 @@ func TestChecker_CheckRenderedSpansTheSlotWaitAndTheKrakendRun(t *testing.T) {
 	spans.RequireChild(t, "configcheck.validate", "configcheck.slot")
 	spans.RequireChild(t, "configcheck.validate", "krakend check")
 }
+
+// A check renders in process before it lints: the render is a span of its
+// own below the check, beside the content check it feeds.
+func TestChecker_CheckRootSpansItsRender(t *testing.T) {
+	rec := tracingtest.New(t)
+	c := New(newReader(), renderer.New(renderer.Options{}), &fakeValidator{}, 1, rec.Tracer())
+
+	if _, err := c.CheckRoot(context.Background(), Root{Gateway: gateway(v1alpha1.EditionCE)}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	spans := rec.Ended()
+	spans.RequireChild(t, "configcheck.CheckRoot", "configcheck.render")
+	spans.RequireChild(t, "configcheck.CheckRoot", "configcheck.lint")
+}
