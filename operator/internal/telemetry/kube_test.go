@@ -159,15 +159,6 @@ func TestReadEvents_AReadAddsAnEventToTheActiveSpan(t *testing.T) {
 	}
 }
 
-// attrsOf returns the attributes of span as strings by key.
-func attrsOf(span sdktrace.ReadOnlySpan) map[string]string {
-	attrs := map[string]string{}
-	for _, kv := range span.Attributes() {
-		attrs[string(kv.Key)] = kv.Value.Emit()
-	}
-	return attrs
-}
-
 func TestTraceKubeAPI_NoAttributeCarriesAQueryValue(t *testing.T) {
 	rec := tracingtest.New(t)
 	c, _ := tracedClient(t, rec)
@@ -179,9 +170,9 @@ func TestTraceKubeAPI_NoAttributeCarriesAQueryValue(t *testing.T) {
 		client.MatchingLabels{"secret-key": "secret-value"})
 	parent.End()
 
-	for key, value := range attrsOf(rec.Ended().One(t, "k8s list configmaps")) {
-		if strings.Contains(value, "secret-value") {
-			t.Errorf("attribute %s = %q carries a query value", key, value)
+	for _, kv := range rec.Ended().One(t, "k8s list configmaps").Attributes() {
+		if value := kv.Value.Emit(); strings.Contains(value, "secret-value") {
+			t.Errorf("attribute %s = %q carries a query value", kv.Key, value)
 		}
 	}
 }
@@ -212,8 +203,8 @@ func TestTraceKubeAPI_URLFullRedactsBareKeysAndSemicolonPairs(t *testing.T) {
 	_ = resp.Body.Close()
 	parent.End()
 
-	got := attrsOf(rec.Ended().One(t, "k8s list configmaps"))["url.full"]
-	if !strings.HasSuffix(got, "/configmaps?REDACTED&a=REDACTED&b=REDACTED") {
+	got, _ := tracingtest.Attr(rec.Ended().One(t, "k8s list configmaps"), "url.full")
+	if !strings.HasSuffix(got.AsString(), "/configmaps?REDACTED&a=REDACTED&b=REDACTED") {
 		t.Errorf("url.full = %q, want the bare key and each value REDACTED", got)
 	}
 }
@@ -234,9 +225,11 @@ func TestTraceKubeAPI_PrefixedHostStillNamesTheRequestByItsResource(t *testing.T
 			t.Errorf("span name %q carries the namespace or object name", span.Name())
 		}
 	}
-	attrs := attrsOf(spans.One(t, "k8s update configmaps"))
-	if attrs["k8s.resource"] != "configmaps" || attrs["k8s.verb"] != "update" {
-		t.Errorf("attributes = %v, want the configmaps update", attrs)
+	span := spans.One(t, "k8s update configmaps")
+	resource, _ := tracingtest.Attr(span, "k8s.resource")
+	verb, _ := tracingtest.Attr(span, "k8s.verb")
+	if resource.AsString() != "configmaps" || verb.AsString() != "update" {
+		t.Errorf("k8s.resource, k8s.verb = %v, %v, want the configmaps update", resource, verb)
 	}
 }
 
@@ -251,17 +244,17 @@ func TestTraceKubeAPI_ClientSpanRecordsTheRequestAndTheParentDoesNot(t *testing.
 	parent.End()
 
 	spans := rec.Ended()
-	got := attrsOf(spans.One(t, "k8s update configmaps"))
+	clientSpan := spans.One(t, "k8s update configmaps")
 	for key, want := range map[string]string{
 		"k8s.namespace.name": "ns", "k8s.object.name": "cm", "k8s.resource": "configmaps", "k8s.verb": "update",
 	} {
-		if got[key] != want {
-			t.Errorf("client span %s = %q, want %q", key, got[key], want)
+		if got, _ := tracingtest.Attr(clientSpan, key); got.AsString() != want {
+			t.Errorf("client span %s = %q, want %q", key, got.AsString(), want)
 		}
 	}
-	for key := range attrsOf(spans.One(t, "reconcile")) {
-		if strings.HasPrefix(key, "k8s.") {
-			t.Errorf("parent span carries %s", key)
+	for _, kv := range spans.One(t, "reconcile").Attributes() {
+		if strings.HasPrefix(string(kv.Key), "k8s.") {
+			t.Errorf("parent span carries %s", kv.Key)
 		}
 	}
 }
@@ -389,8 +382,8 @@ func TestTraceKubeAPI_ListRecordsNoEmptyObjectName(t *testing.T) {
 	_ = c.List(ctx, &corev1.ConfigMapList{}, client.InNamespace("ns"))
 	parent.End()
 
-	if name, ok := attrsOf(rec.Ended().One(t, "k8s list configmaps"))["k8s.object.name"]; ok {
-		t.Errorf("k8s.object.name = %q on a list, want the attribute omitted", name)
+	if name, ok := tracingtest.Attr(rec.Ended().One(t, "k8s list configmaps"), "k8s.object.name"); ok {
+		t.Errorf("k8s.object.name = %q on a list, want the attribute omitted", name.AsString())
 	}
 }
 
