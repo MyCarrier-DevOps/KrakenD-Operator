@@ -170,3 +170,17 @@ func TestEndpointAdmission_AClashCheckThatCannotRunIs500(t *testing.T) {
 		t.Errorf("response = %+v, want a transient 500", resp.Result)
 	}
 }
+
+func TestEndpointAdmission_RefusesAWriteWhileClashResolutionIsCapped(t *testing.T) {
+	chk := &scriptedChecker{conflicts: func(*v1alpha1.KrakenDGateway, []v1alpha1.KrakenDEndpoint) configcheck.RouteConflicts {
+		return configcheck.RouteConflicts{Capped: true}
+	}}
+	v := &EndpointValidator{Client: fakeClient(testGateway()), Checker: chk}
+
+	resp := review(t, v, "alice", testEndpoint("new", "/a"), nil)
+
+	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity ||
+		!strings.Contains(responseText(resp), configcheck.ClashesCapped) {
+		t.Errorf("response = %+v, want a 422 denial saying the clashes cannot be told apart", resp.Result)
+	}
+}
