@@ -26,6 +26,7 @@ import (
 	"strings"
 	"testing"
 
+	"go.opentelemetry.io/otel/attribute"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
@@ -150,4 +151,31 @@ func TestChecker_CheckRootSpansItsRender(t *testing.T) {
 	spans := rec.Ended()
 	spans.RequireChild(t, "configcheck.CheckRoot", "configcheck.render")
 	spans.RequireChild(t, "configcheck.CheckRoot", "configcheck.lint")
+}
+
+// A check answered from the memo runs no krakend, so without a mark it would
+// read like one a Go-side rule refused: each content check says whether the
+// memo answered it.
+func TestChecker_EachContentCheckSaysWhetherTheMemoAnsweredIt(t *testing.T) {
+	rec := tracingtest.New(t)
+	c := tracedChecker(rec)
+	memo := mapMemo{}
+	root := Root{Gateway: gateway(v1alpha1.EditionCE)}
+
+	for range 2 {
+		if _, err := c.CheckRoot(context.Background(), root, memo); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	spans := rec.Ended()
+	ran := spans.Named("configcheck.lint").With(attribute.Bool("configcheck.memo_hit", false))
+	hit := spans.Named("configcheck.lint").With(attribute.Bool("configcheck.memo_hit", true))
+	if len(ran) != 1 || len(hit) != 1 {
+		t.Fatalf("%d lint checks run and %d answered from the memo, want 1 and 1; spans: %s", len(ran), len(hit), spans)
+	}
+	if parent := spans.Parent(spans.One(t, "krakend check")); parent == nil ||
+		parent.SpanContext().SpanID() != ran[0].SpanContext().SpanID() {
+		t.Errorf("krakend check has parent %v, want the check that ran; spans: %s", parent, spans)
+	}
 }
