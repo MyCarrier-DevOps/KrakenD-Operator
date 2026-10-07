@@ -883,3 +883,26 @@ func TestGatewayReconcile_ExclusionSignalsFollowTheEndpoints(t *testing.T) {
 		t.Errorf("gauge = %v after the excluded endpoint is gone, want no series", got)
 	}
 }
+
+func TestGatewayReconcile_ADeletedGatewayDropsItsExcludedSeries(t *testing.T) {
+	gw := reconciledGateway()
+	gw.Namespace = "dropped"
+	bad := badHosted("bad", "/b")
+	bad.Namespace = gw.Namespace
+	c := fakeClientBuilder().WithObjects(gw, bad).WithStatusSubresource(gw, bad).Build()
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}), rejectsBadHosts())
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := c.Delete(context.Background(), gw); err != nil {
+		t.Fatal(err)
+	}
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := excludedSeries(t, gw.Namespace, gw.Name); len(got) != 0 {
+		t.Errorf("gauge = %v for a deleted gateway, want no series", got)
+	}
+}
