@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"os/exec"
 	"testing"
 
 	metricnoop "go.opentelemetry.io/otel/metric/noop"
@@ -207,5 +208,22 @@ func TestWireReferenceControllers_InstrumentsBoth(t *testing.T) {
 	}
 	if policies.APIReader != mgr.GetAPIReader() {
 		t.Error("the policy reconciler does not read through the manager's API reader")
+	}
+}
+
+func TestNewKrakenDValidator_EachRunIsASpan(t *testing.T) {
+	path, err := exec.LookPath("true")
+	if err != nil {
+		t.Skip("no true binary on this host")
+	}
+	rec := tracingtest.New(t)
+
+	if err := newKrakenDValidator(path, rec.Tracer()).Lint(context.Background(),
+		[]byte(`{"version":3,"endpoints":[]}`), gatewayv1alpha1.EditionCE); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(rec.Ended().Named("true check")) != 1 {
+		t.Errorf("spans = %s, want one \"true check\"", rec.Ended())
 	}
 }
