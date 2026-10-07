@@ -6334,16 +6334,17 @@ func TestAutoConfigReconcile_FetchTimeoutIsOverallNotPerRequest(t *testing.T) {
 
 // A worker waiting for a check slot gives up when its context ends, without
 // running the check.
-func TestAutoConfigCheckGateway_GivesUpWaitingForASlotWhenContextEnds(t *testing.T) {
-	r := newACReconciler(fakeClientBuilder().Build(), &mockFetcher{}, nil, nil, nil)
-	checker := &fakeChecker{}
-	r.Checker = checker
-	r.CheckSlots = make(chan struct{}, 1)
-	r.CheckSlots <- struct{}{}
+func TestWithCheckSlot_GivesUpWaitingForASlotWhenContextEnds(t *testing.T) {
+	slots := make(chan struct{}, 1)
+	slots <- struct{}{}
 	ctx, cancel := context.WithCancel(context.Background())
+	ran := false
 	done := make(chan error, 1)
 	go func() {
-		_, err := r.checkGateway(ctx, &v1alpha1.KrakenDGateway{}, nil)
+		_, err := withCheckSlot(ctx, slots, func() (configcheck.Verdict, error) {
+			ran = true
+			return configcheck.Verdict{OK: true}, nil
+		})
 		done <- err
 	}()
 
@@ -6351,14 +6352,11 @@ func TestAutoConfigCheckGateway_GivesUpWaitingForASlotWhenContextEnds(t *testing
 
 	select {
 	case err := <-done:
-		if !errors.Is(err, context.Canceled) {
-			t.Errorf("expected a cancellation error, got %v", err)
+		if !errors.Is(err, context.Canceled) || ran {
+			t.Errorf("err = %v, ran = %v; want a cancellation error and no check run", err, ran)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("checkGateway kept waiting for a slot after its context ended")
-	}
-	if len(checker.calls) != 0 {
-		t.Errorf("expected no check to run, got %d", len(checker.calls))
+		t.Fatal("withCheckSlot kept waiting for a slot after its context ended")
 	}
 }
 
