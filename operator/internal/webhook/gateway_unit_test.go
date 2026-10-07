@@ -17,6 +17,7 @@ limitations under the License.
 package webhook
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -98,5 +99,18 @@ func TestGatewayAdmission_AMaskedEndpointIsJudgedOnItsOwn(t *testing.T) {
 	}
 	if got := strings.Join(chk.calls, ","); got != "root,group,endpoint,endpoint" {
 		t.Errorf("checks = %s, want the masked endpoint checked on its own with the update and without it", got)
+	}
+}
+
+func TestGatewayAdmission_ACreateWhoseWaitingEndpointsCannotBeCheckedWarns(t *testing.T) {
+	chk := &scriptedChecker{err: errors.New("no validation slot in time"), failCall: 3,
+		verdicts: []configcheck.Verdict{{OK: true}, {Output: "x"}}}
+
+	resp := review(t, &GatewayValidator{Client: fakeClient(testEndpoint("ep", "/a")), Checker: chk},
+		"alice", testGateway(), nil)
+
+	if !resp.Allowed || len(resp.Warnings) != 1 ||
+		!strings.Contains(resp.Warnings[0], "could not check the endpoints that already reference this gateway") {
+		t.Errorf("response = %+v, warnings = %v, want admitted with a could-not-check warning", resp.Result, resp.Warnings)
 	}
 }
