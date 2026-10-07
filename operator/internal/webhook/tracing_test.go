@@ -389,3 +389,19 @@ func TestGatewayAdmission_ADeniedUpdateIsNoErrorOnItsSpans(t *testing.T) {
 	spans.RequireParent(t, "admission.judge_served", "configcheck.CheckEndpoint")
 	requireCleanAdmissionSpans(t, spans)
 }
+
+// An AutoConfig that names no gateway is denied; the denial is on no span.
+func TestAutoConfigAdmission_ADenialIsNoErrorOnItsStructuralSpan(t *testing.T) {
+	rec := tracingtest.New(t)
+	v := tracedValidators(rec)
+	admit := tracedValidator{kind: "KrakenDAutoConfig", next: v.AutoConfig, tracer: rec.Tracer()}
+
+	_, err := admit.ValidateCreate(context.Background(), newAutoConfigForAdditional(nil))
+
+	if !isDenial(err) {
+		t.Fatalf("err = %v, want a denial", err)
+	}
+	spans := rec.Ended()
+	spans.RequireChild(t, "admission.validate KrakenDAutoConfig", "admission.structural")
+	requireCleanAdmissionSpans(t, spans)
+}
