@@ -20,6 +20,7 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel/attribute"
@@ -43,20 +44,20 @@ var apiRequests = request.RequestInfoFactory{
 	GrouplessAPIPrefixes: sets.NewString("api"),
 }
 
-// TraceKubeAPI makes every request a client built from cfg sends under an
-// active span a client span of that span, and passes the trace context on to
-// the API server. Requests with no span in their context (informer lists and
+// TraceKubeAPI makes every request a client built from cfg sends under a
+// valid span context a client span of that span, and passes the trace context
+// on to the API server. Requests with no span in their context (informer lists and
 // watches, leader-election renewals, event writes, metrics authorization) are
 // sent as they are, so they start no trace of their own. No HTTP metric is
 // recorded.
 func TraceKubeAPI(cfg *rest.Config, tp trace.TracerProvider) {
+	prefix := hostPrefix(cfg.Host)
 	cfg.Wrap(func(rt http.RoundTripper) http.RoundTripper {
-		return otelhttp.NewTransport(kubeAttributes{next: rt},
+		return otelhttp.NewTransport(kubeAttributes{next: rt, prefix: prefix},
 			otelhttp.WithTracerProvider(tp),
 			otelhttp.WithMeterProvider(metricnoop.NewMeterProvider()),
 			otelhttp.WithPropagators(propagation.TraceContext{}),
 			otelhttp.WithFilter(hasSpan),
-			otelhttp.WithSpanNameFormatter(kubeSpanName),
 		)
 	})
 }
@@ -99,40 +100,51 @@ func (c readEvents) event(ctx context.Context, name string, obj runtime.Object, 
 	span.AddEvent(name, trace.WithAttributes(attrs...))
 }
 
-// kubeAttributes adds the namespace, resource and object name of a
-// Kubernetes API request to the client span it is sent under.
-type kubeAttributes struct{ next http.RoundTripper }
+// kubeAttributes names the client span of a Kubernetes API request and adds
+// its namespace, resource and object name. It runs after otelhttp has set the
+// span's own attributes, so what it sets wins. Requests with no recording span
+// (informers, lease renewals, event writes) are sent without being parsed.
+type kubeAttributes struct {
+	next http.RoundTripper
+	// prefix is the path the API host is served under, if any.
+	prefix string
+}
 
 // RoundTrip annotates the request's span and sends the request on.
 func (k kubeAttributes) RoundTrip(r *http.Request) (*http.Response, error) {
-	trace.SpanFromContext(r.Context()).SetAttributes(semconv.URLFull(redactedURL(r.URL)))
-	if info, err := apiRequests.NewRequestInfo(r); err == nil && info.IsResourceRequest {
-		trace.SpanFromContext(r.Context()).SetAttributes(
-			semconv.K8SNamespaceName(info.Namespace),
-			tracing.KeyName.String(info.Name),
-			attribute.String("k8s.resource", info.Resource),
-			attribute.String("k8s.verb", info.Verb))
+	if span := trace.SpanFromContext(r.Context()); span.IsRecording() {
+		k.annotate(span, r)
 	}
 	return k.next.RoundTrip(r)
 }
 
-// hasSpan reports whether r is sent under an active span.
-func hasSpan(r *http.Request) bool {
-	return trace.SpanContextFromContext(r.Context()).IsValid()
-}
-
-// kubeSpanName names a Kubernetes API request by its verb and resource, as
-// "k8s update krakendgateways/status".
-func kubeSpanName(_ string, r *http.Request) string {
-	info, err := apiRequests.NewRequestInfo(r)
+func (k kubeAttributes) annotate(span trace.Span, r *http.Request) {
+	span.SetAttributes(semconv.URLFull(redactedURL(r.URL)))
+	unprefixed := *r
+	path := *r.URL
+	path.Path = strings.TrimPrefix(path.Path, k.prefix)
+	unprefixed.URL = &path
+	info, err := apiRequests.NewRequestInfo(&unprefixed)
 	if err != nil || !info.IsResourceRequest {
-		return "k8s " + r.Method + " " + r.URL.Path
+		span.SetName("k8s " + r.Method + " " + path.Path)
+		return
 	}
 	resource := info.Resource
 	if info.Subresource != "" {
 		resource += "/" + info.Subresource
 	}
-	return "k8s " + info.Verb + " " + resource
+	span.SetName("k8s " + info.Verb + " " + resource)
+	span.SetAttributes(
+		semconv.K8SNamespaceName(info.Namespace),
+		tracing.KeyName.String(info.Name),
+		attribute.String("k8s.resource", info.Resource),
+		attribute.String("k8s.verb", info.Verb))
+}
+
+// hasSpan reports whether r is sent under a valid span context, local or
+// remote.
+func hasSpan(r *http.Request) bool {
+	return trace.SpanContextFromContext(r.Context()).IsValid()
 }
 
 // redactedURL is u without userinfo and with every query value replaced, so a
@@ -146,4 +158,17 @@ func redactedURL(u *url.URL) string {
 	}
 	redacted.RawQuery = query.Encode()
 	return redacted.String()
+}
+
+// hostPrefix is the path a host such as "https://proxy/k8s/clusters/c-1" is
+// served under.
+func hostPrefix(host string) string {
+	if !strings.Contains(host, "://") {
+		host = "https://" + host
+	}
+	u, err := url.Parse(host)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSuffix(u.Path, "/")
 }
