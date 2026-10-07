@@ -406,10 +406,10 @@ func (r *KrakenDAutoConfigReconciler) judgeCandidates(
 			Gateway: gw, Endpoints: checkSet(candidates, nil, order, false), CEFallback: ceFallback,
 		}, nil)
 	})
-	if err != nil || group.OK {
+	if err != nil {
 		return held, err
 	}
-	for _, ep := range candidates {
+	for _, ep := range suspects(candidates, group) {
 		v, err := withCheckSlot(ctx, r.CheckSlots, func() (configcheck.EndpointVerdict, error) {
 			unit := configcheck.EndpointUnit{Gateway: gw, Endpoint: ep, CEFallback: ceFallback}
 			return r.Checker.CheckEndpoint(ctx, unit, nil)
@@ -423,6 +423,18 @@ func (r *KrakenDAutoConfigReconciler) judgeCandidates(
 		}
 	}
 	return held, nil
+}
+
+// suspects returns the candidates group does not vouch for: every one when
+// the group fails; otherwise those that lost an entry in the group's render,
+// whose left-out entries the group never checked.
+func suspects(candidates []*v1alpha1.KrakenDEndpoint, group configcheck.Verdict) []*v1alpha1.KrakenDEndpoint {
+	if !group.OK {
+		return candidates
+	}
+	return slices.DeleteFunc(slices.Clone(candidates), func(ep *v1alpha1.KrakenDEndpoint) bool {
+		return !slices.Contains(group.Masked, client.ObjectKeyFromObject(ep))
+	})
 }
 
 // withCheckSlot runs check holding one of slots, and gives up when ctx ends
