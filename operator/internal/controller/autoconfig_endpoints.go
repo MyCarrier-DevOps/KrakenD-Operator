@@ -64,6 +64,11 @@ type AutoConfigChecker interface {
 		gw *v1alpha1.KrakenDGateway,
 		replace []v1alpha1.KrakenDEndpoint,
 	) (configcheck.RouteConflicts, error)
+	CheckRoot(ctx context.Context, r configcheck.Root, memo configcheck.Memo) (configcheck.Verdict, error)
+	CheckGroup(ctx context.Context, g configcheck.Group, memo configcheck.Memo) (configcheck.Verdict, error)
+	CheckEndpoint(
+		ctx context.Context, u configcheck.EndpointUnit, memo configcheck.Memo,
+	) (configcheck.EndpointVerdict, error)
 }
 
 // claimEndpoints returns the endpoints ac controls, found by the controller

@@ -280,6 +280,55 @@ type fakeChecker struct {
 	// conflictCalls records each call's replace set.
 	conflicts     func(replace []v1alpha1.KrakenDEndpoint) configcheck.RouteConflicts
 	conflictCalls [][]v1alpha1.KrakenDEndpoint
+
+	// rootFails makes the gateway root fail on its own. group, when set,
+	// decides the check of the root with the candidates, and endpoint each
+	// candidate's own check; both pass otherwise. checkErr fails every check
+	// of the root, a group or an endpoint; endpointErr only endpoint checks.
+	// checks records them as "root", "group:<names>" and "endpoint:<name>".
+	rootFails   bool
+	group       func(eps []v1alpha1.KrakenDEndpoint) configcheck.Verdict
+	endpoint    func(ep *v1alpha1.KrakenDEndpoint) configcheck.EndpointVerdict
+	checkErr    error
+	endpointErr error
+	checks      []string
+}
+
+func (f *fakeChecker) CheckRoot(context.Context, configcheck.Root, configcheck.Memo) (configcheck.Verdict, error) {
+	f.checks = append(f.checks, "root")
+	if f.checkErr != nil {
+		return configcheck.Verdict{}, f.checkErr
+	}
+	return configcheck.Verdict{OK: !f.rootFails, Output: "root refused"}, nil
+}
+
+func (f *fakeChecker) CheckGroup(
+	_ context.Context, g configcheck.Group, _ configcheck.Memo,
+) (configcheck.Verdict, error) {
+	f.checks = append(f.checks, "group:"+strings.Join(endpointNames(g.Endpoints), ","))
+	if f.checkErr != nil {
+		return configcheck.Verdict{}, f.checkErr
+	}
+	if f.group == nil {
+		return configcheck.Verdict{OK: true}, nil
+	}
+	return f.group(g.Endpoints), nil
+}
+
+func (f *fakeChecker) CheckEndpoint(
+	_ context.Context, u configcheck.EndpointUnit, _ configcheck.Memo,
+) (configcheck.EndpointVerdict, error) {
+	f.checks = append(f.checks, "endpoint:"+u.Endpoint.Name)
+	if f.checkErr != nil {
+		return configcheck.EndpointVerdict{}, f.checkErr
+	}
+	if f.endpointErr != nil {
+		return configcheck.EndpointVerdict{}, f.endpointErr
+	}
+	if f.endpoint == nil {
+		return configcheck.EndpointVerdict{OK: true}, nil
+	}
+	return f.endpoint(u.Endpoint), nil
 }
 
 func (f *fakeChecker) Conflicts(
@@ -6428,12 +6477,35 @@ func (p *peakChecker) CheckGateway(
 	_ *v1alpha1.KrakenDGateway,
 	_ []v1alpha1.KrakenDEndpoint,
 ) (configcheck.Verdict, error) {
+	p.busy()
+	return configcheck.Verdict{OK: true}, nil
+}
+
+func (p *peakChecker) CheckRoot(context.Context, configcheck.Root, configcheck.Memo) (configcheck.Verdict, error) {
+	p.busy()
+	return configcheck.Verdict{OK: true}, nil
+}
+
+func (p *peakChecker) CheckGroup(context.Context, configcheck.Group, configcheck.Memo) (configcheck.Verdict, error) {
+	p.busy()
+	return configcheck.Verdict{OK: true}, nil
+}
+
+func (p *peakChecker) CheckEndpoint(
+	context.Context, configcheck.EndpointUnit, configcheck.Memo,
+) (configcheck.EndpointVerdict, error) {
+	p.busy()
+	return configcheck.EndpointVerdict{OK: true}, nil
+}
+
+// busy counts one running check, records the most that ever ran at once,
+// and holds the check for a moment so that concurrent workers overlap.
+func (p *peakChecker) busy() {
 	now := p.running.Add(1)
 	defer p.running.Add(-1)
 	for peak := p.peak.Load(); now > peak && !p.peak.CompareAndSwap(peak, now); peak = p.peak.Load() {
 	}
 	time.Sleep(100 * time.Millisecond)
-	return configcheck.Verdict{OK: true}, nil
 }
 
 // The pod's one checker has a fixed number of slots and admission shares them,
@@ -6547,6 +6619,26 @@ type slotHeldChecker struct {
 	held     []int
 	// isolatedHeld records the same for isolated checks, which all pass.
 	isolatedHeld []int
+	// checksHeld records the same for each root, group and endpoint check.
+	// Roots and endpoints pass; every group fails, so endpoint checks run too.
+	checksHeld []int
+}
+
+func (s *slotHeldChecker) CheckRoot(context.Context, configcheck.Root, configcheck.Memo) (configcheck.Verdict, error) {
+	s.checksHeld = append(s.checksHeld, len(s.slots))
+	return configcheck.Verdict{OK: true}, nil
+}
+
+func (s *slotHeldChecker) CheckGroup(context.Context, configcheck.Group, configcheck.Memo) (configcheck.Verdict, error) {
+	s.checksHeld = append(s.checksHeld, len(s.slots))
+	return configcheck.Verdict{Output: "fails together"}, nil
+}
+
+func (s *slotHeldChecker) CheckEndpoint(
+	context.Context, configcheck.EndpointUnit, configcheck.Memo,
+) (configcheck.EndpointVerdict, error) {
+	s.checksHeld = append(s.checksHeld, len(s.slots))
+	return configcheck.EndpointVerdict{OK: true}, nil
 }
 
 func (s *slotHeldChecker) Conflicts(
