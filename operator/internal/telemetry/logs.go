@@ -97,10 +97,11 @@ func WithMinSeverity(next sdklog.Processor, minimum otellog.Severity) sdklog.Pro
 }
 
 // NewLogger returns the logr.Logger every component logs through: an
-// OpenTelemetry log bridge over provider, named name.
+// OpenTelemetry log bridge over provider, named name. Values the bridge cannot
+// render, such as a named string type, are converted before it sees them.
 func NewLogger(provider otellog.LoggerProvider, name string) logr.Logger {
-	return logr.New(otellogr.NewLogSink(name,
-		otellogr.WithLoggerProvider(provider), otellogr.WithLevelSeverity(LevelSeverity)))
+	return logr.New(readableSink{otellogr.NewLogSink(name,
+		otellogr.WithLoggerProvider(provider), otellogr.WithLevelSeverity(LevelSeverity))})
 }
 
 // NewErrorHandler returns an OpenTelemetry error handler that logs each
