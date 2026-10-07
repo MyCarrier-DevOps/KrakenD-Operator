@@ -140,12 +140,13 @@ func newBlameWorld(t *testing.T, judge func(config string) (string, bool), objs 
 	checker := &verdictRecorder{verdicts: map[string][]configcheck.EndpointVerdict{},
 		Checker: configcheck.New(c, renderer.New(renderer.Options{}), renderer.NewValidator(
 			renderer.ValidatorOptions{Executor: judgingExecutor{judge: judge}, BinaryPath: "krakend"}), 1)}
+	vs := webhook.NewValidators(c, c, checker, "")
 	return &blameWorld{c: c, gw: gw, checker: checker,
 		gateways: &controller.KrakenDGatewayReconciler{Client: c, APIReader: c, Scheme: scheme,
 			Recorder: record.NewFakeRecorder(100), Renderer: renderer.New(renderer.Options{}), Checker: checker,
 			Clock: clock.RealClock{}, LicenseParser: licenseutil.NewX509LicenseParser()},
-		endpoints: &webhook.EndpointValidator{Client: c, Checker: checker},
-		policies:  &webhook.PolicyValidator{Client: c, Checker: checker},
+		endpoints: vs.Endpoint,
+		policies:  vs.Policy,
 	}
 }
 
