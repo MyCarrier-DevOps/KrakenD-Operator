@@ -18,6 +18,7 @@ package webhook
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -104,11 +105,12 @@ func endRules(span trace.Span, err error) {
 }
 
 // isDenial reports whether err is a validator's refusal of the request: a
-// status error the validator itself returned, with a 4xx code. A 500 (a check
-// that could not run) and an error that only wraps one are not.
+// status error, as controller-runtime reads it to set the response code, with
+// a 4xx code. A 500 (a check that could not run) is not, even when it reports
+// a denial.
 func isDenial(err error) bool {
-	status, ok := err.(apierrors.APIStatus)
-	if !ok {
+	var status apierrors.APIStatus
+	if !errors.As(err, &status) {
 		return false
 	}
 	code := status.Status().Code
