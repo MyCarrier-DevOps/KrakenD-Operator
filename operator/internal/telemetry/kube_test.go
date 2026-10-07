@@ -186,6 +186,38 @@ func TestTraceKubeAPI_NoAttributeCarriesAQueryValue(t *testing.T) {
 	}
 }
 
+// A bare query key is a token as much as a value is, and a semicolon separates
+// pairs: the URL on the span follows the same rules as every other recorded URL.
+func TestTraceKubeAPI_URLFullRedactsBareKeysAndSemicolonPairs(t *testing.T) {
+	rec := tracingtest.New(t)
+	srv := httptest.NewServer(&fakeAPIServer{})
+	t.Cleanup(srv.Close)
+	cfg := &rest.Config{Host: srv.URL}
+	telemetry.TraceKubeAPI(cfg, rec.Provider())
+	httpClient, err := rest.HTTPClientFor(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, parent := rec.Tracer().Start(context.Background(), "reconcile")
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		srv.URL+"/api/v1/namespaces/ns/configmaps?SECRETKEY&a=1;b=2", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	parent.End()
+
+	got := attrsOf(rec.Ended().One(t, "k8s list configmaps"))["url.full"]
+	if !strings.HasSuffix(got, "/configmaps?REDACTED&a=REDACTED&b=REDACTED") {
+		t.Errorf("url.full = %q, want the bare key and each value REDACTED", got)
+	}
+}
+
 func TestTraceKubeAPI_PrefixedHostStillNamesTheRequestByItsResource(t *testing.T) {
 	rec := tracingtest.New(t)
 	c, _ := tracedClientAt(t, rec, "/k8s/clusters/c-1")
