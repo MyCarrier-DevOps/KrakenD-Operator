@@ -211,7 +211,8 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	// CUE evaluation
-	cueOutput, err := r.CUEEvaluator.Evaluate(ctx, autoconfig.CUEInput{
+	ectx, evaluate := tracing.Start(ctx, r.Tracer, "autoconfig.evaluate")
+	cueOutput, err := r.CUEEvaluator.Evaluate(ectx, autoconfig.CUEInput{
 		SpecData:     fetchResult.Data,
 		SpecFormat:   ac.Spec.OpenAPI.Format,
 		DefaultDefs:  defaultDefs,
@@ -223,6 +224,7 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		ServiceName:  "_spec",
 		DefaultHost:  extractHost(ac.Spec.OpenAPI.URL),
 	})
+	tracing.End(evaluate, err)
 	if err != nil {
 		return r.handleCUEError(ctx, &ac, err, warnings)
 	}
