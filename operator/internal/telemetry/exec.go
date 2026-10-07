@@ -40,7 +40,8 @@ type Executor interface {
 // command and its first argument ("krakend check"), with the arguments, the
 // check mode and the exit code. The value of a -c flag (the config file, a
 // random temporary name) is replaced by its base name; neither the config nor
-// the command's output is recorded.
+// the command's output is recorded. A command that fails to start records no
+// exit code.
 func TraceExecutor(next Executor, tracer trace.Tracer) Executor {
 	return tracedExecutor{next: next, tracer: tracer}
 }
