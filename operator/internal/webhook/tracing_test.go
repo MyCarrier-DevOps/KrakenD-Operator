@@ -42,6 +42,7 @@ import (
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
@@ -787,4 +788,85 @@ func TestGatewayAdmission_AFailedJudgingMarksItsSpansWithoutTheText(t *testing.T
 			t.Errorf("span %q has events %v, want none", name, span.Events())
 		}
 	}
+}
+
+// requireFailedRulesWithoutTenantText fails t unless the structural span is an
+// error and neither its status nor its events hold the tenant's values.
+func requireFailedRulesWithoutTenantText(t *testing.T, spans tracingtest.Spans) {
+	t.Helper()
+	span := spans.One(t, "admission.structural")
+	if span.Status().Code != codes.Error {
+		t.Errorf("structural status = %+v, want an error", span.Status())
+	}
+	text := span.Status().Description
+	for _, event := range span.Events() {
+		text += fmt.Sprint(event.Attributes)
+	}
+	if strings.Contains(text, "TENANT") {
+		t.Errorf("structural span records %q, want none of the tenant's values", text)
+	}
+}
+
+// failingGets is a client whose reads of a gateway fail, and whose creates
+// (SubjectAccessReviews) do.
+func failingGets(objs ...client.Object) client.Client {
+	return fakeClientBuilderWith(interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object,
+			opts ...client.GetOption) error {
+			if _, ok := obj.(*v1alpha1.KrakenDGateway); ok {
+				return errors.New("connection refused")
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+		Create: func(context.Context, client.WithWatch, client.Object, ...client.CreateOption) error {
+			return errors.New("connection refused")
+		},
+	}, objs...)
+}
+
+// A lookup that fails inside the rules is the rules' failure: an error on the
+// structural span, with none of the object's values in it.
+func TestGatewayAdmission_AFailedLookupIsAnErrorOnItsStructuralSpanWithoutTheObject(t *testing.T) {
+	rec := tracingtest.New(t)
+	v := &GatewayValidator{Client: failingGets(), Checker: &scriptedChecker{}, Tracer: rec.Tracer()}
+	gw := gatewayWithJob(func(p *v1alpha1.PostRestartJobSpec) {
+		p.ServiceAccountName = "namespace-admin"
+		p.Script = "TENANT-SCRIPT"
+	})
+
+	_, err := tracedValidator{kind: "KrakenDGateway", next: v, tracer: rec.Tracer()}.
+		ValidateCreate(context.Background(), gw)
+
+	if !apierrors.IsInternalError(err) {
+		t.Fatalf("err = %v, want a 500", err)
+	}
+	requireFailedRulesWithoutTenantText(t, rec.Ended())
+}
+
+func TestEndpointAdmission_AFailedLookupIsAnErrorOnItsStructuralSpanWithoutTheObject(t *testing.T) {
+	rec := tracingtest.New(t)
+	v := &EndpointValidator{Client: failingGets(), Checker: &scriptedChecker{}, Tracer: rec.Tracer()}
+
+	_, err := tracedValidator{kind: kindEndpoint, next: v, tracer: rec.Tracer()}.
+		ValidateCreate(context.Background(), testEndpoint("e", "/TENANT-PATH"))
+
+	if !apierrors.IsInternalError(err) {
+		t.Fatalf("err = %v, want a 500", err)
+	}
+	requireFailedRulesWithoutTenantText(t, rec.Ended())
+}
+
+func TestAutoConfigAdmission_AFailedLookupIsAnErrorOnItsStructuralSpanWithoutTheObject(t *testing.T) {
+	rec := tracingtest.New(t)
+	v := &AutoConfigValidator{Client: failingGets(), Tracer: rec.Tracer()}
+	ac := newAutoConfigForAdditional(nil)
+	ac.Spec.OpenAPI.URL = "http://TENANT-HOST/openapi.json"
+
+	_, err := tracedValidator{kind: "KrakenDAutoConfig", next: v, tracer: rec.Tracer()}.
+		ValidateCreate(context.Background(), ac)
+
+	if !apierrors.IsInternalError(err) {
+		t.Fatalf("err = %v, want a 500", err)
+	}
+	requireFailedRulesWithoutTenantText(t, rec.Ended())
 }
