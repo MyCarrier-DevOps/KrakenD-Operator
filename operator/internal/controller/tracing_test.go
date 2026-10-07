@@ -25,6 +25,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/trace"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -598,4 +599,77 @@ func TestAutoConfigReconcile_AFailedSyncWritesItsStatusInASpan(t *testing.T) {
 	}
 
 	rec.Ended().RequireParent(t, "reconcile KrakenDAutoConfig", "autoconfig.status")
+}
+
+// Each of the endpoint, policy and AutoConfig reconciles is the root of a trace
+// of its own, whatever context the manager hands it, and names the object and
+// the generation it read.
+func TestReconcilers_EachStartsATraceNamingItsObject(t *testing.T) {
+	for _, tc := range []struct {
+		kind  string
+		setup func(t *testing.T, tracer trace.Tracer) (client.Object, func(context.Context) error)
+	}{
+		{"KrakenDEndpoint", func(_ *testing.T, tracer trace.Tracer) (client.Object, func(context.Context) error) {
+			ep := endpointOnGW1(3)
+			c := fakeClientBuilder().WithObjects(testGW1(), ep).WithStatusSubresource(ep).Build()
+			r := &KrakenDEndpointReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder(), Tracer: tracer}
+			return ep, func(ctx context.Context) error {
+				_, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(ep)})
+				return err
+			}
+		}},
+		{"KrakenDBackendPolicy", func(_ *testing.T, tracer trace.Tracer) (client.Object, func(context.Context) error) {
+			policy := &v1alpha1.KrakenDBackendPolicy{
+				ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "default", Generation: 3},
+			}
+			c := fakeClientBuilder().WithObjects(policy).WithStatusSubresource(policy).Build()
+			r := &KrakenDBackendPolicyReconciler{
+				Client: c, Scheme: testScheme(), Recorder: fakeRecorder(), APIReader: c, Tracer: tracer,
+			}
+			return policy, func(ctx context.Context) error {
+				_, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(policy)})
+				return err
+			}
+		}},
+		{"KrakenDAutoConfig", func(_ *testing.T, tracer trace.Tracer) (client.Object, func(context.Context) error) {
+			ac := testAutoConfig()
+			ac.Generation = 3
+			c := fakeClientBuilder().WithObjects(ac, testCUEDefinitionsCM()).WithStatusSubresource(ac).Build()
+			f, ce, fi, g := defaultMocks()
+			r := newACReconciler(c, f, ce, fi, g)
+			r.Tracer = tracer
+			return ac, func(ctx context.Context) error {
+				_, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(ac)})
+				return err
+			}
+		}},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			rec := tracingtest.New(t)
+			obj, reconcile := tc.setup(t, rec.Tracer())
+			ctx, outer := rec.Tracer().Start(context.Background(), "outer")
+			defer outer.End()
+
+			if err := reconcile(ctx); err != nil {
+				t.Fatal(err)
+			}
+
+			root := rec.Ended().One(t, "reconcile "+tc.kind)
+			if root.Parent().IsValid() || root.SpanContext().TraceID() == outer.SpanContext().TraceID() {
+				t.Errorf("the reconcile span has parent %v in trace %v, want a root of a trace of its own",
+					root.Parent(), root.SpanContext().TraceID())
+			}
+			for key, want := range map[string]string{
+				"k8s.namespace.name": obj.GetNamespace(), "k8s.object.name": obj.GetName(),
+				"k8s.object.kind": tc.kind, "k8s.object.generation": "3",
+			} {
+				if got := attrOf(root, key); got != want {
+					t.Errorf("the reconcile span's %s = %q, want %q", key, got, want)
+				}
+			}
+			if !hasAttr(root, "controller_runtime.reconcile_id") {
+				t.Errorf("the reconcile span lacks controller_runtime.reconcile_id: %v", root.Attributes())
+			}
+		})
+	}
 }
