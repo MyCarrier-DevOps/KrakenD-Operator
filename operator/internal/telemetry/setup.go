@@ -22,8 +22,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"strings"
+	"unicode"
 
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
@@ -81,7 +83,8 @@ type Telemetry struct {
 	Logger      logr.Logger
 	Diagnostics logr.Logger
 	// Warning is a configuration problem Setup worked around, to report once
-	// logging is installed: a malformed OTEL_RESOURCE_ATTRIBUTES entry.
+	// logging is installed: a malformed OTEL_RESOURCE_ATTRIBUTES entry, or a
+	// header or endpoint variable that keeps a signal from being exported.
 	Warning  error
 	shutdown []func(context.Context) error
 }
@@ -126,7 +129,7 @@ func (t *Telemetry) Shutdown(ctx context.Context) error {
 }
 
 func (t *Telemetry) setupTraces(ctx context.Context, res *resource.Resource) error {
-	protocol, err := otlpProtocol("TRACES")
+	protocol, err := t.otlpProtocol("TRACES")
 	if err != nil || protocol == "" {
 		t.TracerProvider = noop.NewTracerProvider()
 		return err
@@ -154,7 +157,7 @@ func (t *Telemetry) setupMetrics(ctx context.Context, res *resource.Resource, re
 		return fmt.Errorf("creating the Prometheus exporter: %w", err)
 	}
 	opts := []sdkmetric.Option{sdkmetric.WithResource(res), sdkmetric.WithReader(prom)}
-	protocol, err := otlpProtocol("METRICS")
+	protocol, err := t.otlpProtocol("METRICS")
 	if err != nil {
 		return err
 	}
@@ -184,7 +187,7 @@ func (t *Telemetry) setupLogs(ctx context.Context, res *resource.Resource, cfg C
 	}
 	stdout = WithMinSeverity(stdout, cfg.LogLevel)
 	opts := []sdklog.LoggerProviderOption{sdklog.WithResource(res), sdklog.WithProcessor(stdout)}
-	protocol, err := otlpProtocol("LOGS")
+	protocol, err := t.otlpProtocol("LOGS")
 	if err != nil {
 		return err
 	}
@@ -212,8 +215,11 @@ func (t *Telemetry) setupLogs(ctx context.Context, res *resource.Resource, cfg C
 }
 
 // otlpProtocol returns the OTLP protocol signal (TRACES, METRICS or LOGS) is
-// exported with, or "" when it is not exported.
-func otlpProtocol(signal string) (string, error) {
+// exported with, or "" when it is not exported. An unsupported exporter or
+// protocol is an error. A header or endpoint variable the exporters cannot
+// read is not: they would log its value, which can hold a collector
+// credential, so the signal is not exported and t.Warning names the variable.
+func (t *Telemetry) otlpProtocol(signal string) (string, error) {
 	switch exporter := os.Getenv("OTEL_" + signal + "_EXPORTER"); exporter {
 	case "none":
 		return "", nil
@@ -230,7 +236,64 @@ func otlpProtocol(signal string) (string, error) {
 		return "", fmt.Errorf("OTLP protocol %q is not supported for %s: want %s or %s",
 			protocol, strings.ToLower(signal), protocolGRPC, protocolHTTP)
 	}
+	if err := unreadableOTLPVariable(signal); err != nil {
+		t.Warning = errors.Join(t.Warning, fmt.Errorf("not exporting %s over OTLP: %w", strings.ToLower(signal), err))
+		return "", nil
+	}
 	return protocol, nil
+}
+
+// unreadableOTLPVariable names the first of signal's header and endpoint
+// variables the OTLP exporters cannot read, never its value, or returns nil.
+// The exporters read the generic and the signal's own variable alike, and log
+// what they cannot read with its value.
+func unreadableOTLPVariable(signal string) error {
+	for _, name := range []string{"OTEL_EXPORTER_OTLP_HEADERS", "OTEL_EXPORTER_OTLP_" + signal + "_HEADERS"} {
+		if i := malformedHeader(os.Getenv(name)); i > 0 {
+			return fmt.Errorf("%s: header %d is not a name=value pair with a valid name and a URL-encoded value",
+				name, i)
+		}
+	}
+	for _, name := range []string{"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_" + signal + "_ENDPOINT"} {
+		// The trace and metric exporters parse the value trimmed, the log
+		// exporters as it is.
+		if raw := os.Getenv(name); !validURL(raw) || !validURL(strings.TrimSpace(raw)) {
+			return fmt.Errorf("%s is not a valid URL", name)
+		}
+	}
+	return nil
+}
+
+// malformedHeader returns the position, from 1, of the first entry of value,
+// an OTEL_EXPORTER_OTLP_*HEADERS list, that the OTLP exporters reject, or 0.
+// Each comma-separated entry must be name=value, with the name an HTTP token
+// and the value URL-encoded. A blank value has no entry.
+func malformedHeader(value string) int {
+	if strings.TrimSpace(value) == "" {
+		return 0
+	}
+	for i, entry := range strings.Split(value, ",") {
+		name, v, found := strings.Cut(entry, "=")
+		if _, err := url.PathUnescape(v); !found || !httpToken(strings.TrimSpace(name)) || err != nil {
+			return i + 1
+		}
+	}
+	return 0
+}
+
+// httpToken reports whether s is a header name the OTLP exporters accept: a
+// non-empty HTTP token.
+func httpToken(s string) bool {
+	return s != "" && !strings.ContainsFunc(s, func(c rune) bool {
+		return c > unicode.MaxASCII ||
+			!unicode.IsLetter(c) && !unicode.IsDigit(c) && !strings.ContainsRune("!#$%&'*+-.^_`|~", c)
+	})
+}
+
+// validURL reports whether raw parses as a URL.
+func validURL(raw string) bool {
+	_, err := url.Parse(raw)
+	return err == nil
 }
 
 // newResource describes the operator process. OTEL_SERVICE_NAME and
