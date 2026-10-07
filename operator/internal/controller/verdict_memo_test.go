@@ -49,3 +49,22 @@ func TestVerdictMemo_AFailedPassKeepsWhatTheLastPassKept(t *testing.T) {
 		}
 	}
 }
+
+func TestVerdictMemo_ForgetDropsTheOwnerAndOwnersAreApart(t *testing.T) {
+	var m verdictMemo
+	other := types.NamespacedName{Namespace: "ns", Name: "other"}
+	for _, owner := range []types.NamespacedName{memoOwner, other} {
+		p := m.begin(owner)
+		p.Store("k", configcheck.Verdict{OK: true})
+		m.end(owner, p, false)
+	}
+
+	m.forget(memoOwner)
+
+	if _, ok := m.begin(memoOwner).Lookup("k"); ok {
+		t.Error("a forgotten owner's verdict is still kept")
+	}
+	if _, ok := m.begin(other).Lookup("k"); !ok {
+		t.Error("forgetting one owner dropped another's verdict")
+	}
+}
