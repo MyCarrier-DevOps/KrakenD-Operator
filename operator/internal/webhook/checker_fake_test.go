@@ -54,7 +54,7 @@ type scriptedChecker struct {
 	conflictCalls [][]v1alpha1.KrakenDEndpoint
 	// endpointVerdicts answer CheckEndpoint in order (OK once they run out).
 	endpointVerdicts []configcheck.EndpointVerdict
-	// memos records, for each root and endpoint check, whether it was handed
+	// memos records, for each root, policy, group and endpoint check, whether it was handed
 	// a memo.
 	memos []bool
 	// delay holds every check that long, giving up when its context ends.
