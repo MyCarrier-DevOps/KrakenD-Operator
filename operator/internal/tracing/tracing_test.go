@@ -102,3 +102,26 @@ func TestEnd_LeavesASuccessfulSpanUnset(t *testing.T) {
 		t.Errorf("status = %+v, events = %d; want Unset and no events", got.Status(), len(got.Events()))
 	}
 }
+
+func TestStart_NestedKeepsTheLoggerNameAndValues(t *testing.T) {
+	rec := tracingtest.New(t)
+	var lines []string
+	logger := funcr.New(func(prefix, args string) { lines = append(lines, prefix+" "+args) }, funcr.Options{}).
+		WithName("controller").WithValues("gateway", "gw")
+	ctx := logr.NewContext(context.Background(), logger)
+
+	ctx, outer := tracing.Start(ctx, rec.Tracer(), "outer")
+	ctx, inner := tracing.Start(ctx, rec.Tracer(), "inner")
+	logr.FromContextOrDiscard(ctx).Info("inside")
+	inner.End()
+	outer.End()
+
+	if len(lines) != 1 {
+		t.Fatalf("log lines = %q, want one", lines)
+	}
+	for _, want := range []string{"controller", `"gateway"="gw"`, inner.SpanContext().SpanID().String()} {
+		if !strings.Contains(lines[0], want) {
+			t.Errorf("log line %q lacks %q", lines[0], want)
+		}
+	}
+}
