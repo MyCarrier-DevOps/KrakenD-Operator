@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/fieldindex"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 )
 
@@ -145,11 +146,24 @@ func (c *Checker) CheckPolicy(ctx context.Context, policy *v1alpha1.KrakenDBacke
 }
 
 // CheckEndpoint judges u.Endpoint on its own: the gateway root with the
-// endpoint (lint). A rejection is the endpoint's own fault (EndpointInvalid,
-// quoting the check).
+// endpoint and the policies it references (lint). A rejection is the
+// endpoint's own fault (EndpointInvalid, quoting the check). An endpoint that
+// references a policy that does not exist is not judged: no render includes
+// it, and the endpoint controller reports the missing policy. Its verdict is
+// OK.
 func (c *Checker) CheckEndpoint(ctx context.Context, u EndpointUnit, memo Memo) (EndpointVerdict, error) {
+	policies, err := c.unitPolicies(ctx, u)
+	if err != nil {
+		return EndpointVerdict{}, err
+	}
+	for _, key := range fieldindex.EndpointPolicyKeys(u.Endpoint) {
+		if _, ok := policies[key]; !ok {
+			return EndpointVerdict{OK: true}, nil
+		}
+	}
 	in := renderer.RenderInput{
-		Gateway: u.Gateway, Endpoints: []v1alpha1.KrakenDEndpoint{*u.Endpoint}, CEFallback: u.CEFallback,
+		Gateway: u.Gateway, Endpoints: []v1alpha1.KrakenDEndpoint{*u.Endpoint},
+		Policies: policies, CEFallback: u.CEFallback,
 	}
 	whole, err := c.lintInput(ctx, in, memo)
 	if err != nil || whole.OK {
@@ -198,6 +212,12 @@ func (c *Checker) remembered(ctx context.Context, in renderer.RenderInput, out *
 		memo.Store(key, Verdict{OK: rejection == nil, Rejection: bounded(rejection)})
 	}
 	return verdictFor(rejection, in, out), nil
+}
+
+// unitPolicies returns the policies u's endpoint references, read through the
+// reader.
+func (c *Checker) unitPolicies(ctx context.Context, u EndpointUnit) (map[string]*v1alpha1.KrakenDBackendPolicy, error) {
+	return c.policiesFor(ctx, []v1alpha1.KrakenDEndpoint{*u.Endpoint})
 }
 
 // verdictFor is the verdict on out, rendered from in, for a check that
