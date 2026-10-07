@@ -129,3 +129,41 @@ func TestLogger_ValuesAreConvertedToWhatTheyRead(t *testing.T) {
 		}
 	}
 }
+
+// A named logger keeps converting values, and an error record converts them
+// too.
+func TestLogger_ChildLoggersAndErrorsConvertValues(t *testing.T) {
+	logger, out := newStdoutLogger(t, otellog.SeverityInfo)
+
+	child := logger.WithName("child").WithValues("bound", types.UID("u1"))
+	child.Info("m", "call", types.UID("u2"))
+	child.Error(nil, "failed", "call", types.UID("u3"))
+
+	got := records(t, out)
+	if len(got) != 2 {
+		t.Fatalf("got %d records, want 2", len(got))
+	}
+	for i, call := range []string{"u2", "u3"} {
+		attrs := map[string]any{}
+		for _, a := range got[i].Attributes {
+			attrs[a.Key] = a.Value.Value
+		}
+		if got[i].Scope.Name != "test/child" || attrs["bound"] != "u1" || attrs["call"] != call {
+			t.Errorf("record %d = scope %q, attributes %v; want scope test/child, bound u1, call %s",
+				i, got[i].Scope.Name, attrs, call)
+		}
+	}
+}
+
+// A value that contains itself is cut off rather than followed forever.
+func TestLogger_ASelfContainingValueDoesNotOverflow(t *testing.T) {
+	logger, out := newStdoutLogger(t, otellog.SeverityInfo)
+	loop := map[string]any{}
+	loop["self"] = loop
+
+	logger.Info("m", "loop", loop)
+
+	if got := records(t, out); len(got) != 1 {
+		t.Errorf("got %d records, want 1", len(got))
+	}
+}
