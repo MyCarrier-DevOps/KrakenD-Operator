@@ -752,9 +752,50 @@ func (r *KrakenDGatewayReconciler) reconcileConfig(
 		res.output, res.excluded, res.judged = output, d.excluded, d.judged
 		return res, err
 	}
-	markConfigApplied(gw, d.output.Checksum, edition)
+	if err := r.recordApplied(ctx, gw, before, d.output.Checksum, edition); err != nil {
+		res, err := r.keepApplied(ctx, gw, err)
+		res.output, res.excluded, res.judged = output, d.excluded, d.judged
+		return res, err
+	}
 	return configResult{appliedConfigMap: resources.ConfigMapName(gw, d.output.Checksum),
 		output: d.output, excluded: d.excluded, judged: d.judged, served: true}, nil
+}
+
+// recordApplied marks checksum as the applied config and writes it to the
+// gateway's status at once. Later passes read status.configChecksum as what is
+// applied, so nothing acts on the new config (endpoint acceptance, the
+// Deployment) before that record is durable: a pass that cannot apply its
+// render keeps the stored config, and must not find pods already moved off it.
+// When the write fails the in-memory record is undone, so the pass keeps the
+// stored config, and the error is returned.
+func (r *KrakenDGatewayReconciler) recordApplied(
+	ctx context.Context,
+	gw *v1alpha1.KrakenDGateway,
+	before *v1alpha1.KrakenDGatewayStatus,
+	checksum string,
+	edition v1alpha1.Edition,
+) error {
+	prior := gw.Status.DeepCopy()
+	markConfigApplied(gw, checksum, edition)
+	// The rest of the status is still the previous pass's: read in between,
+	// it must show the gateway as reconciling, not contradict itself.
+	setGatewayReadiness(gw, before.ObservedGeneration)
+	if err := r.Status().Update(ctx, gw); err != nil {
+		gw.Status.ConfigChecksum, gw.Status.ConfigEdition = prior.ConfigChecksum, prior.ConfigEdition
+		restoreCondition(gw, prior, v1alpha1.ConditionConfigValid)
+		return fmt.Errorf("recording applied config %s: %w", checksum, err)
+	}
+	return nil
+}
+
+// restoreCondition sets gw's condition of type condType back to the one in
+// prior, removing it when prior has none.
+func restoreCondition(gw *v1alpha1.KrakenDGateway, prior *v1alpha1.KrakenDGatewayStatus, condType string) {
+	if cond := meta.FindStatusCondition(prior.Conditions, condType); cond != nil {
+		meta.SetStatusCondition(&gw.Status.Conditions, *cond)
+		return
+	}
+	meta.RemoveStatusCondition(&gw.Status.Conditions, condType)
 }
 
 // render renders in inside a gateway.render span: the newest render, and the
