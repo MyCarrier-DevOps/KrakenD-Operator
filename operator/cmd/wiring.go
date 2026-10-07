@@ -17,6 +17,7 @@ limitations under the License.
 package main
 
 import (
+	otellog "go.opentelemetry.io/otel/log"
 	"go.opentelemetry.io/otel/trace"
 	"k8s.io/client-go/rest"
 	"k8s.io/utils/clock"
@@ -162,4 +163,10 @@ func newManagerClient(config *rest.Config, options client.Options) (client.Clien
 		return nil, err
 	}
 	return telemetry.ReadEvents(c), nil
+}
+
+// telemetryConfig is the telemetry setup of the operator process. It is a
+// stub: it is empty.
+func telemetryConfig(otellog.Severity, telemetry.LogFormat) telemetry.Config {
+	return telemetry.Config{}
 }

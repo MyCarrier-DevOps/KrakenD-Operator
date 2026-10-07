@@ -24,6 +24,7 @@ import (
 	"os/exec"
 	"testing"
 
+	otellog "go.opentelemetry.io/otel/log"
 	metricnoop "go.opentelemetry.io/otel/metric/noop"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -33,6 +34,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	gatewayv1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/autoconfig"
@@ -274,5 +276,17 @@ func TestNewManagerClient_ReadsAreSpanEvents(t *testing.T) {
 
 	if events := rec.Ended().One(t, "reconcile").Events(); len(events) != 1 || events[0].Name != "k8s.client.get" {
 		t.Errorf("events = %+v, want one k8s.client.get", events)
+	}
+}
+
+func TestTelemetryConfig_ReportsTheBuildAndThePod(t *testing.T) {
+	t.Setenv("POD_NAME", "op-7")
+	t.Setenv("POD_NAMESPACE", "krakend-system")
+
+	cfg := telemetryConfig(otellog.SeverityInfo, telemetry.LogFormatJSON)
+
+	if cfg.ServiceVersion != version || cfg.PodName != "op-7" || cfg.PodNamespace != "krakend-system" ||
+		cfg.Registerer != ctrlmetrics.Registry || cfg.LogLevel != otellog.SeverityInfo {
+		t.Errorf("telemetryConfig = %+v", cfg)
 	}
 }
