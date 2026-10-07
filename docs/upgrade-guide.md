@@ -1110,8 +1110,9 @@ mount it. The operator keeps:
 
 Old revisions keep whatever the rendered config embeds, credentials
 included. A revision is kept for up to three config changes, plus any a live
-ReplicaSet still mounts, so a credential embedded in the rendered config
-outlives its rotation by up to two config changes. Keep secrets out of the
+ReplicaSet or the held Deployment's template still mounts, so a credential
+embedded in the rendered config outlives its rotation by up to two config
+changes, or for as long as a hold keeps a Deployment on the old revision. Keep secrets out of the
 rendered config, or restrict who can read ConfigMaps in the gateway's
 namespace.
 
@@ -1431,9 +1432,10 @@ the Dragonfly, ExternalSecret and VirtualService objects it creates:
 - an edited or deleted VirtualService or ExternalSecret is restored at once;
 - Dragonfly becoming ready is reflected in `DragonflyReady` at once.
 
-The watch is metadata only: the operator caches each object's name, labels
-and owner references, not its spec, so memory does not grow with the size of
-the Dragonfly, ExternalSecret and VirtualService objects in the cluster.
+The watch is metadata only: the operator caches each object's metadata
+(name, labels, annotations, owner references), not its spec or status. An
+object applied with client-side `kubectl apply` still repeats its body in the
+last-applied annotation, which is cached with it.
 
 **A CRD installed after the operator started is not watched until the
 operator restarts.** The operator logs `optional CRD not installed at
