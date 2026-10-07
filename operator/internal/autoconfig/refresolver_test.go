@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
@@ -1001,5 +1002,21 @@ func TestRedactRef(t *testing.T) {
 				t.Errorf("RedactRef(%q) = %q, want %q", tc.ref, got, tc.want)
 			}
 		})
+	}
+}
+
+// The fetcher's error already names the document: the resolver does not
+// repeat it.
+func TestResolveExternalRefs_AFetchErrorNamesTheDocumentOnce(t *testing.T) {
+	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"$ref":"http://127.0.0.1:1/x.json#/A"}}}}}}`)
+	f := &httpFetcher{strictClient: &http.Client{Transport: http.DefaultTransport, Timeout: fetchTimeout}}
+
+	_, _, err := ResolveExternalRefs(context.Background(), main, "http://127.0.0.1:1/openapi.json", f, FetchSource{})
+
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if n := strings.Count(err.Error(), "http://127.0.0.1:1/x.json"); n != 1 {
+		t.Errorf("error %q names the document %d times, want once", err, n)
 	}
 }
