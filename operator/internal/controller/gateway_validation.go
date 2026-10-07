@@ -64,9 +64,12 @@ const combinedFailureMessage = "Every endpoint passes krakend check on its own, 
 //  1. the gateway root on its own: when it fails, nothing more is judged and
 //     no endpoint is blamed;
 //  2. the render as a whole, with the full check;
-//  3. when that fails, each endpoint on its own (judgeEndpoints). Those that
-//     fail are excluded and the rest is applied. When none fails, the
-//     endpoints fail only together, which is the gateway's failure;
+//  3. each endpoint the whole check does not vouch for, on its own
+//     (judgeEndpoints): every endpoint when it failed, otherwise those that
+//     lost an entry in full, since a check of full says nothing about the
+//     entries it left out. Those that fail are excluded; when the whole
+//     check failed and none is, the endpoints fail only together, which is
+//     the gateway's failure;
 //  4. the render without the excluded endpoints, with the full check, unless
 //     it is the applied config: when it still fails, the endpoints fail only
 //     together.
@@ -94,14 +97,18 @@ func (r *KrakenDGatewayReconciler) decide(
 	if err != nil {
 		return decision{}, err
 	}
-	if whole.OK {
-		return decision{output: full, judged: true}, nil
+	suspects := maskedEndpoints(in.Endpoints, full)
+	if !whole.OK {
+		suspects = in.Endpoints
 	}
-	excluded, err := r.judgeEndpoints(ctx, gw, in, in.Endpoints, counted)
+	excluded, err := r.judgeEndpoints(ctx, gw, in, suspects, counted)
 	if err != nil {
 		return decision{}, err
 	}
 	if len(excluded) == 0 {
+		if whole.OK {
+			return decision{output: full, judged: true}, nil
+		}
 		logCombinedFailure(ctx, whole)
 		return decision{judged: true, failure: combinedFailure()}, nil
 	}
@@ -146,6 +153,15 @@ func (r *KrakenDGatewayReconciler) judgeEndpoints(
 		}
 	}
 	return excluded, nil
+}
+
+// maskedEndpoints returns the endpoints that lost an entry in full
+// (configcheck.MaskedEndpoints), in their order in endpoints.
+func maskedEndpoints(endpoints []v1alpha1.KrakenDEndpoint, full *renderer.RenderOutput) []v1alpha1.KrakenDEndpoint {
+	masked := configcheck.MaskedEndpoints(full)
+	return slices.DeleteFunc(slices.Clone(endpoints), func(ep v1alpha1.KrakenDEndpoint) bool {
+		return !slices.Contains(masked, client.ObjectKeyFromObject(&ep))
+	})
 }
 
 // without returns endpoints less those in excluded.
