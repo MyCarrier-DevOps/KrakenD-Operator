@@ -240,11 +240,10 @@ const (
 	ReasonPolicyNotFound  = "PolicyNotFound"
 
 	// Accepted reasons. ReasonEndpointConflict above is also one.
-	ReasonAccepted              = "Accepted"
-	ReasonPartiallyAccepted     = "PartiallyAccepted"
-	ReasonGatewayConfigRejected = "GatewayConfigRejected"
-	ReasonSchemaNameConflict    = "SchemaNameConflict"
-	ReasonEEFeaturesStripped    = "EEFeaturesStripped"
+	ReasonAccepted           = "Accepted"
+	ReasonPartiallyAccepted  = "PartiallyAccepted"
+	ReasonSchemaNameConflict = "SchemaNameConflict"
+	ReasonEEFeaturesStripped = "EEFeaturesStripped"
 	// ReasonEndpointInvalid: the endpoint fails krakend check on its own (the
 	// gateway root with this endpoint and the policies it references). The
 	// gateway leaves it out and serves its other endpoints.
