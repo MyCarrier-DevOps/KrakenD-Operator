@@ -28,50 +28,52 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
-	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 )
-
-func rootFailure(msg string) configcheck.Verdict {
-	return configcheck.Verdict{Findings: []configcheck.Finding{{Index: -1, Message: msg}}}
-}
 
 func TestGatewayAdmission_Render(t *testing.T) {
 	old := testGateway()
 	edited := old.DeepCopy()
 	edited.Spec.Config.Timeout = "5s"
-	broken := failing("ep", 0, "broken elsewhere")
+	ep := testEndpoint("ep", "/a")
+	ok, fail := configcheck.Verdict{OK: true}, configcheck.Verdict{Output: "x"}
+	epOK := configcheck.EndpointVerdict{OK: true}
+	epFail := configcheck.EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid, Output: "x"}
 	tests := []struct {
-		name     string
-		old      *v1alpha1.KrakenDGateway
-		verdicts []configcheck.Verdict
-		allowed  bool
-		calls    string
-		warns    string
+		name             string
+		old              *v1alpha1.KrakenDGateway
+		objs             []client.Object
+		verdicts         []configcheck.Verdict
+		endpointVerdicts []configcheck.EndpointVerdict
+		allowed          bool
+		calls            string
+		warns            string
 	}{
-		{"create checks the root, then the gateway with its endpoints", nil, nil, true, "isolated,gateway", ""},
-		{"create whose orphaned endpoints clash with the root", nil,
-			[]configcheck.Verdict{{OK: true}, broken}, true, "isolated,gateway", "default/ep spec.endpoints[0]"},
-		{"create with a failing root", nil,
-			[]configcheck.Verdict{rootFailure("'timeout' time: unknown unit")}, false, "isolated", ""},
-		{"update keeps it passing", old, nil, true, "gateway", ""},
-		{"update breaks it", old, []configcheck.Verdict{broken, {OK: true}}, false, "gateway,gateway", ""},
-		{"update of a broken gateway, root still fine", old, []configcheck.Verdict{broken, broken, {OK: true}}, true,
-			"gateway,gateway,isolated", "already fails validation"},
-		{"update of a broken gateway breaks the root", old,
-			[]configcheck.Verdict{broken, broken, rootFailure("bad"), {OK: true}}, false,
-			"gateway,gateway,isolated,isolated", ""},
+		{"create checks the root, then the endpoints referencing it", nil, []client.Object{ep}, nil, nil, true,
+			"root,group", ""},
+		{"create whose waiting endpoints fail with it", nil, []client.Object{ep},
+			[]configcheck.Verdict{ok, fail}, []configcheck.EndpointVerdict{epFail}, true, "root,group,endpoint", "default/ep"},
+		{"create with a failing root", nil, nil, []configcheck.Verdict{fail}, nil, false, "root", ""},
+		{"update keeps it passing", old, []client.Object{ep}, nil, nil, true, "root,group", ""},
+		{"update breaks a served endpoint", old, []client.Object{ep},
+			[]configcheck.Verdict{ok, fail}, []configcheck.EndpointVerdict{epFail, epOK}, false,
+			"root,group,endpoint,endpoint", ""},
+		{"update of a gateway whose endpoints already fail", old, []client.Object{ep},
+			[]configcheck.Verdict{ok, fail}, []configcheck.EndpointVerdict{epFail, epFail}, true,
+			"root,group,endpoint,endpoint", "already fail validation with the stored config"},
+		{"update breaks the root", old, []client.Object{ep}, []configcheck.Verdict{fail, ok}, nil, false, "root,root", ""},
+		{"update of a root that already fails", old, []client.Object{ep}, []configcheck.Verdict{fail, fail}, nil, true,
+			"root,root", "already fails validation on its own"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			chk := &scriptedChecker{verdicts: tt.verdicts}
-			v := &GatewayValidator{Client: fakeClient(), Checker: chk}
+			chk := &scriptedChecker{verdicts: tt.verdicts, endpointVerdicts: tt.endpointVerdicts}
+			v := &GatewayValidator{Client: fakeClient(tt.objs...), Checker: chk}
 			obj := testGateway()
 			var oldObj runtime.Object
 			if tt.old != nil {
@@ -89,82 +91,6 @@ func TestGatewayAdmission_Render(t *testing.T) {
 			}
 			if tt.warns != "" && (len(resp.Warnings) == 0 || !strings.Contains(resp.Warnings[0], tt.warns)) {
 				t.Errorf("warnings = %v, want %q", resp.Warnings, tt.warns)
-			}
-		})
-	}
-}
-
-// routeRejection is a verdict of the route check that refused each of the
-// given groups of endpoints (the refused one, then the one it clashes with),
-// blaming every endpoint they name.
-func routeRejection(refusals ...[]string) configcheck.Verdict {
-	v := configcheck.Verdict{Stage: renderer.StageRoute}
-	for _, names := range refusals {
-		refusal := configcheck.Refusal{Message: "route refused"}
-		for _, name := range names {
-			key := types.NamespacedName{Namespace: "default", Name: name}
-			refusal.Endpoints = append(refusal.Endpoints, key)
-			v.Findings = append(v.Findings, configcheck.Finding{Endpoint: key, Message: "route refused"})
-		}
-		v.Refusals = append(v.Refusals, refusal)
-	}
-	return v
-}
-
-// cappedRouteRejection marks v as a route check that stopped at its cap.
-func cappedRouteRejection(v configcheck.Verdict) configcheck.Verdict {
-	v.RefusalsCapped = true
-	return v
-}
-
-// On a gateway that already fails, a gateway change is denied when it makes
-// the route check refuse endpoints that were not refused before it, which the
-// root-alone check cannot see.
-func TestGatewayAdmission_FailingGatewayDeniesNewRouteRefusals(t *testing.T) {
-	old := testGateway()
-	edited := old.DeepCopy()
-	edited.Spec.Config.Timeout = "5s"
-	tests := []struct {
-		name          string
-		before, after configcheck.Verdict
-		allowed       bool
-	}{
-		{"healthy endpoints newly clash",
-			routeRejection([]string{"x1", "x2"}),
-			routeRejection([]string{"x1", "x2"}, []string{"c", "b"}), false},
-		{"a clash the change only un-masked, between a blamed endpoint and another",
-			routeRejection([]string{"x"}),
-			routeRejection([]string{"x", "z"}), true},
-		{"the auto_options counterexample: the fixed pair was blamed before",
-			routeRejection([]string{"r", "a"}, []string{"s", "r"}),
-			routeRejection([]string{"r", "s"}), true},
-		{"a healthy endpoint refused alone, as the gateway's own route",
-			routeRejection([]string{"x1", "x2"}),
-			routeRejection([]string{"x1", "x2"}, []string{"e"}), false},
-		{"the failure before was only at krakend check, so any route refusal is new",
-			configcheck.Verdict{Stage: renderer.StageCheck, Findings: routeRejection([]string{"x"}).Findings},
-			routeRejection([]string{"x", "z"}), false},
-		{"the failure before was at the cap, so refusals are unknown",
-			cappedRouteRejection(routeRejection([]string{"x1", "x2"})),
-			routeRejection([]string{"x1", "x2"}, []string{"c", "b"}), true},
-		{"the failure before was an EE wildcard conflict",
-			configcheck.Verdict{Stage: renderer.StageEEWildcard, Findings: routeRejection([]string{"w"}).Findings},
-			routeRejection([]string{"c", "b"}), true},
-		{"the failure after is an EE wildcard conflict",
-			routeRejection([]string{"x1", "x2"}),
-			configcheck.Verdict{Stage: renderer.StageEEWildcard, Findings: routeRejection([]string{"w"}).Findings}, true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			chk := &scriptedChecker{verdicts: []configcheck.Verdict{tt.after, tt.before}}
-
-			resp := review(t, &GatewayValidator{Client: fakeClient(), Checker: chk}, "alice", edited, old)
-
-			if resp.Allowed != tt.allowed {
-				t.Errorf("allowed = %v, want %v (%+v)", resp.Allowed, tt.allowed, resp.Result)
-			}
-			if !tt.allowed && resp.Result.Code != http.StatusUnprocessableEntity {
-				t.Errorf("code = %d, want 422", resp.Result.Code)
 			}
 		})
 	}
@@ -202,41 +128,46 @@ func TestGatewayAdmission_RenderComparisonFailureIs500(t *testing.T) {
 	}
 }
 
-// A gateway write can break endpoints it does not own: each cause goes on the
-// field the user edits, and the endpoints it breaks are named.
-func TestGatewayAdmission_DenialAttributesFindings(t *testing.T) {
-	old := testGateway()
-	edited := old.DeepCopy()
-	edited.Spec.Config.Timeout = "5s"
-	after := failing("ep", 2, "bad regexp")
-	after.Findings = append(after.Findings, rootFailure("'timeout' time: unknown unit").Findings...)
-	chk := &scriptedChecker{verdicts: []configcheck.Verdict{after, {OK: true}}}
+// A gateway write can break endpoints it does not own. A root failure is
+// quoted on spec.config, because its writer owns the root; an endpoint the
+// write breaks is named on spec, and nothing of it is quoted.
+func TestGatewayAdmission_DenialQuotesOnlyTheRoot(t *testing.T) {
+	t.Run("a root failure", func(t *testing.T) {
+		chk := &scriptedChecker{verdicts: []configcheck.Verdict{{Output: "- at '/extra_config': bad"}}}
 
-	resp := review(t, &GatewayValidator{Client: fakeClient(), Checker: chk}, "alice", edited, old)
+		resp := review(t, &GatewayValidator{Client: fakeClient(), Checker: chk}, "alice", testGateway(), nil)
 
-	if resp.Allowed || resp.Result.Details == nil {
-		t.Fatalf("response = %+v, want a denial with causes", resp.Result)
-	}
-	causes := map[string]string{}
-	for _, c := range resp.Result.Details.Causes {
-		causes[c.Field] = c.Message
-	}
-	if got := causes["spec.config"]; !strings.Contains(got, "unknown unit") || strings.Contains(got, "bad regexp") {
-		t.Errorf("spec.config cause = %q, want the root finding alone", got)
-	}
-	if got := causes["spec"]; !strings.Contains(got, "default/ep spec.endpoints[2]: bad regexp") ||
-		strings.Contains(got, "unknown unit") {
-		t.Errorf("spec cause = %q, want the endpoint finding naming default/ep spec.endpoints[2]", got)
-	}
+		if resp.Allowed || resp.Result.Details == nil || len(resp.Result.Details.Causes) != 1 {
+			t.Fatalf("response = %+v, want a denial with one cause", resp.Result)
+		}
+		if c := resp.Result.Details.Causes[0]; c.Field != "spec.config" || !strings.Contains(c.Message, "- at '/extra_config': bad") {
+			t.Errorf("cause = %+v, want spec.config quoting the root's output", c)
+		}
+	})
+	t.Run("a broken endpoint", func(t *testing.T) {
+		old := testGateway()
+		edited := old.DeepCopy()
+		edited.Spec.Config.Timeout = "5s"
+		chk := &scriptedChecker{verdicts: []configcheck.Verdict{{OK: true}, {Output: "SECRET"}},
+			endpointVerdicts: []configcheck.EndpointVerdict{
+				{Reason: v1alpha1.ReasonEndpointInvalid, Output: "SECRET"}, {OK: true}}}
+
+		resp := review(t, &GatewayValidator{Client: fakeClient(testEndpoint("ep", "/a")), Checker: chk}, "alice", edited, old)
+
+		if resp.Allowed || resp.Result.Details == nil || len(resp.Result.Details.Causes) != 1 {
+			t.Fatalf("response = %+v, want a denial with one cause", resp.Result)
+		}
+		if c := resp.Result.Details.Causes[0]; c.Field != "spec" || !strings.Contains(c.Message, "default/ep") ||
+			strings.Contains(responseText(resp), "SECRET") {
+			t.Errorf("cause = %+v, want spec naming default/ep and quoting nothing of it", c)
+		}
+	})
 }
 
 // A root with hundreds of failures must not produce an unbounded denial.
 func TestGatewayAdmission_DenialCausesAreBounded(t *testing.T) {
-	var findings []configcheck.Finding
-	for i := 0; i < 3*maxEntryCauses; i++ {
-		findings = append(findings, configcheck.Finding{Index: -1, Message: strings.Repeat("x", 3*warningLimit)})
-	}
-	chk := &scriptedChecker{verdicts: []configcheck.Verdict{{Findings: findings}}}
+	chk := &scriptedChecker{verdicts: []configcheck.Verdict{
+		{Output: strings.Repeat("- at '/extra_config': "+strings.Repeat("x", warningLimit)+"\n", 1000)}}}
 
 	resp := review(t, &GatewayValidator{Client: fakeClient(), Checker: chk}, "alice", testGateway(), nil)
 
@@ -244,13 +175,8 @@ func TestGatewayAdmission_DenialCausesAreBounded(t *testing.T) {
 		t.Fatalf("response = %+v, want a denial with causes", resp.Result)
 	}
 	causes := resp.Result.Details.Causes
-	if len(causes) > maxEntryCauses+1 {
-		t.Errorf("%d causes, want at most %d", len(causes), maxEntryCauses+1)
-	}
-	for _, c := range causes {
-		if len(c.Message) > 2*warningLimit {
-			t.Errorf("cause on %s is %d bytes, want it cut near %d", c.Field, len(c.Message), warningLimit)
-		}
+	if len(causes) != 1 || len(causes[0].Message) > 2*warningLimit {
+		t.Errorf("%d causes, the first of %d bytes; want one cut near %d", len(causes), len(causes[0].Message), warningLimit)
 	}
 }
 
@@ -260,30 +186,31 @@ func TestGatewayAdmission_ValidatorUnavailableIs500(t *testing.T) {
 	old := testGateway()
 	edited := old.DeepCopy()
 	edited.Spec.Config.Timeout = "5s"
-	broken := failing("ep", 0, "broken elsewhere")
+	fail := configcheck.Verdict{Output: "x"}
 	tests := []struct {
 		name     string
 		old      *v1alpha1.KrakenDGateway
 		verdicts []configcheck.Verdict
 		failCall int
 	}{
-		{"create", nil, nil, 1},
-		{"update, the gateway with the change", old, nil, 1},
-		{"update, the stored gateway", old, []configcheck.Verdict{broken}, 2},
-		{"update, the root with the change", old, []configcheck.Verdict{broken, broken}, 3},
-		{"update, the stored root", old, []configcheck.Verdict{broken, broken, rootFailure("bad")}, 4},
+		{"create, the root", nil, nil, 1},
+		{"update, the root", old, nil, 1},
+		{"update, the stored root", old, []configcheck.Verdict{fail}, 2},
+		{"update, the served endpoints", old, nil, 2},
+		{"update, an endpoint on its own", old, []configcheck.Verdict{{OK: true}, fail}, 3},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			chk := &scriptedChecker{verdicts: tt.verdicts, failCall: tt.failCall,
-				err: errors.New("waiting for a validation slot: context deadline exceeded")}
+				endpointVerdicts: []configcheck.EndpointVerdict{{Reason: v1alpha1.ReasonEndpointInvalid}},
+				err:              errors.New("waiting for a validation slot: context deadline exceeded")}
 			obj := testGateway()
 			var oldObj runtime.Object
 			if tt.old != nil {
 				obj, oldObj = edited, tt.old
 			}
 
-			resp := review(t, &GatewayValidator{Client: fakeClient(), Checker: chk}, "alice", obj, oldObj)
+			resp := review(t, &GatewayValidator{Client: fakeClient(testEndpoint("ep", "/a")), Checker: chk}, "alice", obj, oldObj)
 
 			if resp.Allowed || resp.Result.Code != http.StatusInternalServerError {
 				t.Errorf("response = %+v, want 500", resp.Result)
@@ -301,10 +228,10 @@ func TestGatewayAdmission_ChecksRunUnderTheAdmissionBudget(t *testing.T) {
 	old := testGateway()
 	edited := old.DeepCopy()
 	edited.Spec.Config.Timeout = "5s"
-	broken := failing("ep", 0, "broken elsewhere")
-	chk := &scriptedChecker{verdicts: []configcheck.Verdict{broken, broken, rootFailure("bad"), {OK: true}}}
+	chk := &scriptedChecker{verdicts: []configcheck.Verdict{{OK: true}, {Output: "x"}},
+		endpointVerdicts: []configcheck.EndpointVerdict{{Reason: v1alpha1.ReasonEndpointInvalid}, {OK: true}}}
 
-	review(t, &GatewayValidator{Client: fakeClient(), Checker: chk}, "alice", edited, old)
+	review(t, &GatewayValidator{Client: fakeClient(testEndpoint("ep", "/a")), Checker: chk}, "alice", edited, old)
 
 	if len(chk.deadlines) != 4 {
 		t.Fatalf("%d checks ran, want 4", len(chk.deadlines))
@@ -660,16 +587,16 @@ func TestGatewayAdmission_RejectedDragonflyOnCEDoesNotAlsoWarn(t *testing.T) {
 }
 
 // A check that cannot run leaves the request unjudged: the 500 carries no
-// warning about the failure that was already there.
+// warning about a failure that was already there.
 func TestGatewayAdmission_UnavailableCheckCarriesNoWarning(t *testing.T) {
 	old := testGateway()
 	edited := old.DeepCopy()
 	edited.Spec.Config.Timeout = "5s"
-	broken := failing("ep", 0, "broken elsewhere")
-	chk := &scriptedChecker{verdicts: []configcheck.Verdict{broken, broken}, failCall: 3,
-		err: errors.New("waiting for a validation slot: context deadline exceeded")}
+	chk := &scriptedChecker{verdicts: []configcheck.Verdict{{OK: true}, {Output: "x"}}, failCall: 4,
+		endpointVerdicts: []configcheck.EndpointVerdict{{Reason: v1alpha1.ReasonEndpointInvalid}},
+		err:              errors.New("waiting for a validation slot: context deadline exceeded")}
 
-	v := &GatewayValidator{Client: fakeClient(), Checker: chk}
+	v := &GatewayValidator{Client: fakeClient(testEndpoint("ep", "/a")), Checker: chk}
 
 	warnings, err := v.ValidateUpdate(context.Background(), old, edited)
 
@@ -681,18 +608,18 @@ func TestGatewayAdmission_UnavailableCheckCarriesNoWarning(t *testing.T) {
 	}
 }
 
-// The ratchet judges the new gateway after, and the stored one before: a
-// check handed the wrong gateway would compare the change with itself.
-func TestGatewayAdmission_RatchetChecksTheNewGatewayAfterAndTheStoredOneBefore(t *testing.T) {
-	broken := failing("ep", 0, "broken elsewhere")
+// An endpoint that fails with the update is checked again with the stored
+// gateway: a check handed the wrong gateway would compare the change with
+// itself.
+func TestGatewayAdmission_ChecksTheNewGatewayThenTheStoredOne(t *testing.T) {
 	tests := []struct {
 		name         string
 		fromEdition  v1alpha1.Edition
 		toEdition    v1alpha1.Edition
 		wantGateways string
 	}{
-		{"same edition", v1alpha1.EditionCE, v1alpha1.EditionCE, "CE/5s,CE/3s,CE/5s,CE/3s"},
-		{"Enterprise to Community", v1alpha1.EditionEE, v1alpha1.EditionCE, "CE/5s,EE/3s,CE/5s,EE/3s"},
+		{"same edition", v1alpha1.EditionCE, v1alpha1.EditionCE, "CE/5s,CE/5s,CE/5s,CE/3s"},
+		{"Enterprise to Community", v1alpha1.EditionEE, v1alpha1.EditionCE, "CE/5s,CE/5s,CE/5s,EE/3s"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -700,18 +627,18 @@ func TestGatewayAdmission_RatchetChecksTheNewGatewayAfterAndTheStoredOneBefore(t
 			old.Spec.Edition, old.Spec.Config.Timeout = tt.fromEdition, "3s"
 			edited := old.DeepCopy()
 			edited.Spec.Edition, edited.Spec.Config.Timeout = tt.toEdition, "5s"
-			// The gateway fails with and without the change, and its root fails
-			// only with it: all four checks run.
-			chk := &scriptedChecker{verdicts: []configcheck.Verdict{broken, broken, rootFailure("bad"), {OK: true}}}
+			chk := &scriptedChecker{verdicts: []configcheck.Verdict{{OK: true}, {Output: "x"}},
+				endpointVerdicts: []configcheck.EndpointVerdict{{Reason: v1alpha1.ReasonEndpointInvalid}, {OK: true}}}
 
-			resp := review(t, &GatewayValidator{Client: fakeClient(), Checker: chk}, "alice", edited, old)
+			resp := review(t, &GatewayValidator{Client: fakeClient(testEndpoint("ep", "/a")), Checker: chk},
+				"alice", edited, old)
 
 			if resp.Allowed {
 				t.Fatalf("response = %+v, want a denial", resp.Result)
 			}
 			if got := strings.Join(chk.gateways, ","); got != tt.wantGateways {
-				t.Errorf("checks were handed gateways %s, want %s (after, before, isolated after, isolated before)",
-					got, tt.wantGateways)
+				t.Errorf("checks were handed gateways %s, want %s (root, group, endpoint with the update, "+
+					"endpoint with the stored gateway)", got, tt.wantGateways)
 			}
 		})
 	}
@@ -735,24 +662,54 @@ func TestGatewayAdmission_EmptyVersionWarningSaysTheVersionIsEmpty(t *testing.T)
 	}
 }
 
-// Endpoints that clash with a new gateway's root are named in one warning,
-// which stays bounded however many there are.
+// Endpoints that fail with a new gateway are named in one warning, which
+// stays bounded however many there are, and keeps its count of those not checked.
 func TestGatewayAdmission_CreateWarningIsBounded(t *testing.T) {
-	var findings []configcheck.Finding
-	for i := 0; i < 3*maxEntryCauses; i++ {
-		findings = append(findings, configcheck.Finding{
-			Endpoint: types.NamespacedName{Namespace: "default", Name: "ep"}, Index: i,
-			Message: strings.Repeat("é", 3*warningLimit)})
+	objs := []client.Object{}
+	var endpointVerdicts []configcheck.EndpointVerdict
+	for i := range 2 * maxEntryCauses {
+		objs = append(objs, testEndpoint(fmt.Sprintf("endpoint-with-a-long-name-%02d", i), fmt.Sprintf("/e%d", i)))
+		endpointVerdicts = append(endpointVerdicts, configcheck.EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid})
 	}
-	chk := &scriptedChecker{verdicts: []configcheck.Verdict{{OK: true}, {Findings: findings}}}
+	chk := &scriptedChecker{verdicts: []configcheck.Verdict{{OK: true}, {Output: "x"}}, endpointVerdicts: endpointVerdicts}
 
-	resp := review(t, &GatewayValidator{Client: fakeClient(), Checker: chk}, "alice", testGateway(), nil)
+	resp := review(t, &GatewayValidator{Client: fakeClient(objs...), Checker: chk}, "alice", testGateway(), nil)
 
 	if !resp.Allowed || len(resp.Warnings) != 1 {
 		t.Fatalf("response = %+v, warnings = %v, want admitted with one warning", resp.Result, resp.Warnings)
 	}
-	if w := resp.Warnings[0]; len(w) > 2*warningLimit || !utf8.ValidString(w) {
+	w := resp.Warnings[0]
+	if len(w) > 2*warningLimit || !utf8.ValidString(w) {
 		t.Errorf("warning is %d bytes (valid UTF-8: %v), want it bounded by the warning limit", len(w), utf8.ValidString(w))
+	}
+	if want := fmt.Sprintf("(+%d more not checked)", maxEntryCauses); !strings.HasSuffix(w, want) {
+		t.Errorf("warning = %q, want it to end with the count %q", w, want)
+	}
+}
+
+// However long the list of endpoints a gateway update breaks, the denial
+// keeps its count of those not checked.
+func TestGatewayAdmission_TheDenialKeepsItsCountOfEndpointsNotChecked(t *testing.T) {
+	old := testGateway()
+	edited := old.DeepCopy()
+	edited.Spec.Config.Timeout = "5s"
+	objs := []client.Object{}
+	var endpointVerdicts []configcheck.EndpointVerdict
+	for i := range maxEntryCauses + 5 {
+		objs = append(objs, testEndpoint(fmt.Sprintf("carrier-integrations-orders-api-endpoint-%02d", i), fmt.Sprintf("/e%d", i)))
+		endpointVerdicts = append(endpointVerdicts,
+			configcheck.EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid}, configcheck.EndpointVerdict{OK: true})
+	}
+	chk := &scriptedChecker{verdicts: []configcheck.Verdict{{OK: true}, {Output: "x"}}, endpointVerdicts: endpointVerdicts}
+
+	resp := review(t, &GatewayValidator{Client: fakeClient(objs...), Checker: chk}, "alice", edited, old)
+
+	if resp.Allowed || resp.Result.Details == nil || len(resp.Result.Details.Causes) != 1 {
+		t.Fatalf("response = %+v, want a denial with one cause", resp.Result)
+	}
+	msg := resp.Result.Details.Causes[0].Message
+	if want := "(+5 more not checked)"; !strings.HasSuffix(msg, want) || len(msg) > 2*warningLimit+len("Invalid value: ") {
+		t.Errorf("cause = %q (%d bytes), want it to end with %q within the bound", msg, len(msg), want)
 	}
 }
 
@@ -761,7 +718,7 @@ func TestGatewayAdmission_CreateWarningIsBounded(t *testing.T) {
 func TestGatewayAdmission_CreateAdmitsWhenTheEndpointCheckCannotRun(t *testing.T) {
 	chk := &scriptedChecker{err: errors.New("no validation slot in time"), failCall: 2}
 
-	resp := review(t, &GatewayValidator{Client: fakeClient(), Checker: chk}, "alice", testGateway(), nil)
+	resp := review(t, &GatewayValidator{Client: fakeClient(testEndpoint("ep", "/a")), Checker: chk}, "alice", testGateway(), nil)
 
 	if !resp.Allowed || len(resp.Warnings) != 1 ||
 		!strings.Contains(resp.Warnings[0], "could not check the endpoints that already reference this gateway") {
