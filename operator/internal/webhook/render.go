@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
@@ -220,4 +221,21 @@ func newRouteRefusals(before, after configcheck.Verdict) bool {
 		})
 	}
 	return false
+}
+
+// clashErrors reports router clashes on p: the first maxEntryCauses as causes
+// of their own, cut to the warning limit, the rest counted in one more. A
+// clash names endpoints, methods and paths only.
+func clashErrors(p *field.Path, clashes []configcheck.Clash) field.ErrorList {
+	var errs field.ErrorList
+	for i, c := range clashes {
+		if i == maxEntryCauses {
+			errs = append(errs, field.Invalid(p, field.OmitValueType{},
+				fmt.Sprintf("%d more entries clash the same way", len(clashes)-i)))
+			break
+		}
+		errs = append(errs, field.Invalid(p, field.OmitValueType{},
+			truncate("KrakenD's router cannot serve both: "+c.String(), warningLimit)))
+	}
+	return errs
 }
