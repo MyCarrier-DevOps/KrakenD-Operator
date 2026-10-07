@@ -147,3 +147,17 @@ func TestGatewayAdmission_NamingStopsBeforeTheBudget(t *testing.T) {
 		t.Errorf("answered after %s, want soon after the %s deadline", took, deadline)
 	}
 }
+
+func TestGatewayAdmission_ALargeGatewayThatPassesRunsTwoChecks(t *testing.T) {
+	old, gw := editedGateway()
+	objs := []client.Object{old}
+	for i := range 500 {
+		objs = append(objs, testEndpoint(fmt.Sprintf("ep-%03d", i), fmt.Sprintf("/e%d", i)))
+	}
+	chk := &scriptedChecker{}
+	v := &GatewayValidator{Client: fakeClient(objs...), Checker: chk}
+
+	if resp := review(t, v, "alice", gw, old); !resp.Allowed || strings.Join(chk.calls, ",") != "root,group" {
+		t.Errorf("allowed = %v, %d checks; want admitted after the root and one group check", resp.Allowed, len(chk.calls))
+	}
+}
