@@ -57,7 +57,6 @@ import (
 	"github.com/mycarrier-devops/krakend-operator/internal/fieldindex"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 	"github.com/mycarrier-devops/krakend-operator/internal/resources"
-	"github.com/mycarrier-devops/krakend-operator/internal/util/hash"
 	"github.com/mycarrier-devops/krakend-operator/internal/util/license"
 )
 
@@ -80,10 +79,6 @@ type KrakenDGatewayReconciler struct {
 	// MaxConcurrentReconciles is how many gateways reconcile at once; zero
 	// means one. Each reconcile holds one config checker slot at a time.
 	MaxConcurrentReconciles int
-
-	// rejections remembers each gateway's last rejected validation input,
-	// so an unchanged bad render is not re-validated on every event.
-	rejections rejectionMemo
 
 	// verdicts remembers, per gateway, the config checks its last pass ran,
 	// so a gateway whose inputs did not change runs none.
@@ -227,26 +222,31 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 	appliedBefore := appliedKey(&gw, edition)
 	cfg, configErr := r.reconcileConfig(ctx, &gw, before, in, output, edition)
+	// From here on the pass reports on the render the config stage settled
+	// on: the applied one, after exclusion, or the newest when nothing was
+	// applied.
+	output = cfg.output
 	r.reconcileCEFallbackCondition(&gw, output, edition)
 	image := appliedImage(&gw, edition)
 	configChanged := appliedKey(&gw, edition) != appliedBefore ||
 		// The hold just lifted: the config applied meanwhile starts rolling now.
 		pluginsHeldBefore && cfg.appliedConfigMap != "" && deployed.config != gw.Status.ConfigChecksum
 
-	// Accepted: the applied render sets every endpoint's verdict. On a pass
-	// that applies nothing (a rejected render, or a validator that could not
-	// judge), the endpoints the findings name get GatewayConfigRejected and
-	// those it no longer names lose it; while no config has ever been
-	// applied, every endpoint no finding names also loses its Accepted. A
-	// failed endpoint status write does not stop the infrastructure stage or
-	// the gateway status; it is returned after them so the reconcile is
-	// retried.
+	// Accepted: the applied render sets every endpoint's verdict, and an
+	// endpoint that fails on its own gets Accepted=False with its reason. On a
+	// pass that applies nothing (a rejected render, or a validator that could
+	// not judge), an endpoint that fails on its own gets the same verdict,
+	// worded for a config not yet applied, and one every endpoint was judged
+	// against loses an exclusion it no longer earns; while no config has ever
+	// been applied, every other endpoint loses its Accepted. A failed endpoint
+	// status write does not stop the infrastructure stage or the gateway
+	// status; it is returned after them so the reconcile is retried.
 	var acceptanceErr error
 	if isApplied(&gw, output, edition) {
-		acceptanceErr = r.reconcileEndpointAcceptance(ctx, &gw, endpoints, output)
+		acceptanceErr = r.reconcileEndpointAcceptance(ctx, &gw, endpoints, output, cfg.excluded)
 	} else {
 		never, neverErr := r.neverApplied(ctx, &gw)
-		acceptanceErr = stderrors.Join(neverErr, r.recordRejections(ctx, endpoints, cfg.rejections, never))
+		acceptanceErr = stderrors.Join(neverErr, r.recordExclusions(ctx, &gw, endpoints, cfg, never))
 	}
 
 	// Infrastructure stage: always runs, and deploys the applied config.
@@ -383,10 +383,9 @@ func (r *KrakenDGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 // forgetGateway drops what the controller keeps per gateway once the gateway
-// is gone or terminating: its metric series and its remembered rejection.
+// is gone or terminating: its metric series and its remembered verdicts.
 func (r *KrakenDGatewayReconciler) forgetGateway(key types.NamespacedName) {
 	deleteGatewayMetrics(key.Namespace, key.Name)
-	r.rejections.forget(key)
 	r.verdicts.forget(key)
 	r.verified.forgetGateway(key)
 }
@@ -678,11 +677,13 @@ func findDeploymentCondition(
 	return nil
 }
 
-// reconcileConfig is the config stage. It decides whether the current render
-// becomes the applied config (status.configChecksum), and it is the only code
-// that writes config content. Reconcile returns its error only after the
-// infrastructure stage has run, so a rejected or unjudged render never stops
-// drift correction of the gateway's other resources.
+// reconcileConfig is the config stage. It decides which render becomes the
+// applied config (status.configChecksum), and it is the only code that writes
+// config content. A render that is not the applied config is judged by
+// decide. Reconcile returns the stage's error only after the infrastructure
+// stage has run, so a rejected or unjudged render never stops drift
+// correction of the gateway's other resources. The result's output is the
+// render the rest of the pass reports on.
 func (r *KrakenDGatewayReconciler) reconcileConfig(
 	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
@@ -692,55 +693,54 @@ func (r *KrakenDGatewayReconciler) reconcileConfig(
 	edition v1alpha1.Edition,
 ) (configResult, error) {
 	if isApplied(gw, output, edition) {
-		// The applied config passed validation when it was applied, so a
-		// revert to it clears a rejection. Recording the edition adopts a
-		// status written before configEdition existed.
-		gw.Status.ConfigEdition = edition
-		res, err := r.publishApplied(ctx, gw, output)
-		if err != nil {
-			// The ConfigMap does not hold this config, so it is not reported
-			// as the applied one.
-			return res, r.handleConfigPublishFailed(gw, before, err)
-		}
-		setConfigApplied(gw)
-		return res, nil
+		return r.serveApplied(ctx, gw, before, output, edition, nil)
 	}
-	rejections, err := r.validateAndApply(ctx, gw, before, in, output, edition)
-	if isApplied(gw, output, edition) {
-		return configResult{appliedConfigMap: resources.ConfigMapName(gw, output.Checksum)}, nil
+	d, err := r.decide(ctx, gw, in, output, edition)
+	if err != nil {
+		res, err := r.keepApplied(ctx, gw, r.handleValidatorUnavailable(gw, before, err))
+		res.output = output
+		return res, err
 	}
-	res, err := r.keepApplied(ctx, gw, err)
-	res.rejections = rejections
-	return res, err
-}
-
-// validateAndApply validates a render that is not the applied config and,
-// when it passes, publishes it and makes it the applied config.
-// validateConfig answers from the rejection memo when this exact input was
-// already rejected.
-func (r *KrakenDGatewayReconciler) validateAndApply(
-	ctx context.Context,
-	gw *v1alpha1.KrakenDGateway,
-	before *v1alpha1.KrakenDGatewayStatus,
-	in renderer.RenderInput,
-	output *renderer.RenderOutput,
-	edition v1alpha1.Edition,
-) (map[types.NamespacedName]string, error) {
-	verdict, err := r.validateConfig(ctx, gw, in, output, edition)
-	switch {
-	case err != nil:
-		return nil, r.handleValidatorUnavailable(gw, before, err)
-	case !verdict.OK:
-		r.handleValidationError(gw, before, rejectionMessage(verdict.Findings))
-		return rejectionsByEndpoint(verdict.Findings), nil
+	if d.failure != nil {
+		r.handleValidationError(gw, before, d.failure.reason, d.failure.message)
+		res, err := r.keepApplied(ctx, gw, nil)
+		res.output, res.excluded, res.judged = output, d.excluded, d.judged
+		return res, err
+	}
+	if isApplied(gw, d.output, edition) {
+		return r.serveApplied(ctx, gw, before, d.output, edition, d.excluded)
 	}
 	// Publish before recording the checksum as applied: status must never
 	// name a config that no ConfigMap holds.
-	if err := r.publishConfig(ctx, gw, output.JSON, output.Checksum); err != nil {
-		return nil, r.handleConfigPublishFailed(gw, before, err)
+	if err := r.publishConfig(ctx, gw, d.output.JSON, d.output.Checksum); err != nil {
+		res, err := r.keepApplied(ctx, gw, r.handleConfigPublishFailed(gw, before, err))
+		res.output, res.excluded, res.judged = output, d.excluded, d.judged
+		return res, err
 	}
-	markConfigApplied(gw, output.Checksum, edition)
-	return map[types.NamespacedName]string{}, nil
+	markConfigApplied(gw, d.output.Checksum, edition)
+	return configResult{appliedConfigMap: resources.ConfigMapName(gw, d.output.Checksum),
+		output: d.output, excluded: d.excluded, judged: d.judged}, nil
+}
+
+// serveApplied is the outcome of a pass whose render, after exclusion, is the
+// applied config. It passed validation when it was applied, so a revert to
+// it clears a rejection. Recording the edition adopts a status written before
+// configEdition existed.
+func (r *KrakenDGatewayReconciler) serveApplied(
+	ctx context.Context, gw *v1alpha1.KrakenDGateway, before *v1alpha1.KrakenDGatewayStatus,
+	output *renderer.RenderOutput, edition v1alpha1.Edition,
+	excluded map[types.NamespacedName]configcheck.EndpointVerdict,
+) (configResult, error) {
+	gw.Status.ConfigEdition = edition
+	res, err := r.publishApplied(ctx, gw, output)
+	res.output, res.excluded, res.judged = output, excluded, true
+	if err != nil {
+		// The ConfigMap does not hold this config, so it is not reported as
+		// the applied one.
+		return res, r.handleConfigPublishFailed(gw, before, err)
+	}
+	setConfigApplied(gw)
+	return res, nil
 }
 
 // markConfigApplied makes checksum, validated as edition, the applied config.
@@ -796,48 +796,16 @@ func (r *KrakenDGatewayReconciler) markDeploymentUpdate(
 	return &rolloutNote{reason: "DeploymentUpdated", message: "Deployment updated for image, plugin or license change"}
 }
 
-// validateConfig checks the render as the given edition. When the validator
-// already rejected this exact render for this edition on this gateway, the
-// remembered rejection is returned without running krakend check again: a
-// verdict is deterministic for (render, edition), so a CE-fallback flip
-// re-validates. The findings are rebuilt from the remembered rejection each
-// time: the memo key covers neither the order of a KrakenDEndpoint's entries
-// nor the rendered entries' sources, which the findings name.
-func (r *KrakenDGatewayReconciler) validateConfig(
-	ctx context.Context, gw *v1alpha1.KrakenDGateway, in renderer.RenderInput,
-	output *renderer.RenderOutput, edition v1alpha1.Edition,
-) (configcheck.Verdict, error) {
-	key := client.ObjectKeyFromObject(gw)
-	input := hash.CombineHex(output.Checksum, string(edition))
-	if rejection := r.rejections.lookup(key, input); rejection != nil {
-		return configcheck.Rejected(rejection, in, output), nil
-	}
-	verdict, err := r.Checker.CheckRendered(ctx, in, output, nil)
-	switch {
-	case err != nil:
-		// The validator could not judge the render: nothing to remember.
-	case verdict.OK:
-		r.rejections.forget(key)
-	default:
-		configValidationFailures.Inc()
-		r.rejections.remember(key, input, verdict.Rejection)
-		logf.FromContext(ctx).Error(verdict.Rejection, "validation rejected the rendered config")
-	}
-	return verdict, err
-}
-
-// handleValidationError records a rejected configuration: ConfigValid=False
-// with message (bounded by truncateMessage to 4 KiB; the log holds the
-// rejection bounded to 16 KiB). The Warning event fires only when the recorded
-// verdict changes, so a gateway that keeps rendering the same rejected config
-// stays quiet. The applied config is left alone; the status, with the derived
-// Ready and phase, is written at the end of Reconcile after the
-// infrastructure stage. The rejection is persistent and a change to any input
-// re-enqueues the gateway, so no error is returned.
+// handleValidationError records a render none of which can be applied:
+// ConfigValid=False with reason and message (bounded by truncateMessage to
+// 4 KiB). The Warning event fires only when the recorded verdict changes, so
+// a gateway that keeps rendering the same rejected config stays quiet. The
+// applied config is left alone; the status, with the derived Ready and phase,
+// is written at the end of Reconcile after the infrastructure stage. The
+// rejection is persistent and a change to any input re-enqueues the gateway,
+// so no error is returned.
 func (r *KrakenDGatewayReconciler) handleValidationError(
-	gw *v1alpha1.KrakenDGateway,
-	before *v1alpha1.KrakenDGatewayStatus,
-	message string,
+	gw *v1alpha1.KrakenDGateway, before *v1alpha1.KrakenDGatewayStatus, reason, message string,
 ) {
 	message = truncateMessage(message)
 	prev := meta.FindStatusCondition(before.Conditions, v1alpha1.ConditionConfigValid)
@@ -845,11 +813,11 @@ func (r *KrakenDGatewayReconciler) handleValidationError(
 		Type:               v1alpha1.ConditionConfigValid,
 		Status:             metav1.ConditionFalse,
 		ObservedGeneration: gw.Generation,
-		Reason:             v1alpha1.ReasonConfigValidationFailed,
+		Reason:             reason,
 		Message:            message,
 	})
-	if prev == nil || prev.Status != metav1.ConditionFalse || prev.Message != message {
-		r.Recorder.Event(gw, "Warning", v1alpha1.ReasonConfigValidationFailed, message)
+	if prev == nil || prev.Status != metav1.ConditionFalse || prev.Reason != reason || prev.Message != message {
+		r.Recorder.Event(gw, corev1.EventTypeWarning, reason, message)
 	}
 }
 
@@ -1056,8 +1024,9 @@ func (r *KrakenDGatewayReconciler) reconcileEndpointAcceptance(
 	gw *v1alpha1.KrakenDGateway,
 	endpoints []v1alpha1.KrakenDEndpoint,
 	output *renderer.RenderOutput,
+	excluded map[types.NamespacedName]configcheck.EndpointVerdict,
 ) error {
-	rv := newRenderVerdicts(output, nil)
+	rv := newRenderVerdicts(output, excluded)
 	schemaMsgs := schemaConflictMessages(output.SchemaConflicts)
 	var errs []error
 	for i := range endpoints {
