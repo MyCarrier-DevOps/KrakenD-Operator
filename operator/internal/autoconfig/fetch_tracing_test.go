@@ -26,7 +26,9 @@ import (
 	"testing"
 
 	"go.opentelemetry.io/otel/codes"
+	corev1 "k8s.io/api/core/v1"
 
+	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/tracing/tracingtest"
 )
 
@@ -288,6 +290,62 @@ func TestClientSpans_AnErrorStatusMarksTheSpan(t *testing.T) {
 
 			if got := rec.Ended().One(t, "HTTP GET").Status().Code; got != tc.want {
 				t.Errorf("HTTP GET status = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// Every error of a fetch names the document once, redacted, whichever step of
+// the fetch failed: a $ref's error is then enough to tell which of its
+// documents it was.
+func TestFetch_EveryErrorNamesTheRedactedURLOnce(t *testing.T) {
+	short := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", "100")
+		_, _ = w.Write([]byte("x"))
+		w.(http.Flusher).Flush()
+		panic(http.ErrAbortHandler)
+	}))
+	defer short.Close()
+	big := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(make([]byte, maxBodyBytes+2))
+	}))
+	defer big.Close()
+	withSecrets := func(raw string) string {
+		return strings.Replace(raw, "://", "://user:pw@", 1) + "/spec.json?token=TOKVAL"
+	}
+	missingSecret := &v1alpha1.AuthConfig{BearerTokenSecret: &corev1.SecretKeySelector{
+		LocalObjectReference: corev1.LocalObjectReference{Name: "absent"}, Key: "token",
+	}}
+
+	for _, tc := range []struct {
+		name   string
+		source FetchSource
+	}{
+		{"a body that ends early", FetchSource{URL: withSecrets(short.URL)}},
+		{"a body over the limit", FetchSource{URL: withSecrets(big.URL)}},
+		{"a scheme that is not http", FetchSource{URL: "ftp://user:pw@example.com/spec.json?token=TOKVAL"}},
+		{"auth that cannot be applied", FetchSource{URL: withSecrets(short.URL), Auth: missingSecret}},
+		{"a URL that does not parse", FetchSource{URL: "http://user:pw@host:badport/spec.json?token=TOKVAL"}},
+		{"a URL without a host", FetchSource{URL: "https:user:pw@example.com/spec.json?token=TOKVAL"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &httpFetcher{
+				client:       fakeClient(),
+				strictClient: &http.Client{Transport: http.DefaultTransport, Timeout: fetchTimeout},
+			}
+			tc.source.AllowClusterLocal = false
+
+			_, err := f.Fetch(context.Background(), tc.source)
+
+			if err == nil {
+				t.Fatal("Fetch succeeded")
+			}
+			want := "fetching " + RedactURL(tc.source.URL) + ": "
+			if n := strings.Count(err.Error(), "fetching "); n != 1 || !strings.HasPrefix(err.Error(), want) {
+				t.Errorf("error %q, want it to start with %q and name the fetch once", err, want)
+			}
+			if msg := err.Error(); strings.Contains(msg, "pw@") || strings.Contains(msg, "TOKVAL") {
+				t.Errorf("error %q carries a credential", msg)
 			}
 		})
 	}
