@@ -212,7 +212,7 @@ type scan struct {
 // nothing was stored before, so that every failure is the write's). It stops
 // at maxEntryCauses broken endpoints, or at the first check that cannot run,
 // which includes one the admission deadline cuts off, and counts the suspects
-// left.
+// left. A caller keeps a denial the scan found however the scan ended.
 func failingEndpoints(ctx context.Context, chk ConfigChecker, memo configcheck.Memo,
 	now configcheck.EndpointUnit, was *configcheck.EndpointUnit, suspects []v1alpha1.KrakenDEndpoint) scan {
 	var s scan
@@ -246,10 +246,15 @@ func failingEndpoints(ctx context.Context, chk ConfigChecker, memo configcheck.M
 }
 
 // brokenList names the endpoints a write breaks, quoting nothing of them, and
-// counts the suspects the scan left unjudged.
+// counts the suspects the scan left unjudged: past maxEntryCauses, or once a
+// check could not run.
 func brokenList(s scan) string {
 	text := "with this change these KrakenDEndpoints fail validation: " + strings.Join(s.broken, ", ")
-	if s.unchecked > 0 {
+	switch {
+	case s.unchecked == 0:
+	case s.stopped != nil:
+		text += fmt.Sprintf(" (%d not checked within the admission time)", s.unchecked)
+	default:
 		text += fmt.Sprintf(" (+%d more not checked)", s.unchecked)
 	}
 	return text
