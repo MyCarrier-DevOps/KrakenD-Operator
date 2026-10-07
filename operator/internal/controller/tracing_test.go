@@ -19,6 +19,8 @@ package controller
 import (
 	"context"
 	"errors"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -821,4 +823,52 @@ func TestPolicyReconcile_AFailedStatusWriteMarksOnlyItsOwnStage(t *testing.T) {
 			t.Errorf("%s status = %v, want %v", span, got[span], code)
 		}
 	}
+}
+
+// rejectingExecutor stands in for a krakend binary that refuses every config
+// that mentions its marker, and accepts the rest.
+type rejectingExecutor struct{ marker string }
+
+func (e rejectingExecutor) Execute(_ context.Context, _ string, args ...string) ([]byte, error) {
+	config, err := os.ReadFile(args[len(args)-1])
+	if err != nil {
+		return nil, err
+	}
+	if !strings.Contains(string(config), e.marker) {
+		return []byte("Syntax OK!"), nil
+	}
+	return []byte("refused"), exec.Command("sh", "-c", "exit 1").Run()
+}
+
+// A sync that holds a candidate checks the rest again for router clashes, and
+// judges the candidates on their own: both run under the precheck and its
+// judging stage, as the first pass does.
+func TestAutoConfigReconcile_AHeldCandidateIsRecheckedUnderThePrecheck(t *testing.T) {
+	ac := testAutoConfig()
+	c := fakeClientBuilder().WithObjects(ac, testCUEDefinitionsCM(), testGateway()).WithStatusSubresource(ac).Build()
+	f, ce, fi, g := defaultMocks()
+	orders := g.output.Endpoints[0].DeepCopy()
+	orders.Name = "test-ac-listorders"
+	orders.Spec.Endpoints[0].Endpoint = "/api/orders"
+	orders.Spec.Endpoints[0].Backends[0].URLPattern = "/api/orders"
+	g.output.Endpoints = append(g.output.Endpoints, orders)
+	r := newACReconciler(c, f, ce, fi, g)
+	rec := tracingtest.New(t)
+	r.Tracer = rec.Tracer()
+	v := renderer.NewValidator(renderer.ValidatorOptions{
+		Executor: telemetry.TraceExecutor(rejectingExecutor{marker: "/api/users"}, rec.Tracer()), BinaryPath: "krakend",
+	})
+	r.Checker = configcheck.New(c, renderer.New(renderer.Options{}), v, 1, rec.Tracer())
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatal(err)
+	}
+
+	spans := rec.Ended()
+	if got := len(spans.Named("configcheck.Conflicts")); got != 4 {
+		t.Errorf("%d configcheck.Conflicts spans, want 4: the clash check, then once more without the held candidate", got)
+	}
+	spans.RequireParent(t, "autoconfig.precheck", "configcheck.Conflicts")
+	spans.RequireParent(t, "autoconfig.judge_candidates", "configcheck.CheckEndpoint")
+	spans.RequireParent(t, "reconcile KrakenDAutoConfig", "autoconfig.status")
 }
