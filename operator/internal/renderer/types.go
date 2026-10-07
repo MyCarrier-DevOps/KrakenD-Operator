@@ -84,8 +84,9 @@ type RenderOutput struct {
 	ConflictedEndpoints []types.NamespacedName
 	InvalidEndpoints    []types.NamespacedName
 	// EntryConflicts maps each KrakenDEndpoint that lost at least one entry
-	// to the entries it lost, sorted by endpoint then method. Its keys are
-	// ConflictedEndpoints.
+	// to the entries it lost, sorted by endpoint, then method, then winner. An
+	// entry that clashes with several older entries is listed once for each
+	// KrakenDEndpoint they belong to. Its keys are ConflictedEndpoints.
 	EntryConflicts map[types.NamespacedName][]EntryConflict
 	// Sources is index-aligned with the rendered "endpoints" array:
 	// Sources[i] is the KrakenDEndpoint that produced endpoints[i]. It is the
@@ -186,7 +187,10 @@ func (e *ValidationError) Unwrap() error {
 // EntryConflict is one entry of a KrakenDEndpoint that the render left out
 // because an older KrakenDEndpoint, or an earlier entry of the same one, has
 // an entry with the same method and route shape (paths that differ only in
-// parameter names are the same route).
+// parameter names are the same route), or an entry KrakenD's router cannot
+// serve next to it. An entry that clashes with the entries of several older
+// KrakenDEndpoints is recorded once for each of them, every older clashing
+// entry, served or left out; each record has its own Detail.
 type EntryConflict struct {
 	Endpoint string
 	Method   string
