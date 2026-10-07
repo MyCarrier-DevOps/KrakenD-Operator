@@ -494,7 +494,7 @@ func optionalCRDMapper(gvks ...schema.GroupVersionKind) meta.RESTMapper {
 // controller reports it once a rollout has exceeded its progress deadline.
 func deploymentPastProgressDeadline(gw *v1alpha1.KrakenDGateway) *appsv1.Deployment {
 	return &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace},
+		ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace, OwnerReferences: ownedBy(gw)},
 		Status: appsv1.DeploymentStatus{Conditions: []appsv1.DeploymentCondition{{
 			Type:   appsv1.DeploymentProgressing,
 			Status: corev1.ConditionFalse,
@@ -621,7 +621,7 @@ func legacyConfigMap(gw *v1alpha1.KrakenDGateway, config string) *corev1.ConfigM
 // legacyDeployment is a gateway Deployment that mounts legacyConfigMap.
 func legacyDeployment(gw *v1alpha1.KrakenDGateway) *appsv1.Deployment {
 	return &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace},
+		ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace, OwnerReferences: ownedBy(gw)},
 		Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
 			Volumes: []corev1.Volume{{
 				Name: "config",
