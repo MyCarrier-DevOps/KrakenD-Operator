@@ -188,4 +188,9 @@ type EntryConflict struct {
 	// Winner is the KrakenDEndpoint whose entry is rendered instead. It is the
 	// losing KrakenDEndpoint itself when an earlier entry of its own won.
 	Winner types.NamespacedName
+	// Detail is the router's refusal when the two entries do not share a
+	// route shape but KrakenD cannot serve both: gin refuses to register one
+	// next to the other, or one lies under the other's EE wildcard. It names
+	// methods and paths only. It is empty for entries of the same route shape.
+	Detail string
 }
