@@ -26,6 +26,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -506,4 +507,23 @@ func TestEndpointReconcile_IsOneTraceWithItsRefsAndStatusWrite(t *testing.T) {
 	spans := rec.Ended()
 	spans.RequireChild(t, "reconcile KrakenDEndpoint", "endpoint.resolve_refs")
 	spans.RequireChild(t, "reconcile KrakenDEndpoint", "endpoint.status")
+}
+
+// A policy reconcile is one trace: its protection and its status write are
+// spans of it.
+func TestPolicyReconcile_IsOneTraceWithItsProtectionAndStatusWrite(t *testing.T) {
+	policy := &v1alpha1.KrakenDBackendPolicy{ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "default"}}
+	c := fakeClientBuilder().WithObjects(policy).WithStatusSubresource(policy).Build()
+	rec := tracingtest.New(t)
+	r := &KrakenDBackendPolicyReconciler{
+		Client: c, Scheme: testScheme(), Recorder: fakeRecorder(), APIReader: c, Tracer: rec.Tracer(),
+	}
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(policy)}); err != nil {
+		t.Fatal(err)
+	}
+
+	spans := rec.Ended()
+	spans.RequireChild(t, "reconcile KrakenDBackendPolicy", "policy.protection")
+	spans.RequireChild(t, "reconcile KrakenDBackendPolicy", "policy.status")
 }

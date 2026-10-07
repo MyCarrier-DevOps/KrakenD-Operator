@@ -22,6 +22,7 @@ import (
 	"slices"
 	"strings"
 
+	"go.opentelemetry.io/otel/trace"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -53,6 +54,8 @@ type KrakenDBackendPolicyReconciler struct {
 	// APIReader reads uncached; the finalizer is released only after it
 	// confirms that no endpoint references the policy.
 	APIReader client.Reader
+	// Tracer records the reconcile's spans; nil records none.
+	Tracer trace.Tracer
 }
 
 // +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendbackendpolicies,verbs=get;list;watch;update
