@@ -2678,12 +2678,14 @@ func TestGatewayReconcile_GatewayMetricsFollowTheSpec(t *testing.T) {
 	c := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).Build()
 	val := &countingValidator{}
 	r := newTestGatewayReconciler(c, renderOutput("cs1"), val)
-	t.Cleanup(func() { deleteGatewayMetrics(gw.Namespace, gw.Name) })
+	m, reg := testMetrics(t)
+	r.Metrics = m
 
 	if err := reconcileGateway(t, r, gw); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if got := testutil.ToFloat64(gatewayConfigValid.WithLabelValues(gw.Namespace, gw.Name)); got != 1 {
+	if got, _ := metricValue(t, reg, "krakend_operator_gateway_config_valid",
+		"namespace", gw.Namespace, "name", gw.Name); got != 1 {
 		t.Errorf("gateway_config_valid = %v after an applied config, want 1", got)
 	}
 
@@ -2697,10 +2699,11 @@ func TestGatewayReconcile_GatewayMetricsFollowTheSpec(t *testing.T) {
 	if err := reconcileGateway(t, r, gw); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if got := testutil.ToFloat64(gatewayConfigValid.WithLabelValues(gw.Namespace, gw.Name)); got != 0 {
+	if got, _ := metricValue(t, reg, "krakend_operator_gateway_config_valid",
+		"namespace", gw.Namespace, "name", gw.Name); got != 0 {
 		t.Errorf("gateway_config_valid = %v after a rejected config, want 0", got)
 	}
-	if got := gatewayInfoVersions(t, gw.Namespace, gw.Name); !slices.Equal(got, []string{"2.13"}) {
+	if got := gatewayInfoVersions(t, reg, gw.Namespace, gw.Name); !slices.Equal(got, []string{"2.13"}) {
 		t.Errorf("gateway_info versions = %v, want only [2.13] (the old version's series must go)", got)
 	}
 }

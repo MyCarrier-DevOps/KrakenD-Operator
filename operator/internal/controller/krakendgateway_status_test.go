@@ -25,15 +25,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	appsv1 "k8s.io/api/apps/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	clocktesting "k8s.io/utils/clock/testing"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
-	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
@@ -326,30 +327,34 @@ func TestGatewayReconcile_OversizedRejectionWarnsOnce(t *testing.T) {
 	}
 }
 
-// setGatewaySeries gives the gateway a series in every per-gateway metric.
-func setGatewaySeries(namespace, name string) {
-	endpointsPerGateway.WithLabelValues(namespace, name).Set(4)
-	gatewayInfo.WithLabelValues(namespace, name, "CE", "2.7.0").Set(1)
-	gatewayConfigValid.WithLabelValues(namespace, name).Set(1)
-	dragonflyReady.WithLabelValues(namespace, name).Set(1)
-	licenseExpirySeconds.WithLabelValues(namespace, name).Set(100)
-	reconcileDuration.WithLabelValues("gateway", namespace, name).Observe(0.1)
+// setGatewaySeries gives the gateway a series in every per-gateway gauge.
+func setGatewaySeries(m GatewayMetrics, key types.NamespacedName) {
+	m.SetEndpoints(key, 4)
+	m.SetGatewayInfo(key, "CE", "2.7.0")
+	m.SetConfigValid(key, true)
+	m.SetDragonflyReady(key, true)
+	m.SetLicenseExpiry(key, 100*time.Second)
+	m.SetExcludedEndpoints(key, map[string]int{v1alpha1.ReasonEndpointInvalid: 1})
 }
 
-// gatewaySeriesCount counts the gateway's series across the registry, so a
-// per-gateway metric that deleteGatewayMetrics forgets is caught without the
-// test listing it. The autoconfig gauge shares the labels but belongs to a
-// different resource, so it is not the gateway's.
-func gatewaySeriesCount(t *testing.T, namespace, name string) int {
+// gatewaySeriesCount counts the gateway's series in g, so a per-gateway gauge
+// that ForgetGateway forgets is caught without the test listing it. The
+// autoconfig gauge shares the labels but belongs to another resource. The
+// reconcile-duration histogram is left out: OpenTelemetry cannot remove one of
+// its series, so a deleted gateway's stays until the operator restarts.
+func gatewaySeriesCount(t *testing.T, g prometheus.Gatherer, namespace, name string) int {
 	t.Helper()
-	families, err := ctrlmetrics.Registry.Gather()
+	families, err := g.Gather()
 	if err != nil {
 		t.Fatalf("gathering metrics: %v", err)
 	}
 	n := 0
 	for _, family := range families {
-		if !strings.HasPrefix(family.GetName(), "krakend_operator_") ||
-			family.GetName() == "krakend_operator_autoconfig_synced" {
+		switch family.GetName() {
+		case "krakend_operator_autoconfig_synced", "krakend_operator_reconcile_duration_seconds":
+			continue
+		}
+		if !strings.HasPrefix(family.GetName(), "krakend_operator_") {
 			continue
 		}
 		for _, m := range family.GetMetric() {
@@ -357,8 +362,7 @@ func gatewaySeriesCount(t *testing.T, namespace, name string) int {
 			for _, l := range m.GetLabel() {
 				labels[l.GetName()] = l.GetValue()
 			}
-			if labels["namespace"] == namespace && labels["name"] == name &&
-				(labels["controller"] == "" || labels["controller"] == "gateway") {
+			if labels["namespace"] == namespace && (labels["name"] == name || labels["gateway"] == name) {
 				n++
 			}
 		}
@@ -367,10 +371,10 @@ func gatewaySeriesCount(t *testing.T, namespace, name string) int {
 }
 
 // gatewayInfoVersions lists the version label of each gateway_info series the
-// gateway has.
-func gatewayInfoVersions(t *testing.T, namespace, name string) []string {
+// gateway has in g.
+func gatewayInfoVersions(t *testing.T, g prometheus.Gatherer, namespace, name string) []string {
 	t.Helper()
-	families, err := ctrlmetrics.Registry.Gather()
+	families, err := g.Gather()
 	if err != nil {
 		t.Fatalf("gathering metrics: %v", err)
 	}
@@ -398,12 +402,13 @@ func TestGatewayReconcile_TerminatingGatewayIsLeftAlone(t *testing.T) {
 	gw.Finalizers = []string{"test.krakend.io/hold"}
 	gw.DeletionTimestamp = &metav1.Time{Time: time.Now()}
 	c, phases := gatewayStatusWrites(gw)
-	setGatewaySeries(gw.Namespace, gw.Name)
-	t.Cleanup(func() { deleteGatewayMetrics(gw.Namespace, gw.Name) })
+	m, reg := testMetrics(t)
+	setGatewaySeries(m, client.ObjectKeyFromObject(gw))
 	r := &KrakenDGatewayReconciler{
 		Client: c, APIReader: c, Scheme: testScheme(), Recorder: fakeRecorder(),
 		Renderer: &mockRenderer{err: fmt.Errorf("a terminating gateway must not be rendered")},
 		Checker:  newTestChecker(c, &mockValidator{}),
+		Metrics:  m,
 	}
 
 	if err := reconcileGateway(t, r, gw); err != nil {
@@ -417,8 +422,12 @@ func TestGatewayReconcile_TerminatingGatewayIsLeftAlone(t *testing.T) {
 	if len(*phases) != 0 {
 		t.Errorf("status written for a terminating gateway: %v", *phases)
 	}
-	if n := gatewaySeriesCount(t, gw.Namespace, gw.Name); n != 0 {
+	if n := gatewaySeriesCount(t, reg, gw.Namespace, gw.Name); n != 0 {
 		t.Errorf("%d metric series left for a terminating gateway, want 0", n)
+	}
+	if _, ok := metricValue(t, reg, "krakend_operator_reconcile_duration_seconds",
+		"controller", "gateway", "namespace", gw.Namespace, "name", gw.Name); ok {
+		t.Error("the reconcile of a terminating gateway observed a duration")
 	}
 }
 
@@ -430,16 +439,19 @@ func TestGatewayReconcile_DeletedGatewayDropsItsMetrics(t *testing.T) {
 	c := fakeClientBuilder().WithObjects(gw, secret).WithStatusSubresource(gw).Build()
 	r := newTestGatewayReconciler(c, renderOutput("cs"), &mockValidator{})
 	r.LicenseParser = parser
-	t.Cleanup(func() { deleteGatewayMetrics(gw.Namespace, gw.Name) })
+	m, reg := testMetrics(t)
+	r.Metrics = m
 
 	if err := reconcileGateway(t, r, gw); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	// endpoints, info, config_valid, license expiry, dragonfly_ready and the
-	// reconcile duration: a floor, so a fixture that skips a path cannot pass.
-	if n := gatewaySeriesCount(t, gw.Namespace, gw.Name); n < 6 {
-		t.Fatalf("a live gateway has %d metric series, want at least 6", n)
+	// endpoints, info, config_valid, license expiry and dragonfly_ready: a
+	// floor, so a fixture that skips a path cannot pass.
+	if n := gatewaySeriesCount(t, reg, gw.Namespace, gw.Name); n < 5 {
+		t.Fatalf("a live gateway has %d metric series, want at least 5", n)
 	}
+	durations, _ := metricValue(t, reg, "krakend_operator_reconcile_duration_seconds",
+		"controller", "gateway", "namespace", gw.Namespace, "name", gw.Name)
 
 	if err := c.Delete(context.Background(), gw); err != nil {
 		t.Fatal(err)
@@ -447,8 +459,12 @@ func TestGatewayReconcile_DeletedGatewayDropsItsMetrics(t *testing.T) {
 	if err := reconcileGateway(t, r, gw); err != nil {
 		t.Fatalf("reconcile after delete: %v", err)
 	}
-	if n := gatewaySeriesCount(t, gw.Namespace, gw.Name); n != 0 {
+	if n := gatewaySeriesCount(t, reg, gw.Namespace, gw.Name); n != 0 {
 		t.Errorf("%d metric series left for a deleted gateway, want 0", n)
+	}
+	if got, _ := metricValue(t, reg, "krakend_operator_reconcile_duration_seconds",
+		"controller", "gateway", "namespace", gw.Namespace, "name", gw.Name); got != durations {
+		t.Errorf("the reconcile of a deleted gateway observed a duration (%v, was %v)", got, durations)
 	}
 }
 
