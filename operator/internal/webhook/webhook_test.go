@@ -2458,6 +2458,14 @@ func TestNewValidators_GiveTheEndpointValidatorAVerdictMemo(t *testing.T) {
 	}
 }
 
+func TestNewValidators_GiveTheGatewayValidatorAVerdictMemo(t *testing.T) {
+	v := NewValidators(fakeClient(), fakeClient(), &scriptedChecker{}, "")
+
+	if v.Gateway.Memo == nil {
+		t.Error("the gateway validator has no verdict memo, so every write runs every check again")
+	}
+}
+
 func TestNewValidators_GiveThePolicyValidatorAVerdictMemo(t *testing.T) {
 	v := NewValidators(fakeClient(), fakeClient(), &scriptedChecker{}, "")
 
