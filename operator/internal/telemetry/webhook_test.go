@@ -59,3 +59,16 @@ func TestTraceWebhookServer_RequestIsAServerSpanAboveTheValidator(t *testing.T) 
 		t.Errorf("server span has parent %v, want a new trace when none is propagated", parent)
 	}
 }
+
+func TestTraceWebhookServer_ContinuesThePropagatedTrace(t *testing.T) {
+	rec := tracingtest.New(t)
+	const traceID, parentID = "4bf92f3577b34da6a3ce929d0e0e4736", "00f067aa0ba902b7"
+
+	serveOnce(t, rec, "00-"+traceID+"-"+parentID+"-01")
+
+	parent := rec.Ended().One(t, "admission "+hookPath).Parent()
+	if parent.TraceID().String() != traceID || parent.SpanID().String() != parentID {
+		t.Errorf("server span parent = %s/%s, want the propagated %s/%s",
+			parent.TraceID(), parent.SpanID(), traceID, parentID)
+	}
+}
