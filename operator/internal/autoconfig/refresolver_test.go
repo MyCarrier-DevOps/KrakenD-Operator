@@ -982,3 +982,24 @@ func TestResolveExternalRefs_AnOpaqueRefCarriesNoCredentials(t *testing.T) {
 
 	requireNoSecrets(t, err)
 }
+
+// A ref that carries no credential is shown as written; one that does keeps
+// its JSON pointer and loses the credential.
+func TestRedactRef(t *testing.T) {
+	for _, tc := range []struct{ name, ref, want string }{
+		{"spaces are not encoded", "my schemas.json#/R", "my schemas.json#/R"},
+		{"a relative ref is unchanged", "../common/pet.json#/Pet", "../common/pet.json#/Pet"},
+		{"a local ref is unchanged", "#/components/schemas/Pet", "#/components/schemas/Pet"},
+		{"a ref without a pointer", "https://example.com/pet.json", "https://example.com/pet.json"},
+		{
+			"userinfo and query values go, the pointer stays",
+			"https://user:pw@example.com/pet.json?token=abc#/Pet", "https://example.com/pet.json?token=REDACTED#/Pet",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := redactRef(tc.ref); got != tc.want {
+				t.Errorf("redactRef(%q) = %q, want %q", tc.ref, got, tc.want)
+			}
+		})
+	}
+}
