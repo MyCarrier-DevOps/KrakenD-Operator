@@ -459,3 +459,55 @@ func TestSetup_RejectsAnUnsupportedExporter(t *testing.T) {
 		})
 	}
 }
+
+// The protocol a signal is exported with is its own OTEL_EXPORTER_OTLP_<SIGNAL>_PROTOCOL,
+// else OTEL_EXPORTER_OTLP_PROTOCOL, else http/protobuf. Each signal is pointed
+// at the collector that speaks the protocol the variables select, and only that
+// collector receives it.
+func TestSetup_ProtocolIsTheSignalsThenTheGenericThenHTTP(t *testing.T) {
+	for _, tc := range []struct {
+		name, generic, own string
+		grpc               bool
+	}{
+		{"neither set", "", "", false},
+		{"generic grpc", "grpc", "", true},
+		{"signal http over generic grpc", "grpc", "http/protobuf", false},
+		{"signal grpc over generic http", "http/protobuf", "grpc", true},
+	} {
+		for _, signal := range otlpSignals {
+			t.Run(signal.name+"/"+tc.name, func(t *testing.T) {
+				cleanOTelEnv(t)
+				httpCollected, httpURL := newHTTPCollector(t)
+				grpcCollected, grpcURL := newGRPCCollector(t)
+				for _, other := range otlpSignals {
+					if other.name != signal.name {
+						t.Setenv("OTEL_"+other.name+"_EXPORTER", "none")
+					}
+				}
+				t.Setenv("OTEL_EXPORTER_OTLP_PROTOCOL", tc.generic)
+				t.Setenv("OTEL_EXPORTER_OTLP_"+signal.name+"_PROTOCOL", tc.own)
+				want, wantKey, other, otherKey := httpCollected, signal.httpPath, grpcCollected, signal.grpcMethod
+				// A signal's own endpoint is used as given, path included.
+				endpoint := httpURL + signal.httpPath
+				if tc.grpc {
+					want, wantKey, other, otherKey = grpcCollected, signal.grpcMethod, httpCollected, signal.httpPath
+					endpoint = grpcURL
+				}
+				t.Setenv("OTEL_EXPORTER_OTLP_"+signal.name+"_ENDPOINT", endpoint)
+				tel := setup(t, &bytes.Buffer{})
+
+				signal.emit(t, tel)
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				_ = tel.Shutdown(ctx)
+
+				if want.count(wantKey) == 0 {
+					t.Errorf("%s never reached %s; got %v", signal.name, wantKey, want.all())
+				}
+				if other.count(otherKey) != 0 {
+					t.Errorf("%s reached %s, the other protocol", signal.name, otherKey)
+				}
+			})
+		}
+	}
+}
