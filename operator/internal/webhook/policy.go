@@ -107,10 +107,12 @@ const countWarningBytes = 96
 const policyWarningLimit = (policyWarningBytes - countWarningBytes) / maxPolicyWarnings
 
 // checkPolicyRender validates policy on its own (lintPolicyAlone) and against
-// the endpoints of every gateway that use it: each gateway is screened
-// (screenPolicyUse), then the endpoints the change breaks are named
-// (judgePolicyUse). A denial names endpoints and quotes none of them. A check
-// that cannot run makes the request a 500.
+// the endpoints of every gateway that use it. Every gateway is screened first
+// (screenPolicyUse), and only then are the endpoints a change breaks named,
+// gateway by gateway (judgePolicyUse), so naming the endpoints of one gateway
+// cannot spend the time another gateway's checks need. A denial names
+// endpoints and quotes none of them. A check that cannot run makes the
+// request a 500.
 func checkPolicyRender(ctx context.Context, c client.Reader, chk ConfigChecker, memo configcheck.Memo,
 	old, policy *v1alpha1.KrakenDBackendPolicy) (admission.Warnings, error) {
 	if err := lintPolicyAlone(ctx, chk, memo, old, policy); err != nil {
@@ -138,6 +140,7 @@ func checkPolicyRender(ctx context.Context, c client.Reader, chk ConfigChecker, 
 		}
 		omitted++
 	}
+	screened := make([]policyUse, 0, len(uses))
 	for i := range uses {
 		gw := &uses[i].gateway
 		if gw.Spec.Edition == v1alpha1.EditionCE && len(drops) > 0 {
@@ -146,7 +149,9 @@ func checkPolicyRender(ctx context.Context, c client.Reader, chk ConfigChecker, 
 					gw.Namespace, gw.Name)))
 			continue
 		}
-		use := screenPolicyUse(ctx, chk, memo, gw, uses[i].endpoints, policy)
+		screened = append(screened, screenPolicyUse(ctx, chk, memo, gw, uses[i].endpoints, policy))
+	}
+	for _, use := range screened {
 		broken, warning, err := judgePolicyUse(ctx, chk, memo, use, old, policy)
 		if err != nil {
 			return nil, checkErr(err)
