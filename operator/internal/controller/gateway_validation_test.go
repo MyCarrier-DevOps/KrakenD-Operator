@@ -404,3 +404,25 @@ func TestGatewayReconcile_ASteadyPassWithAnExcludedEndpointRunsNoCheck(t *testin
 			val.lints-lints, val.validates-validates, writes-written)
 	}
 }
+
+func TestGatewayReconcile_AFailureOnlyTogetherIsTheGatewaysAndQuotesNothing(t *testing.T) {
+	gw := reconciledGateway()
+	a, b := testEndpoint("a", "/a"), testEndpoint("b", "/b")
+	c := fakeClientBuilder().WithObjects(gw, a, b).WithStatusSubresource(gw, a, b).Build()
+	val := &contentValidator{together: []string{`"/a"`, `"/b"`}}
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}), val)
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+
+	cv := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionConfigValid)
+	if cv == nil || cv.Reason != v1alpha1.ReasonCombinedConfigInvalid || strings.Contains(cv.Message, "TOGETHER-ONLY") {
+		t.Errorf("ConfigValid = %+v, want %s quoting no output", cv, v1alpha1.ReasonCombinedConfigInvalid)
+	}
+	for _, ep := range []*v1alpha1.KrakenDEndpoint{a, b} {
+		if cond := storedAccepted(t, c, client.ObjectKeyFromObject(ep)); cond != nil {
+			t.Errorf("%s Accepted = %+v, want none: no endpoint fails on its own", ep.Name, cond)
+		}
+	}
+}
