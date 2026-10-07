@@ -1,7 +1,7 @@
 # Project State — KrakenD Operator
 
 > **Last Updated:** 2026-10-06
-> **Status:** Conformance release: single-writer status with `Ready` conditions, a two-stage gateway reconcile, complete admission, a per-operation AutoConfig pipeline, per-object validation that excludes an invalid endpoint and applies the rest of its gateway, and a trimmed, tested RBAC with metadata-only Secret and ConfigMap caching. Unit and integration tests pass, 0 lint issues.
+> **Status:** Conformance release: single-writer status with `Ready` conditions, a two-stage gateway reconcile, complete admission, a per-operation AutoConfig pipeline, per-object validation that excludes an invalid endpoint and applies the rest of its gateway, a trimmed, tested RBAC with metadata-only Secret and ConfigMap caching, and OpenTelemetry logs, traces and metrics. Unit and integration tests pass, 0 lint issues.
 
 ## Overview
 
@@ -77,8 +77,8 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 - `helpers_test.go` — 10 tests for conditionsEqual() covering both-empty, different-length, same-content, ignore-LastTransitionTime, different-status/reason/message/generation, missing-type
 - 69 tests across 6 test files, ~84.8% coverage (filtered), 0 lint issues
 
-### Prometheus Metrics (`internal/controller/metrics.go`)
-- 11 metrics registered via controller-runtime `metrics.Registry`; every name carries the `krakend_operator_` prefix
+### Metrics (`internal/controller/metrics.go`, `internal/telemetry/metrics.go`)
+- 11 metrics on OpenTelemetry instruments behind the `GatewayMetrics`/`AutoConfigMetrics` ports, served on `/metrics` by the OpenTelemetry Prometheus exporter with the names, labels, help text and buckets of earlier releases (golden test); every name carries the `krakend_operator_` prefix
 - `krakend_operator_config_renders_total`, `krakend_operator_config_validation_failures_total`, `krakend_operator_rolling_restarts_total` (Deployment writes that changed the pod template, once per write)
 - `krakend_operator_license_expiry_seconds` (gauge per gateway), `krakend_operator_endpoints` (gauge per gateway)
 - `krakend_operator_dragonfly_ready` (gauge per gateway, 1 if ready, 0 otherwise)
@@ -86,8 +86,15 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 - `krakend_operator_gateway_excluded_endpoints` (gauge per gateway and `Accepted` reason: the endpoints the gateway leaves out because they fail validation on their own)
 - `krakend_operator_reconcile_duration_seconds` (histogram), `krakend_operator_gateway_info` (metadata labels)
 - `krakend_operator_autoconfig_synced` (gauge per AutoConfig namespace+name: 1 after a successful sync, 0 while failing or any operation is held; removed on delete)
-- Instrumented in gateway controller Reconcile (including Dragonfly state) and the AutoConfig controller
-- `cmd/main.go` — Wires Renderer, Validator, Recorder, Clock into all controller setups; passes X509LicenseParser and the API reader to the gateway reconciler; builds the one `configcheck.Checker`, and the gateway and AutoConfig reconcilers that hold it (the AutoConfig one with Fetcher, CUEEvaluator, Filter, Generator and a one-slot `CheckSlots` bound), in `wireValidation`; sets `MaxConcurrentReconciles` from `--autoconfig-max-concurrent-reconciles` (default 4); and calls `webhook.SetupWebhooks(mgr, validators)` for admission webhook registration; `LeaderElectionID` set to `krakend-operator-leader`
+- Instrumented in gateway controller Reconcile (including Dragonfly state) and the AutoConfig controller; gauges are observable, so a forgotten gateway's or AutoConfig's series disappears, but the reconcile-duration histogram keeps a deleted gateway's series until restart
+
+### Telemetry (`internal/telemetry/`, `internal/tracing/`)
+- `telemetry.Setup` builds the tracer, meter and logger providers from `OTEL_*` (export over OTLP only with an endpoint; a no-op tracer otherwise; a malformed OTLP header or endpoint variable stops that signal's export and is named, never quoted, in a startup warning); `service.name`, `service.version`, `k8s.pod.name` and `k8s.namespace.name` form the resource
+- Log pipeline: every logger (logr, controller-runtime, klog, the stdlib `log`, grpc-go's `grpclog`, the SDK's own diagnostics on a stdout-only logger) goes through one `otellogr` bridge, a level processor (severity floor, timestamp and severity text, never-cancelled export context), a synchronous stdout JSON exporter and a batched OTLP exporter; errors are `exception.message`/`exception.type`, with no stack traces; `InstallGRPCLogging` and `InstallLogging` are the only globals set
+- Instrumentation: `TraceKubeAPI` (client spans for requests sent under a span, trace context to the API server), `ReadEvents` (`k8s.client.get`/`list` span events), `TraceWebhookServer` (admission server spans continuing the API server's trace), `TraceExecutor` (a span per `krakend check`); background API traffic (informers, lease renewals, metrics-endpoint reviews, events) is not traced; optional CRD lookups in a reconcile are `k8s.discovery` spans
+- `tracing.Start` starts a span and rebinds the context's logger so its records carry the trace and span IDs; `tracing.End` records an error and ends; `tracing/tracingtest` is an in-memory recorder with parent/child assertions; `tracing/background_test.go` guards against fresh contexts on request paths
+- Spans carry object identity, never what the object says: a denied admission sets `admission.allowed` and `admission.code` and no status or text; no span carries a denial, a warning or krakend output
+- `cmd/main.go` — Wires Renderer, Validator, Recorder, Clock into all controller setups; passes X509LicenseParser and the API reader to the gateway reconciler; builds the one `configcheck.Checker`, and the gateway and AutoConfig reconcilers that hold it (the AutoConfig one with Fetcher, CUEEvaluator, Filter, Generator and a one-slot `CheckSlots` bound), in `wireValidation`; sets `MaxConcurrentReconciles` from `--autoconfig-max-concurrent-reconciles` (default 4); and calls `webhook.SetupWebhooks(mgr, validators)` for admission webhook registration; `LeaderElectionID` set to `krakend-operator-leader`; `run()` sets telemetry up first (after parsing flags) and flushes it last, within 5 seconds; `wireValidation` takes `instrumentation` (the tracer and `OperatorMetrics`); `wireReferenceControllers` builds the endpoint and policy reconcilers; `--log-format` and the kept `--zap-*` flags (`logflags.go`); `main.version`, set from the `VERSION` build argument
 - `cmd/webhooks.go` — `registerWebhooks` sets the webhooks up only when enabled and then adds the `webhook` readiness check (`GetWebhookServer().StartedChecker()`), so each replica is Ready only once its webhook server accepts TLS connections; with webhooks disabled it touches nothing on the manager
 
 ### External CRD Builders (`internal/resources/`)
@@ -132,6 +139,15 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 - All methods use runtime.Object with checked comma-ok type assertions
 
 ## Recent Changes
+
+### 2026-10-06 — OpenTelemetry logs, traces and metrics
+
+- Logs move from stderr to stdout, one OpenTelemetry JSON record per line (`--log-format=pretty` indents them); an error's text and type are the `exception.message` and `exception.type` attributes, and error records no longer carry the stack trace zap added. The `--zap-*` flags are still accepted.
+- Each reconcile and each admission request is a trace, with every `krakend check` run and every Kubernetes API call below it; with no OTLP endpoint nothing is exported. Informer list/watch, leader-election renewals, the metrics endpoint's TokenReview/SubjectAccessReview and events are not traced. AutoConfig spec fetches send no trace header and record redacted URLs.
+- Metrics keep their names, labels, help text and buckets; a deleted gateway's reconcile-duration series stays until the operator restarts.
+- A malformed OTLP header or endpoint variable stops that signal's export, not the operator. The final flush waits at most 5 seconds.
+- Chart: a `telemetry:` block (OTLP endpoint or node-local collector, protocol, headers Secret, signals, sampler, resource attributes, log format); `POD_NAME` is set by the chart, kustomize and the OLM bundle.
+- Dependencies: OpenTelemetry Go v1.47.0, Prometheus exporter v0.69.0, client_golang v1.24.1.
 
 ### 2026-10-06 — Per-object validation and exclusion
 
@@ -335,6 +351,7 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 - `test/integration/suite_test.go` — starts an ephemeral K3s cluster through testcontainers, installs the CRDs and wires the Gateway, Endpoint, Policy and AutoConfig controllers over a marker validator; it starts no webhook server (webhook reads run under the trimmed role only in e2e). The manager runs as the operator ServiceAccount, bound to the generated `config/rbac/role.yaml` and impersonated once a SubjectAccessReview allows it, so every test exercises the role as a deployment grants it
 - `test/integration/cache_test.go` — the suite's cache is wrapped (`typedCoreReads`) to record typed Secret and ConfigMap informers, Gets and Lists: `TestManager_CachesNoSecretOrConfigMapContent` fails if any appear (it sees only the tests that ran before it), and `TestManager_CachesNoLastAppliedAnnotation` fails if a cached Secret or ConfigMap keeps its annotations or `managedFields`. The manager is configured as `cmd/main.go` does: `controller.UncachedObjects()` for live reads and `controller.CacheByObject()` for the stripped metadata cache. Residual: names, labels and owners of every Secret and ConfigMap stay cached
 - The K3s API server runs with the `OwnerReferencesPermissionEnforcement` admission plugin, which clusters such as OpenShift enable by default. `rbac_test.go` proves the role covers the adoption path it guards
+- `test/integration/tracing_test.go` — the suite's manager records spans (`TraceKubeAPI` on its client): a gateway's status write is a client span of its reconcile, and no Kubernetes client span is a root
 - `test/integration/` — 42 tests across `gateway_test.go` (resource creation with owner refs, endpoint triggers, status), `status_test.go` (conditions and single-writer status), `autoconfig_test.go`, `policy_protection_test.go`, `validation_test.go`, `crd_validation_test.go` (the generated CRDs against the API server's schema and CEL rules), `configcheck_parity_test.go` (the pinned binary against the route check) and `rbac_test.go`
 - `test/e2e/e2e_suite_test.go` — testcontainers-go + K3s module: ephemeral K3s cluster per test run, image build + load, cert-manager + CRD install, full teardown. Requires rootful podman machine
 - `test/e2e/e2e_test.go` — 8 e2e specs: Controller Manager (pod running, metrics, sample CRs), Basic CE Gateway (create, endpoint lifecycle), Dragonfly Gateway, Istio Gateway, Dragonfly+Istio Gateway
@@ -354,6 +371,7 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 - Webhook infrastructure: ValidatingWebhookConfiguration (4 webhooks), webhook Service, cert-manager Issuer+Certificate, cert volume mount in Deployment
 - Metrics RBAC (when `metrics.enabled`): `<fullname>-metrics-auth-role` ClusterRole (TokenReviews and SubjectAccessReviews, bound to the operator ServiceAccount) and `<fullname>-metrics-reader` ClusterRole (GET `/metrics`, to bind to the scraper). Hand-copied from `config/rbac`; the render test pins both to the kustomize copies. The metrics Service carries `app.kubernetes.io/component: metrics`
 - Optional `ServiceMonitor` (`metrics.serviceMonitor.enabled`, default `false`; `additionalLabels`): selects only the metrics Service through the component label (the webhook Service shares the other selector labels, and the render test proves it is not selected). Uses `bearerTokenFile`, as `config/prometheus/monitor.yaml` does (accepted, though deprecated, by the prometheus-operator v0.77.1 CRD)
+- `telemetry:` values (`otlp.endpoint`, `otlp.nodeCollector`, `otlp.protocol`, `otlp.headersSecret`, `otlp.signals`, `traces.sampler`, `traces.samplerArg`, `resourceAttributes`, `logs.format`) render the `OTEL_*` variables and `--log-format`; with the defaults only `POD_NAME` is added; `nodeCollector` and `endpoint` together fail the render
 - Webhooks enabled by default (`webhooks.enabled=true`, `webhooks.certManager.enabled=true`); can be disabled or used with external CA bundle
 - CRDs in `crds/` directory (auto-installed by Helm)
 - Availability defaults: `replicaCount: 2`; a PodDisruptionBudget (`podDisruptionBudget.enabled`, default `true`, `maxUnavailable: 1`, selecting only the operator's own selector labels) rendered only when `replicaCount` > 1, so a single replica never blocks a node drain; soft pod anti-affinity (`preferredDuringSchedulingIgnoredDuringExecution`, hostname topology) when `affinity` is empty, replaced by a user-supplied `affinity`; `deployment.yaml` fails the render for `replicaCount` > 1 with `leaderElection.enabled: false` (two active controllers would fight over every object). The render test pins each, including the refusal (`expect_render_fails`)
@@ -366,7 +384,7 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 - `release.yml` — On push to main: runs lint/test/build/e2e/helm-lint gates, then auto-calculates next semver from conventional commits (`mathieudutour/github-tag-action`), builds+pushes multi-arch image to GHCR, releases Helm chart via chart-releaser-action, creates GitHub release with changelog
 
 ### Operational Documentation (`docs/`)
-- `runbook.md` — Health checks, Prometheus metrics, alerts, gateway lifecycle phases, troubleshooting, scaling, backup/recovery, log analysis
+- `runbook.md` — Health checks, Prometheus metrics, alerts, tracing, gateway lifecycle phases, troubleshooting, scaling, backup/recovery, log analysis
 - `upgrade-guide.md` — Pre-upgrade checklist, Helm/kustomize upgrade, CRD updates, rollback, version compatibility
 - Root `README.md` — Quick start, install instructions, development guide
 
