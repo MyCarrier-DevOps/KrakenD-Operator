@@ -18,8 +18,10 @@ package autoconfig
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -58,4 +60,39 @@ func TestClientSpans_RecordTheRedactedURLAndPropagateNothing(t *testing.T) {
 	if tp := headers.Get("Traceparent"); tp != "" {
 		t.Errorf("the spec host got traceparent %q, want none", tp)
 	}
+}
+
+// A failed fetch's error, which becomes a status message and a span event,
+// names the URL without its credentials.
+func TestFetcher_ErrorsCarryNoCredentials(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+	f := &httpFetcher{
+		strictClient:  &http.Client{Transport: http.DefaultTransport, Timeout: fetchTimeout},
+		lenientClient: &http.Client{Transport: http.DefaultTransport, Timeout: fetchTimeout},
+	}
+	withSecrets := func(base string) string {
+		return strings.Replace(base, "http://", "http://user:secret@", 1) + "/spec.json?token=abc123"
+	}
+	unreachable := "http://127.0.0.1:1"
+
+	for _, raw := range []string{withSecrets(srv.URL), withSecrets(unreachable)} {
+		_, err := f.Fetch(context.Background(), FetchSource{URL: raw})
+		if err == nil {
+			t.Fatalf("Fetch(%s) succeeded", raw)
+		}
+		if msg := err.Error(); strings.Contains(msg, "secret") || strings.Contains(msg, "abc123") {
+			t.Errorf("error %q carries a credential", msg)
+		}
+		if _, ok := errorsAsURLError(err); ok {
+			t.Errorf("error %q still wraps a *url.Error", err)
+		}
+	}
+}
+
+func errorsAsURLError(err error) (*url.Error, bool) {
+	var uerr *url.Error
+	return uerr, errors.As(err, &uerr)
 }
