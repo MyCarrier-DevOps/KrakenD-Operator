@@ -710,7 +710,9 @@ func (r *KrakenDGatewayReconciler) reconcileConfig(
 	in renderer.RenderInput,
 	output *renderer.RenderOutput,
 	edition v1alpha1.Edition,
-) (configResult, error) {
+) (_ configResult, retErr error) {
+	ctx, span := tracing.Start(ctx, r.Tracer, "gateway.config")
+	defer func() { tracing.End(span, retErr) }()
 	d, err := r.decide(ctx, gw, in, output, edition)
 	if err != nil {
 		res, err := r.keepApplied(ctx, gw, r.handleValidatorUnavailable(gw, before, err))
