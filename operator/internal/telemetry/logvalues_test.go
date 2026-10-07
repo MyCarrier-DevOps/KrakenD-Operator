@@ -194,8 +194,8 @@ func TestLogger_ASelfContainingValueDoesNotHangOrGrow(t *testing.T) {
 
 	for name, value := range map[string]any{"map": branching, "slice": list} {
 		t.Run(name, func(t *testing.T) {
-			if out := logsWithinTimeout(t, value); len(out) > 1<<20 || !strings.Contains(out, "<cycle>") {
-				t.Errorf("output is %d bytes, want under 1MiB containing <cycle>", len(out))
+			if out := logsWithinTimeout(t, value); len(out) > 1<<20 || !strings.Contains(out, "\\u003ccycle\\u003e") {
+				t.Errorf("output is %d bytes, want under 1MiB containing <cycle> (JSON-escaped)", len(out))
 			}
 		})
 	}
@@ -209,7 +209,7 @@ func TestLogger_AFanningOutValueIsTruncated(t *testing.T) {
 		node = []any{node, node}
 	}
 
-	if out := logsWithinTimeout(t, node); len(out) > 4<<20 || !strings.Contains(out, "<truncated>") {
-		t.Errorf("output is %d bytes, want under 4MiB containing <truncated>", len(out))
+	if out := logsWithinTimeout(t, node); len(out) > 4<<20 || !strings.Contains(out, "\\u003ctruncated\\u003e") {
+		t.Errorf("output is %d bytes, want under 4MiB containing <truncated> (JSON-escaped)", len(out))
 	}
 }
