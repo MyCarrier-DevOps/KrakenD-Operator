@@ -21,6 +21,8 @@ import (
 	"strings"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/types"
+
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
 )
@@ -77,5 +79,24 @@ func TestGatewayAdmission_AnAlreadyFailingEndpointDoesNotHideABrokenOne(t *testi
 	}
 	if text := responseText(resp); !strings.Contains(text, "default/victim") || strings.Contains(text, "default/stale") {
 		t.Errorf("denial = %q, want it to name default/victim only", text)
+	}
+}
+
+func TestGatewayAdmission_AMaskedEndpointIsJudgedOnItsOwn(t *testing.T) {
+	old, gw := editedGateway()
+	chk := &scriptedChecker{
+		verdicts: []configcheck.Verdict{{OK: true},
+			{OK: true, Masked: []types.NamespacedName{{Namespace: "default", Name: "ep"}}}},
+		endpointVerdicts: []configcheck.EndpointVerdict{{Reason: v1alpha1.ReasonEndpointInvalid}, {OK: true}},
+	}
+	v := &GatewayValidator{Client: fakeClient(old, testEndpoint("ep", "/a")), Checker: chk}
+
+	resp := review(t, v, "alice", gw, old)
+
+	if resp.Allowed || !strings.Contains(responseText(resp), "default/ep") {
+		t.Errorf("response = %+v; want a denial naming default/ep, whose lost entry the group never checked", resp.Result)
+	}
+	if got := strings.Join(chk.calls, ","); got != "root,group,endpoint,endpoint" {
+		t.Errorf("checks = %s, want the masked endpoint checked on its own with the update and without it", got)
 	}
 }
