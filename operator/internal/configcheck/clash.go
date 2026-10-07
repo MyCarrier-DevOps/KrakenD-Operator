@@ -130,5 +130,5 @@ func (c *Checker) Conflicts(ctx context.Context, gw *v1alpha1.KrakenDGateway,
 	if err != nil {
 		return RouteConflicts{}, fmt.Errorf("rendering config: %w", err)
 	}
-	return RouteConflicts{Lost: out.EntryConflicts}, nil
+	return RouteConflicts{Lost: out.EntryConflicts, Capped: out.RouteResolutionCapped}, nil
 }
