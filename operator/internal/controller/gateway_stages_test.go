@@ -2952,3 +2952,37 @@ func TestGatewayReconcile_TheAppliedConfigIsWrittenOnlyWhenTheChecksumChanges(t 
 		t.Errorf("a changed config wrote the gateway status %d time(s), want 2: the applied config, then the rest", got)
 	}
 }
+
+func TestGatewayReconcile_ARejectedRenderStillRevertsARolloutUndo(t *testing.T) {
+	const c1, c2, c3 = `{"version":3,"name":"c1"}`, `{"version":3,"name":"c2"}`, `{"version":3,"name":"c3"}`
+	gw := reconciledGateway()
+	c := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).Build()
+	rend, val := renderOf(c1), &countingValidator{}
+	r := newTestGatewayReconciler(c, rend, val)
+	for _, config := range []string{c1, c2} {
+		rend.output = renderOf(config).output
+		if err := reconcileGateway(t, r, gw); err != nil {
+			t.Fatalf("applying %s: %v", config, err)
+		}
+	}
+	// Someone rolls the Deployment back to the first config's revision.
+	sum1 := hash.SHA256Hex([]byte(c1))
+	var dep appsv1.Deployment
+	getObject(t, c, gw, gw.Name, &dep)
+	dep.Spec.Template.Annotations[resources.PostRestartJobChecksumAnnotation] = sum1
+	for i := range dep.Spec.Template.Spec.Volumes {
+		if v := &dep.Spec.Template.Spec.Volumes[i]; v.Name == "config" {
+			v.ConfigMap.Name = resources.ConfigMapName(gw, sum1)
+		}
+	}
+	if err := c.Update(context.Background(), &dep); err != nil {
+		t.Fatal(err)
+	}
+
+	rend.output, val.err = renderOf(c3).output, rejectedBy("- at '/endpoints/0/endpoint': bad")
+	_ = reconcileGateway(t, r, gw)
+
+	if got, want := mountedConfig(t, c, gw), resources.ConfigMapName(gw, hash.SHA256Hex([]byte(c2))); got != want {
+		t.Errorf("Deployment mounts %q, want the stored config's %q restored", got, want)
+	}
+}
