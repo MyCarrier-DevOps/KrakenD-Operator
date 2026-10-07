@@ -17,9 +17,14 @@ limitations under the License.
 package configcheck
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"maps"
 	"slices"
+	"strings"
+
+	"k8s.io/apimachinery/pkg/types"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
@@ -48,6 +53,16 @@ const (
 // contentKey identifies the check of out, as edition, in mode.
 func contentKey(out *renderer.RenderOutput, edition v1alpha1.Edition, mode string) string {
 	return out.Checksum + "/" + string(edition) + "/" + mode
+}
+
+// MaskedEndpoints returns the endpoints that lost an entry in out, sorted by
+// namespace/name: a check of out says nothing about the entries it left out.
+func MaskedEndpoints(out *renderer.RenderOutput) []types.NamespacedName {
+	names := slices.Collect(maps.Keys(out.EntryConflicts))
+	slices.SortFunc(names, func(a, b types.NamespacedName) int {
+		return cmp.Or(strings.Compare(a.Namespace, b.Namespace), strings.Compare(a.Name, b.Name))
+	})
+	return names
 }
 
 // Group is a gateway root with Endpoints as its only endpoints, as the
@@ -97,13 +112,19 @@ func (c *Checker) CheckPolicy(ctx context.Context, policy *v1alpha1.KrakenDBacke
 }
 
 // lintInput renders in and lints the render, answering from memo when it
-// already judged the same content.
+// already judged the same content. The verdict's Masked comes from this
+// render, never from the memo.
 func (c *Checker) lintInput(ctx context.Context, in renderer.RenderInput, memo Memo) (Verdict, error) {
 	out, err := c.renderer.Render(in)
 	if err != nil {
 		return Verdict{}, fmt.Errorf("rendering config: %w", err)
 	}
-	return c.remembered(ctx, in, out, modeLint, c.validator.Lint, memo)
+	v, err := c.remembered(ctx, in, out, modeLint, c.validator.Lint, memo)
+	if err != nil {
+		return Verdict{}, err
+	}
+	v.Masked = MaskedEndpoints(out)
+	return v, nil
 }
 
 // remembered runs validate on out, rendered from in, unless memo already
