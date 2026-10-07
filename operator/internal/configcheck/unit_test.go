@@ -191,6 +191,20 @@ func TestCheckRoot_KeepsABoundedOutput(t *testing.T) {
 		if len(kept.Output) > maxStoredOutput {
 			t.Errorf("memo keeps %d bytes of output under %s, want at most %d", len(kept.Output), key, maxStoredOutput)
 		}
+		if kept.Rejection != nil && len(kept.Rejection.Output) > maxStoredOutput {
+			t.Errorf("memo keeps %d bytes of rejection output under %s, want at most %d",
+				len(kept.Rejection.Output), key, maxStoredOutput)
+		}
+		for _, f := range kept.Findings {
+			if len(f.Message) > maxStoredOutput {
+				t.Errorf("memo keeps a %d byte finding under %s, want at most %d", len(f.Message), key, maxStoredOutput)
+			}
+		}
+	}
+	for _, f := range v.Findings {
+		if len(f.Message) > maxStoredOutput {
+			t.Errorf("a finding is %d bytes, want at most %d", len(f.Message), maxStoredOutput)
+		}
 	}
 	if len(v.Output) > maxStoredOutput || !strings.HasSuffix(v.Output, "...") {
 		t.Errorf("verdict output is %d bytes, want it cut to %d with an ellipsis", len(v.Output), maxStoredOutput)
