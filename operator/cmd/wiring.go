@@ -36,6 +36,9 @@ import (
 	webhooksetup "github.com/mycarrier-devops/krakend-operator/internal/webhook"
 )
 
+// instrumentationScope names the operator's tracer and meter.
+const instrumentationScope = "github.com/mycarrier-devops/krakend-operator"
+
 // gatewayCheckWorkers is how many gateway checks the gateway controller runs at
 // once: it reconciles with this many workers (wireValidation sets its
 // MaxConcurrentReconciles) and each reconcile holds one checker slot at a time.
@@ -182,8 +185,6 @@ func telemetryConfig(level otellog.Severity, format telemetry.LogFormat) telemet
 	}
 }
 
-// instrumentationScope names the operator's tracer and meter.
-const instrumentationScope = "github.com/mycarrier-devops/krakend-operator"
 
 // newInstrumentation returns the operator's tracer and metrics recorder over
 // tel's providers.
