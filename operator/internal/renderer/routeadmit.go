@@ -83,7 +83,8 @@ func dropRouteLosers(flat []flatEndpoint, conflicted map[types.NamespacedName][]
 
 // routeLosers admits flat's entries to KrakenD's router in serving order
 // (servedBefore). An entry loses to the first older entry of another
-// KrakenDEndpoint it clashes with:
+// KrakenDEndpoint it clashes with, whether that entry is served or was left
+// out itself:
 //   - gin refuses to register the entry's route, or the OPTIONS route
 //     router.auto_options adds for its path, next to the older entry's (the
 //     route check's rule, on the path the validation copy registers);
@@ -107,13 +108,7 @@ func routeLosers(flat []flatEndpoint, rules routeRules) routeAdmission {
 		if refusedAlone(routes) {
 			continue // its own endpoint's check refuses it
 		}
-		if rules.eeWildcards {
-			if winner, detail, ok := eeWildcardOverlap(older, entry); ok {
-				adm.losers[i] = EntryConflict{Endpoint: entry.path, Method: fe.Entry.Method, Winner: winner, Detail: detail}
-				continue
-			}
-		}
-		winner, detail, lost := olderClash(dropped, entry.source, routes)
+		winner, detail, lost := olderClash(rules, older, dropped, entry, routes)
 		if !lost {
 			var refused bool
 			winner, detail, refused = registerEntry(engine, served, routes, fe.Source)
@@ -137,6 +132,7 @@ func routeLosers(flat []flatEndpoint, rules routeRules) routeAdmission {
 		for _, r := range routes {
 			dropped = append(dropped, routedRoute{route: r, source: fe.Source})
 		}
+		older = append(older, entry)
 	}
 	return adm
 }
@@ -213,12 +209,19 @@ func routesOf(routed []routedRoute) []ginRoute {
 }
 
 // olderClash reports the first older entry of another KrakenDEndpoint that
-// was left out and that one of routes clashes with in gin, pairwise. Served
-// entries are checked by registering routes in the engine (registerEntry).
-func olderClash(dropped []routedRoute, source types.NamespacedName,
+// entry clashes with without registering it: under the EE wildcard rule,
+// against every older entry, and in gin, pairwise, against the routes of the
+// older entries left out. Served entries are checked by registering entry in
+// the engine (registerEntry).
+func olderClash(rules routeRules, older []routedEntry, dropped []routedRoute, entry routedEntry,
 	routes []ginRoute) (types.NamespacedName, string, bool) {
+	if rules.eeWildcards {
+		if winner, detail, ok := eeWildcardOverlap(older, entry); ok {
+			return winner, detail, true
+		}
+	}
 	for _, d := range dropped {
-		if d.source == source {
+		if d.source == entry.source {
 			continue
 		}
 		for _, r := range routes {
