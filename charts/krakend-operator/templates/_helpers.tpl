@@ -81,3 +81,15 @@ base64 encoding of the PEM on one line, which is what the API server expects.
 {{- $ca | nospace -}}
 {{- end -}}
 {{- end }}
+
+{{/*
+OTEL_RESOURCE_ATTRIBUTES from a map: key=value pairs, sorted by key, joined
+with commas.
+*/}}
+{{- define "krakend-operator.resourceAttributes" -}}
+{{- $pairs := list -}}
+{{- range $key, $value := . -}}
+{{- $pairs = append $pairs (printf "%s=%s" $key (toString $value)) -}}
+{{- end -}}
+{{- join "," $pairs -}}
+{{- end }}
