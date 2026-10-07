@@ -19,6 +19,8 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net/http"
 	"os"
 	"os/exec"
 	"reflect"
@@ -29,6 +31,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -96,6 +99,7 @@ type blameWorld struct {
 	checker   *verdictRecorder
 	gateways  *controller.KrakenDGatewayReconciler
 	endpoints *webhook.EndpointValidator
+	policies  *webhook.PolicyValidator
 }
 
 func newBlameWorld(t *testing.T, judge func(config string) (string, bool), objs ...client.Object) *blameWorld {
@@ -118,6 +122,7 @@ func newBlameWorld(t *testing.T, judge func(config string) (string, bool), objs 
 			Recorder: record.NewFakeRecorder(100), Renderer: renderer.New(renderer.Options{}), Checker: checker,
 			Clock: clock.RealClock{}, LicenseParser: licenseutil.NewX509LicenseParser()},
 		endpoints: &webhook.EndpointValidator{Client: c, Checker: checker},
+		policies:  &webhook.PolicyValidator{Client: c, Checker: checker},
 	}
 }
 
@@ -468,5 +473,36 @@ func TestBlame_AForeignPolicyIsNamedAlikeOnBothPaths(t *testing.T) {
 	}
 	if denied == nil || !strings.Contains(denied.Error(), words) || strings.Contains(denied.Error(), "tenant-p-secret") {
 		t.Errorf("the create's denial = %v, want it to say %q, without the policy's content", denied, words)
+	}
+}
+
+// TestBlame_APolicyChangeIsDeniedByTheEndpointItNewlyBreaks: both endpoints
+// use tenant-p's policy. tenant-a's already fails on its own and was never
+// judged, so it still counts as served. A change to the policy that breaks
+// tenant-b's endpoint is denied for tenant-b's endpoint, although the gateway
+// with the change fails for tenant-a's too: an endpoint that already fails
+// never masks one the change newly breaks.
+func TestBlame_APolicyChangeIsDeniedByTheEndpointItNewlyBreaks(t *testing.T) {
+	p := rawPolicy("tenant-p", "p", `{"tenant-p/config":{"mode":"old"}}`)
+	a := usingPolicy(tenantEndpoint("tenant-a", "a", "/a", "http://already.invalid"), "tenant-p", "p")
+	b := usingPolicy(tenantEndpoint("tenant-b", "b", "/b", "http://b.svc"), "tenant-p", "p")
+	w := newBlameWorld(t, func(config string) (string, bool) {
+		switch {
+		case strings.Contains(config, "already.invalid"):
+			return "- at '/endpoints/0/backend/0/host/0': already.invalid is refused", true
+		case strings.Contains(config, "breaks-b") && strings.Contains(config, "b.svc"):
+			return "- at '/endpoints/0/backend/0/extra_config': b.svc cannot take breaks-b", true
+		}
+		return "", false
+	}, p, a, b)
+	changed := p.DeepCopy()
+	changed.Spec.Raw = &runtime.RawExtension{Raw: []byte(`{"tenant-p/config":{"mode":"breaks-b"}}`)}
+
+	_, err := w.policies.ValidateUpdate(context.Background(), p, changed)
+
+	var status apierrors.APIStatus
+	if !errors.As(err, &status) || status.Status().Code != http.StatusUnprocessableEntity ||
+		!strings.Contains(err.Error(), "tenant-b/b") || strings.Contains(err.Error(), "tenant-a/a") {
+		t.Errorf("policy update: %v; want a 422 naming tenant-b/b alone", err)
 	}
 }
