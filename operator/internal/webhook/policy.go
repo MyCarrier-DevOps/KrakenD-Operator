@@ -274,6 +274,9 @@ func judgePolicyUse(ctx context.Context, chk ConfigChecker, memo configcheck.Mem
 		return prefix + brokenList(s, warningLimit-len(prefix)), "", nil
 	case s.stopped != nil:
 		return "", "", s.stopped
+	case s.already && old == nil:
+		return "", fmt.Sprintf("gateway %s/%s: endpoints that use this policy already fail validation "+
+			"whatever this policy holds", gw.Namespace, gw.Name), nil
 	case s.already:
 		return "", fmt.Sprintf("gateway %s/%s: endpoints that use this policy already fail validation with "+
 			"the stored policy", gw.Namespace, gw.Name), nil
