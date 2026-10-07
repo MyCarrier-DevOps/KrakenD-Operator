@@ -224,7 +224,7 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		ServiceName:  "_spec",
 		DefaultHost:  extractHost(ac.Spec.OpenAPI.URL),
 	})
-	tracing.End(evaluate, err)
+	tracing.EndFailed(evaluate, err, "the CUE evaluation failed")
 	if err != nil {
 		return r.handleCUEError(ctx, &ac, err, warnings)
 	}
@@ -263,7 +263,7 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		GatewayRef:       ac.Spec.GatewayRef,
 		ComponentSchemas: componentSchemas,
 	})
-	tracing.End(generate, err)
+	tracing.EndFailed(generate, err, "endpoint generation failed")
 	if err != nil {
 		return r.handleCUEError(ctx, &ac, fmt.Errorf("generating endpoints: %w", err), warnings)
 	}
