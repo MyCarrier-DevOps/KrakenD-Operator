@@ -30,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
@@ -576,6 +577,88 @@ func TestPolicyAdmission_AChangeThatBreaksNothingOnALargeGatewayIsAdmitted(t *te
 	}
 }
 
+// A policy that fails krakend check on its own, with the written content and
+// the stored one alike, makes its endpoints fail both ways though the stored
+// group passed: the write only warns when the scan finishes, so it is never a
+// 422 when the admission time ends first.
+func TestPolicyAdmission_EndpointsOfAPolicyFailingAloneAreNotDecidedByTheGroup(t *testing.T) {
+	names := make([]string, 300)
+	for i := range names {
+		names[i] = fmt.Sprintf("uses-p-%03d", i)
+	}
+	policyAlone := configcheck.EndpointVerdict{Reason: v1alpha1.ReasonPolicyInvalid, PoliciesFailAlone: true}
+	bad := configcheck.Verdict{Output: "bad"}
+	run := func(delay, deadline time.Duration) (admission.Warnings, error) {
+		// The policy alone, new and stored, the root, the group, the stored
+		// group, then the stored policy alone.
+		chk := &scriptedChecker{delay: delay,
+			verdicts:         []configcheck.Verdict{bad, bad, {OK: true}, {Output: "x"}, {OK: true}, bad},
+			endpointVerdicts: []configcheck.EndpointVerdict{policyAlone, policyAlone}}
+		ctx, cancel := context.WithTimeout(context.Background(), deadline)
+		defer cancel()
+		return (&PolicyValidator{Client: fakeClient(policyUsers(names...)...), Checker: chk}).
+			ValidateUpdate(ctx, testPolicy(`{}`), testPolicy(`{"x":{}}`))
+	}
+
+	warnings, err := run(0, time.Minute)
+	if err != nil || len(warnings) != 1 || !strings.Contains(warnings[0], "already fail validation") {
+		t.Fatalf("complete scan: warnings %q, err %v; want admitted with the already-fail warning", warnings, err)
+	}
+	_, err = run(30*time.Millisecond, 2*time.Second)
+	if err == nil || apierrors.IsInvalid(err) {
+		t.Errorf("scan cut off: err = %v, want a 500: the complete scan admits", err)
+	}
+}
+
+// An endpoint the stored render masked, failing both ways, keeps the write
+// from being decided: a scan that ends by the deadline is a 500.
+func TestPolicyAdmission_AMaskedEndpointFailingBothWaysLeavesACutOffScanUndecided(t *testing.T) {
+	masked := configcheck.Verdict{OK: true, Masked: []types.NamespacedName{{Namespace: "default", Name: "ep"}}}
+	epFail := configcheck.EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid}
+	// Calls: the policy alone, the root, the group, the stored group, the
+	// stored policy alone, ep, ep with the stored policy, then zz-other, which
+	// cannot run.
+	chk := &scriptedChecker{err: errors.New("no slot"), failCall: 8, failOnly: true,
+		verdicts:         []configcheck.Verdict{{OK: true}, {OK: true}, {Output: "x"}, masked},
+		endpointVerdicts: []configcheck.EndpointVerdict{epFail, epFail}}
+	v := &PolicyValidator{Client: fakeClient(policyUsers("ep", "zz-other")...), Checker: chk}
+
+	resp := review(t, v, "alice", testPolicy(`{"x":{}}`), testPolicy(`{}`))
+
+	if resp.Allowed || resp.Result.Code != http.StatusInternalServerError {
+		t.Errorf("response = %+v, warnings %q; want a 500", resp.Result, resp.Warnings)
+	}
+}
+
+// A masked endpoint whose own check cannot run leaves the write undecided: a
+// 500, not a 422 that counts it as not checked.
+func TestPolicyAdmission_AMaskedEndpointThatCannotBeCheckedLeavesTheWriteUndecided(t *testing.T) {
+	masked := configcheck.Verdict{OK: true, Masked: []types.NamespacedName{{Namespace: "default", Name: "ep"}}}
+	chk := &scriptedChecker{err: errors.New("no slot"), failCall: 6, failOnly: true,
+		verdicts: []configcheck.Verdict{{OK: true}, {OK: true}, {Output: "x"}, masked}}
+	v := &PolicyValidator{Client: fakeClient(policyUsers("ep", "zz-other")...), Checker: chk}
+
+	resp := review(t, v, "alice", testPolicy(`{"x":{}}`), testPolicy(`{}`))
+
+	if resp.Allowed || resp.Result.Code != http.StatusInternalServerError {
+		t.Errorf("response = %+v, warnings %q; want a 500", resp.Result, resp.Warnings)
+	}
+}
+
+// On a create the stored group is the group with the policy rendered empty,
+// under the policy's own name: with no policy at all the renderer leaves the
+// endpoints out, and the baseline would say nothing of them.
+func TestPolicyAdmission_ACreateChecksTheStoredGroupWithTheEmptyPolicy(t *testing.T) {
+	chk := &scriptedChecker{verdicts: []configcheck.Verdict{{OK: true}, {OK: true}, {Output: "x"}}}
+	v := &PolicyValidator{Client: fakeClient(referencing()...), Checker: chk}
+
+	review(t, v, "alice", testPolicy(`{"x":{}}`), nil)
+
+	if got := strings.Join(chk.groupOverrides, " "); got != "default/p default/p" {
+		t.Errorf("group checks were handed policies %s, want the written policy and the empty one, both as default/p", got)
+	}
+}
+
 func TestPolicyAdmission_NamingStopsBeforeTheBudget(t *testing.T) {
 	names := make([]string, 15)
 	var endpointVerdicts []configcheck.EndpointVerdict
@@ -652,13 +735,14 @@ func TestPolicyAdmission_AScanThatStoppedWithoutADenialIs500(t *testing.T) {
 		verdicts []configcheck.EndpointVerdict
 		failCall int
 	}{
-		// The stored group fails too, so the write is not decided before the scan.
+		// The stored group fails too, so the write is not decided before the scan; with
+		// the group passing, as in the second case, no stored group is checked.
 		{"after an endpoint that already failed", policyUsers("stale", "zz-next"),
 			configcheck.Verdict{Output: "x"}, configcheck.Verdict{Output: "x"},
 			[]configcheck.EndpointVerdict{epFail, epFail}, 7},
 		{"on a masked endpoint", referencing(),
 			configcheck.Verdict{OK: true, Masked: []types.NamespacedName{{Namespace: "default", Name: "uses-p"}}},
-			configcheck.Verdict{OK: true}, nil, 4},
+			configcheck.Verdict{}, nil, 4},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
