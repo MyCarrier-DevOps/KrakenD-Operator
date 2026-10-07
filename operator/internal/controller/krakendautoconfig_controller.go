@@ -501,9 +501,11 @@ func (r *KrakenDAutoConfigReconciler) recordSyncedFailure(
 	reason string,
 	syncMessage string,
 	warnings *inputWarnings,
-) (retErr error) {
+) error {
+	// The span records a conflicting write, which the return value does not.
+	var spanErr error
 	ctx, span := tracing.Start(ctx, r.Tracer, "autoconfig.status")
-	defer func() { tracing.End(span, retErr) }()
+	defer func() { tracing.End(span, spanErr) }()
 	// A failure can list every operation or write that failed, which would
 	// overrun the condition's size limit: bound the status and event text.
 	message := truncateMessage(syncMessage)
@@ -520,9 +522,11 @@ func (r *KrakenDAutoConfigReconciler) recordSyncedFailure(
 	r.metrics().SetAutoConfigSynced(client.ObjectKeyFromObject(ac), false)
 	if err := r.Status().Update(ctx, ac); err != nil {
 		if errors.IsConflict(err) {
+			spanErr = err
 			return nil
 		}
-		return fmt.Errorf("updating %s status: %w", reason, err)
+		spanErr = fmt.Errorf("updating %s status: %w", reason, err)
+		return spanErr
 	}
 	warnings.emit(r.Recorder, ac)
 	r.Recorder.Event(ac, "Warning", reason, message)
