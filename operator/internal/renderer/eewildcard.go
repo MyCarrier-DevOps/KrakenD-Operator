@@ -36,7 +36,8 @@ func IsEEWildcard(path string) bool {
 
 // rewriteEEWildcards replaces, in place, the trailing "*" of every EE
 // wildcard endpoint with eeWildcardParam. Endpoints are never removed, so the
-// copy stays index-aligned with the rendered config and its Sources.
+// copy stays index-aligned with the rendered config: lint pointer lines name
+// rendered positions.
 func rewriteEEWildcards(endpoints []any) bool {
 	changed := false
 	for _, ep := range endpoints {
