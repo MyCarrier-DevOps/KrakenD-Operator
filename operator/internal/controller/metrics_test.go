@@ -1,8 +1,12 @@
 package controller
 
 import (
+	"context"
 	"strings"
 	"testing"
+
+	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
 )
 
 func TestConfigValidationFailures_HelpSaysItCountsChangesNotReconciles(t *testing.T) {
@@ -32,5 +36,25 @@ func TestGatewayReconcile_RecordsIntoTheInjectedMetrics(t *testing.T) {
 	}
 	if got, ok := metricValue(t, reg, "krakend_operator_endpoints", "namespace", gw.Namespace, "name", gw.Name); !ok || got != 0 {
 		t.Errorf("endpoints = %v (present %v), want a 0 series for the gateway", got, ok)
+	}
+}
+
+// An AutoConfig reconciler given a recorder records into it.
+func TestAutoConfigReconcile_RecordsIntoTheInjectedMetrics(t *testing.T) {
+	ac := testAutoConfig()
+	c := fakeClientBuilder().WithObjects(ac, testCUEDefinitionsCM()).WithStatusSubresource(ac).Build()
+	f, ce, fi, g := defaultMocks()
+	r := newACReconciler(c, f, ce, fi, g)
+	m, reg := testMetrics(t)
+	r.Metrics = m
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Namespace: ac.Namespace, Name: ac.Name},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, ok := metricValue(t, reg, "krakend_operator_autoconfig_synced", "namespace", ac.Namespace, "name", ac.Name); !ok || got != 1 {
+		t.Errorf("autoconfig_synced = %v (present %v), want 1", got, ok)
 	}
 }
