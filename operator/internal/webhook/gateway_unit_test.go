@@ -14,7 +14,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-
 package webhook
 
 import (
@@ -51,5 +50,32 @@ func TestGatewayAdmission_AnUpdateThatBreaksAServedEndpointIsDeniedByName(t *tes
 	if got := strings.Join(chk.calls, ","); got != "root,group,endpoint,endpoint" {
 		t.Errorf("checks = %s, want the root, the served endpoints with the new root, then the endpoint on its "+
 			"own with the new root and with the stored one", got)
+	}
+}
+
+// An endpoint that failed before the update, and that the gateway has not
+// excluded yet, must not hide one that the update breaks.
+func TestGatewayAdmission_AnAlreadyFailingEndpointDoesNotHideABrokenOne(t *testing.T) {
+	old, gw := editedGateway()
+	epFail := configcheck.EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid}
+	chk := &scriptedChecker{
+		// The root, the served endpoints with the update; then the served
+		// endpoints with the stored root, which stale fails too: a judgement
+		// that would hide victim, so the webhook must not rely on it.
+		verdicts: []configcheck.Verdict{{OK: true}, {Output: "x"}, {Output: "x"}},
+		endpointVerdicts: []configcheck.EndpointVerdict{
+			epFail, epFail, // stale: fails with the update and without it
+			epFail, {OK: true}, // victim: fails only with the update
+		},
+	}
+	v := &GatewayValidator{Client: fakeClient(old, testEndpoint("stale", "/a"), testEndpoint("victim", "/b")), Checker: chk}
+
+	resp := review(t, v, "alice", gw, old)
+
+	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("response = %+v, warnings %q; want a 422", resp.Result, resp.Warnings)
+	}
+	if text := responseText(resp); !strings.Contains(text, "default/victim") || strings.Contains(text, "default/stale") {
+		t.Errorf("denial = %q, want it to name default/victim only", text)
 	}
 }
