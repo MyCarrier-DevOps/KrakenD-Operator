@@ -26,33 +26,28 @@ import (
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// createRejectedGateway creates a gateway whose only endpoint is at path,
-// which the suite's validator rejects, and waits until the rejection is
-// recorded in status.
-func createRejectedGateway(t *testing.T, name, path string) *v1alpha1.KrakenDGateway {
+// rootRejecting is a gateway extraConfig the suite's validator rejects: its
+// key carries marker, so the gateway root fails on its own and no endpoint
+// is to blame.
+func rootRejecting(marker string) *runtime.RawExtension {
+	return &runtime.RawExtension{Raw: []byte(`{"test` + marker + `":{}}`)}
+}
+
+// createRejectedGateway creates a gateway whose root the suite's validator
+// rejects (rootRejecting), and waits until the rejection is recorded in
+// status.
+func createRejectedGateway(t *testing.T, name, marker string) *v1alpha1.KrakenDGateway {
 	t.Helper()
 	ns := testNamespace(t)
-	ep := &v1alpha1.KrakenDEndpoint{
-		ObjectMeta: metav1.ObjectMeta{Name: name + "-ep", Namespace: ns},
-		Spec: v1alpha1.KrakenDEndpointSpec{
-			GatewayRef: v1alpha1.GatewayRef{Name: name},
-			Endpoints: []v1alpha1.EndpointEntry{{
-				Endpoint: path,
-				Method:   "GET",
-				Backends: []v1alpha1.BackendSpec{{Host: []string{"http://svc:8080"}, URLPattern: "/x"}},
-			}},
-		},
-	}
-	if err := k8sClient.Create(ctx, ep); err != nil {
-		t.Fatalf("create endpoint: %v", err)
-	}
 	gw := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
 		Spec: v1alpha1.KrakenDGatewaySpec{
-			Version: "2.9", Edition: v1alpha1.EditionCE, Config: v1alpha1.GatewayConfig{},
+			Version: "2.9", Edition: v1alpha1.EditionCE,
+			Config: v1alpha1.GatewayConfig{ExtraConfig: rootRejecting(marker)},
 		},
 	}
 	if err := k8sClient.Create(ctx, gw); err != nil {
@@ -64,8 +59,8 @@ func createRejectedGateway(t *testing.T, name, path string) *v1alpha1.KrakenDGat
 			return err
 		}
 		cond := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionConfigValid)
-		if cond == nil || cond.Status != metav1.ConditionFalse {
-			return fmt.Errorf("ConfigValid = %+v, want False", cond)
+		if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != v1alpha1.ReasonGatewayRootInvalid {
+			return fmt.Errorf("ConfigValid = %+v, want False/%s", cond, v1alpha1.ReasonGatewayRootInvalid)
 		}
 		return nil
 	})
