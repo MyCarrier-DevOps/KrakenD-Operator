@@ -208,3 +208,28 @@ func TestAutoConfigReconcile_AnEndpointCheckThatCannotRunFailsTheSync(t *testing
 		t.Errorf("Synced = %+v; want ValidatorUnavailable and nothing written", synced)
 	}
 }
+
+// Another tenant's endpoint on the same gateway carries a value its own
+// check refuses. A candidate's checks never render it, so it can neither hold
+// the candidate nor appear in a hold.
+func TestAutoConfigReconcile_AnotherEndpointsFailureNeverReachesACandidate(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	foreign := testEndpoint("orders", "/orders")
+	foreign.Namespace = "tenant-z"
+	foreign.Spec.GatewayRef.Namespace = "default"
+	foreign.Spec.Endpoints[0].Backends[0].Host = []string{"http://SECRET-PASS@secret.invalid"}
+	val := &contentValidator{markers: map[string]string{"secret.invalid": "SECRET-PASS is refused"}}
+	c := fakeClientBuilder().WithObjects(ac, cm, testGateway(), foreign).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Checker = newTestChecker(c, val)
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatal(err)
+	}
+
+	if failed := getAC(t, c, ac).Status.FailedOperations; len(failed) != 0 || !endpointExists(t, c, "test-ac-listusers") {
+		t.Errorf("failedOperations = %+v; want listusers written: another endpoint's failure is not its", failed)
+	}
+}
