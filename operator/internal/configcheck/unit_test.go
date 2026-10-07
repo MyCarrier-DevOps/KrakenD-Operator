@@ -534,3 +534,24 @@ func TestCheckEndpoint_FailingOnlyWithAForeignPolicyBlamesThePolicy(t *testing.T
 		t.Errorf("message %q must name other/q and quote nothing", msg)
 	}
 }
+
+func TestCheckEndpoint_JudgesWithTheCallersPolicies(t *testing.T) {
+	bad := policy("p")
+	bad.Spec.Raw = &runtime.RawExtension{Raw: []byte(`{"x/bad-policy":{}}`)}
+	val := &judgeValidator{judge: func(config string) error {
+		if strings.Contains(config, "x/bad-policy") {
+			return rejectedOutput("bad policy")
+		}
+		return nil
+	}}
+	chk := newChecker(val, policy("p"))
+
+	v, err := chk.CheckEndpoint(context.Background(), EndpointUnit{
+		Gateway: gateway(v1alpha1.EditionCE), Endpoint: withPolicy(endpoint("uses-p", "/a"), "p"),
+		Policies: map[string]*v1alpha1.KrakenDBackendPolicy{"ns/p": bad},
+	}, nil)
+
+	if err != nil || v.Reason != v1alpha1.ReasonPolicyInvalid {
+		t.Errorf("verdict = %+v, %v; want PolicyInvalid from the policies the caller holds, not the stored one", v, err)
+	}
+}
