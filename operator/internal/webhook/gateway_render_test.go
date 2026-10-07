@@ -72,6 +72,9 @@ func TestGatewayAdmission_Render(t *testing.T) {
 		{"update of a gateway whose endpoints already fail together", old, []client.Object{ep},
 			[]configcheck.Verdict{ok, fail, fail}, []configcheck.EndpointVerdict{epOK}, true,
 			"root,group,endpoint,group", "already fail validation together"},
+		{"update makes the endpoints fail only together", old, []client.Object{ep},
+			[]configcheck.Verdict{ok, fail, ok}, []configcheck.EndpointVerdict{epOK}, false,
+			"root,group,endpoint,group", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
