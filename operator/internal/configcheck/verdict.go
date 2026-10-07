@@ -88,6 +88,7 @@ type Refusal struct {
 func Rejected(rejection *renderer.ValidationError, in renderer.RenderInput, out *renderer.RenderOutput) Verdict {
 	atts := renderer.Attribute(out.JSON, out.Sources, rejection.Output)
 	return Verdict{
+		Output:   rejection.Output,
 		Findings: findingsFrom(atts, out.JSON, in.Endpoints, rejection.Output), Rejection: rejection,
 		Stage: rejection.Stage, Refusals: refusalsFrom(rejection.Refusals, out.Sources),
 		RefusalsCapped: rejection.RefusalsCapped,
