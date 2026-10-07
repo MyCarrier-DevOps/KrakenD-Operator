@@ -69,10 +69,15 @@ func TestNoRequestPathStartsAFreshContext(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	for file := range freshContexts {
+		if _, ok := got[file]; !ok {
+			got[file] = 0 // an allowed file with none left is stale
+		}
+	}
 	for file, n := range got {
-		if n > freshContexts[file] {
+		if allowed := freshContexts[file]; n != allowed {
 			t.Errorf("%s calls context.Background() or context.TODO() %d times, %d allowed: "+
-				"take the caller's context", file, n, freshContexts[file])
+				"take the caller's context, or update the allowance", file, n, allowed)
 		}
 	}
 }
