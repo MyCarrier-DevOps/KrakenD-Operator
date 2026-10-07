@@ -43,6 +43,7 @@ import (
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/fieldindex"
+	"github.com/mycarrier-devops/krakend-operator/internal/tracing"
 )
 
 // KrakenDBackendPolicyReconciler reconciles a KrakenDBackendPolicy object.
@@ -64,7 +65,11 @@ type KrakenDBackendPolicyReconciler struct {
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 // Reconcile counts endpoint references and sets the Ready condition.
-func (r *KrakenDBackendPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *KrakenDBackendPolicyReconciler) Reconcile(
+	ctx context.Context, req ctrl.Request,
+) (_ ctrl.Result, retErr error) {
+	ctx, span := startReconcile(ctx, r.Tracer, "KrakenDBackendPolicy", req)
+	defer func() { tracing.End(span, retErr) }()
 	log := logf.FromContext(ctx)
 
 	var policy v1alpha1.KrakenDBackendPolicy
@@ -74,6 +79,7 @@ func (r *KrakenDBackendPolicyReconciler) Reconcile(ctx context.Context, req ctrl
 		}
 		return ctrl.Result{}, fmt.Errorf("getting policy %s: %w", req.NamespacedName, err)
 	}
+	spanGeneration(ctx, policy.Generation)
 
 	// Capture original status for change detection
 	origRef := policy.Status.ReferencedBy
@@ -107,8 +113,11 @@ func (r *KrakenDBackendPolicyReconciler) Reconcile(ctx context.Context, req ctrl
 	if policy.Status.ReferencedBy != origRef ||
 		policy.Status.ObservedGeneration != origGeneration ||
 		!conditionsEqual(origConditions, policy.Status.Conditions) {
-		if err := r.Status().Update(ctx, &policy); err != nil {
-			return ctrl.Result{}, fmt.Errorf("updating policy status: %w", err)
+		sctx, status := tracing.Start(ctx, r.Tracer, "policy.status")
+		updateErr := r.Status().Update(sctx, &policy)
+		tracing.End(status, updateErr)
+		if updateErr != nil {
+			return ctrl.Result{}, fmt.Errorf("updating policy status: %w", updateErr)
 		}
 		recordConditionTransition(r.Recorder, &policy, prevReady, ready)
 	}
@@ -146,6 +155,8 @@ const maxNamedReferrers = 5
 func (r *KrakenDBackendPolicyReconciler) reconcileProtection(
 	ctx context.Context, policy *v1alpha1.KrakenDBackendPolicy, referrers []v1alpha1.KrakenDEndpoint,
 ) (done bool, err error) {
+	ctx, span := tracing.Start(ctx, r.Tracer, "policy.protection")
+	defer func() { tracing.End(span, err) }()
 	if policy.DeletionTimestamp.IsZero() {
 		if controllerutil.AddFinalizer(policy, v1alpha1.PolicyProtectionFinalizer) {
 			if err := r.Update(ctx, policy); err != nil {
