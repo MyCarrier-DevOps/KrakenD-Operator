@@ -102,6 +102,7 @@ func TestGatewayReconcile_SpansEachStageUnderItsParent(t *testing.T) {
 		{"gateway.acceptance", "reconcile KrakenDGateway", nil},
 		{"gateway.endpoint_status", "gateway.acceptance", nil},
 		{"gateway.core_resources", "reconcile KrakenDGateway", nil},
+		{"apply serviceaccount", "gateway.core_resources", nil},
 		{"apply service", "gateway.core_resources", nil},
 	} {
 		t.Run(tc.span, func(t *testing.T) {
