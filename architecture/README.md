@@ -1612,16 +1612,19 @@ stands, and the names are bounded by bytes, with the not-checked counts always
 kept. When the group of the endpoints with the write fails, the stored group
 (the stored object, or the policy rendered empty on a policy create) is
 checked before the endpoints are scanned, and so are the endpoints it lost an
-entry in. If it passes and none of those fails both ways, the write is the
-cause of the failure whichever endpoints the scan reaches, so the write is
-refused with a `422` even when the budget ends before the scan has named an
-endpoint it breaks (`(N not checked within the admission time)`): the scan
-changes only how many endpoints are named, never the verdict. When the
-stored group fails too, or an endpoint that lost an entry fails both ways,
-nothing is decided in advance: no denial and an unfinished scan is a `500` (a
-gateway create only warns), which a large gateway with many failing, not yet
-recorded endpoints can return until the controller records their exclusions.
-A validator that cannot run before those checks finish is a `500` as well.
+entry in and those that use a policy failing `krakend check` on its own (each
+distinct policy is checked as stored, which no group check does). If the group
+passes and none of those fails both ways, the write is the cause of the
+failure whichever endpoints the scan reaches, so the write is refused with a
+`422` even when the budget ends before the scan has named an endpoint it
+breaks (`(N not checked within the admission time)`): the scan changes only
+how many endpoints are named, never the verdict. Nothing is decided in advance
+when the stored group fails too, when one of those endpoints fails both ways
+(the decision is withdrawn when any endpoint does), when the stored root fails
+on its own (a gateway update), or when a check cannot run. Then no denial and
+an unfinished scan is a `500` (a gateway create only warns), which a large
+gateway with many failing, not yet recorded endpoints can return until the
+controller records their exclusions.
 
 Both check an endpoint that already fails on its own before they check the
 endpoints together. While such an endpoint is not yet recorded as excluded, a
@@ -1654,7 +1657,7 @@ of endpoints that lost an entry, P the policies, N the endpoints):
 | AutoConfig sync with C candidates | ≤ 2 (root, group) + the candidates that lost an entry; + P + C when the group fails |
 | policy reconcile | 1 per distinct policy content, remembered for the 256 most recent (a restart checks each policy once again) |
 | endpoint write | ≤ 2 + P (root, its policies alone, unit); + 1 stub, + the stored version's, on failure |
-| policy write over G gateways | 1 + 2G; + 1 per endpoint judged on its own (all of a gateway's endpoints that use it when its group fails, else M) and 1 more for each that fails; + 1 stored group (on a create, with the policy empty) when the group fails. An endpoint check runs each referenced policy alone, the endpoint, and, when it fails and references a policy of another namespace, again with that policy emptied; the stored baseline repeats these |
+| policy write over G gateways | 1 + 2G; + 1 per endpoint judged on its own (all of a gateway's endpoints that use it when its group fails, else M) and 1 more for each that fails; + 1 stored group (on a create, with the policy empty) when the group fails, and then 1 per distinct policy its endpoints use. An endpoint check runs each referenced policy alone, the endpoint, and, when it fails and references a policy of another namespace, again with that policy emptied; the stored baseline repeats these |
 | gateway write | 2; + 1 stored root when the root fails or endpoints are judged on their own; + the endpoint checks as for a policy write; + 1 stored group when the group fails and the stored root passes |
 
 On the pinned binary (KrakenD CE 2.13.11) one run takes:
@@ -1672,8 +1675,10 @@ endpoint on its own, one run after another, so it costs about 0.1 s per served
 endpoint, plus one more for each that fails. After the root, the group and the
 stored root and group, the 12 s admission budget covers about 80–110 such
 checks, so a gateway of several hundred served endpoints cannot be named in
-full. Deciding the write does not cost that: it is four lints, about 0.5 s at
-500m, whatever the number of endpoints. So a request whose group passes stays
+full. Deciding the write costs less: four lints, about 0.5 s at 500m for 500
+endpoints (a group lint grows with the endpoints, about 0.27 s at 1000), plus
+two endpoint checks for each endpoint the stored render masked and one policy
+check for each distinct policy the endpoints reference. So a request whose group passes stays
 far inside the 15 s webhook timeout, and one whose group fails is refused
 within the budget, naming what the scan reached; waiting for a slot can also
 delay it. The memos live in the operator's memory. After a
