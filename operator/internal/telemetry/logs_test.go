@@ -177,7 +177,9 @@ func TestParseLogLevel(t *testing.T) {
 func restoreGlobals(t *testing.T) {
 	t.Helper()
 	writer, flags := log.Writer(), log.Flags()
+	target := telemetry.SwapGRPCTarget(nil)
 	t.Cleanup(func() {
+		telemetry.SwapGRPCTarget(target)
 		klog.ClearLogger()
 		log.SetOutput(writer)
 		log.SetFlags(flags)
