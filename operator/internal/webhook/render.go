@@ -51,57 +51,6 @@ func bindCheck(
 	return func(ctx context.Context) (configcheck.Verdict, error) { return run(ctx, gw, nil) }
 }
 
-// foreignCheckOutput reports whether f is krakend check output that names no
-// endpoint of namespace ns: another namespace's endpoint, or none, which is how
-// krakend reports the gateway root and also some errors of an endpoint, such as
-// an invalid backend host. krakend check prints the values it refuses, and a
-// writer in ns may read neither the gateway nor another namespace's endpoint.
-// The requester's own unnamed lines are quoted by the denial once the gateway
-// root passes alone. The route and EE wildcard checks print only methods and
-// paths, so their findings are not foreign.
-func foreignCheckOutput(stage renderer.RejectionStage, f configcheck.Finding, ns string) bool {
-	if stage == renderer.StageRoute || stage == renderer.StageEEWildcard {
-		return false
-	}
-	return f.Endpoint.Name == "" || f.Endpoint.Namespace != ns
-}
-
-// withholdForeign returns the findings of v that a writer in namespace ns may
-// be shown, and counts the foreignCheckOutput ones it leaves out.
-func withholdForeign(v configcheck.Verdict, ns string) (shown []configcheck.Finding, withheld int) {
-	for _, f := range v.Findings {
-		if foreignCheckOutput(v.Stage, f, ns) {
-			withheld++
-			continue
-		}
-		shown = append(shown, f)
-	}
-	return shown, withheld
-}
-
-// withheldNote counts n withheld findings for a writer in namespace ns. Each
-// names no endpoint of ns: it names one in another namespace, or none at all,
-// which is how krakend check reports the gateway root and also some errors of
-// an endpoint (an invalid backend host).
-func withheldNote(n int, ns string) string {
-	return fmt.Sprintf("%d findings that name no endpoint of namespace %s are not shown", n, ns)
-}
-
-// shownSummary is v's summary, cut to limit, over the findings a writer in
-// namespace ns may be shown, followed by a count of those withheld.
-func shownSummary(v configcheck.Verdict, ns string, limit int) string {
-	shown, withheld := withholdForeign(v, ns)
-	summary := configcheck.Verdict{Findings: shown}.Summary(limit)
-	if withheld == 0 {
-		return summary
-	}
-	note := withheldNote(withheld, ns)
-	if summary == "" {
-		return note
-	}
-	return summary + "; " + note
-}
-
 // ratchetRender rejects a change only when it turns a passing config into a
 // failing one. It runs after, then before; when before fails too the failure
 // is a warning (preexisting words it from before's verdict) unless newFailure
