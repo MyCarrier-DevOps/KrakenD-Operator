@@ -89,6 +89,7 @@ func TestGatewayReconcile_SpansEachStageUnderItsParent(t *testing.T) {
 		span, parent string
 		tweak        func(*v1alpha1.KrakenDGateway)
 	}{
+		{"configcheck.Gather", "reconcile KrakenDGateway", nil},
 		{"gateway.license", "reconcile KrakenDGateway", nil},
 		{"gateway.plugins", "reconcile KrakenDGateway", nil},
 		{"gateway.render", "reconcile KrakenDGateway", nil},
