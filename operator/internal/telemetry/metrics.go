@@ -37,11 +37,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 )
 
-// reconcileBuckets are the reconcile-duration histogram's bucket bounds:
-// prometheus.DefBuckets, so the le labels stay those of the client_golang
-// histogram this replaces.
-var reconcileBuckets = []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10}
-
 // NewPrometheusReader returns the metric reader that serves the operator's
 // metrics on /metrics through reg. Instrument names are exported verbatim:
 // no unit or _total suffix is added, no otel_scope_* label and no target_info
@@ -119,7 +114,7 @@ func NewOperatorMetrics(meter metric.Meter) (*OperatorMetrics, error) {
 	var err error
 	m.duration, err = meter.Float64Histogram("krakend_operator_reconcile_duration_seconds",
 		metric.WithDescription("Reconciliation loop latency"), metric.WithUnit("s"),
-		metric.WithExplicitBucketBoundaries(reconcileBuckets...))
+		metric.WithExplicitBucketBoundaries(prometheus.DefBuckets...))
 	errs = append(errs, err, m.registerGauges(meter))
 	if err := errors.Join(errs...); err != nil {
 		return nil, err
