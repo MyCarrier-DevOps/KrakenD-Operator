@@ -234,6 +234,15 @@ const (
 	ReasonGatewayConfigRejected = "GatewayConfigRejected"
 	ReasonSchemaNameConflict    = "SchemaNameConflict"
 	ReasonEEFeaturesStripped    = "EEFeaturesStripped"
+	// ReasonEndpointInvalid: the endpoint fails krakend check on its own (the
+	// gateway root with this endpoint and the policies it references). The
+	// gateway leaves it out and serves its other endpoints.
+	ReasonEndpointInvalid = "EndpointInvalid"
+	// ReasonPolicyInvalid: a policy the endpoint references fails krakend
+	// check on its own, or the endpoint fails only together with a policy of
+	// another namespace. The gateway leaves it out; the message names the
+	// policy and never quotes it.
+	ReasonPolicyInvalid = "PolicyInvalid"
 
 	// Ready reasons shared by every kind. A False Ready carries the reason of
 	// the condition that keeps the object from being ready.
