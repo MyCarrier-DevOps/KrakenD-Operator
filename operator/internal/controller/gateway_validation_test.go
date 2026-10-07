@@ -649,6 +649,9 @@ func TestGatewayReconcile_ASafetyNetFailureOnTheFastPathReportsAnUnappliedExclus
 	if cv != nil && strings.Contains(cv.Message, "Every endpoint passes") {
 		t.Errorf("ConfigValid message = %q, want no claim that every endpoint passes on its own", cv.Message)
 	}
+	if cv == nil || cv.Message != combinedFailureMessage {
+		t.Errorf("ConfigValid = %+v, want the combined-failure message %q", cv, combinedFailureMessage)
+	}
 	if err := c.Get(context.Background(), client.ObjectKeyFromObject(newer), &live); err != nil {
 		t.Fatal(err)
 	}
