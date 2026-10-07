@@ -132,10 +132,11 @@ type Validators struct {
 func NewValidators(
 	c client.Client, apiReader client.Reader, checker ConfigChecker, operatorUsername string,
 ) Validators {
+	memo := newAdmissionMemo()
 	return Validators{
 		Gateway: &GatewayValidator{Client: c, Checker: checker},
 		Endpoint: &EndpointValidator{
-			Client: c, APIReader: apiReader, Checker: checker, OperatorUsername: operatorUsername,
+			Client: c, APIReader: apiReader, Checker: checker, OperatorUsername: operatorUsername, Memo: memo,
 		},
 		Policy:     &PolicyValidator{Client: c, Checker: checker},
 		AutoConfig: &AutoConfigValidator{Client: c},
