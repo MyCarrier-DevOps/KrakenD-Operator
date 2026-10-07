@@ -30,6 +30,7 @@ import (
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/resources"
+	"github.com/mycarrier-devops/krakend-operator/internal/tracing"
 	"github.com/mycarrier-devops/krakend-operator/internal/util/hash"
 	"github.com/mycarrier-devops/krakend-operator/internal/util/license"
 )
@@ -87,6 +88,8 @@ func (v licenseVerdict) checksumFor(deployed string) string {
 // license expiry metric. Secret changes arrive through the Secret watch, and
 // time-driven changes through requeueAfter.
 func (r *KrakenDGatewayReconciler) reconcileLicense(ctx context.Context, gw *v1alpha1.KrakenDGateway) licenseVerdict {
+	ctx, span := tracing.Start(ctx, r.Tracer, "gateway.license")
+	defer span.End()
 	if gw.Spec.Edition != v1alpha1.EditionEE {
 		r.forgetLicense(gw)
 		return licenseVerdict{}
