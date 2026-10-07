@@ -35,6 +35,10 @@ type Memo interface {
 	Store(key string, v Verdict)
 }
 
+// maxStoredOutput bounds the rejection output a verdict keeps, so a memo of
+// many verdicts stays small. No message shows more than a few KiB of it.
+const maxStoredOutput = 16 << 10
+
 // The checks a content key names.
 const (
 	modeLint     = "lint"

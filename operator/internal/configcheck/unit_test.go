@@ -174,3 +174,23 @@ func TestCheckRendered_RemembersTheFullCheckApartFromLint(t *testing.T) {
 func rejectedOutput(output string) error {
 	return &renderer.ValidationError{Output: output, Err: errors.New("exit status 1"), Stage: renderer.StageCheck}
 }
+
+func TestCheckRoot_KeepsABoundedOutput(t *testing.T) {
+	val := &fakeValidator{err: rejectedOutput(strings.Repeat("x", maxStoredOutput+1))}
+	chk := newChecker(val)
+	memo := mapMemo{}
+
+	v, err := chk.CheckRoot(context.Background(), Root{Gateway: gateway(v1alpha1.EditionCE)}, memo)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, kept := range memo {
+		if len(kept.Output) > maxStoredOutput {
+			t.Errorf("memo keeps %d bytes of output under %s, want at most %d", len(kept.Output), key, maxStoredOutput)
+		}
+	}
+	if len(v.Output) > maxStoredOutput || !strings.HasSuffix(v.Output, "...") {
+		t.Errorf("verdict output is %d bytes, want it cut to %d with an ellipsis", len(v.Output), maxStoredOutput)
+	}
+}
