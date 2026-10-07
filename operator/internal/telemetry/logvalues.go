@@ -60,14 +60,24 @@ func readableKeysAndValues(keysAndValues []any) []any {
 	copy(out, keysAndValues)
 	for i := 1; i < len(out); i += 2 {
 		if _, ok := out[i].(context.Context); !ok {
-			out[i] = readableValue(out[i], 0)
+			out[i] = readableValue(out[i])
 		}
 	}
 	return out
 }
 
-// maxValueDepth bounds how deep a value that contains itself is followed.
-const maxValueDepth = 100
+// maxValueNodes bounds the work spent on one value: past it, what is left of
+// the value is rendered as "<truncated>".
+const maxValueNodes = 10_000
+
+// valueConverter converts one value. It is not safe for concurrent use.
+type valueConverter struct {
+	// budget is the number of nodes it may still convert.
+	budget int
+	// open holds the maps, slices and pointers on the path to the node being
+	// converted, to cut a value that contains itself.
+	open map[uintptr]bool
+}
 
 // readableValue returns v, or what it converts to, so the log bridge renders
 // it readably:
@@ -79,10 +89,15 @@ const maxValueDepth = 100
 //   - a map, slice, array or pointer: the same with its elements converted.
 //
 // A time.Duration and a time.Time stay as they are: the bridge records them as
-// numbers.
-func readableValue(v any, depth int) any {
-	if depth > maxValueDepth {
-		return "<max-depth-exceeded>"
+// numbers. A value that contains itself renders "<cycle>" where it repeats.
+func readableValue(v any) any {
+	c := valueConverter{budget: maxValueNodes, open: map[uintptr]bool{}}
+	return c.convert(v)
+}
+
+func (c *valueConverter) convert(v any) any {
+	if c.budget--; c.budget < 0 {
+		return "<truncated>"
 	}
 	switch x := v.(type) {
 	case nil, time.Duration, time.Time:
@@ -93,7 +108,7 @@ func readableValue(v any, depth int) any {
 		return orPlain(v, x.String)
 	case logr.Marshaler:
 		if logged, ok := try(x.MarshalLog); ok {
-			return readableValue(logged, depth+1)
+			return c.convert(logged)
 		}
 		return plain(v)
 	}
@@ -112,29 +127,65 @@ func readableValue(v any, depth int) any {
 	case reflect.Complex64, reflect.Complex128:
 		return rv.Complex()
 	case reflect.Slice, reflect.Array:
-		if rv.Type().Elem().Kind() == reflect.Uint8 {
-			return v
-		}
-		out := make([]any, rv.Len())
-		for i := range out {
-			out[i] = readableValue(rv.Index(i).Interface(), depth+1)
-		}
-		return out
+		return c.convertList(v, rv)
 	case reflect.Pointer:
 		if rv.IsNil() {
 			return v
 		}
-		return readableValue(rv.Elem().Interface(), depth+1)
+		return c.enter(rv, func() any { return c.convert(rv.Elem().Interface()) })
 	case reflect.Map:
-		out := make(map[string]any, rv.Len())
-		for iter := rv.MapRange(); iter.Next(); {
-			out[fmt.Sprint(iter.Key().Interface())] = readableValue(iter.Value().Interface(), depth+1)
-		}
-		return out
+		return c.enter(rv, func() any { return c.convertMap(rv) })
 	case reflect.Struct:
 		return v
 	}
 	return plain(v)
+}
+
+// convertList converts the elements of a slice or an array, leaving a byte
+// slice to the bridge.
+func (c *valueConverter) convertList(v any, rv reflect.Value) any {
+	if rv.Type().Elem().Kind() == reflect.Uint8 {
+		return v
+	}
+	if rv.Len() > c.budget {
+		return "<truncated>"
+	}
+	if rv.Kind() == reflect.Array || rv.Len() == 0 {
+		return c.convertElements(rv)
+	}
+	return c.enter(rv, func() any { return c.convertElements(rv) })
+}
+
+func (c *valueConverter) convertElements(rv reflect.Value) any {
+	out := make([]any, rv.Len())
+	for i := range out {
+		out[i] = c.convert(rv.Index(i).Interface())
+	}
+	return out
+}
+
+// convertMap converts the values of a map, keyed as the bridge keys a map.
+func (c *valueConverter) convertMap(rv reflect.Value) any {
+	if rv.Len() > c.budget {
+		return "<truncated>"
+	}
+	out := make(map[string]any, rv.Len())
+	for iter := rv.MapRange(); iter.Next(); {
+		out[fmt.Sprintf("%+v", iter.Key().Interface())] = c.convert(iter.Value().Interface())
+	}
+	return out
+}
+
+// enter runs convert with rv marked as open, or returns "<cycle>" if it is
+// open already.
+func (c *valueConverter) enter(rv reflect.Value, convert func() any) any {
+	id := rv.Pointer()
+	if c.open[id] {
+		return "<cycle>"
+	}
+	c.open[id] = true
+	defer delete(c.open, id)
+	return convert()
 }
 
 // plain renders v as fmt prints it with field names, the form a value the
