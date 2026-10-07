@@ -933,7 +933,7 @@ func TestCollectConfigMaps_DeletesWhatNothingCanMount(t *testing.T) {
 	).Build()
 	r := newTestGatewayReconciler(c, &mockRenderer{}, &mockValidator{})
 
-	if err := r.collectConfigMaps(context.Background(), gw, "test-gw-config-r6"); err != nil {
+	if err := r.collectConfigMaps(context.Background(), gw, "test-gw-config-r6", ""); err != nil {
 		t.Fatalf("collect: %v", err)
 	}
 	want := []string{"someone-elses", "test-gw-config-r2", "test-gw-config-r4", "test-gw-config-r5", "test-gw-config-r6"}
@@ -955,7 +955,7 @@ func TestCollectConfigMaps_KeepsInUseEvenWhenOldest(t *testing.T) {
 	).Build()
 	r := newTestGatewayReconciler(c, &mockRenderer{}, &mockValidator{})
 
-	if err := r.collectConfigMaps(context.Background(), gw, "test-gw-config-r1"); err != nil {
+	if err := r.collectConfigMaps(context.Background(), gw, "test-gw-config-r1", ""); err != nil {
 		t.Fatalf("collect: %v", err)
 	}
 	want := []string{"test-gw-config-r1", "test-gw-config-r4", "test-gw-config-r5"}
@@ -982,7 +982,7 @@ func TestCollectConfigMaps_ListsNoReplicaSetsWhenNothingIsCollectable(t *testing
 	}).Build()
 	r := newTestGatewayReconciler(c, &mockRenderer{}, &mockValidator{})
 
-	if err := r.collectConfigMaps(context.Background(), gw, "test-gw-config-r2"); err != nil {
+	if err := r.collectConfigMaps(context.Background(), gw, "test-gw-config-r2", ""); err != nil {
 		t.Fatalf("collect: %v", err)
 	}
 	if lists != 0 {
@@ -1220,7 +1220,7 @@ func TestCollectConfigMaps_ListsConfigMapsAsMetadataOnly(t *testing.T) {
 	})
 	r := newTestGatewayReconciler(c, &mockRenderer{}, &mockValidator{})
 
-	if err := r.collectConfigMaps(context.Background(), gw, "test-gw-config-r4"); err != nil {
+	if err := r.collectConfigMaps(context.Background(), gw, "test-gw-config-r4", ""); err != nil {
 		t.Fatalf("collect: %v", err)
 	}
 	want := []string{"test-gw-config-r2", "test-gw-config-r3", "test-gw-config-r4"}
@@ -1263,7 +1263,7 @@ func TestCollectConfigMaps_KeepsWhatAScaledDownReplicaSetStillRunsPodsFor(t *tes
 	).Build()
 	r := newTestGatewayReconciler(c, &mockRenderer{}, &mockValidator{})
 
-	if err := r.collectConfigMaps(context.Background(), gw, "test-gw-config-r4"); err != nil {
+	if err := r.collectConfigMaps(context.Background(), gw, "test-gw-config-r4", ""); err != nil {
 		t.Fatalf("collect: %v", err)
 	}
 	if got := remainingConfigMaps(t, c, gw); !slices.Contains(got, "test-gw-config-r1") {

@@ -268,14 +268,17 @@ const configMapHistoryLimit = 3
 // collectConfigMaps deletes the gateway's config ConfigMaps that nothing can
 // still mount. It lists them as metadata only. A ConfigMap is kept when any
 // of these holds:
-//   - it is inUse (the applied config, which the Deployment template mounts);
+//   - it is inUse (the applied config);
+//   - it is mounted, the one the Deployment template mounts now: while the
+//     Deployment is held that is an older revision, and with no ReplicaSet
+//     running nothing else would keep it;
 //   - it is in the revision history (configMapGCCandidates);
 //   - a live ReplicaSet of the gateway's Deployment mounts it.
 //
 // The ConfigMap an earlier operator version kept under the gateway's own name
 // is collected on the same terms, but never counts toward the history.
 func (r *KrakenDGatewayReconciler) collectConfigMaps(
-	ctx context.Context, gw *v1alpha1.KrakenDGateway, inUse string,
+	ctx context.Context, gw *v1alpha1.KrakenDGateway, inUse, mounted string,
 ) (retErr error) {
 	ctx, span := tracing.Start(ctx, r.Tracer, "gateway.collect_configmaps")
 	defer func() { tracing.End(span, retErr) }()
@@ -285,17 +288,17 @@ func (r *KrakenDGatewayReconciler) collectConfigMaps(
 		client.MatchingLabels(resources.SelectorLabels(gw))); err != nil {
 		return fmt.Errorf("listing config configmaps: %w", err)
 	}
-	candidates := configMapGCCandidates(gw, list.Items, inUse)
+	candidates := configMapGCCandidates(gw, list.Items, inUse, mounted)
 	if len(candidates) == 0 {
 		return nil
 	}
-	mounted, err := r.liveReplicaSetConfigMaps(ctx, gw)
+	live, err := r.liveReplicaSetConfigMaps(ctx, gw)
 	if err != nil {
 		return err
 	}
 	for i := range candidates {
 		cm := &candidates[i]
-		if mounted[cm.Name] {
+		if live[cm.Name] {
 			continue
 		}
 		cm.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("ConfigMap"))
@@ -308,15 +311,16 @@ func (r *KrakenDGatewayReconciler) collectConfigMaps(
 }
 
 // configMapGCCandidates returns the gateway's config ConfigMaps that only a
-// live ReplicaSet could still keep: every controlled one except inUse and the
-// revision history.
+// live ReplicaSet could still keep: every controlled one except inUse, the
+// ConfigMap the Deployment template mounts and the revision history. The
+// mounted one takes no place in the history.
 func configMapGCCandidates(
-	gw *v1alpha1.KrakenDGateway, cms []metav1.PartialObjectMetadata, inUse string,
+	gw *v1alpha1.KrakenDGateway, cms []metav1.PartialObjectMetadata, inUse, mounted string,
 ) []metav1.PartialObjectMetadata {
 	var revisions, candidates []metav1.PartialObjectMetadata
 	for i := range cms {
 		cm := cms[i]
-		if !metav1.IsControlledBy(&cm, gw) {
+		if !metav1.IsControlledBy(&cm, gw) || cm.Name == mounted {
 			continue
 		}
 		switch {

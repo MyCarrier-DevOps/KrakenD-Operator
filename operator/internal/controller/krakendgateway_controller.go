@@ -270,14 +270,15 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	// Infrastructure stage: always runs, and deploys the applied config.
 	infra := infraInputs{
-		appliedChecksum: gw.Status.ConfigChecksum,
-		pluginChecksum:  output.PluginChecksum,
-		licenseChecksum: licenseChecksum,
-		image:           image,
-		ceRender:        appliedKey(&gw, edition).edition == v1alpha1.EditionCE,
-		configMapName:   cfg.appliedConfigMap,
-		heldBecause:     cfg.heldBecause,
-		missingPlugins:  missingPlugins,
+		appliedChecksum:  gw.Status.ConfigChecksum,
+		pluginChecksum:   output.PluginChecksum,
+		licenseChecksum:  licenseChecksum,
+		image:            image,
+		ceRender:         appliedKey(&gw, edition).edition == v1alpha1.EditionCE,
+		configMapName:    cfg.appliedConfigMap,
+		heldBecause:      cfg.heldBecause,
+		missingPlugins:   missingPlugins,
+		mountedConfigMap: deployed.configMap,
 	}
 	saControlled, coreErr := r.reconcileCoreResources(ctx, &gw, infra)
 	note := r.noteRollout(&gw, infra, deployed, configChanged, saControlled)
@@ -672,6 +673,8 @@ func deploymentConverged(dep *appsv1.Deployment, want infraInputs) bool {
 // Deployment's pod template carries now; "" for one it carries none of.
 type deployedChecksums struct {
 	config, license string
+	// configMap is the ConfigMap the template mounts as the gateway config.
+	configMap string
 }
 
 // deployedChecksums reads them from the gateway Deployment; both are "" when
@@ -689,8 +692,9 @@ func (r *KrakenDGatewayReconciler) deployedChecksums(
 	}
 	annotations := dep.Spec.Template.Annotations
 	return deployedChecksums{
-		config:  annotations[resources.PostRestartJobChecksumAnnotation],
-		license: annotations[resources.LicenseChecksumAnnotation],
+		config:    annotations[resources.PostRestartJobChecksumAnnotation],
+		license:   annotations[resources.LicenseChecksumAnnotation],
+		configMap: resources.MountedConfigMapName(&dep.Spec.Template.Spec),
 	}, nil
 }
 
@@ -1202,6 +1206,9 @@ type infraInputs struct {
 	// missingPlugins are the plugin ConfigMaps that do not exist; while any
 	// is missing the Deployment is held.
 	missingPlugins []string
+	// mountedConfigMap is the ConfigMap the Deployment template mounts now,
+	// read before this pass changes it; "" when there is no Deployment.
+	mountedConfigMap string
 }
 
 // reconcileDeploymentUnlessHeld reconciles the Deployment, or leaves it exactly
@@ -1231,13 +1238,14 @@ func (r *KrakenDGatewayReconciler) reconcileDeploymentUnlessHeld(
 		// A pod template that mounts a missing ConfigMap never starts
 		// (FailedMount). Leave the Deployment as it is; PluginsResolved
 		// names the ConfigMaps, and their creation reconciles the gateway.
-		gcErr = r.collectConfigMaps(ctx, gw, in.configMapName)
+		gcErr = r.collectConfigMaps(ctx, gw, in.configMapName, in.mountedConfigMap)
 	default:
 		obs, err = r.reconcileDeployment(ctx, gw, in)
 		if err != nil {
 			return deploymentObservation{failed: true}, nil, err
 		}
-		gcErr = r.collectConfigMaps(ctx, gw, in.configMapName)
+		// The template now mounts in.configMapName.
+		gcErr = r.collectConfigMaps(ctx, gw, in.configMapName, "")
 	}
 	return obs, gcErr, nil
 }
@@ -1280,7 +1288,7 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 			"serviceaccount %s/%s is not controlled by gateway %s", gw.Namespace, gw.Name, gw.Name))
 		// The config stage still publishes a ConfigMap per passing render.
 		if in.configMapName != "" {
-			errs = append(errs, r.collectConfigMaps(ctx, gw, in.configMapName))
+			errs = append(errs, r.collectConfigMaps(ctx, gw, in.configMapName, in.mountedConfigMap))
 		}
 		errs = append(errs,
 			r.reconcileDragonfly(ctx, gw), r.reconcileExternalSecret(ctx, gw), r.reconcileVirtualService(ctx, gw))
