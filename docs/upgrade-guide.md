@@ -918,7 +918,10 @@ Job and optional resources were not reconciled until the input was fixed,
 so a deleted Deployment stayed deleted. Reconciliation now has two stages:
 
 - **Config stage:** render, validate, publish. Only a config that passed
-  validation becomes the applied config (`status.configChecksum`).
+  validation becomes the applied config (`status.configChecksum`), and
+  that record is written before endpoints are accepted or the Deployment is
+  pointed at the new config. A failed write leaves the pods on the stored
+  config and the pass is retried.
 - **Infrastructure stage:** always runs and deploys the applied config. A
   rejected or unjudged render changes nothing the pods see. Every other spec
   change (replicas, image, resources, probes) and drift correction proceed
