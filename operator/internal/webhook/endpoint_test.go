@@ -469,14 +469,6 @@ func TestEndpointAdmission_RouteCheckStopsWhenTheBudgetEnds(t *testing.T) {
 	}
 }
 
-// tenantEndpoint is a KrakenDEndpoint of namespace ns on the test gateway.
-func tenantEndpoint(ns, name, path string) *v1alpha1.KrakenDEndpoint {
-	ep := testEndpoint(name, path)
-	ep.Namespace = ns
-	ep.Spec.GatewayRef = v1alpha1.GatewayRef{Name: "gw", Namespace: "default"}
-	return ep
-}
-
 // responseText is everything a response carries to the requester.
 func responseText(resp admission.Response) string {
 	var got []string
