@@ -2766,3 +2766,58 @@ func TestEndpointAccepted_MessageAllowsTheWinnerToBeAnEarlierEntryOfTheSameEndpo
 		})
 	}
 }
+
+// A gateway whose Deployment is held still publishes a ConfigMap for every
+// distinct passing render, so old revisions are collected on the hold paths
+// too. The ConfigMap the held Deployment's template mounts is kept, even
+// beyond the history and with no ReplicaSet running it.
+func TestGatewayReconcile_CollectsConfigRevisionsWhileTheDeploymentIsHeld(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(gw *v1alpha1.KrakenDGateway) []client.Object
+	}{
+		{"missing plugin ConfigMap", func(gw *v1alpha1.KrakenDGateway) []client.Object {
+			gw.Spec.Plugins = &v1alpha1.PluginsSpec{Sources: []v1alpha1.PluginSource{
+				{ConfigMapRef: &v1alpha1.ConfigMapKeyRef{Name: "plugins-a", Key: "auth.so"}},
+			}}
+			return nil
+		}},
+		{"ServiceAccount another controller owns", func(gw *v1alpha1.KrakenDGateway) []client.Object {
+			return []client.Object{otherControllersServiceAccount(&gw.ObjectMeta)}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gw := reconciledGateway()
+			gw.UID = "gw-uid"
+			gw.Status.ConfigChecksum = "r5"
+			at := func(h int) time.Time { return testNow.Add(time.Duration(h) * time.Hour) }
+			dep := legacyDeployment(gw)
+			dep.Spec.Template.Spec.Volumes[0].ConfigMap.Name = "test-gw-config-r0"
+			objs := append(tc.setup(gw), gw, dep,
+				ownedConfigMap(gw, "test-gw-config-r0", at(0), true),
+				ownedConfigMap(gw, "test-gw-config-r1", at(1), true),
+				ownedConfigMap(gw, "test-gw-config-r2", at(2), true),
+				ownedConfigMap(gw, "test-gw-config-r3", at(3), true),
+				ownedConfigMap(gw, "test-gw-config-r4", at(4), true),
+				ownedConfigMap(gw, "test-gw-config-r5", at(5), true),
+			)
+			c := fakeClientBuilder().WithObjects(objs...).WithStatusSubresource(gw).Build()
+			r := newTestGatewayReconciler(c, renderOf(`{"version":3,"name":"r6"}`), &mockValidator{})
+
+			_ = reconcileGateway(t, r, gw) // the hold is reported as an error
+
+			got := remainingConfigMaps(t, c, gw)
+			for _, gone := range []string{"test-gw-config-r1", "test-gw-config-r2", "test-gw-config-r3"} {
+				if slices.Contains(got, gone) {
+					t.Errorf("%s survived the hold; remaining = %v", gone, got)
+				}
+			}
+			for _, kept := range []string{"test-gw-config-r0", "test-gw-config-r4", "test-gw-config-r5"} {
+				if !slices.Contains(got, kept) {
+					t.Errorf("%s was collected; remaining = %v", kept, got)
+				}
+			}
+		})
+	}
+}
