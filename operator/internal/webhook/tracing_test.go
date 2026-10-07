@@ -206,3 +206,20 @@ func TestGatewayAdmission_JudgesItsServedEndpointsInASpan(t *testing.T) {
 	spans.RequireParent(t, "admission.validate KrakenDGateway", "configcheck.CheckRoot")
 	spans.RequireChild(t, "admission.validate KrakenDGateway", "configcheck.CheckGroup")
 }
+
+// A policy write screens each gateway that uses it in a span of its own,
+// below the admission's.
+func TestPolicyAdmission_ScreensEachGatewayInASpan(t *testing.T) {
+	rec := tracingtest.New(t)
+	v := tracedValidators(rec, referencing()...)
+	admit := tracedValidator{kind: "KrakenDBackendPolicy", next: v.Policy, tracer: rec.Tracer()}
+
+	if _, err := admit.ValidateCreate(context.Background(), testPolicy(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+
+	spans := rec.Ended()
+	spans.RequireChild(t, "admission.validate KrakenDBackendPolicy", "admission.screen_policy")
+	spans.RequireParent(t, "admission.screen_policy", "configcheck.CheckRoot")
+	spans.RequireParent(t, "admission.screen_policy", "configcheck.CheckGroup")
+}
