@@ -53,22 +53,16 @@ func TestNoRequestPathStartsAFreshContext(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			ast.Inspect(file, func(n ast.Node) bool {
-				call, ok := n.(*ast.CallExpr)
-				if !ok {
-					return true
-				}
-				sel, ok := call.Fun.(*ast.SelectorExpr)
-				if !ok {
-					return true
-				}
-				if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "context" &&
-					(sel.Sel.Name == "Background" || sel.Sel.Name == "TODO") {
-					rel, _ := filepath.Rel(root, path)
-					got[filepath.ToSlash(rel)]++
-				}
-				return true
-			})
+			n, dot := countFreshContexts(file)
+			rel, _ := filepath.Rel(root, path)
+			rel = filepath.ToSlash(rel)
+			if dot {
+				t.Errorf("%s dot-imports context: write context.Background and context.TODO "+
+					"qualified so they can be found", rel)
+			}
+			if n > 0 {
+				got[rel] = n
+			}
 			return nil
 		})
 		if err != nil {
@@ -80,5 +74,70 @@ func TestNoRequestPathStartsAFreshContext(t *testing.T) {
 			t.Errorf("%s calls context.Background() or context.TODO() %d times, %d allowed: "+
 				"take the caller's context", file, n, freshContexts[file])
 		}
+	}
+}
+
+// countFreshContexts counts the context.Background and context.TODO calls in
+// file, and reports whether it dot-imports context, which hides them.
+func countFreshContexts(file *ast.File) (int, bool) {
+	n := 0
+	ast.Inspect(file, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "context" &&
+			(sel.Sel.Name == "Background" || sel.Sel.Name == "TODO") {
+			n++
+		}
+		return true
+	})
+	return n, false
+}
+
+func TestCountFreshContexts(t *testing.T) {
+	tests := []struct {
+		name, src string
+		wantN     int
+		wantDot   bool
+	}{
+		{"a plain call", `package p
+import "context"
+var _ = context.Background()`, 1, false},
+		{"a renamed import", `package p
+import ctx "context"
+var _ = ctx.TODO()`, 1, false},
+		{"a method value", `package p
+import "context"
+var bg = context.Background`, 1, false},
+		{"a method value passed on", `package p
+import "context"
+func f(func() context.Context) {}
+func g() { f(context.TODO) }`, 1, false},
+		{"a dot import", `package p
+import . "context"
+var _ = Background()`, 0, true},
+		{"another package's Background", `package p
+import "context"
+type c struct{ Background int }
+var _ = context.WithCancel
+var x c
+var _ = x.Background`, 0, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			file, err := parser.ParseFile(token.NewFileSet(), "src.go", tt.src, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			n, dot := countFreshContexts(file)
+			if n != tt.wantN || dot != tt.wantDot {
+				t.Errorf("got %d uses, dot import %v; want %d, %v", n, dot, tt.wantN, tt.wantDot)
+			}
+		})
 	}
 }
