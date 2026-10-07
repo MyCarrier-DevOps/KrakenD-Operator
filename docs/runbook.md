@@ -524,6 +524,10 @@ nothing removes every `Accepted`).
 
 **Resolution:** remove the cause. The operator retries with exponential backoff up to 5 minutes; editing the gateway or restarting the operator retries at once. Once the ConfigMap is published, `ConfigValid` returns to `True`.
 
+### Reconcile error "recording applied config" or "the cached gateway is behind its stored status"
+
+A newly published config is recorded in `status.configChecksum` before endpoints are accepted or the Deployment is pointed at it. If that status write fails (usually a conflict because the gateway was changed during the pass), the log shows `recording applied config <hash>: ...`; the pods and the endpoints' `Accepted` stay as they were and the next pass applies the config. The error `the cached gateway is behind its stored status` means a pass that applies nothing found the Deployment on a config other than the one its cached gateway names and the stored status disagreed with the cache; it changes nothing and retries. Both clear on their own within a retry or two. Only a persistent error needs attention: check the operator's `update` permission on `krakendgateways/status` and API server health.
+
 ### Gateway Deployment not updated: "no ConfigMap holds the applied config"
 
 The operator logs this when the ConfigMap for `status.configChecksum`
