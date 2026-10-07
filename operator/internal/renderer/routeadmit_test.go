@@ -442,3 +442,51 @@ func TestRender_AnEntrysConflictsAreOrderedByWinner(t *testing.T) {
 		t.Errorf("winners = %v, want %v", got, want)
 	}
 }
+
+// winnersOf lists the endpoints out's entries of name lost to, sorted.
+func winnersOf(out *RenderOutput, name string) []string {
+	var got []string
+	for _, c := range out.EntryConflicts[types.NamespacedName{Namespace: "ns", Name: name}] {
+		got = append(got, c.Winner.Name)
+	}
+	slices.Sort(got)
+	return got
+}
+
+// TestRender_AnEntryRecordsLeftOutWinnersToo pins that a losing entry is
+// recorded against older entries that were themselves left out, and against a
+// served one, not only against the first it meets: z1 and z2 lose to x, and w
+// clashes with x (served) and with z1 and z2 (left out).
+func TestRender_AnEntryRecordsLeftOutWinnersToo(t *testing.T) {
+	in := RenderInput{Gateway: routedGateway(v1alpha1.EditionCE, nil), Endpoints: []v1alpha1.KrakenDEndpoint{
+		routed("x", 0, "GET", "/a/{id}"), routed("z1", 1, "GET", "/a/{name}/x"),
+		routed("z2", 1, "GET", "/a/{n2}/y"), routed("w", 2, "GET", "/a/{key}/q"),
+	}}
+
+	out, err := New(Options{}).Render(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got, want := winnersOf(out, "w"), []string{"x", "z1", "z2"}; !slices.Equal(got, want) {
+		t.Errorf("w lost to %v, want %v", got, want)
+	}
+}
+
+// TestRender_AnEntryRecordsEveryEEWildcardItLiesUnder pins that an entry under
+// several older EE wildcards is recorded against each: e lies under w1's
+// /p/* and under w2's /p/q/*, which itself lies under w1's.
+func TestRender_AnEntryRecordsEveryEEWildcardItLiesUnder(t *testing.T) {
+	in := RenderInput{Gateway: routedGateway(v1alpha1.EditionEE, nil), Endpoints: []v1alpha1.KrakenDEndpoint{
+		routed("w1", 0, "GET", "/p/*"), routed("w2", 1, "GET", "/p/q/*"), routed("e", 2, "GET", "/p/q/r"),
+	}}
+
+	out, err := New(Options{}).Render(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got, want := winnersOf(out, "e"), []string{"w1", "w2"}; !slices.Equal(got, want) {
+		t.Errorf("e lost to %v, want %v", got, want)
+	}
+}
