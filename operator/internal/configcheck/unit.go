@@ -312,9 +312,17 @@ func emptied(policies map[string]*v1alpha1.KrakenDBackendPolicy,
 	out := maps.Clone(policies)
 	for _, key := range keys {
 		p := policies[key]
-		out[key] = &v1alpha1.KrakenDBackendPolicy{ObjectMeta: metav1.ObjectMeta{Name: p.Name, Namespace: p.Namespace}}
+		out[key] = EmptyPolicy(p.Namespace, p.Name)
 	}
 	return out
+}
+
+// EmptyPolicy returns a policy with the identity namespace/name and no
+// content: what stands for a policy whose content is not rendered. It must
+// stay present, because a render leaves out every entry of an endpoint one of
+// whose policies is missing.
+func EmptyPolicy(namespace, name string) *v1alpha1.KrakenDBackendPolicy {
+	return &v1alpha1.KrakenDBackendPolicy{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace}}
 }
 
 // policyNames names the policies of keys ("namespace/name").
