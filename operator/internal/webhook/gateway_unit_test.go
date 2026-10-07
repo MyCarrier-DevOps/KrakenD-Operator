@@ -142,6 +142,27 @@ func TestGatewayAdmission_AServedEndpointIsDeniedWhenTheStoredRootFails(t *testi
 	}
 }
 
+// Suspects no applied config served are not judged once a served one is found
+// broken, so the denial counts them as not checked.
+func TestGatewayAdmission_ADenialUnderAFailingStoredRootCountsTheSuspectsItNeverJudged(t *testing.T) {
+	old, gw := editedGateway()
+	epFail := configcheck.EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid}
+	chk := &scriptedChecker{
+		verdicts:         []configcheck.Verdict{{OK: true}, {Output: "x"}, {Output: "the stored root fails"}},
+		endpointVerdicts: []configcheck.EndpointVerdict{epFail, epFail, epFail},
+	}
+	v := &GatewayValidator{Client: fakeClient(old, acceptedEndpoint("a-served", "/a"),
+		testEndpoint("b-waiting", "/b"), testEndpoint("c-waiting", "/c")), Checker: chk}
+
+	resp := review(t, v, "alice", gw, old)
+
+	if text := responseText(resp); resp.Allowed || !strings.Contains(text, "default/a-served") ||
+		!strings.Contains(text, "(+2 more not checked)") {
+		t.Errorf("response = %+v, warnings %q; want a denial naming default/a-served and counting 2 not checked",
+			resp.Result, resp.Warnings)
+	}
+}
+
 // An endpoint no applied config served (never judged, or changed since) is
 // not known to have passed, so with a failing stored root it only draws the
 // warning, and it must not hide a served endpoint the update breaks.
