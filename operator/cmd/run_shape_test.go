@@ -371,3 +371,14 @@ func TestShutdown_ManagerStopAndFlushFitTheGracePeriod(t *testing.T) {
 			managerStopTimeout, telemetryFlushTimeout, got, podTerminationGracePeriod)
 	}
 }
+
+// The manager stops within managerStopTimeout only if ctrl.Options says so:
+// controller-runtime waits up to 30 seconds otherwise.
+func TestRun_BoundsTheManagersStop(t *testing.T) {
+	_, run := parseRun(t)
+
+	call, ok := optionsValue(t, run, "GracefulShutdownTimeout").(*ast.CallExpr)
+	if !ok || len(call.Args) != 1 || expr(call.Fun) != "new" || expr(call.Args[0]) != "managerStopTimeout" {
+		t.Errorf("ctrl.Options.GracefulShutdownTimeout = %T, want new(managerStopTimeout)", call)
+	}
+}
