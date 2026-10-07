@@ -140,7 +140,8 @@ func (c *Checker) remembered(ctx context.Context, in renderer.RenderInput, out *
 	validate func(context.Context, []byte, v1alpha1.Edition) error, memo Memo) (Verdict, error) {
 	key := contentKey(out, renderer.EditionFor(in.Gateway, in.CEFallback), mode)
 	if memo != nil {
-		if kept, ok := memo.Lookup(key); ok {
+		// An entry that is neither OK nor a rejection judged nothing: a miss.
+		if kept, ok := memo.Lookup(key); ok && (kept.OK || kept.Rejection != nil) {
 			return verdictFor(kept.Rejection, in, out), nil
 		}
 	}
