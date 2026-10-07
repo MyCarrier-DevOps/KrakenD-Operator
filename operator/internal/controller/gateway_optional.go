@@ -203,9 +203,10 @@ func refuseUncontrolled(gw *v1alpha1.KrakenDGateway, obj client.Object, kind str
 	return refused
 }
 
-// notControlledIn returns every notControlledError in err's tree.
+// notControlledIn returns every notControlledError in err's tree. errors.As
+// finds only the first, so it walks the tree by hand.
 func notControlledIn(err error) []*notControlledError {
-	switch e := err.(type) {
+	switch e := err.(type) { //nolint:errorlint // walks the tree; errors.As returns one match
 	case nil:
 		return nil
 	case *notControlledError:
