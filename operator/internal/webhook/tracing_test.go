@@ -186,3 +186,23 @@ func TestSetupWebhooks_EachValidatorSpanIsAChildOfItsRequestsServerSpan(t *testi
 		})
 	}
 }
+
+// A gateway update compares its config with the stored one's, then judges the
+// endpoints the gateway serves in a span of its own, below the admission's.
+func TestGatewayAdmission_JudgesItsServedEndpointsInASpan(t *testing.T) {
+	rec := tracingtest.New(t)
+	old, gw := editedGateway()
+	v := tracedValidators(rec, old, testEndpoint("e", "/e"))
+	admit := tracedValidator{kind: "KrakenDGateway", next: v.Gateway, tracer: rec.Tracer()}
+
+	if _, err := admit.ValidateUpdate(context.Background(), old, gw); err != nil {
+		t.Fatal(err)
+	}
+
+	spans := rec.Ended()
+	spans.RequireChild(t, "admission.validate KrakenDGateway", "admission.judge_served")
+	spans.RequireChild(t, "admission.validate KrakenDGateway", "configcheck.SameConfig")
+	spans.RequireParent(t, "admission.validate KrakenDGateway", "configcheck.Conflicts")
+	spans.RequireParent(t, "admission.validate KrakenDGateway", "configcheck.CheckRoot")
+	spans.RequireChild(t, "admission.validate KrakenDGateway", "configcheck.CheckGroup")
+}
