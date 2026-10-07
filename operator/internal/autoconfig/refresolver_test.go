@@ -943,3 +943,18 @@ func TestResolveExternalRefs_AFailedRefWarningCarriesNoCredentials(t *testing.T)
 	}
 	requireNoSecretWarnings(t, warnings)
 }
+
+func TestResolveExternalRefs_ACycleWarningCarriesNoCredentials(t *testing.T) {
+	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"$ref":"` + refWithSecrets + `#/A"}}}}}}`)
+	fetcher := &stubFetcher{docs: map[string][]byte{
+		refWithSecrets: []byte(`{"A":{"next":{"$ref":"` + refWithSecrets + `#/A"}}}`),
+	}}
+
+	_, warnings, err := ResolveExternalRefs(context.Background(), main, "https://api.example.com/openapi.json",
+		fetcher, FetchSource{})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireNoSecretWarnings(t, warnings)
+}
