@@ -266,9 +266,30 @@ func TestCheckRoot_AMemoEntryWithoutARejectionIsAMiss(t *testing.T) {
 		t.Errorf("CheckRoot = %+v, %v after %d checks; want the validator's rejection from a re-run", v, err, len(val.calls))
 	}
 	for _, kept := range memo {
-		if !judged(kept) {
+		if kept.Output != "really bad" || kept.Stage != renderer.StageCheck {
 			t.Errorf("memo entry %+v was not replaced with the real answer", kept)
 		}
+	}
+}
+
+// The Memo is a port the checker does not trust: an entry that is both OK and
+// a rejection is a miss, never a pass.
+func TestCheckRoot_AMemoEntryThatIsOKAndRejectedIsAMiss(t *testing.T) {
+	val := &fakeValidator{err: rejectedOutput("really bad")}
+	chk := newChecker(val)
+	memo := mapMemo{}
+	root := Root{Gateway: gateway(v1alpha1.EditionCE)}
+	if _, err := chk.CheckRoot(context.Background(), root, memo); err != nil {
+		t.Fatal(err)
+	}
+	for key := range memo {
+		memo[key] = Verdict{OK: true, Output: "really bad", Stage: renderer.StageCheck}
+	}
+
+	v, err := chk.CheckRoot(context.Background(), root, memo)
+
+	if err != nil || v.OK || len(val.calls) != 2 {
+		t.Errorf("CheckRoot = %+v, %v after %d checks; want the validator's rejection from a re-run", v, err, len(val.calls))
 	}
 }
 
