@@ -39,7 +39,7 @@ See [values.yaml](values.yaml) for the full list of configurable parameters.
 | `telemetry.otlp.headersSecret` | Secret `name` and `key` holding `OTEL_EXPORTER_OTLP_HEADERS` (`key1=value1,key2=value2`) | `name: ""`, `key: headers` |
 | `telemetry.otlp.signals` | Which of `traces`, `metrics`, `logs` are exported when an endpoint is set | all `true` |
 | `telemetry.traces.sampler`, `telemetry.traces.samplerArg` | `OTEL_TRACES_SAMPLER` and its argument | `""` (parent-based, always on) |
-| `telemetry.resourceAttributes` | Extra `OTEL_RESOURCE_ATTRIBUTES` | `{}` |
+| `telemetry.resourceAttributes` | Extra `OTEL_RESOURCE_ATTRIBUTES`. Values are percent-encoded for you; keys may not contain `,` or `=`; quote numeric values in YAML (`"1234567"`) so they are not reformatted | `{}` |
 | `telemetry.logs.format` | stdout log format: `json` or `pretty` | `json` |
 | `resources` | CPU/memory requests and limits | See values.yaml |
 
@@ -77,15 +77,17 @@ The operator uses OpenTelemetry for its logs, traces and metrics.
 
 - **Logs** are written to stdout as JSON, one record per line. Each record carries `TraceID` and `SpanID` when it was logged inside a reconcile or an admission request.
 - **Metrics** are served on the metrics endpoint as before, with the same names and labels.
-- **Traces and OTLP.** With `telemetry.otlp.endpoint` set, traces, metrics and logs are also exported over OTLP. Each reconcile and each admission request is one trace, with every krakend run and Kubernetes API call below it. Without an endpoint nothing is exported.
+- **Traces and OTLP.** With `telemetry.otlp.endpoint` (or the node collector below) set, traces, metrics and logs are also exported over OTLP. Each reconcile and each admission request is one trace, with every krakend run and Kubernetes API call below it. With neither, nothing is exported.
 - **Node-local collector.** If a collector runs on every node, set `telemetry.otlp.nodeCollector.enabled=true` instead of an endpoint. The operator then reaches the collector on its node's IP and labels its telemetry with the node and pod. For a gRPC collector also set the port and protocol:
 
   ```bash
-  helm upgrade --install krakend-operator ./charts/krakend-operator \
+  helm upgrade krakend-operator krakend-operator/krakend-operator -n krakend-operator-system --reuse-values \
     --set telemetry.otlp.nodeCollector.enabled=true \
     --set telemetry.otlp.nodeCollector.port=4317 \
     --set telemetry.otlp.protocol=grpc
   ```
+
+  `status.hostIP` is an unbracketed address on IPv6-primary nodes, so the node collector does not apply there; set `telemetry.otlp.endpoint` instead.
 
 - **Headers.** Put collector credentials in a Secret and name it in `telemetry.otlp.headersSecret`.
 - **Duplicate logs.** If a log agent already collects the pod's stdout, set `telemetry.otlp.signals.logs=false` so log records are not delivered twice.
