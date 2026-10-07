@@ -113,3 +113,51 @@ func TestTraceExecutor_TheCommandOutputIsRecordedNowhere(t *testing.T) {
 		}
 	}
 }
+
+func TestTraceExecutor_RecordsHowEachRunEnded(t *testing.T) {
+	tests := []struct {
+		name     string
+		args     []string
+		err      error
+		wantCode int64 // -1: no exit code recorded
+		wantMode string
+		wantErr  bool
+	}{
+		{
+			name: "success is exit code 0 and leaves the status unset",
+			args: []string{"check", "-t", "-c", "/tmp/c.json"}, wantCode: 0, wantMode: "validate",
+		},
+		{
+			name: "lint has no -t",
+			args: []string{"check", "-l", "-c", "/tmp/c.json"}, wantCode: 0, wantMode: "lint",
+		},
+		{
+			name: "a failed start is an error with no exit code",
+			args: []string{"check", "-t", "-c", "/tmp/c.json"}, err: errors.New("fork/exec krakend: no such file"),
+			wantCode: -1, wantMode: "validate", wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := tracingtest.New(t)
+			executor := telemetry.TraceExecutor(stubExecutor{err: tt.err}, rec.Tracer())
+
+			_, _ = executor.Execute(context.Background(), "krakend", tt.args...)
+
+			span := rec.Ended().One(t, "krakend check")
+			code, hasCode := attr(span.Attributes(), "process.exit.code")
+			if tt.wantCode < 0 && hasCode {
+				t.Errorf("process.exit.code = %v, want none", code.AsInt64())
+			}
+			if tt.wantCode >= 0 && (!hasCode || code.AsInt64() != tt.wantCode) {
+				t.Errorf("process.exit.code = %v (set: %t), want %d", code.AsInt64(), hasCode, tt.wantCode)
+			}
+			if mode, _ := attr(span.Attributes(), "krakend.check.mode"); mode.AsString() != tt.wantMode {
+				t.Errorf("krakend.check.mode = %q, want %q", mode.AsString(), tt.wantMode)
+			}
+			if gotErr := span.Status().Code == codes.Error; gotErr != tt.wantErr {
+				t.Errorf("status = %v, want error: %t", span.Status(), tt.wantErr)
+			}
+		})
+	}
+}
