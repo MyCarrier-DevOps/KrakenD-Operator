@@ -2872,6 +2872,33 @@ func TestAutoConfigReconcile_AllOperationsHeldStillScopesAdditionalEndpoints(t *
 	}
 }
 
+// A held operation outside the generated endpoints' parent leaves no base to
+// derive, exactly as it would once it is healthy.
+func TestAutoConfigReconcile_HeldRootOperationFailsAdditionalEndpointScope(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	ac.Status.Phase = v1alpha1.AutoConfigPhasePending
+	ac.Spec.AdditionalEndpoints = []v1alpha1.AdditionalEndpoint{{Endpoint: "/liveness"}}
+	c := fakeClientBuilder().WithObjects(ac, cm, testGateway()).WithStatusSubresource(ac).Build()
+	f, ce, fi, g := defaultMocks()
+	ce.output.Failed = []autoconfig.OperationIssue{{
+		Operation: autoconfig.Operation{Method: "GET", Path: "/healthz", OperationID: "health"},
+		Reason:    v1alpha1.ReasonCUEEvaluationFailed,
+		Message:   "boom",
+	}}
+	r := newACReconciler(c, f, ce, fi, g)
+
+	_, _ = reconcileAC(r, ac)
+
+	synced := meta.FindStatusCondition(getAC(t, c, ac).Status.Conditions, v1alpha1.ConditionSynced)
+	if synced == nil || synced.Reason != v1alpha1.ReasonAdditionalEndpointScopeFailed {
+		t.Fatalf("Synced = %+v, want reason %s", synced, v1alpha1.ReasonAdditionalEndpointScopeFailed)
+	}
+	if !strings.Contains(synced.Message, "held operations") {
+		t.Errorf("message %q, want it to name the held operations", synced.Message)
+	}
+}
+
 func TestAutoConfigReconcile_AdditionalEndpointOverrideEmitsWarning(t *testing.T) {
 	cm := testCUEDefinitionsCM()
 	ac := testAutoConfig()
