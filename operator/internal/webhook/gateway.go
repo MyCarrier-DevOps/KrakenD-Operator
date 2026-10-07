@@ -1174,22 +1174,19 @@ func warnWaiting(ctx context.Context, chk ConfigChecker, memo configcheck.Memo, 
 }
 
 // judgeServed decides a gateway update from the endpoints gw serves (served),
-// given the check of them as a group with the update (group). When it fails,
-// each endpoint is checked on its own with the update (now) and, when that
-// fails, with the stored gateway (old). One that fails only with the update
-// is broken by it: the update is refused, naming it and quoting nothing of
-// it. When every endpoint that fails failed with the stored gateway too, the
-// update only draws a warning. When the group failed but no endpoint fails on
+// given the check of them as a group with the update (group). Each endpoint
+// that check left unjudged (suspectsOf) is checked on its own with the update
+// (now) and, when that fails, with the stored gateway (old). One that fails
+// only with the update is broken by it: the update is refused, naming it and
+// quoting nothing of it. When every endpoint that fails failed with the stored
+// gateway too, the update only draws a warning. When the group failed but no endpoint fails on
 // its own, the group with the stored gateway tells whether failing together is
 // the update's doing.
 func judgeServed(ctx context.Context, chk ConfigChecker, memo configcheck.Memo, now configcheck.EndpointUnit,
 	old *v1alpha1.KrakenDGateway, group configcheck.Verdict, served []v1alpha1.KrakenDEndpoint,
 ) (admission.Warnings, error) {
-	if group.OK {
-		return nil, nil
-	}
 	was := &configcheck.EndpointUnit{Gateway: old, CEFallback: configcheck.CEFallback(old)}
-	s := failingEndpoints(ctx, chk, memo, now, was, served)
+	s := failingEndpoints(ctx, chk, memo, now, was, suspectsOf(group, served))
 	switch {
 	case s.stopped != nil:
 		return nil, checkErr(s.stopped)
@@ -1199,6 +1196,8 @@ func judgeServed(ctx context.Context, chk ConfigChecker, memo configcheck.Memo, 
 	case s.already:
 		return admission.Warnings{"some of the gateway's endpoints already fail validation with the stored " +
 			"config, and stay left out until they pass"}, nil
+	case group.OK:
+		return nil, nil
 	}
 	before, err := chk.CheckGroup(ctx,
 		configcheck.Group{Gateway: old, Endpoints: served, CEFallback: was.CEFallback}, memo)
