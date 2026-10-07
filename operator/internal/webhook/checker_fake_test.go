@@ -57,6 +57,9 @@ type scriptedChecker struct {
 	// memos records, for each root, policy, group and endpoint check, whether it was handed
 	// a memo.
 	memos []bool
+	// overrides records, for each endpoint check, the namespace/name of the
+	// policy override it was handed, "-" for none.
+	overrides []string
 	// delay holds every check that long, giving up when its context ends.
 	delay time.Duration
 	// failOnly makes err fail call failCall alone, not every call after it.
@@ -130,9 +133,12 @@ func (s *scriptedChecker) CheckEndpoint(
 ) (configcheck.EndpointVerdict, error) {
 	s.memos = append(s.memos, memo != nil)
 	err := s.record(ctx, "endpoint", []v1alpha1.KrakenDEndpoint{*u.Endpoint})
+	override := "-"
 	if u.Override != nil {
 		s.args[len(s.args)-1] += ":" + rawOf(u.Override)
+		override = u.Override.Namespace + "/" + u.Override.Name
 	}
+	s.overrides = append(s.overrides, override)
 	if err != nil {
 		return configcheck.EndpointVerdict{}, err
 	}
