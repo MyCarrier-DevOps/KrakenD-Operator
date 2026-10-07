@@ -274,7 +274,7 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// is the applied config. A rejected render, an unavailable validator and a
 	// missing plugin ConfigMap do not hold it back: they are verdicts on this
 	// generation that Ready already reports.
-	appliedHeld := isApplied(&gw, output, edition) && cfg.appliedConfigMap == ""
+	appliedHeld := cfg.served && cfg.appliedConfigMap == ""
 	observed := gw.Generation
 	if infraErr != nil || appliedHeld {
 		observed = before.ObservedGeneration
