@@ -511,3 +511,49 @@ func TestSetup_ProtocolIsTheSignalsThenTheGenericThenHTTP(t *testing.T) {
 		}
 	}
 }
+
+// A signal's own endpoint, with no generic one, turns that signal's export on
+// and no other.
+func TestSetup_ASignalEndpointAloneEnablesThatSignal(t *testing.T) {
+	for _, on := range otlpSignals {
+		t.Run(on.name, func(t *testing.T) {
+			cleanOTelEnv(t)
+			collected, url := newHTTPCollector(t)
+			t.Setenv("OTEL_EXPORTER_OTLP_"+on.name+"_ENDPOINT", url+on.httpPath)
+			tel := setup(t, &bytes.Buffer{})
+
+			for _, signal := range otlpSignals {
+				signal.emit(t, tel)
+			}
+			if err := tel.Shutdown(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+
+			if got := collected.all(); len(got) != 1 || got[on.httpPath] == 0 {
+				t.Errorf("the collector got %v, want only %s", got, on.httpPath)
+			}
+		})
+	}
+}
+
+// The SDK's own diagnostics go to stdout only. Sent through the OTLP log
+// exporter, a failing export would report itself into the exporter that failed.
+func TestSetup_DiagnosticsAreNeverExportedOverOTLP(t *testing.T) {
+	cleanOTelEnv(t)
+	collected, url := newHTTPCollector(t)
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", url)
+	var out bytes.Buffer
+	tel := setup(t, &out)
+
+	tel.Diagnostics.Info("export failed")
+	if err := tel.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(out.String(), "export failed") {
+		t.Errorf("stdout lacks the diagnostic:\n%s", out.String())
+	}
+	if n := collected.count("/v1/logs"); n != 0 {
+		t.Errorf("%d log POSTs carried the diagnostic; the collector got %v", n, collected.all())
+	}
+}
