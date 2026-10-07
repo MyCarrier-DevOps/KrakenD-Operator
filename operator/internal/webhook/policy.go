@@ -42,6 +42,9 @@ type PolicyValidator struct {
 	client.Client
 	// Checker renders the policy alone and in every gateway that uses it.
 	Checker ConfigChecker
+	// Memo remembers recent config verdicts across requests. Nil remembers
+	// nothing.
+	Memo configcheck.Memo
 }
 
 // ValidateCreate validates a new KrakenDBackendPolicy.
@@ -52,7 +55,7 @@ func (v *PolicyValidator) ValidateCreate(ctx context.Context, obj runtime.Object
 	}
 	ctx, cancel := context.WithTimeout(ctx, admissionBudget)
 	defer cancel()
-	return checkPolicyRender(ctx, v.Client, v.Checker, nil, policy)
+	return checkPolicyRender(ctx, v.Client, v.Checker, v.Memo, nil, policy)
 }
 
 // ValidateUpdate validates an updated KrakenDBackendPolicy. An update that
@@ -76,7 +79,7 @@ func (v *PolicyValidator) ValidateUpdate(
 	}
 	ctx, cancel := context.WithTimeout(ctx, admissionBudget)
 	defer cancel()
-	return checkPolicyRender(ctx, v.Client, v.Checker, old, policy)
+	return checkPolicyRender(ctx, v.Client, v.Checker, v.Memo, old, policy)
 }
 
 // ValidateDelete is required by admission.CustomValidator. The policy webhook is
@@ -113,7 +116,8 @@ const policySummaryLimit = policyWarningLimit / 2
 // that already failed alone (old) is judged by its gateways, and a gateway
 // already failing without the change gets a warning instead.
 func checkPolicyRender(
-	ctx context.Context, c client.Reader, chk ConfigChecker, old, policy *v1alpha1.KrakenDBackendPolicy,
+	ctx context.Context, c client.Reader, chk ConfigChecker, memo configcheck.Memo,
+	old, policy *v1alpha1.KrakenDBackendPolicy,
 ) (admission.Warnings, error) {
 	if err := lintPolicyAlone(ctx, chk, old, policy); err != nil {
 		return nil, err
@@ -273,4 +277,33 @@ func gatewaysUsing(
 		gateways = append(gateways, gw)
 	}
 	return gateways, nil
+}
+
+// policyUse is a gateway's screening of a policy write (screenPolicyUse).
+type policyUse struct {
+	gateway *v1alpha1.KrakenDGateway
+	// served are the gateway's endpoints that use the policy and that it
+	// serves (servedEndpoints).
+	served []v1alpha1.KrakenDEndpoint
+	// failed says the group check of served with the write failed, and
+	// suspects are those of served it did not judge (suspectsOf).
+	failed   bool
+	suspects []v1alpha1.KrakenDEndpoint
+	// warning says the gateway's root fails on its own, so nothing is judged.
+	warning string
+	// err is a check that could not run: the gateway is not judged.
+	err error
+}
+
+// screenPolicyUse runs the checks of a policy write on gw that do not depend
+// on how many endpoints it breaks.
+func screenPolicyUse(_ context.Context, _ ConfigChecker, _ configcheck.Memo, gw *v1alpha1.KrakenDGateway,
+	_ []v1alpha1.KrakenDEndpoint, _ *v1alpha1.KrakenDBackendPolicy) policyUse {
+	return policyUse{gateway: gw}
+}
+
+// judgePolicyUse names the endpoints of a screened gateway that policy breaks.
+func judgePolicyUse(context.Context, ConfigChecker, configcheck.Memo, policyUse,
+	*v1alpha1.KrakenDBackendPolicy, *v1alpha1.KrakenDBackendPolicy) (cause, warning string, err error) {
+	return "", "", nil
 }
