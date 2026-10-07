@@ -23,6 +23,7 @@ import (
 	"slices"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
@@ -81,6 +82,8 @@ type KrakenDGatewayReconciler struct {
 	MaxConcurrentReconciles int
 	// Metrics records the controller's metrics; nil records nothing.
 	Metrics GatewayMetrics
+	// Tracer records the reconcile's spans; nil records none.
+	Tracer trace.Tracer
 
 	// verdicts remembers, per gateway, the config checks its last pass ran,
 	// so a gateway whose inputs did not change runs none.
