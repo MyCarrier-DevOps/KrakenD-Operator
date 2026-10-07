@@ -19,6 +19,8 @@ package telemetry_test
 import (
 	"bytes"
 	"context"
+	"maps"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -32,6 +34,8 @@ import (
 	"go.opentelemetry.io/otel"
 	otellog "go.opentelemetry.io/otel/log"
 	"go.opentelemetry.io/otel/trace/noop"
+	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/mycarrier-devops/krakend-operator/internal/telemetry"
 )
@@ -121,9 +125,96 @@ func TestSetup_RejectsAnUnsupportedProtocol(t *testing.T) {
 	}
 }
 
+// collector records the calls an OTLP client makes to a test server: the URL
+// path for http/protobuf, the full method name for gRPC.
+type collector struct {
+	mu    sync.Mutex
+	calls map[string]int
+}
+
+func (c *collector) record(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.calls == nil {
+		c.calls = map[string]int{}
+	}
+	c.calls[key]++
+}
+
+func (c *collector) count(key string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.calls[key]
+}
+
+func (c *collector) all() map[string]int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return maps.Clone(c.calls)
+}
+
+// newHTTPCollector serves OTLP over http/protobuf and returns its URL.
+func newHTTPCollector(t *testing.T) (*collector, string) {
+	t.Helper()
+	c := &collector{}
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			c.record(r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+	return c, server.URL
+}
+
+// newGRPCCollector serves any gRPC method, answering with an empty message,
+// and returns its URL. An http:// scheme makes the OTLP exporter insecure.
+func newGRPCCollector(t *testing.T) (*collector, string) {
+	t.Helper()
+	c := &collector{}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := grpc.NewServer(grpc.UnknownServiceHandler(func(_ any, stream grpc.ServerStream) error {
+		method, _ := grpc.MethodFromServerStream(stream)
+		_ = stream.RecvMsg(&emptypb.Empty{})
+		c.record(method)
+		return stream.SendMsg(&emptypb.Empty{})
+	}))
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(server.Stop)
+	return c, "http://" + listener.Addr().String()
+}
+
+// otlpSignal is one of the three signals Setup exports, with where an OTLP
+// client delivers it and a way to produce one.
+type otlpSignal struct {
+	name, httpPath, grpcMethod string
+	emit                       func(t *testing.T, tel *telemetry.Telemetry)
+}
+
+var otlpSignals = []otlpSignal{
+	{"TRACES", "/v1/traces", "/opentelemetry.proto.collector.trace.v1.TraceService/Export",
+		func(_ *testing.T, tel *telemetry.Telemetry) {
+			_, span := tel.TracerProvider.Tracer("test").Start(context.Background(), "exported")
+			span.End()
+		}},
+	{"METRICS", "/v1/metrics", "/opentelemetry.proto.collector.metrics.v1.MetricsService/Export",
+		func(t *testing.T, tel *telemetry.Telemetry) {
+			counter, err := tel.MeterProvider.Meter("test").Int64Counter("exported_total")
+			if err != nil {
+				t.Fatal(err)
+			}
+			counter.Add(context.Background(), 1)
+		}},
+	{"LOGS", "/v1/logs", "/opentelemetry.proto.collector.logs.v1.LogsService/Export",
+		func(_ *testing.T, tel *telemetry.Telemetry) { tel.Logger.Info("exported") }},
+}
+
 func TestSetup_WithAnEndpointTracesAreRecorded(t *testing.T) {
 	cleanOTelEnv(t)
-	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:1")
+	_, url := newHTTPCollector(t)
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", url)
 	t.Setenv("OTEL_LOGS_EXPORTER", "none")
 	t.Setenv("OTEL_METRICS_EXPORTER", "none")
 
@@ -141,38 +232,20 @@ func TestSetup_WithAnEndpointTracesAreRecorded(t *testing.T) {
 // time Shutdown returns.
 func TestSetup_ExportsEverySignalOverOTLP(t *testing.T) {
 	cleanOTelEnv(t)
-	var mu sync.Mutex
-	posts := map[string]int{}
-	collector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		defer mu.Unlock()
-		if r.Method == http.MethodPost {
-			posts[r.URL.Path]++
-		}
-	}))
-	defer collector.Close()
-	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", collector.URL)
-	var out bytes.Buffer
-	tel := setup(t, &out)
-	ctx := context.Background()
+	collected, url := newHTTPCollector(t)
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", url)
+	tel := setup(t, &bytes.Buffer{})
 
-	_, span := tel.TracerProvider.Tracer("test").Start(ctx, "exported")
-	span.End()
-	counter, err := tel.MeterProvider.Meter("test").Int64Counter("exported_total")
-	if err != nil {
-		t.Fatal(err)
+	for _, signal := range otlpSignals {
+		signal.emit(t, tel)
 	}
-	counter.Add(ctx, 1)
-	tel.Logger.Info("exported")
-	if err := tel.Shutdown(ctx); err != nil {
+	if err := tel.Shutdown(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 
-	mu.Lock()
-	defer mu.Unlock()
-	for _, path := range []string{"/v1/traces", "/v1/metrics", "/v1/logs"} {
-		if posts[path] == 0 {
-			t.Errorf("no POST to %s; the collector got %v", path, posts)
+	for _, signal := range otlpSignals {
+		if collected.count(signal.httpPath) == 0 {
+			t.Errorf("no POST to %s; the collector got %v", signal.httpPath, collected.all())
 		}
 	}
 }
