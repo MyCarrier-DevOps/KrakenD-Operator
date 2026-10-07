@@ -1269,4 +1269,4 @@ Error records, unlike spans, can quote krakend's output, which may hold tenant v
 - a failure of the final flush at shutdown, printed as `flushing telemetry: …`;
 - Go runtime crashes.
 
-**Shutdown.** On `SIGTERM` the manager stops, then the operator flushes the batched OTLP traces, metrics and logs, waiting at most 5 seconds, so that both fit the pod's 10 second termination grace period. Only OTLP data can be cut off by that limit. When the leader-election lease is lost the process exits the same way, after at most the same wait. A second signal exits at once, without the flush.
+**Shutdown.** On `SIGTERM` the manager stops, waiting at most 4 seconds for its controllers and servers (its graceful shutdown timeout), then the operator flushes the batched OTLP traces, metrics and logs, waiting at most 5 seconds, so that both fit the pod's 10 second termination grace period. Only OTLP data can be cut off by that limit. When the leader-election lease is lost the process exits the same way, after at most the same wait. A second signal exits at once, without the flush.

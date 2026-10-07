@@ -2970,7 +2970,7 @@ The image now reports its version (`service.version`) from the `VERSION` build a
 
 ### Shutdown flushes telemetry for at most 5 seconds
 
-After the manager stops, the operator flushes the batched OTLP traces, metrics and logs, waiting at most 5 seconds, so that both fit the pod's 10 second termination grace period. Stdout logs are written as they are logged; only OTLP data can be cut off. A failed flush is printed to stderr. A second signal exits at once, without the flush.
+The manager waits at most 4 seconds for its controllers and servers to stop (its graceful shutdown timeout, which controller-runtime defaults to 30). After it stops, the operator flushes the batched OTLP traces, metrics and logs, waiting at most 5 seconds, so that both fit the pod's 10 second termination grace period. Stdout logs are written as they are logged; only OTLP data can be cut off. A failed flush is printed to stderr. A second signal exits at once, without the flush.
 
 ### AutoConfig fetch errors no longer show URL credentials
 
