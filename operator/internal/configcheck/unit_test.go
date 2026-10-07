@@ -123,3 +123,23 @@ func TestCheckGroup_ChecksOnlyItsEndpointsWithTheOverride(t *testing.T) {
 		t.Errorf("checked config does not carry the override:\n%s", val.seen[0])
 	}
 }
+
+func TestCheckPolicy_LintsThePolicyOnItsOwn(t *testing.T) {
+	val := &fakeValidator{}
+	chk := newChecker(val, endpoint("other", "/other"))
+	memo := mapMemo{}
+
+	for range 2 {
+		v, err := chk.CheckPolicy(context.Background(), policy("p"), memo)
+		if err != nil || !v.OK {
+			t.Fatalf("CheckPolicy = %+v, %v", v, err)
+		}
+	}
+
+	if len(val.calls) != 1 {
+		t.Fatalf("ran %d times, want 1: the second check is remembered", len(val.calls))
+	}
+	if paths := renderedPaths(t, val.seen[0]); !reflect.DeepEqual(paths, []string{"/policy-lint"}) {
+		t.Errorf("checked endpoints %v, want only the synthetic one", paths)
+	}
+}

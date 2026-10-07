@@ -85,6 +85,11 @@ func (c *Checker) CheckGroup(ctx context.Context, g Group, memo Memo) (Verdict, 
 	}, memo)
 }
 
+// CheckPolicy lints policy on its own.
+func (c *Checker) CheckPolicy(context.Context, *v1alpha1.KrakenDBackendPolicy, Memo) (Verdict, error) {
+	return Verdict{}, nil
+}
+
 // lintInput renders in and lints the render, answering from memo when it
 // already judged the same content.
 func (c *Checker) lintInput(ctx context.Context, in renderer.RenderInput, memo Memo) (Verdict, error) {
