@@ -17,15 +17,18 @@ limitations under the License.
 package webhook
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
+	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 )
 
 // ownFailure is an endpoint verdict quoting the endpoint's own output.
@@ -158,4 +161,34 @@ func TestEndpointAdmission_TheDenialIsBounded(t *testing.T) {
 	if text := responseText(resp); len(text) > 3*warningLimit || !strings.Contains(text, "more)") {
 		t.Errorf("denial is %d bytes, want it bounded with a count of what it leaves out", len(text))
 	}
+}
+
+func TestEndpointAdmission_TheRootAndAPolicyAreCheckedOnceForManyWrites(t *testing.T) {
+	executor := &countingExecutor{}
+	shared := &v1alpha1.KrakenDBackendPolicy{ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "default"}}
+	c := fakeClient(testGateway(), shared)
+	chk := configcheck.New(c, renderer.New(renderer.Options{}),
+		renderer.NewValidator(renderer.ValidatorOptions{Executor: executor, BinaryPath: "krakend"}), 1)
+	v := &EndpointValidator{Client: c, Checker: chk, Memo: newAdmissionMemo()}
+
+	for _, name := range []string{"one", "two", "three"} {
+		ep := testEndpoint(name, "/"+name)
+		ep.Spec.Endpoints[0].Backends[0].PolicyRef = &v1alpha1.PolicyRef{Name: "p"}
+		if resp := review(t, v, "alice", ep, nil); !resp.Allowed {
+			t.Fatalf("%s denied: %+v", name, resp.Result)
+		}
+	}
+
+	if executor.runs != 5 {
+		t.Errorf("krakend ran %d times for three creates, want 5: the root and the policy once each, then each endpoint", executor.runs)
+	}
+}
+
+// countingExecutor stands in for a krakend binary that accepts every config
+// and counts its runs.
+type countingExecutor struct{ runs int }
+
+func (e *countingExecutor) Execute(context.Context, string, ...string) ([]byte, error) {
+	e.runs++
+	return []byte("Syntax OK!"), nil
 }
