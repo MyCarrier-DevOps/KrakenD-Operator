@@ -22,7 +22,6 @@ import (
 	"net/http"
 
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -110,10 +109,10 @@ const rulesFailed = "the rules could not be evaluated"
 // tenant's object, nor the text of a failure, which can too: a failure to
 // decide only marks the span an error.
 func endDecision(span trace.Span, err error) {
-	if err != nil && !isDenial(err) {
-		span.SetStatus(codes.Error, decisionFailed)
+	if isDenial(err) {
+		err = nil
 	}
-	span.End()
+	tracing.EndFailed(span, err, decisionFailed)
 }
 
 // endRules ends span, the span of rules that return err. A denial is an
@@ -123,13 +122,12 @@ func endRules(span trace.Span, err error) {
 	var status apierrors.APIStatus
 	switch {
 	case isDenial(err):
+		span.End()
 	case errors.As(err, &status):
-		span.SetStatus(codes.Error, rulesFailed)
+		tracing.EndFailed(span, err, rulesFailed)
 	default:
 		tracing.End(span, err)
-		return
 	}
-	span.End()
 }
 
 // isDenial reports whether err is a validator's refusal of the request: a
