@@ -18,11 +18,13 @@ package renderer
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 )
@@ -93,5 +95,36 @@ func TestRender_ARenderWithoutClashesIsUnchanged(t *testing.T) {
 	const want = "096f201b1129f20da995540ed15e26145719594bc642dab73bdba4ccd4af112d"
 	if out.Checksum != want {
 		t.Errorf("checksum = %s, want %s", out.Checksum, want)
+	}
+}
+
+func TestRender_ARouterClashKeepsTheOlderEndpointsEntry(t *testing.T) {
+	tests := []struct {
+		name               string
+		olderPath, newPath string
+	}{
+		{"the parameter route is older", "/users/{id}", "/users/{userId}/orders"},
+		{"the nested route is older", "/users/{userId}/orders", "/users/{id}"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			in := RenderInput{Gateway: routedGateway(v1alpha1.EditionCE, nil), Endpoints: []v1alpha1.KrakenDEndpoint{
+				routed("older", 0, "GET", tt.olderPath), routed("newer", 1, "GET", tt.newPath),
+			}}
+
+			out, err := New(Options{}).Render(in)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if got := servedEntries(t, out); len(got) != 1 || got[0] != "GET "+tt.olderPath {
+				t.Errorf("served %v, want only the older endpoint's GET %s", got, tt.olderPath)
+			}
+			lost := out.EntryConflicts[types.NamespacedName{Namespace: "ns", Name: "newer"}]
+			if len(lost) != 1 || lost[0].Endpoint != tt.newPath || lost[0].Winner.Name != "older" ||
+				!strings.Contains(lost[0].Detail, "conflicts with existing wildcard") {
+				t.Errorf("newer lost %+v, want its entry, to ns/older, with gin's refusal", lost)
+			}
+		})
 	}
 }
