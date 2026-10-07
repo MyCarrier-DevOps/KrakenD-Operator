@@ -58,8 +58,8 @@ func TestChecker_EveryExportedMethodStartsItsOwnSpan(t *testing.T) {
 				continue
 			}
 			methods++
-			if want := "configcheck." + fn.Name.Name; !startsSpan(fn.Body, want) {
-				t.Errorf("(*Checker).%s starts no span %q", fn.Name.Name, want)
+			if want := "configcheck." + fn.Name.Name; !startsSpan(fn, want) {
+				t.Errorf("(*Checker).%s starts no span %q as its first statement, from its ctx", fn.Name.Name, want)
 			}
 		}
 	}
@@ -80,25 +80,38 @@ func receiverType(fn *ast.FuncDecl) string {
 	return ident.Name
 }
 
-// startsSpan reports whether body makes a call with name as a string
-// argument: tracing.Start or the Checker's own c.start.
-func startsSpan(body *ast.BlockStmt, name string) bool {
-	found := false
-	ast.Inspect(body, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return !found
-		}
-		for _, arg := range call.Args {
-			if lit, ok := arg.(*ast.BasicLit); ok && lit.Kind == token.STRING {
-				if s, err := strconv.Unquote(lit.Value); err == nil && s == name {
-					found = true
-				}
+// startsSpan reports whether the first statement of fn rebinds its context
+// parameter from a call that takes that same context first and names the
+// span: ctx, span := c.start(ctx, name, ...) or the tracing.Start form. A span
+// started later, or from another context, leaves the work before it, or the
+// spans below it, outside the check.
+func startsSpan(fn *ast.FuncDecl, name string) bool {
+	if len(fn.Body.List) == 0 || len(fn.Type.Params.List) == 0 || len(fn.Type.Params.List[0].Names) == 0 {
+		return false
+	}
+	ctx := fn.Type.Params.List[0].Names[0].Name
+	assign, ok := fn.Body.List[0].(*ast.AssignStmt)
+	if !ok || len(assign.Lhs) == 0 || len(assign.Rhs) == 0 {
+		return false
+	}
+	if lhs, ok := assign.Lhs[0].(*ast.Ident); !ok || lhs.Name != ctx {
+		return false
+	}
+	call, ok := assign.Rhs[0].(*ast.CallExpr)
+	if !ok || len(call.Args) == 0 {
+		return false
+	}
+	if first, ok := call.Args[0].(*ast.Ident); !ok || first.Name != ctx {
+		return false
+	}
+	for _, arg := range call.Args {
+		if lit, ok := arg.(*ast.BasicLit); ok && lit.Kind == token.STRING {
+			if s, err := strconv.Unquote(lit.Value); err == nil && s == name {
+				return true
 			}
 		}
-		return !found
-	})
-	return found
+	}
+	return false
 }
 
 // tracedChecker returns a checker over objs, with a real validator whose
