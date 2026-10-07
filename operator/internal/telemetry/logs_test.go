@@ -49,6 +49,10 @@ type stdoutRecord struct {
 	TraceID      string
 	SpanID       string
 	Scope        struct{ Name string }
+	Attributes   []struct {
+		Key   string
+		Value struct{ Value any }
+	}
 }
 
 // newStdoutLogger returns a logger writing JSON records at or above minimum
@@ -278,5 +282,25 @@ func TestInstallLogging_ControllerRuntimeLogsThroughThePipeline(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Body.Value != "from controller-runtime" || got[0].Scope.Name != "test/x" {
 		t.Errorf("records = %+v\nchild output:\n%s\nwant one record, scoped test/x", got, output)
+	}
+}
+
+// An error passed to logger.Error is recorded as the exception attributes of
+// the OpenTelemetry semantic conventions.
+func TestLogger_ErrorRecordsTheExceptionAttributes(t *testing.T) {
+	logger, out := newStdoutLogger(t, otellog.SeverityInfo)
+
+	logger.Error(errors.New("boom"), "it failed")
+
+	got := records(t, out)
+	if len(got) != 1 {
+		t.Fatalf("got %d records, want 1", len(got))
+	}
+	attrs := map[string]any{}
+	for _, a := range got[0].Attributes {
+		attrs[a.Key] = a.Value.Value
+	}
+	if attrs["exception.message"] != "boom" || attrs["exception.type"] == nil {
+		t.Errorf("attributes = %v, want exception.message=boom and an exception.type", attrs)
 	}
 }
