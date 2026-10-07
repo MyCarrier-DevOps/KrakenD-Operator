@@ -2904,8 +2904,8 @@ Update log pipelines **before** upgrading:
 - read the container's stdout; a collector that reads only stderr sees nothing but the few lines below;
 - the message is `Body.Value`;
 - the level is `SeverityText`;
-- the logger name is `Scope.Name`, with `/` instead of `.`;
-- key/value pairs are in `Attributes`;
+- the logger name is `Scope.Name`: `krakend-operator/` followed by the logger's names joined with `/` (`controller-runtime.metrics` becomes `krakend-operator/controller-runtime/metrics`);
+- key/value pairs are in `Attributes`; values the log bridge cannot render natively are converted to text (controller-runtime's `reconcileID` is the bare UUID, the same as the span's `controller_runtime.reconcile_id`);
 - an error is in the `exception.message` (its text) and `exception.type` (its Go type) attributes; there is no `error` key;
 - error records carry no stack trace: the one zap added in development mode is gone.
 
@@ -2933,25 +2933,23 @@ Each reconcile and each admission request is a trace, with its stages, every `kr
 - Nothing is exported unless an OTLP endpoint is configured.
 - The trace context is sent to the Kubernetes API server and continued from it on admission requests. If the API server sends an unsampled context (for example with API server tracing at a low `samplingRatePerMillion`), the default sampler leaves the admission request unrecorded. `OTEL_TRACES_SAMPLER=always_on` (Helm: `telemetry.traces.sampler`) records it regardless.
 - It is never sent to OpenAPI spec hosts, or to the hosts of their `$ref` documents.
-- Some Kubernetes API traffic is not traced: informer list and watch requests, leader-election lease renewals, the metrics endpoint's TokenReview and SubjectAccessReview, and the discovery the operator does at startup record no span and send no trace header. Kubernetes events are raised inside a reconcile but written asynchronously, without a span.
+- Some Kubernetes API traffic is not traced: informer list and watch requests, leader-election lease renewals, the metrics endpoint's TokenReview and SubjectAccessReview, and the discovery the operator does at startup record no span and send no trace header. RESTMapper discovery requests are untraced too: client-go sends them without a span context, including the lazy RESTMapper's lookups during a reconcile, so only the operator's own optional-CRD lookups are spans. Kubernetes events are raised inside a reconcile but written asynchronously, without a span.
 - A lookup of an optional CRD during a reconcile is a `k8s.discovery` span of the stage that needs it.
-- An admission request's span says whether it was allowed (`admission.allowed`) and with which status code (`admission.code`: 200, the denial's own code, or 500 when the check could not run). It never says why: no span carries a denial's text, a warning's text or krakend's output.
+- The `admission.validate <Kind>` span (not the `admission <path>` server span) says whether it was allowed (`admission.allowed`) and with which status code (`admission.code`: 200, the denial's own code, or 500 when the check could not run). It never says why: no span carries a denial's text, a warning's text or krakend's output.
 - On an admission request's server span, `client.address` is the first `X-Forwarded-For` value, which any caller in the cluster can set; `network.peer.address` is the real peer.
 
 ### Metrics keep their names
 
 `/metrics` serves the same `krakend_operator_*` names, labels, help text and histogram buckets as before. They are now recorded with OpenTelemetry and exported by its Prometheus exporter. No `target_info` series or `otel_scope_*` label is added. controller-runtime's own metrics are unchanged.
 
-One difference: a deleted gateway's `krakend_operator_reconcile_duration_seconds` series stays until the operator restarts. Its gauges are removed as before. This replaces the statement in "Terminating gateways are left alone; deleted gateways stop reporting metrics", above, that the duration series is removed too.
-
-With an OTLP endpoint, the metrics are also pushed over OTLP. Turn that off with `OTEL_METRICS_EXPORTER=none` (Helm: `telemetry.otlp.signals.metrics: false`).
+One difference: a deleted gateway's `krakend_operator_reconcile_duration_seconds` series stays until the operator restarts. Its gauges are removed as before. With an OTLP endpoint, the metrics are also pushed over OTLP. Turn that off with `OTEL_METRICS_EXPORTER=none` (Helm: `telemetry.otlp.signals.metrics: false`).
 
 ### New environment variables and chart values
 
 | Variable | Default | Effect |
 |---|---|---|
 | `OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_{TRACES,METRICS,LOGS}_ENDPOINT`) | unset | Exports that signal over OTLP; unset exports nothing. One that is not a URL stops that signal's export (a startup record names the variable) |
-| `OTEL_EXPORTER_OTLP_PROTOCOL` | `http/protobuf` | `grpc` or `http/protobuf`; anything else stops startup |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | `http/protobuf` | `grpc` or `http/protobuf` (a signal's own `OTEL_EXPORTER_OTLP_<SIGNAL>_PROTOCOL` overrides it); for a signal that has an endpoint, anything else stops startup |
 | `OTEL_EXPORTER_OTLP_HEADERS` (or a signal's own) | unset | Headers sent to the collector, as URL-encoded `name=value` pairs separated by commas. A malformed list stops that signal's export, not the operator; the startup record names the variable and never its value |
 | `OTEL_{TRACES,METRICS,LOGS}_EXPORTER` | `otlp` | `none` turns that signal's export off; any other value stops startup |
 | `OTEL_METRIC_EXPORT_INTERVAL` | `60000` (ms) | How often metrics are pushed over OTLP |
