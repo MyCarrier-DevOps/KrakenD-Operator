@@ -170,3 +170,25 @@ func TestTraceKubeAPI_NoAttributeCarriesAQueryValue(t *testing.T) {
 		}
 	}
 }
+
+func TestTraceKubeAPI_PrefixedHostStillNamesTheRequestByItsResource(t *testing.T) {
+	rec := tracingtest.New(t)
+	c, _ := tracedClientAt(t, rec, "/k8s/clusters/c-1")
+	ctx, parent := rec.Tracer().Start(context.Background(), "reconcile")
+
+	if err := updateConfigMap(ctx, c); err != nil {
+		t.Fatal(err)
+	}
+	parent.End()
+
+	spans := rec.Ended()
+	for _, span := range spans {
+		if strings.Contains(span.Name(), "ns") || strings.Contains(span.Name(), "cm") {
+			t.Errorf("span name %q carries the namespace or object name", span.Name())
+		}
+	}
+	attrs := attrsOf(spans.One(t, "k8s update configmaps"))
+	if attrs["k8s.resource"] != "configmaps" || attrs["k8s.verb"] != "update" {
+		t.Errorf("attributes = %v, want the configmaps update", attrs)
+	}
+}
