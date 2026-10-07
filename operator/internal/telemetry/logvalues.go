@@ -76,7 +76,7 @@ const maxValueDepth = 100
 //     controller-runtime and klog log is "namespace/name";
 //   - a logr.Marshaler: the value it logs as, converted in turn;
 //   - a named string, bool, int or float type: its base type;
-//   - a map, slice or array: the same with its elements converted.
+//   - a map, slice, array or pointer: the same with its elements converted.
 //
 // A time.Duration and a time.Time stay as they are: the bridge records them as
 // numbers.
@@ -84,15 +84,15 @@ func readableValue(v any, depth int) any {
 	if depth > maxValueDepth {
 		return "<max-depth-exceeded>"
 	}
-	switch v.(type) {
+	switch x := v.(type) {
 	case nil, time.Duration, time.Time:
 		return v
 	case error:
-		return v.(error).Error()
+		return x.Error()
 	case fmt.Stringer:
-		return v.(fmt.Stringer).String()
+		return x.String()
 	case logr.Marshaler:
-		return readableValue(v.(logr.Marshaler).MarshalLog(), depth+1)
+		return readableValue(x.MarshalLog(), depth+1)
 	}
 	rv := reflect.ValueOf(v)
 	switch rv.Kind() {
@@ -106,6 +106,20 @@ func readableValue(v any, depth int) any {
 		return rv.Uint()
 	case reflect.Float32, reflect.Float64:
 		return rv.Float()
+	case reflect.Slice, reflect.Array:
+		if rv.Type().Elem().Kind() == reflect.Uint8 {
+			return v
+		}
+		out := make([]any, rv.Len())
+		for i := range out {
+			out[i] = readableValue(rv.Index(i).Interface(), depth+1)
+		}
+		return out
+	case reflect.Pointer:
+		if rv.IsNil() {
+			return v
+		}
+		return readableValue(rv.Elem().Interface(), depth+1)
 	case reflect.Map:
 		out := make(map[string]any, rv.Len())
 		for iter := rv.MapRange(); iter.Next(); {
