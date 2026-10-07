@@ -719,14 +719,15 @@ func TestAutoConfigReconcile_TheSpansOfAWriteNameTheEndpoint(t *testing.T) {
 	}
 }
 
-// spanCodes returns the status code of each of the named spans.
-func spanCodes(t *testing.T, spans tracingtest.Spans, names ...string) map[string]codes.Code {
+// requireCodes fails the test unless each of the named spans has the status
+// code want gives for it.
+func requireCodes(t *testing.T, spans tracingtest.Spans, want map[string]codes.Code) {
 	t.Helper()
-	got := map[string]codes.Code{}
-	for _, name := range names {
-		got[name] = spans.One(t, name).Status().Code
+	for name, code := range want {
+		if got := spans.One(t, name).Status().Code; got != code {
+			t.Errorf("%s status = %v, want %v", name, got, code)
+		}
 	}
-	return got
 }
 
 // A failed fetch is the fetch stage's error and the reconcile's: the status
@@ -747,12 +748,7 @@ func TestAutoConfigReconcile_AFailedFetchMarksOnlyItsOwnStage(t *testing.T) {
 	want := map[string]codes.Code{
 		"reconcile KrakenDAutoConfig": codes.Error, "autoconfig.fetch_spec": codes.Error, "autoconfig.status": codes.Unset,
 	}
-	got := spanCodes(t, rec.Ended(), "reconcile KrakenDAutoConfig", "autoconfig.fetch_spec", "autoconfig.status")
-	for span, code := range want {
-		if got[span] != code {
-			t.Errorf("%s status = %v, want %v", span, got[span], code)
-		}
-	}
+	requireCodes(t, rec.Ended(), want)
 }
 
 // A refused endpoint write is the write's error and the reconcile's. The
@@ -783,13 +779,7 @@ func TestAutoConfigReconcile_AFailedWriteMarksOnlyItsOwnStage(t *testing.T) {
 		"reconcile KrakenDAutoConfig": codes.Error, "autoconfig.write_endpoint": codes.Error,
 		"autoconfig.endpoints": codes.Unset, "autoconfig.status": codes.Unset,
 	}
-	got := spanCodes(t, rec.Ended(), "reconcile KrakenDAutoConfig", "autoconfig.write_endpoint",
-		"autoconfig.endpoints", "autoconfig.status")
-	for span, code := range want {
-		if got[span] != code {
-			t.Errorf("%s status = %v, want %v", span, got[span], code)
-		}
-	}
+	requireCodes(t, rec.Ended(), want)
 	rec.Ended().RequireParent(t, "reconcile KrakenDAutoConfig", "autoconfig.status")
 }
 
@@ -815,12 +805,7 @@ func TestEndpointReconcile_AFailedStatusWriteMarksOnlyItsOwnStage(t *testing.T) 
 	want := map[string]codes.Code{
 		"reconcile KrakenDEndpoint": codes.Error, "endpoint.status": codes.Error, "endpoint.resolve_refs": codes.Unset,
 	}
-	got := spanCodes(t, rec.Ended(), "reconcile KrakenDEndpoint", "endpoint.status", "endpoint.resolve_refs")
-	for span, code := range want {
-		if got[span] != code {
-			t.Errorf("%s status = %v, want %v", span, got[span], code)
-		}
-	}
+	requireCodes(t, rec.Ended(), want)
 }
 
 // A refused status update is the status stage's error and the reconcile's; the
@@ -847,12 +832,7 @@ func TestPolicyReconcile_AFailedStatusWriteMarksOnlyItsOwnStage(t *testing.T) {
 	want := map[string]codes.Code{
 		"reconcile KrakenDBackendPolicy": codes.Error, "policy.status": codes.Error, "policy.protection": codes.Unset,
 	}
-	got := spanCodes(t, rec.Ended(), "reconcile KrakenDBackendPolicy", "policy.status", "policy.protection")
-	for span, code := range want {
-		if got[span] != code {
-			t.Errorf("%s status = %v, want %v", span, got[span], code)
-		}
-	}
+	requireCodes(t, rec.Ended(), want)
 }
 
 // rejectingExecutor stands in for a krakend binary that refuses every config
