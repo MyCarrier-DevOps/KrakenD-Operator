@@ -121,10 +121,23 @@ func wireValidation(
 	}
 }
 
-// wireReferenceControllers builds the endpoint and policy reconcilers. It is
-// a stub: they are empty.
+// wireReferenceControllers builds the endpoint and policy reconcilers, which
+// resolve and protect references and hold no config checker.
 func wireReferenceControllers(
-	ctrl.Manager, instrumentation,
+	mgr ctrl.Manager, inst instrumentation,
 ) (*controller.KrakenDEndpointReconciler, *controller.KrakenDBackendPolicyReconciler) {
-	return &controller.KrakenDEndpointReconciler{}, &controller.KrakenDBackendPolicyReconciler{}
+	endpoints := &controller.KrakenDEndpointReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("krakendendpoint-controller"),
+		Tracer:   inst.Tracer,
+	}
+	policies := &controller.KrakenDBackendPolicyReconciler{
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		Recorder:  mgr.GetEventRecorderFor("krakendbackendpolicy-controller"),
+		APIReader: mgr.GetAPIReader(),
+		Tracer:    inst.Tracer,
+	}
+	return endpoints, policies
 }
