@@ -31,3 +31,21 @@ func TestVerdictMemo_KeepsWhatTheLastPassUsed(t *testing.T) {
 		t.Error("a verdict the last pass used was dropped")
 	}
 }
+
+func TestVerdictMemo_AFailedPassKeepsWhatTheLastPassKept(t *testing.T) {
+	var m verdictMemo
+	first := m.begin(memoOwner)
+	first.Store("root", configcheck.Verdict{OK: true})
+	m.end(memoOwner, first, false)
+
+	failing := m.begin(memoOwner)
+	failing.Store("unit-1", configcheck.Verdict{OK: true})
+	m.end(memoOwner, failing, true)
+
+	next := m.begin(memoOwner)
+	for _, key := range []string{"root", "unit-1"} {
+		if _, ok := next.Lookup(key); !ok {
+			t.Errorf("Lookup(%s) missed after a failed pass", key)
+		}
+	}
+}
