@@ -582,3 +582,20 @@ func TestAutoConfigReconcile_SpansEachStageUnderItsParent(t *testing.T) {
 		})
 	}
 }
+
+// A sync that fails writes its failure status in a span of its own too.
+func TestAutoConfigReconcile_AFailedSyncWritesItsStatusInASpan(t *testing.T) {
+	ac := testAutoConfig()
+	c := fakeClientBuilder().WithObjects(ac, testCUEDefinitionsCM()).WithStatusSubresource(ac).Build()
+	f, ce, fi, g := defaultMocks()
+	f.err = errors.New("the spec host is unreachable")
+	r := newACReconciler(c, f, ce, fi, g)
+	rec := tracingtest.New(t)
+	r.Tracer = rec.Tracer()
+
+	if _, err := reconcileAC(r, ac); err == nil {
+		t.Fatal("a failed fetch must fail the sync")
+	}
+
+	rec.Ended().RequireParent(t, "reconcile KrakenDAutoConfig", "autoconfig.status")
+}
