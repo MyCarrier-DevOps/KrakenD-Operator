@@ -55,8 +55,11 @@ const configCheckSlots = 3
 // krakendBinary is the krakend binary the image ships for validation.
 const krakendBinary = "/usr/local/bin/krakend"
 
-// telemetryFlushTimeout bounds the final flush of traces, metrics and logs.
-const telemetryFlushTimeout = 10 * time.Second
+// telemetryFlushTimeout bounds the final flush of traces, metrics and logs. The
+// pod's grace period is 10 seconds and the manager stops first, so the flush
+// gets half of it. Stdout records are written as they are logged: only batched
+// OTLP data waits on the flush.
+const telemetryFlushTimeout = 5 * time.Second
 
 var (
 	scheme   = runtime.NewScheme()
