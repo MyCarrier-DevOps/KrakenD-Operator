@@ -128,3 +128,18 @@ func TestRender_ARouterClashKeepsTheOlderEndpointsEntry(t *testing.T) {
 		})
 	}
 }
+
+func TestRender_ARouterClashWithinOneEndpointIsLeftForItsOwnCheck(t *testing.T) {
+	in := RenderInput{Gateway: routedGateway(v1alpha1.EditionCE, nil), Endpoints: []v1alpha1.KrakenDEndpoint{
+		routed("one", 0, "GET", "/users/{id}", "/users/{userId}/orders"),
+	}}
+
+	out, err := New(Options{}).Render(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := servedEntries(t, out); len(got) != 2 || len(out.EntryConflicts) != 0 {
+		t.Errorf("served %v with conflicts %+v; want both entries rendered, for the endpoint's own check to refuse", got, out.EntryConflicts)
+	}
+}
