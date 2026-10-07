@@ -47,16 +47,6 @@ import (
 // AutoConfigChecker is the gateway config check the AutoConfig controller runs
 // over the endpoints it is about to write (configcheck.Checker).
 type AutoConfigChecker interface {
-	CheckGateway(
-		ctx context.Context,
-		gw *v1alpha1.KrakenDGateway,
-		replace []v1alpha1.KrakenDEndpoint,
-	) (configcheck.Verdict, error)
-	CheckIsolated(
-		ctx context.Context,
-		gw *v1alpha1.KrakenDGateway,
-		eps []v1alpha1.KrakenDEndpoint,
-	) (configcheck.Verdict, error)
 	// Conflicts renders gw with replace in process and returns what the
 	// render leaves out.
 	Conflicts(

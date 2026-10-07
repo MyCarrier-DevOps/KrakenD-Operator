@@ -263,19 +263,9 @@ func newACReconciler(
 	}
 }
 
-// fakeChecker is an AutoConfigChecker that returns verdicts in order, then
-// passes; err, when set, is returned by every call, and judge, when set,
-// decides every call's verdict from its replace set. calls records each
-// call's replace set. Isolated checks answer from isolated the same way and
-// are recorded in isolatedCalls; isolatedErr, when set, fails every one.
+// fakeChecker is an AutoConfigChecker that answers each check as its fields
+// say and records what it was asked.
 type fakeChecker struct {
-	verdicts      []configcheck.Verdict
-	err           error
-	judge         func(replace []v1alpha1.KrakenDEndpoint) configcheck.Verdict
-	calls         [][]v1alpha1.KrakenDEndpoint
-	isolated      []configcheck.Verdict
-	isolatedErr   error
-	isolatedCalls [][]v1alpha1.KrakenDEndpoint
 	// conflicts answers Conflicts from its replace set; nil answers none.
 	// conflictCalls records each call's replace set.
 	conflicts     func(replace []v1alpha1.KrakenDEndpoint) configcheck.RouteConflicts
@@ -339,43 +329,6 @@ func (f *fakeChecker) Conflicts(
 		return configcheck.RouteConflicts{}, nil
 	}
 	return f.conflicts(replace), nil
-}
-
-func (f *fakeChecker) CheckIsolated(
-	_ context.Context,
-	_ *v1alpha1.KrakenDGateway,
-	eps []v1alpha1.KrakenDEndpoint,
-) (configcheck.Verdict, error) {
-	f.isolatedCalls = append(f.isolatedCalls, eps)
-	if f.isolatedErr != nil {
-		return configcheck.Verdict{}, f.isolatedErr
-	}
-	if len(f.isolated) == 0 {
-		return configcheck.Verdict{OK: true}, nil
-	}
-	v := f.isolated[0]
-	f.isolated = f.isolated[1:]
-	return v, nil
-}
-
-func (f *fakeChecker) CheckGateway(
-	_ context.Context,
-	_ *v1alpha1.KrakenDGateway,
-	replace []v1alpha1.KrakenDEndpoint,
-) (configcheck.Verdict, error) {
-	f.calls = append(f.calls, replace)
-	if f.err != nil {
-		return configcheck.Verdict{}, f.err
-	}
-	if f.judge != nil {
-		return f.judge(replace), nil
-	}
-	if len(f.verdicts) == 0 {
-		return configcheck.Verdict{OK: true}, nil
-	}
-	v := f.verdicts[0]
-	f.verdicts = f.verdicts[1:]
-	return v, nil
 }
 
 // drainEvents returns every event recorded so far, without blocking.
@@ -6217,21 +6170,6 @@ func (p *peakChecker) Conflicts(
 	return configcheck.RouteConflicts{}, nil
 }
 
-func (p *peakChecker) CheckIsolated(
-	_ context.Context, _ *v1alpha1.KrakenDGateway, _ []v1alpha1.KrakenDEndpoint,
-) (configcheck.Verdict, error) {
-	return configcheck.Verdict{OK: true}, nil
-}
-
-func (p *peakChecker) CheckGateway(
-	_ context.Context,
-	_ *v1alpha1.KrakenDGateway,
-	_ []v1alpha1.KrakenDEndpoint,
-) (configcheck.Verdict, error) {
-	p.busy()
-	return configcheck.Verdict{OK: true}, nil
-}
-
 func (p *peakChecker) CheckRoot(context.Context, configcheck.Root, configcheck.Memo) (configcheck.Verdict, error) {
 	p.busy()
 	return configcheck.Verdict{OK: true}, nil
@@ -6360,17 +6298,18 @@ func TestWithCheckSlot_GivesUpWaitingForASlotWhenContextEnds(t *testing.T) {
 	}
 }
 
-// slotHeldChecker is an AutoConfigChecker that records, for each call, how many
-// of slots were held when it ran, and returns verdicts in order.
+// slotHeldChecker is an AutoConfigChecker that records, for each root, group
+// and endpoint check, how many of slots were held when it ran. Roots and
+// endpoints pass; every group fails, so endpoint checks run too.
 type slotHeldChecker struct {
-	slots    chan struct{}
-	verdicts []configcheck.Verdict
-	held     []int
-	// isolatedHeld records the same for isolated checks, which all pass.
-	isolatedHeld []int
-	// checksHeld records the same for each root, group and endpoint check.
-	// Roots and endpoints pass; every group fails, so endpoint checks run too.
+	slots      chan struct{}
 	checksHeld []int
+}
+
+func (s *slotHeldChecker) Conflicts(
+	_ context.Context, _ *v1alpha1.KrakenDGateway, _ []v1alpha1.KrakenDEndpoint,
+) (configcheck.RouteConflicts, error) {
+	return configcheck.RouteConflicts{}, nil
 }
 
 func (s *slotHeldChecker) CheckRoot(context.Context, configcheck.Root, configcheck.Memo) (configcheck.Verdict, error) {
@@ -6390,30 +6329,6 @@ func (s *slotHeldChecker) CheckEndpoint(
 	return configcheck.EndpointVerdict{OK: true}, nil
 }
 
-func (s *slotHeldChecker) Conflicts(
-	_ context.Context, _ *v1alpha1.KrakenDGateway, _ []v1alpha1.KrakenDEndpoint,
-) (configcheck.RouteConflicts, error) {
-	return configcheck.RouteConflicts{}, nil
-}
-
-func (s *slotHeldChecker) CheckIsolated(
-	_ context.Context, _ *v1alpha1.KrakenDGateway, _ []v1alpha1.KrakenDEndpoint,
-) (configcheck.Verdict, error) {
-	s.isolatedHeld = append(s.isolatedHeld, len(s.slots))
-	return configcheck.Verdict{OK: true}, nil
-}
-
-func (s *slotHeldChecker) CheckGateway(
-	_ context.Context,
-	_ *v1alpha1.KrakenDGateway,
-	_ []v1alpha1.KrakenDEndpoint,
-) (configcheck.Verdict, error) {
-	s.held = append(s.held, len(s.slots))
-	v := s.verdicts[0]
-	s.verdicts = s.verdicts[1:]
-	return v, nil
-}
-
 // Every check a sync runs holds a check slot: the root's, the group's and
 // each candidate's own.
 func TestAutoConfigReconcile_EveryCheckHoldsACheckSlot(t *testing.T) {
@@ -6423,7 +6338,7 @@ func TestAutoConfigReconcile_EveryCheckHoldsACheckSlot(t *testing.T) {
 	c := fakeClientBuilder().WithObjects(ac, cm, testGateway()).WithStatusSubresource(ac).Build()
 	r := newACReconciler(c, f, ce, fi, g)
 	r.CheckSlots = make(chan struct{}, 1)
-	checker := &slotHeldChecker{slots: r.CheckSlots, verdicts: []configcheck.Verdict{{OK: true}}}
+	checker := &slotHeldChecker{slots: r.CheckSlots}
 	r.Checker = checker
 
 	if _, err := reconcileAC(r, ac); err != nil {
