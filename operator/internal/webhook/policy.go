@@ -219,7 +219,8 @@ func screenPolicyUse(ctx context.Context, chk ConfigChecker, memo configcheck.Me
 // them with it). One that fails only with policy is broken, and any one makes
 // the returned cause, which names endpoints and quotes none. When every
 // suspect that fails failed with the stored policy too, the write only draws
-// a warning.
+// a warning. When the group failed but no suspect fails on its own, the group
+// with the stored policy tells whether failing together is the write's doing.
 func judgePolicyUse(ctx context.Context, chk ConfigChecker, memo configcheck.Memo, use policyUse,
 	old, policy *v1alpha1.KrakenDBackendPolicy) (cause, warning string, err error) {
 	if use.err != nil {
@@ -256,7 +257,8 @@ func judgePolicyUse(ctx context.Context, chk ConfigChecker, memo configcheck.Mem
 				"together with the stored policy", gw.Namespace, gw.Name), nil
 		}
 	}
-	return "", "", nil
+	return fmt.Sprintf("breaks gateway %s/%s: with this change the endpoints that use it fail validation "+
+		"together, though each passes on its own", gw.Namespace, gw.Name), "", nil
 }
 
 // lintPolicyAlone refuses policy when it fails krakend check on its own,
