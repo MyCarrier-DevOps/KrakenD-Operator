@@ -49,7 +49,7 @@ func TestFlattenEndpoints_SameRouteShapeKeepsOldest(t *testing.T) {
 		},
 	}
 
-	flat, conflicted, _ := flattenEndpoints(eps, nil)
+	flat, _, conflicted, _ := flattenEndpoints(eps, nil)
 
 	if len(flat) != 1 || flat[0].Entry.Endpoint != "/users/{id}" {
 		t.Fatalf("flat = %+v, want only the older /users/{id}", flat)
@@ -130,7 +130,7 @@ func TestFlattenEndpoints_SameShapeInOneEndpointKeepsTheEarlierEntry(t *testing.
 				},
 			}
 
-			flat, conflicted, _ := flattenEndpoints(eps, nil)
+			flat, _, conflicted, _ := flattenEndpoints(eps, nil)
 
 			if len(flat) != 1 || flat[0].Entry.Endpoint != "/a/{p0}" {
 				t.Fatalf("flat = %+v, want only the first entry /a/{p0}", flat)

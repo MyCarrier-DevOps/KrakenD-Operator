@@ -45,7 +45,7 @@ func (r *krakendRenderer) Render(input RenderInput) (*RenderOutput, error) {
 	}
 
 	// Flatten and deduplicate endpoints
-	flat, conflicted, invalid := flattenEndpoints(input.Endpoints, input.Policies)
+	flat, _, conflicted, invalid := flattenEndpoints(input.Endpoints, input.Policies)
 
 	// Build the root config object
 	config := buildRootConfig(gw)

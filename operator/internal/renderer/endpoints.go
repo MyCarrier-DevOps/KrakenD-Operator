@@ -91,12 +91,14 @@ func compareConflicts(a, b EntryConflict) int {
 
 // flattenEndpoints flattens all KrakenDEndpoint specs into individual entries,
 // detects conflicts (entries that register the same route for one method, from
-// one or several KrakenDEndpoints), and returns the
-// deduplicated list plus sets of conflicted and invalid endpoints.
+// one or several KrakenDEndpoints), and returns the deduplicated list, the
+// entries that lost such a conflict (shadowed), and the sets of conflicted and
+// invalid endpoints.
 func flattenEndpoints(
 	endpoints []v1alpha1.KrakenDEndpoint,
 	policies map[string]*v1alpha1.KrakenDBackendPolicy,
-) (flat []flatEndpoint, conflicted map[types.NamespacedName][]EntryConflict, invalid map[types.NamespacedName]struct{}) {
+) (flat, shadowed []flatEndpoint, conflicted map[types.NamespacedName][]EntryConflict,
+	invalid map[types.NamespacedName]struct{}) {
 	conflicted = make(map[types.NamespacedName][]EntryConflict)
 	invalid = make(map[types.NamespacedName]struct{})
 
@@ -159,6 +161,7 @@ func flattenEndpoints(
 
 		// Keep the winner (oldest), mark the rest as conflicted
 		flat = append(flat, group.entries[0])
+		shadowed = append(shadowed, group.entries[1:]...)
 		for _, loser := range group.entries[1:] {
 			conflicted[loser.Source] = append(conflicted[loser.Source], EntryConflict{
 				Endpoint: loser.Entry.Endpoint,
@@ -182,7 +185,7 @@ func flattenEndpoints(
 		return flat[i].Entry.Method < flat[j].Entry.Method
 	})
 
-	return flat, conflicted, invalid
+	return flat, shadowed, conflicted, invalid
 }
 
 // buildEndpointJSON converts a flat endpoint entry to its KrakenD JSON representation.
