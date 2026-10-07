@@ -2440,9 +2440,12 @@ holds on every install method. Now the gateway writes an existing object only
 when:
 
 - it already controls it (its owner reference names this gateway), or
-- it has no controller and carries the gateway's selector labels
-  `app.kubernetes.io/instance: <gateway name>` and
-  `app.kubernetes.io/managed-by: krakend-operator`.
+- it has no controller and carries the two labels the operator itself stamps on
+  that kind, `app.kubernetes.io/instance` and `app.kubernetes.io/managed-by:
+  krakend-operator`. For a ServiceAccount, Service, PodDisruptionBudget,
+  HorizontalPodAutoscaler, Deployment, ExternalSecret and VirtualService the
+  instance is `<gateway name>`; for the Dragonfly it is
+  `<gateway name>-dragonfly`.
 
 Only someone who can write the object can set those labels, so the labels are
 the hand-over. An object that `kubectl delete --cascade=orphan` left behind
@@ -2477,7 +2480,8 @@ reports it.
   retry at once.
 
 To hand over an object you pre-created on purpose (for example a ServiceAccount
-that carries a workload-identity annotation), label it:
+that carries a workload-identity annotation), label it (for a Dragonfly the
+instance is `<gateway name>-dragonfly`):
 
 ```bash
 kubectl label serviceaccount <name> -n <ns> \
@@ -2490,22 +2494,55 @@ replaces the labels with its own, and keeps the annotations. Deleting the
 gateway then deletes the object, as for any child it created.
 
 Earlier versions may already have adopted a ServiceAccount you did not
-intend. Adopted ServiceAccounts are the ones a KrakenDGateway controls although
-they did not come from the gateway: they carry annotations the operator never
-sets, such as `azure.workload.identity/client-id` or `eks.amazonaws.com/role-arn`:
+intend. The operator sets no annotation on a ServiceAccount, so a ServiceAccount
+a KrakenDGateway controls that carries any annotation (a Helm release, a
+workload-identity or cloud-role annotation) came from somewhere else:
 
 ```bash
 kubectl get serviceaccounts -A -o json | jq -r '
   .items[]
   | select(any(.metadata.ownerReferences[]?; .kind == "KrakenDGateway" and .controller == true))
-  | select((.metadata.annotations // {}) | keys | any(test("workload.identity|role-arn")))
+  | select((.metadata.annotations // {}) | length > 0)
   | "\(.metadata.namespace)/\(.metadata.name)"'
 ```
 
-Compare each hit with the RoleBindings and ClusterRoleBindings that name it as a
-subject. To give one back, remove the gateway's owner reference and the
-`app.kubernetes.io/instance` and `app.kubernetes.io/managed-by` labels from it,
-and rename the gateway so it does not take the object again.
+Some platforms annotate every ServiceAccount (OpenShift adds
+`openshift.io/internal-registry-pull-secret-ref`), so review each hit rather than
+treating it as proof. An adopted ServiceAccount whose only privilege is a
+binding has no annotation at all, so also list the RoleBindings and
+ClusterRoleBindings whose subjects are ServiceAccounts a gateway controls:
+
+```bash
+kubectl get serviceaccounts -A -o json | jq -r '
+  .items[]
+  | select(any(.metadata.ownerReferences[]?; .kind == "KrakenDGateway" and .controller == true))
+  | "\(.metadata.namespace)/\(.metadata.name)"' > gateway-serviceaccounts.txt
+kubectl get rolebindings,clusterrolebindings -A -o json \
+  | jq -r --rawfile sas gateway-serviceaccounts.txt '
+    ($sas | split("\n") | map(select(. != ""))) as $gw
+    | .items[] | . as $b | .subjects[]?
+    | select(.kind == "ServiceAccount" and ("\(.namespace)/\(.name)" | IN($gw[])))
+    | "\($b.kind) \($b.metadata.namespace // "-")/\($b.metadata.name) -> \(.namespace)/\(.name)"'
+```
+
+To give a ServiceAccount back, remove the gateway's owner reference and the two
+consent labels in one write. Two separate edits do not hold: with the owner
+reference gone but the labels left, the gateway takes the object again, and with
+the labels gone but the owner reference left, it restamps them.
+
+```bash
+kubectl patch serviceaccount <name> -n <ns> --type=json -p '[
+  {"op":"remove","path":"/metadata/ownerReferences"},
+  {"op":"remove","path":"/metadata/labels/app.kubernetes.io~1instance"},
+  {"op":"remove","path":"/metadata/labels/app.kubernetes.io~1managed-by"}]'
+kubectl get serviceaccount <name> -n <ns> -o jsonpath='{.metadata.ownerReferences}'
+```
+
+The second command must print nothing. Only then delete the gateway and recreate
+it under another name: while the ServiceAccount still carries the gateway's
+owner reference, deleting the gateway deletes the ServiceAccount. A gateway that
+keeps the old name now refuses the ServiceAccount and holds its Deployment
+(`ResourceNotControlled`).
 
 For OLM users: the bundle now supports only the `AllNamespaces` install mode.
 The operator watches every namespace, and under `OwnNamespace` or
