@@ -34,7 +34,6 @@ import (
 	"github.com/mycarrier-devops/krakend-operator/internal/autoconfig"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
-	"github.com/prometheus/client_golang/prometheus/testutil"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -2981,6 +2980,8 @@ func TestAutoConfigReconcile_SyncedGaugeSetOnSuccess(t *testing.T) {
 		Build()
 	f, ce, fi, g := defaultMocks()
 	r := newACReconciler(c, f, ce, fi, g)
+	m, reg := testMetrics(t)
+	r.Metrics = m
 
 	if _, err := r.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace},
@@ -2988,7 +2989,7 @@ func TestAutoConfigReconcile_SyncedGaugeSetOnSuccess(t *testing.T) {
 		t.Fatalf("reconcile: %v", err)
 	}
 
-	if got := testutil.ToFloat64(autoConfigSynced.WithLabelValues(ac.Namespace, ac.Name)); got != 1 {
+	if got, _ := metricValue(t, reg, "krakend_operator_autoconfig_synced", "namespace", ac.Namespace, "name", ac.Name); got != 1 {
 		t.Errorf("expected synced gauge 1 after a successful sync, got %v", got)
 	}
 }
@@ -3004,13 +3005,15 @@ func TestAutoConfigReconcile_SyncedGaugeZeroOnUnmatchedOverride(t *testing.T) {
 		Build()
 	f, ce, fi, g := defaultMocks()
 	r := newACReconciler(c, f, ce, fi, g)
+	m, reg := testMetrics(t)
+	r.Metrics = m
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace}}
 
 	// First reconcile succeeds, so the gauge starts at 1.
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if got := testutil.ToFloat64(autoConfigSynced.WithLabelValues(ac.Namespace, ac.Name)); got != 1 {
+	if got, _ := metricValue(t, reg, "krakend_operator_autoconfig_synced", "namespace", ac.Namespace, "name", ac.Name); got != 1 {
 		t.Fatalf("expected synced gauge 1 after success, got %v", got)
 	}
 
@@ -3020,8 +3023,8 @@ func TestAutoConfigReconcile_SyncedGaugeZeroOnUnmatchedOverride(t *testing.T) {
 		t.Fatal("expected error for OnChange trigger, got nil")
 	}
 
-	if got := testutil.ToFloat64(autoConfigSynced.WithLabelValues(ac.Namespace, ac.Name)); got != 0 {
-		t.Errorf("expected synced gauge 0 after an unmatched-override failure, got %v", got)
+	if got, ok := metricValue(t, reg, "krakend_operator_autoconfig_synced", "namespace", ac.Namespace, "name", ac.Name); !ok || got != 0 {
+		t.Errorf("expected synced gauge 0 after an unmatched-override failure, got %v (present %v)", got, ok)
 	}
 }
 
@@ -3036,13 +3039,15 @@ func TestAutoConfigReconcile_SyncedGaugeZeroOnFetchError(t *testing.T) {
 		Build()
 	f, ce, fi, g := defaultMocks()
 	r := newACReconciler(c, f, ce, fi, g)
+	m, reg := testMetrics(t)
+	r.Metrics = m
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace}}
 
 	// First reconcile succeeds, so the gauge starts at 1.
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if got := testutil.ToFloat64(autoConfigSynced.WithLabelValues(ac.Namespace, ac.Name)); got != 1 {
+	if got, _ := metricValue(t, reg, "krakend_operator_autoconfig_synced", "namespace", ac.Namespace, "name", ac.Name); got != 1 {
 		t.Fatalf("expected synced gauge 1 after success, got %v", got)
 	}
 
@@ -3053,8 +3058,8 @@ func TestAutoConfigReconcile_SyncedGaugeZeroOnFetchError(t *testing.T) {
 		t.Fatal("expected error for OnChange trigger, got nil")
 	}
 
-	if got := testutil.ToFloat64(autoConfigSynced.WithLabelValues(ac.Namespace, ac.Name)); got != 0 {
-		t.Errorf("expected synced gauge 0 after a fetch failure, got %v", got)
+	if got, ok := metricValue(t, reg, "krakend_operator_autoconfig_synced", "namespace", ac.Namespace, "name", ac.Name); !ok || got != 0 {
+		t.Errorf("expected synced gauge 0 after a fetch failure, got %v (present %v)", got, ok)
 	}
 }
 
@@ -3093,13 +3098,15 @@ func TestAutoConfigReconcile_SyncedGaugeZeroWhenFailureStatusWriteFails(t *testi
 				Build()
 			f, ce, fi, g := defaultMocks()
 			r := newACReconciler(c, f, ce, fi, g)
+			m, reg := testMetrics(t)
+			r.Metrics = m
 			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace}}
 
 			// First reconcile succeeds, so the gauge starts at 1.
 			if _, err := r.Reconcile(context.Background(), req); err != nil {
 				t.Fatalf("reconcile: %v", err)
 			}
-			if got := testutil.ToFloat64(autoConfigSynced.WithLabelValues(ac.Namespace, ac.Name)); got != 1 {
+			if got, _ := metricValue(t, reg, "krakend_operator_autoconfig_synced", "namespace", ac.Namespace, "name", ac.Name); got != 1 {
 				t.Fatalf("expected synced gauge 1 after success, got %v", got)
 			}
 
@@ -3110,18 +3117,14 @@ func TestAutoConfigReconcile_SyncedGaugeZeroWhenFailureStatusWriteFails(t *testi
 				t.Fatalf("expected the failure-status write error, got %v", err)
 			}
 
-			if got := testutil.ToFloat64(autoConfigSynced.WithLabelValues(ac.Namespace, ac.Name)); got != 0 {
-				t.Errorf("expected synced gauge 0 after a failed sync whose status write failed, got %v", got)
+			if got, ok := metricValue(t, reg, "krakend_operator_autoconfig_synced", "namespace", ac.Namespace, "name", ac.Name); !ok || got != 0 {
+				t.Errorf("expected synced gauge 0 after a failed sync whose status write failed, got %v (present %v)", got, ok)
 			}
 		})
 	}
 }
 
 func TestAutoConfigReconcile_SyncedGaugeDeletedOnNotFound(t *testing.T) {
-	// Isolate this test's count of the package-level gauge's series from
-	// every other test's, which persist for the life of the test binary.
-	autoConfigSynced.Reset()
-
 	cm := testCUEDefinitionsCM()
 	ac := testAutoConfig()
 	ac.Name = "metrics-notfound-ac"
@@ -3132,13 +3135,15 @@ func TestAutoConfigReconcile_SyncedGaugeDeletedOnNotFound(t *testing.T) {
 		Build()
 	f, ce, fi, g := defaultMocks()
 	r := newACReconciler(c, f, ce, fi, g)
+	m, reg := testMetrics(t)
+	r.Metrics = m
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace}}
 
 	// First reconcile succeeds, so the gauge starts at 1.
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if got := testutil.ToFloat64(autoConfigSynced.WithLabelValues(ac.Namespace, ac.Name)); got != 1 {
+	if got, _ := metricValue(t, reg, "krakend_operator_autoconfig_synced", "namespace", ac.Namespace, "name", ac.Name); got != 1 {
 		t.Fatalf("expected synced gauge 1 after success, got %v", got)
 	}
 
@@ -3151,7 +3156,7 @@ func TestAutoConfigReconcile_SyncedGaugeDeletedOnNotFound(t *testing.T) {
 		t.Fatalf("reconcile after delete: %v", err)
 	}
 
-	if n := testutil.CollectAndCount(autoConfigSynced); n != 0 {
+	if n := seriesCount(t, reg, "krakend_operator_autoconfig_synced"); n != 0 {
 		t.Errorf("expected the synced gauge series to be deleted, got %d series", n)
 	}
 }
@@ -3186,13 +3191,15 @@ func TestAutoConfigReconcile_SyncedGaugeUnchangedOnQuietConflict(t *testing.T) {
 		Build()
 	f, ce, fi, g := defaultMocks()
 	r := newACReconciler(c, f, ce, fi, g)
+	m, reg := testMetrics(t)
+	r.Metrics = m
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace}}
 
 	// First reconcile succeeds, so the gauge starts at 1.
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if got := testutil.ToFloat64(autoConfigSynced.WithLabelValues(ac.Namespace, ac.Name)); got != 1 {
+	if got, _ := metricValue(t, reg, "krakend_operator_autoconfig_synced", "namespace", ac.Namespace, "name", ac.Name); got != 1 {
 		t.Fatalf("expected synced gauge 1 after success, got %v", got)
 	}
 
@@ -3212,16 +3219,12 @@ func TestAutoConfigReconcile_SyncedGaugeUnchangedOnQuietConflict(t *testing.T) {
 	result, err := r.Reconcile(context.Background(), req)
 	assertQuietRequeue(t, result, err, rec)
 
-	if got := testutil.ToFloat64(autoConfigSynced.WithLabelValues(ac.Namespace, ac.Name)); got != 1 {
+	if got, _ := metricValue(t, reg, "krakend_operator_autoconfig_synced", "namespace", ac.Namespace, "name", ac.Name); got != 1 {
 		t.Errorf("expected synced gauge to stay 1 across a quiet conflict requeue, got %v", got)
 	}
 }
 
 func TestAutoConfigReconcile_SyncedGaugeDeletedOnTerminating(t *testing.T) {
-	// Isolate this test's count of the package-level gauge's series from
-	// every other test's, which persist for the life of the test binary.
-	autoConfigSynced.Reset()
-
 	cm := testCUEDefinitionsCM()
 	ac := testAutoConfig()
 	ac.Name = "metrics-terminating-ac"
@@ -3235,13 +3238,15 @@ func TestAutoConfigReconcile_SyncedGaugeDeletedOnTerminating(t *testing.T) {
 		Build()
 	f, ce, fi, g := defaultMocks()
 	r := newACReconciler(c, f, ce, fi, g)
+	m, reg := testMetrics(t)
+	r.Metrics = m
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: ac.Name, Namespace: ac.Namespace}}
 
 	// First reconcile succeeds, so the gauge starts at 1.
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if got := testutil.ToFloat64(autoConfigSynced.WithLabelValues(ac.Namespace, ac.Name)); got != 1 {
+	if got, _ := metricValue(t, reg, "krakend_operator_autoconfig_synced", "namespace", ac.Namespace, "name", ac.Name); got != 1 {
 		t.Fatalf("expected synced gauge 1 after success, got %v", got)
 	}
 
@@ -3259,7 +3264,7 @@ func TestAutoConfigReconcile_SyncedGaugeDeletedOnTerminating(t *testing.T) {
 		t.Fatalf("reconcile after delete: %v", err)
 	}
 
-	if n := testutil.CollectAndCount(autoConfigSynced); n != 0 {
+	if n := seriesCount(t, reg, "krakend_operator_autoconfig_synced"); n != 0 {
 		t.Errorf("expected the synced gauge series to be deleted, got %d series", n)
 	}
 }
@@ -3444,6 +3449,8 @@ func TestAutoConfigReconcile_FailedOperationHoldsItsEndpointAndStaleEndpoints(t 
 	c := fakeClientBuilder().WithObjects(ac, cm, lastGood, stale).WithStatusSubresource(ac).Build()
 	rec := fakeRecorder()
 	r := newACReconciler(c, f, ce, fi, g)
+	m, reg := testMetrics(t)
+	r.Metrics = m
 	r.Recorder = rec
 
 	result, err := reconcileAC(r, ac)
@@ -3477,8 +3484,8 @@ func TestAutoConfigReconcile_FailedOperationHoldsItsEndpointAndStaleEndpoints(t 
 		updated.Status.Phase != v1alpha1.AutoConfigPhaseError {
 		t.Errorf("expected Ready False/OperationsFailed and phase Error, got %+v, %q", ready, updated.Status.Phase)
 	}
-	if got := testutil.ToFloat64(autoConfigSynced.WithLabelValues(ac.Namespace, ac.Name)); got != 0 {
-		t.Errorf("synced gauge = %v, want 0", got)
+	if got, ok := metricValue(t, reg, "krakend_operator_autoconfig_synced", "namespace", ac.Namespace, "name", ac.Name); !ok || got != 0 {
+		t.Errorf("synced gauge = %v (present %v), want 0", got, ok)
 	}
 	if !hasEventReason(drainEvents(rec), v1alpha1.ReasonOperationsFailed) {
 		t.Error("expected an OperationsFailed event")
