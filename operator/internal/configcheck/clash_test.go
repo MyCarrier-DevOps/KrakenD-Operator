@@ -17,11 +17,13 @@ limitations under the License.
 package configcheck
 
 import (
+	"context"
 	"reflect"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/types"
 
+	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 )
 
@@ -60,5 +62,21 @@ func TestNewClashes_KeepsTheNewRouterClashesOfTheGivenEndpoints(t *testing.T) {
 				t.Errorf("NewClashes = %+v, want %+v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestConflicts_RendersTheGatewayWithTheReplacement(t *testing.T) {
+	chk := newChecker(&fakeValidator{}, endpoint("a", "/a/{id}"))
+	replace := []v1alpha1.KrakenDEndpoint{*endpoint("b", "/a/{name}")}
+
+	conflicts, err := chk.Conflicts(context.Background(), gateway(v1alpha1.EditionCE), replace)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := types.NamespacedName{Namespace: "ns", Name: "b"}
+	want := []renderer.EntryConflict{{Endpoint: "/a/{name}", Method: "GET", Winner: types.NamespacedName{Namespace: "ns", Name: "a"}}}
+	if !reflect.DeepEqual(conflicts.Lost[b], want) || conflicts.Capped {
+		t.Errorf("Conflicts = %+v, want ns/b losing its same-shape entry to ns/a, uncapped", conflicts)
 	}
 }

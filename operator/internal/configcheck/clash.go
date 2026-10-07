@@ -18,11 +18,13 @@ package configcheck
 
 import (
 	"cmp"
+	"context"
 	"fmt"
 	"slices"
 
 	"k8s.io/apimachinery/pkg/types"
 
+	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 )
 
@@ -93,4 +95,10 @@ func NewClashes(before, after RouteConflicts, involving map[types.NamespacedName
 			cmp.Compare(a.Endpoint, b.Endpoint), cmp.Compare(a.Method, b.Method))
 	})
 	return out
+}
+
+// Conflicts renders gw.
+func (c *Checker) Conflicts(context.Context, *v1alpha1.KrakenDGateway,
+	[]v1alpha1.KrakenDEndpoint) (RouteConflicts, error) {
+	return RouteConflicts{}, nil
 }
