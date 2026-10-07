@@ -84,6 +84,40 @@ func TestEndpointAdmission_RatchetsUnchangedEntriesAcrossReorder(t *testing.T) {
 	}
 }
 
+// Entries stored before spec.endpoints was a map list can repeat a key, and
+// the API server skips list uniqueness while the stored object fails it. An
+// edit that leaves those entries as they are must not be refused for them.
+func TestEndpointAdmission_StoredDuplicateKeysDoNotBlockAnUnrelatedEdit(t *testing.T) {
+	old := testEndpoint("e", "/dup", "/dup")
+	old.Spec.Endpoints[1].Backends[0].URLPattern = "/other"
+	edited := old.DeepCopy()
+	edited.Spec.Endpoints = append(edited.Spec.Endpoints, testEndpoint("e", "/new").Spec.Endpoints[0])
+	v := &EndpointValidator{Client: fakeClient(testGateway()), Checker: &scriptedChecker{}}
+
+	if resp := review(t, v, "alice", edited, old); !resp.Allowed {
+		t.Errorf("an added entry beside stored duplicates denied: %+v", resp.Result)
+	}
+}
+
+// A stored duplicate cannot vouch for a further copy: the added copy is a new
+// entry and its rules run.
+func TestEndpointAdmission_AnAddedCopyOfAStoredDuplicateIsChecked(t *testing.T) {
+	old := testEndpoint("e", "/dup", "/dup")
+	for i := range old.Spec.Endpoints {
+		old.Spec.Endpoints[i].ExtraConfig = &runtime.RawExtension{
+			Raw: []byte(`{"documentation/openapi":{"audience":{"a":1}}}`),
+		}
+	}
+	edited := old.DeepCopy()
+	edited.Spec.Endpoints = append(edited.Spec.Endpoints, *old.Spec.Endpoints[0].DeepCopy())
+	v := &EndpointValidator{Client: fakeClient(testGateway()), Checker: &scriptedChecker{}}
+
+	resp := review(t, v, "alice", edited, old)
+	if resp.Allowed || !strings.Contains(resp.Result.Message, "spec.endpoints[2].extraConfig") {
+		t.Errorf("response = %+v, want a denial on spec.endpoints[2].extraConfig", resp.Result)
+	}
+}
+
 func TestEndpointAdmission_UnchangedReferencesAreNotRechecked(t *testing.T) {
 	old := testEndpoint("e", "/a")
 	old.Spec.Endpoints[0].Backends[0].PolicyRef = &v1alpha1.PolicyRef{Name: "gone"}
