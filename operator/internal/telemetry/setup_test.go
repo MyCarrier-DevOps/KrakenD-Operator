@@ -561,7 +561,7 @@ func TestSetup_DiagnosticsAreNeverExportedOverOTLP(t *testing.T) {
 // A whitespace-only endpoint is no endpoint: the trace and metric exporters
 // would trim it to nothing and default to localhost:4318.
 func TestSetup_AWhitespaceEndpointDoesNotEnableExport(t *testing.T) {
-	for _, variable := range []string{"OTEL_EXPORTER_OTLP_ENDPOINT"} {
+	for _, variable := range []string{"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"} {
 		t.Run(variable, func(t *testing.T) {
 			cleanOTelEnv(t)
 			t.Setenv(variable, " ")
