@@ -25,6 +25,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -241,5 +242,43 @@ func TestReconcileDragonfly_TakesOverOnlyWhatCarriesItsOwnLabels(t *testing.T) {
 				t.Errorf("controlled by the gateway = %v, want %v", got, !tc.refused)
 			}
 		})
+	}
+}
+
+// Every refused object is named, sorted, with the labels that hand that object
+// over: its own kind's, not one set for all.
+func TestGatewayReconcile_EveryRefusedObjectIsNamedWithItsOwnLabels(t *testing.T) {
+	gw := reconciledGateway()
+	gw.UID = "gw-uid"
+	gw.Spec.Dragonfly = &v1alpha1.DragonflySpec{Enabled: true}
+	named := metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace}
+	dragonfly := controlledChild(gw, dragonflyGVK, resources.DragonflyName(gw))
+	dragonfly.SetOwnerReferences(nil)
+	c := fakeClientBuilder().WithRESTMapper(optionalCRDMapper(optionalOwnedGVKs...)).
+		WithObjects(gw, dragonfly, &corev1.Service{ObjectMeta: named}, &policyv1.PodDisruptionBudget{ObjectMeta: named}).
+		WithStatusSubresource(gw).Build()
+	r := acceptanceReconciler(c, fakeRecorder(), &renderer.RenderOutput{JSON: []byte(`{"version":3}`), Checksum: "cs1"})
+
+	_ = reconcileGateway(t, r, gw)
+
+	cond := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionResourcesControlled)
+	if cond == nil || cond.Status != metav1.ConditionFalse {
+		t.Fatalf("ResourcesControlled = %+v, want False", cond)
+	}
+	wantInOrder := []string{
+		"dragonfly default/test-gw-dragonfly has no controller and lacks the labels " +
+			"app.kubernetes.io/instance=test-gw-dragonfly,app.kubernetes.io/managed-by=krakend-operator",
+		"pdb default/test-gw has no controller and lacks the labels " +
+			"app.kubernetes.io/instance=test-gw,app.kubernetes.io/managed-by=krakend-operator",
+		"service default/test-gw has no controller and lacks the labels " +
+			"app.kubernetes.io/instance=test-gw,app.kubernetes.io/managed-by=krakend-operator",
+	}
+	rest := cond.Message
+	for _, want := range wantInOrder {
+		i := strings.Index(rest, want)
+		if i < 0 {
+			t.Fatalf("message %q lacks %q, in order", cond.Message, want)
+		}
+		rest = rest[i+len(want):]
 	}
 }
