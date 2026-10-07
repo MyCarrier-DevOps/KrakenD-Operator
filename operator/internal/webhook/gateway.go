@@ -1229,13 +1229,23 @@ func judgeServed(ctx context.Context, chk ConfigChecker, memo configcheck.Memo, 
 	}
 	was := &configcheck.EndpointUnit{Gateway: old, CEFallback: ceFallback}
 	var s scan
-	if storedRoot.OK {
-		s = failingEndpoints(ctx, chk, memo, now, was, suspects)
-	} else {
+	var before configcheck.Verdict
+	decided := false
+	switch {
+	case !storedRoot.OK:
 		s = judgeUnderFailingRoot(ctx, chk, memo, now, was, suspects)
+	case group.OK:
+		s = failingEndpoints(ctx, chk, memo, now, was, suspects)
+	default:
+		before, err = chk.CheckGroup(ctx,
+			configcheck.Group{Gateway: old, Endpoints: served, CEFallback: was.CEFallback}, memo)
+		if err != nil {
+			return nil, checkErr(err)
+		}
+		s, decided = failingEndpointsDecidingFirst(ctx, chk, memo, now, was, before, suspects)
 	}
 	switch {
-	case len(s.broken) > 0:
+	case len(s.broken) > 0, s.stopped != nil && decided:
 		return nil, invalid("KrakenDGateway", now.Gateway.Name, field.ErrorList{field.Invalid(
 			field.NewPath("spec"), field.OmitValueType{}, brokenList(s, 2*warningLimit))})
 	case s.stopped != nil:
@@ -1246,16 +1256,9 @@ func judgeServed(ctx context.Context, chk ConfigChecker, memo configcheck.Memo, 
 	case group.OK:
 		return nil, nil
 	}
-	if storedRoot.OK {
-		before, err := chk.CheckGroup(ctx,
-			configcheck.Group{Gateway: old, Endpoints: served, CEFallback: was.CEFallback}, memo)
-		if err != nil {
-			return nil, checkErr(err)
-		}
-		if !before.OK {
-			return admission.Warnings{"the gateway's endpoints already fail validation together with the stored " +
-				"config, though each passes on its own"}, nil
-		}
+	if storedRoot.OK && !before.OK {
+		return admission.Warnings{"the gateway's endpoints already fail validation together with the stored " +
+			"config, though each passes on its own"}, nil
 	}
 	return nil, invalid("KrakenDGateway", now.Gateway.Name, field.ErrorList{field.Invalid(field.NewPath("spec"),
 		field.OmitValueType{}, "with this change the gateway's endpoints fail validation together, though each "+

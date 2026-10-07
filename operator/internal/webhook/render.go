@@ -121,10 +121,19 @@ type scan struct {
 func failingEndpoints(ctx context.Context, chk ConfigChecker, memo configcheck.Memo,
 	now configcheck.EndpointUnit, was *configcheck.EndpointUnit, suspects []v1alpha1.KrakenDEndpoint) scan {
 	var s scan
+	s.judge(ctx, chk, memo, now, was, suspects)
+	return s
+}
+
+// judge adds to s what judging suspects finds (failingEndpoints). The cap of
+// maxEntryCauses broken endpoints counts those s holds already, and suspects
+// left unjudged add to the count s holds.
+func (s *scan) judge(ctx context.Context, chk ConfigChecker, memo configcheck.Memo,
+	now configcheck.EndpointUnit, was *configcheck.EndpointUnit, suspects []v1alpha1.KrakenDEndpoint) {
 	for i := range suspects {
 		if len(s.broken) == maxEntryCauses {
-			s.unchecked = len(suspects) - i
-			return s
+			s.unchecked += len(suspects) - i
+			return
 		}
 		ep := &suspects[i]
 		now.Endpoint = ep
@@ -140,14 +149,47 @@ func failingEndpoints(ctx context.Context, chk ConfigChecker, memo configcheck.M
 			}
 		}
 		if err != nil {
-			s.unchecked, s.stopped = len(suspects)-i, err
-			return s
+			s.unchecked, s.stopped = s.unchecked+len(suspects)-i, err
+			return
 		}
 		if !v.OK {
 			s.broken = append(s.broken, ep.Namespace+"/"+ep.Name)
 		}
 	}
-	return s
+}
+
+// failingEndpointsDecidingFirst is failingEndpoints for a write whose group
+// check failed, given the check of the same endpoints as a group with the
+// stored config (before). When that passes, every endpoint it did not mask
+// passes on its own with the stored config, so only a masked one can have
+// failed before the write: those are judged first. If none of them failed
+// both ways, the write is the cause of the failure, whichever endpoints the
+// rest of the scan reaches, and decided is true: a scan the admission
+// deadline cuts off then changes no verdict, only how many endpoints are
+// named. When before fails, nothing is decided, and the suspects are judged in
+// their order.
+func failingEndpointsDecidingFirst(ctx context.Context, chk ConfigChecker, memo configcheck.Memo,
+	now configcheck.EndpointUnit, was *configcheck.EndpointUnit, before configcheck.Verdict,
+	suspects []v1alpha1.KrakenDEndpoint) (s scan, decided bool) {
+	if !before.OK {
+		return failingEndpoints(ctx, chk, memo, now, was, suspects), false
+	}
+	var masked, rest []v1alpha1.KrakenDEndpoint
+	for _, ep := range suspects {
+		if before.Suspect(types.NamespacedName{Namespace: ep.Namespace, Name: ep.Name}) {
+			masked = append(masked, ep)
+		} else {
+			rest = append(rest, ep)
+		}
+	}
+	s.judge(ctx, chk, memo, now, was, masked)
+	decided = !s.already && s.stopped == nil
+	if s.stopped != nil {
+		s.unchecked += len(rest)
+		return s, false
+	}
+	s.judge(ctx, chk, memo, now, was, rest)
+	return s, decided
 }
 
 // brokenList names the endpoints a write breaks, quoting nothing of them, in
@@ -156,7 +198,10 @@ func failingEndpoints(ctx context.Context, chk ConfigChecker, memo configcheck.M
 // whole; names that do not fit are folded into a count of their own, which
 // says they were checked.
 func brokenList(s scan, room int) string {
-	const header = "with this change these KrakenDEndpoints fail validation: "
+	header := "with this change these KrakenDEndpoints fail validation: "
+	if len(s.broken) == 0 {
+		header = "with this change the gateway's endpoints fail validation"
+	}
 	var unchecked string
 	switch {
 	case s.unchecked == 0:
