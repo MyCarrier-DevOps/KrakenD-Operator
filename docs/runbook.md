@@ -141,7 +141,7 @@ Every trace starts at one of these spans:
 |---|---|---|
 | `reconcile KrakenDGateway` | `k8s.namespace.name`, `k8s.object.name`, `k8s.object.kind`, `k8s.object.generation`, `controller_runtime.reconcile_id` | `configcheck.Gather`, `gateway.license`, `gateway.plugins`, `gateway.dragonfly`, `gateway.render`, `gateway.config` (its `configcheck.*` checks, each `gateway.judge_endpoints` pass with its `configcheck.CheckEndpoint` checks, `gateway.publish_configmap` and `gateway.verify_configmap`), `gateway.acceptance` (`gateway.endpoint_status`), `gateway.core_resources` (`apply serviceaccount`, `apply service`, `apply pdb`), `gateway.infrastructure` (`apply deployment`, `apply job`, `gateway.collect_configmaps`, …), `gateway.status` (with `gateway.status.written`, false when the status was unchanged and nothing was written); a `k8s.discovery` span under the stage that looks an optional CRD up |
 | `reconcile KrakenDAutoConfig` | the same | `autoconfig.fetch_spec` (with `autoconfig.fetch`, `HTTP GET` and `autoconfig.resolve_refs`), `autoconfig.cue_definitions`, `autoconfig.evaluate`, `autoconfig.filter`, `autoconfig.generate`, `autoconfig.endpoints` (each `autoconfig.precheck`, with its router-clash check and `autoconfig.judge_candidates`, whose checks each wait in `autoconfig.slot`, and each `autoconfig.write_endpoint` or `autoconfig.delete_endpoint`), `autoconfig.status` |
-| `reconcile KrakenDEndpoint`, `reconcile KrakenDBackendPolicy` | the same | `endpoint.resolve_refs`, `endpoint.status`; `policy.protection`, `policy.status` |
+| `reconcile KrakenDEndpoint`, `reconcile KrakenDBackendPolicy` | the same | `endpoint.resolve_refs`, `endpoint.status`; `policy.protection`, `configcheck.CheckPolicy` (with its `krakend check` run, or a memo hit), `policy.status` |
 | `admission /validate-…` | HTTP server attributes | `admission.validate <Kind>` (object identity, `k8s.admission.operation`, `k8s.admission.dry_run`, `k8s.admission.uid`, and the outcome below), `admission.structural`, the `configcheck.*` checks; a gateway update's `admission.judge_served`; a policy write's `admission.screen_policy` and `admission.judge_policy`, one of each per gateway that uses the policy |
 
 Each reconcile is a new root: it does not continue the trace of an earlier reconcile or of the admission request that wrote the object.
@@ -651,14 +651,45 @@ The endpoint is excluded as for `EndpointInvalid`, and its message begins the
 same way.
 
 **What to do:**
-- The policy's owner fixes the policy. The operator does not log a policy's
-  output. To see it, dry-run a create of a copy under another name
-  (`kubectl apply --dry-run=server`): admission quotes a policy's own output on a
-  create, and on an update that turns a passing stored policy into a failing
-  one; an update of a policy that already fails alone is admitted with a
-  warning, which is the case here. A policy of another namespace that passes alone has no output of its
-  own: the endpoint fails only together with it.
+- The policy's owner fixes the policy. The endpoint's message never quotes the
+  policy, but the policy's own status does: its `Ready` condition is `False`
+  with reason `PolicyInvalid` and carries the policy's `krakend check` output
+  (see [Policy shows `Ready=False`, reason `PolicyInvalid`](#policy-shows-readyfalse-reason-policyinvalid)).
+  Read it with `kubectl get krakendbackendpolicy <name> -n <ns>
+  -o jsonpath='{.status.conditions[?(@.type=="Ready")].message}'`. A policy of
+  another namespace that passes alone has no `PolicyInvalid` of its own: the
+  endpoint fails only together with it.
 - Or point the endpoint at another policy.
+
+### Policy shows `Ready=False`, reason `PolicyInvalid`
+
+**Meaning:** the policy fails `krakend check` on its own: it is rendered alone,
+on a default gateway in its own namespace, and checked. Every endpoint that
+references it, in any namespace, is excluded from its gateway's config with
+`Accepted=False`, reason `PolicyInvalid`. The message is `fails krakend check on
+its own:` followed by the policy's own output, which its owner may read. A
+Warning event with the same reason is raised when the policy turns invalid,
+not on every reconcile. A policy whose circuit breaker or rate limit fields are
+out of range reads `InvalidCircuitBreaker` or `InvalidRateLimit` instead, and
+is not rendered.
+
+A stored policy can fail alone after an upgrade, after a `krakend` version
+bump, or on an install with `webhooks.enabled: false`; admission rejects a
+create that fails alone and a change that makes a passing policy fail.
+
+**What to do:** fix the field the output points at. Once the policy passes,
+`Ready` returns to `True`, and the endpoints that use it are served again on the
+gateway's next reconcile.
+
+### Policy shows `Ready=Unknown`, reason `ValidatorUnavailable`
+
+**Meaning:** `krakend check` could not run for the policy: the binary is
+missing, the run timed out, or no check slot freed up before the reconcile was
+cancelled. Nothing is known about the policy, so it is not reported as invalid
+and no event is raised. The reconcile retries with exponential backoff, up to 5
+minutes. The message carries the cause; see [Gateway reports
+`ValidatorUnavailable`](#gateway-reports-validatorunavailable) for how to read
+it.
 
 ### Gateway reports `EndpointsExcluded`
 
