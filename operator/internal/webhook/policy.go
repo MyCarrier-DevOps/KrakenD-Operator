@@ -195,8 +195,14 @@ func screenPolicyUse(ctx context.Context, chk ConfigChecker, memo configcheck.Me
 	endpoints []v1alpha1.KrakenDEndpoint, policy *v1alpha1.KrakenDBackendPolicy) policyUse {
 	use := policyUse{gateway: gw}
 	ceFallback := configcheck.CEFallback(gw)
-	if _, err := chk.CheckRoot(ctx, configcheck.Root{Gateway: gw, CEFallback: ceFallback}, memo); err != nil {
+	root, err := chk.CheckRoot(ctx, configcheck.Root{Gateway: gw, CEFallback: ceFallback}, memo)
+	switch {
+	case err != nil:
 		use.err = err
+		return use
+	case !root.OK:
+		use.warning = fmt.Sprintf("gateway %s/%s fails validation on its own, so this policy was not "+
+			"checked against it", gw.Namespace, gw.Name)
 		return use
 	}
 	use.served = endpoints
@@ -223,8 +229,8 @@ func screenPolicyUse(ctx context.Context, chk ConfigChecker, memo configcheck.Me
 // with the stored policy tells whether failing together is the write's doing.
 func judgePolicyUse(ctx context.Context, chk ConfigChecker, memo configcheck.Memo, use policyUse,
 	old, policy *v1alpha1.KrakenDBackendPolicy) (cause, warning string, err error) {
-	if use.err != nil {
-		return "", "", use.err
+	if use.err != nil || use.warning != "" {
+		return "", use.warning, use.err
 	}
 	gw := use.gateway
 	ceFallback := configcheck.CEFallback(gw)
