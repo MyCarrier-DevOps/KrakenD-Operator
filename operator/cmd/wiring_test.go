@@ -139,6 +139,35 @@ func TestWireValidation_AutoConfigAndGatewayChecksLeaveAnAdmissionSlot(t *testin
 	}
 }
 
+// The policy reconciler judges each policy with the pod's checker, on the
+// slots the AutoConfig prechecks hold, and remembers verdicts by content, so a
+// steady state runs no krakend.
+func TestWireValidation_PolicyReconcilerSharesTheCheckerAndTheControllerSlots(t *testing.T) {
+	mgr := stubManager{client: fake.NewClientBuilder().Build()}
+	inst := testInstrumentation(t, tracingtest.New(t))
+
+	w := wireValidation(mgr, renderer.New(renderer.Options{}), nil, "", inst)
+
+	if w.Policy == nil {
+		t.Fatal("wireValidation built no policy reconciler")
+	}
+	if w.Policy.Checker != controller.PolicyChecker(w.Checker) {
+		t.Errorf("the policy reconciler's checker = %v, want the pod's checker %p", w.Policy.Checker, w.Checker)
+	}
+	if w.Policy.CheckSlots == nil || w.Policy.CheckSlots != w.AutoConfig.CheckSlots {
+		t.Error("the policy reconciler does not share the AutoConfig controller's check slots")
+	}
+	if w.Policy.Memo == nil {
+		t.Error("the policy reconciler has no verdict memo")
+	}
+	if w.Policy.Tracer != inst.Tracer {
+		t.Error("the policy reconciler is not given the pod's tracer")
+	}
+	if w.Policy.APIReader != mgr.GetAPIReader() {
+		t.Error("the policy reconciler does not read through the manager's API reader")
+	}
+}
+
 // The gateway controller reconciles with as many workers as the checker slots
 // the AutoConfig bound leaves it.
 func TestWireValidation_GatewayWorkersMatchTheSlotsReservedForThem(t *testing.T) {
