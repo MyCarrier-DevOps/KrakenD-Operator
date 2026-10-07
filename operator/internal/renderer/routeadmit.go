@@ -76,19 +76,21 @@ func dropRouteLosers(flat []flatEndpoint, conflicted map[types.NamespacedName][]
 
 // routeLosers admits flat's entries to KrakenD's router in serving order
 // (servedBefore). An entry loses to the first older entry of another
-// KrakenDEndpoint it clashes with: gin refuses to register the entry's route
-// next to the older entry's (the route check's rule, on the path the
-// validation copy registers). An entry gin refuses on its own, or next to its
+// KrakenDEndpoint it clashes with: gin refuses to register the entry's route,
+// or the OPTIONS route router.auto_options adds for its path, next to the
+// older entry's (the route check's rule, on the path the validation copy
+// registers). An entry gin refuses on its own, or next to its
 // own KrakenDEndpoint's entries, is left in for that endpoint's own check,
 // which refuses it.
 func routeLosers(flat []flatEndpoint, rules routeRules) routeAdmission {
 	adm := routeAdmission{losers: map[int]EntryConflict{}}
 	var served []routedRoute
+	options := map[string]bool{}
 	engine := gin.New()
 	for _, i := range servingOrder(flat) {
 		fe := flat[i]
 		method, path := entryMethod(fe.Entry.Method), fe.Entry.Endpoint
-		routes := entryRoutes(method, path, rules)
+		routes := entryRoutes(method, path, rules, options)
 		if refusedAlone(routes) {
 			continue // its own endpoint's check refuses it
 		}
@@ -96,6 +98,9 @@ func routeLosers(flat []flatEndpoint, rules routeRules) routeAdmission {
 		if !refused {
 			for _, r := range routes {
 				served = append(served, routedRoute{route: r, source: fe.Source})
+				if r.method == http.MethodOptions {
+					options[r.path] = true
+				}
 			}
 			continue
 		}
@@ -127,9 +132,16 @@ func entryMethod(method string) string {
 }
 
 // entryRoutes lists the routes the router registers for an entry of method
-// at path: its own, on the path the validation copy registers.
-func entryRoutes(method, path string, _ routeRules) []ginRoute {
-	return []ginRoute{{method: method, path: ginPath(path)}}
+// at path: its own, on the path the validation copy registers, and, with
+// auto_options, the OPTIONS route of that path unless a served entry already
+// added it.
+func entryRoutes(method, path string, rules routeRules, options map[string]bool) []ginRoute {
+	p := ginPath(path)
+	routes := []ginRoute{{method: method, path: p}}
+	if rules.autoOptions && !options[p] {
+		routes = append(routes, ginRoute{method: http.MethodOptions, path: p})
+	}
+	return routes
 }
 
 // refusedAlone reports whether gin refuses one of routes in an empty engine.
