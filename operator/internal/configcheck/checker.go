@@ -291,6 +291,10 @@ func (c *Checker) render(ctx context.Context, in renderer.RenderInput) (_ *rende
 	return out, nil
 }
 
+// WithPurpose returns ctx naming why the check started from it runs. It is a
+// stub: it names nothing.
+func WithPurpose(ctx context.Context, _ string) context.Context { return ctx }
+
 // start starts the span of a check of gw.
 func (c *Checker) start(ctx context.Context, name string, gw *v1alpha1.KrakenDGateway) (context.Context, trace.Span) {
 	return tracing.Start(ctx, c.tracer, name, trace.WithAttributes(tracing.Object("KrakenDGateway", gw)...))

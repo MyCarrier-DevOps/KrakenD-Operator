@@ -197,3 +197,19 @@ func TestChecker_CheckEndpointSpansItsPolicyChecksBelowIt(t *testing.T) {
 		t.Errorf("want one lint below the policy's check and one below the endpoint's; spans: %s", spans)
 	}
 }
+
+// A caller can name why it runs a check, and the check's span carries it.
+func TestChecker_ACheckCarriesThePurposeItsCallerNames(t *testing.T) {
+	rec := tracingtest.New(t)
+	c := tracedChecker(rec)
+	ctx := WithPurpose(context.Background(), "combined")
+
+	if _, err := c.CheckRoot(ctx, Root{Gateway: gateway(v1alpha1.EditionCE)}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	spans := rec.Ended()
+	if len(spans.Named("configcheck.CheckRoot").With(attribute.String("configcheck.purpose", "combined"))) != 1 {
+		t.Errorf("the check lacks configcheck.purpose=combined; spans: %s", spans)
+	}
+}
