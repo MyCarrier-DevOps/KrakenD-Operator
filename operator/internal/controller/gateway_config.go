@@ -541,6 +541,25 @@ func newRenderVerdicts(output *renderer.RenderOutput,
 	}
 }
 
+// exclusionDetailLimit bounds the part of an exclusion's message that comes
+// from the endpoint's verdict, leaving room for the rest within
+// maxConditionMessageBytes.
+const exclusionDetailLimit = maxConditionMessageBytes - 256
+
+// exclusionCondition is the Accepted verdict on ep, which fails validation
+// on its own (v): the gateway leaves it out and serves its other endpoints.
+func exclusionCondition(gw *v1alpha1.KrakenDGateway, ep *v1alpha1.KrakenDEndpoint,
+	v configcheck.EndpointVerdict, applied bool) *metav1.Condition {
+	where := fmt.Sprintf("Not served by gateway %s/%s, which serves its other endpoints", gw.Namespace, gw.Name)
+	return &metav1.Condition{
+		Type:               v1alpha1.ConditionAccepted,
+		Status:             metav1.ConditionFalse,
+		ObservedGeneration: ep.Generation,
+		Reason:             v.Reason,
+		Message:            truncateMessage(where + ": this endpoint " + v.Message(exclusionDetailLimit)),
+	}
+}
+
 // strippedByEndpoint groups a CE-fallback render's removed features by the
 // KrakenDEndpoint they came from. Gateway-level features are left out.
 func strippedByEndpoint(features []renderer.StrippedEEFeature) map[types.NamespacedName][]renderer.StrippedEEFeature {
