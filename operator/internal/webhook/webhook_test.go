@@ -2450,6 +2450,14 @@ func TestNewValidators_HandTheCheckerToThePolicyValidator(t *testing.T) {
 	}
 }
 
+func TestNewValidators_GiveTheEndpointValidatorAVerdictMemo(t *testing.T) {
+	v := NewValidators(fakeClient(), fakeClient(), &scriptedChecker{}, "")
+
+	if v.Endpoint.Memo == nil {
+		t.Error("the endpoint validator has no verdict memo, so every write runs every check again")
+	}
+}
+
 func TestAutoConfigAdmission_OverrideOperationIDs(t *testing.T) {
 	ac := func(ids ...string) *v1alpha1.KrakenDAutoConfig {
 		a := &v1alpha1.KrakenDAutoConfig{
