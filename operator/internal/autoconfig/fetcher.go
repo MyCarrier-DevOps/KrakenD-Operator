@@ -28,6 +28,7 @@ import (
 	"time"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/redact"
 	"github.com/mycarrier-devops/krakend-operator/internal/tracing"
 	"go.opentelemetry.io/otel/attribute"
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
@@ -60,7 +61,7 @@ type FetchResult struct {
 }
 
 // Fetcher fetches OpenAPI specs from URLs or ConfigMaps. Its errors name a URL
-// only through RedactURL: they become status messages and span events.
+// only through redact.URL: they become status messages and span events.
 type Fetcher interface {
 	Fetch(ctx context.Context, source FetchSource) (*FetchResult, error)
 }
@@ -99,7 +100,7 @@ type httpFetcher struct {
 }
 
 func (f *httpFetcher) Fetch(ctx context.Context, source FetchSource) (_ *FetchResult, retErr error) {
-	attrs := []attribute.KeyValue{attribute.String("autoconfig.source", "url"), semconv.URLFull(RedactURL(source.URL))}
+	attrs := []attribute.KeyValue{attribute.String("autoconfig.source", "url"), semconv.URLFull(redact.URL(source.URL))}
 	if source.ConfigMapRef != nil {
 		attrs = []attribute.KeyValue{
 			attribute.String("autoconfig.source", "configmap"), tracing.KeyName.String(source.ConfigMapRef.Name),
@@ -145,7 +146,7 @@ func (f *httpFetcher) fetchFromURL(ctx context.Context, source FetchSource) (*Fe
 	}
 	result, err := f.get(ctx, source)
 	if err != nil {
-		return nil, fmt.Errorf("fetching %s: %w", RedactURL(source.URL), err)
+		return nil, fmt.Errorf("fetching %s: %w", redact.URL(source.URL), err)
 	}
 	return result, nil
 }

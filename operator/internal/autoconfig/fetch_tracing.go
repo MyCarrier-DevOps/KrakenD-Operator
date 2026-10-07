@@ -20,64 +20,16 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
-	"slices"
 	"strconv"
-	"strings"
 
 	"go.opentelemetry.io/otel/codes"
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/mycarrier-devops/krakend-operator/internal/redact"
 	"github.com/mycarrier-devops/krakend-operator/internal/tracing"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 )
-
-// redactedValue replaces each query value in a URL the operator records.
-const redactedValue = "REDACTED"
-
-// RedactURL returns raw without its user information, with each query value
-// replaced by REDACTED (a bare key, as in "?token", included) and without its
-// fragment, for errors, logs and spans: an OpenAPI URL can carry credentials
-// in any of them. A URL that does not parse, or that has no "//" after its
-// scheme (the opaque form, whose credentials parse as part of the path), is
-// reduced to "<unparseable URL>".
-func RedactURL(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return unparseableURL
-	}
-	return redact(u)
-}
-
-// unparseableURL stands for a URL that cannot be shown safely.
-const unparseableURL = "<unparseable URL>"
-
-func redact(u *url.URL) string {
-	if u.Opaque != "" {
-		return unparseableURL
-	}
-	r := *u
-	r.User, r.Fragment, r.RawFragment = nil, "", ""
-	r.RawQuery = redactQuery(r.RawQuery)
-	return r.String()
-}
-
-// redactQuery replaces the value of each "key=value" pair of query with
-// REDACTED, keeping its key, and a bare key, which is a token as much as a
-// value is, with REDACTED. Pairs are separated by "&" or ";" and come back
-// separated by "&", sorted, without repeats.
-func redactQuery(query string) string {
-	var pairs []string
-	for _, pair := range strings.FieldsFunc(query, func(r rune) bool { return r == '&' || r == ';' }) {
-		if key, _, hasValue := strings.Cut(pair, "="); hasValue {
-			pairs = append(pairs, key+"="+redactedValue)
-		} else {
-			pairs = append(pairs, redactedValue)
-		}
-	}
-	slices.Sort(pairs)
-	return strings.Join(slices.Compact(pairs), "&")
-}
 
 // withoutURL returns err without the *url.Error wrapper net/http and
 // url.Parse add, whose text repeats the URL with its credentials.
@@ -101,7 +53,7 @@ type clientSpans struct {
 // RoundTrip sends r inside a client span.
 func (c clientSpans) RoundTrip(r *http.Request) (resp *http.Response, err error) {
 	ctx, span := tracing.Start(r.Context(), c.tracer, "HTTP "+r.Method, trace.WithSpanKind(trace.SpanKindClient),
-		trace.WithAttributes(semconv.HTTPRequestMethodKey.String(r.Method), semconv.URLFull(redact(r.URL)),
+		trace.WithAttributes(semconv.HTTPRequestMethodKey.String(r.Method), semconv.URLFull(redact.Parsed(r.URL)),
 			semconv.ServerAddress(r.URL.Hostname())))
 	defer func() {
 		if resp != nil {

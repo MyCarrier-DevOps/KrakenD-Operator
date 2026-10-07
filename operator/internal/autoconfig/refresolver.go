@@ -28,6 +28,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/mycarrier-devops/krakend-operator/internal/redact"
 	"sigs.k8s.io/yaml"
 )
 
@@ -299,7 +300,7 @@ func (r *refResolver) resolveExampleRef(entry map[string]any, base string) {
 // the main spec once the document's subtree is inlined into it.
 func (r *refResolver) warnLocalRef(ref, base string) {
 	if strings.HasPrefix(ref, "#") && base != r.baseURL {
-		shown := RedactURL(base)
+		shown := redact.URL(base)
 		r.warnOnce(fmt.Sprintf(
 			"$ref %q in %s is resolved against the main spec after inlining, not against %s",
 			ref, shown, shown))
@@ -356,7 +357,7 @@ func (r *refResolver) resolveExternal(ref, base string, role refRole) (string, e
 		}
 		parsed, err := decodeSpec(fetched.Data)
 		if err != nil {
-			return "", &fatalRefError{fmt.Errorf("decoding %s: %w", RedactURL(absolute), err)}
+			return "", &fatalRefError{fmt.Errorf("decoding %s: %w", redact.URL(absolute), err)}
 		}
 		doc = parsed
 		r.docs[absolute] = doc
@@ -453,7 +454,7 @@ func splitRef(ref string) (docURL, fragment string) {
 }
 
 // RedactRef returns ref as written when its URL part carries no credential,
-// and otherwise with that part redacted as RedactURL does and the JSON pointer
+// and otherwise with that part redacted as redact.URL does and the JSON pointer
 // kept, for the warnings that name a $ref: the URL of a $ref can carry
 // credentials.
 func RedactRef(ref string) string {
@@ -462,9 +463,9 @@ func RedactRef(ref string) string {
 		return ref
 	}
 	if !strings.Contains(ref, "#") {
-		return RedactURL(docURL)
+		return redact.URL(docURL)
 	}
-	return RedactURL(docURL) + "#" + fragment
+	return redact.URL(docURL) + "#" + fragment
 }
 
 // pointerLookup walks a JSON pointer (RFC 6901) and returns the referenced node.

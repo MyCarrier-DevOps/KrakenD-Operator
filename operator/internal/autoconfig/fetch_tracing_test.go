@@ -29,6 +29,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/redact"
 	"github.com/mycarrier-devops/krakend-operator/internal/tracing/tracingtest"
 )
 
@@ -216,38 +217,6 @@ func TestFetch_AnUnparseableRedirectLocationLeaksNothing(t *testing.T) {
 	requireNoSecretInSpans(t, rec.Ended(), "LOCSECRET")
 }
 
-// RedactURL's contract: what it keeps, what it replaces and what it drops.
-func TestRedactURL(t *testing.T) {
-	for _, tc := range []struct{ name, raw, want string }{
-		{"a plain URL is unchanged", "https://example.com/spec.json", "https://example.com/spec.json"},
-		{"userinfo is dropped", "https://user:pw@example.com/spec.json", "https://example.com/spec.json"},
-		{
-			"each query value is replaced and the keys kept",
-			"https://example.com/s.json?token=abc&key=def", "https://example.com/s.json?key=REDACTED&token=REDACTED",
-		},
-		{"the fragment is dropped", "https://example.com/s.json#/Pet", "https://example.com/s.json"},
-		{"an unparseable URL is reduced", "http://host:badport/x?sig=S", "<unparseable URL>"},
-		{"a bare query key is replaced", "https://example.com/s.json?SECRETKEY", "https://example.com/s.json?REDACTED"},
-		{"a semicolon separates pairs too", "https://example.com/s.json?a=1;b=2", "https://example.com/s.json?a=REDACTED&b=REDACTED"},
-		{"a bare key before a semicolon", "https://example.com/s.json?SECRET;a=1", "https://example.com/s.json?REDACTED&a=REDACTED"},
-		{"both separators mixed", "https://example.com/s.json?a=1&SECRET;b=2", "https://example.com/s.json?REDACTED&a=REDACTED&b=REDACTED"},
-		{"the opaque form is reduced", "https:user:pw@example.com/s.json?t=1", "<unparseable URL>"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got := RedactURL(tc.raw)
-
-			if got != tc.want {
-				t.Errorf("RedactURL(%q) = %q, want %q", tc.raw, got, tc.want)
-			}
-			if got != "<unparseable URL>" {
-				if _, err := url.Parse(got); err != nil {
-					t.Errorf("RedactURL(%q) = %q does not parse: %v", tc.raw, got, err)
-				}
-			}
-		})
-	}
-}
-
 // Nothing between clientSpans and the network can add a header: the transport
 // each production client wraps is the SSRF-safe *http.Transport itself.
 func TestNewFetcher_NothingWrapsTheTransportUnderTheSpans(t *testing.T) {
@@ -340,7 +309,7 @@ func TestFetch_EveryErrorNamesTheRedactedURLOnce(t *testing.T) {
 			if err == nil {
 				t.Fatal("Fetch succeeded")
 			}
-			want := "fetching " + RedactURL(tc.source.URL) + ": "
+			want := "fetching " + redact.URL(tc.source.URL) + ": "
 			if n := strings.Count(err.Error(), "fetching "); n != 1 || !strings.HasPrefix(err.Error(), want) {
 				t.Errorf("error %q, want it to start with %q and name the fetch once", err, want)
 			}
