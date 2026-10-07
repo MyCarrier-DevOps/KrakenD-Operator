@@ -190,7 +190,8 @@ type policyUse struct {
 
 // screenPolicyUse runs the checks of a policy write on gw that do not depend
 // on how many endpoints it breaks: gw's root alone, then the root with the
-// endpoints that use the policy, with policy in place of the stored one.
+// endpoints that use the policy and that gw serves, with policy in place of
+// the stored one.
 func screenPolicyUse(ctx context.Context, chk ConfigChecker, memo configcheck.Memo, gw *v1alpha1.KrakenDGateway,
 	endpoints []v1alpha1.KrakenDEndpoint, policy *v1alpha1.KrakenDBackendPolicy) policyUse {
 	use := policyUse{gateway: gw}
@@ -205,7 +206,10 @@ func screenPolicyUse(ctx context.Context, chk ConfigChecker, memo configcheck.Me
 			"checked against it", gw.Namespace, gw.Name)
 		return use
 	}
-	use.served = endpoints
+	use.served = servedEndpoints(endpoints)
+	if len(use.served) == 0 {
+		return use
+	}
 	group, err := chk.CheckGroup(ctx, configcheck.Group{
 		Gateway: gw, Endpoints: use.served, Override: policy, CEFallback: ceFallback,
 	}, memo)
