@@ -50,6 +50,16 @@ func (r *krakendRenderer) Render(input RenderInput) (*RenderOutput, error) {
 	// Build the root config object
 	config := buildRootConfig(gw)
 
+	// The gateway-level extra_config comes first: its router block decides
+	// which routes the entries must share. Entries the router cannot serve
+	// next to an older endpoint's are left out, oldest first, as duplicates
+	// are.
+	gatewayEC := buildGatewayExtraConfig(gw, input.Dragonfly)
+	flat, _ = dropRouteLosers(flat, conflicted, routeRules{
+		autoOptions: routerOptionsOf(gatewayEC).AutoOptions,
+		eeWildcards: gw.Spec.Edition == v1alpha1.EditionEE && !input.CEFallback,
+	})
+
 	// Build endpoints array, recording each entry's source in the same order.
 	// A CE-fallback render drops Enterprise-only features and lists them.
 	endpointsJSON := make([]any, 0, len(flat))
@@ -78,9 +88,6 @@ func (r *krakendRenderer) Render(input RenderInput) (*RenderOutput, error) {
 		sources = append(sources, fe.Source)
 	}
 	config["endpoints"] = endpointsJSON
-
-	// Build gateway-level extra_config
-	gatewayEC := buildGatewayExtraConfig(gw, input.Dragonfly)
 
 	// Aggregate component schemas from all endpoints into root
 	// documentation/openapi.components_schemas so that endpoint-level ref
