@@ -623,3 +623,44 @@ func TestPolicyAdmission_AScanThatStoppedWithoutADenialIs500(t *testing.T) {
 		})
 	}
 }
+
+// However long the names of the endpoints a policy breaks, the cause fits the
+// warning limit and still ends with the count of what was not checked.
+func TestPolicyAdmission_TheCauseKeepsItsCountOfEndpointsNotChecked(t *testing.T) {
+	tests := []struct {
+		name     string
+		failCall int // the check that cannot run, 0 for none
+		suffix   string
+	}{
+		{"past the cap", 0, "(+5 more not checked)"},
+		{"cut short by the deadline", 42, "(6 not checked within the admission time)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			names := make([]string, maxEntryCauses+5)
+			var endpointVerdicts []configcheck.EndpointVerdict
+			for i := range names {
+				names[i] = fmt.Sprintf("carrier-integrations-orders-api-endpoint-%02d", i)
+				endpointVerdicts = append(endpointVerdicts,
+					configcheck.EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid}, configcheck.EndpointVerdict{OK: true})
+			}
+			chk := &scriptedChecker{verdicts: []configcheck.Verdict{{OK: true}, {OK: true}, {Output: "x"}},
+				endpointVerdicts: endpointVerdicts}
+			if tt.failCall > 0 {
+				chk.err, chk.failCall, chk.failOnly = errors.New("no slot"), tt.failCall, true
+			}
+			v := &PolicyValidator{Client: fakeClient(policyUsers(names...)...), Checker: chk}
+
+			resp := review(t, v, "alice", testPolicy(`{"x":{}}`), testPolicy(`{}`))
+
+			if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("response = %+v, want a 422", resp.Result)
+			}
+			msg := strings.TrimPrefix(resp.Result.Details.Causes[0].Message, "Invalid value: ")
+			if len(msg) > warningLimit || !strings.HasSuffix(msg, tt.suffix) {
+				t.Errorf("cause = %q (%d bytes), want at most %d bytes ending with %q",
+					msg, len(msg), warningLimit, tt.suffix)
+			}
+		})
+	}
+}
