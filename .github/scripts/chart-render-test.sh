@@ -183,6 +183,32 @@ expect_equal "kustomize sets POD_SERVICE_ACCOUNT from spec.serviceAccountName" "
 expect_equal "kustomize sets POD_NAMESPACE from metadata.namespace" "metadata.namespace" \
 	"$(env_field POD_NAMESPACE <operator/config/manager/manager.yaml)"
 
+# --- telemetry -----------------------------------------------------------
+expect_equal "the chart sets POD_NAME from metadata.name" "metadata.name" \
+	"$(env_field POD_NAME <<<"$chart_deployment")"
+expect_equal "kustomize sets POD_NAME from metadata.name" "metadata.name" \
+	"$(env_field POD_NAME <operator/config/manager/manager.yaml)"
+expect_absent "nothing is exported over OTLP by default" "OTEL_" --show-only templates/deployment.yaml
+expect_absent "the default stdout format passes no flag (older images keep working)" "--log-format" \
+	--show-only templates/deployment.yaml
+expect_contains "telemetry.logs.format=pretty passes --log-format=pretty" "- --log-format=pretty" \
+	--show-only templates/deployment.yaml --set telemetry.logs.format=pretty
+otlp=(--show-only templates/deployment.yaml --set telemetry.otlp.endpoint=http://collector:4318)
+expect_contains "an OTLP endpoint is passed to the operator" 'value: "http://collector:4318"' "${otlp[@]}"
+expect_contains "the OTLP protocol defaults to http/protobuf" 'value: "http/protobuf"' "${otlp[@]}"
+expect_absent "every signal is exported by default" "S_EXPORTER" "${otlp[@]}"
+expect_contains "OTLP headers are read from the named Secret" "name: otlp-auth" "${otlp[@]}" \
+	--set telemetry.otlp.headersSecret.name=otlp-auth
+expect_contains "a signal turned off is not exported" "name: OTEL_LOGS_EXPORTER" "${otlp[@]}" \
+	--set telemetry.otlp.signals.logs=false
+expect_absent "headers without an endpoint pass nothing" "OTEL_EXPORTER_OTLP_HEADERS" \
+	--show-only templates/deployment.yaml --set telemetry.otlp.headersSecret.name=otlp-auth
+expect_contains "the sampler argument is passed as a string" 'value: "0.1"' --show-only templates/deployment.yaml \
+	--set telemetry.traces.sampler=parentbased_traceidratio --set telemetry.traces.samplerArg=0.1
+expect_contains "resource attributes are joined in key order" 'value: "env=prod,team=platform"' \
+	--show-only templates/deployment.yaml --set telemetry.resourceAttributes.team=platform \
+	--set telemetry.resourceAttributes.env=prod
+
 # --- the chart refuses clusters below the Kubernetes 1.33 floor ---------
 if floor_err=$(helm template t "$CHART" --kube-version 1.32.0 2>&1 >/dev/null); then
 	fail "a Kubernetes 1.32 cluster is refused"
