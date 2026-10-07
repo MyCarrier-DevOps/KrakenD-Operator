@@ -412,7 +412,8 @@ func (r *refResolver) resolveExternal(ref, base string, role refRole) (string, e
 	// r.walk completes.
 	if name, busy := r.resolving[cacheKey]; busy {
 		r.warnings = append(r.warnings,
-			fmt.Sprintf("cycle detected for %s, skipping recursive resolution", RedactRef(refKey)))
+			fmt.Sprintf("cycle detected for %s: a recursive $ref, rewritten to the name being inlined",
+				RedactRef(refKey)))
 		return name, nil
 	}
 	name := sanitizeRefName(absolute, fragment)
