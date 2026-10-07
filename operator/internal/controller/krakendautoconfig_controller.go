@@ -247,7 +247,7 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	skippedOps := r.inScope(&ac, cueOutput.Skipped)
 	failedOps := r.inScope(&ac, cueOutput.Failed)
 
-	filtered, replaced, scopeErr := applyAdditionalEndpoints(&ac, filtered, warnings)
+	filtered, replaced, scopeErr := applyAdditionalEndpoints(&ac, filtered, failedOps, warnings)
 	specNotes = append(specNotes, replaced...)
 	if scopeErr != nil {
 		return r.handleSyncedFailure(ctx, &ac, v1alpha1.ReasonAdditionalEndpointScopeFailed, scopeErr, warnings)
@@ -588,9 +588,16 @@ func (r *KrakenDAutoConfigReconciler) handleCUEError(
 // warning to warnings for each spec-derived endpoint one replaces. It returns
 // the combined slice and a note per replacement for status.warnings, or a
 // non-nil error when no base path can be determined.
+//
+// The derived base path comes from filtered plus the paths of the in-scope
+// failed operations, so a held operation cannot move it: the base depends on
+// the in-scope spec, not on which operations evaluate. The trade-off is that
+// a failed operation at a divergent path (a new root-level path, say) makes
+// the base underivable, exactly as it would once the operation is healthy.
 func applyAdditionalEndpoints(
 	ac *v1alpha1.KrakenDAutoConfig,
 	filtered []v1alpha1.EndpointEntry,
+	failed []autoconfig.OperationIssue,
 	warnings *inputWarnings,
 ) ([]v1alpha1.EndpointEntry, []string, error) {
 	if len(ac.Spec.AdditionalEndpoints) == 0 {
@@ -608,7 +615,11 @@ func applyAdditionalEndpoints(
 	base := ac.Spec.AdditionalEndpointsBasePath
 	hasAddPrefix := ac.Spec.URLTransform != nil && ac.Spec.URLTransform.AddPathPrefix != ""
 	if base == "" && !hasAddPrefix {
-		base = autoconfig.DeriveBasePath(filtered)
+		inScope := slices.Clone(filtered)
+		for _, op := range failed {
+			inScope = append(inScope, v1alpha1.EndpointEntry{Endpoint: op.Path})
+		}
+		base = autoconfig.DeriveBasePath(inScope)
 		if base == "" {
 			return nil, nil, fmt.Errorf(
 				"cannot derive a base path for additionalEndpoints (generated " +
