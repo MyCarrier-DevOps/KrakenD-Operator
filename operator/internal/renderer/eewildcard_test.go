@@ -89,6 +89,11 @@ func TestEEWildcardFindings_StopsAfterTheFirstConflicts(t *testing.T) {
 	if last := findings[len(findings)-1]; last != wantNotice {
 		t.Errorf("last finding = %q, want %q", last, wantNotice)
 	}
+
+	if raceEnabled {
+		t.Skip("the race detector inflates allocations; the bound is checked without -race")
+	}
+
 	const budget = 8 << 20
 	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > budget {
 		t.Errorf("%d bytes allocated for %d routes, want at most %d", allocated, len(endpoints), budget)
