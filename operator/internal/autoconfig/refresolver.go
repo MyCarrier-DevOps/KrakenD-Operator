@@ -247,7 +247,11 @@ func (r *refResolver) walk(node any, base string) {
 						fmt.Sprintf("failed to resolve external $ref %q: %v", RedactRef(ref), err))
 				}
 			}
-			return
+			// A ref to another document is the whole node; a local ref's
+			// siblings are walked, as they were before it was resolved.
+			if !strings.HasPrefix(ref, "#") {
+				return
+			}
 		}
 		// Sorted keys make the walk order, and so the first failing ref
 		// and its error, deterministic.
