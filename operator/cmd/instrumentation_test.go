@@ -77,6 +77,10 @@ func TestNewInstrumentation_ServesEveryOperatorFamilyOnTheRegistry(t *testing.T)
 	telemetrytest.ClearOTelEnv(t)
 	cfg := telemetryConfig(otellog.SeverityInfo, telemetry.LogFormatJSON)
 	cfg.Stdout = io.Discard
+	// A registry of its own: production's is the process-wide one, which
+	// TestTelemetryConfig_ReportsTheBuildAndThePod pins.
+	reg := prometheus.NewRegistry()
+	cfg.Registerer = reg
 	tel, err := telemetry.Setup(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -101,20 +105,14 @@ func TestNewInstrumentation_ServesEveryOperatorFamilyOnTheRegistry(t *testing.T)
 	inst.Metrics.SetAutoConfigSynced(key, true)
 
 	got := map[string]*dto.MetricFamily{}
-	families, err := ctrlmetrics.Registry.Gather()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, family := range families {
-		if strings.HasPrefix(family.GetName(), "krakend_operator_") {
-			got[family.GetName()] = family
-		}
+	for _, family := range operatorFamilies(t, reg) {
+		got[family.GetName()] = family
 	}
 	want := readGolden(t)
 	for name, shape := range want {
 		family := got[name]
 		if family == nil {
-			t.Errorf("%s is not on controller-runtime's registry", name)
+			t.Errorf("%s is not on the registry", name)
 			continue
 		}
 		var labels []string
