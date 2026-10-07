@@ -225,9 +225,10 @@ const (
 	// is judged or blamed, and the applied config keeps serving.
 	ReasonGatewayRootInvalid = "GatewayRootInvalid"
 
-	// ReasonCombinedConfigInvalid backs ConfigValid=False when every endpoint
-	// passes on its own but the gateway's config fails with them together. No
-	// endpoint is blamed, the applied config keeps serving, and the check's
+	// ReasonCombinedConfigInvalid backs ConfigValid=False when the endpoints
+	// that pass on their own fail the gateway's config together. An endpoint
+	// that fails on its own is excluded first and keeps its own verdict; the
+	// failure blames none. The applied config keeps serving, and the check's
 	// output is only in the operator log.
 	ReasonCombinedConfigInvalid = "CombinedConfigInvalid"
 
