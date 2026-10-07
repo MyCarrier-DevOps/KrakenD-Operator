@@ -19,6 +19,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"strings"
 
 	otellog "go.opentelemetry.io/otel/log"
 
@@ -68,13 +69,16 @@ func (f *logFlags) resolve() (otellog.Severity, telemetry.LogFormat, []string, e
 	if err != nil {
 		return 0, "", nil, err
 	}
+	// controller-runtime lowercased --zap-encoder, so a Deployment may spell it
+	// Console or JSON.
+	encoder := strings.ToLower(f.encoder)
 	format := telemetry.LogFormatJSON
 	switch {
 	case f.formatExplicit:
-		format = telemetry.LogFormat(f.format)
-	case f.encoder == "console":
+		format = telemetry.LogFormat(strings.ToLower(f.format))
+	case encoder == "console":
 		format = telemetry.LogFormatPretty
-	case f.encoder != "" && f.encoder != "json":
+	case encoder != "" && encoder != "json":
 		return 0, "", nil, fmt.Errorf("invalid --zap-encoder %q: want json or console", f.encoder)
 	}
 	if format != telemetry.LogFormatJSON && format != telemetry.LogFormatPretty {
