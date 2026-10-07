@@ -577,3 +577,20 @@ func TestCheckEndpoint_TheOverrideStandsInForTheStoredPolicy(t *testing.T) {
 		t.Errorf("with the override: %+v, %v; want PolicyInvalid", v, err)
 	}
 }
+
+func TestCheckEndpoint_EveryCheckIsRemembered(t *testing.T) {
+	val := &fakeValidator{}
+	chk := newChecker(val, policy("p"))
+	memo := mapMemo{}
+	unit := EndpointUnit{Gateway: gateway(v1alpha1.EditionCE), Endpoint: withPolicy(endpoint("uses-p", "/a"), "p")}
+
+	for range 2 {
+		if _, err := chk.CheckEndpoint(context.Background(), unit, memo); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if len(val.calls) != 2 {
+		t.Errorf("ran %d checks, want 2 (the policy alone, then the endpoint) and none again", len(val.calls))
+	}
+}
