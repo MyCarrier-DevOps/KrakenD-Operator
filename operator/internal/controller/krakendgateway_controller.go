@@ -1043,7 +1043,7 @@ func (r *KrakenDGatewayReconciler) reconcileEndpointAcceptance(
 	endpoints []v1alpha1.KrakenDEndpoint,
 	output *renderer.RenderOutput,
 ) error {
-	rv := newRenderVerdicts(output)
+	rv := newRenderVerdicts(output, nil)
 	schemaMsgs := schemaConflictMessages(output.SchemaConflicts)
 	var errs []error
 	for i := range endpoints {

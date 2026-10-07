@@ -523,15 +523,21 @@ type renderVerdicts struct {
 	lost       map[types.NamespacedName][]renderer.EntryConflict
 	unresolved map[types.NamespacedName]struct{}
 	stripped   map[types.NamespacedName][]renderer.StrippedEEFeature
+	// excluded are the endpoints the render leaves out because they fail
+	// validation on their own, with why.
+	excluded map[types.NamespacedName]configcheck.EndpointVerdict
 }
 
-// newRenderVerdicts indexes output for per-endpoint lookups.
-func newRenderVerdicts(output *renderer.RenderOutput) renderVerdicts {
+// newRenderVerdicts indexes output, and the endpoints left out of it for
+// failing on their own, for per-endpoint lookups.
+func newRenderVerdicts(output *renderer.RenderOutput,
+	excluded map[types.NamespacedName]configcheck.EndpointVerdict) renderVerdicts {
 	return renderVerdicts{
 		conflicted: namespacedNameSet(output.ConflictedEndpoints),
 		lost:       output.EntryConflicts,
 		unresolved: namespacedNameSet(output.InvalidEndpoints),
 		stripped:   strippedByEndpoint(output.StrippedEEFeatures),
+		excluded:   excluded,
 	}
 }
 
