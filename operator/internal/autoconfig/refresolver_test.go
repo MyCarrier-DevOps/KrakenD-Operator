@@ -896,3 +896,13 @@ func TestResolveExternalRefs_AFailedFetchErrorCarriesNoCredentials(t *testing.T)
 		t.Errorf("error %q does not name the document", err)
 	}
 }
+
+func TestResolveExternalRefs_ADecodeErrorCarriesNoCredentials(t *testing.T) {
+	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"$ref":"` + refWithSecrets + `#/A"}}}}}}`)
+	fetcher := &stubFetcher{docs: map[string][]byte{refWithSecrets: []byte(`not json`)}}
+
+	_, _, err := ResolveExternalRefs(context.Background(), main, "https://api.example.com/openapi.json",
+		fetcher, FetchSource{})
+
+	requireNoSecrets(t, err)
+}
