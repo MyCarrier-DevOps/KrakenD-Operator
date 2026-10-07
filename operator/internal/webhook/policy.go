@@ -213,9 +213,7 @@ func screenPolicyUse(ctx context.Context, chk ConfigChecker, memo configcheck.Me
 		use.err = err
 		return use
 	}
-	if use.failed = !group.OK; use.failed {
-		use.suspects = use.served
-	}
+	use.failed, use.suspects = !group.OK, suspectsOf(group, use.served)
 	return use
 }
 
