@@ -211,24 +211,29 @@ func TestGatewayReconcile_DeletesWithAUIDPrecondition(t *testing.T) {
 	}
 }
 
-// countingReader counts the unstructured reads served through it.
+// countingReader counts the reads served through it by the Go type read into.
 type countingReader struct {
 	client.Reader
-	reads int
+	reads        int
+	unstructured int
 }
 
 func (c *countingReader) Get(
 	ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption,
 ) error {
-	if _, ok := obj.(*unstructured.Unstructured); ok {
+	switch obj.(type) {
+	case *metav1.PartialObjectMetadata:
 		c.reads++
+	case *unstructured.Unstructured:
+		c.unstructured++
 	}
 	return c.Reader.Get(ctx, key, obj, opts...)
 }
 
 // A disabled feature's child of a kind that has an informer is looked up
 // through the cache, not with a live GET on every reconcile; a child that
-// exists is still deleted.
+// exists is still deleted. The informer holds metadata only, so the read must
+// ask for metadata: an unstructured read would start a second, full informer.
 func TestGatewayReconcile_DisabledOptionalKindsAreReadThroughTheCache(t *testing.T) {
 	gw := reconciledGateway()
 	gw.UID = "gw-uid"
@@ -240,8 +245,11 @@ func TestGatewayReconcile_DisabledOptionalKindsAreReadThroughTheCache(t *testing
 	c := interceptor.NewClient(base, interceptor.Funcs{Get: func(
 		ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption,
 	) error {
-		if _, ok := obj.(*unstructured.Unstructured); ok {
-			liveReads++
+		switch obj.(type) {
+		case *unstructured.Unstructured, *metav1.PartialObjectMetadata:
+			if slices.Contains(optionalOwnedGVKs, obj.GetObjectKind().GroupVersionKind()) {
+				liveReads++
+			}
 		}
 		return cl.Get(ctx, key, obj, opts...)
 	}})
@@ -260,7 +268,10 @@ func TestGatewayReconcile_DisabledOptionalKindsAreReadThroughTheCache(t *testing
 		t.Errorf("live reads of optional kinds = %d, want 0: the informer already holds them", liveReads)
 	}
 	if cached.reads != 3 {
-		t.Errorf("cached reads of optional kinds = %d, want 3 (one per disabled feature)", cached.reads)
+		t.Errorf("cached metadata reads of optional kinds = %d, want 3 (one per disabled feature)", cached.reads)
+	}
+	if cached.unstructured != 0 {
+		t.Errorf("cached unstructured reads = %d, want 0: they would start a full informer", cached.unstructured)
 	}
 	if err := base.Get(context.Background(), client.ObjectKeyFromObject(vs), vs.DeepCopy()); !apierrors.IsNotFound(err) {
 		t.Errorf("VirtualService Get = %v; the child of a disabled feature must still be deleted", err)
