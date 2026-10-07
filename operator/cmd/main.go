@@ -61,6 +61,10 @@ const krakendBinary = "/usr/local/bin/krakend"
 // OTLP data waits on the flush.
 const telemetryFlushTimeout = 5 * time.Second
 
+// managerStopTimeout bounds how long the manager waits for its runnables to
+// stop. controller-runtime's own default is 30 seconds.
+const managerStopTimeout = 30 * time.Second
+
 var (
 	scheme   = runtime.NewScheme()
 	setupLog = ctrl.Log.WithName("setup")

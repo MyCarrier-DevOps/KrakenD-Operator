@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // These tests read run()'s source. run() starts a manager against a cluster, so
@@ -356,5 +357,17 @@ func TestCommand_WrapsNoMetricsHandlerInOtelHTTP(t *testing.T) {
 				t.Errorf("%s imports %s: the metrics server must not be wrapped", name, spec.Path.Value)
 			}
 		}
+	}
+}
+
+// podTerminationGracePeriod is the chart's terminationGracePeriodSeconds.
+const podTerminationGracePeriod = 10 * time.Second
+
+// On SIGTERM the manager stops first and the telemetry flush follows: both fit
+// the pod's termination grace period only if the manager is bound too.
+func TestShutdown_ManagerStopAndFlushFitTheGracePeriod(t *testing.T) {
+	if got := managerStopTimeout + telemetryFlushTimeout; got > podTerminationGracePeriod {
+		t.Errorf("manager stop %s plus flush %s = %s, want at most the %s grace period",
+			managerStopTimeout, telemetryFlushTimeout, got, podTerminationGracePeriod)
 	}
 }
