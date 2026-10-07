@@ -61,7 +61,8 @@ The entrypoint is responsible for wiring dependencies, registering controllers w
 ```mermaid
 flowchart TD
     A[main] --> B[Parse flags and load config]
-    B --> C[Create controller-runtime Manager]
+    B --> T[Set up telemetry from OTEL_* and the log flags, and route every logger through it]
+    T --> C[Create controller-runtime Manager]
     C --> D[Register API scheme]
     D --> E[Create shared dependencies]
     E --> F[Register Gateway Controller]
@@ -70,13 +71,19 @@ flowchart TD
     E --> I[Register AutoConfig Controller]
     E --> K[Register Webhooks]
     F & G & H & I & K --> L[manager.Start context]
+    L --> M[Flush telemetry, at most 5 s]
 ```
+
+`run()` registers grpc-go's logger first, because it must be set before any gRPC call, then parses the flags, because the log level and format come from them, and only then sets telemetry up and installs the loggers. The flush is deferred, so it runs on every return, and a failed set-up exits with status 1 before anything else starts.
 
 ### Manager Configuration
 
 ```go
-mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
-    Scheme: scheme,
+restConfig, err := ctrl.GetConfig()
+telemetry.TraceKubeAPI(restConfig, tel.TracerProvider)
+mgr, err := ctrl.NewManager(restConfig, ctrl.Options{
+    Scheme:    scheme,
+    NewClient: newManagerClient,
     // Secrets and ConfigMaps are read live, never from the cache, and the
     // cache keeps their metadata without annotations and managedFields.
     Client: client.Options{
@@ -84,12 +91,14 @@ mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
     },
     Cache:                  cache.Options{ByObject: controller.CacheByObject()},
     Metrics:                metricsServerOptions,
-    WebhookServer:          webhookServer,
+    WebhookServer:          webhookServer, // telemetry.TraceWebhookServer(webhook.NewServer(...), tel.TracerProvider)
     HealthProbeBindAddress: probeAddr,
     LeaderElection:         enableLeaderElection, // --leader-elect, off by default
     LeaderElectionID:       "krakend-operator-leader",
 })
 ```
+
+`GetConfig` returns an error that `run()` logs before exiting with status 1, where `GetConfigOrDie` exited itself, so the deferred telemetry flush still runs. `telemetry.TraceKubeAPI` wraps the `rest.Config` transport, so every request the manager's clients, the cache and the reader send under an active span is a client span of it, and the trace context is passed to the API server. `newManagerClient` builds the manager's client as controller-runtime does and wraps it in `telemetry.ReadEvents`, which adds a `k8s.client.get` or `k8s.client.list` event to the active span for each read, because a read the cache answers sends no request. `telemetry.TraceWebhookServer` wraps the webhook server so each admission request is a server span that continues the API server's trace.
 
 The controllers watch Secrets and ConfigMaps as metadata only (`builder.OnlyMetadata`), so no Secret `data` or ConfigMap payload is cached. `UncachedObjects` makes every `Get` and `List` of those kinds through the manager's client a live API request, and `CacheByObject` strips the annotations and `managedFields` from the metadata that is cached: a client-side `kubectl apply` repeats the whole object, data included, in the `kubectl.kubernetes.io/last-applied-configuration` annotation. The names, labels and owner references of every Secret and ConfigMap in the cluster stay cached, because the watches cannot select the user-named license Secrets and plugin ConfigMaps they follow. The same options are set on the integration suite's manager, which records any typed Secret or ConfigMap cache request (`TestManager_CachesNoSecretOrConfigMapContent`).
 
@@ -97,22 +106,21 @@ The serving certificates are handed to the servers, not to watchers added to the
 
 ### Shared Dependency Wiring
 
-All controllers and validators receive their dependencies via struct fields set in `cmd/`. There is no service locator or dependency injection container. `main.go` builds the renderer and the validator, then hands them to `wireValidation` (`wiring.go`), which builds the one `configcheck.Checker` of the pod and every part that holds it:
+All controllers and validators receive their dependencies via struct fields set in `cmd/`. There is no service locator or dependency injection container. `main.go` builds the renderer, the validator and the `instrumentation` (the pod's one tracer and one `OperatorMetrics`), then hands them to `wireValidation` (`wiring.go`), which builds the one `configcheck.Checker` of the pod and every part that holds it:
 
 ```go
 rend := renderer.New(renderer.Options{})
-val := renderer.NewValidator(renderer.ValidatorOptions{
-    Executor:   renderer.NewKrakenDExecutor("/usr/local/bin/krakend"),
-    BinaryPath: "/usr/local/bin/krakend",
-})
+// newKrakenDValidator wraps the krakend executor in telemetry.TraceExecutor, so
+// each krakend run is a span of the tracer it is given.
+val := newKrakenDValidator("/usr/local/bin/krakend", inst.Tracer)
 
 // wireValidation builds one checker for the whole pod: its slots bound
 // concurrent krakend executions across the gateway controller, the AutoConfig
 // controller and the admission webhooks, so they must share it.
 func wireValidation(
-    mgr ctrl.Manager, r renderer.Renderer, v renderer.Validator, operatorUsername string,
+    mgr ctrl.Manager, r renderer.Renderer, v renderer.Validator, operatorUsername string, inst instrumentation,
 ) validation {
-    checker := configcheck.New(mgr.GetClient(), r, v, configCheckSlots) // configCheckSlots = 3
+    checker := configcheck.New(mgr.GetClient(), r, v, configCheckSlots, inst.Tracer) // configCheckSlots = 3
     return validation{
         Checker: checker,
         Gateway: &controller.KrakenDGatewayReconciler{
@@ -126,12 +134,14 @@ func wireValidation(
             LicenseParser: licenseutil.NewX509LicenseParser(),
             // each reconcile holds one checker slot
             MaxConcurrentReconciles: gatewayCheckWorkers, // 1
+            Metrics:                 inst.gatewayMetrics(),
+            Tracer:                  inst.Tracer,
         },
         AutoConfig: &controller.KrakenDAutoConfigReconciler{
             Client:       mgr.GetClient(),
             Scheme:       mgr.GetScheme(),
             Recorder:     mgr.GetEventRecorderFor("krakendautoconfig-controller"),
-            Fetcher:      autoconfig.NewFetcher(mgr.GetClient()),
+            Fetcher:      autoconfig.NewFetcher(mgr.GetClient(), inst.Tracer),
             CUEEvaluator: autoconfig.NewCUEEvaluator(),
             Filter:       autoconfig.NewFilter(),
             Generator:    autoconfig.NewGenerator(),
@@ -141,32 +151,37 @@ func wireValidation(
             // controller, however many workers there are.
             CheckSlots: make(chan struct{}, autoConfigCheckSlots),
             Clock:      clock.RealClock{},
+            Metrics:    inst.autoConfigMetrics(),
+            Tracer:     inst.Tracer,
         },
-        Validators: webhooksetup.NewValidators(mgr.GetClient(), mgr.GetAPIReader(), checker, operatorUsername),
+        Validators: webhooksetup.NewValidators(
+            mgr.GetClient(), mgr.GetAPIReader(), checker, operatorUsername, inst.Tracer),
     }
 }
 ```
 
-`operatorUsername` is the `--operator-username` flag, which defaults to the pod's ServiceAccount (`system:serviceaccount:$POD_NAMESPACE:$POD_SERVICE_ACCOUNT`) and is empty when either variable is unset. The remaining controllers take the manager's client, scheme and a recorder, plus what they need:
+`inst.gatewayMetrics()` and `inst.autoConfigMetrics()` are the `OperatorMetrics` behind the controller package's ports, or nil without one, so a reconciler given none records nothing. `operatorUsername` is the `--operator-username` flag, which defaults to the pod's ServiceAccount (`system:serviceaccount:$POD_NAMESPACE:$POD_SERVICE_ACCOUNT`) and is empty when either variable is unset. `wireReferenceControllers` builds the endpoint and policy reconcilers, which resolve and protect references and hold no config checker. They take the manager's client, scheme and a recorder, plus what they need:
 
 ```go
-wired := wireValidation(mgr, rend, val, operatorUsername)
+wired := wireValidation(mgr, rend, val, operatorUsername, inst)
 wired.AutoConfig.MaxConcurrentReconciles = autoConfigMaxConcurrentReconciles // --autoconfig-max-concurrent-reconciles, default 4
 
 wired.Gateway.SetupWithManager(mgr)
 
-(&controller.KrakenDEndpointReconciler{
-    Client:   mgr.GetClient(),
-    Scheme:   mgr.GetScheme(),
-    Recorder: mgr.GetEventRecorderFor("krakendendpoint-controller"),
-}).SetupWithManager(mgr)
-
-(&controller.KrakenDBackendPolicyReconciler{
-    Client:    mgr.GetClient(),
-    Scheme:    mgr.GetScheme(),
-    Recorder:  mgr.GetEventRecorderFor("krakendbackendpolicy-controller"),
-    APIReader: mgr.GetAPIReader(), // releases the protection finalizer only after an uncached list
-}).SetupWithManager(mgr)
+// wireReferenceControllers:
+endpoints, policies := wireReferenceControllers(mgr, inst)
+// endpoints = &controller.KrakenDEndpointReconciler{
+//     Client: mgr.GetClient(), Scheme: mgr.GetScheme(),
+//     Recorder: mgr.GetEventRecorderFor("krakendendpoint-controller"), Tracer: inst.Tracer,
+// }
+// policies = &controller.KrakenDBackendPolicyReconciler{
+//     Client: mgr.GetClient(), Scheme: mgr.GetScheme(),
+//     Recorder:  mgr.GetEventRecorderFor("krakendbackendpolicy-controller"),
+//     APIReader: mgr.GetAPIReader(), // releases the protection finalizer only after an uncached list
+//     Tracer:    inst.Tracer,
+// }
+endpoints.SetupWithManager(mgr)
+policies.SetupWithManager(mgr)
 
 wired.AutoConfig.SetupWithManager(mgr)
 
@@ -2848,90 +2863,46 @@ When a status update fails after a successful mutation (e.g., the config ConfigM
 
 ## 17. Metrics Implementation
 
-**Registered in:** `internal/controller/metrics.go`, with the controller-runtime registry (`metrics.Registry.MustRegister`)
-**Instrumented in:** controller `Reconcile` methods and the gateway controller's license evaluation (`reconcileLicense`)
+**Registered in:** `telemetry.OperatorMetrics` (`internal/telemetry/metrics.go`) on OpenTelemetry instruments, served by `telemetry.NewPrometheusReader` in controller-runtime's `metrics.Registry`
+**Instrumented in:** the `GatewayMetrics` and `AutoConfigMetrics` ports (`internal/controller/metrics.go`), which `cmd` fills with `OperatorMetrics`; a reconciler given none records nothing
+
+The Prometheus reader exports each instrument under its own name, with no unit or `_total` suffix added, no `otel_scope_*` label and no `target_info` series, so the names and labels are those of earlier releases (`TestMetricsExposition_MatchesGolden` pins the scrape). The meter provider sets no cardinality limit. Counters and the histogram are synchronous. Every gauge is observable: it reports the values `OperatorMetrics` holds when a scrape collects them, so forgetting a gateway or AutoConfig removes its series. A synchronous instrument cannot drop a series, so the reconcile-duration histogram keeps a deleted gateway's series until the operator restarts.
 
 ### Metric Definitions
 
-```go
-var (
-    configRenders = prometheus.NewCounter(prometheus.CounterOpts{
-        Name: "krakend_operator_config_renders_total",
-        Help: "Total config render attempts",
-    })
+| Metric | OpenTelemetry instrument | Labels | Help |
+|---|---|---|---|
+| `krakend_operator_config_renders_total` | `Int64Counter` | none | Total config render attempts |
+| `krakend_operator_config_validation_failures_total` | `Int64Counter` | none | Fresh rejections of a gateway root, a backend policy or an endpoint checked on its own, counted once per change of what the gateway controller checks, not once per reconcile; content that comes back, the same policy on another gateway and an operator restart each count again |
+| `krakend_operator_rolling_restarts_total` | `Int64Counter` | none | Deployment writes that changed the pod template, rolling the pods (not creations) |
+| `krakend_operator_license_expiry_seconds` | `Float64ObservableGauge` | `namespace`, `name` | Seconds until EE license expiry |
+| `krakend_operator_endpoints` | `Float64ObservableGauge` | `namespace`, `name` | Number of KrakenDEndpoints per gateway |
+| `krakend_operator_reconcile_duration_seconds` | `Float64Histogram` (unit `s`, buckets `prometheus.DefBuckets`) | `controller`, `namespace`, `name` | Reconciliation loop latency |
+| `krakend_operator_dragonfly_ready` | `Float64ObservableGauge` | `namespace`, `name` | 1 if Dragonfly is ready, 0 otherwise |
+| `krakend_operator_gateway_info` | `Float64ObservableGauge` | `namespace`, `name`, `edition`, `version` | Gateway metadata labels |
+| `krakend_operator_gateway_config_valid` | `Float64ObservableGauge` | `namespace`, `name` | 1 while the gateway's newest rendered config passed validation (ConfigValid=True), 0 otherwise |
+| `krakend_operator_gateway_excluded_endpoints` | `Float64ObservableGauge` | `namespace`, `gateway`, `reason` | KrakenDEndpoints a gateway leaves out of its config because they fail validation on their own, by Accepted reason |
+| `krakend_operator_autoconfig_synced` | `Float64ObservableGauge` | `namespace`, `name` | 1 if the KrakenDAutoConfig's last reconcile synced successfully, 0 if it is failing |
 
-    configValidationFailures = prometheus.NewCounter(prometheus.CounterOpts{
-        Name: "krakend_operator_config_validation_failures_total",
-        Help: "Fresh rejections of a gateway root, a backend policy or an endpoint checked on its own, " +
-            "counted once per change of what the gateway controller checks, not once per reconcile; " +
-            "content that comes back, the same policy on another gateway and an operator restart each count again",
-    })
-
-    rollingRestarts = prometheus.NewCounter(prometheus.CounterOpts{
-        Name: "krakend_operator_rolling_restarts_total",
-        Help: "Deployment writes that changed the pod template, rolling the pods (not creations)",
-    })
-
-    licenseExpirySeconds = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-        Name: "krakend_operator_license_expiry_seconds",
-        Help: "Seconds until EE license expiry",
-    }, []string{"namespace", "name"})
-
-    endpointsPerGateway = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-        Name: "krakend_operator_endpoints",
-        Help: "Number of KrakenDEndpoints per gateway",
-    }, []string{"namespace", "name"})
-
-    reconcileDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
-        Name:    "krakend_operator_reconcile_duration_seconds",
-        Help:    "Reconciliation loop latency",
-        Buckets: prometheus.DefBuckets,
-    }, []string{"controller", "namespace", "name"})
-
-    dragonflyReady = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-        Name: "krakend_operator_dragonfly_ready",
-        Help: "1 if Dragonfly is ready, 0 otherwise",
-    }, []string{"namespace", "name"})
-
-    gatewayInfo = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-        Name: "krakend_operator_gateway_info",
-        Help: "Gateway metadata labels",
-    }, []string{"namespace", "name", "edition", "version"})
-
-    gatewayConfigValid = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-        Name: "krakend_operator_gateway_config_valid",
-        Help: "1 while the gateway's newest rendered config passed validation (ConfigValid=True), 0 otherwise",
-    }, []string{"namespace", "name"})
-
-    gatewayExcludedEndpoints = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-        Name: "krakend_operator_gateway_excluded_endpoints",
-        Help: "KrakenDEndpoints a gateway leaves out of its config because they fail validation on their own, by Accepted reason",
-    }, []string{"namespace", "gateway", "reason"})
-
-    autoConfigSynced = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-        Name: "krakend_operator_autoconfig_synced",
-        Help: "1 if the KrakenDAutoConfig's last reconcile synced successfully, 0 if it is failing",
-    }, []string{"namespace", "name"})
-)
-```
+The three counters are added to once with zero at construction, so they are exported from startup.
 
 ### Instrumentation Points
 
 | Metric | Instrumented In | When |
 |---|---|---|
 | `krakend_operator_config_renders_total` | `KrakenDGatewayReconciler.Reconcile` | After calling `Renderer.Render` |
-| `krakend_operator_config_validation_failures_total` | `countedPass.Store` | Once for each fresh rejection of the gateway root, a policy alone or an endpoint alone: `countedPass` wraps the memo of the root and endpoint checks only. The full checks use the plain `passMemo` and are never counted, and a remembered rejection is not counted again. Only the gateway controller counts: the AutoConfig precheck (plain `passMemo`) and admission (`lruMemo`) do not |
+| `krakend_operator_config_validation_failures_total` | `countedPass.Store` (counts through `GatewayMetrics.ConfigRejected`) | Once for each fresh rejection of the gateway root, a policy alone or an endpoint alone: `countedPass` wraps the memo of the root and endpoint checks only. The full checks use the plain `passMemo` and are never counted, and a remembered rejection is not counted again. Only the gateway controller counts: the AutoConfig precheck (plain `passMemo`) and admission (`lruMemo`) do not |
 | `krakend_operator_rolling_restarts_total` | `KrakenDGatewayReconciler.reconcileDeployment` | Once per Deployment write that changed the pod template, judged by comparing the template read before the write with the server's response. A creation does not count, and drift in the template that the write reverts does |
 | `krakend_operator_license_expiry_seconds` | `KrakenDGatewayReconciler.reconcileLicense` | After parsing the license certificate (from the last known expiry while the license is unreadable); the series is removed with the gateway, and when the gateway is not EE |
-| `krakend_operator_endpoints` | `recordGatewayMetrics` | At the end of each reconcile, from the endpoints listed for the gateway |
-| `krakend_operator_reconcile_duration_seconds` | `KrakenDGatewayReconciler.Reconcile` | `defer` at top of Reconcile, observing total duration |
+| `krakend_operator_endpoints` | `(*KrakenDGatewayReconciler).recordGatewayMetrics` | At the end of each reconcile, from the endpoints listed for the gateway |
+| `krakend_operator_reconcile_duration_seconds` | `KrakenDGatewayReconciler.Reconcile` | `defer` at top of Reconcile, recording the total duration through `GatewayMetrics.GatewayReconciled` |
 | `krakend_operator_dragonfly_ready` | `KrakenDGatewayReconciler.detectDragonflyState` | After checking Dragonfly CR status |
-| `krakend_operator_gateway_info` | `recordGatewayMetrics` | At the end of each reconcile; the gateway's earlier series is deleted first, so one series is left after a version or edition change |
-| `krakend_operator_gateway_config_valid` | `recordGatewayMetrics` | At the end of each reconcile: 1 while `ConfigValid` is `True`, 0 while it is `False` or `Unknown` or absent |
-| `krakend_operator_gateway_excluded_endpoints` | `reportExclusions` | After every pass that reaches the report: one series per `Accepted` reason (`EndpointInvalid`, `PolicyInvalid`) that has endpoints, counted from the endpoints' `Accepted` conditions as soon as an exclusion is recorded; absent while none; deleted in `deleteGatewayMetrics` |
+| `krakend_operator_gateway_info` | `(*KrakenDGatewayReconciler).recordGatewayMetrics` | At the end of each reconcile; `GatewayMetrics.SetGatewayInfo` replaces the gateway's series, so one is left after a version or edition change |
+| `krakend_operator_gateway_config_valid` | `(*KrakenDGatewayReconciler).recordGatewayMetrics` | At the end of each reconcile: 1 while `ConfigValid` is `True`, 0 while it is `False` or `Unknown` or absent |
+| `krakend_operator_gateway_excluded_endpoints` | `reportExclusions` | After every pass that reaches the report: one series per `Accepted` reason (`EndpointInvalid`, `PolicyInvalid`) that has endpoints, counted from the endpoints' `Accepted` conditions as soon as an exclusion is recorded; absent while none; recorded through `GatewayMetrics.SetExcludedEndpoints`, and deleted in `GatewayMetrics.ForgetGateway` |
 | `krakend_operator_autoconfig_synced` | `KrakenDAutoConfigReconciler` | 1 after a successful sync, 0 while it fails or any operation is held; removed when the AutoConfig is deleted |
 
-Every per-gateway series is removed when the gateway is deleted or terminating (`deleteGatewayMetrics`).
+Every per-gateway gauge series is removed when the gateway is deleted or terminating (`GatewayMetrics.ForgetGateway`). The reconcile-duration histogram's series is the exception: it stays until the operator restarts.
 
 ---
 
@@ -3147,7 +3118,10 @@ WORKDIR /workspace
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o manager ./cmd
+# VERSION is reported as service.version; make docker-build passes the Makefile's
+# VERSION, a plain docker build leaves "dev", and a release passes its tag.
+ARG VERSION=dev
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -X main.version=${VERSION}" -o manager ./cmd
 
 # Stage 2: Extract KrakenD CE binary for config validation
 FROM ${KRAKEND_IMAGE} AS krakend
@@ -3183,7 +3157,7 @@ build:                            ## Build operator binary
 	go build -o bin/manager ./cmd
 
 docker-build:                     ## Build Docker image
-	docker build -t krakend-operator:latest .
+	docker build --build-arg VERSION=$(VERSION) -t krakend-operator:latest .
 ```
 
 ### Go Module
@@ -3203,7 +3177,11 @@ require (
     github.com/dragonflydb/dragonfly-operator/api ...
     github.com/external-secrets/external-secrets/apis ...
     istio.io/client-go ...
-    github.com/prometheus/client_golang ...
+    github.com/prometheus/client_golang v1.24.1
+    go.opentelemetry.io/otel v1.47.0   // API and SDK; with the OTLP, stdout and log/metric SDK modules
+    go.opentelemetry.io/otel/exporters/prometheus v0.69.0
+    go.opentelemetry.io/contrib/bridges/otellogr v0.21.0
+    go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.72.0
     github.com/stretchr/testify ...  // test only
 )
 ```
