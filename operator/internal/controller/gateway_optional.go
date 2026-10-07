@@ -113,7 +113,7 @@ func (r *KrakenDGatewayReconciler) deleteIfControlled(
 // asked about again for absentKindWindow. A kind that has an informer is
 // looked up through it: a child it does not hold yet cannot be orphaned,
 // because the child's Add event enqueues the gateway again and that pass
-// deletes it.
+// deletes it. The child is read as metadata, which is all the informer holds.
 func (r *KrakenDGatewayReconciler) deleteOptionalIfControlled(
 	ctx context.Context, gw *v1alpha1.KrakenDGateway, gvk schema.GroupVersionKind, name string,
 ) error {
@@ -130,11 +130,13 @@ func (r *KrakenDGatewayReconciler) deleteOptionalIfControlled(
 		return nil
 	}
 	r.absentKinds.forget(gvk)
-	u := &unstructured.Unstructured{}
-	u.SetGroupVersionKind(gvk)
-	u.SetName(name)
-	u.SetNamespace(gw.Namespace)
-	return r.deleteIfControlled(ctx, r.optionalReader(gvk), gw, u)
+	// Only the owner references are read, and a kind with an informer
+	// caches metadata only: a full read would start a second informer.
+	obj := &metav1.PartialObjectMetadata{}
+	obj.SetGroupVersionKind(gvk)
+	obj.SetName(name)
+	obj.SetNamespace(gw.Namespace)
+	return r.deleteIfControlled(ctx, r.optionalReader(gvk), gw, obj)
 }
 
 // now reads the reconciler's clock, the wall clock when none is wired.
