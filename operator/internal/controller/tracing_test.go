@@ -106,3 +106,33 @@ func TestGatewayReconcile_SpansEachStageUnderItsParent(t *testing.T) {
 		})
 	}
 }
+
+// The render without the endpoints that fail on their own is a render span of
+// its own, inside the config stage, and is not counted as another render.
+func TestGatewayReconcile_TheRenderAfterAnExclusionIsASpanOfTheConfigStage(t *testing.T) {
+	gw := testGateway()
+	c, _ := gatewayStatusWrites(gw, testEndpoint("good", "/a"), badHosted("bad", "/b"))
+	rec := tracingtest.New(t)
+	r := tracedGatewayReconciler(c, rejectsBadHosts(), rec)
+	m, reg := testMetrics(t)
+	r.Metrics = m
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+
+	spans := rec.Ended()
+	parents := map[string]int{}
+	for _, render := range spans.Named("gateway.render") {
+		if parent := spans.Parent(render); parent != nil {
+			parents[parent.Name()]++
+		}
+	}
+	if parents["reconcile KrakenDGateway"] != 1 || parents["gateway.config"] != 1 {
+		t.Errorf("gateway.render spans by parent = %v, want the newest render under the reconcile and the one "+
+			"without the excluded endpoint under gateway.config; spans: %s", parents, spans)
+	}
+	if got, _ := metricValue(t, reg, "krakend_operator_config_renders_total"); got != 1 {
+		t.Errorf("config_renders_total = %v, want 1: the render after an exclusion is not another render attempt", got)
+	}
+}
