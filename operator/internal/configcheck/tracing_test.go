@@ -226,3 +226,28 @@ func TestChecker_ACheckCarriesThePurposeItsCallerNames(t *testing.T) {
 		t.Errorf("the check lacks configcheck.purpose=combined; spans: %s", spans)
 	}
 }
+
+// Conflicts and SameConfig render in process too: those renders are spans
+// below the check that asked for them.
+func TestChecker_ConflictsAndSameConfigSpanTheirRenders(t *testing.T) {
+	rec := tracingtest.New(t)
+	c := New(newReader(endpoint("a", "/a")), renderer.New(renderer.Options{}), &fakeValidator{}, 1, rec.Tracer())
+
+	if _, err := c.Conflicts(context.Background(), gateway(v1alpha1.EditionCE), nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.SameConfig(context.Background(), gateway(v1alpha1.EditionCE), gateway(v1alpha1.EditionCE)); err != nil {
+		t.Fatal(err)
+	}
+
+	spans := rec.Ended()
+	below := map[string]int{}
+	for _, render := range spans.Named("configcheck.render") {
+		if parent := spans.Parent(render); parent != nil {
+			below[parent.Name()]++
+		}
+	}
+	if below["configcheck.Conflicts"] != 1 || below["configcheck.SameConfig"] != 2 {
+		t.Errorf("renders below Conflicts and SameConfig = %v, want 1 and 2; spans: %s", below, spans)
+	}
+}
