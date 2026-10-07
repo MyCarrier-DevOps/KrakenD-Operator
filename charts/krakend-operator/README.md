@@ -89,7 +89,7 @@ The operator uses OpenTelemetry for its logs, traces and metrics.
 
   `status.hostIP` is an unbracketed address on IPv6-primary nodes, so the node collector does not apply there; set `telemetry.otlp.endpoint` instead.
 
-- **Headers.** Put collector credentials in a Secret and name it in `telemetry.otlp.headersSecret`.
+- **Headers.** Put collector credentials in a Secret and name it in `telemetry.otlp.headersSecret`. A missing Secret or key leaves the export without headers, so the collector may reject it, and the operator still starts.
 - **Duplicate logs.** If a log agent already collects the pod's stdout, set `telemetry.otlp.signals.logs=false` so log records are not delivered twice.
 - **External hosts.** Spec fetches to external hosts never carry the trace context.
 
