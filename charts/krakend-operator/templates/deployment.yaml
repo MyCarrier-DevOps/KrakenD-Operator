@@ -48,10 +48,29 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
+            {{- if .Values.telemetry.otlp.nodeCollector.enabled }}
+            - name: NODE_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            {{- end }}
+            {{- $endpoint := include "krakend-operator.otlpEndpoint" . }}
             {{- with .Values.telemetry.otlp }}
-            {{- if .endpoint }}
+            {{- if $endpoint }}
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              value: {{ .endpoint | quote }}
+              value: {{ $endpoint | quote }}
             - name: OTEL_EXPORTER_OTLP_PROTOCOL
               value: {{ .protocol | quote }}
             {{- if .headersSecret.name }}
@@ -77,9 +96,13 @@ spec:
             - name: OTEL_TRACES_SAMPLER_ARG
               value: {{ . | quote }}
             {{- end }}
-            {{- with .Values.telemetry.resourceAttributes }}
+            {{- $attributes := include "krakend-operator.resourceAttributes" .Values.telemetry.resourceAttributes }}
+            {{- if .Values.telemetry.otlp.nodeCollector.enabled }}
+            {{- $attributes = join "," (compact (list $attributes "k8s.node.name=$(NODE_NAME)" "k8s.pod.uid=$(POD_UID)" "k8s.pod.ip=$(POD_IP)")) }}
+            {{- end }}
+            {{- if $attributes }}
             - name: OTEL_RESOURCE_ATTRIBUTES
-              value: {{ include "krakend-operator.resourceAttributes" . | quote }}
+              value: {{ $attributes | quote }}
             {{- end }}
           command:
             - /manager
