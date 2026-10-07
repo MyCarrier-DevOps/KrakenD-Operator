@@ -634,8 +634,8 @@ func TestPolicyAdmission_TheCauseKeepsItsCountOfEndpointsNotChecked(t *testing.T
 		failCall int // the check that cannot run, 0 for none
 		suffix   string
 	}{
-		{"past the cap", 0, "(+5 more not checked)"},
-		{"cut short by the deadline", 42, "(6 not checked within the admission time)"},
+		{"past the cap", 0, "(+3 more) (+5 more not checked)"},
+		{"cut short by the deadline", 42, "(+3 more) (6 not checked within the admission time)"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
