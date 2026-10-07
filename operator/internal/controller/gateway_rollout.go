@@ -38,6 +38,10 @@ type deploymentObservation struct {
 	// but the cache then describes the Deployment from before the write, so
 	// nothing about the rollout can be judged from it.
 	failed bool
+	// unreconciled: the ServiceAccount step failed without a refusal, so the
+	// Deployment step did not run. Unlike failed, the cache still describes the
+	// Deployment as it is, so it is read like on a hold.
+	unreconciled bool
 	// created: this pass created the Deployment.
 	created bool
 	// templateChanged: this pass's write changed the pod template, judged by

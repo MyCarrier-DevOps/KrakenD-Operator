@@ -562,9 +562,10 @@ func (r *KrakenDGatewayReconciler) detectDragonflyState(
 // lowered once the Deployment has converged, so a rollout stays reported
 // across a failed status write and a lagging cache. A pass that did not
 // reconcile the Deployment (held, or the step failed) starts no rollout, so
-// it does not raise Progressing, except that a failed step raises it while the
-// Deployment still mounts an older config than the applied one; it reads the
-// cached Deployment for the rest.
+// it does not raise Progressing, except that a failed Deployment step, or a
+// ServiceAccount step that failed without a refusal, raises it while the
+// Deployment does not mount the applied config; it reads the cached
+// Deployment for the rest.
 func (r *KrakenDGatewayReconciler) inspectDeploymentStatus(
 	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
@@ -572,6 +573,19 @@ func (r *KrakenDGatewayReconciler) inspectDeploymentStatus(
 	obs deploymentObservation,
 	note *rolloutNote,
 ) {
+	// A pass that cannot start the rollout it owes, because its Deployment
+	// step failed or the ServiceAccount step failed without a refusal, raises
+	// Progressing while the Deployment does not mount the applied config, even
+	// with no Deployment at all: Ready must not read True beside the new
+	// checksum. A plugin hold or a refusal is reported by a condition that
+	// outranks Progressing, and raises nothing.
+	if (obs.failed || obs.unreconciled) && want.configMapName != "" && len(want.missingPlugins) == 0 &&
+		want.mountedConfigMap != want.configMapName {
+		raiseProgressing(gw, cmp.Or(note, &rolloutNote{
+			reason: v1alpha1.ReasonConfigDeployed, message: "Configuration updated, rolling deployment",
+		}))
+	}
+
 	// The Deployment this pass reconciled is read from what CreateOrUpdate
 	// left behind, not from the cache, which can still describe the Deployment
 	// from before the write. A pass that did not reconcile it reads the cache.
@@ -591,17 +605,9 @@ func (r *KrakenDGatewayReconciler) inspectDeploymentStatus(
 	gw.Status.Replicas = dep.Status.Replicas
 	gw.Status.ReadyReplicas = dep.Status.ReadyReplicas
 
-	// A failed Deployment step leaves Progressing and Available as they were:
-	// the cached Deployment is from before the write the step could not make.
-	// Unless the Deployment still mounts an older config than the applied one:
-	// then the rollout the pass was to start is still owed, and Ready must not
-	// read True beside the new checksum.
+	// A failed Deployment step leaves Available as it was: the cached
+	// Deployment is from before the write the step could not make.
 	if obs.failed {
-		if want.configMapName != "" && want.mountedConfigMap != want.configMapName {
-			raiseProgressing(gw, cmp.Or(note, &rolloutNote{
-				reason: v1alpha1.ReasonConfigDeployed, message: "Configuration updated, rolling deployment",
-			}))
-		}
 		return
 	}
 
@@ -907,8 +913,9 @@ func markConfigApplied(gw *v1alpha1.KrakenDGateway, checksum string, edition v1a
 // this pass detected, and returns the reason and message chosen for it. It
 // returns nil when the pass detects no change, including while the Deployment
 // is held: a held Deployment starts no rollout. A ServiceAccount hold returns
-// nil too, and its end reports no config rollout: the Deployment write that
-// follows raises Progressing with reason DeploymentUpdated.
+// nil too. After a refusal its end reports no config rollout: the Deployment
+// write that follows raises Progressing with reason DeploymentUpdated. After a
+// failure that is not a refusal the status already says ConfigDeployed.
 func (r *KrakenDGatewayReconciler) noteRollout(
 	gw *v1alpha1.KrakenDGateway, in infraInputs, deployed deployedChecksums, configChanged, saControlled bool,
 ) *rolloutNote {
@@ -1372,7 +1379,7 @@ func (r *KrakenDGatewayReconciler) reconcileDeploymentUnlessHeld(
 //
 // The Deployment and the post-restart Job run as the ServiceAccount named like
 // the gateway, so while the gateway does not control it both are held as they
-// are, and the pass returns an error and the zero observation. The caller runs
+// are, and the pass returns an error and an observation without a Deployment. The caller runs
 // reconcileCoreResources first and passes its outcome in, so the rollout note
 // can honour the hold.
 func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
@@ -1399,10 +1406,10 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 		}
 		errs = append(errs,
 			r.reconcileDragonfly(ctx, gw), r.reconcileExternalSecret(ctx, gw), r.reconcileVirtualService(ctx, gw))
-		// A step that failed without a refusal leaves the Deployment as it was
-		// just like a failed Deployment step; a refusal is reported by
+		// A failure that is not a refusal is marked unreconciled, so the
+		// status still owes the rollout; a refusal is reported by
 		// ResourcesControlled, which outranks Progressing.
-		return deploymentObservation{failed: len(notControlledIn(coreErr)) == 0}, stderrors.Join(errs...)
+		return deploymentObservation{unreconciled: len(notControlledIn(coreErr)) == 0}, stderrors.Join(errs...)
 	}
 
 	obs, gcErr, deploymentErr := r.reconcileDeploymentUnlessHeld(ctx, gw, in)
