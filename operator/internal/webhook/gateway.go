@@ -47,6 +47,9 @@ import (
 type GatewayValidator struct {
 	client.Client
 	Checker ConfigChecker
+	// Memo remembers recent config verdicts across requests. Nil remembers
+	// nothing.
+	Memo configcheck.Memo
 }
 
 // ValidateCreate validates a new KrakenDGateway. There is no "old" object on
@@ -125,7 +128,7 @@ func (v *GatewayValidator) admit(
 	if len(errs) > 0 {
 		return warnings, invalid("KrakenDGateway", gw.Name, errs)
 	}
-	renderWarnings, err := checkGatewayRender(ctx, v.Checker, old, gw)
+	renderWarnings, err := checkGatewayRender(ctx, v.Client, v.Checker, v.Memo, old, gw)
 	return append(append(warnings, renderWarnings...), versionWarning(gw, old)...), err
 }
 
@@ -1071,7 +1074,7 @@ func validatePostRestartWorkingDir(prj *v1alpha1.PostRestartJobSpec) string {
 // the root alone is judged. An update that renders the same config, such as a
 // new image or replica count, is not checked at all.
 func checkGatewayRender(
-	ctx context.Context, chk ConfigChecker, old, gw *v1alpha1.KrakenDGateway,
+	ctx context.Context, _ client.Reader, chk ConfigChecker, _ configcheck.Memo, old, gw *v1alpha1.KrakenDGateway,
 ) (admission.Warnings, error) {
 	if old == nil {
 		root, err := chk.CheckIsolated(ctx, gw, nil)
@@ -1119,6 +1122,33 @@ func checkGatewayRender(
 		func(before configcheck.Verdict) string {
 			return "the gateway's config already fails validation: " + before.Summary(warningLimit)
 		})
+}
+
+// rootVerdict answers a gateway write whose root fails on its own.
+func rootVerdict(context.Context, ConfigChecker, configcheck.Memo, *v1alpha1.KrakenDGateway,
+	*v1alpha1.KrakenDGateway, configcheck.Verdict) (admission.Warnings, error) {
+	return nil, nil
+}
+
+// servedEndpointsOf lists the endpoints of gw that it serves.
+func servedEndpointsOf(
+	context.Context, client.Reader, *v1alpha1.KrakenDGateway,
+) ([]v1alpha1.KrakenDEndpoint, error) {
+	return nil, nil
+}
+
+// warnWaiting answers a gateway create about the endpoints that already
+// reference it.
+func warnWaiting(context.Context, ConfigChecker, configcheck.Memo, configcheck.EndpointUnit,
+	configcheck.Verdict, error, []v1alpha1.KrakenDEndpoint) admission.Warnings {
+	return nil
+}
+
+// judgeServed decides a gateway update from the endpoints gw serves.
+func judgeServed(context.Context, ConfigChecker, configcheck.Memo, configcheck.EndpointUnit,
+	*v1alpha1.KrakenDGateway, configcheck.Verdict, []v1alpha1.KrakenDEndpoint,
+) (admission.Warnings, error) {
+	return nil, nil
 }
 
 // refuseNewGatewayClashes rejects gw when its root makes KrakenD's router
