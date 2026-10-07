@@ -611,3 +611,24 @@ func TestCheckEndpoint_RendersTheDragonflyAddress(t *testing.T) {
 		t.Errorf("checked unit does not carry the Dragonfly address:\n%s", val.seen[0])
 	}
 }
+
+func TestEndpointVerdictMessage(t *testing.T) {
+	p := []types.NamespacedName{{Namespace: "ns", Name: "p"}}
+	tests := []struct {
+		v    EndpointVerdict
+		want string
+	}{
+		{EndpointVerdict{OK: true}, ""},
+		{EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid, Output: "- at '/endpoints/0': bad"},
+			"fails krakend check on its own: - at '/endpoints/0': bad"},
+		{EndpointVerdict{Reason: v1alpha1.ReasonPolicyInvalid, Policies: p, PoliciesFailAlone: true},
+			"references KrakenDBackendPolicy ns/p, which fails krakend check on its own"},
+		{EndpointVerdict{Reason: v1alpha1.ReasonPolicyInvalid, Policies: p},
+			"fails krakend check only together with KrakenDBackendPolicy ns/p of another namespace, whose content is not shown"},
+	}
+	for _, tt := range tests {
+		if got := tt.v.Message(1024); got != tt.want {
+			t.Errorf("Message(%+v) = %q, want %q", tt.v, got, tt.want)
+		}
+	}
+}
