@@ -274,8 +274,8 @@ func (v *EndpointValidator) refuseNewClashes(
 	return invalid(kindEndpoint, ep.Name, errs)
 }
 
-// maxEntryCauses is how many entries of the candidate a denial lists as causes
-// of their own.
+// maxEntryCauses is how many causes a denial lists before it summarises the
+// rest in one more.
 const maxEntryCauses = 20
 
 // rootInvalidWarning warns a writer of an endpoint of gw, whose root fails on
