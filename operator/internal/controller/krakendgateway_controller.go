@@ -149,8 +149,7 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	recordDuration := true
 	defer func() {
 		if recordDuration {
-			reconcileDuration.WithLabelValues("gateway", req.Namespace, req.Name).
-				Observe(time.Since(start).Seconds())
+			r.metrics().GatewayReconciled(ctx, req.NamespacedName, time.Since(start))
 		}
 	}()
 
@@ -214,7 +213,7 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("rendering config: %w", err)
 	}
-	configRenders.Inc()
+	r.metrics().ConfigRendered(ctx)
 
 	// Config stage: decide and publish the applied config. Its error is
 	// returned only after the infrastructure stage and the status write.
@@ -395,7 +394,7 @@ func (r *KrakenDGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 // forgetGateway drops what the controller keeps per gateway once the gateway
 // is gone or terminating: its metric series and its remembered verdicts.
 func (r *KrakenDGatewayReconciler) forgetGateway(key types.NamespacedName) {
-	deleteGatewayMetrics(key.Namespace, key.Name)
+	r.metrics().ForgetGateway(key)
 	r.verdicts.forget(key)
 	r.verified.forgetGateway(key)
 }
@@ -465,7 +464,7 @@ func (r *KrakenDGatewayReconciler) detectDragonflyState(
 			Reason:             v1alpha1.ReasonCRDNotInstalled,
 			Message:            "Dragonfly is enabled but the dragonflydb.io Dragonfly CRD is not installed in the cluster",
 		})
-		dragonflyReady.WithLabelValues(gw.Namespace, gw.Name).Set(0)
+		r.metrics().SetDragonflyReady(client.ObjectKeyFromObject(gw), false)
 		return nil
 	}
 
@@ -483,11 +482,11 @@ func (r *KrakenDGatewayReconciler) detectDragonflyState(
 				Reason:             v1alpha1.ReasonDragonflyNotReady,
 				Message:            "Dragonfly CR not yet created",
 			})
-			dragonflyReady.WithLabelValues(gw.Namespace, gw.Name).Set(0)
+			r.metrics().SetDragonflyReady(client.ObjectKeyFromObject(gw), false)
 			return &renderer.DragonflyState{Enabled: true, ServiceDNS: resources.DragonflyServiceDNS(gw)}
 		}
 		log.Error(err, "failed to get Dragonfly CR", "name", dfName)
-		dragonflyReady.WithLabelValues(gw.Namespace, gw.Name).Set(0)
+		r.metrics().SetDragonflyReady(client.ObjectKeyFromObject(gw), false)
 		return &renderer.DragonflyState{Enabled: true, ServiceDNS: resources.DragonflyServiceDNS(gw)}
 	}
 
@@ -506,7 +505,7 @@ func (r *KrakenDGatewayReconciler) detectDragonflyState(
 			Reason:             "DragonflyReady",
 			Message:            "Dragonfly instance is ready",
 		})
-		dragonflyReady.WithLabelValues(gw.Namespace, gw.Name).Set(1)
+		r.metrics().SetDragonflyReady(client.ObjectKeyFromObject(gw), true)
 		gw.Status.DragonflyAddress = resources.DragonflyServiceDNS(gw)
 	} else {
 		r.setConditionWithEvent(gw, metav1.Condition{
@@ -516,7 +515,7 @@ func (r *KrakenDGatewayReconciler) detectDragonflyState(
 			Reason:             v1alpha1.ReasonDragonflyNotReady,
 			Message:            fmt.Sprintf("Dragonfly phase: %s", phase),
 		})
-		dragonflyReady.WithLabelValues(gw.Namespace, gw.Name).Set(0)
+		r.metrics().SetDragonflyReady(client.ObjectKeyFromObject(gw), false)
 	}
 
 	return &renderer.DragonflyState{Enabled: true, ServiceDNS: resources.DragonflyServiceDNS(gw)}
@@ -1318,7 +1317,7 @@ func (r *KrakenDGatewayReconciler) reconcileDeployment(
 	changed := result == controllerutil.OperationResultUpdated &&
 		!equality.Semantic.DeepEqual(before, &dep.Spec.Template)
 	if changed {
-		rollingRestarts.Inc()
+		r.metrics().RollingRestart(ctx)
 	}
 	return deploymentObservation{
 		dep: dep, created: result == controllerutil.OperationResultCreated, templateChanged: changed,
