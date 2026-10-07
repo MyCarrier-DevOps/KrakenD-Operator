@@ -61,9 +61,9 @@ func TestGatewayAdmission_AnUpdateThatBreaksAServedEndpointIsDeniedByName(t *tes
 			t.Errorf("check %d was handed no memo, want the validator's", i+1)
 		}
 	}
-	if got := strings.Join(chk.calls, ","); got != "root,group,endpoint,endpoint" {
-		t.Errorf("checks = %s, want the root, the served endpoints with the new root, then the endpoint on its "+
-			"own with the new root and with the stored one", got)
+	if got := strings.Join(chk.calls, ","); got != "root,group,root,endpoint,endpoint" {
+		t.Errorf("checks = %s, want the root, the served endpoints with the new root, the stored root, then the "+
+			"endpoint on its own with the new root and with the stored one", got)
 	}
 }
 
@@ -76,7 +76,7 @@ func TestGatewayAdmission_AnAlreadyFailingEndpointDoesNotHideABrokenOne(t *testi
 		// The root, the served endpoints with the update; then the served
 		// endpoints with the stored root, which stale fails too: a judgement
 		// that would hide victim, so the webhook must not rely on it.
-		verdicts: []configcheck.Verdict{{OK: true}, {Output: "x"}, {Output: "x"}},
+		verdicts: []configcheck.Verdict{{OK: true}, {Output: "x"}, {OK: true}},
 		endpointVerdicts: []configcheck.EndpointVerdict{
 			epFail, epFail, // stale: fails with the update and without it
 			epFail, {OK: true}, // victim: fails only with the update
@@ -94,9 +94,9 @@ func TestGatewayAdmission_AnAlreadyFailingEndpointDoesNotHideABrokenOne(t *testi
 	}
 }
 
-// servedByLastConfig is testEndpoint as the gateway reports an endpoint its
+// acceptedEndpoint is testEndpoint as the gateway reports an endpoint its
 // last applied config serves: Accepted for its current generation.
-func servedByLastConfig(name, path string) *v1alpha1.KrakenDEndpoint {
+func acceptedEndpoint(name, path string) *v1alpha1.KrakenDEndpoint {
 	ep := testEndpoint(name, path)
 	ep.Generation = 2
 	ep.Status.Conditions = []metav1.Condition{{Type: v1alpha1.ConditionAccepted, Status: metav1.ConditionTrue,
@@ -110,7 +110,7 @@ func TestGatewayAdmission_AServedEndpointItBreaksIsDeniedWhenTheStoredRootPasses
 	old, gw := editedGateway()
 	chk := &scriptedChecker{verdicts: []configcheck.Verdict{{OK: true}, {Output: "x"}, {OK: true}},
 		endpointVerdicts: []configcheck.EndpointVerdict{{Reason: v1alpha1.ReasonEndpointInvalid}, {OK: true}}}
-	v := &GatewayValidator{Client: fakeClient(old, servedByLastConfig("ep", "/a")), Checker: chk}
+	v := &GatewayValidator{Client: fakeClient(old, acceptedEndpoint("ep", "/a")), Checker: chk}
 
 	resp := review(t, v, "alice", gw, old)
 
@@ -129,7 +129,7 @@ func TestGatewayAdmission_AServedEndpointIsDeniedWhenTheStoredRootFails(t *testi
 		verdicts:         []configcheck.Verdict{{OK: true}, {Output: "x"}, {Output: "the stored root fails"}},
 		endpointVerdicts: []configcheck.EndpointVerdict{epFail, epFail},
 	}
-	v := &GatewayValidator{Client: fakeClient(old, servedByLastConfig("ep", "/a")), Checker: chk}
+	v := &GatewayValidator{Client: fakeClient(old, acceptedEndpoint("ep", "/a")), Checker: chk}
 
 	resp := review(t, v, "alice", gw, old)
 
@@ -148,7 +148,7 @@ func TestGatewayAdmission_AServedEndpointIsDeniedWhenTheStoredRootFails(t *testi
 func TestGatewayAdmission_AnEndpointNoConfigServedOnlyWarnsWhenTheStoredRootFails(t *testing.T) {
 	old, gw := editedGateway()
 	epFail := configcheck.EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid}
-	changed := servedByLastConfig("changed", "/b")
+	changed := acceptedEndpoint("changed", "/b")
 	changed.Generation = 3 // Accepted is for generation 2
 	unjudged := testEndpoint("unjudged", "/c")
 	tests := []struct {
@@ -183,7 +183,7 @@ func TestGatewayAdmission_AServedEndpointIsNamedAlongsideOneNoConfigServed(t *te
 		verdicts:         []configcheck.Verdict{{OK: true}, {Output: "x"}, {Output: "the stored root fails"}},
 		endpointVerdicts: []configcheck.EndpointVerdict{epFail, epFail, epFail, epFail},
 	}
-	v := &GatewayValidator{Client: fakeClient(old, testEndpoint("a-waiting", "/a"), servedByLastConfig("b-served", "/b")),
+	v := &GatewayValidator{Client: fakeClient(old, testEndpoint("a-waiting", "/a"), acceptedEndpoint("b-served", "/b")),
 		Checker: chk}
 
 	resp := review(t, v, "alice", gw, old)
@@ -200,7 +200,7 @@ func TestGatewayAdmission_AServedEndpointIsNamedAlongsideOneNoConfigServed(t *te
 func TestGatewayAdmission_AFailureOnlyTogetherIsDeniedWhenTheStoredRootFails(t *testing.T) {
 	old, gw := editedGateway()
 	chk := &scriptedChecker{verdicts: []configcheck.Verdict{{OK: true}, {Output: "x"}, {Output: "the stored root fails"}}}
-	v := &GatewayValidator{Client: fakeClient(old, servedByLastConfig("ep", "/a")), Checker: chk}
+	v := &GatewayValidator{Client: fakeClient(old, acceptedEndpoint("ep", "/a")), Checker: chk}
 
 	resp := review(t, v, "alice", gw, old)
 
@@ -218,7 +218,7 @@ func TestGatewayAdmission_AStoredRootCheckThatCannotRunIs500(t *testing.T) {
 	chk := &scriptedChecker{err: errors.New("no slot"), failCall: 3, failOnly: true,
 		verdicts: []configcheck.Verdict{{OK: true}, {Output: "x"}}}
 
-	resp := review(t, &GatewayValidator{Client: fakeClient(old, servedByLastConfig("ep", "/a")), Checker: chk},
+	resp := review(t, &GatewayValidator{Client: fakeClient(old, acceptedEndpoint("ep", "/a")), Checker: chk},
 		"alice", gw, old)
 
 	if resp.Allowed || resp.Result.Code != http.StatusInternalServerError {
@@ -243,7 +243,7 @@ func TestGatewayAdmission_AMaskedEndpointIsJudgedOnItsOwn(t *testing.T) {
 	if resp.Allowed || !strings.Contains(responseText(resp), "default/ep") {
 		t.Errorf("response = %+v; want a denial naming default/ep, whose lost entry the group never checked", resp.Result)
 	}
-	if got := strings.Join(chk.calls, ","); got != "root,group,endpoint,endpoint" {
+	if got := strings.Join(chk.calls, ","); got != "root,group,root,endpoint,endpoint" {
 		t.Errorf("checks = %s, want the masked endpoint checked on its own with the update and without it", got)
 	}
 }
@@ -330,9 +330,9 @@ func TestGatewayAdmission_AScanThatStoppedWithoutADenialIs500(t *testing.T) {
 		failCall int
 	}{
 		{"after an endpoint that already failed", []string{"stale", "zz-next"},
-			configcheck.Verdict{Output: "x"}, []configcheck.EndpointVerdict{epFail, epFail}, 5},
+			configcheck.Verdict{Output: "x"}, []configcheck.EndpointVerdict{epFail, epFail}, 6},
 		{"on a masked endpoint", []string{"ep"},
-			configcheck.Verdict{OK: true, Masked: []types.NamespacedName{{Namespace: "default", Name: "ep"}}}, nil, 3},
+			configcheck.Verdict{OK: true, Masked: []types.NamespacedName{{Namespace: "default", Name: "ep"}}}, nil, 4},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -358,7 +358,7 @@ func TestGatewayAdmission_AScanThatStoppedWithoutADenialIs500(t *testing.T) {
 // check that cannot run leaves the update unjudged: a 500.
 func TestGatewayAdmission_AStoredGroupCheckThatCannotRunIs500(t *testing.T) {
 	old, gw := editedGateway()
-	chk := &scriptedChecker{err: errors.New("no slot"), failCall: 4, failOnly: true,
+	chk := &scriptedChecker{err: errors.New("no slot"), failCall: 5, failOnly: true,
 		verdicts:         []configcheck.Verdict{{OK: true}, {Output: "x"}},
 		endpointVerdicts: []configcheck.EndpointVerdict{{OK: true}}}
 
