@@ -1111,3 +1111,43 @@ func TestResolveExternalRefs_AFetchErrorNamesTheDocumentOnce(t *testing.T) {
 		})
 	}
 }
+
+// The warning for a local ref the resolver does not follow, here an Example
+// Object reference, names its document without the credentials in its URL.
+func TestResolveExternalRefs_AnUnfollowedLocalRefWarningCarriesNoCredentials(t *testing.T) {
+	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"$ref":"` + refWithSecrets + `#/A"}}}}}}`)
+	fetcher := &stubFetcher{docs: map[string][]byte{
+		refWithSecrets: []byte(`{"A":{"examples":{"e":{"$ref":"#/S"}}},"S":{}}`),
+	}}
+
+	_, warnings, err := ResolveExternalRefs(context.Background(), main, "https://api.example.com/openapi.json",
+		fetcher, FetchSource{})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireNoSecretWarnings(t, warnings)
+}
+
+// An external ref beside a fetched document's local ref is still resolved.
+func TestResolveExternalRefs_ExternalRefBesideALocalRefIsStillInlined(t *testing.T) {
+	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"content":{"application/json":` +
+		`{"schema":{"$ref":"common.json#/Pet"}}}}}}}}}`)
+	common := []byte(`{"Pet":{"properties":{"o":{"$ref":"#/Owner",` +
+		`"properties":{"x":{"$ref":"other.json#/Bar"}}}}},"Owner":{"type":"string"}}`)
+	other := []byte(`{"Bar":{"type":"integer"}}`)
+	fetcher := &stubFetcher{docs: map[string][]byte{
+		"https://api.example.com/common.json": common,
+		"https://api.example.com/other.json":  other,
+	}}
+
+	resolved, _, err := ResolveExternalRefs(context.Background(), main,
+		"https://api.example.com/openapi.json", fetcher, FetchSource{})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	raw := string(resolved)
+	if strings.Contains(raw, "other.json#") || !strings.Contains(raw, `"other_Bar":{"type":"integer"}`) {
+		t.Errorf("want other.json#/Bar inlined as other_Bar and rewritten; got %s", raw)
+	}
+}
