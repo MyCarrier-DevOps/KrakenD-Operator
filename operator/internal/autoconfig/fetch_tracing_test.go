@@ -25,6 +25,8 @@ import (
 	"strings"
 	"testing"
 
+	"go.opentelemetry.io/otel/codes"
+
 	"github.com/mycarrier-devops/krakend-operator/internal/tracing/tracingtest"
 )
 
@@ -254,5 +256,36 @@ func TestNewFetcher_NothingWrapsTheTransportUnderTheSpans(t *testing.T) {
 		if _, ok := spans.next.(*http.Transport); !ok {
 			t.Errorf("the %s client's clientSpans wraps %T, want *http.Transport", name, spans.next)
 		}
+	}
+}
+
+// A client span is an error when the server answers with a 4xx or 5xx status,
+// as the OpenTelemetry HTTP conventions have it, and not otherwise.
+func TestClientSpans_AnErrorStatusMarksTheSpan(t *testing.T) {
+	for _, tc := range []struct {
+		status int
+		want   codes.Code
+	}{
+		{http.StatusOK, codes.Unset},
+		{http.StatusNotFound, codes.Error},
+	} {
+		t.Run(http.StatusText(tc.status), func(t *testing.T) {
+			rec := tracingtest.New(t)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.status)
+			}))
+			defer srv.Close()
+			client := &http.Client{Transport: clientSpans{next: http.DefaultTransport, tracer: rec.Tracer()}}
+
+			resp, err := client.Get(srv.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = resp.Body.Close()
+
+			if got := rec.Ended().One(t, "HTTP GET").Status().Code; got != tc.want {
+				t.Errorf("HTTP GET status = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
