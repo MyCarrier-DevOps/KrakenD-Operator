@@ -97,3 +97,19 @@ func TestEndpointAdmission_AnUpdateThatNewlyFailsIsDenied(t *testing.T) {
 		t.Errorf("an update that newly fails on its own was admitted: %v", resp.Warnings)
 	}
 }
+
+func TestEndpointAdmission_AMoveIsJudgedLikeACreate(t *testing.T) {
+	elsewhere := testGateway()
+	elsewhere.Name = "elsewhere"
+	stored := testEndpoint("ep", "/a")
+	stored.Spec.GatewayRef.Name = "elsewhere"
+	moved := testEndpoint("ep", "/a")
+	chk := &scriptedChecker{endpointVerdicts: []configcheck.EndpointVerdict{ownFailure("bad here")}}
+	v := &EndpointValidator{Client: fakeClient(testGateway(), elsewhere, stored), Checker: chk}
+
+	resp := review(t, v, "alice", moved, stored)
+
+	if resp.Allowed || strings.Join(chk.calls, ",") != "root,endpoint" {
+		t.Errorf("allowed = %v, checks = %v; want a denial without judging the version on the other gateway", resp.Allowed, chk.calls)
+	}
+}
