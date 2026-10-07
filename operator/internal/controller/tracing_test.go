@@ -552,7 +552,7 @@ func TestAutoConfigReconcile_SpansEachStageUnderItsParent(t *testing.T) {
 		{"autoconfig.precheck", "autoconfig.endpoints"},
 		{"configcheck.Conflicts", "autoconfig.precheck"},
 		{"autoconfig.judge_candidates", "autoconfig.precheck"},
-		{"autoconfig.slot", "autoconfig.judge_candidates"},
+		{"controller.check_slot", "autoconfig.judge_candidates"},
 		{"configcheck.CheckRoot", "autoconfig.judge_candidates"},
 		{"configcheck.CheckGroup", "autoconfig.judge_candidates"},
 		{"autoconfig.write_endpoint", "autoconfig.endpoints"},
@@ -853,7 +853,7 @@ func TestWithCheckSlot_TheWaitEndsBeforeTheCheckRuns(t *testing.T) {
 	waitEnded := false
 
 	_, err := withCheckSlot(ctx, rec.Tracer(), make(chan struct{}, 1), func() (struct{}, error) {
-		waitEnded = len(rec.Ended().Named("autoconfig.slot")) == 1
+		waitEnded = len(rec.Ended().Named("controller.check_slot")) == 1
 		return struct{}{}, nil
 	})
 	outer.End()
@@ -862,12 +862,12 @@ func TestWithCheckSlot_TheWaitEndsBeforeTheCheckRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !waitEnded {
-		t.Error("the autoconfig.slot span was still open while the check ran")
+		t.Error("the controller.check_slot span was still open while the check ran")
 	}
 	spans := rec.Ended()
-	spans.RequireParent(t, "outer", "autoconfig.slot")
-	if got := spans.One(t, "autoconfig.slot").Status().Code; got != codes.Unset {
-		t.Errorf("autoconfig.slot status = %v, want Unset", got)
+	spans.RequireParent(t, "outer", "controller.check_slot")
+	if got := spans.One(t, "controller.check_slot").Status().Code; got != codes.Unset {
+		t.Errorf("controller.check_slot status = %v, want Unset", got)
 	}
 }
 
@@ -884,8 +884,8 @@ func TestWithCheckSlot_AGivenUpWaitIsAnErrorOnItsSpan(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want a cancellation", err)
 	}
-	if got := rec.Ended().One(t, "autoconfig.slot").Status().Code; got != codes.Error {
-		t.Errorf("autoconfig.slot status = %v, want Error", got)
+	if got := rec.Ended().One(t, "controller.check_slot").Status().Code; got != codes.Error {
+		t.Errorf("controller.check_slot status = %v, want Error", got)
 	}
 }
 
