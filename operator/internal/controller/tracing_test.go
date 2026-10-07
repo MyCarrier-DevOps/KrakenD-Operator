@@ -190,6 +190,7 @@ func TestGatewayReconcile_EachJudgingPassNamesItsEndpoints(t *testing.T) {
 		if n := len(judged); n != 1 {
 			t.Errorf("%d judging passes of %q, want 1; spans: %s", n, pass, spans)
 		}
+		spans.RequireChild(t, "gateway.config", "gateway.judge_endpoints")
 	}
 }
 
