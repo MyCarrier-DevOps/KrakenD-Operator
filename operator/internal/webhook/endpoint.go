@@ -265,17 +265,7 @@ func (v *EndpointValidator) refuseNewClashes(
 	if len(clashes) == 0 {
 		return nil
 	}
-	var errs field.ErrorList
-	for i, c := range clashes {
-		if i == maxEntryCauses {
-			errs = append(errs, field.Invalid(field.NewPath("spec", "endpoints"), field.OmitValueType{},
-				fmt.Sprintf("%d more entries clash the same way", len(clashes)-i)))
-			break
-		}
-		errs = append(errs, field.Invalid(field.NewPath("spec", "endpoints"), field.OmitValueType{},
-			truncate("KrakenD's router cannot serve both: "+c.String(), warningLimit)))
-	}
-	return invalid(kindEndpoint, ep.Name, errs)
+	return invalid(kindEndpoint, ep.Name, clashErrors(field.NewPath("spec", "endpoints"), clashes))
 }
 
 // maxEntryCauses is how many entries of the candidate a denial lists as causes
