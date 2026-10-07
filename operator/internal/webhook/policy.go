@@ -118,7 +118,8 @@ const policyWarningLimit = (policyWarningBytes - countWarningBytes) / maxPolicyW
 // cannot spend the time another gateway's checks need. A denial names
 // endpoints and quotes none of them. A gateway that could not be checked makes
 // the request a 500 unless another gateway already refuses it. Each gateway's
-// screening is an admission.screen_policy span of tracer.
+// screening is an admission.screen_policy span of tracer, and its judging an
+// admission.judge_policy span.
 func checkPolicyRender(ctx context.Context, tracer trace.Tracer, c client.Reader, chk ConfigChecker,
 	memo configcheck.Memo, old, policy *v1alpha1.KrakenDBackendPolicy) (admission.Warnings, error) {
 	if err := lintPolicyAlone(ctx, chk, memo, old, policy); err != nil {
@@ -163,7 +164,10 @@ func checkPolicyRender(ctx context.Context, tracer trace.Tracer, c client.Reader
 		screened = append(screened, use)
 	}
 	for _, use := range screened {
-		broken, warning, err := judgePolicyUse(ctx, chk, memo, use, old, policy)
+		jctx, span := tracing.Start(ctx, tracer, "admission.judge_policy",
+			trace.WithAttributes(tracing.Object("KrakenDGateway", use.gateway)...))
+		broken, warning, err := judgePolicyUse(jctx, chk, memo, use, old, policy)
+		tracing.End(span, err)
 		if err != nil {
 			unchecked++
 			if stopped == nil {
