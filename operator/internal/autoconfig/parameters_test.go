@@ -23,6 +23,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 )
 
 func TestDereferenceParameters_InlinesLocalRefs(t *testing.T) {
@@ -239,5 +241,48 @@ func TestDereferenceParameters_PathLevelWarningNamesEveryOperation(t *testing.T)
 		!strings.Contains(warnings[0], `"#/components/parameters/Nope" in /pets`) ||
 		!strings.Contains(warnings[0], "every operation on /pets") {
 		t.Errorf("warnings = %q, err = %v", warnings, err)
+	}
+}
+
+// resolveAndDereference runs the controller's spec preparation over a main
+// spec and the documents its refs fetch, and returns the evaluated entries.
+func resolveAndDereference(t *testing.T, main string, docs map[string]string) []v1alpha1.EndpointEntry {
+	t.Helper()
+	fetched := map[string][]byte{}
+	for url, body := range docs {
+		fetched[url] = []byte(body)
+	}
+	resolved, _, err := ResolveExternalRefs(context.Background(), []byte(main),
+		"https://api.example.com/openapi.json", &stubFetcher{docs: fetched}, FetchSource{})
+	if err != nil {
+		t.Fatalf("ResolveExternalRefs: %v", err)
+	}
+	out, _, err := DereferenceParameters(resolved)
+	if err != nil {
+		t.Fatalf("DereferenceParameters: %v", err)
+	}
+	return evaluateEmbedded(t, string(out)).Entries
+}
+
+// An alias inside a fetched document names a component of that document, not
+// of the main spec, whatever the main spec holds under the same name.
+func TestDereferenceParameters_AliasInFetchedDocumentResolvesInThatDocument(t *testing.T) {
+	main := `{"paths":{"/pets":{"get":{"operationId":"listPets","parameters":[
+		{"$ref":"common.json#/components/parameters/Limit"}],"responses":{"200":{"description":"OK"}}}}},
+		"components":{"parameters":{"PageLimit":{"name":"X-Page","in":"header"}}}}`
+	common := `{"components":{"parameters":{
+		"Limit":{"$ref":"#/components/parameters/PageLimit"},
+		"PageLimit":{"name":"limit","in":"query"}}}}`
+
+	entries := resolveAndDereference(t, main, map[string]string{"https://api.example.com/common.json": common})
+
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries, want 1", len(entries))
+	}
+	if !slices.Equal(entries[0].InputQueryStrings, []string{"limit"}) {
+		t.Errorf("inputQueryStrings = %v, want [limit]", entries[0].InputQueryStrings)
+	}
+	if slices.Contains(entries[0].InputHeaders, "X-Page") {
+		t.Errorf("inputHeaders %v: forwards the main spec's X-Page", entries[0].InputHeaders)
 	}
 }
