@@ -91,3 +91,27 @@ func TestAutoConfigReconcile_HoldsACandidateThatWouldPushAnotherEndpointOut(t *t
 		t.Error("getb was written although it would keep tenant-z/orders out of the router")
 	}
 }
+
+func TestAutoConfigReconcile_AStoredRouterClashHoldsNothing(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	lost := map[types.NamespacedName][]renderer.EntryConflict{
+		{Namespace: "default", Name: "test-ac-listusers"}: {{Endpoint: "/api/users", Method: "GET",
+			Winner: types.NamespacedName{Namespace: "default", Name: "older"}, Detail: routerRefusal}},
+	}
+	checker := &fakeChecker{conflicts: func([]v1alpha1.KrakenDEndpoint) configcheck.RouteConflicts {
+		return configcheck.RouteConflicts{Lost: lost}
+	}}
+	c := fakeClientBuilder().WithObjects(ac, cm, testGateway()).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Checker = checker
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	if failed := getAC(t, c, ac).Status.FailedOperations; len(failed) != 0 {
+		t.Errorf("failedOperations = %+v, want none: the clash predates this sync", failed)
+	}
+}
