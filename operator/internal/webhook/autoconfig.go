@@ -31,6 +31,7 @@ import (
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/autoconfig"
+	"github.com/mycarrier-devops/krakend-operator/internal/tracing"
 )
 
 // AutoConfigValidator validates KrakenDAutoConfig resources.
@@ -44,11 +45,13 @@ type AutoConfigValidator struct {
 func (v *AutoConfigValidator) ValidateCreate(
 	ctx context.Context,
 	obj runtime.Object,
-) (admission.Warnings, error) {
+) (_ admission.Warnings, retErr error) {
 	ac, ok := obj.(*v1alpha1.KrakenDAutoConfig)
 	if !ok {
 		return nil, fmt.Errorf("expected KrakenDAutoConfig, got %T", obj)
 	}
+	ctx, span := tracing.Start(ctx, v.Tracer, "admission.structural")
+	defer func() { tracing.End(span, retErr) }()
 	errs, err := v.validateGatewayRef(ctx, ac)
 	if err != nil {
 		return nil, unavailable(err)
@@ -68,7 +71,7 @@ func (v *AutoConfigValidator) ValidateUpdate(
 	ctx context.Context,
 	oldObj runtime.Object,
 	newObj runtime.Object,
-) (admission.Warnings, error) {
+) (_ admission.Warnings, retErr error) {
 	if terminatingWithUnchangedSpec(oldObj, newObj) {
 		return nil, nil
 	}
@@ -83,6 +86,8 @@ func (v *AutoConfigValidator) ValidateUpdate(
 	if equality.Semantic.DeepEqual(old.Spec, ac.Spec) {
 		return nil, nil
 	}
+	ctx, span := tracing.Start(ctx, v.Tracer, "admission.structural")
+	defer func() { tracing.End(span, retErr) }()
 	var errs field.ErrorList
 	if old.Spec.GatewayRef != ac.Spec.GatewayRef {
 		refErrs, err := v.validateGatewayRef(ctx, ac)
