@@ -430,7 +430,7 @@ func absolutize(docURL, base string) (string, error) {
 	}
 	baseURL, err := url.Parse(base)
 	if err != nil {
-		return "", fmt.Errorf("parsing base URL %q: %w", base, err)
+		return "", fmt.Errorf("parsing base URL: %w", withoutURL(err))
 	}
 	ref, err := url.Parse(docURL)
 	if err != nil {
