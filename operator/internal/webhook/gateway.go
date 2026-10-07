@@ -1163,10 +1163,7 @@ func warnWaiting(ctx context.Context, chk ConfigChecker, memo configcheck.Memo, 
 	if groupErr != nil {
 		return admission.Warnings{truncate(couldNotCheckWaiting+groupErr.Error(), warningLimit)}
 	}
-	if group.OK {
-		return nil
-	}
-	s := failingEndpoints(ctx, chk, memo, now, nil, served)
+	s := failingEndpoints(ctx, chk, memo, now, nil, suspectsOf(group, served))
 	if len(s.broken) > 0 {
 		return admission.Warnings{waitingFail + ": " + brokenList(s, 2*warningLimit-len(waitingFail+": "))}
 	}
