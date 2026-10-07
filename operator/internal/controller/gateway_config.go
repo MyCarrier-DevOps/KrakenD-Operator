@@ -399,7 +399,7 @@ func isExclusion(cond *metav1.Condition) bool {
 // render is not the applied config:
 //   - an endpoint that fails on its own (cfg.excluded) gets Accepted=False
 //     with its reason, worded for a config not yet applied, keeping its live
-//     status.conflicts;
+//     status.conflicts unless no config has ever been applied;
 //   - while no config has ever been applied (neverApplied), every other
 //     endpoint loses any Accepted, for example one an earlier gateway of the
 //     same name left: there is no applied render to keep;
@@ -425,7 +425,7 @@ func (r *KrakenDGatewayReconciler) recordExclusions(
 		v, excluded := cfg.excluded[client.ObjectKeyFromObject(ep)]
 		switch {
 		case excluded:
-			a = acceptance{condition: exclusionCondition(gw, ep, v, false), keepConflicts: true}
+			a = acceptance{condition: exclusionCondition(gw, ep, v, false), keepConflicts: !neverApplied}
 		case neverApplied && cur != nil:
 			a = acceptance{}
 		case cfg.judged && isExclusion(cur):
