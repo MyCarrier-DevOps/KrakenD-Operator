@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
@@ -206,5 +208,55 @@ func TestGatewayReconcile_AnEndpointThatFailsAloneIsExcludedAndTheRestApplied(t 
 	}
 	if cond := storedAccepted(t, c, client.ObjectKeyFromObject(good)); cond == nil || cond.Reason != v1alpha1.ReasonAccepted {
 		t.Errorf("good Accepted = %+v, want Accepted", cond)
+	}
+}
+
+func TestGatewayReconcile_ASafetyNetFailureAppliesNothingAndKeepsTheLiveConflicts(t *testing.T) {
+	gw := servingGateway("applied", convergedImage)
+	good, bad := testEndpoint("good", "/a"), badHosted("bad", "/b")
+	fresh := []v1alpha1.EndpointConflict{{Endpoint: "/b", Method: "GET", Winner: "default/fresh"}}
+	bad.Status.Conflicts = fresh
+	staleList := interceptor.Funcs{
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if err := c.List(ctx, list, opts...); err != nil {
+				return err
+			}
+			if eps, ok := list.(*v1alpha1.KrakenDEndpointList); ok {
+				for i := range eps.Items {
+					if eps.Items[i].Name == "bad" {
+						eps.Items[i].Status.Conflicts = []v1alpha1.EndpointConflict{
+							{Endpoint: "/b", Method: "GET", Winner: "default/stale"}}
+					}
+				}
+			}
+			return nil
+		},
+	}
+	c := fakeClientBuilder().WithObjects(gw, good, bad).WithStatusSubresource(gw, good, bad).
+		WithInterceptorFuncs(staleList).Build()
+	val := &contentValidator{markers: map[string]string{"invalid.test": badHostOutput}, failValidate: true}
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}), val)
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	stored := getGateway(t, c, gw)
+	cv := meta.FindStatusCondition(stored.Status.Conditions, v1alpha1.ConditionConfigValid)
+	if cv == nil || cv.Reason != v1alpha1.ReasonCombinedConfigInvalid || stored.Status.ConfigChecksum != "applied" {
+		t.Errorf("ConfigValid = %+v, checksum %s; want %s with the applied config kept",
+			cv, stored.Status.ConfigChecksum, v1alpha1.ReasonCombinedConfigInvalid)
+	}
+	var got v1alpha1.KrakenDEndpoint
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(bad), &got); err != nil {
+		t.Fatal(err)
+	}
+	if cond := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionAccepted); cond == nil ||
+		cond.Reason != v1alpha1.ReasonEndpointInvalid ||
+		!strings.HasPrefix(cond.Message, "Will not be served when gateway default/test-gw next applies its config: ") {
+		t.Errorf("bad Accepted = %+v, want %s worded for a config not yet applied", cond, v1alpha1.ReasonEndpointInvalid)
+	}
+	if !reflect.DeepEqual(got.Status.Conflicts, fresh) {
+		t.Errorf("status.conflicts = %+v, want the live %+v kept", got.Status.Conflicts, fresh)
 	}
 }
