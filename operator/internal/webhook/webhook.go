@@ -31,6 +31,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
 	"github.com/mycarrier-devops/krakend-operator/internal/fieldindex"
 )
 
@@ -188,4 +189,12 @@ func SetupWebhooks(mgr ctrl.Manager, validators Validators) error {
 	}
 
 	return nil
+}
+
+// admissionMemoSize is how many verdicts the admission webhooks remember, the
+// most recent first, shared by every request the pod admits.
+const admissionMemoSize = 256
+
+func newAdmissionMemo() *configcheck.LRUMemo {
+	return configcheck.NewLRUMemo(admissionMemoSize)
 }

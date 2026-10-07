@@ -14,25 +14,24 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package webhook
+package configcheck
 
 import (
 	"fmt"
 	"testing"
-
-	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
 )
 
-func TestAdmissionMemo_KeepsTheMostRecentVerdicts(t *testing.T) {
-	m := newAdmissionMemo()
-	for i := range admissionMemoSize + 1 {
-		m.Store(fmt.Sprint(i), configcheck.Verdict{Output: fmt.Sprint(i)})
+func TestLRUMemo_KeepsTheMostRecentVerdicts(t *testing.T) {
+	const size = 8
+	m := NewLRUMemo(size)
+	for i := range size + 1 {
+		m.Store(fmt.Sprint(i), Verdict{Output: fmt.Sprint(i)})
 	}
 
 	if _, ok := m.Lookup("0"); ok {
 		t.Error("the oldest verdict is kept past the memo's size")
 	}
-	if v, ok := m.Lookup(fmt.Sprint(admissionMemoSize)); !ok || v.Output != fmt.Sprint(admissionMemoSize) {
+	if v, ok := m.Lookup(fmt.Sprint(size)); !ok || v.Output != fmt.Sprint(size) {
 		t.Errorf("Lookup(newest) = %+v, %v; want the newest verdict", v, ok)
 	}
 }
