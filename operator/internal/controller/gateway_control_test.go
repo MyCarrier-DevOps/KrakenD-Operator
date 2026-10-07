@@ -78,6 +78,7 @@ func TestReconcileInfrastructure_UnownedDeploymentIsNotTakenOver(t *testing.T) {
 	ctx := context.Background()
 	gw := makeGWWithJob("echo ok")
 	victim := makeConvergedDeployment(gw, "abc123")
+	victim.OwnerReferences = nil
 	c := fakeClientBuilder().WithObjects(gw, victim).Build()
 	r := &KrakenDGatewayReconciler{Client: c, APIReader: c, Scheme: testScheme(), Recorder: fakeRecorder()}
 	in := convergedInputs("abc123")
