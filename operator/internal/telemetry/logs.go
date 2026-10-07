@@ -42,7 +42,8 @@ const (
 
 // LevelSeverity maps a logr verbosity to a log record severity: V(0) is INFO,
 // and each level above it one severity lower (V(1) DEBUG4 to V(4) DEBUG, then
-// TRACE4 to TRACE), so a --zap-log-level of N keeps exactly V(0) to V(N).
+// TRACE4 to TRACE), so a --zap-log-level of N keeps exactly V(0) to V(N) for N
+// up to 7; levels above 7 all clamp at TRACE.
 func LevelSeverity(level int) otellog.Severity {
 	return max(otellog.SeverityInfo-otellog.Severity(level), otellog.SeverityTrace)
 }
@@ -104,7 +105,9 @@ func NewLogger(provider otellog.LoggerProvider, name string) logr.Logger {
 
 // NewErrorHandler returns an OpenTelemetry error handler that logs each
 // error through logger. An error raised while one is being logged is dropped,
-// so a failing log pipeline cannot report its own failures in a loop.
+// so a failing log pipeline cannot report its own failures in a loop. The
+// guard is process-wide, so it also drops an unrelated error raised at the
+// same moment on another goroutine.
 func NewErrorHandler(logger logr.Logger) func(error) {
 	var busy atomic.Bool
 	return func(err error) {
