@@ -20,6 +20,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-logr/logr"
 	otellog "go.opentelemetry.io/otel/log"
@@ -37,6 +38,16 @@ type (
 	namedInt    int
 	namedFloat  float64
 )
+
+// level is a named int that reads as its name.
+type level int
+
+func (l level) String() string { return [...]string{"info", "debug"}[l] }
+
+// codeError is an error whose underlying kind is a string.
+type codeError string
+
+func (e codeError) Error() string { return "code " + string(e) }
 
 // marshaled is a logr.Marshaler that logs as the value it holds.
 type marshaled struct{ as any }
@@ -65,6 +76,10 @@ func TestLogger_ValuesAreConvertedToWhatTheyRead(t *testing.T) {
 		{"named bool", namedBool(true), true},
 		{"named int", namedInt(4), float64(4)},
 		{"named float", namedFloat(1.5), 1.5},
+		{"Stringer of kind int", level(1), "debug"},
+		{"error of kind string", codeError("E1"), "code E1"},
+		{"time.Duration", 3 * time.Second, float64(3e9)},
+		{"time.Time", time.Unix(1700000000, 0), float64(1.7e18)},
 		{"marshaler of a UID", marshaled{types.UID("u1")}, "u1"},
 		{"marshaler of a map", marshaled{map[string]any{"id": types.UID("u1")}},
 			[]any{map[string]any{"Key": "id", "Value": stringValue("u1")}}},
