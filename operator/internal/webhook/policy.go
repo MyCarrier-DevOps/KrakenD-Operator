@@ -277,10 +277,23 @@ func judgePolicyUse(ctx context.Context, chk ConfigChecker, memo configcheck.Mem
 		baseline = configcheck.EmptyPolicy(policy.Namespace, policy.Name)
 	}
 	was := &configcheck.EndpointUnit{Gateway: gw, Override: baseline, CEFallback: ceFallback}
-	s := failingEndpoints(ctx, chk, memo,
-		configcheck.EndpointUnit{Gateway: gw, Override: policy, CEFallback: ceFallback}, was, use.suspects)
+	now := configcheck.EndpointUnit{Gateway: gw, Override: policy, CEFallback: ceFallback}
+	var s scan
+	var before configcheck.Verdict
+	decided := false
+	if use.failed {
+		before, err = chk.CheckGroup(ctx, configcheck.Group{
+			Gateway: gw, Endpoints: use.served, Override: baseline, CEFallback: ceFallback,
+		}, memo)
+		if err != nil {
+			return "", "", err
+		}
+		s, decided = failingEndpointsDecidingFirst(ctx, chk, memo, now, was, before, use.suspects)
+	} else {
+		s = failingEndpoints(ctx, chk, memo, now, was, use.suspects)
+	}
 	switch {
-	case len(s.broken) > 0:
+	case len(s.broken) > 0, s.stopped != nil && decided:
 		prefix := fmt.Sprintf("breaks gateway %s/%s: ", gw.Namespace, gw.Name)
 		return prefix + brokenList(s, warningLimit-len(prefix)), "", nil
 	case s.stopped != nil:
@@ -294,17 +307,9 @@ func judgePolicyUse(ctx context.Context, chk ConfigChecker, memo configcheck.Mem
 	case !use.failed:
 		return "", "", nil
 	}
-	if old != nil {
-		before, err := chk.CheckGroup(ctx, configcheck.Group{
-			Gateway: gw, Endpoints: use.served, Override: old, CEFallback: ceFallback,
-		}, memo)
-		if err != nil {
-			return "", "", err
-		}
-		if !before.OK {
-			return "", fmt.Sprintf("gateway %s/%s: the endpoints that use this policy already fail validation "+
-				"together with the stored policy", gw.Namespace, gw.Name), nil
-		}
+	if old != nil && !before.OK {
+		return "", fmt.Sprintf("gateway %s/%s: the endpoints that use this policy already fail validation "+
+			"together with the stored policy", gw.Namespace, gw.Name), nil
 	}
 	return fmt.Sprintf("breaks gateway %s/%s: with this change the endpoints that use it fail validation "+
 		"together, though each passes on its own", gw.Namespace, gw.Name), "", nil
