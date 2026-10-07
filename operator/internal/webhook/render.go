@@ -22,6 +22,8 @@ import (
 	"slices"
 	"strings"
 
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
@@ -174,6 +176,19 @@ func suspectsOf(group configcheck.Verdict, served []v1alpha1.KrakenDEndpoint) []
 	}
 	return slices.DeleteFunc(slices.Clone(served), func(ep v1alpha1.KrakenDEndpoint) bool {
 		return !slices.Contains(group.Masked, types.NamespacedName{Namespace: ep.Namespace, Name: ep.Name})
+	})
+}
+
+// servedEndpoints returns eps less those their gateway leaves out for failing
+// validation on their own (Accepted False with reason EndpointInvalid or
+// PolicyInvalid for their current generation). An endpoint not judged yet,
+// or changed since its verdict, counts as served, so a change is judged
+// against it.
+func servedEndpoints(eps []v1alpha1.KrakenDEndpoint) []v1alpha1.KrakenDEndpoint {
+	return slices.DeleteFunc(slices.Clone(eps), func(ep v1alpha1.KrakenDEndpoint) bool {
+		c := meta.FindStatusCondition(ep.Status.Conditions, v1alpha1.ConditionAccepted)
+		return c != nil && c.Status == metav1.ConditionFalse && c.ObservedGeneration == ep.Generation &&
+			(c.Reason == v1alpha1.ReasonEndpointInvalid || c.Reason == v1alpha1.ReasonPolicyInvalid)
 	})
 }
 
