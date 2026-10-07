@@ -17,7 +17,10 @@ limitations under the License.
 package telemetry_test
 
 import (
+	"bytes"
+	"context"
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/go-logr/logr"
@@ -25,6 +28,7 @@ import (
 	"google.golang.org/grpc/grpclog"
 
 	"github.com/mycarrier-devops/krakend-operator/internal/telemetry"
+	"github.com/mycarrier-devops/krakend-operator/internal/telemetry/telemetrytest"
 )
 
 // discardGRPCLogs puts back a grpc-go logger that writes nothing, so a test
@@ -118,5 +122,31 @@ func TestInstallLogging_AGRPCWarningReachesTheDiagnosticsLoggerOnly(t *testing.T
 	}
 	if main := records(t, out); len(main) != 0 {
 		t.Errorf("main logger records = %+v, want none: its exporter is the one that failed", main)
+	}
+}
+
+// With the pipeline Setup builds and a collector configured, a grpc-go warning
+// is on stdout and in no OTLP log export.
+func TestInstallLogging_AGRPCWarningIsNeverExportedOverOTLP(t *testing.T) {
+	telemetrytest.ClearOTelEnv(t)
+	collected, url := newHTTPCollector(t)
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", url)
+	var out bytes.Buffer
+	tel := setup(t, &out)
+	restoreGlobals(t)
+	telemetry.InstallGRPCLogging()
+	discardGRPCLogs(t)
+	telemetry.InstallLogging(tel.Logger, tel.Diagnostics)
+
+	grpclog.Warning("addrConn.createTransport failed to connect")
+	if err := tel.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(out.String(), "addrConn.createTransport failed to connect") {
+		t.Errorf("stdout lacks the warning:\n%s", out.String())
+	}
+	if n := collected.count("/v1/logs"); n != 0 {
+		t.Errorf("%d log POSTs carried the warning; the collector got %v", n, collected.all())
 	}
 }
