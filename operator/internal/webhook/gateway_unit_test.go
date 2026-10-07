@@ -26,6 +26,7 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -159,5 +160,19 @@ func TestGatewayAdmission_ALargeGatewayThatPassesRunsTwoChecks(t *testing.T) {
 
 	if resp := review(t, v, "alice", gw, old); !resp.Allowed || strings.Join(chk.calls, ",") != "root,group" {
 		t.Errorf("allowed = %v, %d checks; want admitted after the root and one group check", resp.Allowed, len(chk.calls))
+	}
+}
+
+func TestGatewayAdmission_AGatewayWithNoServedEndpointChecksOnlyItsRoot(t *testing.T) {
+	old, gw := editedGateway()
+	ep := testEndpoint("ep", "/a")
+	ep.Generation = 2
+	ep.Status.Conditions = []metav1.Condition{{Type: v1alpha1.ConditionAccepted, Status: metav1.ConditionFalse,
+		Reason: v1alpha1.ReasonEndpointInvalid, ObservedGeneration: 2}}
+	chk := &scriptedChecker{}
+	v := &GatewayValidator{Client: fakeClient(old, ep), Checker: chk}
+
+	if resp := review(t, v, "alice", gw, old); !resp.Allowed || strings.Join(chk.calls, ",") != "root" {
+		t.Errorf("allowed = %v, checks = %v; want admitted after the root alone", resp.Allowed, chk.calls)
 	}
 }
