@@ -173,6 +173,23 @@ env_field() {
 		found && $1 == "fieldPath:" { print $2; exit }
 		found && $1 == "-" { exit }'
 }
+# env_value NAME: the literal value of env var NAME, read from stdin.
+env_value() {
+	awk -v name="$1" '$1 == "-" && $2 == "name:" && $3 == name { found = 1; next }
+		found && $1 == "value:" { print $2; exit }
+		found && $1 == "-" { exit }'
+}
+# env_line NAME: the line number of env var NAME in stdin, empty when absent.
+env_line() { grep -nxE "[[:space:]]*- name: $1" | head -1 | cut -d: -f1; }
+# expect_before NAME FIRST SECOND: env var FIRST is listed before SECOND in
+# stdin, which Kubernetes needs to expand $(FIRST) inside SECOND's value.
+expect_before() {
+	local name=$1 first second input
+	input=$(cat)
+	first=$(env_line "$2" <<<"$input")
+	second=$(env_line "$3" <<<"$input")
+	if [ -n "$first" ] && [ -n "$second" ] && [ "$first" -lt "$second" ]; then pass "$name"; else fail "$name ($2 line '${first}', $3 line '${second}')"; fi
+}
 chart_deployment=$(render --show-only templates/deployment.yaml)
 expect_equal "the chart sets POD_SERVICE_ACCOUNT from spec.serviceAccountName" "spec.serviceAccountName" \
 	"$(env_field POD_SERVICE_ACCOUNT <<<"$chart_deployment")"
@@ -199,8 +216,8 @@ expect_contains "the OTLP protocol defaults to http/protobuf" 'value: "http/prot
 expect_absent "every signal is exported by default" "S_EXPORTER" "${otlp[@]}"
 expect_contains "OTLP headers are read from the named Secret" "name: otlp-auth" "${otlp[@]}" \
 	--set telemetry.otlp.headersSecret.name=otlp-auth
-expect_contains "a signal turned off is not exported" "name: OTEL_LOGS_EXPORTER" "${otlp[@]}" \
-	--set telemetry.otlp.signals.logs=false
+expect_equal "a signal turned off is not exported" '"none"' \
+	"$(render "${otlp[@]}" --set telemetry.otlp.signals.logs=false | env_value OTEL_LOGS_EXPORTER)"
 expect_absent "headers without an endpoint pass nothing" "OTEL_EXPORTER_OTLP_HEADERS" \
 	--show-only templates/deployment.yaml --set telemetry.otlp.headersSecret.name=otlp-auth
 expect_contains "the sampler argument is passed as a string" 'value: "0.1"' --show-only templates/deployment.yaml \
@@ -230,8 +247,8 @@ expect_equal "the node collector reads POD_UID from metadata.uid" "metadata.uid"
 	"$(env_field POD_UID <<<"$node_deployment")"
 expect_equal "the node collector reads POD_IP from status.podIP" "status.podIP" \
 	"$(env_field POD_IP <<<"$node_deployment")"
-expect_contains "the node collector honours the signals setting" "name: OTEL_LOGS_EXPORTER" \
-	"${node_collector[@]}" --set telemetry.otlp.signals.logs=false
+expect_equal "the node collector honours the signals setting" '"none"' \
+	"$(render "${node_collector[@]}" --set telemetry.otlp.signals.logs=false | env_value OTEL_LOGS_EXPORTER)"
 expect_contains "the node collector honours the headers Secret" "name: otlp-auth" \
 	"${node_collector[@]}" --set telemetry.otlp.headersSecret.name=otlp-auth
 if both_err=$(render "${node_collector[@]}" --set telemetry.otlp.endpoint=http://collector:4318 2>&1 >/dev/null); then
@@ -326,6 +343,29 @@ expect_absent "a user affinity replaces the default" "podAntiAffinity" --show-on
 expect_render_fails "several replicas without leader election are refused" --set leaderElection.enabled=false
 expect_contains "one replica without leader election still renders" "kind: Deployment" \
 	--set leaderElection.enabled=false --set replicaCount=1
+
+# --- fix-round rows ------------------------------------------------------
+expect_contains "a sampler argument of 0 is passed, not dropped" 'value: "0"' --show-only templates/deployment.yaml \
+	--set telemetry.traces.sampler=parentbased_traceidratio --set telemetry.traces.samplerArg=0
+printf 'telemetry:\n  traces:\n    sampler: parentbased_traceidratio\n    samplerArg: 0\n' >"$workdir/sampler.yaml"
+expect_contains "a samplerArg of 0 in a values file is passed" 'value: "0"' --show-only templates/deployment.yaml \
+	-f "$workdir/sampler.yaml"
+expect_contains "a comma in a resource attribute value is percent-encoded" 'value: "env=prod%2Cteam%3Dplatform"' \
+	--show-only templates/deployment.yaml --set 'telemetry.resourceAttributes.env=prod\,team=platform'
+expect_contains "a space in a resource attribute value is percent-encoded" 'value: "team=platform%20engineering"' \
+	--show-only templates/deployment.yaml --set 'telemetry.resourceAttributes.team=platform engineering'
+expect_render_fails "a comma in a resource attribute key is refused" \
+	--show-only templates/deployment.yaml --set 'telemetry.resourceAttributes.a\,b=c'
+expect_render_fails "an equals sign in a resource attribute key is refused" \
+	--show-only templates/deployment.yaml --set 'telemetry.resourceAttributes.a\=b=c'
+render "${node_collector[@]}" | expect_before "NODE_IP is defined before the endpoint that expands it" \
+	NODE_IP OTEL_EXPORTER_OTLP_ENDPOINT
+for var in NODE_NAME POD_UID POD_IP; do
+	render "${node_collector[@]}" | expect_before "$var is defined before the resource attributes that expand it" \
+		"$var" OTEL_RESOURCE_ATTRIBUTES
+done
+expect_absent "an empty log format passes no flag" "--log-format" --show-only templates/deployment.yaml \
+	--set telemetry.logs.format=
 
 if [ "$failures" -gt 0 ]; then
 	printf '%d chart render test(s) failed\n' "$failures"
