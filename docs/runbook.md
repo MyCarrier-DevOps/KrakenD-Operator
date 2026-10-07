@@ -774,7 +774,7 @@ breaks gateway <ns>/<name>: ...`.
   they passed together with the stored policy. It quotes nothing, because that
   output would show other tenants' values. Report it with the policy diff.
 
-The same applies to a KrakenDGateway update refused for the endpoints it serves.
+The same applies to a KrakenDGateway update refused for the endpoints it serves, except that a gateway whose stored root fails on its own does not turn the break into a warning for an endpoint its last applied config served: that endpoint failing with the new root is refused, naming it, and so is a failure that appears only with the endpoints together. Any other endpoint only draws a warning.
 
 **Resolution:** fix the policy, or ask the owners of the endpoints it names to fix them.
 
