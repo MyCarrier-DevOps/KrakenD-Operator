@@ -147,3 +147,15 @@ func TestEndpointAdmission_ACheckThatCannotRunIs500(t *testing.T) {
 		})
 	}
 }
+
+func TestEndpointAdmission_TheDenialIsBounded(t *testing.T) {
+	huge := strings.Repeat("- at '/endpoints/0/backend/0/extra_config': additional properties 'x' not allowed\n", 1000)
+	chk := &scriptedChecker{endpointVerdicts: []configcheck.EndpointVerdict{ownFailure(huge)}}
+	v := &EndpointValidator{Client: fakeClient(testGateway()), Checker: chk}
+
+	resp := review(t, v, "alice", testEndpoint("new", "/a"), nil)
+
+	if text := responseText(resp); len(text) > 3*warningLimit || !strings.Contains(text, "more)") {
+		t.Errorf("denial is %d bytes, want it bounded with a count of what it leaves out", len(text))
+	}
+}
