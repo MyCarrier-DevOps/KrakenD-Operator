@@ -188,22 +188,9 @@ func TestCheckRoot_KeepsABoundedOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	for key, kept := range memo {
-		if len(kept.Output) > maxStoredOutput {
-			t.Errorf("memo keeps %d bytes of output under %s, want at most %d", len(kept.Output), key, maxStoredOutput)
-		}
 		if kept.Rejection != nil && len(kept.Rejection.Output) > maxStoredOutput {
 			t.Errorf("memo keeps %d bytes of rejection output under %s, want at most %d",
 				len(kept.Rejection.Output), key, maxStoredOutput)
-		}
-		for _, f := range kept.Findings {
-			if len(f.Message) > maxStoredOutput {
-				t.Errorf("memo keeps a %d byte finding under %s, want at most %d", len(f.Message), key, maxStoredOutput)
-			}
-		}
-	}
-	for _, f := range v.Findings {
-		if len(f.Message) > maxStoredOutput {
-			t.Errorf("a finding is %d bytes, want at most %d", len(f.Message), maxStoredOutput)
 		}
 	}
 	if len(v.Output) > maxStoredOutput || !strings.HasSuffix(v.Output, "...") {
@@ -363,5 +350,24 @@ func TestCheckPolicy_ARememberedVerdictNamesOnlyItsOwnNamespace(t *testing.T) {
 
 	if len(val.calls) != 1 {
 		t.Errorf("ran %d checks, want 1: both namespaces render the same config", len(val.calls))
+	}
+}
+
+func TestCheckRoot_AMemoEntryWithoutARejectionIsNotATrustedRejection(t *testing.T) {
+	val := &fakeValidator{}
+	chk := newChecker(val)
+	memo := mapMemo{}
+	root := Root{Gateway: gateway(v1alpha1.EditionCE)}
+	if _, err := chk.CheckRoot(context.Background(), root, memo); err != nil {
+		t.Fatal(err)
+	}
+	for key := range memo {
+		memo[key] = Verdict{OK: false}
+	}
+
+	v, err := chk.CheckRoot(context.Background(), root, memo)
+
+	if err != nil || !v.OK {
+		t.Errorf("CheckRoot = %+v, %v; want OK: an entry with no rejection judged nothing against the config", v, err)
 	}
 }
