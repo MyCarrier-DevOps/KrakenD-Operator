@@ -506,3 +506,33 @@ func TestGatewayReconcile_ARestartedOperatorKeepsTheAppliedConfig(t *testing.T) 
 			val.lints, val.validates)
 	}
 }
+
+func TestGatewayReconcile_AFixedEndpointIsServedAgain(t *testing.T) {
+	gw := reconciledGateway()
+	good, bad := testEndpoint("good", "/a"), badHosted("bad", "/b")
+	c := fakeClientBuilder().WithObjects(gw, good, bad).WithStatusSubresource(gw, good, bad).Build()
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}), rejectsBadHosts())
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+
+	var stored v1alpha1.KrakenDEndpoint
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(bad), &stored); err != nil {
+		t.Fatal(err)
+	}
+	stored.Spec.Endpoints[0].Backends[0].Host = []string{"http://svc:8080"}
+	stored.Generation++
+	if err := c.Update(context.Background(), &stored); err != nil {
+		t.Fatal(err)
+	}
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+
+	if applied := appliedJSON(t, c, gw); !strings.Contains(applied, `"/b"`) {
+		t.Errorf("applied config:\n%s\nwant the fixed /b served", applied)
+	}
+	if cond := storedAccepted(t, c, client.ObjectKeyFromObject(bad)); cond == nil || cond.Reason != v1alpha1.ReasonAccepted {
+		t.Errorf("bad Accepted = %+v, want Accepted once fixed", cond)
+	}
+}
