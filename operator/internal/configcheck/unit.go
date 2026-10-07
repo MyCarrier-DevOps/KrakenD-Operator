@@ -269,12 +269,23 @@ func (c *Checker) remembered(ctx context.Context, in renderer.RenderInput, out *
 }
 
 // unitPolicies returns the policies u's endpoint references: u.Policies, or
-// those read through the reader.
+// those read through the reader, with u.Override in place of the policy of
+// its namespace/name. The caller's map is never changed.
 func (c *Checker) unitPolicies(ctx context.Context, u EndpointUnit) (map[string]*v1alpha1.KrakenDBackendPolicy, error) {
-	if u.Policies != nil {
-		return u.Policies, nil
+	policies := u.Policies
+	if policies == nil {
+		read, err := c.policiesFor(ctx, []v1alpha1.KrakenDEndpoint{*u.Endpoint})
+		if err != nil {
+			return nil, err
+		}
+		policies = read
 	}
-	return c.policiesFor(ctx, []v1alpha1.KrakenDEndpoint{*u.Endpoint})
+	if u.Override == nil {
+		return policies, nil
+	}
+	policies = maps.Clone(policies)
+	policies[policyKey(u.Override)] = u.Override
+	return policies, nil
 }
 
 // foreignPolicies returns the keys ("namespace/name") of the policies outside
