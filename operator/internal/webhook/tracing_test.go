@@ -653,3 +653,23 @@ func marshal(t *testing.T, obj any) []byte {
 	}
 	return raw
 }
+
+// An AutoConfig update that points at a missing gateway is denied; the denial
+// is on no span, as on a create.
+func TestAutoConfigAdmission_AnUpdatesDenialIsNoErrorOnItsStructuralSpan(t *testing.T) {
+	rec := tracingtest.New(t)
+	gw := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Name: "test-gw", Namespace: "default"}}
+	v := tracedValidators(rec, gw)
+	admit := tracedValidator{kind: "KrakenDAutoConfig", next: v.AutoConfig, tracer: rec.Tracer()}
+	old, edited := newAutoConfigForAdditional(nil), newAutoConfigForAdditional(nil)
+	edited.Spec.GatewayRef.Name = "missing"
+
+	_, err := admit.ValidateUpdate(context.Background(), old, edited)
+
+	if !isDenial(err) {
+		t.Fatalf("err = %v, want a denial", err)
+	}
+	spans := rec.Ended()
+	spans.RequireChild(t, "admission.validate KrakenDAutoConfig", "admission.structural")
+	requireCleanAdmissionSpans(t, spans)
+}
