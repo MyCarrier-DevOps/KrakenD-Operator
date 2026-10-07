@@ -232,6 +232,11 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 	appliedBefore := appliedKey(&gw, edition)
 	cfg, configErr := r.reconcileConfig(ctx, &gw, before, in, output, edition)
+	// A pass that applies nothing re-points the Deployment to the stored
+	// config: first make sure the cached gateway still says what is stored.
+	if err := r.confirmStoredConfig(ctx, &gw, deployed, cfg); err != nil {
+		return ctrl.Result{}, stderrors.Join(configErr, err)
+	}
 	// From here on the pass reports on the render the config stage settled
 	// on: the applied one, after exclusion, or the newest when nothing was
 	// applied.
@@ -759,6 +764,38 @@ func (r *KrakenDGatewayReconciler) reconcileConfig(
 	}
 	return configResult{appliedConfigMap: resources.ConfigMapName(gw, d.output.Checksum),
 		output: d.output, excluded: d.excluded, judged: d.judged, served: true}, nil
+}
+
+// errStaleGateway is returned when the cached gateway is behind its stored
+// status.
+var errStaleGateway = stderrors.New("the cached gateway is behind its stored status")
+
+// confirmStoredConfig guards a pass that applies nothing against a cached
+// gateway that has not yet seen the status write recording the config the
+// Deployment already runs: re-pointing the Deployment to the config the stale
+// status names would roll the pods back. It acts only when such a pass would
+// move the Deployment, that is when the Deployment carries a config checksum
+// other than the cached one, and reads the stored checksum through APIReader
+// then. A stale cache returns errStaleGateway, so the pass changes nothing and
+// is retried. A Deployment that really differs from the stored config, for
+// example after `kubectl rollout undo`, is still re-pointed.
+func (r *KrakenDGatewayReconciler) confirmStoredConfig(
+	ctx context.Context, gw *v1alpha1.KrakenDGateway, deployed deployedChecksums, cfg configResult,
+) error {
+	if cfg.served || cfg.appliedConfigMap == "" {
+		return nil
+	}
+	if deployed.config == "" || deployed.config == gw.Status.ConfigChecksum {
+		return nil
+	}
+	var live v1alpha1.KrakenDGateway
+	if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(gw), &live); err != nil {
+		return fmt.Errorf("confirming the applied config of gateway %s: %w", client.ObjectKeyFromObject(gw), err)
+	}
+	if live.Status.ConfigChecksum != gw.Status.ConfigChecksum {
+		return fmt.Errorf("%w: gateway %s", errStaleGateway, client.ObjectKeyFromObject(gw))
+	}
+	return nil
 }
 
 // recordApplied marks checksum as the applied config and writes it to the
