@@ -92,3 +92,19 @@ func TestTraceKubeAPI_RequestUnderASpanIsItsChildAndCarriesTheTrace(t *testing.T
 		t.Errorf("API server got traceparent headers %q, want one", api.traceparents)
 	}
 }
+
+func TestTraceKubeAPI_RequestWithoutASpanStartsNoTrace(t *testing.T) {
+	rec := tracingtest.New(t)
+	c, api := tracedClient(t, rec)
+
+	if err := updateConfigMap(context.Background(), c); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := rec.Ended(); len(got) != 0 {
+		t.Errorf("spans = %s, want none for a request with no span", got)
+	}
+	if len(api.traceparents) != 1 || api.traceparents[0] != "" {
+		t.Errorf("API server got traceparent headers %q, want none", api.traceparents)
+	}
+}
