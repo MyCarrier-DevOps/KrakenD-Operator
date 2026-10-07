@@ -33,6 +33,7 @@ import (
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
+	"github.com/mycarrier-devops/krakend-operator/internal/resources"
 )
 
 // otherControllersServiceAccount is a ServiceAccount named like gw that a
@@ -157,11 +158,15 @@ func TestReconcileInfrastructure_FailedServiceAccountWriteHoldsTheDeployment(t *
 
 // The decision uses the object the write left behind: a new gateway, whose
 // ServiceAccount this pass creates, gets its Deployment in the same pass, and
-// an unowned same-named ServiceAccount is still adopted.
+// an unowned same-named ServiceAccount that carries the gateway's selector
+// labels, as one orphaned by `kubectl delete --cascade=orphan` does, is
+// adopted.
 func TestReconcileInfrastructure_ServiceAccountCreatedOrAdoptedIsUsedInTheSamePass(t *testing.T) {
 	for name, existing := range map[string]*corev1.ServiceAccount{
 		"created": nil,
-		"adopted": {ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "ns"}},
+		"adopted": {ObjectMeta: metav1.ObjectMeta{
+			Name: "gw", Namespace: "ns", Labels: resources.SelectorLabels(makeGWWithJob("echo ok")),
+		}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()
