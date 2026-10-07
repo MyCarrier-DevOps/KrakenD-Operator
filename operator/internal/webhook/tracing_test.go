@@ -37,6 +37,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/client-go/rest"
 	"k8s.io/utils/ptr"
@@ -902,4 +903,46 @@ func TestPolicyAdmission_TheStoredPolicysGroupCheckIsBelowItsJudgingSpan(t *test
 		t.Fatalf("warnings, err = %v, %v; want a warning", warnings, err)
 	}
 	requireParents(t, rec.Ended(), "configcheck.CheckGroup", "admission.screen_policy", "admission.judge_policy")
+}
+
+// The admission span says whether the request was allowed and the code the
+// API server gets, never why.
+func TestAdmission_SpanSaysTheOutcomeAndTheCodeButNotTheDenial(t *testing.T) {
+	denial := invalid(kindEndpoint, "e", field.ErrorList{field.Invalid(field.NewPath("spec"), "TENANT-VALUE", "d")})
+	forbidden := apierrors.NewForbidden(schema.GroupResource{Resource: "krakendgateways"}, "gw",
+		errors.New("TENANT-USER may not"))
+	for _, tc := range []struct {
+		name    string
+		err     error
+		allowed bool
+		code    int64
+	}{
+		{"allowed", nil, true, http.StatusOK},
+		{"invalid", denial, false, http.StatusUnprocessableEntity},
+		{"forbidden", forbidden, false, http.StatusForbidden},
+		{"wrapped denial", fmt.Errorf("checking: %w", denial), false, http.StatusUnprocessableEntity},
+		{"a failure to decide", unavailable(errors.New("down")), false, http.StatusInternalServerError},
+		{"a plain error", errors.New("TENANT-TEXT"), false, http.StatusForbidden},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := tracingtest.New(t)
+			admit := tracedValidator{kind: kindEndpoint, next: outcomeValidator{err: tc.err}, tracer: rec.Tracer()}
+
+			_, _ = admit.ValidateCreate(context.Background(), testEndpoint("e", "/e"))
+
+			span := rec.Ended().One(t, "admission.validate KrakenDEndpoint")
+			got := map[attribute.Key]attribute.Value{}
+			for _, kv := range span.Attributes() {
+				got[kv.Key] = kv.Value
+				if strings.Contains(kv.Value.Emit(), "TENANT") {
+					t.Errorf("attribute %v holds the denial's text", kv)
+				}
+			}
+			if got["admission.allowed"] != attribute.BoolValue(tc.allowed) ||
+				got["admission.code"] != attribute.Int64Value(tc.code) {
+				t.Errorf("admission.allowed, admission.code = %v, %v; want %v, %v",
+					got["admission.allowed"], got["admission.code"], tc.allowed, tc.code)
+			}
+		})
+	}
 }
