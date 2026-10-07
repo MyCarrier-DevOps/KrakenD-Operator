@@ -254,8 +254,8 @@ func run() int {
 	krakendValidator := newKrakenDValidator(krakendBinary, inst.Tracer)
 
 	// One checker for the whole pod: its slots bound concurrent krakend
-	// executions across the gateway controller, the AutoConfig controller and
-	// the admission webhooks.
+	// executions across the gateway controller, the AutoConfig controller, the
+	// policy controller and the admission webhooks.
 	wired := wireValidation(mgr, krakendRenderer, krakendValidator, operatorUsername, inst)
 	wired.AutoConfig.MaxConcurrentReconciles = autoConfigMaxConcurrentReconciles
 	if enableWebhooks && operatorUsername == "" {
