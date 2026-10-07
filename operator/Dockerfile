@@ -7,6 +7,8 @@ ARG KRAKEND_IMAGE=docker.io/library/krakend:2.13.11@sha256:26eb32dbb0e679c62170b
 FROM golang:1.26-alpine AS builder
 ARG TARGETOS
 ARG TARGETARCH
+# VERSION is the operator version the binary reports as service.version.
+ARG VERSION=dev
 
 WORKDIR /workspace
 # Copy the Go Modules manifests
@@ -22,7 +24,7 @@ COPY api/ api/
 COPY internal/ internal/
 
 # Build
-RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -ldflags="-s -w" -a -o manager ./cmd
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -ldflags="-s -w -X main.version=${VERSION}" -a -o manager ./cmd
 
 # Stage 2: Extract KrakenD CE binary and musl libraries
 FROM ${KRAKEND_IMAGE} AS krakend
