@@ -471,3 +471,19 @@ func TestPolicyAdmission_AMaskedEndpointIsJudgedOnItsOwn(t *testing.T) {
 		t.Errorf("checks = %s, want the masked endpoint checked on its own with and without the change", got)
 	}
 }
+
+func TestPolicyAdmission_AnExcludedEndpointIsNotJudged(t *testing.T) {
+	stored := testPolicy(`{"qos/http-cache":{"shared":true}}`)
+	changed := testPolicy(`{"qos/http-cache":{"shared":false}}`)
+	objs := referencing()
+	ep := objs[1].(*v1alpha1.KrakenDEndpoint)
+	ep.Generation = 2
+	ep.Status.Conditions = []metav1.Condition{{Type: v1alpha1.ConditionAccepted, Status: metav1.ConditionFalse,
+		Reason: v1alpha1.ReasonEndpointInvalid, ObservedGeneration: 2}}
+	chk := &scriptedChecker{}
+	v := &PolicyValidator{Client: fakeClient(append(objs, stored)...), Checker: chk}
+
+	if resp := review(t, v, "alice", changed, stored); !resp.Allowed || strings.Join(chk.calls, ",") != "policy,root" {
+		t.Errorf("allowed = %v, checks = %v; want admitted with only the policy and the root checked", resp.Allowed, chk.calls)
+	}
+}
