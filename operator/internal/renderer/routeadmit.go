@@ -92,17 +92,26 @@ func dropRouteLosers(flat []flatEndpoint, conflicted map[types.NamespacedName][]
 //     method, or is an EE wildcard over an older entry of its method (the EE
 //     router's rule, eeWildcardFindings).
 //
-// The pairwise check, and the record of an entry left out, list the OPTIONS
-// route of the entry's path even when a served entry already added it
-// (entryRoutes with nil options), so neither depends on which older entries
-// are served.
+// Losing also to entries that were left out keeps every entry's outcome
+// independent of whether older entries are served: removing an endpoint, or
+// one of its entries, can bring entries back but never leave another out. For
+// the same reason the pairwise check, and the record of an entry left out,
+// list the OPTIONS route of the entry's path even when a served entry already
+// added it (entryRoutes with nil options).
 //
 // An entry gin refuses on its own, or next to its own KrakenDEndpoint's
-// entries, is left in for that endpoint's own check, which refuses it.
+// entries, is left in for that endpoint's own check, which refuses it; so is
+// a clash with the gateway's own routes, which are not registered here. A
+// clash that needs several older routes together leaves the entry in too.
+// Each loss, and each such clash, rebuilds the engine, so after
+// MaxRouteRefusals of them resolution stops with capped set: the remaining
+// entries are rendered as they are, and the full check reports what is left.
 func routeLosers(flat []flatEndpoint, rules routeRules) routeAdmission {
 	adm := routeAdmission{losers: map[int]EntryConflict{}}
 	var served, dropped []routedRoute
 	var older []routedEntry
+	own := map[types.NamespacedName][]ginRoute{}
+	ownEngines := map[types.NamespacedName]*gin.Engine{}
 	options := map[string]bool{}
 	engine := gin.New()
 	refusals := 0
@@ -115,7 +124,7 @@ func routeLosers(flat []flatEndpoint, rules routeRules) routeAdmission {
 		entry := routedEntry{method: entryMethod(fe.Entry.Method), path: fe.Entry.Endpoint, source: fe.Source}
 		entry.shape = shapeOf(entry.path)
 		routes := entryRoutes(entry.method, entry.path, rules, options)
-		if refusedAlone(routes) {
+		if refusedAlone(routes) || refusedByOwn(ownEngines, own, fe.Source, routes) {
 			continue // its own endpoint's check refuses it
 		}
 		pair := entryRoutes(entry.method, entry.path, rules, nil)
@@ -130,6 +139,7 @@ func routeLosers(flat []flatEndpoint, rules routeRules) routeAdmission {
 						options[r.path] = true
 					}
 				}
+				own[fe.Source] = append(own[fe.Source], routes...)
 				older = append(older, entry)
 				continue
 			}
@@ -138,6 +148,8 @@ func routeLosers(flat []flatEndpoint, rules routeRules) routeAdmission {
 			engine = engineWith(routesOf(served))
 		}
 		refusals++
+		// The entry's routes went into its own engine on trial; take them out.
+		ownEngines[fe.Source] = engineWith(own[fe.Source])
 		if lost {
 			adm.losers[i] = EntryConflict{Endpoint: entry.path, Method: fe.Entry.Method, Winner: winner, Detail: detail}
 		}
@@ -198,8 +210,7 @@ func sharedOptions(a, b ginRoute) bool {
 // registerEntry registers routes in engine. When gin refuses one it reports
 // refused, and, when one served route of another KrakenDEndpoint alone
 // clashes with it, that endpoint as the winner and the clash as detail. The
-// winner is zero when the route clashes only with source's own routes, or
-// only with several routes together.
+// winner is zero when only several routes together refuse it.
 func registerEntry(engine *gin.Engine, served []routedRoute, routes []ginRoute,
 	source types.NamespacedName) (winner types.NamespacedName, detail string, refused bool) {
 	for _, r := range routes {
@@ -225,6 +236,25 @@ func routesOf(routed []routedRoute) []ginRoute {
 		routes[i] = s.route
 	}
 	return routes
+}
+
+// refusedByOwn reports whether gin refuses one of routes next to the served
+// routes of source's own entries. It registers routes in source's own engine
+// on trial; the caller rebuilds that engine when the entry is not served.
+func refusedByOwn(engines map[types.NamespacedName]*gin.Engine, own map[types.NamespacedName][]ginRoute,
+	source types.NamespacedName, routes []ginRoute) bool {
+	engine, ok := engines[source]
+	if !ok {
+		engine = gin.New()
+		engines[source] = engine
+	}
+	for _, r := range routes {
+		if registerRoute(engine, r) != "" {
+			engines[source] = engineWith(own[source])
+			return true
+		}
+	}
+	return false
 }
 
 // olderClash reports the first older entry of another KrakenDEndpoint that
