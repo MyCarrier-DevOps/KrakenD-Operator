@@ -571,7 +571,7 @@ post-restart Job: serviceaccount <ns>/<name> is not controlled by gateway
 <name>`: the Deployment and the post-restart Job run as that ServiceAccount, so
 both are left as they are. Running pods keep running, and a new gateway gets no
 Deployment. A ServiceAccount the operator could not write holds them too, and
-then the condition stays `True`: only the log names it.
+the condition keeps its previous value: only the log names it.
 
 **Fix:** either of:
 
@@ -589,6 +589,10 @@ retried with backoff. Edit the gateway or restart the operator to retry at once.
 The condition turning `False` raises a Warning event with the same reason, and
 turning `True` again a Normal one. Once the conflict is resolved, the rollout of
 the config applied meanwhile shows only as `Progressing` (`DeploymentUpdated`).
+If the message still names an object the gateway now controls, another write of
+the pass is failing or the Deployment is held: the operator log names it, and
+the condition clears on the first pass that fails nothing and writes the
+Deployment.
 
 ### Endpoint shows `Invalid`
 
