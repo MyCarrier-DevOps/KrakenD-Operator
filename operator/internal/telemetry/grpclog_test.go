@@ -37,9 +37,9 @@ func discardGRPCLogs(t *testing.T) {
 	t.Cleanup(func() { grpclog.SetLoggerV2(grpclog.NewLoggerV2(io.Discard, io.Discard, io.Discard)) })
 }
 
-// installGRPCLogging routes grpc-go's logging through logger, and puts back a
-// grpc-go logger that writes nothing, and the globals InstallLogging set, when
-// the test ends.
+// installGRPCLogging routes grpc-go's logging through logger, and when the test
+// ends puts back a grpc-go logger that writes nothing, and what restoreGlobals
+// restores of the globals InstallLogging set.
 func installGRPCLogging(t *testing.T, logger logr.Logger) {
 	t.Helper()
 	restoreGlobals(t)
