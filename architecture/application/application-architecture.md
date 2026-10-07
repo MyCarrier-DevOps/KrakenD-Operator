@@ -1799,7 +1799,7 @@ EE configurations containing wildcard endpoints are handled by
 `KrakenDValidator.Validate(ctx, json, edition)`. For
 `EditionEE` it first applies the rules EE enforces for wildcard endpoints and
 the CE binary cannot test (`eeWildcardFindings`). Each finding is a
-krakend-style lint-pointer line. Only the overlap rule is also applied between endpoints at render time, oldest first (`eeWildcardOverlaps` in `routeadmit.go`); the other two stay per-endpoint validator findings:
+krakend-style lint-pointer line. Only the first rule below, the route conflict (`eeWildcardOverlaps` in `routeadmit.go`), is also applied between endpoints at render time, oldest first; the `{Wildcard}` parameter and one-backend rules stay per-endpoint validator findings:
 
 - **Route conflict.** EE registers `/p/*` as the catch-all `/p/*Wildcard`
   in its method's route tree, so `/p/*` conflicts with any other route of the
@@ -2751,7 +2751,7 @@ All external dependencies are abstracted behind interfaces, injected via struct 
 | `Renderer` | `internal/renderer` | Build `krakend.json` from CRD state | `renderer.configRenderer` |
 | `Validator` | `internal/renderer` | Validate rendered config via `krakend check -t -n -c` (`Validate`) or lint it with `krakend check -n` (`Lint`) | `renderer.KrakenDValidator` |
 | `ConfigChecker` | `internal/controller` | Gather a gateway's render inputs and judge them: `CheckRoot(ctx, configcheck.Root, Memo)`, `CheckEndpoint(ctx, configcheck.EndpointUnit, Memo)` and `CheckRendered(ctx, in, out, Memo)`, behind the pod's shared validation slots | `configcheck.Checker` |
-| `ConfigChecker` | `internal/webhook` | Judge each object on its own and a group of them: `CheckRoot`, `CheckPolicy`, `CheckEndpoint`, `CheckGroup`, `Conflicts` (an in-process render) and `SameConfig` (a render comparison), which run no krakend; the other checks run `krakend check -n` and the route check | `configcheck.Checker` (the same instance the controller's port uses) |
+| `ConfigChecker` | `internal/webhook` | Judge each object on its own and a group of them: `CheckRoot`, `CheckPolicy`, `CheckEndpoint` and `CheckGroup`, which run `krakend check -n` and the route check, and `Conflicts` (an in-process render) and `SameConfig` (a render comparison), which run no krakend | `configcheck.Checker` (the same instance the controller's port uses) |
 | `CommandExecutor` | `internal/renderer` | Execute shell commands (krakend check) | `renderer.KrakenDExecutor` |
 | `Fetcher` | `internal/autoconfig` | Fetch OpenAPI specs (HTTP + ConfigMap) | `autoconfig.httpFetcher` |
 | `CUEEvaluator` | `internal/autoconfig` | Evaluate CUE definitions + OpenAPI spec → `EndpointEntry` objects | `autoconfig.cueEvaluator` |
