@@ -426,3 +426,47 @@ func TestBlame_AMaskedEndpointIsJudgedAlikeOnBothPaths(t *testing.T) {
 		})
 	}
 }
+
+// usingPolicy makes ep's backend reference KrakenDBackendPolicy ns/name.
+func usingPolicy(ep *v1alpha1.KrakenDEndpoint, ns, name string) *v1alpha1.KrakenDEndpoint {
+	ep.Spec.Endpoints[0].Backends[0].PolicyRef = &v1alpha1.PolicyRef{Name: name, Namespace: ns}
+	return ep
+}
+
+// rawPolicy is KrakenDBackendPolicy ns/name whose backend extra_config is raw.
+func rawPolicy(ns, name, raw string) *v1alpha1.KrakenDBackendPolicy {
+	return &v1alpha1.KrakenDBackendPolicy{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		Spec: v1alpha1.KrakenDBackendPolicySpec{Raw: &runtime.RawExtension{Raw: []byte(raw)}}}
+}
+
+// TestBlame_AForeignPolicyIsNamedAlikeOnBothPaths: tenant-e's endpoint
+// references tenant-p's policy and fails krakend check only together with it.
+// Both paths blame the policy by name with the same words, PolicyInvalid, and
+// show none of its content.
+func TestBlame_AForeignPolicyIsNamedAlikeOnBothPaths(t *testing.T) {
+	p := rawPolicy("tenant-p", "p", `{"tenant-p/config":{"token":"tenant-p-secret"}}`)
+	e := usingPolicy(tenantEndpoint("tenant-e", "e", "/e", "http://combo.invalid"), "tenant-p", "p")
+	w := newBlameWorld(t, func(config string) (string, bool) {
+		return "- at '/endpoints/0/backend/0/extra_config': tenant-p-secret refused for combo.invalid",
+			strings.Contains(config, "tenant-p-secret") && strings.Contains(config, "combo.invalid")
+	}, p, e)
+
+	w.reconcile(t)
+	_, denied := w.endpoints.ValidateCreate(context.Background(),
+		usingPolicy(tenantEndpoint("tenant-e", "e2", "/e2", "http://combo.invalid"), "tenant-p", "p"))
+
+	controllerSaw, admissionSaw := w.checker.verdicts["tenant-e/e"], w.checker.verdicts["tenant-e/e2"]
+	if len(controllerSaw) == 0 || len(admissionSaw) != 1 || admissionSaw[0].Reason != v1alpha1.ReasonPolicyInvalid ||
+		!reflect.DeepEqual(controllerSaw[len(controllerSaw)-1], admissionSaw[0]) {
+		t.Fatalf("verdicts: controller %+v, admission %+v; want the same PolicyInvalid", controllerSaw, admissionSaw)
+	}
+	words := admissionSaw[0].Message(1024)
+	got := w.accepted(t, e)
+	if got == nil || got.Reason != v1alpha1.ReasonPolicyInvalid || !strings.Contains(got.Message, words) ||
+		!strings.Contains(words, "tenant-p/p") || strings.Contains(got.Message, "tenant-p-secret") {
+		t.Errorf("e Accepted = %+v, want PolicyInvalid saying %q, without the policy's content", got, words)
+	}
+	if denied == nil || !strings.Contains(denied.Error(), words) || strings.Contains(denied.Error(), "tenant-p-secret") {
+		t.Errorf("the create's denial = %v, want it to say %q, without the policy's content", denied, words)
+	}
+}
