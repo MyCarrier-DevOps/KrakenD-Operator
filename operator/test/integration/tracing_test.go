@@ -50,6 +50,17 @@ func TestTracing_GatewayStatusWriteIsAClientSpanOfItsReconcile(t *testing.T) {
 func TestTracing_NoKubernetesClientSpanIsARoot(t *testing.T) {
 	waitForAppliedChecksum(t, createGateway(t, testNamespace(t), "roots"))
 
+	// A suite that records no Kubernetes client span would pass the loop below
+	// without checking anything.
+	eventually(t, func() error {
+		for _, span := range suiteTraces.Ended() {
+			if strings.HasPrefix(span.Name(), "k8s ") && span.Parent().IsValid() {
+				return nil
+			}
+		}
+		return fmt.Errorf("no Kubernetes client span was recorded")
+	})
+
 	for _, span := range suiteTraces.Ended() {
 		if strings.HasPrefix(span.Name(), "k8s ") && !span.Parent().IsValid() {
 			t.Errorf("Kubernetes client span %q has no parent: background traffic must not start traces", span.Name())
