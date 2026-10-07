@@ -74,11 +74,12 @@ func stringValue(s string) map[string]any {
 	return map[string]any{"Type": "STRING", "Value": s}
 }
 
-// complexValue is how a complex number reads in a stdout JSON record.
+// complexValue is how a complex number reads in a stdout JSON record: the
+// bridge sorts the keys of its map.
 func complexValue(r, i float64) []any {
 	return []any{
-		map[string]any{"Key": "r", "Value": map[string]any{"Type": "FLOAT64", "Value": r}},
 		map[string]any{"Key": "i", "Value": map[string]any{"Type": "FLOAT64", "Value": i}},
+		map[string]any{"Key": "r", "Value": map[string]any{"Type": "FLOAT64", "Value": r}},
 	}
 }
 
