@@ -24,6 +24,8 @@ func TestEndpointAccepted_AnExcludedEndpointIsNotServedForItsOwnReason(t *testin
 	}{
 		{"its own fault", configcheck.EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid,
 			Output: "- at '/endpoints/0/backend/0/host/0': bad host"}, "bad host"},
+		{"a policy at fault", configcheck.EndpointVerdict{Reason: v1alpha1.ReasonPolicyInvalid,
+			Policies: []types.NamespacedName{{Namespace: "default", Name: "p"}}, PoliciesFailAlone: true}, "default/p"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
