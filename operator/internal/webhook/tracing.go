@@ -21,6 +21,7 @@ import (
 	"net/http"
 
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -77,15 +78,19 @@ func (v tracedValidator) start(
 	return tracing.Start(ctx, v.tracer, "admission.validate "+v.kind, trace.WithAttributes(attrs...))
 }
 
-// endDecision ends span, the span of a decision that returned err. A denial
-// (see isDenial) is an answer, so the span records nothing of it: its text
-// can quote the tenant's object.
+// decisionFailed is the description of a span whose decision could not be
+// reached. The failure's own text is on the span that failed.
+const decisionFailed = "the admission could not be decided"
+
+// endDecision ends span, the span of a decision that returned err. The span
+// records neither a denial (see isDenial), which is an answer and can quote the
+// tenant's object, nor the text of a failure, which the span that failed
+// records: a failure to decide only marks the span an error.
 func endDecision(span trace.Span, err error) {
-	if isDenial(err) {
-		span.End()
-		return
+	if err != nil && !isDenial(err) {
+		span.SetStatus(codes.Error, decisionFailed)
 	}
-	tracing.End(span, err)
+	span.End()
 }
 
 // isDenial reports whether err is a validator's refusal of the request: a
