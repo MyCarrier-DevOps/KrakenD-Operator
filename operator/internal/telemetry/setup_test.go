@@ -574,3 +574,17 @@ func TestSetup_AWhitespaceEndpointDoesNotEnableExport(t *testing.T) {
 		})
 	}
 }
+
+// Shutdown can be called again, as the operator's deferred call and a test's
+// cleanup both do: the second call stops nothing and reports nothing.
+func TestSetup_ShutdownTwiceIsANoOp(t *testing.T) {
+	cleanOTelEnv(t)
+	tel := setup(t, &bytes.Buffer{})
+	if err := tel.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := tel.Shutdown(context.Background()); err != nil {
+		t.Errorf("second Shutdown = %v, want nil", err)
+	}
+}
