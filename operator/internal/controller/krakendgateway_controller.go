@@ -85,6 +85,10 @@ type KrakenDGatewayReconciler struct {
 	// so an unchanged bad render is not re-validated on every event.
 	rejections rejectionMemo
 
+	// verdicts remembers, per gateway, the config checks its last pass ran,
+	// so a gateway whose inputs did not change runs none.
+	verdicts verdictMemo
+
 	// cachedOptionalKinds are the optional kinds whose CRDs were installed
 	// at startup, so an informer runs for them (the Owns watches).
 	// optionalCache reads them through that informer. A kind outside the set
@@ -99,13 +103,17 @@ type KrakenDGatewayReconciler struct {
 	verified verifiedConfigMaps
 }
 
-// ConfigChecker gathers a gateway's render inputs and validates what they
-// render to. The gateway controller owns this port; configcheck.Checker is
-// its implementation. A verdict that is not OK always carries its Rejection:
-// validateConfig remembers it, and rebuilds the findings from it later.
+// ConfigChecker gathers a gateway's render inputs and judges them: the
+// gateway root alone, each endpoint alone, and the whole render. The gateway
+// controller owns this port; configcheck.Checker is its implementation. Each
+// check answers from the memo it is handed when it already judged the same
+// content.
 type ConfigChecker interface {
 	Gather(ctx context.Context, gw *v1alpha1.KrakenDGateway,
 		replace []v1alpha1.KrakenDEndpoint) (renderer.RenderInput, error)
+	CheckRoot(ctx context.Context, root configcheck.Root, memo configcheck.Memo) (configcheck.Verdict, error)
+	CheckEndpoint(ctx context.Context, u configcheck.EndpointUnit,
+		memo configcheck.Memo) (configcheck.EndpointVerdict, error)
 	CheckRendered(ctx context.Context, in renderer.RenderInput, out *renderer.RenderOutput,
 		memo configcheck.Memo) (configcheck.Verdict, error)
 }
@@ -379,6 +387,7 @@ func (r *KrakenDGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 func (r *KrakenDGatewayReconciler) forgetGateway(key types.NamespacedName) {
 	deleteGatewayMetrics(key.Namespace, key.Name)
 	r.rejections.forget(key)
+	r.verdicts.forget(key)
 	r.verified.forgetGateway(key)
 }
 
