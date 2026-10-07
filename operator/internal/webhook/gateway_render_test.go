@@ -79,6 +79,9 @@ func TestGatewayAdmission_Render(t *testing.T) {
 		{"create whose waiting endpoint lost an entry that fails on its own", nil, []client.Object{ep},
 			[]configcheck.Verdict{ok, {OK: true, Masked: []types.NamespacedName{{Namespace: "default", Name: "ep"}}}},
 			[]configcheck.EndpointVerdict{epFail}, true, "root,group,endpoint", "default/ep"},
+		{"create whose waiting endpoints fail only together", nil, []client.Object{ep},
+			[]configcheck.Verdict{ok, fail}, []configcheck.EndpointVerdict{epOK}, true, "root,group,endpoint",
+			"they fail validation together"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
