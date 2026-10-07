@@ -962,7 +962,7 @@ func endpointAccepted(gw *v1alpha1.KrakenDGateway, ep *v1alpha1.KrakenDEndpoint,
 	lost := rv.lost[key]
 	// The CE fallback strips wildcards after the conflicts are settled, so a
 	// stripped entry is one that won its pair and is not served either.
-	served := entryCount(ep) - len(lost) - wildcardCount(stripped)
+	served := entryCount(ep) - lostEntryCount(lost) - wildcardCount(stripped)
 	if total := entryCount(ep); len(lost) > 0 && served > 0 {
 		cond.Reason = v1alpha1.ReasonPartiallyAccepted
 		cond.Message = fmt.Sprintf(
@@ -979,6 +979,16 @@ func endpointAccepted(gw *v1alpha1.KrakenDGateway, ep *v1alpha1.KrakenDEndpoint,
 		gw.Namespace, gw.Name)
 	noteStripped(cond, stripped)
 	return acceptance{condition: cond, conflicts: endpointConflicts(lost)}
+}
+
+// lostEntryCount is the number of distinct (endpoint, method) entries in lost,
+// which lists an entry once for each older endpoint it lost to.
+func lostEntryCount(lost []renderer.EntryConflict) int {
+	seen := map[[2]string]struct{}{}
+	for _, l := range lost {
+		seen[[2]string{l.Endpoint, l.Method}] = struct{}{}
+	}
+	return len(seen)
 }
 
 // eeStripped makes cond the verdict for an endpoint that a CE-fallback render
