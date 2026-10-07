@@ -260,3 +260,33 @@ func TestGatewayReconcile_ASafetyNetFailureAppliesNothingAndKeepsTheLiveConflict
 		t.Errorf("status.conflicts = %+v, want the live %+v kept", got.Status.Conflicts, fresh)
 	}
 }
+
+// maskingEndpoints are two endpoints of the test gateway that share GET
+// /same: older serves it, and newer's entry loses it, so the whole render
+// leaves that entry out. newer's lost entry has the backend host the
+// contentValidator rejects; its other entry, GET /e, is valid.
+func maskingEndpoints() (older, newer *v1alpha1.KrakenDEndpoint) {
+	older = testEndpoint("a", "/same")
+	newer = badHosted("e", "/same")
+	newer.Spec.Endpoints = append(newer.Spec.Endpoints, testEndpoint("e", "/e").Spec.Endpoints[0])
+	return older, newer
+}
+
+func TestGatewayReconcile_AMaskedEndpointIsJudgedOnItsOwn(t *testing.T) {
+	gw := reconciledGateway()
+	older, newer := maskingEndpoints()
+	c := fakeClientBuilder().WithObjects(gw, older, newer).WithStatusSubresource(gw, older, newer).Build()
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}), rejectsBadHosts())
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	if cond := storedAccepted(t, c, client.ObjectKeyFromObject(newer)); cond == nil ||
+		cond.Reason != v1alpha1.ReasonEndpointInvalid || !strings.Contains(cond.Message, "is not a valid host") {
+		t.Errorf("e Accepted = %+v, want %s: its lost entry fails on its own", cond, v1alpha1.ReasonEndpointInvalid)
+	}
+	if applied := appliedJSON(t, c, gw); strings.Contains(applied, `"/e"`) {
+		t.Errorf("applied config:\n%s\nwant e left out whole", applied)
+	}
+}
