@@ -71,6 +71,17 @@ spec:
       timeout: 10s
 ```
 
+## Observability
+
+The operator uses OpenTelemetry for its logs, traces and metrics.
+
+- **Logs** go to stdout as JSON, one OpenTelemetry log record per line. A record logged during a reconcile or an admission request carries that trace's `TraceID` and `SpanID`. `--log-format=pretty` (Helm: `telemetry.logs.format`) indents each record for reading by hand.
+- **Metrics** are served on the metrics endpoint (HTTPS, port 8443), under the same `krakend_operator_*` names and labels as earlier releases.
+- **Traces.** Each reconcile and each admission request is one trace, with its stages, every `krakend check` run and every Kubernetes API call below it.
+- **OTLP export.** Set `OTEL_EXPORTER_OTLP_ENDPOINT` (Helm: `telemetry.otlp.endpoint`, or `telemetry.otlp.nodeCollector.enabled` for a collector on every node) to export traces, metrics and logs over OTLP. Without it nothing is exported.
+
+See the [runbook](docs/runbook.md#tracing) for finding a trace and correlating logs, and the [chart README](charts/krakend-operator/README.md#telemetry) for the values.
+
 ## Documentation
 
 - [Operations Runbook](docs/runbook.md) — Day-2 operations, troubleshooting, and monitoring
