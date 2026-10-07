@@ -342,10 +342,7 @@ func (r *KrakenDAutoConfigReconciler) precheck(
 				}
 			}
 		}
-		writes = slices.DeleteFunc(slices.Clone(writes), func(ep *v1alpha1.KrakenDEndpoint) bool {
-			_, ok := rejected[ep.Name]
-			return ok
-		})
+		writes = withoutHeld(writes, rejected)
 	}
 
 	clashes, err := r.routerClashes(ctx, &gw, writes, stale, order, !held && len(rejected) == 0)
@@ -353,10 +350,7 @@ func (r *KrakenDAutoConfigReconciler) precheck(
 		return nil, &validatorUnavailableError{err: err}
 	}
 	maps.Copy(rejected, clashes)
-	writes = slices.DeleteFunc(slices.Clone(writes), func(ep *v1alpha1.KrakenDEndpoint) bool {
-		_, ok := rejected[ep.Name]
-		return ok
-	})
+	writes = withoutHeld(writes, rejected)
 
 	judged, err := r.judgeCandidates(ctx, ac, &gw, writes, order)
 	if err != nil {
@@ -503,6 +497,14 @@ func (r *KrakenDAutoConfigReconciler) routerClashes(
 		hold(held, []*v1alpha1.KrakenDEndpoint{ep}, c.String(), errors.New(c.String()))
 	}
 	return held, nil
+}
+
+// withoutHeld returns eps less the endpoints held names, as a new slice.
+func withoutHeld(eps []*v1alpha1.KrakenDEndpoint, held map[string]rejection) []*v1alpha1.KrakenDEndpoint {
+	return slices.DeleteFunc(slices.Clone(eps), func(ep *v1alpha1.KrakenDEndpoint) bool {
+		_, ok := held[ep.Name]
+		return ok
+	})
 }
 
 // hold records each endpoint in eps as failing the config check: message is
@@ -700,10 +702,7 @@ func (r *KrakenDAutoConfigReconciler) reconcileEndpoints(
 	// endpoints as they stay and checks only the endpoints still to be written.
 	existing := r.withUncontrolled(ctx, controlled, desired)
 	maps.Copy(outcome.rejected, routeCollisions(desired, existing))
-	writes = slices.DeleteFunc(slices.Clone(writes), func(ep *v1alpha1.KrakenDEndpoint) bool {
-		_, ok := outcome.rejected[ep.Name]
-		return ok
-	})
+	writes = withoutHeld(writes, outcome.rejected)
 	checked, err := r.precheck(ctx, ac, writes, stale, newCreationOrder(existing),
 		held || outcome.failed() || recursRejection(ac, writes))
 	if err != nil {
