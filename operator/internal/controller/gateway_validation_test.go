@@ -644,6 +644,11 @@ func TestGatewayReconcile_ASafetyNetFailureOnTheFastPathReportsAnUnappliedExclus
 		t.Errorf("ConfigValid = %+v, checksum %s (was %s); want %s with the applied config kept",
 			cv, stored.Status.ConfigChecksum, applied, v1alpha1.ReasonCombinedConfigInvalid)
 	}
+	// e failed on its own and was excluded before the safety net failed, so
+	// the message must not claim every endpoint passes on its own.
+	if cv != nil && strings.Contains(cv.Message, "Every endpoint passes") {
+		t.Errorf("ConfigValid message = %q, want no claim that every endpoint passes on its own", cv.Message)
+	}
 	if err := c.Get(context.Background(), client.ObjectKeyFromObject(newer), &live); err != nil {
 		t.Fatal(err)
 	}
