@@ -239,7 +239,8 @@ func (v *EndpointValidator) checkRender(
 // whichever of the two the render keeps, the other is no longer served. A
 // clash the gateway already has is not the change's. ep is rendered at its
 // creationTimestamp, or after every endpoint that exists when it has none, as
-// the cluster orders it.
+// the cluster orders it. While the render stops resolving clashes at its cap, a
+// new one cannot be told apart, so ep is rejected.
 func (v *EndpointValidator) refuseNewClashes(
 	ctx context.Context, ep *v1alpha1.KrakenDEndpoint, gw *v1alpha1.KrakenDGateway,
 ) error {
@@ -254,6 +255,10 @@ func (v *EndpointValidator) refuseNewClashes(
 	after, err := v.Checker.Conflicts(ctx, gw, []v1alpha1.KrakenDEndpoint{*candidate})
 	if err != nil {
 		return checkErr(err)
+	}
+	if after.Capped {
+		return invalid(kindEndpoint, ep.Name, field.ErrorList{field.Invalid(field.NewPath("spec", "endpoints"),
+			field.OmitValueType{}, configcheck.ClashesCapped)})
 	}
 	self := types.NamespacedName{Namespace: ep.Namespace, Name: ep.Name}
 	clashes := configcheck.NewClashes(before, after, map[types.NamespacedName]bool{self: true})
