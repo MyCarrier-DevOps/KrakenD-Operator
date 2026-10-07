@@ -249,3 +249,29 @@ func TestTraceKubeAPI_ClusterScopedRequestIsNamedByItsResource(t *testing.T) {
 
 	rec.Ended().RequireChild(t, "reconcile", "k8s update namespaces")
 }
+
+func TestTraceKubeAPI_NonResourceRequestIsNamedByMethodAndPath(t *testing.T) {
+	rec := tracingtest.New(t)
+	srv := httptest.NewServer(&fakeAPIServer{})
+	t.Cleanup(srv.Close)
+	cfg := &rest.Config{Host: srv.URL}
+	telemetry.TraceKubeAPI(cfg, rec.Provider())
+	httpClient, err := rest.HTTPClientFor(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, parent := rec.Tracer().Start(context.Background(), "reconcile")
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/apis", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	parent.End()
+
+	rec.Ended().RequireChild(t, "reconcile", "k8s GET /apis")
+}
