@@ -501,7 +501,9 @@ func (r *KrakenDAutoConfigReconciler) recordSyncedFailure(
 	reason string,
 	syncMessage string,
 	warnings *inputWarnings,
-) error {
+) (retErr error) {
+	ctx, span := tracing.Start(ctx, r.Tracer, "autoconfig.status")
+	defer func() { tracing.End(span, retErr) }()
 	// A failure can list every operation or write that failed, which would
 	// overrun the condition's size limit: bound the status and event text.
 	message := truncateMessage(syncMessage)
