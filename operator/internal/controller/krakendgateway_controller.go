@@ -283,6 +283,7 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	saControlled, coreErr := r.reconcileCoreResources(ctx, &gw, infra)
 	note := r.noteRollout(&gw, infra, deployed, configChanged, saControlled)
 	obs, infraErr := r.reconcileInfrastructure(ctx, &gw, infra, saControlled, coreErr)
+	r.setResourcesControlled(&gw, infraErr)
 	r.inspectDeploymentStatus(ctx, &gw, infra, obs, note)
 
 	// Update final status
@@ -2183,6 +2184,7 @@ func gatewayReadinessFor(conds []metav1.Condition) gatewayReadiness {
 	expired := meta.FindStatusCondition(conds, v1alpha1.ConditionLicenseExpired)
 	ceFallback := meta.FindStatusCondition(conds, v1alpha1.ConditionCEFallbackApplied)
 	plugins := meta.FindStatusCondition(conds, v1alpha1.ConditionPluginsResolved)
+	controlled := meta.FindStatusCondition(conds, v1alpha1.ConditionResourcesControlled)
 	switch {
 	case condFalse(configValid):
 		return notReady(configValid, v1alpha1.PhaseError)
@@ -2191,6 +2193,8 @@ func gatewayReadinessFor(conds []metav1.Condition) gatewayReadiness {
 			message: expired.Message, phase: v1alpha1.PhaseError}
 	case condFalse(plugins):
 		return notReady(plugins, v1alpha1.PhaseError)
+	case condFalse(controlled):
+		return notReady(controlled, v1alpha1.PhaseError)
 	case condFalse(available):
 		return notReady(available, v1alpha1.PhaseError)
 	case condTrue(ceFallback):
