@@ -67,9 +67,10 @@ type Verdict struct {
 	// endpoints.
 	Masked   []types.NamespacedName
 	Findings []Finding
-	// Rejection is the validator's rejection behind a verdict that is not OK.
-	// A caller that remembers it can rebuild the findings with Rejected
-	// against whatever the endpoints are by then.
+	// Rejection is the validator's rejection behind a verdict that is not OK,
+	// a copy with its output bounded to 16 KiB. A caller that remembers it
+	// can rebuild the findings with Rejected against whatever the endpoints
+	// are by then.
 	Rejection *renderer.ValidationError
 	// Stage is the check that rejected the config.
 	Stage renderer.RejectionStage
