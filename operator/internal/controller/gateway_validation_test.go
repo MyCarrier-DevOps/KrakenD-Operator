@@ -14,6 +14,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
@@ -141,6 +142,9 @@ func TestGatewayReconcile_ARootThatFailsAloneBlamesNoEndpoint(t *testing.T) {
 	}
 	if val.lints != 1 || val.validates != 0 {
 		t.Errorf("ran %d lints and %d full checks, want the root alone", val.lints, val.validates)
+	}
+	if n := eventsWithReason(r.Recorder.(*record.FakeRecorder), v1alpha1.ReasonGatewayRootInvalid); n != 1 {
+		t.Errorf("%s events = %d, want 1: the Warning carries the verdict's reason", v1alpha1.ReasonGatewayRootInvalid, n)
 	}
 }
 
@@ -431,6 +435,9 @@ func TestGatewayReconcile_AFailureOnlyTogetherIsTheGatewaysAndQuotesNothing(t *t
 		if cond := storedAccepted(t, c, client.ObjectKeyFromObject(ep)); cond != nil {
 			t.Errorf("%s Accepted = %+v, want none: no endpoint fails on its own", ep.Name, cond)
 		}
+	}
+	if n := eventsWithReason(r.Recorder.(*record.FakeRecorder), v1alpha1.ReasonCombinedConfigInvalid); n != 1 {
+		t.Errorf("%s events = %d, want 1: the Warning carries the verdict's reason", v1alpha1.ReasonCombinedConfigInvalid, n)
 	}
 }
 
