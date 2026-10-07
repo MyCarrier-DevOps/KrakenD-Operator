@@ -122,13 +122,17 @@ func TestEndpointAdmission_AMoveIsJudgedLikeACreate(t *testing.T) {
 
 func TestEndpointAdmission_APolicyAtFaultIsNamedNotQuoted(t *testing.T) {
 	chk := &scriptedChecker{endpointVerdicts: []configcheck.EndpointVerdict{{Reason: v1alpha1.ReasonPolicyInvalid,
-		Policies: []types.NamespacedName{{Namespace: "shared", Name: "p"}}, PoliciesFailAlone: true}}}
+		Policies: []types.NamespacedName{{Namespace: "shared", Name: "p"}}, PoliciesFailAlone: true,
+		Output: "POLICY-SECRET"}}}
 	v := &EndpointValidator{Client: fakeClient(testGateway()), Checker: chk}
 
 	resp := review(t, v, "alice", testEndpoint("new", "/a"), nil)
 
 	if resp.Allowed || !strings.Contains(responseText(resp), "shared/p") {
 		t.Errorf("response = %+v; want a denial naming shared/p", resp.Result)
+	}
+	if strings.Contains(responseText(resp), "POLICY-SECRET") {
+		t.Errorf("response = %q; want the policy's own output left out", responseText(resp))
 	}
 }
 
