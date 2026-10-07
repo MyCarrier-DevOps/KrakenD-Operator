@@ -122,3 +122,36 @@ func TestConflicts_ReportsARenderThatStoppedResolvingClashes(t *testing.T) {
 		t.Errorf("capped = %v with %d losers, want capped after %d", conflicts.Capped, len(conflicts.Lost), renderer.MaxRouteRefusals)
 	}
 }
+
+func TestNewClashes_TakesEachWinnerOfOneEntryAsAClashOfItsOwn(t *testing.T) {
+	a := types.NamespacedName{Namespace: "ns", Name: "a"}
+	b := types.NamespacedName{Namespace: "ns", Name: "b"}
+	c := types.NamespacedName{Namespace: "ns", Name: "c"}
+	toA := renderer.EntryConflict{Endpoint: "/u/{n}/x", Method: "GET", Winner: a, Detail: "clash with a"}
+	toC := renderer.EntryConflict{Endpoint: "/u/{n}/x", Method: "GET", Winner: c, Detail: "clash with c"}
+	before := RouteConflicts{Lost: map[types.NamespacedName][]renderer.EntryConflict{b: {toA}}}
+	after := RouteConflicts{Lost: map[types.NamespacedName][]renderer.EntryConflict{b: {toA, toC}}}
+
+	got := NewClashes(before, after, map[types.NamespacedName]bool{c: true})
+
+	want := []Clash{{Loser: b, Method: "GET", Endpoint: "/u/{n}/x", Winner: c, Detail: "clash with c"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("NewClashes = %+v, want only the entry's new clash with ns/c", got)
+	}
+}
+
+func TestNewClashes_OrdersAnEntrysClashesByWinner(t *testing.T) {
+	a := types.NamespacedName{Namespace: "ns", Name: "a"}
+	b := types.NamespacedName{Namespace: "ns", Name: "b"}
+	c := types.NamespacedName{Namespace: "ns", Name: "c"}
+	after := RouteConflicts{Lost: map[types.NamespacedName][]renderer.EntryConflict{b: {
+		{Endpoint: "/u/{n}/x", Method: "GET", Winner: c, Detail: "clash with c"},
+		{Endpoint: "/u/{n}/x", Method: "GET", Winner: a, Detail: "clash with a"},
+	}}}
+
+	got := NewClashes(RouteConflicts{}, after, nil)
+
+	if len(got) != 2 || got[0].Winner != a || got[1].Winner != c {
+		t.Errorf("NewClashes = %+v, want the clash with ns/a, then the one with ns/c", got)
+	}
+}
