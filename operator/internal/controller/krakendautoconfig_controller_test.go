@@ -2377,11 +2377,15 @@ func TestAutoConfigReconcile_IdenticalSecondPassWritesNothing(t *testing.T) {
 	}}
 	// Two in-scope failed operations: the sync holds them, and an identical
 	// pass must not rewrite the status or repeat the event.
+	// Both sit under /api, the base the AutoConfig's additional endpoints
+	// derive from, so a held operation leaves that base alone.
+	failedB := failedGetB()
+	failedB.Path = "/api/b"
 	ce.output.Failed = []autoconfig.OperationIssue{{
-		Operation: autoconfig.Operation{Method: "GET", Path: "/a", OperationID: "getA"},
+		Operation: autoconfig.Operation{Method: "GET", Path: "/api/a", OperationID: "getA"},
 		Reason:    v1alpha1.ReasonCUEEvaluationFailed,
 		Message:   "boom",
-	}, failedGetB()}
+	}, failedB}
 	// A third endpoint that fails its own config check on every pass.
 	g.output.Endpoints = append(g.output.Endpoints, generatedEndpoint("getC", "/c"))
 	checker := &fakeChecker{
