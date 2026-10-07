@@ -192,3 +192,29 @@ func TestTraceKubeAPI_PrefixedHostStillNamesTheRequestByItsResource(t *testing.T
 		t.Errorf("attributes = %v, want the configmaps update", attrs)
 	}
 }
+
+func TestTraceKubeAPI_ClientSpanRecordsTheRequestAndTheParentDoesNot(t *testing.T) {
+	rec := tracingtest.New(t)
+	c, _ := tracedClient(t, rec)
+	ctx, parent := rec.Tracer().Start(context.Background(), "reconcile")
+
+	if err := updateConfigMap(ctx, c); err != nil {
+		t.Fatal(err)
+	}
+	parent.End()
+
+	spans := rec.Ended()
+	got := attrsOf(spans.One(t, "k8s update configmaps"))
+	for key, want := range map[string]string{
+		"k8s.namespace.name": "ns", "k8s.object.name": "cm", "k8s.resource": "configmaps", "k8s.verb": "update",
+	} {
+		if got[key] != want {
+			t.Errorf("client span %s = %q, want %q", key, got[key], want)
+		}
+	}
+	for key := range attrsOf(spans.One(t, "reconcile")) {
+		if strings.HasPrefix(key, "k8s.") {
+			t.Errorf("parent span carries %s", key)
+		}
+	}
+}
