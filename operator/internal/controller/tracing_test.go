@@ -29,7 +29,9 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -602,6 +604,33 @@ func TestAutoConfigReconcile_AFailedSyncWritesItsStatusInASpan(t *testing.T) {
 	}
 
 	rec.Ended().RequireParent(t, "reconcile KrakenDAutoConfig", "autoconfig.status")
+}
+
+// A failure status write that conflicts did not happen, though the reconcile
+// returns the sync's own failure: its span says so.
+func TestAutoConfigReconcile_AConflictingFailureStatusWriteMarksItsSpan(t *testing.T) {
+	ac := testAutoConfig()
+	c := fakeClientBuilder().WithObjects(ac, testCUEDefinitionsCM()).WithStatusSubresource(ac).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourceUpdate: func(
+				context.Context, client.Client, string, client.Object, ...client.SubResourceUpdateOption,
+			) error {
+				return apierrors.NewConflict(schema.GroupResource{Resource: "krakendautoconfigs"}, ac.Name, errors.New("stale"))
+			},
+		}).Build()
+	f, ce, fi, g := defaultMocks()
+	f.err = errors.New("the spec host is unreachable")
+	r := newACReconciler(c, f, ce, fi, g)
+	rec := tracingtest.New(t)
+	r.Tracer = rec.Tracer()
+
+	if _, err := reconcileAC(r, ac); err == nil || !strings.Contains(err.Error(), "the spec host is unreachable") {
+		t.Fatalf("Reconcile error = %v, want the sync's own failure", err)
+	}
+
+	if got := rec.Ended().One(t, "autoconfig.status").Status().Code; got != codes.Error {
+		t.Errorf("autoconfig.status status = %v, want %v", got, codes.Error)
+	}
 }
 
 // Each of the endpoint, policy and AutoConfig reconciles is the root of a trace
