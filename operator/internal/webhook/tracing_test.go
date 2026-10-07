@@ -880,3 +880,26 @@ func dryRunName(dryRun *bool) string {
 	}
 	return fmt.Sprint(*dryRun)
 }
+
+// A policy update whose gateway's endpoints fail together compares them with
+// the stored policy's; that check, which only an update runs, is below the
+// gateway's judging span, not the screening's.
+func TestPolicyAdmission_TheStoredPolicysGroupCheckIsBelowItsJudgingSpan(t *testing.T) {
+	rec := tracingtest.New(t)
+	objs := []client.Object{testGateway()}
+	for _, path := range []string{"/a", "/b"} {
+		ep := testEndpoint("uses-p"+strings.ReplaceAll(path, "/", "-"), path)
+		ep.Spec.Endpoints[0].Backends[0].PolicyRef = &v1alpha1.PolicyRef{Name: "p"}
+		objs = append(objs, ep)
+	}
+	// Each endpoint passes on its own; the two together fail.
+	v := tracedValidatorsRunning(rec, rejectingExecutor{reject: rejectsWith(`"/a"`, `"/b"`)}, objs...)
+	admit := tracedValidator{kind: "KrakenDBackendPolicy", next: v.Policy, tracer: rec.Tracer()}
+
+	warnings, err := admit.ValidateUpdate(context.Background(), testPolicy(`{}`), testPolicy(`{"x":1}`))
+
+	if err != nil || len(warnings) == 0 {
+		t.Fatalf("warnings, err = %v, %v; want a warning", warnings, err)
+	}
+	requireParents(t, rec.Ended(), "configcheck.CheckGroup", "admission.screen_policy", "admission.judge_policy")
+}
