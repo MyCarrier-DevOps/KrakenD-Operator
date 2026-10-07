@@ -885,9 +885,22 @@ kubectl patch <kind>/<name> -n <ns> --subresource=status --type=json \
 ### KrakenDBackendPolicy
 
 - `Ready` replaces `PolicyValid`: `True` when the policy's fields are in
-  range, `False` with reason `InvalidCircuitBreaker` or `InvalidRateLimit`
-  otherwise. The first reconcile after the upgrade removes `PolicyValid`;
-  replace any check on it with `Ready`.
+  range and it passes `krakend check` on its own, `False` with reason
+  `InvalidCircuitBreaker` or `InvalidRateLimit` when a field is out of range.
+  The first reconcile after the upgrade removes `PolicyValid`; replace any
+  check on it with `Ready`.
+- A policy that fails `krakend check` on its own now reads `Ready=False`,
+  reason `PolicyInvalid`, with the policy's own output in the message, and a
+  Warning event when it turns invalid. Until now such a policy read
+  `Ready=True` while the gateway excluded every endpoint that references it.
+  After the upgrade, policies that were already failing alone change to
+  `False` on the first reconcile (each policy is checked once per operator
+  start); list them with `kubectl get krakendbackendpolicy -A` and its
+  `Ready` column.
+- When `krakend check` cannot run for a policy (no binary, a timeout, no check
+  slot), `Ready` is `Unknown` with reason `ValidatorUnavailable` and the
+  reconcile retries with backoff. It is never reported as the policy's
+  failure.
 - New `status.observedGeneration`.
 - The Warning event for an invalid policy now uses the condition's reason
   (`InvalidCircuitBreaker`, `InvalidRateLimit`) instead of `PolicyInvalid`,
