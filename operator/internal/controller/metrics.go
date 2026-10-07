@@ -72,6 +72,11 @@ var (
 		Help: "1 while the gateway's newest rendered config passed validation (ConfigValid=True), 0 otherwise",
 	}, []string{"namespace", "name"})
 
+	gatewayExcludedEndpoints = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "krakend_operator_gateway_excluded_endpoints",
+		Help: "KrakenDEndpoints a gateway leaves out of its config because they fail validation on their own, by Accepted reason",
+	}, []string{"namespace", "gateway", "reason"})
+
 	autoConfigSynced = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "krakend_operator_autoconfig_synced",
 		Help: "1 if the KrakenDAutoConfig's last reconcile synced successfully, 0 if it is failing",
@@ -87,9 +92,19 @@ func deleteGatewayMetrics(namespace, name string) {
 	gatewayConfigValid.DeletePartialMatch(gateway)
 	dragonflyReady.DeletePartialMatch(gateway)
 	licenseExpirySeconds.DeletePartialMatch(gateway)
+	gatewayExcludedEndpoints.DeletePartialMatch(prometheus.Labels{"namespace": namespace, "gateway": name})
 	reconcileDuration.DeletePartialMatch(prometheus.Labels{
 		"controller": "gateway", "namespace": namespace, "name": name,
 	})
+}
+
+// recordExcludedEndpoints replaces the gateway's excluded-endpoint series
+// with one per reason that has any, so a reason with none has no series.
+func recordExcludedEndpoints(gw *v1alpha1.KrakenDGateway, counts map[string]int) {
+	gatewayExcludedEndpoints.DeletePartialMatch(prometheus.Labels{"namespace": gw.Namespace, "gateway": gw.Name})
+	for reason, n := range counts {
+		gatewayExcludedEndpoints.WithLabelValues(gw.Namespace, gw.Name, reason).Set(float64(n))
+	}
 }
 
 // recordGatewayMetrics sets the gateway's per-gateway series from its status.
@@ -117,6 +132,7 @@ func init() { //nolint:gochecknoinits // required by prometheus metric registrat
 		dragonflyReady,
 		gatewayInfo,
 		gatewayConfigValid,
+		gatewayExcludedEndpoints,
 		autoConfigSynced,
 	)
 }
