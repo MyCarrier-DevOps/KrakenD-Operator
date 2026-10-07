@@ -150,10 +150,29 @@ func TestParseLogLevel(t *testing.T) {
 	}
 }
 
+// restoreGlobals undoes, when the test ends, what InstallLogging set, so the
+// tests after it log nowhere stale. It cannot undo ctrl.SetLogger:
+// controller-runtime fulfils its root logger once per process, and later calls
+// do nothing, so the test of that call runs in a subprocess of its own. The
+// saved OpenTelemetry error handler is not put back either: the default one
+// delegates only once, so a no-op handler takes its place.
+func restoreGlobals(t *testing.T) {
+	t.Helper()
+	writer, flags := log.Writer(), log.Flags()
+	t.Cleanup(func() {
+		klog.ClearLogger()
+		log.SetOutput(writer)
+		log.SetFlags(flags)
+		otel.SetLogger(logr.Discard())
+		otel.SetErrorHandler(otel.ErrorHandlerFunc(func(error) {}))
+	})
+}
+
 // client-go logs through klog, and net/http servers report TLS handshake
 // errors through the standard library's log package: both must become records.
 func TestInstallLogging_KlogAndStdlibLogReachTheOTelPipeline(t *testing.T) {
 	logger, out := newStdoutLogger(t, otellog.SeverityInfo)
+	restoreGlobals(t)
 	telemetry.InstallLogging(logger, logger)
 
 	klog.Info("from klog")
@@ -185,6 +204,7 @@ func TestInstallLogging_AFailingDiagnosticsPipelineDoesNotReportItselfInALoop(t 
 	logger, _ := newStdoutLogger(t, otellog.SeverityInfo)
 	exports := 0
 	diag := sdklog.NewLoggerProvider(sdklog.WithProcessor(sdklog.NewSimpleProcessor(failingExporter{&exports})))
+	restoreGlobals(t)
 	telemetry.InstallLogging(logger, telemetry.NewLogger(diag, "opentelemetry"))
 
 	otel.Handle(errors.New("an exporter failed"))
