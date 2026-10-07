@@ -787,7 +787,7 @@ sequenceDiagram
 | KrakenDGateway updated | Gateway controller | Re-render config, update child resources, rolling restart |
 | KrakenDGateway deleted | Kubernetes GC | ownerReference cascade deletes all child resources. A KrakenDGateway with a deletionTimestamp is not reconciled: garbage collection removes its children, and the operator does not recreate them. |
 | KrakenDEndpoint created, spec changed, or its `Accepted` changed | Endpoint controller | Resolve gateway and policy references into `ResolvedRefs`; derive `Ready` and `phase` from `ResolvedRefs` and `Accepted`; patch status (optimistic lock) only when it changed. The gateway controller re-renders the target gateway on spec changes and records `Accepted` on every endpoint of an applied render. A resolved conflict flips `Accepted` back to `True`. |
-| KrakenDBackendPolicy created/updated/deleted | Policy controller | Set `Ready` from the policy's fields and `observedGeneration`. The gateway controller re-renders every gateway with endpoints referencing the policy. The endpoint controller re-resolves references only when the policy is created or deleted. Deleting a policy that endpoints still reference is accepted and held by the protection finalizer (see section 3.3), so a referenced policy keeps rendering; if the finalizer is removed by hand while endpoints still reference the policy, each referencing endpoint gets `ResolvedRefs=False`/`PolicyNotFound` and phase `Invalid`, and the gateway excludes the endpoint from the rendered config and removes its `Accepted` condition. `referencedBy` is recounted when an endpoint is created, deleted, or has its spec changed. |
+| KrakenDBackendPolicy created/updated/deleted | Policy controller | Set `Ready` from the policy's fields and `observedGeneration`: `False` (`InvalidCircuitBreaker`, `InvalidRateLimit`) for a field out of range; otherwise the policy is rendered alone and checked with `krakend check`: `False` (`PolicyInvalid`, quoting the policy's own output, which its owner may read) when it fails, `Unknown` (`ValidatorUnavailable`, retried with backoff, no event) when the check cannot run, `True` when it passes. The verdict is memoized by the policy's content, so reconciles of unchanged content run no krakend, and the check holds one of the controllers' check slots (shared with the AutoConfig controller). The gateway controller re-renders every gateway with endpoints referencing the policy. The endpoint controller re-resolves references only when the policy is created or deleted. Deleting a policy that endpoints still reference is accepted and held by the protection finalizer (see section 3.3), so a referenced policy keeps rendering; if the finalizer is removed by hand while endpoints still reference the policy, each referencing endpoint gets `ResolvedRefs=False`/`PolicyNotFound` and phase `Invalid`, and the gateway excludes the endpoint from the rendered config and removes its `Accepted` condition. `referencedBy` is recounted when an endpoint is created, deleted, or has its spec changed. |
 | KrakenDAutoConfig created, or spec generation/label/annotation changed | AutoConfig controller | Fetch OpenAPI spec from configured source, parse operations, apply URL transforms and filters, and converge owned KrakenDEndpoint resources to the desired state (create/update/delete). A status-only update (the phase/condition writes the reconciler itself makes) does not re-trigger this — only generation, label, and annotation changes do. Generated endpoints trigger the endpoint controller watch → gateway reconciler. |
 | KrakenDAutoConfig deleted | Kubernetes GC | All owned KrakenDEndpoints are garbage-collected via ownerReference. The AutoConfig controller doesn't reconcile a terminating AutoConfig, so under foreground deletion it doesn't recreate endpoints as they are collected. |
 | Owned KrakenDEndpoint spec changed, labels changed, deleted, or `Ready` condition changed, or the `openapi.configMapRef`/CUE definitions ConfigMap changed | AutoConfig controller | Re-run the full pipeline. A generated endpoint that was hand-edited, relabelled or deleted out of band is restored to the desired spec and labels (endpoint specs are compared by decoded JSON value, so re-encoding/formatting differences alone don't cause a write), and `EndpointsReady` is refreshed, on failure paths too. Endpoints the AutoConfig does not control are not watched, so a label-matched orphan is adopted on the next reconcile. |
@@ -1636,6 +1636,7 @@ of endpoints that lost an entry, P the policies, N the endpoints):
 | gateway, new render passes | ≤ 2 (root, full) + M endpoints; + 1 safety re-check when one of them is excluded |
 | gateway, new render fails | ≤ 2 + P policies + N endpoints + 1, minus what the memo knows |
 | AutoConfig sync with C candidates | ≤ 2 (root, group) + the candidates that lost an entry; + P + C when the group fails |
+| policy reconcile | 1 per distinct policy content (memoized; a restart checks each policy once again) |
 | endpoint write | ≤ 2 + P (root, its policies alone, unit); + 1 stub, + the stored version's, on failure |
 | policy write over G gateways | 1 + 2G; + 1 per endpoint judged on its own (all of a gateway's endpoints that use it when its group fails, else M) and 1 more for each that fails; + 1 stored group when none fails alone. An endpoint check runs each referenced policy alone, the endpoint, and, when it fails and references a policy of another namespace, again with that policy emptied; the stored baseline repeats these |
 | gateway write | 2; + 1 stored root when the root fails or endpoints are judged on their own; + the endpoint checks as for a policy write; + 1 stored group when none fails alone and the stored root passes |
@@ -1656,8 +1657,9 @@ time on the gateway controller's single worker: about 50–60 s for 500
 endpoints, during which other gateways wait. A gateway whose render passes
 pays its root, its full check and its M endpoints. The units are not split
 into groups to find the failing ones faster, not run in parallel (the
-controllers hold at most 2 of the 3 slots, so admission always has one, and
-the krakend processes share the operator's CPU limit), and not stored in the
+controllers hold at most 2 of the 3 slots, so admission always has one: the
+gateway controller's worker holds one, and the AutoConfig prechecks and the
+policy controller's checks share the other; and the krakend processes share the operator's CPU limit), and not stored in the
 cluster (that needs a CRD change, and a stored verdict is only as trustworthy
 as the RBAC on the status subresource).
 
@@ -2186,7 +2188,7 @@ Per-gateway gauge series (`namespace`, `name` labels) are removed when the gatew
 
 ### Kubernetes Events
 
-The operator emits events on the resource a condition or action concerns. Events on a KrakenDEndpoint are `EndpointConflict`, `PartiallyAccepted`, `EndpointInvalid`, `PolicyInvalid`, `Accepted` (emitted by the gateway controller), and `GatewayNotFound`, `PolicyNotFound` and `RefsResolved` (emitted by the endpoint controller). Events on a KrakenDBackendPolicy are `InvalidCircuitBreaker`, `InvalidRateLimit` and `Ready`. Events on a KrakenDAutoConfig are the AutoConfig rows (`SpecFetched` through `DuplicateOperationId`) and `ValidatorUnavailable`. All other rows are emitted on the KrakenDGateway. Condition-transition events (endpoint `ResolvedRefs`, policy `Ready`) fire on the transition only: a Warning when the condition becomes `False` or changes reason, and a Normal event when it recovers.
+The operator emits events on the resource a condition or action concerns. Events on a KrakenDEndpoint are `EndpointConflict`, `PartiallyAccepted`, `EndpointInvalid`, `PolicyInvalid`, `Accepted` (emitted by the gateway controller), and `GatewayNotFound`, `PolicyNotFound` and `RefsResolved` (emitted by the endpoint controller). Events on a KrakenDBackendPolicy are `InvalidCircuitBreaker`, `InvalidRateLimit`, `PolicyInvalid` and `Ready`. Events on a KrakenDAutoConfig are the AutoConfig rows (`SpecFetched` through `DuplicateOperationId`) and `ValidatorUnavailable`. All other rows are emitted on the KrakenDGateway. Condition-transition events (endpoint `ResolvedRefs`, policy `Ready`) fire on the transition only: a Warning when the condition becomes `False` or changes reason, and a Normal event when it recovers.
 
 A gateway event backed by a condition (`RolloutFailed`,
 `IstioVirtualServiceCreated`, `DragonflyNotReady`, `DragonflyReady`, the license
@@ -2221,6 +2223,7 @@ status or reason. A steady state emits no events. `GatewayRootInvalid`, `Combine
 | Endpoint references resolve again | Normal | `RefsResolved` |
 | Policy circuit breaker fields out of range (`Ready` False) | Warning | `InvalidCircuitBreaker` |
 | Policy rate limit fields out of range (`Ready` False) | Warning | `InvalidRateLimit` |
+| Policy fails krakend check on its own (`Ready` False, quoting its own output) | Warning | `PolicyInvalid` |
 | Invalid policy corrected | Normal | `Ready` |
 | Referenced license Secret missing (`secretRef` path) | Warning | `LicenseSecretMissing` |
 | License renewed, EE restored | Normal | `LicenseRestored` |
