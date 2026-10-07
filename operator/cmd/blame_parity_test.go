@@ -532,7 +532,28 @@ func TestBlame_APolicyChangeIsDeniedByTheEndpointItNewlyBreaks(t *testing.T) {
 
 	var status apierrors.APIStatus
 	if !errors.As(err, &status) || status.Status().Code != http.StatusUnprocessableEntity ||
-		!strings.Contains(err.Error(), "tenant-b/b") || strings.Contains(err.Error(), "tenant-a/a") {
-		t.Errorf("policy update: %v; want a 422 naming tenant-b/b alone", err)
+		!strings.Contains(err.Error(), "tenant-b/b") || strings.Contains(err.Error(), "tenant-a/a") ||
+		strings.Contains(err.Error(), "b.svc") || strings.Contains(err.Error(), "breaks-b") {
+		t.Errorf("policy update: %v; want a 422 naming tenant-b/b alone, quoting no krakend output", err)
+	}
+
+	// Stored past admission, the change makes the controller judge the same
+	// way: b is blamed on the policy by name, a on its own failure.
+	var stored v1alpha1.KrakenDBackendPolicy
+	if err := w.c.Get(context.Background(), client.ObjectKeyFromObject(p), &stored); err != nil {
+		t.Fatal(err)
+	}
+	stored.Spec.Raw = changed.Spec.Raw
+	if err := w.c.Update(context.Background(), &stored); err != nil {
+		t.Fatal(err)
+	}
+	w.reconcile(t)
+	if got := w.accepted(t, b); got == nil || got.Reason != v1alpha1.ReasonPolicyInvalid ||
+		!strings.Contains(got.Message, "tenant-p/p") || strings.Contains(got.Message, "breaks-b") ||
+		strings.Contains(got.Message, "b.svc") {
+		t.Errorf("b Accepted = %+v, want PolicyInvalid naming tenant-p/p, quoting none of b's krakend output", got)
+	}
+	if got := w.accepted(t, a); got == nil || got.Reason != v1alpha1.ReasonEndpointInvalid {
+		t.Errorf("a Accepted = %+v, want EndpointInvalid", got)
 	}
 }
