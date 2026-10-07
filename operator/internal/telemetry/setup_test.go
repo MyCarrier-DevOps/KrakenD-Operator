@@ -201,3 +201,23 @@ func TestSetup_ShutdownWithAnUnreachableCollectorReturnsByTheDeadline(t *testing
 		t.Errorf("Shutdown took %v with a 2s deadline", elapsed)
 	}
 }
+
+// A value the chart passes through can be malformed; the operator must still
+// start, without that entry, and say so.
+func TestSetup_AMalformedResourceAttributeIsAWarning(t *testing.T) {
+	cleanOTelEnv(t)
+	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "bad,team=platform")
+	var out bytes.Buffer
+
+	tel := setup(t, &out)
+	tel.Logger.Info("hello")
+
+	if tel.Warning == nil || !strings.Contains(tel.Warning.Error(), "bad") {
+		t.Errorf("Warning = %v, want the malformed entry named", tel.Warning)
+	}
+	for _, want := range []string{`"Value":"krakend-operator"`, `{"Key":"team","Value":{"Type":"STRING","Value":"platform"}}`} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("record lacks %s:\n%s", want, out.String())
+		}
+	}
+}
