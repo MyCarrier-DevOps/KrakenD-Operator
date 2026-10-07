@@ -78,8 +78,9 @@ func dropRouteLosers(flat []flatEndpoint, conflicted map[types.NamespacedName][]
 // (servedBefore). An entry loses to the first older entry of another
 // KrakenDEndpoint it clashes with: gin refuses to register the entry's route
 // next to the older entry's (the route check's rule, on the path the
-// validation copy registers). An entry gin refuses on its own is left in for
-// its endpoint's own check, which refuses it.
+// validation copy registers). An entry gin refuses on its own, or next to its
+// own KrakenDEndpoint's entries, is left in for that endpoint's own check,
+// which refuses it.
 func routeLosers(flat []flatEndpoint, rules routeRules) routeAdmission {
 	adm := routeAdmission{losers: map[int]EntryConflict{}}
 	var served []routedRoute
@@ -91,7 +92,7 @@ func routeLosers(flat []flatEndpoint, rules routeRules) routeAdmission {
 		if refusedAlone(routes) {
 			continue // its own endpoint's check refuses it
 		}
-		winner, detail, refused := registerEntry(engine, served, routes)
+		winner, detail, refused := registerEntry(engine, served, routes, fe.Source)
 		if !refused {
 			for _, r := range routes {
 				served = append(served, routedRoute{route: r, source: fe.Source})
@@ -100,7 +101,9 @@ func routeLosers(flat []flatEndpoint, rules routeRules) routeAdmission {
 		}
 		// gin can leave its tree half-updated after a refusal; rebuild it.
 		engine = engineWith(routesOf(served))
-		adm.losers[i] = EntryConflict{Endpoint: path, Method: fe.Entry.Method, Winner: winner, Detail: detail}
+		if winner != (types.NamespacedName{}) {
+			adm.losers[i] = EntryConflict{Endpoint: path, Method: fe.Entry.Method, Winner: winner, Detail: detail}
+		}
 	}
 	return adm
 }
@@ -135,17 +138,19 @@ func refusedAlone(routes []ginRoute) bool {
 }
 
 // registerEntry registers routes in engine. When gin refuses one it reports
-// refused, with the first served route that alone clashes with it: its
-// endpoint as the winner and the clash as detail.
-func registerEntry(engine *gin.Engine, served []routedRoute,
-	routes []ginRoute) (winner types.NamespacedName, detail string, refused bool) {
+// refused, and, when one served route of another KrakenDEndpoint alone
+// clashes with it, that endpoint as the winner and the clash as detail. The
+// winner is zero when the route clashes only with source's own routes, or
+// only with several routes together.
+func registerEntry(engine *gin.Engine, served []routedRoute, routes []ginRoute,
+	source types.NamespacedName) (winner types.NamespacedName, detail string, refused bool) {
 	for _, r := range routes {
 		refusal := registerRoute(engine, r)
 		if refusal == "" {
 			continue
 		}
 		for _, s := range served {
-			if registerRoute(engineWith([]ginRoute{s.route}), r) == "" {
+			if s.source == source || registerRoute(engineWith([]ginRoute{s.route}), r) == "" {
 				continue
 			}
 			return s.source, fmt.Sprintf("%s clashes with %s: %s", r.describe(), s.route.describe(), refusal), true
