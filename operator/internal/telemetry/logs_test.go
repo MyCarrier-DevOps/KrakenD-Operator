@@ -21,7 +21,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -30,6 +33,7 @@ import (
 	otellog "go.opentelemetry.io/otel/log"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	"k8s.io/klog/v2"
+	ctrl "sigs.k8s.io/controller-runtime"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/mycarrier-devops/krakend-operator/internal/telemetry"
@@ -52,13 +56,20 @@ type stdoutRecord struct {
 func newStdoutLogger(t *testing.T, minimum otellog.Severity) (logr.Logger, *bytes.Buffer) {
 	t.Helper()
 	var out bytes.Buffer
-	stdout, err := telemetry.NewStdoutProcessor(&out, telemetry.LogFormatJSON)
+	return newStdoutLoggerTo(t, &out, minimum), &out
+}
+
+// newStdoutLoggerTo returns a logger writing JSON records at or above minimum
+// to w.
+func newStdoutLoggerTo(t *testing.T, w io.Writer, minimum otellog.Severity) logr.Logger {
+	t.Helper()
+	stdout, err := telemetry.NewStdoutProcessor(w, telemetry.LogFormatJSON)
 	if err != nil {
 		t.Fatal(err)
 	}
 	lp := sdklog.NewLoggerProvider(sdklog.WithProcessor(telemetry.WithMinSeverity(stdout, minimum)))
 	t.Cleanup(func() { _ = lp.Shutdown(context.Background()) })
-	return telemetry.NewLogger(lp, "test"), &out
+	return telemetry.NewLogger(lp, "test")
 }
 
 // records decodes the JSON records written to out.
@@ -229,5 +240,43 @@ func TestInstallLogging_TheSDKsOwnWarningsReachTheDiagnosticsLogger(t *testing.T
 	got := records(t, diagOut)
 	if len(got) != 1 || got[0].Body.Value != "Invalid Logger name." || len(records(t, out)) != 0 {
 		t.Errorf("diagnostics records = %+v, want the SDK's one warning, and none in the main logger", got)
+	}
+}
+
+// childEnv marks the process TestInstallLogging_ControllerRuntimeLogsThroughThePipeline
+// starts to run the logging half of that test.
+const childEnv = "TELEMETRY_TEST_INSTALL_LOGGING_CHILD"
+
+// controller-runtime fulfils its root logger once per process, so only the
+// first SetLogger counts and a test in this process cannot pin it. The test
+// runs InstallLogging in a process of its own and reads what that one writes.
+func TestInstallLogging_ControllerRuntimeLogsThroughThePipeline(t *testing.T) {
+	if os.Getenv(childEnv) == "1" {
+		logger := newStdoutLoggerTo(t, os.Stdout, otellog.SeverityInfo)
+		telemetry.InstallLogging(logger, logger)
+		ctrl.Log.WithName("x").Info("from controller-runtime")
+		return
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=^TestInstallLogging_ControllerRuntimeLogsThroughThePipeline$")
+	cmd.Env = append(os.Environ(), childEnv+"=1")
+	output, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("child process: %v\n%s", err, output)
+	}
+
+	var got []stdoutRecord
+	for _, line := range bytes.Split(output, []byte("\n")) {
+		if !bytes.HasPrefix(line, []byte("{")) {
+			continue
+		}
+		var r stdoutRecord
+		if err := json.Unmarshal(line, &r); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, r)
+	}
+	if len(got) != 1 || got[0].Body.Value != "from controller-runtime" || got[0].Scope.Name != "test/x" {
+		t.Errorf("records = %+v\nchild output:\n%s\nwant one record, scoped test/x", got, output)
 	}
 }
