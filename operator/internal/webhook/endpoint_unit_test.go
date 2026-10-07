@@ -21,6 +21,8 @@ import (
 	"strings"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/types"
+
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
 )
@@ -111,5 +113,17 @@ func TestEndpointAdmission_AMoveIsJudgedLikeACreate(t *testing.T) {
 
 	if resp.Allowed || strings.Join(chk.calls, ",") != "root,endpoint" {
 		t.Errorf("allowed = %v, checks = %v; want a denial without judging the version on the other gateway", resp.Allowed, chk.calls)
+	}
+}
+
+func TestEndpointAdmission_APolicyAtFaultIsNamedNotQuoted(t *testing.T) {
+	chk := &scriptedChecker{endpointVerdicts: []configcheck.EndpointVerdict{{Reason: v1alpha1.ReasonPolicyInvalid,
+		Policies: []types.NamespacedName{{Namespace: "shared", Name: "p"}}, PoliciesFailAlone: true}}}
+	v := &EndpointValidator{Client: fakeClient(testGateway()), Checker: chk}
+
+	resp := review(t, v, "alice", testEndpoint("new", "/a"), nil)
+
+	if resp.Allowed || !strings.Contains(responseText(resp), "shared/p") {
+		t.Errorf("response = %+v; want a denial naming shared/p", resp.Result)
 	}
 }
