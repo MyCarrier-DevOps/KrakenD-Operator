@@ -1188,11 +1188,29 @@ func warnWaiting(ctx context.Context, chk ConfigChecker, memo configcheck.Memo, 
 // the rest of the scan ends. When the group failed but no endpoint fails on
 // its own, the group with the stored gateway tells whether failing together is
 // the update's doing.
+//
+// A stored root that fails on its own makes every stored unit and group fail,
+// which says nothing about the endpoints, so they are not compared with it
+// (judgeUnderFailingRoot).
 func judgeServed(ctx context.Context, chk ConfigChecker, memo configcheck.Memo, now configcheck.EndpointUnit,
 	old *v1alpha1.KrakenDGateway, group configcheck.Verdict, served []v1alpha1.KrakenDEndpoint,
 ) (admission.Warnings, error) {
-	was := &configcheck.EndpointUnit{Gateway: old, CEFallback: configcheck.CEFallback(old)}
-	s := failingEndpoints(ctx, chk, memo, now, was, suspectsOf(group, served))
+	suspects := suspectsOf(group, served)
+	if group.OK && len(suspects) == 0 {
+		return nil, nil
+	}
+	ceFallback := configcheck.CEFallback(old)
+	storedRoot, err := chk.CheckRoot(ctx, configcheck.Root{Gateway: old, CEFallback: ceFallback}, memo)
+	if err != nil {
+		return nil, checkErr(err)
+	}
+	was := &configcheck.EndpointUnit{Gateway: old, CEFallback: ceFallback}
+	var s scan
+	if storedRoot.OK {
+		s = failingEndpoints(ctx, chk, memo, now, was, suspects)
+	} else {
+		s = judgeUnderFailingRoot(ctx, chk, memo, now, was, suspects)
+	}
 	switch {
 	case len(s.broken) > 0:
 		return nil, invalid("KrakenDGateway", now.Gateway.Name, field.ErrorList{field.Invalid(
@@ -1205,18 +1223,43 @@ func judgeServed(ctx context.Context, chk ConfigChecker, memo configcheck.Memo, 
 	case group.OK:
 		return nil, nil
 	}
-	before, err := chk.CheckGroup(ctx,
-		configcheck.Group{Gateway: old, Endpoints: served, CEFallback: was.CEFallback}, memo)
-	if err != nil {
-		return nil, checkErr(err)
-	}
-	if !before.OK {
-		return admission.Warnings{"the gateway's endpoints already fail validation together with the stored " +
-			"config, though each passes on its own"}, nil
+	if storedRoot.OK {
+		before, err := chk.CheckGroup(ctx,
+			configcheck.Group{Gateway: old, Endpoints: served, CEFallback: was.CEFallback}, memo)
+		if err != nil {
+			return nil, checkErr(err)
+		}
+		if !before.OK {
+			return admission.Warnings{"the gateway's endpoints already fail validation together with the stored " +
+				"config, though each passes on its own"}, nil
+		}
 	}
 	return nil, invalid("KrakenDGateway", now.Gateway.Name, field.ErrorList{field.Invalid(field.NewPath("spec"),
 		field.OmitValueType{}, "with this change the gateway's endpoints fail validation together, though each "+
 			"passes on its own")})
+}
+
+// judgeUnderFailingRoot scans the suspects of a gateway update whose stored
+// root fails on its own. The controller blames no endpoint for that root and
+// keeps serving the last applied config, so a suspect that config served
+// (servedByLastConfig) failing with the update is the update's doing: it is
+// judged with nothing to compare it with. Any other suspect may have failed
+// since before, so it keeps the comparison with the stored gateway (was),
+// which fails for it too: it can only draw a warning.
+func judgeUnderFailingRoot(ctx context.Context, chk ConfigChecker, memo configcheck.Memo,
+	now configcheck.EndpointUnit, was *configcheck.EndpointUnit, suspects []v1alpha1.KrakenDEndpoint) scan {
+	var served, rest []v1alpha1.KrakenDEndpoint
+	for _, ep := range suspects {
+		if servedByLastConfig(ep) {
+			served = append(served, ep)
+		} else {
+			rest = append(rest, ep)
+		}
+	}
+	if s := failingEndpoints(ctx, chk, memo, now, nil, served); len(s.broken) > 0 || s.stopped != nil {
+		return s
+	}
+	return failingEndpoints(ctx, chk, memo, now, was, rest)
 }
 
 // refuseNewGatewayClashes rejects gw when its root makes KrakenD's router
