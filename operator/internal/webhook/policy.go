@@ -25,7 +25,6 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -261,9 +260,7 @@ func judgePolicyUse(ctx context.Context, chk ConfigChecker, memo configcheck.Mem
 	// another namespace is rendered for the endpoint's owner (configcheck).
 	baseline := old
 	if baseline == nil {
-		baseline = &v1alpha1.KrakenDBackendPolicy{
-			ObjectMeta: metav1.ObjectMeta{Name: policy.Name, Namespace: policy.Namespace},
-		}
+		baseline = configcheck.EmptyPolicy(policy.Namespace, policy.Name)
 	}
 	was := &configcheck.EndpointUnit{Gateway: gw, Override: baseline, CEFallback: ceFallback}
 	s := failingEndpoints(ctx, chk, memo,
