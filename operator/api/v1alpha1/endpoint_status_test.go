@@ -91,9 +91,9 @@ func TestEndpointReady(t *testing.T) {
 			metav1.ConditionFalse, "EndpointConflict", "EndpointConflict message",
 		},
 		{
-			"configuration rejected",
-			[]metav1.Condition{refsOK, testCondition("Accepted", metav1.ConditionFalse, "GatewayConfigRejected", 2)},
-			metav1.ConditionFalse, "GatewayConfigRejected", "GatewayConfigRejected message",
+			"endpoint invalid on its own",
+			[]metav1.Condition{refsOK, testCondition("Accepted", metav1.ConditionFalse, "EndpointInvalid", 2)},
+			metav1.ConditionFalse, "EndpointInvalid", "EndpointInvalid message",
 		},
 		{
 			"accepted with a docs-only schema name conflict",
@@ -130,7 +130,7 @@ func TestEndpointPhaseFromReady(t *testing.T) {
 		{metav1.ConditionFalse, "PartiallyAccepted", "Conflicted"},
 		{metav1.ConditionTrue, "SchemaNameConflict", "Active"},
 		{metav1.ConditionFalse, "PolicyNotFound", "Invalid"},
-		{metav1.ConditionFalse, "GatewayConfigRejected", "Invalid"},
+		{metav1.ConditionFalse, "EndpointInvalid", "Invalid"},
 		{metav1.ConditionFalse, "EEFeaturesStripped", "Invalid"},
 	}
 	for _, tt := range tests {
