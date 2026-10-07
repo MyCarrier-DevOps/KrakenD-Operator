@@ -77,7 +77,11 @@ type KrakenDBackendPolicyStatus struct {
 	// ObservedGeneration is the metadata.generation this status was computed for.
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 	ReferencedBy       int   `json:"referencedBy,omitempty"`
-	// Conditions are keyed by type. Ready is the summary condition.
+	// Conditions are keyed by type. Ready is the summary condition: False
+	// (InvalidCircuitBreaker, InvalidRateLimit) when a field is out of range,
+	// False (PolicyInvalid) when the policy fails krakend check on its own,
+	// with that output in the message, Unknown (ValidatorUnavailable) when the
+	// check could not run, True otherwise.
 	// +listType=map
 	// +listMapKey=type
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
