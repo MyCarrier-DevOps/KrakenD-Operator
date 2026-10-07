@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -16,6 +17,7 @@ import (
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
+	"github.com/mycarrier-devops/krakend-operator/internal/resources"
 )
 
 func TestEndpointAccepted_AnExcludedEndpointIsNotServedForItsOwnReason(t *testing.T) {
@@ -166,5 +168,43 @@ func TestGatewayReconcile_AFirstRenderMarksAStaleAcceptedEndpointInvalid(t *test
 	}
 	if status, _, _ := v1alpha1.EndpointReady(stored.Status.Conditions); status == metav1.ConditionTrue {
 		t.Error("endpoint is Ready although it fails on its own")
+	}
+}
+
+// appliedJSON is the config the stored gateway applies.
+func appliedJSON(t *testing.T, c client.Client, gw *v1alpha1.KrakenDGateway) string {
+	t.Helper()
+	stored := getGateway(t, c, gw)
+	var cm corev1.ConfigMap
+	key := types.NamespacedName{Namespace: gw.Namespace, Name: resources.ConfigMapName(stored, stored.Status.ConfigChecksum)}
+	if err := c.Get(context.Background(), key, &cm); err != nil {
+		t.Fatalf("reading the applied config: %v", err)
+	}
+	return cm.Data[resources.ConfigKey]
+}
+
+func TestGatewayReconcile_AnEndpointThatFailsAloneIsExcludedAndTheRestApplied(t *testing.T) {
+	gw := reconciledGateway()
+	good, bad := testEndpoint("good", "/a"), badHosted("bad", "/b")
+	c := fakeClientBuilder().WithObjects(gw, good, bad).WithStatusSubresource(gw, good, bad).Build()
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}), rejectsBadHosts())
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	cv := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionConfigValid)
+	if cv == nil || cv.Status != metav1.ConditionTrue || cv.Reason != v1alpha1.ReasonConfigApplied {
+		t.Errorf("ConfigValid = %+v, want True/%s: the rest of the gateway is applied", cv, v1alpha1.ReasonConfigApplied)
+	}
+	if applied := appliedJSON(t, c, gw); !strings.Contains(applied, `"/a"`) || strings.Contains(applied, `"/b"`) {
+		t.Errorf("applied config:\n%s\nwant /a served and /b left out", applied)
+	}
+	if cond := storedAccepted(t, c, client.ObjectKeyFromObject(bad)); cond == nil || cond.Status != metav1.ConditionFalse ||
+		cond.Reason != v1alpha1.ReasonEndpointInvalid || !strings.Contains(cond.Message, "is not a valid host") {
+		t.Errorf("bad Accepted = %+v, want False/%s quoting its own output", cond, v1alpha1.ReasonEndpointInvalid)
+	}
+	if cond := storedAccepted(t, c, client.ObjectKeyFromObject(good)); cond == nil || cond.Reason != v1alpha1.ReasonAccepted {
+		t.Errorf("good Accepted = %+v, want Accepted", cond)
 	}
 }
