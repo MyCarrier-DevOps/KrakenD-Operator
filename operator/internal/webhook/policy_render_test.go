@@ -554,3 +554,20 @@ func TestPolicyAdmission_NamingStopsBeforeTheBudget(t *testing.T) {
 		t.Errorf("answered after %s, want soon after the %s deadline", took, deadline)
 	}
 }
+
+func TestPolicyAdmission_ScreensEveryGatewayBeforeNaming(t *testing.T) {
+	chk := &scriptedChecker{
+		verdicts:         []configcheck.Verdict{{OK: true}, {OK: true}, {Output: "x"}, {OK: true}, {OK: true}},
+		endpointVerdicts: []configcheck.EndpointVerdict{{Reason: v1alpha1.ReasonEndpointInvalid}, {OK: true}},
+	}
+	v := &PolicyValidator{Client: fakeClient(referencingGateways("gw-a", "gw-b")...), Checker: chk}
+
+	resp := review(t, v, "alice", testPolicy(`{"x":{}}`), testPolicy(`{}`))
+
+	if resp.Allowed {
+		t.Errorf("admitted a policy that breaks default/uses-p-gw-a")
+	}
+	if got := strings.Join(chk.calls, ","); got != "policy,root,group,root,group,endpoint,endpoint" {
+		t.Errorf("checks = %s, want both gateways screened before any endpoint is named", got)
+	}
+}
