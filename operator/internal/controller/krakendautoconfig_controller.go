@@ -684,7 +684,8 @@ func (r *KrakenDAutoConfigReconciler) fetchSpec(
 		// then fails CUE evaluation, which reports it.
 		for _, ref := range external {
 			notes = append(notes, fmt.Sprintf(
-				"external $ref %q is not resolved: a ConfigMap-sourced spec cannot fetch other documents", ref))
+				"external $ref %q is not resolved: a ConfigMap-sourced spec cannot fetch other documents",
+				autoconfig.RedactRef(ref)))
 		}
 	}
 
