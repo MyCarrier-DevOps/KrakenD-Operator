@@ -57,9 +57,14 @@ func NewPrometheusReader(reg prometheus.Registerer) (*otelprom.Exporter, error) 
 }
 
 // NewMeterProvider returns the meter provider every operator metric is
-// recorded through, with opts.
+// recorded through, with opts and no cardinality limit. The SDK's default
+// keeps 2,000 series per instrument and folds the rest into one
+// otel_metric_overflow series; the reconcile-duration histogram keeps a
+// deleted gateway's series until the operator restarts, so a long-lived
+// operator would pass that limit and its newest gateways would lose their
+// own series.
 func NewMeterProvider(opts ...sdkmetric.Option) *sdkmetric.MeterProvider {
-	return sdkmetric.NewMeterProvider(opts...)
+	return sdkmetric.NewMeterProvider(append(opts, sdkmetric.WithCardinalityLimit(0))...)
 }
 
 // OperatorMetrics records the operator's metrics on OpenTelemetry
