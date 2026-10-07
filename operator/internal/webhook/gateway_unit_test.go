@@ -61,9 +61,9 @@ func TestGatewayAdmission_AnUpdateThatBreaksAServedEndpointIsDeniedByName(t *tes
 			t.Errorf("check %d was handed no memo, want the validator's", i+1)
 		}
 	}
-	if got := strings.Join(chk.calls, ","); got != "root,group,root,endpoint,endpoint" {
-		t.Errorf("checks = %s, want the root, the served endpoints with the new root, the stored root, then the "+
-			"endpoint on its own with the new root and with the stored one", got)
+	if got := strings.Join(chk.calls, ","); got != "root,group,root,group,endpoint,endpoint" {
+		t.Errorf("checks = %s, want the root, the served endpoints with the new root, the stored root, the "+
+			"served endpoints with it, then the endpoint on its own with the new root and with the stored one", got)
 	}
 }
 
@@ -346,15 +346,20 @@ func TestGatewayAdmission_AScanThatStoppedWithoutADenialIs500(t *testing.T) {
 	tests := []struct {
 		name string
 		objs []string
-		// group is the group verdict; the check that cannot run is call failCall.
+		// group is the group verdict, and stored the stored gateway's; the check
+		// that cannot run is call failCall.
 		group    configcheck.Verdict
+		stored   configcheck.Verdict
 		verdicts []configcheck.EndpointVerdict
 		failCall int
 	}{
+		// The stored group fails too, so the update is not decided before the scan.
 		{"after an endpoint that already failed", []string{"stale", "zz-next"},
-			configcheck.Verdict{Output: "x"}, []configcheck.EndpointVerdict{epFail, epFail}, 6},
+			configcheck.Verdict{Output: "x"}, configcheck.Verdict{Output: "x"},
+			[]configcheck.EndpointVerdict{epFail, epFail}, 7},
 		{"on a masked endpoint", []string{"ep"},
-			configcheck.Verdict{OK: true, Masked: []types.NamespacedName{{Namespace: "default", Name: "ep"}}}, nil, 4},
+			configcheck.Verdict{OK: true, Masked: []types.NamespacedName{{Namespace: "default", Name: "ep"}}},
+			configcheck.Verdict{OK: true}, nil, 4},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -364,7 +369,7 @@ func TestGatewayAdmission_AScanThatStoppedWithoutADenialIs500(t *testing.T) {
 				objs = append(objs, testEndpoint(name, "/"+name))
 			}
 			chk := &scriptedChecker{err: errors.New("no slot"), failCall: tt.failCall, failOnly: true,
-				verdicts:         []configcheck.Verdict{{OK: true}, tt.group},
+				verdicts:         []configcheck.Verdict{{OK: true}, tt.group, {OK: true}, tt.stored},
 				endpointVerdicts: tt.verdicts}
 
 			resp := review(t, &GatewayValidator{Client: fakeClient(objs...), Checker: chk}, "alice", gw, old)
@@ -380,7 +385,7 @@ func TestGatewayAdmission_AScanThatStoppedWithoutADenialIs500(t *testing.T) {
 // check that cannot run leaves the update unjudged: a 500.
 func TestGatewayAdmission_AStoredGroupCheckThatCannotRunIs500(t *testing.T) {
 	old, gw := editedGateway()
-	chk := &scriptedChecker{err: errors.New("no slot"), failCall: 5, failOnly: true,
+	chk := &scriptedChecker{err: errors.New("no slot"), failCall: 4, failOnly: true,
 		verdicts:         []configcheck.Verdict{{OK: true}, {Output: "x"}},
 		endpointVerdicts: []configcheck.EndpointVerdict{{OK: true}}}
 
