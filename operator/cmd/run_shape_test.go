@@ -86,10 +86,16 @@ func optionsValue(t *testing.T, run *ast.FuncDecl, key string) ast.Expr {
 	t.Helper()
 	var value ast.Expr
 	ast.Inspect(run, func(node ast.Node) bool {
-		if kv, ok := node.(*ast.KeyValueExpr); ok && expr(kv.Key) == key {
-			value = kv.Value
+		lit, ok := node.(*ast.CompositeLit)
+		if !ok || expr(lit.Type) != "ctrl.Options" {
+			return true
 		}
-		return true
+		for _, elt := range lit.Elts {
+			if kv, ok := elt.(*ast.KeyValueExpr); ok && expr(kv.Key) == key {
+				value = kv.Value
+			}
+		}
+		return false
 	})
 	if value == nil {
 		t.Fatalf("run() gives ctrl.Options no %s", key)
@@ -134,6 +140,71 @@ func TestRun_TracesTheKubernetesAPIOnceBeforeTheManager(t *testing.T) {
 	}
 	if got := expr(traced[0].Args[1]); got != "tel.TracerProvider" {
 		t.Errorf("TraceKubeAPI is given %q, want tel.TracerProvider", got)
+	}
+	direct := false
+	for _, stmt := range run.Body.List {
+		if es, ok := stmt.(*ast.ExprStmt); ok && es.X == ast.Expr(traced[0]) {
+			direct = true
+		}
+	}
+	if !direct {
+		t.Error("TraceKubeAPI is not a statement of run() itself: it is conditional, or nested in a block")
+	}
+	total := 0
+	for name, file := range parseCommandBodies(t) {
+		if n := len(calls(file, "telemetry.TraceKubeAPI")); n != 0 {
+			total += n
+			t.Logf("%s calls TraceKubeAPI %d times", name, n)
+		}
+	}
+	if total != 1 {
+		t.Errorf("cmd calls TraceKubeAPI %d times, want once: a second call nests the transports", total)
+	}
+}
+
+// The pod's one tracer and recorder reach every component through the value
+// newInstrumentation returns: a component handed a zero instrumentation or a
+// nil tracer records nothing, silently.
+func TestRun_HandsThePodsInstrumentsToEveryComponent(t *testing.T) {
+	_, run := parseRun(t)
+
+	var inst string
+	ast.Inspect(run, func(node ast.Node) bool {
+		as, ok := node.(*ast.AssignStmt)
+		if !ok || len(as.Rhs) != 1 {
+			return true
+		}
+		if call, ok := as.Rhs[0].(*ast.CallExpr); ok && expr(call.Fun) == "newInstrumentation" {
+			inst = expr(as.Lhs[0])
+		}
+		return true
+	})
+	if inst == "" || inst == "_" {
+		t.Fatalf("run() does not keep what newInstrumentation returns (bound to %q)", inst)
+	}
+	checks := []struct {
+		fn   string
+		arg  int
+		want string
+	}{
+		{"wireValidation", 4, inst},
+		{"wireReferenceControllers", 1, inst},
+		{"newKrakenDValidator", 1, inst + ".Tracer"},
+	}
+	for _, c := range checks {
+		found := false
+		ast.Inspect(run, func(node ast.Node) bool {
+			if call, ok := node.(*ast.CallExpr); ok && expr(call.Fun) == c.fn {
+				found = true
+				if got := expr(call.Args[c.arg]); got != c.want {
+					t.Errorf("%s argument %d = %q, want %q", c.fn, c.arg, got, c.want)
+				}
+			}
+			return true
+		})
+		if !found {
+			t.Errorf("run() never calls %s", c.fn)
+		}
 	}
 }
 
@@ -206,6 +277,27 @@ func parseCommand(t *testing.T) map[string]*ast.File {
 			continue
 		}
 		file, err := parser.ParseFile(token.NewFileSet(), name, nil, parser.ImportsOnly)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files[name] = file
+	}
+	return files
+}
+
+// parseCommandBodies parses the production files of cmd in full.
+func parseCommandBodies(t *testing.T) map[string]*ast.File {
+	t.Helper()
+	files := map[string]*ast.File{}
+	names, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range names {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), name, nil, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
