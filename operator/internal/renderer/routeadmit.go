@@ -92,6 +92,11 @@ func dropRouteLosers(flat []flatEndpoint, conflicted map[types.NamespacedName][]
 //     method, or is an EE wildcard over an older entry of its method (the EE
 //     router's rule, eeWildcardFindings).
 //
+// The pairwise check, and the record of an entry left out, list the OPTIONS
+// route of the entry's path even when a served entry already added it
+// (entryRoutes with nil options), so neither depends on which older entries
+// are served.
+//
 // An entry gin refuses on its own, or next to its own KrakenDEndpoint's
 // entries, is left in for that endpoint's own check, which refuses it.
 func routeLosers(flat []flatEndpoint, rules routeRules) routeAdmission {
@@ -108,7 +113,8 @@ func routeLosers(flat []flatEndpoint, rules routeRules) routeAdmission {
 		if refusedAlone(routes) {
 			continue // its own endpoint's check refuses it
 		}
-		winner, detail, lost := olderClash(rules, older, dropped, entry, routes)
+		pair := entryRoutes(entry.method, entry.path, rules, nil)
+		winner, detail, lost := olderClash(rules, older, dropped, entry, pair)
 		if !lost {
 			var refused bool
 			winner, detail, refused = registerEntry(engine, served, routes, fe.Source)
@@ -129,7 +135,7 @@ func routeLosers(flat []flatEndpoint, rules routeRules) routeAdmission {
 		if lost {
 			adm.losers[i] = EntryConflict{Endpoint: entry.path, Method: fe.Entry.Method, Winner: winner, Detail: detail}
 		}
-		for _, r := range routes {
+		for _, r := range pair {
 			dropped = append(dropped, routedRoute{route: r, source: fe.Source})
 		}
 		older = append(older, entry)
@@ -157,8 +163,9 @@ func entryMethod(method string) string {
 
 // entryRoutes lists the routes the router registers for an entry of method
 // at path: its own, on the path the validation copy registers, and, with
-// auto_options, the OPTIONS route of that path unless a served entry already
-// added it.
+// auto_options, the OPTIONS route of that path unless options says a served
+// entry already added it. With nil options it always lists that OPTIONS
+// route, as the pairwise check against entries left out needs.
 func entryRoutes(method, path string, rules routeRules, options map[string]bool) []ginRoute {
 	p := ginPath(path)
 	if rules.eeWildcards {
