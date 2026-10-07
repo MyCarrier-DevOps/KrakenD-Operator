@@ -43,12 +43,12 @@ type renderChecks struct {
 	newFailure                         func(before, after configcheck.Verdict) bool
 }
 
-// bindCheck fixes the gateway and endpoints a check runs on.
+// bindCheck fixes the gateway a check of its stored endpoints runs on.
 func bindCheck(
 	run func(context.Context, *v1alpha1.KrakenDGateway, []v1alpha1.KrakenDEndpoint) (configcheck.Verdict, error),
-	gw *v1alpha1.KrakenDGateway, eps []v1alpha1.KrakenDEndpoint,
+	gw *v1alpha1.KrakenDGateway,
 ) func(context.Context) (configcheck.Verdict, error) {
-	return func(ctx context.Context) (configcheck.Verdict, error) { return run(ctx, gw, eps) }
+	return func(ctx context.Context) (configcheck.Verdict, error) { return run(ctx, gw, nil) }
 }
 
 // foreignCheckOutput reports whether f is krakend check output that names no
@@ -100,25 +100,6 @@ func shownSummary(v configcheck.Verdict, ns string, limit int) string {
 		return note
 	}
 	return summary + "; " + note
-}
-
-// onceCheck runs check at most once and returns its first result to every
-// call, so the ratchet and the denial it builds share one isolated check.
-func onceCheck(
-	check func(context.Context) (configcheck.Verdict, error),
-) func(context.Context) (configcheck.Verdict, error) {
-	var (
-		ran     bool
-		verdict configcheck.Verdict
-		err     error
-	)
-	return func(ctx context.Context) (configcheck.Verdict, error) {
-		if !ran {
-			verdict, err = check(ctx)
-			ran = true
-		}
-		return verdict, err
-	}
 }
 
 // ratchetRender rejects a change only when it turns a passing config into a
@@ -181,17 +162,6 @@ func describeDrops(drops []renderer.CEDrop) string {
 // blames reports whether v names an entry of endpoint.
 func blames(v configcheck.Verdict, endpoint types.NamespacedName) bool {
 	return slices.ContainsFunc(v.Findings, func(f configcheck.Finding) bool { return f.Endpoint == endpoint })
-}
-
-// newlyBlamed is the endpoint rule of the ratchet on a failing gateway: the
-// candidate's own KrakenDEndpoint is blamed after the change and was not
-// before it. An isolated check cannot see a clash with another endpoint, and a
-// change reaches a later check stage than before only by removing a failure of
-// its own object, which was then blamed before.
-func newlyBlamed(self types.NamespacedName) func(before, after configcheck.Verdict) bool {
-	return func(before, after configcheck.Verdict) bool {
-		return blames(after, self) && !blames(before, self)
-	}
 }
 
 // newRouteRefusals is the gateway rule of the ratchet on a failing gateway,

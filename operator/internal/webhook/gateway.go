@@ -1109,10 +1109,10 @@ func checkGatewayRender(
 		return nil, err
 	}
 	return ratchetRender(ctx, renderChecks{
-		after:      bindCheck(chk.CheckGateway, gw, nil),
-		before:     bindCheck(chk.CheckGateway, old, nil),
-		isoAfter:   bindCheck(chk.CheckIsolated, gw, nil),
-		isoBefore:  bindCheck(chk.CheckIsolated, old, nil),
+		after:      bindCheck(chk.CheckGateway, gw),
+		before:     bindCheck(chk.CheckGateway, old),
+		isoAfter:   bindCheck(chk.CheckIsolated, gw),
+		isoBefore:  bindCheck(chk.CheckIsolated, old),
 		newFailure: newRouteRefusals,
 	},
 		func(v configcheck.Verdict) error { return gatewayRenderDenial(gw, v) },

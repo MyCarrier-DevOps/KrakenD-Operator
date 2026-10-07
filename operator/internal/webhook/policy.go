@@ -195,7 +195,7 @@ func policyBaseline(
 	chk ConfigChecker, gw *v1alpha1.KrakenDGateway, old *v1alpha1.KrakenDBackendPolicy,
 ) func(context.Context) (configcheck.Verdict, error) {
 	if old == nil {
-		return bindCheck(chk.CheckGateway, gw, nil)
+		return bindCheck(chk.CheckGateway, gw)
 	}
 	return bindPolicyCheck(chk.CheckGatewayPolicy, gw, old)
 }
