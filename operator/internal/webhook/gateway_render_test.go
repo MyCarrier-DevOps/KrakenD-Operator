@@ -625,14 +625,28 @@ func TestGatewayAdmission_UnavailableCheckCarriesNoWarning(t *testing.T) {
 // gateway: a check handed the wrong gateway would compare the change with
 // itself.
 func TestGatewayAdmission_ChecksTheNewGatewayThenTheStoredOne(t *testing.T) {
+	fail, ok := configcheck.Verdict{Output: "x"}, configcheck.Verdict{OK: true}
+	epFail, epOK := configcheck.EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid}, configcheck.EndpointVerdict{OK: true}
 	tests := []struct {
-		name         string
-		fromEdition  v1alpha1.Edition
-		toEdition    v1alpha1.Edition
-		wantGateways string
+		name             string
+		fromEdition      v1alpha1.Edition
+		toEdition        v1alpha1.Edition
+		verdicts         []configcheck.Verdict
+		endpointVerdicts []configcheck.EndpointVerdict
+		wantGateways     string
 	}{
-		{"same edition", v1alpha1.EditionCE, v1alpha1.EditionCE, "CE/5s,CE/5s,CE/5s,CE/3s"},
-		{"Enterprise to Community", v1alpha1.EditionEE, v1alpha1.EditionCE, "CE/5s,CE/5s,CE/5s,EE/3s"},
+		{"same edition", v1alpha1.EditionCE, v1alpha1.EditionCE, []configcheck.Verdict{ok, fail},
+			[]configcheck.EndpointVerdict{epFail, epOK}, "CE/5s,CE/5s,CE/5s,CE/3s"},
+		{"Enterprise to Community", v1alpha1.EditionEE, v1alpha1.EditionCE, []configcheck.Verdict{ok, fail},
+			[]configcheck.EndpointVerdict{epFail, epOK}, "CE/5s,CE/5s,CE/5s,EE/3s"},
+		{"the root fails, same edition", v1alpha1.EditionCE, v1alpha1.EditionCE, []configcheck.Verdict{fail, ok},
+			nil, "CE/5s,CE/3s"},
+		{"the root fails, Enterprise to Community", v1alpha1.EditionEE, v1alpha1.EditionCE,
+			[]configcheck.Verdict{fail, ok}, nil, "CE/5s,EE/3s"},
+		{"fails only together, same edition", v1alpha1.EditionCE, v1alpha1.EditionCE,
+			[]configcheck.Verdict{ok, fail, ok}, []configcheck.EndpointVerdict{epOK}, "CE/5s,CE/5s,CE/5s,CE/3s"},
+		{"fails only together, Enterprise to Community", v1alpha1.EditionEE, v1alpha1.EditionCE,
+			[]configcheck.Verdict{ok, fail, ok}, []configcheck.EndpointVerdict{epOK}, "CE/5s,CE/5s,CE/5s,EE/3s"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -640,8 +654,7 @@ func TestGatewayAdmission_ChecksTheNewGatewayThenTheStoredOne(t *testing.T) {
 			old.Spec.Edition, old.Spec.Config.Timeout = tt.fromEdition, "3s"
 			edited := old.DeepCopy()
 			edited.Spec.Edition, edited.Spec.Config.Timeout = tt.toEdition, "5s"
-			chk := &scriptedChecker{verdicts: []configcheck.Verdict{{OK: true}, {Output: "x"}},
-				endpointVerdicts: []configcheck.EndpointVerdict{{Reason: v1alpha1.ReasonEndpointInvalid}, {OK: true}}}
+			chk := &scriptedChecker{verdicts: tt.verdicts, endpointVerdicts: tt.endpointVerdicts}
 
 			resp := review(t, &GatewayValidator{Client: fakeClient(testEndpoint("ep", "/a")), Checker: chk},
 				"alice", edited, old)
@@ -650,8 +663,8 @@ func TestGatewayAdmission_ChecksTheNewGatewayThenTheStoredOne(t *testing.T) {
 				t.Fatalf("response = %+v, want a denial", resp.Result)
 			}
 			if got := strings.Join(chk.gateways, ","); got != tt.wantGateways {
-				t.Errorf("checks were handed gateways %s, want %s (root, group, endpoint with the update, "+
-					"endpoint with the stored gateway)", got, tt.wantGateways)
+				t.Errorf("checks were handed gateways %s, want %s (the new gateway's checks, then the stored "+
+					"gateway's)", got, tt.wantGateways)
 			}
 		})
 	}
