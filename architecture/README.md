@@ -1370,7 +1370,9 @@ in-memory apply is undone: no endpoint is accepted against the new config, the
 Deployment is not moved, and the error is returned so the next pass, reading a
 fresh gateway, applies it. A pass that applies the config already stored
 writes nothing extra, so the record costs one status write per newly applied
-config.
+config. Until the Deployment moves on, that stored status reads as a rollout
+under way (`Progressing=True`, `Ready=False` with reason `ConfigDeployed`, phase
+`Deploying`), never `Ready=True` beside the new checksum.
 
 A pass that applies nothing also guards the other direction. When the
 Deployment carries a config checksum other than the cached gateway's, it reads
