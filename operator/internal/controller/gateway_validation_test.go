@@ -39,8 +39,15 @@ func TestEndpointAccepted_AnExcludedEndpointIsNotServedForItsOwnReason(t *testin
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rv := newRenderVerdicts(&renderer.RenderOutput{},
-				map[types.NamespacedName]configcheck.EndpointVerdict{client.ObjectKeyFromObject(bad): tt.verdict})
+			// The render also lists bad as conflicted: an endpoint that is both
+			// excluded and conflicted serves nothing, so it keeps no conflicts.
+			key := client.ObjectKeyFromObject(bad)
+			rv := newRenderVerdicts(&renderer.RenderOutput{
+				ConflictedEndpoints: []types.NamespacedName{key},
+				EntryConflicts: map[types.NamespacedName][]renderer.EntryConflict{
+					key: {{Endpoint: "/b", Method: "GET", Winner: types.NamespacedName{Namespace: "default", Name: "older"}}},
+				},
+			}, map[types.NamespacedName]configcheck.EndpointVerdict{key: tt.verdict})
 
 			a := endpointAccepted(gw, bad, rv)
 
