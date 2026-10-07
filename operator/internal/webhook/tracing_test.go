@@ -31,6 +31,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	admissionv1 "k8s.io/api/admission/v1"
 	authorizationv1 "k8s.io/api/authorization/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -316,22 +317,22 @@ func TestAdmission_AFailureToDecideIsAnErrorWithoutItsText(t *testing.T) {
 const krakendOutput = "SECRET-KRAKEND-OUTPUT"
 
 // rejectingExecutor stands in for a krakend binary that rejects the configs for
-// which reject is true, printing krakendOutput, and fails to run when broken
-// is set.
+// which reject is true, printing krakendOutput; when broken is set, it fails
+// to run on those configs instead.
 type rejectingExecutor struct {
 	reject func(config string) bool
 	broken error
 }
 
 func (e rejectingExecutor) Execute(_ context.Context, _ string, args ...string) ([]byte, error) {
-	if e.broken != nil {
-		return []byte(krakendOutput), e.broken
-	}
 	config, err := os.ReadFile(args[len(args)-1])
 	if err != nil {
 		return nil, err
 	}
 	if e.reject(string(config)) {
+		if e.broken != nil {
+			return []byte(krakendOutput), e.broken
+		}
 		return []byte(krakendOutput), exec.Command("sh", "-c", "exit 3").Run()
 	}
 	return []byte("Syntax OK!"), nil
@@ -424,4 +425,31 @@ func TestGatewayAdmission_AForbiddenRequestIsNoErrorOnItsStructuralSpan(t *testi
 	spans := rec.Ended()
 	spans.RequireChild(t, "admission.validate KrakenDGateway", "admission.structural")
 	requireCleanAdmissionSpans(t, spans)
+}
+
+// A policy write whose gateways cannot be checked is a 500; the failure marks
+// the spans of the decision, and the text of what failed is on none of them.
+func TestPolicyAdmission_AFailedCheckMarksItsSpansWithoutTheText(t *testing.T) {
+	rec := tracingtest.New(t)
+	broken := rejectingExecutor{reject: rejectsWith(`"/a"`), broken: errors.New("SECRET-NO-BINARY")}
+	v := tracedValidatorsRunning(rec, broken, referencing()...)
+	admit := tracedValidator{kind: "KrakenDBackendPolicy", next: v.Policy, tracer: rec.Tracer()}
+
+	_, err := admit.ValidateCreate(context.Background(), testPolicy(`{}`))
+
+	if !apierrors.IsInternalError(err) {
+		t.Fatalf("err = %v, want a 500", err)
+	}
+	spans := rec.Ended()
+	for _, name := range []string{
+		"admission.validate KrakenDBackendPolicy", "admission.screen_policy", "admission.judge_policy",
+	} {
+		span := spans.One(t, name)
+		if got := span.Status(); got.Code != codes.Error || got.Description != decisionFailed {
+			t.Errorf("span %q status = %+v, want an error described %q", name, got, decisionFailed)
+		}
+		if len(span.Events()) != 0 {
+			t.Errorf("span %q has events %v, want none", name, span.Events())
+		}
+	}
 }
