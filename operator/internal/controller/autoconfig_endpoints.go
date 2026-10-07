@@ -186,7 +186,10 @@ func (r *KrakenDAutoConfigReconciler) writeEndpoint(
 	ctx context.Context,
 	ac *v1alpha1.KrakenDAutoConfig,
 	ep *v1alpha1.KrakenDEndpoint,
-) (controllerutil.OperationResult, *v1alpha1.KrakenDEndpoint, error) {
+) (_ controllerutil.OperationResult, _ *v1alpha1.KrakenDEndpoint, retErr error) {
+	ctx, span := tracing.Start(ctx, r.Tracer, "autoconfig.write_endpoint",
+		trace.WithAttributes(tracing.KeyName.String(ep.Name)))
+	defer func() { tracing.End(span, retErr) }()
 	live := &v1alpha1.KrakenDEndpoint{ObjectMeta: metav1.ObjectMeta{Name: ep.Name, Namespace: ep.Namespace}}
 	op, err := controllerutil.CreateOrUpdate(ctx, r.Client, live, func() error {
 		if live.Labels == nil {
