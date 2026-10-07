@@ -251,3 +251,15 @@ func TestChecker_ConflictsAndSameConfigSpanTheirRenders(t *testing.T) {
 		t.Errorf("renders below Conflicts and SameConfig = %v, want 1 and 2; spans: %s", below, spans)
 	}
 }
+
+// A group's check is a lint below it.
+func TestChecker_CheckGroupSpansItsLint(t *testing.T) {
+	rec := tracingtest.New(t)
+	c := New(newReader(), renderer.New(renderer.Options{}), &fakeValidator{}, 1, rec.Tracer())
+
+	if _, err := c.CheckGroup(context.Background(), Group{Gateway: gateway(v1alpha1.EditionCE)}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	rec.Ended().RequireChild(t, "configcheck.CheckGroup", "configcheck.lint")
+}
