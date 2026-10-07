@@ -240,6 +240,10 @@ func run() int {
 		// if you are doing or is intended to do any operation such as perform cleanups
 		// after the manager stops then its usage might be unsafe.
 		// LeaderElectionReleaseOnCancel: true,
+
+		// The manager stops first on SIGTERM; the telemetry flush follows within
+		// the pod's grace period.
+		GracefulShutdownTimeout: new(managerStopTimeout),
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
