@@ -60,6 +60,8 @@ func stringValue(s string) map[string]any {
 	return map[string]any{"Type": "STRING", "Value": s}
 }
 
+func ptrTo[T any](v T) *T { return &v }
+
 // A value logged per call or bound with WithValues reaches the record as the
 // readable value, never as the log bridge's "unhandled:" fallback.
 func TestLogger_ValuesAreConvertedToWhatTheyRead(t *testing.T) {
@@ -80,6 +82,8 @@ func TestLogger_ValuesAreConvertedToWhatTheyRead(t *testing.T) {
 		{"error of kind string", codeError("E1"), "code E1"},
 		{"time.Duration", 3 * time.Second, float64(3e9)},
 		{"time.Time", time.Unix(1700000000, 0), float64(1.7e18)},
+		{"slice of UIDs", []types.UID{"u1", "u2"}, []any{stringValue("u1"), stringValue("u2")}},
+		{"pointer to a UID", ptrTo(types.UID("u1")), "u1"},
 		{"marshaler of a UID", marshaled{types.UID("u1")}, "u1"},
 		{"marshaler of a map", marshaled{map[string]any{"id": types.UID("u1")}},
 			[]any{map[string]any{"Key": "id", "Value": stringValue("u1")}}},
