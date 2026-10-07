@@ -391,7 +391,7 @@ func (r *KrakenDGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		r.cachedOptionalKinds[gvk] = struct{}{}
 		u := &unstructured.Unstructured{}
 		u.SetGroupVersionKind(gvk)
-		b = b.Owns(u)
+		b = b.Owns(u, builder.OnlyMetadata)
 		log.Info("watching optional kind", "kind", gvk.String())
 	}
 	for _, gvk := range missing {
