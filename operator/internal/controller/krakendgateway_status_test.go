@@ -302,7 +302,7 @@ func TestGatewayReconcile_ValidationMessageIsBounded(t *testing.T) {
 			len(cond.Message), cond.Message[max(0, len(cond.Message)-80):])
 	}
 	event := <-recorder.Events
-	if len(event) > 4096+len("Warning ConfigValidationFailed ") {
+	if len(event) > 4096+len("Warning GatewayRootInvalid ") {
 		t.Errorf("event message is %d bytes, want the same bound as the condition", len(event))
 	}
 }
