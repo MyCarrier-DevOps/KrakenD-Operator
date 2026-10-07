@@ -489,3 +489,21 @@ func hasAttr(span sdktrace.ReadOnlySpan, key string) bool {
 	}
 	return false
 }
+
+// An endpoint reconcile is one trace: the resolution of its references and the
+// status write are spans of it.
+func TestEndpointReconcile_IsOneTraceWithItsRefsAndStatusWrite(t *testing.T) {
+	gw := testGW1()
+	ep := endpointOnGW1(1)
+	c := fakeClientBuilder().WithObjects(gw, ep).WithStatusSubresource(ep).Build()
+	rec := tracingtest.New(t)
+	r := &KrakenDEndpointReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder(), Tracer: rec.Tracer()}
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(ep)}); err != nil {
+		t.Fatal(err)
+	}
+
+	spans := rec.Ended()
+	spans.RequireChild(t, "reconcile KrakenDEndpoint", "endpoint.resolve_refs")
+	spans.RequireChild(t, "reconcile KrakenDEndpoint", "endpoint.status")
+}

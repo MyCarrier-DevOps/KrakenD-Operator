@@ -22,6 +22,7 @@ import (
 	"sort"
 	"strings"
 
+	"go.opentelemetry.io/otel/trace"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -49,6 +50,8 @@ type KrakenDEndpointReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
+	// Tracer records the reconcile's spans; nil records none.
+	Tracer trace.Tracer
 }
 
 // +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendendpoints,verbs=get;list;watch
