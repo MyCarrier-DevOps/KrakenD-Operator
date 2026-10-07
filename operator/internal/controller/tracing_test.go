@@ -26,7 +26,6 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -246,10 +245,8 @@ func TestGatewayReconcile_NamesWhyEachRenderIsChecked(t *testing.T) {
 	}
 	spans.RequireParent(t, "gateway.config", "configcheck.CheckRendered")
 	for _, check := range spans.Named("configcheck.CheckEndpoint") {
-		for _, kv := range check.Attributes() {
-			if kv.Key == "configcheck.purpose" {
-				t.Errorf("an endpoint check carries the purpose of a render check: %v", kv)
-			}
+		if purpose, ok := tracingtest.Attr(check, "configcheck.purpose"); ok {
+			t.Errorf("an endpoint check carries the purpose of a render check: %v", purpose)
 		}
 	}
 }
@@ -410,16 +407,6 @@ func TestGatewayReconcile_ACoreResourceFailureMarksOnlyItsOwnStage(t *testing.T)
 	}
 }
 
-// attrOf returns the value of the attribute key on span, or "" if it has none.
-func attrOf(span sdktrace.ReadOnlySpan, key string) string {
-	for _, kv := range span.Attributes() {
-		if string(kv.Key) == key {
-			return kv.Value.Emit()
-		}
-	}
-	return ""
-}
-
 // The Job the post-restart stage applies names itself on its span.
 func TestGatewayReconcile_TheJobSpanNamesTheJob(t *testing.T) {
 	gw := testGateway()
@@ -427,9 +414,9 @@ func TestGatewayReconcile_TheJobSpanNamesTheJob(t *testing.T) {
 
 	spans := reconcileTraced(t, gw, testEndpoint("e", "/e"))
 
-	got := attrOf(spans.One(t, "apply job"), "k8s.object.name")
-	if want := gw.Name + "-postrestart-"; !strings.HasPrefix(got, want) {
-		t.Errorf("apply job k8s.object.name = %q, want the Job's name, prefixed %q", got, want)
+	got, _ := tracingtest.Attr(spans.One(t, "apply job"), "k8s.object.name")
+	if want := gw.Name + "-postrestart-"; !strings.HasPrefix(got.AsString(), want) {
+		t.Errorf("apply job k8s.object.name = %q, want the Job's name, prefixed %q", got.AsString(), want)
 	}
 }
 
@@ -443,11 +430,11 @@ func TestGatewayReconcile_TheRootSpanNamesTheGateway(t *testing.T) {
 	for key, want := range map[string]string{
 		"k8s.namespace.name": gw.Namespace, "k8s.object.name": gw.Name, "k8s.object.kind": "KrakenDGateway",
 	} {
-		if got := attrOf(root, key); got != want {
-			t.Errorf("the reconcile span's %s = %q, want %q", key, got, want)
+		if got, _ := tracingtest.Attr(root, key); got.Emit() != want {
+			t.Errorf("the reconcile span's %s = %q, want %q", key, got.Emit(), want)
 		}
 	}
-	if !hasAttr(root, "controller_runtime.reconcile_id") {
+	if _, ok := tracingtest.Attr(root, "controller_runtime.reconcile_id"); !ok {
 		t.Errorf("the reconcile span lacks controller_runtime.reconcile_id: %v", root.Attributes())
 	}
 }
@@ -469,8 +456,8 @@ func TestGatewayReconcile_TheStatusSpanSaysWhetherItWrote(t *testing.T) {
 	}
 
 	for rec, want := range map[*tracingtest.Recorder]string{first: "true", second: "false"} {
-		if got := attrOf(rec.Ended().One(t, "gateway.status"), "gateway.status.written"); got != want {
-			t.Errorf("gateway.status written = %q, want %q", got, want)
+		if got, _ := tracingtest.Attr(rec.Ended().One(t, "gateway.status"), "gateway.status.written"); got.Emit() != want {
+			t.Errorf("gateway.status.written = %q, want %q", got.Emit(), want)
 		}
 	}
 }
@@ -482,19 +469,10 @@ func TestGatewayReconcile_TheSpansOfAWriteNameItsObject(t *testing.T) {
 	spans := reconcileTraced(t, gw, testEndpoint("e", "/e"))
 
 	for _, span := range []string{"apply service", "apply deployment", "gateway.delete_child"} {
-		if got := attrOf(spans.One(t, span), "k8s.object.name"); got != gw.Name {
-			t.Errorf("%s k8s.object.name = %q, want %q", span, got, gw.Name)
+		if got, _ := tracingtest.Attr(spans.One(t, span), "k8s.object.name"); got.AsString() != gw.Name {
+			t.Errorf("%s k8s.object.name = %q, want %q", span, got.AsString(), gw.Name)
 		}
 	}
-}
-
-func hasAttr(span sdktrace.ReadOnlySpan, key string) bool {
-	for _, kv := range span.Attributes() {
-		if string(kv.Key) == key {
-			return true
-		}
-	}
-	return false
 }
 
 // An endpoint reconcile is one trace: the resolution of its references and the
@@ -700,11 +678,11 @@ func TestReconcilers_EachStartsATraceNamingItsObject(t *testing.T) {
 				"k8s.namespace.name": obj.GetNamespace(), "k8s.object.name": obj.GetName(),
 				"k8s.object.kind": tc.kind, "k8s.object.generation": "3",
 			} {
-				if got := attrOf(root, key); got != want {
-					t.Errorf("the reconcile span's %s = %q, want %q", key, got, want)
+				if got, _ := tracingtest.Attr(root, key); got.Emit() != want {
+					t.Errorf("the reconcile span's %s = %q, want %q", key, got.Emit(), want)
 				}
 			}
-			if !hasAttr(root, "controller_runtime.reconcile_id") {
+			if _, ok := tracingtest.Attr(root, "controller_runtime.reconcile_id"); !ok {
 				t.Errorf("the reconcile span lacks controller_runtime.reconcile_id: %v", root.Attributes())
 			}
 		})
@@ -718,8 +696,8 @@ func TestAutoConfigReconcile_TheSpansOfAWriteNameTheEndpoint(t *testing.T) {
 	for span, want := range map[string]string{
 		"autoconfig.write_endpoint": "test-ac-listusers", "autoconfig.delete_endpoint": "test-ac-old-endpoint",
 	} {
-		if got := attrOf(spans.One(t, span), "k8s.object.name"); got != want {
-			t.Errorf("%s k8s.object.name = %q, want %q", span, got, want)
+		if got, _ := tracingtest.Attr(spans.One(t, span), "k8s.object.name"); got.AsString() != want {
+			t.Errorf("%s k8s.object.name = %q, want %q", span, got.AsString(), want)
 		}
 	}
 }
