@@ -80,7 +80,12 @@ type Group struct {
 	CEFallback bool
 }
 
-// EndpointUnit is one KrakenDEndpoint to judge on its own.
+// EndpointUnit is one KrakenDEndpoint to judge on its own: the gateway root
+// with Endpoint as its only endpoint and the policies it references, as the
+// edition CEFallback makes it. Policies, when not nil, are those policies by
+// PolicyRef.PolicyKey, as a caller that gathered them holds them; otherwise
+// they are read through the Checker's reader. Override, when not nil, stands
+// in for the policy of its namespace/name.
 type EndpointUnit struct {
 	Gateway    *v1alpha1.KrakenDGateway
 	Endpoint   *v1alpha1.KrakenDEndpoint
@@ -91,11 +96,19 @@ type EndpointUnit struct {
 
 // EndpointVerdict is the verdict on one KrakenDEndpoint judged on its own.
 type EndpointVerdict struct {
-	OK                bool
-	Reason            string
-	Policies          []types.NamespacedName
+	OK bool
+	// Reason is v1alpha1.ReasonEndpointInvalid or
+	// v1alpha1.ReasonPolicyInvalid when OK is false.
+	Reason string
+	// Policies are the policies a PolicyInvalid verdict is about.
+	Policies []types.NamespacedName
+	// PoliciesFailAlone says those policies fail krakend check on their own;
+	// otherwise the endpoint fails only together with them.
 	PoliciesFailAlone bool
-	Output            string
+	// Output is an EndpointInvalid verdict's rejection: what the check of the
+	// gateway root with the endpoint printed, with every policy of another
+	// namespace rendered empty.
+	Output string
 }
 
 // Root is a gateway's root on its own: what Gateway renders with no endpoint,
@@ -131,9 +144,18 @@ func (c *Checker) CheckPolicy(ctx context.Context, policy *v1alpha1.KrakenDBacke
 	return c.lintInput(ctx, policyAlone(policy), memo)
 }
 
-// CheckEndpoint judges u.Endpoint on its own.
-func (c *Checker) CheckEndpoint(context.Context, EndpointUnit, Memo) (EndpointVerdict, error) {
-	return EndpointVerdict{}, nil
+// CheckEndpoint judges u.Endpoint on its own: the gateway root with the
+// endpoint (lint). A rejection is the endpoint's own fault (EndpointInvalid,
+// quoting the check).
+func (c *Checker) CheckEndpoint(ctx context.Context, u EndpointUnit, memo Memo) (EndpointVerdict, error) {
+	in := renderer.RenderInput{
+		Gateway: u.Gateway, Endpoints: []v1alpha1.KrakenDEndpoint{*u.Endpoint}, CEFallback: u.CEFallback,
+	}
+	whole, err := c.lintInput(ctx, in, memo)
+	if err != nil || whole.OK {
+		return EndpointVerdict{OK: whole.OK}, err
+	}
+	return EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid, Output: whole.Output}, nil
 }
 
 // lintInput renders in and lints the render, answering from memo when it
