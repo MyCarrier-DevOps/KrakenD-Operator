@@ -28,7 +28,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
-
 	"github.com/mycarrier-devops/krakend-operator/internal/tracing"
 	"github.com/mycarrier-devops/krakend-operator/internal/tracing/tracingtest"
 )
