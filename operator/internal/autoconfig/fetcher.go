@@ -146,6 +146,9 @@ func (f *httpFetcher) fetchFromURL(ctx context.Context, source FetchSource) (*Fe
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
 		return nil, fmt.Errorf("unsupported scheme %q: only http and https are allowed", parsed.Scheme)
 	}
+	if parsed.Hostname() == "" {
+		return nil, fmt.Errorf("URL %s has no host", RedactURL(source.URL))
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, source.URL, http.NoBody)
 	if err != nil {
