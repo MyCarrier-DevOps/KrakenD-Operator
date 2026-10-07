@@ -104,6 +104,11 @@ type RenderOutput struct {
 	// schema name from (first seen, in endpoint order). It is empty unless the
 	// render publishes docs.
 	SchemaConflicts []SchemaConflict
+	// RouteResolutionCapped says the render stopped resolving router clashes
+	// between endpoints at MaxRouteRefusals: entries after that point are
+	// rendered whether or not they clash, and EntryConflicts misses those
+	// clashes.
+	RouteResolutionCapped bool
 }
 
 // SchemaConflict is a component schema Endpoint defines under a name whose

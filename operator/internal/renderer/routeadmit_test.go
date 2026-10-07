@@ -18,6 +18,7 @@ package renderer
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -286,5 +287,28 @@ func TestRender_TheOPTIONSRouteOfAPathIsSharedNotAClash(t *testing.T) {
 	}
 	if lost := out.EntryConflicts[types.NamespacedName{Namespace: "ns", Name: "f"}]; len(lost) != 0 {
 		t.Errorf("f lost %+v, want POST /p/x served: it shares only the OPTIONS route of d's path", lost)
+	}
+}
+
+func TestRender_RouterClashResolutionIsBounded(t *testing.T) {
+	var endpoints []v1alpha1.KrakenDEndpoint
+	for i := range 300 {
+		endpoints = append(endpoints,
+			routed(fmt.Sprintf("old-%03d", i), 0, "GET", fmt.Sprintf("/c%d/{id}", i)),
+			routed(fmt.Sprintf("new-%03d", i), 1, "GET", fmt.Sprintf("/c%d/{name}/x", i)))
+	}
+	start := time.Now()
+
+	out, err := New(Options{}).Render(RenderInput{Gateway: routedGateway(v1alpha1.EditionCE, nil), Endpoints: endpoints})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Errorf("rendering 600 endpoints with 300 clashes took %s, want well under 5s", took)
+	}
+	if n := len(out.EntryConflicts); n != MaxRouteRefusals || !out.RouteResolutionCapped {
+		t.Errorf("%d endpoints lost an entry (capped %v), want the pass to stop at %d refusals and say so",
+			n, out.RouteResolutionCapped, MaxRouteRefusals)
 	}
 }
