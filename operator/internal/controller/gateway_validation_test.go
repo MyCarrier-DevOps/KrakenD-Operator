@@ -704,3 +704,38 @@ func TestGatewayReconcile_ANeverAppliedGatewayClearsAnExcludedEndpointsLeftoverC
 		t.Errorf("status.conflicts = %+v, want cleared: no applied render serves any of it", got.Status.Conflicts)
 	}
 }
+
+func TestGatewayReconcile_ASafetyNetFailureOnTheFastPathDoesNotHoldTheGeneration(t *testing.T) {
+	gw := reconciledGateway()
+	older, newer := maskingEndpoints()
+	c := fakeClientBuilder().WithObjects(gw, older, newer).WithStatusSubresource(gw, older, newer).Build()
+	if err := reconcileGateway(t, newTestGatewayReconciler(c, renderer.New(renderer.Options{}),
+		&contentValidator{}), gw); err != nil {
+		t.Fatal(err)
+	}
+	// The gateway is edited, and the applied config's ConfigMap is lost.
+	stored := getGateway(t, c, gw)
+	var cm corev1.ConfigMap
+	key := types.NamespacedName{Namespace: gw.Namespace, Name: resources.ConfigMapName(stored, stored.Status.ConfigChecksum)}
+	if err := c.Get(context.Background(), key, &cm); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Delete(context.Background(), &cm); err != nil {
+		t.Fatal(err)
+	}
+	stored.Generation++
+	if err := c.Update(context.Background(), stored); err != nil {
+		t.Fatal(err)
+	}
+
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}), safetyFailsWithoutE{rejectsBadHosts()})
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+
+	got := getGateway(t, c, gw)
+	if got.Status.ObservedGeneration != got.Generation {
+		t.Errorf("observedGeneration = %d, want %d: a pass that applies nothing is a verdict on this generation",
+			got.Status.ObservedGeneration, got.Generation)
+	}
+}
