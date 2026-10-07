@@ -18,6 +18,7 @@ package configcheck
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -101,5 +102,23 @@ func TestClash_StringNamesBothEndpointsAndTheRoutersWords(t *testing.T) {
 		"which is older: wildcard conflict"
 	if got := clash.String(); got != want {
 		t.Errorf("String = %q, want %q", got, want)
+	}
+}
+
+func TestConflicts_ReportsARenderThatStoppedResolvingClashes(t *testing.T) {
+	var stored []v1alpha1.KrakenDEndpoint
+	for i := range renderer.MaxRouteRefusals + 1 {
+		stored = append(stored, *endpoint(fmt.Sprintf("old-%02d", i), fmt.Sprintf("/c%d/{id}", i)),
+			*endpoint(fmt.Sprintf("x-new-%02d", i), fmt.Sprintf("/c%d/{name}/x", i)))
+	}
+	chk := newChecker(&fakeValidator{})
+
+	conflicts, err := chk.Conflicts(context.Background(), gateway(v1alpha1.EditionCE), stored)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !conflicts.Capped || len(conflicts.Lost) != renderer.MaxRouteRefusals {
+		t.Errorf("capped = %v with %d losers, want capped after %d", conflicts.Capped, len(conflicts.Lost), renderer.MaxRouteRefusals)
 	}
 }
