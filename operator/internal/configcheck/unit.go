@@ -24,6 +24,7 @@ import (
 	"slices"
 	"strings"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -160,13 +161,21 @@ func (c *Checker) CheckPolicy(ctx context.Context, policy *v1alpha1.KrakenDBacke
 	return c.lintInput(ctx, policyAlone(policy), memo)
 }
 
-// CheckEndpoint judges u.Endpoint on its own: first each policy it references,
-// alone (CheckPolicy), where one that fails makes the verdict PolicyInvalid,
-// naming it; then the gateway root with the endpoint and its policies (lint),
-// whose rejection is the endpoint's own fault (EndpointInvalid, quoting the
-// check). An endpoint that references a policy that does not exist is not
-// judged: no render includes it, and the endpoint controller reports the
-// missing policy. Its verdict is OK.
+// CheckEndpoint judges u.Endpoint on its own, in the order that blames each
+// object only for its own content:
+//  1. each policy it references, alone (CheckPolicy): one that fails makes
+//     the verdict PolicyInvalid, naming it;
+//  2. the gateway root with the endpoint and its policies (lint);
+//  3. when that fails and the endpoint references a policy of another
+//     namespace, the same check with those policies rendered empty, because
+//     the endpoint's owner may not read them. Still failing is the
+//     endpoint's own fault (EndpointInvalid, quoting this check); passing
+//     means it fails only together with those policies (PolicyInvalid).
+//
+// An endpoint that references a policy that does not exist is not judged:
+// no render includes it, and the endpoint controller reports the missing
+// policy. Its verdict is OK. Every check answers from memo when it already
+// judged the same content.
 func (c *Checker) CheckEndpoint(ctx context.Context, u EndpointUnit, memo Memo) (EndpointVerdict, error) {
 	policies, err := c.unitPolicies(ctx, u)
 	if err != nil {
@@ -198,7 +207,16 @@ func (c *Checker) CheckEndpoint(ctx context.Context, u EndpointUnit, memo Memo) 
 	if err != nil || whole.OK {
 		return EndpointVerdict{OK: whole.OK}, err
 	}
-	return EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid, Output: whole.Output}, nil
+	foreign := foreignPolicies(u.Endpoint.Namespace, keys)
+	if len(foreign) == 0 {
+		return EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid, Output: whole.Output}, nil
+	}
+	in.Policies = emptied(policies, foreign)
+	own, err := c.lintInput(ctx, in, memo)
+	if err != nil {
+		return EndpointVerdict{}, err
+	}
+	return EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid, Output: own.Output}, nil
 }
 
 // lintInput renders in and lints the render, answering from memo when it
@@ -247,6 +265,31 @@ func (c *Checker) remembered(ctx context.Context, in renderer.RenderInput, out *
 // reader.
 func (c *Checker) unitPolicies(ctx context.Context, u EndpointUnit) (map[string]*v1alpha1.KrakenDBackendPolicy, error) {
 	return c.policiesFor(ctx, []v1alpha1.KrakenDEndpoint{*u.Endpoint})
+}
+
+// foreignPolicies returns the keys ("namespace/name") of the policies outside
+// namespace.
+func foreignPolicies(namespace string, keys []string) []string {
+	var foreign []string
+	for _, key := range keys {
+		if ns, _, _ := strings.Cut(key, "/"); ns != namespace {
+			foreign = append(foreign, key)
+		}
+	}
+	return foreign
+}
+
+// emptied returns policies with each of keys replaced by a policy of the
+// same namespace/name and no content. The policy must stay present: a render
+// leaves out every entry of an endpoint one of whose policies is missing.
+func emptied(policies map[string]*v1alpha1.KrakenDBackendPolicy,
+	keys []string) map[string]*v1alpha1.KrakenDBackendPolicy {
+	out := maps.Clone(policies)
+	for _, key := range keys {
+		p := policies[key]
+		out[key] = &v1alpha1.KrakenDBackendPolicy{ObjectMeta: metav1.ObjectMeta{Name: p.Name, Namespace: p.Namespace}}
+	}
+	return out
 }
 
 // verdictFor is the verdict on out, rendered from in, for a check that
