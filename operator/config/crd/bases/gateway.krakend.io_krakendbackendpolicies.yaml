@@ -119,7 +119,12 @@ spec:
               KrakenDBackendPolicy.
             properties:
               conditions:
-                description: Conditions are keyed by type. Ready is the summary condition.
+                description: |-
+                  Conditions are keyed by type. Ready is the summary condition: False
+                  (InvalidCircuitBreaker, InvalidRateLimit) when a field is out of range,
+                  False (PolicyInvalid) when the policy fails krakend check on its own,
+                  with that output in the message, Unknown (ValidatorUnavailable) when the
+                  check could not run, True otherwise.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
