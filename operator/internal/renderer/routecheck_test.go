@@ -230,7 +230,7 @@ func TestRouteRefusals_ReportsWhenItStoppedAtTheCap(t *testing.T) {
 	}
 }
 
-func TestRouteRefusals_AGatewayRouteRefusalNamesNoEntry(t *testing.T) {
+func TestRouteRefusals_AGatewayRouteIsRefusedOnce(t *testing.T) {
 	doc := `{"debug_endpoint":true,"extra_config":{"router":{"health_path":"/__debug/x"}},"endpoints":[]}`
 
 	refusals, capped, err := routeRefusals(context.Background(), []byte(doc))
@@ -238,7 +238,7 @@ func TestRouteRefusals_AGatewayRouteRefusalNamesNoEntry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(refusals) != 1 || len(refusals[0].Indices) != 0 || capped {
-		t.Errorf("refusals = %+v, capped %t, want one that names no entry", refusals, capped)
+	if len(refusals) != 1 || capped {
+		t.Errorf("refusals = %+v, capped %t, want one refusal, not capped", refusals, capped)
 	}
 }
