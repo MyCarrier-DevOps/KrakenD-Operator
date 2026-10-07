@@ -942,7 +942,7 @@ func TestInspectDeploymentStatus_ProgressDeadlineExceeded(t *testing.T) {
 
 	replicas := int32(3)
 	dep := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace},
+		ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace, OwnerReferences: ownedBy(gw)},
 		Spec:       appsv1.DeploymentSpec{Replicas: &replicas},
 		Status: appsv1.DeploymentStatus{
 			Replicas:          3,
@@ -990,7 +990,7 @@ func TestInspectDeploymentStatus_RolloutConverged(t *testing.T) {
 
 	replicas := int32(3)
 	dep := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace},
+		ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace, OwnerReferences: ownedBy(gw)},
 		Spec:       appsv1.DeploymentSpec{Replicas: &replicas},
 		Status: appsv1.DeploymentStatus{
 			Replicas:          3,
@@ -1212,7 +1212,7 @@ func TestGatewayReconcile_AutoscaledReplicasAreNotReset(t *testing.T) {
 	gw.Spec.Replicas = ptr.To(int32(2))
 	gw.Spec.Autoscaling = &v1alpha1.AutoscalingSpec{MinReplicas: ptr.To(int32(2)), MaxReplicas: 10}
 	scaled := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace},
+		ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace, OwnerReferences: ownedBy(gw)},
 		Spec:       appsv1.DeploymentSpec{Replicas: ptr.To(int32(7))}, // chosen by the HPA
 	}
 	c := fakeClientBuilder().WithObjects(gw, scaled).WithStatusSubresource(gw).Build()
