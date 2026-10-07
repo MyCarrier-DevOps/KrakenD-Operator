@@ -60,23 +60,26 @@ const combinedFailureMessage = "Every endpoint passes krakend check on its own, 
 	"it with them together, so the last applied config keeps serving. The check's output quotes the endpoints' " +
 	"values and is only in the operator log (\"the gateway's config fails krakend check only together\")."
 
-// decide judges the newest render, full, which is not the applied config:
-//  1. the gateway root on its own: when it fails, nothing more is judged and
+// decide judges the newest render, full, in the order that blames each
+// object only for its own content:
+//  1. when full is the applied config, it passed when it was applied, so
+//     only the endpoints that lost an entry in it are judged, each on its
+//     own: a check of full says nothing about the entries it left out. When
+//     none fails, full is kept as it is;
+//  2. the gateway root on its own: when it fails, nothing more is judged and
 //     no endpoint is blamed;
-//  2. the render as a whole, with the full check;
-//  3. each endpoint the whole check does not vouch for, on its own
+//  3. the render as a whole, with the full check;
+//  4. each endpoint the whole check does not vouch for, on its own
 //     (judgeEndpoints): every endpoint when it failed, otherwise those that
-//     lost an entry in full, since a check of full says nothing about the
-//     entries it left out. Those that fail are excluded; when the whole
-//     check failed and none is, the endpoints fail only together, which is
-//     the gateway's failure;
-//  4. the render without the excluded endpoints, with the full check, unless
-//     it is the applied config: when it still fails, the endpoints fail only
-//     together.
+//     lost an entry in full. Those that fail are excluded, and the render
+//     without them is checked once more with the full check. When that still
+//     fails, or the whole check failed and nothing was excluded, the
+//     endpoints fail only together, which is the gateway's failure.
 //
 // Every check answers from the gateway's verdict memo when it already judged
-// the same content. An error means a check could not run: nothing is
-// decided, and the verdicts judged before it are kept for the next pass.
+// the same content, so a gateway whose inputs did not change runs none. An
+// error means a check could not run: nothing is decided, and the verdicts
+// judged before it are kept for the next pass.
 func (r *KrakenDGatewayReconciler) decide(
 	ctx context.Context, gw *v1alpha1.KrakenDGateway, in renderer.RenderInput,
 	full *renderer.RenderOutput, edition v1alpha1.Edition,
@@ -86,6 +89,16 @@ func (r *KrakenDGatewayReconciler) decide(
 	defer func() { r.verdicts.end(key, pass, err != nil) }()
 	counted := countedPass{pass}
 
+	masked := maskedEndpoints(in.Endpoints, full)
+	if isApplied(gw, full, edition) {
+		var excluded map[types.NamespacedName]configcheck.EndpointVerdict
+		if excluded, err = r.judgeEndpoints(ctx, gw, in, masked, counted); err != nil {
+			return decision{}, err
+		}
+		if len(excluded) == 0 {
+			return decision{output: full, judged: true}, nil
+		}
+	}
 	root, err := r.Checker.CheckRoot(ctx, configcheck.Root{Gateway: gw, CEFallback: in.CEFallback}, counted)
 	if err != nil {
 		return decision{}, err
@@ -97,7 +110,7 @@ func (r *KrakenDGatewayReconciler) decide(
 	if err != nil {
 		return decision{}, err
 	}
-	suspects := maskedEndpoints(in.Endpoints, full)
+	suspects := masked
 	if !whole.OK {
 		suspects = in.Endpoints
 	}
