@@ -44,12 +44,18 @@ const instrumentationScope = "github.com/mycarrier-devops/krakend-operator"
 // MaxConcurrentReconciles) and each reconcile holds one checker slot at a time.
 const gatewayCheckWorkers = 1
 
-// autoConfigCheckSlots is how many checker slots the AutoConfig prechecks may
-// hold at once: the checker's slots, less one the controllers never take, left
-// to admission (which waits against a short deadline), less the gateway
-// controller's. Together the controllers never hold more than all but one
-// slot; concurrent admission requests can still take the rest.
+// autoConfigCheckSlots is how many checker slots the AutoConfig prechecks and
+// the policy checks may hold at once, between them: the checker's slots, less
+// one the controllers never take, left to admission (which waits against a
+// short deadline), less the gateway controller's. Together the controllers
+// never hold more than all but one slot; concurrent admission requests can
+// still take the rest.
 const autoConfigCheckSlots = configCheckSlots - 1 - gatewayCheckWorkers
+
+// policyMemoSize is how many policy verdicts the policy controller remembers,
+// the most recent first. A verdict depends only on the policy's content, so
+// reconciles of content already judged run no krakend.
+const policyMemoSize = 256
 
 // instrumentation is what every component records its spans and metrics
 // with: the pod's one tracer and one metrics recorder.
@@ -93,6 +99,10 @@ func wireValidation(
 	mgr ctrl.Manager, r renderer.Renderer, v renderer.Validator, operatorUsername string, inst instrumentation,
 ) validation {
 	checker := configcheck.New(mgr.GetClient(), r, v, configCheckSlots, inst.Tracer)
+	// The AutoConfig prechecks and the policy checks hold at most
+	// autoConfigCheckSlots of the checker's slots between them, however many
+	// workers there are.
+	controllerSlots := make(chan struct{}, autoConfigCheckSlots)
 	return validation{
 		Checker: checker,
 		Gateway: &controller.KrakenDGatewayReconciler{
@@ -119,12 +129,20 @@ func wireValidation(
 			Filter:       autoconfig.NewFilter(),
 			Generator:    autoconfig.NewGenerator(),
 			Checker:      checker,
-			// The AutoConfig prechecks hold at most autoConfigCheckSlots of the
-			// checker's slots, however many workers there are.
-			CheckSlots: make(chan struct{}, autoConfigCheckSlots),
-			Clock:      clock.RealClock{},
-			Metrics:    inst.autoConfigMetrics(),
+			CheckSlots:   controllerSlots,
+			Clock:        clock.RealClock{},
+			Metrics:      inst.autoConfigMetrics(),
+			Tracer:       inst.Tracer,
+		},
+		Policy: &controller.KrakenDBackendPolicyReconciler{
+			Client:     mgr.GetClient(),
+			Scheme:     mgr.GetScheme(),
+			Recorder:   mgr.GetEventRecorderFor("krakendbackendpolicy-controller"),
+			APIReader:  mgr.GetAPIReader(),
 			Tracer:     inst.Tracer,
+			Checker:    checker,
+			Memo:       configcheck.NewLRUMemo(policyMemoSize),
+			CheckSlots: controllerSlots,
 		},
 		Validators: webhooksetup.NewValidators(
 			mgr.GetClient(), mgr.GetAPIReader(), checker, operatorUsername, inst.Tracer),
