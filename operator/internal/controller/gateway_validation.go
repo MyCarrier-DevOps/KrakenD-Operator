@@ -101,7 +101,9 @@ func (r *KrakenDGatewayReconciler) decide(
 			return decision{output: full, judged: true}, nil
 		}
 	}
-	root, err := r.Checker.CheckRoot(ctx, configcheck.Root{Gateway: gw, CEFallback: in.CEFallback}, counted)
+	root, err := r.Checker.CheckRoot(ctx, configcheck.Root{
+		Gateway: gw, CEFallback: in.CEFallback, Dragonfly: in.Dragonfly,
+	}, counted)
 	if err != nil {
 		return decision{}, err
 	}
