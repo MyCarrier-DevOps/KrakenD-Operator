@@ -23,6 +23,7 @@ limitations under the License.
 package telemetry
 
 import (
+	"context"
 	"errors"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -71,6 +72,10 @@ func NewOperatorMetrics(meter metric.Meter) (*OperatorMetrics, error) {
 		"Deployment writes that changed the pod template, rolling the pods (not creations)")
 	if err := errors.Join(errs...); err != nil {
 		return nil, err
+	}
+	ctx := context.Background()
+	for _, c := range []metric.Int64Counter{m.renders, m.rejections, m.restarts} {
+		c.Add(ctx, 0)
 	}
 	return m, nil
 }
