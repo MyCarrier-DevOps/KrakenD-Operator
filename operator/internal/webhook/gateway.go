@@ -1132,7 +1132,7 @@ func checkGatewayRender(ctx context.Context, tracer trace.Tracer, c client.Reade
 	}
 	ctx, span := tracing.Start(ctx, tracer, "admission.judge_served")
 	warnings, err := judgeServed(ctx, chk, memo, now, old, group, served)
-	tracing.End(span, err)
+	endDecision(span, err)
 	return warnings, err
 }
 
