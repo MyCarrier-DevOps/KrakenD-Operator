@@ -749,9 +749,12 @@ func validateProbeReachability(p *field.Path, probe *corev1.Probe, defaultSideca
 		return errs
 	}
 	if probe.GRPC != nil {
+		// No value: the action's Service is a pointer whose address would
+		// otherwise print, so the text would differ between equal probes and
+		// the update ratchet could not match it.
 		errs = append(errs, field.Invalid(
 			p.Child("grpc"),
-			probe.GRPC,
+			field.OmitValueType{},
 			"the default busybox sidecar serves plaintext HTTP/1.1; a grpc handler can never succeed -- set spec.openapi.sidecarImage if your image speaks gRPC",
 		))
 	}
