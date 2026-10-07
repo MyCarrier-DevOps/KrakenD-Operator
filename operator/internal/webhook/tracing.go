@@ -45,7 +45,7 @@ type tracedValidator struct {
 // ValidateCreate validates obj inside a span.
 func (v tracedValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (_ admission.Warnings, retErr error) {
 	ctx, span := v.start(ctx, "CREATE", obj)
-	defer func() { endDecision(span, retErr) }()
+	defer func() { v.finish(span, retErr) }()
 	return v.next.ValidateCreate(ctx, obj)
 }
 
@@ -54,15 +54,31 @@ func (v tracedValidator) ValidateUpdate(
 	ctx context.Context, oldObj, newObj runtime.Object,
 ) (_ admission.Warnings, retErr error) {
 	ctx, span := v.start(ctx, "UPDATE", newObj)
-	defer func() { endDecision(span, retErr) }()
+	defer func() { v.finish(span, retErr) }()
 	return v.next.ValidateUpdate(ctx, oldObj, newObj)
 }
 
 // ValidateDelete validates obj inside a span.
 func (v tracedValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (_ admission.Warnings, retErr error) {
 	ctx, span := v.start(ctx, "DELETE", obj)
-	defer func() { endDecision(span, retErr) }()
+	defer func() { v.finish(span, retErr) }()
 	return v.next.ValidateDelete(ctx, obj)
+}
+
+// finish says on span whether the request was allowed and the code the API
+// server gets, as controller-runtime derives it from err, and ends it. Never
+// why: the denial's text can quote the tenant's object.
+func (v tracedValidator) finish(span trace.Span, err error) {
+	code := http.StatusOK
+	if err != nil {
+		code = http.StatusForbidden // a plain error is a denial with no status
+		var status apierrors.APIStatus
+		if errors.As(err, &status) {
+			code = int(status.Status().Code)
+		}
+	}
+	span.SetAttributes(attribute.Bool("admission.allowed", err == nil), attribute.Int("admission.code", code))
+	endDecision(span, err)
 }
 
 func (v tracedValidator) start(
@@ -80,10 +96,9 @@ func (v tracedValidator) start(
 }
 
 // decisionFailed is the description of a span whose decision could not be
-// reached. The failure's text is on no span of the decision that records only
-// this: the config check's span, or the rules' span for a plain error, may
-// record it, but a failure raised elsewhere (a 500 that wraps a lookup) leaves
-// no text in the trace.
+// reached. The spans that record only this leave the failure's text to the
+// config check's span and, for a plain error, the rules' span; a failure
+// raised anywhere else (a 500 that wraps a lookup) leaves no text in the trace.
 const decisionFailed = "the admission could not be decided"
 
 // rulesFailed is the description of a rules span whose failure was a status
