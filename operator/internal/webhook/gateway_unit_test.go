@@ -73,10 +73,11 @@ func TestGatewayAdmission_AnAlreadyFailingEndpointDoesNotHideABrokenOne(t *testi
 	old, gw := editedGateway()
 	epFail := configcheck.EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid}
 	chk := &scriptedChecker{
-		// The root, the served endpoints with the update; then the served
-		// endpoints with the stored root, which stale fails too: a judgement
-		// that would hide victim, so the webhook must not rely on it.
-		verdicts: []configcheck.Verdict{{OK: true}, {Output: "x"}, {OK: true}},
+		// The root, the served endpoints with the update; then the stored
+		// root, which passes; then the served endpoints with the stored
+		// root, which stale fails too: a judgement that would hide victim,
+		// so the webhook must not rely on it.
+		verdicts: []configcheck.Verdict{{OK: true}, {Output: "x"}, {OK: true}, {Output: "x"}},
 		endpointVerdicts: []configcheck.EndpointVerdict{
 			epFail, epFail, // stale: fails with the update and without it
 			epFail, {OK: true}, // victim: fails only with the update
