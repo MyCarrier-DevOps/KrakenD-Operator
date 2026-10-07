@@ -347,3 +347,39 @@ func TestAutoConfigReconcile_AHoldMessageEndsAtAFindingBoundaryWithinTheStatusLi
 		t.Errorf("message = %q (%d bytes), want one ending at a finding boundary with a count of the rest", msg, len(msg))
 	}
 }
+
+// A clash hold keeps the stale endpoints just as a judging hold does: the
+// first clash render modelled them gone, so a sibling whose new route loses to
+// a kept stale endpoint is held too.
+func TestAutoConfigReconcile_AClashHoldKeepsTheStaleEndpointsTheClashStageModelledGone(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	stale := ownedCopy(t, ac, generatedEndpoint("getUser", "/users/{id}"))
+	stale.CreationTimestamp = metav1.NewTime(time.Unix(1000, 0))
+	orders := ownedCopy(t, ac, generatedEndpoint("getUserOrders", "/users/{id}/orders"))
+	orders.CreationTimestamp = metav1.NewTime(time.Unix(1000, 0))
+	other := testEndpoint("other", "/c/{a}")
+	other.CreationTimestamp = metav1.NewTime(time.Unix(500, 0))
+	g.output.Endpoints = []*v1alpha1.KrakenDEndpoint{
+		generatedEndpoint("getUserOrders", "/users/{userId}/orders"), generatedEndpoint("getC", "/c/{b}/d"),
+	}
+	c := fakeClientBuilder().WithObjects(ac, cm, stale, orders, other, testGateway()).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Checker = newTestChecker(c, rejectsBadHosts())
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	held := map[string]string{}
+	for _, op := range getAC(t, c, ac).Status.FailedOperations {
+		held[op.Endpoint] = op.Reason
+	}
+	if held["test-ac-getc"] != v1alpha1.ReasonConfigValidationFailed {
+		t.Fatalf("held = %v, want getC held for its router clash", held)
+	}
+	if held["test-ac-getuserorders"] != v1alpha1.ReasonConfigValidationFailed {
+		t.Errorf("held = %v, want getUserOrders held: it would lose to the kept stale getUser", held)
+	}
+}
