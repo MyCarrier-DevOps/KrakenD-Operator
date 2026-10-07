@@ -42,6 +42,7 @@ import (
 	"github.com/mycarrier-devops/krakend-operator/internal/fieldindex"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 	"github.com/mycarrier-devops/krakend-operator/internal/resources"
+	"github.com/mycarrier-devops/krakend-operator/internal/tracing"
 )
 
 // GatewayValidator validates KrakenDGateway resources.
@@ -115,24 +116,37 @@ func (v *GatewayValidator) admit(
 	ctx, cancel := context.WithTimeout(ctx, admissionBudget)
 	defer cancel()
 
-	if err := v.authorizePostRestartJob(ctx, old, gw); err != nil {
-		return nil, err
-	}
-	warnings, errs := v.validate(gw, old)
-	if old != nil {
-		errs = newErrors(errs, v.storedErrors(gw, old))
-	}
-	eeErrs, err := v.eeNamespacesOnCE(ctx, old, gw)
+	warnings, errs, err := v.structural(ctx, old, gw)
 	if err != nil {
-		return warnings, unavailable(err)
+		return warnings, err
 	}
-	errs = append(errs, eeErrs...)
-	errs = append(errs, eeFieldsOnCE(old, gw)...)
 	if len(errs) > 0 {
 		return warnings, invalid("KrakenDGateway", gw.Name, errs)
 	}
 	renderWarnings, err := checkGatewayRender(ctx, v.Client, v.Checker, v.Memo, old, gw)
 	return append(append(warnings, renderWarnings...), versionWarning(gw, old)...), err
+}
+
+// structural runs gw's rules that need no krakend run, inside one span. Its
+// error is the admission error to return.
+func (v *GatewayValidator) structural(
+	ctx context.Context, old, gw *v1alpha1.KrakenDGateway,
+) (warnings admission.Warnings, errs field.ErrorList, retErr error) {
+	ctx, span := tracing.Start(ctx, v.Tracer, "admission.structural")
+	defer func() { tracing.End(span, retErr) }()
+	if err := v.authorizePostRestartJob(ctx, old, gw); err != nil {
+		return nil, nil, err
+	}
+	warnings, errs = v.validate(gw, old)
+	if old != nil {
+		errs = newErrors(errs, v.storedErrors(gw, old))
+	}
+	eeErrs, err := v.eeNamespacesOnCE(ctx, old, gw)
+	if err != nil {
+		return warnings, nil, unavailable(err)
+	}
+	errs = append(errs, eeErrs...)
+	return warnings, append(errs, eeFieldsOnCE(old, gw)...), nil
 }
 
 // eeNamespacesOnCE rejects Enterprise-only extra_config namespaces that a CE
