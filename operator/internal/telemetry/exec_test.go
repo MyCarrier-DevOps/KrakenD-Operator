@@ -24,7 +24,6 @@ import (
 	"strings"
 	"testing"
 
-	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 
 	"github.com/mycarrier-devops/krakend-operator/internal/telemetry"
@@ -36,14 +35,6 @@ type exitingExecutor struct{ code string }
 
 func (e exitingExecutor) Execute(ctx context.Context, _ string, _ ...string) ([]byte, error) {
 	return exec.CommandContext(ctx, "sh", "-c", "exit "+e.code).CombinedOutput()
-}
-
-func attr(attrs []attribute.KeyValue, key string) (attribute.Value, bool) {
-	i := slices.IndexFunc(attrs, func(kv attribute.KeyValue) bool { return string(kv.Key) == key })
-	if i < 0 {
-		return attribute.Value{}, false
-	}
-	return attrs[i].Value, true
 }
 
 func TestTraceExecutor_KrakendCheckIsAChildSpanWithModeAndExitCode(t *testing.T) {
@@ -60,14 +51,13 @@ func TestTraceExecutor_KrakendCheckIsAChildSpanWithModeAndExitCode(t *testing.T)
 	spans := rec.Ended()
 	spans.RequireChild(t, "configcheck.CheckRendered", "krakend check")
 	span := spans.One(t, "krakend check")
-	attrs := span.Attributes()
-	if v, _ := attr(attrs, "process.exit.code"); v.AsInt64() != 1 {
+	if v, _ := tracingtest.Attr(span, "process.exit.code"); v.AsInt64() != 1 {
 		t.Errorf("process.exit.code = %v, want 1", v.String())
 	}
-	if v, _ := attr(attrs, "krakend.check.mode"); v.AsString() != "validate" {
+	if v, _ := tracingtest.Attr(span, "krakend.check.mode"); v.AsString() != "validate" {
 		t.Errorf("krakend.check.mode = %q, want validate", v.AsString())
 	}
-	if v, _ := attr(attrs, "process.command_args"); slices.Contains(v.AsStringSlice(), "/tmp/krakend-config-42.json") {
+	if v, _ := tracingtest.Attr(span, "process.command_args"); slices.Contains(v.AsStringSlice(), "/tmp/krakend-config-42.json") {
 		t.Errorf("process.command_args = %v, want the config path reduced to its base name", v.AsStringSlice())
 	}
 	if span.Status().Code != codes.Error {
@@ -146,14 +136,14 @@ func TestTraceExecutor_RecordsHowEachRunEnded(t *testing.T) {
 			_, _ = executor.Execute(context.Background(), "krakend", tt.args...)
 
 			span := rec.Ended().One(t, "krakend check")
-			code, hasCode := attr(span.Attributes(), "process.exit.code")
+			code, hasCode := tracingtest.Attr(span, "process.exit.code")
 			if tt.wantCode < 0 && hasCode {
 				t.Errorf("process.exit.code = %v, want none", code.AsInt64())
 			}
 			if tt.wantCode >= 0 && (!hasCode || code.AsInt64() != tt.wantCode) {
 				t.Errorf("process.exit.code = %v (set: %t), want %d", code.AsInt64(), hasCode, tt.wantCode)
 			}
-			if mode, _ := attr(span.Attributes(), "krakend.check.mode"); mode.AsString() != tt.wantMode {
+			if mode, _ := tracingtest.Attr(span, "krakend.check.mode"); mode.AsString() != tt.wantMode {
 				t.Errorf("krakend.check.mode = %q, want %q", mode.AsString(), tt.wantMode)
 			}
 			if gotErr := span.Status().Code == codes.Error; gotErr != tt.wantErr {
