@@ -424,6 +424,8 @@ func (r *KrakenDGatewayReconciler) gatherPluginConfigMaps(
 	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
 ) (found []corev1.ConfigMap, missing []string, err error) {
+	ctx, span := tracing.Start(ctx, r.Tracer, "gateway.plugins")
+	defer func() { tracing.End(span, err) }()
 	if gw.Spec.Plugins == nil {
 		return nil, nil, nil
 	}
