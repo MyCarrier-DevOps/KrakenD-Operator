@@ -165,7 +165,10 @@ func labelsContain(have, want map[string]string) bool {
 func (r *KrakenDAutoConfigReconciler) deleteEndpoint(
 	ctx context.Context,
 	ep *v1alpha1.KrakenDEndpoint,
-) (bool, error) {
+) (_ bool, retErr error) {
+	ctx, span := tracing.Start(ctx, r.Tracer, "autoconfig.delete_endpoint",
+		trace.WithAttributes(tracing.KeyName.String(ep.Name)))
+	defer func() { tracing.End(span, retErr) }()
 	err := r.Delete(ctx, ep, client.Preconditions{UID: &ep.UID})
 	switch {
 	case err == nil:
