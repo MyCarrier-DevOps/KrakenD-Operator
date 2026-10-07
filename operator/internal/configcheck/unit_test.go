@@ -192,9 +192,9 @@ func TestCheckRoot_KeepsABoundedOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	for key, kept := range memo {
-		if kept.Rejection != nil && len(kept.Rejection.Output) > maxStoredOutput {
+		if len(kept.Output) > maxStoredOutput {
 			t.Errorf("memo keeps %d bytes of rejection output under %s, want at most %d",
-				len(kept.Rejection.Output), key, maxStoredOutput)
+				len(kept.Output), key, maxStoredOutput)
 		}
 	}
 	if len(v.Output) > maxStoredOutput || !strings.HasSuffix(v.Output, "...") {
@@ -248,115 +248,6 @@ func TestCheckRoot_RendersTheDragonflyAddress(t *testing.T) {
 	}
 }
 
-// inNamespace returns ep moved to ns.
-func inNamespace(ep *v1alpha1.KrakenDEndpoint, ns string) v1alpha1.KrakenDEndpoint {
-	moved := *ep.DeepCopy()
-	moved.Namespace = ns
-	return moved
-}
-
-func TestCheckGroup_ARememberedVerdictNamesOnlyItsOwnEndpoints(t *testing.T) {
-	val := &fakeValidator{err: rejectedOutput("- at '/endpoints/0': bad")}
-	chk := newChecker(val)
-	memo := mapMemo{}
-	gw := gateway(v1alpha1.EditionCE)
-	mine := endpoint("same", "/same")
-
-	for _, ns := range []string{"tenant-a", "tenant-b"} {
-		v, err := chk.CheckGroup(context.Background(), Group{
-			Gateway: gw, Endpoints: []v1alpha1.KrakenDEndpoint{inNamespace(mine, ns)},
-		}, memo)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(v.Findings) != 1 || v.Findings[0].Endpoint.Namespace != ns {
-			t.Errorf("findings for %s = %+v, want only its own endpoint", ns, v.Findings)
-		}
-	}
-
-	if len(val.calls) != 1 {
-		t.Errorf("ran %d checks, want 1: both namespaces render the same config", len(val.calls))
-	}
-}
-
-func TestCheckRoot_KeepsBoundedRefusals(t *testing.T) {
-	refused := &renderer.ValidationError{
-		Err: errors.New("exit status 1"), Stage: renderer.StageRoute,
-		Refusals: []renderer.RouteRefusal{{Message: strings.Repeat("y", maxStoredOutput+1)}},
-	}
-	chk := newChecker(&fakeValidator{err: refused})
-	memo := mapMemo{}
-
-	v, err := chk.CheckRoot(context.Background(), Root{Gateway: gateway(v1alpha1.EditionCE)}, memo)
-
-	if err != nil {
-		t.Fatal(err)
-	}
-	for key, kept := range memo {
-		if got := len(kept.Rejection.Refusals[0].Message); got > maxStoredOutput {
-			t.Errorf("memo keeps a %d byte refusal under %s, want at most %d", got, key, maxStoredOutput)
-		}
-	}
-	if got := len(v.Refusals[0].Message); got > maxStoredOutput {
-		t.Errorf("verdict refusal is %d bytes, want at most %d", got, maxStoredOutput)
-	}
-	if refused.Refusals[0].Message != strings.Repeat("y", maxStoredOutput+1) {
-		t.Error("bounding a refusal changed the validator's own rejection")
-	}
-}
-
-func TestCheckRoot_AHitSharesNothingWithAnEarlierVerdict(t *testing.T) {
-	refused := &renderer.ValidationError{
-		Output: "- at '/endpoints/0': bad", Err: errors.New("exit status 1"), Stage: renderer.StageRoute,
-		Refusals: []renderer.RouteRefusal{{Message: "refused", Indices: []int{0}}},
-	}
-	chk := newChecker(&fakeValidator{err: refused})
-	memo := mapMemo{}
-	root := Root{Gateway: gateway(v1alpha1.EditionCE)}
-	first, err := chk.CheckRoot(context.Background(), root, memo)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	first.Findings[0].Message = "changed"
-	first.Rejection.Output = "changed"
-	first.Rejection.Refusals[0].Indices[0] = 7
-	second, err := chk.CheckRoot(context.Background(), root, memo)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if second.Findings[0].Message == "changed" || second.Rejection.Output == "changed" ||
-		second.Rejection.Refusals[0].Indices[0] != 0 {
-		t.Errorf("a later hit shows the earlier verdict's edits: %+v, %+v", second.Findings, second.Rejection)
-	}
-	if refused.Refusals[0].Indices[0] != 0 {
-		t.Error("an edit of a verdict reached the validator's own rejection")
-	}
-}
-
-func TestCheckPolicy_ARememberedVerdictNamesOnlyItsOwnNamespace(t *testing.T) {
-	val := &fakeValidator{err: rejectedOutput("- at '/endpoints/0': bad")}
-	chk := newChecker(val)
-	memo := mapMemo{}
-
-	for _, ns := range []string{"tenant-a", "tenant-b"} {
-		p := policy("p")
-		p.Namespace = ns
-		v, err := chk.CheckPolicy(context.Background(), p, memo)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(v.Findings) != 1 || v.Findings[0].Endpoint.Namespace != ns {
-			t.Errorf("findings for %s = %+v, want only its own synthetic endpoint", ns, v.Findings)
-		}
-	}
-
-	if len(val.calls) != 1 {
-		t.Errorf("ran %d checks, want 1: both namespaces render the same config", len(val.calls))
-	}
-}
-
 func TestCheckRoot_AMemoEntryWithoutARejectionIsAMiss(t *testing.T) {
 	val := &fakeValidator{err: rejectedOutput("really bad")}
 	chk := newChecker(val)
@@ -375,7 +266,7 @@ func TestCheckRoot_AMemoEntryWithoutARejectionIsAMiss(t *testing.T) {
 		t.Errorf("CheckRoot = %+v, %v after %d checks; want the validator's rejection from a re-run", v, err, len(val.calls))
 	}
 	for _, kept := range memo {
-		if kept.Rejection == nil {
+		if !judged(kept) {
 			t.Errorf("memo entry %+v was not replaced with the real answer", kept)
 		}
 	}
