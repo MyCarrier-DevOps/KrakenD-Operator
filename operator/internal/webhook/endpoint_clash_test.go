@@ -82,3 +82,20 @@ func TestEndpointAdmission_RefusesAWriteThatKeepsAnOlderEndpointOutOfTheRouter(t
 		t.Errorf("response = %+v, want a denial naming the endpoint the update would push out", resp.Result)
 	}
 }
+
+func TestEndpointAdmission_AClashTheGatewayAlreadyHasIsNotTheWrites(t *testing.T) {
+	lost := map[types.NamespacedName][]renderer.EntryConflict{
+		newEndpoint: {{Endpoint: "/a/{name}/x", Method: "GET", Winner: oldEndpoint, Detail: ginClash}},
+	}
+	chk := &scriptedChecker{conflicts: func(*v1alpha1.KrakenDGateway, []v1alpha1.KrakenDEndpoint) configcheck.RouteConflicts {
+		return configcheck.RouteConflicts{Lost: lost}
+	}}
+	stored := testEndpoint("new", "/a/{name}/x")
+	updated := stored.DeepCopy()
+	updated.Spec.Endpoints[0].Backends[0].URLPattern = "/changed"
+	v := &EndpointValidator{Client: fakeClient(testGateway(), stored), Checker: chk}
+
+	if resp := review(t, v, "alice", updated, stored); !resp.Allowed {
+		t.Errorf("an update that keeps a stored clash was denied: %+v", resp.Result)
+	}
+}
