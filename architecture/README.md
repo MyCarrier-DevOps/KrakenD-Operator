@@ -664,7 +664,7 @@ erDiagram
 | **Deployment** | KrakenDGateway | Operator-managed; garbage-collected via ownerReference |
 | **Service** | KrakenDGateway | Operator-managed; garbage-collected via ownerReference |
 | **ConfigMap** | KrakenDGateway | Operator-managed; garbage-collected via ownerReference |
-| **ServiceAccount** | KrakenDGateway | Operator-managed; garbage-collected via ownerReference |
+| **ServiceAccount** | KrakenDGateway | Operator-managed; garbage-collected via ownerReference. An existing same-named one is taken over only if it has no controller and carries the gateway's selector labels, see below |
 | **HorizontalPodAutoscaler** | KrakenDGateway | Operator-managed (when `autoscaling` is set); the operator sets Deployment `spec.replicas` only when creating it (to `minReplicas`) |
 | **PodDisruptionBudget** | KrakenDGateway | Operator-managed; garbage-collected via ownerReference |
 | **Dragonfly CR** | KrakenDGateway | Operator-managed (when `dragonfly.enabled=true`); Dragonfly Operator reconciles into StatefulSet, Service, PVC |
@@ -1358,6 +1358,27 @@ rejected or unjudged render never stops drift correction. The Deployment is
 created only once a config has been applied, and is left as it is only while
 no ConfigMap holds the applied config or a plugin ConfigMap is missing. The
 gateway status is written once, after both stages.
+
+### Taking over existing objects
+
+The gateway writes its children by name, so an object with that name may
+already exist. `applyOwned` (and the Deployment write) decide on the object as
+fetched, inside the `CreateOrUpdate` mutate function and before the builder
+rewrites its labels: the gateway writes it only if it already controls it, or
+it has no controller and carries the gateway's selector labels
+(`app.kubernetes.io/instance=<gateway>`, `app.kubernetes.io/managed-by=krakend-operator`).
+Those labels are the hand-over, since only someone who can write the object can
+set them, and an object left by `kubectl delete --cascade=orphan` still carries
+them. Anything else is refused with a `notControlledError` and left untouched:
+an object another controller owns, and an unlabelled object nothing owns. The
+pods run as the ServiceAccount named like the gateway, so a refused
+ServiceAccount holds the Deployment and the post-restart Job. The infrastructure
+stage turns the refusals of a pass into the `ResourcesControlled` condition
+(`False` with reason `ResourceNotControlled`, naming each object, its controller
+and the remedy), which `Ready` folds in the way it folds `PluginsResolved`. The
+decision is made on the exact version the write would replace, so a stale cache
+read cannot bypass it: a missed object fails the create with `AlreadyExists`, and
+a stale controlled or labelled read fails the update on its `resourceVersion`.
 
 ### Conflict reporting
 
