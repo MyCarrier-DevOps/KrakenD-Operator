@@ -30,6 +30,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
@@ -280,5 +281,35 @@ func TestGatewayReconcile_EveryRefusedObjectIsNamedWithItsOwnLabels(t *testing.T
 			t.Fatalf("message %q lacks %q, in order", cond.Message, want)
 		}
 		rest = rest[i+len(want):]
+	}
+}
+
+// While a child the gateway refused cannot be evaluated this pass, because its
+// write fails for another reason, the condition keeps what it said.
+func TestGatewayReconcile_AFailedWriteDoesNotClearResourcesControlled(t *testing.T) {
+	gw := reconciledGateway()
+	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+		Type: v1alpha1.ConditionResourcesControlled, Status: metav1.ConditionFalse,
+		Reason: v1alpha1.ReasonResourceNotControlled, Message: "service default/test-gw is somebody else's",
+	})
+	c := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object,
+				opts ...client.GetOption) error {
+				if _, ok := obj.(*corev1.Service); ok {
+					return errors.New("the server is currently unable to handle the request")
+				}
+				return cl.Get(ctx, key, obj, opts...)
+			},
+		}).Build()
+	r := acceptanceReconciler(c, fakeRecorder(), &renderer.RenderOutput{JSON: []byte(`{"version":3}`), Checksum: "cs1"})
+
+	if err := reconcileGateway(t, r, gw); err == nil {
+		t.Fatalf("expected the failed Service write to be reported")
+	}
+
+	cond := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionResourcesControlled)
+	if cond == nil || cond.Status != metav1.ConditionFalse {
+		t.Errorf("ResourcesControlled = %+v, want it to stay False", cond)
 	}
 }
