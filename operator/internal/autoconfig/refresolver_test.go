@@ -912,3 +912,9 @@ func TestAbsolutize_ABaseURLErrorCarriesNoCredentials(t *testing.T) {
 
 	requireNoSecrets(t, err)
 }
+
+func TestAbsolutize_ARefURLErrorCarriesNoCredentials(t *testing.T) {
+	_, err := absolutize("https://user:pw@host:badport/x.json?token=secret", "https://api.example.com/spec.json")
+
+	requireNoSecrets(t, err)
+}
