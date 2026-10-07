@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -272,6 +273,29 @@ func TestAdmission_ADenialIsNoErrorAndItsTextIsOnNoSpan(t *testing.T) {
 	span := rec.Ended().One(t, "admission.validate KrakenDEndpoint")
 	if got := span.Status().Code; got != codes.Unset {
 		t.Errorf("status = %v, want unset: a denial is not an error", got)
+	}
+	if n := len(span.Events()); n != 0 {
+		t.Errorf("%d events on the span, want none: %v", n, span.Events())
+	}
+}
+
+// A decision that could not be reached is an error on the span, with no text
+// of what failed: the span that failed records it.
+func TestAdmission_AFailureToDecideIsAnErrorWithoutItsText(t *testing.T) {
+	rec := tracingtest.New(t)
+	failure := unavailable(errors.New("lookup failed: TENANT-DETAIL"))
+	admit := tracedValidator{kind: kindEndpoint, next: outcomeValidator{err: failure}, tracer: rec.Tracer()}
+
+	if _, err := admit.ValidateCreate(context.Background(), testEndpoint("e", "/e")); err == nil {
+		t.Fatal("the failure was swallowed")
+	}
+
+	span := rec.Ended().One(t, "admission.validate KrakenDEndpoint")
+	if got := span.Status().Code; got != codes.Error {
+		t.Errorf("status = %v, want error", got)
+	}
+	if got := span.Status().Description; strings.Contains(got, "TENANT") {
+		t.Errorf("status description = %q, want none of the failure's text", got)
 	}
 	if n := len(span.Events()); n != 0 {
 		t.Errorf("%d events on the span, want none: %v", n, span.Events())
