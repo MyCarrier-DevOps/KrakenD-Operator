@@ -160,7 +160,7 @@ func (r *KrakenDGatewayReconciler) judgeEndpoints(
 	for i := range suspects {
 		ep := &suspects[i]
 		v, err := r.Checker.CheckEndpoint(ctx, configcheck.EndpointUnit{
-			Gateway: gw, Endpoint: ep, Policies: in.Policies, CEFallback: in.CEFallback,
+			Gateway: gw, Endpoint: ep, Policies: in.Policies, CEFallback: in.CEFallback, Dragonfly: in.Dragonfly,
 		}, memo)
 		if err != nil {
 			return nil, err
