@@ -72,6 +72,7 @@ func tracedClientAt(t *testing.T, rec *tracingtest.Recorder, prefix string) (cli
 	// A static mapper: the fake server answers no discovery request.
 	mapper := meta.NewDefaultRESTMapper(nil)
 	mapper.Add(corev1.SchemeGroupVersion.WithKind("ConfigMap"), meta.RESTScopeNamespace)
+	mapper.Add(corev1.SchemeGroupVersion.WithKind("Namespace"), meta.RESTScopeRoot)
 	c, err := client.New(cfg, client.Options{Mapper: mapper})
 	if err != nil {
 		t.Fatal(err)
@@ -231,4 +232,20 @@ func TestTraceKubeAPI_StatusUpdateIsNamedWithItsSubresource(t *testing.T) {
 	parent.End()
 
 	rec.Ended().RequireChild(t, "reconcile", "k8s update configmaps/status")
+}
+
+func TestTraceKubeAPI_ClusterScopedRequestIsNamedByItsResource(t *testing.T) {
+	rec := tracingtest.New(t)
+	c, _ := tracedClient(t, rec)
+	ctx, parent := rec.Tracer().Start(context.Background(), "reconcile")
+
+	// The fake answers a ConfigMap, so decoding may fail; the request is
+	// what matters.
+	_ = c.Update(ctx, &corev1.Namespace{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Namespace"},
+		ObjectMeta: metav1.ObjectMeta{Name: "team-a"},
+	})
+	parent.End()
+
+	rec.Ended().RequireChild(t, "reconcile", "k8s update namespaces")
 }
