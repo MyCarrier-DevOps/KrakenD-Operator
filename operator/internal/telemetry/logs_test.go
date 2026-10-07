@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/go-logr/logr"
@@ -82,5 +83,26 @@ func TestLogger_RecordWithACancelledContextStillReachesStdout(t *testing.T) {
 
 	if got := records(t, out); len(got) != 1 || got[0].Body.Value != "after the deadline" {
 		t.Errorf("records = %+v, want the one logged after cancellation", got)
+	}
+}
+
+// --zap-log-level=debug keeps V(1) and drops V(2), as zap did; a kept record
+// carries a severity name and the time it was logged.
+func TestLogger_KeepsVerbosityUpToTheLevel(t *testing.T) {
+	minimum, err := telemetry.ParseLogLevel("debug")
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger, out := newStdoutLogger(t, minimum)
+
+	logger.V(1).Info("kept")
+	logger.V(2).Info("dropped")
+
+	got := records(t, out)
+	if len(got) != 1 || got[0].Body.Value != "kept" || got[0].SeverityText != "DEBUG4" {
+		t.Errorf("records = %+v, want only the V(1) one, as DEBUG4", got)
+	}
+	if len(got) == 1 && (got[0].Timestamp == "" || strings.HasPrefix(got[0].Timestamp, "0001-")) {
+		t.Errorf("timestamp = %q, want the time it was logged", got[0].Timestamp)
 	}
 }
