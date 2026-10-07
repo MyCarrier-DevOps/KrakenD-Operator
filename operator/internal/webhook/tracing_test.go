@@ -82,9 +82,9 @@ func TestEndpointAdmission_IsOneSpanAboveItsRulesAndKrakendRun(t *testing.T) {
 	spans := rec.Ended()
 	spans.RequireChild(t, "admission.validate KrakenDEndpoint", "admission.structural")
 	spans.RequireAncestors(t, "krakend check", "configcheck.", "admission.validate KrakenDEndpoint")
-	spans.RequireParent(t, "admission.validate KrakenDEndpoint", "configcheck.Conflicts")
-	spans.RequireParent(t, "admission.validate KrakenDEndpoint", "configcheck.CheckRoot")
-	spans.RequireParent(t, "admission.validate KrakenDEndpoint", "configcheck.CheckEndpoint")
+	requireParentID(t, spans, "admission.validate KrakenDEndpoint", "configcheck.Conflicts")
+	requireParentID(t, spans, "admission.validate KrakenDEndpoint", "configcheck.CheckRoot")
+	requireParentID(t, spans, "admission.validate KrakenDEndpoint", "configcheck.CheckEndpoint")
 }
 
 func TestGatewayAdmission_IsOneSpanAboveItsRulesAndKrakendRun(t *testing.T) {
@@ -128,7 +128,7 @@ func TestPolicyAdmission_IsOneSpanAboveItsCheckAndKrakendRun(t *testing.T) {
 
 	spans := rec.Ended()
 	spans.RequireAncestors(t, "krakend check", "configcheck.CheckPolicy", "admission.validate KrakenDBackendPolicy")
-	spans.RequireParent(t, "admission.validate KrakenDBackendPolicy", "configcheck.CheckPolicy")
+	requireParentID(t, spans, "admission.validate KrakenDBackendPolicy", "configcheck.CheckPolicy")
 }
 
 // webhookManager is the part of a manager SetupWebhooks uses: the scheme, the
@@ -219,8 +219,8 @@ func TestGatewayAdmission_JudgesItsServedEndpointsInASpan(t *testing.T) {
 	spans := rec.Ended()
 	spans.RequireChild(t, "admission.validate KrakenDGateway", "admission.judge_served")
 	spans.RequireChild(t, "admission.validate KrakenDGateway", "configcheck.SameConfig")
-	spans.RequireParent(t, "admission.validate KrakenDGateway", "configcheck.Conflicts")
-	spans.RequireParent(t, "admission.validate KrakenDGateway", "configcheck.CheckRoot")
+	requireParentID(t, spans, "admission.validate KrakenDGateway", "configcheck.Conflicts")
+	requireParentID(t, spans, "admission.validate KrakenDGateway", "configcheck.CheckRoot")
 	spans.RequireChild(t, "admission.validate KrakenDGateway", "configcheck.CheckGroup")
 }
 
@@ -237,8 +237,8 @@ func TestPolicyAdmission_ScreensEachGatewayInASpan(t *testing.T) {
 
 	spans := rec.Ended()
 	spans.RequireChild(t, "admission.validate KrakenDBackendPolicy", "admission.screen_policy")
-	spans.RequireParent(t, "admission.screen_policy", "configcheck.CheckRoot")
-	spans.RequireParent(t, "admission.screen_policy", "configcheck.CheckGroup")
+	requireParentID(t, spans, "admission.screen_policy", "configcheck.CheckRoot")
+	requireParentID(t, spans, "admission.screen_policy", "configcheck.CheckGroup")
 }
 
 // Once every gateway is screened, a policy write judges each in a span of its
@@ -391,7 +391,7 @@ func TestGatewayAdmission_ADeniedUpdateIsNoErrorOnItsSpans(t *testing.T) {
 		t.Fatalf("err = %v, want a denial", err)
 	}
 	spans := rec.Ended()
-	spans.RequireParent(t, "admission.judge_served", "configcheck.CheckEndpoint")
+	requireParentID(t, spans, "admission.judge_served", "configcheck.CheckEndpoint")
 	requireCleanAdmissionSpans(t, spans)
 }
 
@@ -457,24 +457,42 @@ func TestPolicyAdmission_AFailedCheckMarksItsSpansWithoutTheText(t *testing.T) {
 	}
 }
 
-// parentsOf returns the names of the parents of the spans named name, sorted.
-func parentsOf(spans tracingtest.Spans, name string) []string {
-	var parents []string
-	for _, span := range spans.Named(name) {
-		parent := "<root>"
-		if p := spans.Parent(span); p != nil {
-			parent = p.Name()
-		}
-		parents = append(parents, parent)
+// requireParents fails t unless the spans named child have, as their parents,
+// exactly the spans named in parents (one span each, matched by span ID, so a
+// span of the same name in another trace does not count).
+func requireParents(t *testing.T, spans tracingtest.Spans, child string, parents ...string) {
+	t.Helper()
+	var want, got []string
+	for _, name := range parents {
+		want = append(want, spans.One(t, name).SpanContext().SpanID().String())
 	}
-	slices.Sort(parents)
-	return parents
+	for _, span := range spans.Named(child) {
+		id := "<none>"
+		if p := spans.Parent(span); p != nil {
+			id = p.SpanContext().SpanID().String()
+		}
+		got = append(got, id)
+	}
+	slices.Sort(want)
+	slices.Sort(got)
+	if !slices.Equal(got, want) {
+		t.Errorf("spans %q have parents %v, want those of %q (%v); spans: %s", child, got, parents, want, spans)
+	}
 }
 
-func requireParents(t *testing.T, spans tracingtest.Spans, name string, want ...string) {
+// requireParentID fails t unless there is a span named child and the only
+// span named parent is the parent of every one of them, by span ID.
+func requireParentID(t *testing.T, spans tracingtest.Spans, parent, child string) {
 	t.Helper()
-	if got := parentsOf(spans, name); !slices.Equal(got, want) {
-		t.Errorf("spans %q have parents %v, want %v; spans: %s", name, got, want, spans)
+	want := spans.One(t, parent).SpanContext().SpanID()
+	named := spans.Named(child)
+	if len(named) == 0 {
+		t.Fatalf("0 spans named %q, want at least 1; spans: %s", child, spans)
+	}
+	for _, span := range named {
+		if p := spans.Parent(span); p == nil || p.SpanContext().SpanID() != want {
+			t.Errorf("span %q is not a child of %q; spans: %s", child, parent, spans)
+		}
 	}
 }
 
@@ -491,8 +509,8 @@ func TestGatewayAdmission_ACreateWarningsChecksAreBelowTheAdmission(t *testing.T
 		t.Fatalf("warnings, err = %v, %v; want a warning", warnings, err)
 	}
 	spans := rec.Ended()
-	spans.RequireParent(t, "admission.validate KrakenDGateway", "configcheck.CheckGroup")
-	spans.RequireParent(t, "admission.validate KrakenDGateway", "configcheck.CheckEndpoint")
+	requireParentID(t, spans, "admission.validate KrakenDGateway", "configcheck.CheckGroup")
+	requireParentID(t, spans, "admission.validate KrakenDGateway", "configcheck.CheckEndpoint")
 	requireCleanAdmissionSpans(t, spans)
 }
 
@@ -545,7 +563,7 @@ func TestGatewayAdmission_JudgingUnderAFailingStoredRootIsBelowItsSpan(t *testin
 			spans := rec.Ended()
 			requireParents(t, spans, "configcheck.CheckRoot",
 				"admission.judge_served", "admission.validate KrakenDGateway")
-			spans.RequireParent(t, "admission.judge_served", "configcheck.CheckEndpoint")
+			requireParentID(t, spans, "admission.judge_served", "configcheck.CheckEndpoint")
 			requireCleanAdmissionSpans(t, spans)
 		})
 	}
@@ -565,7 +583,7 @@ func TestEndpointAdmission_ItsStoredVersionsCheckIsBelowTheAdmission(t *testing.
 		t.Fatalf("warnings, err = %v, %v; want a warning", warnings, err)
 	}
 	spans := rec.Ended()
-	spans.RequireParent(t, "admission.validate KrakenDEndpoint", "configcheck.CheckEndpoint")
+	requireParentID(t, spans, "admission.validate KrakenDEndpoint", "configcheck.CheckEndpoint")
 	requireCleanAdmissionSpans(t, spans)
 }
 
@@ -582,7 +600,7 @@ func TestPolicyAdmission_JudgingAGatewaysEndpointsIsBelowItsSpan(t *testing.T) {
 		t.Fatalf("warnings, err = %v, %v; want a warning", warnings, err)
 	}
 	spans := rec.Ended()
-	spans.RequireParent(t, "admission.judge_policy", "configcheck.CheckEndpoint")
+	requireParentID(t, spans, "admission.judge_policy", "configcheck.CheckEndpoint")
 	requireCleanAdmissionSpans(t, spans)
 }
 
