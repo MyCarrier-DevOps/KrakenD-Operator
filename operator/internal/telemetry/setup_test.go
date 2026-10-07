@@ -312,6 +312,7 @@ func TestSetup_AMalformedEndpointNeverReachesTheOutput(t *testing.T) {
 	const secret = "pw-s3cret"
 	for _, tc := range []struct{ name, value string }{
 		{"an invalid escape", "http://user:" + secret + "@127.0.0.1:1/%zz"},
+		{"a leading space", " http://user:" + secret + "@127.0.0.1:1"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cleanOTelEnv(t)
