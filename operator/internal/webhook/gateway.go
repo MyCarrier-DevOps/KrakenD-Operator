@@ -123,7 +123,7 @@ func (v *GatewayValidator) admit(
 	if len(errs) > 0 {
 		return warnings, invalid("KrakenDGateway", gw.Name, errs)
 	}
-	renderWarnings, err := checkGatewayRender(ctx, v.Client, v.Checker, v.Memo, old, gw)
+	renderWarnings, err := checkGatewayRender(ctx, v.Tracer, v.Client, v.Checker, v.Memo, old, gw)
 	return append(append(warnings, renderWarnings...), versionWarning(gw, old)...), err
 }
 
@@ -1091,10 +1091,10 @@ func validatePostRestartWorkingDir(prj *v1alpha1.PostRestartJobSpec) string {
 //     gateway, so its output is quoted;
 //  3. the root with the endpoints it serves (servedEndpoints) is checked as
 //     a group, and the endpoints that check leaves unjudged on their own:
-//     judgeServed decides an update, warnWaiting answers a create. Neither
-//     quotes an endpoint.
-func checkGatewayRender(ctx context.Context, c client.Reader, chk ConfigChecker, memo configcheck.Memo,
-	old, gw *v1alpha1.KrakenDGateway) (admission.Warnings, error) {
+//     judgeServed decides an update, in an admission.judge_served span of
+//     tracer, and warnWaiting answers a create. Neither quotes an endpoint.
+func checkGatewayRender(ctx context.Context, tracer trace.Tracer, c client.Reader, chk ConfigChecker,
+	memo configcheck.Memo, old, gw *v1alpha1.KrakenDGateway) (admission.Warnings, error) {
 	if old != nil {
 		same, err := chk.SameConfig(ctx, old, gw)
 		if err != nil {
@@ -1130,7 +1130,10 @@ func checkGatewayRender(ctx context.Context, c client.Reader, chk ConfigChecker,
 	if err != nil {
 		return nil, checkErr(err)
 	}
-	return judgeServed(ctx, chk, memo, now, old, group, served)
+	ctx, span := tracing.Start(ctx, tracer, "admission.judge_served")
+	warnings, err := judgeServed(ctx, chk, memo, now, old, group, served)
+	tracing.End(span, err)
+	return warnings, err
 }
 
 // rootVerdict answers a gateway write whose root fails on its own: a denial
