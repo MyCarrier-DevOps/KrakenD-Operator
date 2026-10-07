@@ -316,13 +316,15 @@ func TestAutoConfigReconcile_AJudgingHoldKeepsTheStaleEndpointsTheClashStageMode
 // The status cuts a message at maxStatusMessageLen with an ellipsis, in the
 // middle of a finding. A hold's own output is bounded so that the whole
 // message fits and ends at a finding boundary, naming how many it left out.
+// Five 42-byte findings take 218 bytes joined: under the limit without the
+// room for that count, over it with the room.
 func TestAutoConfigReconcile_AHoldMessageEndsAtAFindingBoundaryWithinTheStatusLimit(t *testing.T) {
 	cm := testCUEDefinitionsCM()
 	ac := syncedAutoConfig(cm)
 	f, ce, fi, g := defaultMocks()
 	var findings []string
 	for i := range 20 {
-		findings = append(findings, fmt.Sprintf("finding %02d: the host is not valid here", i))
+		findings = append(findings, fmt.Sprintf("finding %02d: the host is not valid here!!!!", i))
 	}
 	checker := &fakeChecker{
 		group: func([]v1alpha1.KrakenDEndpoint) configcheck.Verdict { return configcheck.Verdict{Output: "together"} },
