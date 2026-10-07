@@ -230,3 +230,26 @@ func TestGatewayReconcile_NamesWhyEachRenderIsChecked(t *testing.T) {
 		}
 	}
 }
+
+// A pass whose render is rejected keeps the applied config, and verifies the
+// ConfigMap that holds it inside the config stage.
+func TestGatewayReconcile_KeepingTheAppliedConfigVerifiesItInTheConfigStage(t *testing.T) {
+	gw := testGateway()
+	c, _ := gatewayStatusWrites(gw)
+	rend := renderOf(`{"version":3,"name":"applied"}`)
+	val := &countingValidator{}
+	r := newTestGatewayReconciler(c, rend, val)
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+	*rend = *renderOf(`{"version":3,"name":"rejected"}`)
+	val.err = rejectedBy("- at '/endpoints/0/endpoint': bad")
+	rec := tracingtest.New(t)
+	r.Tracer = rec.Tracer()
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+
+	rec.Ended().RequireChild(t, "gateway.config", "gateway.verify_configmap")
+}
