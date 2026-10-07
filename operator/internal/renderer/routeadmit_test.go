@@ -221,6 +221,10 @@ func TestRender_RemovingAnEndpointLeavesNoOtherEntryOut(t *testing.T) {
 			"GET /a/{id}", "v", "z"},
 		{"moving x off /a/{id}", ce, []v1alpha1.KrakenDEndpoint{x, z, v, u},
 			[]v1alpha1.KrakenDEndpoint{routed("x", 0, "GET", "/c"), z, v, u}, "GET /a/{id}", "v", "z"},
+		{"deleting x on EE", routedGateway(v1alpha1.EditionEE, nil), []v1alpha1.KrakenDEndpoint{
+			routed("x", 0, "GET", "/p/{id}"), routed("z", 1, "GET", "/p/*"), routed("v", 2, "GET", "/p/q"), u,
+		}, []v1alpha1.KrakenDEndpoint{routed("z", 1, "GET", "/p/*"), routed("v", 2, "GET", "/p/q"), u},
+			"GET /p/{id}", "v", "z"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
