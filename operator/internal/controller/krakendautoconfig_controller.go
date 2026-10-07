@@ -278,12 +278,12 @@ func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// Diff and reconcile endpoints
 	outcome, err := r.reconcileEndpoints(ctx, &ac, genOutput.Endpoints, len(failedOps) > 0)
 	if err != nil {
-		return r.handleEndpointError(ctx, &ac, err, warnings)
+		return ctrl.Result{}, r.handleEndpointError(ctx, &ac, err, warnings)
 	}
 	if len(outcome.transient) > 0 {
 		// A race beside a real failure is part of the same failed pass.
 		failures := endpointFailuresError{errs: slices.Concat(outcome.transient, outcome.raced)}
-		return r.handleEndpointError(ctx, &ac, failures, warnings)
+		return ctrl.Result{}, r.handleEndpointError(ctx, &ac, failures, warnings)
 	}
 	if len(outcome.raced) > 0 {
 		return lostWriteRace(ctx, kerrors.NewAggregate(outcome.raced))
@@ -447,15 +447,16 @@ func (r *KrakenDAutoConfigReconciler) handleSyncedFailure(
 // EndpointReconcileFailed, for a failed list or the endpointFailuresError of
 // one pass, which can hold transient write, raced (beside a transient one),
 // adoption and delete errors. A pass whose only failures are raced never gets
-// here; it requeues quietly. The error is returned for every trigger, so
-// controller-runtime retries it with backoff: these errors are transient, and
-// a periodic trigger would otherwise wait a whole interval.
+// here; it requeues quietly. The error is returned for every trigger, with no
+// requeue interval, so controller-runtime retries it with backoff: these
+// errors are transient, and a periodic trigger would otherwise wait a whole
+// interval.
 func (r *KrakenDAutoConfigReconciler) handleEndpointError(
 	ctx context.Context,
 	ac *v1alpha1.KrakenDAutoConfig,
 	endpointErr error,
 	warnings *inputWarnings,
-) (ctrl.Result, error) {
+) error {
 	syncErr := fmt.Errorf("reconciling endpoints: %w", endpointErr)
 	// The returned error carries every failure for the log; the status and
 	// the event name the first few.
@@ -464,9 +465,9 @@ func (r *KrakenDAutoConfigReconciler) handleEndpointError(
 		message = "reconciling endpoints: " + f.Summary()
 	}
 	if err := r.recordSyncedFailure(ctx, ac, endpointFailureReason(endpointErr), message, warnings); err != nil {
-		return ctrl.Result{}, err
+		return err
 	}
-	return ctrl.Result{}, syncErr
+	return syncErr
 }
 
 // recordSyncedFailure records a failed sync: the synced gauge 0, the Synced
