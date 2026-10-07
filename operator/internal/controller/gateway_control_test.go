@@ -17,10 +17,12 @@ limitations under the License.
 package controller
 
 import (
+	"context"
 	"maps"
 	"strings"
 	"testing"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -66,5 +68,35 @@ func TestGatewayReconcile_UnownedServiceIsNotTakenOver(t *testing.T) {
 	ready := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionReady)
 	if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != v1alpha1.ReasonResourceNotControlled {
 		t.Errorf("Ready = %+v, want False/ResourceNotControlled", ready)
+	}
+}
+
+// A Deployment named like the gateway that nothing controls and that does not
+// carry the gateway's labels is somebody else's: the gateway does not rewrite
+// it, and its status names it.
+func TestReconcileInfrastructure_UnownedDeploymentIsNotTakenOver(t *testing.T) {
+	ctx := context.Background()
+	gw := makeGWWithJob("echo ok")
+	victim := makeConvergedDeployment(gw, "abc123")
+	c := fakeClientBuilder().WithObjects(gw, victim).Build()
+	r := &KrakenDGatewayReconciler{Client: c, APIReader: c, Scheme: testScheme(), Recorder: fakeRecorder()}
+	in := convergedInputs("abc123")
+	in.configMapName = "gw-config-abc123"
+
+	_, err := reconcileInfrastructureOf(ctx, r, gw, in)
+
+	if err == nil {
+		t.Errorf("expected the refusal to be reported as an error")
+	}
+	var d appsv1.Deployment
+	if err := c.Get(ctx, client.ObjectKeyFromObject(victim), &d); err != nil {
+		t.Fatal(err)
+	}
+	if len(d.OwnerReferences) != 0 || len(d.Labels) != 0 {
+		t.Errorf("Deployment taken over: ownerReferences %v, labels %v", d.OwnerReferences, d.Labels)
+	}
+	refused := notControlledIn(err)
+	if len(refused) != 1 || refused[0].kind != "deployment" {
+		t.Errorf("refused = %v, want the deployment", refused)
 	}
 }
