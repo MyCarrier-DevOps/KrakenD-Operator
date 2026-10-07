@@ -14,7 +14,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-
 package webhook
 
 import (
@@ -52,5 +51,20 @@ func TestEndpointAdmission_DeniesAnEndpointThatFailsOnItsOwn(t *testing.T) {
 		if d <= 0 || d > admissionBudget || !chk.memos[i] {
 			t.Errorf("check %d ran with %s left and memo %v, want a deadline within %s and the memo", i, d, chk.memos[i], admissionBudget)
 		}
+	}
+}
+
+func TestEndpointAdmission_AGatewayRootThatFailsAloneOnlyWarns(t *testing.T) {
+	chk := &scriptedChecker{verdicts: []configcheck.Verdict{{Output: "ROOT-SECRET is refused"}}}
+	v := &EndpointValidator{Client: fakeClient(testGateway()), Checker: chk}
+
+	resp := review(t, v, "alice", testEndpoint("new", "/a"), nil)
+
+	if !resp.Allowed || len(resp.Warnings) != 1 || !strings.Contains(resp.Warnings[0], "default/gw") ||
+		strings.Contains(responseText(resp), "ROOT-SECRET") {
+		t.Errorf("response = %+v, warnings %v; want admitted with one warning naming default/gw and quoting nothing", resp.Result, resp.Warnings)
+	}
+	if got := strings.Join(chk.calls, ","); got != "root" {
+		t.Errorf("checks = %s, want the root alone", got)
 	}
 }
