@@ -594,3 +594,20 @@ func TestCheckEndpoint_EveryCheckIsRemembered(t *testing.T) {
 		t.Errorf("ran %d checks, want 2 (the policy alone, then the endpoint) and none again", len(val.calls))
 	}
 }
+
+func TestCheckEndpoint_RendersTheDragonflyAddress(t *testing.T) {
+	val := &fakeValidator{}
+	chk := newChecker(val)
+
+	_, err := chk.CheckEndpoint(context.Background(), EndpointUnit{
+		Gateway: gateway(v1alpha1.EditionCE), Endpoint: endpoint("e", "/e"),
+		Dragonfly: &renderer.DragonflyState{Enabled: true, ServiceDNS: "gw-dragonfly.ns.svc:6379"},
+	}, nil)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(val.seen[0], "gw-dragonfly.ns.svc:6379") {
+		t.Errorf("checked unit does not carry the Dragonfly address:\n%s", val.seen[0])
+	}
+}

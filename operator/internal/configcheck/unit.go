@@ -88,13 +88,15 @@ type Group struct {
 // edition CEFallback makes it. Policies, when not nil, are those policies by
 // PolicyRef.PolicyKey, as a caller that gathered them holds them; otherwise
 // they are read through the Checker's reader. Override, when not nil, stands
-// in for the policy of its namespace/name.
+// in for the policy of its namespace/name. Dragonfly is the Dragonfly state
+// the gateway controller detected (Root.Dragonfly); nil renders none.
 type EndpointUnit struct {
 	Gateway    *v1alpha1.KrakenDGateway
 	Endpoint   *v1alpha1.KrakenDEndpoint
 	Policies   map[string]*v1alpha1.KrakenDBackendPolicy
 	Override   *v1alpha1.KrakenDBackendPolicy
 	CEFallback bool
+	Dragonfly  *renderer.DragonflyState
 }
 
 // EndpointVerdict is the verdict on one KrakenDEndpoint judged on its own.
