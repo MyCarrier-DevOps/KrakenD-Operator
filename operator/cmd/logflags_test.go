@@ -53,6 +53,8 @@ func TestLogFlags(t *testing.T) {
 			telemetry.LogFormatJSON, nil},
 		{"an integer level keeps that verbosity", []string{"--zap-log-level=3"}, otellog.SeverityDebug2,
 			telemetry.LogFormatJSON, nil},
+		{"--zap-encoder=console is pretty", []string{"--zap-encoder=console"}, otellog.SeverityDebug4,
+			telemetry.LogFormatPretty, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			level, format, ignored, err := parseLogFlags(t, tc.args...)
