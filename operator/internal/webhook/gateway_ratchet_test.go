@@ -22,6 +22,8 @@ import (
 	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
@@ -113,4 +115,45 @@ func TestGatewayAdmission_FailingGatewayRatchetOnRealRouteRefusals(t *testing.T)
 			}
 		})
 	}
+}
+
+// The API server defaults a grpc probe's service to "", so a stored probe
+// carries a non-nil Service pointer. Old and new objects are decoded
+// separately, so the pointers differ and the error text must not print them.
+func TestGatewayAdmission_AStoredGRPCProbeOnTheDefaultSidecarRatchets(t *testing.T) {
+	grpcProbe := func(port int32) *corev1.Probe {
+		return &corev1.Probe{ProbeHandler: corev1.ProbeHandler{
+			GRPC: &corev1.GRPCAction{Port: port, Service: ptr.To("")},
+		}}
+	}
+	v := &GatewayValidator{Client: fakeClient(), Checker: &scriptedChecker{}}
+	old := gwWithProbes(grpcProbe(9000), nil, "")
+
+	t.Run("an unrelated edit is admitted", func(t *testing.T) {
+		edited := gwWithProbes(grpcProbe(9000), nil, "")
+		edited.Spec.Image = "ghcr.io/example/krakend:2.13"
+		if resp := review(t, v, "alice", edited, old); !resp.Allowed {
+			t.Errorf("unrelated edit of a gateway with a stored grpc probe denied: %+v", resp.Result)
+		}
+	})
+
+	t.Run("changing the probe is checked again", func(t *testing.T) {
+		resp := review(t, v, "alice", gwWithProbes(grpcProbe(9001), nil, ""), old)
+		if resp.Allowed {
+			t.Fatal("a changed grpc probe on the default sidecar admitted")
+		}
+		if !strings.Contains(resp.Result.Message, "spec.openapi.livenessProbe.grpc") {
+			t.Errorf("message = %q, want it to name spec.openapi.livenessProbe.grpc", resp.Result.Message)
+		}
+	})
+
+	t.Run("a new probe on create is refused without a pointer address", func(t *testing.T) {
+		resp := review(t, v, "alice", gwWithProbes(grpcProbe(9000), nil, ""), nil)
+		if resp.Allowed {
+			t.Fatal("a new grpc probe on the default sidecar admitted")
+		}
+		if strings.Contains(resp.Result.Message, "0x") {
+			t.Errorf("message = %q, want no pointer address", resp.Result.Message)
+		}
+	})
 }
