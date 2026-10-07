@@ -2585,6 +2585,67 @@ func TestAutoConfigAdmission_RatchetsAStoredOverrideCollision(t *testing.T) {
 	}
 }
 
+// Additional endpoints are a map list keyed by endpoint and method, so a stored
+// audience error follows its entry when earlier entries are removed or the
+// list is reordered. A new entry, or a changed one, is checked in full.
+func TestAutoConfigAdmission_RatchetsAnAdditionalEndpointAudienceByItsKey(t *testing.T) {
+	badAudience := func(audience string) *runtime.RawExtension {
+		return &runtime.RawExtension{Raw: []byte(`{"documentation/openapi":{"audience":"` + audience + `"}}`)}
+	}
+	entry := func(path, method string, extra *runtime.RawExtension) v1alpha1.AdditionalEndpoint {
+		return v1alpha1.AdditionalEndpoint{Endpoint: path, Method: method, ExtraConfig: extra}
+	}
+	acWith := func(entries ...v1alpha1.AdditionalEndpoint) *v1alpha1.KrakenDAutoConfig {
+		return &v1alpha1.KrakenDAutoConfig{
+			ObjectMeta: metav1.ObjectMeta{Name: "ac", Namespace: "default"},
+			Spec: v1alpha1.KrakenDAutoConfigSpec{GatewayRef: v1alpha1.GatewayRef{Name: "gw"},
+				OpenAPI: v1alpha1.OpenAPISource{URL: "http://svc/openapi.json"}, Trigger: v1alpha1.TriggerOnChange,
+				AdditionalEndpoints: entries},
+		}
+	}
+	v := &AutoConfigValidator{Client: fakeClient(testGateway())}
+	a, b := entry("/a", "GET", nil), entry("/b", "GET", badAudience("x"))
+	old := acWith(a, b)
+
+	tests := []struct {
+		name   string
+		edited *v1alpha1.KrakenDAutoConfig
+		denied string
+	}{
+		{name: "removing an earlier entry", edited: acWith(b)},
+		{name: "reordering the entries", edited: acWith(b, a)},
+		{name: "inserting an entry above", edited: acWith(entry("/c", "GET", nil), a, b)},
+		{name: "an unset method is GET", edited: acWith(entry("/b", "", badAudience("x")))},
+		{name: "changing the entry's audience", edited: acWith(a, entry("/b", "GET", badAudience("y"))),
+			denied: "spec.additionalEndpoints[1]"},
+		{name: "adding a new entry with a bad audience", edited: acWith(b, a, entry("/c", "GET", badAudience("x"))),
+			denied: "spec.additionalEndpoints[2]"},
+		{name: "the same path under another method is a new entry",
+			edited: acWith(a, b, entry("/b", "POST", badAudience("x"))), denied: "spec.additionalEndpoints[2]"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := review(t, v, "alice", tt.edited, old)
+			if tt.denied == "" {
+				if !resp.Allowed {
+					t.Errorf("denied: %+v", resp.Result)
+				}
+				return
+			}
+			if resp.Allowed || !strings.Contains(resp.Result.Message, tt.denied) {
+				t.Errorf("response = %+v, want a denial naming %s", resp.Result, tt.denied)
+			}
+		})
+	}
+
+	t.Run("a stored duplicate key does not grandfather an added copy", func(t *testing.T) {
+		stored := acWith(b, b)
+		if resp := review(t, v, "alice", acWith(b, b, b), stored); resp.Allowed {
+			t.Error("a third copy of a stored entry with a bad audience admitted")
+		}
+	})
+}
+
 // Names are cut at 253 characters after the AutoConfig name is prefixed, so two
 // long operationIds can give one generated endpoint name.
 func TestAutoConfigAdmission_RejectsOverridesThatGenerateOneEndpointName(t *testing.T) {
