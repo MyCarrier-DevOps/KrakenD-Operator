@@ -67,3 +67,18 @@ func TestEndpointAdmission_RefusesAnEntryTheRouterCannotServeNextToAnOlderOne(t 
 		t.Errorf("checks = %v, want none after a structural refusal", chk.calls)
 	}
 }
+
+func TestEndpointAdmission_RefusesAWriteThatKeepsAnOlderEndpointOutOfTheRouter(t *testing.T) {
+	chk := &scriptedChecker{conflicts: clashWith("new", map[types.NamespacedName][]renderer.EntryConflict{
+		oldEndpoint: {{Endpoint: "/a/{name}/x", Method: "GET", Winner: newEndpoint, Detail: ginClash}},
+	})}
+	stored := testEndpoint("new", "/b")
+	updated := testEndpoint("new", "/a/{id}")
+	v := &EndpointValidator{Client: fakeClient(testGateway(), stored), Checker: chk}
+
+	resp := review(t, v, "alice", updated, stored)
+
+	if resp.Allowed || !strings.Contains(responseText(resp), "default/old") {
+		t.Errorf("response = %+v, want a denial naming the endpoint the update would push out", resp.Result)
+	}
+}
