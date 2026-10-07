@@ -276,7 +276,9 @@ const legacyConditionPolicyValid = "PolicyValid"
 // policyReady returns the policy's Ready condition. A field out of range is
 // False with the validatePolicy reason. Otherwise the policy is rendered and
 // checked on its own: False with reason PolicyInvalid and the policy's own
-// krakend output when it fails, True when it passes.
+// krakend output when it fails, True when it passes. A check that cannot run
+// (no validator, a timeout, no slot) is Unknown with reason
+// ValidatorUnavailable, and its error is returned for a retry with backoff.
 func (r *KrakenDBackendPolicyReconciler) policyReady(
 	ctx context.Context, policy *v1alpha1.KrakenDBackendPolicy,
 ) (metav1.Condition, error) {
@@ -288,6 +290,10 @@ func (r *KrakenDBackendPolicyReconciler) policyReady(
 		return r.Checker.CheckPolicy(ctx, policy, r.Memo)
 	})
 	if err != nil {
+		// The check did not run to a verdict, which says nothing about the
+		// policy: Unknown, and the error retries it with backoff.
+		cond.Status, cond.Reason = metav1.ConditionUnknown, v1alpha1.ReasonValidatorUnavailable
+		cond.Message = truncateMessage(fmt.Sprintf("config validator unavailable, retrying: %v", err))
 		return cond, fmt.Errorf("checking policy: %w", err)
 	}
 	if !v.OK {
