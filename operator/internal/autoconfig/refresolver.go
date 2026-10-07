@@ -371,7 +371,8 @@ func (r *refResolver) resolveExternal(ref, base string, role refRole) (string, e
 	// here — the outer call will store the properly-walked clone after its
 	// r.walk completes.
 	if name, busy := r.resolving[cacheKey]; busy {
-		r.warnings = append(r.warnings, fmt.Sprintf("cycle detected for %s, skipping recursive resolution", redactRef(refKey)))
+		r.warnings = append(r.warnings,
+			fmt.Sprintf("cycle detected for %s, skipping recursive resolution", redactRef(refKey)))
 		return name, nil
 	}
 	name := sanitizeRefName(absolute, fragment)
