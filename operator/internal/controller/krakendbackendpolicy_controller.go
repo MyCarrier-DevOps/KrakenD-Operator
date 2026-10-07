@@ -42,9 +42,17 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
 	"github.com/mycarrier-devops/krakend-operator/internal/fieldindex"
 	"github.com/mycarrier-devops/krakend-operator/internal/tracing"
 )
+
+// PolicyChecker judges a policy on its own with krakend check. The
+// configcheck.Checker satisfies it.
+type PolicyChecker interface {
+	CheckPolicy(ctx context.Context, policy *v1alpha1.KrakenDBackendPolicy,
+		memo configcheck.Memo) (configcheck.Verdict, error)
+}
 
 // KrakenDBackendPolicyReconciler reconciles a KrakenDBackendPolicy object.
 // It maintains referencedBy and the Ready condition.
@@ -57,6 +65,15 @@ type KrakenDBackendPolicyReconciler struct {
 	APIReader client.Reader
 	// Tracer records the reconcile's spans; nil records none.
 	Tracer trace.Tracer
+	// Checker judges the policy on its own; nil checks only the typed fields.
+	Checker PolicyChecker
+	// Memo remembers a policy's verdict by its content, so a reconcile of
+	// content already judged runs no krakend. Nil remembers nothing.
+	Memo configcheck.Memo
+	// CheckSlots bounds the checks this controller holds at once, out of the
+	// checker's slots. Share one channel with the other controllers that
+	// check, so together they leave admission a slot. Nil is unbounded.
+	CheckSlots chan struct{}
 }
 
 // +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendbackendpolicies,verbs=get;list;watch;update
