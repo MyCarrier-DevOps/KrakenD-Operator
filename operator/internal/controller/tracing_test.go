@@ -232,6 +232,13 @@ func TestGatewayReconcile_NamesWhyEachRenderIsChecked(t *testing.T) {
 		}
 	}
 	spans.RequireParent(t, "gateway.config", "configcheck.CheckRendered")
+	for _, check := range spans.Named("configcheck.CheckEndpoint") {
+		for _, kv := range check.Attributes() {
+			if kv.Key == "configcheck.purpose" {
+				t.Errorf("an endpoint check carries the purpose of a render check: %v", kv)
+			}
+		}
+	}
 }
 
 // A pass whose render is rejected keeps the applied config, and verifies the
