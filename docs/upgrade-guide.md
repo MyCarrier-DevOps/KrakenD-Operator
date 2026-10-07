@@ -1860,7 +1860,12 @@ An update that renders the same config as the stored object (a new
 the validator is unavailable. Any other update must keep its root passing on its
 own (an update whose stored root fails too only warns) and must not make an
 endpoint it serves fail that passed with the stored root: the denial names those
-endpoints, never quoting them. An update that would make two endpoints' routes
+endpoints, never quoting them. A stored root that fails on its own makes every
+endpoint fail with it, which says nothing about the endpoints, so it does not
+turn a break into a warning for an endpoint the gateway's last applied config
+served: failing with the new root is the update's doing, and the update is
+refused, naming it. An endpoint that config did not serve (never judged, or
+changed since) only draws a warning. An update that would make two endpoints' routes
 clash in KrakenD's router, such as turning router.auto_options on, is refused,
 naming both. A `spec.version` other than 2.13.x gets a warning when it is set
 or changed: validation uses the pinned 2.13 binary. **On a CE gateway,
@@ -2811,7 +2816,12 @@ their paths differ in shape no longer fail the gateway's check. Examples:
   - Then the root is checked with the endpoints it serves now, and the
     endpoints are judged as for a policy write: an update is refused when an
     endpoint fails with the new root and passed with the stored one, naming
-    it. On a create, endpoints that already reference the gateway and fail
+    it. When the stored root fails on its own, no endpoint passed with it, so
+    an endpoint that the last applied config served (`Accepted` is `True`, or
+    `PartiallyAccepted`, for its current generation) is refused when it fails
+    with the new root; any other endpoint only draws a warning. Endpoints that
+    fail only together are refused too, without comparing them with the stored
+    group. On a create, endpoints that already reference the gateway and fail
     with it only draw a warning naming them (or saying they fail only
     together, or that they could not be checked).
   - A render-neutral update (image, replicas, probes) is still not checked.
@@ -2841,9 +2851,10 @@ their paths differ in shape no longer fail the gateway's check. Examples:
     judged on its own (every endpoint that uses the policy there when they fail
     together, otherwise those that lost an entry) and 1 more for each of those
     that fails, plus 1 for the stored group when none fails on its own;
-  - a gateway write: 2, plus 1 for the stored root when the root fails, plus
-    the endpoint checks as for a policy write, plus 1 for the stored group
-    when none fails on its own.
+  - a gateway write: 2, plus 1 for the stored root when the root fails or
+    when endpoints are judged on their own, plus the endpoint checks as for a
+    policy write, plus 1 for the stored group when none fails on its own and
+    the stored root passes.
   - On the pinned binary, at the chart's 500m CPU limit, one endpoint's check
     takes about 0.1 s and 500 endpoints are linted together in about 0.17 s,
     far inside the 15 s webhook timeout; what delays a request is waiting for
