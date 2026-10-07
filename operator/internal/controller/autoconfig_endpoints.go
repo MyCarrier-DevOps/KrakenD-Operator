@@ -565,12 +565,8 @@ func attributeFindings(
 // creationOrder is the order in which the renderer serves endpoints that share
 // a route: the oldest creationTimestamp first (to the second), then the name.
 // It knows the endpoints that exist; one it does not know is not yet created
-// and sorts after every one that does.
+// and sorts after every one that does (configcheck.NotYetCreated).
 type creationOrder map[string]int64
-
-// notYetCreated is the creation time, in Unix seconds, of an endpoint that
-// does not exist yet: the end of year 9999, after any that does.
-const notYetCreated int64 = 253402300799
 
 // newCreationOrder records the creation time of each of existing.
 func newCreationOrder(existing []v1alpha1.KrakenDEndpoint) creationOrder {
@@ -590,7 +586,7 @@ func (o creationOrder) createdAt(name string) int64 {
 	if t, ok := o[name]; ok {
 		return t
 	}
-	return notYetCreated
+	return configcheck.NotYetCreated.Unix()
 }
 
 // withUncontrolled returns controlled plus the stored copy of each desired
