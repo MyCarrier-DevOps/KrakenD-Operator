@@ -28,6 +28,7 @@ import (
 	"github.com/mycarrier-devops/krakend-operator/internal/telemetry"
 	"github.com/prometheus/client_golang/prometheus"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
@@ -159,4 +160,9 @@ func seriesCount(t *testing.T, g prometheus.Gatherer, family string) int {
 		}
 	}
 	return 0
+}
+
+// ownedBy is the owner references of an object gw controls.
+func ownedBy(gw *v1alpha1.KrakenDGateway) []metav1.OwnerReference {
+	return []metav1.OwnerReference{*metav1.NewControllerRef(gw, v1alpha1.GroupVersion.WithKind("KrakenDGateway"))}
 }
