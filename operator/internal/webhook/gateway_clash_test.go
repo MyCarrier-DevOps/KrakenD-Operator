@@ -57,3 +57,24 @@ func TestGatewayAdmission_AClashTheStoredRootAlreadyHasIsNotTheChanges(t *testin
 		t.Errorf("an edit that keeps a stored clash was denied: %+v", resp.Result)
 	}
 }
+
+// TestGatewayAdmission_RefusesARootWhileClashResolutionIsCapped caps only the
+// render of the changed gateway: the stored one resolves in full, so the
+// refusal can only come from the render of the change.
+func TestGatewayAdmission_RefusesARootWhileClashResolutionIsCapped(t *testing.T) {
+	chk := &scriptedChecker{conflicts: func(gw *v1alpha1.KrakenDGateway, _ []v1alpha1.KrakenDEndpoint) configcheck.RouteConflicts {
+		return configcheck.RouteConflicts{Capped: gw.Spec.Config.Router != nil && gw.Spec.Config.Router.HealthPath == "/status"}
+	}}
+	old := testGateway()
+	gw := routerOf(testGateway(), v1alpha1.RouterConfig{HealthPath: "/status"})
+
+	resp := review(t, &GatewayValidator{Client: fakeClient(old), Checker: chk}, "alice", gw, old)
+
+	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity ||
+		!strings.Contains(responseText(resp), configcheck.ClashesCapped) {
+		t.Errorf("response = %+v, want a 422 denial saying the clashes cannot be told apart", resp.Result)
+	}
+	if len(chk.calls) != 0 {
+		t.Errorf("checks = %v, want none after a structural refusal", chk.calls)
+	}
+}
