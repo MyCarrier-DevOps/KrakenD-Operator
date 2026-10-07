@@ -316,6 +316,7 @@ func runTests(m *testing.M) int {
 		&policyv1.PodDisruptionBudget{},
 		&autoscalingv2.HorizontalPodAutoscaler{},
 		&batchv1.Job{},
+		partialObject(virtualServiceGVK),
 	}
 	informerCtx, informerCancel := context.WithTimeout(ctx, 30*time.Second)
 	for _, obj := range watchedTypes {
@@ -581,8 +582,20 @@ const (
 // metadataOnly returns the metadata-only form of a core kind, as the
 // controllers watch it.
 func metadataOnly(kind string) client.Object {
+	return partialObject(corev1.SchemeGroupVersion.WithKind(kind))
+}
+
+// virtualServiceGVK is the Istio kind the suite installs a CRD for, and the
+// operator watches when its CRD exists at startup.
+var virtualServiceGVK = schema.GroupVersionKind{Group: istioGroup, Version: "v1", Kind: "VirtualService"}
+
+// istioGroup is the API group of the optional Istio kinds.
+const istioGroup = "networking.istio.io"
+
+// partialObject returns the metadata-only form of gvk.
+func partialObject(gvk schema.GroupVersionKind) client.Object {
 	m := &metav1.PartialObjectMetadata{}
-	m.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind(kind))
+	m.SetGroupVersionKind(gvk)
 	return m
 }
 
@@ -594,9 +607,15 @@ type typedCoreReads struct {
 	cache.Cache
 	mu   sync.Mutex
 	seen []string
+	// istio is every request for a kind of the Istio group, with the Go type
+	// asked for. The operator watches and reads these as metadata only.
+	istio []string
 }
 
 func (r *typedCoreReads) note(obj runtime.Object) {
+	if gvk := obj.GetObjectKind().GroupVersionKind(); gvk.Group == istioGroup {
+		r.recordIstio(fmt.Sprintf("%T %s", obj, gvk.Kind))
+	}
 	switch obj.(type) {
 	case *corev1.Secret, *corev1.SecretList, *corev1.ConfigMap, *corev1.ConfigMapList:
 		r.record(fmt.Sprintf("%T", obj))
@@ -607,6 +626,18 @@ func (r *typedCoreReads) record(what string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.seen = append(r.seen, what)
+}
+
+func (r *typedCoreReads) recordIstio(what string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.istio = append(r.istio, what)
+}
+
+func (r *typedCoreReads) istioRecords() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.istio)
 }
 
 func (r *typedCoreReads) records() []string {
@@ -632,6 +663,9 @@ func (r *typedCoreReads) GetInformerForKind(
 ) (cache.Informer, error) {
 	if gvk.Group == "" && (gvk.Kind == "Secret" || gvk.Kind == "ConfigMap") {
 		r.record("GetInformerForKind " + gvk.Kind)
+	}
+	if gvk.Group == istioGroup {
+		r.recordIstio("GetInformerForKind " + gvk.Kind)
 	}
 	return r.Cache.GetInformerForKind(ctx, gvk, opts...)
 }
