@@ -19,7 +19,9 @@ package main
 import (
 	"crypto/tls"
 	"flag"
+	"io"
 	"os"
+	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -38,6 +40,7 @@ import (
 	gatewayv1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/controller"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
+	"github.com/mycarrier-devops/krakend-operator/internal/telemetry"
 	webhooksetup "github.com/mycarrier-devops/krakend-operator/internal/webhook"
 	// +kubebuilder:scaffold:imports
 )
@@ -252,3 +255,7 @@ func main() {
 		os.Exit(1)
 	}
 }
+
+// flushTelemetry flushes the telemetry still buffered. It is a stub: it
+// flushes nothing.
+func flushTelemetry(*telemetry.Telemetry, time.Duration, io.Writer) {}
