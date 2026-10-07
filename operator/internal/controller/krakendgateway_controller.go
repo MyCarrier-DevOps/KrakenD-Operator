@@ -238,16 +238,23 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// not judge), an endpoint that fails on its own gets the same verdict,
 	// worded for a config not yet applied, and one every endpoint was judged
 	// against loses an exclusion it no longer earns; while no config has ever
-	// been applied, every other endpoint loses its Accepted. A failed endpoint
-	// status write does not stop the infrastructure stage or the gateway
-	// status; it is returned after them so the reconcile is retried.
-	var acceptanceErr error
+	// been applied, every other endpoint loses its Accepted. The gateway's
+	// EndpointsExcluded condition and gauge follow. A failed endpoint status
+	// write does not stop the infrastructure stage or the gateway status; it
+	// is returned after them so the reconcile is retried.
+	var (
+		acceptanceErr error
+		decided       map[types.NamespacedName]*metav1.Condition
+	)
 	if cfg.served {
-		acceptanceErr = r.reconcileEndpointAcceptance(ctx, &gw, endpoints, output, cfg.excluded)
+		decided, acceptanceErr = r.reconcileEndpointAcceptance(ctx, &gw, endpoints, output, cfg.excluded)
 	} else {
 		never, neverErr := r.neverApplied(ctx, &gw)
-		acceptanceErr = stderrors.Join(neverErr, r.recordExclusions(ctx, &gw, endpoints, cfg, never))
+		var recordErr error
+		decided, recordErr = r.recordExclusions(ctx, &gw, endpoints, cfg, never)
+		acceptanceErr = stderrors.Join(neverErr, recordErr)
 	}
+	r.reportExclusions(&gw, endpoints, decided, cfg.served)
 
 	// Infrastructure stage: always runs, and deploys the applied config.
 	infra := infraInputs{
@@ -1022,21 +1029,24 @@ func (r *KrakenDGatewayReconciler) reconcileEndpointAcceptance(
 	endpoints []v1alpha1.KrakenDEndpoint,
 	output *renderer.RenderOutput,
 	excluded map[types.NamespacedName]configcheck.EndpointVerdict,
-) error {
+) (map[types.NamespacedName]*metav1.Condition, error) {
 	rv := newRenderVerdicts(output, excluded)
 	schemaMsgs := schemaConflictMessages(output.SchemaConflicts)
+	decided := map[types.NamespacedName]*metav1.Condition{}
 	var errs []error
 	for i := range endpoints {
+		key := client.ObjectKeyFromObject(&endpoints[i])
 		a := endpointAccepted(gw, &endpoints[i], rv)
-		if msg, ok := schemaMsgs[client.ObjectKeyFromObject(&endpoints[i])]; ok &&
+		if msg, ok := schemaMsgs[key]; ok &&
 			a.condition != nil && a.condition.Reason == v1alpha1.ReasonAccepted {
 			a.condition.Reason, a.condition.Message = v1alpha1.ReasonSchemaNameConflict, msg
 		}
+		decided[key] = a.condition
 		if err := r.writeEndpointAccepted(ctx, &endpoints[i], a, nil); err != nil {
 			errs = append(errs, err)
 		}
 	}
-	return utilerrors.NewAggregate(errs)
+	return decided, utilerrors.NewAggregate(errs)
 }
 
 // writeEndpointAccepted sets the verdict a on the endpoint the render saw as

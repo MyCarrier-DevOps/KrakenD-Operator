@@ -409,20 +409,22 @@ func isExclusion(cond *metav1.Condition) bool {
 //
 // A removal is checked against the live condition, so a stale endpoint list
 // cannot remove a verdict it did not see. writeEndpointAccepted writes only
-// on change.
+// on change. It returns what it decided per endpoint (nil: removed).
 func (r *KrakenDGatewayReconciler) recordExclusions(
 	ctx context.Context, gw *v1alpha1.KrakenDGateway, endpoints []v1alpha1.KrakenDEndpoint,
 	cfg configResult, neverApplied bool,
-) error {
+) (map[types.NamespacedName]*metav1.Condition, error) {
+	decided := map[types.NamespacedName]*metav1.Condition{}
 	var errs []error
 	for i := range endpoints {
 		ep := &endpoints[i]
+		key := client.ObjectKeyFromObject(ep)
 		cur := meta.FindStatusCondition(ep.Status.Conditions, v1alpha1.ConditionAccepted)
 		var (
 			a         acceptance
 			removable func(*metav1.Condition) bool
 		)
-		v, excluded := cfg.excluded[client.ObjectKeyFromObject(ep)]
+		v, excluded := cfg.excluded[key]
 		switch {
 		case excluded:
 			a = acceptance{condition: exclusionCondition(gw, ep, v, false), keepConflicts: !neverApplied}
@@ -433,11 +435,12 @@ func (r *KrakenDGatewayReconciler) recordExclusions(
 		default:
 			continue
 		}
+		decided[key] = a.condition
 		if err := r.writeEndpointAccepted(ctx, ep, a, removable); err != nil {
 			errs = append(errs, err)
 		}
 	}
-	return utilerrors.NewAggregate(errs)
+	return decided, utilerrors.NewAggregate(errs)
 }
 
 // renderVerdicts is what one render says about its endpoints.
