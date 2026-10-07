@@ -19,7 +19,7 @@ package configcheck
 import (
 	"context"
 	"errors"
-	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -142,63 +142,38 @@ func newChecker(v renderer.Validator, objs ...client.Object) *Checker {
 	return New(newReader(objs...), renderer.New(renderer.Options{}), v, 1)
 }
 
-func TestCheckGateway_LintsCurrentEndpointsWithTheCandidate(t *testing.T) {
-	v := &fakeValidator{}
-	c := newChecker(v, endpoint("a", "/a"), endpoint("b", "/b"))
+// The AutoConfig precheck passes an entry-less copy of a stale endpoint to
+// model its deletion: it must no longer win a route.
+func TestConflicts_AnEmptyReplacementRemovesTheEndpoint(t *testing.T) {
+	older := endpoint("a", "/x")
+	newer := endpoint("b", "/x")
+	chk := newChecker(&fakeValidator{}, older, newer)
+	gone := *older.DeepCopy()
+	gone.Spec.Endpoints = nil
 
-	verdict, err := c.CheckGateway(context.Background(), gateway(v1alpha1.EditionCE),
-		[]v1alpha1.KrakenDEndpoint{*endpoint("b", "/b2"), *endpoint("c", "/c")})
+	conflicts, err := chk.Conflicts(context.Background(), gateway(v1alpha1.EditionCE), []v1alpha1.KrakenDEndpoint{gone})
 
-	if err != nil || !verdict.OK {
-		t.Fatalf("verdict = %+v, err = %v; want OK", verdict, err)
-	}
-	if len(v.calls) != 1 || v.calls[0] != "lint" || v.editions[0] != v1alpha1.EditionCE {
-		t.Fatalf("calls = %v %v, want one CE lint", v.calls, v.editions)
-	}
-	for _, want := range []string{`"/a"`, `"/b2"`, `"/c"`} {
-		if !strings.Contains(v.seen[0], want) {
-			t.Errorf("config %s lacks %s", v.seen[0], want)
-		}
-	}
-	if strings.Contains(v.seen[0], `"/b"`) {
-		t.Errorf("config still holds the replaced entry: %s", v.seen[0])
+	if err != nil || len(conflicts.Lost) != 0 {
+		t.Errorf("Conflicts = %+v, %v; want none: with ns/a removed, ns/b serves /x alone", conflicts, err)
 	}
 }
 
-// The AutoConfig controller passes an entry-less copy of a stale endpoint to
-// model its deletion. It must render nothing: not its paths, not its
-// component schemas.
-func TestCheckGateway_EmptyReplacementRemovesTheEndpoint(t *testing.T) {
-	stale := endpoint("stale", "/stale")
-	stale.Spec.ComponentSchemas = map[string]runtime.RawExtension{"staleschema": {Raw: []byte(`{"type":"object"}`)}}
-	v := &fakeValidator{}
-	c := newChecker(v, stale, endpoint("kept", "/kept"))
-	removal := stale.DeepCopy()
-	removal.Spec.Endpoints = nil
-
-	verdict, err := c.CheckGateway(context.Background(), gateway(v1alpha1.EditionEE), []v1alpha1.KrakenDEndpoint{*removal})
-
-	if err != nil || !verdict.OK {
-		t.Fatalf("verdict = %+v, err = %v; want OK", verdict, err)
-	}
-	if strings.Contains(v.seen[0], "/stale") || strings.Contains(v.seen[0], "staleschema") || !strings.Contains(v.seen[0], "/kept") {
-		t.Errorf("linted %s, want /kept only", v.seen[0])
-	}
-}
-
-func TestCheckGateway_ARouteClashAcrossEndpointsIsResolvedOldestFirst(t *testing.T) {
+func TestCheckGroup_ARouteClashAcrossEndpointsIsResolvedOldestFirst(t *testing.T) {
 	c := newChecker(realValidator(), endpoint("a", "/users/{id}"))
 	replace := []v1alpha1.KrakenDEndpoint{*endpoint("b", "/other", "/users/{userId}/orders")}
+	b := types.NamespacedName{Namespace: "ns", Name: "b"}
 
-	verdict, err := c.CheckGateway(context.Background(), gateway(v1alpha1.EditionCE), replace)
-	if err != nil || !verdict.OK {
-		t.Fatalf("verdict = %+v, %v; want OK: the render leaves the newer entry out", verdict, err)
+	verdict, err := c.CheckGroup(context.Background(), Group{
+		Gateway: gateway(v1alpha1.EditionCE), Endpoints: []v1alpha1.KrakenDEndpoint{*endpoint("a", "/users/{id}"), replace[0]},
+	}, nil)
+	if err != nil || !verdict.OK || !slices.Equal(verdict.Masked, []types.NamespacedName{b}) {
+		t.Fatalf("verdict = %+v, %v; want OK with ns/b masked: the render leaves the newer entry out", verdict, err)
 	}
 	conflicts, err := c.Conflicts(context.Background(), gateway(v1alpha1.EditionCE), replace)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := conflicts.Lost[types.NamespacedName{Namespace: "ns", Name: "b"}]
+	got := conflicts.Lost[b]
 	if len(got) != 1 || got[0].Endpoint != "/users/{userId}/orders" || got[0].Winner.Name != "a" {
 		t.Errorf("ns/b lost %+v, want GET /users/{userId}/orders to ns/a", got)
 	}
@@ -239,28 +214,9 @@ func TestSameConfig(t *testing.T) {
 	}
 }
 
-func TestCheckGateway_AttributesLintOutputToTheSpecEntry(t *testing.T) {
-	v := &fakeValidator{err: &renderer.ValidationError{
-		Output: "ERROR linting the configuration file:\tjsonschema validation failed with 'file:///etc/krakend/schema.json#'\n" +
-			"- at '/endpoints/1/extra_config': additional properties 'qos/circuit-breakr' not allowed\n",
-		Err: errors.New("exit status 1"),
-	}}
-	c := newChecker(v, endpoint("a", "/a"), endpoint("b", "/y", "/x"))
-
-	verdict, err := c.CheckGateway(context.Background(), gateway(v1alpha1.EditionCE), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Rendered order is /a, /x, /y: index 1 is b's /x, which is b's spec.endpoints[1].
-	b := types.NamespacedName{Namespace: "ns", Name: "b"}
-	if verdict.OK || len(verdict.Findings) != 1 || verdict.Findings[0].Endpoint != b || verdict.Findings[0].Index != 1 {
-		t.Errorf("findings = %+v, want ns/b spec.endpoints[1]", verdict.Findings)
-	}
-}
-
-func TestCheckRendered_AVerdictCarriesTheValidatorsRejection(t *testing.T) {
+func TestCheckRendered_AVerdictCarriesTheRejectionsOutputAndStage(t *testing.T) {
 	rejection := &renderer.ValidationError{
-		Output: "- at '/endpoints/0/extra_config': bad", Err: errors.New("exit status 1"),
+		Output: "- at '/endpoints/0/extra_config': bad", Err: errors.New("exit status 1"), Stage: renderer.StageCheck,
 	}
 	c := newChecker(&fakeValidator{err: rejection}, endpoint("a", "/a"))
 	in, err := c.Gather(context.Background(), gateway(v1alpha1.EditionCE), nil)
@@ -274,14 +230,14 @@ func TestCheckRendered_AVerdictCarriesTheValidatorsRejection(t *testing.T) {
 
 	verdict, err := c.CheckRendered(context.Background(), in, out, nil)
 
-	if err != nil || verdict.OK || !reflect.DeepEqual(verdict.Rejection, rejection) {
-		t.Errorf("verdict = %+v, err = %v; want a rejection carrying %v", verdict, err, rejection)
+	if err != nil || verdict.OK || verdict.Output != rejection.Output || verdict.Stage != renderer.StageCheck {
+		t.Errorf("verdict = %+v, err = %v; want the rejection's output and stage", verdict, err)
 	}
 }
 
 func TestCheck_TransientValidatorErrorIsAnError(t *testing.T) {
 	c := newChecker(&fakeValidator{err: errors.New("running krakend check: fork/exec: no such file")}, endpoint("a", "/a"))
-	if verdict, err := c.CheckGateway(context.Background(), gateway(v1alpha1.EditionCE), nil); err == nil {
+	if verdict, err := c.CheckRoot(context.Background(), Root{Gateway: gateway(v1alpha1.EditionCE)}, nil); err == nil {
 		t.Fatalf("verdict = %+v, err = nil; want the validator failure as an error", verdict)
 	}
 }
@@ -295,7 +251,7 @@ func TestCheck_WaitsForASlotUntilTheDeadline(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	_, err := c.CheckGateway(ctx, gateway(v1alpha1.EditionCE), nil)
+	_, err := c.CheckRoot(ctx, Root{Gateway: gateway(v1alpha1.EditionCE)}, nil)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("err = %v, want deadline exceeded", err)
 	}
@@ -308,7 +264,7 @@ func TestCheck_ReleasesTheSlotWhenDone(t *testing.T) {
 	c := newChecker(&fakeValidator{}, endpoint("a", "/a"))
 	for i := range 2 {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		verdict, err := c.CheckGateway(ctx, gateway(v1alpha1.EditionCE), nil)
+		verdict, err := c.CheckRoot(ctx, Root{Gateway: gateway(v1alpha1.EditionCE)}, nil)
 		cancel()
 		if err != nil || !verdict.OK {
 			t.Fatalf("check %d: verdict = %+v, err = %v; want OK", i, verdict, err)
@@ -316,36 +272,13 @@ func TestCheck_ReleasesTheSlotWhenDone(t *testing.T) {
 	}
 }
 
-func TestCheckIsolated_UsesOnlyTheGivenEndpoints(t *testing.T) {
-	v := &fakeValidator{}
-	c := newChecker(v, endpoint("a", "/stored"))
-	if _, err := c.CheckIsolated(context.Background(), gateway(v1alpha1.EditionCE),
-		[]v1alpha1.KrakenDEndpoint{*endpoint("b", "/alone")}); err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(v.seen[0], "/stored") || !strings.Contains(v.seen[0], "/alone") {
-		t.Errorf("linted %s, want only /alone", v.seen[0])
-	}
-}
-
-func TestCheckGateway_RendersThePoliciesTheEndpointsReference(t *testing.T) {
-	v := &fakeValidator{}
-	c := newChecker(v, policy("breaker"), withPolicy(endpoint("a", "/a"), "breaker"))
-
-	if _, err := c.CheckGateway(context.Background(), gateway(v1alpha1.EditionCE), nil); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(v.seen[0], "qos/circuit-breaker") {
-		t.Errorf("config lacks the policy's circuit breaker: %s", v.seen[0])
-	}
-}
-
-func TestCheckIsolated_RendersThePoliciesTheEndpointsReference(t *testing.T) {
+func TestCheckGroup_RendersThePoliciesItsEndpointsReference(t *testing.T) {
 	v := &fakeValidator{}
 	c := newChecker(v, policy("breaker"))
 
-	if _, err := c.CheckIsolated(context.Background(), gateway(v1alpha1.EditionCE),
-		[]v1alpha1.KrakenDEndpoint{*withPolicy(endpoint("a", "/a"), "breaker")}); err != nil {
+	if _, err := c.CheckGroup(context.Background(), Group{
+		Gateway: gateway(v1alpha1.EditionCE), Endpoints: []v1alpha1.KrakenDEndpoint{*withPolicy(endpoint("a", "/a"), "breaker")},
+	}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(v.seen[0], "qos/circuit-breaker") {
@@ -355,11 +288,12 @@ func TestCheckIsolated_RendersThePoliciesTheEndpointsReference(t *testing.T) {
 
 // A missing policy is not a validator failure: the renderer leaves the
 // endpoint out and the check goes on.
-func TestCheckGateway_MissingPolicyLeavesTheEndpointOut(t *testing.T) {
+func TestCheckGroup_MissingPolicyLeavesTheEndpointOut(t *testing.T) {
 	v := &fakeValidator{}
-	c := newChecker(v, withPolicy(endpoint("a", "/a"), "gone"), endpoint("b", "/b"))
+	c := newChecker(v)
 
-	verdict, err := c.CheckGateway(context.Background(), gateway(v1alpha1.EditionCE), nil)
+	verdict, err := c.CheckGroup(context.Background(), Group{Gateway: gateway(v1alpha1.EditionCE),
+		Endpoints: []v1alpha1.KrakenDEndpoint{*withPolicy(endpoint("a", "/a"), "gone"), *endpoint("b", "/b")}}, nil)
 
 	if err != nil || !verdict.OK {
 		t.Fatalf("verdict = %+v, err = %v; want OK", verdict, err)
@@ -390,17 +324,19 @@ func TestCheckRendered_RunsTheFullCheckAsTheRendersEdition(t *testing.T) {
 	}
 }
 
-func TestCheckGateway_HealthPathClash(t *testing.T) {
+func TestCheckGroup_HealthPathClash(t *testing.T) {
 	gw := gateway(v1alpha1.EditionCE)
 	gw.Spec.Config.Router = &v1alpha1.RouterConfig{HealthPath: "/healthz"}
-	c := newChecker(realValidator(), endpoint("a", "/healthz"))
+	c := newChecker(realValidator())
 
-	verdict, err := c.CheckGateway(context.Background(), gw, nil)
+	verdict, err := c.CheckGroup(context.Background(), Group{
+		Gateway: gw, Endpoints: []v1alpha1.KrakenDEndpoint{*endpoint("a", "/healthz")},
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if verdict.OK || verdict.Findings[0].Index != 0 || !strings.Contains(verdict.Findings[0].Message, "the gateway's own route") {
-		t.Errorf("findings = %+v, want ns/a spec.endpoints[0] clashing with the health route", verdict.Findings)
+	if verdict.OK || !strings.Contains(verdict.Output, "the gateway's own route") {
+		t.Errorf("verdict = %+v, want the entry refused next to the health route", verdict)
 	}
 }
 
@@ -420,23 +356,24 @@ func TestCheck_ReleasesTheSlotWhenTheValidatorPanics(t *testing.T) {
 	c := newChecker(panicValidator{}, endpoint("a", "/a"))
 	func() {
 		defer func() { _ = recover() }()
-		_, _ = c.CheckGateway(context.Background(), gateway(v1alpha1.EditionCE), nil)
+		_, _ = c.CheckRoot(context.Background(), Root{Gateway: gateway(v1alpha1.EditionCE)}, nil)
 	}()
 	c.validator = &fakeValidator{}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	verdict, err := c.CheckGateway(ctx, gateway(v1alpha1.EditionCE), nil)
+	verdict, err := c.CheckRoot(ctx, Root{Gateway: gateway(v1alpha1.EditionCE)}, nil)
 	if err != nil || !verdict.OK {
 		t.Fatalf("verdict = %+v, err = %v; want OK after a panicked check", verdict, err)
 	}
 }
 
-func TestCheckGateway_AnEEGatewayInLicenseFallbackIsLintedAsCE(t *testing.T) {
+func TestCheckRoot_AnEEGatewayInLicenseFallbackIsLintedAsCE(t *testing.T) {
 	v := &fakeValidator{}
-	c := newChecker(v, endpoint("a", "/a"))
+	c := newChecker(v)
+	gw := degraded(gateway(v1alpha1.EditionEE))
 
-	if _, err := c.CheckGateway(context.Background(), degraded(gateway(v1alpha1.EditionEE)), nil); err != nil {
+	if _, err := c.CheckRoot(context.Background(), Root{Gateway: gw, CEFallback: CEFallback(gw)}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(v.editions) != 1 || v.editions[0] != v1alpha1.EditionCE {
@@ -447,10 +384,13 @@ func TestCheckGateway_AnEEGatewayInLicenseFallbackIsLintedAsCE(t *testing.T) {
 // The gateway controller reports CE fallback for an EE gateway only, yet a
 // stale LicenseDegraded condition outlives an EE to CE switch until its next
 // reconcile. Admission must not strip a CE gateway's wildcard on that account.
-func TestCheckGateway_AStaleFallbackConditionDoesNotAffectACEGateway(t *testing.T) {
-	c := newChecker(realValidator(), endpoint("a", "/files/*"))
+func TestCheckGroup_AStaleFallbackConditionDoesNotAffectACEGateway(t *testing.T) {
+	c := newChecker(realValidator())
+	gw := degraded(gateway(v1alpha1.EditionCE))
 
-	verdict, err := c.CheckGateway(context.Background(), degraded(gateway(v1alpha1.EditionCE)), nil)
+	verdict, err := c.CheckGroup(context.Background(), Group{
+		Gateway: gw, Endpoints: []v1alpha1.KrakenDEndpoint{*endpoint("a", "/files/*")}, CEFallback: CEFallback(gw),
+	}, nil)
 
 	if err != nil || verdict.OK {
 		t.Errorf("verdict = %+v, err = %v; want the CE wildcard entry linted and rejected", verdict, err)
@@ -486,7 +426,7 @@ func TestCheck_RunsAtMostTheConfiguredNumberOfValidationsAtOnce(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := c.CheckGateway(context.Background(), gateway(v1alpha1.EditionCE), nil); err != nil {
+			if _, err := c.CheckRoot(context.Background(), Root{Gateway: gateway(v1alpha1.EditionCE)}, nil); err != nil {
 				t.Error(err)
 			}
 		}()
@@ -509,7 +449,7 @@ func TestNew_FewerThanOneSlotMeansOne(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	verdict, err := c.CheckGateway(ctx, gateway(v1alpha1.EditionCE), nil)
+	verdict, err := c.CheckRoot(ctx, Root{Gateway: gateway(v1alpha1.EditionCE)}, nil)
 
 	if err != nil || !verdict.OK {
 		t.Fatalf("verdict = %+v, err = %v; want OK", verdict, err)
@@ -552,32 +492,13 @@ func TestGather_ReturnsCopiesTheCallerMayMutate(t *testing.T) {
 	}
 }
 
-func TestCheckGatewayPolicy_RendersTheCandidatePolicy(t *testing.T) {
-	stored := policy("p")
-	stored.Spec.Raw = &runtime.RawExtension{Raw: []byte(`{"stored/ns":{}}`)}
-	v := &fakeValidator{}
-	c := newChecker(v, withPolicy(endpoint("a", "/a"), "p"), stored)
-	candidate := stored.DeepCopy()
-	candidate.Spec.Raw = &runtime.RawExtension{Raw: []byte(`{"candidate/ns":{}}`)}
-
-	if _, err := c.CheckGatewayPolicy(context.Background(), gateway(v1alpha1.EditionCE), candidate); err != nil {
-		t.Fatal(err)
-	}
-	if len(v.seen) != 1 {
-		t.Fatalf("lint ran %d times, want 1", len(v.seen))
-	}
-	if !strings.Contains(v.seen[0], "candidate/ns") || strings.Contains(v.seen[0], "stored/ns") {
-		t.Errorf("linted %s, want the candidate policy only", v.seen[0])
-	}
-}
-
-func TestLintPolicy_RendersThePolicyOnASyntheticBackend(t *testing.T) {
+func TestCheckPolicy_RendersThePolicyOnASyntheticBackend(t *testing.T) {
 	v := &fakeValidator{}
 	c := newChecker(v)
 	p := policy("p")
 	p.Spec.Raw = &runtime.RawExtension{Raw: []byte(`{"qos/circuit-breakr":{}}`)}
 
-	if _, err := c.LintPolicy(context.Background(), p); err != nil {
+	if _, err := c.CheckPolicy(context.Background(), p, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(v.seen) != 1 || !strings.Contains(v.seen[0], "qos/circuit-breakr") {
@@ -588,16 +509,18 @@ func TestLintPolicy_RendersThePolicyOnASyntheticBackend(t *testing.T) {
 	}
 }
 
-func TestCheckGatewayPolicy_KeepsTheOtherStoredPolicies(t *testing.T) {
+func TestCheckGroup_TheOverrideKeepsTheOtherStoredPolicies(t *testing.T) {
 	p, q := policy("p"), policy("q")
 	p.Spec.Raw = &runtime.RawExtension{Raw: []byte(`{"stored-p/ns":{}}`)}
 	q.Spec.Raw = &runtime.RawExtension{Raw: []byte(`{"stored-q/ns":{}}`)}
 	v := &fakeValidator{}
-	c := newChecker(v, withPolicy(endpoint("a", "/a"), "p"), withPolicy(endpoint("b", "/b"), "q"), p, q)
+	c := newChecker(v, p, q)
 	candidate := p.DeepCopy()
 	candidate.Spec.Raw = &runtime.RawExtension{Raw: []byte(`{"candidate/ns":{}}`)}
 
-	if _, err := c.CheckGatewayPolicy(context.Background(), gateway(v1alpha1.EditionCE), candidate); err != nil {
+	if _, err := c.CheckGroup(context.Background(), Group{Gateway: gateway(v1alpha1.EditionCE),
+		Endpoints: []v1alpha1.KrakenDEndpoint{*withPolicy(endpoint("a", "/a"), "p"), *withPolicy(endpoint("b", "/b"), "q")},
+		Override:  candidate}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(v.seen[0], "stored-q/ns") || !strings.Contains(v.seen[0], "candidate/ns") {
@@ -605,16 +528,17 @@ func TestCheckGatewayPolicy_KeepsTheOtherStoredPolicies(t *testing.T) {
 	}
 }
 
-func TestCheckGatewayPolicy_OverrideIsKeyedByNamespace(t *testing.T) {
+func TestCheckGroup_TheOverrideIsKeyedByNamespace(t *testing.T) {
 	stored := policy("p")
 	stored.Spec.Raw = &runtime.RawExtension{Raw: []byte(`{"stored/ns":{}}`)}
 	v := &fakeValidator{}
-	c := newChecker(v, withPolicy(endpoint("a", "/a"), "p"), stored)
+	c := newChecker(v, stored)
 	candidate := stored.DeepCopy()
 	candidate.Namespace = "other"
 	candidate.Spec.Raw = &runtime.RawExtension{Raw: []byte(`{"candidate/ns":{}}`)}
 
-	if _, err := c.CheckGatewayPolicy(context.Background(), gateway(v1alpha1.EditionCE), candidate); err != nil {
+	if _, err := c.CheckGroup(context.Background(), Group{Gateway: gateway(v1alpha1.EditionCE),
+		Endpoints: []v1alpha1.KrakenDEndpoint{*withPolicy(endpoint("a", "/a"), "p")}, Override: candidate}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(v.seen[0], "stored/ns") || strings.Contains(v.seen[0], "candidate/ns") {
@@ -622,13 +546,14 @@ func TestCheckGatewayPolicy_OverrideIsKeyedByNamespace(t *testing.T) {
 	}
 }
 
-func TestCheckGatewayPolicy_CandidateFillsAMissingPolicy(t *testing.T) {
+func TestCheckGroup_TheOverrideFillsAMissingPolicy(t *testing.T) {
 	v := &fakeValidator{}
-	c := newChecker(v, withPolicy(endpoint("a", "/a"), "p"))
+	c := newChecker(v)
 	candidate := policy("p")
 	candidate.Spec.Raw = &runtime.RawExtension{Raw: []byte(`{"candidate/ns":{}}`)}
 
-	if _, err := c.CheckGatewayPolicy(context.Background(), gateway(v1alpha1.EditionCE), candidate); err != nil {
+	if _, err := c.CheckGroup(context.Background(), Group{Gateway: gateway(v1alpha1.EditionCE),
+		Endpoints: []v1alpha1.KrakenDEndpoint{*withPolicy(endpoint("a", "/a"), "p")}, Override: candidate}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(v.seen) != 1 || !strings.Contains(v.seen[0], "candidate/ns") {
@@ -636,7 +561,7 @@ func TestCheckGatewayPolicy_CandidateFillsAMissingPolicy(t *testing.T) {
 	}
 }
 
-func TestLintPolicy_FindingsDoNotNameTheSyntheticEndpoint(t *testing.T) {
+func TestCheckPolicy_ARejectionCarriesItsOutput(t *testing.T) {
 	v := &fakeValidator{err: &renderer.ValidationError{
 		Output: "ERROR linting the configuration file:\tjsonschema validation failed with 'file:///etc/krakend/schema.json#'\n" +
 			"- at '/endpoints/0/backend/0/extra_config': additional properties 'qos/circuit-breakr' not allowed\n",
@@ -644,14 +569,10 @@ func TestLintPolicy_FindingsDoNotNameTheSyntheticEndpoint(t *testing.T) {
 	}}
 	c := newChecker(v)
 
-	verdict, err := c.LintPolicy(context.Background(), policy("p"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if verdict.OK || len(verdict.Findings) != 1 {
-		t.Fatalf("findings = %+v, want one", verdict.Findings)
-	}
-	if f := verdict.Findings[0]; f.Endpoint != (types.NamespacedName{}) || f.Index != -1 || strings.Contains(f.String(), "policy-lint") {
-		t.Errorf("finding = %+v (%s), want no endpoint and index -1", f, f)
+	verdict, err := c.CheckPolicy(context.Background(), policy("p"), nil)
+
+	if err != nil || verdict.OK || verdict.Excerpt(1024) !=
+		"- at '/endpoints/0/backend/0/extra_config': additional properties 'qos/circuit-breakr' not allowed" {
+		t.Errorf("verdict = %+v, %v; want the rejection with its finding line", verdict, err)
 	}
 }
