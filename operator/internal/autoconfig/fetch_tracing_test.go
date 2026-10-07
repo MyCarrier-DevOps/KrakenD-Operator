@@ -350,3 +350,18 @@ func TestFetch_EveryErrorNamesTheRedactedURLOnce(t *testing.T) {
 		})
 	}
 }
+
+// A scheme-less URL whose first segment is a token parses with the token as
+// its scheme: the error must not repeat the scheme.
+func TestFetch_ASchemeThatIsATokenIsNotEchoed(t *testing.T) {
+	f := &httpFetcher{}
+
+	_, err := f.Fetch(context.Background(), FetchSource{URL: "glpat-AbC123:x@gitlab.example.com/spec.json"})
+
+	if err == nil {
+		t.Fatal("Fetch succeeded")
+	}
+	if msg := err.Error(); strings.Contains(strings.ToLower(msg), "glpat") {
+		t.Errorf("error %q echoes the scheme", msg)
+	}
+}
