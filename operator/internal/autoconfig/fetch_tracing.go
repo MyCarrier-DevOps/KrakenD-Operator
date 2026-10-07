@@ -64,15 +64,14 @@ func redact(u *url.URL) string {
 
 // redactQuery replaces the value of each "key=value" pair of query with
 // REDACTED, keeping its key, and a bare key, which is a token as much as a
-// value is, with REDACTED. The pairs come back sorted, without repeats.
+// value is, with REDACTED. Pairs are separated by "&" or ";" and come back
+// separated by "&", sorted, without repeats.
 func redactQuery(query string) string {
 	var pairs []string
-	for _, pair := range strings.Split(query, "&") {
-		switch key, _, hasValue := strings.Cut(pair, "="); {
-		case pair == "":
-		case hasValue:
+	for _, pair := range strings.FieldsFunc(query, func(r rune) bool { return r == '&' || r == ';' }) {
+		if key, _, hasValue := strings.Cut(pair, "="); hasValue {
 			pairs = append(pairs, key+"="+redactedValue)
-		default:
+		} else {
 			pairs = append(pairs, redactedValue)
 		}
 	}
