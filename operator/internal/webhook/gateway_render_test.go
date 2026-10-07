@@ -28,6 +28,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -75,6 +76,9 @@ func TestGatewayAdmission_Render(t *testing.T) {
 		{"update makes the endpoints fail only together", old, []client.Object{ep},
 			[]configcheck.Verdict{ok, fail, ok}, []configcheck.EndpointVerdict{epOK}, false,
 			"root,group,endpoint,group", ""},
+		{"create whose waiting endpoint lost an entry that fails on its own", nil, []client.Object{ep},
+			[]configcheck.Verdict{ok, {OK: true, Masked: []types.NamespacedName{{Namespace: "default", Name: "ep"}}}},
+			[]configcheck.EndpointVerdict{epFail}, true, "root,group,endpoint", "default/ep"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
