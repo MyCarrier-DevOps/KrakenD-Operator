@@ -55,7 +55,7 @@ func (r *krakendRenderer) Render(input RenderInput) (*RenderOutput, error) {
 	// next to an older endpoint's are left out, oldest first, as duplicates
 	// are.
 	gatewayEC := buildGatewayExtraConfig(gw, input.Dragonfly)
-	flat, _ = dropRouteLosers(flat, conflicted, routeRules{
+	flat, capped := dropRouteLosers(flat, conflicted, routeRules{
 		autoOptions: routerOptionsOf(gatewayEC).AutoOptions,
 		eeWildcards: gw.Spec.Edition == v1alpha1.EditionEE && !input.CEFallback,
 	})
@@ -134,15 +134,16 @@ func (r *krakendRenderer) Render(input RenderInput) (*RenderOutput, error) {
 	}
 
 	return &RenderOutput{
-		JSON:                jsonData,
-		Checksum:            checksum,
-		PluginChecksum:      pluginChecksum,
-		ConflictedEndpoints: conflictedSlice,
-		EntryConflicts:      conflicted,
-		InvalidEndpoints:    invalidSlice,
-		Sources:             sources,
-		StrippedEEFeatures:  stripped,
-		SchemaConflicts:     schemaConflicts,
+		JSON:                  jsonData,
+		Checksum:              checksum,
+		PluginChecksum:        pluginChecksum,
+		ConflictedEndpoints:   conflictedSlice,
+		EntryConflicts:        conflicted,
+		RouteResolutionCapped: capped,
+		InvalidEndpoints:      invalidSlice,
+		Sources:               sources,
+		StrippedEEFeatures:    stripped,
+		SchemaConflicts:       schemaConflicts,
 	}, nil
 }
 
