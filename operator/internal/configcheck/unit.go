@@ -197,8 +197,8 @@ func (c *Checker) CheckPolicy(ctx context.Context, policy *v1alpha1.KrakenDBacke
 // judged the same content.
 func (c *Checker) CheckEndpoint(ctx context.Context, u EndpointUnit, memo Memo) (v EndpointVerdict, retErr error) {
 	ctx, span := c.start(ctx, "configcheck.CheckEndpoint", u.Gateway)
-	span.SetAttributes(attribute.String("configcheck.endpoint", client.ObjectKeyFromObject(u.Endpoint).String()))
 	defer func() { endCheck(span, v.OK, retErr) }()
+	span.SetAttributes(attribute.String("configcheck.endpoint", client.ObjectKeyFromObject(u.Endpoint).String()))
 	policies, err := c.unitPolicies(ctx, u)
 	if err != nil {
 		return EndpointVerdict{}, err
