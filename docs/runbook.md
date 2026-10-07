@@ -524,9 +524,11 @@ nothing removes every `Accepted`).
 
 **Resolution:** remove the cause. The operator retries with exponential backoff up to 5 minutes; editing the gateway or restarting the operator retries at once. Once the ConfigMap is published, `ConfigValid` returns to `True`.
 
-### Reconcile error "recording applied config" or "the cached gateway is behind its stored status"
+### Reconcile error "updating gateway status" or "the cached gateway is behind its stored status"
 
-A newly published config is recorded in `status.configChecksum` before endpoints are accepted or the Deployment is pointed at it. If that status write fails (usually a conflict because the gateway was changed during the pass), the log shows `recording applied config <hash>: ...`; the pods and the endpoints' `Accepted` stay as they were and the next pass applies the config. The error `the cached gateway is behind its stored status` means a pass that applies nothing found the Deployment on a config other than the one its cached gateway names and the stored status disagreed with the cache; it changes nothing and retries. Both clear on their own within a retry or two. Only a persistent error needs attention: check the operator's `update` permission on `krakendgateways/status` and API server health.
+A newly published config is recorded in `status.configChecksum` before endpoints are accepted or the Deployment is pointed at it, and that record reads as a rollout under way (`Ready=False`, reason `ConfigDeployed`) until the Deployment moves on. If the write fails (usually a conflict because the gateway was changed during the pass), the pods and the endpoints' `Accepted` stay as they were and the next pass applies the config. The log shows either `recording applied config <hash>: ...` or, when the end-of-pass status write then conflicts too (the usual case), only `updating gateway status: Operation cannot be fulfilled ...`. Both clear within a retry or two. A persistent `updating gateway status` error needs the `update` permission on `krakendgateways/status` and API server health checked.
+
+The error `the cached gateway is behind its stored status` means a pass that applies nothing found the Deployment on a config other than the one its cached gateway names, and the stored status disagreed with the cache. The pass changes nothing and retries, and clears once the cache catches up. If it persists, the gateway informer is not receiving events: check the operator's list and watch permission on `krakendgateways` and the watch's health.
 
 ### Gateway Deployment not updated: "no ConfigMap holds the applied config"
 
