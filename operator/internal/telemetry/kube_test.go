@@ -218,3 +218,17 @@ func TestTraceKubeAPI_ClientSpanRecordsTheRequestAndTheParentDoesNot(t *testing.
 		}
 	}
 }
+
+func TestTraceKubeAPI_StatusUpdateIsNamedWithItsSubresource(t *testing.T) {
+	rec := tracingtest.New(t)
+	c, _ := tracedClient(t, rec)
+	ctx, parent := rec.Tracer().Start(context.Background(), "reconcile")
+
+	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "cm"}}
+	if err := c.Status().Update(ctx, cm); err != nil {
+		t.Fatal(err)
+	}
+	parent.End()
+
+	rec.Ended().RequireChild(t, "reconcile", "k8s update configmaps/status")
+}
