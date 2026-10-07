@@ -98,7 +98,7 @@ func readableValue(v any, depth int) any {
 		return plain(v)
 	}
 	rv := reflect.ValueOf(v)
-	switch rv.Kind() {
+	switch rv.Kind() { //nolint:exhaustive // every other kind is rendered by plain below
 	case reflect.String:
 		return rv.String()
 	case reflect.Bool:
