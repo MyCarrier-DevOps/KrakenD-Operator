@@ -1151,3 +1151,29 @@ func TestResolveExternalRefs_ExternalRefBesideALocalRefIsStillInlined(t *testing
 		t.Errorf("want other.json#/Bar inlined as other_Bar and rewritten; got %s", raw)
 	}
 }
+
+// A recursive schema in a fetched document is rewritten to its inlined name,
+// so the cycle note must not say the resolution was skipped.
+func TestResolveExternalRefs_RecursiveSchemaWarningDoesNotClaimItWasSkipped(t *testing.T) {
+	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"content":{"application/json":` +
+		`{"schema":{"$ref":"common.json#/Node"}}}}}}}}}`)
+	common := []byte(`{"Node":{"properties":{"left":{"$ref":"#/Node"}}}}`)
+	fetcher := &stubFetcher{docs: map[string][]byte{"https://api.example.com/common.json": common}}
+
+	resolved, warnings, err := ResolveExternalRefs(context.Background(), main,
+		"https://api.example.com/openapi.json", fetcher, FetchSource{})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if !strings.Contains(string(resolved), `"left":{"$ref":"#/components/schemas/common_Node"}`) {
+		t.Errorf("want the recursive ref rewritten to common_Node; got %s", resolved)
+	}
+	for _, w := range warnings {
+		if !strings.Contains(w, "cycle detected") || strings.Contains(w, "skipping") {
+			t.Errorf("warning %q, want a cycle note that does not claim the resolution was skipped", w)
+		}
+	}
+	if len(warnings) != 1 {
+		t.Errorf("warnings = %q, want one cycle note", warnings)
+	}
+}
