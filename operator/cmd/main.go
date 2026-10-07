@@ -81,9 +81,9 @@ func main() {
 // before anything logs, and flushed on every return.
 func run() int {
 	// grpc-go requires its logger before any gRPC call, and the OTLP gRPC
-	// exporters Setup builds are gRPC clients. The logger is controller-runtime's,
-	// which logs through the pipeline once InstallLogging has run.
-	telemetry.InstallGRPCLogging(ctrl.Log.WithName("grpc"))
+	// exporters Setup builds are gRPC clients. It logs through the pipeline
+	// once InstallLogging has run.
+	telemetry.InstallGRPCLogging()
 	var metricsAddr string
 	var metricsCertPath, metricsCertName, metricsCertKey string
 	var webhookCertPath, webhookCertName, webhookCertKey string

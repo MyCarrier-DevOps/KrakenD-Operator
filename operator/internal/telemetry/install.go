@@ -35,6 +35,8 @@ import (
 // operator reads a global logger.
 func InstallLogging(logger, diagnostics logr.Logger) {
 	ctrl.SetLogger(logger)
+	grpcLogs := logger.WithName("grpc")
+	grpcTarget.Store(&grpcLogs)
 	klog.SetLoggerWithOptions(logger.WithName("klog"), klog.ContextualLogger(true))
 	log.SetFlags(0)
 	log.SetOutput(stdlibWriter{logger: logger.WithName("stdlib")})

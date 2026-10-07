@@ -20,6 +20,7 @@ import (
 	"io"
 	"testing"
 
+	"github.com/go-logr/logr"
 	otellog "go.opentelemetry.io/otel/log"
 	"google.golang.org/grpc/grpclog"
 
@@ -32,13 +33,23 @@ func discardGRPCLogs(t *testing.T) {
 	t.Cleanup(func() { grpclog.SetLoggerV2(grpclog.NewLoggerV2(io.Discard, io.Discard, io.Discard)) })
 }
 
+// installGRPCLogging routes grpc-go's logging through logger, and puts back a
+// grpc-go logger that writes nothing, and the globals InstallLogging set, when
+// the test ends.
+func installGRPCLogging(t *testing.T, logger logr.Logger) {
+	t.Helper()
+	restoreGlobals(t)
+	telemetry.InstallGRPCLogging()
+	discardGRPCLogs(t)
+	telemetry.InstallLogging(logger, logger)
+}
+
 // grpc-go, which the OTLP gRPC exporters run on, logs through a global logger
 // of its own that writes errors to stderr. Installed, it logs through the
 // pipeline: a transport error is an ERROR record of the grpc logger.
 func TestInstallGRPCLogging_AnErrorIsARecordOfThePipeline(t *testing.T) {
 	logger, out := newStdoutLogger(t, otellog.SeverityInfo)
-	telemetry.InstallGRPCLogging(logger.WithName("grpc"))
-	discardGRPCLogs(t)
+	installGRPCLogging(t, logger)
 
 	grpclog.Errorf("transport: received GOAWAY with %s", "too_many_pings")
 
@@ -63,8 +74,7 @@ func TestInstallGRPCLogging_InfoIsVerbosityTwo(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			logger, out := newStdoutLogger(t, tc.minimum)
-			telemetry.InstallGRPCLogging(logger)
-			discardGRPCLogs(t)
+			installGRPCLogging(t, logger)
 
 			grpclog.Info("[core] Channel switches to new LB policy")
 
@@ -79,8 +89,7 @@ func TestInstallGRPCLogging_InfoIsVerbosityTwo(t *testing.T) {
 // that is the path its own code takes, not the package-level functions.
 func TestInstallGRPCLogging_AComponentsErrorIsARecordWithItsPrefix(t *testing.T) {
 	logger, out := newStdoutLogger(t, otellog.SeverityInfo)
-	telemetry.InstallGRPCLogging(logger)
-	discardGRPCLogs(t)
+	installGRPCLogging(t, logger)
 
 	grpclog.Component("transport").Errorf("connection closed: %s", "EOF")
 

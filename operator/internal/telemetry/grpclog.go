@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync/atomic"
 
 	"github.com/go-logr/logr"
 	"google.golang.org/grpc/grpclog"
@@ -31,14 +32,44 @@ import (
 // default debug level.
 const grpcInfoLevel = 2
 
+// grpcTarget is the logger grpc-go's records go to. InstallLogging sets it;
+// until then, while Setup builds the exporters, the records are dropped.
+var grpcTarget atomic.Pointer[logr.Logger]
+
 // InstallGRPCLogging makes grpc-go, which the OTLP gRPC exporters run on, log
-// through logger instead of its default logger, which writes errors to
-// stderr. grpc-go requires its logger to be set before any gRPC call, so cmd
-// calls this first, with a controller-runtime logger that logs once
-// InstallLogging has run. It is process-wide by nature.
-func InstallGRPCLogging(logger logr.Logger) {
-	grpclog.SetLoggerV2(grpcLogger{logger: logger, exit: os.Exit})
+// through the logger InstallLogging gives it instead of its default logger,
+// which writes errors to stderr. grpc-go requires its logger to be set before
+// any gRPC call, so cmd calls this first, before the logger exists: records
+// logged until InstallLogging has run are dropped. It is process-wide by
+// nature.
+func InstallGRPCLogging() {
+	grpclog.SetLoggerV2(grpcLogger{logger: logr.New(grpcSink{}), exit: os.Exit})
 }
+
+// grpcSink is a logr.LogSink that logs through grpcTarget, when it is set.
+type grpcSink struct{}
+
+func (grpcSink) Init(logr.RuntimeInfo) {}
+
+func (grpcSink) Enabled(level int) bool {
+	target := grpcTarget.Load()
+	return target != nil && target.V(level).Enabled()
+}
+
+func (grpcSink) Info(level int, msg string, keysAndValues ...any) {
+	if target := grpcTarget.Load(); target != nil {
+		target.V(level).Info(msg, keysAndValues...)
+	}
+}
+
+func (grpcSink) Error(err error, msg string, keysAndValues ...any) {
+	if target := grpcTarget.Load(); target != nil {
+		target.Error(err, msg, keysAndValues...)
+	}
+}
+
+func (s grpcSink) WithValues(...any) logr.LogSink { return s }
+func (s grpcSink) WithName(string) logr.LogSink   { return s }
 
 // grpcLogger is a grpclog.LoggerV2 that logs through a logr.Logger: info at
 // grpcInfoLevel, warnings at info, errors as errors. Fatal logs an error,
