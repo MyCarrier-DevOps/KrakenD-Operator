@@ -708,6 +708,9 @@ func TestPolicyAdmission_AReferrerThatFailsAnywayDoesNotBlockACreate(t *testing.
 	if got := strings.Join(chk.calls, ","); got != "policy,root,group,endpoint,endpoint" {
 		t.Errorf("checks = %s, want the endpoint checked with the policy and with it rendered empty", got)
 	}
+	if got := strings.Join(chk.overrides, " "); got != "default/p default/p" {
+		t.Errorf("endpoint checks were handed policies %s, want the written policy and the empty one, both as default/p", got)
+	}
 	if got := strings.Join(chk.args, " "); !strings.HasSuffix(got, `default/uses-p[GET /a]:{"x":{}} default/uses-p[GET /a]:-`) {
 		t.Errorf("checks received %s, want the second endpoint check to carry the policy with no content", got)
 	}
