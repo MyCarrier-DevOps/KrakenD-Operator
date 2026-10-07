@@ -118,8 +118,7 @@ func (v *KrakenDValidator) validate(
 	}
 	if len(refusals) > 0 {
 		return &ValidationError{
-			Output: strings.Join(refusalLines(refusals, capped), "\n"), Err: errRouteConflict,
-			Stage: StageRoute, Refusals: refusals, RefusalsCapped: capped,
+			Output: strings.Join(refusalLines(refusals, capped), "\n"), Err: errRouteConflict, Stage: StageRoute,
 		}
 	}
 	return v.check(ctx, doc, flags...)

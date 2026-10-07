@@ -165,15 +165,11 @@ type RouteRefusal struct {
 }
 
 // ValidationError wraps a failed krakend check output. Stage says which check
-// rejected the config. For a route check rejection, Refusals lists what it
-// refused, and RefusalsCapped is set when the check stopped at MaxRouteRefusals,
-// so refusals past those listed are unknown.
+// rejected the config.
 type ValidationError struct {
-	Output         string
-	Err            error
-	Stage          RejectionStage
-	Refusals       []RouteRefusal
-	RefusalsCapped bool
+	Output string
+	Err    error
+	Stage  RejectionStage
 }
 
 func (e *ValidationError) Error() string {
