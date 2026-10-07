@@ -2015,9 +2015,13 @@ names the second entry (`spec.overrides[1].operationId`). A stored list that
 already does this keeps accepting edits that leave the colliding entries and
 their positions unchanged; inserting or removing an override above the pair
 shifts it to a new position and is rejected. A stored malformed
-`documentation/openapi.audience` is ratcheted the same way, by its position:
-inserting or removing an override or an additional endpoint above it gives it a
-new position and it is rejected until it is fixed. The audit in the Pre-Upgrade
+`documentation/openapi.audience` on an override is ratcheted the same way, by
+its position: inserting or removing an override above it gives it a new
+position and it is rejected until it is fixed. On an additional endpoint it is
+matched by the entry's `endpoint` and `method`, like the list's map key:
+removing, inserting or reordering other additional endpoints does not affect
+it, while a new entry, or an entry whose content changed, is checked in full.
+The audit in the Pre-Upgrade
 Checklist lists these lists. A `policyRef` in `defaults`, `overrides` or
 `additionalEndpoints` that names no existing policy now produces an admission
 warning (at most five, then a count), not a rejection: a release may create the
