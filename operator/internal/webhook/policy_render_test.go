@@ -684,3 +684,29 @@ func TestPolicyAdmission_AnEndpointChangedSinceItsVerdictIsStillJudged(t *testin
 			resp.Allowed, chk.calls)
 	}
 }
+
+// Before a policy exists, a referrer that fails on its own, whatever the
+// policy holds, must not block every create of it: its baseline is the policy
+// rendered empty, and failing there too makes the failure its own.
+func TestPolicyAdmission_AReferrerThatFailsAnywayDoesNotBlockACreate(t *testing.T) {
+	chk := &scriptedChecker{
+		verdicts: []configcheck.Verdict{{OK: true}, {OK: true}, {Output: "x"}},
+		endpointVerdicts: []configcheck.EndpointVerdict{
+			{Reason: v1alpha1.ReasonEndpointInvalid}, {Reason: v1alpha1.ReasonEndpointInvalid}},
+	}
+	v := &PolicyValidator{Client: fakeClient(referencing()...), Checker: chk}
+
+	resp := review(t, v, "alice", testPolicy(`{"x":{}}`), nil)
+
+	if !resp.Allowed || len(resp.Warnings) != 1 ||
+		!strings.Contains(resp.Warnings[0], "already fail validation") {
+		t.Errorf("response = %+v, warnings %q; want an admission with the already-fail warning",
+			resp.Result, resp.Warnings)
+	}
+	if got := strings.Join(chk.calls, ","); got != "policy,root,group,endpoint,endpoint" {
+		t.Errorf("checks = %s, want the endpoint checked with the policy and with it rendered empty", got)
+	}
+	if got := strings.Join(chk.args, " "); !strings.HasSuffix(got, `default/uses-p[GET /a]:{"x":{}} default/uses-p[GET /a]:-`) {
+		t.Errorf("checks received %s, want the second endpoint check to carry the policy with no content", got)
+	}
+}
