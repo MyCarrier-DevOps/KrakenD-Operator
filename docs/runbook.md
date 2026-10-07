@@ -45,7 +45,7 @@ on). Key metrics:
 | Metric | Type | Description |
 |---|---|---|
 | `config_renders_total` | Counter | Total config renders |
-| `config_validation_failures_total` | Counter | Fresh rejections of a gateway root, a backend policy or an endpoint checked on its own, a rejection counts once per change of what the gateway controller checks, not once per reconcile, and again for content that comes back, the same policy on another gateway and after a restart. The full check of a gateway's whole render is not counted: a config that fails only with its endpoints together shows as gateway_config_valid 0 (ConfigValid=False, CombinedConfigInvalid) instead |
+| `config_validation_failures_total` | Counter | Fresh rejections of a gateway root, a backend policy or an endpoint checked on its own, Fresh rejections of a gateway root, a backend policy or an endpoint checked on its own, counted once per change of what the gateway controller checks, not once per reconcile; content that comes back, the same policy on another gateway and an operator restart each count again. The full check of a gateway's whole render is not counted: a config that fails only with its endpoints together shows as gateway_config_valid 0 (ConfigValid=False, CombinedConfigInvalid) instead |
 | `rolling_restarts_total` | Counter | Deployment writes that changed the pod template, once per write (a creation does not count; drift in the template the operator reverts does) |
 | `license_expiry_seconds` | Gauge | Seconds until license expiry (per gateway) |
 | `endpoints` | Gauge | Number of endpoints (per gateway) |
@@ -607,11 +607,13 @@ costs the same once, because every endpoint's check then covers new content.
 ### Endpoint shows `Accepted` reason `PartiallyAccepted`
 
 Some of this endpoint's entries are served; the ones in `status.conflicts`
-are not, because an older KrakenDEndpoint (`winner`) serves the same method
-and route. Paths that differ only in parameter names are the same route, so
-the winner may serve a differently named parameter path (for example
-`/users/{id}` wins over `/users/{name}`). When `winner` is the endpoint itself,
-an earlier entry of the same KrakenDEndpoint serves the route. Remove the
+are not, because they lose to the KrakenDEndpoint named in `winner`: an older
+endpoint with the same method and route shape, or one whose route clashes with
+this entry's in the router. Paths that differ only in parameter names are the
+same route (for example `/users/{id}` wins over `/users/{name}`). An entry is
+listed once for each endpoint it loses to, and the winner's entry may itself be
+left out. When `winner` is the endpoint itself, an earlier entry of the same
+KrakenDEndpoint has the same route shape and method. Remove the
 duplicate entry from one of the two, or move it to the KrakenDEndpoint that
 should own it.
 
