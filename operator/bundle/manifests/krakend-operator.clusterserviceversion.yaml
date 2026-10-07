@@ -419,6 +419,10 @@ spec:
                   valueFrom:
                     fieldRef:
                       fieldPath: spec.serviceAccountName
+                - name: POD_NAME
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.name
                 image: ghcr.io/mycarrier-devops/krakend-operator:latest
                 livenessProbe:
                   httpGet:
