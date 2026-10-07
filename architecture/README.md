@@ -1369,8 +1369,9 @@ KrakenDEndpoint the earlier spec entry is (the winner is then the endpoint
 itself). A KrakenDEndpoint that lost some but not
 all of its entries is `Accepted=True/PartiallyAccepted`; one that lost all of
 them is `Accepted=False/EndpointConflict`. In both cases `status.conflicts`
-lists each lost entry once for every older KrakenDEndpoint it loses to (the winner),
-and that older endpoint may itself be left out. The gateway
+lists each lost entry once for every KrakenDEndpoint it loses to (the winner:
+an older endpoint, or this one when an earlier entry of it won), and the
+winner's entry may itself be left out. The gateway
 writes it in the same optimistic-lock status patch as `Accepted`.
 
 Admission stops new conflicts before the renderer sees them. The
@@ -2103,7 +2104,7 @@ shares the other selector labels, is never scraped.
 |---|---|---|
 | `krakend_operator_gateway_info` | Gauge | Gateway metadata labels (edition, version, namespace) |
 | `krakend_operator_config_renders_total` | Counter | Total config render attempts |
-| `krakend_operator_config_validation_failures_total` | Counter | Fresh rejections of a gateway root, a backend policy or an endpoint checked on its own, a rejection counts once per change of what the gateway controller checks, not once per reconcile, and again for content that comes back, the same policy on another gateway and after a restart. Only the gateway controller counts, and its full check of a whole render is not counted: a config that fails only with its endpoints together shows as gateway_config_valid 0 (ConfigValid=False, CombinedConfigInvalid) instead |
+| `krakend_operator_config_validation_failures_total` | Counter | Fresh rejections of a gateway root, a backend policy or an endpoint checked on its own, counted once per change of what the gateway controller checks, not once per reconcile; content that comes back, the same policy on another gateway and an operator restart each count again. Only the gateway controller counts, and its full check of a whole render is not counted: a config that fails only with its endpoints together shows as gateway_config_valid 0 (ConfigValid=False, CombinedConfigInvalid) instead |
 | `krakend_operator_rolling_restarts_total` | Counter | Rolling deployments triggered |
 | `krakend_operator_license_expiry_seconds` | Gauge | Seconds until EE license expiry (labels: `namespace`, `name`) |
 | `krakend_operator_endpoints` | Gauge | Number of KrakenDEndpoints per gateway |
