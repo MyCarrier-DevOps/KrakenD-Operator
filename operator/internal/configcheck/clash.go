@@ -88,7 +88,7 @@ type clashKey struct {
 // when the same entry of the same endpoint loses to the same endpoint, however
 // the router words it. Same-shape conflicts are left out: the route uniqueness
 // rules and the oldest-wins render settle those. The result is sorted by
-// loser, endpoint and method.
+// loser, endpoint, method and winner.
 func NewClashes(before, after RouteConflicts, involving map[types.NamespacedName]bool) []Clash {
 	known := map[clashKey]bool{}
 	for loser, lost := range before.Lost {
@@ -110,7 +110,8 @@ func NewClashes(before, after RouteConflicts, involving map[types.NamespacedName
 	}
 	slices.SortFunc(out, func(a, b Clash) int {
 		return cmp.Or(cmp.Compare(a.Loser.String(), b.Loser.String()),
-			cmp.Compare(a.Endpoint, b.Endpoint), cmp.Compare(a.Method, b.Method))
+			cmp.Compare(a.Endpoint, b.Endpoint), cmp.Compare(a.Method, b.Method),
+			cmp.Compare(a.Winner.String(), b.Winner.String()))
 	})
 	return out
 }
