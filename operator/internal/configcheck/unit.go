@@ -85,9 +85,11 @@ func (c *Checker) CheckGroup(ctx context.Context, g Group, memo Memo) (Verdict, 
 	}, memo)
 }
 
-// CheckPolicy lints policy on its own.
-func (c *Checker) CheckPolicy(context.Context, *v1alpha1.KrakenDBackendPolicy, Memo) (Verdict, error) {
-	return Verdict{}, nil
+// CheckPolicy lints policy on its own: one synthetic endpoint on a default CE
+// gateway, whose only backend references policy (policyAlone).
+func (c *Checker) CheckPolicy(ctx context.Context, policy *v1alpha1.KrakenDBackendPolicy,
+	memo Memo) (Verdict, error) {
+	return c.lintInput(ctx, policyAlone(policy), memo)
 }
 
 // lintInput renders in and lints the render, answering from memo when it
