@@ -312,3 +312,30 @@ func TestRender_RouterClashResolutionIsBounded(t *testing.T) {
 			n, out.RouteResolutionCapped, MaxRouteRefusals)
 	}
 }
+
+// TestRender_AnEndpointsOwnClashesDoNotCountTowardTheCap pins that clashes
+// among one endpoint's own entries, which its own check refuses, leave its
+// entries in and spend nothing of MaxRouteRefusals: a clash between two other
+// endpoints after them is still resolved.
+func TestRender_AnEndpointsOwnClashesDoNotCountTowardTheCap(t *testing.T) {
+	var paths []string
+	for i := range 30 {
+		paths = append(paths, fmt.Sprintf("/s/{p%d}/x%d", i, i))
+	}
+	in := RenderInput{Gateway: routedGateway(v1alpha1.EditionCE, nil), Endpoints: []v1alpha1.KrakenDEndpoint{
+		routed("self", 0, "GET", paths...), routed("older", 1, "GET", "/t/{id}"), routed("newer", 2, "GET", "/t/{name}/x"),
+	}}
+
+	out, err := New(Options{}).Render(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if out.RouteResolutionCapped || len(out.EntryConflicts[types.NamespacedName{Namespace: "ns", Name: "self"}]) != 0 {
+		t.Errorf("capped = %v, self lost %+v; want self's own clashes left to its check, uncounted",
+			out.RouteResolutionCapped, out.EntryConflicts)
+	}
+	if lost := out.EntryConflicts[types.NamespacedName{Namespace: "ns", Name: "newer"}]; len(lost) != 1 || lost[0].Winner.Name != "older" {
+		t.Errorf("newer lost %+v, want GET /t/{name}/x to ns/older", lost)
+	}
+}
