@@ -462,29 +462,6 @@ func suspects(candidates []*v1alpha1.KrakenDEndpoint, group configcheck.Verdict)
 	})
 }
 
-// withCheckSlot runs check holding one of slots, and gives up when ctx ends
-// while waiting. A nil slots runs check at once. The wait is an
-// autoconfig.slot span of tracer, ended once the slot is taken; the check is
-// not part of it.
-func withCheckSlot[T any](
-	ctx context.Context, tracer trace.Tracer, slots chan struct{}, check func() (T, error),
-) (T, error) {
-	if slots != nil {
-		_, wait := tracing.Start(ctx, tracer, "autoconfig.slot")
-		select {
-		case slots <- struct{}{}:
-			wait.End()
-			defer func() { <-slots }()
-		case <-ctx.Done():
-			err := fmt.Errorf("waiting for an AutoConfig check slot: %w", ctx.Err())
-			tracing.End(wait, err)
-			var zero T
-			return zero, err
-		}
-	}
-	return check()
-}
-
 // routerClashesCappedMessage holds every candidate while the gateway's render
 // stops resolving router clashes at its cap: a new clash cannot be told apart.
 const routerClashesCappedMessage = "not written: " + configcheck.ClashesCapped

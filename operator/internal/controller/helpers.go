@@ -17,9 +17,11 @@ limitations under the License.
 package controller
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
+	"go.opentelemetry.io/otel/trace"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -32,6 +34,7 @@ import (
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
+	"github.com/mycarrier-devops/krakend-operator/internal/tracing"
 )
 
 // setReadyCondition sets the Ready condition on conds, stamped with the
@@ -174,4 +177,28 @@ func recordConditionTransition(
 	case next.Status == metav1.ConditionTrue && prev != nil && prev.Status != metav1.ConditionTrue:
 		recorder.Event(obj, corev1.EventTypeNormal, next.Reason, next.Message)
 	}
+}
+
+// withCheckSlot runs check holding one of slots, the share of the checker's
+// slots the AutoConfig and policy controllers hold between them, and gives up
+// when ctx ends while waiting. A nil slots runs check at once. The wait is a
+// controller.check_slot span of tracer, ended once the slot is taken; the
+// check is not part of it.
+func withCheckSlot[T any](
+	ctx context.Context, tracer trace.Tracer, slots chan struct{}, check func() (T, error),
+) (T, error) {
+	if slots != nil {
+		_, wait := tracing.Start(ctx, tracer, "controller.check_slot")
+		select {
+		case slots <- struct{}{}:
+			wait.End()
+			defer func() { <-slots }()
+		case <-ctx.Done():
+			err := fmt.Errorf("waiting for a controller check slot: %w", ctx.Err())
+			tracing.End(wait, err)
+			var zero T
+			return zero, err
+		}
+	}
+	return check()
 }
