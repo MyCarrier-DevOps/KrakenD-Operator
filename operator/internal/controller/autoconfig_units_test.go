@@ -133,3 +133,29 @@ func TestAutoConfigReconcile_AMaskedCandidateThatFailsOnItsOwnIsHeld(t *testing.
 		t.Error("want listusers written and getb held")
 	}
 }
+
+// While the gateway's render stops resolving router clashes at its cap, a new
+// clash cannot be told apart, so every write is held before any krakend check.
+func TestAutoConfigReconcile_ACappedRenderHoldsEveryWriteBeforeAnyCheck(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	checker := &fakeChecker{conflicts: func([]v1alpha1.KrakenDEndpoint) configcheck.RouteConflicts {
+		return configcheck.RouteConflicts{Capped: true}
+	}}
+	c := fakeClientBuilder().WithObjects(ac, cm, testGateway()).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Checker = checker
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(checker.checks) != 0 || endpointExists(t, c, "test-ac-listusers") {
+		t.Errorf("checks = %v; want listusers held before any check", checker.checks)
+	}
+	failed := getAC(t, c, ac).Status.FailedOperations
+	if len(failed) != 1 || failed[0].Message != routerClashesCappedMessage {
+		t.Errorf("failedOperations = %+v, want listusers held for the capped render", failed)
+	}
+}
