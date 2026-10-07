@@ -240,3 +240,19 @@ func TestRedactURL(t *testing.T) {
 		})
 	}
 }
+
+// Nothing between clientSpans and the network can add a header: the transport
+// each production client wraps is the SSRF-safe *http.Transport itself.
+func TestNewFetcher_NothingWrapsTheTransportUnderTheSpans(t *testing.T) {
+	f := NewFetcher(fakeClient(), nil).(*httpFetcher)
+
+	for name, c := range map[string]*http.Client{"strict": f.strictClient, "lenient": f.lenientClient} {
+		spans, ok := c.Transport.(clientSpans)
+		if !ok {
+			t.Fatalf("the %s client's transport is %T, want clientSpans", name, c.Transport)
+		}
+		if _, ok := spans.next.(*http.Transport); !ok {
+			t.Errorf("the %s client's clientSpans wraps %T, want *http.Transport", name, spans.next)
+		}
+	}
+}
