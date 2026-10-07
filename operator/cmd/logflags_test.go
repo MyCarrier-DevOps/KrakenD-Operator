@@ -72,3 +72,9 @@ func TestLogFlags(t *testing.T) {
 		})
 	}
 }
+
+func TestLogFlags_RejectsAnUnknownFormat(t *testing.T) {
+	if _, _, _, err := parseLogFlags(t, "--log-format=console"); err == nil {
+		t.Error("want an error for --log-format=console")
+	}
+}
