@@ -291,13 +291,25 @@ func (c *Checker) render(ctx context.Context, in renderer.RenderInput) (_ *rende
 	return out, nil
 }
 
-// WithPurpose returns ctx naming why the check started from it runs. It is a
-// stub: it names nothing.
-func WithPurpose(ctx context.Context, _ string) context.Context { return ctx }
+// purposeKey is the context key of the purpose WithPurpose names.
+type purposeKey struct{}
 
-// start starts the span of a check of gw.
+// WithPurpose returns ctx naming why the check started from it runs, such as
+// "combined" or "safety_net": that check's span carries it as
+// configcheck.purpose. The value is a telemetry attribute only: no check reads
+// it, so it changes no behaviour.
+func WithPurpose(ctx context.Context, purpose string) context.Context {
+	return context.WithValue(ctx, purposeKey{}, purpose)
+}
+
+// start starts the span of a check of gw, with the purpose its caller named
+// (WithPurpose).
 func (c *Checker) start(ctx context.Context, name string, gw *v1alpha1.KrakenDGateway) (context.Context, trace.Span) {
-	return tracing.Start(ctx, c.tracer, name, trace.WithAttributes(tracing.Object("KrakenDGateway", gw)...))
+	attrs := tracing.Object("KrakenDGateway", gw)
+	if purpose, ok := ctx.Value(purposeKey{}).(string); ok {
+		attrs = append(attrs, attribute.String("configcheck.purpose", purpose))
+	}
+	return tracing.Start(ctx, c.tracer, name, trace.WithAttributes(attrs...))
 }
 
 // endCheck records whether the check passed and ends its span. A rejected
