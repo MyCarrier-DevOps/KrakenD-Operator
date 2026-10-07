@@ -2988,11 +2988,12 @@ their paths differ in shape no longer fail the gateway's check. Examples:
   - a policy write: 1, plus 2 per gateway that uses it, plus 1 per endpoint
     judged on its own (every endpoint that uses the policy there when they fail
     together, otherwise those that lost an entry) and 1 more for each of those
-    that fails, plus 1 for the stored group when none fails on its own;
+    that fails, plus 1 for the stored group (on a create, with the policy empty)
+    when they fail together;
   - a gateway write: 2, plus 1 for the stored root when the root fails or
     when endpoints are judged on their own, plus the endpoint checks as for a
-    policy write, plus 1 for the stored group when none fails on its own and
-    the stored root passes.
+    policy write, plus 1 for the stored group when they fail together and the
+    stored root passes.
   - On the pinned binary, at the chart's 500m CPU limit, one endpoint's check
     takes about 0.1-0.13 s and 500 endpoints are linted together in about
     0.17 s. A write whose group passes stays far inside the 15 s webhook
