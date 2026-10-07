@@ -17,6 +17,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
@@ -737,5 +738,59 @@ func TestGatewayReconcile_ASafetyNetFailureOnTheFastPathDoesNotHoldTheGeneration
 	if got.Status.ObservedGeneration != got.Generation {
 		t.Errorf("observedGeneration = %d, want %d: a pass that applies nothing is a verdict on this generation",
 			got.Status.ObservedGeneration, got.Generation)
+	}
+}
+
+// excludedSeries returns the gateway's excluded-endpoints gauge, by reason.
+func excludedSeries(t *testing.T, namespace, gateway string) map[string]float64 {
+	t.Helper()
+	families, err := ctrlmetrics.Registry.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	series := map[string]float64{}
+	for _, family := range families {
+		if family.GetName() != "krakend_operator_gateway_excluded_endpoints" {
+			continue
+		}
+		for _, m := range family.GetMetric() {
+			labels := map[string]string{}
+			for _, l := range m.GetLabel() {
+				labels[l.GetName()] = l.GetValue()
+			}
+			if labels["namespace"] == namespace && labels["gateway"] == gateway {
+				series[labels["reason"]] = m.GetGauge().GetValue()
+			}
+		}
+	}
+	return series
+}
+
+func TestGatewayReconcile_ReportsTheExcludedEndpoints(t *testing.T) {
+	gw := reconciledGateway()
+	gw.Namespace = "excluded"
+	good, bad := testEndpoint("good", "/a"), badHosted("bad", "/b")
+	good.Namespace, bad.Namespace = gw.Namespace, gw.Namespace
+	c := fakeClientBuilder().WithObjects(gw, good, bad).WithStatusSubresource(gw, good, bad).Build()
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}), rejectsBadHosts())
+	rec := r.Recorder.(*record.FakeRecorder)
+	t.Cleanup(func() { deleteGatewayMetrics(gw.Namespace, gw.Name) })
+
+	for range 2 {
+		if err := reconcileGateway(t, r, gw); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cond := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionEndpointsExcluded)
+	if cond == nil || cond.Status != metav1.ConditionTrue || cond.Reason != v1alpha1.ReasonInvalidEndpointsExcluded ||
+		cond.Message != "1 KrakenDEndpoint(s) fail validation and are not served: excluded/bad" {
+		t.Errorf("EndpointsExcluded = %+v, want True naming excluded/bad", cond)
+	}
+	if n := eventsWithReason(rec, v1alpha1.ReasonInvalidEndpointsExcluded); n != 1 {
+		t.Errorf("%d %s events over two passes, want 1", n, v1alpha1.ReasonInvalidEndpointsExcluded)
+	}
+	if got := excludedSeries(t, gw.Namespace, gw.Name); len(got) != 1 || got[v1alpha1.ReasonEndpointInvalid] != 1 {
+		t.Errorf("gauge = %v, want EndpointInvalid=1", got)
 	}
 }
