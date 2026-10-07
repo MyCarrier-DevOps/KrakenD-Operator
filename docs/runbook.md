@@ -140,8 +140,8 @@ Every trace starts at one of these spans:
 | Root span | Attributes | Below it |
 |---|---|---|
 | `reconcile KrakenDGateway` | `k8s.namespace.name`, `k8s.object.name`, `k8s.object.kind`, `k8s.object.generation`, `controller_runtime.reconcile_id` | `configcheck.Gather`, `gateway.license`, `gateway.plugins`, `gateway.dragonfly`, `gateway.render`, `gateway.config` (its `configcheck.*` checks, each `gateway.judge_endpoints` pass with its `configcheck.CheckEndpoint` checks, `gateway.publish_configmap` and `gateway.verify_configmap`), `gateway.acceptance` (`gateway.endpoint_status`), `gateway.core_resources` (`apply serviceaccount`, `apply service`, `apply pdb`), `gateway.infrastructure` (`apply deployment`, `apply job`, `gateway.collect_configmaps`, …), `gateway.status` (with `gateway.status.written`, false when the status was unchanged and nothing was written); a `k8s.discovery` span under the stage that looks an optional CRD up |
-| `reconcile KrakenDAutoConfig` | the same | `autoconfig.fetch_spec` (with `autoconfig.fetch`, `HTTP GET` and `autoconfig.resolve_refs`), `autoconfig.cue_definitions`, `autoconfig.evaluate`, `autoconfig.filter`, `autoconfig.generate`, `autoconfig.endpoints` (each `autoconfig.precheck`, with its router-clash check and `autoconfig.judge_candidates`, whose checks each wait in `autoconfig.slot`, and each `autoconfig.write_endpoint` or `autoconfig.delete_endpoint`), `autoconfig.status` |
-| `reconcile KrakenDEndpoint`, `reconcile KrakenDBackendPolicy` | the same | `endpoint.resolve_refs`, `endpoint.status`; `policy.protection`, `configcheck.CheckPolicy` (with its `krakend check` run, or a memo hit), `policy.status` |
+| `reconcile KrakenDAutoConfig` | the same | `autoconfig.fetch_spec` (with `autoconfig.fetch`, `HTTP GET` and `autoconfig.resolve_refs`), `autoconfig.cue_definitions`, `autoconfig.evaluate`, `autoconfig.filter`, `autoconfig.generate`, `autoconfig.endpoints` (each `autoconfig.precheck`, with its router-clash check and `autoconfig.judge_candidates`, whose checks each wait in `controller.check_slot`, and each `autoconfig.write_endpoint` or `autoconfig.delete_endpoint`), `autoconfig.status` |
+| `reconcile KrakenDEndpoint`, `reconcile KrakenDBackendPolicy` | the same | `endpoint.resolve_refs`, `endpoint.status`; `policy.protection`, `controller.check_slot` (the wait for a controller check slot), `configcheck.CheckPolicy` (with its `krakend check` run, or a memo hit), `policy.status` |
 | `admission /validate-…` | HTTP server attributes | `admission.validate <Kind>` (object identity, `k8s.admission.operation`, `k8s.admission.dry_run`, `k8s.admission.uid`, and the outcome below), `admission.structural`, the `configcheck.*` checks; a gateway update's `admission.judge_served`; a policy write's `admission.screen_policy` and `admission.judge_policy`, one of each per gateway that uses the policy |
 
 Each reconcile is a new root: it does not continue the trace of an earlier reconcile or of the admission request that wrote the object.
@@ -169,7 +169,7 @@ Each reconcile is a new root: it does not continue the trace of an earlier recon
 ### Finding the trace of a slow or stuck reconcile
 
 1. In the trace backend, search for spans named `reconcile KrakenDGateway` (or the kind) whose span attributes `k8s.namespace.name` and `k8s.object.name` are the object's, sorted by duration. The waterfall shows which child took the time:
-   - `configcheck.slot`: waiting for one of the three validation slots, or `autoconfig.slot` for the AutoConfig controller's own share of them;
+   - `configcheck.slot`: waiting for one of the three validation slots, or `controller.check_slot` for the share of them the AutoConfig and policy controllers hold between them;
    - `krakend check`: the binary itself;
    - a `k8s …` span: the API server;
    - `HTTP GET`: a spec host.
@@ -690,12 +690,18 @@ gateway's next reconcile.
 ### Policy shows `Ready=Unknown`, reason `ValidatorUnavailable`
 
 **Meaning:** `krakend check` could not run for the policy: the binary is
-missing, the run timed out, or no check slot freed up before the reconcile was
-cancelled. Nothing is known about the policy, so it is not reported as invalid
-and no event is raised. The reconcile retries with exponential backoff, up to 5
-minutes. The message carries the cause; see [Gateway reports
+missing or the run timed out. Nothing is known about the policy, so it is not
+reported as invalid, and no event is raised when it turns `Unknown`. The
+reconcile retries with exponential backoff, up to 5 minutes. The message
+carries the cause; see [Gateway reports
 `ValidatorUnavailable`](#gateway-reports-validatorunavailable) for how to read
 it.
+
+When the check works again, a policy that was `Unknown` emits a Normal `Ready`
+event as it returns to `True`, and one that is invalid repeats its Warning
+`PolicyInvalid` as it goes `Unknown` to `False`. Both fire once per change. A
+reconcile cancelled while it waited for a check slot (the operator stopping or
+losing its lease) shows only on the reconcile span and in the controller log.
 
 ### Gateway reports `EndpointsExcluded`
 
@@ -1196,7 +1202,7 @@ phase `Error`.
 
 The chart runs two replicas by default, with a PodDisruptionBudget allowing one voluntary disruption and a preference for different nodes. Leader election (`krakend-operator-leader` Lease) keeps one replica running the controllers; every replica serves the admission webhooks and is Ready only once its webhook server is serving, so a rollout or node drain does not route admission requests to a pod whose webhook server is not listening. Readiness does not cover cache sync: a request that arrives before the caches have synced waits up to the 12 s budget and then fails closed with a 500. Every replica, not only the leader, reloads the webhook and metrics serving certificates when they are renewed. The chart refuses `replicaCount` > 1 with `leaderElection.enabled: false`.
 
-The active replica reconciles up to 4 KrakenDAutoConfigs at once, because each reconcile fetches its OpenAPI spec over the network and a slow upstream should delay only its own AutoConfig. Set `--autoconfig-max-concurrent-reconciles` (chart value `autoconfig.maxConcurrentReconciles`, default `4`; values below 1 mean 1) to change it. The AutoConfig config checks hold at most 1 of the pod's 3 validation slots, and the gateway controller at most 1, so the controllers never hold more than 2 of the 3 slots, however many workers there are. Concurrent admission requests can take the rest.
+The active replica reconciles up to 4 KrakenDAutoConfigs at once, because each reconcile fetches its OpenAPI spec over the network and a slow upstream should delay only its own AutoConfig. Set `--autoconfig-max-concurrent-reconciles` (chart value `autoconfig.maxConcurrentReconciles`, default `4`; values below 1 mean 1) to change it. The AutoConfig config checks and the policy controller's checks hold at most 1 of the pod's 3 validation slots between them, and the gateway controller at most 1, so the controllers never hold more than 2 of the 3 slots, however many workers there are. Concurrent admission requests can take the rest.
 
 The gateway controller remembers its verdicts in memory only. After a restart or
 a leader failover, each gateway whose whole render fails checks every one of its
