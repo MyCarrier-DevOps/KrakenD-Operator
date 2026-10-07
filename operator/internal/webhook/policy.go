@@ -17,11 +17,11 @@ limitations under the License.
 package webhook
 
 import (
+	"cmp"
 	"context"
-	"errors"
 	"fmt"
-	"sort"
-	"strings"
+	"maps"
+	"slices"
 
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -106,23 +106,17 @@ const countWarningBytes = 96
 // them and the closing count fit in policyWarningBytes.
 const policyWarningLimit = (policyWarningBytes - countWarningBytes) / maxPolicyWarnings
 
-// policySummaryLimit bounds the findings a gateway's warning quotes: the
-// rest of the warning, the gateway's name and the cut marker, fits in what
-// policyWarningLimit leaves.
-const policySummaryLimit = policyWarningLimit / 2
-
-// checkPolicyRender validates policy on its own and in every gateway that
-// renders it. It rejects a request only for a pass-to-fail change: a policy
-// that already failed alone (old) is judged by its gateways, and a gateway
-// already failing without the change gets a warning instead.
-func checkPolicyRender(
-	ctx context.Context, c client.Reader, chk ConfigChecker, memo configcheck.Memo,
-	old, policy *v1alpha1.KrakenDBackendPolicy,
-) (admission.Warnings, error) {
-	if err := lintPolicyAlone(ctx, chk, old, policy); err != nil {
+// checkPolicyRender validates policy on its own (lintPolicyAlone) and against
+// the endpoints of every gateway that use it: each gateway is screened
+// (screenPolicyUse), then the endpoints the change breaks are named
+// (judgePolicyUse). A denial names endpoints and quotes none of them. A check
+// that cannot run makes the request a 500.
+func checkPolicyRender(ctx context.Context, c client.Reader, chk ConfigChecker, memo configcheck.Memo,
+	old, policy *v1alpha1.KrakenDBackendPolicy) (admission.Warnings, error) {
+	if err := lintPolicyAlone(ctx, chk, memo, old, policy); err != nil {
 		return nil, err
 	}
-	gateways, err := gatewaysUsing(ctx, c, policy)
+	uses, err := gatewaysUsing(ctx, c, policy)
 	if err != nil {
 		return nil, unavailable(err)
 	}
@@ -144,36 +138,26 @@ func checkPolicyRender(
 		}
 		omitted++
 	}
-	for i := range gateways {
-		gw := &gateways[i]
+	for i := range uses {
+		gw := &uses[i].gateway
 		if gw.Spec.Edition == v1alpha1.EditionCE && len(drops) > 0 {
 			cause(field.Invalid(field.NewPath("spec", "raw"), describeDrops(drops),
 				fmt.Sprintf("Enterprise-only extra_config: gateway %s/%s runs CE, which ignores it silently",
 					gw.Namespace, gw.Name)))
 			continue
 		}
-		w, err := ratchetRender(ctx, renderChecks{
-			after:  bindPolicyCheck(chk.CheckGatewayPolicy, gw, policy),
-			before: policyBaseline(chk, gw, old),
-		},
-			func(after configcheck.Verdict) error {
-				cause(field.Invalid(field.NewPath("spec"), field.OmitValueType{},
-					fmt.Sprintf("breaks gateway %s/%s: %s", gw.Namespace, gw.Name,
-						shownSummary(after, policy.Namespace, warningLimit))))
-				return errPolicyBreaksGateway
-			},
-			func(before configcheck.Verdict) string {
-				summary := shownSummary(before, policy.Namespace, policySummaryLimit)
-				return truncate(fmt.Sprintf("gateway %s/%s already fails validation: %s",
-					gw.Namespace, gw.Name, summary), policyWarningLimit)
-			})
-		if err != nil && !errors.Is(err, errPolicyBreaksGateway) {
-			return nil, err
+		use := screenPolicyUse(ctx, chk, memo, gw, uses[i].endpoints, policy)
+		broken, warning, err := judgePolicyUse(ctx, chk, memo, use, old, policy)
+		if err != nil {
+			return nil, checkErr(err)
+		}
+		if broken != "" {
+			cause(field.Invalid(field.NewPath("spec"), field.OmitValueType{}, truncate(broken, warningLimit)))
 		}
 		switch {
-		case len(w) == 0:
+		case warning == "":
 		case len(warnings) < maxPolicyWarnings:
-			warnings = append(warnings, w...)
+			warnings = append(warnings, truncate(warning, policyWarningLimit))
 		default:
 			unwarned++
 		}
@@ -186,97 +170,6 @@ func checkPolicyRender(
 		warnings = append(warnings, fmt.Sprintf("%d more gateways already fail validation", unwarned))
 	}
 	return warnings, invalid("KrakenDBackendPolicy", policy.Name, errs)
-}
-
-// errPolicyBreaksGateway tells checkPolicyRender's loop that a gateway's
-// ratchet denied the policy; the cause itself is already collected.
-var errPolicyBreaksGateway = errors.New("policy breaks gateway")
-
-// policyBaseline is the check of gw without the change: with the stored policy
-// as the update read it (old), not whatever the cache holds now. A create has
-// no stored policy, so gw is rendered as it stands.
-func policyBaseline(
-	chk ConfigChecker, gw *v1alpha1.KrakenDGateway, old *v1alpha1.KrakenDBackendPolicy,
-) func(context.Context) (configcheck.Verdict, error) {
-	if old == nil {
-		return bindCheck(chk.CheckGateway, gw)
-	}
-	return bindPolicyCheck(chk.CheckGatewayPolicy, gw, old)
-}
-
-// bindPolicyCheck fixes the gateway and the policy a check runs on.
-func bindPolicyCheck(
-	run func(context.Context, *v1alpha1.KrakenDGateway, *v1alpha1.KrakenDBackendPolicy) (configcheck.Verdict, error),
-	gw *v1alpha1.KrakenDGateway, policy *v1alpha1.KrakenDBackendPolicy,
-) func(context.Context) (configcheck.Verdict, error) {
-	return func(ctx context.Context) (configcheck.Verdict, error) { return run(ctx, gw, policy) }
-}
-
-// lintPolicyAlone refuses policy when it fails krakend check on its own,
-// unless the stored policy (old, nil on a create) already failed too: then its
-// gateways decide.
-func lintPolicyAlone(
-	ctx context.Context, chk ConfigChecker, old, policy *v1alpha1.KrakenDBackendPolicy,
-) error {
-	alone, err := chk.LintPolicy(ctx, policy)
-	if err != nil || alone.OK {
-		return checkErr(err)
-	}
-	if old != nil {
-		oldAlone, err := chk.LintPolicy(ctx, old)
-		if err != nil || !oldAlone.OK {
-			return checkErr(err)
-		}
-	}
-	return invalid("KrakenDBackendPolicy", policy.Name, field.ErrorList{field.Invalid(
-		field.NewPath("spec"), field.OmitValueType{}, "fails krakend check on its own: "+messages(alone))})
-}
-
-// messages joins a verdict's messages without their locations: a policy's
-// lint findings point into a synthetic endpoint the user never wrote.
-func messages(v configcheck.Verdict) string {
-	parts := make([]string, 0, len(v.Findings))
-	for _, f := range v.Findings {
-		parts = append(parts, f.Message)
-	}
-	return truncate(strings.Join(parts, "; "), warningLimit)
-}
-
-// gatewaysUsing returns the gateways of the endpoints that reference policy,
-// each once, sorted by namespace/name. Gateways that no longer exist are
-// skipped.
-func gatewaysUsing(
-	ctx context.Context, c client.Reader, policy *v1alpha1.KrakenDBackendPolicy,
-) ([]v1alpha1.KrakenDGateway, error) {
-	var eps v1alpha1.KrakenDEndpointList
-	if err := c.List(ctx, &eps, client.UnsafeDisableDeepCopy,
-		client.MatchingFields{fieldindex.EndpointPolicy: policy.Namespace + "/" + policy.Name}); err != nil {
-		return nil, fmt.Errorf("listing endpoints that reference policy %s/%s: %w", policy.Namespace, policy.Name, err)
-	}
-	keys := map[types.NamespacedName]struct{}{}
-	for i := range eps.Items {
-		ep := &eps.Items[i]
-		keys[types.NamespacedName{
-			Namespace: ep.Spec.GatewayRef.ResolvedNamespace(ep.Namespace), Name: ep.Spec.GatewayRef.Name,
-		}] = struct{}{}
-	}
-	sorted := make([]types.NamespacedName, 0, len(keys))
-	for k := range keys {
-		sorted = append(sorted, k)
-	}
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].String() < sorted[j].String() })
-	gateways := make([]v1alpha1.KrakenDGateway, 0, len(sorted))
-	for _, key := range sorted {
-		var gw v1alpha1.KrakenDGateway
-		if err := c.Get(ctx, key, &gw); err != nil {
-			if apierrors.IsNotFound(err) {
-				continue
-			}
-			return nil, fmt.Errorf("getting gateway %s: %w", key, err)
-		}
-		gateways = append(gateways, gw)
-	}
-	return gateways, nil
 }
 
 // policyUse is a gateway's screening of a policy write (screenPolicyUse).
@@ -296,14 +189,120 @@ type policyUse struct {
 }
 
 // screenPolicyUse runs the checks of a policy write on gw that do not depend
-// on how many endpoints it breaks.
-func screenPolicyUse(_ context.Context, _ ConfigChecker, _ configcheck.Memo, gw *v1alpha1.KrakenDGateway,
-	_ []v1alpha1.KrakenDEndpoint, _ *v1alpha1.KrakenDBackendPolicy) policyUse {
-	return policyUse{gateway: gw}
+// on how many endpoints it breaks: gw's root alone, then the root with the
+// endpoints that use the policy, with policy in place of the stored one.
+func screenPolicyUse(ctx context.Context, chk ConfigChecker, memo configcheck.Memo, gw *v1alpha1.KrakenDGateway,
+	endpoints []v1alpha1.KrakenDEndpoint, policy *v1alpha1.KrakenDBackendPolicy) policyUse {
+	use := policyUse{gateway: gw}
+	ceFallback := configcheck.CEFallback(gw)
+	if _, err := chk.CheckRoot(ctx, configcheck.Root{Gateway: gw, CEFallback: ceFallback}, memo); err != nil {
+		use.err = err
+		return use
+	}
+	use.served = endpoints
+	group, err := chk.CheckGroup(ctx, configcheck.Group{
+		Gateway: gw, Endpoints: use.served, Override: policy, CEFallback: ceFallback,
+	}, memo)
+	if err != nil {
+		use.err = err
+		return use
+	}
+	if use.failed = !group.OK; use.failed {
+		use.suspects = use.served
+	}
+	return use
 }
 
-// judgePolicyUse names the endpoints of a screened gateway that policy breaks.
-func judgePolicyUse(context.Context, ConfigChecker, configcheck.Memo, policyUse,
-	*v1alpha1.KrakenDBackendPolicy, *v1alpha1.KrakenDBackendPolicy) (cause, warning string, err error) {
+// judgePolicyUse names the endpoints of a screened gateway that policy
+// breaks: each suspect is checked on its own with policy and, when that
+// fails, with the stored policy (old; nil on a create, when nothing rendered
+// them with it). One that fails only with policy is broken, and any one makes
+// the returned cause, which names endpoints and quotes none. When every
+// suspect that fails failed with the stored policy too, the write only draws
+// a warning.
+func judgePolicyUse(ctx context.Context, chk ConfigChecker, memo configcheck.Memo, use policyUse,
+	old, policy *v1alpha1.KrakenDBackendPolicy) (cause, warning string, err error) {
+	if use.err != nil {
+		return "", "", use.err
+	}
+	gw := use.gateway
+	ceFallback := configcheck.CEFallback(gw)
+	var was *configcheck.EndpointUnit
+	if old != nil {
+		was = &configcheck.EndpointUnit{Gateway: gw, Override: old, CEFallback: ceFallback}
+	}
+	s := failingEndpoints(ctx, chk, memo,
+		configcheck.EndpointUnit{Gateway: gw, Override: policy, CEFallback: ceFallback}, was, use.suspects)
+	switch {
+	case s.stopped != nil:
+		return "", "", s.stopped
+	case len(s.broken) > 0:
+		return fmt.Sprintf("breaks gateway %s/%s: %s", gw.Namespace, gw.Name, brokenList(s)), "", nil
+	case s.already:
+		return "", fmt.Sprintf("gateway %s/%s: endpoints that use this policy already fail validation with "+
+			"the stored policy", gw.Namespace, gw.Name), nil
+	}
 	return "", "", nil
+}
+
+// lintPolicyAlone refuses policy when it fails krakend check on its own,
+// quoting its own output, unless the stored policy (old, nil on a create)
+// already failed too: then its endpoints decide.
+func lintPolicyAlone(ctx context.Context, chk ConfigChecker, memo configcheck.Memo,
+	old, policy *v1alpha1.KrakenDBackendPolicy) error {
+	alone, err := chk.CheckPolicy(ctx, policy, memo)
+	if err != nil || alone.OK {
+		return checkErr(err)
+	}
+	if old != nil {
+		oldAlone, err := chk.CheckPolicy(ctx, old, memo)
+		if err != nil || !oldAlone.OK {
+			return checkErr(err)
+		}
+	}
+	return invalid("KrakenDBackendPolicy", policy.Name, field.ErrorList{field.Invalid(
+		field.NewPath("spec"), field.OmitValueType{}, "fails krakend check on its own: "+alone.Excerpt(warningLimit))})
+}
+
+// gatewayUse is a gateway that renders a policy, and the endpoints of it that
+// reference the policy.
+type gatewayUse struct {
+	gateway   v1alpha1.KrakenDGateway
+	endpoints []v1alpha1.KrakenDEndpoint
+}
+
+// gatewaysUsing returns the gateways of the endpoints that reference policy,
+// each once with those endpoints, sorted by namespace/name. Gateways that no
+// longer exist are skipped.
+func gatewaysUsing(
+	ctx context.Context, c client.Reader, policy *v1alpha1.KrakenDBackendPolicy,
+) ([]gatewayUse, error) {
+	var eps v1alpha1.KrakenDEndpointList
+	if err := c.List(ctx, &eps, client.UnsafeDisableDeepCopy,
+		client.MatchingFields{fieldindex.EndpointPolicy: policy.Namespace + "/" + policy.Name}); err != nil {
+		return nil, fmt.Errorf("listing endpoints that reference policy %s/%s: %w", policy.Namespace, policy.Name, err)
+	}
+	byGateway := map[types.NamespacedName][]v1alpha1.KrakenDEndpoint{}
+	for i := range eps.Items {
+		ep := eps.Items[i]
+		key := types.NamespacedName{
+			Namespace: ep.Spec.GatewayRef.ResolvedNamespace(ep.Namespace), Name: ep.Spec.GatewayRef.Name,
+		}
+		byGateway[key] = append(byGateway[key], ep)
+	}
+	keys := slices.SortedFunc(maps.Keys(byGateway), func(a, b types.NamespacedName) int {
+		return cmp.Compare(a.String(), b.String())
+	})
+	uses := make([]gatewayUse, 0, len(keys))
+	for _, key := range keys {
+		var gw v1alpha1.KrakenDGateway
+		if err := c.Get(ctx, key, &gw); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return nil, fmt.Errorf("getting gateway %s: %w", key, err)
+		}
+		uses = append(uses, gatewayUse{gateway: gw, endpoints: byGateway[key]})
+	}
+	return uses, nil
 }
