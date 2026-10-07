@@ -1094,7 +1094,10 @@ func (r *KrakenDGatewayReconciler) writeEndpointAccepted(
 	rendered *v1alpha1.KrakenDEndpoint,
 	a acceptance,
 	removable func(live *metav1.Condition) bool,
-) error {
+) (retErr error) {
+	ctx, span := tracing.Start(ctx, r.Tracer, "gateway.endpoint_status",
+		trace.WithAttributes(tracing.Object("KrakenDEndpoint", rendered)...))
+	defer func() { tracing.End(span, retErr) }()
 	key := client.ObjectKeyFromObject(rendered)
 	var (
 		ep    v1alpha1.KrakenDEndpoint
