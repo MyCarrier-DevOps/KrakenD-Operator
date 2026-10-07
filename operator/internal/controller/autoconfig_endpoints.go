@@ -319,7 +319,9 @@ func (r *KrakenDAutoConfigReconciler) precheck(
 	stale []v1alpha1.KrakenDEndpoint,
 	order creationOrder,
 	held bool,
-) (map[string]rejection, error) {
+) (_ map[string]rejection, retErr error) {
+	ctx, span := tracing.Start(ctx, r.Tracer, "autoconfig.precheck")
+	defer func() { tracing.End(span, retErr) }()
 	rejected := map[string]rejection{}
 	if len(writes) == 0 {
 		return rejected, nil
