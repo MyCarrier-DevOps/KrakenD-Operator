@@ -1864,8 +1864,11 @@ endpoints, never quoting them. A stored root that fails on its own makes every
 endpoint fail with it, which says nothing about the endpoints, so it does not
 turn a break into a warning for an endpoint the gateway's last applied config
 served: failing with the new root is the update's doing, and the update is
-refused, naming it. An endpoint that config did not serve (never judged, or
-changed since) only draws a warning. An update that would make two endpoints' routes
+refused, naming it. The same goes for a failure that appears only with the
+endpoints together: the stored group is not compared, so it is denied. An
+endpoint that config did not serve only draws a warning: one never judged, one
+changed since it was judged, or one that lost every entry (`EndpointConflict`,
+or every entry stripped, `Accepted` False). An update that would make two endpoints' routes
 clash in KrakenD's router, such as turning router.auto_options on, is refused,
 naming both. A `spec.version` other than 2.13.x gets a warning when it is set
 or changed: validation uses the pinned 2.13 binary. **On a CE gateway,
