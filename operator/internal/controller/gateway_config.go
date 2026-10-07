@@ -22,7 +22,6 @@ import (
 	stderrors "errors"
 	"fmt"
 	"slices"
-	"sort"
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -51,9 +50,6 @@ type configResult struct {
 	// heldBecause says why appliedConfigMap is "": nil means no ConfigMap
 	// exists, otherwise the ConfigMap that does failed verification.
 	heldBecause error
-	// rejections are the endpoints krakend check blamed for the current
-	// render, with their findings.
-	rejections map[types.NamespacedName]string
 	// output is the render the rest of the pass reports on: the applied
 	// config when this pass applied or kept it, otherwise the newest render.
 	output *renderer.RenderOutput
@@ -371,91 +367,6 @@ func (r *KrakenDGatewayReconciler) liveReplicaSetConfigMaps(
 	return mounted, nil
 }
 
-// rejectionsByEndpoint groups krakend check findings by the KrakenDEndpoint
-// they name. Findings that name no endpoint are reported on the gateway only.
-// One message that blames several entries of an endpoint is one line naming
-// all of them.
-func rejectionsByEndpoint(findings []configcheck.Finding) map[types.NamespacedName]string {
-	type blame struct {
-		message string
-		entries []int
-	}
-	blames := map[types.NamespacedName][]*blame{}
-	for _, f := range findings {
-		if f.Endpoint == (types.NamespacedName{}) {
-			continue
-		}
-		list := blames[f.Endpoint]
-		i := slices.IndexFunc(list, func(b *blame) bool { return b.message == f.Message })
-		if i < 0 {
-			list = append(list, &blame{message: f.Message})
-			blames[f.Endpoint] = list
-			i = len(list) - 1
-		}
-		if f.Index >= 0 && !slices.Contains(list[i].entries, f.Index) {
-			list[i].entries = append(list[i].entries, f.Index)
-		}
-	}
-	out := make(map[types.NamespacedName]string, len(blames))
-	for nn, list := range blames {
-		lines := make([]string, 0, len(list))
-		for _, b := range list {
-			slices.Sort(b.entries)
-			where := make([]string, 0, len(b.entries))
-			for _, i := range b.entries {
-				where = append(where, fmt.Sprintf("spec.endpoints[%d]", i))
-			}
-			if len(where) > 0 {
-				lines = append(lines, strings.Join(where, ", ")+": "+b.message)
-			} else {
-				lines = append(lines, b.message)
-			}
-		}
-		out[nn] = truncateMessage("The gateway's newest config was rejected by krakend check and not applied; " +
-			"findings naming this endpoint: " + strings.Join(lines, "; "))
-	}
-	return out
-}
-
-// rejectionMessage is ConfigValid's message on rejection: the summary, then
-// one line per finding, so truncateMessage keeps whole findings.
-func rejectionMessage(findings []configcheck.Finding) string {
-	lines := make([]string, 0, len(findings)+1)
-	lines = append(lines, rejectionSummary(findings))
-	for _, f := range findings {
-		lines = append(lines, f.String())
-	}
-	return strings.Join(lines, "\n")
-}
-
-// rejectionSummary is the first line of ConfigValid's message on rejection. It
-// names the KrakenDEndpoints krakend check blamed.
-func rejectionSummary(findings []configcheck.Finding) string {
-	seen := map[types.NamespacedName]bool{}
-	var names []string
-	unattributed := 0
-	for _, f := range findings {
-		switch {
-		case f.Endpoint == (types.NamespacedName{}):
-			unattributed++
-		case !seen[f.Endpoint]:
-			seen[f.Endpoint] = true
-			names = append(names, f.Endpoint.String())
-		}
-	}
-	sort.Strings(names)
-	switch {
-	case len(names) == 0:
-		return "Rejected by krakend check; no finding names a KrakenDEndpoint (gateway settings, plugins or policies)."
-	case unattributed == 0:
-		return fmt.Sprintf("Rejected by krakend check; findings name KrakenDEndpoint(s) %s.", strings.Join(names, ", "))
-	default:
-		return fmt.Sprintf(
-			"Rejected by krakend check; findings name KrakenDEndpoint(s) %s; %d finding(s) name no endpoint.",
-			strings.Join(names, ", "), unattributed)
-	}
-}
-
 // neverApplied reports whether no config has ever been applied to gw. The
 // cached gateway's empty checksum may predate the first apply, so an empty one
 // is confirmed with an uncached read. When that read fails it reports false,
@@ -471,11 +382,6 @@ func (r *KrakenDGatewayReconciler) neverApplied(
 		return false, fmt.Errorf("confirming gateway %s has no applied config: %w", client.ObjectKeyFromObject(gw), err)
 	}
 	return live.Status.ConfigChecksum == "", nil
-}
-
-// isConfigRejected reports whether cond is a GatewayConfigRejected verdict.
-func isConfigRejected(cond *metav1.Condition) bool {
-	return cond != nil && cond.Reason == v1alpha1.ReasonGatewayConfigRejected
 }
 
 // isExclusion reports whether cond leaves its endpoint out for failing
@@ -523,52 +429,6 @@ func (r *KrakenDGatewayReconciler) recordExclusions(
 		default:
 			continue
 		}
-		if err := r.writeEndpointAccepted(ctx, ep, a, removable); err != nil {
-			errs = append(errs, err)
-		}
-	}
-	return utilerrors.NewAggregate(errs)
-}
-
-// recordRejections settles the endpoints' Accepted verdicts on a pass whose
-// render is not the applied config. An endpoint the current findings name gets
-// Accepted=False/GatewayConfigRejected. An endpoint carrying
-// GatewayConfigRejected that no finding names any longer has it removed, so
-// its Ready is derived afresh. Every other endpoint keeps the verdict of the
-// applied render, unless no config has ever been applied (neverApplied): then
-// there is no applied render to keep, and any Accepted left by an earlier
-// gateway of the same name is removed. A removal is checked against the live
-// condition, so a stale endpoint list cannot remove a verdict it did not see.
-// writeEndpointAccepted writes only on change, so a remembered rejection
-// writes nothing.
-func (r *KrakenDGatewayReconciler) recordRejections(
-	ctx context.Context,
-	endpoints []v1alpha1.KrakenDEndpoint,
-	rejections map[types.NamespacedName]string,
-	neverApplied bool,
-) error {
-	removable := isConfigRejected
-	if neverApplied {
-		removable = nil
-	}
-	var errs []error
-	for i := range endpoints {
-		ep := &endpoints[i]
-		var want *metav1.Condition
-		if msg, ok := rejections[client.ObjectKeyFromObject(ep)]; ok {
-			want = &metav1.Condition{
-				Type:               v1alpha1.ConditionAccepted,
-				Status:             metav1.ConditionFalse,
-				ObservedGeneration: ep.Generation,
-				Reason:             v1alpha1.ReasonGatewayConfigRejected,
-				Message:            msg,
-			}
-		} else if cur := meta.FindStatusCondition(ep.Status.Conditions, v1alpha1.ConditionAccepted); cur == nil ||
-			(!neverApplied && !isConfigRejected(cur)) {
-			continue
-		}
-		// Without an applied render there are no served conflicts to keep.
-		a := acceptance{condition: want, keepConflicts: !neverApplied}
 		if err := r.writeEndpointAccepted(ctx, ep, a, removable); err != nil {
 			errs = append(errs, err)
 		}
