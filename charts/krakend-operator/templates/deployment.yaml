@@ -92,9 +92,9 @@ spec:
             - name: OTEL_TRACES_SAMPLER
               value: {{ . | quote }}
             {{- end }}
-            {{- with .Values.telemetry.traces.samplerArg }}
+            {{- if ne (toString .Values.telemetry.traces.samplerArg) "" }}
             - name: OTEL_TRACES_SAMPLER_ARG
-              value: {{ . | quote }}
+              value: {{ .Values.telemetry.traces.samplerArg | toString | quote }}
             {{- end }}
             {{- $attributes := include "krakend-operator.resourceAttributes" .Values.telemetry.resourceAttributes }}
             {{- if .Values.telemetry.otlp.nodeCollector.enabled }}
@@ -112,7 +112,7 @@ spec:
             {{- end }}
             - --health-probe-bind-address=:{{ .Values.healthProbes.port }}
             - --autoconfig-max-concurrent-reconciles={{ .Values.autoconfig.maxConcurrentReconciles }}
-            {{- if ne .Values.telemetry.logs.format "json" }}
+            {{- if and .Values.telemetry.logs.format (ne .Values.telemetry.logs.format "json") }}
             - --log-format={{ .Values.telemetry.logs.format }}
             {{- end }}
             {{- if .Values.metrics.enabled }}
