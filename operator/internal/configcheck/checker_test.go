@@ -289,7 +289,7 @@ func TestCheckRendered_AVerdictCarriesTheValidatorsRejection(t *testing.T) {
 
 	verdict, err := c.CheckRendered(context.Background(), in, out, nil)
 
-	if err != nil || verdict.OK || verdict.Rejection != rejection {
+	if err != nil || verdict.OK || !reflect.DeepEqual(verdict.Rejection, rejection) {
 		t.Errorf("verdict = %+v, err = %v; want a rejection carrying %v", verdict, err, rejection)
 	}
 }
