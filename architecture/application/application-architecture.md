@@ -60,9 +60,10 @@ The entrypoint is responsible for wiring dependencies, registering controllers w
 
 ```mermaid
 flowchart TD
-    A[main] --> B[Parse flags and load config]
+    A[main] --> B[Parse flags]
     B --> T[Set up telemetry from OTEL_* and the log flags, and route every logger through it]
-    T --> C[Create controller-runtime Manager]
+    T --> G0[Load the Kubernetes client config]
+    G0 --> C[Create controller-runtime Manager]
     C --> D[Register API scheme]
     D --> E[Create shared dependencies]
     E --> F[Register Gateway Controller]
