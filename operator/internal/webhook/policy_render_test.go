@@ -425,3 +425,24 @@ func TestPolicyAdmission_WarningsAreBounded(t *testing.T) {
 		t.Errorf("last warning = %q, want it to count the 35 gateways left out", last)
 	}
 }
+
+func TestPolicyAdmission_TheDenialNamesTheBrokenEndpointsAndQuotesNone(t *testing.T) {
+	stored := testPolicy(`{"qos/http-cache":{"shared":true}}`)
+	changed := testPolicy(`{"qos/http-cache":{"shared":false}}`)
+	chk := &scriptedChecker{
+		verdicts: []configcheck.Verdict{{OK: true}, {OK: true}, {Output: "SECRET-OF-uses-p"}},
+		endpointVerdicts: []configcheck.EndpointVerdict{
+			{Reason: v1alpha1.ReasonEndpointInvalid, Output: "SECRET-OF-uses-p"}, {OK: true}},
+	}
+	v := &PolicyValidator{Client: fakeClient(append(referencing(), stored)...), Checker: chk}
+
+	resp := review(t, v, "alice", changed, stored)
+
+	if resp.Allowed || !strings.Contains(responseText(resp), "default/uses-p") || strings.Contains(responseText(resp), "SECRET") {
+		t.Errorf("response = %+v; want a denial naming default/uses-p and quoting nothing of it", resp.Result)
+	}
+	if got := strings.Join(chk.calls, ","); got != "policy,root,group,endpoint,endpoint" {
+		t.Errorf("checks = %s, want the policy alone, the root, the group with the change, then the endpoint "+
+			"with the change and with the stored policy", got)
+	}
+}
