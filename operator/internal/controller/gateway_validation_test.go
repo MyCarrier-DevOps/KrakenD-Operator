@@ -131,3 +131,40 @@ func TestGatewayReconcile_ARootThatFailsAloneBlamesNoEndpoint(t *testing.T) {
 		t.Errorf("ran %d lints and %d full checks, want the root alone", val.lints, val.validates)
 	}
 }
+
+const badHostOutput = "- at '/endpoints/0/backend/0/host/0': http://invalid.test is not a valid host"
+
+// badHosted is the test gateway's endpoint name at path, whose backend host
+// the contentValidator below rejects.
+func badHosted(name, path string) *v1alpha1.KrakenDEndpoint {
+	ep := testEndpoint(name, path)
+	ep.Spec.Endpoints[0].Backends[0].Host = []string{"http://invalid.test"}
+	return ep
+}
+
+func rejectsBadHosts() *contentValidator {
+	return &contentValidator{markers: map[string]string{"invalid.test": badHostOutput}}
+}
+
+func TestGatewayReconcile_AFirstRenderMarksAStaleAcceptedEndpointInvalid(t *testing.T) {
+	gw := reconciledGateway() // recreated: no config has ever been applied
+	bad := withAccepted(badHosted("bad", "/b"), metav1.ConditionTrue, v1alpha1.ReasonAccepted)
+	c := fakeClientBuilder().WithObjects(gw, bad).WithStatusSubresource(gw, bad).Build()
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}), rejectsBadHosts())
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	var stored v1alpha1.KrakenDEndpoint
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(bad), &stored); err != nil {
+		t.Fatal(err)
+	}
+	cond := meta.FindStatusCondition(stored.Status.Conditions, v1alpha1.ConditionAccepted)
+	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != v1alpha1.ReasonEndpointInvalid {
+		t.Errorf("Accepted = %+v, want False/%s over the previous gateway's True", cond, v1alpha1.ReasonEndpointInvalid)
+	}
+	if status, _, _ := v1alpha1.EndpointReady(stored.Status.Conditions); status == metav1.ConditionTrue {
+		t.Error("endpoint is Ready although it fails on its own")
+	}
+}
