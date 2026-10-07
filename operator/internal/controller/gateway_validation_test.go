@@ -536,3 +536,18 @@ func TestGatewayReconcile_AFixedEndpointIsServedAgain(t *testing.T) {
 		t.Errorf("bad Accepted = %+v, want Accepted once fixed", cond)
 	}
 }
+
+func TestGatewayReconcile_AnEndpointThatPassesAgainLosesItsExclusionOnAFailedPass(t *testing.T) {
+	gw := servingGateway("applied", convergedImage)
+	fixed := withAccepted(testEndpoint("fixed", "/a"), metav1.ConditionFalse, v1alpha1.ReasonEndpointInvalid)
+	c := fakeClientBuilder().WithObjects(gw, fixed).WithStatusSubresource(gw, fixed).Build()
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}), &contentValidator{failValidate: true})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+
+	if cond := storedAccepted(t, c, client.ObjectKeyFromObject(fixed)); cond != nil {
+		t.Errorf("Accepted = %+v, want the stale exclusion lifted: the endpoint passes on its own", cond)
+	}
+}
