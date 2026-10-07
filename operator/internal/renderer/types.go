@@ -185,8 +185,10 @@ func (e *ValidationError) Unwrap() error {
 type EntryConflict struct {
 	Endpoint string
 	Method   string
-	// Winner is the KrakenDEndpoint whose entry is rendered instead. It is the
-	// losing KrakenDEndpoint itself when an earlier entry of its own won.
+	// Winner is the KrakenDEndpoint whose older entry this one shares a route
+	// shape with or clashes with in the router. That entry may itself be left
+	// out of the render. It is the losing KrakenDEndpoint itself when an
+	// earlier entry of its own is the one.
 	Winner types.NamespacedName
 	// Detail is the router's refusal when the two entries do not share a
 	// route shape but KrakenD cannot serve both: gin refuses to register one
