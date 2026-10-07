@@ -112,19 +112,50 @@ func refusalsFrom(refusals []renderer.RouteRefusal, sources []types.NamespacedNa
 }
 
 // Summary joins the findings into one message, cut at a finding boundary and
-// ending with the number of findings left out. The findings take at most limit
-// bytes; the count suffix follows them. When the first finding alone exceeds
-// limit, a prefix of it is kept, cut on a rune boundary, so the message always
-// carries a reason.
+// ending with the number of findings left out (joinBounded).
 func (v Verdict) Summary(limit int) string {
-	var b strings.Builder
+	parts := make([]string, len(v.Findings))
 	for i, f := range v.Findings {
-		s := f.String()
+		parts[i] = f.String()
+	}
+	return joinBounded(parts, limit)
+}
+
+// Excerpt is the rejection's output on one line: its lines that carry a
+// finding, joined like Summary. An empty rejection reads "rejected with no
+// output", so an excerpt always carries a reason.
+func (v Verdict) Excerpt(limit int) string {
+	var lines []string
+	for _, l := range strings.Split(v.Output, "\n") {
+		if l = strings.TrimSpace(l); !noFinding(l) {
+			lines = append(lines, l)
+		}
+	}
+	if len(lines) == 0 && !v.OK {
+		lines = []string{"rejected with no output"}
+	}
+	return joinBounded(lines, limit)
+}
+
+// noFinding reports the lines krakend check prints around its findings.
+func noFinding(line string) bool {
+	return line == "" || line == "Syntax OK!" ||
+		strings.HasPrefix(line, "Parsing configuration file") ||
+		strings.HasPrefix(line, "ERROR linting the configuration file")
+}
+
+// joinBounded joins parts with "; ", cut at a part boundary so the parts take
+// at most limit bytes, followed by " (+N more)" for the parts left out, or
+// " (truncated)" when only a cut first part is kept. When the first part
+// alone exceeds limit, a prefix of it is kept, cut on a rune boundary.
+func joinBounded(parts []string, limit int) string {
+	var b strings.Builder
+	for i, s := range parts {
 		if i > 0 {
 			s = "; " + s
 		}
 		if b.Len()+len(s) > limit {
-			left := len(v.Findings) - i
+			left := len(parts) - i
 			if i == 0 {
 				b.WriteString(Truncate(s, limit))
 				left--
@@ -216,6 +247,3 @@ func findingsFrom(atts []renderer.Attribution, renderedJSON []byte,
 	}
 	return out
 }
-
-// Excerpt is the rejection's output on one line.
-func (v Verdict) Excerpt(int) string { return "" }
