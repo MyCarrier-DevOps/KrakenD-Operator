@@ -98,3 +98,25 @@ func TestInstallGRPCLogging_AComponentsErrorIsARecordWithItsPrefix(t *testing.T)
 		t.Errorf("records = %+v, want one ERROR record, prefixed [transport]", got)
 	}
 }
+
+// grpc-go warns about every failed reconnect to a collector. Those records
+// must not reach the main logger, whose OTLP exporter is the connection that
+// failed: they go to the diagnostics logger, which writes to stdout only.
+func TestInstallLogging_AGRPCWarningReachesTheDiagnosticsLoggerOnly(t *testing.T) {
+	logger, out := newStdoutLogger(t, otellog.SeverityInfo)
+	diagnostics, diagOut := newStdoutLogger(t, otellog.SeverityInfo)
+	restoreGlobals(t)
+	telemetry.InstallGRPCLogging()
+	discardGRPCLogs(t)
+	telemetry.InstallLogging(logger, diagnostics)
+
+	grpclog.Warningf("addrConn.createTransport failed to connect to %s", "collector:4317")
+
+	got := records(t, diagOut)
+	if len(got) != 1 || got[0].Body.Value != "addrConn.createTransport failed to connect to collector:4317" {
+		t.Errorf("diagnostics records = %+v, want the one warning", got)
+	}
+	if main := records(t, out); len(main) != 0 {
+		t.Errorf("main logger records = %+v, want none: its exporter is the one that failed", main)
+	}
+}
