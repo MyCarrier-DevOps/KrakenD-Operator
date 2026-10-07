@@ -114,3 +114,15 @@ func TestOperatorMetrics_ExcludedEndpointsReplacesEveryReason(t *testing.T) {
 		t.Errorf("a dropped or zero reason still has a series:\n%s", got)
 	}
 }
+
+func TestPrometheusReader_AddsNoFamilyOrLabelOfItsOwn(t *testing.T) {
+	m, scrape := newScraped(t)
+	m.ConfigRendered(context.Background())
+
+	got := scrape()
+	for _, unwanted := range []string{"target_info", "otel_scope_"} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("exposition has %q:\n%s", unwanted, got)
+		}
+	}
+}
