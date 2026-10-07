@@ -17,6 +17,7 @@ limitations under the License.
 package main
 
 import (
+	"go.opentelemetry.io/otel/trace"
 	"k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
 
@@ -24,6 +25,7 @@ import (
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
 	"github.com/mycarrier-devops/krakend-operator/internal/controller"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
+	"github.com/mycarrier-devops/krakend-operator/internal/telemetry"
 	licenseutil "github.com/mycarrier-devops/krakend-operator/internal/util/license"
 	webhooksetup "github.com/mycarrier-devops/krakend-operator/internal/webhook"
 )
@@ -40,6 +42,13 @@ const gatewayCheckWorkers = 1
 // slot; concurrent admission requests can still take the rest.
 const autoConfigCheckSlots = configCheckSlots - 1 - gatewayCheckWorkers
 
+// instrumentation is what every component records its spans and metrics
+// with: the pod's one tracer and one metrics recorder.
+type instrumentation struct {
+	Tracer  trace.Tracer
+	Metrics *telemetry.OperatorMetrics
+}
+
 // validation is everything that holds the pod's one config checker.
 type validation struct {
 	Checker    *configcheck.Checker
@@ -53,7 +62,7 @@ type validation struct {
 // gateway controller, the AutoConfig controller and the admission webhooks, so
 // they must share it.
 func wireValidation(
-	mgr ctrl.Manager, r renderer.Renderer, v renderer.Validator, operatorUsername string,
+	mgr ctrl.Manager, r renderer.Renderer, v renderer.Validator, operatorUsername string, _ instrumentation,
 ) validation {
 	checker := configcheck.New(mgr.GetClient(), r, v, configCheckSlots, nil)
 	return validation{

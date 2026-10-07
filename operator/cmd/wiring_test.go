@@ -17,16 +17,22 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"testing"
 
+	metricnoop "go.opentelemetry.io/otel/metric/noop"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	gatewayv1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/autoconfig"
 	"github.com/mycarrier-devops/krakend-operator/internal/controller"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
+	"github.com/mycarrier-devops/krakend-operator/internal/telemetry"
+	"github.com/mycarrier-devops/krakend-operator/internal/tracing/tracingtest"
 	webhooksetup "github.com/mycarrier-devops/krakend-operator/internal/webhook"
 )
 
@@ -53,7 +59,7 @@ func (m stubManager) GetEventRecorderFor(string) record.EventRecorder {
 func TestWireValidation_SharesOneCheckerBetweenControllerAndWebhooks(t *testing.T) {
 	mgr := stubManager{client: fake.NewClientBuilder().Build()}
 
-	w := wireValidation(mgr, renderer.New(renderer.Options{}), nil, "")
+	w := wireValidation(mgr, renderer.New(renderer.Options{}), nil, "", instrumentation{})
 
 	if w.Checker == nil {
 		t.Fatal("wireValidation built no checker")
@@ -89,7 +95,7 @@ func TestWireValidation_EndpointValidatorTrustsTheGivenOperatorUsername(t *testi
 	mgr := stubManager{client: fake.NewClientBuilder().Build()}
 	const operator = "system:serviceaccount:krakend-system:krakend-operator"
 
-	w := wireValidation(mgr, renderer.New(renderer.Options{}), nil, operator)
+	w := wireValidation(mgr, renderer.New(renderer.Options{}), nil, operator, instrumentation{})
 
 	if got := w.Validators.Endpoint.OperatorUsername; got != operator {
 		t.Errorf("endpoint validator's OperatorUsername = %q, want %q", got, operator)
@@ -101,7 +107,7 @@ func TestWireValidation_EndpointValidatorTrustsTheGivenOperatorUsername(t *testi
 func TestWireValidation_EndpointValidatorReadsPoliciesUncached(t *testing.T) {
 	mgr := stubManager{client: fake.NewClientBuilder().Build()}
 
-	w := wireValidation(mgr, renderer.New(renderer.Options{}), nil, "")
+	w := wireValidation(mgr, renderer.New(renderer.Options{}), nil, "", instrumentation{})
 
 	if w.Validators.Endpoint.APIReader != mgr.GetAPIReader() {
 		t.Errorf("endpoint validator's APIReader = %v, want the manager's API reader", w.Validators.Endpoint.APIReader)
@@ -115,7 +121,7 @@ func TestWireValidation_EndpointValidatorReadsPoliciesUncached(t *testing.T) {
 func TestWireValidation_AutoConfigAndGatewayChecksLeaveAnAdmissionSlot(t *testing.T) {
 	mgr := stubManager{client: fake.NewClientBuilder().Build()}
 
-	w := wireValidation(mgr, renderer.New(renderer.Options{}), nil, "")
+	w := wireValidation(mgr, renderer.New(renderer.Options{}), nil, "", instrumentation{})
 
 	gatewayWorkers := w.Gateway.MaxConcurrentReconciles
 	if held := cap(w.AutoConfig.CheckSlots) + gatewayWorkers; held > configCheckSlots-1 {
@@ -129,9 +135,47 @@ func TestWireValidation_AutoConfigAndGatewayChecksLeaveAnAdmissionSlot(t *testin
 func TestWireValidation_GatewayWorkersMatchTheSlotsReservedForThem(t *testing.T) {
 	mgr := stubManager{client: fake.NewClientBuilder().Build()}
 
-	w := wireValidation(mgr, renderer.New(renderer.Options{}), nil, "")
+	w := wireValidation(mgr, renderer.New(renderer.Options{}), nil, "", instrumentation{})
 
 	if got := w.Gateway.MaxConcurrentReconciles; got != gatewayCheckWorkers {
 		t.Errorf("gateway MaxConcurrentReconciles = %d, want gatewayCheckWorkers (%d)", got, gatewayCheckWorkers)
+	}
+}
+
+// testInstrumentation records spans to rec and metrics to a no-op meter.
+func testInstrumentation(t *testing.T, rec *tracingtest.Recorder) instrumentation {
+	t.Helper()
+	m, err := telemetry.NewOperatorMetrics(metricnoop.NewMeterProvider().Meter("test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return instrumentation{Tracer: rec.Tracer(), Metrics: m}
+}
+
+// Every component gets the pod's tracer and recorder: a nil one would record
+// nothing, silently.
+func TestWireValidation_InstrumentsEveryPart(t *testing.T) {
+	mgr := stubManager{client: fake.NewClientBuilder().Build()}
+	rec := tracingtest.New(t)
+	inst := testInstrumentation(t, rec)
+
+	w := wireValidation(mgr, renderer.New(renderer.Options{}), nil, "", inst)
+
+	if w.Gateway.Tracer != inst.Tracer || w.Gateway.Metrics != controller.GatewayMetrics(inst.Metrics) {
+		t.Error("the gateway reconciler is not given the pod's tracer and metrics")
+	}
+	if w.AutoConfig.Tracer != inst.Tracer || w.AutoConfig.Metrics != controller.AutoConfigMetrics(inst.Metrics) {
+		t.Error("the AutoConfig reconciler is not given the pod's tracer and metrics")
+	}
+	if w.Validators.Tracer != inst.Tracer {
+		t.Error("the validators are not given the pod's tracer")
+	}
+	ctx := context.Background()
+	_, _ = w.Checker.Gather(ctx, &gatewayv1alpha1.KrakenDGateway{}, nil)
+	_, _ = w.AutoConfig.Fetcher.Fetch(ctx, autoconfig.FetchSource{ConfigMapRef: &gatewayv1alpha1.ConfigMapKeyRef{Name: "absent"}})
+	for _, name := range []string{"configcheck.Gather", "autoconfig.fetch"} {
+		if len(rec.Ended().Named(name)) != 1 {
+			t.Errorf("no %s span: that component is not given the pod's tracer", name)
+		}
 	}
 }
