@@ -1016,6 +1016,30 @@ func TestAutoConfigReconcile_AFailedStageSpanCarriesNoTenantText(t *testing.T) {
 			if events := span.Events(); len(events) != 0 {
 				t.Errorf("%s has events %v, want none", tc.span, events)
 			}
+			requireNoText(t, rec.Ended(), "SPECSECRET")
 		})
+	}
+}
+
+// requireNoText fails t when any ended span's status description, attributes
+// or events, with their attributes, contain text.
+func requireNoText(t *testing.T, spans tracingtest.Spans, text string) {
+	t.Helper()
+	for _, span := range spans {
+		if strings.Contains(span.Status().Description, text) {
+			t.Errorf("span %q status description %q contains %q", span.Name(), span.Status().Description, text)
+		}
+		for _, kv := range span.Attributes() {
+			if strings.Contains(kv.Value.Emit(), text) {
+				t.Errorf("span %q attribute %s contains %q", span.Name(), kv.Key, text)
+			}
+		}
+		for _, ev := range span.Events() {
+			for _, kv := range ev.Attributes {
+				if strings.Contains(kv.Value.Emit(), text) {
+					t.Errorf("span %q event %q attribute %s contains %q", span.Name(), ev.Name, kv.Key, text)
+				}
+			}
+		}
 	}
 }
