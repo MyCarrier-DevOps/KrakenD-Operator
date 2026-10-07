@@ -36,6 +36,7 @@ import (
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
 	"github.com/mycarrier-devops/krakend-operator/internal/fieldindex"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
+	"github.com/mycarrier-devops/krakend-operator/internal/tracing"
 )
 
 const kindEndpoint = "KrakenDEndpoint"
@@ -135,36 +136,9 @@ func (v *EndpointValidator) admit(
 func (v *EndpointValidator) check(
 	ctx context.Context, old, ep *v1alpha1.KrakenDEndpoint,
 ) (admission.Warnings, error) {
-	gw, errs, err := v.gatewayFor(ctx, old, ep)
+	gw, stored, errs, err := v.structural(ctx, old, ep)
 	if err != nil {
 		return nil, unavailable(err)
-	}
-	refErrs, err := v.validatePolicyRefs(ctx, v.Client, old, ep)
-	if err != nil {
-		return nil, unavailable(err)
-	}
-	errs = append(errs, refErrs...)
-	stored := old
-	if movedGateway(old, ep) {
-		stored = nil // another gateway judges every entry afresh
-	}
-	changed := changedEntries(stored, ep)
-	for _, i := range changed {
-		errs = append(errs, validateExtraConfigAudience(
-			field.NewPath("spec", "endpoints").Index(i).Child("extraConfig"), ep.Spec.Endpoints[i].ExtraConfig)...)
-	}
-	if gw != nil {
-		errs = append(errs, validateEntries(ep, changed, gw)...)
-		polErrs, err := v.validatePolicyNamespaces(ctx, stored, ep, gw)
-		if err != nil {
-			return nil, unavailable(err)
-		}
-		errs = append(errs, polErrs...)
-		dupErrs, err := v.validateRouteUniqueness(ctx, ep, stored, changed, gw)
-		if err != nil {
-			return nil, unavailable(err)
-		}
-		errs = append(errs, dupErrs...)
 	}
 	if len(errs) > 0 {
 		return nil, invalid(kindEndpoint, ep.Name, errs)
@@ -178,6 +152,49 @@ func (v *EndpointValidator) check(
 		return nil, nil
 	}
 	return v.checkRender(ctx, stored, ep, gw)
+}
+
+// structural runs ep's rules that need no krakend run, inside one span: its
+// gateway, its policy references and namespaces, its changed entries and
+// their routes. It returns the gateway (nil when there is none), the stored
+// object the render check compares with, and the field errors; its error is a
+// failed lookup.
+func (v *EndpointValidator) structural(
+	ctx context.Context, old, ep *v1alpha1.KrakenDEndpoint,
+) (gw *v1alpha1.KrakenDGateway, stored *v1alpha1.KrakenDEndpoint, errs field.ErrorList, retErr error) {
+	ctx, span := tracing.Start(ctx, v.Tracer, "admission.structural")
+	defer func() { tracing.End(span, retErr) }()
+	gw, errs, err := v.gatewayFor(ctx, old, ep)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	refErrs, err := v.validatePolicyRefs(ctx, v.Client, old, ep)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	errs = append(errs, refErrs...)
+	stored = old
+	if movedGateway(old, ep) {
+		stored = nil // another gateway judges every entry afresh
+	}
+	changed := changedEntries(stored, ep)
+	for _, i := range changed {
+		errs = append(errs, validateExtraConfigAudience(
+			field.NewPath("spec", "endpoints").Index(i).Child("extraConfig"), ep.Spec.Endpoints[i].ExtraConfig)...)
+	}
+	if gw == nil {
+		return nil, stored, errs, nil
+	}
+	errs = append(errs, validateEntries(ep, changed, gw)...)
+	polErrs, err := v.validatePolicyNamespaces(ctx, stored, ep, gw)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	dupErrs, err := v.validateRouteUniqueness(ctx, ep, stored, changed, gw)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return gw, stored, append(append(errs, polErrs...), dupErrs...), nil
 }
 
 // trustedWrite reports whether the request is the operator, by its exact
