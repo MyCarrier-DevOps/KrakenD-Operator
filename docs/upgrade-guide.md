@@ -893,9 +893,7 @@ kubectl patch <kind>/<name> -n <ns> --subresource=status --type=json \
   check on it with `Ready`.
 - A policy that fails `krakend check` on its own now reads `Ready=False`,
   reason `PolicyInvalid`, with the policy's own output in the message, and a
-  Warning event when it turns invalid. Until now such a policy read
-  `Ready=True` while the gateway excluded every endpoint that references it.
-  After the upgrade, policies that were already failing alone change to
+  Warning event when it turns invalid. After the upgrade, policies that were already failing alone change to
   `False` on the first reconcile (each policy is checked once per operator
   start); list them with `kubectl get krakendbackendpolicy -A` and its
   `Ready` column.
@@ -904,9 +902,11 @@ kubectl patch <kind>/<name> -n <ns> --subresource=status --type=json \
   reconcile retries with backoff. It is never reported as the policy's
   failure.
 - New `status.observedGeneration`.
-- The Warning event for an invalid policy now uses the condition's reason
-  (`InvalidCircuitBreaker`, `InvalidRateLimit`) instead of `PolicyInvalid`,
-  and fires only when the verdict changes.
+- The Warning event for a policy with a field out of range now uses the
+  condition's reason (`InvalidCircuitBreaker`, `InvalidRateLimit`) instead of
+  `PolicyInvalid`, and fires only when the verdict changes. The event reason
+  `PolicyInvalid` now means the policy fails `krakend check` on its own: an
+  event filter on it changes meaning.
 
 ### Watch scope
 
@@ -1680,8 +1680,10 @@ an Enterprise gateway is in CE fallback (its `LicenseDegraded` condition is
 true), admission judges the fallback render, which drops the Enterprise-only
 content, so such content in a write is first judged when the license returns.
 The checks run in the operator pod, three at a time for the whole pod, sharing those
-slots with the gateway controller and the AutoConfig controller (each holds at
-most one, so together they never hold more than 2 of the 3 slots), and each webhook call stops
+slots with the gateway controller, the AutoConfig controller and the policy
+controller (the gateway controller holds at most one, and the AutoConfig and
+policy controllers one between them, so together they never hold more than 2 of
+the 3 slots), and each webhook call stops
 its work after 12 s. A request that cannot get a slot in time, or whose check cannot run, is
 answered `500 Internal Error`: a transient error that `kubectl` does not retry,
 so run the command again (controllers and GitOps tools retry on their own).
@@ -2280,9 +2282,9 @@ endpoints are serving.
   stale endpoints in its model and holds the sibling instead.
 - **Concurrency, slots and deadline.** Up to 4 AutoConfigs reconcile at once.
   Configure this with `--autoconfig-max-concurrent-reconciles`, or chart
-  value `autoconfig.maxConcurrentReconciles`. The AutoConfig checks hold at
-  most 1 of the pod's 3 config-check slots, and the gateway controller at
-  most 1, so the controllers never hold more than 2 of the 3 slots.
+  value `autoconfig.maxConcurrentReconciles`. The AutoConfig checks and the
+  policy controller's checks hold at most 1 of the pod's 3 config-check slots
+  between them, and the gateway controller at most 1, so the controllers never hold more than 2 of the 3 slots.
   Concurrent admission requests can take the rest. Fetching a spec and resolving
   its external `$ref`s is bounded by 2 minutes overall, and each request by
   30 seconds. A stuck upstream fails with `SpecFetchFailed` (`context
