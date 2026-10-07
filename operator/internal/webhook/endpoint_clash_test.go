@@ -172,8 +172,10 @@ func TestEndpointAdmission_AClashCheckThatCannotRunIs500(t *testing.T) {
 }
 
 func TestEndpointAdmission_RefusesAWriteWhileClashResolutionIsCapped(t *testing.T) {
-	chk := &scriptedChecker{conflicts: func(*v1alpha1.KrakenDGateway, []v1alpha1.KrakenDEndpoint) configcheck.RouteConflicts {
-		return configcheck.RouteConflicts{Capped: true}
+	// Only the render that carries the candidate reports the cap: reading the
+	// stored render's would let a capped write through.
+	chk := &scriptedChecker{conflicts: func(_ *v1alpha1.KrakenDGateway, replace []v1alpha1.KrakenDEndpoint) configcheck.RouteConflicts {
+		return configcheck.RouteConflicts{Capped: len(replace) > 0}
 	}}
 	v := &EndpointValidator{Client: fakeClient(testGateway()), Checker: chk}
 
