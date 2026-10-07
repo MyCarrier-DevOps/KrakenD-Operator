@@ -56,6 +56,11 @@ func TestGatewayAdmission_AnUpdateThatBreaksAServedEndpointIsDeniedByName(t *tes
 		!strings.Contains(responseText(resp), "default/ep") || strings.Contains(responseText(resp), "SECRET") {
 		t.Errorf("response = %+v; want a 422 naming default/ep and quoting nothing of it", resp.Result)
 	}
+	for i, handed := range chk.memos {
+		if !handed {
+			t.Errorf("check %d was handed no memo, want the validator's", i+1)
+		}
+	}
 	if got := strings.Join(chk.calls, ","); got != "root,group,endpoint,endpoint" {
 		t.Errorf("checks = %s, want the root, the served endpoints with the new root, then the endpoint on its "+
 			"own with the new root and with the stored one", got)
@@ -174,5 +179,57 @@ func TestGatewayAdmission_AGatewayWithNoServedEndpointChecksOnlyItsRoot(t *testi
 
 	if resp := review(t, v, "alice", gw, old); !resp.Allowed || strings.Join(chk.calls, ",") != "root" {
 		t.Errorf("allowed = %v, checks = %v; want admitted after the root alone", resp.Allowed, chk.calls)
+	}
+}
+
+// A scan that stopped on a check that could not run, with no endpoint found
+// broken, leaves the update unjudged: a 500, whatever the group says.
+func TestGatewayAdmission_AScanThatStoppedWithoutADenialIs500(t *testing.T) {
+	epFail := configcheck.EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid}
+	tests := []struct {
+		name string
+		objs []string
+		// group is the group verdict; the check that cannot run is call failCall.
+		group    configcheck.Verdict
+		verdicts []configcheck.EndpointVerdict
+		failCall int
+	}{
+		{"after an endpoint that already failed", []string{"stale", "zz-next"},
+			configcheck.Verdict{Output: "x"}, []configcheck.EndpointVerdict{epFail, epFail}, 5},
+		{"on a masked endpoint", []string{"ep"},
+			configcheck.Verdict{OK: true, Masked: []types.NamespacedName{{Namespace: "default", Name: "ep"}}}, nil, 3},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			old, gw := editedGateway()
+			objs := []client.Object{old}
+			for _, name := range tt.objs {
+				objs = append(objs, testEndpoint(name, "/"+name))
+			}
+			chk := &scriptedChecker{err: errors.New("no slot"), failCall: tt.failCall, failOnly: true,
+				verdicts:         []configcheck.Verdict{{OK: true}, tt.group},
+				endpointVerdicts: tt.verdicts}
+
+			resp := review(t, &GatewayValidator{Client: fakeClient(objs...), Checker: chk}, "alice", gw, old)
+
+			if resp.Allowed || resp.Result.Code != http.StatusInternalServerError {
+				t.Errorf("response = %+v, warnings %q; want a 500", resp.Result, resp.Warnings)
+			}
+		})
+	}
+}
+
+// When the endpoints fail together but none fails on its own, a stored-group
+// check that cannot run leaves the update unjudged: a 500.
+func TestGatewayAdmission_AStoredGroupCheckThatCannotRunIs500(t *testing.T) {
+	old, gw := editedGateway()
+	chk := &scriptedChecker{err: errors.New("no slot"), failCall: 4, failOnly: true,
+		verdicts:         []configcheck.Verdict{{OK: true}, {Output: "x"}},
+		endpointVerdicts: []configcheck.EndpointVerdict{{OK: true}}}
+
+	resp := review(t, &GatewayValidator{Client: fakeClient(old, testEndpoint("ep", "/a")), Checker: chk}, "alice", gw, old)
+
+	if resp.Allowed || resp.Result.Code != http.StatusInternalServerError {
+		t.Errorf("response = %+v, warnings %q; want a 500", resp.Result, resp.Warnings)
 	}
 }
