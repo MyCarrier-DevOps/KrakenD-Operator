@@ -18,11 +18,16 @@ package controller
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	corev1 "k8s.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
@@ -362,5 +367,37 @@ func TestGatewayReconcile_StartsANewTraceWhateverTheContextCarries(t *testing.T)
 	}
 	if root.SpanContext().TraceID() == outer.SpanContext().TraceID() {
 		t.Errorf("the reconcile span joined the trace %v of its context, want a trace of its own", root.SpanContext().TraceID())
+	}
+}
+
+// A failure of the core resources is the core resources stage's error: the
+// infrastructure stage that runs after it carries only its own, while the
+// reconcile still returns both.
+func TestGatewayReconcile_ACoreResourceFailureMarksOnlyItsOwnStage(t *testing.T) {
+	gw := testGateway()
+	c := fakeClientBuilder().WithObjects(gw, testEndpoint("e", "/e")).
+		WithStatusSubresource(&v1alpha1.KrakenDGateway{}, &v1alpha1.KrakenDEndpoint{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+				if _, ok := obj.(*corev1.Service); ok {
+					return errors.New("service refused")
+				}
+				return c.Create(ctx, obj, opts...)
+			},
+		}).Build()
+	rec := tracingtest.New(t)
+
+	err := reconcileGateway(t, tracedGatewayReconciler(c, krakendValidator(rec), rec), gw)
+
+	if err == nil || !strings.Contains(err.Error(), "service refused") {
+		t.Fatalf("Reconcile error = %v, want the service failure", err)
+	}
+	spans := rec.Ended()
+	for span, want := range map[string]codes.Code{
+		"gateway.core_resources": codes.Error, "gateway.infrastructure": codes.Unset,
+	} {
+		if got := spans.One(t, span).Status().Code; got != want {
+			t.Errorf("%s status = %v, want %v", span, got, want)
+		}
 	}
 }
