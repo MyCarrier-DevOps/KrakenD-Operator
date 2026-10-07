@@ -55,14 +55,15 @@ func (c Clash) String() string {
 		"which is older: %s", c.Method, c.Endpoint, c.Loser, c.Winner, c.Detail)
 }
 
-// NewClashes returns the router clashes of after. Same-shape conflicts are
-// left out: the route uniqueness rules and the oldest-wins render settle
-// those. The result is sorted by loser, endpoint and method.
-func NewClashes(_, after RouteConflicts, _ map[types.NamespacedName]bool) []Clash {
+// NewClashes returns the router clashes of after that involve one of
+// involving as the loser; a nil involving takes every endpoint. Same-shape
+// conflicts are left out: the route uniqueness rules and the oldest-wins
+// render settle those. The result is sorted by loser, endpoint and method.
+func NewClashes(_, after RouteConflicts, involving map[types.NamespacedName]bool) []Clash {
 	var out []Clash
 	for loser, lost := range after.Lost {
 		for _, e := range lost {
-			if e.Detail == "" {
+			if e.Detail == "" || involving != nil && !involving[loser] {
 				continue
 			}
 			out = append(out, Clash{
