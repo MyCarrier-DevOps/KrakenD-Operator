@@ -231,6 +231,7 @@ func TestGatewayReconcile_NamesWhyEachRenderIsChecked(t *testing.T) {
 			t.Errorf("%d render checks for %q, want 1; spans: %s", len(checks), purpose, spans)
 		}
 	}
+	spans.RequireParent(t, "gateway.config", "configcheck.CheckRendered")
 }
 
 // A pass whose render is rejected keeps the applied config, and verifies the
