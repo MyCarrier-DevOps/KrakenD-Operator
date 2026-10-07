@@ -565,6 +565,7 @@ func TestAutoConfigReconcile_SpansEachStageUnderItsParent(t *testing.T) {
 		{"autoconfig.filter", "reconcile KrakenDAutoConfig"},
 		{"autoconfig.generate", "reconcile KrakenDAutoConfig"},
 		{"autoconfig.endpoints", "reconcile KrakenDAutoConfig"},
+		{"autoconfig.precheck", "autoconfig.endpoints"},
 	} {
 		t.Run(tc.span, func(t *testing.T) {
 			spans := reconcileACTraced(t)
