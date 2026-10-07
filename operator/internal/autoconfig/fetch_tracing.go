@@ -24,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 
+	"go.opentelemetry.io/otel/codes"
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 	"go.opentelemetry.io/otel/trace"
 
@@ -105,6 +106,9 @@ func (c clientSpans) RoundTrip(r *http.Request) (resp *http.Response, err error)
 	defer func() {
 		if resp != nil {
 			span.SetAttributes(semconv.HTTPResponseStatusCode(resp.StatusCode))
+			if resp.StatusCode >= http.StatusBadRequest {
+				span.SetStatus(codes.Error, "")
+			}
 		}
 		tracing.End(span, err)
 	}()
