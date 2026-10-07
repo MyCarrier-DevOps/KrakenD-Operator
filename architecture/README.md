@@ -1755,8 +1755,11 @@ license, so a renewal does not re-run it.
 A config ConfigMap is garbage-collected once nothing can mount it. The
 operator keeps the three most recently created revisions, the applied one
 included (revisions created in the same second are ordered by name), and any
-revision a live ReplicaSet (one with or wanting pods) still mounts.
-ReplicaSets are read uncached, and only when there is something to collect.
+revision a live ReplicaSet (one with or wanting pods) still mounts. While the
+Deployment is held (a plugin ConfigMap is missing, or another controller owns
+the ServiceAccount) collection still runs, and also keeps the revision the
+held Deployment's template mounts. ReplicaSets are read uncached, and only
+when there is something to collect.
 Old revisions keep whatever the rendered config embeds, credentials included,
 so a credential embedded in the rendered config outlives its rotation by up to
 two config changes.
