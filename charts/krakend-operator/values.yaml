@@ -75,6 +75,13 @@ telemetry:
     headersSecret:
       name: ""
       key: headers
+    # Export to an OpenTelemetry collector that runs on every node and is
+    # reached through the node's IP (the downward API's status.hostIP).
+    # Takes the place of endpoint; setting both is an error.
+    nodeCollector:
+      enabled: false
+      # 4318 for http/protobuf, 4317 for grpc (see protocol).
+      port: 4318
     # The signals exported over OTLP when an endpoint is set. Turn logs off
     # when a log agent already collects the pods' stdout, so each record is
     # not delivered twice.
