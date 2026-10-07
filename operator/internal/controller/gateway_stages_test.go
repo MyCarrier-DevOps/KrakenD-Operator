@@ -3062,3 +3062,68 @@ func TestGatewayReconcile_TheAppliedRecordIsNotReadyUntilTheDeploymentMovesOn(t 
 		})
 	}
 }
+
+// requireNotReadyWhileBehind fails when the stored gateway reads Ready=True or
+// Running while the Deployment mounts a config other than the stored
+// checksum's.
+func requireNotReadyWhileBehind(t *testing.T, c client.Client, gw *v1alpha1.KrakenDGateway) {
+	t.Helper()
+	stored := getGateway(t, c, gw)
+	want := resources.ConfigMapName(gw, stored.Status.ConfigChecksum)
+	if mountedConfig(t, c, gw) == want {
+		t.Fatalf("the Deployment mounts the stored config %q; the case does not exercise the gap", want)
+	}
+	ready := meta.FindStatusCondition(stored.Status.Conditions, v1alpha1.ConditionReady)
+	if ready == nil || ready.Status == metav1.ConditionTrue || stored.Status.Phase == v1alpha1.PhaseRunning {
+		t.Errorf("stored Ready = %+v, phase %q while the Deployment mounts %q, not the stored %q",
+			ready, stored.Status.Phase, mountedConfig(t, c, gw), want)
+	}
+}
+
+func TestGatewayReconcile_AFailedStepDoesNotStoreReadyBesideAConfigNotRunning(t *testing.T) {
+	const a, b = `{"version":3,"name":"a"}`, `{"version":3,"name":"b"}`
+	sumA := hash.SHA256Hex([]byte(a))
+	cases := []struct {
+		name string
+		fail func(base client.WithWatch) client.Client
+	}{
+		{"the Deployment update is refused", func(base client.WithWatch) client.Client {
+			return interceptor.NewClient(base, interceptor.Funcs{
+				Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+					if _, ok := obj.(*appsv1.Deployment); ok {
+						return apierrors.NewForbidden(appsv1.Resource("deployments"), obj.GetName(),
+							errors.New("admission webhook denied the request"))
+					}
+					return c.Update(ctx, obj, opts...)
+				},
+			})
+		}},
+		{"the ServiceAccount write fails", func(base client.WithWatch) client.Client {
+			return interceptor.NewClient(base, interceptor.Funcs{
+				Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+					if _, ok := obj.(*corev1.ServiceAccount); ok {
+						return apierrors.NewInternalError(errors.New("etcdserver: request timed out"))
+					}
+					return c.Create(ctx, obj, opts...)
+				},
+			})
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gw := servingGateway(sumA, convergedImage)
+			gw.Generation, gw.Status.ObservedGeneration = 1, 1
+			base := fakeClientBuilder().WithObjects(gw, settledDeployment(gw, sumA)).
+				WithStatusSubresource(gw).Build().(client.WithWatch)
+			r := newTestGatewayReconciler(base, renderOf(b), &mockValidator{})
+			r.Client = tc.fail(base)
+
+			for pass := 1; pass <= 2; pass++ {
+				if err := reconcileGateway(t, r, gw); err == nil {
+					t.Fatalf("pass %d: the failed step must fail the pass", pass)
+				}
+				requireNotReadyWhileBehind(t, base, gw)
+			}
+		})
+	}
+}
