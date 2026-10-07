@@ -195,9 +195,23 @@ func (c *Checker) lint(ctx context.Context, in renderer.RenderInput) (Verdict, e
 // check runs validate on out as the edition in is for, holding a slot.
 func (c *Checker) check(ctx context.Context, in renderer.RenderInput, out *renderer.RenderOutput,
 	validate func(context.Context, []byte, v1alpha1.Edition) error) (Verdict, error) {
+	rejection, err := c.run(ctx, in, out, validate)
+	if err != nil {
+		return Verdict{}, err
+	}
+	if rejection != nil {
+		return Rejected(rejection, in, out), nil
+	}
+	return Verdict{OK: true}, nil
+}
+
+// run runs validate on out as the edition in is for, holding a slot. It
+// returns the validator's rejection, or nil when it accepts out.
+func (c *Checker) run(ctx context.Context, in renderer.RenderInput, out *renderer.RenderOutput,
+	validate func(context.Context, []byte, v1alpha1.Edition) error) (*renderer.ValidationError, error) {
 	edition := renderer.EditionFor(in.Gateway, in.CEFallback)
 	if err := c.acquire(ctx); err != nil {
-		return Verdict{}, err
+		return nil, err
 	}
 	// The slot is freed even if validate panics (the manager recovers
 	// panics), and before attribution, which needs no slot.
@@ -207,12 +221,9 @@ func (c *Checker) check(ctx context.Context, in renderer.RenderInput, out *rende
 	}()
 	var invalid *renderer.ValidationError
 	if errors.As(err, &invalid) {
-		return Rejected(invalid, in, out), nil
+		return invalid, nil
 	}
-	if err != nil {
-		return Verdict{}, err
-	}
-	return Verdict{OK: true}, nil
+	return nil, err
 }
 
 // acquire takes a validation slot, giving up when ctx ends.
