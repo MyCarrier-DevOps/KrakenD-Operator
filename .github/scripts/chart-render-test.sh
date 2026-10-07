@@ -209,6 +209,42 @@ expect_contains "resource attributes are joined in key order" 'value: "env=prod,
 	--show-only templates/deployment.yaml --set telemetry.resourceAttributes.team=platform \
 	--set telemetry.resourceAttributes.env=prod
 
+# --- the opt-in node-local collector -------------------------------------
+node_collector=(--show-only templates/deployment.yaml --set telemetry.otlp.nodeCollector.enabled=true)
+node_deployment=$(render "${node_collector[@]}")
+expect_equal "the node collector reads NODE_IP from status.hostIP" "status.hostIP" \
+	"$(env_field NODE_IP <<<"$node_deployment")"
+expect_contains "the node collector endpoint is the node IP on 4318" 'value: "http://$(NODE_IP):4318"' \
+	"${node_collector[@]}"
+expect_contains "the node collector port follows telemetry.otlp.nodeCollector.port" \
+	'value: "http://$(NODE_IP):4317"' "${node_collector[@]}" \
+	--set telemetry.otlp.nodeCollector.port=4317 --set telemetry.otlp.protocol=grpc
+expect_contains "the node collector labels the node and the pod" \
+	'value: "k8s.node.name=$(NODE_NAME),k8s.pod.uid=$(POD_UID),k8s.pod.ip=$(POD_IP)"' "${node_collector[@]}"
+expect_contains "the node and pod labels follow the configured resource attributes" \
+	'value: "env=prod,team=platform,k8s.node.name=$(NODE_NAME),k8s.pod.uid=$(POD_UID),k8s.pod.ip=$(POD_IP)"' \
+	"${node_collector[@]}" --set telemetry.resourceAttributes.team=platform --set telemetry.resourceAttributes.env=prod
+expect_equal "the node collector reads NODE_NAME from spec.nodeName" "spec.nodeName" \
+	"$(env_field NODE_NAME <<<"$node_deployment")"
+expect_equal "the node collector reads POD_UID from metadata.uid" "metadata.uid" \
+	"$(env_field POD_UID <<<"$node_deployment")"
+expect_equal "the node collector reads POD_IP from status.podIP" "status.podIP" \
+	"$(env_field POD_IP <<<"$node_deployment")"
+expect_contains "the node collector honours the signals setting" "name: OTEL_LOGS_EXPORTER" \
+	"${node_collector[@]}" --set telemetry.otlp.signals.logs=false
+expect_contains "the node collector honours the headers Secret" "name: otlp-auth" \
+	"${node_collector[@]}" --set telemetry.otlp.headersSecret.name=otlp-auth
+if both_err=$(render "${node_collector[@]}" --set telemetry.otlp.endpoint=http://collector:4318 2>&1 >/dev/null); then
+	fail "an endpoint together with the node collector is refused"
+elif grep -qF "telemetry.otlp.endpoint" <<<"$both_err" && grep -qF "telemetry.otlp.nodeCollector.enabled" <<<"$both_err"; then
+	pass "an endpoint together with the node collector is refused"
+else
+	fail "an endpoint together with the node collector is refused without naming both values: $both_err"
+fi
+for var in NODE_IP NODE_NAME POD_UID POD_IP; do
+	expect_absent "the node collector is off by default: no $var" "name: $var" --show-only templates/deployment.yaml
+done
+
 # --- the chart refuses clusters below the Kubernetes 1.33 floor ---------
 if floor_err=$(helm template t "$CHART" --kube-version 1.32.0 2>&1 >/dev/null); then
 	fail "a Kubernetes 1.32 cluster is refused"
