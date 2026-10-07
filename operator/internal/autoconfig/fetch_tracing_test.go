@@ -96,3 +96,17 @@ func errorsAsURLError(err error) (*url.Error, bool) {
 	var uerr *url.Error
 	return uerr, errors.As(err, &uerr)
 }
+
+// An unparseable URL's error does not repeat the URL either.
+func TestFetcher_AParseErrorCarriesNoCredentials(t *testing.T) {
+	f := &httpFetcher{}
+
+	_, err := f.Fetch(context.Background(), FetchSource{URL: "http://user:pw@host:badport/spec.json?token=secret"})
+
+	if err == nil {
+		t.Fatal("Fetch succeeded")
+	}
+	if msg := err.Error(); strings.Contains(msg, "pw@") || strings.Contains(msg, "secret") {
+		t.Errorf("error %q carries a credential", msg)
+	}
+}
