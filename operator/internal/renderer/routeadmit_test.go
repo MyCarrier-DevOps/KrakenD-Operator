@@ -143,3 +143,25 @@ func TestRender_ARouterClashWithinOneEndpointIsLeftForItsOwnCheck(t *testing.T) 
 		t.Errorf("served %v with conflicts %+v; want both entries rendered, for the endpoint's own check to refuse", got, out.EntryConflicts)
 	}
 }
+
+func TestRender_AnAutoOptionsClashKeepsTheOlderEndpointsEntry(t *testing.T) {
+	endpoints := []v1alpha1.KrakenDEndpoint{routed("older", 0, "GET", "/a/{id}"), routed("newer", 1, "POST", "/a/{name}")}
+
+	with, err := New(Options{}).Render(RenderInput{
+		Gateway: routedGateway(v1alpha1.EditionCE, &v1alpha1.RouterConfig{AutoOptions: true}), Endpoints: endpoints})
+	if err != nil {
+		t.Fatal(err)
+	}
+	without, err := New(Options{}).Render(RenderInput{Gateway: routedGateway(v1alpha1.EditionCE, nil), Endpoints: endpoints})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	lost := with.EntryConflicts[types.NamespacedName{Namespace: "ns", Name: "newer"}]
+	if len(lost) != 1 || !strings.Contains(lost[0].Detail, "OPTIONS") {
+		t.Errorf("with auto_options newer lost %+v, want POST /a/{name} to its OPTIONS route", lost)
+	}
+	if len(without.EntryConflicts) != 0 {
+		t.Errorf("without auto_options conflicts = %+v, want none: the methods' trees are apart", without.EntryConflicts)
+	}
+}
