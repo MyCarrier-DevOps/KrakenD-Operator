@@ -600,7 +600,8 @@ pass, continuously, until the input was fixed. Now:
   validation".
 - The Warning event (`GatewayRootInvalid` or `CombinedConfigInvalid`) fires
   when the verdict or its message changes, not on every reconcile.
-- `krakend_operator_config_validation_failures_total` counts each rejected content once, not
+- `krakend_operator_config_validation_failures_total` counts a rejection once
+  per change of what the gateway controller checks, not
   once per reconcile, and, since per-object validation, only the rejections of a gateway root, a policy or an
   endpoint checked on its own (see "Unreleased — Per-object validation"). An alert on its rate, such as the runbook's former
   `KrakenDConfigValidationFailures`
@@ -618,7 +619,9 @@ Tooling that waits for `Rendering` or `Validating` should wait on the
 ### An unavailable validator is retried, not reported as a broken config
 
 Only a completed krakend check run that rejects the config marks it invalid
-(`ConfigValid=False`, reason `GatewayRootInvalid` or `CombinedConfigInvalid`, phase `Error`; or, for one endpoint, `Accepted=False` with reason `EndpointInvalid` or `PolicyInvalid`). When
+(`ConfigValid=False`, reason `GatewayRootInvalid` or `CombinedConfigInvalid`,
+phase `Error`; or, for one endpoint, `Accepted=False` with reason
+`EndpointInvalid` or `PolicyInvalid`). When
 the check cannot run to completion (the binary is missing, the 30-second
 limit is hit, the process is killed, the temp directory is unwritable or
 full, or the validation copy or the route check cannot complete), the gateway
@@ -628,7 +631,9 @@ now reports
 config, and retries with exponential backoff. Previously such failures were
 reported as an invalid config (and re-run in a status-write loop).
 
-`krakend_operator_config_validation_failures_total` counts only a fresh rejection of a gateway root, a policy or an endpoint checked on its own (the EE wildcard rules or the route check applied before it, or
+`krakend_operator_config_validation_failures_total` counts only a fresh
+rejection of a gateway root, a policy or an endpoint checked on its own (the EE
+wildcard rules or the route check applied before it, or
 `krakend check`). Failures to prepare the validation copy, other errors
 that are not verdicts such as an unavailable validator, and the gateway's full check of its whole render do not increment it.
 
@@ -638,8 +643,10 @@ The `ConfigValid` condition message and its Warning event (`GatewayRootInvalid`
 or `CombinedConfigInvalid`) now carry at most 4 KiB: a summary line, then the
 root's output line by line, as many whole lines as fit, followed by
 `(output truncated, N more lines)`. An endpoint's `Accepted` message is cut to
-the same 4 KiB. The full output of a gateway root that fails is logged by the
-operator. Previously an
+the same 4 KiB. A gateway root that fails is quoted in `ConfigValid` and its
+event, and an endpoint that fails in its `Accepted` message; the operator
+logs krakend output only for a failure that needs several endpoints
+together, cut at 16 KiB. Previously an
 output over the CRD's 32768-character limit (for example one bad key in a
 policy used by many backends) made the status write fail, so the rejection
 was never recorded.
@@ -773,9 +780,11 @@ kubectl patch <kind>/<name> -n <ns> --subresource=status --type=json \
   is unchanged since it did, and records the endpoint generation that
   configuration contains. While nothing of a gateway's newest render
   can be applied (its root fails on its own, or its endpoints fail only
-  together), no verdict changes, except that an endpoint that fails on its own
-  gets Accepted=False with reason EndpointInvalid or PolicyInvalid, worded as
-  not served once the gateway next applies its config.
+  together), no verdict changes, except that on a combined failure an endpoint
+  that fails on its own gets Accepted=False with reason EndpointInvalid or
+  PolicyInvalid, worded as not served once the gateway next applies its
+  config, and an exclusion that no longer holds is lifted. On a root failure no
+  endpoint is judged.
 - The `EndpointConflict` Warning event fires once per transition instead of
   on every gateway reconcile. A `Normal` `Accepted` event marks a conflict
   that cleared. A `PartiallyAccepted` endpoint gets its own Warning
@@ -1137,7 +1146,12 @@ Helm chart ships it. If you maintain your own copy of the role, add it.
 
 ### An endpoint that fails on its own says so on its own status
 
-krakend check output is no longer mapped back to endpoints. Each endpoint is judged on its own, and one that fails gets Accepted=False with reason EndpointInvalid (quoting its own output) or PolicyInvalid (naming the policy), while the rest of the gateway is applied. ConfigValid quotes the root's own output for GatewayRootInvalid, and nothing for CombinedConfigInvalid. See "Unreleased — Per-object validation".
+krakend check output is no longer mapped back to endpoints. Each endpoint is
+judged on its own, and one that fails gets Accepted=False with reason
+EndpointInvalid (quoting its own output) or PolicyInvalid (naming the policy),
+while the rest of the gateway is applied. ConfigValid quotes the root's own
+output for GatewayRootInvalid, and nothing for CombinedConfigInvalid. See
+"Unreleased — Per-object validation".
 
 ### Partly conflicting endpoints report exactly what is not served
 
@@ -1236,7 +1250,11 @@ refuses unnamed wildcards. Validation of an EE config now works like this:
 - **The EE router's wildcard rule is applied by the operator.** A
   `/prefix/*` endpoint conflicts with any other endpoint of the same method
   whose path starts with `/prefix/`, for example `GET /v1/*` next to
-  `GET /v1/users`. The EE router refuses to start in that case. An EE wildcard that overlaps another endpoint's route of the same method is resolved oldest-first (the newer entry reports EndpointConflict or PartiallyAccepted); one that breaks the wildcard rule within its own endpoint gets EndpointInvalid. A wildcard endpoint with more
+  `GET /v1/users`. The EE router refuses to start in that case. An EE wildcard
+  that overlaps another endpoint's route of the same method is resolved
+  oldest-first (the newer entry reports EndpointConflict or PartiallyAccepted);
+  one that breaks the wildcard rule within its own endpoint gets
+  EndpointInvalid. A wildcard endpoint with more
   than one backend is rejected on its own, because EE allows only one.
   Paths are compared as the router registers them: a brace group the
   router does not read as a parameter (`/v1/jobs{x}/*` next to
@@ -1570,14 +1588,21 @@ counts its routes as taken, so a route can be rejected that the gateway would
 serve until the policy exists. Renaming a path parameter across several routes needs
 them in one KrakenDEndpoint; see the runbook.
 
-**Health-path and autoOptions clashes no longer reach a pod.** An endpoint on the gateway's custom health_path is that endpoint's own failure (EndpointInvalid) and is excluded; endpoints whose routes clash only while router.auto_options is on are resolved oldest-first. Before this release the same render was published and new pods panicked at startup. The clashes
+**Health-path and autoOptions clashes no longer reach a pod.** An endpoint on
+the gateway's custom health_path is that endpoint's own failure
+(EndpointInvalid) and is excluded; endpoints whose routes clash only while
+router.auto_options is on are resolved oldest-first. Before this release the
+same render was published and new pods panicked at startup. The clashes
 are an endpoint on the gateway's custom `health_path` with a GET method, and
 endpoints under different methods whose routes would clash in one method's
 tree while `router.auto_options` is on, because `auto_options` joins every
 method's paths in one tree (for example `GET /users/{id}` with
 `POST /users/{userId}/orders`). The route check and the EE wildcard rule each
 report at most 21 conflicts and end with a notice line, so a config with many
-clashing routes cannot exhaust the operator's memory in the validator. The render resolves at most 21 clashes between endpoints; past that, admission and the AutoConfig controller refuse every write that could add one (see "Router clashes resolve oldest-first").
+clashing routes cannot exhaust the operator's memory in the validator. The
+render resolves at most 21 clashes between endpoints; past that, admission and
+the AutoConfig controller refuse every write that could add one (see "Router
+clashes resolve oldest-first").
 
 **The validator binary is pinned by digest.** The operator image takes its
 `krakend` binary from KrakenD CE 2.13.11, referenced by digest in the
@@ -1588,7 +1613,11 @@ the operator image yourself, the build argument is now `KRAKEND_IMAGE`; the
 former `KRAKEND_VERSION` is gone, and passing `--build-arg KRAKEND_VERSION=...`
 no longer has an effect: the build uses the pinned image.
 
-**Rejection messages are the object's own.** An endpoint's EndpointInvalid message quotes the krakend check output of the gateway root with that endpoint alone; ConfigValid quotes the root's own output for GatewayRootInvalid and nothing for CombinedConfigInvalid. The gateway controller gathers, renders and validates through the same checker the admission webhooks use.
+**Rejection messages are the object's own.** An endpoint's EndpointInvalid
+message quotes the krakend check output of the gateway root with that endpoint
+alone; ConfigValid quotes the root's own output for GatewayRootInvalid and
+nothing for CombinedConfigInvalid. The gateway controller gathers, renders and
+validates through the same checker the admission webhooks use.
 
 **Admission denials are `422 Invalid` with one cause per rejected field.**
 `kubectl` prints `The KrakenDEndpoint "x" is invalid: spec.endpoints[1]: ...`
@@ -1602,9 +1631,11 @@ now limited to 15 s (`timeoutSeconds`; it was the 10 s default).
 KrakenDEndpoint first checks the gateway root alone and each policy the
 endpoint references alone; their verdicts are remembered across requests, the
 256 most recent per operator pod. Then it checks the endpoint with the root and
-the policies it references. A denial quotes only the endpoint's own
-`krakend check` output; nothing about another endpoint or the gateway is
-quoted. When the gateway root fails on its own, the write is admitted with a
+the policies it references. A denial quotes only the output of the endpoint's
+own check; nothing about another endpoint is quoted. That check renders the
+gateway root with the endpoint, so output from a failure that occurs only with
+a root setting can reveal that setting to the endpoint's author. When the
+gateway root fails on its own, the write is admitted with a
 warning that names the gateway and asks its owner to fix it. An update whose
 stored version also fails on its own is admitted with a warning, and the
 endpoint stays excluded until it passes. A referenced policy that fails on its
@@ -1622,8 +1653,14 @@ most one, so together they never hold more than 2 of the 3 slots), and each webh
 its work after 12 s. A request that cannot get a slot in time, or whose check cannot run, is
 answered `500 Internal Error`: a transient error that `kubectl` does not retry,
 so run the command again (controllers and GitOps tools retry on their own).
-A policy write runs 1 check, plus 2 for each gateway that uses it (that gateway's root, then the endpoints that use it together), plus one per endpoint it then judges on its own (every such endpoint when they fail together, otherwise those that lost an entry in that check), plus one more for each of those that fails.
-With the webhooks disabled the controller's checks are the only protection: an endpoint that fails on its own is excluded, and a root that fails keeps the gateway at its last applied config.
+A policy write runs 1 check, plus 2 for each gateway that uses it (that
+gateway's root, then the endpoints that use it together), plus one per endpoint
+it then judges on its own (every such endpoint when they fail together,
+otherwise those that lost an entry in that check), plus one more for each of
+those that fails.
+With the webhooks disabled the controller's checks are the only protection: an
+endpoint that fails on its own is excluded, and a root that fails keeps the
+gateway at its last applied config.
 
 **The operator's own writes to AutoConfig endpoints skip the render check.**
 A write the operator makes to a KrakenDEndpoint that a KrakenDAutoConfig
@@ -1818,7 +1855,12 @@ Enterprise-only namespaces or `/prefix/*` wildcards (below).
 An update that renders the same config as the stored object (a new
 `spec.image`, `spec.version`, replica count, resource, probe or
 `postRestartJob`) is not checked, so it is never refused with a `500` because
-the validator is unavailable. Any other update must keep its root passing on its own (an update whose stored root fails too only warns) and must not make an endpoint it serves fail that passed with the stored root: the denial names those endpoints, never quoting them. An update that would make two endpoints' routes clash in KrakenD's router, such as turning router.auto_options on, is refused, naming both. A `spec.version` other than 2.13.x gets a warning when it is set
+the validator is unavailable. Any other update must keep its root passing on its
+own (an update whose stored root fails too only warns) and must not make an
+endpoint it serves fail that passed with the stored root: the denial names those
+endpoints, never quoting them. An update that would make two endpoints' routes
+clash in KrakenD's router, such as turning router.auto_options on, is refused,
+naming both. A `spec.version` other than 2.13.x gets a warning when it is set
 or changed: validation uses the pinned 2.13 binary. **On a CE gateway,
 Enterprise-only namespaces are rejected** in `spec.config.extraConfig` when it
 is set or changed, and creating a CE gateway, or switching `edition: EE` to
@@ -2145,7 +2187,20 @@ endpoints are serving.
   stale endpoints it will delete count as gone, unless this pass will not
   delete them: an operation is held, or a write in this pass names an
   endpoint the last status recorded as `EndpointRejected`, which the API
-  server rejects again. The candidates that would take part in a new router clash are held first. Then the gateway root is checked alone (when it fails, no candidate is to blame and all are written), then the root with every candidate together. When that fails, each candidate is checked on its own; when it passes, only the candidates that lost an entry in it. A hold quotes only that operation's own output (cut to fit the 256-byte status entry; the operator log keeps the full text), or names the policy at fault; no other endpoint's content can hold a candidate or reach its message. After a hold, the clash check runs again over the remaining candidates, with the stale endpoints and the held candidates' stored versions kept, until it holds no more. While the gateway has more router clashes than the render resolves, every candidate is held. Every check holds a check slot, and when it cannot run the sync fails as `ValidatorUnavailable`.
+  server rejects again. The candidates that would take part in a new router
+  clash are held first. Then the gateway root is checked alone (when it fails,
+  no candidate is to blame and all are written), then the root with every
+  candidate together. When that fails, each candidate is checked on its own;
+  when it passes, only the candidates that lost an entry in it. A hold quotes
+  only that operation's own output (cut to fit the 256-byte status entry; the
+  operator log keeps the full text), or names the policy at fault; no other
+  endpoint's content can hold a candidate or reach its message. After a hold,
+  the clash check runs again over the remaining candidates, with the stale
+  endpoints and the held candidates' stored versions kept, until it holds no
+  more. While the gateway has more router clashes than the render resolves,
+  every candidate is held. Every krakend check holds a check slot (the clash
+  check renders in process and holds none), and when it cannot run the sync
+  fails as `ValidatorUnavailable`.
   When the checker is unavailable, nothing is written or deleted, and
   `Synced=False` has reason `ValidatorUnavailable` (retried with backoff);
   it may still adopt label-matched orphans, which changes owner references
@@ -2156,11 +2211,19 @@ endpoints are serving.
   excludes the endpoints that fail on their own, and keeps its applied config
   with `ConfigValid=False` when its root fails or its endpoints fail only
   together. A rename and a brand-new rejection (the
-  API server answering 422) in the same pass is not predicted: the check
-  models the stale endpoints as deleted, the rejection stops the delete, and
-  the gateway can fail its own check. It keeps its applied config,
-  `ConfigValid=False` names both entries, and it clears once the cause of
-  the 422 is fixed.
+  API server answering 422) in the same pass is not predicted when the
+  rejection is new: the check models the stale endpoints as deleted, so a
+  renamed sibling is written, the rejection stops the delete, and the gateway
+  renders the old and the new endpoints together. The mixed render resolves
+  oldest-first: the stale endpoint is older and keeps its routes, and the
+  newer entry is left out. The whole render passes, so `ConfigValid` stays
+  `True` and nothing is counted. The losing endpoint reads `EndpointConflict`
+  or `PartiallyAccepted`, `status.conflicts` names the stale endpoint as
+  winner, an `EndpointConflict` Warning fires, and the AutoConfig reads
+  `EndpointsNotReady`. The moved route is not served until the cause of the 422
+  is fixed: this is the accepted write-time remainder. When the last status
+  already records the rejection (`EndpointRejected`), the precheck keeps the
+  stale endpoints in its model and holds the sibling instead.
 - **Concurrency, slots and deadline.** Up to 4 AutoConfigs reconcile at once.
   Configure this with `--autoconfig-max-concurrent-reconciles`, or chart
   value `autoconfig.maxConcurrentReconciles`. The AutoConfig checks hold at
@@ -2251,7 +2314,11 @@ upgrading; an `EndpointReconcileFailed` one holds none.
 closure its documentation references is updated once, on its AutoConfig's
 first sync that reaches the writes, and each Enterprise gateway whose
 published documentation changes re-renders after each write and rolls,
-possibly more than once in quick succession. Those writes also run the new check, which costs two `krakend check` runs per sync that writes (the gateway root and the candidates together), plus one per candidate when those fail, or per candidate that lost an entry when they pass, through the 1 slot the AutoConfigs share, so expect a
+possibly more than once in quick succession. Those writes also run the new
+check, which costs two `krakend check` runs per sync that writes (the gateway
+root and the candidates together), plus one per candidate when those fail, or
+per candidate that lost an entry when they pass, through the 1 slot the
+AutoConfigs share, so expect a
 short burst after the rollout. Every AutoConfig's status gains `skipped`,
 `warnings`, `failedOperations` and `readyEndpoints` and the `EndpointsReady`
 condition, and its `Ready` now also requires `EndpointsReady`, so health
@@ -2470,14 +2537,18 @@ applied. This is a deliberate change. The endpoint says why on its own status;
 the gateway and a metric say that endpoints are excluded. A gateway whose root
 fails on its own still keeps its last applied config, as before. A validator
 that cannot run excludes no endpoint and lifts no exclusion: the endpoints
-keep the verdicts they have until a pass can judge them.
+keep the verdicts they have until a pass can judge them. The exception is a
+gateway that has never applied a config: a pass that applies nothing removes
+every `Accepted`, so its exclusions, the condition and the gauge clear.
 
 An unchanged gateway runs no check: the operator remembers each verdict by the
 content it judged, per gateway, until the gateway is deleted. The memory is
 the operator's own, so it is empty after an operator restart or a leader
 failover, and an edit of the gateway root or its edition changes every
 verdict's content. After either, a gateway whose whole render fails (it
-excludes endpoints) checks each of its endpoints once more, one at a time on
+excludes endpoints) checks each of its endpoints once more (when the render is
+the applied config, only the endpoints that lost an entry are judged first, and
+the rest runs only if one of them fails), one at a time on
 the gateway controller's single worker. On the pinned binary, at the chart's
 default CPU limit of 500m, one endpoint's check takes about 0.1 s (0.05 s
 unthrottled), so a gateway of 500 endpoints holds the gateway worker for about
@@ -2550,8 +2621,8 @@ kubectl get krakendendpoints -A -o json | jq -r '
   fails krakend check on its own. The message quotes its own output, at most
   4 KiB: `Not served by gateway <ns>/<gw>, which serves its other endpoints:
   this endpoint fails krakend check on its own: …`. While the gateway cannot
-  apply its newest config (its `ConfigValid` is `False`, or `Unknown` while the
-  validator cannot run), the message reads
+  apply its newest config (its endpoints fail only together, or its ConfigMap
+  cannot be published), the message reads
   `Will not be served when gateway <ns>/<gw> next applies its config: this
   endpoint …` instead: the last applied config, which may hold an earlier
   version of the endpoint, keeps serving until then. `Ready` is False with the
@@ -2565,21 +2636,29 @@ kubectl get krakendendpoints -A -o json | jq -r '
   `InvalidEndpointsExcluded`, while one or more endpoints are excluded:
   `<n> KrakenDEndpoint(s) fail validation and are not served: <ns>/<a>, …
   (+<m> more)` (the first 10), or, while the gateway cannot apply its newest
-  config (`ConfigValid` is `False` or `Unknown`), `<n> KrakenDEndpoint(s) fail
-  validation and will not be served when the gateway next applies its config:
-  …`. It is absent otherwise. A Warning
+  config (its pass applied nothing new: `ConfigValid` is `False` or `Unknown`),
+  `<n> KrakenDEndpoint(s) fail validation and will not be served when the
+  gateway next applies its config: …`. On a root failure or a validator outage
+  no endpoint is judged, so each endpoint keeps the message it has. It is absent otherwise. A Warning
   event `InvalidEndpointsExcluded` marks it appearing or changing.
-  `ConfigValid` stays `True` and `Ready` is not affected: the gateway serves
-  every valid endpoint.
+  The exclusions themselves change neither `ConfigValid` nor `Ready`: the
+  gateway serves every valid endpoint.
 - KrakenDGateway `ConfigValid=False`, reason **`GatewayRootInvalid`**: the
   gateway root fails on its own. No endpoint is judged or blamed, and the last
   applied config keeps serving. The message quotes the root's output.
-- KrakenDGateway `ConfigValid=False`, reason **`CombinedConfigInvalid`**: every
-  endpoint passes on its own, but the config fails with them together. No
-  endpoint is blamed and the last applied config keeps serving. The message
-  quotes nothing: the output names the endpoints' values, so it is only in the
-  operator log (`the gateway's config fails krakend check only together`).
-  This is not expected to happen; report it with that log line.
+- KrakenDGateway `ConfigValid=False`, reason **`CombinedConfigInvalid`**: the
+  endpoints that pass on their own fail the config together. No endpoint is
+  blamed and the last applied config keeps serving. The message reads "The
+  endpoints that pass krakend check on their own fail it together, so the last
+  applied config keeps serving; any endpoint that fails on its own is excluded
+  first. The check's output quotes the endpoints' values and is only in the
+  operator log (\"the gateway's config fails krakend check only together\")."
+  Three paths lead here: a write that admission let through with a warning
+  (see Admission, below); a gateway with more router clashes than the render
+  resolves (the full check's route stage refuses the rest, so remove the
+  clashing endpoints); and the safety re-check after exclusions, which can
+  fail even though the excluded endpoints are out. Report any other case with
+  that log line.
 - **The gateway no longer writes `ConfigValidationFailed`** on `ConfigValid`,
   nor emits it as an event. Alerts, dashboards and scripts that select it, such
   as the event query under [Post-Upgrade Verification](#post-upgrade-verification),
@@ -2594,8 +2673,9 @@ kubectl get krakendendpoints -A -o json | jq -r '
 (gauge): the endpoints a gateway excludes, by `Accepted` reason (`EndpointInvalid`
 or `PolicyInvalid`).
 - It is absent while there are none.
-- It follows the endpoints' recorded verdicts, so it survives an operator
-  restart.
+- It follows the endpoints' recorded verdicts, and the first pass after an
+  operator restart that reaches the exclusion report rebuilds it (an early
+  return skips the report).
 - It counts an endpoint as soon as its exclusion is recorded, including while
   the gateway cannot apply its newest config.
 - It is removed with the gateway.
@@ -2605,8 +2685,10 @@ stays `1` while endpoints are excluded, so alert on the new gauge (see
 `KrakenDGatewayEndpointsExcluded` in the runbook).
 
 `krakend_operator_config_validation_failures_total` now counts only the
-rejections of a gateway root, a policy or an endpoint checked on its own, each
-distinct content once. The whole render's full check and its re-check without
+rejections of a gateway root, a policy or an endpoint checked on its own: a
+rejection counts once per change of what the gateway controller checks, not once
+per reconcile, and again for content that comes back, the same policy on
+another gateway and after a restart. The whole render's full check and its re-check without
 the excluded endpoints are not counted: they still contain the excluded
 endpoints, so counting them would add a rejection for every unrelated edit on
 the gateway. A failure that needs several endpoints together therefore adds
@@ -2657,15 +2739,21 @@ their paths differ in shape no longer fail the gateway's check. Examples:
   direction: an endpoint write that would lose a clash, or that would push
   another endpoint's entry out; and a gateway write, such as turning
   `router.auto_options` on. The AutoConfig controller holds such an operation.
-- A gateway resolves at most 21 left-out entries in one render (an entry that
-  clashes with several older endpoints counts once). Past that, the remaining
+- A gateway resolves at most 21 entries that the router refuses next to older
+  ones in one render (an entry that clashes with several older endpoints counts
+  once, and so does one left in because its clash needs several older routes
+  together). Past that, the remaining
   entries are rendered as they are, and the operator can no longer tell which
   write adds a clash. So admission refuses every create or
   update of an endpoint on that gateway and every gateway write that changes
   its render, and the AutoConfig controller holds every write, until the
   existing clashes are fixed. Deletes are still admitted, and they are the way
   out. Only objects stored without admission, or written in a race, can reach
-  it.
+  it. The gateway then reports `CombinedConfigInvalid`, because the full
+  check's route stage refuses the entries that were not resolved: remove the
+  clashing endpoints. Its `status.conflicts` do not list the clashes past the
+  cap, and on a pass that applies nothing they stay as the last applied render
+  recorded them.
 - A clash between two entries of one endpoint, or with the gateway's own
   health route, is that endpoint's own failure (`EndpointInvalid`).
 
@@ -2676,8 +2764,10 @@ their paths differ in shape no longer fail the gateway's check. Examples:
     alone. Their verdicts are remembered across requests, the 256 most recent
     per operator pod.
   - Then the endpoint with the root and the policies it references.
-  - A denial quotes only the endpoint's own `krakend check` output. Nothing
-    about another endpoint or the gateway is quoted.
+  - A denial quotes only the output of the endpoint's own check. Nothing
+    about another endpoint is quoted, but that check renders the gateway root
+    with the endpoint, so output from a failure that occurs only with a root
+    setting can reveal that setting to the endpoint's author.
   - When the gateway root fails on its own, the write is admitted with a
     warning that names the gateway and asks its owner to fix it.
   - An update whose stored version also fails on its own is admitted with a
@@ -2718,8 +2808,9 @@ their paths differ in shape no longer fail the gateway's check. Examples:
     with it only draw a warning naming them (or saying they fail only
     together, or that they could not be checked).
   - A render-neutral update (image, replicas, probes) is still not checked.
-- Naming stops at 20 endpoints (`(+N more not checked)`) or when the 12 s
-  admission budget runs out (`(N not checked within the admission time)`).
+- Naming stops at 20 endpoints (`(+N more not checked)`) or when a check could
+  not run, for example because the 12 s admission budget ran out (`(N not
+  checked within the admission time)`). A denial prints at most one of the two.
   The names are bounded by bytes: names that were found broken but do not fit
   are folded into `(+N more)`, and the two not-checked counts are always
   kept. Once an endpoint the change breaks has been found, the answer is that
