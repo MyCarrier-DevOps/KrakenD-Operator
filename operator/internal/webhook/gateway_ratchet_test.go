@@ -67,17 +67,16 @@ func TestGatewayAdmission_FailingGatewayRatchetOnRealRouteRefusals(t *testing.T)
 		warnWith string
 	}{
 		{
-			// A health_path of /s/:p refuses GET /s/{q}, which hides its clash with
-			// GET /s/{p}/x. Moving it un-masks that clash, which it did not create.
-			name:     "moving health_path un-masks an older clash",
-			objs:     []client.Object{methodEndpoint("x", "GET", "/s/{q}"), methodEndpoint("z", "GET", "/s/{p}/x")},
-			old:      routerOf(testGateway(), v1alpha1.RouterConfig{HealthPath: "/s/:p"}),
-			gw:       routerOf(testGateway(), v1alpha1.RouterConfig{HealthPath: "/healthz"}),
-			warnWith: "already fails validation",
+			// Moving health_path off GET /s/{q}: the stored z already loses
+			// GET /s/{p}/x to the older x at render time, so nothing fails.
+			name: "moving health_path un-masks an older clash",
+			objs: []client.Object{methodEndpoint("x", "GET", "/s/{q}"), methodEndpoint("z", "GET", "/s/{p}/x")},
+			old:  routerOf(testGateway(), v1alpha1.RouterConfig{HealthPath: "/s/:p"}),
+			gw:   routerOf(testGateway(), v1alpha1.RouterConfig{HealthPath: "/healthz"}),
 		},
 		{
 			// auto_options joins every method's paths in one tree, so GET /a/{id}
-			// and POST /a/{name} clash once it is on, beside an older failure.
+			// and POST /a/{name} clash once it is on: a new clash the change makes.
 			name: "turning auto_options on makes healthy endpoints clash",
 			objs: []client.Object{
 				methodEndpoint("b", "GET", "/a/{id}"), methodEndpoint("c", "POST", "/a/{name}"),
@@ -102,6 +101,12 @@ func TestGatewayAdmission_FailingGatewayRatchetOnRealRouteRefusals(t *testing.T)
 			}
 			if !resp.Allowed {
 				t.Fatalf("denied: %+v", resp.Result)
+			}
+			if tt.warnWith == "" {
+				if len(resp.Warnings) != 0 {
+					t.Errorf("warnings = %v, want none", resp.Warnings)
+				}
+				return
 			}
 			if len(resp.Warnings) != 1 || !strings.Contains(resp.Warnings[0], tt.warnWith) {
 				t.Errorf("warnings = %v, want one containing %q", resp.Warnings, tt.warnWith)
