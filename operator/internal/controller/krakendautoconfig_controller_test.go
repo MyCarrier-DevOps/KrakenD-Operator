@@ -2791,6 +2791,83 @@ func TestAutoConfigReconcile_AdditionalEndpointsReachGenerator(t *testing.T) {
 	}
 }
 
+// The derived base path depends on the in-scope spec, not on which operations
+// evaluate: a held operation keeps contributing its path.
+func TestAutoConfigReconcile_HeldOperationDoesNotMoveAdditionalEndpointBase(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	ac.Status.Phase = v1alpha1.AutoConfigPhasePending
+	ac.Spec.AdditionalEndpoints = []v1alpha1.AdditionalEndpoint{{Endpoint: "/liveness"}}
+	c := fakeClientBuilder().WithObjects(ac, cm, testGateway()).WithStatusSubresource(ac).Build()
+	f, ce, fi, g := defaultMocks()
+	ce.output.Entries = []v1alpha1.EndpointEntry{
+		{Endpoint: "/billing/invoices/{id}", Method: "GET"},
+		{Endpoint: "/billing/invoices/{id}/pdf", Method: "GET"},
+	}
+	ce.output.OperationIDs = map[string]string{}
+	ce.output.Failed = []autoconfig.OperationIssue{{
+		Operation: autoconfig.Operation{Method: "GET", Path: "/billing/payments/{id}", OperationID: "getPayment"},
+		Reason:    v1alpha1.ReasonCUEEvaluationFailed,
+		Message:   "boom",
+	}}
+	r := newACReconciler(c, f, ce, fi, g)
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	if g.gotInput == nil {
+		t.Fatal("generator was not called")
+	}
+	var got []string
+	for _, e := range g.gotInput.Entries {
+		got = append(got, e.Method+" "+e.Endpoint)
+	}
+	if !slices.Contains(got, "GET /billing/liveness") || slices.Contains(got, "GET /billing/invoices/liveness") {
+		t.Errorf("generator entries = %q, want GET /billing/liveness and no /billing/invoices/liveness", got)
+	}
+}
+
+func TestAutoConfigReconcile_AllOperationsHeldStillScopesAdditionalEndpoints(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := testAutoConfig()
+	ac.Status.Phase = v1alpha1.AutoConfigPhasePending
+	ac.Spec.AdditionalEndpoints = []v1alpha1.AdditionalEndpoint{{Endpoint: "/liveness"}}
+	c := fakeClientBuilder().WithObjects(ac, cm, testGateway()).WithStatusSubresource(ac).Build()
+	f, ce, fi, g := defaultMocks()
+	ce.output.Entries = nil
+	ce.output.OperationIDs = map[string]string{}
+	ce.output.Failed = []autoconfig.OperationIssue{{
+		Operation: autoconfig.Operation{Method: "GET", Path: "/billing/payments/{id}", OperationID: "getPayment"},
+		Reason:    v1alpha1.ReasonCUEEvaluationFailed,
+		Message:   "boom",
+	}, {
+		Operation: autoconfig.Operation{Method: "GET", Path: "/billing/invoices/{id}", OperationID: "getInvoice"},
+		Reason:    v1alpha1.ReasonCUEEvaluationFailed,
+		Message:   "boom",
+	}}
+	r := newACReconciler(c, f, ce, fi, g)
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	synced := meta.FindStatusCondition(getAC(t, c, ac).Status.Conditions, v1alpha1.ConditionSynced)
+	if synced == nil || synced.Status != metav1.ConditionFalse || synced.Reason != v1alpha1.ReasonOperationsFailed {
+		t.Errorf("Synced = %+v, want False/%s", synced, v1alpha1.ReasonOperationsFailed)
+	}
+	if g.gotInput == nil {
+		t.Fatal("generator was not called")
+	}
+	var found bool
+	for _, e := range g.gotInput.Entries {
+		found = found || (e.Method == "GET" && e.Endpoint == "/billing/liveness")
+	}
+	if !found {
+		t.Errorf("GET /billing/liveness not passed to generator: %+v", g.gotInput.Entries)
+	}
+}
+
 func TestAutoConfigReconcile_AdditionalEndpointOverrideEmitsWarning(t *testing.T) {
 	cm := testCUEDefinitionsCM()
 	ac := testAutoConfig()
