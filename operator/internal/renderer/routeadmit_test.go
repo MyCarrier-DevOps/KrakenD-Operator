@@ -367,3 +367,27 @@ func TestRender_ASameShapeDuplicateTheRouterRefusesKeepsNothingOut(t *testing.T)
 		t.Errorf("r lost %+v, want GET /a/{id} served: q's route is refused on its own and records nothing", lost)
 	}
 }
+
+// TestRender_AnEntryRecordsEveryOlderEntryItClashesWith pins that a losing
+// entry is recorded once per older endpoint it clashes with, served or left
+// out, each with that clash's own detail: E's GET /a/{name}/x clashes with
+// s's GET /a/{id} and with e's GET /a/{id}/y.
+func TestRender_AnEntryRecordsEveryOlderEntryItClashesWith(t *testing.T) {
+	in := RenderInput{Gateway: routedGateway(v1alpha1.EditionCE, nil), Endpoints: []v1alpha1.KrakenDEndpoint{
+		routed("s", 0, "GET", "/a/{id}"), routed("e", 1, "GET", "/a/{id}/y"), routed("big", 2, "GET", "/a/{name}/x"),
+	}}
+
+	out, err := New(Options{}).Render(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	lost := out.EntryConflicts[types.NamespacedName{Namespace: "ns", Name: "big"}]
+	winners := map[string]string{}
+	for _, c := range lost {
+		winners[c.Winner.Name] = c.Detail
+	}
+	if len(lost) != 2 || winners["s"] == "" || winners["e"] == "" {
+		t.Errorf("big lost %+v, want its entry once to ns/s and once to ns/e, each with a detail", lost)
+	}
+}
