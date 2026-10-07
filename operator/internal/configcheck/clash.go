@@ -31,8 +31,9 @@ import (
 
 // RouteConflicts is what a render of a gateway leaves out. Lost holds, by the
 // KrakenDEndpoint that loses them, the entries the render does not serve
-// because an older endpoint's entry (or an earlier entry of the same
-// endpoint) is served instead. Capped says the render stopped resolving
+// because they share a route shape with, or clash in the router with, an
+// entry of an older endpoint (served or not), or an earlier entry of the same
+// endpoint. Capped says the render stopped resolving
 // router clashes at renderer.MaxRouteRefusals, so Lost misses the clashes
 // among the entries after that point.
 type RouteConflicts struct {
