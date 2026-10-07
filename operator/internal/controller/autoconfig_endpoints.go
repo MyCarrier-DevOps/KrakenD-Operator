@@ -401,6 +401,14 @@ func (r *KrakenDAutoConfigReconciler) judgeCandidates(
 	if err != nil || !root.OK {
 		return held, err
 	}
+	group, err := withCheckSlot(ctx, r.CheckSlots, func() (configcheck.Verdict, error) {
+		return r.Checker.CheckGroup(ctx, configcheck.Group{
+			Gateway: gw, Endpoints: checkSet(candidates, nil, order, false), CEFallback: ceFallback,
+		}, nil)
+	})
+	if err != nil || group.OK {
+		return held, err
+	}
 	for _, ep := range candidates {
 		v, err := withCheckSlot(ctx, r.CheckSlots, func() (configcheck.EndpointVerdict, error) {
 			unit := configcheck.EndpointUnit{Gateway: gw, Endpoint: ep, CEFallback: ceFallback}
