@@ -1363,6 +1363,9 @@ func (r *KrakenDGatewayReconciler) reconcileDeployment(
 	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace}}
 	var before *corev1.PodTemplateSpec
 	result, err := controllerutil.CreateOrUpdate(ctx, r.Client, dep, func() error {
+		if err := refuseUncontrolled(gw, dep, "deployment"); err != nil {
+			return err
+		}
 		before = dep.Spec.Template.DeepCopy()
 		resources.BuildDeployment(dep, gw, resources.DeploymentInputs{
 			ConfigMapName:   in.configMapName,
