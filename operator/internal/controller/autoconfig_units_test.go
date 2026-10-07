@@ -383,3 +383,37 @@ func TestAutoConfigReconcile_AClashHoldKeepsTheStaleEndpointsTheClashStageModell
 		t.Errorf("held = %v, want getUserOrders held: it would lose to the kept stale getUser", held)
 	}
 }
+
+// A candidate a clash holds stays at its stored route, which a sibling's new
+// route may clash with: the sibling is held, not written into that clash.
+func TestAutoConfigReconcile_ASiblingOfAClashHeldCandidateIsHeldWhenItClashesWithTheStoredRoute(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	other := testEndpoint("other", "/c/{a}")
+	other.CreationTimestamp = metav1.NewTime(time.Unix(500, 0))
+	xStored := ownedCopy(t, ac, generatedEndpoint("getX", "/p/{xid}"))
+	xStored.CreationTimestamp = metav1.NewTime(time.Unix(1000, 0))
+	yStored := ownedCopy(t, ac, generatedEndpoint("getY", "/p/{xid}/z"))
+	yStored.CreationTimestamp = metav1.NewTime(time.Unix(1000, 0))
+	g.output.Endpoints = []*v1alpha1.KrakenDEndpoint{
+		generatedEndpoint("getX", "/c/{b}/d"), generatedEndpoint("getY", "/p/{yid}/z"),
+	}
+	c := fakeClientBuilder().WithObjects(ac, cm, other, xStored, yStored, testGateway()).
+		WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Checker = newTestChecker(c, rejectsBadHosts())
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	held := map[string]string{}
+	for _, op := range getAC(t, c, ac).Status.FailedOperations {
+		held[op.Endpoint] = op.Reason
+	}
+	if held["test-ac-getx"] != v1alpha1.ReasonConfigValidationFailed ||
+		held["test-ac-gety"] != v1alpha1.ReasonConfigValidationFailed {
+		t.Errorf("held = %v, want getX held for its clash and getY held for clashing with getX's stored route", held)
+	}
+}
