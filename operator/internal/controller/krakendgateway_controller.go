@@ -79,6 +79,9 @@ type KrakenDGatewayReconciler struct {
 	// MaxConcurrentReconciles is how many gateways reconcile at once; zero
 	// means one. Each reconcile holds one config checker slot at a time.
 	MaxConcurrentReconciles int
+	// Metrics records the controller's metrics; nil records them in the
+	// package's Prometheus collectors.
+	Metrics GatewayMetrics
 
 	// verdicts remembers, per gateway, the config checks its last pass ran,
 	// so a gateway whose inputs did not change runs none.

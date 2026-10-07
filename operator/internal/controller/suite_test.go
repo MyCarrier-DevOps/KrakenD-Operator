@@ -18,12 +18,16 @@ package controller
 
 import (
 	"context"
+	"maps"
 	"testing"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
 	"github.com/mycarrier-devops/krakend-operator/internal/fieldindex"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
+	"github.com/mycarrier-devops/krakend-operator/internal/telemetry"
+	"github.com/prometheus/client_golang/prometheus"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
@@ -84,4 +88,75 @@ func countStatusWrites[T client.Object](n *int) interceptor.Funcs {
 			return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
 		},
 	}
+}
+
+// testMetrics returns the operator's metrics recording into a registry of
+// their own, exported as /metrics exports them.
+func testMetrics(t *testing.T) (*telemetry.OperatorMetrics, *prometheus.Registry) {
+	t.Helper()
+	reg := prometheus.NewRegistry()
+	reader, err := telemetry.NewPrometheusReader(reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mp := telemetry.NewMeterProvider(sdkmetric.WithReader(reader))
+	t.Cleanup(func() { _ = mp.Shutdown(context.Background()) })
+	m, err := telemetry.NewOperatorMetrics(mp.Meter("test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m, reg
+}
+
+// metricValue returns the value (a histogram's sample count) of family's
+// series whose labels are exactly labels, given as name, value pairs, and
+// whether that series exists.
+func metricValue(t *testing.T, g prometheus.Gatherer, family string, labels ...string) (float64, bool) {
+	t.Helper()
+	families, err := g.Gather()
+	if err != nil {
+		t.Fatalf("gathering metrics: %v", err)
+	}
+	want := map[string]string{}
+	for i := 0; i+1 < len(labels); i += 2 {
+		want[labels[i]] = labels[i+1]
+	}
+	for _, f := range families {
+		if f.GetName() != family {
+			continue
+		}
+		for _, m := range f.GetMetric() {
+			got := map[string]string{}
+			for _, l := range m.GetLabel() {
+				got[l.GetName()] = l.GetValue()
+			}
+			if !maps.Equal(got, want) {
+				continue
+			}
+			switch {
+			case m.GetCounter() != nil:
+				return m.GetCounter().GetValue(), true
+			case m.GetHistogram() != nil:
+				return float64(m.GetHistogram().GetSampleCount()), true
+			default:
+				return m.GetGauge().GetValue(), true
+			}
+		}
+	}
+	return 0, false
+}
+
+// seriesCount counts family's series in g.
+func seriesCount(t *testing.T, g prometheus.Gatherer, family string) int {
+	t.Helper()
+	families, err := g.Gather()
+	if err != nil {
+		t.Fatalf("gathering metrics: %v", err)
+	}
+	for _, f := range families {
+		if f.GetName() == family {
+			return len(f.GetMetric())
+		}
+	}
+	return 0
 }

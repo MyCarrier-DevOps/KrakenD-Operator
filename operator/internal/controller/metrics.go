@@ -17,8 +17,12 @@ limitations under the License.
 package controller
 
 import (
+	"context"
+	"time"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
@@ -83,6 +87,31 @@ var (
 		Help: "1 if the KrakenDAutoConfig's last reconcile synced successfully, 0 if it is failing",
 	}, []string{"namespace", "name"})
 )
+
+// GatewayMetrics records the gateway controller's metrics. The controller
+// owns this port; telemetry.OperatorMetrics implements it on OpenTelemetry
+// instruments, and a reconciler given none records nothing.
+type GatewayMetrics interface {
+	ConfigRendered(ctx context.Context)
+	ConfigRejected(ctx context.Context)
+	RollingRestart(ctx context.Context)
+	GatewayReconciled(ctx context.Context, gateway types.NamespacedName, d time.Duration)
+	SetLicenseExpiry(gateway types.NamespacedName, left time.Duration)
+	ForgetLicenseExpiry(gateway types.NamespacedName)
+	SetEndpoints(gateway types.NamespacedName, n int)
+	SetDragonflyReady(gateway types.NamespacedName, ready bool)
+	ForgetDragonflyReady(gateway types.NamespacedName)
+	SetConfigValid(gateway types.NamespacedName, valid bool)
+	SetGatewayInfo(gateway types.NamespacedName, edition, version string)
+	SetExcludedEndpoints(gateway types.NamespacedName, byReason map[string]int)
+	ForgetGateway(gateway types.NamespacedName)
+}
+
+// AutoConfigMetrics records the AutoConfig controller's metric.
+type AutoConfigMetrics interface {
+	SetAutoConfigSynced(autoConfig types.NamespacedName, synced bool)
+	ForgetAutoConfig(autoConfig types.NamespacedName)
+}
 
 // deleteGatewayMetrics removes every series labelled with the gateway, so a
 // deleted gateway stops reporting, and alerting, until it is recreated.
