@@ -45,7 +45,7 @@ on). Key metrics:
 | Metric | Type | Description |
 |---|---|---|
 | `config_renders_total` | Counter | Total config renders |
-| `config_validation_failures_total` | Counter | Fresh rejections of a gateway root, a backend policy or an endpoint checked on its own, Fresh rejections of a gateway root, a backend policy or an endpoint checked on its own, counted once per change of what the gateway controller checks, not once per reconcile; content that comes back, the same policy on another gateway and an operator restart each count again. The full check of a gateway's whole render is not counted: a config that fails only with its endpoints together shows as gateway_config_valid 0 (ConfigValid=False, CombinedConfigInvalid) instead |
+| `config_validation_failures_total` | Counter | Fresh rejections of a gateway root, a backend policy or an endpoint checked on its own, counted once per change of what the gateway controller checks, not once per reconcile; content that comes back, the same policy on another gateway and an operator restart each count again. The full check of a gateway's whole render is not counted: a config that fails only with its endpoints together shows as gateway_config_valid 0 (ConfigValid=False, CombinedConfigInvalid) instead |
 | `rolling_restarts_total` | Counter | Deployment writes that changed the pod template, once per write (a creation does not count; drift in the template the operator reverts does) |
 | `license_expiry_seconds` | Gauge | Seconds until license expiry (per gateway) |
 | `endpoints` | Gauge | Number of endpoints (per gateway) |
@@ -369,8 +369,8 @@ kubectl get events --field-selector involvedObject.name=<name> --sort-by='.lastT
   the full check's route stage refuses the entries that were not resolved, so
   remove the clashing endpoints. And the safety re-check after exclusions can
   fail even though the excluded endpoints are out. Report any other case with
-  the log line. In both cases the gateway keeps serving its last applied
-  config (`status.configChecksum`). Endpoints the operator excludes meanwhile
+  the log line. Whichever path led there, and for `GatewayRootInvalid`, the
+  gateway keeps serving its last applied config (`status.configChecksum`). Endpoints the operator excludes meanwhile
   say they will not be served when the gateway next applies its config. The
   gateway's Deployment (unless a plugin ConfigMap is missing, which holds it),
   Service and other resources are still reconciled. Only the rejected render
@@ -560,9 +560,10 @@ same way.
 **What to do:**
 - The policy's owner fixes the policy. The operator does not log a policy's
   output. To see it, dry-run a create of a copy under another name
-  (`kubectl apply --dry-run=server`): only a create quotes the policy's own
-  output, and an update of a policy that already fails alone is admitted with a
-  warning. A policy of another namespace that passes alone has no output of its
+  (`kubectl apply --dry-run=server`): admission quotes a policy's own output on a
+  create, and on an update that turns a passing stored policy into a failing
+  one; an update of a policy that already fails alone is admitted with a
+  warning, which is the case here. A policy of another namespace that passes alone has no output of its
   own: the endpoint fails only together with it.
 - Or point the endpoint at another policy.
 
