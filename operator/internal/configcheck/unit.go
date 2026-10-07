@@ -30,11 +30,15 @@ import (
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 )
 
-// Memo remembers verdicts by the content key of what was checked: the
+// Memo remembers what a check judged about a content, by its key: the
 // checksum of the rendered config, the edition it is validated as, and the
-// check (lint or the full check). A verdict depends on nothing else, so a
-// remembered one stands in for a run. The implementation decides how long it
-// keeps one. A nil Memo remembers nothing.
+// check (lint or the full check). It keeps the content's judgement only: OK,
+// or the rejection bounded to maxStoredOutput with its refusals by index.
+// Findings, refusals, endpoint names and Masked depend on the input a config
+// was rendered from, which the content does not fix, so they are rebuilt on
+// every call from that call's own input and render. What a Memo receives is a
+// partial verdict, and it is never returned as is. The implementation decides
+// how long it keeps one. A nil Memo remembers nothing.
 type Memo interface {
 	Lookup(key string) (Verdict, bool)
 	Store(key string, v Verdict)
@@ -137,7 +141,7 @@ func (c *Checker) remembered(ctx context.Context, in renderer.RenderInput, out *
 	key := contentKey(out, renderer.EditionFor(in.Gateway, in.CEFallback), mode)
 	if memo != nil {
 		if kept, ok := memo.Lookup(key); ok {
-			return verdictFor(kept.OK, kept.Rejection, in, out), nil
+			return verdictFor(kept.Rejection, in, out), nil
 		}
 	}
 	rejection, err := c.run(ctx, in, out, validate)
@@ -147,15 +151,16 @@ func (c *Checker) remembered(ctx context.Context, in renderer.RenderInput, out *
 	if memo != nil {
 		memo.Store(key, Verdict{OK: rejection == nil, Rejection: bounded(rejection)})
 	}
-	return verdictFor(rejection == nil, rejection, in, out), nil
+	return verdictFor(rejection, in, out), nil
 }
 
 // verdictFor is the verdict on out, rendered from in, for a check that
-// accepted it (ok) or rejected it with rejection. It reads a bounded copy of
-// the rejection, so a fresh run and a hit return the same text.
-func verdictFor(ok bool, rejection *renderer.ValidationError, in renderer.RenderInput,
+// accepted it (nil rejection) or rejected it with rejection. It reads a
+// bounded copy of the rejection, so a fresh run and a hit return the same
+// text.
+func verdictFor(rejection *renderer.ValidationError, in renderer.RenderInput,
 	out *renderer.RenderOutput) Verdict {
-	if ok {
+	if rejection == nil {
 		return Verdict{OK: true}
 	}
 	return Rejected(bounded(rejection), in, out)
