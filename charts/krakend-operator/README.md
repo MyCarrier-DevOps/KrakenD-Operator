@@ -33,6 +33,13 @@ See [values.yaml](values.yaml) for the full list of configurable parameters.
 | `webhooks.enabled` | Serve the validating admission webhooks. `false` runs the operator without a webhook server; only render-time validation then protects gateways | `true` |
 | `webhooks.caBundle` | CA bundle (PEM or base64-encoded PEM) for the webhook, used when `webhooks.certManager.enabled` is `false` | `""` |
 | `autoconfig.maxConcurrentReconciles` | KrakenDAutoConfigs reconciled at once; each reconcile fetches its OpenAPI spec over the network, so a slow upstream delays only its own AutoConfig | `4` |
+| `telemetry.otlp.endpoint` | OTLP collector the operator exports traces, metrics and logs to (`OTEL_EXPORTER_OTLP_ENDPOINT`). Empty exports nothing | `""` |
+| `telemetry.otlp.protocol` | `grpc` or `http/protobuf` | `http/protobuf` |
+| `telemetry.otlp.headersSecret` | Secret `name` and `key` holding `OTEL_EXPORTER_OTLP_HEADERS` (`key1=value1,key2=value2`) | `name: ""`, `key: headers` |
+| `telemetry.otlp.signals` | Which of `traces`, `metrics`, `logs` are exported when an endpoint is set | all `true` |
+| `telemetry.traces.sampler`, `telemetry.traces.samplerArg` | `OTEL_TRACES_SAMPLER` and its argument | `""` (parent-based, always on) |
+| `telemetry.resourceAttributes` | Extra `OTEL_RESOURCE_ATTRIBUTES` | `{}` |
+| `telemetry.logs.format` | stdout log format: `json` or `pretty` | `json` |
 | `resources` | CPU/memory requests and limits | See values.yaml |
 
 ## Scraping metrics
@@ -62,6 +69,17 @@ certificate, and it sends the Prometheus ServiceAccount's token as the bearer
 token. Anything that can answer on the metrics endpoint can therefore capture
 that token. Enable `metrics.serviceMonitor` only where the pod network is
 trusted.
+
+## Telemetry
+
+The operator uses OpenTelemetry for its logs, traces and metrics.
+
+- **Logs** are written to stdout as JSON, one record per line. Each record carries `TraceID` and `SpanID` when it was logged inside a reconcile or an admission request.
+- **Metrics** are served on the metrics endpoint as before, with the same names and labels.
+- **Traces and OTLP.** With `telemetry.otlp.endpoint` set, traces, metrics and logs are also exported over OTLP. Each reconcile and each admission request is one trace, with every krakend run and Kubernetes API call below it. Without an endpoint nothing is exported.
+- **Headers.** Put collector credentials in a Secret and name it in `telemetry.otlp.headersSecret`.
+- **Duplicate logs.** If a log agent already collects the pod's stdout, set `telemetry.otlp.signals.logs=false` so log records are not delivered twice.
+- **External hosts.** Spec fetches to external hosts never carry the trace context.
 
 ## Uninstall
 
