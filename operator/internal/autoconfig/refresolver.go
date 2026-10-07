@@ -299,9 +299,10 @@ func (r *refResolver) resolveExampleRef(entry map[string]any, base string) {
 // the main spec once the document's subtree is inlined into it.
 func (r *refResolver) warnLocalRef(ref, base string) {
 	if strings.HasPrefix(ref, "#") && base != r.baseURL {
+		shown := RedactURL(base)
 		r.warnOnce(fmt.Sprintf(
 			"$ref %q in %s is resolved against the main spec after inlining, not against %s",
-			ref, base, base))
+			ref, shown, shown))
 	}
 }
 
