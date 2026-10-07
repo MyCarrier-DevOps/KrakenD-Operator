@@ -5675,6 +5675,50 @@ func TestAutoConfigReconcile_PrecheckHoldsASiblingThatAnotherTenantsOlderRouteBr
 	}
 }
 
+func TestAutoConfigReconcile_PrecheckHoldsEveryCandidateThatPushesAnotherTenantsEntryOut(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	// The AutoConfig's older endpoints opS and opE move to /a/{id} and
+	// /a/{id}/y. Another tenant's newer GET /a/{name}/x clashes with both, so
+	// the gateway would serve each and leave the tenant's entry out. Each move
+	// is a new clash, so both are held, not only the one an entry names first.
+	stored := func(opID, path string, created int64) *v1alpha1.KrakenDEndpoint {
+		ep := ownedCopy(t, ac, generatedEndpoint(opID, path))
+		ep.CreationTimestamp = metav1.NewTime(time.Unix(created, 0))
+		return ep
+	}
+	tenant := generatedEndpoint("tenantD", "/a/{name}/x")
+	tenant.Name, tenant.Labels = "tenant-d", nil
+	tenant.CreationTimestamp = metav1.NewTime(time.Unix(2000, 0))
+	g.output.Endpoints = []*v1alpha1.KrakenDEndpoint{
+		generatedEndpoint("opS", "/a/{id}"),
+		generatedEndpoint("opE", "/a/{id}/y"),
+	}
+	c := fakeClientBuilder().WithObjects(ac, cm, stored("opS", "/s", 1000), stored("opE", "/e", 1100), tenant,
+		testGateway()).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Checker = realRouteChecker(c)
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	held := map[string]string{}
+	for _, f := range getAC(t, c, ac).Status.FailedOperations {
+		held[f.Endpoint] = f.Reason
+	}
+	for _, name := range []string{"test-ac-ops", "test-ac-ope"} {
+		var cur v1alpha1.KrakenDEndpoint
+		if err := c.Get(context.Background(), types.NamespacedName{Name: name, Namespace: "default"}, &cur); err != nil {
+			t.Fatalf("getting %s: %v", name, err)
+		}
+		if held[name] != v1alpha1.ReasonConfigValidationFailed || strings.HasPrefix(cur.Spec.Endpoints[0].Endpoint, "/a/") {
+			t.Errorf("%s: held = %q, route = %q; want it held at its stored route (failed operations %v)",
+				name, held[name], cur.Spec.Endpoints[0].Endpoint, held)
+		}
+	}
+}
+
 func TestAutoConfigReconcile_PrecheckKeepsStaleWhenAKnownRejectionRecurs(t *testing.T) {
 	cm := testCUEDefinitionsCM()
 	ac := syncedAutoConfig(cm)
