@@ -14,7 +14,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-
 package configcheck
 
 import (
@@ -50,6 +49,10 @@ func TestNewClashes_KeepsTheNewRouterClashesOfTheGivenEndpoints(t *testing.T) {
 			{Loser: b, Method: "GET", Endpoint: "/u/{n}/x", Winner: a, Detail: "wildcard conflict"},
 			{Loser: c, Method: "GET", Endpoint: "/u/{n}/x", Winner: a, Detail: "wildcard conflict"},
 		}},
+		{"a clash the gateway already has, whatever the router's words", RouteConflicts{Lost: map[types.NamespacedName][]renderer.EntryConflict{
+			b: {{Endpoint: "/u/{n}/x", Method: "GET", Winner: a, Detail: "wildcard conflict in existing prefix '/u/:id'"}},
+			c: {clash},
+		}}, nil, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
