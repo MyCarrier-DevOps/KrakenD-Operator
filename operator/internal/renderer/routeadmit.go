@@ -95,7 +95,7 @@ func dropRouteLosers(flat []flatEndpoint, conflicted map[types.NamespacedName][]
 // entries, is left in for that endpoint's own check, which refuses it.
 func routeLosers(flat []flatEndpoint, rules routeRules) routeAdmission {
 	adm := routeAdmission{losers: map[int]EntryConflict{}}
-	var served []routedRoute
+	var served, dropped []routedRoute
 	var older []routedEntry
 	options := map[string]bool{}
 	engine := gin.New()
@@ -113,21 +113,29 @@ func routeLosers(flat []flatEndpoint, rules routeRules) routeAdmission {
 				continue
 			}
 		}
-		winner, detail, refused := registerEntry(engine, served, routes, fe.Source)
-		if !refused {
-			for _, r := range routes {
-				served = append(served, routedRoute{route: r, source: fe.Source})
-				if r.method == http.MethodOptions {
-					options[r.path] = true
+		winner, detail, lost := olderClash(dropped, entry.source, routes)
+		if !lost {
+			var refused bool
+			winner, detail, refused = registerEntry(engine, served, routes, fe.Source)
+			if !refused {
+				for _, r := range routes {
+					served = append(served, routedRoute{route: r, source: fe.Source})
+					if r.method == http.MethodOptions {
+						options[r.path] = true
+					}
 				}
+				older = append(older, entry)
+				continue
 			}
-			older = append(older, entry)
-			continue
+			lost = winner != (types.NamespacedName{})
+			// gin can leave its tree half-updated after a refusal; rebuild it.
+			engine = engineWith(routesOf(served))
 		}
-		// gin can leave its tree half-updated after a refusal; rebuild it.
-		engine = engineWith(routesOf(served))
-		if winner != (types.NamespacedName{}) {
+		if lost {
 			adm.losers[i] = EntryConflict{Endpoint: entry.path, Method: fe.Entry.Method, Winner: winner, Detail: detail}
+		}
+		for _, r := range routes {
+			dropped = append(dropped, routedRoute{route: r, source: fe.Source})
 		}
 	}
 	return adm
@@ -202,6 +210,24 @@ func routesOf(routed []routedRoute) []ginRoute {
 		routes[i] = s.route
 	}
 	return routes
+}
+
+// olderClash reports the first older entry of another KrakenDEndpoint that
+// was left out and that one of routes clashes with in gin, pairwise. Served
+// entries are checked by registering routes in the engine (registerEntry).
+func olderClash(dropped []routedRoute, source types.NamespacedName,
+	routes []ginRoute) (types.NamespacedName, string, bool) {
+	for _, d := range dropped {
+		if d.source == source {
+			continue
+		}
+		for _, r := range routes {
+			if refusal := registerRoute(engineWith([]ginRoute{d.route}), r); refusal != "" {
+				return d.source, fmt.Sprintf("%s clashes with %s: %s", r.describe(), d.route.describe(), refusal), true
+			}
+		}
+	}
+	return types.NamespacedName{}, "", false
 }
 
 // eeWildcardOverlap applies the EE router's wildcard rule (eeWildcardFindings)
