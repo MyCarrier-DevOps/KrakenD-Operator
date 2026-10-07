@@ -381,3 +381,26 @@ func TestGatewayReconcile_EachEndpointIsCheckedWithTheDetectedDragonfly(t *testi
 			cond, v1alpha1.ReasonEndpointInvalid)
 	}
 }
+
+func TestGatewayReconcile_ASteadyPassWithAnExcludedEndpointRunsNoCheck(t *testing.T) {
+	gw := reconciledGateway()
+	good, bad := testEndpoint("good", "/a"), badHosted("bad", "/b")
+	writes := 0
+	c := fakeClientBuilder().WithObjects(gw, good, bad).WithStatusSubresource(gw, good, bad).
+		WithInterceptorFuncs(countStatusWrites[*v1alpha1.KrakenDEndpoint](&writes)).Build()
+	val := rejectsBadHosts()
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}), val)
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+	lints, validates, written := val.lints, val.validates, writes
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+
+	if val.lints != lints || val.validates != validates || writes != written {
+		t.Errorf("the steady pass ran %d lints, %d full checks and %d endpoint writes, want none",
+			val.lints-lints, val.validates-validates, writes-written)
+	}
+}
