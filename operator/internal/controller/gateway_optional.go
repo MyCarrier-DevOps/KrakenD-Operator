@@ -151,12 +151,13 @@ func (r *KrakenDGatewayReconciler) now() time.Time {
 }
 
 // optionalReader is the reader for gvk's children: the informer cache for a
-// kind that has an informer, the live client otherwise.
+// kind that has an informer, the API reader otherwise. The manager client
+// would serve a metadata read from its cache and start an informer for it.
 func (r *KrakenDGatewayReconciler) optionalReader(gvk schema.GroupVersionKind) client.Reader {
 	if _, ok := r.cachedOptionalKinds[gvk]; ok && r.optionalCache != nil {
 		return r.optionalCache
 	}
-	return r.Client
+	return r.APIReader
 }
 
 // errNotControlled is what applyOwned and the Deployment write return, wrapped
