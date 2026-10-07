@@ -80,23 +80,44 @@ func TestNoRequestPathStartsAFreshContext(t *testing.T) {
 // countFreshContexts counts the context.Background and context.TODO calls in
 // file, and reports whether it dot-imports context, which hides them.
 func countFreshContexts(file *ast.File) (int, bool) {
+	name, dot := contextImportName(file)
 	n := 0
+	if name == "" {
+		return 0, dot
+	}
 	ast.Inspect(file, func(node ast.Node) bool {
-		call, ok := node.(*ast.CallExpr)
+		sel, ok := node.(*ast.SelectorExpr)
 		if !ok {
 			return true
 		}
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok {
-			return true
-		}
-		if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "context" &&
+		if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == name &&
 			(sel.Sel.Name == "Background" || sel.Sel.Name == "TODO") {
 			n++
 		}
 		return true
 	})
-	return n, false
+	return n, dot
+}
+
+// contextImportName is the name file gives the "context" package, empty when
+// it does not import it by a usable name, and whether it dot-imports it.
+func contextImportName(file *ast.File) (string, bool) {
+	for _, imp := range file.Imports {
+		if imp.Path.Value != `"context"` {
+			continue
+		}
+		switch {
+		case imp.Name == nil:
+			return "context", false
+		case imp.Name.Name == ".":
+			return "", true
+		case imp.Name.Name == "_":
+			return "", false
+		default:
+			return imp.Name.Name, false
+		}
+	}
+	return "", false
 }
 
 func TestCountFreshContexts(t *testing.T) {
