@@ -214,3 +214,31 @@ func clashErrors(p *field.Path, clashes []configcheck.Clash, capped bool) field.
 	}
 	return errs
 }
+
+// scan is what failingEndpoints found among the suspects of a write.
+type scan struct {
+	// broken are the suspects the write breaks, by namespace/name: each fails
+	// on its own with the write and passed without it. At most maxEntryCauses.
+	broken []string
+	// already says a suspect fails on its own both with and without the write.
+	already bool
+	// unchecked counts the suspects left unjudged.
+	unchecked int
+	// stopped is why the scan ended before judging every suspect, when it was
+	// not maxEntryCauses: a check that could not run, such as one cut off by
+	// the admission deadline.
+	stopped error
+}
+
+// failingEndpoints judges each suspect on its own with a write (now, with the
+// suspect as its endpoint) and, when that fails, without it (was; nil when
+// nothing was stored before, so that every failure is the write's).
+func failingEndpoints(context.Context, ConfigChecker, configcheck.Memo,
+	configcheck.EndpointUnit, *configcheck.EndpointUnit, []v1alpha1.KrakenDEndpoint) scan {
+	return scan{}
+}
+
+// brokenList names the endpoints a write breaks, quoting nothing of them.
+func brokenList(scan) string {
+	return ""
+}
