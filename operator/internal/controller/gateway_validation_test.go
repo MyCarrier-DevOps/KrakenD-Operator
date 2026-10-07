@@ -471,3 +471,38 @@ func TestGatewayReconcile_AnOutageMidwayKeepsTheFinishedVerdicts(t *testing.T) {
 		t.Errorf("ran %d lints in all, want 6: the verdicts finished before the outage are kept", val.lints)
 	}
 }
+
+func TestGatewayReconcile_ARestartedOperatorKeepsTheAppliedConfig(t *testing.T) {
+	gw := reconciledGateway()
+	good, bad := testEndpoint("good", "/a"), badHosted("bad", "/b")
+	gatewayWrites := 0
+	c := fakeClientBuilder().WithObjects(gw, good, bad).WithStatusSubresource(gw, good, bad).
+		WithInterceptorFuncs(countStatusWrites[*v1alpha1.KrakenDGateway](&gatewayWrites)).Build()
+	if err := reconcileGateway(t, newTestGatewayReconciler(c, renderer.New(renderer.Options{}), rejectsBadHosts()), gw); err != nil {
+		t.Fatal(err)
+	}
+	applied, written := getGateway(t, c, gw).Status.ConfigChecksum, gatewayWrites
+	var before corev1.ConfigMapList
+	if err := c.List(context.Background(), &before, client.InNamespace(gw.Namespace)); err != nil {
+		t.Fatal(err)
+	}
+
+	val := rejectsBadHosts() // a new process: a cold memo
+	if err := reconcileGateway(t, newTestGatewayReconciler(c, renderer.New(renderer.Options{}), val), gw); err != nil {
+		t.Fatal(err)
+	}
+
+	var after corev1.ConfigMapList
+	if err := c.List(context.Background(), &after, client.InNamespace(gw.Namespace)); err != nil {
+		t.Fatal(err)
+	}
+	if got := getGateway(t, c, gw).Status.ConfigChecksum; got != applied || gatewayWrites != written ||
+		len(after.Items) != len(before.Items) {
+		t.Errorf("after a restart: checksum %s (was %s), %d new gateway status writes, %d ConfigMaps (were %d); want nothing changed",
+			got, applied, gatewayWrites-written, len(after.Items), len(before.Items))
+	}
+	if val.lints != 3 || val.validates != 1 {
+		t.Errorf("the cold pass ran %d lints and %d full checks, want 3 and 1: the render without bad is the applied one",
+			val.lints, val.validates)
+	}
+}
