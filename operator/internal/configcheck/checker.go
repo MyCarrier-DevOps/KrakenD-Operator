@@ -129,10 +129,10 @@ func (c *Checker) CheckGatewayPolicy(ctx context.Context, gw *v1alpha1.KrakenDGa
 	return c.lintGathered(ctx, gw, nil, policy)
 }
 
-// LintPolicy lints policy on its own: one synthetic endpoint on a default CE
-// gateway, whose only backend references policy. It catches a bad policy
-// before anything references it. Its findings name no endpoint.
-func (c *Checker) LintPolicy(ctx context.Context, policy *v1alpha1.KrakenDBackendPolicy) (Verdict, error) {
+// policyAlone is the render input that checks policy on its own: one
+// synthetic endpoint on a default CE gateway, whose only backend references
+// policy.
+func policyAlone(policy *v1alpha1.KrakenDBackendPolicy) renderer.RenderInput {
 	const name = "policy-lint"
 	gw := &v1alpha1.KrakenDGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: policy.Namespace},
@@ -151,11 +151,17 @@ func (c *Checker) LintPolicy(ctx context.Context, policy *v1alpha1.KrakenDBacken
 			}},
 		},
 	}
-	verdict, err := c.lint(ctx, renderer.RenderInput{
+	return renderer.RenderInput{
 		Gateway:   gw,
 		Endpoints: []v1alpha1.KrakenDEndpoint{ep},
 		Policies:  map[string]*v1alpha1.KrakenDBackendPolicy{policyKey(policy): policy},
-	})
+	}
+}
+
+// LintPolicy lints policy on its own (policyAlone). It catches a bad policy
+// before anything references it. Its findings name no endpoint.
+func (c *Checker) LintPolicy(ctx context.Context, policy *v1alpha1.KrakenDBackendPolicy) (Verdict, error) {
+	verdict, err := c.lint(ctx, policyAlone(policy))
 	// The synthetic endpoint is not something the caller created: its
 	// findings read as policy-level.
 	for i := range verdict.Findings {
