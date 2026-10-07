@@ -231,13 +231,16 @@ func notControlledIn(err error) []*notControlledError {
 
 // setResourcesControlled records on gw which existing objects this pass left
 // alone, found in the errors err carries: False, naming each and what to do,
-// while there is one. It is True only when the pass refused nothing and
-// failed nothing; a pass that failed for another reason could not evaluate
-// every child, so it leaves the condition as it was.
-func (r *KrakenDGatewayReconciler) setResourcesControlled(gw *v1alpha1.KrakenDGateway, err error) {
+// while there is one. It is True only when the pass refused nothing, failed
+// nothing and wrote the Deployment (deploymentWritten); a pass that failed for
+// another reason, or held the Deployment, could not evaluate every child, so it
+// leaves the condition as it was.
+func (r *KrakenDGatewayReconciler) setResourcesControlled(
+	gw *v1alpha1.KrakenDGateway, err error, deploymentWritten bool,
+) {
 	refused := notControlledIn(err)
 	if len(refused) == 0 {
-		if err != nil {
+		if err != nil || !deploymentWritten {
 			return
 		}
 		r.setConditionWithEvent(gw, metav1.Condition{

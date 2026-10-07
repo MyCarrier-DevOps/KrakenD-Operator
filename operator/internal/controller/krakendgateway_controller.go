@@ -288,7 +288,7 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	saControlled, coreErr := r.reconcileCoreResources(ctx, &gw, infra)
 	note := r.noteRollout(&gw, infra, deployed, configChanged, saControlled)
 	obs, infraErr := r.reconcileInfrastructure(ctx, &gw, infra, saControlled, coreErr)
-	r.setResourcesControlled(&gw, infraErr)
+	r.setResourcesControlled(&gw, infraErr, obs.dep != nil)
 	r.inspectDeploymentStatus(ctx, &gw, infra, obs, note)
 
 	// Update final status
