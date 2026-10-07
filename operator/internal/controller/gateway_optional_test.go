@@ -392,8 +392,11 @@ func TestGatewayReconcile_NoCRDNeverReadsLive(t *testing.T) {
 		interceptor.Funcs{Get: func(
 			ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption,
 		) error {
-			if u, ok := obj.(*unstructured.Unstructured); ok {
-				t.Errorf("live Get of %s %s without its CRD", u.GetKind(), key)
+			switch obj.(type) {
+			case *unstructured.Unstructured, *metav1.PartialObjectMetadata:
+				if gvk := obj.GetObjectKind().GroupVersionKind(); slices.Contains(optionalOwnedGVKs, gvk) {
+					t.Errorf("live Get of %s %s without its CRD", gvk.Kind, key)
+				}
 			}
 			return cl.Get(ctx, key, obj, opts...)
 		}})
