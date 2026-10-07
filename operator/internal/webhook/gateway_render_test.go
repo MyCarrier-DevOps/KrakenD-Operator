@@ -681,7 +681,7 @@ func TestGatewayAdmission_CreateWarningIsBounded(t *testing.T) {
 	objs := []client.Object{}
 	var endpointVerdicts []configcheck.EndpointVerdict
 	for i := range 2 * maxEntryCauses {
-		objs = append(objs, testEndpoint(fmt.Sprintf("endpoint-with-a-long-name-%02d", i), fmt.Sprintf("/e%d", i)))
+		objs = append(objs, testEndpoint(fmt.Sprintf("%s-%02d", strings.Repeat("e", 120), i), fmt.Sprintf("/e%d", i)))
 		endpointVerdicts = append(endpointVerdicts, configcheck.EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid})
 	}
 	chk := &scriptedChecker{verdicts: []configcheck.Verdict{{OK: true}, {Output: "x"}}, endpointVerdicts: endpointVerdicts}
@@ -709,7 +709,7 @@ func TestGatewayAdmission_TheDenialKeepsItsCountOfEndpointsNotChecked(t *testing
 	objs := []client.Object{}
 	var endpointVerdicts []configcheck.EndpointVerdict
 	for i := range maxEntryCauses + 5 {
-		objs = append(objs, testEndpoint(fmt.Sprintf("carrier-integrations-orders-api-endpoint-%02d", i), fmt.Sprintf("/e%d", i)))
+		objs = append(objs, testEndpoint(fmt.Sprintf("%s-%02d", strings.Repeat("e", 120), i), fmt.Sprintf("/e%d", i)))
 		endpointVerdicts = append(endpointVerdicts,
 			configcheck.EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid}, configcheck.EndpointVerdict{OK: true})
 	}
