@@ -35,6 +35,7 @@ import (
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/mycarrier-devops/krakend-operator/internal/redact"
 	"github.com/mycarrier-devops/krakend-operator/internal/tracing"
 )
 
@@ -133,7 +134,7 @@ func (k kubeAttributes) RoundTrip(r *http.Request) (*http.Response, error) {
 }
 
 func (k kubeAttributes) annotate(span trace.Span, r *http.Request) {
-	span.SetAttributes(semconv.URLFull(redactedURL(r.URL)))
+	span.SetAttributes(semconv.URLFull(redact.Parsed(r.URL)))
 	unprefixed := *r
 	path := *r.URL
 	path.Path = strings.TrimPrefix(path.Path, k.prefix)
@@ -165,19 +166,6 @@ func (k kubeAttributes) annotate(span trace.Span, r *http.Request) {
 // remote.
 func hasSpan(r *http.Request) bool {
 	return trace.SpanContextFromContext(r.Context()).IsValid()
-}
-
-// redactedURL is u without userinfo and with every query value replaced, so a
-// selector or a continue token never reaches a span.
-func redactedURL(u *url.URL) string {
-	redacted := *u
-	redacted.User = nil
-	query := redacted.Query()
-	for key := range query {
-		query[key] = []string{"REDACTED"}
-	}
-	redacted.RawQuery = query.Encode()
-	return redacted.String()
 }
 
 // hostPrefix is the path a host such as "https://proxy/k8s/clusters/c-1" is
