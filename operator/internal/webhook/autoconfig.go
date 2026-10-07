@@ -268,34 +268,20 @@ func validateAdditionalEndpoints(ac, old *v1alpha1.KrakenDAutoConfig) field.Erro
 
 // changedAdditionalEndpoints returns the positions of ac's additional
 // endpoints that are new or differ from the stored one with the same endpoint
-// and method; an unset method is GET, as the CRD defaults it. Each stored
-// entry matches at most one new entry, so a stored duplicate key cannot vouch
-// for an added copy. With no stored object every entry has changed.
+// and method (see changedByKey); an unset method is GET, as the CRD defaults
+// it. With no stored object every entry has changed.
 func changedAdditionalEndpoints(old, ac *v1alpha1.KrakenDAutoConfig) []int {
-	withMethod := func(e v1alpha1.AdditionalEndpoint) v1alpha1.AdditionalEndpoint {
-		e.Method = cmp.Or(e.Method, http.MethodGet)
-		return e
+	withMethod := func(entries []v1alpha1.AdditionalEndpoint) []v1alpha1.AdditionalEndpoint {
+		out := slices.Clone(entries)
+		for i := range out {
+			out[i].Method = cmp.Or(out[i].Method, http.MethodGet)
+		}
+		return out
 	}
-	key := func(e v1alpha1.AdditionalEndpoint) string { return e.Method + " " + e.Endpoint }
-	stored := map[string][]v1alpha1.AdditionalEndpoint{}
+	var stored []v1alpha1.AdditionalEndpoint
 	if old != nil {
-		for _, e := range old.Spec.AdditionalEndpoints {
-			e = withMethod(e)
-			stored[key(e)] = append(stored[key(e)], e)
-		}
+		stored = withMethod(old.Spec.AdditionalEndpoints)
 	}
-	var changed []int
-	for i, e := range ac.Spec.AdditionalEndpoints {
-		e = withMethod(e)
-		candidates := stored[key(e)]
-		match := slices.IndexFunc(candidates, func(s v1alpha1.AdditionalEndpoint) bool {
-			return equality.Semantic.DeepEqual(s, e)
-		})
-		if match < 0 {
-			changed = append(changed, i)
-			continue
-		}
-		stored[key(e)] = slices.Delete(candidates, match, match+1)
-	}
-	return changed
+	return changedByKey(stored, withMethod(ac.Spec.AdditionalEndpoints),
+		func(e v1alpha1.AdditionalEndpoint) string { return e.Method + " " + e.Endpoint })
 }
