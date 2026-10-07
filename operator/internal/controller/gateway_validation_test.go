@@ -679,3 +679,28 @@ func TestGatewayReconcile_AnOutageOnTheFastPathExcludesAndReadmitsNothing(t *tes
 		t.Errorf("e Accepted = %+v, want %s kept: an outage excludes and readmits nothing", cond, v1alpha1.ReasonEndpointInvalid)
 	}
 }
+
+func TestGatewayReconcile_ANeverAppliedGatewayClearsAnExcludedEndpointsLeftoverConflicts(t *testing.T) {
+	gw := reconciledGateway() // recreated: no config has ever been applied
+	good, bad := testEndpoint("good", "/a"), badHosted("bad", "/b")
+	bad.Status.Conflicts = []v1alpha1.EndpointConflict{{Endpoint: "/b", Method: "GET", Winner: "default/gone"}}
+	c := fakeClientBuilder().WithObjects(gw, good, bad).WithStatusSubresource(gw, good, bad).Build()
+	// The render without bad fails too, so nothing is applied.
+	val := &contentValidator{markers: map[string]string{"invalid.test": badHostOutput}, failValidate: true}
+
+	if err := reconcileGateway(t, newTestGatewayReconciler(c, renderer.New(renderer.Options{}), val), gw); err != nil {
+		t.Fatal(err)
+	}
+
+	var got v1alpha1.KrakenDEndpoint
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(bad), &got); err != nil {
+		t.Fatal(err)
+	}
+	if cond := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionAccepted); cond == nil ||
+		cond.Reason != v1alpha1.ReasonEndpointInvalid {
+		t.Errorf("bad Accepted = %+v, want %s", cond, v1alpha1.ReasonEndpointInvalid)
+	}
+	if len(got.Status.Conflicts) != 0 {
+		t.Errorf("status.conflicts = %+v, want cleared: no applied render serves any of it", got.Status.Conflicts)
+	}
+}
