@@ -659,9 +659,11 @@ deletion) is no longer reconciled, so the operator no longer recreates the
 children garbage collection is removing. When a gateway is deleted or starts
 terminating, its `krakend_operator_endpoints`,
 `krakend_operator_gateway_info`, `krakend_operator_gateway_config_valid`,
-`krakend_operator_dragonfly_ready`, `krakend_operator_license_expiry_seconds`
-and `krakend_operator_reconcile_duration_seconds{controller="gateway"}`
-series are removed, so alerts on a deleted gateway stop firing.
+`krakend_operator_dragonfly_ready` and
+`krakend_operator_license_expiry_seconds` series are removed, so alerts on a
+deleted gateway stop firing. Its
+`krakend_operator_reconcile_duration_seconds{controller="gateway"}` series
+stays until the operator restarts; see the OpenTelemetry section below.
 
 ### Autoscaled gateways keep the HPA's replica count
 
