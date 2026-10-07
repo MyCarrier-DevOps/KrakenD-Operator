@@ -571,3 +571,20 @@ func TestPolicyAdmission_ScreensEveryGatewayBeforeNaming(t *testing.T) {
 		t.Errorf("checks = %s, want both gateways screened before any endpoint is named", got)
 	}
 }
+
+func TestPolicyAdmission_AGatewayThatCannotBeCheckedDoesNotHideADenial(t *testing.T) {
+	chk := &scriptedChecker{err: errors.New("no slot"), failCall: 4, failOnly: true,
+		verdicts:         []configcheck.Verdict{{OK: true}, {OK: true}, {Output: "x"}},
+		endpointVerdicts: []configcheck.EndpointVerdict{{Reason: v1alpha1.ReasonEndpointInvalid}, {OK: true}}}
+	v := &PolicyValidator{Client: fakeClient(referencingGateways("gw-a", "gw-b")...), Checker: chk}
+
+	resp := review(t, v, "alice", testPolicy(`{"x":{}}`), testPolicy(`{}`))
+
+	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("response = %+v, want the 422 gateway default/gw-a earned", resp.Result)
+	}
+	if text := responseText(resp); !strings.Contains(text, "default/uses-p-gw-a") ||
+		!strings.Contains(text, "1 more gateways that use the policy could not be checked") {
+		t.Errorf("denial = %q, want default/uses-p-gw-a named and the unchecked gateway counted", text)
+	}
+}
