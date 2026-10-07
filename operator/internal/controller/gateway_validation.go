@@ -66,7 +66,10 @@ const combinedFailureMessage = "Every endpoint passes krakend check on its own, 
 //  2. the render as a whole, with the full check;
 //  3. when that fails, each endpoint on its own (judgeEndpoints). Those that
 //     fail are excluded and the rest is applied. When none fails, the
-//     endpoints fail only together, which is the gateway's failure.
+//     endpoints fail only together, which is the gateway's failure;
+//  4. the render without the excluded endpoints, with the full check, unless
+//     it is the applied config: when it still fails, the endpoints fail only
+//     together.
 //
 // Every check answers from the gateway's verdict memo when it already judged
 // the same content. An error means a check could not run: nothing is
@@ -107,6 +110,16 @@ func (r *KrakenDGatewayReconciler) decide(
 	out, err := r.Renderer.Render(rest)
 	if err != nil {
 		return decision{}, fmt.Errorf("rendering config: %w", err)
+	}
+	if !isApplied(gw, out, edition) {
+		var safety configcheck.Verdict
+		if safety, err = r.Checker.CheckRendered(ctx, rest, out, counted); err != nil {
+			return decision{}, err
+		}
+		if !safety.OK {
+			logCombinedFailure(ctx, safety)
+			return decision{excluded: excluded, judged: true, failure: combinedFailure()}, nil
+		}
 	}
 	return decision{output: out, excluded: excluded, judged: true}, nil
 }
