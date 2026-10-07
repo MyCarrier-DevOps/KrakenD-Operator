@@ -118,6 +118,7 @@ func (c *Checker) remembered(ctx context.Context, in renderer.RenderInput, out *
 		}
 	}
 	v, err := c.check(ctx, in, out, validate)
+	v.Output = TruncateEllipsis(v.Output, maxStoredOutput)
 	if err == nil && memo != nil {
 		memo.Store(key, v)
 	}
