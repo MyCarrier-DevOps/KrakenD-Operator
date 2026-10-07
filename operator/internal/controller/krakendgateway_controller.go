@@ -805,6 +805,16 @@ func (r *KrakenDGatewayReconciler) confirmStoredConfig(
 // render keeps the stored config, and must not find pods already moved off it.
 // When the write fails the in-memory record is undone, so the pass keeps the
 // stored config, and the error is returned.
+//
+// The Deployment still runs the previous config when this is written, so the
+// stored status says a rollout is starting: the write is a copy with
+// Progressing=True/ConfigDeployed, and Ready derives from that copy as False
+// and the phase as Deploying. gw itself keeps the pass's own state; the end of
+// the pass decides Progressing from the Deployment step. If the end-of-pass
+// write is then lost as well, the stored Progressing=True lingers until the
+// rollout converges; on a plugin or ServiceAccount hold that is until the hold
+// ends, and Ready is still right because PluginsResolved=False and
+// ResourcesControlled=False outrank Progressing.
 func (r *KrakenDGatewayReconciler) recordApplied(
 	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
@@ -814,14 +824,17 @@ func (r *KrakenDGatewayReconciler) recordApplied(
 ) error {
 	prior := gw.Status.DeepCopy()
 	markConfigApplied(gw, checksum, edition)
-	// The rest of the status is still the previous pass's: read in between,
-	// it must show the gateway as reconciling, not contradict itself.
-	setGatewayReadiness(gw, before.ObservedGeneration)
-	if err := r.Status().Update(ctx, gw); err != nil {
+	stored := gw.DeepCopy()
+	raiseProgressing(stored, &rolloutNote{
+		reason: v1alpha1.ReasonConfigDeployed, message: "Configuration updated, rolling deployment",
+	})
+	setGatewayReadiness(stored, before.ObservedGeneration)
+	if err := r.Status().Update(ctx, stored); err != nil {
 		gw.Status.ConfigChecksum, gw.Status.ConfigEdition = prior.ConfigChecksum, prior.ConfigEdition
 		restoreCondition(gw, prior, v1alpha1.ConditionConfigValid)
 		return fmt.Errorf("recording applied config %s: %w", checksum, err)
 	}
+	gw.ResourceVersion = stored.ResourceVersion
 	return nil
 }
 
