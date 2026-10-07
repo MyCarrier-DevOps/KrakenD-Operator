@@ -62,9 +62,9 @@ type validation struct {
 // gateway controller, the AutoConfig controller and the admission webhooks, so
 // they must share it.
 func wireValidation(
-	mgr ctrl.Manager, r renderer.Renderer, v renderer.Validator, operatorUsername string, _ instrumentation,
+	mgr ctrl.Manager, r renderer.Renderer, v renderer.Validator, operatorUsername string, inst instrumentation,
 ) validation {
-	checker := configcheck.New(mgr.GetClient(), r, v, configCheckSlots, nil)
+	checker := configcheck.New(mgr.GetClient(), r, v, configCheckSlots, inst.Tracer)
 	return validation{
 		Checker: checker,
 		Gateway: &controller.KrakenDGatewayReconciler{
@@ -79,12 +79,14 @@ func wireValidation(
 			// Each gateway reconcile holds one checker slot, so the workers
 			// are the slots the AutoConfig bound leaves the gateway.
 			MaxConcurrentReconciles: gatewayCheckWorkers,
+			Metrics:                 inst.Metrics,
+			Tracer:                  inst.Tracer,
 		},
 		AutoConfig: &controller.KrakenDAutoConfigReconciler{
 			Client:       mgr.GetClient(),
 			Scheme:       mgr.GetScheme(),
 			Recorder:     mgr.GetEventRecorderFor("krakendautoconfig-controller"),
-			Fetcher:      autoconfig.NewFetcher(mgr.GetClient(), nil),
+			Fetcher:      autoconfig.NewFetcher(mgr.GetClient(), inst.Tracer),
 			CUEEvaluator: autoconfig.NewCUEEvaluator(),
 			Filter:       autoconfig.NewFilter(),
 			Generator:    autoconfig.NewGenerator(),
@@ -93,7 +95,10 @@ func wireValidation(
 			// checker's slots, however many workers there are.
 			CheckSlots: make(chan struct{}, autoConfigCheckSlots),
 			Clock:      clock.RealClock{},
+			Metrics:    inst.Metrics,
+			Tracer:     inst.Tracer,
 		},
-		Validators: webhooksetup.NewValidators(mgr.GetClient(), mgr.GetAPIReader(), checker, operatorUsername, nil),
+		Validators: webhooksetup.NewValidators(
+			mgr.GetClient(), mgr.GetAPIReader(), checker, operatorUsername, inst.Tracer),
 	}
 }
