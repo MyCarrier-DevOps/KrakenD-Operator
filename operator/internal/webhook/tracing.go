@@ -80,7 +80,10 @@ func (v tracedValidator) start(
 }
 
 // decisionFailed is the description of a span whose decision could not be
-// reached. The failure's own text is on the span that failed.
+// reached. The failure's text is on no span of the decision that records only
+// this: the config check's span, or the rules' span for a plain error, may
+// record it, but a failure raised elsewhere (a 500 that wraps a lookup) leaves
+// no text in the trace.
 const decisionFailed = "the admission could not be decided"
 
 // rulesFailed is the description of a rules span whose failure was a status
@@ -89,8 +92,8 @@ const rulesFailed = "the rules could not be evaluated"
 
 // endDecision ends span, the span of a decision that returned err. The span
 // records neither a denial (see isDenial), which is an answer and can quote the
-// tenant's object, nor the text of a failure, which the span that failed
-// records: a failure to decide only marks the span an error.
+// tenant's object, nor the text of a failure, which can too: a failure to
+// decide only marks the span an error.
 func endDecision(span trace.Span, err error) {
 	if err != nil && !isDenial(err) {
 		span.SetStatus(codes.Error, decisionFailed)
