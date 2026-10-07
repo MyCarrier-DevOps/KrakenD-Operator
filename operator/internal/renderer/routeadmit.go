@@ -49,11 +49,19 @@ type routedEntry struct {
 	source              types.NamespacedName
 }
 
+// routerClash is an older entry of another KrakenDEndpoint that an entry
+// clashes with: its endpoint, and the clash as detail.
+type routerClash struct {
+	winner types.NamespacedName
+	detail string
+}
+
 // routeAdmission is what admitting a render's entries to the router decided.
 type routeAdmission struct {
 	// losers are the entries left out, by position in flat, each as the
-	// EntryConflict it loses.
-	losers map[int]EntryConflict
+	// EntryConflicts it loses: one for every older KrakenDEndpoint it clashes
+	// with.
+	losers map[int][]EntryConflict
 	// capped says resolution stopped at MaxRouteRefusals, so clashes among
 	// the entries after that point are not resolved.
 	capped bool
@@ -76,14 +84,14 @@ func dropRouteLosers(flat, shadowed []flatEndpoint, conflicted map[types.Namespa
 			kept = append(kept, fe)
 			continue
 		}
-		conflicted[fe.Source] = append(conflicted[fe.Source], c)
+		conflicted[fe.Source] = append(conflicted[fe.Source], c...)
 		slices.SortFunc(conflicted[fe.Source], compareConflicts)
 	}
 	return kept, adm.capped
 }
 
 // routeLosers admits flat's entries to KrakenD's router in serving order
-// (servedBefore). An entry loses to the first older entry of another
+// (servedBefore). An entry loses to any older entry of another
 // KrakenDEndpoint it clashes with, whether that entry is served or was left
 // out itself:
 //   - gin refuses to register the entry's route, or the OPTIONS route
@@ -92,6 +100,11 @@ func dropRouteLosers(flat, shadowed []flatEndpoint, conflicted map[types.Namespa
 //   - on an EE render, the entry lies under an older EE wildcard of its
 //     method, or is an EE wildcard over an older entry of its method (the EE
 //     router's rule, eeWildcardFindings).
+//
+// A losing entry is recorded once for every older KrakenDEndpoint it clashes
+// with, each with its own detail, so a write that adds one more clash is seen
+// as new. Only the loss decides what is served: whether one older entry or
+// several are named does not.
 //
 // Losing also to entries that were left out keeps every entry's outcome
 // independent of whether older entries are served: removing an endpoint, or
@@ -112,11 +125,12 @@ func dropRouteLosers(flat, shadowed []flatEndpoint, conflicted map[types.Namespa
 // entries, is left in for that endpoint's own check, which refuses it; so is
 // a clash with the gateway's own routes, which are not registered here. A
 // clash that needs several older routes together leaves the entry in too.
-// Each loss, and each such clash, rebuilds the engine, so after
+// Each entry lost, and each such clash, rebuilds the engine, so after
 // MaxRouteRefusals of them resolution stops with capped set: the remaining
 // entries are rendered as they are, and the full check reports what is left.
+// The cap counts entries, not the clashes of one entry.
 func routeLosers(flat, shadowed []flatEndpoint, rules routeRules) routeAdmission {
-	adm := routeAdmission{losers: map[int]EntryConflict{}}
+	adm := routeAdmission{losers: map[int][]EntryConflict{}}
 	var served, dropped []routedRoute
 	var older []routedEntry
 	own := map[types.NamespacedName][]ginRoute{}
@@ -147,11 +161,9 @@ func routeLosers(flat, shadowed []flatEndpoint, rules routeRules) routeAdmission
 			continue // its own endpoint's check refuses it
 		}
 		pair := entryRoutes(entry.method, entry.path, rules, nil)
-		winner, detail, lost := olderClash(rules, older, dropped, entry, pair)
-		if !lost {
-			var refused bool
-			winner, detail, refused = registerEntry(engine, served, routes, fe.Source)
-			if !refused {
+		clashes := olderClashes(rules, older, dropped, entry, pair)
+		if len(clashes) == 0 {
+			if registerAll(engine, routes) {
 				for _, r := range routes {
 					served = append(served, routedRoute{route: r, source: fe.Source})
 					if r.method == http.MethodOptions {
@@ -162,15 +174,17 @@ func routeLosers(flat, shadowed []flatEndpoint, rules routeRules) routeAdmission
 				older = append(older, entry)
 				continue
 			}
-			lost = winner != (types.NamespacedName{})
 			// gin can leave its tree half-updated after a refusal; rebuild it.
 			engine = engineWith(routesOf(served))
 		}
+		clashes = withClashes(clashes, pairwiseClashes(served, entry.source, routes))
 		refusals++
 		// The entry's routes went into its own engine on trial; take them out.
 		ownEngines[fe.Source] = engineWith(own[fe.Source])
-		if lost {
-			adm.losers[i] = EntryConflict{Endpoint: entry.path, Method: fe.Entry.Method, Winner: winner, Detail: detail}
+		for _, c := range clashes {
+			adm.losers[i] = append(adm.losers[i], EntryConflict{
+				Endpoint: entry.path, Method: fe.Entry.Method, Winner: c.winner, Detail: c.detail,
+			})
 		}
 		for _, r := range pair {
 			dropped = append(dropped, routedRoute{route: r, source: fe.Source})
@@ -226,26 +240,15 @@ func sharedOptions(a, b ginRoute) bool {
 	return a.method == http.MethodOptions && b.method == http.MethodOptions && a.path == b.path
 }
 
-// registerEntry registers routes in engine. When gin refuses one it reports
-// refused, and, when one served route of another KrakenDEndpoint alone
-// clashes with it, that endpoint as the winner and the clash as detail. The
-// winner is zero when only several routes together refuse it.
-func registerEntry(engine *gin.Engine, served []routedRoute, routes []ginRoute,
-	source types.NamespacedName) (winner types.NamespacedName, detail string, refused bool) {
+// registerAll registers routes in engine and reports whether gin accepted
+// every one. After a refusal the engine may be half-updated.
+func registerAll(engine *gin.Engine, routes []ginRoute) bool {
 	for _, r := range routes {
-		refusal := registerRoute(engine, r)
-		if refusal == "" {
-			continue
+		if registerRoute(engine, r) != "" {
+			return false
 		}
-		for _, s := range served {
-			if s.source == source || registerRoute(engineWith([]ginRoute{s.route}), r) == "" {
-				continue
-			}
-			return s.source, fmt.Sprintf("%s clashes with %s: %s", r.describe(), s.route.describe(), refusal), true
-		}
-		return types.NamespacedName{}, "", true
 	}
-	return types.NamespacedName{}, "", false
+	return true
 }
 
 // routesOf lists the routes of routed.
@@ -276,57 +279,82 @@ func refusedByOwn(engines map[types.NamespacedName]*gin.Engine, own map[types.Na
 	return false
 }
 
-// olderClash reports the first older entry of another KrakenDEndpoint that
-// entry clashes with without registering it: under the EE wildcard rule,
-// against every older entry, and in gin, pairwise, against the routes of the
-// older entries left out. Served entries are checked by registering entry in
-// the engine (registerEntry).
-func olderClash(rules routeRules, older []routedEntry, dropped []routedRoute, entry routedEntry,
-	routes []ginRoute) (types.NamespacedName, string, bool) {
+// olderClashes lists the older entries of other KrakenDEndpoints that entry
+// clashes with without registering it: under the EE wildcard rule, against
+// every older entry, and in gin, pairwise, against the routes of the older
+// entries left out. Served entries are checked by registering entry in the
+// engine (registerAll) and, for the clashes it names, by pairwiseClashes.
+func olderClashes(rules routeRules, older []routedEntry, dropped []routedRoute, entry routedEntry,
+	routes []ginRoute) []routerClash {
+	var clashes []routerClash
 	if rules.eeWildcards {
-		if winner, detail, ok := eeWildcardOverlap(older, entry); ok {
-			return winner, detail, true
-		}
+		clashes = eeWildcardOverlaps(older, entry)
 	}
-	for _, d := range dropped {
-		if d.source == entry.source {
+	return withClashes(clashes, pairwiseClashes(dropped, entry.source, routes))
+}
+
+// pairwiseClashes lists, for each KrakenDEndpoint other than source, the first
+// of its routes in against that one of routes alone clashes with in gin.
+func pairwiseClashes(against []routedRoute, source types.NamespacedName, routes []ginRoute) []routerClash {
+	var clashes []routerClash
+	seen := map[types.NamespacedName]bool{}
+	for _, a := range against {
+		if a.source == source || seen[a.source] {
 			continue
 		}
 		for _, r := range routes {
-			if sharedOptions(d.route, r) {
+			if sharedOptions(a.route, r) {
 				continue
 			}
-			if refusal := registerRoute(engineWith([]ginRoute{d.route}), r); refusal != "" {
-				return d.source, fmt.Sprintf("%s clashes with %s: %s", r.describe(), d.route.describe(), refusal), true
+			if refusal := registerRoute(engineWith([]ginRoute{a.route}), r); refusal != "" {
+				seen[a.source] = true
+				clashes = append(clashes, routerClash{winner: a.source,
+					detail: fmt.Sprintf("%s clashes with %s: %s", r.describe(), a.route.describe(), refusal)})
+				break
 			}
 		}
 	}
-	return types.NamespacedName{}, "", false
+	return clashes
 }
 
-// eeWildcardOverlap applies the EE router's wildcard rule (eeWildcardFindings)
-// between entry and the older entries of other KrakenDEndpoints. It reports
-// the first that is an EE wildcard of the method entry lies under, or that
-// lies under entry when entry is an EE wildcard.
-func eeWildcardOverlap(older []routedEntry, entry routedEntry) (types.NamespacedName, string, bool) {
+// withClashes appends the clashes of more with a KrakenDEndpoint that clashes
+// lacks.
+func withClashes(clashes, more []routerClash) []routerClash {
+	for _, m := range more {
+		if !slices.ContainsFunc(clashes, func(c routerClash) bool { return c.winner == m.winner }) {
+			clashes = append(clashes, m)
+		}
+	}
+	return clashes
+}
+
+// eeWildcardOverlaps applies the EE router's wildcard rule (eeWildcardFindings)
+// between entry and the older entries of other KrakenDEndpoints. It reports,
+// for each, the first that is an EE wildcard of the method entry lies under,
+// or that lies under entry when entry is an EE wildcard.
+func eeWildcardOverlaps(older []routedEntry, entry routedEntry) []routerClash {
+	var clashes []routerClash
 	for _, o := range older {
 		if o.method != entry.method || o.source == entry.source {
 			continue
 		}
 		if prefix := strings.TrimSuffix(o.path, "*"); IsEEWildcard(o.path) &&
 			strings.HasPrefix(entry.shape, shapeOf(prefix)) {
-			return o.source, fmt.Sprintf("'%s %s' conflicts with EE wildcard '%s %s': "+
-				"the EE router accepts no other %s route under %s",
-				entry.method, entry.path, o.method, o.path, entry.method, prefix), true
+			clashes = withClashes(clashes, []routerClash{{winner: o.source,
+				detail: fmt.Sprintf("'%s %s' conflicts with EE wildcard '%s %s': "+
+					"the EE router accepts no other %s route under %s",
+					entry.method, entry.path, o.method, o.path, entry.method, prefix)}})
+			continue
 		}
 		if prefix := strings.TrimSuffix(entry.path, "*"); IsEEWildcard(entry.path) &&
 			strings.HasPrefix(o.shape, shapeOf(prefix)) {
-			return o.source, fmt.Sprintf("EE wildcard '%s %s' conflicts with '%s %s': "+
-				"the EE router accepts no other %s route under %s",
-				entry.method, entry.path, o.method, o.path, entry.method, prefix), true
+			clashes = withClashes(clashes, []routerClash{{winner: o.source,
+				detail: fmt.Sprintf("EE wildcard '%s %s' conflicts with '%s %s': "+
+					"the EE router accepts no other %s route under %s",
+					entry.method, entry.path, o.method, o.path, entry.method, prefix)}})
 		}
 	}
-	return types.NamespacedName{}, "", false
+	return clashes
 }
 
 // routerOptionsOf reads the router block of a gateway-level extra_config.
