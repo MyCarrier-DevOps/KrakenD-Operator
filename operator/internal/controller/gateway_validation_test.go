@@ -426,3 +426,48 @@ func TestGatewayReconcile_AFailureOnlyTogetherIsTheGatewaysAndQuotesNothing(t *t
 		}
 	}
 }
+
+func TestGatewayReconcile_AnOutageMidwayKeepsTheFinishedVerdicts(t *testing.T) {
+	gw := reconciledGateway()
+	a, b, bad := testEndpoint("a", "/a"), testEndpoint("b", "/b"), badHosted("c", "/c")
+	c := fakeClientBuilder().WithObjects(gw, a, b, bad).WithStatusSubresource(gw, a, b, bad).Build()
+	val := rejectsBadHosts()
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}), val)
+	if err := reconcileGateway(t, r, gw); err != nil { // lints: the root, a, b, c
+		t.Fatal(err)
+	}
+	// a changes, so its check is the first to run again, and it cannot run.
+	var changed v1alpha1.KrakenDEndpoint
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(a), &changed); err != nil {
+		t.Fatal(err)
+	}
+	changed.Spec.Endpoints[0].Backends[0].URLPattern = "/changed"
+	changed.Generation++
+	if err := c.Update(context.Background(), &changed); err != nil {
+		t.Fatal(err)
+	}
+	val.unavailableAt = val.lints + 1
+
+	if err := reconcileGateway(t, r, gw); err == nil {
+		t.Fatal("reconcile succeeded although a check could not run")
+	}
+	cv := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionConfigValid)
+	if cv == nil || cv.Reason != v1alpha1.ReasonValidatorUnavailable {
+		t.Errorf("ConfigValid = %+v, want %s", cv, v1alpha1.ReasonValidatorUnavailable)
+	}
+	if cond := storedAccepted(t, c, client.ObjectKeyFromObject(bad)); cond == nil || cond.Reason != v1alpha1.ReasonEndpointInvalid {
+		t.Errorf("c Accepted = %+v, want its exclusion kept on a pass a check could not finish", cond)
+	}
+
+	val.unavailableAt = 0
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+
+	// The first pass checks the root, a, b and c. The failed pass checks a,
+	// which cannot run. The last pass checks a again; b and c were judged
+	// before the outage and are not run again.
+	if val.lints != 6 {
+		t.Errorf("ran %d lints in all, want 6: the verdicts finished before the outage are kept", val.lints)
+	}
+}
