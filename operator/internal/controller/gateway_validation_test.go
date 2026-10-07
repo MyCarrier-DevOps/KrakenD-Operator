@@ -927,3 +927,25 @@ func TestGatewayReconcile_ADeletedGatewayDropsItsExcludedSeries(t *testing.T) {
 		t.Errorf("gauge = %v for a deleted gateway, want no series", got)
 	}
 }
+
+func TestReportExclusions_NamesTheFirstTenSortedAndCountsTheRest(t *testing.T) {
+	gw := reconciledGateway()
+	gw.Namespace = "capped"
+	t.Cleanup(func() { deleteGatewayMetrics(gw.Namespace, gw.Name) })
+	var endpoints []v1alpha1.KrakenDEndpoint
+	for _, name := range []string{"k", "c", "a", "j", "e", "b", "i", "g", "d", "h", "f"} {
+		ep := withAccepted(badHosted(name, "/"+name), metav1.ConditionFalse, v1alpha1.ReasonEndpointInvalid)
+		ep.Namespace = gw.Namespace
+		endpoints = append(endpoints, *ep)
+	}
+	r := newTestGatewayReconciler(fakeClientBuilder().Build(), renderer.New(renderer.Options{}), rejectsBadHosts())
+
+	r.reportExclusions(gw, endpoints, nil, true)
+
+	cond := meta.FindStatusCondition(gw.Status.Conditions, v1alpha1.ConditionEndpointsExcluded)
+	want := "11 KrakenDEndpoint(s) fail validation and are not served: " +
+		"capped/a, capped/b, capped/c, capped/d, capped/e, capped/f, capped/g, capped/h, capped/i, capped/j (+1 more)"
+	if cond == nil || cond.Message != want {
+		t.Errorf("EndpointsExcluded = %+v, want message %q", cond, want)
+	}
+}
