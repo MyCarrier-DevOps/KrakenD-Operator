@@ -58,6 +58,7 @@ import (
 	"github.com/mycarrier-devops/krakend-operator/internal/fieldindex"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 	"github.com/mycarrier-devops/krakend-operator/internal/resources"
+	"github.com/mycarrier-devops/krakend-operator/internal/tracing"
 	"github.com/mycarrier-devops/krakend-operator/internal/util/license"
 )
 
@@ -143,7 +144,9 @@ type ConfigChecker interface {
 
 // Reconcile implements the gateway rendering pipeline: gather inputs,
 // render config, validate, update resource, and reconcile owned objects.
-func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Result, retErr error) {
+	ctx, span := startReconcile(ctx, r.Tracer, "KrakenDGateway", req)
+	defer func() { tracing.End(span, retErr) }()
 	log := logf.FromContext(ctx)
 	start := time.Now()
 	// A gateway that is gone or terminating is forgotten below and observes no
@@ -165,6 +168,7 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 		return ctrl.Result{}, fmt.Errorf("getting gateway %s: %w", req.NamespacedName, err)
 	}
+	spanGeneration(ctx, gw.Generation)
 
 	// A terminating gateway is left alone: under foreground deletion it
 	// lingers while garbage collection removes its children, and converging
