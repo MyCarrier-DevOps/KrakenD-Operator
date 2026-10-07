@@ -508,3 +508,20 @@ func TestPolicyAdmission_NamingStopsAtTwentyEndpoints(t *testing.T) {
 		t.Errorf("denial = %q, want the first 20 endpoints named and 5 counted", text)
 	}
 }
+
+func TestPolicyAdmission_ADenialSurvivesALaterCheckThatCannotRun(t *testing.T) {
+	chk := &scriptedChecker{err: errors.New("no slot"), failCall: 6,
+		verdicts:         []configcheck.Verdict{{OK: true}, {OK: true}, {Output: "x"}},
+		endpointVerdicts: []configcheck.EndpointVerdict{{Reason: v1alpha1.ReasonEndpointInvalid}, {OK: true}}}
+	v := &PolicyValidator{Client: fakeClient(policyUsers("victim", "zz-other")...), Checker: chk}
+
+	resp := review(t, v, "alice", testPolicy(`{"x":{}}`), testPolicy(`{}`))
+
+	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("response = %+v, want the 422 the first endpoint already earned", resp.Result)
+	}
+	if text := responseText(resp); !strings.Contains(text, "default/victim") ||
+		!strings.Contains(text, "(1 not checked within the admission time)") {
+		t.Errorf("denial = %q, want default/victim named and the endpoint left unchecked counted", text)
+	}
+}
