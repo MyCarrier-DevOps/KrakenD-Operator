@@ -440,3 +440,16 @@ func TestCheckEndpoint_ForgedTextBlamesOnlyItsAuthor(t *testing.T) {
 		})
 	}
 }
+
+func TestCheckEndpoint_AMissingPolicyIsNotJudged(t *testing.T) {
+	val := &fakeValidator{err: rejectedOutput("never")}
+	chk := newChecker(val)
+
+	v, err := chk.CheckEndpoint(context.Background(), EndpointUnit{
+		Gateway: gateway(v1alpha1.EditionCE), Endpoint: withPolicy(endpoint("orphan", "/a"), "gone"),
+	}, nil)
+
+	if err != nil || !v.OK || len(val.calls) != 0 {
+		t.Errorf("verdict = %+v, %v after %d checks; want OK and nothing run", v, err, len(val.calls))
+	}
+}
