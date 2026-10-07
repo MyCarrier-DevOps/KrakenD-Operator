@@ -101,15 +101,15 @@ func (c *Checker) SameConfig(ctx context.Context, old, gw *v1alpha1.KrakenDGatew
 	if err != nil {
 		return false, err
 	}
-	out, err := c.renderer.Render(in)
+	out, err := c.render(ctx, in)
 	if err != nil {
-		return false, fmt.Errorf("rendering config: %w", err)
+		return false, err
 	}
 	before := in
 	before.Gateway, before.CEFallback = old, CEFallback(old)
-	oldOut, err := c.renderer.Render(before)
+	oldOut, err := c.render(ctx, before)
 	if err != nil {
-		return false, fmt.Errorf("rendering config: %w", err)
+		return false, err
 	}
 	return bytes.Equal(out.JSON, oldOut.JSON) &&
 		renderer.EditionFor(gw, in.CEFallback) == renderer.EditionFor(old, before.CEFallback), nil
@@ -278,6 +278,17 @@ func sortEndpoints(endpoints []v1alpha1.KrakenDEndpoint) {
 func CEFallback(gw *v1alpha1.KrakenDGateway) bool {
 	return gw.Spec.Edition == v1alpha1.EditionEE &&
 		meta.IsStatusConditionTrue(gw.Status.Conditions, v1alpha1.ConditionLicenseDegraded)
+}
+
+// render renders in, in process, inside a configcheck.render span.
+func (c *Checker) render(ctx context.Context, in renderer.RenderInput) (_ *renderer.RenderOutput, retErr error) {
+	_, span := tracing.Start(ctx, c.tracer, "configcheck.render")
+	defer func() { tracing.End(span, retErr) }()
+	out, err := c.renderer.Render(in)
+	if err != nil {
+		return nil, fmt.Errorf("rendering config: %w", err)
+	}
+	return out, nil
 }
 
 // start starts the span of a check of gw.
