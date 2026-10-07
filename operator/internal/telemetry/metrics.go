@@ -25,11 +25,13 @@ package telemetry
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/otlptranslator"
 	otelprom "go.opentelemetry.io/otel/exporters/prometheus"
 	"go.opentelemetry.io/otel/metric"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 // NewPrometheusReader returns the metric reader that serves the operator's
@@ -79,3 +81,24 @@ func NewOperatorMetrics(meter metric.Meter) (*OperatorMetrics, error) {
 	}
 	return m, nil
 }
+
+// SetEndpoints is a stub.
+func (m *OperatorMetrics) SetEndpoints(types.NamespacedName, int) {}
+
+// SetGatewayInfo is a stub.
+func (m *OperatorMetrics) SetGatewayInfo(types.NamespacedName, string, string) {}
+
+// SetConfigValid is a stub.
+func (m *OperatorMetrics) SetConfigValid(types.NamespacedName, bool) {}
+
+// SetDragonflyReady is a stub.
+func (m *OperatorMetrics) SetDragonflyReady(types.NamespacedName, bool) {}
+
+// SetLicenseExpiry is a stub.
+func (m *OperatorMetrics) SetLicenseExpiry(types.NamespacedName, time.Duration) {}
+
+// SetExcludedEndpoints is a stub.
+func (m *OperatorMetrics) SetExcludedEndpoints(types.NamespacedName, map[string]int) {}
+
+// ForgetGateway is a stub.
+func (m *OperatorMetrics) ForgetGateway(types.NamespacedName) {}

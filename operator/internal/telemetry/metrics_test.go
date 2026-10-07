@@ -21,10 +21,12 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/expfmt"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/mycarrier-devops/krakend-operator/internal/telemetry"
 )
@@ -74,5 +76,25 @@ func TestOperatorMetrics_UnlabelledCountersAreExportedFromStartup(t *testing.T) 
 		if !strings.Contains(got, line+"\n") {
 			t.Errorf("exposition lacks %q:\n%s", line, got)
 		}
+	}
+}
+
+func TestOperatorMetrics_ForgetGatewayRemovesItsGaugeSeries(t *testing.T) {
+	m, scrape := newScraped(t)
+	gw := types.NamespacedName{Namespace: "ns", Name: "gw"}
+	m.SetEndpoints(gw, 3)
+	m.SetGatewayInfo(gw, "EE", "2.13")
+	m.SetConfigValid(gw, true)
+	m.SetDragonflyReady(gw, true)
+	m.SetLicenseExpiry(gw, time.Hour)
+	m.SetExcludedEndpoints(gw, map[string]int{"FailsValidation": 2})
+	if got := strings.Count(scrape(), `namespace="ns"`); got != 6 {
+		t.Fatalf("%d series for the gateway before ForgetGateway, want 6", got)
+	}
+
+	m.ForgetGateway(gw)
+
+	if got := scrape(); strings.Contains(got, `namespace="ns"`) {
+		t.Errorf("series left for a forgotten gateway:\n%s", got)
 	}
 }
