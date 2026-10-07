@@ -53,6 +53,9 @@ type EndpointValidator struct {
 	// check (the AutoConfig controller checks the endpoints it is about to
 	// write first); empty disables the exemption.
 	OperatorUsername string
+	// Memo remembers recent config verdicts across requests. Nil remembers
+	// nothing.
+	Memo configcheck.Memo
 }
 
 // ValidateCreate validates a new KrakenDEndpoint.
