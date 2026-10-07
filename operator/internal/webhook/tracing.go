@@ -19,30 +19,58 @@ package webhook
 import (
 	"context"
 
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
+
+	"github.com/mycarrier-devops/krakend-operator/internal/tracing"
 )
 
-// tracedValidator wraps a validator so each admission decision is a span. It
-// is a stub: it only calls next.
+// tracedValidator wraps a validator so each admission decision is a span
+// named "admission.validate <kind>", a child of the request's server span,
+// with the object's identity and the operation. A denial ends the span with
+// an error status.
 type tracedValidator struct {
 	kind   string
 	next   admission.CustomValidator
 	tracer trace.Tracer
 }
 
-// ValidateCreate calls next.
-func (v tracedValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
+// ValidateCreate validates obj inside a span.
+func (v tracedValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (_ admission.Warnings, retErr error) {
+	ctx, span := v.start(ctx, "CREATE", obj)
+	defer func() { tracing.End(span, retErr) }()
 	return v.next.ValidateCreate(ctx, obj)
 }
 
-// ValidateUpdate calls next.
-func (v tracedValidator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
+// ValidateUpdate validates newObj inside a span.
+func (v tracedValidator) ValidateUpdate(
+	ctx context.Context, oldObj, newObj runtime.Object,
+) (_ admission.Warnings, retErr error) {
+	ctx, span := v.start(ctx, "UPDATE", newObj)
+	defer func() { tracing.End(span, retErr) }()
 	return v.next.ValidateUpdate(ctx, oldObj, newObj)
 }
 
-// ValidateDelete calls next.
-func (v tracedValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
+// ValidateDelete validates obj inside a span.
+func (v tracedValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (_ admission.Warnings, retErr error) {
+	ctx, span := v.start(ctx, "DELETE", obj)
+	defer func() { tracing.End(span, retErr) }()
 	return v.next.ValidateDelete(ctx, obj)
+}
+
+func (v tracedValidator) start(
+	ctx context.Context, operation string, obj runtime.Object,
+) (context.Context, trace.Span) {
+	attrs := []attribute.KeyValue{attribute.String("k8s.admission.operation", operation)}
+	if o, ok := obj.(client.Object); ok {
+		attrs = append(attrs, tracing.Object(v.kind, o)...)
+	}
+	if req, err := admission.RequestFromContext(ctx); err == nil {
+		attrs = append(attrs, attribute.Bool("k8s.admission.dry_run", req.DryRun != nil && *req.DryRun),
+			attribute.String("k8s.admission.uid", string(req.UID)))
+	}
+	return tracing.Start(ctx, v.tracer, "admission.validate "+v.kind, trace.WithAttributes(attrs...))
 }
