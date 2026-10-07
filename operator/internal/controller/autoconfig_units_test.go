@@ -17,13 +17,17 @@ limitations under the License.
 package controller
 
 import (
+	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
+	"time"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
 	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 )
 
@@ -258,5 +262,52 @@ func TestAutoConfigReconcile_AGroupFailureNoCandidateOwnsHoldsNoCandidate(t *tes
 	}
 	if failed := getAC(t, c, ac).Status.FailedOperations; len(failed) != 0 || !endpointExists(t, c, "test-ac-listusers") {
 		t.Errorf("failedOperations = %+v; want listusers written: a group verdict blames no one", failed)
+	}
+}
+
+// A hold that judging adds keeps the stale endpoints (the sync deletes none
+// once something is held), so the router-clash stage, which modelled them gone,
+// must look again: a candidate whose new route would lose to a kept stale
+// endpoint is held, not written into a clash nobody saw.
+func TestAutoConfigReconcile_AJudgingHoldKeepsTheStaleEndpointsTheClashStageModelledGone(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	stale := ownedCopy(t, ac, generatedEndpoint("getUser", "/users/{id}"))
+	stale.CreationTimestamp = metav1.NewTime(time.Unix(1000, 0))
+	orders := ownedCopy(t, ac, generatedEndpoint("getUserOrders", "/users/{id}/orders"))
+	orders.CreationTimestamp = metav1.NewTime(time.Unix(1000, 0))
+	bad := generatedEndpoint("getB", "/b")
+	bad.Spec.Endpoints[0].Backends[0].Host = []string{"http://invalid.test"}
+	g.output.Endpoints = []*v1alpha1.KrakenDEndpoint{
+		generatedEndpoint("getUserOrders", "/users/{userId}/orders"), bad,
+	}
+	c := fakeClientBuilder().WithObjects(ac, cm, stale, orders, testGateway()).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Checker = newTestChecker(c, rejectsBadHosts())
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	var cur v1alpha1.KrakenDEndpoint
+	key := types.NamespacedName{Name: "test-ac-getuserorders", Namespace: "default"}
+	if err := c.Get(context.Background(), key, &cur); err != nil {
+		t.Fatalf("getting the endpoint: %v", err)
+	}
+	if got := cur.Spec.Endpoints[0].Endpoint; got != "/users/{id}/orders" {
+		t.Errorf("getUserOrders route = %q, want it held at /users/{id}/orders", got)
+	}
+	held := map[string]string{}
+	for _, op := range getAC(t, c, ac).Status.FailedOperations {
+		if op.Reason == v1alpha1.ReasonConfigValidationFailed {
+			held[op.Endpoint] = op.Message
+		}
+	}
+	if msg, ok := held["test-ac-getuserorders"]; !ok || !strings.Contains(msg, "test-ac-getuser") {
+		t.Errorf("held = %v, want getUserOrders held, naming the stale endpoint it would lose to", held)
+	}
+	if _, ok := held["test-ac-getb"]; !ok {
+		t.Errorf("held = %v, want getB held for its own failure", held)
 	}
 }
