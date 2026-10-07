@@ -313,3 +313,33 @@ func TestCheckRoot_KeepsBoundedRefusals(t *testing.T) {
 		t.Error("bounding a refusal changed the validator's own rejection")
 	}
 }
+
+func TestCheckRoot_AHitSharesNothingWithAnEarlierVerdict(t *testing.T) {
+	refused := &renderer.ValidationError{
+		Output: "- at '/endpoints/0': bad", Err: errors.New("exit status 1"), Stage: renderer.StageRoute,
+		Refusals: []renderer.RouteRefusal{{Message: "refused", Indices: []int{0}}},
+	}
+	chk := newChecker(&fakeValidator{err: refused})
+	memo := mapMemo{}
+	root := Root{Gateway: gateway(v1alpha1.EditionCE)}
+	first, err := chk.CheckRoot(context.Background(), root, memo)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first.Findings[0].Message = "changed"
+	first.Rejection.Output = "changed"
+	first.Rejection.Refusals[0].Indices[0] = 7
+	second, err := chk.CheckRoot(context.Background(), root, memo)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if second.Findings[0].Message == "changed" || second.Rejection.Output == "changed" ||
+		second.Rejection.Refusals[0].Indices[0] != 0 {
+		t.Errorf("a later hit shows the earlier verdict's edits: %+v, %+v", second.Findings, second.Rejection)
+	}
+	if refused.Refusals[0].Indices[0] != 0 {
+		t.Error("an edit of a verdict reached the validator's own rejection")
+	}
+}
