@@ -100,3 +100,15 @@ func TestSetup_ServiceNameFromTheEnvironmentWins(t *testing.T) {
 		t.Errorf("record lacks %s:\n%s", want, out.String())
 	}
 }
+
+func TestSetup_RejectsAnUnsupportedProtocol(t *testing.T) {
+	cleanOTelEnv(t)
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4318")
+	t.Setenv("OTEL_EXPORTER_OTLP_PROTOCOL", "http/json")
+
+	_, err := telemetry.Setup(context.Background(), telemetry.Config{Registerer: prometheus.NewRegistry()})
+
+	if err == nil || !strings.Contains(err.Error(), "http/json") {
+		t.Errorf("err = %v, want the unsupported protocol named", err)
+	}
+}
