@@ -57,6 +57,13 @@ type AutoConfigChecker interface {
 		gw *v1alpha1.KrakenDGateway,
 		eps []v1alpha1.KrakenDEndpoint,
 	) (configcheck.Verdict, error)
+	// Conflicts renders gw with replace in process and returns what the
+	// render leaves out.
+	Conflicts(
+		ctx context.Context,
+		gw *v1alpha1.KrakenDGateway,
+		replace []v1alpha1.KrakenDEndpoint,
+	) (configcheck.RouteConflicts, error)
 }
 
 // claimEndpoints returns the endpoints ac controls, found by the controller

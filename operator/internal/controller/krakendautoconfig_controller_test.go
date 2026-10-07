@@ -276,6 +276,20 @@ type fakeChecker struct {
 	isolated      []configcheck.Verdict
 	isolatedErr   error
 	isolatedCalls [][]v1alpha1.KrakenDEndpoint
+	// conflicts answers Conflicts from its replace set; nil answers none.
+	// conflictCalls records each call's replace set.
+	conflicts     func(replace []v1alpha1.KrakenDEndpoint) configcheck.RouteConflicts
+	conflictCalls [][]v1alpha1.KrakenDEndpoint
+}
+
+func (f *fakeChecker) Conflicts(
+	_ context.Context, _ *v1alpha1.KrakenDGateway, replace []v1alpha1.KrakenDEndpoint,
+) (configcheck.RouteConflicts, error) {
+	f.conflictCalls = append(f.conflictCalls, replace)
+	if f.conflicts == nil {
+		return configcheck.RouteConflicts{}, nil
+	}
+	return f.conflicts(replace), nil
 }
 
 func (f *fakeChecker) CheckIsolated(
@@ -6346,6 +6360,12 @@ type peakChecker struct {
 	running, peak atomic.Int32
 }
 
+func (p *peakChecker) Conflicts(
+	_ context.Context, _ *v1alpha1.KrakenDGateway, _ []v1alpha1.KrakenDEndpoint,
+) (configcheck.RouteConflicts, error) {
+	return configcheck.RouteConflicts{}, nil
+}
+
 func (p *peakChecker) CheckIsolated(
 	_ context.Context, _ *v1alpha1.KrakenDGateway, _ []v1alpha1.KrakenDEndpoint,
 ) (configcheck.Verdict, error) {
@@ -6476,6 +6496,12 @@ type slotHeldChecker struct {
 	held     []int
 	// isolatedHeld records the same for isolated checks, which all pass.
 	isolatedHeld []int
+}
+
+func (s *slotHeldChecker) Conflicts(
+	_ context.Context, _ *v1alpha1.KrakenDGateway, _ []v1alpha1.KrakenDEndpoint,
+) (configcheck.RouteConflicts, error) {
+	return configcheck.RouteConflicts{}, nil
 }
 
 func (s *slotHeldChecker) CheckIsolated(
