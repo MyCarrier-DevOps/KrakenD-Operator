@@ -88,15 +88,11 @@ func (c *Checker) CheckGateway(ctx context.Context, gw *v1alpha1.KrakenDGateway,
 // CheckIsolated lints gw's root config with eps as its only endpoints.
 func (c *Checker) CheckIsolated(ctx context.Context, gw *v1alpha1.KrakenDGateway,
 	eps []v1alpha1.KrakenDEndpoint) (Verdict, error) {
-	endpoints := slices.Clone(eps)
-	sortEndpoints(endpoints)
-	policies, err := c.policiesFor(ctx, endpoints)
+	in, err := c.inputFor(ctx, gw, slices.Clone(eps), nil, ceFallback(gw))
 	if err != nil {
 		return Verdict{}, err
 	}
-	return c.lint(ctx, renderer.RenderInput{
-		Gateway: gw, Endpoints: endpoints, Policies: policies, CEFallback: ceFallback(gw),
-	})
+	return c.lint(ctx, in)
 }
 
 // SameConfig reports whether gw and old, two versions of one gateway, render
@@ -246,7 +242,15 @@ func (c *Checker) gather(ctx context.Context, gw *v1alpha1.KrakenDGateway, repla
 	if err := c.reader.List(ctx, &list, opts...); err != nil {
 		return renderer.RenderInput{}, fmt.Errorf("listing endpoints of gateway %s/%s: %w", gw.Namespace, gw.Name, err)
 	}
-	endpoints := substitute(list.Items, replace)
+	return c.inputFor(ctx, gw, substitute(list.Items, replace), override, ceFallback(gw))
+}
+
+// inputFor is the render input of gw with endpoints as its only endpoints,
+// sorted in place by namespace/name, and the policies they reference, with
+// override (when not nil) in place of the stored policy of the same
+// namespace/name.
+func (c *Checker) inputFor(ctx context.Context, gw *v1alpha1.KrakenDGateway, endpoints []v1alpha1.KrakenDEndpoint,
+	override *v1alpha1.KrakenDBackendPolicy, fallback bool) (renderer.RenderInput, error) {
 	sortEndpoints(endpoints)
 	policies, err := c.policiesFor(ctx, endpoints)
 	if err != nil {
@@ -255,7 +259,7 @@ func (c *Checker) gather(ctx context.Context, gw *v1alpha1.KrakenDGateway, repla
 	if override != nil {
 		policies[policyKey(override)] = override
 	}
-	return renderer.RenderInput{Gateway: gw, Endpoints: endpoints, Policies: policies, CEFallback: ceFallback(gw)}, nil
+	return renderer.RenderInput{Gateway: gw, Endpoints: endpoints, Policies: policies, CEFallback: fallback}, nil
 }
 
 // policiesFor fetches every policy the endpoints reference, keyed by
