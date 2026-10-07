@@ -229,6 +229,8 @@ func screenPolicyUse(ctx context.Context, chk ConfigChecker, memo configcheck.Me
 // suspect that fails failed with the stored policy too, the write only draws
 // a warning. When the group failed but no suspect fails on its own, the group
 // with the stored policy tells whether failing together is the write's doing.
+// A check that cannot run is returned as err, unless a broken endpoint was
+// already found: that denial stands.
 func judgePolicyUse(ctx context.Context, chk ConfigChecker, memo configcheck.Memo, use policyUse,
 	old, policy *v1alpha1.KrakenDBackendPolicy) (cause, warning string, err error) {
 	if use.err != nil || use.warning != "" {
@@ -243,10 +245,10 @@ func judgePolicyUse(ctx context.Context, chk ConfigChecker, memo configcheck.Mem
 	s := failingEndpoints(ctx, chk, memo,
 		configcheck.EndpointUnit{Gateway: gw, Override: policy, CEFallback: ceFallback}, was, use.suspects)
 	switch {
-	case s.stopped != nil:
-		return "", "", s.stopped
 	case len(s.broken) > 0:
 		return fmt.Sprintf("breaks gateway %s/%s: %s", gw.Namespace, gw.Name, brokenList(s)), "", nil
+	case s.stopped != nil:
+		return "", "", s.stopped
 	case s.already:
 		return "", fmt.Sprintf("gateway %s/%s: endpoints that use this policy already fail validation with "+
 			"the stored policy", gw.Namespace, gw.Name), nil
