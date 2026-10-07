@@ -98,3 +98,19 @@ func TestOperatorMetrics_ForgetGatewayRemovesItsGaugeSeries(t *testing.T) {
 		t.Errorf("series left for a forgotten gateway:\n%s", got)
 	}
 }
+
+func TestOperatorMetrics_ExcludedEndpointsReplacesEveryReason(t *testing.T) {
+	m, scrape := newScraped(t)
+	gw := types.NamespacedName{Namespace: "ns", Name: "gw"}
+	m.SetExcludedEndpoints(gw, map[string]int{"A": 1, "B": 2})
+
+	m.SetExcludedEndpoints(gw, map[string]int{"B": 1, "C": 0})
+
+	got := scrape()
+	if want := `krakend_operator_gateway_excluded_endpoints{gateway="gw",namespace="ns",reason="B"} 1`; !strings.Contains(got, want) {
+		t.Errorf("exposition lacks %q:\n%s", want, got)
+	}
+	if strings.Contains(got, `reason="A"`) || strings.Contains(got, `reason="C"`) {
+		t.Errorf("a dropped or zero reason still has a series:\n%s", got)
+	}
+}
