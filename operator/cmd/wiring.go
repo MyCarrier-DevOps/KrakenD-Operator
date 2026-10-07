@@ -185,7 +185,6 @@ func telemetryConfig(level otellog.Severity, format telemetry.LogFormat) telemet
 	}
 }
 
-
 // newInstrumentation returns the operator's tracer and metrics recorder over
 // tel's providers.
 func newInstrumentation(tel *telemetry.Telemetry) (instrumentation, error) {
