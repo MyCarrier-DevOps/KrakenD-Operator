@@ -722,3 +722,41 @@ func TestAutoConfigReconcile_AFailedFetchMarksOnlyItsOwnStage(t *testing.T) {
 		}
 	}
 }
+
+// A refused endpoint write is the write's error and the reconcile's. The
+// endpoint pass, which only collects it, and the status write that records the
+// failure carry none: it is neither's own.
+func TestAutoConfigReconcile_AFailedWriteMarksOnlyItsOwnStage(t *testing.T) {
+	ac := testAutoConfig()
+	c := fakeClientBuilder().WithObjects(ac, testCUEDefinitionsCM(), testGateway()).
+		WithStatusSubresource(ac).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+				if _, ok := obj.(*v1alpha1.KrakenDEndpoint); ok {
+					return errors.New("endpoint refused")
+				}
+				return c.Create(ctx, obj, opts...)
+			},
+		}).Build()
+	f, ce, fi, g := defaultMocks()
+	r := newACReconciler(c, f, ce, fi, g)
+	rec := tracingtest.New(t)
+	r.Tracer = rec.Tracer()
+
+	if _, err := reconcileAC(r, ac); err == nil || !strings.Contains(err.Error(), "endpoint refused") {
+		t.Fatalf("Reconcile error = %v, want the refused write", err)
+	}
+
+	want := map[string]codes.Code{
+		"reconcile KrakenDAutoConfig": codes.Error, "autoconfig.write_endpoint": codes.Error,
+		"autoconfig.endpoints": codes.Unset, "autoconfig.status": codes.Unset,
+	}
+	got := spanCodes(t, rec.Ended(), "reconcile KrakenDAutoConfig", "autoconfig.write_endpoint",
+		"autoconfig.endpoints", "autoconfig.status")
+	for span, code := range want {
+		if got[span] != code {
+			t.Errorf("%s status = %v, want %v", span, got[span], code)
+		}
+	}
+	rec.Ended().RequireParent(t, "reconcile KrakenDAutoConfig", "autoconfig.status")
+}
