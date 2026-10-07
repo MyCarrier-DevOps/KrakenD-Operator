@@ -216,3 +216,6 @@ func findingsFrom(atts []renderer.Attribution, renderedJSON []byte,
 	}
 	return out
 }
+
+// Excerpt is the rejection's output on one line.
+func (v Verdict) Excerpt(int) string { return "" }

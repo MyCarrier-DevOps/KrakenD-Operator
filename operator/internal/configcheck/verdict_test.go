@@ -294,3 +294,20 @@ func TestTruncateEllipsis_NeverExceedsTheLimit(t *testing.T) {
 		})
 	}
 }
+
+func TestVerdictExcerpt_KeepsTheFindingLinesWithinTheLimit(t *testing.T) {
+	v := Verdict{Output: "Parsing configuration file: krakend.json\n" +
+		"ERROR linting the configuration file:\n" +
+		"- at '/endpoints/0/backend/0/host/0': first\n\n" +
+		"- at '/endpoints/0/timeout': second\n"}
+
+	if got := v.Excerpt(1024); got != "- at '/endpoints/0/backend/0/host/0': first; - at '/endpoints/0/timeout': second" {
+		t.Errorf("Excerpt = %q, want the finding lines only", got)
+	}
+	if got := v.Excerpt(45); got != "- at '/endpoints/0/backend/0/host/0': first (+1 more)" {
+		t.Errorf("Excerpt(45) = %q, want the first line and a count", got)
+	}
+	if got := (Verdict{}).Excerpt(64); got != "rejected with no output" {
+		t.Errorf("an empty rejection's excerpt = %q", got)
+	}
+}
