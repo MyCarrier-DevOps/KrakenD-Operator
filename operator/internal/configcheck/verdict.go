@@ -24,6 +24,7 @@ package configcheck
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -56,7 +57,7 @@ type Verdict struct {
 // and admission judge exactly these endpoints on their own, so each blames
 // the same ones.
 func (v Verdict) Suspect(name types.NamespacedName) bool {
-	return false
+	return !v.OK || slices.Contains(v.Masked, name)
 }
 
 // Excerpt is the rejection's output on one line: its lines that carry a
