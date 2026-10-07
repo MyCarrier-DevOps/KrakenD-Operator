@@ -235,7 +235,7 @@ func (r *refResolver) walk(node any, base string) {
 					r.fatalErr = fatal.err
 				} else {
 					r.warnings = append(r.warnings,
-						fmt.Sprintf("failed to resolve external $ref %q: %v", ref, err))
+						fmt.Sprintf("failed to resolve external $ref %q: %v", redactRef(ref), err))
 				}
 			}
 			return
@@ -290,7 +290,7 @@ func (r *refResolver) resolveExampleRef(entry map[string]any, base string) {
 			r.fatalErr = fatal.err
 		} else {
 			r.warnings = append(r.warnings,
-				fmt.Sprintf("failed to resolve external $ref %q: %v", ref, err))
+				fmt.Sprintf("failed to resolve external $ref %q: %v", redactRef(ref), err))
 		}
 	}
 }
@@ -447,6 +447,17 @@ func splitRef(ref string) (docURL, fragment string) {
 		return ref, ""
 	}
 	return ref[:idx], ref[idx+1:]
+}
+
+// redactRef returns ref with the URL part redacted as RedactURL does and its
+// JSON pointer kept, for the warnings that name a $ref: the URL of a $ref can
+// carry credentials.
+func redactRef(ref string) string {
+	docURL, fragment := splitRef(ref)
+	if !strings.Contains(ref, "#") {
+		return RedactURL(docURL)
+	}
+	return RedactURL(docURL) + "#" + fragment
 }
 
 // pointerLookup walks a JSON pointer (RFC 6901) and returns the referenced node.
