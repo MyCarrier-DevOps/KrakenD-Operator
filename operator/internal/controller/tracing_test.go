@@ -872,3 +872,47 @@ func TestAutoConfigReconcile_AHeldCandidateIsRecheckedUnderThePrecheck(t *testin
 	spans.RequireParent(t, "autoconfig.judge_candidates", "configcheck.CheckEndpoint")
 	spans.RequireParent(t, "reconcile KrakenDAutoConfig", "autoconfig.status")
 }
+
+// The wait for a check slot is a span under the caller's, and it has ended
+// once the slot is taken: the check is not part of it.
+func TestWithCheckSlot_TheWaitEndsBeforeTheCheckRuns(t *testing.T) {
+	rec := tracingtest.New(t)
+	ctx, outer := rec.Tracer().Start(context.Background(), "outer")
+	waitEnded := false
+
+	_, err := withCheckSlot(ctx, rec.Tracer(), make(chan struct{}, 1), func() (struct{}, error) {
+		waitEnded = len(rec.Ended().Named("autoconfig.slot")) == 1
+		return struct{}{}, nil
+	})
+	outer.End()
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !waitEnded {
+		t.Error("the autoconfig.slot span was still open while the check ran")
+	}
+	spans := rec.Ended()
+	spans.RequireParent(t, "outer", "autoconfig.slot")
+	if got := spans.One(t, "autoconfig.slot").Status().Code; got != codes.Unset {
+		t.Errorf("autoconfig.slot status = %v, want Unset", got)
+	}
+}
+
+// A wait that gives up when its context ends records why on its span.
+func TestWithCheckSlot_AGivenUpWaitIsAnErrorOnItsSpan(t *testing.T) {
+	rec := tracingtest.New(t)
+	slots := make(chan struct{}, 1)
+	slots <- struct{}{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := withCheckSlot(ctx, rec.Tracer(), slots, func() (struct{}, error) { return struct{}{}, nil })
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want a cancellation", err)
+	}
+	if got := rec.Ended().One(t, "autoconfig.slot").Status().Code; got != codes.Error {
+		t.Errorf("autoconfig.slot status = %v, want Error", got)
+	}
+}
