@@ -291,8 +291,9 @@ const legacyConditionPolicyValid = "PolicyValid"
 // False with the validatePolicy reason. Otherwise the policy is rendered and
 // checked on its own: False with reason PolicyInvalid and the policy's own
 // krakend output when it fails, True when it passes. A check that cannot run
-// (no validator, a timeout, no slot) is Unknown with reason
-// ValidatorUnavailable, and its error is returned for a retry with backoff.
+// (no validator, a run that timed out, or the reconcile ending while it waits
+// for a slot) is Unknown with reason ValidatorUnavailable, and its error is
+// returned for a retry with backoff. Waiting for a slot only delays the check.
 func (r *KrakenDBackendPolicyReconciler) policyReady(
 	ctx context.Context, policy *v1alpha1.KrakenDBackendPolicy,
 ) (metav1.Condition, error) {
