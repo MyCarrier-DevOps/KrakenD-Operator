@@ -19,7 +19,10 @@ package telemetry_test
 import (
 	"bytes"
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -125,5 +128,46 @@ func TestSetup_WithAnEndpointTracesAreRecorded(t *testing.T) {
 	defer span.End()
 	if !span.IsRecording() {
 		t.Error("span is not recording with an OTLP endpoint configured")
+	}
+}
+
+// With an OTLP endpoint, every signal reaches the collector: a span, a
+// metric and a log record are each posted to their http/protobuf path by the
+// time Shutdown returns.
+func TestSetup_ExportsEverySignalOverOTLP(t *testing.T) {
+	cleanOTelEnv(t)
+	var mu sync.Mutex
+	posts := map[string]int{}
+	collector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		if r.Method == http.MethodPost {
+			posts[r.URL.Path]++
+		}
+	}))
+	defer collector.Close()
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", collector.URL)
+	var out bytes.Buffer
+	tel := setup(t, &out)
+	ctx := context.Background()
+
+	_, span := tel.TracerProvider.Tracer("test").Start(ctx, "exported")
+	span.End()
+	counter, err := tel.MeterProvider.Meter("test").Int64Counter("exported_total")
+	if err != nil {
+		t.Fatal(err)
+	}
+	counter.Add(ctx, 1)
+	tel.Logger.Info("exported")
+	if err := tel.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	for _, path := range []string{"/v1/traces", "/v1/metrics", "/v1/logs"} {
+		if posts[path] == 0 {
+			t.Errorf("no POST to %s; the collector got %v", path, posts)
+		}
 	}
 }
