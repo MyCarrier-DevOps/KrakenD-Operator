@@ -165,15 +165,51 @@ func TestLogger_ChildLoggersAndErrorsConvertValues(t *testing.T) {
 	}
 }
 
-// A value that contains itself is cut off rather than followed forever.
-func TestLogger_ASelfContainingValueDoesNotOverflow(t *testing.T) {
+// logsWithinTimeout logs value and reports the stdout output, failing the
+// test if logging has not finished in two seconds.
+func logsWithinTimeout(t *testing.T, value any) string {
+	t.Helper()
 	logger, out := newStdoutLogger(t, otellog.SeverityInfo)
-	loop := map[string]any{}
-	loop["self"] = loop
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		logger.Info("m", "value", value)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("logging the value did not finish in 2s")
+	}
+	return out.String()
+}
 
-	logger.Info("m", "loop", loop)
+// A value that contains itself is cut off rather than followed forever, even
+// when it contains itself twice over.
+func TestLogger_ASelfContainingValueDoesNotHangOrGrow(t *testing.T) {
+	branching := map[string]any{}
+	branching["a"] = branching
+	branching["b"] = branching
+	list := []any{nil, nil}
+	list[0], list[1] = list, list
 
-	if got := records(t, out); len(got) != 1 {
-		t.Errorf("got %d records, want 1", len(got))
+	for name, value := range map[string]any{"map": branching, "slice": list} {
+		t.Run(name, func(t *testing.T) {
+			if out := logsWithinTimeout(t, value); len(out) > 1<<20 || !strings.Contains(out, "<cycle>") {
+				t.Errorf("output is %d bytes, want under 1MiB containing <cycle>", len(out))
+			}
+		})
+	}
+}
+
+// A value shared without cycles, but fanning out exponentially, is cut off at
+// a bounded number of nodes.
+func TestLogger_AFanningOutValueIsTruncated(t *testing.T) {
+	var node any = "leaf"
+	for range 40 {
+		node = []any{node, node}
+	}
+
+	if out := logsWithinTimeout(t, node); len(out) > 4<<20 || !strings.Contains(out, "<truncated>") {
+		t.Errorf("output is %d bytes, want under 4MiB containing <truncated>", len(out))
 	}
 }
