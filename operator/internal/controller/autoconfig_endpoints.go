@@ -395,6 +395,12 @@ func (r *KrakenDAutoConfigReconciler) judgeCandidates(
 ) (held map[string]rejection, err error) {
 	held = map[string]rejection{}
 	ceFallback := configcheck.CEFallback(gw)
+	root, err := withCheckSlot(ctx, r.CheckSlots, func() (configcheck.Verdict, error) {
+		return r.Checker.CheckRoot(ctx, configcheck.Root{Gateway: gw, CEFallback: ceFallback}, nil)
+	})
+	if err != nil || !root.OK {
+		return held, err
+	}
 	for _, ep := range candidates {
 		v, err := withCheckSlot(ctx, r.CheckSlots, func() (configcheck.EndpointVerdict, error) {
 			unit := configcheck.EndpointUnit{Gateway: gw, Endpoint: ep, CEFallback: ceFallback}
