@@ -19,6 +19,7 @@ package autoconfig
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -155,7 +156,7 @@ func (f *httpFetcher) get(ctx context.Context, source FetchSource) (*FetchResult
 		return nil, fmt.Errorf("parsing URL: %w", withoutURL(err))
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return nil, fmt.Errorf("unsupported scheme %q: only http and https are allowed", parsed.Scheme)
+		return nil, errors.New("unsupported scheme: only http and https are allowed")
 	}
 	if parsed.Hostname() == "" {
 		return nil, fmt.Errorf("URL has no host")
