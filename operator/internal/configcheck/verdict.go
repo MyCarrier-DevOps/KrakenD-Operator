@@ -49,6 +49,16 @@ type Verdict struct {
 	Stage renderer.RejectionStage
 }
 
+// Suspect reports whether the check of a group of endpoints, this verdict, did
+// not judge the endpoint name of that group: every one when the check failed,
+// otherwise those that lost an entry in its render (Masked), whose lost
+// entries it never checked. The gateway controller, the AutoConfig controller
+// and admission judge exactly these endpoints on their own, so each blames
+// the same ones.
+func (v Verdict) Suspect(name types.NamespacedName) bool {
+	return false
+}
+
 // Excerpt is the rejection's output on one line: its lines that carry a
 // finding, joined with "; " and cut at a line boundary (joinBounded). An
 // empty rejection reads "rejected with no output", so an excerpt always

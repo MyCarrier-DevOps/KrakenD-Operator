@@ -20,6 +20,8 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"k8s.io/apimachinery/pkg/types"
 )
 
 func TestTruncate_CutsOnARuneBoundary(t *testing.T) {
@@ -101,5 +103,29 @@ func TestVerdictExcerpt_KeepsAValidPrefixOfAnOversizedFirstLine(t *testing.T) {
 
 	if !utf8.ValidString(got) || !strings.HasSuffix(got, " (+1 more)") || !strings.HasPrefix(got, "- at '/a': é") {
 		t.Errorf("excerpt = %q, want a rune-safe prefix of the first line and \" (+1 more)\"", got)
+	}
+}
+
+func TestVerdictSuspect_IsEveryEndpointOfAFailedGroupOrTheMaskedOnesOfAPassingOne(t *testing.T) {
+	masked := types.NamespacedName{Namespace: "a", Name: "masked"}
+	other := types.NamespacedName{Namespace: "a", Name: "other"}
+	tests := []struct {
+		name     string
+		verdict  Verdict
+		endpoint types.NamespacedName
+		want     bool
+	}{
+		{"a failed group does not vouch for any endpoint", Verdict{Masked: []types.NamespacedName{masked}}, other, true},
+		{"a passing group does not vouch for a masked endpoint", Verdict{OK: true, Masked: []types.NamespacedName{masked}},
+			masked, true},
+		{"a passing group vouches for an endpoint it rendered whole", Verdict{OK: true,
+			Masked: []types.NamespacedName{masked}}, other, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.verdict.Suspect(tt.endpoint); got != tt.want {
+				t.Errorf("Suspect(%v) = %v, want %v", tt.endpoint, got, tt.want)
+			}
+		})
 	}
 }
