@@ -311,6 +311,50 @@ func TestGatewayAdmission_NamingStopsBeforeTheBudget(t *testing.T) {
 	}
 }
 
+// The stored gateway's group passes and the update's fails, so the update is
+// the cause whichever endpoint the scan would name: it is refused with a 422
+// when the admission time ends before the scan reaches the endpoint it breaks.
+func TestGatewayAdmission_AnUpdateThatBreaksALargeGatewayIsRefusedWithinTheBudget(t *testing.T) {
+	old, gw := editedGateway()
+	objs := []client.Object{old}
+	for i := range 300 {
+		objs = append(objs, testEndpoint(fmt.Sprintf("ep-%03d", i), fmt.Sprintf("/e%d", i)))
+	}
+	chk := &scriptedChecker{delay: 30 * time.Millisecond,
+		verdicts: []configcheck.Verdict{{OK: true}, {Output: "x"}, {OK: true}, {OK: true}}}
+	v := &GatewayValidator{Client: fakeClient(objs...), Checker: chk}
+	const deadline = 2 * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), deadline)
+	defer cancel()
+	start := time.Now()
+
+	_, err := v.ValidateUpdate(ctx, old, gw)
+
+	if !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "not checked within the admission time") {
+		t.Fatalf("err = %v, want a 422 that the deadline cut short", err)
+	}
+	if took := time.Since(start); took > deadline+500*time.Millisecond {
+		t.Errorf("answered after %s, want soon after the %s deadline", took, deadline)
+	}
+}
+
+// An endpoint that fails on its own with the stored gateway too, though the
+// stored group passed, is one the stored render masked: the update is not
+// decided before the scan, and its endpoints draw only the warning.
+func TestGatewayAdmission_AnEndpointMaskedBeforeAndFailingBothWaysOnlyWarns(t *testing.T) {
+	old, gw := editedGateway()
+	masked := configcheck.Verdict{OK: true, Masked: []types.NamespacedName{{Namespace: "default", Name: "ep"}}}
+	epFail := configcheck.EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid}
+	chk := &scriptedChecker{verdicts: []configcheck.Verdict{{OK: true}, {Output: "x"}, {OK: true}, masked},
+		endpointVerdicts: []configcheck.EndpointVerdict{epFail, epFail}}
+
+	resp := review(t, &GatewayValidator{Client: fakeClient(old, testEndpoint("ep", "/a")), Checker: chk}, "alice", gw, old)
+
+	if !resp.Allowed || len(resp.Warnings) != 1 || !strings.Contains(resp.Warnings[0], "already fail validation") {
+		t.Errorf("response = %+v, warnings %q; want admitted with the already-fail warning", resp.Result, resp.Warnings)
+	}
+}
+
 func TestGatewayAdmission_ALargeGatewayThatPassesRunsTwoChecks(t *testing.T) {
 	old, gw := editedGateway()
 	objs := []client.Object{old}
