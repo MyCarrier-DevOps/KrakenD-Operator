@@ -296,6 +296,19 @@ func TestGatewayReconcile_EachCRDLookupIsADiscoverySpanOfItsStage(t *testing.T) 
 		{"Dragonfly.dragonflydb.io", "gateway.dragonfly", func(gw *v1alpha1.KrakenDGateway) {
 			gw.Spec.Dragonfly = &v1alpha1.DragonflySpec{Enabled: true}
 		}},
+		{"VirtualService.networking.istio.io", "gateway.infrastructure", func(gw *v1alpha1.KrakenDGateway) {
+			gw.Spec.Istio = &v1alpha1.IstioSpec{
+				Enabled: true, Hosts: []string{"api.example.com"}, Gateways: []string{"istio-system/gw"},
+			}
+		}},
+		{"ExternalSecret.external-secrets.io", "gateway.license", func(gw *v1alpha1.KrakenDGateway) {
+			gw.Spec.Edition = v1alpha1.EditionEE
+			gw.Spec.License = &v1alpha1.LicenseConfig{ExternalSecret: v1alpha1.ExternalSecretLicenseConfig{
+				Enabled:        true,
+				SecretStoreRef: v1alpha1.SecretStoreRef{Name: "vault", Kind: "ClusterSecretStore"},
+				RemoteRef:      v1alpha1.ExternalRemoteRef{Key: "krakend/license"},
+			}}
+		}},
 	} {
 		t.Run(tc.kind, func(t *testing.T) {
 			gw := testGateway()
