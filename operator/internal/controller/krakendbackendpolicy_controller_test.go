@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -766,5 +767,36 @@ func TestPolicyReconcile_ReadyIsFalseWhenThePolicyFailsKrakendCheckOnItsOwn(t *t
 	events := drainEvents(rec)
 	if len(events) != 1 || !strings.HasPrefix(events[0], "Warning PolicyInvalid ") {
 		t.Errorf("events = %q, want one Warning PolicyInvalid", events)
+	}
+}
+
+func TestPolicyReconcile_ReadyIsUnknownWhenTheCheckCannotRun(t *testing.T) {
+	policy := policyInRange()
+	checker := &stubPolicyChecker{err: errors.New("krakend: executable file not found")}
+	c := fakeClientBuilder().WithObjects(policy).WithStatusSubresource(policy).Build()
+	rec := fakeRecorder()
+	r := &KrakenDBackendPolicyReconciler{
+		Client: c, Scheme: testScheme(), Recorder: rec, Checker: checker,
+	}
+
+	req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(policy)}
+	_, err := r.Reconcile(context.Background(), req)
+
+	if err == nil {
+		t.Error("Reconcile returned no error, so the check is not retried with backoff")
+	}
+	var stored v1alpha1.KrakenDBackendPolicy
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(policy), &stored); err != nil {
+		t.Fatal(err)
+	}
+	ready := meta.FindStatusCondition(stored.Status.Conditions, v1alpha1.ConditionReady)
+	if ready == nil || ready.Status != metav1.ConditionUnknown || ready.Reason != v1alpha1.ReasonValidatorUnavailable {
+		t.Fatalf("Ready = %+v, want Unknown/ValidatorUnavailable", ready)
+	}
+	if !strings.Contains(ready.Message, "krakend: executable file not found") {
+		t.Errorf("Ready message = %q, want it to carry the cause", ready.Message)
+	}
+	if events := drainEvents(rec); len(events) != 0 {
+		t.Errorf("events = %q, want none: an unavailable validator is not a policy failure", events)
 	}
 }
