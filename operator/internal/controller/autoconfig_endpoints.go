@@ -288,10 +288,6 @@ func (f endpointFailuresError) Summary() string {
 // unattributedSummaryLimit bounds the findings text of a hold, in bytes.
 const unattributedSummaryLimit = 200
 
-// maxPrecheckRounds bounds the gateway config checks one reconcile runs to
-// attribute a failing check to operations.
-const maxPrecheckRounds = 5
-
 // validatorUnavailableError marks a reconcileEndpoints failure caused by the
 // gateway config check being unavailable (a transient condition).
 type validatorUnavailableError struct{ err error }
@@ -310,21 +306,21 @@ func endpointFailureReason(err error) string {
 	return v1alpha1.ReasonEndpointReconcileFailed
 }
 
-// precheck runs the gateway config check over the endpoints reconcileEndpoints
-// would write and returns those that fail it, keyed by name. Each round
-// checks the remaining candidates, attributes the check's findings to them by
-// Finding.Endpoint, and drops the attributed ones, until the check passes, no
-// finding names a candidate, or maxPrecheckRounds rounds ran. A round models
-// the state its writes would produce: when this reconcile will also delete
-// the stale endpoints (held is false and nothing was held in an earlier
-// round), they are replaced by empty copies so the check sees them gone. A
-// missing gateway renders nothing, so nothing is checked. On a CE gateway,
-// candidates that use Enterprise-only namespaces are held first (as
-// EndpointRejected, the reason a refused write would give) and never checked:
-// entry and backend namespaces are held without a write, while other
-// admission rules the config check cannot see cost one rejected write per
-// sync, which is held as EndpointRejected too. An error means the check could
-// not run.
+// precheck returns the endpoints reconcileEndpoints would write that it must
+// hold, keyed by name. A missing gateway renders nothing, so nothing is
+// checked. It holds, in order:
+//  1. on a CE gateway, the candidates that use Enterprise-only namespaces, as
+//     EndpointRejected (the reason a refused write would give), never
+//     checked: entry and backend namespaces are held without a write, while
+//     other admission rules the config check cannot see cost one rejected
+//     write per sync, which is held as EndpointRejected too;
+//  2. the candidates that would newly clash in the router (routerClashes),
+//     whose render replaces the stale endpoints by empty copies when this
+//     reconcile will also delete them (held is false and nothing was held
+//     before);
+//  3. the candidates that fail validation on their own (judgeCandidates).
+//
+// An error means a check could not run.
 func (r *KrakenDAutoConfigReconciler) precheck(
 	ctx context.Context,
 	ac *v1alpha1.KrakenDAutoConfig,
@@ -375,34 +371,59 @@ func (r *KrakenDAutoConfigReconciler) precheck(
 		return ok
 	})
 
-	candidates := writes
-	failedByCheck := 0
-	for round := 0; len(candidates) > 0; round++ {
-		if round == maxPrecheckRounds {
-			message := fmt.Sprintf(
-				"not checked: %s failed the gateway config check first", counted(failedByCheck, "other operation"))
-			hold(rejected, candidates, message, errors.New(message))
-			return rejected, nil
-		}
-		verdict, err := r.checkGateway(ctx, &gw, checkSet(candidates, stale, order, !held && len(rejected) == 0))
-		if err != nil {
-			return nil, &validatorUnavailableError{err: err}
-		}
-		if verdict.OK {
-			return rejected, nil
-		}
-		attributed := attributeFindings(verdict.Findings, candidates)
-		if len(attributed) == 0 {
-			return r.unattributedFailure(ctx, &gw, candidates, order, verdict, rejected)
-		}
-		maps.Copy(rejected, attributed)
-		failedByCheck += len(attributed)
-		candidates = slices.DeleteFunc(slices.Clone(candidates), func(ep *v1alpha1.KrakenDEndpoint) bool {
-			_, ok := attributed[ep.Name]
-			return ok
-		})
+	judged, err := r.judgeCandidates(ctx, ac, &gw, writes, order)
+	if err != nil {
+		return nil, &validatorUnavailableError{err: err}
 	}
+	maps.Copy(rejected, judged)
 	return rejected, nil
+}
+
+// holdMessageLimit bounds a held candidate's own krakend output, in bytes.
+const holdMessageLimit = 1024
+
+// judgeCandidates holds each candidate that fails validation on its own
+// (configcheck.CheckEndpoint), with its own message. Other endpoints of the
+// gateway are never rendered with a candidate, so their content can neither
+// hold one nor reach its message. Every check holds one of CheckSlots.
+func (r *KrakenDAutoConfigReconciler) judgeCandidates(
+	ctx context.Context,
+	ac *v1alpha1.KrakenDAutoConfig,
+	gw *v1alpha1.KrakenDGateway,
+	candidates []*v1alpha1.KrakenDEndpoint,
+	order creationOrder,
+) (held map[string]rejection, err error) {
+	held = map[string]rejection{}
+	ceFallback := configcheck.CEFallback(gw)
+	for _, ep := range candidates {
+		v, err := withCheckSlot(ctx, r.CheckSlots, func() (configcheck.EndpointVerdict, error) {
+			unit := configcheck.EndpointUnit{Gateway: gw, Endpoint: ep, CEFallback: ceFallback}
+			return r.Checker.CheckEndpoint(ctx, unit, nil)
+		})
+		if err != nil {
+			return nil, err
+		}
+		if !v.OK {
+			held[ep.Name] = rejection{endpoint: ep, reason: v1alpha1.ReasonConfigValidationFailed,
+				message: v.Message(holdMessageLimit), cause: errors.New(v.Message(math.MaxInt))}
+		}
+	}
+	return held, nil
+}
+
+// withCheckSlot runs check holding one of slots, and gives up when ctx ends
+// while waiting. A nil slots runs check at once.
+func withCheckSlot[T any](ctx context.Context, slots chan struct{}, check func() (T, error)) (T, error) {
+	if slots != nil {
+		select {
+		case slots <- struct{}{}:
+			defer func() { <-slots }()
+		case <-ctx.Done():
+			var zero T
+			return zero, fmt.Errorf("waiting for an AutoConfig check slot: %w", ctx.Err())
+		}
+	}
+	return check()
 }
 
 // routerClashesCappedMessage holds every candidate while the gateway's render
