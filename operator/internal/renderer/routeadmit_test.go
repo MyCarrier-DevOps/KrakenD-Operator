@@ -265,3 +265,26 @@ func TestRender_RemovingAnEndpointLeavesNoOtherEntryOut(t *testing.T) {
 		})
 	}
 }
+
+// TestRender_TheOPTIONSRouteOfAPathIsSharedNotAClash pins that two entries on
+// one path share the OPTIONS route router.auto_options registers for it, also
+// when the older entry is left out: d's GET /p/x lies under x's EE wildcard,
+// and f's POST /p/x still has its route.
+func TestRender_TheOPTIONSRouteOfAPathIsSharedNotAClash(t *testing.T) {
+	gw := routedGateway(v1alpha1.EditionEE, &v1alpha1.RouterConfig{AutoOptions: true})
+	in := RenderInput{Gateway: gw, Endpoints: []v1alpha1.KrakenDEndpoint{
+		routed("x", 0, "GET", "/p/*"), routed("d", 1, "GET", "/p/x"), routed("f", 2, "POST", "/p/x"),
+	}}
+
+	out, err := New(Options{}).Render(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if lost := out.EntryConflicts[types.NamespacedName{Namespace: "ns", Name: "d"}]; len(lost) != 1 || lost[0].Winner.Name != "x" {
+		t.Errorf("d lost %+v, want GET /p/x to ns/x's EE wildcard", lost)
+	}
+	if lost := out.EntryConflicts[types.NamespacedName{Namespace: "ns", Name: "f"}]; len(lost) != 0 {
+		t.Errorf("f lost %+v, want POST /p/x served: it shares only the OPTIONS route of d's path", lost)
+	}
+}
