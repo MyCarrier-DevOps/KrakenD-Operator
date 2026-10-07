@@ -18,6 +18,8 @@ package controller
 
 import (
 	"context"
+	"fmt"
+	"slices"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/types"
@@ -62,8 +64,9 @@ const combinedFailureMessage = "Every endpoint passes krakend check on its own, 
 //  1. the gateway root on its own: when it fails, nothing more is judged and
 //     no endpoint is blamed;
 //  2. the render as a whole, with the full check;
-//  3. when that fails, each endpoint on its own (judgeEndpoints). The pass
-//     records those that fail and applies nothing.
+//  3. when that fails, each endpoint on its own (judgeEndpoints). Those that
+//     fail are excluded and the rest is applied. When none fails, the
+//     endpoints fail only together, which is the gateway's failure.
 //
 // Every check answers from the gateway's verdict memo when it already judged
 // the same content. An error means a check could not run: nothing is
@@ -95,8 +98,17 @@ func (r *KrakenDGatewayReconciler) decide(
 	if err != nil {
 		return decision{}, err
 	}
-	logCombinedFailure(ctx, whole)
-	return decision{excluded: excluded, judged: true, failure: combinedFailure()}, nil
+	if len(excluded) == 0 {
+		logCombinedFailure(ctx, whole)
+		return decision{judged: true, failure: combinedFailure()}, nil
+	}
+	rest := in
+	rest.Endpoints = without(in.Endpoints, excluded)
+	out, err := r.Renderer.Render(rest)
+	if err != nil {
+		return decision{}, fmt.Errorf("rendering config: %w", err)
+	}
+	return decision{output: out, excluded: excluded, judged: true}, nil
 }
 
 // judgeEndpoints checks each of suspects, endpoints of in, on its own
@@ -121,6 +133,15 @@ func (r *KrakenDGatewayReconciler) judgeEndpoints(
 		}
 	}
 	return excluded, nil
+}
+
+// without returns endpoints less those in excluded.
+func without(endpoints []v1alpha1.KrakenDEndpoint,
+	excluded map[types.NamespacedName]configcheck.EndpointVerdict) []v1alpha1.KrakenDEndpoint {
+	return slices.DeleteFunc(slices.Clone(endpoints), func(ep v1alpha1.KrakenDEndpoint) bool {
+		_, ok := excluded[client.ObjectKeyFromObject(&ep)]
+		return ok
+	})
 }
 
 // rootFailure is ConfigValid's verdict when the gateway root fails on its
