@@ -137,3 +137,10 @@ func TestGatewayReconcile_TheRenderAfterAnExclusionIsASpanOfTheConfigStage(t *te
 		t.Errorf("config_renders_total = %v, want 1: the render after an exclusion is not another render attempt", got)
 	}
 }
+
+// A krakend run is below the check that ran it, inside the config stage.
+func TestGatewayReconcile_AKrakendRunIsBelowItsCheckInTheConfigStage(t *testing.T) {
+	spans := reconcileTraced(t, testGateway(), testEndpoint("e", "/e"))
+
+	spans.RequireAncestors(t, "krakend check", "configcheck.", "gateway.config", "reconcile KrakenDGateway")
+}
