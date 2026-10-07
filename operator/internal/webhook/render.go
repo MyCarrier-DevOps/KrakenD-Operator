@@ -85,6 +85,15 @@ func servedEndpoints(eps []v1alpha1.KrakenDEndpoint) []v1alpha1.KrakenDEndpoint 
 	})
 }
 
+// servedByLastConfig reports whether the gateway's last applied config serves
+// ep, going by what the gateway reported on its current generation: Accepted
+// is True, which includes a reason of PartiallyAccepted.
+func servedByLastConfig(ep v1alpha1.KrakenDEndpoint) bool {
+	c := meta.FindStatusCondition(ep.Status.Conditions, v1alpha1.ConditionAccepted)
+	return c != nil && c.ObservedGeneration == ep.Generation &&
+		(c.Status == metav1.ConditionTrue || c.Reason == v1alpha1.ReasonPartiallyAccepted)
+}
+
 // scan is what failingEndpoints found among the suspects of a write.
 type scan struct {
 	// broken are the suspects the write breaks, by namespace/name: each fails
