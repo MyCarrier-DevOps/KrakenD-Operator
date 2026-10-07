@@ -623,16 +623,19 @@ func TestAdmission_SpanCarriesTheObjectTheOperationAndTheRequest(t *testing.T) {
 		object    *v1alpha1.KrakenDEndpoint
 		old       *v1alpha1.KrakenDEndpoint
 		generated int64
+		dryRun    *bool
 	}{
-		{admissionv1.Create, ep, nil, 7},
-		{admissionv1.Update, ep, stored, 7},
-		{admissionv1.Delete, nil, stored, 6},
+		{admissionv1.Create, ep, nil, 7, ptr.To(true)},
+		{admissionv1.Update, ep, stored, 7, ptr.To(true)},
+		{admissionv1.Delete, nil, stored, 6, ptr.To(true)},
+		{admissionv1.Create, ep, nil, 7, ptr.To(false)},
+		{admissionv1.Create, ep, nil, 7, nil},
 	} {
-		t.Run(string(tc.operation), func(t *testing.T) {
+		t.Run(fmt.Sprintf("%s dry run %s", tc.operation, dryRunName(tc.dryRun)), func(t *testing.T) {
 			rec := tracingtest.New(t)
 			admit := tracedValidator{kind: kindEndpoint, next: outcomeValidator{}, tracer: rec.Tracer()}
 			req := admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{
-				UID: "request-uid", Operation: tc.operation, DryRun: ptr.To(true),
+				UID: "request-uid", Operation: tc.operation, DryRun: tc.dryRun,
 			}}
 			if tc.object != nil {
 				req.Object = runtime.RawExtension{Raw: marshal(t, tc.object)}
@@ -654,7 +657,7 @@ func TestAdmission_SpanCarriesTheObjectTheOperationAndTheRequest(t *testing.T) {
 			}
 			want := map[attribute.Key]attribute.Value{
 				"k8s.admission.operation": attribute.StringValue(string(tc.operation)),
-				"k8s.admission.dry_run":   attribute.BoolValue(true),
+				"k8s.admission.dry_run":   attribute.BoolValue(ptr.Deref(tc.dryRun, false)),
 				"k8s.admission.uid":       attribute.StringValue("request-uid"),
 				"k8s.namespace.name":      attribute.StringValue("default"),
 				"k8s.object.name":         attribute.StringValue("e"),
@@ -869,4 +872,11 @@ func TestAutoConfigAdmission_AFailedLookupIsAnErrorOnItsStructuralSpanWithoutThe
 		t.Fatalf("err = %v, want a 500", err)
 	}
 	requireFailedRulesWithoutTenantText(t, rec.Ended())
+}
+
+func dryRunName(dryRun *bool) string {
+	if dryRun == nil {
+		return "unset"
+	}
+	return fmt.Sprint(*dryRun)
 }
