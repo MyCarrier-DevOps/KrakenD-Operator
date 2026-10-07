@@ -2904,7 +2904,7 @@ Update log pipelines **before** upgrading:
 - read the container's stdout; a collector that reads only stderr sees nothing but the few lines below;
 - the message is `Body.Value`;
 - the level is `SeverityText`;
-- the logger name is `Scope.Name`: `krakend-operator/` followed by the logger's names joined with `/` (`controller-runtime.metrics` becomes `krakend-operator/controller-runtime/metrics`);
+- the logger name is `Scope.Name`: `krakend-operator/` followed by the logger's names joined with `/` (`controller-runtime.metrics` becomes `krakend-operator/controller-runtime/metrics`). The exception is the SDK diagnostics logger, whose scope is the bare `opentelemetry` (grpc-go's records on it are `opentelemetry/grpc`);
 - key/value pairs are in `Attributes`; values the log bridge cannot render natively are converted to text (controller-runtime's `reconcileID` is the bare UUID, the same as the span's `controller_runtime.reconcile_id`);
 - an error is in the `exception.message` (its text) and `exception.type` (its Go type) attributes; there is no `error` key;
 - error records carry no stack trace: the one zap added in development mode is gone.
@@ -2919,7 +2919,7 @@ A record logged inside a reconcile or an admission request carries its trace's `
 | `--log-format` | New: `json` (default) or `pretty`. Ignores case |
 | `--zap-stacktrace-level`, `--zap-time-encoding` | Accepted and ignored; a startup record names them |
 
-grpc-go's log, which the OTLP gRPC exporters use, goes through the pipeline as the `krakend-operator/grpc` logger. These still write to stderr directly:
+grpc-go's log, which the OTLP gRPC exporters use, goes to stdout only, never to OTLP, as the `opentelemetry/grpc` logger, so a collector that cannot be reached does not queue a record for every reconnect. These still write to stderr directly:
 - flag errors (exit status 2) and `--help` (exit status 0);
 - an invalid logging flag (exit status 2);
 - an unusable `OTEL_*` setting, such as an unsupported exporter or protocol (the operator prints `setting up telemetry: …` and exits with status 1);
