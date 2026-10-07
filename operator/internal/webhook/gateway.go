@@ -133,7 +133,7 @@ func (v *GatewayValidator) structural(
 	ctx context.Context, old, gw *v1alpha1.KrakenDGateway,
 ) (warnings admission.Warnings, errs field.ErrorList, retErr error) {
 	ctx, span := tracing.Start(ctx, v.Tracer, "admission.structural")
-	defer func() { tracing.End(span, retErr) }()
+	defer func() { endRules(span, retErr) }()
 	if err := v.authorizePostRestartJob(ctx, old, gw); err != nil {
 		return nil, nil, err
 	}
