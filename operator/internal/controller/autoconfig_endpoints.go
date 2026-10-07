@@ -399,6 +399,7 @@ const holdMessageLimit = maxStatusMessageLen - len("fails krakend check on its o
 // Other endpoints of the gateway are never rendered with a candidate, so
 // their content can neither hold one nor reach its message. Every check
 // holds one of CheckSlots and answers from the AutoConfig's verdict memo.
+// The checks run inside one autoconfig.judge_candidates span.
 func (r *KrakenDAutoConfigReconciler) judgeCandidates(
 	ctx context.Context,
 	ac *v1alpha1.KrakenDAutoConfig,
@@ -410,6 +411,8 @@ func (r *KrakenDAutoConfigReconciler) judgeCandidates(
 	if len(candidates) == 0 {
 		return held, nil
 	}
+	ctx, span := tracing.Start(ctx, r.Tracer, "autoconfig.judge_candidates")
+	defer func() { tracing.End(span, err) }()
 	key := client.ObjectKeyFromObject(ac)
 	pass := r.verdicts.begin(key)
 	defer func() { r.verdicts.end(key, pass, err != nil) }()
