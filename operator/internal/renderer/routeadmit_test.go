@@ -214,6 +214,8 @@ func TestRender_RemovingAnEndpointLeavesNoOtherEntryOut(t *testing.T) {
 	autoOptions := routedGateway(v1alpha1.EditionCE, &v1alpha1.RouterConfig{AutoOptions: true})
 	s, d := routed("s", 0, "GET", "/a/{id}"), routed("d", 1, "GET", "/a/{name}/x")
 	e := routed("e", 2, "POST", "/a/{id}")
+	a, b := routed("a", 0, "GET", "/a/{id}"), routed("b", 1, "GET", "/a/{key}")
+	c := routed("c", 2, "GET", "/a/{id}/y")
 	tests := []struct {
 		name          string
 		gateway       *v1alpha1.KrakenDGateway
@@ -236,6 +238,11 @@ func TestRender_RemovingAnEndpointLeavesNoOtherEntryOut(t *testing.T) {
 			[]v1alpha1.KrakenDEndpoint{d, e}, "GET /a/{id}", "e", "d"},
 		{"moving s off /a/{id} with auto_options", autoOptions, []v1alpha1.KrakenDEndpoint{s, d, e},
 			[]v1alpha1.KrakenDEndpoint{routed("s", 0, "GET", "/c"), d, e}, "GET /a/{id}", "e", "d"},
+		// b's GET /a/{key} has the shape of a's GET /a/{id} and loses to it.
+		// c's GET /a/{id}/y fits a's route but clashes with b's, so it loses
+		// to b whether or not b is served.
+		{"deleting a, whose same-shape duplicate b is left out", ce, []v1alpha1.KrakenDEndpoint{a, b, c},
+			[]v1alpha1.KrakenDEndpoint{b, c}, "GET /a/{id}", "c", "b"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
