@@ -451,11 +451,15 @@ func splitRef(ref string) (docURL, fragment string) {
 	return ref[:idx], ref[idx+1:]
 }
 
-// redactRef returns ref with the URL part redacted as RedactURL does and its
-// JSON pointer kept, for the warnings that name a $ref: the URL of a $ref can
-// carry credentials.
+// redactRef returns ref as written when its URL part carries no credential,
+// and otherwise with that part redacted as RedactURL does and the JSON pointer
+// kept, for the warnings that name a $ref: the URL of a $ref can carry
+// credentials.
 func redactRef(ref string) string {
 	docURL, fragment := splitRef(ref)
+	if u, err := url.Parse(docURL); err == nil && u.User == nil && u.RawQuery == "" && u.Opaque == "" {
+		return ref
+	}
 	if !strings.Contains(ref, "#") {
 		return RedactURL(docURL)
 	}
