@@ -117,11 +117,17 @@ val := newKrakenDValidator("/usr/local/bin/krakend", inst.Tracer)
 
 // wireValidation builds one checker for the whole pod: its slots bound
 // concurrent krakend executions across the gateway controller, the AutoConfig
-// controller and the admission webhooks, so they must share it.
+// controller, the policy controller and the admission webhooks, so they must
+// share it.
 func wireValidation(
     mgr ctrl.Manager, r renderer.Renderer, v renderer.Validator, operatorUsername string, inst instrumentation,
 ) validation {
     checker := configcheck.New(mgr.GetClient(), r, v, configCheckSlots, inst.Tracer) // configCheckSlots = 3
+    // The AutoConfig prechecks and the policy checks hold at most
+    // autoConfigCheckSlots (1) of the checker's slots between them:
+    // configCheckSlots - 1 for admission - 1 for the gateway controller,
+    // however many workers there are.
+    controllerSlots := make(chan struct{}, autoConfigCheckSlots)
     return validation{
         Checker: checker,
         Gateway: &controller.KrakenDGatewayReconciler{
@@ -147,13 +153,20 @@ func wireValidation(
             Filter:       autoconfig.NewFilter(),
             Generator:    autoconfig.NewGenerator(),
             Checker:      checker,
-            // The AutoConfig prechecks hold at most autoConfigCheckSlots (1) of the
-            // checker's slots: configCheckSlots - 1 for admission - 1 for the gateway
-            // controller, however many workers there are.
-            CheckSlots: make(chan struct{}, autoConfigCheckSlots),
-            Clock:      clock.RealClock{},
-            Metrics:    inst.autoConfigMetrics(),
+            CheckSlots:   controllerSlots,
+            Clock:        clock.RealClock{},
+            Metrics:      inst.autoConfigMetrics(),
+            Tracer:       inst.Tracer,
+        },
+        Policy: &controller.KrakenDBackendPolicyReconciler{
+            Client:     mgr.GetClient(),
+            Scheme:     mgr.GetScheme(),
+            Recorder:   mgr.GetEventRecorderFor("krakendbackendpolicy-controller"),
+            APIReader:  mgr.GetAPIReader(), // releases the protection finalizer only after an uncached list
             Tracer:     inst.Tracer,
+            Checker:    checker,
+            Memo:       configcheck.NewLRUMemo(policyMemoSize), // 256 verdicts
+            CheckSlots: controllerSlots,
         },
         Validators: webhooksetup.NewValidators(
             mgr.GetClient(), mgr.GetAPIReader(), checker, operatorUsername, inst.Tracer),
@@ -161,7 +174,7 @@ func wireValidation(
 }
 ```
 
-`inst.gatewayMetrics()` and `inst.autoConfigMetrics()` are the `OperatorMetrics` behind the controller package's ports, or nil without one, so a reconciler given none records nothing. `operatorUsername` is the `--operator-username` flag, which defaults to the pod's ServiceAccount (`system:serviceaccount:$POD_NAMESPACE:$POD_SERVICE_ACCOUNT`) and is empty when either variable is unset. `wireReferenceControllers` builds the endpoint and policy reconcilers, which resolve and protect references and hold no config checker. They take the manager's client, scheme and a recorder, plus what they need:
+`inst.gatewayMetrics()` and `inst.autoConfigMetrics()` are the `OperatorMetrics` behind the controller package's ports, or nil without one, so a reconciler given none records nothing. `operatorUsername` is the `--operator-username` flag, which defaults to the pod's ServiceAccount (`system:serviceaccount:$POD_NAMESPACE:$POD_SERVICE_ACCOUNT`) and is empty when either variable is unset. `wireEndpointController` builds the endpoint reconciler, which resolves references and holds no config checker. The policy reconciler is built in `wireValidation`, because it judges each policy with the pod's checker and holds the controllers' check slot. Both take the manager's client, scheme and a recorder, plus what they need:
 
 ```go
 wired := wireValidation(mgr, rend, val, operatorUsername, inst)
@@ -169,20 +182,14 @@ wired.AutoConfig.MaxConcurrentReconciles = autoConfigMaxConcurrentReconciles // 
 
 wired.Gateway.SetupWithManager(mgr)
 
-// wireReferenceControllers:
-endpoints, policies := wireReferenceControllers(mgr, inst)
+// wireEndpointController:
+endpoints := wireEndpointController(mgr, inst)
 // endpoints = &controller.KrakenDEndpointReconciler{
 //     Client: mgr.GetClient(), Scheme: mgr.GetScheme(),
 //     Recorder: mgr.GetEventRecorderFor("krakendendpoint-controller"), Tracer: inst.Tracer,
 // }
-// policies = &controller.KrakenDBackendPolicyReconciler{
-//     Client: mgr.GetClient(), Scheme: mgr.GetScheme(),
-//     Recorder:  mgr.GetEventRecorderFor("krakendbackendpolicy-controller"),
-//     APIReader: mgr.GetAPIReader(), // releases the protection finalizer only after an uncached list
-//     Tracer:    inst.Tracer,
-// }
 endpoints.SetupWithManager(mgr)
-policies.SetupWithManager(mgr)
+wired.Policy.SetupWithManager(mgr)
 
 wired.AutoConfig.SetupWithManager(mgr)
 
@@ -1348,6 +1355,17 @@ type KrakenDBackendPolicyReconciler struct {
     // APIReader reads uncached; the finalizer is released only after it
     // confirms that no endpoint references the policy.
     APIReader client.Reader
+    // Tracer records the reconcile's spans; nil records none.
+    Tracer trace.Tracer
+    // Checker judges the policy on its own (the PolicyChecker port);
+    // nil checks only the typed fields.
+    Checker PolicyChecker
+    // Memo remembers a policy's verdict by its content (an LRU of 256 in the
+    // pod); nil remembers nothing.
+    Memo configcheck.Memo
+    // CheckSlots bounds the checks this controller holds at once, shared with
+    // the AutoConfig controller; nil is unbounded.
+    CheckSlots chan struct{}
 }
 ```
 
@@ -1369,13 +1387,18 @@ flowchart TD
     R --> E
     E --> F{Validate policy fields}
     F -->|Invalid| G[Set Ready=False with the<br/>InvalidCircuitBreaker or<br/>InvalidRateLimit reason]
-    F -->|Valid| H[Set Ready=True<br/>reason Ready]
+    F -->|Valid| L[Render the policy alone and check it<br/>through the memo, on a controller check slot]
+    L -->|Fails| M[Set Ready=False reason PolicyInvalid,<br/>the policy's own bounded output]
+    L -->|Cannot run| N[Set Ready=Unknown reason ValidatorUnavailable,<br/>return the error: retry with backoff, capped at 5 min]
+    L -->|Passes| H[Set Ready=True<br/>reason Ready]
     G --> J[Drop the legacy PolicyValid condition,<br/>write status only if it changed]
+    M --> J
+    N --> J
     H --> J
     J --> K[Emit an event on a Ready transition]
 ```
 
-`Ready` replaces the earlier `PolicyValid` condition, which is removed from policies written by earlier versions. It is `False` when `circuitBreaker.maxErrors`, `interval` or `timeout` is not positive (`InvalidCircuitBreaker`) or `rateLimit.maxRate` is not positive (`InvalidRateLimit`), and `True` otherwise. Events fire on transitions only: a `Warning` with the invalid reason when `Ready` becomes `False` or changes reason, and a `Normal` `Ready` when it recovers.
+`Ready` replaces the earlier `PolicyValid` condition, which is removed from policies written by earlier versions. It is `False` when `circuitBreaker.maxErrors`, `interval` or `timeout` is not positive (`InvalidCircuitBreaker`) or `rateLimit.maxRate` is not positive (`InvalidRateLimit`), and the field checks run first. A policy whose fields are in range is then rendered alone, on a default CE gateway in its own namespace, and checked with `krakend check` (`Checker.CheckPolicy`, a `configcheck.CheckPolicy` span under the reconcile span). When it fails, `Ready` is `False` with reason `PolicyInvalid` and the message `fails krakend check on its own:` plus the policy's own output, bounded like the endpoint's message; its owner may read it, and every endpoint that references it is excluded by the gateway controller. When the check cannot run (no binary, a timeout, no slot), `Ready` is `Unknown` with reason `ValidatorUnavailable` and the reconcile returns the error, so it retries with backoff capped at 5 minutes; this is never reported as the policy's failure. Otherwise `Ready` is `True`. The verdict is memoized by the content that was checked, so a reconcile of unchanged content (an endpoint change that re-queues the policy, a resync) runs no krakend; after a restart each policy is checked once. Events fire on transitions only: a `Warning` with the invalid reason when `Ready` becomes `False` or changes reason, and a `Normal` `Ready` when it returns to `True` from `False` or `Unknown`. Entering `Unknown` raises no event.
 
 The policy controller's reconciliation is straightforward. The `referencedBy` count is the number of `KrakenDEndpoint` resources the `fieldindex.EndpointPolicy` field index returns for the policy's `namespace/name`: those with at least one `backend[].policyRef` that resolves to this policy, in any namespace. The important cross-controller interaction is through the gateway controller's `policyToGateways` mapper, which uses the same index: when a policy is updated, all gateways with endpoints referencing that policy are re-queued for re-rendering.
 
