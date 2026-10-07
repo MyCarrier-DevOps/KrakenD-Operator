@@ -25,6 +25,7 @@ import (
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
+	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -798,5 +799,27 @@ func TestPolicyReconcile_ReadyIsUnknownWhenTheCheckCannotRun(t *testing.T) {
 	}
 	if events := drainEvents(rec); len(events) != 0 {
 		t.Errorf("events = %q, want none: an unavailable validator is not a policy failure", events)
+	}
+}
+
+func TestPolicyReconcile_AReconcileOfUnchangedContentRunsNoExtraCheck(t *testing.T) {
+	policy := policyInRange()
+	c := fakeClientBuilder().WithObjects(policy).WithStatusSubresource(policy).Build()
+	validator := &countingValidator{}
+	r := &KrakenDBackendPolicyReconciler{
+		Client: c, Scheme: testScheme(), Recorder: fakeRecorder(),
+		Checker: configcheck.New(c, renderer.New(renderer.Options{}), validator, 1, nil),
+		Memo:    configcheck.NewLRUMemo(8),
+	}
+	req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(policy)}
+
+	for range 3 {
+		if _, err := r.Reconcile(context.Background(), req); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+
+	if validator.calls != 1 {
+		t.Errorf("krakend ran %d times over 3 reconciles of one content, want 1", validator.calls)
 	}
 }
