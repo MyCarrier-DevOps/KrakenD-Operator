@@ -364,3 +364,20 @@ func TestGatewayReconcile_TheRootIsCheckedWithTheDetectedDragonfly(t *testing.T)
 		t.Errorf("ConfigValid = %+v, want %s quoting the Dragonfly address", cv, v1alpha1.ReasonGatewayRootInvalid)
 	}
 }
+
+func TestGatewayReconcile_EachEndpointIsCheckedWithTheDetectedDragonfly(t *testing.T) {
+	gw, c := dragonflyGateway(testEndpoint("good", "/a"), testEndpoint("e", "/e"))
+	dns := resources.DragonflyServiceDNS(gw)
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}),
+		&contentValidator{together: []string{dns, `"/e"`}})
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+
+	if cond := storedAccepted(t, c, types.NamespacedName{Namespace: gw.Namespace, Name: "e"}); cond == nil ||
+		cond.Reason != v1alpha1.ReasonEndpointInvalid {
+		t.Errorf("e Accepted = %+v, want %s: it fails with the Dragonfly address the gateway serves",
+			cond, v1alpha1.ReasonEndpointInvalid)
+	}
+}
