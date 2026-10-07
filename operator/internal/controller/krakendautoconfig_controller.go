@@ -148,7 +148,10 @@ const defaultFetchTimeout = 2 * time.Minute
 // reconcile that finds nothing to change writes nothing and runs no check.
 func (r *KrakenDAutoConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Result, retErr error) {
 	ctx, span := startReconcile(ctx, r.Tracer, "KrakenDAutoConfig", req)
-	defer func() { tracing.End(span, retErr) }()
+	// The failure can be a CUE or generation error that quotes the spec, so
+	// the span says only that the reconcile failed; the returned error and
+	// its log line keep the text.
+	defer func() { tracing.EndFailed(span, retErr, "the AutoConfig reconcile failed") }()
 	log := logf.FromContext(ctx)
 
 	var ac v1alpha1.KrakenDAutoConfig
