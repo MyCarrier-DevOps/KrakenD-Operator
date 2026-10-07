@@ -29,13 +29,14 @@ import (
 // InstallLogging makes every logger in the process log through logger:
 // controller-runtime's (and so the manager's, the controllers', the webhook
 // server's and leader election's), client-go's klog, the standard library's
-// log package (net/http servers report TLS handshake errors through it), and
-// the OpenTelemetry SDK's own error handler and internal logger, which log
-// through diagnostics. These are process-wide by nature; nothing else in the
-// operator reads a global logger.
+// log package (net/http servers report TLS handshake errors through it); and,
+// through diagnostics, the OpenTelemetry SDK's own error handler and internal
+// logger and grpc-go's, since a failing OTLP exporter must not queue records
+// for itself. These are process-wide by nature; nothing else in the operator
+// reads a global logger.
 func InstallLogging(logger, diagnostics logr.Logger) {
 	ctrl.SetLogger(logger)
-	grpcLogs := logger.WithName("grpc")
+	grpcLogs := diagnostics.WithName("grpc")
 	grpcTarget.Store(&grpcLogs)
 	klog.SetLoggerWithOptions(logger.WithName("klog"), klog.ContextualLogger(true))
 	log.SetFlags(0)
