@@ -59,6 +59,7 @@ func TestLogFlags(t *testing.T) {
 			otellog.SeverityDebug4, telemetry.LogFormatJSON, nil},
 		{"--zap-encoder=Console is pretty, as controller-runtime lowercases it", []string{"--zap-encoder=Console"},
 			otellog.SeverityDebug4, telemetry.LogFormatPretty, nil},
+		{"--zap-encoder=JSON is json", []string{"--zap-encoder=JSON"}, otellog.SeverityDebug4, telemetry.LogFormatJSON, nil},
 		{"every --zap-* flag an older Deployment passes still parses", []string{"--zap-devel=false",
 			"--zap-log-level=info", "--zap-encoder=json", "--zap-stacktrace-level=error", "--zap-time-encoding=iso8601"},
 			otellog.SeverityInfo, telemetry.LogFormatJSON, []string{"--zap-stacktrace-level", "--zap-time-encoding"}},
