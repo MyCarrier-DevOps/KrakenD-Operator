@@ -1257,6 +1257,7 @@ func judgeUnderFailingRoot(ctx context.Context, chk ConfigChecker, memo configch
 		}
 	}
 	if s := failingEndpoints(ctx, chk, memo, now, nil, served); len(s.broken) > 0 || s.stopped != nil {
+		s.unchecked += len(rest)
 		return s
 	}
 	return failingEndpoints(ctx, chk, memo, now, was, rest)
