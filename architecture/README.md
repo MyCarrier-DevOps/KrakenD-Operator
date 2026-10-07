@@ -757,7 +757,7 @@ sequenceDiagram
                 Op->>K8s: Update KrakenDGateway condition → ConfigValid=True (ConfigApplied)
                 Op->>K8s: Report the rollout, Progressing=True follows the Deployment write (phase Deploying is derived)
                 Op->>CM: Create the immutable ConfigMap gateway-config-hash with the new krakend.json
-                Op->>K8s: Write status.configChecksum = newChecksum
+                Op->>K8s: Write status.configChecksum = newChecksum (at once, before acceptance and the Deployment step; a failed write keeps the stored config and returns the error)
                 Op->>Dep: Patch Deployment: pod annotations<br/>checksum/config + checksum/plugins,<br/>container image (all to desired state)
                 Op->>K8s: Patch Accepted on each endpoint of the render, only on change:<br/>True (Accepted, PartiallyAccepted or SchemaNameConflict), False (EndpointConflict, EndpointInvalid or PolicyInvalid), EEFeaturesStripped in a CE fallback, or removed (missing policy), plus status.conflicts
                 Note over Op: Requeue: wait for Deployment rollout
@@ -1331,7 +1331,7 @@ flowchart TD
 
     P --> Q{Verdict?}
     Q -->|Yes| Q2{Publish ConfigMap gw-config-hash:<br/>created, or the existing one<br/>verified by its payload hash?}
-    Q2 -->|Published| R[Set ConfigValid=True<br/>Write status.configChecksum and configEdition]
+    Q2 -->|Published| R[Set ConfigValid=True<br/>Write status.configChecksum and configEdition at once,<br/>before acceptance and the Deployment step]
     Q2 -->|Failed| W[Set ConfigValid=Unknown<br/>reason ConfigPublishFailed<br/>Ready=Unknown, keep the serving phase and applied config<br/>One Warning Event, on a change of reason<br/>Continue with the infrastructure stage,<br/>then return the error: retry with backoff]
     Q -->|No| S[Set ConfigValid=False<br/>Keep the applied config<br/>Emit a Warning Event only if the verdict changed<br/>Continue with the infrastructure stage]
     Q -->|Unavailable| V[Set ConfigValid=Unknown<br/>reason ValidatorUnavailable<br/>Ready=Unknown, keep the serving phase and applied config<br/>One Warning Event, on entering the state<br/>Continue with the infrastructure stage,<br/>then return the error: retry with backoff]
@@ -1357,7 +1357,27 @@ HPA, post-restart Job and optional resources on the *applied* config, so a
 rejected or unjudged render never stops drift correction. The Deployment is
 created only once a config has been applied, and is left as it is only while
 no ConfigMap holds the applied config or a plugin ConfigMap is missing. The
-gateway status is written once, after both stages.
+rest of the gateway status is written once, after both stages.
+
+The applied config is recorded before anything acts on it. Right after a
+render is published, the config stage writes `status.configChecksum` and
+`status.configEdition` (with `ConfigValid`) to the status, before endpoint
+acceptance and before the Deployment is pointed at the new ConfigMap. A pass
+that cannot apply its render keeps the stored config and re-points the
+Deployment to it, so pods must never be ahead of that record. When the write
+fails (typically a conflict because the gateway changed during the pass) the
+in-memory apply is undone: no endpoint is accepted against the new config, the
+Deployment is not moved, and the error is returned so the next pass, reading a
+fresh gateway, applies it. A pass that applies the config already stored
+writes nothing extra, so the record costs one status write per newly applied
+config.
+
+A pass that applies nothing also guards the other direction. When the
+Deployment carries a config checksum other than the cached gateway's, it reads
+the stored checksum through the uncached reader before re-pointing the
+Deployment. If the cache is behind (the stored checksum differs from the cached
+one) the pass changes nothing and is retried; if it matches, the Deployment is
+re-pointed to the stored config, which also reverts a `kubectl rollout undo`.
 
 ### Taking over existing objects
 
