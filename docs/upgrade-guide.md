@@ -1162,7 +1162,8 @@ served. The newer KrakenDEndpoint now reports:
 - `Accepted=True` with reason `PartiallyAccepted` when some of its entries
   are served. It is `Accepted=False/EndpointConflict` only when none are.
 - `status.conflicts`, a list of `{endpoint, method, winner}`, one item per
-  entry that is not served, naming the KrakenDEndpoint that serves it.
+  entry that is not served, once for each KrakenDEndpoint it loses to (the
+  winner, whose entry may itself be left out).
 
 A `PartiallyAccepted` endpoint is not `Ready`, and its phase is
 `Conflicted`. Becoming `PartiallyAccepted` emits a `Warning` event with that
@@ -2686,9 +2687,9 @@ stays `1` while endpoints are excluded, so alert on the new gauge (see
 
 `krakend_operator_config_validation_failures_total` now counts only the
 rejections of a gateway root, a policy or an endpoint checked on its own: a
-rejection counts once per change of what the gateway controller checks, not once
-per reconcile, and again for content that comes back, the same policy on
-another gateway and after a restart. The whole render's full check and its re-check without
+rejection is counted once per change of what the gateway controller checks, not
+once per reconcile; content that comes back, the same policy on another gateway
+and an operator restart each count again. The whole render's full check and its re-check without
 the excluded endpoints are not counted: they still contain the excluded
 endpoints, so counting them would add a rejection for every unrelated edit on
 the gateway. A failure that needs several endpoints together therefore adds
