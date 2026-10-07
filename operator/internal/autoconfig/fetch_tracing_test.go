@@ -211,3 +211,31 @@ func TestFetch_AnUnparseableRedirectLocationLeaksNothing(t *testing.T) {
 	}
 	requireNoSecretInSpans(t, rec.Ended(), "LOCSECRET")
 }
+
+// RedactURL's contract: what it keeps, what it replaces and what it drops.
+func TestRedactURL(t *testing.T) {
+	for _, tc := range []struct{ name, raw, want string }{
+		{"a plain URL is unchanged", "https://example.com/spec.json", "https://example.com/spec.json"},
+		{"userinfo is dropped", "https://user:pw@example.com/spec.json", "https://example.com/spec.json"},
+		{
+			"each query value is replaced and the keys kept",
+			"https://example.com/s.json?token=abc&key=def", "https://example.com/s.json?key=REDACTED&token=REDACTED",
+		},
+		{"the fragment is dropped", "https://example.com/s.json#/Pet", "https://example.com/s.json"},
+		{"an unparseable URL is reduced", "http://host:badport/x?sig=S", "<unparseable URL>"},
+		{"the opaque form is reduced", "https:user:pw@example.com/s.json?t=1", "<unparseable URL>"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := RedactURL(tc.raw)
+
+			if got != tc.want {
+				t.Errorf("RedactURL(%q) = %q, want %q", tc.raw, got, tc.want)
+			}
+			if got != "<unparseable URL>" {
+				if _, err := url.Parse(got); err != nil {
+					t.Errorf("RedactURL(%q) = %q does not parse: %v", tc.raw, got, err)
+				}
+			}
+		})
+	}
+}
