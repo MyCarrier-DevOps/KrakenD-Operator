@@ -22,7 +22,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/prometheus/client_golang/prometheus/testutil"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -306,8 +305,12 @@ func TestGatewayReconcile_FailedDeploymentWriteLeavesProgressingAlone(t *testing
 func TestGatewayReconcile_RollingRestartsCountsOnlyTheWriteThatChangedTheTemplate(t *testing.T) {
 	s := serveGateway(t)
 	s.editSpec(t, func(spec *v1alpha1.KrakenDGatewaySpec) { spec.Image = "img:v2" })
-	base := testutil.ToFloat64(rollingRestarts)
-	restarts := func() float64 { return testutil.ToFloat64(rollingRestarts) - base }
+	m, reg := testMetrics(t)
+	s.r.Metrics = m
+	restarts := func() float64 {
+		v, _ := metricValue(t, reg, "krakend_operator_rolling_restarts_total")
+		return v
+	}
 
 	s.failDeploymentWrites()
 	if err := reconcileGateway(t, s.r, s.gw); err == nil {
