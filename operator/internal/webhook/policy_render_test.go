@@ -705,6 +705,10 @@ func TestPolicyAdmission_AReferrerThatFailsAnywayDoesNotBlockACreate(t *testing.
 		t.Errorf("response = %+v, warnings %q; want an admission with the already-fail warning",
 			resp.Result, resp.Warnings)
 	}
+	if len(resp.Warnings) == 1 && (strings.Contains(resp.Warnings[0], "stored policy") ||
+		!strings.Contains(resp.Warnings[0], "whatever this policy holds")) {
+		t.Errorf("warning = %q, want it to say the endpoints fail whatever the policy holds, with no stored policy", resp.Warnings[0])
+	}
 	if got := strings.Join(chk.calls, ","); got != "policy,root,group,endpoint,endpoint" {
 		t.Errorf("checks = %s, want the endpoint checked with the policy and with it rendered empty", got)
 	}
