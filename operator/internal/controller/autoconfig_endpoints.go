@@ -42,6 +42,7 @@ import (
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
 	"github.com/mycarrier-devops/krakend-operator/internal/fieldindex"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
+	"github.com/mycarrier-devops/krakend-operator/internal/tracing"
 )
 
 // AutoConfigChecker is the gateway config check the AutoConfig controller runs
@@ -707,7 +708,9 @@ func (r *KrakenDAutoConfigReconciler) reconcileEndpoints(
 	ac *v1alpha1.KrakenDAutoConfig,
 	desired []*v1alpha1.KrakenDEndpoint,
 	held bool,
-) (endpointOutcome, error) {
+) (_ endpointOutcome, retErr error) {
+	ctx, span := tracing.Start(ctx, r.Tracer, "autoconfig.endpoints")
+	defer func() { tracing.End(span, retErr) }()
 	outcome := endpointOutcome{rejected: map[string]rejection{}}
 	controlled, err := r.claimEndpoints(ctx, ac, desired, &outcome)
 	if err != nil {
