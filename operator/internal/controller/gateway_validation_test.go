@@ -290,3 +290,31 @@ func TestGatewayReconcile_AMaskedEndpointIsJudgedOnItsOwn(t *testing.T) {
 		t.Errorf("applied config:\n%s\nwant e left out whole", applied)
 	}
 }
+
+func TestGatewayReconcile_AMaskedEndpointIsJudgedOnTheFastPath(t *testing.T) {
+	gw := reconciledGateway()
+	older, newer := maskingEndpoints()
+	c := fakeClientBuilder().WithObjects(gw, older, newer).WithStatusSubresource(gw, older, newer).Build()
+	// An earlier validator passed e's lost entry, so the whole render was
+	// applied with e served in part.
+	if err := reconcileGateway(t, newTestGatewayReconciler(c, renderer.New(renderer.Options{}),
+		&contentValidator{}), gw); err != nil {
+		t.Fatal(err)
+	}
+	applied := getGateway(t, c, gw).Status.ConfigChecksum
+
+	// A new process with a validator that rejects it: the render is still the
+	// applied config.
+	if err := reconcileGateway(t, newTestGatewayReconciler(c, renderer.New(renderer.Options{}),
+		rejectsBadHosts()), gw); err != nil {
+		t.Fatal(err)
+	}
+
+	if cond := storedAccepted(t, c, client.ObjectKeyFromObject(newer)); cond == nil ||
+		cond.Reason != v1alpha1.ReasonEndpointInvalid {
+		t.Errorf("e Accepted = %+v, want %s although the render is the applied config", cond, v1alpha1.ReasonEndpointInvalid)
+	}
+	if got := getGateway(t, c, gw).Status.ConfigChecksum; got == applied {
+		t.Errorf("checksum %s unchanged, want the config without e applied", got)
+	}
+}
