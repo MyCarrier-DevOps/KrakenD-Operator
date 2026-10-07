@@ -27,7 +27,6 @@ import (
 	"time"
 
 	"github.com/go-logr/logr/funcr"
-	"github.com/prometheus/client_golang/prometheus/testutil"
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
@@ -816,7 +815,8 @@ func TestGatewayReconcile_HeldDeploymentReportsNoRollout(t *testing.T) {
 	// rollout starts.
 	r := newTestGatewayReconciler(c, renderOf(`{"version":3,"name":"rejected"}`),
 		&countingValidator{err: rejectedBy("- at '/endpoints/0/endpoint': bad")})
-	restartsBefore := testutil.ToFloat64(rollingRestarts)
+	m, reg := testMetrics(t)
+	r.Metrics = m
 
 	if err := reconcileGateway(t, r, gw); err != nil {
 		t.Fatalf("reconcile: %v", err)
@@ -825,8 +825,8 @@ func TestGatewayReconcile_HeldDeploymentReportsNoRollout(t *testing.T) {
 	if progressing != nil && progressing.Reason == "DeploymentUpdated" {
 		t.Errorf("Progressing = %+v; a held Deployment starts no rollout", progressing)
 	}
-	if got := testutil.ToFloat64(rollingRestarts); got != restartsBefore {
-		t.Errorf("rollingRestarts rose from %v to %v for a rollout that never started", restartsBefore, got)
+	if got, _ := metricValue(t, reg, "krakend_operator_rolling_restarts_total"); got != 0 {
+		t.Errorf("rollingRestarts rose to %v for a rollout that never started", got)
 	}
 }
 
@@ -2712,16 +2712,22 @@ func TestGatewayReconcile_UnjudgedConfigReportsInvalidGauge(t *testing.T) {
 	gw := reconciledGateway()
 	gw.Namespace = "metrics-unjudged"
 	c := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).Build()
-	t.Cleanup(func() { deleteGatewayMetrics(gw.Namespace, gw.Name) })
-	gatewayConfigValid.WithLabelValues(gw.Namespace, gw.Name).Set(1)
+	m, reg := testMetrics(t)
+	m.SetConfigValid(client.ObjectKeyFromObject(gw), true)
+	r := newTestGatewayReconciler(c, renderOutput("new"),
+		&countingValidator{err: errors.New("fork/exec /usr/local/bin/krakend: no such file or directory")})
+	r.Metrics = m
 
-	reconcileWithUnavailableValidator(t, c, gw)
+	if err := reconcileGateway(t, r, gw); err == nil {
+		t.Fatal("an unavailable validator must fail the reconcile so it is retried")
+	}
 
 	cond := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionConfigValid)
 	if cond != nil && cond.Status == metav1.ConditionTrue {
 		t.Fatalf("ConfigValid = %+v, want not True while the validator is down", cond)
 	}
-	if got := testutil.ToFloat64(gatewayConfigValid.WithLabelValues(gw.Namespace, gw.Name)); got != 0 {
+	if got, _ := metricValue(t, reg, "krakend_operator_gateway_config_valid",
+		"namespace", gw.Namespace, "name", gw.Name); got != 0 {
 		t.Errorf("gateway_config_valid = %v while the config is unjudged, want 0", got)
 	}
 }
