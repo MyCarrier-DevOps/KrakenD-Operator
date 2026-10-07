@@ -38,6 +38,12 @@ import (
 // into `components.schemas` of the main spec under a sanitized key. The
 // original $ref is rewritten to `#/components/schemas/<sanitized-name>`.
 //
+// A `#/...` ref inside a fetched document names a location of that document,
+// so it is resolved against it like an external ref and rewritten to the
+// inlined name. When the pointer is not in its own document the ref is left as
+// it is, to resolve against the main spec, and a warning says so. A bare `#`
+// is left alone. A `#/...` ref in the main spec is never rewritten.
+//
 // A reference an "examples" object holds is to an Example Object, which is
 // data: its target is fetched and inlined under `components.examples`, and
 // the reference is rewritten to `#/components/examples/<name>`, without
@@ -210,7 +216,8 @@ func (e *fatalRefError) Error() string { return e.err.Error() }
 func (e *fatalRefError) Unwrap() error { return e.err }
 
 // walk recursively scans node, an object of the document at base, replacing
-// every external $ref with a local one. Once a fatal error (a failed fetch or
+// every external $ref, and every "#/" ref inside a fetched document, with a
+// local one. Once a fatal error (a failed fetch or
 // decode of an external document) has been recorded, walk stops descending so
 // no further refs are resolved and no further documents are fetched.
 // An example payload, the value of an object's "example" or "examples" field,
@@ -224,13 +231,14 @@ func (r *refResolver) walk(node any, base string) {
 	}
 	switch v := node.(type) {
 	case map[string]any:
-		if ref, ok := v["$ref"].(string); ok {
+		ref, isRef := v["$ref"].(string)
+		if isRef && !r.resolvesExternally(ref, base) {
 			r.warnLocalRef(ref, base)
 		}
-		if ref, ok := v["$ref"].(string); ok && ref != "" && !strings.HasPrefix(ref, "#") {
+		if isRef && r.resolvesExternally(ref, base) {
 			if localName, err := r.resolveExternal(ref, base, schemaRole); err == nil {
 				v["$ref"] = schemaRole.componentsPath() + localName
-			} else {
+			} else if !r.keepsLocalRef(ref, base, err) {
 				var fatal *fatalRefError
 				if errors.As(err, &fatal) {
 					r.fatalErr = fatal.err
@@ -296,8 +304,34 @@ func (r *refResolver) resolveExampleRef(entry map[string]any, base string) {
 	}
 }
 
-// warnLocalRef warns that a "#/" ref in a fetched document is resolved against
-// the main spec once the document's subtree is inlined into it.
+// resolvesExternally reports whether walk resolves ref through resolveExternal:
+// a ref to another document, or a "#/" ref inside a fetched document, which
+// names a location of that document. A "#/" ref in the main spec stays as it
+// is, and so does a bare "#", which would inline the whole document.
+func (r *refResolver) resolvesExternally(ref, base string) bool {
+	if strings.HasPrefix(ref, "#") {
+		return base != r.baseURL && strings.HasPrefix(ref, "#/")
+	}
+	return ref != ""
+}
+
+// keepsLocalRef reports whether err, from resolving a "#/" ref in a fetched
+// document, means the pointer is not in that document, and if so warns that
+// the ref is left to resolve against the main spec.
+func (r *refResolver) keepsLocalRef(ref, base string, err error) bool {
+	if !strings.HasPrefix(ref, "#") || errors.As(err, new(*fatalRefError)) {
+		return false
+	}
+	shown := redact.URL(base)
+	r.warnOnce(fmt.Sprintf(
+		"$ref %q is not in %s: it is resolved against the main spec after inlining (%v)",
+		ref, shown, err))
+	return true
+}
+
+// warnLocalRef warns that a "#/" ref in a fetched document, found where it is
+// not resolved, is resolved against the main spec once the document's subtree
+// is inlined into it.
 func (r *refResolver) warnLocalRef(ref, base string) {
 	if strings.HasPrefix(ref, "#") && base != r.baseURL {
 		shown := redact.URL(base)
