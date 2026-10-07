@@ -29,6 +29,7 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -417,13 +418,13 @@ func (r *KrakenDAutoConfigReconciler) judgeCandidates(
 	pass := r.verdicts.begin(key)
 	defer func() { r.verdicts.end(key, pass, err != nil) }()
 	ceFallback := configcheck.CEFallback(gw)
-	root, err := withCheckSlot(ctx, r.CheckSlots, func() (configcheck.Verdict, error) {
+	root, err := withCheckSlot(ctx, r.Tracer, r.CheckSlots, func() (configcheck.Verdict, error) {
 		return r.Checker.CheckRoot(ctx, configcheck.Root{Gateway: gw, CEFallback: ceFallback}, pass)
 	})
 	if err != nil || !root.OK {
 		return held, err
 	}
-	group, err := withCheckSlot(ctx, r.CheckSlots, func() (configcheck.Verdict, error) {
+	group, err := withCheckSlot(ctx, r.Tracer, r.CheckSlots, func() (configcheck.Verdict, error) {
 		return r.Checker.CheckGroup(ctx, configcheck.Group{
 			Gateway: gw, Endpoints: checkSet(candidates, nil, order, false), CEFallback: ceFallback,
 		}, pass)
@@ -432,7 +433,7 @@ func (r *KrakenDAutoConfigReconciler) judgeCandidates(
 		return held, err
 	}
 	for _, ep := range suspects(candidates, group) {
-		v, err := withCheckSlot(ctx, r.CheckSlots, func() (configcheck.EndpointVerdict, error) {
+		v, err := withCheckSlot(ctx, r.Tracer, r.CheckSlots, func() (configcheck.EndpointVerdict, error) {
 			unit := configcheck.EndpointUnit{Gateway: gw, Endpoint: ep, CEFallback: ceFallback}
 			return r.Checker.CheckEndpoint(ctx, unit, pass)
 		})
@@ -456,15 +457,23 @@ func suspects(candidates []*v1alpha1.KrakenDEndpoint, group configcheck.Verdict)
 }
 
 // withCheckSlot runs check holding one of slots, and gives up when ctx ends
-// while waiting. A nil slots runs check at once.
-func withCheckSlot[T any](ctx context.Context, slots chan struct{}, check func() (T, error)) (T, error) {
+// while waiting. A nil slots runs check at once. The wait is an
+// autoconfig.slot span of tracer, ended once the slot is taken; the check is
+// not part of it.
+func withCheckSlot[T any](
+	ctx context.Context, tracer trace.Tracer, slots chan struct{}, check func() (T, error),
+) (T, error) {
 	if slots != nil {
+		_, wait := tracing.Start(ctx, tracer, "autoconfig.slot")
 		select {
 		case slots <- struct{}{}:
+			wait.End()
 			defer func() { <-slots }()
 		case <-ctx.Done():
+			err := fmt.Errorf("waiting for an AutoConfig check slot: %w", ctx.Err())
+			tracing.End(wait, err)
 			var zero T
-			return zero, fmt.Errorf("waiting for an AutoConfig check slot: %w", ctx.Err())
+			return zero, err
 		}
 	}
 	return check()

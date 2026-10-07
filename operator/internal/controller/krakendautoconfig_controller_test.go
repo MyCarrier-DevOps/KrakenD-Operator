@@ -6286,7 +6286,7 @@ func TestWithCheckSlot_GivesUpWaitingForASlotWhenContextEnds(t *testing.T) {
 	ran := false
 	done := make(chan error, 1)
 	go func() {
-		_, err := withCheckSlot(ctx, slots, func() (configcheck.Verdict, error) {
+		_, err := withCheckSlot(ctx, nil, slots, func() (configcheck.Verdict, error) {
 			ran = true
 			return configcheck.Verdict{OK: true}, nil
 		})
