@@ -77,10 +77,13 @@ type Group struct {
 }
 
 // Root is a gateway's root on its own: what Gateway renders with no endpoint,
-// as the edition CEFallback makes it.
+// as the edition CEFallback makes it. Dragonfly is the Dragonfly state the
+// gateway controller detected, which sets the Redis address; nil renders
+// none, as admission renders.
 type Root struct {
 	Gateway    *v1alpha1.KrakenDGateway
 	CEFallback bool
+	Dragonfly  *renderer.DragonflyState
 }
 
 // CheckRoot lints r on its own.
