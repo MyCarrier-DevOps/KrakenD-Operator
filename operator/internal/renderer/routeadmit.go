@@ -105,8 +105,13 @@ func routeLosers(flat []flatEndpoint, rules routeRules) routeAdmission {
 	var older []routedEntry
 	options := map[string]bool{}
 	engine := gin.New()
+	refusals := 0
 	for _, i := range servingOrder(flat) {
 		fe := flat[i]
+		if refusals == MaxRouteRefusals {
+			adm.capped = true
+			break
+		}
 		entry := routedEntry{method: entryMethod(fe.Entry.Method), path: fe.Entry.Endpoint, source: fe.Source}
 		entry.shape = shapeOf(entry.path)
 		routes := entryRoutes(entry.method, entry.path, rules, options)
@@ -132,6 +137,7 @@ func routeLosers(flat []flatEndpoint, rules routeRules) routeAdmission {
 			// gin can leave its tree half-updated after a refusal; rebuild it.
 			engine = engineWith(routesOf(served))
 		}
+		refusals++
 		if lost {
 			adm.losers[i] = EntryConflict{Endpoint: entry.path, Method: fe.Entry.Method, Winner: winner, Detail: detail}
 		}
