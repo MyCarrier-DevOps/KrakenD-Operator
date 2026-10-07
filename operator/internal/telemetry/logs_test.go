@@ -129,3 +129,19 @@ func TestLogger_RecordInAChildSpanCarriesThatSpansIDs(t *testing.T) {
 			got[0].TraceID, got[0].SpanID, sc.TraceID(), sc.SpanID())
 	}
 }
+
+func TestParseLogLevel(t *testing.T) {
+	for value, want := range map[string]otellog.Severity{
+		"debug": otellog.SeverityDebug4, "info": otellog.SeverityInfo, "error": otellog.SeverityError,
+		"panic": otellog.SeverityFatal, "3": otellog.SeverityDebug2, "9": otellog.SeverityTrace,
+	} {
+		if got, err := telemetry.ParseLogLevel(value); err != nil || got != want {
+			t.Errorf("ParseLogLevel(%q) = %v, %v; want %v", value, got, err, want)
+		}
+	}
+	for _, bad := range []string{"0", "-1", "warn", "verbose"} {
+		if _, err := telemetry.ParseLogLevel(bad); err == nil {
+			t.Errorf("ParseLogLevel(%q) accepted it", bad)
+		}
+	}
+}
