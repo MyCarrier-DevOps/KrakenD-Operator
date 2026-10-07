@@ -879,8 +879,11 @@ gateway edit that cannot change the rendered config (image, version, replicas,
 resources, probes, `postRestartJob`) is not checked and never draws this error. If it
 repeats, check the operator pod's CPU and memory. A
 write that breaks endpoints which pass today is refused with a `422` naming
-the endpoints the check reached, even when the budget runs out first; the
-`500` that remains is described under `breaks gateway` below.
+the endpoints the check reached, even when the budget runs out first. The
+`500` that remains on a large gateway needs endpoints that already fail, or a
+gateway update whose stored root fails on its own: fix that root first (see
+the root denial above); the policy case is described under `breaks gateway`
+below.
 
 ### Admission refuses a policy with `breaks gateway`
 
@@ -901,7 +904,10 @@ breaks gateway <ns>/<name>: ...`.
   before the change was decided. A change that breaks endpoints which pass
   today is refused with a `422` even when the budget ends first, so this `500`
   needs endpoints that already fail but are not yet recorded as excluded (for
-  example right after their owners changed them). Each request scans the
+  example right after their owners changed them), or an endpoint that fails
+  because a policy it references fails on its own, which the controller never
+  excludes while the whole render passes: fix that policy, or the endpoint's
+  inline override of it. Each request scans the
   endpoints in a random order, so a retry also reaches others; but on a gateway
   of several hundred served endpoints it may not converge. It stops when the
   gateway controller records their exclusions: retry after its next
