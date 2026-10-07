@@ -509,3 +509,28 @@ func hostedAt(ep *v1alpha1.KrakenDEndpoint, host string) *v1alpha1.KrakenDEndpoi
 	ep.Spec.Endpoints[0].Backends[0].Host = []string{host}
 	return ep
 }
+
+func TestCheckEndpoint_FailingOnlyWithAForeignPolicyBlamesThePolicy(t *testing.T) {
+	foreign := policy("q")
+	foreign.Namespace = "other"
+	foreign.Spec.Raw = &runtime.RawExtension{Raw: []byte(`{"x/foreign":{}}`)}
+	ep := withPolicy(endpoint("mine", "/orders"), "q")
+	ep.Spec.Endpoints[0].Backends[0].PolicyRef.Namespace = "other"
+	val := &judgeValidator{judge: func(config string) error {
+		if strings.Contains(config, "x/foreign") && strings.Contains(config, "/orders") {
+			return rejectedOutput("VALUE-OF-Q clashes with /orders")
+		}
+		return nil
+	}}
+	chk := newChecker(val, foreign)
+
+	v, err := chk.CheckEndpoint(context.Background(), EndpointUnit{Gateway: gateway(v1alpha1.EditionCE), Endpoint: ep}, nil)
+
+	if err != nil || v.Reason != v1alpha1.ReasonPolicyInvalid || v.PoliciesFailAlone ||
+		!slices.Equal(v.Policies, []types.NamespacedName{{Namespace: "other", Name: "q"}}) {
+		t.Fatalf("verdict = %+v, %v; want PolicyInvalid naming other/q, failing only together", v, err)
+	}
+	if msg := v.Message(1024); strings.Contains(msg, "VALUE-OF-Q") || !strings.Contains(msg, "other/q") {
+		t.Errorf("message %q must name other/q and quote nothing", msg)
+	}
+}
