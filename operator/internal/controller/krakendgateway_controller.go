@@ -1407,10 +1407,11 @@ func (r *KrakenDGatewayReconciler) reconcileCoreResources(
 	sa := &corev1.ServiceAccount{ObjectMeta: named}
 	svc := &corev1.Service{ObjectMeta: named}
 	pdb := &policyv1.PodDisruptionBudget{ObjectMeta: named}
-	saErr := r.applyOwned(ctx, gw, sa, "serviceaccount", resources.SelectorLabels(gw), func() { resources.BuildServiceAccount(sa, gw) })
+	consent := resources.SelectorLabels(gw)
+	saErr := r.applyOwned(ctx, gw, sa, "serviceaccount", consent, func() { resources.BuildServiceAccount(sa, gw) })
 	err = stderrors.Join(saErr,
-		r.applyOwned(ctx, gw, svc, "service", resources.SelectorLabels(gw), func() { resources.BuildService(svc, gw, in.ceRender) }),
-		r.applyOwned(ctx, gw, pdb, "pdb", resources.SelectorLabels(gw), func() { resources.BuildPDB(pdb, gw) }))
+		r.applyOwned(ctx, gw, svc, "service", consent, func() { resources.BuildService(svc, gw, in.ceRender) }),
+		r.applyOwned(ctx, gw, pdb, "pdb", consent, func() { resources.BuildPDB(pdb, gw) }))
 	// The mutate function stamps the gateway's reference on sa before the
 	// write, so sa alone does not prove the server accepted it.
 	return saErr == nil && metav1.IsControlledBy(sa, gw), err
