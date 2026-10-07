@@ -267,14 +267,20 @@ func (c *Checker) lintInput(ctx context.Context, in renderer.RenderInput, memo M
 // rejection. Masked is not part of it, so a hit shares nothing with the
 // verdict it returned before. The check is a span named after its mode
 // (configcheck.lint or configcheck.validate), with the slot wait and the
-// krakend run below it.
+// krakend run below it; configcheck.memo_hit says the memo answered it, so it
+// has neither.
 func (c *Checker) remembered(ctx context.Context, in renderer.RenderInput, out *renderer.RenderOutput, mode string,
 	validate func(context.Context, []byte, v1alpha1.Edition) error, memo Memo) (v Verdict, retErr error) {
 	ctx, span := tracing.Start(ctx, c.tracer, "configcheck."+mode)
-	defer func() { endCheck(span, v.OK, retErr) }()
+	hit := false
+	defer func() {
+		span.SetAttributes(attribute.Bool("configcheck.memo_hit", hit))
+		endCheck(span, v.OK, retErr)
+	}()
 	key := contentKey(out, renderer.EditionFor(in.Gateway, in.CEFallback), mode)
 	if memo != nil {
 		if kept, ok := memo.Lookup(key); ok && judged(kept) {
+			hit = true
 			return Verdict{OK: kept.OK, Output: kept.Output, Stage: kept.Stage}, nil
 		}
 	}
