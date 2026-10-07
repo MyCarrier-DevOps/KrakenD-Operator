@@ -587,6 +587,7 @@ const (
     ConditionEndpointsReady           = "EndpointsReady" // AutoConfig: every generated endpoint is Ready
     ConditionReady                    = "Ready"
     ConditionPluginsResolved          = "PluginsResolved"
+    ConditionResourcesControlled      = "ResourcesControlled"
     ConditionCEFallbackApplied        = "CEFallbackApplied"
     ConditionResolvedRefs             = "ResolvedRefs" // endpoints
     ConditionAccepted                 = "Accepted"     // endpoints, written by the gateway controller
@@ -1096,7 +1097,7 @@ flowchart TD
 | `Deploying` | A rollout is in progress (`Progressing=True`: the Deployment was created, its pod template was written, or old pods remain beside updated ones), or the Deployment is not yet available |
 | `Running` | Config valid, the applied config rolled out to every replica, the Deployment available, and no license condition degrading it |
 | `Degraded` | CE fallback is active (`CEFallbackApplied` or `LicenseDegraded` is `True`) |
-| `Error` | Config validation failed, a plugin ConfigMap is missing (`PluginsResolved=False`), the rollout failed or the Deployment lost availability (`Available=False`), or the license expired with `fallbackToCE=false` |
+| `Error` | Config validation failed, a plugin ConfigMap is missing (`PluginsResolved=False`), an existing object the gateway will not take over (`ResourcesControlled=False`), the rollout failed or the Deployment lost availability (`Available=False`), or the license expired with `fallbackToCE=false` |
 
 A configuration that could not be validated because the validator was unavailable leaves `Ready` Unknown with reason `ValidatorUnavailable` and keeps the serving phase. A configuration that passed validation but whose ConfigMap could not be published, or whose applied ConfigMap fails the payload hash and cannot be replaced, does the same with reason `ConfigPublishFailed` (`handleConfigPublishFailed`).
 
