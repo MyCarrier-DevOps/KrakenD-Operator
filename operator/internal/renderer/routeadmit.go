@@ -42,6 +42,13 @@ type routedRoute struct {
 	source types.NamespacedName
 }
 
+// routedEntry is an entry of source, by method, path and route shape, for the
+// EE wildcard rule.
+type routedEntry struct {
+	method, path, shape string
+	source              types.NamespacedName
+}
+
 // routeAdmission is what admitting a render's entries to the router decided.
 type routeAdmission struct {
 	// losers are the entries left out, by position in flat, each as the
@@ -76,23 +83,35 @@ func dropRouteLosers(flat []flatEndpoint, conflicted map[types.NamespacedName][]
 
 // routeLosers admits flat's entries to KrakenD's router in serving order
 // (servedBefore). An entry loses to the first older entry of another
-// KrakenDEndpoint it clashes with: gin refuses to register the entry's route,
-// or the OPTIONS route router.auto_options adds for its path, next to the
-// older entry's (the route check's rule, on the path the validation copy
-// registers). An entry gin refuses on its own, or next to its
-// own KrakenDEndpoint's entries, is left in for that endpoint's own check,
-// which refuses it.
+// KrakenDEndpoint it clashes with:
+//   - gin refuses to register the entry's route, or the OPTIONS route
+//     router.auto_options adds for its path, next to the older entry's (the
+//     route check's rule, on the path the validation copy registers);
+//   - on an EE render, the entry lies under an older EE wildcard of its
+//     method, or is an EE wildcard over an older entry of its method (the EE
+//     router's rule, eeWildcardFindings).
+//
+// An entry gin refuses on its own, or next to its own KrakenDEndpoint's
+// entries, is left in for that endpoint's own check, which refuses it.
 func routeLosers(flat []flatEndpoint, rules routeRules) routeAdmission {
 	adm := routeAdmission{losers: map[int]EntryConflict{}}
 	var served []routedRoute
+	var older []routedEntry
 	options := map[string]bool{}
 	engine := gin.New()
 	for _, i := range servingOrder(flat) {
 		fe := flat[i]
-		method, path := entryMethod(fe.Entry.Method), fe.Entry.Endpoint
-		routes := entryRoutes(method, path, rules, options)
+		entry := routedEntry{method: entryMethod(fe.Entry.Method), path: fe.Entry.Endpoint, source: fe.Source}
+		entry.shape = shapeOf(entry.path)
+		routes := entryRoutes(entry.method, entry.path, rules, options)
 		if refusedAlone(routes) {
 			continue // its own endpoint's check refuses it
+		}
+		if rules.eeWildcards {
+			if winner, detail, ok := eeWildcardOverlap(older, entry); ok {
+				adm.losers[i] = EntryConflict{Endpoint: entry.path, Method: fe.Entry.Method, Winner: winner, Detail: detail}
+				continue
+			}
 		}
 		winner, detail, refused := registerEntry(engine, served, routes, fe.Source)
 		if !refused {
@@ -102,12 +121,13 @@ func routeLosers(flat []flatEndpoint, rules routeRules) routeAdmission {
 					options[r.path] = true
 				}
 			}
+			older = append(older, entry)
 			continue
 		}
 		// gin can leave its tree half-updated after a refusal; rebuild it.
 		engine = engineWith(routesOf(served))
 		if winner != (types.NamespacedName{}) {
-			adm.losers[i] = EntryConflict{Endpoint: path, Method: fe.Entry.Method, Winner: winner, Detail: detail}
+			adm.losers[i] = EntryConflict{Endpoint: entry.path, Method: fe.Entry.Method, Winner: winner, Detail: detail}
 		}
 	}
 	return adm
@@ -137,6 +157,9 @@ func entryMethod(method string) string {
 // added it.
 func entryRoutes(method, path string, rules routeRules, options map[string]bool) []ginRoute {
 	p := ginPath(path)
+	if rules.eeWildcards {
+		p = routeShape(path)
+	}
 	routes := []ginRoute{{method: method, path: p}}
 	if rules.autoOptions && !options[p] {
 		routes = append(routes, ginRoute{method: http.MethodOptions, path: p})
@@ -179,6 +202,24 @@ func routesOf(routed []routedRoute) []ginRoute {
 		routes[i] = s.route
 	}
 	return routes
+}
+
+// eeWildcardOverlap applies the EE router's wildcard rule (eeWildcardFindings)
+// between entry and the older entries of other KrakenDEndpoints. It reports
+// the first that is an EE wildcard of the method entry lies under.
+func eeWildcardOverlap(older []routedEntry, entry routedEntry) (types.NamespacedName, string, bool) {
+	for _, o := range older {
+		if o.method != entry.method || o.source == entry.source {
+			continue
+		}
+		if prefix := strings.TrimSuffix(o.path, "*"); IsEEWildcard(o.path) &&
+			strings.HasPrefix(entry.shape, shapeOf(prefix)) {
+			return o.source, fmt.Sprintf("'%s %s' conflicts with EE wildcard '%s %s': "+
+				"the EE router accepts no other %s route under %s",
+				entry.method, entry.path, o.method, o.path, entry.method, prefix), true
+		}
+	}
+	return types.NamespacedName{}, "", false
 }
 
 // routerOptionsOf reads the router block of a gateway-level extra_config.
