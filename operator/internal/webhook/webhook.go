@@ -138,7 +138,7 @@ func NewValidators(
 		Endpoint: &EndpointValidator{
 			Client: c, APIReader: apiReader, Checker: checker, OperatorUsername: operatorUsername, Memo: memo,
 		},
-		Policy:     &PolicyValidator{Client: c, Checker: checker},
+		Policy:     &PolicyValidator{Client: c, Checker: checker, Memo: memo},
 		AutoConfig: &AutoConfigValidator{Client: c},
 	}
 }
