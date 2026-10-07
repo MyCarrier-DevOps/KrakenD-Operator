@@ -55,6 +55,16 @@ func TestNewClashes_KeepsTheNewRouterClashesOfTheGivenEndpoints(t *testing.T) {
 			b: {{Endpoint: "/u/{n}/x", Method: "GET", Winner: a, Detail: "wildcard conflict in existing prefix '/u/:id'"}},
 			c: {clash},
 		}}, nil, nil},
+		{"a clash differing from a stored one in a single field is new", RouteConflicts{Lost: map[types.NamespacedName][]renderer.EntryConflict{
+			b: {
+				{Endpoint: "/u/{n}/y", Method: "GET", Winner: a, Detail: "wildcard conflict"},
+				{Endpoint: "/u/{n}/x", Method: "POST", Winner: a, Detail: "wildcard conflict"},
+				{Endpoint: "/u/{n}/x", Method: "GET", Winner: c, Detail: "wildcard conflict"},
+			},
+			c: {clash},
+		}}, nil, []Clash{
+			{Loser: b, Method: "GET", Endpoint: "/u/{n}/x", Winner: a, Detail: "wildcard conflict"},
+		}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -78,5 +88,18 @@ func TestConflicts_RendersTheGatewayWithTheReplacement(t *testing.T) {
 	want := []renderer.EntryConflict{{Endpoint: "/a/{name}", Method: "GET", Winner: types.NamespacedName{Namespace: "ns", Name: "a"}}}
 	if !reflect.DeepEqual(conflicts.Lost[b], want) || conflicts.Capped {
 		t.Errorf("Conflicts = %+v, want ns/b losing its same-shape entry to ns/a, uncapped", conflicts)
+	}
+}
+
+func TestClash_StringNamesBothEndpointsAndTheRoutersWords(t *testing.T) {
+	clash := Clash{
+		Loser: types.NamespacedName{Namespace: "ns", Name: "b"}, Method: "GET", Endpoint: "/u/{n}/x",
+		Winner: types.NamespacedName{Namespace: "ns", Name: "a"}, Detail: "wildcard conflict",
+	}
+
+	want := "GET /u/{n}/x of KrakenDEndpoint ns/b cannot be routed next to KrakenDEndpoint ns/a, " +
+		"which is older: wildcard conflict"
+	if got := clash.String(); got != want {
+		t.Errorf("String = %q, want %q", got, want)
 	}
 }
