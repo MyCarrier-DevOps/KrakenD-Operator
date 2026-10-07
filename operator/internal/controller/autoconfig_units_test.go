@@ -78,3 +78,21 @@ func TestAutoConfigReconcile_ARootThatFailsAloneHoldsNoCandidate(t *testing.T) {
 		t.Errorf("checks = %v; want only the root checked and listusers written", checker.checks)
 	}
 }
+
+func TestAutoConfigReconcile_AGroupThatPassesRunsNoEndpointCheck(t *testing.T) {
+	cm := testCUEDefinitionsCM()
+	ac := syncedAutoConfig(cm)
+	f, ce, fi, g := defaultMocks()
+	checker := &fakeChecker{}
+	c := fakeClientBuilder().WithObjects(ac, cm, testGateway()).WithStatusSubresource(ac).Build()
+	r := newACReconciler(c, f, ce, fi, g)
+	r.Checker = checker
+
+	if _, err := reconcileAC(r, ac); err != nil {
+		t.Fatal(err)
+	}
+
+	if want := []string{"root", "group:test-ac-listusers"}; !slices.Equal(checker.checks, want) {
+		t.Errorf("checks = %v, want %v: candidates that pass together are not checked one by one", checker.checks, want)
+	}
+}
