@@ -33,6 +33,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	otelprom "go.opentelemetry.io/otel/exporters/prometheus"
 	"go.opentelemetry.io/otel/metric"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"k8s.io/apimachinery/pkg/types"
 )
 
@@ -53,6 +54,12 @@ func NewPrometheusReader(reg prometheus.Registerer) (*otelprom.Exporter, error) 
 		otelprom.WithoutScopeInfo(),
 		otelprom.WithoutTargetInfo(),
 	)
+}
+
+// NewMeterProvider returns the meter provider every operator metric is
+// recorded through, with opts.
+func NewMeterProvider(opts ...sdkmetric.Option) *sdkmetric.MeterProvider {
+	return sdkmetric.NewMeterProvider(opts...)
 }
 
 // OperatorMetrics records the operator's metrics on OpenTelemetry

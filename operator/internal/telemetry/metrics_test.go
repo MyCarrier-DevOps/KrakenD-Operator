@@ -19,6 +19,7 @@ package telemetry_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -40,7 +41,7 @@ func newScraped(t *testing.T) (*telemetry.OperatorMetrics, func() string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	mp := telemetry.NewMeterProvider(sdkmetric.WithReader(reader))
 	t.Cleanup(func() { _ = mp.Shutdown(context.Background()) })
 	m, err := telemetry.NewOperatorMetrics(mp.Meter("test"))
 	if err != nil {
@@ -123,6 +124,30 @@ func TestPrometheusReader_AddsNoFamilyOrLabelOfItsOwn(t *testing.T) {
 	for _, unwanted := range []string{"target_info", "otel_scope_"} {
 		if strings.Contains(got, unwanted) {
 			t.Errorf("exposition has %q:\n%s", unwanted, got)
+		}
+	}
+}
+
+// The SDK keeps at most 2,000 series per instrument unless told otherwise and
+// folds the rest into one otel_metric_overflow series. The reconcile-duration
+// histogram keeps a deleted gateway's series until the operator restarts, so a
+// long-lived operator passes that limit: every gateway must keep its own series.
+func TestOperatorMetrics_EveryGatewayKeepsItsOwnSeriesPastTheSDKDefaultLimit(t *testing.T) {
+	m, scrape := newScraped(t)
+	const gateways = 2001
+	for i := range gateways {
+		gw := types.NamespacedName{Namespace: "ns", Name: fmt.Sprintf("gw-%d", i)}
+		m.GatewayReconciled(context.Background(), gw, time.Millisecond)
+		m.SetEndpoints(gw, 1)
+	}
+
+	got := scrape()
+	if strings.Contains(got, "otel_metric_overflow") {
+		t.Error("the exposition has an otel_metric_overflow series: gateways past the limit lost their own")
+	}
+	for _, series := range []string{"krakend_operator_reconcile_duration_seconds_count{", "krakend_operator_endpoints{"} {
+		if n := strings.Count(got, series); n != gateways {
+			t.Errorf("%d %s…} series, want one per gateway (%d)", n, series, gateways)
 		}
 	}
 }
