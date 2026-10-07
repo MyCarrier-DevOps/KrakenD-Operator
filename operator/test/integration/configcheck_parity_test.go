@@ -37,6 +37,7 @@ import (
 	tcexec "github.com/testcontainers/testcontainers-go/exec"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -129,6 +130,9 @@ type parityCase struct {
 	// routerRejects is true, the route check stands in for -t; where both are
 	// false, admission is stricter than the binary on purpose.
 	routerRejects bool
+	// loser names the endpoint whose entry the render leaves out because an
+	// older endpoint's entry is served instead ("" for none).
+	loser string
 }
 
 func parityGateway(edition v1alpha1.Edition, router *v1alpha1.RouterConfig) *v1alpha1.KrakenDGateway {
@@ -156,30 +160,30 @@ func parityCases() []parityCase {
 	ce := parityGateway(v1alpha1.EditionCE, nil)
 	return []parityCase{
 		{"valid", ce, []*v1alpha1.KrakenDEndpoint{
-			parityEndpoint("a", time.Hour, "GET", "/a/{id}"), parityEndpoint("b", 0, "GET", "/b")}, true, false},
+			parityEndpoint("a", time.Hour, "GET", "/a/{id}"), parityEndpoint("b", 0, "GET", "/b")}, true, false, ""},
 		{"prefix parameter clash", ce, []*v1alpha1.KrakenDEndpoint{
 			parityEndpoint("a", time.Hour, "GET", "/users/{id}"),
-			parityEndpoint("b", 0, "GET", "/users/{userId}/orders")}, false, true},
+			parityEndpoint("b", 0, "GET", "/users/{userId}/orders")}, true, false, "b"},
 		{"suffix after parameter", ce, []*v1alpha1.KrakenDEndpoint{
 			parityEndpoint("a", time.Hour, "GET", "/files/{id}"),
-			parityEndpoint("b", 0, "GET", "/files/{id}.json")}, false, true},
+			parityEndpoint("b", 0, "GET", "/files/{id}.json")}, true, false, "b"},
 		{"same shape resolves oldest-wins", ce, []*v1alpha1.KrakenDEndpoint{
-			parityEndpoint("a", time.Hour, "GET", "/a/{id}"), parityEndpoint("b", 0, "GET", "/a/{name}")}, true, false},
+			parityEndpoint("a", time.Hour, "GET", "/a/{id}"), parityEndpoint("b", 0, "GET", "/a/{name}")}, true, false, "b"},
 		{"double slash resolves oldest-wins", ce, []*v1alpha1.KrakenDEndpoint{
-			parityEndpoint("a", time.Hour, "GET", "/a//b"), parityEndpoint("b", 0, "GET", "/a/b")}, true, false},
+			parityEndpoint("a", time.Hour, "GET", "/a//b"), parityEndpoint("b", 0, "GET", "/a/b")}, true, false, "b"},
 		{"trailing slash is a distinct route", ce, []*v1alpha1.KrakenDEndpoint{
-			parityEndpoint("a", time.Hour, "GET", "/b"), parityEndpoint("b", 0, "GET", "/b/")}, true, false},
+			parityEndpoint("a", time.Hour, "GET", "/b"), parityEndpoint("b", 0, "GET", "/b/")}, true, false, ""},
 		{"parameter names across methods without auto options", ce, []*v1alpha1.KrakenDEndpoint{
-			parityEndpoint("a", time.Hour, "GET", "/a/{id}"), parityEndpoint("b", 0, "POST", "/a/{name}")}, true, false},
-		{"unnamed wildcard on CE", ce, []*v1alpha1.KrakenDEndpoint{parityEndpoint("a", 0, "GET", "/files/*")}, false, true},
+			parityEndpoint("a", time.Hour, "GET", "/a/{id}"), parityEndpoint("b", 0, "POST", "/a/{name}")}, true, false, ""},
+		{"unnamed wildcard on CE", ce, []*v1alpha1.KrakenDEndpoint{parityEndpoint("a", 0, "GET", "/files/*")}, false, true, ""},
 		{"unnamed wildcard on EE", parityGateway(v1alpha1.EditionEE, nil),
-			[]*v1alpha1.KrakenDEndpoint{parityEndpoint("a", 0, "GET", "/files/*")}, true, false},
-		{"reserved path", ce, []*v1alpha1.KrakenDEndpoint{parityEndpoint("a", 0, "GET", "/__health")}, false, true},
+			[]*v1alpha1.KrakenDEndpoint{parityEndpoint("a", 0, "GET", "/files/*")}, true, false, ""},
+		{"reserved path", ce, []*v1alpha1.KrakenDEndpoint{parityEndpoint("a", 0, "GET", "/__health")}, false, true, ""},
 		{"custom health path clash", parityGateway(v1alpha1.EditionCE, &v1alpha1.RouterConfig{HealthPath: "/healthz"}),
-			[]*v1alpha1.KrakenDEndpoint{parityEndpoint("a", 0, "GET", "/healthz")}, false, false},
+			[]*v1alpha1.KrakenDEndpoint{parityEndpoint("a", 0, "GET", "/healthz")}, false, false, ""},
 		{"auto options clash", parityGateway(v1alpha1.EditionCE, &v1alpha1.RouterConfig{AutoOptions: true}),
 			[]*v1alpha1.KrakenDEndpoint{
-				parityEndpoint("a", time.Hour, "GET", "/a/{id}"), parityEndpoint("b", 0, "POST", "/a/{name}")}, false, false},
+				parityEndpoint("a", time.Hour, "GET", "/a/{id}"), parityEndpoint("b", 0, "POST", "/a/{name}")}, false, false, ""},
 	}
 }
 
@@ -233,47 +237,46 @@ func TestConfigCheckParity(t *testing.T) {
 	})
 
 	policyChecker := configcheck.New(nil, renderer.New(renderer.Options{}), validator, 1)
-	t.Run("LintPolicy valid policy alone", func(t *testing.T) {
+	t.Run("a valid policy passes on its own", func(t *testing.T) {
 		policy := &v1alpha1.KrakenDBackendPolicy{
 			ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "parity"},
 			Spec: v1alpha1.KrakenDBackendPolicySpec{
 				CircuitBreaker: &v1alpha1.CircuitBreakerSpec{Interval: 60, Timeout: 10, MaxErrors: 3},
 			},
 		}
-		verdict, err := policyChecker.LintPolicy(ctx, policy)
+		verdict, err := policyChecker.CheckPolicy(ctx, policy, nil)
 		if err != nil {
-			t.Fatalf("LintPolicy: %v", err)
+			t.Fatalf("CheckPolicy: %v", err)
 		}
 		if !verdict.OK {
-			t.Fatalf("a valid policy alone is refused by the real binary: %+v", verdict.Findings)
+			t.Fatalf("a valid policy alone is refused by the real binary: %s", verdict.Output)
 		}
 	})
 
-	// Endpoint admission judges a candidate against the gateway root alone
-	// when the root's own stored endpoints are the failing part.
+	// The root check renders the gateway with no endpoint.
 	t.Run("a healthy gateway root with no endpoints lints OK", func(t *testing.T) {
-		verdict, err := policyChecker.CheckIsolated(ctx, parityGateway(v1alpha1.EditionCE, nil), nil)
+		verdict, err := policyChecker.CheckRoot(ctx, configcheck.Root{Gateway: parityGateway(v1alpha1.EditionCE, nil)}, nil)
 		if err != nil {
-			t.Fatalf("CheckIsolated: %v", err)
+			t.Fatalf("CheckRoot: %v", err)
 		}
 		if !verdict.OK {
-			t.Fatalf("a gateway root with no endpoints is refused by the real binary: %+v", verdict.Findings)
+			t.Fatalf("a gateway root with no endpoints is refused by the real binary: %s", verdict.Output)
 		}
 	})
 
-	t.Run("LintPolicy refuses a policy the binary rejects", func(t *testing.T) {
+	t.Run("a policy the binary rejects fails on its own", func(t *testing.T) {
 		policy := &v1alpha1.KrakenDBackendPolicy{
 			ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "parity"},
 			Spec: v1alpha1.KrakenDBackendPolicySpec{
 				Raw: &k8sruntime.RawExtension{Raw: []byte(`{"backend/grpc":{"unknown":1}}`)},
 			},
 		}
-		verdict, err := policyChecker.LintPolicy(ctx, policy)
+		verdict, err := policyChecker.CheckPolicy(ctx, policy, nil)
 		if err != nil {
-			t.Fatalf("LintPolicy: %v", err)
+			t.Fatalf("CheckPolicy: %v", err)
 		}
-		if verdict.OK || len(verdict.Findings) == 0 {
-			t.Fatalf("verdict = %+v, want a refusal with findings", verdict)
+		if verdict.OK || verdict.Output == "" {
+			t.Fatalf("verdict = %+v, want a refusal with the binary's output", verdict)
 		}
 	})
 
@@ -293,12 +296,16 @@ func TestConfigCheckParity(t *testing.T) {
 			r := renderer.New(renderer.Options{})
 			checker := configcheck.New(reader, r, validator, 1)
 
-			admission, err := checker.CheckGateway(ctx, tc.gateway, nil)
+			endpoints := make([]v1alpha1.KrakenDEndpoint, 0, len(tc.endpoints))
+			for _, ep := range tc.endpoints {
+				endpoints = append(endpoints, *ep)
+			}
+			admission, err := checker.CheckGroup(ctx, configcheck.Group{Gateway: tc.gateway, Endpoints: endpoints}, nil)
 			if err != nil {
 				t.Fatalf("admission check: %v", err)
 			}
 			if admission.OK != tc.admitted {
-				t.Errorf("admitted = %v, want %v (findings %+v)", admission.OK, tc.admitted, admission.Findings)
+				t.Errorf("admitted = %v, want %v (output %s)", admission.OK, tc.admitted, admission.Output)
 			}
 			in, err := checker.Gather(ctx, tc.gateway, nil)
 			if err != nil {
@@ -314,6 +321,10 @@ func TestConfigCheckParity(t *testing.T) {
 			}
 			if controller.OK != admission.OK {
 				t.Errorf("controller verdict %v differs from admission verdict %v", controller.OK, admission.OK)
+			}
+			if tc.loser == "" && len(out.EntryConflicts) != 0 || tc.loser != "" &&
+				len(out.EntryConflicts[types.NamespacedName{Namespace: "parity", Name: tc.loser}]) == 0 {
+				t.Errorf("entry conflicts = %+v, want %q to lose its entry", out.EntryConflicts, tc.loser)
 			}
 			if tc.gateway.Spec.Edition == v1alpha1.EditionCE {
 				rejected, output := routerTestRejects(t, bin, out.JSON)
