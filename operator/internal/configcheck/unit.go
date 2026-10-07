@@ -121,9 +121,13 @@ func (v EndpointVerdict) Message(int) string {
 	for i, p := range v.Policies {
 		names[i] = p.String()
 	}
-	if v.Reason == v1alpha1.ReasonPolicyInvalid && v.PoliciesFailAlone {
+	switch {
+	case v.Reason == v1alpha1.ReasonPolicyInvalid && v.PoliciesFailAlone:
 		return fmt.Sprintf("references KrakenDBackendPolicy %s, which fails krakend check on its own",
 			strings.Join(names, ", "))
+	case v.Reason == v1alpha1.ReasonPolicyInvalid:
+		return fmt.Sprintf("fails krakend check only together with KrakenDBackendPolicy %s of another namespace, "+
+			"whose content is not shown", strings.Join(names, ", "))
 	}
 	return ""
 }
@@ -216,6 +220,9 @@ func (c *Checker) CheckEndpoint(ctx context.Context, u EndpointUnit, memo Memo) 
 	if err != nil {
 		return EndpointVerdict{}, err
 	}
+	if own.OK {
+		return EndpointVerdict{Reason: v1alpha1.ReasonPolicyInvalid, Policies: policyNames(foreign)}, nil
+	}
 	return EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid, Output: own.Output}, nil
 }
 
@@ -290,6 +297,16 @@ func emptied(policies map[string]*v1alpha1.KrakenDBackendPolicy,
 		out[key] = &v1alpha1.KrakenDBackendPolicy{ObjectMeta: metav1.ObjectMeta{Name: p.Name, Namespace: p.Namespace}}
 	}
 	return out
+}
+
+// policyNames names the policies of keys ("namespace/name").
+func policyNames(keys []string) []types.NamespacedName {
+	names := make([]types.NamespacedName, len(keys))
+	for i, key := range keys {
+		ns, name, _ := strings.Cut(key, "/")
+		names[i] = types.NamespacedName{Namespace: ns, Name: name}
+	}
+	return names
 }
 
 // verdictFor is the verdict on out, rendered from in, for a check that
