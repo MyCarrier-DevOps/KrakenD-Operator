@@ -55,13 +55,16 @@ type gatewayFailure struct {
 	reason, message string
 }
 
-// combinedFailureMessage is ConfigValid's message when every endpoint passes
-// on its own but the gateway's config fails with them together. It quotes
-// nothing: that output quotes the endpoints' values, which the gateway's
-// readers may not be allowed to read, so it goes to the operator log.
-const combinedFailureMessage = "Every endpoint passes krakend check on its own, but the gateway's config fails " +
-	"it with them together, so the last applied config keeps serving. The check's output quotes the endpoints' " +
-	"values and is only in the operator log (\"the gateway's config fails krakend check only together\")."
+// combinedFailureMessage is ConfigValid's message when the endpoints that pass
+// on their own fail the gateway's config together. An endpoint that fails on
+// its own may already have been excluded, so it does not say every endpoint
+// passes. It quotes nothing: that output quotes the endpoints' values, which
+// the gateway's readers may not be allowed to read, so it goes to the
+// operator log.
+const combinedFailureMessage = "The endpoints that pass krakend check on their own fail it together, so the last " +
+	"applied config keeps serving; any endpoint that fails on its own is excluded first. The check's output " +
+	"quotes the endpoints' values and is only in the operator log " +
+	"(\"the gateway's config fails krakend check only together\")."
 
 // decide judges the newest render, full, in the order that blames each
 // object only for its own content:
