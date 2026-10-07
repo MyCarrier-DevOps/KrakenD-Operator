@@ -19,12 +19,15 @@ limitations under the License.
 package integration
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 )
 
 // TestManager_CachesNoSecretOrConfigMapContent sees only what the tests that
@@ -112,5 +115,37 @@ func TestManager_CachesNoLastAppliedAnnotation(t *testing.T) {
 				t.Errorf("the cached %s holds %d managedFields entries", kind, n)
 			}
 		})
+	}
+}
+
+// TestManager_WatchesOptionalKindsAsMetadataOnly pins that the Istio kind,
+// whose CRD the suite installs before the manager starts, is watched and read
+// through the cache as metadata only. A full informer would hold every
+// VirtualService in the cluster, and the operator reads only its owner
+// references.
+func TestManager_WatchesOptionalKindsAsMetadataOnly(t *testing.T) {
+	ns := testNamespace(t)
+	// A gateway with Istio off makes the controller look for a VirtualService
+	// it may have to delete, which reads the kind through the cache.
+	gw := &v1alpha1.KrakenDGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "no-istio-gw", Namespace: ns},
+		Spec:       v1alpha1.KrakenDGatewaySpec{Version: "2.9", Edition: v1alpha1.EditionCE},
+	}
+	if err := k8sClient.Create(ctx, gw); err != nil {
+		t.Fatalf("create gateway: %v", err)
+	}
+	eventually(t, func() error {
+		for _, seen := range suiteCache.istioRecords() {
+			if strings.HasPrefix(seen, "*v1.PartialObjectMetadata ") {
+				return nil
+			}
+		}
+		return fmt.Errorf("no metadata request for an Istio kind yet: %v", suiteCache.istioRecords())
+	})
+
+	for _, seen := range suiteCache.istioRecords() {
+		if strings.Contains(seen, "unstructured") || strings.HasPrefix(seen, "GetInformerForKind") {
+			t.Errorf("the manager cache was asked for a full Istio object: %q (all: %v)", seen, suiteCache.istioRecords())
+		}
 	}
 }
