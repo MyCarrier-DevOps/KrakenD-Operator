@@ -133,20 +133,49 @@ func (c *Checker) lintInput(ctx context.Context, in renderer.RenderInput, memo M
 }
 
 // remembered runs validate on out, rendered from in, unless memo already
-// holds the verdict on out's content in mode, and stores a fresh verdict in
-// memo. An error is never stored: the check did not judge.
+// holds the verdict on out's content in mode, and stores a fresh one in memo.
+// An error is never stored: the check did not judge. The memo holds only what
+// the content decides (acceptance, and the bounded rejection with its refusals
+// by index); the findings, refusals and their endpoint names are rebuilt from
+// in and out on every call, so a hit never names another input's endpoints
+// and shares nothing with the verdict it returned before.
 func (c *Checker) remembered(ctx context.Context, in renderer.RenderInput, out *renderer.RenderOutput, mode string,
 	validate func(context.Context, []byte, v1alpha1.Edition) error, memo Memo) (Verdict, error) {
 	key := contentKey(out, renderer.EditionFor(in.Gateway, in.CEFallback), mode)
 	if memo != nil {
-		if v, ok := memo.Lookup(key); ok {
-			return v, nil
+		if kept, ok := memo.Lookup(key); ok {
+			return verdictFor(kept.OK, kept.Rejection, in, out), nil
 		}
 	}
-	v, err := c.check(ctx, in, out, validate)
-	v.Output = TruncateEllipsis(v.Output, maxStoredOutput)
-	if err == nil && memo != nil {
-		memo.Store(key, v)
+	rejection, err := c.run(ctx, in, out, validate)
+	if err != nil {
+		return Verdict{}, err
 	}
-	return v, err
+	if memo != nil {
+		memo.Store(key, Verdict{OK: rejection == nil, Rejection: bounded(rejection)})
+	}
+	return verdictFor(rejection == nil, rejection, in, out), nil
+}
+
+// verdictFor is the verdict on out, rendered from in, for a check that
+// accepted it (ok) or rejected it with rejection. It reads a bounded copy of
+// the rejection, so a fresh run and a hit return the same text.
+func verdictFor(ok bool, rejection *renderer.ValidationError, in renderer.RenderInput,
+	out *renderer.RenderOutput) Verdict {
+	if ok {
+		return Verdict{OK: true}
+	}
+	return Rejected(bounded(rejection), in, out)
+}
+
+// bounded returns a copy of rejection that shares nothing with it and keeps
+// at most maxStoredOutput of its output, nil for a nil rejection.
+func bounded(rejection *renderer.ValidationError) *renderer.ValidationError {
+	if rejection == nil {
+		return nil
+	}
+	cut := *rejection
+	cut.Output = TruncateEllipsis(rejection.Output, maxStoredOutput)
+	cut.Refusals = slices.Clone(rejection.Refusals)
+	return &cut
 }
