@@ -121,7 +121,7 @@ func (r *KrakenDGatewayReconciler) decide(
 	if !root.OK {
 		return decision{failure: rootFailure(root)}, nil
 	}
-	whole, err := r.Checker.CheckRendered(ctx, in, full, pass)
+	whole, err := r.Checker.CheckRendered(configcheck.WithPurpose(ctx, "combined"), in, full, pass)
 	if err != nil {
 		return decision{}, err
 	}
@@ -145,7 +145,8 @@ func (r *KrakenDGatewayReconciler) decide(
 	}
 	if !isApplied(gw, out, edition) {
 		var safety configcheck.Verdict
-		if safety, err = r.Checker.CheckRendered(ctx, rest, out, pass); err != nil {
+		safetyNet := configcheck.WithPurpose(ctx, "safety_net")
+		if safety, err = r.Checker.CheckRendered(safetyNet, rest, out, pass); err != nil {
 			return decision{}, err
 		}
 		if !safety.OK {
