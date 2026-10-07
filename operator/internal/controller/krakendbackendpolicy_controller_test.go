@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -702,5 +703,68 @@ func TestEndpointPolicyHandler_DeletedEndpointEnqueuesItsPolicy(t *testing.T) {
 	got, _ := q.Get()
 	if want := (types.NamespacedName{Name: "p", Namespace: "default"}); got.NamespacedName != want {
 		t.Errorf("enqueued %v, want %v", got.NamespacedName, want)
+	}
+}
+
+// stubPolicyChecker answers every CheckPolicy with verdict and err, and counts
+// the calls.
+type stubPolicyChecker struct {
+	verdict configcheck.Verdict
+	err     error
+	calls   int
+}
+
+func (s *stubPolicyChecker) CheckPolicy(
+	context.Context, *v1alpha1.KrakenDBackendPolicy, configcheck.Memo,
+) (configcheck.Verdict, error) {
+	s.calls++
+	return s.verdict, s.err
+}
+
+// policyInRange is a policy whose typed fields all pass the range checks.
+func policyInRange() *v1alpha1.KrakenDBackendPolicy {
+	return &v1alpha1.KrakenDBackendPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "pol1", Namespace: "default", Generation: 1},
+		Spec: v1alpha1.KrakenDBackendPolicySpec{
+			CircuitBreaker: &v1alpha1.CircuitBreakerSpec{MaxErrors: 5, Interval: 60, Timeout: 30},
+		},
+	}
+}
+
+func TestPolicyReconcile_ReadyIsFalseWhenThePolicyFailsKrakendCheckOnItsOwn(t *testing.T) {
+	policy := policyInRange()
+	const output = "- at '/endpoints/0/backend/0/extra_config/qos~1circuit-breaker/max_errors': got string, want integer"
+	checker := &stubPolicyChecker{verdict: configcheck.Verdict{Output: output}}
+	c := fakeClientBuilder().WithObjects(policy).WithStatusSubresource(policy).Build()
+	rec := fakeRecorder()
+	r := &KrakenDBackendPolicyReconciler{
+		Client: c, Scheme: testScheme(), Recorder: rec, Checker: checker,
+	}
+
+	req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(policy)}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var stored v1alpha1.KrakenDBackendPolicy
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(policy), &stored); err != nil {
+		t.Fatal(err)
+	}
+	ready := meta.FindStatusCondition(stored.Status.Conditions, v1alpha1.ConditionReady)
+	if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != v1alpha1.ReasonPolicyInvalid {
+		t.Fatalf("Ready = %+v, want False/PolicyInvalid", ready)
+	}
+	for _, want := range []string{"fails krakend check on its own", output} {
+		if !strings.Contains(ready.Message, want) {
+			t.Errorf("Ready message = %q, want it to contain %q", ready.Message, want)
+		}
+	}
+	if ready.ObservedGeneration != stored.Generation || stored.Status.ObservedGeneration != stored.Generation {
+		t.Errorf("observedGeneration = %d (condition %d), want %d",
+			stored.Status.ObservedGeneration, ready.ObservedGeneration, stored.Generation)
+	}
+	events := drainEvents(rec)
+	if len(events) != 1 || !strings.HasPrefix(events[0], "Warning PolicyInvalid ") {
+		t.Errorf("events = %q, want one Warning PolicyInvalid", events)
 	}
 }
