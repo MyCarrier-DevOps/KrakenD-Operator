@@ -3127,3 +3127,128 @@ func TestGatewayReconcile_AFailedStepDoesNotStoreReadyBesideAConfigNotRunning(t 
 		})
 	}
 }
+
+// failingServiceAccountCreates fails every ServiceAccount create with an
+// internal error, a failure that is not a refusal to take an object over.
+func failingServiceAccountCreates(base client.WithWatch) client.Client {
+	return interceptor.NewClient(base, interceptor.Funcs{
+		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if _, ok := obj.(*corev1.ServiceAccount); ok {
+				return apierrors.NewInternalError(errors.New("etcdserver: request timed out"))
+			}
+			return c.Create(ctx, obj, opts...)
+		},
+	})
+}
+
+func TestGatewayReconcile_AFailedServiceAccountStepStillMirrorsALostAvailability(t *testing.T) {
+	const a = `{"version":3,"name":"a"}`
+	sumA := hash.SHA256Hex([]byte(a))
+	cases := []struct {
+		name       string
+		degrade    func(dep *appsv1.Deployment)
+		wantReady  string
+		wantEvents int
+	}{
+		{"the Deployment lost its availability", func(dep *appsv1.Deployment) {
+			dep.Status.AvailableReplicas, dep.Status.ReadyReplicas = 0, 0
+			dep.Status.Conditions = []appsv1.DeploymentCondition{{
+				Type: appsv1.DeploymentAvailable, Status: corev1.ConditionFalse, Reason: "MinimumReplicasUnavailable",
+			}}
+		}, "MinimumReplicasUnavailable", 0},
+		{"the Deployment exceeded its progress deadline", func(dep *appsv1.Deployment) {
+			dep.Status.Conditions = []appsv1.DeploymentCondition{{
+				Type: appsv1.DeploymentProgressing, Status: corev1.ConditionFalse, Reason: "ProgressDeadlineExceeded",
+			}}
+		}, v1alpha1.ReasonRolloutFailed, 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gw := servingGateway(sumA, convergedImage)
+			gw.Generation, gw.Status.ObservedGeneration = 1, 1
+			dep := settledDeployment(gw, sumA)
+			tc.degrade(dep)
+			base := fakeClientBuilder().WithObjects(gw, dep).WithStatusSubresource(gw).Build().(client.WithWatch)
+			r := newTestGatewayReconciler(base, renderOf(a), &mockValidator{})
+			r.Client = failingServiceAccountCreates(base)
+			rec := fakeRecorder()
+			r.Recorder = rec
+
+			if err := reconcileGateway(t, r, gw); err == nil {
+				t.Fatal("the failed ServiceAccount step must fail the pass")
+			}
+			stored := getGateway(t, base, gw)
+			ready := meta.FindStatusCondition(stored.Status.Conditions, v1alpha1.ConditionReady)
+			if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != tc.wantReady ||
+				stored.Status.Phase != v1alpha1.PhaseError {
+				t.Errorf("Ready = %+v, phase %q; want False/%s and Error", ready, stored.Status.Phase, tc.wantReady)
+			}
+			if got := eventsWithReason(rec, v1alpha1.ReasonRolloutFailed); got != tc.wantEvents {
+				t.Errorf("RolloutFailed events = %d, want %d", got, tc.wantEvents)
+			}
+		})
+	}
+}
+
+func TestGatewayReconcile_AMissingDeploymentIsNotReadyBesideANewConfig(t *testing.T) {
+	const a, b = `{"version":3,"name":"a"}`, `{"version":3,"name":"b"}`
+	sumA := hash.SHA256Hex([]byte(a))
+	cases := []struct {
+		name string
+		fail func(base client.WithWatch) client.Client
+	}{
+		{"the Deployment create is refused", func(base client.WithWatch) client.Client {
+			return interceptor.NewClient(base, interceptor.Funcs{
+				Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+					if _, ok := obj.(*appsv1.Deployment); ok {
+						return apierrors.NewForbidden(appsv1.Resource("deployments"), obj.GetName(),
+							errors.New("admission webhook denied the request"))
+					}
+					return c.Create(ctx, obj, opts...)
+				},
+			})
+		}},
+		{"the ServiceAccount write fails", failingServiceAccountCreates},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gw := servingGateway(sumA, convergedImage)
+			gw.Generation, gw.Status.ObservedGeneration = 1, 1
+			base := fakeClientBuilder().WithObjects(gw).WithStatusSubresource(gw).Build().(client.WithWatch)
+			r := newTestGatewayReconciler(base, renderOf(b), &mockValidator{})
+			r.Client = tc.fail(base)
+
+			for pass := 1; pass <= 2; pass++ {
+				if err := reconcileGateway(t, r, gw); err == nil {
+					t.Fatalf("pass %d: the failed step must fail the pass", pass)
+				}
+				stored := getGateway(t, base, gw)
+				ready := meta.FindStatusCondition(stored.Status.Conditions, v1alpha1.ConditionReady)
+				if ready == nil || ready.Status == metav1.ConditionTrue || stored.Status.Phase == v1alpha1.PhaseRunning {
+					t.Errorf("pass %d: stored Ready = %+v, phase %q with no Deployment; want not Ready and not Running",
+						pass, ready, stored.Status.Phase)
+				}
+			}
+		})
+	}
+}
+
+func TestGatewayReconcile_APluginHoldWithAFailedServiceAccountReportsNoRollout(t *testing.T) {
+	const a, b = `{"version":3,"name":"a"}`, `{"version":3,"name":"b"}`
+	sumA := hash.SHA256Hex([]byte(a))
+	gw := servingGateway(sumA, convergedImage)
+	gw.Generation, gw.Status.ObservedGeneration = 1, 1
+	gw.Spec.Plugins = &v1alpha1.PluginsSpec{Sources: []v1alpha1.PluginSource{
+		{ConfigMapRef: &v1alpha1.ConfigMapKeyRef{Name: "plugins-a", Key: "auth.so"}},
+	}}
+	base := fakeClientBuilder().WithObjects(gw, settledDeployment(gw, sumA)).WithStatusSubresource(gw).Build().(client.WithWatch)
+	r := newTestGatewayReconciler(base, renderOf(b), &mockValidator{})
+	r.Client = failingServiceAccountCreates(base)
+
+	if err := reconcileGateway(t, r, gw); err == nil {
+		t.Fatal("the failed ServiceAccount step must fail the pass")
+	}
+	if cond := meta.FindStatusCondition(getGateway(t, base, gw).Status.Conditions, v1alpha1.ConditionProgressing); condTrue(cond) {
+		t.Errorf("Progressing = %+v, want no rollout reported while the Deployment is held", cond)
+	}
+}
