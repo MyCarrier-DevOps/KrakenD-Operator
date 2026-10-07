@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -856,5 +857,66 @@ func TestNewPolicyRateLimiter_CapsBackoffAtFiveMinutes(t *testing.T) {
 	}
 	if delay != 5*time.Minute {
 		t.Fatalf("delay after 30 failures = %v, want the 5m cap", delay)
+	}
+}
+
+func TestPolicyReconcile_ThePolicyInvalidMessageIsBounded(t *testing.T) {
+	policy := policyInRange()
+	var lines []string
+	for i := range 400 {
+		lines = append(lines, fmt.Sprintf("- at '/endpoints/0/backend/0/extra_config/%d': got string, want integer", i))
+	}
+	checker := &stubPolicyChecker{verdict: configcheck.Verdict{Output: strings.Join(lines, "\n")}}
+	c := fakeClientBuilder().WithObjects(policy).WithStatusSubresource(policy).Build()
+	rec := fakeRecorder()
+	r := &KrakenDBackendPolicyReconciler{Client: c, Scheme: testScheme(), Recorder: rec, Checker: checker}
+
+	if _, err := r.Reconcile(context.Background(),
+		ctrl.Request{NamespacedName: client.ObjectKeyFromObject(policy)}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var stored v1alpha1.KrakenDBackendPolicy
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(policy), &stored); err != nil {
+		t.Fatal(err)
+	}
+	ready := meta.FindStatusCondition(stored.Status.Conditions, v1alpha1.ConditionReady)
+	if ready == nil || ready.Reason != v1alpha1.ReasonPolicyInvalid {
+		t.Fatalf("Ready = %+v, want PolicyInvalid", ready)
+	}
+	if len(ready.Message) > maxConditionMessageBytes {
+		t.Errorf("message is %d bytes, want at most %d", len(ready.Message), maxConditionMessageBytes)
+	}
+	if !strings.HasPrefix(ready.Message, "fails krakend check on its own: ") {
+		t.Errorf("message = %.80q, want it to begin with the verdict's lead", ready.Message)
+	}
+	events := drainEvents(rec)
+	if len(events) != 1 || len(events[0]) > maxConditionMessageBytes+len("Warning PolicyInvalid ") {
+		t.Errorf("events = %d, want one bounded Warning", len(events))
+	}
+}
+
+func TestPolicyReconcile_AFieldOutOfRangeRunsNoKrakendCheck(t *testing.T) {
+	policy := policyInRange()
+	policy.Spec.CircuitBreaker.MaxErrors = 0
+	checker := &stubPolicyChecker{verdict: configcheck.Verdict{Output: "krakend says no"}}
+	c := fakeClientBuilder().WithObjects(policy).WithStatusSubresource(policy).Build()
+	r := &KrakenDBackendPolicyReconciler{Client: c, Scheme: testScheme(), Recorder: fakeRecorder(), Checker: checker}
+
+	if _, err := r.Reconcile(context.Background(),
+		ctrl.Request{NamespacedName: client.ObjectKeyFromObject(policy)}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var stored v1alpha1.KrakenDBackendPolicy
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(policy), &stored); err != nil {
+		t.Fatal(err)
+	}
+	ready := meta.FindStatusCondition(stored.Status.Conditions, v1alpha1.ConditionReady)
+	if ready == nil || ready.Reason != "InvalidCircuitBreaker" {
+		t.Errorf("Ready = %+v, want InvalidCircuitBreaker", ready)
+	}
+	if checker.calls != 0 {
+		t.Errorf("krakend check ran %d times for a policy with a field out of range, want 0", checker.calls)
 	}
 }
