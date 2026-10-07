@@ -227,7 +227,8 @@ func (t *Telemetry) otlpProtocol(signal string) (string, error) {
 	default:
 		return "", fmt.Errorf("OTEL_%s_EXPORTER=%q is not supported: want otlp or none", signal, exporter)
 	}
-	if os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") == "" && os.Getenv("OTEL_EXPORTER_OTLP_"+signal+"_ENDPOINT") == "" {
+	if strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")) == "" &&
+		strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_"+signal+"_ENDPOINT")) == "" {
 		return "", nil
 	}
 	protocol := cmp.Or(os.Getenv("OTEL_EXPORTER_OTLP_"+signal+"_PROTOCOL"),
