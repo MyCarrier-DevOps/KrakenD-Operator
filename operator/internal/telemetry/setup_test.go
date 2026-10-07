@@ -304,3 +304,38 @@ func TestSetup_ReadsTheHeaderAndEndpointVariablesAsTheExportersDo(t *testing.T) 
 		})
 	}
 }
+
+// An endpoint with a password in it that the exporters cannot read must not be
+// printed either: they log the value they failed to parse. The signal is not
+// exported, and the warning names the variable, never its value.
+func TestSetup_AMalformedEndpointNeverReachesTheOutput(t *testing.T) {
+	const secret = "pw-s3cret"
+	for _, tc := range []struct{ name, value string }{
+		{"an invalid escape", "http://user:" + secret + "@127.0.0.1:1/%zz"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cleanOTelEnv(t)
+			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", tc.value)
+			diagnostics := captureOTelDiagnostics(t)
+			var out bytes.Buffer
+
+			tel := setup(t, &out)
+			tel.Logger.Info("started")
+
+			for name, written := range map[string]string{
+				"the OpenTelemetry diagnostics": diagnostics.String(), "stdout": out.String(),
+			} {
+				if strings.Contains(written, secret) {
+					t.Errorf("%s carry the endpoint's password:\n%s", name, written)
+				}
+			}
+			if tel.Warning == nil || !strings.Contains(tel.Warning.Error(), "OTEL_EXPORTER_OTLP_ENDPOINT") ||
+				strings.Contains(tel.Warning.Error(), secret) {
+				t.Errorf("Warning = %v, want the variable named without its value", tel.Warning)
+			}
+			if _, ok := tel.TracerProvider.(noop.TracerProvider); !ok {
+				t.Errorf("TracerProvider = %T, want the no-op provider", tel.TracerProvider)
+			}
+		})
+	}
+}
