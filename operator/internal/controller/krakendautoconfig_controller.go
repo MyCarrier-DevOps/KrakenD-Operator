@@ -872,6 +872,8 @@ func newAutoConfigRateLimiter() workqueue.TypedRateLimiter[reconcile.Request] {
 func (r *KrakenDAutoConfigReconciler) loadAllCUEDefinitions(
 	ctx context.Context, ac *v1alpha1.KrakenDAutoConfig,
 ) (defaultDefs, customDefs map[string]string, resourceVersion string, err error) {
+	ctx, span := tracing.Start(ctx, r.Tracer, "autoconfig.cue_definitions")
+	defer func() { tracing.End(span, err) }()
 	defaultDefs, resourceVersion, err = r.loadCUEDefinitions(ctx, ac.Namespace, defaultCUEDefinitionsConfigMap)
 	if err != nil {
 		if !errors.IsNotFound(err) {
