@@ -93,8 +93,8 @@ type validation struct {
 
 // wireValidation builds the pod's one config checker and the parts that use
 // it. The checker's slots bound concurrent krakend executions across the
-// gateway controller, the AutoConfig controller and the admission webhooks, so
-// they must share it.
+// gateway controller, the AutoConfig controller, the policy controller and the
+// admission webhooks, so they must share it.
 func wireValidation(
 	mgr ctrl.Manager, r renderer.Renderer, v renderer.Validator, operatorUsername string, inst instrumentation,
 ) validation {
