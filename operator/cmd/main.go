@@ -22,6 +22,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"time"
 
@@ -36,7 +37,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
-	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	gatewayv1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
@@ -52,6 +52,12 @@ import (
 // peaks at ~110 MB.
 const configCheckSlots = 3
 
+// krakendBinary is the krakend binary the image ships for validation.
+const krakendBinary = "/usr/local/bin/krakend"
+
+// telemetryFlushTimeout bounds the final flush of traces, metrics and logs.
+const telemetryFlushTimeout = 10 * time.Second
+
 var (
 	scheme   = runtime.NewScheme()
 	setupLog = ctrl.Log.WithName("setup")
@@ -65,6 +71,16 @@ func init() { //nolint:gochecknoinits // required by controller-runtime scheme r
 }
 
 func main() {
+	os.Exit(run())
+}
+
+// run runs the operator and returns its exit code. The telemetry is set up
+// before anything logs, and flushed on every return.
+func run() int {
+	// grpc-go requires its logger before any gRPC call, and the OTLP gRPC
+	// exporters Setup builds are gRPC clients. The logger is controller-runtime's,
+	// which logs through the pipeline once InstallLogging has run.
+	telemetry.InstallGRPCLogging(ctrl.Log.WithName("grpc"))
 	var metricsAddr string
 	var metricsCertPath, metricsCertName, metricsCertKey string
 	var webhookCertPath, webhookCertName, webhookCertKey string
@@ -76,6 +92,7 @@ func main() {
 	var operatorUsername string
 	var autoConfigMaxConcurrentReconciles int
 	var tlsOpts []func(*tls.Config)
+	var logs logFlags
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -103,13 +120,35 @@ func main() {
 	flag.IntVar(&autoConfigMaxConcurrentReconciles, "autoconfig-max-concurrent-reconciles", 4,
 		"How many KrakenDAutoConfigs reconcile at once. Each reconcile fetches its OpenAPI spec over the network; "+
 			"values below 1 mean 1.")
-	opts := zap.Options{
-		Development: true,
-	}
-	opts.BindFlags(flag.CommandLine)
+	logs.bind(flag.CommandLine)
 	flag.Parse()
 
-	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+	level, format, ignored, err := logs.resolve()
+	if err != nil {
+		// No log pipeline exists yet.
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
+	tel, err := telemetry.Setup(context.Background(), telemetryConfig(level, format))
+	if err != nil {
+		// The log pipeline is what failed to start.
+		fmt.Fprintln(os.Stderr, "setting up telemetry:", err)
+		return 1
+	}
+	defer flushTelemetry(tel, telemetryFlushTimeout, os.Stderr)
+	telemetry.InstallLogging(tel.Logger, tel.Diagnostics)
+	setupLog.Info("starting the operator", "version", version)
+	if tel.Warning != nil {
+		setupLog.Error(tel.Warning, "ignoring part of the telemetry configuration")
+	}
+	if len(ignored) > 0 {
+		setupLog.Info("ignoring deprecated logging flags", "flags", ignored)
+	}
+	inst, err := newInstrumentation(tel)
+	if err != nil {
+		setupLog.Error(err, "unable to create the operator's metrics")
+		return 1
+	}
 
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
 	// due to its vulnerabilities. More specifically, disabling http/2 will
@@ -140,11 +179,12 @@ func main() {
 		)
 		if err := checkServingFiles(webhookCertPath, webhookCertName, webhookCertKey); err != nil {
 			setupLog.Error(err, "Webhook certificate files are not readable")
-			os.Exit(1)
+			return 1
 		}
 	}
-	webhookServer := webhook.NewServer(
-		webhookServerOptions(enableWebhooks, webhookCertPath, webhookCertName, webhookCertKey, tlsOpts))
+	webhookServer := telemetry.TraceWebhookServer(webhook.NewServer(
+		webhookServerOptions(enableWebhooks, webhookCertPath, webhookCertName, webhookCertKey, tlsOpts)),
+		tel.TracerProvider)
 
 	// Metrics endpoint is enabled in 'config/default/kustomization.yaml'. More info:
 	// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.21.0/pkg/metrics/server
@@ -157,14 +197,21 @@ func main() {
 		)
 		if err := checkServingFiles(metricsCertPath, metricsCertName, metricsCertKey); err != nil {
 			setupLog.Error(err, "Metrics certificate files are not readable")
-			os.Exit(1)
+			return 1
 		}
 	}
 	metricsOptions := metricsServerOptions(
 		metricsAddr, secureMetrics, metricsCertPath, metricsCertName, metricsCertKey, tlsOpts)
 
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
-		Scheme: scheme,
+	restConfig, err := ctrl.GetConfig()
+	if err != nil {
+		setupLog.Error(err, "unable to load the Kubernetes client configuration")
+		return 1
+	}
+	telemetry.TraceKubeAPI(restConfig, tel.TracerProvider)
+	mgr, err := ctrl.NewManager(restConfig, ctrl.Options{
+		Scheme:    scheme,
+		NewClient: newManagerClient,
 		Client: client.Options{
 			Cache: &client.CacheOptions{DisableFor: controller.UncachedObjects()},
 		},
@@ -188,19 +235,16 @@ func main() {
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
-		os.Exit(1)
+		return 1
 	}
 
 	krakendRenderer := renderer.New(renderer.Options{})
-	krakendValidator := renderer.NewValidator(renderer.ValidatorOptions{
-		Executor:   renderer.NewKrakenDExecutor("/usr/local/bin/krakend"),
-		BinaryPath: "/usr/local/bin/krakend",
-	})
+	krakendValidator := newKrakenDValidator(krakendBinary, inst.Tracer)
 
 	// One checker for the whole pod: its slots bound concurrent krakend
 	// executions across the gateway controller, the AutoConfig controller and
 	// the admission webhooks.
-	wired := wireValidation(mgr, krakendRenderer, krakendValidator, operatorUsername, instrumentation{})
+	wired := wireValidation(mgr, krakendRenderer, krakendValidator, operatorUsername, inst)
 	wired.AutoConfig.MaxConcurrentReconciles = autoConfigMaxConcurrentReconciles
 	if enableWebhooks && operatorUsername == "" {
 		setupLog.Info("no operator username: every KrakenDEndpoint write gets the admission render check")
@@ -211,51 +255,44 @@ func main() {
 
 	if err := wired.Gateway.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "KrakenDGateway")
-		os.Exit(1)
+		return 1
 	}
-	if err := (&controller.KrakenDEndpointReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("krakendendpoint-controller"),
-	}).SetupWithManager(mgr); err != nil {
+	endpoints, policies := wireReferenceControllers(mgr, inst)
+	if err := endpoints.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "KrakenDEndpoint")
-		os.Exit(1)
+		return 1
 	}
-	if err := (&controller.KrakenDBackendPolicyReconciler{
-		Client:    mgr.GetClient(),
-		Scheme:    mgr.GetScheme(),
-		Recorder:  mgr.GetEventRecorderFor("krakendbackendpolicy-controller"),
-		APIReader: mgr.GetAPIReader(),
-	}).SetupWithManager(mgr); err != nil {
+	if err := policies.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "KrakenDBackendPolicy")
-		os.Exit(1)
+		return 1
 	}
 	if err := wired.AutoConfig.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "KrakenDAutoConfig")
-		os.Exit(1)
+		return 1
 	}
 	if err := registerWebhooks(mgr, enableWebhooks, func(m ctrl.Manager) error {
 		return webhooksetup.SetupWebhooks(m, wired.Validators)
 	}); err != nil {
 		setupLog.Error(err, "unable to set up webhooks")
-		os.Exit(1)
+		return 1
 	}
 	// +kubebuilder:scaffold:builder
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")
-		os.Exit(1)
+		return 1
 	}
 	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up ready check")
-		os.Exit(1)
+		return 1
 	}
 
 	setupLog.Info("starting manager")
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		setupLog.Error(err, "problem running manager")
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 
 // flushTelemetry flushes the traces, metrics and logs still buffered, waiting
@@ -265,9 +302,7 @@ func flushTelemetry(tel *telemetry.Telemetry, timeout time.Duration, stderr io.W
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	if err := tel.Shutdown(ctx); err != nil {
-		fmt.Fprintln(stderr, "flushing telemetry:", err)
+		// A logger of its own: nothing is left to report a failed write to stderr.
+		log.New(stderr, "", 0).Println("flushing telemetry:", err)
 	}
 }
-
-// run runs the operator. It is a stub: it does nothing.
-func run() int { return 0 }
