@@ -32,9 +32,9 @@ var (
 
 	configValidationFailures = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "krakend_operator_config_validation_failures_total",
-		Help: "Fresh rejections of a gateway root, a backend policy or an endpoint checked on its own: " +
-			"a rejection counts once per change of what the gateway controller checks, not once per reconcile, " +
-			"and again for content that comes back, the same policy on another gateway and after a restart",
+		Help: "Fresh rejections of a gateway root, a backend policy or an endpoint checked on its own, " +
+			"counted once per change of what the gateway controller checks, not once per reconcile; " +
+			"content that comes back, the same policy on another gateway and an operator restart each count again",
 	})
 
 	rollingRestarts = prometheus.NewCounter(prometheus.CounterOpts{
