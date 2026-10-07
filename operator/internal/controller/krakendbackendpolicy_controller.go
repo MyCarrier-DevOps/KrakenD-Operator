@@ -119,9 +119,9 @@ func (r *KrakenDBackendPolicyReconciler) Reconcile(
 
 	policy.Status.ReferencedBy = refCount
 
-	// Ready summarizes the policy's own fields; it replaces PolicyValid.
+	// Ready summarizes the policy's own verdict; it replaces PolicyValid.
 	prevReady := meta.FindStatusCondition(origConditions, v1alpha1.ConditionReady)
-	ready := policyReadyCondition(&policy)
+	ready, checkErr := r.policyReady(ctx, &policy)
 	meta.SetStatusCondition(&policy.Status.Conditions, ready)
 	meta.RemoveStatusCondition(&policy.Status.Conditions, legacyConditionPolicyValid)
 	policy.Status.ObservedGeneration = policy.Generation
@@ -140,7 +140,7 @@ func (r *KrakenDBackendPolicyReconciler) Reconcile(
 	}
 
 	log.V(1).Info("policy reconciled", "referencedBy", refCount)
-	return ctrl.Result{}, nil
+	return ctrl.Result{}, checkErr
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -273,8 +273,33 @@ func (r *KrakenDBackendPolicyReconciler) endpointPolicyHandler() handler.EventHa
 // removes it from policies written by earlier versions.
 const legacyConditionPolicyValid = "PolicyValid"
 
-// policyReadyCondition returns the policy's Ready condition: False with the
-// validatePolicy reason when a field is out of range, True otherwise.
+// policyReady returns the policy's Ready condition. A field out of range is
+// False with the validatePolicy reason. Otherwise the policy is rendered and
+// checked on its own: False with reason PolicyInvalid and the policy's own
+// krakend output when it fails, True when it passes.
+func (r *KrakenDBackendPolicyReconciler) policyReady(
+	ctx context.Context, policy *v1alpha1.KrakenDBackendPolicy,
+) (metav1.Condition, error) {
+	cond := policyReadyCondition(policy)
+	if cond.Status != metav1.ConditionTrue || r.Checker == nil {
+		return cond, nil
+	}
+	v, err := withCheckSlot(ctx, r.Tracer, r.CheckSlots, func() (configcheck.Verdict, error) {
+		return r.Checker.CheckPolicy(ctx, policy, r.Memo)
+	})
+	if err != nil {
+		return cond, fmt.Errorf("checking policy: %w", err)
+	}
+	if !v.OK {
+		cond.Status, cond.Reason = metav1.ConditionFalse, v1alpha1.ReasonPolicyInvalid
+		cond.Message = truncateMessage("fails krakend check on its own: " + v.Excerpt(exclusionDetailLimit))
+	}
+	return cond, nil
+}
+
+// policyReadyCondition returns the policy's Ready condition from its typed
+// fields: False with the validatePolicy reason when one is out of range, True
+// otherwise.
 func policyReadyCondition(policy *v1alpha1.KrakenDBackendPolicy) metav1.Condition {
 	cond := metav1.Condition{
 		Type:               v1alpha1.ConditionReady,
