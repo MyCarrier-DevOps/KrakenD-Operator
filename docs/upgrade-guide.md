@@ -1427,6 +1427,10 @@ the Dragonfly, ExternalSecret and VirtualService objects it creates:
 - an edited or deleted VirtualService or ExternalSecret is restored at once;
 - Dragonfly becoming ready is reflected in `DragonflyReady` at once.
 
+The watch is metadata only: the operator caches each object's name, labels
+and owner references, not its spec, so memory does not grow with the size of
+the Dragonfly, ExternalSecret and VirtualService objects in the cluster.
+
 **A CRD installed after the operator started is not watched until the
 operator restarts.** The operator logs `optional CRD not installed at
 startup` for each such kind. Its objects are still created and corrected on
