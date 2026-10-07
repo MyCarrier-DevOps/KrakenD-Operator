@@ -673,3 +673,16 @@ func TestReconcilers_EachStartsATraceNamingItsObject(t *testing.T) {
 		})
 	}
 }
+
+// The spans of an endpoint write and deletion name the endpoint.
+func TestAutoConfigReconcile_TheSpansOfAWriteNameTheEndpoint(t *testing.T) {
+	spans := reconcileACTraced(t)
+
+	for span, want := range map[string]string{
+		"autoconfig.write_endpoint": "test-ac-listusers", "autoconfig.delete_endpoint": "test-ac-old-endpoint",
+	} {
+		if got := attrOf(spans.One(t, span), "k8s.object.name"); got != want {
+			t.Errorf("%s k8s.object.name = %q, want %q", span, got, want)
+		}
+	}
+}
