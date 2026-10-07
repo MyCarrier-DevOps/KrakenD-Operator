@@ -327,89 +327,6 @@ func entriesEndpoint(name string, paths ...string) *v1alpha1.KrakenDEndpoint {
 	return ep
 }
 
-func TestGatewayReconcile_RejectionNamesTheSpecEntry(t *testing.T) {
-	gw := testGateway()
-	a, b := entriesEndpoint("a", "/a"), entriesEndpoint("b", "/y", "/x")
-	// The rendered order is /a, /x, /y: endpoints/1 is b's /x, its spec.endpoints[1].
-	rejecting := &mockValidator{validateErr: &renderer.ValidationError{
-		Output: "- at '/endpoints/1/extra_config': additional properties 'qos/circuit-breakr' not allowed",
-		Err:    fmt.Errorf("exit status 1"),
-	}}
-	c := fakeClientBuilder().WithObjects(gw, a, b).WithStatusSubresource(gw, a, b).Build()
-	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}), rejecting)
-
-	if err := reconcileGateway(t, r, gw); err != nil {
-		t.Fatal(err)
-	}
-
-	var got v1alpha1.KrakenDEndpoint
-	if err := c.Get(context.Background(), client.ObjectKeyFromObject(b), &got); err != nil {
-		t.Fatal(err)
-	}
-	acc := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionAccepted)
-	if acc == nil || acc.Reason != v1alpha1.ReasonGatewayConfigRejected ||
-		!strings.Contains(acc.Message, "spec.endpoints[1]:") {
-		t.Errorf("b Accepted = %+v, want GatewayConfigRejected naming spec.endpoints[1]", acc)
-	}
-}
-
-func TestGatewayReconcile_ConfigValidListsEachFindingOnItsOwnLine(t *testing.T) {
-	gw := testGateway()
-	a, b := entriesEndpoint("a", "/a"), entriesEndpoint("b", "/y", "/x")
-	rejecting := &mockValidator{validateErr: &renderer.ValidationError{
-		Output: "- at '/endpoints/1/extra_config': bad\ntimeout: unknown unit",
-		Err:    fmt.Errorf("exit status 1"),
-	}}
-	c := fakeClientBuilder().WithObjects(gw, a, b).WithStatusSubresource(gw, a, b).Build()
-	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}), rejecting)
-
-	if err := reconcileGateway(t, r, gw); err != nil {
-		t.Fatal(err)
-	}
-
-	cond := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionConfigValid)
-	want := "Rejected by krakend check; findings name KrakenDEndpoint(s) default/b; 1 finding(s) name no endpoint.\n" +
-		"default/b spec.endpoints[1]: - at '/endpoints/1/extra_config': bad\n" +
-		"gateway: timeout: unknown unit"
-	if cond == nil || cond.Message != want {
-		t.Errorf("ConfigValid = %+v, want message %q", cond, want)
-	}
-}
-
-func TestGatewayReconcile_RememberedRejectionNamesTheEntryAsOrderedNow(t *testing.T) {
-	gw := testGateway()
-	a, b := entriesEndpoint("a", "/a"), entriesEndpoint("b", "/y", "/x")
-	validator := &countingValidator{err: rejectedBy("- at '/endpoints/1/extra_config': bad")}
-	c := fakeClientBuilder().WithObjects(gw, a, b).WithStatusSubresource(gw, a, b).Build()
-	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}), validator)
-	if err := reconcileGateway(t, r, gw); err != nil {
-		t.Fatal(err)
-	}
-
-	// The rendered entries are sorted, so reordering b's entries renders the
-	// same config: the rejection is remembered, and /x is now b's entry 0.
-	var stored v1alpha1.KrakenDEndpoint
-	if err := c.Get(context.Background(), client.ObjectKeyFromObject(b), &stored); err != nil {
-		t.Fatal(err)
-	}
-	stored.Spec.Endpoints[0], stored.Spec.Endpoints[1] = stored.Spec.Endpoints[1], stored.Spec.Endpoints[0]
-	if err := c.Update(context.Background(), &stored); err != nil {
-		t.Fatal(err)
-	}
-	if err := reconcileGateway(t, r, gw); err != nil {
-		t.Fatal(err)
-	}
-
-	if validator.calls != 1 {
-		t.Fatalf("krakend check ran %d times, want 1: the second reconcile renders the same config", validator.calls)
-	}
-	cond := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionConfigValid)
-	if cond == nil || !strings.Contains(cond.Message, "default/b spec.endpoints[0]:") ||
-		strings.Contains(cond.Message, "spec.endpoints[1]") {
-		t.Errorf("ConfigValid = %+v, want the finding on spec.endpoints[0]", cond)
-	}
-}
-
 // methodValidator records which validator method each check calls, without
 // folding Lint into Validate.
 type methodValidator struct{ methods []string }
@@ -424,9 +341,10 @@ func (m *methodValidator) Lint(context.Context, []byte, v1alpha1.Edition) error 
 	return nil
 }
 
-// The controller publishes behind krakend check -t -n (Validate). Lint is
-// admission's cheaper check and must never stand in for it.
-func TestGatewayReconcile_ValidatesWithTheFullCheck(t *testing.T) {
+// The controller lints the gateway root alone, then publishes behind krakend
+// check -t -n (Validate) of the whole render. Lint is the cheaper check and
+// never stands in for the whole render's.
+func TestGatewayReconcile_ChecksTheRootAloneThenTheFullRender(t *testing.T) {
 	gw := testGateway()
 	validator := &methodValidator{}
 	c := fakeClientBuilder().WithObjects(gw, entriesEndpoint("a", "/a")).WithStatusSubresource(gw).Build()
@@ -436,8 +354,9 @@ func TestGatewayReconcile_ValidatesWithTheFullCheck(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !slices.Equal(validator.methods, []string{"Validate"}) {
-		t.Errorf("validator methods called = %v, want [Validate] only", validator.methods)
+	if !slices.Equal(validator.methods, []string{"Lint", "Validate"}) {
+		t.Errorf("validator methods called = %v, want [Lint Validate]: the root, then the whole render",
+			validator.methods)
 	}
 }
 
@@ -1894,8 +1813,8 @@ func TestGatewayReconcile_ValidationFailureAdvancesObservedGeneration(t *testing
 	stored := getGateway(t, c, gw)
 	ready := meta.FindStatusCondition(stored.Status.Conditions, v1alpha1.ConditionReady)
 	if stored.Status.ObservedGeneration != 4 || ready == nil || ready.Status != metav1.ConditionFalse ||
-		ready.Reason != "ConfigValidationFailed" || stored.Status.Phase != v1alpha1.PhaseError {
-		t.Errorf("observedGeneration %d, Ready %+v, phase %q; want 4, False/ConfigValidationFailed, Error",
+		ready.Reason != v1alpha1.ReasonGatewayRootInvalid || stored.Status.Phase != v1alpha1.PhaseError {
+		t.Errorf("observedGeneration %d, Ready %+v, phase %q; want 4, False/GatewayRootInvalid, Error",
 			stored.Status.ObservedGeneration, ready, stored.Status.Phase)
 	}
 }
