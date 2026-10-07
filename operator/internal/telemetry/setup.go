@@ -32,6 +32,8 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	otellog "go.opentelemetry.io/otel/log"
 	"go.opentelemetry.io/otel/metric"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
@@ -40,6 +42,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 )
 
 // ServiceName is the service.name the operator reports unless
@@ -122,8 +125,24 @@ func (t *Telemetry) Shutdown(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-func (t *Telemetry) setupTraces(_ context.Context, _ *resource.Resource) error {
-	tp := sdktrace.NewTracerProvider()
+func (t *Telemetry) setupTraces(ctx context.Context, res *resource.Resource) error {
+	protocol, err := otlpProtocol("TRACES")
+	if err != nil || protocol == "" {
+		t.TracerProvider = noop.NewTracerProvider()
+		return err
+	}
+	var exporter sdktrace.SpanExporter
+	if protocol == protocolGRPC {
+		exporter, err = otlptracegrpc.New(ctx)
+	} else {
+		exporter, err = otlptracehttp.New(ctx)
+	}
+	if err != nil {
+		return fmt.Errorf("creating the OTLP trace exporter: %w", err)
+	}
+	// The sampler comes from OTEL_TRACES_SAMPLER and OTEL_TRACES_SAMPLER_ARG,
+	// parent-based always-on by default.
+	tp := sdktrace.NewTracerProvider(sdktrace.WithResource(res), sdktrace.WithBatcher(exporter))
 	t.TracerProvider = tp
 	t.shutdown = append(t.shutdown, tp.Shutdown)
 	return nil
