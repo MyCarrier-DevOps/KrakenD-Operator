@@ -370,9 +370,9 @@ func TestRender_ASameShapeDuplicateTheRouterRefusesKeepsNothingOut(t *testing.T)
 }
 
 // TestRender_AnEntryRecordsEveryOlderEntryItClashesWith pins that a losing
-// entry is recorded once per older endpoint it clashes with, served or left
-// out, each with that clash's own detail: E's GET /a/{name}/x clashes with
-// s's GET /a/{id} and with e's GET /a/{id}/y.
+// entry is recorded once per older served endpoint it clashes with, each with
+// that clash's own detail: big's GET /a/{name}/x clashes with s's GET /a/{id}
+// and with e's GET /a/{id}/y, both served.
 func TestRender_AnEntryRecordsEveryOlderEntryItClashesWith(t *testing.T) {
 	in := RenderInput{Gateway: routedGateway(v1alpha1.EditionCE, nil), Endpoints: []v1alpha1.KrakenDEndpoint{
 		routed("s", 0, "GET", "/a/{id}"), routed("e", 1, "GET", "/a/{id}/y"), routed("big", 2, "GET", "/a/{name}/x"),
