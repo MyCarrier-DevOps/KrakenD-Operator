@@ -22,7 +22,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
@@ -97,5 +99,27 @@ func TestEndpointAdmission_AClashTheGatewayAlreadyHasIsNotTheWrites(t *testing.T
 
 	if resp := review(t, v, "alice", updated, stored); !resp.Allowed {
 		t.Errorf("an update that keeps a stored clash was denied: %+v", resp.Result)
+	}
+}
+
+func TestEndpointAdmission_ACreateRanksAfterEveryStoredEndpoint(t *testing.T) {
+	var ranked []string
+	chk := &scriptedChecker{conflicts: func(_ *v1alpha1.KrakenDGateway, replace []v1alpha1.KrakenDEndpoint) configcheck.RouteConflicts {
+		for _, ep := range replace {
+			ranked = append(ranked, ep.CreationTimestamp.UTC().Format("2006"))
+		}
+		return configcheck.RouteConflicts{}
+	}}
+	stored := testEndpoint("kept", "/b")
+	stored.CreationTimestamp = metav1.NewTime(time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC))
+	v := &EndpointValidator{Client: fakeClient(testGateway(), stored), Checker: chk}
+
+	review(t, v, "alice", testEndpoint("new", "/a"), nil)
+	updated := stored.DeepCopy()
+	updated.Spec.Endpoints[0].Backends[0].URLPattern = "/changed"
+	review(t, v, "alice", updated, stored)
+
+	if !slices.Equal(ranked, []string{"9999", "2026"}) {
+		t.Errorf("rendered creation years = %v, want a create after every stored endpoint (9999) and an update at its own (2026)", ranked)
 	}
 }
