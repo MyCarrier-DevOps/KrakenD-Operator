@@ -412,8 +412,15 @@ func (r *KrakenDGatewayReconciler) forgetGateway(key types.NamespacedName) {
 
 // crdAvailable checks whether the given GVK is registered in the cluster's
 // API discovery. Returns (false, nil) when the CRD is simply not installed,
-// and (false, err) for transient or unexpected errors.
-func (r *KrakenDGatewayReconciler) crdAvailable(gvk schema.GroupVersionKind) (bool, error) {
+// and (false, err) for transient or unexpected errors. The lookup is a
+// k8s.discovery span: the discovery request it may send carries no context,
+// so no client span records it.
+func (r *KrakenDGatewayReconciler) crdAvailable(
+	ctx context.Context, gvk schema.GroupVersionKind,
+) (_ bool, retErr error) {
+	_, span := tracing.Start(ctx, r.Tracer, "k8s.discovery",
+		trace.WithAttributes(attribute.String("k8s.discovery.kind", gvk.GroupKind().String())))
+	defer func() { tracing.End(span, retErr) }()
 	ok, err := kindInstalled(r.RESTMapper(), gvk)
 	if err != nil {
 		return false, fmt.Errorf("checking CRD availability for %s: %w", gvk, err)
@@ -466,7 +473,7 @@ func (r *KrakenDGatewayReconciler) detectDragonflyState(
 	defer span.End()
 
 	log := logf.FromContext(ctx)
-	available, err := r.crdAvailable(dragonflyGVK)
+	available, err := r.crdAvailable(ctx, dragonflyGVK)
 	if err != nil {
 		log.Error(err, "failed to check Dragonfly CRD availability")
 		return nil

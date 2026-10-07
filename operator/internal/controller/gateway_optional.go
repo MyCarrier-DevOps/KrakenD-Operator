@@ -121,7 +121,7 @@ func (r *KrakenDGatewayReconciler) deleteOptionalIfControlled(
 	if r.absentKinds.absent(gvk, now) {
 		return nil
 	}
-	available, err := r.crdAvailable(gvk)
+	available, err := r.crdAvailable(ctx, gvk)
 	if err != nil {
 		return fmt.Errorf("checking %s CRD: %w", gvk.Kind, err)
 	}
@@ -179,7 +179,7 @@ func (r *KrakenDGatewayReconciler) applyOptional(
 	ctx context.Context, gw *v1alpha1.KrakenDGateway, gvk schema.GroupVersionKind, name string,
 	build func(u *unstructured.Unstructured),
 ) (u *unstructured.Unstructured, applied bool, err error) {
-	available, err := r.crdAvailable(gvk)
+	available, err := r.crdAvailable(ctx, gvk)
 	if err != nil {
 		return nil, false, fmt.Errorf("checking %s CRD: %w", gvk.Kind, err)
 	}
