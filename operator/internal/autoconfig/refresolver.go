@@ -354,7 +354,7 @@ func (r *refResolver) resolveExternal(ref, base string, role refRole) (string, e
 		}
 		parsed, err := decodeSpec(fetched.Data)
 		if err != nil {
-			return "", &fatalRefError{fmt.Errorf("decoding %s: %w", absolute, err)}
+			return "", &fatalRefError{fmt.Errorf("decoding %s: %w", RedactURL(absolute), err)}
 		}
 		doc = parsed
 		r.docs[absolute] = doc
