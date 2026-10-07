@@ -253,3 +253,34 @@ func TestGatewayReconcile_KeepingTheAppliedConfigVerifiesItInTheConfigStage(t *t
 
 	rec.Ended().RequireChild(t, "gateway.config", "gateway.verify_configmap")
 }
+
+// Each child of an optional feature is applied inside the infrastructure
+// stage: the autoscaler, and the Dragonfly, license ExternalSecret and Istio
+// VirtualService whose CRDs are installed.
+func TestGatewayReconcile_SpansEachOptionalChildUnderTheInfrastructureStage(t *testing.T) {
+	gw := testGateway()
+	gw.Spec.Autoscaling = &v1alpha1.AutoscalingSpec{MaxReplicas: 5}
+	gw.Spec.Dragonfly = &v1alpha1.DragonflySpec{Enabled: true}
+	gw.Spec.Edition = v1alpha1.EditionEE
+	gw.Spec.License = &v1alpha1.LicenseConfig{ExternalSecret: v1alpha1.ExternalSecretLicenseConfig{
+		Enabled:        true,
+		SecretStoreRef: v1alpha1.SecretStoreRef{Name: "vault", Kind: "ClusterSecretStore"},
+		RemoteRef:      v1alpha1.ExternalRemoteRef{Key: "krakend/license"},
+	}}
+	gw.Spec.Istio = &v1alpha1.IstioSpec{
+		Enabled: true, Hosts: []string{"api.example.com"}, Gateways: []string{"istio-system/gw"},
+	}
+	c := fakeClientBuilder().WithRESTMapper(optionalCRDMapper(optionalOwnedGVKs...)).
+		WithObjects(gw).WithStatusSubresource(gw).Build()
+	rec := tracingtest.New(t)
+	if err := reconcileGateway(t, tracedGatewayReconciler(c, krakendValidator(rec), rec), gw); err != nil {
+		t.Fatal(err)
+	}
+	spans := rec.Ended()
+
+	for _, child := range []string{"apply hpa", "apply dragonfly", "apply externalsecret", "apply virtualservice"} {
+		t.Run(child, func(t *testing.T) {
+			spans.RequireChild(t, "gateway.infrastructure", child)
+		})
+	}
+}
