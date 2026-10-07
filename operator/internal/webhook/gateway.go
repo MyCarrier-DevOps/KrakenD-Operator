@@ -1102,6 +1102,9 @@ func checkGatewayRender(ctx context.Context, c client.Reader, chk ConfigChecker,
 	if err != nil {
 		return nil, unavailable(err)
 	}
+	if len(served) == 0 {
+		return nil, nil
+	}
 	group, err := chk.CheckGroup(ctx, configcheck.Group{Gateway: gw, Endpoints: served, CEFallback: ceFallback}, memo)
 	now := configcheck.EndpointUnit{Gateway: gw, CEFallback: ceFallback}
 	if old == nil {
