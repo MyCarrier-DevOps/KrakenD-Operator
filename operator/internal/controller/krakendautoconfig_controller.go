@@ -652,14 +652,16 @@ func (r *KrakenDAutoConfigReconciler) fetchSpec(
 	var notes []string
 	// Resolve external $refs (only possible with HTTP sources).
 	if ac.Spec.OpenAPI.URL != "" {
+		rctx, refs := tracing.Start(ctx, r.Tracer, "autoconfig.resolve_refs")
 		resolved, refNotes, resolveErr := autoconfig.ResolveExternalRefs(
-			ctx, fetchResult.Data, ac.Spec.OpenAPI.URL, r.Fetcher,
+			rctx, fetchResult.Data, ac.Spec.OpenAPI.URL, r.Fetcher,
 			autoconfig.FetchSource{
 				Auth:              ac.Spec.OpenAPI.Auth,
 				AllowClusterLocal: ac.Spec.OpenAPI.AllowClusterLocal,
 				Namespace:         ac.Namespace,
 			},
 		)
+		tracing.End(refs, resolveErr)
 		if resolveErr != nil {
 			return nil, nil, resolveErr
 		}
