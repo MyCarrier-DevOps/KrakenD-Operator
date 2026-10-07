@@ -170,34 +170,39 @@ var errNotControlled = stderrors.New("exists and the gateway does not control it
 type notControlledError struct {
 	kind, namespace, name string
 	controller            string
+	// consent are the labels that would hand the object over.
+	consent map[string]string
 }
 
 func (e *notControlledError) Error() string {
 	if e.controller != "" {
 		return fmt.Sprintf("%s %s/%s is controlled by %s", e.kind, e.namespace, e.name, e.controller)
 	}
-	return fmt.Sprintf("%s %s/%s has no controller and does not carry the gateway's labels",
-		e.kind, e.namespace, e.name)
+	return fmt.Sprintf("%s %s/%s has no controller and lacks the labels %s",
+		e.kind, e.namespace, e.name, labels.Set(e.consent))
 }
 
 func (e *notControlledError) Unwrap() error { return errNotControlled }
 
 // refuseUncontrolled returns a notControlledError when obj, as fetched, exists
 // and gw may not take it over. The gateway controls it, or it has no
-// controller and carries the gateway's selector labels, which only someone
-// who can write the object can set: that hands it over, as an object orphaned
-// by `kubectl delete --cascade=orphan` still carries them. It must run before
-// the builder, which sets those labels on every object.
-func refuseUncontrolled(gw *v1alpha1.KrakenDGateway, obj client.Object, kind string) error {
+// controller and carries the consent labels, which only someone who can write
+// the object can set: that hands it over, as an object orphaned by
+// `kubectl delete --cascade=orphan` still carries them. The consent labels are
+// the instance and managed-by labels the operator's own builder stamps on that
+// kind. It must run before the builder, which sets those labels on every object.
+func refuseUncontrolled(gw *v1alpha1.KrakenDGateway, obj client.Object, kind string, consent map[string]string) error {
 	if obj.GetResourceVersion() == "" || metav1.IsControlledBy(obj, gw) {
 		return nil
 	}
 	owner := metav1.GetControllerOf(obj)
-	handedOver := labels.SelectorFromSet(resources.SelectorLabels(gw)).Matches(labels.Set(obj.GetLabels()))
+	handedOver := labels.SelectorFromSet(consent).Matches(labels.Set(obj.GetLabels()))
 	if owner == nil && handedOver {
 		return nil
 	}
-	refused := &notControlledError{kind: kind, namespace: obj.GetNamespace(), name: obj.GetName()}
+	refused := &notControlledError{
+		kind: kind, namespace: obj.GetNamespace(), name: obj.GetName(), consent: consent,
+	}
 	if owner != nil {
 		refused.controller = owner.Kind + "/" + owner.Name
 	}
@@ -244,29 +249,30 @@ func (r *KrakenDGatewayReconciler) setResourcesControlled(gw *v1alpha1.KrakenDGa
 		named[i] = e.Error()
 	}
 	slices.Sort(named)
-	selector := labels.Set(resources.SelectorLabels(gw)).String()
 	r.setConditionWithEvent(gw, metav1.Condition{
 		Type:               v1alpha1.ConditionResourcesControlled,
 		Status:             metav1.ConditionFalse,
 		ObservedGeneration: gw.Generation,
 		Reason:             v1alpha1.ReasonResourceNotControlled,
-		Message: fmt.Sprintf("the gateway leaves existing objects with its name alone: %s. "+
-			"Rename the gateway, or give an object that has no controller the labels %s to hand it over",
-			strings.Join(named, "; "), selector),
+		Message: fmt.Sprintf("the gateway leaves alone existing objects it would write: %s. "+
+			"Rename the gateway, or hand over an object that has no controller by giving it the labels named for it",
+			strings.Join(named, "; ")),
 	})
 }
 
 // applyOwned creates or updates obj, which gw controls, with what build sets.
-// kind names obj in the error. An existing obj that gw may not take over
+// kind names obj in the error, and consent are the labels that hand an
+// existing obj over (see refuseUncontrolled). An existing obj that gw may not take over
 // (see refuseUncontrolled) is left as it is and a notControlledError returned.
 func (r *KrakenDGatewayReconciler) applyOwned(
-	ctx context.Context, gw *v1alpha1.KrakenDGateway, obj client.Object, kind string, build func(),
+	ctx context.Context, gw *v1alpha1.KrakenDGateway, obj client.Object, kind string, consent map[string]string,
+	build func(),
 ) (retErr error) {
 	ctx, span := tracing.Start(ctx, r.Tracer, "apply "+kind,
 		trace.WithAttributes(tracing.KeyName.String(obj.GetName())))
 	defer func() { tracing.End(span, retErr) }()
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, obj, func() error {
-		if err := refuseUncontrolled(gw, obj, kind); err != nil {
+		if err := refuseUncontrolled(gw, obj, kind, consent); err != nil {
 			return err
 		}
 		build()
@@ -283,7 +289,7 @@ func (r *KrakenDGatewayReconciler) applyOwned(
 // create.
 func (r *KrakenDGatewayReconciler) applyOptional(
 	ctx context.Context, gw *v1alpha1.KrakenDGateway, gvk schema.GroupVersionKind, name string,
-	build func(u *unstructured.Unstructured),
+	consent map[string]string, build func(u *unstructured.Unstructured),
 ) (u *unstructured.Unstructured, applied bool, err error) {
 	available, err := r.crdAvailable(ctx, gvk)
 	if err != nil {
@@ -297,7 +303,7 @@ func (r *KrakenDGatewayReconciler) applyOptional(
 	u.SetGroupVersionKind(gvk)
 	u.SetName(name)
 	u.SetNamespace(gw.Namespace)
-	if err := r.applyOwned(ctx, gw, u, strings.ToLower(gvk.Kind), func() { build(u) }); err != nil {
+	if err := r.applyOwned(ctx, gw, u, strings.ToLower(gvk.Kind), consent, func() { build(u) }); err != nil {
 		return nil, false, err
 	}
 	return u, true, nil
@@ -310,7 +316,7 @@ func (r *KrakenDGatewayReconciler) reconcileDragonfly(ctx context.Context, gw *v
 		// Without the CRD there is nothing to create: detectDragonflyState
 		// reports DragonflyReady=False/CRDNotInstalled.
 		df, applied, err := r.applyOptional(ctx, gw, dragonflyGVK, resources.DragonflyName(gw),
-			func(u *unstructured.Unstructured) { resources.BuildDragonfly(u, gw) })
+			resources.DragonflyConsentLabels(gw), func(u *unstructured.Unstructured) { resources.BuildDragonfly(u, gw) })
 		if applied {
 			r.recordDragonflyRunAsRootCondition(gw, df)
 		}
@@ -343,7 +349,7 @@ func (r *KrakenDGatewayReconciler) reconcileExternalSecret(ctx context.Context, 
 		// Without the CRD there is nothing to create: reconcileLicense reports
 		// LicenseSecretUnavailable=True/CRDNotInstalled.
 		_, _, err := r.applyOptional(ctx, gw, externalSecretGVK, resources.ExternalSecretName(gw),
-			func(u *unstructured.Unstructured) { resources.BuildExternalSecret(u, gw) })
+			resources.SelectorLabels(gw), func(u *unstructured.Unstructured) { resources.BuildExternalSecret(u, gw) })
 		return err
 	}
 	return r.deleteOptionalIfControlled(ctx, gw, externalSecretGVK, resources.ExternalSecretName(gw))
@@ -355,7 +361,7 @@ func (r *KrakenDGatewayReconciler) reconcileExternalSecret(ctx context.Context, 
 func (r *KrakenDGatewayReconciler) reconcileVirtualService(ctx context.Context, gw *v1alpha1.KrakenDGateway) error {
 	if gw.Spec.Istio != nil && gw.Spec.Istio.Enabled {
 		_, applied, err := r.applyOptional(ctx, gw, virtualServiceGVK, gw.Name,
-			func(u *unstructured.Unstructured) { resources.BuildVirtualService(u, gw) })
+			resources.SelectorLabels(gw), func(u *unstructured.Unstructured) { resources.BuildVirtualService(u, gw) })
 		switch {
 		case err != nil:
 			return err

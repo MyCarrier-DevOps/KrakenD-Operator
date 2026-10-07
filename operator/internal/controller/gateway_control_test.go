@@ -142,7 +142,7 @@ func TestApplyOptional_TakesOverOnlyWhatTheGatewayMayControl(t *testing.T) {
 			r := newTestGatewayReconciler(c, renderOutput("applied"), &mockValidator{})
 
 			_, applied, err := r.applyOptional(context.Background(), gw, virtualServiceGVK, gw.Name,
-				func(u *unstructured.Unstructured) { u.SetLabels(map[string]string{"built": "yes"}) })
+				resources.SelectorLabels(gw), func(u *unstructured.Unstructured) { u.SetLabels(map[string]string{"built": "yes"}) })
 
 			if got := errors.Is(err, errNotControlled); got != tc.refused {
 				t.Fatalf("errors.Is(err, errNotControlled) = %v (err = %v), want %v", got, err, tc.refused)

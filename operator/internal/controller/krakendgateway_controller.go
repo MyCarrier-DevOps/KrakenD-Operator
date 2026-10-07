@@ -1407,10 +1407,10 @@ func (r *KrakenDGatewayReconciler) reconcileCoreResources(
 	sa := &corev1.ServiceAccount{ObjectMeta: named}
 	svc := &corev1.Service{ObjectMeta: named}
 	pdb := &policyv1.PodDisruptionBudget{ObjectMeta: named}
-	saErr := r.applyOwned(ctx, gw, sa, "serviceaccount", func() { resources.BuildServiceAccount(sa, gw) })
+	saErr := r.applyOwned(ctx, gw, sa, "serviceaccount", resources.SelectorLabels(gw), func() { resources.BuildServiceAccount(sa, gw) })
 	err = stderrors.Join(saErr,
-		r.applyOwned(ctx, gw, svc, "service", func() { resources.BuildService(svc, gw, in.ceRender) }),
-		r.applyOwned(ctx, gw, pdb, "pdb", func() { resources.BuildPDB(pdb, gw) }))
+		r.applyOwned(ctx, gw, svc, "service", resources.SelectorLabels(gw), func() { resources.BuildService(svc, gw, in.ceRender) }),
+		r.applyOwned(ctx, gw, pdb, "pdb", resources.SelectorLabels(gw), func() { resources.BuildPDB(pdb, gw) }))
 	// The mutate function stamps the gateway's reference on sa before the
 	// write, so sa alone does not prove the server accepted it.
 	return saErr == nil && metav1.IsControlledBy(sa, gw), err
@@ -1426,7 +1426,7 @@ func (r *KrakenDGatewayReconciler) reconcileHPA(
 	hpa := &autoscalingv2.HorizontalPodAutoscaler{ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace}}
 	switch {
 	case gw.Spec.Autoscaling != nil:
-		return r.applyOwned(ctx, gw, hpa, "hpa", func() { resources.BuildHPA(hpa, gw) })
+		return r.applyOwned(ctx, gw, hpa, "hpa", resources.SelectorLabels(gw), func() { resources.BuildHPA(hpa, gw) })
 	case deploymentReconciled:
 		return r.deleteIfControlled(ctx, r.Client, gw, hpa)
 	}
@@ -1443,7 +1443,7 @@ func (r *KrakenDGatewayReconciler) reconcileDeployment(
 	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace}}
 	var before *corev1.PodTemplateSpec
 	result, err := controllerutil.CreateOrUpdate(ctx, r.Client, dep, func() error {
-		if err := refuseUncontrolled(gw, dep, "deployment"); err != nil {
+		if err := refuseUncontrolled(gw, dep, "deployment", resources.SelectorLabels(gw)); err != nil {
 			return err
 		}
 		before = dep.Spec.Template.DeepCopy()
