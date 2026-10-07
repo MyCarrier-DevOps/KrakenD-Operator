@@ -150,13 +150,9 @@ const (
 	StageCheck
 )
 
-// RouteRefusal is one registration the route check refused: the positions, in
-// the rendered endpoints array, of the entries it names (the refused one,
-// then the accepted one it clashes with, if any), and its lint lines joined
-// with newlines. A refusal of a route the gateway itself registers names no
-// entry.
+// RouteRefusal is one registration the route check refused: its lint lines
+// joined with newlines.
 type RouteRefusal struct {
-	Indices []int
 	Message string
 }
 

@@ -22,7 +22,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"slices"
 	"sort"
 	"strings"
 
@@ -178,15 +177,12 @@ func routeRefusals(ctx context.Context, doc []byte) (refusals []RouteRefusal, ca
 }
 
 // groupRefusal joins the refusals of one registration of r into a
-// RouteRefusal, naming each endpoint entry once.
+// RouteRefusal.
 func groupRefusal(r ginRoute, clashes []routeRefusal) RouteRefusal {
 	var group RouteRefusal
 	lines := make([]string, 0, len(clashes))
 	for _, f := range clashes {
 		lines = append(lines, f.line(r))
-		if f.index != gatewayRoute && !slices.Contains(group.Indices, f.index) {
-			group.Indices = append(group.Indices, f.index)
-		}
 	}
 	group.Message = strings.Join(lines, "\n")
 	return group
