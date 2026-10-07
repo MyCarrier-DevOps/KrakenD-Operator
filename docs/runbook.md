@@ -40,7 +40,11 @@ without it the endpoint answers 403. The chart grants the operator the
 TokenReview and SubjectAccessReview permissions this check needs, and creates
 a `ServiceMonitor` when `metrics.serviceMonitor.enabled` is true. Every name below carries the
 `krakend_operator_` prefix (`krakend_operator_license_expiry_seconds`, and so
-on). Key metrics:
+on).
+
+The metrics are recorded with OpenTelemetry and served through its Prometheus exporter. Names, labels, help text and histogram buckets are those of earlier releases, no `target_info` series or `otel_scope_*` label is added, and controller-runtime's own metrics (`controller_runtime_*`, `workqueue_*`, `rest_client_*`) are unchanged. One difference: after a gateway is deleted, its `krakend_operator_reconcile_duration_seconds` series stays until the operator restarts, because OpenTelemetry cannot remove a histogram series. Its gauges disappear as before. With an OTLP endpoint configured, the same metrics are also pushed over OTLP every `OTEL_METRIC_EXPORT_INTERVAL` (60 s by default); `OTEL_METRICS_EXPORTER=none` (Helm: `telemetry.otlp.signals.metrics: false`) turns that off.
+
+Key metrics:
 
 | Metric | Type | Description |
 |---|---|---|
@@ -50,7 +54,7 @@ on). Key metrics:
 | `license_expiry_seconds` | Gauge | Seconds until license expiry (per gateway) |
 | `endpoints` | Gauge | Number of endpoints (per gateway) |
 | `dragonfly_ready` | Gauge | Dragonfly readiness (1/0 per gateway) |
-| `reconcile_duration_seconds` | Histogram | Reconcile loop duration |
+| `reconcile_duration_seconds` | Histogram | Reconcile loop duration; a deleted gateway's series stays until the operator restarts |
 | `gateway_info` | Gauge | Gateway metadata labels (edition, version); one series per gateway |
 | `gateway_config_valid` | Gauge | 1 while the gateway's newest config passed validation, 0 while it is rejected or unjudged (per gateway); removed when the gateway is deleted |
 | `gateway_excluded_endpoints` | Gauge | KrakenDEndpoints a gateway leaves out because they fail validation on their own, by `Accepted` reason (`EndpointInvalid`, `PolicyInvalid`); labels `namespace`, `gateway`, `reason`; counted once the exclusion is recorded, including while the gateway cannot apply its newest config; absent while none; removed with the gateway |
@@ -124,6 +128,65 @@ endpoints that are not serving, alert from your cluster's custom-resource
 state tooling on the AutoConfig condition
 `status.conditions[?(@.type=="EndpointsReady")].status` being `False` for 15
 minutes (the condition's message names up to five endpoints and their reasons).
+
+---
+
+## Tracing
+
+Traces are exported over OTLP when `OTEL_EXPORTER_OTLP_ENDPOINT` (or a per-signal `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`) is set. Helm sets it with `telemetry.otlp.endpoint`, or with `telemetry.otlp.nodeCollector.enabled` to reach a collector on the pod's node. Without an endpoint no trace is exported. The default sampler, `parentbased_always_on`, keeps every new trace; use `OTEL_TRACES_SAMPLER=parentbased_traceidratio` with `OTEL_TRACES_SAMPLER_ARG=0.1` (Helm: `telemetry.traces.sampler` and `telemetry.traces.samplerArg`) to keep one in ten.
+
+Every trace starts at one of these spans:
+
+| Root span | Attributes | Below it |
+|---|---|---|
+| `reconcile KrakenDGateway` | `k8s.namespace.name`, `k8s.object.name`, `k8s.object.kind`, `k8s.object.generation`, `controller_runtime.reconcile_id` | `configcheck.Gather`, `gateway.license`, `gateway.plugins`, `gateway.dragonfly`, `gateway.render`, `gateway.config` (its `configcheck.*` checks, each `gateway.judge_endpoints` pass with its `configcheck.CheckEndpoint` checks, `gateway.publish_configmap` and `gateway.verify_configmap`), `gateway.acceptance` (`gateway.endpoint_status`), `gateway.core_resources` (`apply serviceaccount`, `apply service`, `apply pdb`), `gateway.infrastructure` (`apply deployment`, `apply job`, `gateway.collect_configmaps`, …), `gateway.status`; a `k8s.discovery` span under the stage that looks an optional CRD up |
+| `reconcile KrakenDAutoConfig` | the same | `autoconfig.fetch_spec` (with `autoconfig.fetch`, `HTTP GET` and `autoconfig.resolve_refs`), `autoconfig.cue_definitions`, `autoconfig.evaluate`, `autoconfig.filter`, `autoconfig.generate`, `autoconfig.endpoints` (each `autoconfig.precheck`, with its router-clash check and `autoconfig.judge_candidates`, whose checks each wait in `autoconfig.slot`, and each `autoconfig.write_endpoint` or `autoconfig.delete_endpoint`), `autoconfig.status` |
+| `reconcile KrakenDEndpoint`, `reconcile KrakenDBackendPolicy` | the same | `endpoint.resolve_refs`, `endpoint.status`; `policy.protection`, `policy.status` |
+| `admission /validate-…` | HTTP server attributes | `admission.validate <Kind>` (object identity, `k8s.admission.operation`, `k8s.admission.dry_run`, `k8s.admission.uid`, and the outcome below), `admission.structural`, the `configcheck.*` checks; a gateway update's `admission.judge_served`; a policy write's `admission.screen_policy` and `admission.judge_policy`, one of each per gateway that uses the policy |
+
+Each reconcile is a new root: it does not continue the trace of an earlier reconcile or of the admission request that wrote the object.
+
+**Admission outcome.** `admission.validate <Kind>` carries `admission.allowed` (bool) and `admission.code` (int), the status code of the answer: 200 when the request is allowed, the denial's own code when it is denied (422 for rejected fields, 403 for a plain denial), or 500 when the check could not run. `admission.allowed=false` with `admission.code=500` therefore means the request was not decided, not that it was denied. A denial is an answer, not a failure: its span has no error status and records no event. No span carries the denial's text, a warning's text or krakend's output; they would quote the tenant's object, and a denial's output can reveal a gateway root setting to an endpoint's author (see "Endpoint shows `Accepted=False`, reason `EndpointInvalid`" under Troubleshooting). A span whose check could not run is an error with a fixed text ("the admission could not be decided" or "the rules could not be evaluated"). The `admission.structural` spans can also carry the error of a failed lookup, from the API server or the cache; that text names objects but never holds values from a spec.
+
+**`client.address`** on the admission server span is the first value of the request's `X-Forwarded-For` header, which any caller inside the cluster can set. `network.peer.address` is the real peer.
+
+**Config checks.** Each `configcheck.<Method>` span (`CheckRoot`, `CheckGroup`, `CheckEndpoint`, `CheckPolicy`, `CheckRendered`, `Conflicts`, `SameConfig`, `Gather`) names the gateway and carries `configcheck.ok`. A config that fails `krakend check` is an answer, not an error: its span has `configcheck.ok=false` and no error status. Below it, `configcheck.render` is each in-process render, and `configcheck.lint` or `configcheck.validate` is one content check, with `configcheck.slot` (the wait for one of the three validation slots) and `krakend check` (the binary) below it. A content check answered from the operator's memory of recent verdicts has `configcheck.memo_hit=true` and neither child. A content check with `configcheck.memo_hit=false` and no `krakend check` child was either refused before krakend ran by one of the operator's own rules (the Enterprise router rule or the route check; `configcheck.ok=false`), or could not run at all (an error status, for example a `configcheck.slot` wait that reached the deadline). The `krakend check` span carries `process.executable.name`, `process.command_args` (the config file reduced to its base name), `krakend.check.mode` (`lint` or `validate`) and `process.exit.code`; a rejection is a non-zero exit, so that span has an error status reading `exit status 1`, and krakend's output is on no span. When an endpoint fails on its own, the config stage checks the whole render twice: `configcheck.purpose=combined` is the render with every endpoint, `configcheck.purpose=safety_net` the render without the excluded ones. Each `gateway.judge_endpoints` pass says which endpoints it judges: `gateway.judge.pass=suspects`, those the whole render's check left unjudged, or `gateway.judge.pass=masked`, those the applied config leaves an entry of out.
+
+- **Kubernetes API calls** made during any of these are client spans named `k8s <verb> <resource>`, such as `k8s update krakendgateways/status`, with `k8s.verb`, `k8s.resource`, `k8s.namespace.name` and `k8s.object.name`. Their URLs are recorded without user information and with every query value replaced by `REDACTED`.
+- **Cache reads.** Every read through the manager's client, whether the cache answers it or not, adds a `k8s.client.get` or `k8s.client.list` event to the span that made it, with `found` (or `error.type`) on a get and `succeeded` on a list. A read the cache answers sends no request and so has no client span; a read of a Secret or ConfigMap, which is never cached, has both. A read through the operator's uncached reader has a client span and no event.
+- **The API server's trace.** When the API server is configured for tracing, an admission trace continues the API server's own. If the API server sends an unsampled trace context (flags `00`, for example with a low `samplingRatePerMillion`), `parentbased_always_on` follows it and the whole admission subtree goes unrecorded; that is standard W3C behaviour, not a fault. To record admission requests whatever the API server decided, set `OTEL_TRACES_SAMPLER=always_on` (Helm: `telemetry.traces.sampler=always_on`), or `traceidratio` with `OTEL_TRACES_SAMPLER_ARG` to keep a share of them.
+- **Spec hosts.** The trace context is never sent to OpenAPI spec hosts or to the hosts of their `$ref` documents. Each request, and each redirect hop, is its own `HTTP GET` span under `autoconfig.fetch`. A spec URL is recorded, in spans and in errors and the AutoConfig's status, without user information and fragment, with every query value (or bare query key) replaced by `REDACTED`; a URL that cannot be shown safely is recorded as `<unparseable URL>`. A `$ref` with an unsupported scheme fails without echoing the scheme.
+- **CRD lookups.** A lookup of an optional CRD (Dragonfly, ExternalSecret, VirtualService) during a reconcile is a `k8s.discovery` span, with `k8s.discovery.kind`, under the stage that needs the kind. client-go sends the discovery request it may need without a context, so the span is the only record of its time. The check at startup that decides which of these kinds to watch is not traced.
+- **Not traced:** these record no span and send no trace header:
+  - informer list and watch requests, which run outside any reconcile;
+  - leader-election lease renewals, about every 2 seconds;
+  - the metrics endpoint's TokenReview and SubjectAccessReview for each scrape;
+  - Kubernetes events: a reconcile raises them, but the event recorder takes no context and writes each event later, so an event is raised inside a reconcile and written asynchronously without a span.
+
+**`k8s.namespace.name` has two meanings.** On the resource (every span, log record and metric the operator exports), it is the operator pod's namespace. On a reconcile, admission or `k8s …` span, it is the namespace of the object the span is about. To find an object's traces, filter on the span attribute, not the resource attribute (in TraceQL, `span.k8s.namespace.name` rather than `resource.k8s.namespace.name`; in a SQL-backed store, the span-attributes column rather than the resource-attributes one). Filtering on the resource attribute matches every trace of the operator, whatever the object.
+
+### Finding the trace of a slow or stuck reconcile
+
+1. In the trace backend, search for spans named `reconcile KrakenDGateway` (or the kind) whose span attributes `k8s.namespace.name` and `k8s.object.name` are the object's, sorted by duration. The waterfall shows which child took the time:
+   - `configcheck.slot`: waiting for one of the three validation slots, or `autoconfig.slot` for the AutoConfig controller's own share of them;
+   - `krakend check`: the binary itself;
+   - a `k8s …` span: the API server;
+   - `HTTP GET`: a spec host.
+2. A span is exported only when it ends. A reconcile that is still running, or hung, has no root span yet; its finished children appear under a missing parent. Look for those, or start from the logs.
+3. From the operator's logs, take the reconcile's `controller_runtime.reconcile_id` (every record of a reconcile carries it as the `reconcileID` attribute) or a record's `TraceID`, and search the backend for it.
+
+A failed step's error is recorded on its span as an error status and an `exception` event. It can be the text of an API server or cache error, which names objects, and the `autoconfig.evaluate` and `autoconfig.generate` spans can carry a CUE or generation error that quotes the AutoConfig's own spec. The `autoconfig.write_endpoint` span can carry the API server's refusal of a generated endpoint, which can echo only the endpoint fields the AutoConfig generated. Spans carry no krakend output; the operator's logs do, so restrict access to the logs as before.
+
+### From a log line to its trace
+
+A record logged inside a reconcile or an admission request carries `TraceID` and `SpanID`:
+
+```bash
+kubectl -n krakend-operator-system logs deploy/krakend-operator-controller-manager \
+  | jq -c 'select(.TraceID != "00000000000000000000000000000000") | {t: .Timestamp, sev: .SeverityText, msg: .Body.Value, trace: .TraceID, span: .SpanID}'
+```
+
+Open the `TraceID` in the trace backend to see the record's place in the waterfall. Without an OTLP endpoint, traces use a no-op provider and `TraceID` is all zeros, unless the API server propagated one into an admission request. A sampler that keeps only some traces still gives every record a `TraceID`: a record whose `TraceFlags` is `00` belongs to a trace the sampler dropped, which the backend does not hold.
 
 ---
 
@@ -1157,21 +1220,52 @@ reverted-to ReplicaSet's config ConfigMap may already have been collected.
 
 ## Log Analysis
 
-Operator logs use structured JSON logging (controller-runtime). Key fields:
+Every log line is one OpenTelemetry log record in JSON, written to **stdout**. Releases before OpenTelemetry wrote zap's console text to stderr; a log agent that reads only stderr must read stdout instead. That covers the operator's own records, controller-runtime's, client-go's (klog) and the Go HTTP servers' (TLS handshake errors). Records are written as they are logged, so none is lost at exit.
 
-| Field | Description |
+| Field | Meaning |
 |---|---|
-| `controller` | Which controller emitted the log |
-| `namespace` | Resource namespace |
-| `name` | Resource name |
-| `reconcileID` | Unique ID per reconcile invocation |
+| `Timestamp` | When the record was logged |
+| `SeverityText` | `INFO`, `ERROR`, or `DEBUG4` … `DEBUG` (verbosity 1 … 4) and `TRACE4` … `TRACE` (verbosity 5 … 8) |
+| `Body.Value` | The message |
+| `Attributes` | The key/value pairs, as `{"Key":…,"Value":{"Type":…,"Value":…}}`: `controller`, `namespace`, `name`, `reconcileID`, … |
+| `exception.message`, `exception.type` (in `Attributes`) | On a record logged with an error: the error's text and its Go type. There is no `error` attribute |
+| `TraceID`, `SpanID` | The span the record was logged in (all zeros outside one) |
+| `Scope.Name` | The logger: `krakend-operator/setup`, `krakend-operator/controller-runtime/metrics`, `krakend-operator/klog`, … |
+| `Resource` | `service.name`, `service.version`, `k8s.pod.name`, `k8s.namespace.name` (the operator's own namespace) |
+
+Error records carry no stack trace. Earlier releases added one to error records in development mode (`--zap-devel`); the error's text and type are what remains.
 
 ```bash
-kubectl -n krakend-operator-system logs deploy/krakend-operator-controller-manager -f
+# Errors, with their text
+kubectl -n krakend-operator-system logs deploy/krakend-operator-controller-manager \
+  | jq -c 'select(.SeverityText == "ERROR") | {t: .Timestamp, msg: .Body.Value, error: ([.Attributes[] | select(.Key == "exception.message") | .Value.Value][0])}'
+
+# One reconcile, by the reconcileID controller-runtime gives it
+kubectl -n krakend-operator-system logs deploy/krakend-operator-controller-manager \
+  | jq -c --arg id "<reconcileID>" 'select(any(.Attributes[]; .Key == "reconcileID" and .Value.Value == $id))'
 ```
 
-Filter for errors:
+Error records, unlike spans, can quote krakend's output, which may hold tenant values. Restrict access to the logs accordingly.
 
-```bash
-kubectl -n krakend-operator-system logs deploy/krakend-operator-controller-manager | jq 'select(.level == "error")'
-```
+**Level and format.**
+- `--zap-log-level` keeps its values (`debug`, `info`, `error`, `panic`, or an integer N for verbosity N).
+- `--zap-devel` (on by default) means `debug`; `--zap-devel=false` logs at `info`.
+- `--log-format=pretty` (Helm: `telemetry.logs.format`) indents each record for reading by hand. `--zap-encoder=console` selects the same; `json` keeps JSON. Both flags ignore case.
+- `--zap-stacktrace-level` and `--zap-time-encoding` are still accepted and ignored, and a startup record names them.
+
+**`k8s.namespace.name` in queries.** In the log record's `Resource` it is the operator's own namespace. Scope a query for one object by the `namespace` and `name` attributes of the record, not by the resource attribute.
+
+**Diagnosing the telemetry itself.**
+- A failure of the OTLP export (a collector that cannot be reached, a rejected batch) is an `ERROR` record with the message `OpenTelemetry pipeline error` and the scope `opentelemetry`. It is written to stdout only, never to OTLP, so a failing exporter cannot queue records for itself.
+- A malformed OTLP header or endpoint variable does not stop the operator: that signal is not exported over OTLP, and the startup `ERROR` record `ignoring part of the telemetry configuration` names the variable, never its value. A malformed `OTEL_RESOURCE_ATTRIBUTES` entry is left out and named in the same record.
+- grpc-go's own log, which the OTLP gRPC exporters use, goes through the pipeline as the `krakend-operator/grpc` logger (its info records at verbosity 2).
+
+**Lines that do not go through OpenTelemetry.** These are written to stderr; a dependency that wrote to stderr directly would add one:
+- flag parsing errors and `--help` (`--help` exits 0, a flag error exits 2);
+- an invalid logging flag (exit 2);
+- an `OTEL_*` setting the operator cannot use, such as an unsupported `OTEL_*_EXPORTER` or OTLP protocol, printed as `setting up telemetry: …` (exit 1);
+- OpenTelemetry's own warnings about its `OTEL_*` variables while the exporters start, before logging is set up;
+- a failure of the final flush at shutdown, printed as `flushing telemetry: …`;
+- Go runtime crashes.
+
+**Shutdown.** On `SIGTERM` the manager stops, then the operator flushes the batched OTLP traces, metrics and logs, waiting at most 5 seconds, so that both fit the pod's 10 second termination grace period. Only OTLP data can be cut off by that limit. When the leader-election lease is lost the process exits the same way, after at most the same wait. A second signal exits at once, without the flush.
