@@ -56,7 +56,11 @@ func (f Finding) String() string {
 // Verdict is the outcome of a check. OK is false when the config is invalid;
 // Findings then says why.
 type Verdict struct {
-	OK       bool
+	OK bool
+	// Output is the rejection's text when OK is false: what krakend check,
+	// the route check or the EE wildcard rule printed for the config that was
+	// checked. Only the owner of that config may be shown it.
+	Output   string
 	Findings []Finding
 	// Rejection is the validator's rejection behind a verdict that is not OK.
 	// A caller that remembers it can rebuild the findings with Rejected

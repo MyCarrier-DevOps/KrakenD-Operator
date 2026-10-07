@@ -25,6 +25,7 @@ import (
 	"testing"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 )
 
 // mapMemo is a Memo that keeps every verdict, for tests.
@@ -142,4 +143,34 @@ func TestCheckPolicy_LintsThePolicyOnItsOwn(t *testing.T) {
 	if paths := renderedPaths(t, val.seen[0]); !reflect.DeepEqual(paths, []string{"/policy-lint"}) {
 		t.Errorf("checked endpoints %v, want only the synthetic one", paths)
 	}
+}
+
+func TestCheckRendered_RemembersTheFullCheckApartFromLint(t *testing.T) {
+	val := &fakeValidator{err: rejectedOutput("- at '/endpoints/0': bad")}
+	chk := newChecker(val)
+	in := renderer.RenderInput{Gateway: gateway(v1alpha1.EditionCE)}
+	out, err := renderer.New(renderer.Options{}).Render(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	memo := mapMemo{}
+
+	for range 2 {
+		v, err := chk.CheckRendered(context.Background(), in, out, memo)
+		if err != nil || v.OK || v.Output != "- at '/endpoints/0': bad" {
+			t.Fatalf("CheckRendered = %+v, %v; want the rejection with its output", v, err)
+		}
+	}
+	if _, err := chk.CheckRoot(context.Background(), Root{Gateway: in.Gateway}, memo); err != nil {
+		t.Fatal(err)
+	}
+
+	if !reflect.DeepEqual(val.calls, []string{"validate", "lint"}) {
+		t.Errorf("calls = %v: the full check is remembered, and a lint of the same render is a different check", val.calls)
+	}
+}
+
+// rejectedOutput is a krakend check rejection printing output.
+func rejectedOutput(output string) error {
+	return &renderer.ValidationError{Output: output, Err: errors.New("exit status 1"), Stage: renderer.StageCheck}
 }
