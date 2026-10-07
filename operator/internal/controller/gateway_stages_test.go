@@ -2807,16 +2807,11 @@ func TestGatewayReconcile_CollectsConfigRevisionsWhileTheDeploymentIsHeld(t *tes
 
 			_ = reconcileGateway(t, r, gw) // the hold is reported as an error
 
-			got := remainingConfigMaps(t, c, gw)
-			for _, gone := range []string{"test-gw-config-r1", "test-gw-config-r2", "test-gw-config-r3"} {
-				if slices.Contains(got, gone) {
-					t.Errorf("%s survived the hold; remaining = %v", gone, got)
-				}
-			}
-			for _, kept := range []string{"test-gw-config-r0", "test-gw-config-r4", "test-gw-config-r5"} {
-				if !slices.Contains(got, kept) {
-					t.Errorf("%s was collected; remaining = %v", kept, got)
-				}
+			applied := resources.ConfigMapName(gw, getGateway(t, c, gw).Status.ConfigChecksum)
+			want := []string{"test-gw-config-r0", "test-gw-config-r4", "test-gw-config-r5", applied}
+			slices.Sort(want)
+			if got := remainingConfigMaps(t, c, gw); !slices.Equal(got, want) {
+				t.Errorf("remaining ConfigMaps = %v, want %v (the applied one, the history and the mounted one)", got, want)
 			}
 		})
 	}
