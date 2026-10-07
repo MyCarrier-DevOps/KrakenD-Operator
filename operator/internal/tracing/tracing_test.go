@@ -25,6 +25,9 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/go-logr/logr/funcr"
 	"go.opentelemetry.io/otel/codes"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 
 	"github.com/mycarrier-devops/krakend-operator/internal/tracing"
 	"github.com/mycarrier-devops/krakend-operator/internal/tracing/tracingtest"
@@ -66,5 +69,23 @@ func TestEnd_RecordsTheErrorAsTheSpanStatus(t *testing.T) {
 	got := rec.Ended().One(t, "failing")
 	if got.Status().Code != codes.Error || got.Status().Description != "boom" || len(got.Events()) != 1 {
 		t.Errorf("status = %+v, events = %d; want Error \"boom\" and one exception event", got.Status(), len(got.Events()))
+	}
+}
+
+func TestObject_NamesTheObject(t *testing.T) {
+	gw := &v1alpha1.KrakenDGateway{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "gw", Generation: 3}}
+
+	attrs := tracing.Object("KrakenDGateway", gw)
+
+	got := map[string]string{}
+	for _, kv := range attrs {
+		got[string(kv.Key)] = kv.Value.String()
+	}
+	want := map[string]string{"k8s.namespace.name": "ns", "k8s.object.name": "gw",
+		"k8s.object.kind": "KrakenDGateway", "k8s.object.generation": "3"}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s = %q, want %q", k, got[k], v)
+		}
 	}
 }
