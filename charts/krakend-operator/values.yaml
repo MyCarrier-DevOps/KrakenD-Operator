@@ -60,6 +60,41 @@ webhooks:
   # with --set-file webhooks.caBundle=ca.pem) or base64-encoded PEM.
   caBundle: ""
 
+telemetry:
+  # OpenTelemetry export. With no endpoint nothing is exported: metrics are
+  # still served on /metrics and logs are written to stdout.
+  otlp:
+    # The OTLP collector (OTEL_EXPORTER_OTLP_ENDPOINT), for example
+    # http://otel-collector.observability:4318 for http/protobuf or :4317 for
+    # grpc.
+    endpoint: ""
+    # grpc or http/protobuf (OTEL_EXPORTER_OTLP_PROTOCOL).
+    protocol: http/protobuf
+    # A Secret key holding OTEL_EXPORTER_OTLP_HEADERS, written as
+    # "key1=value1,key2=value2" (for example a collector API key).
+    headersSecret:
+      name: ""
+      key: headers
+    # The signals exported over OTLP when an endpoint is set. Turn logs off
+    # when a log agent already collects the pods' stdout, so each record is
+    # not delivered twice.
+    signals:
+      traces: true
+      metrics: true
+      logs: true
+  traces:
+    # OTEL_TRACES_SAMPLER; empty keeps the default, parentbased_always_on.
+    # parentbased_traceidratio with samplerArg "0.1" keeps one new trace in ten.
+    sampler: ""
+    samplerArg: ""
+  # Extra OTEL_RESOURCE_ATTRIBUTES, as key: value. Values must not contain
+  # "," or "=".
+  resourceAttributes: {}
+  logs:
+    # How records are written to stdout: json (one object per line) or pretty
+    # (indented JSON, for reading by hand).
+    format: json
+
 podAnnotations: {}
 
 podSecurityContext:
