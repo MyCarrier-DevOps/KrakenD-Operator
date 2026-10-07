@@ -26,6 +26,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
@@ -450,5 +451,23 @@ func TestPolicyAdmission_AnAlreadyFailingEndpointDoesNotHideABrokenOne(t *testin
 	}
 	if text := responseText(resp); !strings.Contains(text, "default/victim") || strings.Contains(text, "default/stale") {
 		t.Errorf("denial = %q, want it to name default/victim only", text)
+	}
+}
+
+func TestPolicyAdmission_AMaskedEndpointIsJudgedOnItsOwn(t *testing.T) {
+	chk := &scriptedChecker{
+		verdicts: []configcheck.Verdict{{OK: true}, {OK: true},
+			{OK: true, Masked: []types.NamespacedName{{Namespace: "default", Name: "uses-p"}}}},
+		endpointVerdicts: []configcheck.EndpointVerdict{{Reason: v1alpha1.ReasonEndpointInvalid}, {OK: true}},
+	}
+	v := &PolicyValidator{Client: fakeClient(referencing()...), Checker: chk}
+
+	resp := review(t, v, "alice", testPolicy(`{"x":{}}`), testPolicy(`{}`))
+
+	if resp.Allowed || !strings.Contains(responseText(resp), "default/uses-p") {
+		t.Errorf("response = %+v; want a denial naming default/uses-p, whose lost entry the group never checked", resp.Result)
+	}
+	if got := strings.Join(chk.calls, ","); got != "policy,root,group,endpoint,endpoint" {
+		t.Errorf("checks = %s, want the masked endpoint checked on its own with and without the change", got)
 	}
 }
