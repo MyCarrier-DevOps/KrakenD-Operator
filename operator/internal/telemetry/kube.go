@@ -134,11 +134,17 @@ func (k kubeAttributes) annotate(span trace.Span, r *http.Request) {
 		resource += "/" + info.Subresource
 	}
 	span.SetName("k8s " + info.Verb + " " + resource)
-	span.SetAttributes(
-		semconv.K8SNamespaceName(info.Namespace),
-		tracing.KeyName.String(info.Name),
+	attrs := []attribute.KeyValue{
 		attribute.String("k8s.resource", info.Resource),
-		attribute.String("k8s.verb", info.Verb))
+		attribute.String("k8s.verb", info.Verb),
+	}
+	if info.Namespace != "" {
+		attrs = append(attrs, semconv.K8SNamespaceName(info.Namespace))
+	}
+	if info.Name != "" {
+		attrs = append(attrs, tracing.KeyName.String(info.Name))
+	}
+	span.SetAttributes(attrs...)
 }
 
 // hasSpan reports whether r is sent under a valid span context, local or
