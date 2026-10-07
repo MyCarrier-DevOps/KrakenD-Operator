@@ -17,12 +17,35 @@ limitations under the License.
 package telemetry
 
 import (
+	"net/http"
+
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	metricnoop "go.opentelemetry.io/otel/metric/noop"
+	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 )
 
 // TraceWebhookServer wraps srv so each admission request it serves is a
-// server span.
-func TraceWebhookServer(srv webhook.Server, _ trace.TracerProvider) webhook.Server {
-	return srv
+// server span named "admission <path>". The span continues the trace the API
+// server propagates (W3C traceparent) when it sends one, and starts a new
+// trace otherwise. No HTTP metric is recorded.
+func TraceWebhookServer(srv webhook.Server, tp trace.TracerProvider) webhook.Server {
+	return tracedWebhookServer{Server: srv, tp: tp}
+}
+
+// tracedWebhookServer is the server TraceWebhookServer returns.
+type tracedWebhookServer struct {
+	webhook.Server
+	tp trace.TracerProvider
+}
+
+// Register serves hook at path inside a server span.
+func (s tracedWebhookServer) Register(path string, hook http.Handler) {
+	s.Server.Register(path, otelhttp.NewHandler(hook, "admission "+path,
+		otelhttp.WithTracerProvider(s.tp),
+		otelhttp.WithMeterProvider(metricnoop.NewMeterProvider()),
+		otelhttp.WithPropagators(propagation.TraceContext{}),
+		otelhttp.WithSpanNameFormatter(func(operation string, _ *http.Request) string { return operation }),
+	))
 }
