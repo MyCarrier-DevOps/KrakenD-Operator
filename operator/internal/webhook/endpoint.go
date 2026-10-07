@@ -444,18 +444,34 @@ func movedGateway(old, ep *v1alpha1.KrakenDEndpoint) bool {
 // from the stored entry with the same endpoint and method. On a create every
 // entry has changed.
 func changedEntries(old, ep *v1alpha1.KrakenDEndpoint) []int {
-	stored := map[string]v1alpha1.EndpointEntry{}
+	var stored []v1alpha1.EndpointEntry
 	if old != nil {
-		for _, e := range old.Spec.Endpoints {
-			stored[e.Method+" "+e.Endpoint] = e
-		}
+		stored = old.Spec.Endpoints
+	}
+	return changedByKey(stored, ep.Spec.Endpoints, func(e v1alpha1.EndpointEntry) string {
+		return e.Method + " " + e.Endpoint
+	})
+}
+
+// changedByKey returns the positions of items that are new or differ from the
+// stored item with the same key. Each stored item matches at most one item, so
+// a stored duplicate key, which a list stored before its map key was declared
+// can hold, cannot vouch for an added copy, and unchanged duplicates still
+// match. With nothing stored every item has changed.
+func changedByKey[T any](stored, items []T, key func(T) string) []int {
+	unmatched := map[string][]T{}
+	for _, s := range stored {
+		unmatched[key(s)] = append(unmatched[key(s)], s)
 	}
 	var changed []int
-	for i, e := range ep.Spec.Endpoints {
-		if s, ok := stored[e.Method+" "+e.Endpoint]; ok && equality.Semantic.DeepEqual(s, e) {
+	for i, item := range items {
+		candidates := unmatched[key(item)]
+		match := slices.IndexFunc(candidates, func(s T) bool { return equality.Semantic.DeepEqual(s, item) })
+		if match < 0 {
+			changed = append(changed, i)
 			continue
 		}
-		changed = append(changed, i)
+		unmatched[key(item)] = slices.Delete(candidates, match, match+1)
 	}
 	return changed
 }
