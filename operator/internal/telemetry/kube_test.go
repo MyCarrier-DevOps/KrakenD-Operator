@@ -140,7 +140,8 @@ func TestReadEvents_AReadAddsAnEventToTheActiveSpan(t *testing.T) {
 	for _, kv := range events[0].Attributes {
 		attrs[string(kv.Key)] = kv.Value.String()
 	}
-	if attrs["k8s.object.kind"] != "ConfigMap" || attrs["k8s.object.name"] != "cm" || attrs["found"] != "true" {
+	if attrs["k8s.object.kind"] != "ConfigMap" || attrs["k8s.namespace.name"] != "ns" ||
+		attrs["k8s.object.name"] != "cm" || attrs["found"] != "true" {
 		t.Errorf("event attributes = %v, want ConfigMap ns/cm found", attrs)
 	}
 }
