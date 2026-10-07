@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -863,5 +864,35 @@ func TestResolveExternalRefs_ExamplesAndNameKeyedMaps(t *testing.T) {
 				t.Errorf("fetches = %v, want %d in total", fetcher.hits, tc.wantHits)
 			}
 		})
+	}
+}
+
+// A ref's URL can carry credentials: the errors the resolver builds from it,
+// which become status messages and span events, name it redacted.
+const refWithSecrets = "https://user:pw@schemas.example.com/x.json?token=secret"
+
+func requireNoSecrets(t *testing.T, err error) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if msg := err.Error(); strings.Contains(msg, "pw@") || strings.Contains(msg, "secret") {
+		t.Errorf("error %q carries a credential", msg)
+	}
+}
+
+type failingFetcher struct{ err error }
+
+func (f failingFetcher) Fetch(context.Context, FetchSource) (*FetchResult, error) { return nil, f.err }
+
+func TestResolveExternalRefs_AFailedFetchErrorCarriesNoCredentials(t *testing.T) {
+	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"$ref":"` + refWithSecrets + `#/A"}}}}}}`)
+
+	_, _, err := ResolveExternalRefs(context.Background(), main, "https://api.example.com/openapi.json",
+		failingFetcher{err: errors.New("boom")}, FetchSource{})
+
+	requireNoSecrets(t, err)
+	if !strings.Contains(err.Error(), "https://schemas.example.com/x.json") {
+		t.Errorf("error %q does not name the document", err)
 	}
 }
