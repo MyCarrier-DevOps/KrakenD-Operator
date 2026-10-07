@@ -59,11 +59,15 @@ const combinedFailureMessage = "Every endpoint passes krakend check on its own, 
 	"values and is only in the operator log (\"the gateway's config fails krakend check only together\")."
 
 // decide judges the newest render, full, which is not the applied config:
-// first the gateway root on its own, which blames no endpoint when it fails,
-// then the render as a whole, with the full check. Every check answers from
-// the gateway's verdict memo when it already judged the same content. An
-// error means a check could not run: nothing is decided, and the verdicts
-// judged before it are kept for the next pass.
+//  1. the gateway root on its own: when it fails, nothing more is judged and
+//     no endpoint is blamed;
+//  2. the render as a whole, with the full check;
+//  3. when that fails, each endpoint on its own (judgeEndpoints). The pass
+//     records those that fail and applies nothing.
+//
+// Every check answers from the gateway's verdict memo when it already judged
+// the same content. An error means a check could not run: nothing is
+// decided, and the verdicts judged before it are kept for the next pass.
 func (r *KrakenDGatewayReconciler) decide(
 	ctx context.Context, gw *v1alpha1.KrakenDGateway, in renderer.RenderInput,
 	full *renderer.RenderOutput, edition v1alpha1.Edition,
@@ -84,11 +88,39 @@ func (r *KrakenDGatewayReconciler) decide(
 	if err != nil {
 		return decision{}, err
 	}
-	if !whole.OK {
-		logCombinedFailure(ctx, whole)
-		return decision{failure: combinedFailure()}, nil
+	if whole.OK {
+		return decision{output: full, judged: true}, nil
 	}
-	return decision{output: full, judged: true}, nil
+	excluded, err := r.judgeEndpoints(ctx, gw, in, in.Endpoints, counted)
+	if err != nil {
+		return decision{}, err
+	}
+	logCombinedFailure(ctx, whole)
+	return decision{excluded: excluded, judged: true, failure: combinedFailure()}, nil
+}
+
+// judgeEndpoints checks each of suspects, endpoints of in, on its own
+// (configcheck.CheckEndpoint) and returns those that fail, with why. An
+// endpoint whose policy is missing is not judged: the render already leaves
+// it out.
+func (r *KrakenDGatewayReconciler) judgeEndpoints(
+	ctx context.Context, gw *v1alpha1.KrakenDGateway, in renderer.RenderInput,
+	suspects []v1alpha1.KrakenDEndpoint, memo configcheck.Memo,
+) (map[types.NamespacedName]configcheck.EndpointVerdict, error) {
+	excluded := map[types.NamespacedName]configcheck.EndpointVerdict{}
+	for i := range suspects {
+		ep := &suspects[i]
+		v, err := r.Checker.CheckEndpoint(ctx, configcheck.EndpointUnit{
+			Gateway: gw, Endpoint: ep, Policies: in.Policies, CEFallback: in.CEFallback,
+		}, memo)
+		if err != nil {
+			return nil, err
+		}
+		if !v.OK {
+			excluded[client.ObjectKeyFromObject(ep)] = v
+		}
+	}
+	return excluded, nil
 }
 
 // rootFailure is ConfigValid's verdict when the gateway root fails on its
