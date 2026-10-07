@@ -906,3 +906,9 @@ func TestResolveExternalRefs_ADecodeErrorCarriesNoCredentials(t *testing.T) {
 
 	requireNoSecrets(t, err)
 }
+
+func TestAbsolutize_ABaseURLErrorCarriesNoCredentials(t *testing.T) {
+	_, err := absolutize("x.json", "https://user:pw@host:badport/spec.json?token=secret")
+
+	requireNoSecrets(t, err)
+}
