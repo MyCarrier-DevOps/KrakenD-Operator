@@ -19,6 +19,7 @@ package telemetry_test
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -64,5 +65,25 @@ func TestSetup_WithoutAnEndpointNothingIsExported(t *testing.T) {
 
 	if _, ok := tel.TracerProvider.(noop.TracerProvider); !ok {
 		t.Errorf("TracerProvider = %T, want the no-op provider", tel.TracerProvider)
+	}
+}
+
+func TestSetup_ResourceNamesTheOperatorItsVersionAndPod(t *testing.T) {
+	cleanOTelEnv(t)
+	var out bytes.Buffer
+	tel := setup(t, &out)
+
+	tel.Logger.Info("hello")
+
+	got := out.String()
+	for _, want := range []string{
+		`{"Key":"service.name","Value":{"Type":"STRING","Value":"krakend-operator"}}`,
+		`{"Key":"service.version","Value":{"Type":"STRING","Value":"1.2.3"}}`,
+		`{"Key":"k8s.pod.name","Value":{"Type":"STRING","Value":"op-0"}}`,
+		`{"Key":"k8s.namespace.name","Value":{"Type":"STRING","Value":"krakend-system"}}`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("record lacks %s:\n%s", want, got)
+		}
 	}
 }
