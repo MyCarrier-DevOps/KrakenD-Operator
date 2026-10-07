@@ -652,10 +652,6 @@ func TestAdmission_SpanCarriesTheObjectTheOperationAndTheRequest(t *testing.T) {
 				t.Fatalf("denied: %+v", resp.Result)
 			}
 			span := rec.Ended().One(t, "admission.validate KrakenDEndpoint")
-			got := map[attribute.Key]attribute.Value{}
-			for _, kv := range span.Attributes() {
-				got[kv.Key] = kv.Value
-			}
 			want := map[attribute.Key]attribute.Value{
 				"k8s.admission.operation": attribute.StringValue(string(tc.operation)),
 				"k8s.admission.dry_run":   attribute.BoolValue(ptr.Deref(tc.dryRun, false)),
@@ -666,8 +662,8 @@ func TestAdmission_SpanCarriesTheObjectTheOperationAndTheRequest(t *testing.T) {
 				"k8s.object.generation":   attribute.Int64Value(tc.generated),
 			}
 			for key, value := range want {
-				if got[key] != value {
-					t.Errorf("attribute %s = %v, want %v; attributes: %v", key, got[key], value, span.Attributes())
+				if got, _ := tracingtest.Attr(span, string(key)); got != value {
+					t.Errorf("attribute %s = %v, want %v; attributes: %v", key, got, value, span.Attributes())
 				}
 			}
 		})
@@ -931,17 +927,15 @@ func TestAdmission_SpanSaysTheOutcomeAndTheCodeButNotTheDenial(t *testing.T) {
 			_, _ = admit.ValidateCreate(context.Background(), testEndpoint("e", "/e"))
 
 			span := rec.Ended().One(t, "admission.validate KrakenDEndpoint")
-			got := map[attribute.Key]attribute.Value{}
 			for _, kv := range span.Attributes() {
-				got[kv.Key] = kv.Value
 				if strings.Contains(kv.Value.Emit(), "TENANT") {
 					t.Errorf("attribute %v holds the denial's text", kv)
 				}
 			}
-			if got["admission.allowed"] != attribute.BoolValue(tc.allowed) ||
-				got["admission.code"] != attribute.Int64Value(tc.code) {
-				t.Errorf("admission.allowed, admission.code = %v, %v; want %v, %v",
-					got["admission.allowed"], got["admission.code"], tc.allowed, tc.code)
+			allowed, _ := tracingtest.Attr(span, "admission.allowed")
+			code, _ := tracingtest.Attr(span, "admission.code")
+			if allowed != attribute.BoolValue(tc.allowed) || code != attribute.Int64Value(tc.code) {
+				t.Errorf("admission.allowed, admission.code = %v, %v; want %v, %v", allowed, code, tc.allowed, tc.code)
 			}
 		})
 	}
@@ -991,10 +985,9 @@ func TestPolicyAdmission_ARefusedReadInAPhaseIsAFailureOnItsSpan(t *testing.T) {
 			if tc.unfailing != "" && spans.One(t, tc.unfailing).Status().Code == codes.Error {
 				t.Errorf("span %q is an error, want none: its phase ran", tc.unfailing)
 			}
-			for _, kv := range spans.One(t, "admission.validate KrakenDBackendPolicy").Attributes() {
-				if kv.Key == "admission.code" && kv.Value.AsInt64() != http.StatusInternalServerError {
-					t.Errorf("admission.code = %v, want 500", kv.Value)
-				}
+			code, ok := tracingtest.Attr(spans.One(t, "admission.validate KrakenDBackendPolicy"), "admission.code")
+			if ok && code.AsInt64() != http.StatusInternalServerError {
+				t.Errorf("admission.code = %v, want 500", code)
 			}
 		})
 	}
