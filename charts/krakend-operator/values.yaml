@@ -94,8 +94,9 @@ telemetry:
     # parentbased_traceidratio with samplerArg "0.1" keeps one new trace in ten.
     sampler: ""
     samplerArg: ""
-  # Extra OTEL_RESOURCE_ATTRIBUTES, as key: value. Values must not contain
-  # "," or "=".
+  # Extra OTEL_RESOURCE_ATTRIBUTES, as key: value. Values are percent-encoded
+  # for you, so they may contain "," or spaces; keys must not contain "," or
+  # "=". Quote numbers ("1234567"), or YAML turns them into floats.
   resourceAttributes: {}
   logs:
     # How records are written to stdout: json (one object per line) or pretty
