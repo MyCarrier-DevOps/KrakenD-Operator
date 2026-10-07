@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"maps"
 	"strings"
 	"testing"
@@ -26,10 +27,12 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
+	"github.com/mycarrier-devops/krakend-operator/internal/resources"
 )
 
 // A Service named like the gateway that nothing controls and that does not
@@ -99,5 +102,105 @@ func TestReconcileInfrastructure_UnownedDeploymentIsNotTakenOver(t *testing.T) {
 	refused := notControlledIn(err)
 	if len(refused) != 1 || refused[0].kind != "deployment" {
 		t.Errorf("refused = %v, want the deployment", refused)
+	}
+}
+
+// What the gateway controls, or an object orphaned from it that still carries
+// its selector labels, is written as always; an object of an optional kind
+// that nothing controls and that lacks the labels is not, and the caller can
+// tell why.
+func TestApplyOptional_TakesOverOnlyWhatTheGatewayMayControl(t *testing.T) {
+	gw := reconciledGateway()
+	gw.UID = "gw-uid"
+	existing := func(mutate func(u *unstructured.Unstructured)) *unstructured.Unstructured {
+		u := controlledChild(gw, virtualServiceGVK, gw.Name)
+		mutate(u)
+		return u
+	}
+	for name, tc := range map[string]struct {
+		existing *unstructured.Unstructured
+		refused  bool
+	}{
+		"controlled by the gateway": {existing: existing(func(*unstructured.Unstructured) {})},
+		"orphaned with its labels": {existing: existing(func(u *unstructured.Unstructured) {
+			u.SetOwnerReferences(nil)
+			u.SetLabels(resources.SelectorLabels(gw))
+		})},
+		"unlabelled and uncontrolled": {existing: existing(func(u *unstructured.Unstructured) {
+			u.SetOwnerReferences(nil)
+		}), refused: true},
+		"labelled but controlled by another": {existing: existing(func(u *unstructured.Unstructured) {
+			u.SetOwnerReferences([]metav1.OwnerReference{{
+				APIVersion: "apps/v1", Kind: "Deployment", Name: "other", UID: "other-uid", Controller: new(true),
+			}})
+			u.SetLabels(resources.SelectorLabels(gw))
+		}), refused: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := fakeClientBuilder().WithRESTMapper(optionalCRDMapper(optionalOwnedGVKs...)).
+				WithObjects(gw, tc.existing).Build()
+			r := newTestGatewayReconciler(c, renderOutput("applied"), &mockValidator{})
+
+			_, applied, err := r.applyOptional(context.Background(), gw, virtualServiceGVK, gw.Name,
+				func(u *unstructured.Unstructured) { u.SetLabels(map[string]string{"built": "yes"}) })
+
+			if got := errors.Is(err, errNotControlled); got != tc.refused {
+				t.Fatalf("errors.Is(err, errNotControlled) = %v (err = %v), want %v", got, err, tc.refused)
+			}
+			if !tc.refused && (err != nil || !applied) {
+				t.Fatalf("applied = %v, err = %v", applied, err)
+			}
+			stored := &unstructured.Unstructured{}
+			stored.SetGroupVersionKind(virtualServiceGVK)
+			if err := c.Get(context.Background(), client.ObjectKeyFromObject(tc.existing), stored); err != nil {
+				t.Fatal(err)
+			}
+			if written := stored.GetLabels()["built"] == "yes"; written == tc.refused {
+				t.Errorf("object written = %v, want %v (labels %v)", written, !tc.refused, stored.GetLabels())
+			}
+			if !tc.refused && !metav1.IsControlledBy(stored, gw) {
+				t.Errorf("not controlled by the gateway after the write: %v", stored.GetOwnerReferences())
+			}
+		})
+	}
+}
+
+// A Service orphaned from the gateway by `kubectl delete --cascade=orphan`
+// still carries its selector labels and is taken back; one the gateway
+// controls is written as always.
+func TestGatewayReconcile_ServiceTheGatewayMayControlIsRewritten(t *testing.T) {
+	for name, existing := range map[string]func(gw *v1alpha1.KrakenDGateway) *corev1.Service{
+		"orphaned with its labels": func(gw *v1alpha1.KrakenDGateway) *corev1.Service {
+			return &corev1.Service{ObjectMeta: metav1.ObjectMeta{
+				Name: gw.Name, Namespace: gw.Namespace, Labels: resources.SelectorLabels(gw),
+			}}
+		},
+		"controlled by the gateway": func(gw *v1alpha1.KrakenDGateway) *corev1.Service {
+			return &corev1.Service{ObjectMeta: metav1.ObjectMeta{
+				Name: gw.Name, Namespace: gw.Namespace, OwnerReferences: ownedBy(gw),
+			}}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			gw := reconciledGateway()
+			svc := existing(gw)
+			svc.Spec.Selector = map[string]string{"app": "stale"}
+			c := fakeClientBuilder().WithObjects(gw, svc).WithStatusSubresource(gw).Build()
+			r := acceptanceReconciler(c, fakeRecorder(), &renderer.RenderOutput{JSON: []byte(`{"version":3}`), Checksum: "cs1"})
+
+			_ = reconcileGateway(t, r, gw)
+
+			var got corev1.Service
+			if err := c.Get(t.Context(), client.ObjectKeyFromObject(svc), &got); err != nil {
+				t.Fatal(err)
+			}
+			if !maps.Equal(got.Spec.Selector, resources.SelectorLabels(gw)) || !metav1.IsControlledBy(&got, gw) {
+				t.Errorf("Service not written: selector %v, ownerReferences %v", got.Spec.Selector, got.OwnerReferences)
+			}
+			cond := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionResourcesControlled)
+			if cond == nil || cond.Status != metav1.ConditionTrue {
+				t.Errorf("ResourcesControlled = %+v, want True", cond)
+			}
+		})
 	}
 }
