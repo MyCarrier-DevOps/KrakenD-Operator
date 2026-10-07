@@ -135,6 +135,9 @@ func TestExclusion_AnInvalidEndpointIsExcludedAndTheRestApplied(t *testing.T) {
 		if !strings.Contains(applied, `"/fixed"`) {
 			return fmt.Errorf("the fixed endpoint is not applied")
 		}
+		if !strings.Contains(applied, `"/good"`) {
+			return fmt.Errorf("the good endpoint is still applied")
+		}
 		if c := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionEndpointsExcluded); c != nil {
 			return fmt.Errorf("EndpointsExcluded = %+v, want it removed", c)
 		}
@@ -145,7 +148,14 @@ func TestExclusion_AnInvalidEndpointIsExcludedAndTheRestApplied(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		return expectCondition(ep, v1alpha1.ConditionAccepted, metav1.ConditionTrue, v1alpha1.ReasonAccepted)
+		if err := expectCondition(ep, v1alpha1.ConditionAccepted, metav1.ConditionTrue, v1alpha1.ReasonAccepted); err != nil {
+			return err
+		}
+		goodEp, err := getEndpoint(good)
+		if err != nil {
+			return err
+		}
+		return expectCondition(goodEp, v1alpha1.ConditionAccepted, metav1.ConditionTrue, v1alpha1.ReasonAccepted)
 	})
 }
 
@@ -188,5 +198,23 @@ func TestExclusion_AnEndpointOfAnInvalidPolicyIsExcludedByName(t *testing.T) {
 			return err
 		}
 		return expectCondition(other, v1alpha1.ConditionAccepted, metav1.ConditionTrue, v1alpha1.ReasonAccepted)
+	})
+	eventually(t, func() error {
+		got, applied, err := appliedConfig(gw)
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(applied, `"/sibling"`) {
+			return fmt.Errorf("applied config does not serve /sibling:\n%s", applied)
+		}
+		ex := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionEndpointsExcluded)
+		if ex == nil || ex.Status != metav1.ConditionTrue || !strings.Contains(ex.Message, ns+"/uses-refused") {
+			return fmt.Errorf("EndpointsExcluded = %+v, want True naming %s/uses-refused", ex, ns)
+		}
+		series, err := excludedEndpointsGauge(ns, gw.Name)
+		if err != nil || len(series) != 1 || series[v1alpha1.ReasonPolicyInvalid] != 1 {
+			return fmt.Errorf("gauge = %v (%v), want PolicyInvalid=1", series, err)
+		}
+		return nil
 	})
 }
