@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/record"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/autoconfig"
@@ -306,11 +307,7 @@ func (r *KrakenDAutoConfigReconciler) recordSync(
 			return fmt.Errorf("updating final status: %w", err)
 		}
 	}
-	gauge := 1.0
-	if synced.Status != metav1.ConditionTrue {
-		gauge = 0
-	}
-	autoConfigSynced.WithLabelValues(ac.Namespace, ac.Name).Set(gauge)
+	r.metrics().SetAutoConfigSynced(client.ObjectKeyFromObject(ac), synced.Status == metav1.ConditionTrue)
 
 	warnings.emit(r.Recorder, ac)
 	if synced.Status != metav1.ConditionTrue && failureChanged(orig, &ac.Status) {
