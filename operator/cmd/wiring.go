@@ -18,8 +18,10 @@ package main
 
 import (
 	"go.opentelemetry.io/otel/trace"
+	"k8s.io/client-go/rest"
 	"k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/mycarrier-devops/krakend-operator/internal/autoconfig"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
@@ -149,4 +151,10 @@ func newKrakenDValidator(path string, tracer trace.Tracer) *renderer.KrakenDVali
 		Executor:   telemetry.TraceExecutor(renderer.NewKrakenDExecutor(path), tracer),
 		BinaryPath: path,
 	})
+}
+
+// newManagerClient builds the manager's client. It is a stub: its reads are
+// not span events.
+func newManagerClient(config *rest.Config, options client.Options) (client.Client, error) {
+	return client.New(config, options)
 }

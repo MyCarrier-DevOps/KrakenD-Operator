@@ -18,11 +18,17 @@ package main
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os/exec"
 	"testing"
 
 	metricnoop "go.opentelemetry.io/otel/metric/noop"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -243,5 +249,30 @@ func TestNewKrakenDValidator_ValidateIsASpanToo(t *testing.T) {
 
 	if len(rec.Ended().Named("true check")) != 1 {
 		t.Errorf("spans = %s, want one \"true check\"", rec.Ended())
+	}
+}
+
+func TestNewManagerClient_ReadsAreSpanEvents(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"apiVersion":"v1","kind":"ConfigMap","metadata":{"namespace":"ns","name":"cm"}}`)
+	}))
+	defer srv.Close()
+	mapper := meta.NewDefaultRESTMapper(nil)
+	mapper.Add(corev1.SchemeGroupVersion.WithKind("ConfigMap"), meta.RESTScopeNamespace)
+	c, err := newManagerClient(&rest.Config{Host: srv.URL}, client.Options{Mapper: mapper})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := tracingtest.New(t)
+	ctx, span := rec.Tracer().Start(context.Background(), "reconcile")
+
+	if err := c.Get(ctx, client.ObjectKey{Namespace: "ns", Name: "cm"}, &corev1.ConfigMap{}); err != nil {
+		t.Fatal(err)
+	}
+	span.End()
+
+	if events := rec.Ended().One(t, "reconcile").Events(); len(events) != 1 || events[0].Name != "k8s.client.get" {
+		t.Errorf("events = %+v, want one k8s.client.get", events)
 	}
 }
