@@ -973,3 +973,12 @@ func TestResolveExternalRefs_ALocalRefWarningCarriesNoCredentials(t *testing.T) 
 	}
 	requireNoSecretWarnings(t, warnings)
 }
+
+func TestResolveExternalRefs_AnOpaqueRefCarriesNoCredentials(t *testing.T) {
+	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"$ref":"https:user:pw@schemas.example.com/x.json?token=secret#/A"}}}}}}`)
+
+	_, _, err := ResolveExternalRefs(context.Background(), main, "https://api.example.com/openapi.json",
+		failingFetcher{err: errors.New("boom")}, FetchSource{})
+
+	requireNoSecrets(t, err)
+}
