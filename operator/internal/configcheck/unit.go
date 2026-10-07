@@ -207,7 +207,7 @@ func (c *Checker) CheckEndpoint(ctx context.Context, u EndpointUnit, memo Memo) 
 	}
 	in := renderer.RenderInput{
 		Gateway: u.Gateway, Endpoints: []v1alpha1.KrakenDEndpoint{*u.Endpoint},
-		Policies: policies, CEFallback: u.CEFallback,
+		Policies: policies, CEFallback: u.CEFallback, Dragonfly: u.Dragonfly,
 	}
 	whole, err := c.lintInput(ctx, in, memo)
 	if err != nil || whole.OK {
