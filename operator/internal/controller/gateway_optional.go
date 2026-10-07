@@ -323,8 +323,9 @@ func (r *KrakenDGatewayReconciler) reconcileDragonfly(ctx context.Context, gw *v
 	if gw.Spec.Dragonfly != nil && gw.Spec.Dragonfly.Enabled {
 		// Without the CRD there is nothing to create: detectDragonflyState
 		// reports DragonflyReady=False/CRDNotInstalled.
-		df, applied, err := r.applyOptional(ctx, gw, dragonflyGVK, resources.DragonflyName(gw),
-			resources.DragonflyConsentLabels(gw), func(u *unstructured.Unstructured) { resources.BuildDragonfly(u, gw) })
+		consent := resources.DragonflyConsentLabels(gw)
+		df, applied, err := r.applyOptional(ctx, gw, dragonflyGVK, resources.DragonflyName(gw), consent,
+			func(u *unstructured.Unstructured) { resources.BuildDragonfly(u, gw) })
 		if applied {
 			r.recordDragonflyRunAsRootCondition(gw, df)
 		}
