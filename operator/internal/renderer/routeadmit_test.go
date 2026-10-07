@@ -233,6 +233,8 @@ func TestRender_RemovingAnEndpointLeavesNoOtherEntryOut(t *testing.T) {
 		// whether or not s's GET /a/{id} already serves that OPTIONS route.
 		{"deleting s with auto_options", autoOptions, []v1alpha1.KrakenDEndpoint{s, d, e},
 			[]v1alpha1.KrakenDEndpoint{d, e}, "GET /a/{id}", "e", "d"},
+		{"moving s off /a/{id} with auto_options", autoOptions, []v1alpha1.KrakenDEndpoint{s, d, e},
+			[]v1alpha1.KrakenDEndpoint{routed("s", 0, "GET", "/c"), d, e}, "GET /a/{id}", "e", "d"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
