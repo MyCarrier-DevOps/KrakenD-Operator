@@ -44,6 +44,43 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: spec.serviceAccountName
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            {{- with .Values.telemetry.otlp }}
+            {{- if .endpoint }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .endpoint | quote }}
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: {{ .protocol | quote }}
+            {{- if .headersSecret.name }}
+            - name: OTEL_EXPORTER_OTLP_HEADERS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .headersSecret.name }}
+                  key: {{ .headersSecret.key }}
+            {{- end }}
+            {{- range $signal, $exported := .signals }}
+            {{- if not $exported }}
+            - name: OTEL_{{ upper $signal }}_EXPORTER
+              value: "none"
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- with .Values.telemetry.traces.sampler }}
+            - name: OTEL_TRACES_SAMPLER
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.telemetry.traces.samplerArg }}
+            - name: OTEL_TRACES_SAMPLER_ARG
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.telemetry.resourceAttributes }}
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: {{ include "krakend-operator.resourceAttributes" . | quote }}
+            {{- end }}
           command:
             - /manager
           args:
@@ -52,6 +89,9 @@ spec:
             {{- end }}
             - --health-probe-bind-address=:{{ .Values.healthProbes.port }}
             - --autoconfig-max-concurrent-reconciles={{ .Values.autoconfig.maxConcurrentReconciles }}
+            {{- if ne .Values.telemetry.logs.format "json" }}
+            - --log-format={{ .Values.telemetry.logs.format }}
+            {{- end }}
             {{- if .Values.metrics.enabled }}
             - --metrics-bind-address=:{{ .Values.metrics.service.port }}
             {{- end }}
