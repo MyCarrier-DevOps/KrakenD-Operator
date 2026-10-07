@@ -86,3 +86,20 @@ func TestAutoConfigAdmission_RulesAreAStructuralSpan(t *testing.T) {
 
 	rec.Ended().RequireChild(t, "admission.validate KrakenDAutoConfig", "admission.structural")
 }
+
+// A policy's admission is one span, with the policy's own check and its
+// krakend run below it.
+func TestPolicyAdmission_IsOneSpanAboveItsCheckAndKrakendRun(t *testing.T) {
+	rec := tracingtest.New(t)
+	v := tracedValidators(rec)
+	admit := tracedValidator{kind: "KrakenDBackendPolicy", next: v.Policy, tracer: rec.Tracer()}
+	policy := &v1alpha1.KrakenDBackendPolicy{ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "default"}}
+
+	if _, err := admit.ValidateCreate(context.Background(), policy); err != nil {
+		t.Fatal(err)
+	}
+
+	spans := rec.Ended()
+	spans.RequireAncestors(t, "krakend check", "configcheck.CheckPolicy", "admission.validate KrakenDBackendPolicy")
+	spans.RequireParent(t, "admission.validate KrakenDBackendPolicy", "configcheck.CheckPolicy")
+}
