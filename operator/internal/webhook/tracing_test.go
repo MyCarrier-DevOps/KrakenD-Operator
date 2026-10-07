@@ -160,12 +160,14 @@ func createReview(t *testing.T, obj client.Object) []byte {
 // through the path SetupWebhooks registers: the validator's span is a child of
 // the request's server span, for every kind.
 func TestSetupWebhooks_EachValidatorSpanIsAChildOfItsRequestsServerSpan(t *testing.T) {
+	policy := &v1alpha1.KrakenDBackendPolicy{ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "default"}}
 	for _, tc := range []struct {
 		kind string
 		obj  client.Object
 	}{
 		{"KrakenDGateway", testGateway()},
 		{"KrakenDEndpoint", testEndpoint("e", "/e")},
+		{"KrakenDBackendPolicy", policy},
 	} {
 		t.Run(tc.kind, func(t *testing.T) {
 			rec := tracingtest.New(t)
