@@ -469,7 +469,7 @@ func TestGatewayReconcile_TheStatusSpanSaysWhetherItWrote(t *testing.T) {
 	}
 
 	for rec, want := range map[*tracingtest.Recorder]string{first: "true", second: "false"} {
-		if got := attrOf(rec.Ended().One(t, "gateway.status"), "written"); got != want {
+		if got := attrOf(rec.Ended().One(t, "gateway.status"), "gateway.status.written"); got != want {
 			t.Errorf("gateway.status written = %q, want %q", got, want)
 		}
 	}
