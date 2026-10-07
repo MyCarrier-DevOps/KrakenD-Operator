@@ -11,6 +11,7 @@ require (
 	github.com/onsi/ginkgo/v2 v2.22.0
 	github.com/onsi/gomega v1.36.1
 	github.com/prometheus/client_golang v1.24.1
+	github.com/prometheus/client_model v0.6.3
 	github.com/prometheus/common v0.72.0
 	github.com/prometheus/otlptranslator v1.0.0
 	github.com/testcontainers/testcontainers-go v0.41.0
@@ -136,7 +137,6 @@ require (
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect
-	github.com/prometheus/client_model v0.6.3 // indirect
 	github.com/prometheus/procfs v0.22.0 // indirect
 	github.com/protocolbuffers/txtpbfmt v0.0.0-20260217160748-a481f6a22f94 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
