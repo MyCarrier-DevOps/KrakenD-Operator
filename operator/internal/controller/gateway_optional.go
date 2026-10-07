@@ -231,16 +231,21 @@ func notControlledIn(err error) []*notControlledError {
 
 // setResourcesControlled records on gw which existing objects this pass left
 // alone, found in the errors err carries: False, naming each and what to do,
-// while there is one, True otherwise.
+// while there is one. It is True only when the pass refused nothing and
+// failed nothing; a pass that failed for another reason could not evaluate
+// every child, so it leaves the condition as it was.
 func (r *KrakenDGatewayReconciler) setResourcesControlled(gw *v1alpha1.KrakenDGateway, err error) {
 	refused := notControlledIn(err)
 	if len(refused) == 0 {
+		if err != nil {
+			return
+		}
 		r.setConditionWithEvent(gw, metav1.Condition{
 			Type:               v1alpha1.ConditionResourcesControlled,
 			Status:             metav1.ConditionTrue,
 			ObservedGeneration: gw.Generation,
 			Reason:             v1alpha1.ReasonResourcesControlled,
-			Message:            "every object the gateway writes is controlled by it",
+			Message:            "no object the gateway wrote was refused",
 		})
 		return
 	}
