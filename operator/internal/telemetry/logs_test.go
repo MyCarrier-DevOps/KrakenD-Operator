@@ -199,7 +199,8 @@ func (failingExporter) Shutdown(context.Context) error   { return nil }
 func (failingExporter) ForceFlush(context.Context) error { return nil }
 
 // An OTLP export failure is reported once; a failing diagnostics pipeline must
-// not report its own failure, which would report a failure, forever.
+// not report its own failure, which would report a failure, forever. Once
+// reported, the next error is reported too.
 func TestInstallLogging_AFailingDiagnosticsPipelineDoesNotReportItselfInALoop(t *testing.T) {
 	logger, _ := newStdoutLogger(t, otellog.SeverityInfo)
 	exports := 0
@@ -208,8 +209,9 @@ func TestInstallLogging_AFailingDiagnosticsPipelineDoesNotReportItselfInALoop(t 
 	telemetry.InstallLogging(logger, telemetry.NewLogger(diag, "opentelemetry"))
 
 	otel.Handle(errors.New("an exporter failed"))
+	otel.Handle(errors.New("an exporter failed again"))
 
-	if exports != 1 {
-		t.Errorf("diagnostics exported %d times for one error, want 1", exports)
+	if exports != 2 {
+		t.Errorf("diagnostics exported %d times for two errors, want 2", exports)
 	}
 }
