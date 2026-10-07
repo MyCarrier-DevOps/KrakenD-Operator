@@ -165,3 +165,36 @@ func TestRender_AnAutoOptionsClashKeepsTheOlderEndpointsEntry(t *testing.T) {
 		t.Errorf("without auto_options conflicts = %+v, want none: the methods' trees are apart", without.EntryConflicts)
 	}
 }
+
+func TestRender_AnEEWildcardOverlapKeepsTheOlderEntry(t *testing.T) {
+	tests := []struct {
+		name      string
+		gateway   *v1alpha1.KrakenDGateway
+		fallback  bool
+		endpoints []v1alpha1.KrakenDEndpoint
+		lostPath  string
+	}{
+		{"the wildcard is older", routedGateway(v1alpha1.EditionEE, nil), false,
+			[]v1alpha1.KrakenDEndpoint{routed("older", 0, "GET", "/p/*"), routed("newer", 1, "GET", "/p/x")}, "/p/x"},
+		{"another method", routedGateway(v1alpha1.EditionEE, nil), false,
+			[]v1alpha1.KrakenDEndpoint{routed("older", 0, "GET", "/p/*"), routed("newer", 1, "POST", "/p/x")}, ""},
+		{"CE fallback strips the wildcard", routedGateway(v1alpha1.EditionEE, nil), true,
+			[]v1alpha1.KrakenDEndpoint{routed("older", 0, "GET", "/p/*"), routed("newer", 1, "GET", "/p/x")}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, err := New(Options{}).Render(RenderInput{Gateway: tt.gateway, CEFallback: tt.fallback, Endpoints: tt.endpoints})
+			if err != nil {
+				t.Fatal(err)
+			}
+			lost := out.EntryConflicts[types.NamespacedName{Namespace: "ns", Name: "newer"}]
+			switch {
+			case tt.lostPath == "" && len(lost) != 0:
+				t.Errorf("newer lost %+v, want nothing", lost)
+			case tt.lostPath != "" && (len(lost) != 1 || lost[0].Endpoint != tt.lostPath ||
+				!strings.Contains(lost[0].Detail, "EE wildcard")):
+				t.Errorf("newer lost %+v, want %s under the EE wildcard rule", lost, tt.lostPath)
+			}
+		})
+	}
+}
