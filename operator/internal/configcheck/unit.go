@@ -88,7 +88,9 @@ type Root struct {
 
 // CheckRoot lints r on its own.
 func (c *Checker) CheckRoot(ctx context.Context, r Root, memo Memo) (Verdict, error) {
-	return c.lintInput(ctx, renderer.RenderInput{Gateway: r.Gateway, CEFallback: r.CEFallback}, memo)
+	return c.lintInput(ctx, renderer.RenderInput{
+		Gateway: r.Gateway, CEFallback: r.CEFallback, Dragonfly: r.Dragonfly,
+	}, memo)
 }
 
 // CheckGroup lints g.
