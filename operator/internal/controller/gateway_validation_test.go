@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -316,5 +317,23 @@ func TestGatewayReconcile_AMaskedEndpointIsJudgedOnTheFastPath(t *testing.T) {
 	}
 	if got := getGateway(t, c, gw).Status.ConfigChecksum; got == applied {
 		t.Errorf("checksum %s unchanged, want the config without e applied", got)
+	}
+}
+
+func TestGatewayReconcile_CountsOnlyTheRejectionsOfObjectsOnTheirOwn(t *testing.T) {
+	gw := reconciledGateway()
+	good, bad := testEndpoint("good", "/a"), badHosted("bad", "/b")
+	c := fakeClientBuilder().WithObjects(gw, good, bad).WithStatusSubresource(gw, good, bad).Build()
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}), rejectsBadHosts())
+	before := testutil.ToFloat64(configValidationFailures)
+
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+
+	// bad's own check counts; the whole render's rejection, which bad
+	// causes, does not.
+	if got := testutil.ToFloat64(configValidationFailures) - before; got != 1 {
+		t.Errorf("counted %v rejections, want 1", got)
 	}
 }
