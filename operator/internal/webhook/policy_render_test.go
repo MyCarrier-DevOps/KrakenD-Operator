@@ -80,6 +80,8 @@ func TestPolicyAdmission_Render(t *testing.T) {
 		{"they already fail together with the stored policy", referencing(), testPolicy(`{}`),
 			[]configcheck.Verdict{ok, ok, fail, fail}, nil, true, "policy,root,group,endpoint,group",
 			"already fail validation together"},
+		{"they fail only together with the change", referencing(), testPolicy(`{}`),
+			[]configcheck.Verdict{ok, ok, fail, ok}, nil, false, "policy,root,group,endpoint,group", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
