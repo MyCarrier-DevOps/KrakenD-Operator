@@ -39,6 +39,7 @@ import (
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 	"github.com/mycarrier-devops/krakend-operator/internal/resources"
+	"github.com/mycarrier-devops/krakend-operator/internal/tracing"
 	"github.com/mycarrier-devops/krakend-operator/internal/util/hash"
 )
 
@@ -144,7 +145,9 @@ var errAppliedConfigMissing = stderrors.New("no ConfigMap holds the applied conf
 // content's address.
 func (r *KrakenDGatewayReconciler) publishConfig(
 	ctx context.Context, gw *v1alpha1.KrakenDGateway, jsonData []byte, checksum string,
-) error {
+) (retErr error) {
+	ctx, span := tracing.Start(ctx, r.Tracer, "gateway.publish_configmap")
+	defer func() { tracing.End(span, retErr) }()
 	name := resources.ConfigMapName(gw, checksum)
 	if found, err := r.verifyExistingConfigMap(ctx, r.Client, gw, checksum); found || err != nil {
 		return err
