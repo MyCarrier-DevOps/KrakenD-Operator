@@ -647,3 +647,28 @@ func TestGatewayReconcile_ASafetyNetFailureOnTheFastPathReportsAnUnappliedExclus
 		t.Errorf("status.conflicts = %+v, want the live %+v kept", live.Status.Conflicts, conflicts)
 	}
 }
+
+func TestGatewayReconcile_AnOutageOnTheFastPathExcludesAndReadmitsNothing(t *testing.T) {
+	gw := reconciledGateway()
+	older, bad := testEndpoint("a", "/same"), badHosted("e", "/same") // e's only entry is masked
+	c := fakeClientBuilder().WithObjects(gw, older, bad).WithStatusSubresource(gw, older, bad).Build()
+	if err := reconcileGateway(t, newTestGatewayReconciler(c, renderer.New(renderer.Options{}),
+		rejectsBadHosts()), gw); err != nil {
+		t.Fatal(err)
+	}
+	if cond := storedAccepted(t, c, client.ObjectKeyFromObject(bad)); cond == nil ||
+		cond.Reason != v1alpha1.ReasonEndpointInvalid {
+		t.Fatalf("e Accepted = %+v, want %s after the first pass", cond, v1alpha1.ReasonEndpointInvalid)
+	}
+
+	val := rejectsBadHosts()
+	val.unavailableAt = 1 // a new process: the first check cannot run
+	if err := reconcileGateway(t, newTestGatewayReconciler(c, renderer.New(renderer.Options{}), val), gw); err == nil {
+		t.Fatal("reconcile succeeded although a check could not run")
+	}
+
+	if cond := storedAccepted(t, c, client.ObjectKeyFromObject(bad)); cond == nil ||
+		cond.Reason != v1alpha1.ReasonEndpointInvalid {
+		t.Errorf("e Accepted = %+v, want %s kept: an outage excludes and readmits nothing", cond, v1alpha1.ReasonEndpointInvalid)
+	}
+}
