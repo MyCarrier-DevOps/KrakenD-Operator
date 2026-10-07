@@ -263,3 +263,30 @@ func TestChecker_CheckGroupSpansItsLint(t *testing.T) {
 
 	rec.Ended().RequireChild(t, "configcheck.CheckGroup", "configcheck.lint")
 }
+
+// A check the memo answered waited for no slot and ran no krakend: neither
+// span is below it.
+func TestChecker_AMemoHitHasNeitherSlotNorKrakendRunBelowIt(t *testing.T) {
+	rec := tracingtest.New(t)
+	c := tracedChecker(rec)
+	memo := mapMemo{}
+	root := Root{Gateway: gateway(v1alpha1.EditionCE)}
+	for range 2 {
+		if _, err := c.CheckRoot(context.Background(), root, memo); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	spans := rec.Ended()
+	hit := spans.Named("configcheck.lint").With(attribute.Bool("configcheck.memo_hit", true))
+	if len(hit) != 1 {
+		t.Fatalf("%d memo hits, want 1; spans: %s", len(hit), spans)
+	}
+	for _, name := range []string{"configcheck.slot", "krakend check"} {
+		for _, span := range spans.Named(name) {
+			if parent := spans.Parent(span); parent != nil && parent.SpanContext().SpanID() == hit[0].SpanContext().SpanID() {
+				t.Errorf("a memo hit has %q below it; spans: %s", name, spans)
+			}
+		}
+	}
+}
