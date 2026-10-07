@@ -135,11 +135,21 @@ func (f *httpFetcher) fetchFromConfigMap(ctx context.Context, source FetchSource
 	return &FetchResult{Data: raw, Checksum: checksum}, nil
 }
 
+// fetchFromURL reads source's URL. Every error it returns names the URL once,
+// redacted, as "fetching <URL>: ...", so a $ref's error tells which document
+// failed, and nothing it wraps may repeat the URL.
 func (f *httpFetcher) fetchFromURL(ctx context.Context, source FetchSource) (*FetchResult, error) {
 	if source.URL == "" {
 		return nil, fmt.Errorf("no URL or ConfigMapRef provided")
 	}
+	result, err := f.get(ctx, source)
+	if err != nil {
+		return nil, fmt.Errorf("fetching %s: %w", RedactURL(source.URL), err)
+	}
+	return result, nil
+}
 
+func (f *httpFetcher) get(ctx context.Context, source FetchSource) (*FetchResult, error) {
 	parsed, err := url.Parse(source.URL)
 	if err != nil {
 		return nil, fmt.Errorf("parsing URL: %w", withoutURL(err))
@@ -148,7 +158,7 @@ func (f *httpFetcher) fetchFromURL(ctx context.Context, source FetchSource) (*Fe
 		return nil, fmt.Errorf("unsupported scheme %q: only http and https are allowed", parsed.Scheme)
 	}
 	if parsed.Hostname() == "" {
-		return nil, fmt.Errorf("URL %s has no host", RedactURL(source.URL))
+		return nil, fmt.Errorf("URL has no host")
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, source.URL, http.NoBody)
@@ -169,7 +179,7 @@ func (f *httpFetcher) fetchFromURL(ctx context.Context, source FetchSource) (*Fe
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("fetching %s: %w", RedactURL(source.URL), withoutURL(err))
+		return nil, withoutURL(err)
 	}
 	defer func() {
 		if cerr := resp.Body.Close(); cerr != nil {
@@ -178,7 +188,7 @@ func (f *httpFetcher) fetchFromURL(ctx context.Context, source FetchSource) (*Fe
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status %d from %s", resp.StatusCode, RedactURL(source.URL))
+		return nil, fmt.Errorf("unexpected status %d", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes+1))
