@@ -268,9 +268,12 @@ func (c *Checker) remembered(ctx context.Context, in renderer.RenderInput, out *
 	return verdictFor(rejection, in, out), nil
 }
 
-// unitPolicies returns the policies u's endpoint references, read through the
-// reader.
+// unitPolicies returns the policies u's endpoint references: u.Policies, or
+// those read through the reader.
 func (c *Checker) unitPolicies(ctx context.Context, u EndpointUnit) (map[string]*v1alpha1.KrakenDBackendPolicy, error) {
+	if u.Policies != nil {
+		return u.Policies, nil
+	}
 	return c.policiesFor(ctx, []v1alpha1.KrakenDEndpoint{*u.Endpoint})
 }
 
