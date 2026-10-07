@@ -1326,7 +1326,9 @@ func (r *KrakenDGatewayReconciler) reconcileHPA(
 // and records what it now runs.
 func (r *KrakenDGatewayReconciler) reconcileDeployment(
 	ctx context.Context, gw *v1alpha1.KrakenDGateway, in infraInputs,
-) (deploymentObservation, error) {
+) (_ deploymentObservation, retErr error) {
+	ctx, span := tracing.Start(ctx, r.Tracer, "apply deployment", trace.WithAttributes(tracing.KeyName.String(gw.Name)))
+	defer func() { tracing.End(span, retErr) }()
 	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace}}
 	var before *corev1.PodTemplateSpec
 	result, err := controllerutil.CreateOrUpdate(ctx, r.Client, dep, func() error {
