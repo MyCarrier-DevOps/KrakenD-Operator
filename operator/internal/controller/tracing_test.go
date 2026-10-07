@@ -425,3 +425,67 @@ func TestGatewayReconcile_TheJobSpanNamesTheJob(t *testing.T) {
 		t.Errorf("apply job k8s.object.name = %q, want the Job's name, prefixed %q", got, want)
 	}
 }
+
+// The reconcile span names the object it reconciles, and carries the ID of the
+// controller-runtime reconcile (empty when no manager ran it).
+func TestGatewayReconcile_TheRootSpanNamesTheGateway(t *testing.T) {
+	gw := testGateway()
+
+	root := reconcileTraced(t, gw).One(t, "reconcile KrakenDGateway")
+
+	for key, want := range map[string]string{
+		"k8s.namespace.name": gw.Namespace, "k8s.object.name": gw.Name, "k8s.object.kind": "KrakenDGateway",
+	} {
+		if got := attrOf(root, key); got != want {
+			t.Errorf("the reconcile span's %s = %q, want %q", key, got, want)
+		}
+	}
+	if !hasAttr(root, "controller_runtime.reconcile_id") {
+		t.Errorf("the reconcile span lacks controller_runtime.reconcile_id: %v", root.Attributes())
+	}
+}
+
+// The status span says whether the stage wrote: the first reconcile writes the
+// status, the next finds it unchanged.
+func TestGatewayReconcile_TheStatusSpanSaysWhetherItWrote(t *testing.T) {
+	gw := testGateway()
+	c, _ := gatewayStatusWrites(gw, testEndpoint("e", "/e"))
+	first := tracingtest.New(t)
+	r := tracedGatewayReconciler(c, krakendValidator(first), first)
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+	second := tracingtest.New(t)
+	r.Tracer = second.Tracer()
+	if err := reconcileGateway(t, r, gw); err != nil {
+		t.Fatal(err)
+	}
+
+	for rec, want := range map[*tracingtest.Recorder]string{first: "true", second: "false"} {
+		if got := attrOf(rec.Ended().One(t, "gateway.status"), "written"); got != want {
+			t.Errorf("gateway.status written = %q, want %q", got, want)
+		}
+	}
+}
+
+// The spans of a write name the object they write.
+func TestGatewayReconcile_TheSpansOfAWriteNameItsObject(t *testing.T) {
+	gw := testGateway()
+
+	spans := reconcileTraced(t, gw, testEndpoint("e", "/e"))
+
+	for _, span := range []string{"apply service", "apply deployment", "gateway.delete_child"} {
+		if got := attrOf(spans.One(t, span), "k8s.object.name"); got != gw.Name {
+			t.Errorf("%s k8s.object.name = %q, want %q", span, got, gw.Name)
+		}
+	}
+}
+
+func hasAttr(span sdktrace.ReadOnlySpan, key string) bool {
+	for _, kv := range span.Attributes() {
+		if string(kv.Key) == key {
+			return true
+		}
+	}
+	return false
+}
