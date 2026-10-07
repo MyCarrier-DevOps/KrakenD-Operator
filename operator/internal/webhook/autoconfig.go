@@ -17,8 +17,11 @@ limitations under the License.
 package webhook
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"net/http"
+	"slices"
 
 	"go.opentelemetry.io/otel/trace"
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -56,7 +59,7 @@ func (v *AutoConfigValidator) ValidateCreate(
 	if err != nil {
 		return nil, unavailable(err)
 	}
-	errs = append(errs, validateFields(ac)...)
+	errs = append(errs, validateFields(ac, nil)...)
 	warnings, err := v.policyRefWarnings(ctx, ac)
 	if err != nil {
 		return nil, unavailable(err)
@@ -96,7 +99,7 @@ func (v *AutoConfigValidator) ValidateUpdate(
 		}
 		errs = refErrs
 	}
-	errs = append(errs, newErrors(validateFields(ac), validateFields(old))...)
+	errs = append(errs, validateFields(ac, old)...)
 	warnings, err := v.policyRefWarnings(ctx, ac)
 	if err != nil {
 		return nil, unavailable(err)
@@ -189,8 +192,22 @@ func (v *AutoConfigValidator) validateGatewayRef(
 	return errs, nil
 }
 
-// validateFields runs the field rules for ac.
-func validateFields(ac *v1alpha1.KrakenDAutoConfig) field.ErrorList {
+// validateFields runs the field rules for ac. With a stored object (an
+// update) it returns only the errors that object did not already have:
+// overrides and defaults are matched on the error text, so an override is
+// matched by its position, while each additional endpoint is matched by its
+// endpoint and method, the key of that map list.
+func validateFields(ac, old *v1alpha1.KrakenDAutoConfig) field.ErrorList {
+	if old == nil {
+		return append(validateFixedFields(ac), validateAdditionalEndpoints(ac, nil)...)
+	}
+	return append(newErrors(validateFixedFields(ac), validateFixedFields(old)),
+		validateAdditionalEndpoints(ac, old)...)
+}
+
+// validateFixedFields runs the field rules for ac that do not concern its
+// additional endpoints.
+func validateFixedFields(ac *v1alpha1.KrakenDAutoConfig) field.ErrorList {
 	var errs field.ErrorList
 	for i, ov := range ac.Spec.Overrides {
 		errs = append(errs, validateExtraConfigAudience(
@@ -206,7 +223,6 @@ func validateFields(ac *v1alpha1.KrakenDAutoConfig) field.ErrorList {
 		)...)
 	}
 
-	errs = append(errs, validateAdditionalEndpoints(ac)...)
 	errs = append(errs, validateOverrideIDs(ac.Name, ac.Spec.Overrides)...)
 
 	return errs
@@ -238,12 +254,48 @@ func validateOverrideIDs(acName string, overrides []v1alpha1.OperationOverride) 
 }
 
 // validateAdditionalEndpoints validates the audience in each additional
-// endpoint's extraConfig; the CRD enforces the rest.
-func validateAdditionalEndpoints(ac *v1alpha1.KrakenDAutoConfig) field.ErrorList {
+// endpoint's extraConfig; the CRD enforces the rest. Given a stored object it
+// skips the entries that are unchanged from it.
+func validateAdditionalEndpoints(ac, old *v1alpha1.KrakenDAutoConfig) field.ErrorList {
 	var errs field.ErrorList
-	for i, ae := range ac.Spec.AdditionalEndpoints {
+	for _, i := range changedAdditionalEndpoints(old, ac) {
 		errs = append(errs, validateExtraConfigAudience(
-			field.NewPath("spec", "additionalEndpoints").Index(i).Child("extraConfig"), ae.ExtraConfig)...)
+			field.NewPath("spec", "additionalEndpoints").Index(i).Child("extraConfig"),
+			ac.Spec.AdditionalEndpoints[i].ExtraConfig)...)
 	}
 	return errs
+}
+
+// changedAdditionalEndpoints returns the positions of ac's additional
+// endpoints that are new or differ from the stored one with the same endpoint
+// and method; an unset method is GET, as the CRD defaults it. Each stored
+// entry matches at most one new entry, so a stored duplicate key cannot vouch
+// for an added copy. With no stored object every entry has changed.
+func changedAdditionalEndpoints(old, ac *v1alpha1.KrakenDAutoConfig) []int {
+	withMethod := func(e v1alpha1.AdditionalEndpoint) v1alpha1.AdditionalEndpoint {
+		e.Method = cmp.Or(e.Method, http.MethodGet)
+		return e
+	}
+	key := func(e v1alpha1.AdditionalEndpoint) string { return e.Method + " " + e.Endpoint }
+	stored := map[string][]v1alpha1.AdditionalEndpoint{}
+	if old != nil {
+		for _, e := range old.Spec.AdditionalEndpoints {
+			e = withMethod(e)
+			stored[key(e)] = append(stored[key(e)], e)
+		}
+	}
+	var changed []int
+	for i, e := range ac.Spec.AdditionalEndpoints {
+		e = withMethod(e)
+		candidates := stored[key(e)]
+		match := slices.IndexFunc(candidates, func(s v1alpha1.AdditionalEndpoint) bool {
+			return equality.Semantic.DeepEqual(s, e)
+		})
+		if match < 0 {
+			changed = append(changed, i)
+			continue
+		}
+		stored[key(e)] = slices.Delete(candidates, match, match+1)
+	}
+	return changed
 }
