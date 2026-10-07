@@ -30,12 +30,13 @@ import (
 	otellog "go.opentelemetry.io/otel/log"
 
 	"github.com/mycarrier-devops/krakend-operator/internal/telemetry"
+	"github.com/mycarrier-devops/krakend-operator/internal/telemetry/telemetrytest"
 )
 
 // flushTelemetry runs when the log pipeline is the thing being shut down, so
 // a failed flush can only be reported on stderr.
 func TestFlushTelemetry_AFailedFlushIsPrintedToStderr(t *testing.T) {
-	clearOTelEnv(t)
+	telemetrytest.ClearOTelEnv(t)
 	hung := make(chan struct{})
 	collector := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-hung }))
 	defer collector.Close()
@@ -59,7 +60,7 @@ func TestFlushTelemetry_AFailedFlushIsPrintedToStderr(t *testing.T) {
 }
 
 func TestFlushTelemetry_ASuccessfulFlushPrintsNothing(t *testing.T) {
-	clearOTelEnv(t)
+	telemetrytest.ClearOTelEnv(t)
 	tel, err := telemetry.Setup(context.Background(), telemetry.Config{
 		LogLevel: otellog.SeverityInfo, Stdout: io.Discard, Registerer: prometheus.NewRegistry(),
 	})

@@ -31,6 +31,7 @@ import (
 	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	"github.com/mycarrier-devops/krakend-operator/internal/telemetry"
+	"github.com/mycarrier-devops/krakend-operator/internal/telemetry/telemetrytest"
 )
 
 // goldenShape is one family of internal/controller/testdata/metrics.golden:
@@ -72,7 +73,7 @@ func readGolden(t *testing.T) map[string]*goldenShape {
 // families are on it only through the recorder the pod's instrumentation
 // builds: a recorder that is missing serves none of them.
 func TestNewInstrumentation_ServesEveryOperatorFamilyOnTheRegistry(t *testing.T) {
-	clearOTelEnv(t)
+	telemetrytest.ClearOTelEnv(t)
 	cfg := telemetryConfig(otellog.SeverityInfo, telemetry.LogFormatJSON)
 	cfg.Stdout = io.Discard
 	tel, err := telemetry.Setup(context.Background(), cfg)

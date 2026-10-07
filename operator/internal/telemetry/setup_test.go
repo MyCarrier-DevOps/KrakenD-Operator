@@ -38,23 +38,8 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/mycarrier-devops/krakend-operator/internal/telemetry"
+	"github.com/mycarrier-devops/krakend-operator/internal/telemetry/telemetrytest"
 )
-
-// cleanOTelEnv empties every OTEL_* variable Setup reads, so the developer's
-// or the CI runner's environment cannot change a test's outcome.
-func cleanOTelEnv(t *testing.T) {
-	t.Helper()
-	for _, name := range []string{
-		"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_PROTOCOL", "OTEL_EXPORTER_OTLP_HEADERS",
-		"OTEL_EXPORTER_OTLP_TRACES_HEADERS", "OTEL_EXPORTER_OTLP_METRICS_HEADERS", "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
-		"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
-		"OTEL_EXPORTER_OTLP_TRACES_PROTOCOL", "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL", "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL",
-		"OTEL_TRACES_EXPORTER", "OTEL_METRICS_EXPORTER", "OTEL_LOGS_EXPORTER",
-		"OTEL_SERVICE_NAME", "OTEL_RESOURCE_ATTRIBUTES", "OTEL_TRACES_SAMPLER", "OTEL_TRACES_SAMPLER_ARG",
-	} {
-		t.Setenv(name, "")
-	}
-}
 
 func setup(t *testing.T, out *bytes.Buffer) *telemetry.Telemetry {
 	t.Helper()
@@ -71,7 +56,7 @@ func setup(t *testing.T, out *bytes.Buffer) *telemetry.Telemetry {
 }
 
 func TestSetup_WithoutAnEndpointNothingIsExported(t *testing.T) {
-	cleanOTelEnv(t)
+	telemetrytest.ClearOTelEnv(t)
 
 	tel := setup(t, &bytes.Buffer{})
 
@@ -81,7 +66,7 @@ func TestSetup_WithoutAnEndpointNothingIsExported(t *testing.T) {
 }
 
 func TestSetup_ResourceNamesTheOperatorItsVersionAndPod(t *testing.T) {
-	cleanOTelEnv(t)
+	telemetrytest.ClearOTelEnv(t)
 	var out bytes.Buffer
 	tel := setup(t, &out)
 
@@ -101,7 +86,7 @@ func TestSetup_ResourceNamesTheOperatorItsVersionAndPod(t *testing.T) {
 }
 
 func TestSetup_ServiceNameFromTheEnvironmentWins(t *testing.T) {
-	cleanOTelEnv(t)
+	telemetrytest.ClearOTelEnv(t)
 	t.Setenv("OTEL_SERVICE_NAME", "operator-staging")
 	var out bytes.Buffer
 	tel := setup(t, &out)
@@ -114,7 +99,7 @@ func TestSetup_ServiceNameFromTheEnvironmentWins(t *testing.T) {
 }
 
 func TestSetup_RejectsAnUnsupportedProtocol(t *testing.T) {
-	cleanOTelEnv(t)
+	telemetrytest.ClearOTelEnv(t)
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4318")
 	t.Setenv("OTEL_EXPORTER_OTLP_PROTOCOL", "http/json")
 
@@ -212,7 +197,7 @@ var otlpSignals = []otlpSignal{
 }
 
 func TestSetup_WithAnEndpointTracesAreRecorded(t *testing.T) {
-	cleanOTelEnv(t)
+	telemetrytest.ClearOTelEnv(t)
 	_, url := newHTTPCollector(t)
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", url)
 	t.Setenv("OTEL_LOGS_EXPORTER", "none")
@@ -231,7 +216,7 @@ func TestSetup_WithAnEndpointTracesAreRecorded(t *testing.T) {
 // metric and a log record are each posted to their http/protobuf path by the
 // time Shutdown returns.
 func TestSetup_ExportsEverySignalOverOTLP(t *testing.T) {
-	cleanOTelEnv(t)
+	telemetrytest.ClearOTelEnv(t)
 	collected, url := newHTTPCollector(t)
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", url)
 	tel := setup(t, &bytes.Buffer{})
@@ -253,7 +238,7 @@ func TestSetup_ExportsEverySignalOverOTLP(t *testing.T) {
 // A collector that accepts connections and never answers must not hold the
 // operator's shutdown past its deadline.
 func TestSetup_ShutdownWithAnUnreachableCollectorReturnsByTheDeadline(t *testing.T) {
-	cleanOTelEnv(t)
+	telemetrytest.ClearOTelEnv(t)
 	hung := make(chan struct{})
 	collector := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-hung }))
 	defer collector.Close()
@@ -282,7 +267,7 @@ func TestSetup_ShutdownWithAnUnreachableCollectorReturnsByTheDeadline(t *testing
 // A value the chart passes through can be malformed; the operator must still
 // start, without that entry, and say so.
 func TestSetup_AMalformedResourceAttributeIsAWarning(t *testing.T) {
-	cleanOTelEnv(t)
+	telemetrytest.ClearOTelEnv(t)
 	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "bad,team=platform")
 	var out bytes.Buffer
 
@@ -322,7 +307,7 @@ func captureOTelDiagnostics(t *testing.T) *bytes.Buffer {
 // cannot read with its value. The signal is not exported, and the warning
 // names the variable, never its value.
 func TestSetup_AMalformedHeaderNeverReachesTheOutput(t *testing.T) {
-	cleanOTelEnv(t)
+	telemetrytest.ClearOTelEnv(t)
 	const secret = "s3cr3t-token"
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:1")
 	t.Setenv("OTEL_EXPORTER_OTLP_HEADERS", "Authorization: Bearer "+secret)
@@ -364,7 +349,7 @@ func TestSetup_ReadsTheHeaderAndEndpointVariablesAsTheExportersDo(t *testing.T) 
 		{"an endpoint that is not a URL", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "http://collector:4318/%zz", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cleanOTelEnv(t)
+			telemetrytest.ClearOTelEnv(t)
 			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:1")
 			t.Setenv(tc.variable, tc.value)
 
@@ -388,7 +373,7 @@ func TestSetup_AMalformedEndpointNeverReachesTheOutput(t *testing.T) {
 		{"a leading space", " http://user:" + secret + "@127.0.0.1:1"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cleanOTelEnv(t)
+			telemetrytest.ClearOTelEnv(t)
 			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", tc.value)
 			diagnostics := captureOTelDiagnostics(t)
 			var out bytes.Buffer
@@ -419,7 +404,7 @@ func TestSetup_AMalformedEndpointNeverReachesTheOutput(t *testing.T) {
 func TestSetup_ExporterNoneDisablesOnlyThatSignal(t *testing.T) {
 	for _, off := range otlpSignals {
 		t.Run(off.name, func(t *testing.T) {
-			cleanOTelEnv(t)
+			telemetrytest.ClearOTelEnv(t)
 			collected, url := newHTTPCollector(t)
 			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", url)
 			t.Setenv("OTEL_"+off.name+"_EXPORTER", "none")
@@ -447,7 +432,7 @@ func TestSetup_ExporterNoneDisablesOnlyThatSignal(t *testing.T) {
 func TestSetup_RejectsAnUnsupportedExporter(t *testing.T) {
 	for _, signal := range otlpSignals {
 		t.Run(signal.name, func(t *testing.T) {
-			cleanOTelEnv(t)
+			telemetrytest.ClearOTelEnv(t)
 			variable := "OTEL_" + signal.name + "_EXPORTER"
 			t.Setenv(variable, "jaeger")
 
@@ -476,7 +461,7 @@ func TestSetup_ProtocolIsTheSignalsThenTheGenericThenHTTP(t *testing.T) {
 	} {
 		for _, signal := range otlpSignals {
 			t.Run(signal.name+"/"+tc.name, func(t *testing.T) {
-				cleanOTelEnv(t)
+				telemetrytest.ClearOTelEnv(t)
 				httpCollected, httpURL := newHTTPCollector(t)
 				grpcCollected, grpcURL := newGRPCCollector(t)
 				for _, other := range otlpSignals {
@@ -517,7 +502,7 @@ func TestSetup_ProtocolIsTheSignalsThenTheGenericThenHTTP(t *testing.T) {
 func TestSetup_ASignalEndpointAloneEnablesThatSignal(t *testing.T) {
 	for _, on := range otlpSignals {
 		t.Run(on.name, func(t *testing.T) {
-			cleanOTelEnv(t)
+			telemetrytest.ClearOTelEnv(t)
 			collected, url := newHTTPCollector(t)
 			t.Setenv("OTEL_EXPORTER_OTLP_"+on.name+"_ENDPOINT", url+on.httpPath)
 			tel := setup(t, &bytes.Buffer{})
@@ -539,7 +524,7 @@ func TestSetup_ASignalEndpointAloneEnablesThatSignal(t *testing.T) {
 // The SDK's own diagnostics go to stdout only. Sent through the OTLP log
 // exporter, a failing export would report itself into the exporter that failed.
 func TestSetup_DiagnosticsAreNeverExportedOverOTLP(t *testing.T) {
-	cleanOTelEnv(t)
+	telemetrytest.ClearOTelEnv(t)
 	collected, url := newHTTPCollector(t)
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", url)
 	var out bytes.Buffer
@@ -563,7 +548,7 @@ func TestSetup_DiagnosticsAreNeverExportedOverOTLP(t *testing.T) {
 func TestSetup_AWhitespaceEndpointDoesNotEnableExport(t *testing.T) {
 	for _, variable := range []string{"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"} {
 		t.Run(variable, func(t *testing.T) {
-			cleanOTelEnv(t)
+			telemetrytest.ClearOTelEnv(t)
 			t.Setenv(variable, " ")
 
 			tel := setup(t, &bytes.Buffer{})
@@ -578,7 +563,7 @@ func TestSetup_AWhitespaceEndpointDoesNotEnableExport(t *testing.T) {
 // Shutdown can be called again, as the operator's deferred call and a test's
 // cleanup both do: the second call stops nothing and reports nothing.
 func TestSetup_ShutdownTwiceIsANoOp(t *testing.T) {
-	cleanOTelEnv(t)
+	telemetrytest.ClearOTelEnv(t)
 	tel := setup(t, &bytes.Buffer{})
 	if err := tel.Shutdown(context.Background()); err != nil {
 		t.Fatal(err)
