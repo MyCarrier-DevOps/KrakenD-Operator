@@ -176,6 +176,8 @@ func TestRender_AnEEWildcardOverlapKeepsTheOlderEntry(t *testing.T) {
 	}{
 		{"the wildcard is older", routedGateway(v1alpha1.EditionEE, nil), false,
 			[]v1alpha1.KrakenDEndpoint{routed("older", 0, "GET", "/p/*"), routed("newer", 1, "GET", "/p/x")}, "/p/x"},
+		{"the wildcard is newer", routedGateway(v1alpha1.EditionEE, nil), false,
+			[]v1alpha1.KrakenDEndpoint{routed("older", 0, "GET", "/p/x"), routed("newer", 1, "GET", "/p/*")}, "/p/*"},
 		{"another method", routedGateway(v1alpha1.EditionEE, nil), false,
 			[]v1alpha1.KrakenDEndpoint{routed("older", 0, "GET", "/p/*"), routed("newer", 1, "POST", "/p/x")}, ""},
 		{"CE fallback strips the wildcard", routedGateway(v1alpha1.EditionEE, nil), true,
