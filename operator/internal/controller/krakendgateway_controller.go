@@ -679,8 +679,8 @@ func findDeploymentCondition(
 
 // reconcileConfig is the config stage. It decides which render becomes the
 // applied config (status.configChecksum), and it is the only code that writes
-// config content. A render that is not the applied config is judged by
-// decide. Reconcile returns the stage's error only after the infrastructure
+// config content. The newest render is judged by decide, so an endpoint that
+// fails on its own is excluded and the rest applied. Reconcile returns the stage's error only after the infrastructure
 // stage has run, so a rejected or unjudged render never stops drift
 // correction of the gateway's other resources. The result's output is the
 // render the rest of the pass reports on.
@@ -692,9 +692,6 @@ func (r *KrakenDGatewayReconciler) reconcileConfig(
 	output *renderer.RenderOutput,
 	edition v1alpha1.Edition,
 ) (configResult, error) {
-	if isApplied(gw, output, edition) {
-		return r.serveApplied(ctx, gw, before, output, edition, nil)
-	}
 	d, err := r.decide(ctx, gw, in, output, edition)
 	if err != nil {
 		res, err := r.keepApplied(ctx, gw, r.handleValidatorUnavailable(gw, before, err))
