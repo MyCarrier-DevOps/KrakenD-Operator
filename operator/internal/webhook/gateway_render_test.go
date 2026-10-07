@@ -63,19 +63,19 @@ func TestGatewayAdmission_Render(t *testing.T) {
 		{"update keeps it passing", old, []client.Object{ep}, nil, nil, true, "root,group", ""},
 		{"update breaks a served endpoint", old, []client.Object{ep},
 			[]configcheck.Verdict{ok, fail}, []configcheck.EndpointVerdict{epFail, epOK}, false,
-			"root,group,root,endpoint,endpoint", ""},
+			"root,group,root,group,endpoint,endpoint", ""},
 		{"update of a gateway whose endpoints already fail", old, []client.Object{ep},
 			[]configcheck.Verdict{ok, fail}, []configcheck.EndpointVerdict{epFail, epFail}, true,
-			"root,group,root,endpoint,endpoint", "already fail validation with the stored config"},
+			"root,group,root,group,endpoint,endpoint", "already fail validation with the stored config"},
 		{"update breaks the root", old, []client.Object{ep}, []configcheck.Verdict{fail, ok}, nil, false, "root,root", ""},
 		{"update of a root that already fails", old, []client.Object{ep}, []configcheck.Verdict{fail, fail}, nil, true,
 			"root,root", "already fails validation on its own"},
 		{"update of a gateway whose endpoints already fail together", old, []client.Object{ep},
 			[]configcheck.Verdict{ok, fail, ok, fail}, []configcheck.EndpointVerdict{epOK}, true,
-			"root,group,root,endpoint,group", "already fail validation together"},
+			"root,group,root,group,endpoint", "already fail validation together"},
 		{"update makes the endpoints fail only together", old, []client.Object{ep},
 			[]configcheck.Verdict{ok, fail, ok, ok}, []configcheck.EndpointVerdict{epOK}, false,
-			"root,group,root,endpoint,group", ""},
+			"root,group,root,group,endpoint", ""},
 		{"create whose waiting endpoint lost an entry that fails on its own", nil, []client.Object{ep},
 			[]configcheck.Verdict{ok, {OK: true, Masked: []types.NamespacedName{{Namespace: "default", Name: "ep"}}}},
 			[]configcheck.EndpointVerdict{epFail}, true, "root,group,endpoint", "default/ep"},
@@ -210,7 +210,8 @@ func TestGatewayAdmission_ValidatorUnavailableIs500(t *testing.T) {
 		{"update, the root", old, nil, 1},
 		{"update, the stored root", old, []configcheck.Verdict{fail}, 2},
 		{"update, the served endpoints", old, nil, 2},
-		{"update, an endpoint on its own", old, []configcheck.Verdict{{OK: true}, fail}, 3},
+		{"update, the stored served endpoints", old, []configcheck.Verdict{{OK: true}, fail}, 4},
+		{"update, an endpoint on its own", old, []configcheck.Verdict{{OK: true}, fail, {OK: true}, fail}, 5},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -246,8 +247,8 @@ func TestGatewayAdmission_ChecksRunUnderTheAdmissionBudget(t *testing.T) {
 
 	review(t, &GatewayValidator{Client: fakeClient(testEndpoint("ep", "/a")), Checker: chk}, "alice", edited, old)
 
-	if len(chk.deadlines) != 5 {
-		t.Fatalf("%d checks ran, want 5", len(chk.deadlines))
+	if len(chk.deadlines) != 6 {
+		t.Fatalf("%d checks ran, want 6", len(chk.deadlines))
 	}
 	for i, left := range chk.deadlines {
 		if left <= 0 || left > admissionBudget {
@@ -636,17 +637,17 @@ func TestGatewayAdmission_ChecksTheNewGatewayThenTheStoredOne(t *testing.T) {
 		wantGateways     string
 	}{
 		{"same edition", v1alpha1.EditionCE, v1alpha1.EditionCE, []configcheck.Verdict{ok, fail},
-			[]configcheck.EndpointVerdict{epFail, epOK}, "CE/5s,CE/5s,CE/3s,CE/5s,CE/3s"},
+			[]configcheck.EndpointVerdict{epFail, epOK}, "CE/5s,CE/5s,CE/3s,CE/3s,CE/5s,CE/3s"},
 		{"Enterprise to Community", v1alpha1.EditionEE, v1alpha1.EditionCE, []configcheck.Verdict{ok, fail},
-			[]configcheck.EndpointVerdict{epFail, epOK}, "CE/5s,CE/5s,EE/3s,CE/5s,EE/3s"},
+			[]configcheck.EndpointVerdict{epFail, epOK}, "CE/5s,CE/5s,EE/3s,EE/3s,CE/5s,EE/3s"},
 		{"the root fails, same edition", v1alpha1.EditionCE, v1alpha1.EditionCE, []configcheck.Verdict{fail, ok},
 			nil, "CE/5s,CE/3s"},
 		{"the root fails, Enterprise to Community", v1alpha1.EditionEE, v1alpha1.EditionCE,
 			[]configcheck.Verdict{fail, ok}, nil, "CE/5s,EE/3s"},
 		{"fails only together, same edition", v1alpha1.EditionCE, v1alpha1.EditionCE,
-			[]configcheck.Verdict{ok, fail, ok}, []configcheck.EndpointVerdict{epOK}, "CE/5s,CE/5s,CE/3s,CE/5s,CE/3s"},
+			[]configcheck.Verdict{ok, fail, ok}, []configcheck.EndpointVerdict{epOK}, "CE/5s,CE/5s,CE/3s,CE/3s,CE/5s"},
 		{"fails only together, Enterprise to Community", v1alpha1.EditionEE, v1alpha1.EditionCE,
-			[]configcheck.Verdict{ok, fail, ok}, []configcheck.EndpointVerdict{epOK}, "CE/5s,CE/5s,EE/3s,CE/5s,EE/3s"},
+			[]configcheck.Verdict{ok, fail, ok}, []configcheck.EndpointVerdict{epOK}, "CE/5s,CE/5s,EE/3s,EE/3s,CE/5s"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
