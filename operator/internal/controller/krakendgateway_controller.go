@@ -818,8 +818,8 @@ func (r *KrakenDGatewayReconciler) validateConfig(
 }
 
 // handleValidationError records a rejected configuration: ConfigValid=False
-// with message (bounded by truncateMessage to 4 KiB; the full output is in
-// the log). The Warning event fires only when the recorded
+// with message (bounded by truncateMessage to 4 KiB; the log holds the
+// rejection bounded to 16 KiB). The Warning event fires only when the recorded
 // verdict changes, so a gateway that keeps rendering the same rejected config
 // stays quiet. The applied config is left alone; the status, with the derived
 // Ready and phase, is written at the end of Reconcile after the
