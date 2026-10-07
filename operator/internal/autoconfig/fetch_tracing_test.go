@@ -223,6 +223,7 @@ func TestRedactURL(t *testing.T) {
 		},
 		{"the fragment is dropped", "https://example.com/s.json#/Pet", "https://example.com/s.json"},
 		{"an unparseable URL is reduced", "http://host:badport/x?sig=S", "<unparseable URL>"},
+		{"a bare query key is replaced", "https://example.com/s.json?SECRETKEY", "https://example.com/s.json?REDACTED"},
 		{"the opaque form is reduced", "https:user:pw@example.com/s.json?t=1", "<unparseable URL>"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
