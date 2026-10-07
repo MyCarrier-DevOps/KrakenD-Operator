@@ -23,6 +23,7 @@ import (
 	"maps"
 	"slices"
 
+	"go.opentelemetry.io/otel/trace"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -35,6 +36,7 @@ import (
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
 	"github.com/mycarrier-devops/krakend-operator/internal/fieldindex"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
+	"github.com/mycarrier-devops/krakend-operator/internal/tracing"
 )
 
 // PolicyValidator validates KrakenDBackendPolicy resources.
@@ -45,6 +47,9 @@ type PolicyValidator struct {
 	// Memo remembers recent config verdicts across requests. Nil remembers
 	// nothing.
 	Memo configcheck.Memo
+	// Tracer records the screening and judging of each gateway as spans; nil
+	// records none.
+	Tracer trace.Tracer
 }
 
 // ValidateCreate validates a new KrakenDBackendPolicy.
@@ -55,7 +60,7 @@ func (v *PolicyValidator) ValidateCreate(ctx context.Context, obj runtime.Object
 	}
 	ctx, cancel := context.WithTimeout(ctx, admissionBudget)
 	defer cancel()
-	return checkPolicyRender(ctx, v.Client, v.Checker, v.Memo, nil, policy)
+	return checkPolicyRender(ctx, v.Tracer, v.Client, v.Checker, v.Memo, nil, policy)
 }
 
 // ValidateUpdate validates an updated KrakenDBackendPolicy. An update that
@@ -79,7 +84,7 @@ func (v *PolicyValidator) ValidateUpdate(
 	}
 	ctx, cancel := context.WithTimeout(ctx, admissionBudget)
 	defer cancel()
-	return checkPolicyRender(ctx, v.Client, v.Checker, v.Memo, old, policy)
+	return checkPolicyRender(ctx, v.Tracer, v.Client, v.Checker, v.Memo, old, policy)
 }
 
 // ValidateDelete is required by admission.CustomValidator. The policy webhook is
@@ -112,9 +117,10 @@ const policyWarningLimit = (policyWarningBytes - countWarningBytes) / maxPolicyW
 // gateway by gateway (judgePolicyUse), so naming the endpoints of one gateway
 // cannot spend the time another gateway's checks need. A denial names
 // endpoints and quotes none of them. A gateway that could not be checked makes
-// the request a 500 unless another gateway already refuses it.
-func checkPolicyRender(ctx context.Context, c client.Reader, chk ConfigChecker, memo configcheck.Memo,
-	old, policy *v1alpha1.KrakenDBackendPolicy) (admission.Warnings, error) {
+// the request a 500 unless another gateway already refuses it. Each gateway's
+// screening is an admission.screen_policy span of tracer.
+func checkPolicyRender(ctx context.Context, tracer trace.Tracer, c client.Reader, chk ConfigChecker,
+	memo configcheck.Memo, old, policy *v1alpha1.KrakenDBackendPolicy) (admission.Warnings, error) {
 	if err := lintPolicyAlone(ctx, chk, memo, old, policy); err != nil {
 		return nil, err
 	}
@@ -150,7 +156,11 @@ func checkPolicyRender(ctx context.Context, c client.Reader, chk ConfigChecker, 
 					gw.Namespace, gw.Name)))
 			continue
 		}
-		screened = append(screened, screenPolicyUse(ctx, chk, memo, gw, uses[i].endpoints, policy))
+		sctx, span := tracing.Start(ctx, tracer, "admission.screen_policy",
+			trace.WithAttributes(tracing.Object("KrakenDGateway", gw)...))
+		use := screenPolicyUse(sctx, chk, memo, gw, uses[i].endpoints, policy)
+		tracing.End(span, use.err)
+		screened = append(screened, use)
 	}
 	for _, use := range screened {
 		broken, warning, err := judgePolicyUse(ctx, chk, memo, use, old, policy)
