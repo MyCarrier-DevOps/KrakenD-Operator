@@ -183,6 +183,12 @@ func refusedAlone(routes []ginRoute) bool {
 	return slices.ContainsFunc(routes, func(r ginRoute) bool { return registerRoute(gin.New(), r) != "" })
 }
 
+// sharedOptions reports whether a and b are the one OPTIONS route
+// router.auto_options registers for a path that several entries share.
+func sharedOptions(a, b ginRoute) bool {
+	return a.method == http.MethodOptions && b.method == http.MethodOptions && a.path == b.path
+}
+
 // registerEntry registers routes in engine. When gin refuses one it reports
 // refused, and, when one served route of another KrakenDEndpoint alone
 // clashes with it, that endpoint as the winner and the clash as detail. The
@@ -232,6 +238,9 @@ func olderClash(rules routeRules, older []routedEntry, dropped []routedRoute, en
 			continue
 		}
 		for _, r := range routes {
+			if sharedOptions(d.route, r) {
+				continue
+			}
 			if refusal := registerRoute(engineWith([]ginRoute{d.route}), r); refusal != "" {
 				return d.source, fmt.Sprintf("%s clashes with %s: %s", r.describe(), d.route.describe(), refusal), true
 			}
