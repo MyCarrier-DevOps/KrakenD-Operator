@@ -83,6 +83,10 @@ func (v tracedValidator) start(
 // reached. The failure's own text is on the span that failed.
 const decisionFailed = "the admission could not be decided"
 
+// rulesFailed is the description of a rules span whose failure was a status
+// error: its text can carry the tenant's values.
+const rulesFailed = "the rules could not be evaluated"
+
 // endDecision ends span, the span of a decision that returned err. The span
 // records neither a denial (see isDenial), which is an answer and can quote the
 // tenant's object, nor the text of a failure, which the span that failed

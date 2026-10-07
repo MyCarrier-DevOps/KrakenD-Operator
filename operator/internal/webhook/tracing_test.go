@@ -718,3 +718,38 @@ func TestIsDenial_ReadsTheStatusErrorInTheChain(t *testing.T) {
 		})
 	}
 }
+
+// A rules span records the rules' own failure, but never the text of a status
+// error, which can carry the tenant's values: only that the rules failed.
+func TestEndRules_RecordsAFailureWithoutAStatusErrorsText(t *testing.T) {
+	denial := invalid(kindEndpoint, "e", field.ErrorList{field.Invalid(field.NewPath("spec"), "TENANT-VALUE", "d")})
+	for _, tc := range []struct {
+		name       string
+		err        error
+		wantStatus codes.Code
+		wantText   string
+	}{
+		{"a denial", denial, codes.Unset, ""},
+		{"a wrapped denial", fmt.Errorf("checking: %w", denial), codes.Unset, ""},
+		{"a failure reported as a status", unavailable(errors.New("TENANT-VALUE")), codes.Error, rulesFailed},
+		{"a plain failure", errors.New("lookup failed"), codes.Error, "lookup failed"},
+		{"no error", nil, codes.Unset, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := tracingtest.New(t)
+			_, span := rec.Tracer().Start(context.Background(), "rules")
+
+			endRules(span, tc.err)
+
+			got := rec.Ended().One(t, "rules")
+			if got.Status().Code != tc.wantStatus || got.Status().Description != tc.wantText {
+				t.Errorf("status = %+v, want %v %q", got.Status(), tc.wantStatus, tc.wantText)
+			}
+			for _, event := range got.Events() {
+				if strings.Contains(fmt.Sprint(event.Attributes), "TENANT") {
+					t.Errorf("event %v carries the tenant's text", event)
+				}
+			}
+		})
+	}
+}
