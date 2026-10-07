@@ -2413,33 +2413,85 @@ before. The gateway webhook now reviews the requester's access for a
 post-restart Job that runs as another ServiceAccount, reads a Secret, or
 relaxes the operator's default security context (see *Complete admission*), so
 a gateway writer cannot use the operator to borrow those rights. It does not
-review `podLabels` or the `podAnnotations` other than the AppArmor one. One adoption path is not closed by that, and it is the same on
-every install method: the gateway reconciler creates or updates a ServiceAccount
-named like the gateway and adopts one that already exists with no controller, so
-a user who may create KrakenDGateways in a namespace can run `spec.image` as
-any such ServiceAccount by giving the gateway its name. A ServiceAccount that
-another controller owns is neither adopted nor run as:
+review `podLabels` or the `podAnnotations` other than the AppArmor one.
 
-- While the gateway does not control it, the Deployment and the post-restart Job
-  are held. The operator logs `holding the Deployment and the post-restart Job:
+The gateway no longer takes over an object it does not control. Earlier versions
+created or updated a ServiceAccount, Service, PodDisruptionBudget,
+HorizontalPodAutoscaler, Deployment, Dragonfly, ExternalSecret or VirtualService
+named like the gateway, and adopted one that already existed with no controller.
+That let a user who may create KrakenDGateways in a namespace, but not pods, run
+`spec.image` as any unowned ServiceAccount of that namespace by giving the
+gateway its name, and redirect an unowned Service to the gateway's pods. The same
+holds on every install method. Now the gateway writes an existing object only
+when:
+
+- it already controls it (its owner reference names this gateway), or
+- it has no controller and carries the gateway's selector labels
+  `app.kubernetes.io/instance: <gateway name>` and
+  `app.kubernetes.io/managed-by: krakend-operator`.
+
+Only someone who can write the object can set those labels, so the labels are
+the hand-over. An object that `kubectl delete --cascade=orphan` left behind
+still carries them, so a gateway recreated after an orphan delete takes its
+children back. An object that another controller owns is never taken over, and
+the labels do not change that.
+
+Nothing is needed on an existing install: the objects earlier versions created
+or adopted already carry the gateway's owner reference. What changes is a gateway
+whose name matches an object that predates it and carries neither the owner
+reference nor the labels: the object is left exactly as it is, and the gateway
+reports it.
+
+- `ResourcesControlled` is `False` with reason `ResourceNotControlled`, and its
+  message names each refused object's kind and `<namespace>/<name>` and its
+  controller if it has one, then the remedy: rename the gateway, or label the
+  object to hand it over. `Ready` carries the same reason, with phase `Error`.
+  The condition is `True` while nothing is refused.
+- A ServiceAccount the gateway does not control holds the Deployment and the
+  post-restart Job, whether another controller owns it or nothing does. The
+  operator logs `holding the Deployment and the post-restart Job:
   serviceaccount <ns>/<name> is not controlled by gateway <name>`, and still
-  reconciles the Service, PodDisruptionBudget, Dragonfly, ExternalSecret and
-  VirtualService.
-- The hold returns an error, like any other failed child. A new gateway's
-  `Ready` reads `AwaitingAvailability`. `status.observedGeneration` stays behind
-  `metadata.generation`, so kstatus and Flux show the gateway in progress, only
-  for a new gateway or after an edit of the gateway's own spec. Otherwise (an
-  endpoint, policy, license Secret or plugin ConfigMap change, a CE-fallback flip,
-  or nothing pending) the status shows nothing: `Ready` can stay `True` while the
-  Deployment keeps what it runs, and only the operator log names the hold. The
-  reconcile is retried with backoff, which is what
-  recovers it once the conflict is gone, because nothing watches a ServiceAccount
-  the gateway does not own.
-- A Deployment that already runs as that ServiceAccount is held as it is, and
-  its pods keep running until the conflict is resolved.
+  reconciles the other children. A Deployment that already runs as that
+  ServiceAccount is held as it is, and its pods keep running until the conflict
+  is resolved.
+- A refused Service, PodDisruptionBudget or HorizontalPodAutoscaler is left
+  alone while the rest is reconciled. A refused Deployment is left alone and
+  the post-restart Job waits for it.
+- The refusal returns an error, like any other failed child, and the reconcile
+  is retried with backoff. Nothing watches an object the gateway does not
+  control, so after you label one, edit the gateway or restart the operator to
+  retry at once.
 
-Treat the right to create KrakenDGateways in a namespace as the right to run pods
-as that namespace's unowned ServiceAccounts, and grant it accordingly.
+To hand over an object you pre-created on purpose (for example a ServiceAccount
+that carries a workload-identity annotation), label it:
+
+```bash
+kubectl label serviceaccount <name> -n <ns> \
+  app.kubernetes.io/instance=<gateway name> \
+  app.kubernetes.io/managed-by=krakend-operator
+```
+
+The gateway then takes it over on the next reconcile: it becomes the controller,
+replaces the labels with its own, and keeps the annotations. Deleting the
+gateway then deletes the object, as for any child it created.
+
+Earlier versions may already have adopted a ServiceAccount you did not
+intend. Adopted ServiceAccounts are the ones a KrakenDGateway controls although
+they did not come from the gateway: they carry annotations the operator never
+sets, such as `azure.workload.identity/client-id` or `eks.amazonaws.com/role-arn`:
+
+```bash
+kubectl get serviceaccounts -A -o json | jq -r '
+  .items[]
+  | select(any(.metadata.ownerReferences[]?; .kind == "KrakenDGateway" and .controller == true))
+  | select((.metadata.annotations // {}) | keys | any(test("workload.identity|role-arn")))
+  | "\(.metadata.namespace)/\(.metadata.name)"'
+```
+
+Compare each hit with the RoleBindings and ClusterRoleBindings that name it as a
+subject. To give one back, remove the gateway's owner reference and the
+`app.kubernetes.io/instance` and `app.kubernetes.io/managed-by` labels from it,
+and rename the gateway so it does not take the object again.
 
 For OLM users: the bundle now supports only the `AllNamespaces` install mode.
 The operator watches every namespace, and under `OwnNamespace` or
