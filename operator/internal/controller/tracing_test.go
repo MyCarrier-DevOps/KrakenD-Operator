@@ -559,6 +559,7 @@ func reconcileACTraced(t *testing.T) tracingtest.Spans {
 func TestAutoConfigReconcile_SpansEachStageUnderItsParent(t *testing.T) {
 	for _, tc := range []struct{ span, parent string }{
 		{"autoconfig.fetch_spec", "reconcile KrakenDAutoConfig"},
+		{"autoconfig.resolve_refs", "autoconfig.fetch_spec"},
 	} {
 		t.Run(tc.span, func(t *testing.T) {
 			spans := reconcileACTraced(t)
