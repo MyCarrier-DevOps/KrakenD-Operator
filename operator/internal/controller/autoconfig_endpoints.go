@@ -382,10 +382,18 @@ func (r *KrakenDAutoConfigReconciler) precheck(
 // holdMessageLimit bounds a held candidate's own krakend output, in bytes.
 const holdMessageLimit = 1024
 
-// judgeCandidates holds each candidate that fails validation on its own
-// (configcheck.CheckEndpoint), with its own message. Other endpoints of the
-// gateway are never rendered with a candidate, so their content can neither
-// hold one nor reach its message. Every check holds one of CheckSlots.
+// judgeCandidates holds each candidate that fails validation on its own,
+// with its own message, in the order that runs the fewest checks:
+//  1. the gateway root alone: when it fails, no candidate is to blame and
+//     none is judged, so all are written;
+//  2. the root with every candidate together (the group);
+//  3. each candidate the group does not vouch for, on its own
+//     (configcheck.CheckEndpoint): every one when the group fails, otherwise
+//     those that lost an entry in the group's render (suspects).
+//
+// Other endpoints of the gateway are never rendered with a candidate, so
+// their content can neither hold one nor reach its message. Every check
+// holds one of CheckSlots and answers from the AutoConfig's verdict memo.
 func (r *KrakenDAutoConfigReconciler) judgeCandidates(
 	ctx context.Context,
 	ac *v1alpha1.KrakenDAutoConfig,
@@ -397,9 +405,12 @@ func (r *KrakenDAutoConfigReconciler) judgeCandidates(
 	if len(candidates) == 0 {
 		return held, nil
 	}
+	key := client.ObjectKeyFromObject(ac)
+	pass := r.verdicts.begin(key)
+	defer func() { r.verdicts.end(key, pass, err != nil) }()
 	ceFallback := configcheck.CEFallback(gw)
 	root, err := withCheckSlot(ctx, r.CheckSlots, func() (configcheck.Verdict, error) {
-		return r.Checker.CheckRoot(ctx, configcheck.Root{Gateway: gw, CEFallback: ceFallback}, nil)
+		return r.Checker.CheckRoot(ctx, configcheck.Root{Gateway: gw, CEFallback: ceFallback}, pass)
 	})
 	if err != nil || !root.OK {
 		return held, err
@@ -407,7 +418,7 @@ func (r *KrakenDAutoConfigReconciler) judgeCandidates(
 	group, err := withCheckSlot(ctx, r.CheckSlots, func() (configcheck.Verdict, error) {
 		return r.Checker.CheckGroup(ctx, configcheck.Group{
 			Gateway: gw, Endpoints: checkSet(candidates, nil, order, false), CEFallback: ceFallback,
-		}, nil)
+		}, pass)
 	})
 	if err != nil {
 		return held, err
@@ -415,7 +426,7 @@ func (r *KrakenDAutoConfigReconciler) judgeCandidates(
 	for _, ep := range suspects(candidates, group) {
 		v, err := withCheckSlot(ctx, r.CheckSlots, func() (configcheck.EndpointVerdict, error) {
 			unit := configcheck.EndpointUnit{Gateway: gw, Endpoint: ep, CEFallback: ceFallback}
-			return r.Checker.CheckEndpoint(ctx, unit, nil)
+			return r.Checker.CheckEndpoint(ctx, unit, pass)
 		})
 		if err != nil {
 			return nil, err
