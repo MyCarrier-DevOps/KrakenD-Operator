@@ -890,7 +890,8 @@ func TestResolveExternalRefs_AFailedFetchErrorCarriesNoCredentials(t *testing.T)
 	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"$ref":"` + refWithSecrets + `#/A"}}}}}}`)
 
 	_, _, err := ResolveExternalRefs(context.Background(), main, "https://api.example.com/openapi.json",
-		failingFetcher{err: errors.New("boom")}, FetchSource{})
+		failingFetcher{err: errors.New("fetching https://schemas.example.com/x.json?token=REDACTED: boom")},
+		FetchSource{})
 
 	requireNoSecrets(t, err)
 	if !strings.Contains(err.Error(), "https://schemas.example.com/x.json") {
