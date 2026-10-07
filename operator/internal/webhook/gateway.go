@@ -1169,6 +1169,8 @@ func warnWaiting(ctx context.Context, chk ConfigChecker, memo configcheck.Memo, 
 		return admission.Warnings{waitingFail + ": " + brokenList(s, 2*warningLimit-len(waitingFail+": "))}
 	case s.stopped != nil:
 		return admission.Warnings{truncate(couldNotCheckWaiting+s.stopped.Error(), warningLimit)}
+	case !group.OK:
+		return admission.Warnings{waitingFail + ": they fail validation together, though each passes on its own"}
 	}
 	return nil
 }
