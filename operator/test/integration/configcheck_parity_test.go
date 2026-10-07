@@ -308,7 +308,7 @@ func TestConfigCheckParity(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			controller, err := checker.CheckRendered(ctx, in, out)
+			controller, err := checker.CheckRendered(ctx, in, out, nil)
 			if err != nil {
 				t.Fatal(err)
 			}

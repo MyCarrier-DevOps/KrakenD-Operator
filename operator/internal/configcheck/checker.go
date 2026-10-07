@@ -70,10 +70,11 @@ func (c *Checker) Gather(ctx context.Context, gw *v1alpha1.KrakenDGateway,
 
 // CheckRendered validates out, rendered from in, with the full check the
 // gateway controller publishes behind (Validator.Validate: krakend check -t -n
-// after the route check).
+// after the route check), answering from memo when it already judged the same
+// content.
 func (c *Checker) CheckRendered(ctx context.Context, in renderer.RenderInput,
-	out *renderer.RenderOutput) (Verdict, error) {
-	return c.check(ctx, in, out, c.validator.Validate)
+	out *renderer.RenderOutput, memo Memo) (Verdict, error) {
+	return c.remembered(ctx, in, out, modeValidate, c.validator.Validate, memo)
 }
 
 // CheckGateway lints gw's config: its current endpoints with replace

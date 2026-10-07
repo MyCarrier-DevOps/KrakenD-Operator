@@ -287,7 +287,7 @@ func TestCheckRendered_AVerdictCarriesTheValidatorsRejection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	verdict, err := c.CheckRendered(context.Background(), in, out)
+	verdict, err := c.CheckRendered(context.Background(), in, out, nil)
 
 	if err != nil || verdict.OK || verdict.Rejection != rejection {
 		t.Errorf("verdict = %+v, err = %v; want a rejection carrying %v", verdict, err, rejection)
@@ -397,7 +397,7 @@ func TestCheckRendered_RunsTheFullCheckAsTheRendersEdition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if verdict, err := c.CheckRendered(context.Background(), in, out); err != nil || !verdict.OK {
+	if verdict, err := c.CheckRendered(context.Background(), in, out, nil); err != nil || !verdict.OK {
 		t.Fatalf("verdict = %+v, err = %v", verdict, err)
 	}
 	if len(v.calls) != 1 || v.calls[0] != "validate" || v.editions[0] != v1alpha1.EditionCE {

@@ -106,8 +106,8 @@ type KrakenDGatewayReconciler struct {
 type ConfigChecker interface {
 	Gather(ctx context.Context, gw *v1alpha1.KrakenDGateway,
 		replace []v1alpha1.KrakenDEndpoint) (renderer.RenderInput, error)
-	CheckRendered(ctx context.Context, in renderer.RenderInput,
-		out *renderer.RenderOutput) (configcheck.Verdict, error)
+	CheckRendered(ctx context.Context, in renderer.RenderInput, out *renderer.RenderOutput,
+		memo configcheck.Memo) (configcheck.Verdict, error)
 }
 
 // +kubebuilder:rbac:groups=gateway.krakend.io,resources=krakendgateways,verbs=get;list;watch
@@ -803,7 +803,7 @@ func (r *KrakenDGatewayReconciler) validateConfig(
 	if rejection := r.rejections.lookup(key, input); rejection != nil {
 		return configcheck.Rejected(rejection, in, output), nil
 	}
-	verdict, err := r.Checker.CheckRendered(ctx, in, output)
+	verdict, err := r.Checker.CheckRendered(ctx, in, output, nil)
 	switch {
 	case err != nil:
 		// The validator could not judge the render: nothing to remember.
