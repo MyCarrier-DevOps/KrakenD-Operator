@@ -84,12 +84,15 @@ base64 encoding of the PEM on one line, which is what the API server expects.
 
 {{/*
 OTEL_RESOURCE_ATTRIBUTES from a map: key=value pairs, sorted by key, joined
-with commas.
+with commas. Values are percent-encoded, as the SDK decodes them.
 */}}
 {{- define "krakend-operator.resourceAttributes" -}}
 {{- $pairs := list -}}
 {{- range $key, $value := . -}}
-{{- $pairs = append $pairs (printf "%s=%s" $key (toString $value)) -}}
+{{- if or (contains "," $key) (contains "=" $key) -}}
+{{- fail (printf "telemetry.resourceAttributes key %q must not contain \",\" or \"=\"" $key) -}}
+{{- end -}}
+{{- $pairs = append $pairs (printf "%s=%s" $key (urlquery (toString $value) | replace "+" "%20")) -}}
 {{- end -}}
 {{- join "," $pairs -}}
 {{- end }}
