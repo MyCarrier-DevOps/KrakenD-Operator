@@ -18,6 +18,7 @@ limitations under the License.
 package webhook
 
 import (
+	"errors"
 	"net/http"
 	"slices"
 	"strings"
@@ -157,5 +158,16 @@ func TestEndpointAdmission_ACreateInTheSameSecondCannotPushAStoredEntryOut(t *te
 	want := "GET /a/{name}/x of KrakenDEndpoint default/old cannot be routed next to KrakenDEndpoint default/new"
 	if resp.Allowed || !strings.Contains(responseText(resp), want) {
 		t.Errorf("response = %+v, want a denial: the create ranks first by name and would push out %q", resp.Result, want)
+	}
+}
+
+func TestEndpointAdmission_AClashCheckThatCannotRunIs500(t *testing.T) {
+	chk := &scriptedChecker{conflictErr: errors.New("listing endpoints: etcd timeout")}
+	v := &EndpointValidator{Client: fakeClient(testGateway()), Checker: chk}
+
+	resp := review(t, v, "alice", testEndpoint("new", "/a"), nil)
+
+	if resp.Allowed || resp.Result.Code != http.StatusInternalServerError {
+		t.Errorf("response = %+v, want a transient 500", resp.Result)
 	}
 }
