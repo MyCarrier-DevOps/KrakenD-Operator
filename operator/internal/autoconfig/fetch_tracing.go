@@ -29,6 +29,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/mycarrier-devops/krakend-operator/internal/tracing"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // redactedValue replaces each query value in a URL the operator records.
@@ -137,7 +138,9 @@ func refuseUnparseableRedirect(r *http.Request, resp *http.Response) (*http.Resp
 		return resp, nil
 	}
 	if _, err := r.URL.Parse(location); err != nil {
-		_ = resp.Body.Close()
+		if cerr := resp.Body.Close(); cerr != nil {
+			logf.FromContext(r.Context()).V(1).Info("failed to close response body", "error", cerr)
+		}
 		return nil, errors.New("redirect has an unparseable Location header")
 	}
 	return resp, nil
