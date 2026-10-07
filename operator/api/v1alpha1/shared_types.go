@@ -136,6 +136,13 @@ const (
 	// ConditionPluginsResolved reports whether every plugin ConfigMap the
 	// gateway mounts exists. Only the gateway controller writes it.
 	ConditionPluginsResolved = "PluginsResolved"
+
+	// ConditionEndpointsExcluded is True while the gateway leaves out one or
+	// more of its KrakenDEndpoints because they fail validation on their own
+	// (Accepted reason EndpointInvalid or PolicyInvalid); its message counts
+	// and names them. It is absent while none is. Only the gateway controller
+	// writes it.
+	ConditionEndpointsExcluded = "EndpointsExcluded"
 )
 
 // Event reason constants for the EventRecorder.
@@ -223,6 +230,9 @@ const (
 	// endpoint is blamed, the applied config keeps serving, and the check's
 	// output is only in the operator log.
 	ReasonCombinedConfigInvalid = "CombinedConfigInvalid"
+
+	// ReasonInvalidEndpointsExcluded backs EndpointsExcluded=True.
+	ReasonInvalidEndpointsExcluded = "InvalidEndpointsExcluded"
 
 	// ReasonConfigMapTampered is the event reason for a config ConfigMap that
 	// the operator deleted because its krakend.json does not hash to the
