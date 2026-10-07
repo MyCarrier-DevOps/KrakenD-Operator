@@ -934,7 +934,9 @@ func gatewayStatusChanged(before, after *v1alpha1.KrakenDGatewayStatus) bool {
 //     entry of ep itself) won some but not all of its routes;
 //   - False/EndpointConflict when it won all of them;
 //   - reason EEFeaturesStripped when a CE-fallback render removed Enterprise-only
-//     features from it (False when nothing of it is served).
+//     features from it (False when nothing of it is served);
+//   - False with reason EndpointInvalid or PolicyInvalid when the render left ep
+//     out because it fails validation on its own (exclusionCondition).
 //
 // status.conflicts lists the lost entries. The condition is nil when the
 // render excluded ep because a policy it references is missing: the endpoint
@@ -944,6 +946,9 @@ func endpointAccepted(gw *v1alpha1.KrakenDGateway, ep *v1alpha1.KrakenDEndpoint,
 	key := client.ObjectKeyFromObject(ep)
 	if _, ok := rv.unresolved[key]; ok {
 		return acceptance{}
+	}
+	if v, ok := rv.excluded[key]; ok {
+		return acceptance{condition: exclusionCondition(gw, ep, v, true)}
 	}
 	cond := &metav1.Condition{
 		Type:               v1alpha1.ConditionAccepted,
