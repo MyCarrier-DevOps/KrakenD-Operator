@@ -106,9 +106,9 @@ func TestGatewayReconcile_FirstReconcileWritesTheAppliedConfigThenTheDerivedStat
 		WithStatusSubresource(gw).
 		WithInterceptorFuncs(countStatusWrites[*v1alpha1.KrakenDGateway](&writes)).
 		Build()
-	r := acceptanceReconciler(c, fakeRecorder(), &renderer.RenderOutput{
-		JSON: []byte(`{"version":3}`), Checksum: "cs1",
-	})
+	first := &firstGatewayStatusWrite{}
+	r := acceptanceReconciler(interceptor.NewClient(c.(client.WithWatch), first.funcs(c)), fakeRecorder(),
+		&renderer.RenderOutput{JSON: []byte(`{"version":3}`), Checksum: "cs1"})
 
 	result, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(gw)})
 	if err != nil {
@@ -120,6 +120,11 @@ func TestGatewayReconcile_FirstReconcileWritesTheAppliedConfigThenTheDerivedStat
 	if writes != 2 {
 		t.Errorf("gateway status writes = %d, want 2: the applied config, then the derived status "+
 			"(no separate Pending write)", writes)
+	}
+	// The applied-config record already reads as a rollout under way.
+	if firstReady := meta.FindStatusCondition(first.status.Conditions, v1alpha1.ConditionReady); firstReady == nil ||
+		firstReady.Reason != "ConfigDeployed" || first.status.Phase != v1alpha1.PhaseDeploying {
+		t.Errorf("first write: Ready = %+v, phase %q; want ConfigDeployed, Deploying", firstReady, first.status.Phase)
 	}
 	stored := getGateway(t, c, gw)
 	ready := meta.FindStatusCondition(stored.Status.Conditions, v1alpha1.ConditionReady)
