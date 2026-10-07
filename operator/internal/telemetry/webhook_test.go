@@ -22,6 +22,7 @@ import (
 	"strings"
 	"testing"
 
+	"go.opentelemetry.io/otel/trace"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	"github.com/mycarrier-devops/krakend-operator/internal/telemetry"
@@ -70,5 +71,23 @@ func TestTraceWebhookServer_ContinuesThePropagatedTrace(t *testing.T) {
 	if parent.TraceID().String() != traceID || parent.SpanID().String() != parentID {
 		t.Errorf("server span parent = %s/%s, want the propagated %s/%s",
 			parent.TraceID(), parent.SpanID(), traceID, parentID)
+	}
+}
+
+func TestTraceWebhookServer_HandlerContextCarriesTheServerSpan(t *testing.T) {
+	rec := tracingtest.New(t)
+	var seen trace.Span
+	srv := telemetry.TraceWebhookServer(webhook.NewServer(webhook.Options{}), rec.Provider())
+	srv.Register(hookPath, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		seen = trace.SpanFromContext(r.Context())
+	}))
+
+	srv.WebhookMux().ServeHTTP(httptest.NewRecorder(),
+		httptest.NewRequest(http.MethodPost, hookPath, strings.NewReader("{}")))
+
+	server := rec.Ended().One(t, "admission "+hookPath).SpanContext()
+	if got := seen.SpanContext(); got.TraceID() != server.TraceID() || got.SpanID() != server.SpanID() {
+		t.Errorf("handler context span = %s/%s, want the server span %s/%s",
+			got.TraceID(), got.SpanID(), server.TraceID(), server.SpanID())
 	}
 }
