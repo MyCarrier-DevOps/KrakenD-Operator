@@ -24,6 +24,7 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	corev1 "k8s.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -399,5 +400,28 @@ func TestGatewayReconcile_ACoreResourceFailureMarksOnlyItsOwnStage(t *testing.T)
 		if got := spans.One(t, span).Status().Code; got != want {
 			t.Errorf("%s status = %v, want %v", span, got, want)
 		}
+	}
+}
+
+// attrOf returns the value of the attribute key on span, or "" if it has none.
+func attrOf(span sdktrace.ReadOnlySpan, key string) string {
+	for _, kv := range span.Attributes() {
+		if string(kv.Key) == key {
+			return kv.Value.Emit()
+		}
+	}
+	return ""
+}
+
+// The Job the post-restart stage applies names itself on its span.
+func TestGatewayReconcile_TheJobSpanNamesTheJob(t *testing.T) {
+	gw := testGateway()
+	gw.Spec.PostRestartJob = &v1alpha1.PostRestartJobSpec{Enabled: true, Script: "echo done"}
+
+	spans := reconcileTraced(t, gw, testEndpoint("e", "/e"))
+
+	got := attrOf(spans.One(t, "apply job"), "k8s.object.name")
+	if want := gw.Name + "-postrestart-"; !strings.HasPrefix(got, want) {
+		t.Errorf("apply job k8s.object.name = %q, want the Job's name, prefixed %q", got, want)
 	}
 }
