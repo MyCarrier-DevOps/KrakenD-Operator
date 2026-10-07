@@ -215,3 +215,19 @@ func TestInstallLogging_AFailingDiagnosticsPipelineDoesNotReportItselfInALoop(t 
 		t.Errorf("diagnostics exported %d times for two errors, want 2", exports)
 	}
 }
+
+// The SDK reports its own warnings through otel's logger, at V(1): they reach
+// the diagnostics logger, not the main one.
+func TestInstallLogging_TheSDKsOwnWarningsReachTheDiagnosticsLogger(t *testing.T) {
+	logger, out := newStdoutLogger(t, otellog.SeverityInfo)
+	diagnostics, diagOut := newStdoutLogger(t, telemetry.LevelSeverity(1))
+	restoreGlobals(t)
+	telemetry.InstallLogging(logger, diagnostics)
+
+	_ = sdklog.NewLoggerProvider().Logger("")
+
+	got := records(t, diagOut)
+	if len(got) != 1 || got[0].Body.Value != "Invalid Logger name." || len(records(t, out)) != 0 {
+		t.Errorf("diagnostics records = %+v, want the SDK's one warning, and none in the main logger", got)
+	}
+}
