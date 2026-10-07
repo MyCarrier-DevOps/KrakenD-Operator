@@ -14,47 +14,26 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package configcheck decides whether a gateway's aggregated KrakenD config is
-// valid. The gateway controller and the admission webhooks share one Checker,
-// so both judge the same inputs with the same renderer and the same krakend
-// binary, and share its exec slots.
+// Package configcheck judges KrakenD configs: a gateway's root, each of its
+// endpoints and policies on its own, a group of them, and the whole render the
+// gateway controller applies. The gateway controller, the AutoConfig
+// controller and the admission webhooks share one Checker, so all judge the
+// same inputs with the same renderer and the same krakend binary, and share
+// its exec slots.
 package configcheck
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 	"unicode/utf8"
 
 	"k8s.io/apimachinery/pkg/types"
 
-	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
 )
 
-// Finding is one reason a config fails validation. Endpoint and Index name
-// the KrakenDEndpoint and the position in its spec.endpoints the failure
-// belongs to. A failure of the gateway root, or one that names no endpoint,
-// has an empty Endpoint and Index -1.
-type Finding struct {
-	Endpoint types.NamespacedName
-	Index    int
-	Message  string
-}
-
-// String renders f for status messages and admission responses.
-func (f Finding) String() string {
-	if f.Endpoint.Name == "" {
-		return "gateway: " + f.Message
-	}
-	if f.Index < 0 {
-		return fmt.Sprintf("%s: %s", f.Endpoint, f.Message)
-	}
-	return fmt.Sprintf("%s spec.endpoints[%d]: %s", f.Endpoint, f.Index, f.Message)
-}
-
 // Verdict is the outcome of a check. OK is false when the config is invalid;
-// Findings then says why.
+// Output then says why, in the words of the check that rejected it.
 type Verdict struct {
 	OK bool
 	// Output is the rejection's text when OK is false: what krakend check,
@@ -65,71 +44,15 @@ type Verdict struct {
 	// (MaskedEndpoints). They come from this check's render, never from a
 	// memo: the same content can be rendered from inputs that mask different
 	// endpoints.
-	Masked   []types.NamespacedName
-	Findings []Finding
-	// Rejection is the validator's rejection behind a verdict that is not OK,
-	// a copy with its output bounded to 16 KiB. A caller that remembers it
-	// can rebuild the findings with Rejected against whatever the endpoints
-	// are by then.
-	Rejection *renderer.ValidationError
+	Masked []types.NamespacedName
 	// Stage is the check that rejected the config.
 	Stage renderer.RejectionStage
-	// Refusals are the route check's refused registrations, when Stage is
-	// renderer.StageRoute, and RefusalsCapped is set when the check stopped
-	// at renderer.MaxRouteRefusals, so refusals past those listed are unknown.
-	Refusals       []Refusal
-	RefusalsCapped bool
-}
-
-// Refusal is one registration the route check refused: the KrakenDEndpoints
-// it names (the refused entry's, then the accepted entry's it clashes with, if
-// any; none for a refusal of the gateway's own route) and its lint lines.
-type Refusal struct {
-	Endpoints []types.NamespacedName
-	Message   string
-}
-
-// Rejected returns the verdict for rejection of out, the render of in. The
-// findings name the entries of in's endpoints as they are now.
-func Rejected(rejection *renderer.ValidationError, in renderer.RenderInput, out *renderer.RenderOutput) Verdict {
-	atts := renderer.Attribute(out.JSON, out.Sources, rejection.Output)
-	return Verdict{
-		Output:   rejection.Output,
-		Findings: findingsFrom(atts, out.JSON, in.Endpoints, rejection.Output), Rejection: rejection,
-		Stage: rejection.Stage, Refusals: refusalsFrom(rejection.Refusals, out.Sources),
-		RefusalsCapped: rejection.RefusalsCapped,
-	}
-}
-
-// refusalsFrom names, for each refusal, the KrakenDEndpoints that produced the
-// entries it points at. sources is index-aligned with the rendered endpoints.
-func refusalsFrom(refusals []renderer.RouteRefusal, sources []types.NamespacedName) []Refusal {
-	var out []Refusal
-	for _, r := range refusals {
-		refusal := Refusal{Message: r.Message}
-		for _, i := range r.Indices {
-			if i >= 0 && i < len(sources) {
-				refusal.Endpoints = append(refusal.Endpoints, sources[i])
-			}
-		}
-		out = append(out, refusal)
-	}
-	return out
-}
-
-// Summary joins the findings into one message, cut at a finding boundary and
-// ending with the number of findings left out (joinBounded).
-func (v Verdict) Summary(limit int) string {
-	parts := make([]string, len(v.Findings))
-	for i, f := range v.Findings {
-		parts[i] = f.String()
-	}
-	return joinBounded(parts, limit)
 }
 
 // Excerpt is the rejection's output on one line: its lines that carry a
-// finding, joined like Summary. An empty rejection reads "rejected with no
-// output", so an excerpt always carries a reason.
+// finding, joined with "; " and cut at a line boundary (joinBounded). An
+// empty rejection reads "rejected with no output", so an excerpt always
+// carries a reason.
 func (v Verdict) Excerpt(limit int) string {
 	var lines []string
 	for _, l := range strings.Split(v.Output, "\n") {
@@ -202,54 +125,4 @@ func TruncateEllipsis(s string, limit int) string {
 		return Truncate(s, limit)
 	}
 	return Truncate(s, limit-len("...")) + "..."
-}
-
-// findingsFrom converts the renderer's attributions, which name positions in the
-// rendered endpoints array, into findings that name the entry's position in
-// its KrakenDEndpoint's spec.endpoints. A rejection always has a finding:
-// when nothing was attributed, the output, one line per non-empty line joined
-// with "; ", is one gateway finding.
-func findingsFrom(atts []renderer.Attribution, renderedJSON []byte,
-	endpoints []v1alpha1.KrakenDEndpoint, output string) []Finding {
-	if len(atts) == 0 {
-		var lines []string
-		for _, l := range strings.Split(output, "\n") {
-			if l = strings.TrimSpace(l); l != "" {
-				lines = append(lines, l)
-			}
-		}
-		msg := strings.Join(lines, "; ")
-		if msg == "" {
-			msg = "rejected with no output"
-		}
-		return []Finding{{Index: -1, Message: msg}}
-	}
-	var doc struct {
-		Endpoints []struct {
-			Endpoint string `json:"endpoint"`
-			Method   string `json:"method"`
-		} `json:"endpoints"`
-	}
-	if json.Unmarshal(renderedJSON, &doc) != nil {
-		doc.Endpoints = nil
-	}
-	specs := make(map[types.NamespacedName]*v1alpha1.KrakenDEndpoint, len(endpoints))
-	for i := range endpoints {
-		specs[types.NamespacedName{Namespace: endpoints[i].Namespace, Name: endpoints[i].Name}] = &endpoints[i]
-	}
-	out := make([]Finding, 0, len(atts))
-	for _, a := range atts {
-		f := Finding{Endpoint: a.Endpoint, Index: -1, Message: a.Message}
-		if ep := specs[a.Endpoint]; ep != nil && a.Index >= 0 && a.Index < len(doc.Endpoints) {
-			rendered := doc.Endpoints[a.Index]
-			for i, e := range ep.Spec.Endpoints {
-				if e.Method == rendered.Method && e.Endpoint == rendered.Endpoint {
-					f.Index = i
-					break
-				}
-			}
-		}
-		out = append(out, f)
-	}
-	return out
 }
