@@ -2964,7 +2964,7 @@ The Helm chart gains a `telemetry:` block: `otlp.endpoint`, `otlp.nodeCollector`
 - `telemetry.resourceAttributes` values are percent-encoded for you, keys may not contain `,` or `=`, and a numeric value needs quoting (`"1234567"`) so YAML does not reformat it. A `telemetry.traces.samplerArg` of `0` is kept.
 - On a large cluster, start with `telemetry.traces.sampler: parentbased_traceidratio` and `samplerArg: "0.1"`.
 
-A bad collector Secret does not crash-loop the operator: a malformed header or endpoint variable stops that signal's export and is named in a startup record, without its value.
+A bad collector Secret does not crash-loop the operator: a malformed header or endpoint variable stops that signal's export and is named in a startup record, without its value. A missing headers Secret, or a missing key in it, leaves the export without headers, so the collector may reject it and the rejections appear as `OpenTelemetry pipeline error` records; the operator still starts.
 
 The image now reports its version (`service.version`) from the `VERSION` build argument. `make docker-build` stamps the Makefile's `VERSION`, a plain `docker build` stamps `dev`, and a release stamps its tag.
 
