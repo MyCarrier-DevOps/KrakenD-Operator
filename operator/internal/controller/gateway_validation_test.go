@@ -794,3 +794,37 @@ func TestGatewayReconcile_ReportsTheExcludedEndpoints(t *testing.T) {
 		t.Errorf("gauge = %v, want EndpointInvalid=1", got)
 	}
 }
+
+func TestGatewayReconcile_ExclusionSignalsSurviveARestartThatAppliesNothing(t *testing.T) {
+	gw := reconciledGateway()
+	gw.Namespace = "survives"
+	good, bad := testEndpoint("good", "/a"), badHosted("bad", "/b")
+	good.Namespace, bad.Namespace = gw.Namespace, gw.Namespace
+	c := fakeClientBuilder().WithObjects(gw, good, bad).WithStatusSubresource(gw, good, bad).Build()
+	t.Cleanup(func() { deleteGatewayMetrics(gw.Namespace, gw.Name) })
+	if err := reconcileGateway(t, newTestGatewayReconciler(c, renderer.New(renderer.Options{}), rejectsBadHosts()), gw); err != nil {
+		t.Fatal(err)
+	}
+	deleteGatewayMetrics(gw.Namespace, gw.Name) // the restarted process starts with no series
+	stored := getGateway(t, c, gw)
+	stored.Spec.Config.ExtraConfig = &runtime.RawExtension{Raw: []byte(`{"test/root-bad":{}}`)}
+	stored.Generation++
+	if err := c.Update(context.Background(), stored); err != nil {
+		t.Fatal(err)
+	}
+	val := &contentValidator{markers: map[string]string{"invalid.test": badHostOutput, "test/root-bad": "root refused"}}
+
+	if err := reconcileGateway(t, newTestGatewayReconciler(c, renderer.New(renderer.Options{}), val), gw); err != nil {
+		t.Fatal(err)
+	}
+
+	cond := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionEndpointsExcluded)
+	if cond == nil || cond.Status != metav1.ConditionTrue ||
+		cond.Message != "1 KrakenDEndpoint(s) fail validation and will not be served when the gateway next applies "+
+			"its config: survives/bad" {
+		t.Errorf("EndpointsExcluded = %+v, want it kept, worded for a pass that applies nothing", cond)
+	}
+	if got := excludedSeries(t, gw.Namespace, gw.Name); got[v1alpha1.ReasonEndpointInvalid] != 1 {
+		t.Errorf("gauge = %v, want EndpointInvalid=1 from bad's stored verdict", got)
+	}
+}
