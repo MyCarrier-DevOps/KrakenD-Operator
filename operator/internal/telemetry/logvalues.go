@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"slices"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -28,6 +29,10 @@ import (
 // readableSink wraps the log bridge's sink so every value is converted to a
 // type the bridge renders readably before it sees it: the bridge turns a type
 // it does not know, such as a named string, into an "unhandled:" fallback.
+//
+// It does not delegate logr.CallDepthLogSink (WithCallDepth and
+// WithCallStackHelper) and has no Unwrap. That is harmless: the bridge drops
+// the caller's program counter, so call depth changes nothing it records.
 type readableSink struct {
 	logr.LogSink
 }
@@ -53,17 +58,35 @@ func (s readableSink) WithName(name string) logr.LogSink {
 }
 
 // readableKeysAndValues converts the values of a key/value list, leaving the
-// keys alone. A context.Context value is the span the record belongs to, which
-// the bridge reads as a context, so it is not converted.
+// keys alone, and returns keysAndValues itself when no value needs converting.
+// A context.Context value is the span the record belongs to, which the bridge
+// reads as a context, so it is not converted.
 func readableKeysAndValues(keysAndValues []any) []any {
-	out := make([]any, len(keysAndValues))
-	copy(out, keysAndValues)
-	for i := 1; i < len(out); i += 2 {
-		if _, ok := out[i].(context.Context); !ok {
-			out[i] = readableValue(out[i])
+	out, copied := keysAndValues, false
+	for i := 1; i < len(keysAndValues); i += 2 {
+		v := keysAndValues[i]
+		if isPlain(v) {
+			continue
 		}
+		if _, ok := v.(context.Context); ok {
+			continue
+		}
+		if !copied {
+			out, copied = slices.Clone(keysAndValues), true
+		}
+		out[i] = readableValue(v)
 	}
 	return out
+}
+
+// isPlain reports whether the bridge already renders v readably and needs no
+// conversion.
+func isPlain(v any) bool {
+	switch v.(type) {
+	case string, bool, int, int64, float64, time.Duration, time.Time:
+		return true
+	}
+	return false
 }
 
 // maxValueNodes bounds the work spent on one value: past it, what is left of
@@ -91,16 +114,23 @@ type valueConverter struct {
 // A time.Duration and a time.Time stay as they are: the bridge records them as
 // numbers. A value that contains itself renders "<cycle>" where it repeats.
 func readableValue(v any) any {
+	if isPlain(v) {
+		return v
+	}
 	c := valueConverter{budget: maxValueNodes, open: map[uintptr]bool{}}
 	return c.convert(v)
 }
 
 func (c *valueConverter) convert(v any) any {
-	if c.budget--; c.budget < 0 {
+	c.budget--
+	if c.budget < 0 {
 		return "<truncated>"
 	}
+	if isPlain(v) {
+		return v
+	}
 	switch x := v.(type) {
-	case nil, time.Duration, time.Time:
+	case nil:
 		return v
 	case error:
 		return orPlain(v, x.Error)
@@ -130,7 +160,7 @@ func (c *valueConverter) convert(v any) any {
 		return c.convertList(v, rv)
 	case reflect.Pointer:
 		if rv.IsNil() {
-			return v
+			return "<nil>"
 		}
 		return c.enter(rv, func() any { return c.convert(rv.Elem().Interface()) })
 	case reflect.Map:
