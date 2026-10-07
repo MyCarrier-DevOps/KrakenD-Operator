@@ -81,12 +81,10 @@ func servedBefore(a, b flatEndpoint) bool {
 }
 
 // compareConflicts orders a KrakenDEndpoint's lost entries by endpoint, then
-// method.
+// method, then the winner an entry lost to.
 func compareConflicts(a, b EntryConflict) int {
-	if c := cmp.Compare(a.Endpoint, b.Endpoint); c != 0 {
-		return c
-	}
-	return cmp.Compare(a.Method, b.Method)
+	return cmp.Or(cmp.Compare(a.Endpoint, b.Endpoint), cmp.Compare(a.Method, b.Method),
+		cmp.Compare(a.Winner.String(), b.Winner.String()))
 }
 
 // flattenEndpoints flattens all KrakenDEndpoint specs into individual entries,
