@@ -301,13 +301,14 @@ func endpointFailureReason(err error) string {
 //     checked: entry and backend namespaces are held without a write, while
 //     other admission rules the config check cannot see cost one rejected
 //     write per sync, which is held as EndpointRejected too;
-//  2. the candidates that would newly clash in the router (routerClashes),
-//     whose render replaces the stale endpoints by empty copies when this
-//     reconcile will also delete them (held is false and nothing was held
-//     before);
-//  3. the candidates that fail validation on their own (judgeCandidates).
-//  4. when step 3 held any, the candidates that would newly clash once the
-//     held ones stay as stored and the stale endpoints stay (routerClashes again).
+//  2. the candidates that would newly clash in the router (routerClashes).
+//     Its render replaces the stale endpoints by empty copies only when this
+//     reconcile will also delete them: held is false and nothing was held
+//     before. A hold keeps them, so step 4 looks again;
+//  3. the candidates that fail validation on their own (judgeCandidates);
+//  4. when step 2 or 3 held any, the candidates that would newly clash once
+//     the held ones stay as stored and the stale endpoints stay (routerClashes
+//     again, until no new clash appears).
 //
 // An error means a check could not run.
 func (r *KrakenDAutoConfigReconciler) precheck(
@@ -359,11 +360,11 @@ func (r *KrakenDAutoConfigReconciler) precheck(
 		return nil, &validatorUnavailableError{err: err}
 	}
 	maps.Copy(rejected, judged)
-	if len(judged) == 0 {
+	if len(clashes) == 0 && len(judged) == 0 {
 		return rejected, nil
 	}
 	// A hold keeps the stale endpoints (the sync deletes none) and leaves the
-	// held candidate at its stored version, which the clash render above did
+	// held candidate at its stored version, which the first clash render did
 	// not model. Render again without the held until no new clash appears.
 	for writes = withoutHeld(writes, judged); len(writes) > 0; writes = withoutHeld(writes, clashes) {
 		clashes, err = r.routerClashes(ctx, &gw, writes, stale, order, false)
