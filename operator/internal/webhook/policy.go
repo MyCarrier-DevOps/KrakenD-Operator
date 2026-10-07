@@ -241,6 +241,20 @@ func judgePolicyUse(ctx context.Context, chk ConfigChecker, memo configcheck.Mem
 	case s.already:
 		return "", fmt.Sprintf("gateway %s/%s: endpoints that use this policy already fail validation with "+
 			"the stored policy", gw.Namespace, gw.Name), nil
+	case !use.failed:
+		return "", "", nil
+	}
+	if old != nil {
+		before, err := chk.CheckGroup(ctx, configcheck.Group{
+			Gateway: gw, Endpoints: use.served, Override: old, CEFallback: ceFallback,
+		}, memo)
+		if err != nil {
+			return "", "", err
+		}
+		if !before.OK {
+			return "", fmt.Sprintf("gateway %s/%s: the endpoints that use this policy already fail validation "+
+				"together with the stored policy", gw.Namespace, gw.Name), nil
+		}
 	}
 	return "", "", nil
 }
