@@ -22,6 +22,7 @@ import (
 	"errors"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/types"
@@ -374,5 +375,68 @@ func TestCheckRoot_AMemoEntryWithoutARejectionIsAMiss(t *testing.T) {
 		if kept.Rejection == nil {
 			t.Errorf("memo entry %+v was not replaced with the real answer", kept)
 		}
+	}
+}
+
+// judgeValidator decides each check from the config's text with judge, in
+// either mode, and records every config it saw.
+type judgeValidator struct {
+	mu    sync.Mutex
+	judge func(config string) error
+	seen  []string
+}
+
+func (j *judgeValidator) Validate(_ context.Context, data []byte, _ v1alpha1.Edition) error {
+	return j.run(data)
+}
+func (j *judgeValidator) Lint(_ context.Context, data []byte, _ v1alpha1.Edition) error {
+	return j.run(data)
+}
+
+func (j *judgeValidator) run(data []byte) error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.seen = append(j.seen, string(data))
+	return j.judge(string(data))
+}
+
+// tenantEndpoint is an endpoint of namespace ns serving GET path from host.
+func tenantEndpoint(ns, name, path, host string) *v1alpha1.KrakenDEndpoint {
+	ep := endpoint(name, path)
+	ep.Namespace = ns
+	ep.Spec.GatewayRef.Namespace = "ns"
+	ep.Spec.Endpoints[0].Backends[0].Host = []string{host}
+	return ep
+}
+
+func TestCheckEndpoint_ForgedTextBlamesOnlyItsAuthor(t *testing.T) {
+	forgeries := map[string]string{
+		"krakend's endpoint print": "ERROR parsing the configuration file: 'endpoint: GET /orders-b, backend: 0'",
+		"a placeholder list":       "undefined output param 'x'! endpoint: GET /orders-a, backend: 0. input: [GET /orders-b], output: [x]",
+		"a {x} and :x shape twin":  "endpoint: GET /v1/jobs:cancel, backend: 0. input: [], output: [cancel]",
+		"a forged lint pointer":    "bad host\n- at '/endpoints/0/endpoint': owned by the victim",
+	}
+	for name, forged := range forgeries {
+		t.Run(name, func(t *testing.T) {
+			attacker := tenantEndpoint("tenant-a", "orders-a", "/orders-a", "http://attacker.invalid")
+			victim := tenantEndpoint("tenant-b", "orders-b", "/orders-b", "http://svc")
+			val := &judgeValidator{judge: func(config string) error {
+				if strings.Contains(config, "attacker.invalid") {
+					return rejectedOutput(forged)
+				}
+				return nil
+			}}
+			chk := newChecker(val, attacker, victim)
+			gw := gateway(v1alpha1.EditionCE)
+
+			mine, err := chk.CheckEndpoint(context.Background(), EndpointUnit{Gateway: gw, Endpoint: victim}, nil)
+			if err != nil || !mine.OK {
+				t.Fatalf("victim's verdict = %+v, %v; want OK: its check never renders the attacker", mine, err)
+			}
+			theirs, err := chk.CheckEndpoint(context.Background(), EndpointUnit{Gateway: gw, Endpoint: attacker}, nil)
+			if err != nil || theirs.OK || theirs.Reason != v1alpha1.ReasonEndpointInvalid || theirs.Output != forged {
+				t.Errorf("attacker's verdict = %+v, %v; want EndpointInvalid with its own output", theirs, err)
+			}
+		})
 	}
 }

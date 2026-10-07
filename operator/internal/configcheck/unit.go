@@ -80,6 +80,24 @@ type Group struct {
 	CEFallback bool
 }
 
+// EndpointUnit is one KrakenDEndpoint to judge on its own.
+type EndpointUnit struct {
+	Gateway    *v1alpha1.KrakenDGateway
+	Endpoint   *v1alpha1.KrakenDEndpoint
+	Policies   map[string]*v1alpha1.KrakenDBackendPolicy
+	Override   *v1alpha1.KrakenDBackendPolicy
+	CEFallback bool
+}
+
+// EndpointVerdict is the verdict on one KrakenDEndpoint judged on its own.
+type EndpointVerdict struct {
+	OK                bool
+	Reason            string
+	Policies          []types.NamespacedName
+	PoliciesFailAlone bool
+	Output            string
+}
+
 // Root is a gateway's root on its own: what Gateway renders with no endpoint,
 // as the edition CEFallback makes it. Dragonfly is the Dragonfly state the
 // gateway controller detected, which sets the Redis address; nil renders
@@ -111,6 +129,11 @@ func (c *Checker) CheckGroup(ctx context.Context, g Group, memo Memo) (Verdict, 
 func (c *Checker) CheckPolicy(ctx context.Context, policy *v1alpha1.KrakenDBackendPolicy,
 	memo Memo) (Verdict, error) {
 	return c.lintInput(ctx, policyAlone(policy), memo)
+}
+
+// CheckEndpoint judges u.Endpoint on its own.
+func (c *Checker) CheckEndpoint(context.Context, EndpointUnit, Memo) (EndpointVerdict, error) {
+	return EndpointVerdict{}, nil
 }
 
 // lintInput renders in and lints the render, answering from memo when it
