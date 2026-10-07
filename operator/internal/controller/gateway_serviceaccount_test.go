@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"maps"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -73,6 +74,50 @@ func TestReconcileInfrastructure_NothingRunsAsAServiceAccountAnotherControllerOw
 	}
 	if len(jobs.Items) != 0 {
 		t.Errorf("post-restart Jobs created: %d, want 0", len(jobs.Items))
+	}
+}
+
+// A ServiceAccount named like the gateway that nothing controls and that does
+// not carry the gateway's labels is somebody else's: the gateway does not take
+// it over, and nothing runs as it.
+func TestReconcileInfrastructure_NothingRunsAsAnUnownedServiceAccount(t *testing.T) {
+	ctx := context.Background()
+	gw := makeGWWithJob("echo ok")
+	labels := map[string]string{"app.kubernetes.io/managed-by": "Helm"}
+	annotations := map[string]string{"azure.workload.identity/client-id": "x"}
+	unowned := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{
+		Name: gw.Name, Namespace: gw.Namespace, Labels: labels, Annotations: annotations,
+	}}
+	c := fakeClientBuilder().WithObjects(gw, unowned).Build()
+	r := &KrakenDGatewayReconciler{Client: c, APIReader: c, Scheme: testScheme(), Recorder: fakeRecorder()}
+	in := convergedInputs("abc123")
+	in.configMapName = "gw-config-abc123"
+
+	_, err := reconcileInfrastructureOf(ctx, r, gw, in)
+
+	if err == nil {
+		t.Errorf("expected the hold to be reported as an error")
+	}
+	var d appsv1.Deployment
+	if err := c.Get(ctx, client.ObjectKeyFromObject(gw), &d); !apierrors.IsNotFound(err) {
+		t.Errorf("Deployment get err = %v, want NotFound: nothing runs as the unowned ServiceAccount", err)
+	}
+	var jobs batchv1.JobList
+	if err := c.List(ctx, &jobs, client.InNamespace(gw.Namespace)); err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs.Items) != 0 {
+		t.Errorf("post-restart Jobs created: %d, want 0", len(jobs.Items))
+	}
+	var sa corev1.ServiceAccount
+	if err := c.Get(ctx, client.ObjectKeyFromObject(unowned), &sa); err != nil {
+		t.Fatal(err)
+	}
+	if len(sa.OwnerReferences) != 0 {
+		t.Errorf("ServiceAccount ownerReferences = %v, want none", sa.OwnerReferences)
+	}
+	if !maps.Equal(sa.Labels, labels) || !maps.Equal(sa.Annotations, annotations) {
+		t.Errorf("ServiceAccount rewritten: labels %v, annotations %v", sa.Labels, sa.Annotations)
 	}
 }
 
