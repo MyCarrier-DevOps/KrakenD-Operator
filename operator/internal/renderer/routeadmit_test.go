@@ -210,6 +210,9 @@ func TestRender_RemovingAnEndpointLeavesNoOtherEntryOut(t *testing.T) {
 	ce := routedGateway(v1alpha1.EditionCE, nil)
 	x, z := routed("x", 0, "GET", "/a/{id}"), routed("z", 1, "GET", "/a/{name}/x")
 	v, u := routed("v", 2, "GET", "/a/{id}/y"), routed("u", 3, "GET", "/b")
+	autoOptions := routedGateway(v1alpha1.EditionCE, &v1alpha1.RouterConfig{AutoOptions: true})
+	s, d := routed("s", 0, "GET", "/a/{id}"), routed("d", 1, "GET", "/a/{name}/x")
+	e := routed("e", 2, "POST", "/a/{id}")
 	tests := []struct {
 		name          string
 		gateway       *v1alpha1.KrakenDGateway
@@ -225,6 +228,11 @@ func TestRender_RemovingAnEndpointLeavesNoOtherEntryOut(t *testing.T) {
 			routed("x", 0, "GET", "/p/{id}"), routed("z", 1, "GET", "/p/*"), routed("v", 2, "GET", "/p/q"), u,
 		}, []v1alpha1.KrakenDEndpoint{routed("z", 1, "GET", "/p/*"), routed("v", 2, "GET", "/p/q"), u},
 			"GET /p/{id}", "v", "z"},
+		// With auto_options, e's POST /a/{id} adds the OPTIONS /a/{id} route,
+		// which clashes with the OPTIONS route of d's left-out GET /a/{name}/x,
+		// whether or not s's GET /a/{id} already serves that OPTIONS route.
+		{"deleting s with auto_options", autoOptions, []v1alpha1.KrakenDEndpoint{s, d, e},
+			[]v1alpha1.KrakenDEndpoint{d, e}, "GET /a/{id}", "e", "d"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
