@@ -1181,7 +1181,8 @@ func warnWaiting(ctx context.Context, chk ConfigChecker, memo configcheck.Memo, 
 // (now) and, when that fails, with the stored gateway (old). One that fails
 // only with the update is broken by it: the update is refused, naming it and
 // quoting nothing of it. When every endpoint that fails failed with the stored
-// gateway too, the update only draws a warning. When the group failed but no endpoint fails on
+// gateway too, the update only draws a warning. The update is refused however
+// the rest of the scan ends. When the group failed but no endpoint fails on
 // its own, the group with the stored gateway tells whether failing together is
 // the update's doing.
 func judgeServed(ctx context.Context, chk ConfigChecker, memo configcheck.Memo, now configcheck.EndpointUnit,
@@ -1190,11 +1191,11 @@ func judgeServed(ctx context.Context, chk ConfigChecker, memo configcheck.Memo, 
 	was := &configcheck.EndpointUnit{Gateway: old, CEFallback: configcheck.CEFallback(old)}
 	s := failingEndpoints(ctx, chk, memo, now, was, suspectsOf(group, served))
 	switch {
-	case s.stopped != nil:
-		return nil, checkErr(s.stopped)
 	case len(s.broken) > 0:
 		return nil, invalid("KrakenDGateway", now.Gateway.Name, field.ErrorList{field.Invalid(
 			field.NewPath("spec"), field.OmitValueType{}, brokenList(s, 2*warningLimit))})
+	case s.stopped != nil:
+		return nil, checkErr(s.stopped)
 	case s.already:
 		return admission.Warnings{"some of the gateway's endpoints already fail validation with the stored " +
 			"config, and stay left out until they pass"}, nil
