@@ -1,0 +1,56 @@
+/*
+Copyright 2026 The KrakenD Operator Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+
+package webhook
+
+import (
+	"net/http"
+	"strings"
+	"testing"
+
+	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
+	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
+)
+
+// ownFailure is an endpoint verdict quoting the endpoint's own output.
+func ownFailure(output string) configcheck.EndpointVerdict {
+	return configcheck.EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid, Output: output}
+}
+
+func TestEndpointAdmission_DeniesAnEndpointThatFailsOnItsOwn(t *testing.T) {
+	chk := &scriptedChecker{endpointVerdicts: []configcheck.EndpointVerdict{
+		ownFailure("- at '/endpoints/0/backend/0/host/0': svc:bad is not a host")}}
+	v := &EndpointValidator{Client: fakeClient(testGateway()), Checker: chk, Memo: newAdmissionMemo()}
+
+	resp := review(t, v, "alice", testEndpoint("new", "/a"), nil)
+
+	if resp.Allowed || resp.Result.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("response = %+v, want a 422 denial", resp.Result)
+	}
+	causes := resp.Result.Details.Causes
+	if len(causes) != 1 || causes[0].Field != "spec.endpoints" || !strings.Contains(causes[0].Message, "svc:bad is not a host") {
+		t.Errorf("causes = %+v, want one on spec.endpoints quoting the endpoint's own output", causes)
+	}
+	if got := strings.Join(chk.calls, ","); got != "root,endpoint" {
+		t.Errorf("checks = %s, want the root alone then the endpoint alone", got)
+	}
+	for i, d := range chk.deadlines {
+		if d <= 0 || d > admissionBudget || !chk.memos[i] {
+			t.Errorf("check %d ran with %s left and memo %v, want a deadline within %s and the memo", i, d, chk.memos[i], admissionBudget)
+		}
+	}
+}
