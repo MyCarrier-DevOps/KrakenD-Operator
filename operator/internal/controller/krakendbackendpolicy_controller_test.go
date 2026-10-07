@@ -26,6 +26,7 @@ import (
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
 	"github.com/mycarrier-devops/krakend-operator/internal/configcheck"
 	"github.com/mycarrier-devops/krakend-operator/internal/renderer"
+	"github.com/mycarrier-devops/krakend-operator/internal/tracing/tracingtest"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -822,4 +823,22 @@ func TestPolicyReconcile_AReconcileOfUnchangedContentRunsNoExtraCheck(t *testing
 	if validator.calls != 1 {
 		t.Errorf("krakend ran %d times over 3 reconciles of one content, want 1", validator.calls)
 	}
+}
+
+func TestPolicyReconcile_TheCheckIsAChildOfTheReconcileSpan(t *testing.T) {
+	policy := policyInRange()
+	c := fakeClientBuilder().WithObjects(policy).WithStatusSubresource(policy).Build()
+	rec := tracingtest.New(t)
+	r := &KrakenDBackendPolicyReconciler{
+		Client: c, Scheme: testScheme(), Recorder: fakeRecorder(), Tracer: rec.Tracer(),
+		Checker: configcheck.New(c, renderer.New(renderer.Options{}), &countingValidator{}, 1, rec.Tracer()),
+		Memo:    configcheck.NewLRUMemo(8),
+	}
+
+	if _, err := r.Reconcile(context.Background(),
+		ctrl.Request{NamespacedName: client.ObjectKeyFromObject(policy)}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rec.Ended().RequireChild(t, "reconcile KrakenDBackendPolicy", "configcheck.CheckPolicy")
 }
