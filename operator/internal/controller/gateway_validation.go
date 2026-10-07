@@ -243,7 +243,7 @@ func (r *KrakenDGatewayReconciler) reportExclusions(gw *v1alpha1.KrakenDGateway,
 			counts[cond.Reason]++
 		}
 	}
-	recordExcludedEndpoints(gw, counts)
+	r.metrics().SetExcludedEndpoints(client.ObjectKeyFromObject(gw), counts)
 	if len(names) == 0 {
 		meta.RemoveStatusCondition(&gw.Status.Conditions, v1alpha1.ConditionEndpointsExcluded)
 		return
