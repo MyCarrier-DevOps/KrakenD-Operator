@@ -434,7 +434,7 @@ func absolutize(docURL, base string) (string, error) {
 	}
 	ref, err := url.Parse(docURL)
 	if err != nil {
-		return "", fmt.Errorf("parsing ref url %q: %w", docURL, err)
+		return "", fmt.Errorf("parsing ref url: %w", withoutURL(err))
 	}
 	return baseURL.ResolveReference(ref).String(), nil
 }
