@@ -52,6 +52,17 @@ func rewriteEEWildcards(endpoints []any) bool {
 	return changed
 }
 
+// routeShape spells a route the way krakend's router registers it: the
+// parameters lura extracts are written :param (ginPath, which stops at the
+// first "?"), and an EE wildcard's trailing "*" is written as the ":Wildcard"
+// parameter it is rewritten to for the CE binary (eeWildcardParam).
+func routeShape(path string) string {
+	if IsEEWildcard(path) {
+		path = strings.TrimSuffix(path, "*") + eeWildcardParam
+	}
+	return ginPath(path)
+}
+
 // shapeOf spells a route's shape; a variable so a test can count the calls.
 var shapeOf = routeShape
 
@@ -69,7 +80,7 @@ var shapeOf = routeShape
 // The route conflicts stop at MaxRouteRefusals, with one notice line, so the
 // work and the output stay bounded however many routes conflict.
 //
-// Every finding is a lint-pointer line, so Attribute maps it like any other.
+// Every finding is a lint-pointer line naming the entry's position.
 func eeWildcardFindings(ctx context.Context, endpoints []any) ([]string, error) {
 	type route struct {
 		index               int
