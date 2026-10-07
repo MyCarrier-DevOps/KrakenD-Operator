@@ -200,3 +200,52 @@ func TestRender_AnEEWildcardOverlapKeepsTheOlderEntry(t *testing.T) {
 		})
 	}
 }
+
+// TestRender_RemovingAnEndpointLeavesNoOtherEntryOut pins that an entry loses
+// to an older entry it clashes with whether or not that entry is served, so
+// a write that removes an entry can bring others back but never leave
+// another out: x's GET /a/{id} keeps z's GET /a/{name}/x out, and z's entry
+// keeps v's GET /a/{id}/y out with x or without it.
+func TestRender_RemovingAnEndpointLeavesNoOtherEntryOut(t *testing.T) {
+	ce := routedGateway(v1alpha1.EditionCE, nil)
+	x, z := routed("x", 0, "GET", "/a/{id}"), routed("z", 1, "GET", "/a/{name}/x")
+	v, u := routed("v", 2, "GET", "/a/{id}/y"), routed("u", 3, "GET", "/b")
+	tests := []struct {
+		name          string
+		gateway       *v1alpha1.KrakenDGateway
+		before, after []v1alpha1.KrakenDEndpoint
+		gone          string
+		loser, winner string
+	}{
+		{"deleting x", ce, []v1alpha1.KrakenDEndpoint{x, z, v, u}, []v1alpha1.KrakenDEndpoint{z, v, u},
+			"GET /a/{id}", "v", "z"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			before, err := New(Options{}).Render(RenderInput{Gateway: tt.gateway, Endpoints: tt.before})
+			if err != nil {
+				t.Fatal(err)
+			}
+			after, err := New(Options{}).Render(RenderInput{Gateway: tt.gateway, Endpoints: tt.after})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			served := map[string]bool{}
+			for _, e := range servedEntries(t, after) {
+				served[e] = true
+			}
+			for _, e := range servedEntries(t, before) {
+				if e != tt.gone && !served[e] {
+					t.Errorf("the write left out %s, which it never clashed with", e)
+				}
+			}
+			loser := types.NamespacedName{Namespace: "ns", Name: tt.loser}
+			for _, out := range []*RenderOutput{before, after} {
+				if lost := out.EntryConflicts[loser]; len(lost) != 1 || lost[0].Winner.Name != tt.winner {
+					t.Errorf("%s lost %+v, want its entry, to the older ns/%s, in both renders", tt.loser, lost, tt.winner)
+				}
+			}
+		})
+	}
+}
