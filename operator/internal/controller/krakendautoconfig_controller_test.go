@@ -2430,20 +2430,17 @@ func TestAutoConfigReconcile_IdenticalSecondPassWritesNothing(t *testing.T) {
 		Reason:    v1alpha1.ReasonCUEEvaluationFailed,
 		Message:   "boom",
 	}, failedGetB()}
-	// A third endpoint the gateway config check holds on every pass, for two
-	// reasons that arrive in the opposite order on the second pass.
+	// A third endpoint that fails its own config check on every pass.
 	g.output.Endpoints = append(g.output.Endpoints, generatedEndpoint("getC", "/c"))
-	reasons := []configcheck.Finding{{
-		Endpoint: types.NamespacedName{Namespace: "default", Name: "test-ac-getc"}, Index: 0, Message: "first reason",
-	}, {
-		Endpoint: types.NamespacedName{Namespace: "default", Name: "test-ac-getc"}, Index: 0, Message: "second reason",
-	}}
-	checker := &fakeChecker{judge: func(replace []v1alpha1.KrakenDEndpoint) configcheck.Verdict {
-		if slices.Contains(endpointNames(replace), "test-ac-getc") {
-			return configcheck.Verdict{Findings: slices.Clone(reasons)}
-		}
-		return configcheck.Verdict{OK: true}
-	}}
+	checker := &fakeChecker{
+		group: func([]v1alpha1.KrakenDEndpoint) configcheck.Verdict { return configcheck.Verdict{Output: "together"} },
+		endpoint: func(ep *v1alpha1.KrakenDEndpoint) configcheck.EndpointVerdict {
+			if ep.Name == "test-ac-getc" {
+				return configcheck.EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid, Output: "first finding\nsecond finding"}
+			}
+			return configcheck.EndpointVerdict{OK: true}
+		},
+	}
 	var counts writeCounts
 	c := fakeClientBuilder().WithObjects(ac, cm, testGateway()).WithStatusSubresource(ac).
 		WithInterceptorFuncs(countWrites(&counts)).Build()
@@ -2467,7 +2464,6 @@ func TestAutoConfigReconcile_IdenticalSecondPassWritesNothing(t *testing.T) {
 	slices.Reverse(ce.output.Skipped)
 	slices.Reverse(ce.output.Failed)
 	slices.Reverse(g.output.Skipped)
-	slices.Reverse(reasons)
 	counts = writeCounts{}
 
 	if _, err := reconcileAC(r, first); err != nil {
@@ -5150,51 +5146,6 @@ func endpointNames(eps []v1alpha1.KrakenDEndpoint) []string {
 	return names
 }
 
-func TestAutoConfigReconcile_PrecheckHoldsAttributedOperations(t *testing.T) {
-	cm := testCUEDefinitionsCM()
-	ac := syncedAutoConfig(cm)
-	stale := ownedCopy(t, ac, generatedEndpoint("old", "/old"))
-	f, ce, fi, g := defaultMocks()
-	g.output.Endpoints = append(g.output.Endpoints, generatedEndpoint("getB", "/b"))
-	checker := &fakeChecker{verdicts: []configcheck.Verdict{{Findings: []configcheck.Finding{{
-		Endpoint: types.NamespacedName{Namespace: "default", Name: "test-ac-getb"}, Index: 0,
-		Message: "'timeout' time: unknown unit",
-	}}}}}
-	c := fakeClientBuilder().WithObjects(ac, cm, stale, testGateway()).WithStatusSubresource(ac).Build()
-	r := newACReconciler(c, f, ce, fi, g)
-	r.Checker = checker
-
-	if _, err := reconcileAC(r, ac); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
-	if len(checker.calls) != 2 {
-		t.Fatalf("expected 2 checks, got %d", len(checker.calls))
-	}
-	// Round 1 checks both candidates and models the stale endpoint gone.
-	if names := endpointNames(checker.calls[0]); !slices.Equal(names,
-		[]string{"test-ac-listusers", "test-ac-getb", "test-ac-old"}) {
-		t.Errorf("round 1 replace set = %v", names)
-	}
-	if old := checker.calls[0][2]; len(old.Spec.Endpoints) != 0 || old.Spec.ComponentSchemas != nil {
-		t.Errorf("expected an empty copy of the stale endpoint, got %+v", old.Spec)
-	}
-	// Round 2 re-checks what remains; test-ac-getb failed, so the stale
-	// endpoint stays and is not modelled gone.
-	if names := endpointNames(checker.calls[1]); !slices.Equal(names, []string{"test-ac-listusers"}) {
-		t.Errorf("round 2 replace set = %v", names)
-	}
-	if endpointExists(t, c, "test-ac-getb") || !endpointExists(t, c, "test-ac-listusers") ||
-		!endpointExists(t, c, "test-ac-old") {
-		t.Error("expected listusers written, getb not written, old kept")
-	}
-	failed := getAC(t, c, ac).Status.FailedOperations
-	if len(failed) != 1 || failed[0].Endpoint != "test-ac-getb" ||
-		failed[0].Reason != v1alpha1.ReasonConfigValidationFailed ||
-		failed[0].Message != "'timeout' time: unknown unit" {
-		t.Errorf("failedOperations = %+v", failed)
-	}
-}
-
 func TestAutoConfigReconcile_PrecheckUnavailableWritesNothing(t *testing.T) {
 	cm := testCUEDefinitionsCM()
 	ac := syncedAutoConfig(cm)
@@ -5204,7 +5155,7 @@ func TestAutoConfigReconcile_PrecheckUnavailableWritesNothing(t *testing.T) {
 	c := fakeClientBuilder().WithObjects(ac, cm, stale, testGateway()).WithStatusSubresource(ac).
 		WithInterceptorFuncs(recordEndpointWrites(&ops, nil)).Build()
 	r := newACReconciler(c, f, ce, fi, g)
-	r.Checker = &fakeChecker{err: errors.New("no free validator slot before the deadline")}
+	r.Checker = &fakeChecker{checkErr: errors.New("no free validator slot before the deadline")}
 
 	if _, err := reconcileAC(r, ac); err == nil {
 		t.Fatal("expected an error to retry with backoff")
@@ -5215,190 +5166,6 @@ func TestAutoConfigReconcile_PrecheckUnavailableWritesNothing(t *testing.T) {
 	cond := meta.FindStatusCondition(getAC(t, c, ac).Status.Conditions, v1alpha1.ConditionSynced)
 	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != v1alpha1.ReasonValidatorUnavailable {
 		t.Errorf("expected Synced False/ValidatorUnavailable, got %+v", cond)
-	}
-}
-
-func TestAutoConfigReconcile_UnattributedCheckFailure(t *testing.T) {
-	otherEndpoint := configcheck.Verdict{Findings: []configcheck.Finding{{
-		Endpoint: types.NamespacedName{Namespace: "team-b", Name: "orders"}, Index: 0, Message: "wildcard conflict",
-	}}}
-	gatewayRoot := configcheck.Verdict{Findings: []configcheck.Finding{{Index: -1, Message: "'timeout' time: unknown unit"}}}
-	for name, tc := range map[string]struct {
-		failure, baseline configcheck.Verdict
-		wantWrite         bool
-	}{
-		"another endpoint, gateway already broken: write": {otherEndpoint, otherEndpoint, true},
-		"another endpoint, change breaks gateway: hold":   {otherEndpoint, configcheck.Verdict{OK: true}, false},
-		"gateway root, change breaks gateway: hold":       {gatewayRoot, configcheck.Verdict{OK: true}, false},
-	} {
-		t.Run(name, func(t *testing.T) {
-			cm := testCUEDefinitionsCM()
-			ac := syncedAutoConfig(cm)
-			f, ce, fi, g := defaultMocks()
-			c := fakeClientBuilder().WithObjects(ac, cm, testGateway()).WithStatusSubresource(ac).Build()
-			r := newACReconciler(c, f, ce, fi, g)
-			r.Checker = &fakeChecker{verdicts: []configcheck.Verdict{tc.failure, tc.baseline}}
-
-			if _, err := reconcileAC(r, ac); err != nil {
-				t.Fatalf("reconcile: %v", err)
-			}
-			if got := endpointExists(t, c, "test-ac-listusers"); got != tc.wantWrite {
-				t.Errorf("endpoint written = %v, want %v", got, tc.wantWrite)
-			}
-			if tc.wantWrite {
-				if failed := getAC(t, c, ac).Status.FailedOperations; len(failed) != 0 {
-					t.Errorf("failedOperations = %+v, want none for a write", failed)
-				}
-			} else {
-				failed := getAC(t, c, ac).Status.FailedOperations
-				if len(failed) != 1 ||
-					!strings.HasPrefix(failed[0].Message, "the change fails the gateway config check") {
-					t.Errorf("failedOperations = %+v", failed)
-				}
-			}
-		})
-	}
-}
-
-// A change that fails the gateway check only because it un-hides another
-// endpoint (one that lost a route to a candidate's endpoint) must not copy that
-// endpoint's echoed value into this AutoConfig's status.
-func TestAutoConfigReconcile_HoldDoesNotEchoAnotherEndpointsValue(t *testing.T) {
-	cm := testCUEDefinitionsCM()
-	ac := syncedAutoConfig(cm)
-	f, ce, fi, g := defaultMocks()
-	c := fakeClientBuilder().WithObjects(ac, cm, testGateway()).WithStatusSubresource(ac).Build()
-	r := newACReconciler(c, f, ce, fi, g)
-	// The combined render un-hides a loser whose host krakend refuses and echoes;
-	// the gateway alone passes, and so do the candidates on their own.
-	r.Checker = &fakeChecker{verdicts: []configcheck.Verdict{
-		{Findings: []configcheck.Finding{{Index: -1, Message: "host http://u:SECRET-PASS@h1 not valid: invalid host"}}},
-		{OK: true},
-	}}
-
-	if _, err := reconcileAC(r, ac); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
-
-	failed := getAC(t, c, ac).Status.FailedOperations
-	if len(failed) != 1 || !strings.HasPrefix(failed[0].Message, "the change fails the gateway config check") {
-		t.Fatalf("failedOperations = %+v, want the one candidate held", failed)
-	}
-	if strings.Contains(failed[0].Message, "SECRET-PASS") {
-		t.Errorf("the hold message %q copies a value from another endpoint", failed[0].Message)
-	}
-}
-
-// The candidates' own failures stay visible: when the candidates fail the
-// check on their own, the hold shows that check's summary.
-func TestAutoConfigReconcile_HoldStillShowsTheTenantsOwnError(t *testing.T) {
-	cm := testCUEDefinitionsCM()
-	ac := syncedAutoConfig(cm)
-	f, ce, fi, g := defaultMocks()
-	c := fakeClientBuilder().WithObjects(ac, cm, testGateway()).WithStatusSubresource(ac).Build()
-	r := newACReconciler(c, f, ce, fi, g)
-	parseError := configcheck.Finding{Index: -1, Message: "host http://own-host:bad not valid: invalid host"}
-	checker := &fakeChecker{
-		verdicts: []configcheck.Verdict{{Findings: []configcheck.Finding{parseError}}, {OK: true}},
-		isolated: []configcheck.Verdict{{Findings: []configcheck.Finding{parseError}}},
-	}
-	r.Checker = checker
-
-	if _, err := reconcileAC(r, ac); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
-
-	failed := getAC(t, c, ac).Status.FailedOperations
-	if len(failed) != 1 || !strings.Contains(failed[0].Message, "own-host:bad not valid") {
-		t.Errorf("failedOperations = %+v, want the candidate's own parse error", failed)
-	}
-	if len(checker.isolatedCalls) != 1 || len(checker.isolatedCalls[0]) != 1 {
-		t.Errorf("isolated checks = %v, want one over the candidate alone", checker.isolatedCalls)
-	}
-}
-
-// An isolated check that cannot run leaves the sync unjudged, like a baseline
-// that cannot run: nothing is written.
-func TestAutoConfigReconcile_IsolatedCheckThatCannotRunFailsTheSync(t *testing.T) {
-	cm := testCUEDefinitionsCM()
-	ac := syncedAutoConfig(cm)
-	f, ce, fi, g := defaultMocks()
-	c := fakeClientBuilder().WithObjects(ac, cm, testGateway()).WithStatusSubresource(ac).Build()
-	r := newACReconciler(c, f, ce, fi, g)
-	r.Checker = &fakeChecker{
-		verdicts: []configcheck.Verdict{
-			{Findings: []configcheck.Finding{{Index: -1, Message: "broken"}}}, {OK: true},
-		},
-		isolatedErr: errors.New("no free validator slot before the deadline"),
-	}
-
-	if _, err := reconcileAC(r, ac); err == nil {
-		t.Fatal("expected an error to retry with backoff")
-	}
-	cond := meta.FindStatusCondition(getAC(t, c, ac).Status.Conditions, v1alpha1.ConditionSynced)
-	if cond == nil || cond.Reason != v1alpha1.ReasonValidatorUnavailable {
-		t.Errorf("expected Synced False/ValidatorUnavailable, got %+v", cond)
-	}
-	if endpointExists(t, c, "test-ac-listusers") {
-		t.Error("an endpoint was written although its check could not run")
-	}
-}
-
-func TestAttributeFindings_ReadsEndpointNotIndexAndKeepsTheLeastMessage(t *testing.T) {
-	a, b := generatedEndpoint("a", "/a"), generatedEndpoint("b", "/b")
-	got := attributeFindings([]configcheck.Finding{
-		{Endpoint: types.NamespacedName{Namespace: "default", Name: "test-ac-a"}, Index: 0, Message: "second"},
-		{Endpoint: types.NamespacedName{Namespace: "default", Name: "test-ac-a"}, Index: -1, Message: "first"},
-		{Endpoint: types.NamespacedName{Namespace: "default", Name: "test-ac-b"}, Index: -1, Message: "entry unknown"},
-		{Index: -1, Message: "gateway root"},
-		{Endpoint: types.NamespacedName{Namespace: "team-b", Name: "orders"}, Index: 0, Message: "elsewhere"},
-	}, []*v1alpha1.KrakenDEndpoint{a, b})
-
-	if len(got) != 2 || got["test-ac-a"].message != "first" || got["test-ac-b"].message != "entry unknown" {
-		t.Errorf("attributeFindings = %+v, want test-ac-a: first, test-ac-b: entry unknown", got)
-	}
-}
-
-func TestAutoConfigReconcile_PrecheckHoldsWhatTheRoundsLeftUnchecked(t *testing.T) {
-	cm := testCUEDefinitionsCM()
-	ac := syncedAutoConfig(cm)
-	f, ce, fi, g := defaultMocks()
-	// Seven candidates; each round's check names the first one left, so five
-	// rounds attribute five and leave two that no passing check covered.
-	names := []string{"test-ac-listusers"}
-	for _, id := range []string{"b", "c", "d", "e", "f", "g"} {
-		g.output.Endpoints = append(g.output.Endpoints, generatedEndpoint(id, "/"+id))
-		names = append(names, "test-ac-"+id)
-	}
-	checker := &fakeChecker{}
-	for _, name := range names[:maxPrecheckRounds] {
-		checker.verdicts = append(checker.verdicts, configcheck.Verdict{Findings: []configcheck.Finding{{
-			Endpoint: types.NamespacedName{Namespace: "default", Name: name}, Index: 0, Message: "bad " + name,
-		}}})
-	}
-	c := fakeClientBuilder().WithObjects(ac, cm, testGateway()).WithStatusSubresource(ac).Build()
-	r := newACReconciler(c, f, ce, fi, g)
-	r.Checker = checker
-
-	if _, err := reconcileAC(r, ac); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
-	if len(checker.calls) != maxPrecheckRounds {
-		t.Errorf("config checks = %d, want %d", len(checker.calls), maxPrecheckRounds)
-	}
-	for _, name := range names {
-		if endpointExists(t, c, name) {
-			t.Errorf("endpoint %s was written without a passing check", name)
-		}
-	}
-	failed := getAC(t, c, ac).Status.FailedOperations
-	if len(failed) != len(names) {
-		t.Fatalf("failedOperations = %+v, want all %d held", failed, len(names))
-	}
-	for _, f := range failed {
-		if f.Endpoint == "test-ac-g" && f.Message != "not checked: 5 other operations failed the gateway config check first" {
-			t.Errorf("message of the unchecked endpoint = %q", f.Message)
-		}
 	}
 }
 
@@ -5415,8 +5182,8 @@ func TestAutoConfigReconcile_SteadyStateRunsNoCheck(t *testing.T) {
 	if _, err := reconcileAC(r, ac); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if len(checker.calls) != 0 {
-		t.Errorf("expected no config check without writes, got %d", len(checker.calls))
+	if len(checker.checks) != 0 {
+		t.Errorf("expected no config check without writes, got %v", checker.checks)
 	}
 }
 
@@ -5453,9 +5220,9 @@ func TestAutoConfigReconcile_PrecheckHoldsEnterpriseOnlyNamespacesOnACEGateway(t
 		!endpointExists(t, c, "test-ac-getdocs") {
 		t.Error("expected listusers and getdocs written, getkeys held")
 	}
-	for i, call := range checker.calls {
-		if slices.Contains(endpointNames(call), "test-ac-getkeys") {
-			t.Errorf("config check %d included the held endpoint: %v", i, endpointNames(call))
+	for _, check := range checker.checks {
+		if strings.Contains(check, "test-ac-getkeys") {
+			t.Errorf("config check %s included the held endpoint", check)
 		}
 	}
 	failed := getAC(t, c, ac).Status.FailedOperations
@@ -5554,14 +5321,12 @@ func TestAutoConfigReconcile_PrecheckHoldsANewShapeCollisionAndKeepsStaleInTheCh
 	g.output.Endpoints = []*v1alpha1.KrakenDEndpoint{
 		generatedEndpoint("getA", "/h/{a}"), generatedEndpoint("getB", "/h/{b}"), generatedEndpoint("getC", "/c"),
 	}
-	// The check would fail the clashing endpoint if it were put to it.
-	checker := &fakeChecker{judge: func(replace []v1alpha1.KrakenDEndpoint) configcheck.Verdict {
-		if slices.Contains(endpointNames(replace), "test-ac-geta") {
-			return configcheck.Verdict{Findings: []configcheck.Finding{{
-				Endpoint: types.NamespacedName{Namespace: "default", Name: "test-ac-geta"}, Index: 0, Message: "clash",
-			}}}
+	// A check would fail the clashing endpoint if it were put to it.
+	checker := &fakeChecker{endpoint: func(ep *v1alpha1.KrakenDEndpoint) configcheck.EndpointVerdict {
+		if ep.Name == "test-ac-geta" {
+			return configcheck.EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid, Output: "clash"}
 		}
-		return configcheck.Verdict{OK: true}
+		return configcheck.EndpointVerdict{OK: true}
 	}}
 	c := fakeClientBuilder().WithObjects(ac, cm, served, stale, testGateway()).WithStatusSubresource(ac).Build()
 	r := newACReconciler(c, f, ce, fi, g)
@@ -5574,14 +5339,17 @@ func TestAutoConfigReconcile_PrecheckHoldsANewShapeCollisionAndKeepsStaleInTheCh
 		!endpointExists(t, c, "test-ac-old") {
 		t.Error("expected getA held, getC written and the stale endpoint kept")
 	}
-	// The held collision keeps the stale endpoint: the check does not replace
-	// it with an empty copy, so it stays as it is. The held endpoint is not
-	// checked.
-	if len(checker.calls) != 1 {
-		t.Fatalf("expected 1 check, got %d", len(checker.calls))
+	// The held collision keeps the stale endpoint: the router-clash render
+	// does not replace it with an empty copy, so it stays as it is. The held
+	// endpoint is not checked.
+	if len(checker.conflictCalls) != 2 {
+		t.Fatalf("expected 2 router-clash renders, got %d", len(checker.conflictCalls))
 	}
-	if names := endpointNames(checker.calls[0]); !slices.Equal(names, []string{"test-ac-getc"}) {
+	if names := endpointNames(checker.conflictCalls[1]); !slices.Equal(names, []string{"test-ac-getc"}) {
 		t.Errorf("replace set = %v, want only test-ac-getc (no empty copy of the stale endpoint)", names)
+	}
+	if slices.ContainsFunc(checker.checks, func(c string) bool { return strings.Contains(c, "test-ac-geta") }) {
+		t.Errorf("checks = %v, want the held endpoint never checked", checker.checks)
 	}
 	failed := getAC(t, c, ac).Status.FailedOperations
 	if len(failed) != 1 || failed[0].Endpoint != "test-ac-geta" ||
@@ -5613,8 +5381,8 @@ func TestAutoConfigReconcile_HoldsAStoredSameShapePairsLoserAndKeepsStale(t *tes
 	if _, err := reconcileAC(r, ac); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if len(ops) != 0 || len(checker.calls) != 0 {
-		t.Errorf("expected no writes, deletes or checks, got %v and %d checks", ops, len(checker.calls))
+	if len(ops) != 0 || len(checker.checks) != 0 {
+		t.Errorf("expected no writes, deletes or checks, got %v and checks %v", ops, checker.checks)
 	}
 	got := getAC(t, c, ac)
 	failed := got.Status.FailedOperations
@@ -5996,23 +5764,6 @@ func TestAutoConfigReconcile_PrecheckHoldsASiblingThatADormantDuplicateBreaks(t 
 		!strings.Contains(failed[0].Message, "cannot be routed next to KrakenDEndpoint default/tenant-user,") ||
 		endpointExists(t, c, "test-ac-getuserorders") {
 		t.Errorf("failed operations = %+v, want only the sibling held, unwritten, for the tenant's /users/{tid}", failed)
-	}
-}
-
-func TestAttributeFindings_CauseCarriesEveryFindingInOrder(t *testing.T) {
-	a := generatedEndpoint("a", "/a")
-	key := types.NamespacedName{Namespace: "default", Name: "test-ac-a"}
-
-	got := attributeFindings([]configcheck.Finding{
-		{Endpoint: key, Index: 0, Message: "zeta"},
-		{Endpoint: key, Index: -1, Message: "alpha"},
-	}, []*v1alpha1.KrakenDEndpoint{a})
-
-	if want := "default/test-ac-a spec.endpoints[0]: zeta; default/test-ac-a: alpha"; got["test-ac-a"].cause.Error() != want {
-		t.Errorf("cause = %v, want %q", got["test-ac-a"].cause, want)
-	}
-	if got["test-ac-a"].message != "alpha" {
-		t.Errorf("message = %q, want the least finding, alpha", got["test-ac-a"].message)
 	}
 }
 
@@ -6665,31 +6416,23 @@ func (s *slotHeldChecker) CheckGateway(
 	return v, nil
 }
 
-// Every gateway check a sync runs holds a check slot, the baseline check that
-// follows a failure no candidate owns included.
-func TestAutoConfigReconcile_BaselineCheckHoldsACheckSlot(t *testing.T) {
+// Every check a sync runs holds a check slot: the root's, the group's and
+// each candidate's own.
+func TestAutoConfigReconcile_EveryCheckHoldsACheckSlot(t *testing.T) {
 	cm := testCUEDefinitionsCM()
 	ac := syncedAutoConfig(cm)
 	f, ce, fi, g := defaultMocks()
 	c := fakeClientBuilder().WithObjects(ac, cm, testGateway()).WithStatusSubresource(ac).Build()
 	r := newACReconciler(c, f, ce, fi, g)
 	r.CheckSlots = make(chan struct{}, 1)
-	checker := &slotHeldChecker{slots: r.CheckSlots, verdicts: []configcheck.Verdict{
-		{Findings: []configcheck.Finding{{
-			Endpoint: types.NamespacedName{Namespace: "default", Name: "unrelated"}, Index: 0, Message: "broken",
-		}}},
-		{OK: true},
-	}}
+	checker := &slotHeldChecker{slots: r.CheckSlots, verdicts: []configcheck.Verdict{{OK: true}}}
 	r.Checker = checker
 
 	if _, err := reconcileAC(r, ac); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 
-	if !slices.Equal(checker.isolatedHeld, []int{1}) {
-		t.Errorf("slots held during the isolated check = %v, want [1]", checker.isolatedHeld)
-	}
-	if !slices.Equal(checker.held, []int{1, 1}) {
-		t.Errorf("slots held during the round and baseline checks = %v, want [1 1]", checker.held)
+	if len(checker.checksHeld) == 0 || slices.ContainsFunc(checker.checksHeld, func(n int) bool { return n != 1 }) {
+		t.Errorf("slots held during the checks = %v, want the one slot held by each check", checker.checksHeld)
 	}
 }
