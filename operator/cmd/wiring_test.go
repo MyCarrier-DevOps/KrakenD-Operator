@@ -179,3 +179,19 @@ func TestWireValidation_InstrumentsEveryPart(t *testing.T) {
 		}
 	}
 }
+
+// A recorder the pod has none of is a nil port, which the reconcilers turn
+// into a no-op: a nil *OperatorMetrics inside the interface would not be nil
+// and would panic on its first use.
+func TestWireValidation_NoRecorderLeavesTheMetricsPortsNil(t *testing.T) {
+	mgr := stubManager{client: fake.NewClientBuilder().Build()}
+
+	w := wireValidation(mgr, renderer.New(renderer.Options{}), nil, "", instrumentation{})
+
+	if w.Gateway.Metrics != nil {
+		t.Errorf("gateway Metrics = %#v, want a nil port", w.Gateway.Metrics)
+	}
+	if w.AutoConfig.Metrics != nil {
+		t.Errorf("AutoConfig Metrics = %#v, want a nil port", w.AutoConfig.Metrics)
+	}
+}
