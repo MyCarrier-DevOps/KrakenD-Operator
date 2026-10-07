@@ -56,7 +56,11 @@ func (m stubManager) GetClient() client.Client { return m.client }
 
 func (m stubManager) GetScheme() *runtime.Scheme { return m.client.Scheme() }
 
-func (m stubManager) GetAPIReader() client.Reader { return m.client }
+// GetAPIReader answers a reader that is not the cached client, so a component
+// handed the client where it needs the API reader fails the identity checks.
+func (m stubManager) GetAPIReader() client.Reader { return uncachedReader{m.client} }
+
+type uncachedReader struct{ client.Reader }
 
 func (m stubManager) GetEventRecorderFor(string) record.EventRecorder {
 	return record.NewFakeRecorder(1)
