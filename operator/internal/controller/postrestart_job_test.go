@@ -56,7 +56,7 @@ var convergedImage = renderer.ResolveImage(testGateway(), false)
 
 func makeConvergedDeployment(gw *v1alpha1.KrakenDGateway, checksum string) *appsv1.Deployment {
 	return &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace},
+		ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace, OwnerReferences: ownedBy(gw)},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: new(int32(1)),
 			Template: corev1.PodTemplateSpec{
