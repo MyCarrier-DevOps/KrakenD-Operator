@@ -20,11 +20,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"strings"
 	"testing"
 
 	"github.com/go-logr/logr"
+	"go.opentelemetry.io/otel"
 	otellog "go.opentelemetry.io/otel/log"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	"k8s.io/klog/v2"
@@ -164,5 +166,30 @@ func TestInstallLogging_KlogAndStdlibLogReachTheOTelPipeline(t *testing.T) {
 	}
 	if scopes["from klog"] != "test/klog" || scopes["from the standard library"] != "test/stdlib" {
 		t.Errorf("records by message and scope = %v, want both, scoped test/klog and test/stdlib", scopes)
+	}
+}
+
+// failingExporter counts its exports and fails each one.
+type failingExporter struct{ exports *int }
+
+func (e failingExporter) Export(context.Context, []sdklog.Record) error {
+	*e.exports++
+	return errors.New("export failed")
+}
+func (failingExporter) Shutdown(context.Context) error   { return nil }
+func (failingExporter) ForceFlush(context.Context) error { return nil }
+
+// An OTLP export failure is reported once; a failing diagnostics pipeline must
+// not report its own failure, which would report a failure, forever.
+func TestInstallLogging_AFailingDiagnosticsPipelineDoesNotReportItselfInALoop(t *testing.T) {
+	logger, _ := newStdoutLogger(t, otellog.SeverityInfo)
+	exports := 0
+	diag := sdklog.NewLoggerProvider(sdklog.WithProcessor(sdklog.NewSimpleProcessor(failingExporter{&exports})))
+	telemetry.InstallLogging(logger, telemetry.NewLogger(diag, "opentelemetry"))
+
+	otel.Handle(errors.New("an exporter failed"))
+
+	if exports != 1 {
+		t.Errorf("diagnostics exported %d times for one error, want 1", exports)
 	}
 }
