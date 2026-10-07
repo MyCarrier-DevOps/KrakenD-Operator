@@ -153,8 +153,13 @@ func newKrakenDValidator(path string, tracer trace.Tracer) *renderer.KrakenDVali
 	})
 }
 
-// newManagerClient builds the manager's client. It is a stub: its reads are
-// not span events.
+// newManagerClient builds the manager's client as controller-runtime does,
+// with each read an event on the active span: reads the cache serves send no
+// request, so the transport cannot see them.
 func newManagerClient(config *rest.Config, options client.Options) (client.Client, error) {
-	return client.New(config, options)
+	c, err := client.New(config, options)
+	if err != nil {
+		return nil, err
+	}
+	return telemetry.ReadEvents(c), nil
 }
