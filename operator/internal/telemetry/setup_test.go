@@ -413,3 +413,31 @@ func TestSetup_AMalformedEndpointNeverReachesTheOutput(t *testing.T) {
 		})
 	}
 }
+
+// OTEL_<SIGNAL>_EXPORTER=none turns that signal's OTLP export off even with an
+// endpoint configured, and leaves the other signals exported.
+func TestSetup_ExporterNoneDisablesOnlyThatSignal(t *testing.T) {
+	for _, off := range otlpSignals {
+		t.Run(off.name, func(t *testing.T) {
+			cleanOTelEnv(t)
+			collected, url := newHTTPCollector(t)
+			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", url)
+			t.Setenv("OTEL_"+off.name+"_EXPORTER", "none")
+			tel := setup(t, &bytes.Buffer{})
+
+			for _, signal := range otlpSignals {
+				signal.emit(t, tel)
+			}
+			if err := tel.Shutdown(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+
+			for _, signal := range otlpSignals {
+				if got := collected.count(signal.httpPath); (got > 0) == (signal.name == off.name) {
+					t.Errorf("%d POSTs to %s with %s off; the collector got %v",
+						got, signal.httpPath, off.name, collected.all())
+				}
+			}
+		})
+	}
+}
