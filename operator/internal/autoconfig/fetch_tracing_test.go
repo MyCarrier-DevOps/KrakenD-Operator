@@ -131,3 +131,45 @@ func TestNewFetcher_FetchIsASpanAboveItsHTTPRequest(t *testing.T) {
 		t.Error("the strict client's transport is not traced")
 	}
 }
+
+// requireNoSecretInSpans fails the test if any attribute, status description
+// or event attribute of the recorded spans contains one of secrets.
+func requireNoSecretInSpans(t *testing.T, spans tracingtest.Spans, secrets ...string) {
+	t.Helper()
+	check := func(where, v string) {
+		for _, secret := range secrets {
+			if strings.Contains(v, secret) {
+				t.Errorf("%s = %q records %q", where, v, secret)
+			}
+		}
+	}
+	for _, span := range spans {
+		for _, kv := range span.Attributes() {
+			check(span.Name()+" attribute "+string(kv.Key), kv.Value.Emit())
+		}
+		check(span.Name()+" status", span.Status().Description)
+		for _, ev := range span.Events() {
+			for _, kv := range ev.Attributes {
+				check(span.Name()+" event attribute "+string(kv.Key), kv.Value.Emit())
+			}
+		}
+	}
+}
+
+// A URL in the opaque form (no "//") parses with its credentials in Opaque:
+// they are recorded nowhere, however it reaches a fetch.
+func TestFetch_AnOpaqueURLLeaksNoCredentials(t *testing.T) {
+	const opaque = "https:user:pw@schemas.example.com/spec.json?token=abc"
+	rec := tracingtest.New(t)
+	f := NewFetcher(fakeClient(), rec.Tracer())
+
+	_, err := f.Fetch(context.Background(), FetchSource{URL: opaque})
+
+	if err == nil {
+		t.Fatal("Fetch succeeded")
+	}
+	if msg := err.Error(); strings.Contains(msg, "user:pw") || strings.Contains(msg, "abc") {
+		t.Errorf("error %q carries a credential", msg)
+	}
+	requireNoSecretInSpans(t, rec.Ended(), "user:pw", "abc")
+}
