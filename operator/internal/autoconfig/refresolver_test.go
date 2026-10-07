@@ -485,22 +485,45 @@ func TestSanitizeRefName_EmptyFragment(t *testing.T) {
 	}
 }
 
-func TestResolveExternalRefs_ReportsLocalRefInFetchedDocument(t *testing.T) {
+func TestResolveExternalRefs_ResolvesLocalRefInFetchedDocumentAgainstThatDocument(t *testing.T) {
 	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"content":{"application/json":` +
-		`{"schema":{"$ref":"common.json#/Pet"}}}}}}}}}`)
-	// Two refs to Owner are one warning.
+		`{"schema":{"$ref":"common.json#/Pet"}}}}}}}},"components":{"schemas":{"Owner":{"type":"integer"}}}}`)
+	// Two refs to Owner are one inlined schema.
 	common := []byte(`{"Pet":{"properties":{"owner":{"$ref":"#/Owner"},"previous":{"$ref":"#/Owner"}}},` +
 		`"Owner":{"type":"string"}}`)
 	fetcher := &stubFetcher{docs: map[string][]byte{"https://api.example.com/common.json": common}}
 
-	_, warnings, err := ResolveExternalRefs(context.Background(), main,
+	resolved, warnings, err := ResolveExternalRefs(context.Background(), main,
 		"https://api.example.com/openapi.json", fetcher, FetchSource{})
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	want := `$ref "#/Owner" in https://api.example.com/common.json is resolved against the main spec`
-	if len(warnings) != 1 || !strings.Contains(warnings[0], want) {
-		t.Errorf("warnings = %q, want one containing %q", warnings, want)
+	if len(warnings) != 0 {
+		t.Errorf("warnings = %q, want none", warnings)
+	}
+	var out struct {
+		Components struct {
+			Schemas map[string]struct {
+				Type       string `json:"type"`
+				Properties map[string]struct {
+					Ref string `json:"$ref"`
+				} `json:"properties"`
+			} `json:"schemas"`
+		} `json:"components"`
+	}
+	if err := json.Unmarshal(resolved, &out); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	const want = "#/components/schemas/common_Owner"
+	pet := out.Components.Schemas["common_Pet"]
+	if pet.Properties["owner"].Ref != want || pet.Properties["previous"].Ref != want {
+		t.Errorf("Pet properties = %+v, want both to reference %s", pet.Properties, want)
+	}
+	if got := out.Components.Schemas["common_Owner"].Type; got != "string" {
+		t.Errorf("inlined Owner type = %q, want string (the fetched document's, not the main spec's)", got)
+	}
+	if got := out.Components.Schemas["Owner"].Type; got != "integer" {
+		t.Errorf("main spec Owner type = %q, want it untouched", got)
 	}
 }
 
@@ -566,41 +589,90 @@ func TestExternalRefs_ListsRefsUnderMembersNamedExample(t *testing.T) {
 	}
 }
 
-func TestResolveExternalRefs_LocalRefWarningSkipsExamplePayload(t *testing.T) {
+func TestResolveExternalRefs_LocalRefResolutionSkipsExamplePayload(t *testing.T) {
 	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"content":{"application/json":` +
 		`{"schema":{"$ref":"common.json#/Pet"}}}}}}}}}`)
 	common := []byte(`{"Pet":{"example":{"$ref":"#/just-data"},` +
 		`"properties":{"owner":{"$ref":"#/Owner"}}},"Owner":{"type":"string"}}`)
 	fetcher := &stubFetcher{docs: map[string][]byte{"https://api.example.com/common.json": common}}
 
-	_, warnings, err := ResolveExternalRefs(context.Background(), main,
+	resolved, warnings, err := ResolveExternalRefs(context.Background(), main,
 		"https://api.example.com/openapi.json", fetcher, FetchSource{})
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if len(warnings) != 1 || !strings.Contains(warnings[0], `"#/Owner"`) {
-		t.Errorf("warnings = %q, want exactly one, about #/Owner", warnings)
+	if len(warnings) != 0 {
+		t.Errorf("warnings = %q, want none: the example payload is data", warnings)
+	}
+	raw := string(resolved)
+	if !strings.Contains(raw, `"$ref":"#/components/schemas/common_Owner"`) ||
+		!strings.Contains(raw, `"example":{"$ref":"#/just-data"}`) {
+		t.Errorf("want Owner rewritten and the example payload untouched; got %s", raw)
 	}
 }
 
-func TestResolveExternalRefs_LocalRefIsAttributedToItsOwnDocument(t *testing.T) {
+func TestResolveExternalRefs_LocalRefIsResolvedInItsOwnDocument(t *testing.T) {
 	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"content":{"application/json":` +
 		`{"schema":{"$ref":"a.json#/A"}}}}}}}}}`)
-	a := []byte(`{"A":{"properties":{"b":{"$ref":"sub/b.json#/B"}}}}`)
+	a := []byte(`{"A":{"properties":{"b":{"$ref":"sub/b.json#/B"}}},"Z":{"type":"integer"}}`)
 	b := []byte(`{"B":{"properties":{"z":{"$ref":"#/Z"}}},"Z":{"type":"string"}}`)
 	fetcher := &stubFetcher{docs: map[string][]byte{
 		"https://api.example.com/a.json":     a,
 		"https://api.example.com/sub/b.json": b,
 	}}
 
-	_, warnings, err := ResolveExternalRefs(context.Background(), main,
+	resolved, warnings, err := ResolveExternalRefs(context.Background(), main,
 		"https://api.example.com/openapi.json", fetcher, FetchSource{})
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	want := `$ref "#/Z" in https://api.example.com/sub/b.json is resolved against the main spec`
+	if len(warnings) != 0 {
+		t.Errorf("warnings = %q, want none", warnings)
+	}
+	raw := string(resolved)
+	if !strings.Contains(raw, `"b_Z":{"type":"string"}`) || strings.Contains(raw, `"a_Z"`) {
+		t.Errorf("want Z taken from sub/b.json, not a.json; got %s", raw)
+	}
+}
+
+// A pointer that is not in its own document is left for the main spec to
+// resolve, as a bundle-style fragment expects, and the warning says so.
+func TestResolveExternalRefs_LocalRefMissingFromItsDocumentFallsBackToTheMainSpec(t *testing.T) {
+	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"content":{"application/json":` +
+		`{"schema":{"$ref":"common.json#/Pet"}}}}}}}}}`)
+	common := []byte(`{"Pet":{"properties":{"owner":{"$ref":"#/components/schemas/Owner"}}}}`)
+	fetcher := &stubFetcher{docs: map[string][]byte{"https://api.example.com/common.json": common}}
+
+	resolved, warnings, err := ResolveExternalRefs(context.Background(), main,
+		"https://api.example.com/openapi.json", fetcher, FetchSource{})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	want := `$ref "#/components/schemas/Owner" is not in https://api.example.com/common.json: ` +
+		`it is resolved against the main spec after inlining`
 	if len(warnings) != 1 || !strings.Contains(warnings[0], want) {
 		t.Errorf("warnings = %q, want one containing %q", warnings, want)
+	}
+	if !strings.Contains(string(resolved), `"owner":{"$ref":"#/components/schemas/Owner"}`) {
+		t.Errorf("want the ref left as written; got %s", resolved)
+	}
+}
+
+// A bare "#" names the whole document: it is left alone, not inlined.
+func TestResolveExternalRefs_BareHashInFetchedDocumentIsLeftAlone(t *testing.T) {
+	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"content":{"application/json":` +
+		`{"schema":{"$ref":"common.json#/Tree"}}}}}}}}}`)
+	common := []byte(`{"Tree":{"properties":{"root":{"$ref":"#"}}}}`)
+	fetcher := &stubFetcher{docs: map[string][]byte{"https://api.example.com/common.json": common}}
+
+	resolved, _, err := ResolveExternalRefs(context.Background(), main,
+		"https://api.example.com/openapi.json", fetcher, FetchSource{})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	raw := string(resolved)
+	if !strings.Contains(raw, `"root":{"$ref":"#"}`) || strings.Contains(raw, "common_Tree_root") {
+		t.Errorf("want the bare # left as written and nothing inlined for it; got %s", raw)
 	}
 }
 
@@ -965,10 +1037,10 @@ func TestResolveExternalRefs_ACycleWarningCarriesNoCredentials(t *testing.T) {
 	requireNoSecretWarnings(t, warnings)
 }
 
-func TestResolveExternalRefs_ALocalRefWarningCarriesNoCredentials(t *testing.T) {
+func TestResolveExternalRefs_AMissingLocalRefWarningCarriesNoCredentials(t *testing.T) {
 	main := []byte(`{"paths":{"/a":{"get":{"responses":{"200":{"$ref":"` + refWithSecrets + `#/A"}}}}}}`)
 	fetcher := &stubFetcher{docs: map[string][]byte{
-		refWithSecrets: []byte(`{"A":{"next":{"$ref":"#/B"}},"B":{}}`),
+		refWithSecrets: []byte(`{"A":{"next":{"$ref":"#/B"}}}`),
 	}}
 
 	_, warnings, err := ResolveExternalRefs(context.Background(), main, "https://api.example.com/openapi.json",
