@@ -56,8 +56,12 @@ func TestTraceWebhookServer_RequestIsAServerSpanAboveTheValidator(t *testing.T) 
 
 	spans := rec.Ended()
 	spans.RequireChild(t, "admission "+hookPath, "admission.validate")
-	if parent := spans.One(t, "admission "+hookPath).Parent(); parent.IsValid() {
+	server := spans.One(t, "admission "+hookPath)
+	if parent := server.Parent(); parent.IsValid() {
 		t.Errorf("server span has parent %v, want a new trace when none is propagated", parent)
+	}
+	if server.SpanKind() != trace.SpanKindServer {
+		t.Errorf("admission span kind = %v, want server", server.SpanKind())
 	}
 }
 
