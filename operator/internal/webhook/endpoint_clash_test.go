@@ -123,3 +123,39 @@ func TestEndpointAdmission_ACreateRanksAfterEveryStoredEndpoint(t *testing.T) {
 		t.Errorf("rendered creation years = %v, want a create after every stored endpoint (9999) and an update at its own (2026)", ranked)
 	}
 }
+
+// servedFirst answers Conflicts as the renderer orders two endpoints that
+// clash: the older wins, and namespace/name breaks a tie within one second.
+// The loser loses GET /a/{name}/x to the winner.
+func servedFirst(stored *v1alpha1.KrakenDEndpoint) func(*v1alpha1.KrakenDGateway, []v1alpha1.KrakenDEndpoint) configcheck.RouteConflicts {
+	return func(_ *v1alpha1.KrakenDGateway, replace []v1alpha1.KrakenDEndpoint) configcheck.RouteConflicts {
+		if len(replace) == 0 {
+			return configcheck.RouteConflicts{}
+		}
+		winner, loser := replace[0], *stored
+		if loser.CreationTimestamp.Before(&winner.CreationTimestamp) ||
+			loser.CreationTimestamp.Equal(&winner.CreationTimestamp) && loser.Name < winner.Name {
+			winner, loser = loser, winner
+		}
+		return configcheck.RouteConflicts{Lost: map[types.NamespacedName][]renderer.EntryConflict{
+			{Namespace: loser.Namespace, Name: loser.Name}: {{Endpoint: "/a/{name}/x", Method: "GET",
+				Winner: types.NamespacedName{Namespace: winner.Namespace, Name: winner.Name}, Detail: ginClash}},
+		}}
+	}
+}
+
+func TestEndpointAdmission_ACreateInTheSameSecondCannotPushAStoredEntryOut(t *testing.T) {
+	second := metav1.NewTime(time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC))
+	stored := testEndpoint("old", "/a/{name}/x")
+	stored.CreationTimestamp = second
+	created := testEndpoint("new", "/a/{id}")
+	created.CreationTimestamp = second // the API server stamps a create before admission sees it
+	v := &EndpointValidator{Client: fakeClient(testGateway(), stored), Checker: &scriptedChecker{conflicts: servedFirst(stored)}}
+
+	resp := review(t, v, "alice", created, nil)
+
+	want := "GET /a/{name}/x of KrakenDEndpoint default/old cannot be routed next to KrakenDEndpoint default/new"
+	if resp.Allowed || !strings.Contains(responseText(resp), want) {
+		t.Errorf("response = %+v, want a denial: the create ranks first by name and would push out %q", resp.Result, want)
+	}
+}
