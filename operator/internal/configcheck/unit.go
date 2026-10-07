@@ -95,18 +95,11 @@ func (c *Checker) CheckRoot(ctx context.Context, r Root, memo Memo) (Verdict, er
 
 // CheckGroup lints g.
 func (c *Checker) CheckGroup(ctx context.Context, g Group, memo Memo) (Verdict, error) {
-	endpoints := slices.Clone(g.Endpoints)
-	sortEndpoints(endpoints)
-	policies, err := c.policiesFor(ctx, endpoints)
+	in, err := c.inputFor(ctx, g.Gateway, slices.Clone(g.Endpoints), g.Override, g.CEFallback)
 	if err != nil {
 		return Verdict{}, err
 	}
-	if g.Override != nil {
-		policies[policyKey(g.Override)] = g.Override
-	}
-	return c.lintInput(ctx, renderer.RenderInput{
-		Gateway: g.Gateway, Endpoints: endpoints, Policies: policies, CEFallback: g.CEFallback,
-	}, memo)
+	return c.lintInput(ctx, in, memo)
 }
 
 // CheckPolicy lints policy on its own: one synthetic endpoint on a default CE
