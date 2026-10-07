@@ -284,3 +284,37 @@ func TestGatewayReconcile_SpansEachOptionalChildUnderTheInfrastructureStage(t *t
 		})
 	}
 }
+
+// A CRD lookup can send a discovery request, which client-go sends without a
+// context, so no client span records it: each lookup is a k8s.discovery span
+// of its own, under the stage that needs the kind.
+func TestGatewayReconcile_EachCRDLookupIsADiscoverySpanOfItsStage(t *testing.T) {
+	for _, tc := range []struct {
+		kind, parent string
+		enable       func(*v1alpha1.KrakenDGateway)
+	}{
+		{"Dragonfly.dragonflydb.io", "gateway.dragonfly", func(gw *v1alpha1.KrakenDGateway) {
+			gw.Spec.Dragonfly = &v1alpha1.DragonflySpec{Enabled: true}
+		}},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			gw := testGateway()
+			tc.enable(gw)
+
+			spans := reconcileTraced(t, gw, testEndpoint("e", "/e"))
+
+			found := false
+			for _, span := range spans.Named("k8s.discovery") {
+				parent := spans.Parent(span)
+				if parent == nil {
+					t.Fatalf("a k8s.discovery span has no parent; spans: %s", spans)
+				}
+				kind := tracingtest.Spans{span}.With(attribute.String("k8s.discovery.kind", tc.kind))
+				found = found || (len(kind) == 1 && parent.Name() == tc.parent)
+			}
+			if !found {
+				t.Errorf("no k8s.discovery span of %s under %q; spans: %s", tc.kind, tc.parent, spans)
+			}
+		})
+	}
+}
