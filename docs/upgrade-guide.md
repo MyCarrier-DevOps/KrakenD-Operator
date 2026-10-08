@@ -2511,15 +2511,15 @@ reports it.
   gateway writes no HorizontalPodAutoscaler and deletes the one it controls,
   so an HPA does not scale somebody else's Deployment. The Deployment step's
   refusal decides when the step runs; while the Deployment is held for
-  another reason (a missing plugin ConfigMap, no config applied yet, or the
-  ServiceAccount), the gateway's read of that Deployment decides, and
-  `ResourcesControlled` names it only once a pass tries to write it. Beside a
-  refused Deployment old config ConfigMaps are still collected, and the
-  configs applied meanwhile raise no `Progressing`. While the Service is
-  refused, which every pass checks, the gateway writes no VirtualService and
-  deletes the one it controls (`IstioConfigured=False`, reason
-  `ResourceNotControlled`), so the gateway's hosts are not routed to somebody
-  else's pods.
+  another reason (a missing plugin ConfigMap, no config applied yet, no
+  ConfigMap holding the applied config, or the ServiceAccount), the gateway's
+  read of that Deployment decides, and `ResourcesControlled` names it only
+  once a pass tries to write it. Beside a refused Deployment old config
+  ConfigMaps are still collected, and the configs applied meanwhile raise no
+  `Progressing`. While the Service is refused, which every pass checks, the
+  gateway writes no VirtualService and deletes the one it controls
+  (`IstioConfigured=False`, reason `ResourceNotControlled`), so the gateway's
+  hosts are not routed to somebody else's pods.
 - A refused Dragonfly is not reported ready (`DragonflyReady=False`, reason
   `ResourceNotControlled`), `status.dragonflyAddress` is cleared, and the
   rendered Redis pool does not point at it: the render falls back to
