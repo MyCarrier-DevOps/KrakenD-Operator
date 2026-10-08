@@ -578,11 +578,12 @@ What points at a refused object by name is held with it:
 - **A refused Deployment.** The HorizontalPodAutoscaler would scale it, so the
   gateway writes none and deletes the one it controls. It does the same while
   the Deployment is held for another reason (a missing plugin ConfigMap, no
-  config applied yet, or the ServiceAccount) and the Deployment named like the
-  gateway is one it does not control, though this condition names that
-  Deployment only once a pass tries to write it. The configs applied meanwhile
-  raise no `Progressing`, and old config ConfigMaps are still collected, so a
-  long refusal does not pile them up.
+  config applied yet, no ConfigMap holding the applied config, or the
+  ServiceAccount) and the Deployment named like the gateway is one it does not
+  control, though this condition names that Deployment only once a pass tries
+  to write it. The configs applied meanwhile raise no `Progressing`, and old
+  config ConfigMaps are still collected, so a long refusal does not pile them
+  up.
 - **A refused Service.** The VirtualService would route the gateway's hosts to
   it, so the gateway writes none and deletes the one it controls.
   `IstioConfigured` is `False` with reason `ResourceNotControlled`.
