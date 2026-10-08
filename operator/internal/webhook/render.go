@@ -113,9 +113,6 @@ type scan struct {
 	stopped error
 }
 
-// cutShort says the scan ended on a check that could not run.
-func (s *scan) cutShort() bool { return s.stopped != nil }
-
 // failingEndpoints judges each suspect on its own with a write (now, with the
 // suspect as its endpoint) and, when that fails, without it (was; nil when
 // there is nothing to compare with: nothing was stored before, or the stored
@@ -198,19 +195,20 @@ func failingEndpointsDecidingFirst(ctx context.Context, c client.Reader, chk Con
 		}
 	}
 	s.judge(ctx, chk, memo, now, was, first)
-	if s.cutShort() {
+	decided = s.stopped == nil
+	if decided {
+		s.judge(ctx, chk, memo, now, was, rest)
+	} else {
 		s.unchecked += len(rest)
-		return s, false, nil
 	}
-	decided = !s.already
-	s.judge(ctx, chk, memo, now, was, rest)
 	return s, decided && !s.already, nil
 }
 
 // usersOfFailingPolicies returns the endpoints of eps that reference a policy
 // failing krakend check on its own: each distinct policy is checked once, as
-// stored, or as baseline when it is the policy a write replaces. A policy
-// that no longer exists fails nothing: the endpoint reports it missing.
+// stored, or as baseline when it is the policy a write replaces. A policy that
+// does not exist fails nothing: no render includes its endpoints, and the
+// endpoint controller reports it missing (PolicyNotFound).
 func usersOfFailingPolicies(ctx context.Context, c client.Reader, chk ConfigChecker, memo configcheck.Memo,
 	baseline *v1alpha1.KrakenDBackendPolicy, eps []v1alpha1.KrakenDEndpoint) (map[types.NamespacedName]bool, error) {
 	fails := make(map[string]bool)
@@ -245,7 +243,7 @@ func policyFailsAlone(ctx context.Context, c client.Reader, chk ConfigChecker, m
 			if apierrors.IsNotFound(err) {
 				return false, nil
 			}
-			return false, unavailable(err)
+			return false, fmt.Errorf("getting policy %s: %w", key, err)
 		}
 	}
 	alone, err := chk.CheckPolicy(ctx, policy, memo)
