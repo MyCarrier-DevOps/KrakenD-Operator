@@ -332,8 +332,8 @@ func TestApplyOptional_TakesOverOnlyWhatTheGatewayMayControl(t *testing.T) {
 			_, applied, err := r.applyOptional(context.Background(), gw, virtualServiceGVK, gw.Name,
 				resources.SelectorLabels(gw), func(u *unstructured.Unstructured) { u.SetLabels(map[string]string{"built": "yes"}) })
 
-			if got := errors.Is(err, errNotControlled); got != tc.refused {
-				t.Fatalf("errors.Is(err, errNotControlled) = %v (err = %v), want %v", got, err, tc.refused)
+			if got := len(notControlledIn(err)) == 1; got != tc.refused {
+				t.Fatalf("refused = %v (err = %v), want %v", got, err, tc.refused)
 			}
 			if !tc.refused && (err != nil || !applied) {
 				t.Fatalf("applied = %v, err = %v", applied, err)
@@ -417,8 +417,8 @@ func TestReconcileDragonfly_TakesOverOnlyWhatCarriesItsOwnLabels(t *testing.T) {
 
 			err := r.reconcileDragonfly(context.Background(), gw)
 
-			if got := errors.Is(err, errNotControlled); got != tc.refused {
-				t.Fatalf("errors.Is(err, errNotControlled) = %v (err = %v), want %v", got, err, tc.refused)
+			if got := len(notControlledIn(err)) == 1; got != tc.refused {
+				t.Fatalf("refused = %v (err = %v), want %v", got, err, tc.refused)
 			}
 			stored := &unstructured.Unstructured{}
 			stored.SetGroupVersionKind(dragonflyGVK)
