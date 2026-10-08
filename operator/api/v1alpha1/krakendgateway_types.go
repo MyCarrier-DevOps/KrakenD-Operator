@@ -708,7 +708,6 @@ type KrakenDGatewayStatus struct {
 // KrakenDGateway declares a KrakenD API gateway. The operator creates and keeps
 // its Deployment, Service and rendered configuration in sync with the gateway
 // and its endpoints.
-// +operator-sdk:csv:customresourcedefinitions:displayName="KrakenD Gateway"
 type KrakenDGateway struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
