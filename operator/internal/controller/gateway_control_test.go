@@ -385,6 +385,41 @@ func TestReconcileDragonfly_TakesOverOnlyWhatCarriesItsOwnLabels(t *testing.T) {
 	}
 }
 
+// A Dragonfly named like the gateway's that the gateway refuses is somebody
+// else's: the gateway does not report it ready, does not publish its address,
+// and does not point the rendered Redis pool at it.
+func TestGatewayReconcile_ARefusedDragonflyIsNotTheGateways(t *testing.T) {
+	gw := reconciledGateway()
+	gw.UID = "gw-uid"
+	gw.Spec.Dragonfly = &v1alpha1.DragonflySpec{Enabled: true}
+	df := controlledChild(gw, dragonflyGVK, resources.DragonflyName(gw))
+	df.SetOwnerReferences(nil)
+	if err := unstructured.SetNestedField(df.Object, "ready", "status", "phase"); err != nil {
+		t.Fatal(err)
+	}
+	c := fakeClientBuilder().WithRESTMapper(optionalCRDMapper(dragonflyGVK)).
+		WithObjects(gw, df).WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderer.New(renderer.Options{}), &mockValidator{})
+
+	if err := reconcileGateway(t, r, gw); len(notControlledIn(err)) != 1 {
+		t.Fatalf("err = %v, want the Dragonfly's refusal", err)
+	}
+
+	got := getGateway(t, c, gw)
+	cond := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionDragonflyReady)
+	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != v1alpha1.ReasonResourceNotControlled {
+		t.Errorf("DragonflyReady = %+v, want False/ResourceNotControlled", cond)
+	}
+	if got.Status.DragonflyAddress != "" {
+		t.Errorf("dragonflyAddress = %q, want none for a Dragonfly the gateway refuses", got.Status.DragonflyAddress)
+	}
+	var cm corev1.ConfigMap
+	getObject(t, c, gw, resources.ConfigMapName(gw, got.Status.ConfigChecksum), &cm)
+	if dns := resources.DragonflyServiceDNS(gw); strings.Contains(cm.Data[resources.ConfigKey], dns) {
+		t.Errorf("the rendered config points at %s, the refused Dragonfly's Service", dns)
+	}
+}
+
 // Every refused object is named, sorted, with the labels that hand that object
 // over: its own kind's, not one set for all.
 func TestGatewayReconcile_EveryRefusedObjectIsNamedWithItsOwnLabels(t *testing.T) {
