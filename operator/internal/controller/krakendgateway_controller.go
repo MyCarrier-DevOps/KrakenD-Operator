@@ -1469,16 +1469,16 @@ func (r *KrakenDGatewayReconciler) reconcileCoreResources(
 // reconcileHPA creates or updates the HorizontalPodAutoscaler when
 // autoscaling is configured. The HPA scales the Deployment named like the
 // gateway, so while the Deployment step refused that Deployment (obs.refused)
-// no HPA is written. Otherwise one the gateway controls is deleted, but only
-// once the Deployment reconciled: it is the Deployment that carries the
-// replica count the HPA stops managing.
+// no HPA is written and one the gateway controls is deleted. Otherwise one the
+// gateway controls is deleted, but only once the Deployment reconciled: it is
+// the Deployment that carries the replica count the HPA stops managing.
 func (r *KrakenDGatewayReconciler) reconcileHPA(
 	ctx context.Context, gw *v1alpha1.KrakenDGateway, obs deploymentObservation,
 ) error {
 	hpa := &autoscalingv2.HorizontalPodAutoscaler{ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace}}
 	switch {
 	case obs.refused:
-		return nil
+		return r.deleteIfControlled(ctx, r.Client, gw, hpa)
 	case gw.Spec.Autoscaling != nil:
 		return r.applyOwned(ctx, gw, hpa, "hpa", resources.SelectorLabels(gw), func() { resources.BuildHPA(hpa, gw) })
 	case !obs.failed:
