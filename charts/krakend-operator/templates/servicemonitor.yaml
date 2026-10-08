@@ -16,8 +16,16 @@ spec:
       scheme: https
       bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
       tlsConfig:
+        {{- if .Values.metrics.certManager.enabled }}
+        serverName: {{ include "krakend-operator.fullname" . }}-metrics-service.{{ .Release.Namespace }}.svc
+        ca:
+          secret:
+            name: {{ include "krakend-operator.fullname" . }}-metrics-server-cert
+            key: ca.crt
+        {{- else }}
         # The metrics server uses a self-signed certificate.
         insecureSkipVerify: true
+        {{- end }}
   selector:
     matchLabels:
       {{- include "krakend-operator.selectorLabels" . | nindent 6 }}
