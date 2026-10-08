@@ -142,3 +142,13 @@ tolerations: []
 
 # When empty, replicas prefer to run on different nodes.
 affinity: {}
+
+networkPolicy:
+  # Admit ingress to the operator pods only on the metrics port, from the
+  # namespaces metricsNamespaceSelector selects, and on the webhook port from
+  # any source (the API server cannot be selected by labels). Needs a CNI that
+  # enforces NetworkPolicy.
+  enabled: false
+  metricsNamespaceSelector:
+    matchLabels:
+      metrics: enabled
