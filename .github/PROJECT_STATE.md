@@ -5,12 +5,12 @@
 
 ## Overview
 
-Kubernetes operator that manages KrakenD API Gateway instances declaratively via Custom Resources. Built with operator-sdk (kubebuilder v4 layout), controller-runtime v0.21.0, Go 1.26. Four CRDs: KrakenDGateway, KrakenDEndpoint, KrakenDBackendPolicy, KrakenDAutoConfig.
+Kubernetes operator that manages KrakenD API Gateway instances declaratively via Custom Resources. Built with controller-runtime v0.21.0 (kubebuilder v4 layout), Go 1.26. Four CRDs: KrakenDGateway, KrakenDEndpoint, KrakenDBackendPolicy, KrakenDAutoConfig.
 
 ## Implemented Systems
 
-### Scaffold (operator-sdk)
-- **operator-sdk v1.42.2** initialized in `operator/` subdirectory
+### Scaffold (kubebuilder v4 layout)
+- Initialized in the `operator/` subdirectory with operator-sdk v1.42.2 (the tool and its OLM bundle were dropped 2026-10-08)
 - Domain: `krakend.io`, API Group: `gateway.krakend.io/v1alpha1`
 - Module: `github.com/mycarrier-devops/krakend-operator`
 - All 4 CRDs scaffolded with placeholder types (default `Foo` field)
@@ -166,7 +166,6 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 ### 2026-09-28 — Conformance RBAC, caching and availability
 - The manager ClusterRole is trimmed to the verbs the controllers use, pinned by `TestManagerRoleGrantsOnlyUsedVerbs`. `delete` stays on Deployments, Services, ServiceAccounts and PodDisruptionBudgets although the controllers never call it, because the `OwnerReferencesPermissionEnforcement` admission plugin requires it when an update changes an object's owner references (a gateway adopting a same-named object). The integration suite runs its manager as the operator ServiceAccount bound to the generated role, on a K3s API server with that plugin enabled, so a verb the role lacks fails the integration suite on the paths it runs; the golden test pins the role to the hand-kept table, and the VirtualService CRD is installed in the suite (Dragonfly, ExternalSecret and the optional kinds' `delete` rely on the table alone). The leader-election Role uses Leases only.
 - The chart's ClusterRole renders from `charts/krakend-operator/files/manager-role.yaml`, copied by `make manifests` and gated by `make verify-manifests`.
-- The OLM bundle is regenerated from source and gated by `make verify-manifests`: its ClusterServiceVersion now declares the four validating webhooks, the Job permission, 512Mi of memory and the node affinity of the kustomize install. Like kustomize, OLM keeps one replica with no PodDisruptionBudget or anti-affinity; only the Helm chart gets the availability defaults.
 - Secrets and ConfigMaps are watched as metadata only and read live (`controller.UncachedObjects`). `controller.CacheByObject` strips annotations and `managedFields` from the cached metadata, so a client-side `kubectl apply` annotation never sits in the cache. Each CUE definitions ConfigMap is read once per reconcile, in full.
 - Chart: metrics authentication RBAC, a `metrics-reader` ClusterRole and an optional ServiceMonitor; two replicas, a PodDisruptionBudget, soft anti-affinity and a render guard against several replicas without leader election. `/readyz` includes the webhook server (it does not cover cache sync: a request that arrives before the caches sync waits up to the 12 s budget, then fails closed with a 500). The webhook and metrics servers start their own certificate watchers from `CertDir`/`CertName`/`KeyName` (`cmd/serving.go`), which run on every replica, so standbys reload renewed certificates too.
 - CI: a `krakend-smoke` job checks the pinned krakend binary's exit codes on three fixtures, and chart and fixture edits trigger the CI workflow.
@@ -184,7 +183,7 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 - Renderer conflict keys use the route shape; same-shape paths resolve oldest-wins instead of failing the gateway. Admission rejects duplicate and same-shape routes across KrakenDEndpoints of one gateway (`validateRouteUniqueness`); renderer oldest-wins remains the fallback.
 - The validator binary is pinned by digest (`Dockerfile` `KRAKEND_IMAGE`, KrakenD CE 2.13.11, `configcheck.ValidatorVersion`); `TestConfigCheckParity` checks, against the pinned binary, that admission's `krakend check -n` plus the route check rejects the route-conflict classes `krakend check -t -n` rejects (and the clashes `-t` misses). The operator image build is fixed to copy all of `cmd/`.
 - The gateway controller gathers and validates through the shared `configcheck.Checker` (`Gather`, `CheckRendered`: route check, then `krakend check -t -n`); `wireValidation` in `cmd/wiring.go` builds one checker with `configCheckSlots = 3` for the whole pod; the AutoConfig controller holds at most `autoConfigCheckSlots` (1) of them and the gateway controller at most one (`gatewayCheckWorkers`, its `MaxConcurrentReconciles`), so the controllers never hold more than 2 of the 3 slots and concurrent admission requests can take the rest. `ConfigValid` and an endpoint's `GatewayConfigRejected` message name the entry (`namespace/name spec.endpoints[i]: …`), and the rejection memo keeps the raw rejection so a reorder never leaves a stale index. The operator memory limit is 512Mi. Its message naming, `GatewayConfigRejected` and the rejection memo are superseded: see 2026-10-06 — Per-object validation and exclusion.
-- Kubernetes 1.33 is the floor (chart `kubeVersion`, CSV `minKubeVersion`, docs; Helm 3.18+). The KrakenDEndpoint CRD enforces its object-decidable rules in the schema: `spec.endpoints` is a map list keyed on (endpoint, method) with `MinItems=1`, backends `MinItems=1`, an endpoint path pattern, Go-duration patterns on `timeout`/`cacheTTL`, enums on `outputEncoding` and backend `encoding`/`sd`/`method`, and `MinLength=1` on `gatewayRef.name`/`policyRef.name`. The webhook's duplicate-entry loop and `validatePolicyFields` are gone. `api/v1alpha1/crd_validation_test.go` validates objects against the generated CRDs as the API server does; `TestCRD_EndpointRules` proves the rules on K3s 1.32, below the floor, where CRD validation ratcheting and `optionalOldSelf` are beta and on by default.
+- Kubernetes 1.33 is the floor (chart `kubeVersion`, docs; Helm 3.18+). The KrakenDEndpoint CRD enforces its object-decidable rules in the schema: `spec.endpoints` is a map list keyed on (endpoint, method) with `MinItems=1`, backends `MinItems=1`, an endpoint path pattern, Go-duration patterns on `timeout`/`cacheTTL`, enums on `outputEncoding` and backend `encoding`/`sd`/`method`, and `MinLength=1` on `gatewayRef.name`/`policyRef.name`. The webhook's duplicate-entry loop and `validatePolicyFields` are gone. `api/v1alpha1/crd_validation_test.go` validates objects against the generated CRDs as the API server does; `TestCRD_EndpointRules` proves the rules on K3s 1.32, below the floor, where CRD validation ratcheting and `optionalOldSelf` are beta and on by default.
 - The KrakenDGateway CRD carries its object-decidable rules: KrakenD duration patterns on `config.timeout`/`cacheTTL`/`dnsCacheTTL`, `cors.maxAge` and `redis.connectionPool.dialTimeout`, port 1-65535, an `outputEncoding` enum, a `healthPath` pattern, CEL for the license sources, OpenAPI port and post-restart script, a single PVC plugin source (`plugins.sources` `MaxItems=32`), and rejection of `redis.connectionPool.password`/`.tls` and of `dragonfly.authentication.passwordFromSecret` on EE (never rendered; the Dragonfly rule uses `optionalOldSelf` so a stored value ratchets). KrakenDEndpoint `timeout`/`cacheTTL` also get a CEL duration-parse rule guarded by the pattern, and `MaxLength=64`; `spec.endpoints` holds at most 1024 entries (CEL cost budget). `postRestartJob.tmpSizeLimit` has a strict quantity pattern checked before `isQuantity`. `crd_validation_test.go` models ratcheting (`validateCRDUpdate`); `TestCRD_GatewayRules` and `TestCRD_GatewayDragonflyPasswordRatchets` prove the rules on K3s 1.32.
 - The KrakenDAutoConfig CRD carries its object-decidable rules: exactly one OpenAPI source, `hostMapping` with `configMapRef`, a Periodic `interval` of at least 30s (a guarded Go-duration rule), exclusive auth secrets, a 63-character name, an override method enum and a non-negative backend index, `overrides` `MaxItems=1024`, slash-prefixed base path and additional endpoint paths, a base path exclusive with `addPathPrefix`, `additionalEndpoints` as a map list keyed on (endpoint, method) with `MaxItems=256` and a `GET` method default, backends exclusive with the shorthand, guarded Go-duration rules on `timeout`/`cacheTTL`, and the KrakenDEndpoint `outputEncoding` and backend `encoding` and `sd` enums. The webhook keeps the gateway lookup and the audience checks.
 - `operator/hack/audit-admission-rules.sh` is a read-only pre-upgrade audit (`kubectl get` and `jq` 1.7) of stored objects against the CRD rules, route conflicts between endpoints of one gateway, endpoints on a gateway's health path, and Enterprise-only namespaces and fields on CE gateways. It reads the Enterprise-only lists from `internal/renderer/eeonly_namespaces.json`, which `eestrip.go` embeds, so the audit, admission and the CE renders judge one list. `hack/test-audit-admission-rules.sh` runs it offline against `hack/testdata/audit`, through a stub `kubectl` that allows only `get`, and checks its patterns and enum lists against the generated CRDs.
@@ -345,7 +344,7 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 - 57 tests, 93.9% coverage, 0 lint issues, committed in 3 groups
 - Completed utility packages (hash, license) with 100% coverage
 - All 4 CRD types fully implemented and committed with generated deepcopy/manifests
-- Scaffolded operator-sdk project in `operator/`
+- Scaffolded the project in `operator/` (operator-sdk, since dropped)
 
 ### Testing Infrastructure
 - `test/integration/suite_test.go` — starts an ephemeral K3s cluster through testcontainers, installs the CRDs and wires the Gateway, Endpoint, Policy and AutoConfig controllers over a marker validator; it starts no webhook server (webhook reads run under the trimmed role only in e2e). The manager runs as the operator ServiceAccount, bound to the generated `config/rbac/role.yaml` and impersonated once a SubjectAccessReview allows it, so every test exercises the role as a deployment grants it
@@ -357,14 +356,6 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 - `test/e2e/e2e_test.go` — 8 e2e specs: Controller Manager (pod running, metrics, sample CRs), Basic CE Gateway (create, endpoint lifecycle), Dragonfly Gateway, Istio Gateway, Dragonfly+Istio Gateway
 - `test/utils/chart.go` — `OperatorManifest`: renders the operator chart for the e2e image (pinned by `chart_test.go`)
 - `test/utils/utils.go` — Shared e2e helpers: kubeconfig management, command execution with KUBECONFIG/CONTAINER_HOST injection, cert-manager install, CRD installers (Dragonfly, Istio, ExternalSecrets)
-
-### OLM Bundle (`operator/bundle/`)
-- Generated via `make bundle` with the pinned operator-sdk (`OPERATOR_SDK_VERSION`, installed under `operator/bin/`), validated CSV, CRDs, RBAC roles
-- CSV includes all 4 owned CRDs with display names, `alm-examples` from `config/samples`, and the four validating `webhookdefinitions` (`failurePolicy: Fail`); OLM mounts its own webhook certs, so the `[WEBHOOK]` patches in `config/manifests/kustomization.yaml` remove the cert volume and mount
-- `make verify-manifests` gates both CSV files (`bundle/manifests` and `config/manifests/bases`), ignoring only `createdAt`
-- No OLM install is exercised in CI or tests: the bundle is generated and validated with `operator-sdk bundle validate`, never installed
-- InstallModes: AllNamespaces only (`OwnNamespace` and `SingleNamespace` are `supported: false`): the operator watches every namespace, and under the other modes OLM would scope the webhooks to the target namespaces
-- `bundle.Dockerfile` for OLM bundle image builds
 
 ### Helm Chart (`charts/krakend-operator/`)
 - `Chart.yaml` with kubeVersion >=1.33 constraint
@@ -383,7 +374,7 @@ Kubernetes operator that manages KrakenD API Gateway instances declaratively via
 - Validated: `helm lint` + `helm template` pass
 
 ### CI Pipelines (`.github/workflows/`)
-- `ci.yml` — PR-only gate: lint (golangci-lint v2.11.4), test (race, coverage >=80%, `make test-audit`), manifests drift (`make verify-manifests`: CRDs, RBAC, webhooks, the chart copies and the OLM bundle), build, integration (K3s), e2e (testcontainers + K3s); triggers on `operator/**` changes; also triggers on `charts/krakend-operator/**` and `.github/krakend-smoke/**`, so a hand edit of the chart's generated copies (CRDs, `files/manager-role.yaml`) fails Manifests Drift. `krakend-smoke` job: runs `krakend check -t -n` from the Dockerfile-pinned `KRAKEND_IMAGE` with `--network=none` on three fixtures in `.github/krakend-smoke/` and asserts exit codes (valid 0, decoding error 1, route conflict 1)
+- `ci.yml` — PR-only gate: lint (golangci-lint v2.11.4), test (race, coverage >=80%, `make test-audit`), manifests drift (`make verify-manifests`: CRDs, RBAC, webhooks and the chart copies), build, integration (K3s), e2e (testcontainers + K3s); triggers on `operator/**` changes; also triggers on `charts/krakend-operator/**` and `.github/krakend-smoke/**`, so a hand edit of the chart's generated copies (CRDs, `files/manager-role.yaml`) fails Manifests Drift. `krakend-smoke` job: runs `krakend check -t -n` from the Dockerfile-pinned `KRAKEND_IMAGE` with `--network=none` on three fixtures in `.github/krakend-smoke/` and asserts exit codes (valid 0, decoding error 1, route conflict 1)
 - `helm-ci.yml` — PR-only gate: Helm lint + template + render tests (`.github/scripts/chart-render-test.sh`); triggers on `charts/**`, `operator/config/rbac/**`, `operator/config/webhook/**` and its own workflow and script (the render tests read `role.yaml` and the webhook manifests)
 - `release.yml` — On push to main: runs lint/test/build/e2e/helm-lint gates, then auto-calculates next semver from conventional commits (`mathieudutour/github-tag-action`), builds+pushes multi-arch image to GHCR, releases Helm chart via chart-releaser-action, creates GitHub release with changelog
 
@@ -411,7 +402,7 @@ PR #12 (`fix/deepmerge-deepcopy-bug`): Deep merge/deep copy bug fixes, defaults 
 | Decision | Rationale |
 |---|---|
 | `operator/` as Go module root | operator-sdk requires an empty directory; repo root contains `architecture/` |
-| operator-sdk over raw kubebuilder | Provides OLM bundle, scorecard, and additional scaffolding |
+| operator-sdk over raw kubebuilder | Provided the OLM bundle and scorecard. Superseded 2026-10-08: the bundle was never published and is removed; the Helm chart is the only install path |
 | Binary name `manager` | Default operator-sdk convention; architecture updated to match |
 | `cmd/main.go` (not `cmd/operator/main.go`) | operator-sdk default layout; architecture updated to match |
 | Blame by isolation | An object is invalid when it fails on its own; rules spanning objects (route uniqueness, router clashes, EE overlaps) are decided in Go by identity, oldest first |
@@ -448,5 +439,5 @@ PR #12 (`fix/deepmerge-deepcopy-bug`): Deep merge/deep copy bug fixes, defaults 
 16. ~~Integration tests with envtest~~ ✅ — 6 tests in `test/integration/`
 17. ~~E2e test infrastructure~~ ✅ — KrakenD CRD lifecycle e2e + Dockerfile ARG fix
 18. ~~CI pipeline (GitHub Actions) — build, lint, test~~ ✅ — `ci.yml`, `helm-ci.yml`, `release.yml`
-19. ~~OLM bundle generation (`make bundle`)~~ ✅ — validated bundle in `operator/bundle/`
+19. ~~OLM bundle generation (`make bundle`)~~ ✅ — removed 2026-10-08: never published; the chart is the only install path
 20. ~~Operational documentation (runbook, upgrade guide)~~ ✅ — `docs/runbook.md`, `docs/upgrade-guide.md`, `README.md`
