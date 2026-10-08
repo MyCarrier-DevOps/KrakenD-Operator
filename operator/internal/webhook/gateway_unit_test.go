@@ -29,6 +29,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	v1alpha1 "github.com/mycarrier-devops/krakend-operator/api/v1alpha1"
@@ -356,37 +357,97 @@ func TestGatewayAdmission_AnEndpointMaskedBeforeAndFailingBothWaysOnlyWarns(t *t
 	}
 }
 
+// largeGatewayWithPolicyUser stores a gateway of 300 endpoints that use no
+// policy and one, zz-user, that sorts last and uses the policy p.
+func largeGatewayWithPolicyUser(old *v1alpha1.KrakenDGateway) []client.Object {
+	objs := []client.Object{old, testPolicy(`{"x":{}}`)}
+	for i := range 300 {
+		objs = append(objs, testEndpoint(fmt.Sprintf("ep-%03d", i), fmt.Sprintf("/e%d", i)))
+	}
+	user := testEndpoint("zz-user", "/zz")
+	user.Spec.Endpoints[0].Backends[0].PolicyRef = &v1alpha1.PolicyRef{Name: "p"}
+	return append(objs, user)
+}
+
 // An endpoint that references a policy failing krakend check on its own fails
 // with the stored gateway too, though the stored group passed: the update only
 // warns when the scan finishes, so it is never a 422 when the admission time
-// ends first.
+// ends first. The endpoint sorts past what the budget reaches, so only judging
+// the users of the failing policy first keeps the update undecided.
 func TestGatewayAdmission_AnEndpointWhoseStoredPolicyFailsAloneIsNotDecidedByTheGroup(t *testing.T) {
 	policyAlone := configcheck.EndpointVerdict{Reason: v1alpha1.ReasonPolicyInvalid, PoliciesFailAlone: true}
-	run := func(t *testing.T, delay time.Duration, deadline time.Duration) (admission.Warnings, error) {
-		t.Helper()
+	run := func(delay, deadline time.Duration) (admission.Warnings, error) {
 		old, gw := editedGateway()
-		objs := []client.Object{old, testPolicy(`{"x":{}}`)}
+		chk := &scriptedChecker{delay: delay,
+			verdicts:   []configcheck.Verdict{{OK: true}, {Output: "x"}, {OK: true}, {OK: true}, {Output: "policy"}},
+			byEndpoint: map[string]configcheck.EndpointVerdict{"zz-user": policyAlone}}
+		ctx, cancel := context.WithTimeout(context.Background(), deadline)
+		defer cancel()
+		return (&GatewayValidator{Client: fakeClient(largeGatewayWithPolicyUser(old)...), Checker: chk}).
+			ValidateUpdate(ctx, old, gw)
+	}
+
+	warnings, err := run(0, time.Minute)
+	if err != nil || len(warnings) != 1 || !strings.Contains(warnings[0], "already fail validation") {
+		t.Fatalf("complete scan: warnings %q, err %v; want admitted with the already-fail warning", warnings, err)
+	}
+	_, err = run(30*time.Millisecond, 2*time.Second)
+	if err == nil || apierrors.IsInvalid(err) {
+		t.Errorf("scan cut off: err = %v, want a 500: the complete scan admits", err)
+	}
+}
+
+// An endpoint that fails both ways among those judged after the decision
+// withdraws it, whatever references a policy: a cut-off scan that has seen it
+// is a 500, as the complete scan only warns.
+func TestGatewayAdmission_AnEndpointFailingBothWaysWithdrawsTheDecision(t *testing.T) {
+	epFail := configcheck.EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid}
+	run := func(delay, deadline time.Duration) (admission.Warnings, error) {
+		old, gw := editedGateway()
+		objs := []client.Object{old}
 		for i := range 300 {
 			objs = append(objs, testEndpoint(fmt.Sprintf("ep-%03d", i), fmt.Sprintf("/e%d", i)))
 		}
-		user := testEndpoint("zz-user", "/zz")
-		user.Spec.Endpoints[0].Backends[0].PolicyRef = &v1alpha1.PolicyRef{Name: "p"}
-		objs = append(objs, user)
 		chk := &scriptedChecker{delay: delay,
-			verdicts:         []configcheck.Verdict{{OK: true}, {Output: "x"}, {OK: true}, {OK: true}, {Output: "policy"}},
-			endpointVerdicts: []configcheck.EndpointVerdict{policyAlone, policyAlone}}
+			verdicts:         []configcheck.Verdict{{OK: true}, {Output: "x"}, {OK: true}, {OK: true}},
+			endpointVerdicts: []configcheck.EndpointVerdict{epFail, epFail}}
 		ctx, cancel := context.WithTimeout(context.Background(), deadline)
 		defer cancel()
 		return (&GatewayValidator{Client: fakeClient(objs...), Checker: chk}).ValidateUpdate(ctx, old, gw)
 	}
 
-	warnings, err := run(t, 0, time.Minute)
+	warnings, err := run(0, time.Minute)
 	if err != nil || len(warnings) != 1 || !strings.Contains(warnings[0], "already fail validation") {
 		t.Fatalf("complete scan: warnings %q, err %v; want admitted with the already-fail warning", warnings, err)
 	}
-	_, err = run(t, 30*time.Millisecond, 2*time.Second)
+	_, err = run(30*time.Millisecond, 2*time.Second)
 	if err == nil || apierrors.IsInvalid(err) {
 		t.Errorf("scan cut off: err = %v, want a 500: the complete scan admits", err)
+	}
+}
+
+// A policy of the gateway's endpoints that cannot be read is a check that
+// cannot run: a 500, said once, never a decision that counts the policy as
+// passing.
+func TestGatewayAdmission_APolicyThatCannotBeReadBeforeTheDecisionIs500(t *testing.T) {
+	old, gw := editedGateway()
+	funcs := interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey,
+		obj client.Object, opts ...client.GetOption) error {
+		if _, ok := obj.(*v1alpha1.KrakenDBackendPolicy); ok {
+			return errors.New("cache read failed")
+		}
+		return c.Get(ctx, key, obj, opts...)
+	}}
+	user := testEndpoint("user", "/u")
+	user.Spec.Endpoints[0].Backends[0].PolicyRef = &v1alpha1.PolicyRef{Name: "p"}
+	chk := &scriptedChecker{verdicts: []configcheck.Verdict{{OK: true}, {Output: "x"}}}
+	v := &GatewayValidator{Client: fakeClientBuilderWith(funcs, old, user), Checker: chk}
+
+	resp := review(t, v, "alice", gw, old)
+
+	if resp.Allowed || resp.Result.Code != http.StatusInternalServerError ||
+		strings.Count(resp.Result.Message, "Internal error occurred") != 1 {
+		t.Errorf("response = %+v; want one 500 that says it once", resp.Result)
 	}
 }
 
