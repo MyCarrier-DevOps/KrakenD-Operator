@@ -194,7 +194,7 @@ func run() int {
 		webhookServerOptions(enableWebhooks, webhookCertPath, webhookCertName, webhookCertKey, tlsOpts)),
 		tel.TracerProvider)
 
-	// Metrics endpoint is enabled in 'config/default/kustomization.yaml'. More info:
+	// Metrics are served when --metrics-bind-address is set; the chart sets it with metrics.enabled. More info:
 	// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.21.0/pkg/metrics/server
 	// - https://book.kubebuilder.io/reference/metrics.html
 	if metricsCertPath != "" {
