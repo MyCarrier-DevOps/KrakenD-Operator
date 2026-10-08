@@ -1,6 +1,7 @@
 {{- if and (gt (int .Values.replicaCount) 1) (not .Values.leaderElection.enabled) }}
 {{- fail "replicaCount > 1 requires leaderElection.enabled=true: without it every replica runs the controllers" }}
 {{- end }}
+{{- $metricsCert := and .Values.metrics.enabled .Values.metrics.certManager.enabled }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -118,6 +119,9 @@ spec:
             {{- end }}
             {{- if .Values.metrics.enabled }}
             - --metrics-bind-address=:{{ .Values.metrics.service.port }}
+            {{- if .Values.metrics.certManager.enabled }}
+            - --metrics-cert-path=/tmp/k8s-metrics-server/metrics-certs
+            {{- end }}
             {{- end }}
             {{- if .Values.webhooks.enabled }}
             - --webhook-cert-path=/tmp/k8s-webhook-server/serving-certs
@@ -154,18 +158,33 @@ spec:
             periodSeconds: 10
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-          {{- if .Values.webhooks.enabled }}
+          {{- if or .Values.webhooks.enabled $metricsCert }}
           volumeMounts:
+            {{- if .Values.webhooks.enabled }}
             - name: cert
               mountPath: /tmp/k8s-webhook-server/serving-certs
               readOnly: true
+            {{- end }}
+            {{- if $metricsCert }}
+            - name: metrics-certs
+              mountPath: /tmp/k8s-metrics-server/metrics-certs
+              readOnly: true
+            {{- end }}
           {{- end }}
-      {{- if .Values.webhooks.enabled }}
+      {{- if or .Values.webhooks.enabled $metricsCert }}
       volumes:
+        {{- if .Values.webhooks.enabled }}
         - name: cert
           secret:
             secretName: {{ include "krakend-operator.fullname" . }}-webhook-server-cert
             defaultMode: 420
+        {{- end }}
+        {{- if $metricsCert }}
+        - name: metrics-certs
+          secret:
+            secretName: {{ include "krakend-operator.fullname" . }}-metrics-server-cert
+            defaultMode: 420
+        {{- end }}
       {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
