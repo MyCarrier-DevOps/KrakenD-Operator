@@ -283,6 +283,28 @@ expect_equal "the chart's leader-election Role matches config/rbac" \
 	"$(rules_block <operator/config/rbac/leader_election_role.yaml)" \
 	"$(manifest Role t-krakend-operator-leader-election-role | rules_block)"
 
+# --- admin, editor and viewer ClusterRoles for each kind --------------------
+# user_role_rules ROLE RESOURCE: the rules the chart grants ROLE on RESOURCE.
+user_role_rules() {
+	local verbs
+	case $1 in
+	admin) verbs="  - '*'" ;;
+	editor) verbs=$'  - create\n  - delete\n  - get\n  - list\n  - patch\n  - update\n  - watch' ;;
+	viewer) verbs=$'  - get\n  - list\n  - watch' ;;
+	esac
+	printf -- '- apiGroups:\n  - gateway.krakend.io\n  resources:\n  - %s\n  verbs:\n%s\n- apiGroups:\n  - gateway.krakend.io\n  resources:\n  - %s/status\n  verbs:\n  - get\n' "$2" "$verbs" "$2"
+}
+for pair in krakendgateway:krakendgateways krakendendpoint:krakendendpoints \
+	krakendbackendpolicy:krakendbackendpolicies krakendautoconfig:krakendautoconfigs; do
+	kind=${pair%%:*} resource=${pair#*:}
+	for role in admin editor viewer; do
+		expect_equal "the chart has a $role ClusterRole for $resource" "$(user_role_rules "$role" "$resource")" \
+			"$(manifest ClusterRole "t-krakend-operator-$kind-$role-role" | rules_block)"
+	done
+done
+expect_equal "the chart renders exactly the 12 user ClusterRoles" "12" \
+	"$(render | grep -cE '^  name: t-krakend-operator-krakend(gateway|endpoint|backendpolicy|autoconfig)-(admin|editor|viewer)-role$')"
+
 # --- metrics -------------------------------------------------------------
 expect_contains "metrics RBAC lets the operator create TokenReviews" "- tokenreviews" \
 	--show-only templates/metrics-rbac.yaml
