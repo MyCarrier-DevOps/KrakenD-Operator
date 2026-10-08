@@ -366,8 +366,23 @@ func (r *KrakenDGatewayReconciler) reconcileExternalSecret(ctx context.Context, 
 
 // reconcileVirtualService creates or updates the Istio VirtualService when
 // Istio is enabled and its CRD is installed, and removes the one gw controls
-// when it is not. IstioConfigured says which.
-func (r *KrakenDGatewayReconciler) reconcileVirtualService(ctx context.Context, gw *v1alpha1.KrakenDGateway) error {
+// when it is not. The VirtualService routes to the Service named like the
+// gateway, so while the pass refused that Service (serviceRefused) it is not
+// written either. IstioConfigured says which.
+func (r *KrakenDGatewayReconciler) reconcileVirtualService(
+	ctx context.Context, gw *v1alpha1.KrakenDGateway, serviceRefused bool,
+) error {
+	if gw.Spec.Istio != nil && gw.Spec.Istio.Enabled && serviceRefused {
+		r.setConditionWithEvent(gw, metav1.Condition{
+			Type:               v1alpha1.ConditionIstioConfigured,
+			Status:             metav1.ConditionFalse,
+			ObservedGeneration: gw.Generation,
+			Reason:             v1alpha1.ReasonResourceNotControlled,
+			Message: fmt.Sprintf("the VirtualService is not written: it routes to service %s/%s, "+
+				"which the gateway does not control", gw.Namespace, gw.Name),
+		})
+		return nil
+	}
 	if gw.Spec.Istio != nil && gw.Spec.Istio.Enabled {
 		_, applied, err := r.applyOptional(ctx, gw, virtualServiceGVK, gw.Name,
 			resources.SelectorLabels(gw), func(u *unstructured.Unstructured) { resources.BuildVirtualService(u, gw) })

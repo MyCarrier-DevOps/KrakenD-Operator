@@ -1406,6 +1406,8 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 	// the stage's own marks its span.
 	errs := []error{coreErr}
 	defer func() { tracing.End(span, stderrors.Join(errs[1:]...)) }()
+	serviceRefused := slices.ContainsFunc(notControlledIn(coreErr),
+		func(e *notControlledError) bool { return e.kind == serviceKind })
 	if !saControlled {
 		// The Deployment and the post-restart Job run as the ServiceAccount
 		// named like the gateway. While the gateway does not control it
@@ -1417,8 +1419,8 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 		if in.configMapName != "" {
 			errs = append(errs, r.collectConfigMaps(ctx, gw, in.configMapName, in.mountedConfigMap))
 		}
-		errs = append(errs,
-			r.reconcileDragonfly(ctx, gw), r.reconcileExternalSecret(ctx, gw), r.reconcileVirtualService(ctx, gw))
+		errs = append(errs, r.reconcileDragonfly(ctx, gw), r.reconcileExternalSecret(ctx, gw),
+			r.reconcileVirtualService(ctx, gw, serviceRefused))
 		// A failure that is not a refusal is marked unreconciled, so the
 		// status still owes the rollout; a refusal is reported by
 		// ResourcesControlled, which outranks Progressing.
@@ -1436,9 +1438,12 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 	errs = append(errs,
 		r.reconcileDragonfly(ctx, gw),
 		r.reconcileExternalSecret(ctx, gw),
-		r.reconcileVirtualService(ctx, gw))
+		r.reconcileVirtualService(ctx, gw, serviceRefused))
 	return obs, stderrors.Join(errs...)
 }
+
+// serviceKind names the gateway's Service in a notControlledError.
+const serviceKind = "service"
 
 // reconcileCoreResources creates or updates the gateway's ServiceAccount,
 // Service and PodDisruptionBudget. They are independent of each other, so each
@@ -1459,7 +1464,7 @@ func (r *KrakenDGatewayReconciler) reconcileCoreResources(
 	consent := resources.SelectorLabels(gw)
 	saErr := r.applyOwned(ctx, gw, sa, "serviceaccount", consent, func() { resources.BuildServiceAccount(sa, gw) })
 	err = stderrors.Join(saErr,
-		r.applyOwned(ctx, gw, svc, "service", consent, func() { resources.BuildService(svc, gw, in.ceRender) }),
+		r.applyOwned(ctx, gw, svc, serviceKind, consent, func() { resources.BuildService(svc, gw, in.ceRender) }),
 		r.applyOwned(ctx, gw, pdb, "pdb", consent, func() { resources.BuildPDB(pdb, gw) }))
 	// The mutate function stamps the gateway's reference on sa before the
 	// write, so sa alone does not prove the server accepted it.
