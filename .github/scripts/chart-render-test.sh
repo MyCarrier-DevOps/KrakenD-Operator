@@ -455,15 +455,26 @@ expect_absent "no NetworkPolicy by default" "kind: NetworkPolicy"
 np=(--show-only templates/networkpolicy.yaml --set networkPolicy.enabled=true)
 # np_ports [helm args...]: the ports the NetworkPolicy admits, space-separated.
 np_ports() { render "${np[@]}" "$@" | awk '$1=="port:"||($1=="-"&&$2=="port:"){print $NF}' | tr '\n' ' '; }
-expect_contains "the NetworkPolicy selects the operator pods" "control-plane: controller-manager" "${np[@]}"
+expect_equal "the NetworkPolicy selects only the operator pods, for ingress" \
+	"$(printf '%s\n' '  podSelector:' '    matchLabels:' '      app.kubernetes.io/name: krakend-operator' \
+		'      app.kubernetes.io/instance: t' '      control-plane: controller-manager' \
+		'  policyTypes:' '    - Ingress')" \
+	"$(render "${np[@]}" | awk '$1 == "podSelector:" { f = 1 } $1 == "ingress:" { f = 0 } f')"
 expect_equal "the NetworkPolicy admits the metrics and webhook ports" "8443 9443 " "$(np_ports)"
 expect_equal "with webhooks off only the metrics port is admitted" "8443 " "$(np_ports --set webhooks.enabled=false)"
 expect_equal "with metrics off only the webhook port is admitted" "9443 " "$(np_ports --set metrics.enabled=false)"
 expect_equal "the admitted metrics port follows metrics.service.port" "9000 9443 " "$(np_ports --set metrics.service.port=9000)"
-expect_contains "metrics are admitted from namespaces labelled metrics: enabled" "metrics: enabled" "${np[@]}"
+expect_equal "metrics are admitted from the selected namespaces" \
+	"$(printf '%s\n' '    - from:' '        - namespaceSelector:' '            matchLabels:' '              metrics: enabled')" \
+	"$(render "${np[@]}" | awk '$1 == "-" && $2 == "from:" { f = 1 } $1 == "ports:" { f = 0 } f')"
 expect_equal "only the metrics rule restricts its sources" "1" "$(render "${np[@]}" | grep -c 'from:')"
 expect_contains "the metrics namespace selector is configurable" "team: observability" "${np[@]}" \
 	--set networkPolicy.metricsNamespaceSelector.matchLabels.team=observability
+expect_absent "a namespace selector can drop the default label" "metrics: enabled" "${np[@]}" \
+	--set networkPolicy.metricsNamespaceSelector.matchLabels.metrics=null \
+	--set networkPolicy.metricsNamespaceSelector.matchLabels.team=observability
+expect_absent "with metrics and webhooks off no port is admitted" "port:" "${np[@]}" \
+	--set metrics.enabled=false --set webhooks.enabled=false
 
 # --- fix-round rows ------------------------------------------------------
 expect_contains "a sampler argument of 0 is passed, not dropped" 'value: "0"' --show-only templates/deployment.yaml \
