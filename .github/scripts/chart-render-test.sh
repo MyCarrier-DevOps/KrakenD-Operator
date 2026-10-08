@@ -368,6 +368,47 @@ expect_render_fails "several replicas without leader election are refused" --set
 expect_contains "one replica without leader election still renders" "kind: Deployment" \
 	--set leaderElection.enabled=false --set replicaCount=1
 
+# --- metrics.certManager --------------------------------------------------
+expect_absent "metrics are served with the operator's own certificate by default" "--metrics-cert-path"
+expect_absent "no metrics Certificate by default" "t-krakend-operator-metrics-cert"
+mc=(--set metrics.certManager.enabled=true)
+expect_contains "metrics.certManager passes the metrics certificate path" \
+	"- --metrics-cert-path=/tmp/k8s-metrics-server/metrics-certs" --show-only templates/deployment.yaml "${mc[@]}"
+expect_contains "metrics.certManager mounts the metrics certificate" \
+	"mountPath: /tmp/k8s-metrics-server/metrics-certs" --show-only templates/deployment.yaml "${mc[@]}"
+expect_contains "metrics.certManager mounts the issued Secret" \
+	"secretName: t-krakend-operator-metrics-server-cert" --show-only templates/deployment.yaml "${mc[@]}"
+expect_contains "the metrics Certificate names the metrics Service" \
+	"- t-krakend-operator-metrics-service.krakend-operator-system.svc" "${mc[@]}"
+expect_equal "the metrics Certificate is issued by the chart's Issuer" "t-krakend-operator-selfsigned-issuer" \
+	"$(manifest Certificate t-krakend-operator-metrics-cert "${mc[@]}" | awk '$1=="issuerRef:"{f=1} f&&$1=="name:"{print $2;exit}')"
+expect_equal "one Issuer serves both certificates" "1" "$(render "${mc[@]}" | grep -c '^kind: Issuer$')"
+expect_contains "the Issuer is rendered for the metrics certificate alone" "kind: Issuer" "${mc[@]}" --set webhooks.enabled=false
+expect_absent "metrics.enabled=false renders no metrics certificate" "metrics-cert" "${mc[@]}" --set metrics.enabled=false
+expect_contains "both certificates stay mounted together" \
+	"mountPath: /tmp/k8s-webhook-server/serving-certs" --show-only templates/deployment.yaml "${mc[@]}"
+sm=(--show-only templates/servicemonitor.yaml --set metrics.serviceMonitor.enabled=true)
+expect_contains "without it the ServiceMonitor skips verification" "insecureSkipVerify: true" "${sm[@]}"
+expect_absent "with it the ServiceMonitor verifies the certificate" "insecureSkipVerify" "${sm[@]}" "${mc[@]}"
+expect_contains "the ServiceMonitor checks the metrics Service name" \
+	"serverName: t-krakend-operator-metrics-service.krakend-operator-system.svc" "${sm[@]}" "${mc[@]}"
+expect_contains "the ServiceMonitor trusts the certificate's CA" "name: t-krakend-operator-metrics-server-cert" "${sm[@]}" "${mc[@]}"
+
+# --- networkPolicy ----------------------------------------------------------
+expect_absent "no NetworkPolicy by default" "kind: NetworkPolicy"
+np=(--show-only templates/networkpolicy.yaml --set networkPolicy.enabled=true)
+# np_ports [helm args...]: the ports the NetworkPolicy admits, space-separated.
+np_ports() { render "${np[@]}" "$@" | awk '$1=="port:"||($1=="-"&&$2=="port:"){print $NF}' | tr '\n' ' '; }
+expect_contains "the NetworkPolicy selects the operator pods" "control-plane: controller-manager" "${np[@]}"
+expect_equal "the NetworkPolicy admits the metrics and webhook ports" "8443 9443 " "$(np_ports)"
+expect_equal "with webhooks off only the metrics port is admitted" "8443 " "$(np_ports --set webhooks.enabled=false)"
+expect_equal "with metrics off only the webhook port is admitted" "9443 " "$(np_ports --set metrics.enabled=false)"
+expect_equal "the admitted metrics port follows metrics.service.port" "9000 9443 " "$(np_ports --set metrics.service.port=9000)"
+expect_contains "metrics are admitted from namespaces labelled metrics: enabled" "metrics: enabled" "${np[@]}"
+expect_equal "only the metrics rule restricts its sources" "1" "$(render "${np[@]}" | grep -c 'from:')"
+expect_contains "the metrics namespace selector is configurable" "team: observability" "${np[@]}" \
+	--set networkPolicy.metricsNamespaceSelector.matchLabels.team=observability
+
 # --- fix-round rows ------------------------------------------------------
 expect_contains "a sampler argument of 0 is passed, not dropped" 'value: "0"' --show-only templates/deployment.yaml \
 	--set telemetry.traces.sampler=parentbased_traceidratio --set telemetry.traces.samplerArg=0
