@@ -1424,14 +1424,14 @@ Deployment over, the HPA is not written, and one the gateway controls is
 deleted. The Deployment step's refusal decides when the step runs. On a hold,
 where it does not (no config applied yet, no ConfigMap holding it, a missing
 plugin ConfigMap, or a ServiceAccount the gateway does not control), the
-pass's read of the Deployment decides, and the hold reports nothing more about
-that Deployment. The VirtualService routes to the Service named like the
-gateway, and the Service step runs on every pass: while it refuses that
-Service, the VirtualService is not written, one the gateway controls is
-deleted, and `IstioConfigured` is `False` with reason
-`ResourceNotControlled`. A refused Deployment raises no `Progressing`, and
-config ConfigMaps are still collected beside it, since the config stage keeps
-publishing one per applied config while the refusal lasts.
+pass's read of the Deployment decides; `ResourcesControlled` names that
+Deployment only once a pass runs the step and refuses it. The VirtualService
+routes to the Service named like the gateway, and the Service step runs on
+every pass: while it refuses that Service, the VirtualService is not written,
+one the gateway controls is deleted, and `IstioConfigured` is `False` with
+reason `ResourceNotControlled`. A refused Deployment raises no `Progressing`,
+and config ConfigMaps are still collected beside it, since the config stage
+keeps publishing one per applied config while the refusal lasts.
 `detectDragonflyState` applies the same rule to the Dragonfly it reads before
 the render: a refused one reads `DragonflyReady=False`
 (`ResourceNotControlled`), its address is not published in
