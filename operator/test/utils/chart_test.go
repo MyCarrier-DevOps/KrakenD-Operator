@@ -1,9 +1,41 @@
 package utils
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
+
+// stubHelm puts a helm executable that runs script first on PATH.
+func stubHelm(t *testing.T, script string) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "helm"), []byte("#!/bin/sh\n"+script+"\n"), 0o755); err != nil { //nolint:gosec // the stub must be executable
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+}
+
+func TestOperatorManifest_ReturnsStdoutWithoutHelmWarnings(t *testing.T) {
+	stubHelm(t, `echo "kind: Deployment"; echo "WARNING: x" >&2`)
+	got, err := OperatorManifest("ns", "repo/op:e2e", false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "kind: Deployment\n" {
+		t.Errorf("manifest = %q, want only helm's stdout", got)
+	}
+}
+
+func TestOperatorManifest_CarriesHelmStderrInTheError(t *testing.T) {
+	stubHelm(t, `echo boom >&2; exit 1`)
+	_, err := OperatorManifest("ns", "repo/op:e2e", false)
+	if err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Errorf("error = %v, want one that carries helm's stderr", err)
+	}
+}
 
 func TestOperatorTemplateArgs_RendersTheReleaseForTheImage(t *testing.T) {
 	got, err := operatorTemplateArgs("krakend-operator-system", "ghcr.io/mycarrier-devops/krakend-operator:e2e", true)
