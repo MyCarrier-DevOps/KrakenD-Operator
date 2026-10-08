@@ -40,7 +40,7 @@ const namespace = "krakend-operator-system"
 const serviceAccountName = "krakend-operator-controller-manager"
 
 // metricsServiceName is the name of the metrics service of the project
-const metricsServiceName = "krakend-operator-controller-manager-metrics-service"
+const metricsServiceName = "krakend-operator-metrics-service"
 
 // metricsRoleBindingName is the name of the RBAC that will be created to allow get the metrics data
 const metricsRoleBindingName = "krakend-operator-metrics-binding"
@@ -65,15 +65,21 @@ var _ = Describe("KrakenD Operator", Ordered, func() {
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to label namespace with restricted policy")
 
-		By("installing CRDs")
-		cmd = exec.Command("make", "install")
-		_, err = utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to install CRDs")
+		By("rendering the Helm chart")
+		manifest, err := utils.OperatorManifest(namespace, projectImage, true)
+		Expect(err).NotTo(HaveOccurred(), "Failed to render the Helm chart")
 
-		By("deploying the controller-manager")
-		cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", projectImage))
+		By("installing the CRDs and the controller-manager from the chart")
+		cmd = exec.Command("kubectl", "apply", "--server-side", "-f", "-")
+		cmd.Stdin = strings.NewReader(manifest)
 		_, err = utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
+		Expect(err).NotTo(HaveOccurred(), "Failed to install the operator from the chart")
+
+		By("waiting for the controller-manager to roll out")
+		cmd = exec.Command("kubectl", "rollout", "status", "deployment/krakend-operator-controller-manager",
+			"-n", namespace, "--timeout=5m")
+		_, err = utils.Run(cmd) // Ready only once the webhook server serves
+		Expect(err).NotTo(HaveOccurred(), "The controller-manager did not roll out")
 
 		By("creating test namespace for CRD lifecycle tests")
 		cmd = exec.Command("kubectl", "create", "ns", testNamespace)
@@ -93,13 +99,14 @@ var _ = Describe("KrakenD Operator", Ordered, func() {
 			"-n", namespace, "--ignore-not-found")
 		_, _ = utils.Run(cmd)
 
-		By("undeploying the controller-manager")
-		cmd = exec.Command("make", "undeploy")
-		_, _ = utils.Run(cmd)
-
-		By("uninstalling CRDs")
-		cmd = exec.Command("make", "uninstall")
-		_, _ = utils.Run(cmd)
+		// The CRDs go with the K3s container: deleting them once the operator is gone could
+		// hang on the policy-protection finalizer.
+		By("deleting the controller-manager")
+		if manifest, err := utils.OperatorManifest(namespace, projectImage, false); err == nil {
+			cmd = exec.Command("kubectl", "delete", "--ignore-not-found", "-f", "-")
+			cmd.Stdin = strings.NewReader(manifest)
+			_, _ = utils.Run(cmd)
+		}
 
 		By("cleaning up metrics ClusterRoleBinding")
 		cmd = exec.Command("kubectl", "delete", "clusterrolebinding", metricsRoleBindingName, "--ignore-not-found")
