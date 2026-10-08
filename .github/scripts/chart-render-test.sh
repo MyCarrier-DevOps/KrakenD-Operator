@@ -402,12 +402,24 @@ expect_contains "metrics.certManager mounts the metrics certificate" \
 	"mountPath: /tmp/k8s-metrics-server/metrics-certs" --show-only templates/deployment.yaml "${mc[@]}"
 expect_contains "metrics.certManager mounts the issued Secret" \
 	"secretName: t-krakend-operator-metrics-server-cert" --show-only templates/deployment.yaml "${mc[@]}"
+# issuers [helm args...]: how many Issuers the chart renders.
+issuers() { render "$@" | grep -c '^kind: Issuer$' || true; }
 expect_contains "the metrics Certificate names the metrics Service" \
 	"- t-krakend-operator-metrics-service.krakend-operator-system.svc" "${mc[@]}"
-expect_equal "the metrics Certificate is issued by the chart's Issuer" "t-krakend-operator-selfsigned-issuer" \
-	"$(manifest Certificate t-krakend-operator-metrics-cert "${mc[@]}" | awk '$1=="issuerRef:"{f=1} f&&$1=="name:"{print $2;exit}')"
-expect_equal "one Issuer serves both certificates" "1" "$(render "${mc[@]}" | grep -c '^kind: Issuer$')"
-expect_contains "the Issuer is rendered for the metrics certificate alone" "kind: Issuer" "${mc[@]}" --set webhooks.enabled=false
+expect_equal "the webhook certificate alone renders one Issuer" "1" "$(issuers)"
+expect_equal "one Issuer serves both certificates" "1" "$(issuers "${mc[@]}")"
+expect_equal "the metrics certificate alone renders one Issuer" "1" "$(issuers "${mc[@]}" --set webhooks.enabled=false)"
+expect_equal "no Issuer without a cert-manager certificate" "0" "$(issuers --set webhooks.enabled=false)"
+expect_absent "no Issuer when metrics are off too" "kind: Issuer" \
+	"${mc[@]}" --set metrics.enabled=false --set webhooks.enabled=false
+# rendered_issuer [helm args...]: the rendered Issuer's metadata.name.
+rendered_issuer() { render "$@" | awk '/^kind: Issuer$/ { f = 1 } f && $1 == "name:" { print $2; exit }'; }
+# issuer_ref CERTIFICATE [helm args...]: the issuerRef name of that Certificate.
+issuer_ref() { manifest Certificate "$@" | awk '$1 == "issuerRef:" { f = 1 } f && $1 == "name:" { print $2; exit }'; }
+expect_equal "the webhook Certificate names the rendered Issuer" "$(rendered_issuer)" \
+	"$(issuer_ref t-krakend-operator-serving-cert)"
+expect_equal "the metrics Certificate names the rendered Issuer" "$(rendered_issuer "${mc[@]}")" \
+	"$(issuer_ref t-krakend-operator-metrics-cert "${mc[@]}")"
 expect_absent "metrics.enabled=false renders no metrics certificate" "metrics-cert" "${mc[@]}" --set metrics.enabled=false
 expect_contains "both certificates stay mounted together" \
 	"mountPath: /tmp/k8s-webhook-server/serving-certs" --show-only templates/deployment.yaml "${mc[@]}"
