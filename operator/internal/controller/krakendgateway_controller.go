@@ -607,9 +607,7 @@ func (r *KrakenDGatewayReconciler) inspectDeploymentStatus(
 		len(want.missingPlugins) == 0 && want.mountedConfigMap != want.configMapName
 	raiseOwed := func() {
 		if owed {
-			raiseProgressing(gw, cmp.Or(note, &rolloutNote{
-				reason: v1alpha1.ReasonConfigDeployed, message: "Configuration updated, rolling deployment",
-			}))
+			raiseProgressing(gw, cmp.Or(note, configRolloutNote()))
 		}
 	}
 
@@ -874,9 +872,7 @@ func (r *KrakenDGatewayReconciler) recordApplied(
 	prior := gw.Status.DeepCopy()
 	markConfigApplied(gw, checksum, edition)
 	stored := gw.DeepCopy()
-	raiseProgressing(stored, &rolloutNote{
-		reason: v1alpha1.ReasonConfigDeployed, message: "Configuration updated, rolling deployment",
-	})
+	raiseProgressing(stored, configRolloutNote())
 	setGatewayReadiness(stored, before.ObservedGeneration)
 	if err := r.Status().Update(ctx, stored); err != nil {
 		gw.Status.ConfigChecksum, gw.Status.ConfigEdition = prior.ConfigChecksum, prior.ConfigEdition
@@ -971,7 +967,7 @@ func (r *KrakenDGatewayReconciler) noteRollout(
 func (r *KrakenDGatewayReconciler) reportConfigRollout(gw *v1alpha1.KrakenDGateway) *rolloutNote {
 	r.Recorder.Event(gw, corev1.EventTypeNormal, v1alpha1.ReasonConfigDeployed,
 		fmt.Sprintf("Configuration updated, checksum: %s", gw.Status.ConfigChecksum))
-	return &rolloutNote{reason: v1alpha1.ReasonConfigDeployed, message: "Configuration updated, rolling deployment"}
+	return configRolloutNote()
 }
 
 // markDeploymentUpdate describes the rollout the infrastructure stage is about
