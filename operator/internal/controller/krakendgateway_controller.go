@@ -277,15 +277,16 @@ func (r *KrakenDGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	// Infrastructure stage: always runs, and deploys the applied config.
 	infra := infraInputs{
-		appliedChecksum:  gw.Status.ConfigChecksum,
-		pluginChecksum:   output.PluginChecksum,
-		licenseChecksum:  licenseChecksum,
-		image:            image,
-		ceRender:         appliedKey(&gw, edition).edition == v1alpha1.EditionCE,
-		configMapName:    cfg.appliedConfigMap,
-		heldBecause:      cfg.heldBecause,
-		missingPlugins:   missingPlugins,
-		mountedConfigMap: deployed.configMap,
+		appliedChecksum:   gw.Status.ConfigChecksum,
+		pluginChecksum:    output.PluginChecksum,
+		licenseChecksum:   licenseChecksum,
+		image:             image,
+		ceRender:          appliedKey(&gw, edition).edition == v1alpha1.EditionCE,
+		configMapName:     cfg.appliedConfigMap,
+		heldBecause:       cfg.heldBecause,
+		missingPlugins:    missingPlugins,
+		mountedConfigMap:  deployed.configMap,
+		deploymentForeign: deployed.foreign,
 	}
 	saControlled, coreErr := r.reconcileCoreResources(ctx, &gw, infra)
 	note := r.noteRollout(&gw, infra, deployed, configChanged, saControlled)
@@ -726,6 +727,9 @@ type deployedChecksums struct {
 	config, license string
 	// configMap is the ConfigMap the template mounts as the gateway config.
 	configMap string
+	// foreign: the Deployment exists and the gateway may not take it over
+	// (refuseUncontrolledDeployment).
+	foreign bool
 }
 
 // deployedChecksums reads them from the gateway Deployment; both are "" when
@@ -746,6 +750,7 @@ func (r *KrakenDGatewayReconciler) deployedChecksums(
 		config:    annotations[resources.PostRestartJobChecksumAnnotation],
 		license:   annotations[resources.LicenseChecksumAnnotation],
 		configMap: resources.MountedConfigMapName(&dep.Spec.Template.Spec),
+		foreign:   refuseUncontrolledDeployment(gw, &dep) != nil,
 	}, nil
 }
 
@@ -1348,6 +1353,10 @@ type infraInputs struct {
 	// mountedConfigMap is the ConfigMap the Deployment template mounts now,
 	// read before this pass changes it; "" when there is no Deployment.
 	mountedConfigMap string
+	// deploymentForeign: the Deployment named like the gateway, as read before
+	// this pass changes it, is one the gateway may not take over. It is known
+	// even when the Deployment step does not run.
+	deploymentForeign bool
 }
 
 // reconcileDeploymentUnlessHeld reconciles the Deployment, or leaves it exactly
@@ -1454,7 +1463,7 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 	}
 
 	obs, gcErr, deploymentErr := r.reconcileDeploymentUnlessHeld(ctx, gw, in)
-	errs = append(errs, deploymentErr, gcErr, r.reconcileHPA(ctx, gw, obs))
+	errs = append(errs, deploymentErr, gcErr, r.reconcileHPA(ctx, gw, in, obs))
 	if deploymentErr == nil {
 		// Only after the Deployment has rolled out the applied config, image
 		// and plugins. Jobs are idempotent by name so each unique config
@@ -1499,16 +1508,18 @@ func (r *KrakenDGatewayReconciler) reconcileCoreResources(
 
 // reconcileHPA creates or updates the HorizontalPodAutoscaler when
 // autoscaling is configured. The HPA scales the Deployment named like the
-// gateway, so while the Deployment step refused that Deployment (obs.refused)
-// no HPA is written and one the gateway controls is deleted. Otherwise one the
-// gateway controls is deleted, but only once the Deployment reconciled: it is
-// the Deployment that carries the replica count the HPA stops managing.
+// gateway, so while that Deployment is one the gateway may not take over, no
+// HPA is written and one the gateway controls is deleted: the Deployment step
+// refused it (obs.refused), or the pass read it so (in.deploymentForeign),
+// which holds when the step does not run. Otherwise one the gateway controls
+// is deleted, but only once the Deployment reconciled: it is the Deployment
+// that carries the replica count the HPA stops managing.
 func (r *KrakenDGatewayReconciler) reconcileHPA(
-	ctx context.Context, gw *v1alpha1.KrakenDGateway, obs deploymentObservation,
+	ctx context.Context, gw *v1alpha1.KrakenDGateway, in infraInputs, obs deploymentObservation,
 ) error {
 	hpa := &autoscalingv2.HorizontalPodAutoscaler{ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace}}
 	switch {
-	case obs.refused:
+	case obs.refused || in.deploymentForeign:
 		return r.deleteIfControlled(ctx, r.Client, gw, hpa)
 	case gw.Spec.Autoscaling != nil:
 		return r.applyOwned(ctx, gw, hpa, "hpa", resources.SelectorLabels(gw), func() { resources.BuildHPA(hpa, gw) })
