@@ -2507,13 +2507,19 @@ reports it.
   alone while the rest is reconciled. A refused Deployment is left alone and
   the post-restart Job waits for it.
 - What points at a refused object by name is held with it. While the
-  Deployment step refuses the Deployment, the gateway writes no
-  HorizontalPodAutoscaler and deletes the one it controls, so an HPA does not
-  scale somebody else's Deployment; old config ConfigMaps are still collected,
-  and the configs applied meanwhile raise no `Progressing`. While the Service
-  is refused, the gateway writes no VirtualService and deletes the one it
-  controls (`IstioConfigured=False`, reason `ResourceNotControlled`), so the
-  gateway's hosts are not routed to somebody else's pods.
+  Deployment named like the gateway is one the gateway may not take over, the
+  gateway writes no HorizontalPodAutoscaler and deletes the one it controls,
+  so an HPA does not scale somebody else's Deployment. The Deployment step's
+  refusal decides when the step runs; while the Deployment is held for
+  another reason (a missing plugin ConfigMap, no config applied yet, or the
+  ServiceAccount), the gateway's read of that Deployment decides, and
+  `ResourcesControlled` names it only once a pass tries to write it. Beside a
+  refused Deployment old config ConfigMaps are still collected, and the
+  configs applied meanwhile raise no `Progressing`. While the Service is
+  refused, which every pass checks, the gateway writes no VirtualService and
+  deletes the one it controls (`IstioConfigured=False`, reason
+  `ResourceNotControlled`), so the gateway's hosts are not routed to somebody
+  else's pods.
 - A refused Dragonfly is not reported ready (`DragonflyReady=False`, reason
   `ResourceNotControlled`), `status.dragonflyAddress` is cleared, and the
   rendered Redis pool does not point at it: the render falls back to
