@@ -19,7 +19,9 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
 	"maps"
+	"slices"
 	"strings"
 	"testing"
 
@@ -178,6 +180,30 @@ func TestGatewayReconcile_ARefusedDeploymentRaisesNoProgressing(t *testing.T) {
 	}
 	if cond := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionProgressing); condTrue(cond) {
 		t.Errorf("Progressing = %+v, want it not raised: nothing rolls the refused Deployment", cond)
+	}
+}
+
+// A refusal lasts until someone renames the gateway or hands the Deployment
+// over, and the config stage keeps publishing a ConfigMap per applied config
+// meanwhile: collection keeps them to the revision history.
+func TestGatewayReconcile_CollectsConfigRevisionsWhileTheDeploymentIsRefused(t *testing.T) {
+	gw := reconciledGateway()
+	gw.UID = "gw-uid"
+	c := fakeClientBuilder().WithObjects(gw, foreignDeployment(gw)).WithStatusSubresource(gw).Build()
+	rend := renderOf(`{"version":3,"name":"c0"}`)
+	r := newTestGatewayReconciler(c, rend, &mockValidator{})
+
+	for i := range 6 {
+		rend.output = renderOf(fmt.Sprintf(`{"version":3,"name":"c%d"}`, i)).output
+		if err := reconcileGateway(t, r, gw); len(notControlledIn(err)) != 1 {
+			t.Fatalf("pass %d: err = %v, want the Deployment's refusal", i, err)
+		}
+	}
+
+	applied := resources.ConfigMapName(gw, getGateway(t, c, gw).Status.ConfigChecksum)
+	if got := remainingConfigMaps(t, c, gw); len(got) != configMapHistoryLimit || !slices.Contains(got, applied) {
+		t.Errorf("config ConfigMaps after 6 applied configs = %v, want %d with the applied %s among them",
+			got, configMapHistoryLimit, applied)
 	}
 }
 
