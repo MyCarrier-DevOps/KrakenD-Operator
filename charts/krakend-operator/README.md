@@ -36,7 +36,7 @@ See [values.yaml](values.yaml) for the full list of configurable parameters.
 | `webhooks.enabled` | Serve the validating admission webhooks. `false` runs the operator without a webhook server; only render-time validation then protects gateways | `true` |
 | `webhooks.caBundle` | CA bundle (PEM or base64-encoded PEM) for the webhook, used when `webhooks.certManager.enabled` is `false` | `""` |
 | `networkPolicy.enabled` | Create a NetworkPolicy that admits ingress to the operator pods only on the metrics port (from namespaces matching `networkPolicy.metricsNamespaceSelector`) and the webhook port (from anywhere). Needs a CNI that enforces NetworkPolicy | `false` |
-| `networkPolicy.metricsNamespaceSelector` | Namespaces allowed to scrape the metrics port | `matchLabels: {metrics: enabled}` |
+| `networkPolicy.metricsNamespaceSelector` | Namespaces allowed to scrape the metrics port. Keys merge with the default, so a selector you set is ANDed with `metrics: enabled`; `--set networkPolicy.metricsNamespaceSelector.matchLabels.metrics=null` removes it | `matchLabels: {metrics: enabled}` |
 | `autoconfig.maxConcurrentReconciles` | KrakenDAutoConfigs reconciled at once; each reconcile fetches its OpenAPI spec over the network, so a slow upstream delays only its own AutoConfig | `4` |
 | `telemetry.otlp.endpoint` | OTLP collector the operator exports traces, metrics and logs to (`OTEL_EXPORTER_OTLP_ENDPOINT`). Empty exports nothing | `""` |
 | `telemetry.otlp.nodeCollector` | `enabled` exports to the OpenTelemetry collector on the pod's node, at `http://<node IP>:<port>` (`port` is `4318` for `http/protobuf`, `4317` for `grpc`), and labels records with `k8s.node.name`, `k8s.pod.uid` and `k8s.pod.ip`. Takes the place of `endpoint`; setting both fails the render | `enabled: false`, `port: 4318` |
@@ -82,7 +82,7 @@ self-signed Issuer, for a certificate for the metrics Service, mounts it in the
 operator pods, and the `ServiceMonitor` checks the Service's name and trusts
 the certificate's CA. The Prometheus Operator reads that CA from the Secret
 `<fullname>-metrics-server-cert`, which it looks up in the `ServiceMonitor`'s
-namespace, the operator's. The Issuer is shared with the webhook certificate.
+namespace, the operator's. When the webhook certificate also comes from cert-manager, both share the Issuer.
 
 ## User roles
 
@@ -111,6 +111,8 @@ operator pods that admits ingress only on:
 
 - the metrics port, from namespaces matching `networkPolicy.metricsNamespaceSelector` (by default those labelled `metrics: enabled`);
 - the webhook port, 9443, from any source: the API server calls the webhooks and cannot be selected by labels, and a policy without this rule would make every write to the four kinds fail while `webhooks.failurePolicy` is `Fail`.
+
+Each rule is present only while its server is on (`metrics.enabled`, `webhooks.enabled`); with both off the policy admits no ingress.
 
 It needs a CNI that enforces NetworkPolicy. It adds no rule for the health
 port: kubelet probes are host traffic, which common CNIs admit. If yours does
