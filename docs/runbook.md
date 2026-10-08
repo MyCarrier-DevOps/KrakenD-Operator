@@ -220,7 +220,7 @@ pod eviction) makes the Deployment report `Available=False`
 
 | Condition | Meaning |
 |---|---|
-| `Ready` | Summary, written only by the gateway controller. `True` (`Ready`): the configuration is applied, the Deployment is available and the applied config is rolled out to all replicas. Otherwise its reason names the first thing that blocks it. `False`: `GatewayRootInvalid`, `CombinedConfigInvalid`, `LicenseExpiredNoFallback`, `ConfigMapNotFound`, the Deployment's reason when `Available` is `False` (`RolloutFailed`, `MinimumReplicasUnavailable`), `EEFeaturesStripped` or `LicenseFallbackCE` while the gateway runs CE as a fallback, `ConfigDeployed` or `DeploymentUpdated` while a rollout is in progress, `AwaitingAvailability` while the Deployment reports no available replicas. `Unknown`: `Pending` (no configuration validated yet), `ValidatorUnavailable` or `ConfigPublishFailed` |
+| `Ready` | Summary, written only by the gateway controller. `True` (`Ready`): the configuration is applied, the Deployment is available and the applied config is rolled out to all replicas. Otherwise its reason names the first thing that blocks it. `False`: `GatewayRootInvalid`, `CombinedConfigInvalid`, `LicenseExpiredNoFallback`, `ConfigMapNotFound`, `ResourceNotControlled`, the Deployment's reason when `Available` is `False` (`RolloutFailed`, `MinimumReplicasUnavailable`), `EEFeaturesStripped` or `LicenseFallbackCE` while the gateway runs CE as a fallback, `ConfigDeployed` or `DeploymentUpdated` while a rollout is in progress, `AwaitingAvailability` while the Deployment reports no available replicas. `Unknown`: `Pending` (no configuration validated yet), `ValidatorUnavailable` or `ConfigPublishFailed` |
 | `ConfigValid` | `True` (`ConfigApplied`): the rendered config passed validation and is the applied config. `False` (`GatewayRootInvalid`): the gateway root fails on its own, so nothing is judged; `False` (`CombinedConfigInvalid`): the endpoints that pass krakend check on their own fail it together (any endpoint that fails on its own is excluded first). In both, the last applied config keeps serving. `Unknown` (`ValidatorUnavailable`): krakend check could not run; retried with backoff. `Unknown` (`ConfigPublishFailed`): the newest render passed validation but its ConfigMap could not be published, or the applied config's ConfigMap does not hold the config; retried with backoff |
 | `EndpointsExcluded` | `True` (`InvalidEndpointsExcluded`) while the gateway leaves out endpoints that fail validation on their own; the message counts them and names the first 10. It reads `… fail validation and are not served: …` while the gateway serves its newest config, and `… fail validation and will not be served when the gateway next applies its config: …` while `ConfigValid` is not `True` (the last applied config, which may still hold them, keeps serving). The wording switch is a message change, so a rejected root or a validator outage emits one extra `InvalidEndpointsExcluded` Warning, and another when the gateway applies again. Absent otherwise. `ConfigValid` and `Ready` are not affected by the exclusions themselves |
 | `PluginsResolved` | `True` (`ConfigMapsFound`) when every plugin ConfigMap exists; `False` (`ConfigMapNotFound`) naming the missing ones while the Deployment is held. Absent without ConfigMap plugin sources |
@@ -228,8 +228,8 @@ pod eviction) makes the Deployment report `Available=False`
 | `Available` | The Deployment is available; `False` when it loses its minimum replicas (for example all pods crash-looping) or its rollout fails |
 | `Progressing` | A rollout is in progress: the Deployment was created, its pod template was written (a config, image, plugin or license change, but also resources, probes or drift the operator reverted), or old pods remain beside updated ones. It stays `True` until the Deployment has observed the change and every replica is updated and available. A replica change alone (an HPA scale) does not raise it, though the brief `Available=False` a scale-up can cause is still mirrored |
 | `CEFallbackApplied` | `True` (`EEFeaturesStripped`) while the applied config is the CE-fallback render; the message lists the Enterprise-only features it removed. Absent otherwise |
-| `DragonflyReady` | DragonflyDB instance is operational |
-| `IstioConfigured` | VirtualService has been reconciled |
+| `DragonflyReady` | DragonflyDB instance is operational; `False` (`ResourceNotControlled`) while the Dragonfly named like the gateway's is one the gateway refuses (see *Gateway reports `ResourceNotControlled`*) |
+| `IstioConfigured` | VirtualService has been reconciled; `False` (`ResourceNotControlled`) while the gateway refuses the Service the VirtualService would route to |
 | `LicenseValid` | EE license state: `True` (`LicenseOK`), `True` (`LicenseExpiringSoon`) inside the warning window, `False` (`LicensePreExpiry`, `LicenseExpired`), or `Unknown` (`LicenseSecretMissing`) while the license cannot be read, unless the last known expiry is already inside the safety buffer or past |
 | `LicenseExpired` | `True` once the license is expired or inside the 1 h safety buffer; without `fallbackToCE` the gateway reports phase `Error` |
 | `LicenseDegraded` | `True` (`LicenseFallbackCE`) while the gateway runs CE because its license expired or entered the 1 h safety buffer |
@@ -573,6 +573,24 @@ both are left as they are. Running pods keep running, and a new gateway gets no
 Deployment. A ServiceAccount the operator could not write holds them too, and
 the condition keeps its previous value: only the log names it.
 
+What points at a refused object by name is held with it:
+
+- **A refused Deployment.** The HorizontalPodAutoscaler would scale it, so the
+  gateway writes none and deletes the one it controls. The configs applied
+  meanwhile raise no `Progressing`, and old config ConfigMaps are still
+  collected, so a long refusal does not pile them up.
+- **A refused Service.** The VirtualService would route the gateway's hosts to
+  it, so the gateway writes none and deletes the one it controls.
+  `IstioConfigured` is `False` with reason `ResourceNotControlled`.
+- **A refused Dragonfly.** It is not reported ready (`DragonflyReady=False`,
+  reason `ResourceNotControlled`), `status.dragonflyAddress` is cleared, and the
+  rendered Redis pool does not point at it: the render falls back to
+  `spec.redis`, as when the Dragonfly CRD is missing, and without `spec.redis`
+  the config has no Redis pool until the conflict is resolved. The rendered
+  config changes, and so does its checksum.
+
+Once the conflict is resolved, the next pass writes them again.
+
 **Fix:** either of:
 
 - Rename the gateway, so its name no longer collides.
@@ -911,12 +929,13 @@ breaks gateway <ns>/<name>: ...`.
   inline override of it. The decision itself can also be too large for the
   budget: many endpoints that lost an entry (resolve the clashes in
   `status.conflicts`), a write to a policy whose stored content fails on its
-  own (every endpoint that uses it is judged first; fix the policy), or many
-  distinct policies not checked yet since a restart (a retry helps). For
-  failing, not yet recorded endpoints, each request scans the endpoints in a
-  random order, so a retry also reaches others; but on a gateway of several
-  hundred served endpoints it may not converge. It stops when the gateway
-  controller records their exclusions: retry after its next reconcile;
+  own, or a gateway update whose endpoints use such a policy (every endpoint
+  that uses it is judged first; fix the policy), or many distinct policies not
+  checked yet since a restart (a retry helps). For failing, not yet recorded
+  endpoints, each request scans the endpoints in a random order, so a retry
+  also reaches others; but on a gateway of several hundred served endpoints it
+  may not converge. It stops when the gateway controller records their
+  exclusions: retry after its next reconcile;
 - fix the policy, or ask those endpoints' owners;
 - a gateway whose root fails on its own, or whose failing endpoints all already
   failed with the stored policy, gets a warning instead. On a create there is no
