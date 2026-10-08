@@ -1,0 +1,11 @@
+{{- if include "krakend-operator.issuerEnabled" . }}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "krakend-operator.issuerName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "krakend-operator.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+{{- end }}
