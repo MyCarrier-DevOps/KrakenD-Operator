@@ -59,6 +59,11 @@ type rolloutNote struct {
 	reason, message string
 }
 
+// configRolloutNote is the note of the rollout a newly applied config starts.
+func configRolloutNote() *rolloutNote {
+	return &rolloutNote{reason: v1alpha1.ReasonConfigDeployed, message: "Configuration updated, rolling deployment"}
+}
+
 // rolloutInFlight reports whether the pass that reconciled the Deployment
 // started, or sees, a rollout: it created the Deployment, its write changed
 // the pod template, the template is not the wanted one, or old pods remain
