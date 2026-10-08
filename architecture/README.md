@@ -2143,6 +2143,8 @@ Secrets and ConfigMaps are watched as metadata only (`builder.OnlyMetadata`) and
 
 `coordination.k8s.io/leases`: `get`, `create`, `update`; `events`: `create`, `patch`. controller-runtime uses a Lease; no ConfigMap lock.
 
+The chart also ships an admin, an editor and a viewer ClusterRole for each of the four kinds (`<fullname>-<kind>-<role>-role`, 12 in all). The operator does not use them and nothing binds them; they are for cluster admins to grant, and they carry no aggregation labels.
+
 The ClusterRole is generated from the `+kubebuilder:rbac` markers into `operator/config/rbac/role.yaml`. `TestManagerRoleGrantsOnlyUsedVerbs` pins it to the table above, and the integration suite runs its manager as a ServiceAccount bound to exactly that role, so a verb the role lacks fails the integration suite on the paths it runs, while the golden test pins the role to the hand-kept table. The suite runs against K3s with the `OwnerReferencesPermissionEnforcement` admission plugin enabled, and the VirtualService CRD is installed there. Four paths stay outside it: the admission webhooks run only in the end-to-end tests, the Dragonfly and ExternalSecret CRDs are not installed, and the optional kinds' `delete` is not exercised, so those verbs are pinned by the table alone, and a Lease election is not contested.
 
 ---
