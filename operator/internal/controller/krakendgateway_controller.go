@@ -1414,10 +1414,15 @@ func (r *KrakenDGatewayReconciler) reconcileDeploymentUnlessHeld(
 // Deployment step instead, because they consume it:
 //   - ConfigMap collection, after a successful Deployment reconcile (while the
 //     Deployment is held it runs without one, keeping the revision the held
-//     template mounts);
+//     template mounts, and after a refused one it runs too);
 //   - the deletion of an HPA the gateway no longer wants, so the Deployment
 //     carries the replica count before the HPA stops managing it;
 //   - the post-restart Job, which runs against the Deployment's pods.
+//
+// Two children name a sibling, so they follow its refusal: the HPA scales the
+// Deployment named like the gateway and the VirtualService routes to the
+// Service named like it. While the pass refuses that sibling, neither is
+// written, and the one the gateway controls is deleted.
 //
 // The Deployment and the post-restart Job run as the ServiceAccount named like
 // the gateway, so while the gateway does not control it both are held as they
