@@ -77,6 +77,8 @@ generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and
 # generated-output location, not just config/crd/bases:
 #   - config/crd/bases, config/rbac/role.yaml, config/webhook/manifests.yaml
 #     (controller-gen output, via the `manifests` target)
+#   - api/v1alpha1/zz_generated.deepcopy.go (controller-gen output, via the
+#     `generate` target)
 #   - ../charts/krakend-operator/crds and ../charts/krakend-operator/files,
 #     the chart's copies of the CRDs and of the manager ClusterRole, which the
 #     `manifests` target copies from the controller-gen output. The chart's
@@ -92,17 +94,17 @@ generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and
 # gate exists to close. CI is never affected, since CI checkouts carry no local
 # scratch files. If this trips locally,
 # `git clean -n -- $(VERIFY_MANIFESTS_PATHS)` shows what would be removed.
-VERIFY_MANIFESTS_PATHS = config/crd/bases config/rbac/role.yaml config/webhook/manifests.yaml ../charts/krakend-operator/crds ../charts/krakend-operator/files
+VERIFY_MANIFESTS_PATHS = config/crd/bases config/rbac/role.yaml config/webhook/manifests.yaml api/v1alpha1/zz_generated.deepcopy.go ../charts/krakend-operator/crds ../charts/krakend-operator/files
 verify-manifests: manifests generate ## Verify generated manifests (CRDs/RBAC/webhook/chart copies) match committed source. May fail on local untracked scratch files under gated paths (not a bug, CI-safe; see the Makefile comment above this target).
 	@untracked=$$(git status --porcelain -- $(VERIFY_MANIFESTS_PATHS) | grep '^??' || true); \
 	if [ -n "$$untracked" ]; then \
 	  echo "generated manifests drifted: new untracked file(s):"; \
 	  echo "$$untracked"; \
-	  echo "run 'make manifests' and commit the result"; \
+	  echo "run 'make manifests generate' and commit the result"; \
 	  exit 1; \
 	fi
 	git diff --exit-code -- $(VERIFY_MANIFESTS_PATHS) || \
-	  (echo "generated manifests are out of date — run 'make manifests' and commit the result" \
+	  (echo "generated manifests are out of date — run 'make manifests generate' and commit the result" \
 	    && exit 1)
 
 .PHONY: fmt
