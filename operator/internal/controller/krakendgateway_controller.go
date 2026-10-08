@@ -564,8 +564,9 @@ func (r *KrakenDGatewayReconciler) detectDragonflyState(
 // reconcile the Deployment (held, or the step failed) starts no rollout, so
 // it does not raise Progressing, except that a failed Deployment step, or a
 // ServiceAccount step that failed without a refusal, raises it while the
-// Deployment does not mount the applied config; it reads the cached
-// Deployment for the rest.
+// Deployment does not mount the applied config, unless the cached
+// Deployment's lost availability or missed progress deadline is reported in
+// its place; it reads the cached Deployment for the rest.
 func (r *KrakenDGatewayReconciler) inspectDeploymentStatus(
 	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
@@ -925,7 +926,9 @@ func markConfigApplied(gw *v1alpha1.KrakenDGateway, checksum string, edition v1a
 // is held: a held Deployment starts no rollout. A ServiceAccount hold returns
 // nil too. After a refusal its end reports no config rollout: the Deployment
 // write that follows raises Progressing with reason DeploymentUpdated. After a
-// failure that is not a refusal the status already says ConfigDeployed.
+// failure that is not a refusal, a config applied meanwhile already reads
+// ConfigDeployed, unless the Deployment's lost availability or missed progress
+// deadline was reported instead; its end then reads DeploymentUpdated too.
 func (r *KrakenDGatewayReconciler) noteRollout(
 	gw *v1alpha1.KrakenDGateway, in infraInputs, deployed deployedChecksums, configChanged, saControlled bool,
 ) *rolloutNote {
@@ -1389,9 +1392,9 @@ func (r *KrakenDGatewayReconciler) reconcileDeploymentUnlessHeld(
 //
 // The Deployment and the post-restart Job run as the ServiceAccount named like
 // the gateway, so while the gateway does not control it both are held as they
-// are, and the pass returns an error and an observation without a Deployment. The caller runs
-// reconcileCoreResources first and passes its outcome in, so the rollout note
-// can honour the hold.
+// are, and the pass returns an error and an observation without a Deployment.
+// The caller runs reconcileCoreResources first and passes its outcome in, so
+// the rollout note can honour the hold.
 func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
