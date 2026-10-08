@@ -29,13 +29,6 @@ helm install krakend-operator krakend-operator/krakend-operator \
   --namespace krakend-operator-system --create-namespace
 ```
 
-### Install via Kustomize
-
-```bash
-cd operator
-make deploy IMG=ghcr.io/mycarrier-devops/krakend-operator:latest
-```
-
 ### Create a Gateway
 
 ```yaml
