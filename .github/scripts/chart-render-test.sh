@@ -400,12 +400,30 @@ expect_contains "metrics.certManager passes the metrics certificate path" \
 	"- --metrics-cert-path=/tmp/k8s-metrics-server/metrics-certs" --show-only templates/deployment.yaml "${mc[@]}"
 expect_contains "metrics.certManager mounts the metrics certificate" \
 	"mountPath: /tmp/k8s-metrics-server/metrics-certs" --show-only templates/deployment.yaml "${mc[@]}"
-expect_contains "metrics.certManager mounts the issued Secret" \
-	"secretName: t-krakend-operator-metrics-server-cert" --show-only templates/deployment.yaml "${mc[@]}"
+expect_equal "the metrics Certificate covers the metrics Service and fills the mounted Secret" \
+	"$(printf '%s\n' '  dnsNames:' \
+		'    - t-krakend-operator-metrics-service.krakend-operator-system.svc' \
+		'    - t-krakend-operator-metrics-service.krakend-operator-system.svc.cluster.local' \
+		'  issuerRef:' '    kind: Issuer' '    name: t-krakend-operator-selfsigned-issuer' \
+		'  secretName: t-krakend-operator-metrics-server-cert')" \
+	"$(manifest Certificate t-krakend-operator-metrics-cert "${mc[@]}" | awk '/^spec:/ { f = 1; next } f')"
+# mounted_secret PATH [helm args...]: the Secret behind the volume mounted at PATH.
+mounted_secret() {
+	local path=$1
+	shift
+	render --show-only templates/deployment.yaml "$@" | awk -v p="$path" '
+		$1 == "-" && $2 == "name:" { last = $3 }
+		$1 == "mountPath:" && $2 == p { vol = last }
+		$1 == "volumes:" { vols = 1 }
+		vols && $1 == "-" && $2 == "name:" { cur = $3 }
+		vols && $1 == "secretName:" && cur == vol { print $2; exit }'
+}
+expect_equal "the metrics certificate path holds the metrics Certificate's Secret" \
+	"t-krakend-operator-metrics-server-cert" "$(mounted_secret /tmp/k8s-metrics-server/metrics-certs "${mc[@]}")"
+expect_equal "the webhook certificate path still holds the webhook Secret" \
+	"t-krakend-operator-webhook-server-cert" "$(mounted_secret /tmp/k8s-webhook-server/serving-certs "${mc[@]}")"
 # issuers [helm args...]: how many Issuers the chart renders.
 issuers() { render "$@" | grep -c '^kind: Issuer$' || true; }
-expect_contains "the metrics Certificate names the metrics Service" \
-	"- t-krakend-operator-metrics-service.krakend-operator-system.svc" "${mc[@]}"
 expect_equal "the webhook certificate alone renders one Issuer" "1" "$(issuers)"
 expect_equal "one Issuer serves both certificates" "1" "$(issuers "${mc[@]}")"
 expect_equal "the metrics certificate alone renders one Issuer" "1" "$(issuers "${mc[@]}" --set webhooks.enabled=false)"
@@ -426,9 +444,11 @@ expect_contains "both certificates stay mounted together" \
 sm=(--show-only templates/servicemonitor.yaml --set metrics.serviceMonitor.enabled=true)
 expect_contains "without it the ServiceMonitor skips verification" "insecureSkipVerify: true" "${sm[@]}"
 expect_absent "with it the ServiceMonitor verifies the certificate" "insecureSkipVerify" "${sm[@]}" "${mc[@]}"
-expect_contains "the ServiceMonitor checks the metrics Service name" \
-	"serverName: t-krakend-operator-metrics-service.krakend-operator-system.svc" "${sm[@]}" "${mc[@]}"
-expect_contains "the ServiceMonitor trusts the certificate's CA" "name: t-krakend-operator-metrics-server-cert" "${sm[@]}" "${mc[@]}"
+expect_equal "the ServiceMonitor checks the metrics Service against the certificate's CA" \
+	"$(printf '%s\n' '        serverName: t-krakend-operator-metrics-service.krakend-operator-system.svc' \
+		'        ca:' '          secret:' '            name: t-krakend-operator-metrics-server-cert' \
+		'            key: ca.crt')" \
+	"$(render "${sm[@]}" "${mc[@]}" | awk '$1 == "tlsConfig:" { f = 1; next } $1 == "selector:" { f = 0 } f')"
 
 # --- networkPolicy ----------------------------------------------------------
 expect_absent "no NetworkPolicy by default" "kind: NetworkPolicy"
