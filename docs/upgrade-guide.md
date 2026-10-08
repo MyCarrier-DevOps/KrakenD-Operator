@@ -1685,7 +1685,8 @@ slots with the gateway controller, the AutoConfig controller and the policy
 controller (the gateway controller holds at most one, and the AutoConfig and
 policy controllers one between them, so together they never hold more than 2 of
 the 3 slots), and each webhook call stops its work after 12 s. A request that
-cannot get a slot in time, or whose check cannot run, is answered `500 Internal Error`: a transient error that `kubectl` does not retry,
+cannot get a slot in time, or whose check cannot run, is answered
+`500 Internal Error`: a transient error that `kubectl` does not retry,
 so run the command again (controllers and GitOps tools retry on their own).
 A policy write runs 1 check, plus 2 for each gateway that uses it (that
 gateway's root, then the endpoints that use it together), plus one per endpoint
