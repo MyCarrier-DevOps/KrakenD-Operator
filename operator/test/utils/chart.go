@@ -19,7 +19,6 @@ package utils
 import (
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"strings"
 )
@@ -46,13 +45,8 @@ func OperatorManifest(namespace, image string, crds bool) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	dir, _ := GetProjectDir() //nolint:errcheck // best-effort directory resolution
 	cmd := exec.Command("helm", args...)
-	cmd.Dir = dir
-	cmd.Env = os.Environ()
-	if kubeconfigPath != "" {
-		cmd.Env = append(cmd.Env, "KUBECONFIG="+kubeconfigPath)
-	}
+	prepareCommand(cmd)
 	// Output keeps stderr out of the YAML: a helm warning there would corrupt the manifest.
 	out, err := cmd.Output()
 	if err != nil {
