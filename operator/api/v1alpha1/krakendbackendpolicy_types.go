@@ -98,7 +98,6 @@ type KrakenDBackendPolicyStatus struct {
 // KrakenDBackendPolicy defines circuit-breaker, rate-limit and cache settings,
 // plus raw backend extra_config, that KrakenDEndpoint backends reference
 // through policyRef.
-// +operator-sdk:csv:customresourcedefinitions:displayName="KrakenD Backend Policy"
 type KrakenDBackendPolicy struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
