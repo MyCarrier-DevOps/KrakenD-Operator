@@ -110,17 +110,22 @@ func TestReconcileInfrastructure_UnownedDeploymentIsNotTakenOver(t *testing.T) {
 	}
 }
 
+// foreignDeployment is a Deployment named like gw that nothing controls and
+// that lacks the gateway's labels: somebody else's, which the gateway refuses.
+func foreignDeployment(gw *v1alpha1.KrakenDGateway) *appsv1.Deployment {
+	return &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace},
+		Spec:       appsv1.DeploymentSpec{Replicas: new(int32(5))},
+	}
+}
+
 // The HPA scales the Deployment named like the gateway. While the gateway
 // refuses that Deployment, the HPA would scale somebody else's, so it is not
 // written.
 func TestGatewayReconcile_NoHPAForARefusedDeployment(t *testing.T) {
 	gw := reconciledGateway()
 	gw.Spec.Autoscaling = &v1alpha1.AutoscalingSpec{MinReplicas: new(int32(1)), MaxReplicas: 1}
-	victim := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace},
-		Spec:       appsv1.DeploymentSpec{Replicas: new(int32(5))},
-	}
-	c := fakeClientBuilder().WithObjects(gw, victim).WithStatusSubresource(gw).Build()
+	c := fakeClientBuilder().WithObjects(gw, foreignDeployment(gw)).WithStatusSubresource(gw).Build()
 	r := acceptanceReconciler(c, fakeRecorder(), &renderer.RenderOutput{JSON: []byte(`{"version":3}`), Checksum: "cs1"})
 
 	if err := reconcileGateway(t, r, gw); len(notControlledIn(err)) != 1 {
@@ -131,6 +136,27 @@ func TestGatewayReconcile_NoHPAForARefusedDeployment(t *testing.T) {
 	if err := c.Get(t.Context(), client.ObjectKeyFromObject(gw), &hpa); !apierrors.IsNotFound(err) {
 		t.Errorf("HPA get err = %v, want NotFound: it targets %+v, the refused Deployment",
 			err, hpa.Spec.ScaleTargetRef)
+	}
+}
+
+// An HPA the gateway wrote before its Deployment was refused would keep
+// scaling somebody else's Deployment, so it is deleted.
+func TestGatewayReconcile_DeletesItsHPAWhileTheDeploymentIsRefused(t *testing.T) {
+	gw := reconciledGateway()
+	gw.UID = "gw-uid"
+	gw.Spec.Autoscaling = &v1alpha1.AutoscalingSpec{MinReplicas: new(int32(1)), MaxReplicas: 1}
+	hpa := &autoscalingv2.HorizontalPodAutoscaler{ObjectMeta: metav1.ObjectMeta{
+		Name: gw.Name, Namespace: gw.Namespace, OwnerReferences: ownedBy(gw),
+	}}
+	c := fakeClientBuilder().WithObjects(gw, foreignDeployment(gw), hpa).WithStatusSubresource(gw).Build()
+	r := acceptanceReconciler(c, fakeRecorder(), &renderer.RenderOutput{JSON: []byte(`{"version":3}`), Checksum: "cs1"})
+
+	if err := reconcileGateway(t, r, gw); len(notControlledIn(err)) != 1 {
+		t.Fatalf("err = %v, want the Deployment's refusal", err)
+	}
+
+	if err := c.Get(t.Context(), client.ObjectKeyFromObject(hpa), hpa); !apierrors.IsNotFound(err) {
+		t.Errorf("HPA get err = %v, want NotFound: the gateway's HPA must not scale the refused Deployment", err)
 	}
 }
 
