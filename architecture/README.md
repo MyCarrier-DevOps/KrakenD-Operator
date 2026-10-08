@@ -2868,14 +2868,11 @@ Go project layout following [Standard Go Project Layout](https://github.com/gola
 │   ├── config/
 │   │   ├── crd/
 │   │   │   └── bases/                          # Generated CRD YAML manifests
-│   │   ├── certmanager/                        # Webhook serving certificate
-│   │   ├── default/                            # Default kustomization and its patches
-│   │   ├── manager/                            # Operator Deployment manifests
-│   │   ├── network-policy/                     # Metrics traffic policy
-│   │   ├── prometheus/                         # ServiceMonitor
-│   │   ├── rbac/                               # RBAC manifests
+│   │   ├── rbac/
+│   │   │   └── role.yaml                       # Generated manager ClusterRole
 │   │   ├── samples/                            # Example CR YAML files
-│   │   └── webhook/                            # Webhook manifests (ValidatingWebhookConfiguration)
+│   │   └── webhook/
+│   │       └── manifests.yaml                  # Generated ValidatingWebhookConfiguration
 │   ├── hack/
 │   │   ├── audit-admission-rules.sh            # Read-only pre-upgrade audit of stored objects against the admission rules
 │   │   ├── test-audit-admission-rules.sh       # Runs the audit against its fixtures (make test-audit)
