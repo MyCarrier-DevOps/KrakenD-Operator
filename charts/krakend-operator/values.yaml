@@ -26,13 +26,20 @@ metrics:
   enabled: true
   service:
     port: 8443
+  certManager:
+    # Serve metrics with a certificate cert-manager issues from the chart's
+    # self-signed Issuer instead of the one the operator generates at startup.
+    # The ServiceMonitor (serviceMonitor.enabled) then verifies it.
+    # Requires cert-manager to be installed in the cluster.
+    enabled: false
   serviceMonitor:
     # Create a Prometheus Operator ServiceMonitor (needs the
     # monitoring.coreos.com CRDs). Bind the <fullname>-metrics-reader
     # ClusterRole to the scraping ServiceAccount.
-    # The scrape skips TLS verification (the metrics server's certificate is
-    # self-signed) and sends Prometheus's ServiceAccount token to the
-    # endpoint, so enable it only where the pod network is trusted.
+    # Unless certManager.enabled, the scrape skips TLS verification (the
+    # metrics server's certificate is self-signed) and sends Prometheus's
+    # ServiceAccount token to the endpoint, so enable it only where the pod
+    # network is trusted.
     enabled: false
     additionalLabels: {}
 
