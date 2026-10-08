@@ -3177,8 +3177,12 @@ Namespace as well.
    `nodeSelector: {kubernetes.io/os: linux}` to keep the old shape.
 7. Verify (see *Post-Upgrade Verification*).
 
+Run the block in bash or zsh: it uses brace expansion. Set `VERSION` to the
+chart release you are migrating to (the tag without its `v`).
+
 ```bash
 NS=krakend-operator-system
+VERSION=x.y.z   # replace with the release you are migrating to
 kubectl delete validatingwebhookconfiguration krakend-operator-validating-webhook-configuration --ignore-not-found
 kubectl -n "$NS" delete --ignore-not-found \
   deployment/krakend-operator-controller-manager \
@@ -3186,22 +3190,25 @@ kubectl -n "$NS" delete --ignore-not-found \
   serviceaccount/krakend-operator-controller-manager \
   role/krakend-operator-leader-election-role rolebinding/krakend-operator-leader-election-rolebinding \
   certificates.cert-manager.io/krakend-operator-serving-cert issuers.cert-manager.io/krakend-operator-selfsigned-issuer
-# Only if you enabled the overlays. The ServiceMonitor needs the prometheus-operator
-# CRDs, so it is a separate command: a missing type does not fail the others.
+# Only if you enabled the overlays. The ServiceMonitor delete runs only where the
+# prometheus-operator CRDs exist, so a cluster without them skips it.
 kubectl -n "$NS" delete --ignore-not-found networkpolicy/krakend-operator-allow-metrics-traffic
-kubectl -n "$NS" delete --ignore-not-found servicemonitors.monitoring.coreos.com/krakend-operator-controller-manager-metrics-monitor
+if kubectl get crd servicemonitors.monitoring.coreos.com >/dev/null 2>&1; then
+  kubectl -n "$NS" delete --ignore-not-found servicemonitors.monitoring.coreos.com/krakend-operator-controller-manager-metrics-monitor
+fi
 # Only after the Certificate is gone. Otherwise cert-manager can reissue the
 # Secret, and the reissued Secret carries no owner reference.
 kubectl -n "$NS" delete --ignore-not-found secret/webhook-server-cert
 kubectl delete --ignore-not-found clusterrolebinding krakend-operator-manager-rolebinding krakend-operator-metrics-auth-rolebinding
 kubectl delete --ignore-not-found clusterrole krakend-operator-manager-role krakend-operator-metrics-auth-role krakend-operator-metrics-reader \
   krakend-operator-krakend{gateway,endpoint,backendpolicy,autoconfig}-{admin,editor,viewer}-role
-# Helm skips CRDs that already exist: apply this release's CRDs first, from a
-# checkout of the tag v<version> (or use the raw URLs in *CRD Upgrades*).
-kubectl apply --server-side -f charts/krakend-operator/crds/
+# Helm skips CRDs that already exist: apply this release's CRDs first, from its tag.
+for crd in krakendgateways krakendendpoints krakendbackendpolicies krakendautoconfigs; do
+  kubectl apply --server-side -f "https://raw.githubusercontent.com/MyCarrier-DevOps/KrakenD-Operator/v$VERSION/charts/krakend-operator/crds/gateway.krakend.io_$crd.yaml"
+done
 helm repo add krakend-operator https://mycarrier-devops.github.io/KrakenD-Operator
 helm repo update
-helm install krakend-operator krakend-operator/krakend-operator -n "$NS" --version <version> \
+helm install krakend-operator krakend-operator/krakend-operator -n "$NS" --version "$VERSION" \
   --set replicaCount=1 --set-string 'nodeSelector.kubernetes\.io/os=linux'
 ```
 
