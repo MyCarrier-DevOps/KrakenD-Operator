@@ -52,7 +52,7 @@ func metricsServerOptions(
 	opts := metricsserver.Options{BindAddress: addr, SecureServing: secure, TLSOpts: tlsOpts}
 	if secure {
 		// Only authorized users and service accounts can read the metrics; the
-		// RBAC lives in config/rbac. More info:
+		// RBAC is in the chart's templates/metrics-rbac.yaml. More info:
 		// https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.21.0/pkg/metrics/filters#WithAuthenticationAndAuthorization
 		opts.FilterProvider = filters.WithAuthenticationAndAuthorization
 	}
