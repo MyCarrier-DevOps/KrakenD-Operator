@@ -3163,6 +3163,8 @@ func TestGatewayReconcile_AFailedServiceAccountStepStillMirrorsALostAvailability
 		wantEvents int
 	}{
 		{"the Deployment lost its availability", a, lostAvailability, "MinimumReplicasUnavailable", 0},
+		{"a new config waits and the Deployment lost its availability", b, lostAvailability,
+			"MinimumReplicasUnavailable", 0},
 		{"the Deployment exceeded its progress deadline", a, pastDeadline, v1alpha1.ReasonRolloutFailed, 1},
 		{"a new config waits and the Deployment exceeded its progress deadline", b, pastDeadline,
 			v1alpha1.ReasonRolloutFailed, 1},
