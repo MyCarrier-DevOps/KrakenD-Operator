@@ -1355,9 +1355,10 @@ publish) is the only code that decides the applied config
 then always runs. It converges the ServiceAccount, Service, PDB, Deployment,
 HPA, post-restart Job and optional resources on the *applied* config, so a
 rejected or unjudged render never stops drift correction. The Deployment is
-created only once a config has been applied, and is left as it is only while
-no ConfigMap holds the applied config or a plugin ConfigMap is missing. The
-rest of the gateway status is written once, after both stages.
+created only once a config has been applied, and is left as it is while no
+ConfigMap holds the applied config, a plugin ConfigMap is missing, or the
+gateway does not control its ServiceAccount (see *Taking over existing
+objects*). The rest of the gateway status is written once, after both stages.
 
 The applied config is recorded before anything acts on it. Right after a
 render is published, the config stage writes `status.configChecksum` and
@@ -1374,14 +1375,15 @@ config. Until the Deployment moves on, that stored status reads as a rollout
 under way (`Progressing=True`, reason `ConfigDeployed`), so `Ready` is not
 `True` beside the new checksum. It reads `False` and `Deploying`, or whichever
 higher-ranked condition applies (for example `Degraded` on a CE fallback, or
-`Error` for `Available=False`, a missing plugin ConfigMap or a refused
-ServiceAccount). A pass whose Deployment step fails, or whose ServiceAccount
-step fails without a refusal, keeps `Ready` not `True` for as long as the
+`Error` for `Available=False`, a missing plugin ConfigMap, or a refused
+ServiceAccount or Deployment). A pass whose Deployment step or ServiceAccount
+step fails without a refusal keeps `Ready` not `True` for as long as the
 Deployment is missing or mounts the older config; the reason can change to
-`DeploymentUpdated` when an image, plugin or license change is also pending. If the
-Deployment loses its availability only after that record was stored, the gateway
-keeps reading `Deploying` until the failing step recovers; `Ready` is never
-`True`.
+`DeploymentUpdated` when an image, plugin or license change is also pending.
+If the Deployment loses its availability only after that record was stored,
+the gateway keeps reading `Deploying` until the failing step recovers; `Ready`
+is never `True`. The end of a pass raises no `Progressing` for a refused
+Deployment: nothing rolls it, and `ResourcesControlled=False` reports it.
 
 A pass that applies nothing also guards the other direction. When the
 Deployment carries a config checksum other than the cached gateway's, it reads
@@ -1397,22 +1399,40 @@ already exist. `applyOwned` (and the Deployment write) decide on the object as
 fetched, inside the `CreateOrUpdate` mutate function and before the builder
 rewrites its labels: the gateway writes it only if it already controls it, or
 it has no controller and carries the instance and managed-by labels the
-operator's own builder stamps on that kind (`app.kubernetes.io/instance=<gateway>`
-for every kind but the Dragonfly, whose instance is `<gateway>-dragonfly`, and
+operator's own builder stamps on that kind
+(`app.kubernetes.io/instance=<gateway>` for every kind but the Dragonfly,
+whose instance is `<gateway>-dragonfly`, and
 `app.kubernetes.io/managed-by=krakend-operator`). Each call site passes its
 kind's pair, and the `notControlledError` carries it into the condition's
-message. Those labels are the hand-over, since only someone who can write the object can
-set them, and an object left by `kubectl delete --cascade=orphan` still carries
-them. Anything else is refused with a `notControlledError` and left untouched:
-an object another controller owns, and an unlabelled object nothing owns. The
-pods run as the ServiceAccount named like the gateway, so a refused
-ServiceAccount holds the Deployment and the post-restart Job. The infrastructure
-stage turns the refusals of a pass into the `ResourcesControlled` condition
-(`False` with reason `ResourceNotControlled`, naming each object, its controller
-and the remedy), which `Ready` folds in the way it folds `PluginsResolved`. The
-decision is made on the exact version the write would replace, so a stale cache
-read cannot bypass it: a missed object fails the create with `AlreadyExists`, and
-a stale controlled or labelled read fails the update on its `resourceVersion` whenever the write changes anything.
+message. Those labels are the hand-over, since only someone who can write the
+object can set them, and an object left by `kubectl delete --cascade=orphan`
+still carries them. Anything else is refused with a `notControlledError` and
+not written: an object another controller owns, and an unlabelled object
+nothing owns. The pods run as the ServiceAccount named like the gateway, so a
+refused ServiceAccount holds the Deployment and the post-restart Job. The
+infrastructure stage turns the refusals of a pass into the
+`ResourcesControlled` condition (`False` with reason `ResourceNotControlled`,
+naming each object, its controller and the remedy), which `Ready` folds in the
+way it folds `PluginsResolved`. The decision is made on the exact version the
+write would replace, so a stale cache read cannot bypass it: a missed object
+fails the create with `AlreadyExists`, and a stale controlled or labelled read
+fails the update on its `resourceVersion` whenever the write changes anything.
+
+Two children name a sibling, and follow its refusal. The HPA scales the
+Deployment named like the gateway: while the Deployment step refuses that
+Deployment, the HPA is not written, and one the gateway controls is deleted.
+The VirtualService routes to the Service named like the gateway: while the pass
+refuses that Service, the VirtualService is not written, one the gateway
+controls is deleted, and `IstioConfigured` is `False` with reason
+`ResourceNotControlled`. A refused Deployment raises no `Progressing`, and
+config ConfigMaps are still collected beside it, since the config stage keeps
+publishing one per applied config while the refusal lasts.
+`detectDragonflyState` applies the same rule to the Dragonfly it reads before
+the render: a refused one reads `DragonflyReady=False`
+(`ResourceNotControlled`), its address is not published in
+`status.dragonflyAddress`, and the render points no Redis pool at it, falling
+back to `spec.redis` as when the CRD is missing. That changes the rendered
+config and its checksum.
 
 ### Conflict reporting
 
@@ -1842,10 +1862,10 @@ A config ConfigMap is garbage-collected once nothing can mount it. The
 operator keeps the three most recently created revisions, the applied one
 included (revisions created in the same second are ordered by name), and any
 revision a live ReplicaSet (one with or wanting pods) still mounts. While the
-Deployment is held (a plugin ConfigMap is missing, or another controller owns
-the ServiceAccount) collection still runs, and also keeps the revision the
-held Deployment's template mounts. ReplicaSets are read uncached, and only
-when there is something to collect.
+Deployment is held (a plugin ConfigMap is missing, or the gateway does not
+control the ServiceAccount) or refused, collection still runs; a hold also
+keeps the revision the held Deployment's template mounts. ReplicaSets are read
+uncached, and only when there is something to collect.
 Old revisions keep whatever the rendered config embeds, credentials included,
 so a credential embedded in the rendered config outlives its rotation by up to
 two config changes, or for as long as a hold keeps the Deployment on the old
@@ -2151,9 +2171,10 @@ gateway is requeued with backoff, and kstatus and Flux report it as in
 progress, not current, until the error clears. A rejected config, an
 unavailable validator and a missing plugin ConfigMap are verdicts on the
 current generation and do not hold it back. The infrastructure stage attempts
-every independent child and joins the errors; the post-restart Job, ConfigMap
-collection and the deletion of an unwanted HPA wait for a successful
-Deployment step.
+every independent child and joins the errors; the post-restart Job and the
+deletion of an unwanted HPA wait for a successful Deployment step, and
+ConfigMap collection runs after it, on a plugin or ServiceAccount hold, and
+beside a refused Deployment.
 
 ### Gateway Status Conditions
 
@@ -2168,8 +2189,8 @@ Deployment step.
 | `CEFallbackApplied` | The applied config is the CE-fallback render (reason `EEFeaturesStripped`); the message lists the Enterprise-only features it removed. Absent otherwise |
 | `PluginsResolved` | Every plugin ConfigMap the gateway mounts exists (`ConfigMapsFound`), or `False`/`ConfigMapNotFound` naming the missing ones, while the Deployment is held. Absent without ConfigMap plugin sources |
 | `ResourcesControlled` | `True` (`ResourcesControlled`) when no object the gateway wrote this pass was refused (the condition keeps its last value while the pass failed otherwise or held the Deployment); `False` (`ResourceNotControlled`) naming each existing object it leaves alone (kind, `<namespace>/<name>`, its controller if any) and the remedy |
-| `DragonflyReady` | Dragonfly CR status reports `ready` phase (watched from Dragonfly Operator); `False`/`CRDNotInstalled` when the feature is enabled but its CRD is not installed |
-| `IstioConfigured` | VirtualService was successfully created/updated; `False`/`CRDNotInstalled` when the feature is enabled but its CRD is not installed |
+| `DragonflyReady` | Dragonfly CR status reports `ready` phase (watched from Dragonfly Operator); `False`/`CRDNotInstalled` when the feature is enabled but its CRD is not installed; `False`/`ResourceNotControlled` when the Dragonfly named like the gateway's is one the gateway refuses (nothing is rendered for it) |
+| `IstioConfigured` | VirtualService was successfully created/updated; `False`/`CRDNotInstalled` when the feature is enabled but its CRD is not installed; `False`/`ResourceNotControlled` while the gateway refuses the Service named like it (no VirtualService is written, and the one the gateway controls is deleted) |
 | `LicenseSecretUnavailable` | `True` while the license cannot be read: the ExternalSecret failed to sync, the referenced Secret (`secretRef`) or its key does not exist, or the certificate does not parse. `LicenseValid` is `Unknown` meanwhile, unless the last known expiry (`status.licenseExpiry`) is already inside the safety buffer or past, in which case the stage verdict applies. `False` with reason `SecretAvailable` once it can be read; `True`/`CRDNotInstalled` when the license comes from an ExternalSecret whose CRD is not installed |
 | `LicenseExpired` | License has expired or is inside the 1 h safety buffer (reason `LicenseExpired` or `LicensePreExpiry`), whether or not `fallbackToCE` is set; without `fallbackToCE` (no `LicenseDegraded`) the gateway reports phase `Error`, and its pods self-terminate at T-0. `False` with reason `LicenseRestored` after recovery, and absent otherwise |
 | `Progressing` | A rolling deployment is in progress. It is derived from the Deployment the reconcile just wrote, not from the detection of a change: it is `True` when the Deployment was created, the write changed its pod template (annotated or not), the template is not the wanted one, or old pods remain beside updated ones (`updatedReplicas < replicas`). A replica change alone (an HPA scale) is not a rollout. The reason is the detected change (`ConfigDeployed` or `DeploymentUpdated`), else the reason already reported, else `DeploymentUpdated`. It ends (`RolloutComplete`) only when the Deployment has observed the change, its pods carry the applied config checksum, image, plugin checksum and license checksum and mount the applied config's ConfigMap, and every replica is updated and available. A pass that holds the Deployment starts no rollout and never raises it |
