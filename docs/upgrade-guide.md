@@ -828,10 +828,12 @@ kubectl patch <kind>/<name> -n <ns> --subresource=status --type=json \
 - New `Ready` condition. The first matching rule gives its value:
   `ConfigValid=False` (its reason), license expired without CE fallback
   (`LicenseExpiredNoFallback`), a missing plugin ConfigMap
-  (`PluginsResolved=False`, `ConfigMapNotFound`), `Available=False` (e.g.
-  `RolloutFailed`), CE fallback (`EEFeaturesStripped` while the applied
-  config is the fallback render, otherwise `LicenseFallbackCE`), no
-  configuration validated yet
+  (`PluginsResolved=False`, `ConfigMapNotFound`), an existing object the
+  gateway will not take over (`ResourcesControlled=False`,
+  `ResourceNotControlled`; see *The OLM bundle matches the kustomize
+  install*), `Available=False` (e.g. `RolloutFailed`), CE fallback
+  (`EEFeaturesStripped` while the applied config is the fallback render,
+  otherwise `LicenseFallbackCE`), no configuration validated yet
   (`Unknown`/`Pending`), a configuration that could not be validated
   because the validator was unavailable (`Unknown`/`ValidatorUnavailable`;
   the phase stays at the serving phase: `Pending` before any rollout,
@@ -894,14 +896,16 @@ kubectl patch <kind>/<name> -n <ns> --subresource=status --type=json \
 - A policy that fails `krakend check` on its own now reads `Ready=False`,
   reason `PolicyInvalid`, with the policy's own output in the message, and a
   Warning event when it turns invalid. After the upgrade, policies that were
-  already failing alone change to `False` on the first reconcile (each policy
-  is checked once per operator start); list them with `kubectl get krakendbackendpolicy -A` and its
-  `Ready` column.
+  already failing alone change to `False` on the first reconcile. Each policy
+  is checked once per operator start while the memo holds its verdict (the
+  256 most recent policy contents); one evicted from it is checked again on
+  its next reconcile. List them with `kubectl get krakendbackendpolicy -A` and
+  its `Ready` column.
 - When `krakend check` cannot run for a policy (no binary, a run that timed
   out, or the operator stopping while it waits for a check slot, which only
   delays the check otherwise), `Ready` is `Unknown` with reason
-  `ValidatorUnavailable` and the reconcile retries with backoff. It is never reported as the policy's
-  failure.
+  `ValidatorUnavailable` and the reconcile retries with backoff. It is never
+  reported as the policy's failure.
 - New `status.observedGeneration`.
 - The Warning event for a policy with a field out of range now uses the
   condition's reason (`InvalidCircuitBreaker`, `InvalidRateLimit`) instead of
@@ -1123,9 +1127,9 @@ mount it. The operator keeps:
 - any revision mounted by a ReplicaSet of the gateway's Deployment that
   still has or wants pods;
 - the revision the Deployment's pod template mounts, which matters while the
-  Deployment is held (a missing plugin ConfigMap, or a ServiceAccount another
-  controller owns): collection still runs then, so a long hold does not pile
-  up revisions.
+  Deployment is held (a missing plugin ConfigMap, or a ServiceAccount the
+  gateway does not control): collection still runs then, and beside a refused
+  Deployment too, so a long hold or refusal does not pile up revisions.
 
 Old revisions keep whatever the rendered config embeds, credentials
 included. A revision is kept for up to three config changes, plus any a live
@@ -2499,6 +2503,19 @@ reports it.
 - A refused Service, PodDisruptionBudget or HorizontalPodAutoscaler is left
   alone while the rest is reconciled. A refused Deployment is left alone and
   the post-restart Job waits for it.
+- What points at a refused object by name is held with it. While the
+  Deployment step refuses the Deployment, the gateway writes no
+  HorizontalPodAutoscaler and deletes the one it controls, so an HPA does not
+  scale somebody else's Deployment; old config ConfigMaps are still collected,
+  and the configs applied meanwhile raise no `Progressing`. While the Service
+  is refused, the gateway writes no VirtualService and deletes the one it
+  controls (`IstioConfigured=False`, reason `ResourceNotControlled`), so the
+  gateway's hosts are not routed to somebody else's pods.
+- A refused Dragonfly is not reported ready (`DragonflyReady=False`, reason
+  `ResourceNotControlled`), `status.dragonflyAddress` is cleared, and the
+  rendered Redis pool does not point at it: the render falls back to
+  `spec.redis`, as when the Dragonfly CRD is missing. The rendered config
+  changes, and so does its checksum.
 - The refusal returns an error, like any other failed child, and the reconcile
   is retried with backoff. Nothing watches an object the gateway does not
   control, so after you label one, edit the gateway or restart the operator to
@@ -2984,13 +3001,13 @@ their paths differ in shape no longer fail the gateway's check. Examples:
   those endpoints fails both ways, or, for a gateway update, when the stored
   root fails on its own. A decision that cannot finish within the budget
   stays undecided too: many endpoints that lost an entry (judged first), a
-  policy write whose stored policy fails on its own (every endpoint that uses
-  it is judged first), or many distinct policies not yet checked since a
-  restart. In those cases, as when a check cannot run, the budget running out
-  before any broken endpoint is found is a `500 Internal Error`. Retrying
-  helps only with a cold memo or endpoints that are about to be recorded as
-  excluded; otherwise resolve the clashes in `status.conflicts` or fix the
-  policy.
+  policy write whose stored policy fails on its own, or a gateway update whose
+  endpoints use such a policy (every endpoint that uses it is judged first),
+  or many distinct policies not yet checked since a restart. In those cases,
+  as when a check cannot run, the budget running out before any broken
+  endpoint is found is a `500 Internal Error`. Retrying helps only with a cold
+  memo or endpoints that are about to be recorded as excluded; otherwise
+  resolve the clashes in `status.conflicts` or fix the policy.
 - A policy or gateway write that is admitted with a warning can still lead to
   `CombinedConfigInvalid`. Both check the endpoints that already fail on their
   own before they check the endpoints together. So while an endpoint that
@@ -3021,10 +3038,10 @@ their paths differ in shape no longer fail the gateway's check. Examples:
     checks for each endpoint judged first (those the stored render masked and
     those that use a policy failing on its own: every endpoint that uses the
     policy when a policy write's stored policy fails on its own). Naming the
-    endpoints costs about 0.1 s per served endpoint, one after another, so the 12 s admission budget names roughly 80-110 of
-    them: on a gateway of several hundred served endpoints the denial names
-    those the scan reached and counts the rest. Waiting for a validation slot
-    can delay a request too.
+    endpoints costs about 0.1 s per served endpoint, one after another, so the
+    12 s admission budget names roughly 80-110 of them: on a gateway of several
+    hundred served endpoints the denial names those the scan reached and
+    counts the rest. Waiting for a validation slot can delay a request too.
 
 ### Known limits
 
