@@ -181,6 +181,46 @@ func TestGatewayReconcile_AFailedDeploymentWriteStillWritesTheHPA(t *testing.T) 
 	}
 }
 
+// The VirtualService routes to the Service named like the gateway. While the
+// gateway refuses that Service, the VirtualService would publish somebody
+// else's pods on the gateway's hosts, so it is not written, and
+// IstioConfigured says why.
+func TestGatewayReconcile_NoVirtualServiceForARefusedService(t *testing.T) {
+	for name, also := range map[string]func(gw *v1alpha1.KrakenDGateway) []client.Object{
+		"the Service": func(*v1alpha1.KrakenDGateway) []client.Object { return nil },
+	} {
+		t.Run(name, func(t *testing.T) {
+			gw := reconciledGateway()
+			gw.Spec.Istio = &v1alpha1.IstioSpec{
+				Enabled: true, Hosts: []string{"public.example.com"}, Gateways: []string{"istio-system/public"},
+			}
+			victim := &corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace},
+				Spec:       corev1.ServiceSpec{Selector: map[string]string{"app": "victim-db-admin"}},
+			}
+			c := fakeClientBuilder().WithRESTMapper(optionalCRDMapper(virtualServiceGVK)).
+				WithObjects(append(also(gw), gw, victim)...).WithStatusSubresource(gw).Build()
+			r := acceptanceReconciler(c, fakeRecorder(),
+				&renderer.RenderOutput{JSON: []byte(`{"version":3}`), Checksum: "cs1"})
+
+			if err := reconcileGateway(t, r, gw); len(notControlledIn(err)) == 0 {
+				t.Fatalf("err = %v, want the Service's refusal", err)
+			}
+
+			vs := &unstructured.Unstructured{}
+			vs.SetGroupVersionKind(virtualServiceGVK)
+			if err := c.Get(t.Context(), client.ObjectKeyFromObject(gw), vs); !apierrors.IsNotFound(err) {
+				t.Errorf("VirtualService get err = %v, want NotFound: it routes %v to the refused Service",
+					err, vs.Object["spec"])
+			}
+			cond := meta.FindStatusCondition(getGateway(t, c, gw).Status.Conditions, v1alpha1.ConditionIstioConfigured)
+			if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != v1alpha1.ReasonResourceNotControlled {
+				t.Errorf("IstioConfigured = %+v, want False/ResourceNotControlled", cond)
+			}
+		})
+	}
+}
+
 // What the gateway controls, or an object orphaned from it that still carries
 // its selector labels, is written as always; an object of an optional kind
 // that nothing controls and that lacks the labels is not, and the caller can
