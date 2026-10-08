@@ -7,6 +7,7 @@ This directory contains the operator source code, built with [Operator SDK](http
 - Go 1.26+
 - Docker or Podman
 - kubectl configured for a Kubernetes 1.33+ cluster
+- helm 3 or 4 (the end-to-end tests render the chart)
 - operator-sdk v1.42+
 
 ## Project Layout
@@ -38,7 +39,7 @@ make bundle                 # Generate OLM bundle
 
 ```bash
 go test -race ./internal/... ./api/... ./cmd/...   # Unit tests
-make test-e2e                                       # End-to-end tests (requires Kind)
+make test-e2e                                       # End-to-end tests (needs a container runtime, kubectl and helm; starts K3s through testcontainers)
 ```
 
 ## Linting
