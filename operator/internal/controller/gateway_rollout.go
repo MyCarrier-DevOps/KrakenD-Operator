@@ -38,6 +38,10 @@ type deploymentObservation struct {
 	// but the cache then describes the Deployment from before the write, so
 	// nothing about the rollout can be judged from it.
 	failed bool
+	// refused: the step failed because the Deployment named like the gateway
+	// is one the gateway does not control (refuseUncontrolled). failed is set
+	// too.
+	refused bool
 	// unreconciled: the ServiceAccount step failed without a refusal, so the
 	// Deployment step did not run. Unlike failed, the cache still describes the
 	// Deployment as it is, so it is read like on a hold.
