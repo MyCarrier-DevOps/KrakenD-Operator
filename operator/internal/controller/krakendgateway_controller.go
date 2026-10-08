@@ -1528,7 +1528,7 @@ func (r *KrakenDGatewayReconciler) reconcileDeployment(
 	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace}}
 	var before *corev1.PodTemplateSpec
 	result, err := controllerutil.CreateOrUpdate(ctx, r.Client, dep, func() error {
-		if err := refuseUncontrolled(gw, dep, "deployment", resources.SelectorLabels(gw)); err != nil {
+		if err := refuseUncontrolledDeployment(gw, dep); err != nil {
 			return err
 		}
 		before = dep.Spec.Template.DeepCopy()
@@ -1558,6 +1558,12 @@ func (r *KrakenDGatewayReconciler) reconcileDeployment(
 	return deploymentObservation{
 		dep: dep, created: result == controllerutil.OperationResultCreated, templateChanged: changed,
 	}, nil
+}
+
+// refuseUncontrolledDeployment is refuseUncontrolled for the Deployment named
+// like the gateway, which the gateway's selector labels hand over.
+func refuseUncontrolledDeployment(gw *v1alpha1.KrakenDGateway, dep *appsv1.Deployment) error {
+	return refuseUncontrolled(gw, dep, "deployment", resources.SelectorLabels(gw))
 }
 
 // reconcilePostRestartJob creates a Job to run the user-provided bash script
