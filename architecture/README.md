@@ -1378,7 +1378,10 @@ higher-ranked condition applies (for example `Degraded` on a CE fallback, or
 ServiceAccount). A pass whose Deployment step fails, or whose ServiceAccount
 step fails without a refusal, keeps `Ready` not `True` for as long as the
 Deployment is missing or mounts the older config; the reason can change to
-`DeploymentUpdated` when an image, plugin or license change is also pending.
+`DeploymentUpdated` when an image, plugin or license change is also pending. If the
+Deployment loses its availability only after that record was stored, the gateway
+keeps reading `Deploying` until the failing step recovers; `Ready` is never
+`True`.
 
 A pass that applies nothing also guards the other direction. When the
 Deployment carries a config checksum other than the cached gateway's, it reads
