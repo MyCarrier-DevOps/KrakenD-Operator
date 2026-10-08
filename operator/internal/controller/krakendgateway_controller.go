@@ -1456,6 +1456,11 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 		}
 		errs = append(errs, r.reconcileDragonfly(ctx, gw), r.reconcileExternalSecret(ctx, gw),
 			r.reconcileVirtualService(ctx, gw, serviceRefused))
+		// The HPA waits for the Deployment step, except that one scaling a
+		// Deployment the gateway does not control is deleted on this hold too.
+		if in.deploymentForeign {
+			errs = append(errs, r.reconcileHPA(ctx, gw, in, deploymentObservation{}))
+		}
 		// A failure that is not a refusal is marked unreconciled, so the
 		// status still owes the rollout; a refusal is reported by
 		// ResourcesControlled, which outranks Progressing.
