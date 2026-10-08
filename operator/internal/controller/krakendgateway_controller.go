@@ -1367,7 +1367,7 @@ func (r *KrakenDGatewayReconciler) reconcileDeploymentUnlessHeld(
 	default:
 		obs, err = r.reconcileDeployment(ctx, gw, in)
 		if err != nil {
-			return deploymentObservation{failed: true}, nil, err
+			return deploymentObservation{failed: true, refused: len(notControlledIn(err)) > 0}, nil, err
 		}
 		// The template now mounts in.configMapName.
 		gcErr = r.collectConfigMaps(ctx, gw, in.configMapName, "")
@@ -1426,7 +1426,7 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 	}
 
 	obs, gcErr, deploymentErr := r.reconcileDeploymentUnlessHeld(ctx, gw, in)
-	errs = append(errs, deploymentErr, gcErr, r.reconcileHPA(ctx, gw, deploymentErr == nil))
+	errs = append(errs, deploymentErr, gcErr, r.reconcileHPA(ctx, gw, obs))
 	if deploymentErr == nil {
 		// Only after the Deployment has rolled out the applied config, image
 		// and plugins. Jobs are idempotent by name so each unique config
@@ -1467,17 +1467,21 @@ func (r *KrakenDGatewayReconciler) reconcileCoreResources(
 }
 
 // reconcileHPA creates or updates the HorizontalPodAutoscaler when
-// autoscaling is configured. Otherwise one the gateway controls is deleted, but
-// only once the Deployment reconciled: it is the Deployment that carries the
+// autoscaling is configured. The HPA scales the Deployment named like the
+// gateway, so while the Deployment step refused that Deployment (obs.refused)
+// no HPA is written. Otherwise one the gateway controls is deleted, but only
+// once the Deployment reconciled: it is the Deployment that carries the
 // replica count the HPA stops managing.
 func (r *KrakenDGatewayReconciler) reconcileHPA(
-	ctx context.Context, gw *v1alpha1.KrakenDGateway, deploymentReconciled bool,
+	ctx context.Context, gw *v1alpha1.KrakenDGateway, obs deploymentObservation,
 ) error {
 	hpa := &autoscalingv2.HorizontalPodAutoscaler{ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: gw.Namespace}}
 	switch {
+	case obs.refused:
+		return nil
 	case gw.Spec.Autoscaling != nil:
 		return r.applyOwned(ctx, gw, hpa, "hpa", resources.SelectorLabels(gw), func() { resources.BuildHPA(hpa, gw) })
-	case deploymentReconciled:
+	case !obs.failed:
 		return r.deleteIfControlled(ctx, r.Client, gw, hpa)
 	}
 	return nil
