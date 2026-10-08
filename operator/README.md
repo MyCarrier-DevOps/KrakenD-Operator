@@ -21,7 +21,8 @@ internal/
   resources/    Kubernetes resource builders (Deployment, ConfigMap, Service, etc.)
   webhook/      Validating and mutating webhooks
   util/         Shared utilities (conditions, labels)
-config/         Kustomize manifests (CRDs, RBAC, manager, samples)
+config/         Generated CRDs (crd/bases), the manager ClusterRole (rbac/role.yaml) and the webhook
+                configuration (webhook/manifests.yaml), plus sample CRs
 ```
 
 ## Building
@@ -47,8 +48,8 @@ golangci-lint run -c ../.github/.golangci.yml
 
 ## Flags
 
-The manager binary (`cmd/main.go`) takes these flags. The chart and the
-kustomize manifests set the ones they need.
+The manager binary (`cmd/main.go`) takes these flags. The chart sets the
+ones it needs.
 
 | Flag | Default | Purpose |
 |------|---------|---------|
@@ -72,7 +73,7 @@ to write before it writes them. Every other check still runs: schema,
 references, the audience rule, the entry rules and duplicate routes. Writes from any other user, writes to endpoints
 without an AutoConfig controller, and every other kind get the full check.
 
-The Helm chart and `config/manager/manager.yaml` set `POD_NAMESPACE`
+The Helm chart sets `POD_NAMESPACE`
 (`fieldRef: metadata.namespace`) and `POD_SERVICE_ACCOUNT`
 (`fieldRef: spec.serviceAccountName`) from the downward API, so the default is
 the pod's own ServiceAccount, whatever the release or name prefix. A custom
@@ -84,15 +85,17 @@ render check for AutoConfig endpoint writes from` shows the username in use.
 ## Running Locally
 
 ```bash
-make install    # Install CRDs into the current cluster
+make install    # Install the CRDs into the current cluster with kubectl
 make run        # Run the operator outside the cluster
 ```
 
 ## Deploying
 
 ```bash
-make deploy IMG=ghcr.io/mycarrier-devops/krakend-operator:latest
-make undeploy   # Remove the operator
+helm upgrade --install krakend-operator ../charts/krakend-operator \
+  -n krakend-operator-system --create-namespace \
+  --set image.repository=ghcr.io/mycarrier-devops/krakend-operator --set image.tag=<tag>
+helm uninstall krakend-operator -n krakend-operator-system   # Leaves the CRDs
 ```
 
 ## License
