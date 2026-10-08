@@ -3063,7 +3063,9 @@ func TestGatewayReconciler_CreatesOwnedResources(t *testing.T) {
 
 **Location:** `test/e2e/`
 
-E2E tests run against an ephemeral K3s cluster (testcontainers) with all CRDs installed and the operator running. The suite installs the operator from the Helm chart: it renders the chart with `helm template --kube-version 1.33.0 --include-crds`, applies the result with `kubectl apply --server-side` and waits for the Deployment to roll out. It does not use `helm install`, because the chart refuses Kubernetes older than 1.33, the K3s version is 1.32 (rootless podman needs it), and `helm install` reads the version from the cluster and has no flag to override it. The chart has no hooks, so the two are equivalent:
+E2E tests run against an ephemeral K3s cluster (testcontainers) with all CRDs installed and the operator running. The suite installs the operator from the Helm chart: it renders the chart with `helm template --kube-version 1.33.0 --include-crds`, applies the result with `kubectl apply --server-side` and waits for the Deployment to roll out. It does not use `helm install`, because the chart refuses Kubernetes older than 1.33, the K3s version is 1.32 (rootless podman needs it), and `helm install` reads the version from the cluster and has no flag to override it. The chart has no hooks, so the two are equivalent.
+
+A lifecycle spec covers:
 
 ```go
 func TestE2E_FullGatewayLifecycle(t *testing.T) {
