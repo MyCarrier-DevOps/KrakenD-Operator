@@ -160,6 +160,27 @@ func TestGatewayReconcile_DeletesItsHPAWhileTheDeploymentIsRefused(t *testing.T)
 	}
 }
 
+// Nothing rolls a refused Deployment, which is somebody else's: a newly applied
+// config raises no Progressing beside it. ResourcesControlled reports the
+// refusal instead.
+func TestGatewayReconcile_ARefusedDeploymentRaisesNoProgressing(t *testing.T) {
+	gw := reconciledGateway()
+	c := fakeClientBuilder().WithObjects(gw, foreignDeployment(gw)).WithStatusSubresource(gw).Build()
+	r := acceptanceReconciler(c, fakeRecorder(), &renderer.RenderOutput{JSON: []byte(`{"version":3}`), Checksum: "cs1"})
+
+	if err := reconcileGateway(t, r, gw); len(notControlledIn(err)) != 1 {
+		t.Fatalf("err = %v, want the Deployment's refusal", err)
+	}
+
+	got := getGateway(t, c, gw)
+	if got.Status.ConfigChecksum != "cs1" {
+		t.Fatalf("configChecksum = %q, want the newly applied cs1", got.Status.ConfigChecksum)
+	}
+	if cond := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionProgressing); condTrue(cond) {
+		t.Errorf("Progressing = %+v, want it not raised: nothing rolls the refused Deployment", cond)
+	}
+}
+
 // A Deployment write that fails for another reason refuses nothing: the HPA is
 // written as before.
 func TestGatewayReconcile_AFailedDeploymentWriteStillWritesTheHPA(t *testing.T) {
