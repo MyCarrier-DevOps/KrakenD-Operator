@@ -360,7 +360,8 @@ func TestCommand_WrapsNoMetricsHandlerInOtelHTTP(t *testing.T) {
 	}
 }
 
-// podTerminationGracePeriod is the chart's terminationGracePeriodSeconds.
+// podTerminationGracePeriod is the chart's terminationGracePeriodSeconds,
+// pinned by .github/scripts/chart-render-test.sh.
 const podTerminationGracePeriod = 10 * time.Second
 
 // On SIGTERM the manager stops first and the telemetry flush follows: both fit
