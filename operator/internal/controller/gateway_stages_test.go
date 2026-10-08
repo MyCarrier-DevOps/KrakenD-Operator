@@ -3142,25 +3142,30 @@ func failingServiceAccountCreates(base client.WithWatch) client.Client {
 }
 
 func TestGatewayReconcile_AFailedServiceAccountStepStillMirrorsALostAvailability(t *testing.T) {
-	const a = `{"version":3,"name":"a"}`
+	const a, b = `{"version":3,"name":"a"}`, `{"version":3,"name":"b"}`
 	sumA := hash.SHA256Hex([]byte(a))
+	lostAvailability := func(dep *appsv1.Deployment) {
+		dep.Status.AvailableReplicas, dep.Status.ReadyReplicas = 0, 0
+		dep.Status.Conditions = []appsv1.DeploymentCondition{{
+			Type: appsv1.DeploymentAvailable, Status: corev1.ConditionFalse, Reason: "MinimumReplicasUnavailable",
+		}}
+	}
+	pastDeadline := func(dep *appsv1.Deployment) {
+		dep.Status.Conditions = []appsv1.DeploymentCondition{{
+			Type: appsv1.DeploymentProgressing, Status: corev1.ConditionFalse, Reason: "ProgressDeadlineExceeded",
+		}}
+	}
 	cases := []struct {
 		name       string
+		render     string
 		degrade    func(dep *appsv1.Deployment)
 		wantReady  string
 		wantEvents int
 	}{
-		{"the Deployment lost its availability", func(dep *appsv1.Deployment) {
-			dep.Status.AvailableReplicas, dep.Status.ReadyReplicas = 0, 0
-			dep.Status.Conditions = []appsv1.DeploymentCondition{{
-				Type: appsv1.DeploymentAvailable, Status: corev1.ConditionFalse, Reason: "MinimumReplicasUnavailable",
-			}}
-		}, "MinimumReplicasUnavailable", 0},
-		{"the Deployment exceeded its progress deadline", func(dep *appsv1.Deployment) {
-			dep.Status.Conditions = []appsv1.DeploymentCondition{{
-				Type: appsv1.DeploymentProgressing, Status: corev1.ConditionFalse, Reason: "ProgressDeadlineExceeded",
-			}}
-		}, v1alpha1.ReasonRolloutFailed, 1},
+		{"the Deployment lost its availability", a, lostAvailability, "MinimumReplicasUnavailable", 0},
+		{"the Deployment exceeded its progress deadline", a, pastDeadline, v1alpha1.ReasonRolloutFailed, 1},
+		{"a new config waits and the Deployment exceeded its progress deadline", b, pastDeadline,
+			v1alpha1.ReasonRolloutFailed, 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -3169,22 +3174,32 @@ func TestGatewayReconcile_AFailedServiceAccountStepStillMirrorsALostAvailability
 			dep := settledDeployment(gw, sumA)
 			tc.degrade(dep)
 			base := fakeClientBuilder().WithObjects(gw, dep).WithStatusSubresource(gw).Build().(client.WithWatch)
-			r := newTestGatewayReconciler(base, renderOf(a), &mockValidator{})
+			r := newTestGatewayReconciler(base, renderOf(tc.render), &mockValidator{})
 			r.Client = failingServiceAccountCreates(base)
 			rec := fakeRecorder()
 			r.Recorder = rec
 
-			if err := reconcileGateway(t, r, gw); err == nil {
-				t.Fatal("the failed ServiceAccount step must fail the pass")
-			}
-			stored := getGateway(t, base, gw)
-			ready := meta.FindStatusCondition(stored.Status.Conditions, v1alpha1.ConditionReady)
-			if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != tc.wantReady ||
-				stored.Status.Phase != v1alpha1.PhaseError {
-				t.Errorf("Ready = %+v, phase %q; want False/%s and Error", ready, stored.Status.Phase, tc.wantReady)
+			// Every retry finds the same failure: the status holds and the
+			// transition is reported once.
+			for pass := 1; pass <= 3; pass++ {
+				if err := reconcileGateway(t, r, gw); err == nil {
+					t.Fatalf("pass %d: the failed ServiceAccount step must fail the pass", pass)
+				}
+				stored := getGateway(t, base, gw)
+				if stored.Status.ConfigChecksum != hash.SHA256Hex([]byte(tc.render)) ||
+					mountedConfig(t, base, gw) != resources.ConfigMapName(gw, sumA) {
+					t.Fatalf("pass %d: stored checksum %q, mounted %q; want the render applied and the Deployment on a",
+						pass, stored.Status.ConfigChecksum, mountedConfig(t, base, gw))
+				}
+				ready := meta.FindStatusCondition(stored.Status.Conditions, v1alpha1.ConditionReady)
+				if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != tc.wantReady ||
+					stored.Status.Phase != v1alpha1.PhaseError {
+					t.Errorf("pass %d: Ready = %+v, phase %q; want False/%s and Error",
+						pass, ready, stored.Status.Phase, tc.wantReady)
+				}
 			}
 			if got := eventsWithReason(rec, v1alpha1.ReasonRolloutFailed); got != tc.wantEvents {
-				t.Errorf("RolloutFailed events = %d, want %d", got, tc.wantEvents)
+				t.Errorf("RolloutFailed events over 3 passes = %d, want %d", got, tc.wantEvents)
 			}
 		})
 	}
