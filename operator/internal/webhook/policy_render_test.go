@@ -577,23 +577,61 @@ func TestPolicyAdmission_AChangeThatBreaksNothingOnALargeGatewayIsAdmitted(t *te
 	}
 }
 
-// A policy that fails krakend check on its own, with the written content and
-// the stored one alike, makes its endpoints fail both ways though the stored
-// group passed: the write only warns when the scan finishes, so it is never a
-// 422 when the admission time ends first.
-func TestPolicyAdmission_EndpointsOfAPolicyFailingAloneAreNotDecidedByTheGroup(t *testing.T) {
+// An endpoint that uses a second policy, which fails krakend check on its own,
+// fails with the stored policy too though the stored group passed: the write
+// only warns when the scan finishes, so it is never a 422 when the admission
+// time ends first. The endpoint sorts past what the budget reaches, so only
+// judging the users of the failing policy first keeps the write undecided.
+func TestPolicyAdmission_EndpointsOfAnotherPolicyFailingAloneAreNotDecidedByTheGroup(t *testing.T) {
 	names := make([]string, 300)
 	for i := range names {
 		names[i] = fmt.Sprintf("uses-p-%03d", i)
 	}
 	policyAlone := configcheck.EndpointVerdict{Reason: v1alpha1.ReasonPolicyInvalid, PoliciesFailAlone: true}
-	bad := configcheck.Verdict{Output: "bad"}
 	run := func(delay, deadline time.Duration) (admission.Warnings, error) {
-		// The policy alone, new and stored, the root, the group, the stored
-		// group, then the stored policy alone.
+		q := testPolicy(`{"x":{}}`)
+		q.Name = "q"
+		objs := append(policyUsers(names...), q)
+		user := testEndpoint("zz-user", "/zz")
+		user.Spec.Endpoints[0].Backends[0].PolicyRef = &v1alpha1.PolicyRef{Name: "p"}
+		second := *user.Spec.Endpoints[0].Backends[0].DeepCopy()
+		second.PolicyRef = &v1alpha1.PolicyRef{Name: "q"}
+		user.Spec.Endpoints[0].Backends = append(user.Spec.Endpoints[0].Backends, second)
+		objs = append(objs, user)
+		// The policy alone (new), the root, the group, the stored group, then q
+		// alone, and p alone as stored.
 		chk := &scriptedChecker{delay: delay,
-			verdicts:         []configcheck.Verdict{bad, bad, {OK: true}, {Output: "x"}, {OK: true}, bad},
-			endpointVerdicts: []configcheck.EndpointVerdict{policyAlone, policyAlone}}
+			verdicts:   []configcheck.Verdict{{OK: true}, {OK: true}, {Output: "x"}, {OK: true}, {OK: true}, {Output: "q"}},
+			byEndpoint: map[string]configcheck.EndpointVerdict{"zz-user": policyAlone}}
+		ctx, cancel := context.WithTimeout(context.Background(), deadline)
+		defer cancel()
+		return (&PolicyValidator{Client: fakeClient(objs...), Checker: chk}).
+			ValidateUpdate(ctx, testPolicy(`{}`), testPolicy(`{"x":{}}`))
+	}
+
+	warnings, err := run(0, time.Minute)
+	if err != nil || len(warnings) != 1 || !strings.Contains(warnings[0], "already fail validation") {
+		t.Fatalf("complete scan: warnings %q, err %v; want admitted with the already-fail warning", warnings, err)
+	}
+	_, err = run(30*time.Millisecond, 2*time.Second)
+	if err == nil || apierrors.IsInvalid(err) {
+		t.Errorf("scan cut off: err = %v, want a 500: the complete scan admits", err)
+	}
+}
+
+// An endpoint that fails both ways among those judged after the decision
+// withdraws it: a cut-off scan that has seen it is a 500, as the complete scan
+// only warns.
+func TestPolicyAdmission_AnEndpointFailingBothWaysWithdrawsTheDecision(t *testing.T) {
+	names := make([]string, 300)
+	for i := range names {
+		names[i] = fmt.Sprintf("uses-p-%03d", i)
+	}
+	epFail := configcheck.EndpointVerdict{Reason: v1alpha1.ReasonEndpointInvalid}
+	run := func(delay, deadline time.Duration) (admission.Warnings, error) {
+		chk := &scriptedChecker{delay: delay,
+			verdicts:         []configcheck.Verdict{{OK: true}, {OK: true}, {Output: "x"}, {OK: true}},
+			endpointVerdicts: []configcheck.EndpointVerdict{epFail, epFail}}
 		ctx, cancel := context.WithTimeout(context.Background(), deadline)
 		defer cancel()
 		return (&PolicyValidator{Client: fakeClient(policyUsers(names...)...), Checker: chk}).
@@ -607,6 +645,22 @@ func TestPolicyAdmission_EndpointsOfAPolicyFailingAloneAreNotDecidedByTheGroup(t
 	_, err = run(30*time.Millisecond, 2*time.Second)
 	if err == nil || apierrors.IsInvalid(err) {
 		t.Errorf("scan cut off: err = %v, want a 500: the complete scan admits", err)
+	}
+}
+
+// The stored policy that cannot be checked before the decision is a check that
+// cannot run: a 500, never a decision that counts it as passing.
+func TestPolicyAdmission_AStoredPolicyThatCannotBeCheckedBeforeTheDecisionIs500(t *testing.T) {
+	// Calls: the policy alone, the root, the group, the stored group, then the
+	// stored policy alone, which cannot run.
+	chk := &scriptedChecker{err: errors.New("no slot"), failCall: 5, failOnly: true,
+		verdicts: []configcheck.Verdict{{OK: true}, {OK: true}, {Output: "x"}}}
+	v := &PolicyValidator{Client: fakeClient(referencing()...), Checker: chk}
+
+	resp := review(t, v, "alice", testPolicy(`{"x":{}}`), testPolicy(`{}`))
+
+	if resp.Allowed || resp.Result.Code != http.StatusInternalServerError {
+		t.Errorf("response = %+v, warnings %q; want a 500", resp.Result, resp.Warnings)
 	}
 }
 
