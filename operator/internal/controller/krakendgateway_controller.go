@@ -855,9 +855,9 @@ func (r *KrakenDGatewayReconciler) confirmStoredConfig(
 // fails while the Deployment still mounts the older config it keeps the
 // Progressing=True this write stored. If the end-of-pass write is lost, the
 // stored Progressing=True lingers until the rollout converges; on a plugin or
-// ServiceAccount hold that is until the hold ends, and Ready is still right
-// because PluginsResolved=False and ResourcesControlled=False outrank
-// Progressing.
+// ServiceAccount hold, or beside a refused Deployment, that is until the hold
+// or the refusal ends, and Ready is still right because PluginsResolved=False
+// and ResourcesControlled=False outrank Progressing.
 func (r *KrakenDGatewayReconciler) recordApplied(
 	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
@@ -1437,8 +1437,8 @@ func (r *KrakenDGatewayReconciler) reconcileInfrastructure(
 	if !saControlled {
 		// The Deployment and the post-restart Job run as the ServiceAccount
 		// named like the gateway. While the gateway does not control it
-		// (another controller owns it, or it could not be reconciled), both are
-		// held as they are.
+		// (another controller owns it, nothing owns it and it lacks the consent
+		// labels, or it could not be reconciled), both are held as they are.
 		errs = append(errs, fmt.Errorf("holding the Deployment and the post-restart Job: "+
 			"serviceaccount %s/%s is not controlled by gateway %s", gw.Namespace, gw.Name, gw.Name))
 		// The config stage still publishes a ConfigMap per passing render.
@@ -2337,7 +2337,8 @@ type gatewayReadiness struct {
 // gatewayReadinessFor derives a gateway's Ready condition and phase from the
 // conditions the gateway controller maintains. The first rule that applies
 // wins: a rejected configuration, an expired license without CE fallback, a
-// missing plugin ConfigMap, a failed rollout, CE fallback (the removed
+// missing plugin ConfigMap, an existing object the gateway will not take over
+// (ResourcesControlled=False), a failed rollout, CE fallback (the removed
 // features first), no validated configuration yet, a configuration that could
 // not be validated, a rollout in progress, and a Deployment not yet available.
 // The gateway is Ready only when none applies.
