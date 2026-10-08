@@ -10,12 +10,8 @@ helm upgrade krakend-operator krakend-operator/krakend-operator \
   -n krakend-operator-system
 ```
 
-### Via Kustomize
-
-```bash
-cd operator
-make deploy IMG=ghcr.io/mycarrier-devops/krakend-operator:<new-version>
-```
+A cluster installed from the old manifests moves to the chart once; see
+[The Helm chart is the only install path](#unreleased--the-helm-chart-is-the-only-install-path).
 
 ---
 
@@ -133,9 +129,6 @@ make deploy IMG=ghcr.io/mycarrier-devops/krakend-operator:<new-version>
      `krakend check` runs share the container.
    - Metrics scrapes start succeeding once the scraper's ServiceAccount is
      bound to the `<fullname>-metrics-reader` ClusterRole.
-   - OLM installs gain the admission webhooks (`failurePolicy: Fail`), so
-     writes to the four KrakenD kinds are rejected while the operator is
-     unavailable.
 
 ---
 
@@ -160,17 +153,15 @@ kubectl apply -f charts/krakend-operator/crds/
 
 ### RBAC (ClusterRole) copies are generated
 
-The manager's ClusterRole exists in three places, all generated from the
+The manager's ClusterRole exists in two places, both generated from the
 `+kubebuilder:rbac` markers:
 
 - `operator/config/rbac/role.yaml` — `make manifests` (controller-gen);
-- the CSV's `clusterPermissions` (`make bundle`), from the above;
 - `charts/krakend-operator/files/manager-role.yaml` — copied by
   `make manifests`; `templates/clusterrole.yaml` renders its rules.
 
 `make verify-manifests` (the CI `Manifests Drift` job) fails when
-`config/rbac/role.yaml`, the chart copy or the OLM bundle's
-ClusterServiceVersion is stale, and
+`config/rbac/role.yaml` or the chart copy is stale, and
 `TestManagerRoleGrantsOnlyUsedVerbs` fails when the generated role differs
 from the hand-kept table of verbs the controllers use. The integration suite
 runs its manager under that role against K3s, with the VirtualService CRD
@@ -216,13 +207,9 @@ table alone.
 helm rollback krakend-operator -n krakend-operator-system
 ```
 
-### Via Kustomize
-
-Redeploy the previous version:
-
-```bash
-make deploy IMG=ghcr.io/mycarrier-devops/krakend-operator:<previous-version>
-```
+To go back to an earlier chart version without `helm rollback`, run
+`helm upgrade --version <previous-version>`. The chart is the only install path,
+so there is no other route back; older tags still carry their `config/`.
 
 > **Note:** CRD changes cannot be rolled back via Helm. If a CRD schema change is incompatible, restore from backup.
 
@@ -270,20 +257,12 @@ make deploy IMG=ghcr.io/mycarrier-devops/krakend-operator:<previous-version>
 > v0.14.0 needs `update` on ConfigMaps and on `krakendendpoints/status`, and
 > `patch` on `krakendgateways` and `krakendgateways/status` (the Enterprise
 > license monitor). The trimmed ClusterRole grants none of them. `helm rollback` restores the older
-> role together with the older operator. `make deploy IMG=…:<previous>` run
-> from a current checkout applies the trimmed role to the older binary, which
-> then fails with `forbidden: User …`. Check out the previous release's
-> manifests first:
->
-> ```bash
-> git checkout v<previous-version>
-> make deploy IMG=ghcr.io/mycarrier-devops/krakend-operator:<previous-version>
-> ```
->
-> `make deploy` also re-applies that release's CRDs, because `config/default`
-> includes them. With kustomize the older CRD therefore prunes
-> `status.configEdition` on the older operator's next write, as described in
-> the *Gateway reconcile correctness* note above.
+> role together with the older operator, and so does
+> `helm upgrade --version <previous-version>`. Neither restores the older CRDs
+> (Helm does not touch an installed CRD). If the older operator needs them,
+> apply the older release's CRDs with `kubectl apply -f`; the older CRD then
+> prunes `status.configEdition` on the older operator's next write, as
+> described in the *Gateway reconcile correctness* note above.
 
 ---
 
@@ -830,8 +809,8 @@ kubectl patch <kind>/<name> -n <ns> --subresource=status --type=json \
   (`LicenseExpiredNoFallback`), a missing plugin ConfigMap
   (`PluginsResolved=False`, `ConfigMapNotFound`), an existing object the
   gateway will not take over (`ResourcesControlled=False`,
-  `ResourceNotControlled`; see *The OLM bundle matches the kustomize
-  install*), `Available=False` (e.g. `RolloutFailed`), CE fallback
+  `ResourceNotControlled`; see *The gateway no longer takes over objects it
+  does not control*), `Available=False` (e.g. `RolloutFailed`), CE fallback
   (`EEFeaturesStripped` while the applied config is the fallback render,
   otherwise `LicenseFallbackCE`), no configuration validated yet
   (`Unknown`/`Pending`), a configuration that could not be validated
@@ -1714,7 +1693,7 @@ check` per generated operation. Those writes still get the schema, reference,
 audience, duplicate route and entry checks. The operator recognises its own requests by
 `--operator-username`, which defaults to its ServiceAccount
 (`system:serviceaccount:$POD_NAMESPACE:$POD_SERVICE_ACCOUNT`), and the chart
-and the kustomize manifests now set both variables from the downward API.
+now sets both variables from the downward API.
 Custom deployments without those variables must set the flag, or every write
 gets the render check. The username is compared whole, so a user whose name
 only starts with it is not trusted, and an empty value trusts nobody.
@@ -1736,7 +1715,7 @@ does not upgrade CRDs, so with the old CRDs still installed nothing enforces
 them: run the audit, then apply the new CRDs as described in [CRDs: apply them
 before upgrading the operator](#crds-apply-them-before-upgrading-the-operator),
 then upgrade the operator. The chart refuses clusters below
-1.33 (`kubeVersion`), and the OLM bundle's `minKubeVersion` is 1.33.0. With
+1.33 (`kubeVersion`). With
 Helm, use 3.18 or later: older releases default `helm template` and `helm lint`
 to Kubernetes capabilities below 1.33 and refuse the chart unless given
 `--kube-version`.
@@ -2422,9 +2401,8 @@ references or a relaxed security context may create pods (see *Complete admissio
 SubjectAccessReviews only with `metrics.enabled`, for the metrics endpoint; the
 manager role now carries the grant on every install.
 
-Upgrading applies the new rules with no other change: `helm upgrade` and
-`make deploy` apply them from the chart and the kustomize manifests, and an
-OLM upgrade applies the permissions in the new bundle's ClusterServiceVersion.
+Upgrading applies the new rules with no other change: `helm upgrade` applies
+them from the chart.
 
 During `helm upgrade` from v0.14.0, the old leader keeps running under the new
 role until the Lease moves to a new pod, about 30 to 60 seconds. In that time
@@ -2438,26 +2416,7 @@ leader takes over.
 a copy of the generated role instead of a hand-maintained list, so a chart
 release can no longer grant more, or less, than the operator binary needs.
 
-### The OLM bundle matches the kustomize install
-
-The bundle's ClusterServiceVersion is regenerated from source and checked by
-`make verify-manifests`. It had drifted: an OLM install ran without the
-admission webhooks, could not create post-restart Jobs (the `batch/jobs`
-permission was missing) and capped the operator at 128Mi of memory. The
-bundle now declares the four validating webhooks, grants the Job permission
-and uses the same memory (512Mi limit, 128Mi request) and node affinity as the
-kustomize install. Like kustomize, OLM keeps one replica, with no
-PodDisruptionBudget and no anti-affinity: only the Helm chart gets the
-availability defaults below. OLM provides and mounts the webhook certificates,
-so the bundle carries no cert-manager dependency.
-
-The Job permission means that, on OLM, the right to write a KrakenDGateway
-reaches the operator's `batch/jobs` grant, which an OLM install did not have
-before. The gateway webhook now reviews the requester's access for a
-post-restart Job that runs as another ServiceAccount, reads a Secret, or
-relaxes the operator's default security context (see *Complete admission*), so
-a gateway writer cannot use the operator to borrow those rights. It does not
-review `podLabels` or the `podAnnotations` other than the AppArmor one.
+### The gateway no longer takes over objects it does not control
 
 The gateway no longer takes over an object it does not control. Earlier versions
 created or updated a ServiceAccount, Service, PodDisruptionBudget,
@@ -2594,13 +2553,6 @@ it under another name: while the ServiceAccount still carries the gateway's
 owner reference, deleting the gateway deletes the ServiceAccount. A gateway that
 keeps the old name now refuses the ServiceAccount and holds its Deployment
 (`ResourceNotControlled`).
-
-For OLM users: the bundle now supports only the `AllNamespaces` install mode.
-The operator watches every namespace, and under `OwnNamespace` or
-`SingleNamespace` OLM would scope the webhooks to the target namespaces only.
-Writes to the four KrakenD kinds are now validated before they
-are stored, and the webhooks use `failurePolicy: Fail`. While the operator is
-unavailable, creating or updating those resources is rejected.
 
 ### Secrets and ConfigMaps are no longer cached
 
@@ -3142,7 +3094,7 @@ One difference: a deleted gateway's `krakend_operator_reconcile_duration_seconds
 | `OTEL_METRIC_EXPORT_INTERVAL` | `60000` (ms) | How often metrics are pushed over OTLP |
 | `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG` | `parentbased_always_on` | Trace sampling |
 | `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES` | `krakend-operator` | Override the reported resource; a malformed attribute is dropped and named at startup |
-| `POD_NAME` | from the downward API | Reported as `k8s.pod.name`; set by the chart, kustomize and the OLM bundle |
+| `POD_NAME` | from the downward API | Reported as `k8s.pod.name`; set by the chart |
 
 The Helm chart gains a `telemetry:` block: `otlp.endpoint`, `otlp.nodeCollector`, `otlp.protocol`, `otlp.headersSecret`, `otlp.signals`, `traces.sampler`, `traces.samplerArg`, `resourceAttributes` and `logs.format`.
 - With the defaults, nothing new is rendered except `POD_NAME`.
@@ -3166,6 +3118,93 @@ A fetch error in an AutoConfig's status shows the spec URL without user informat
 ### Rollback
 
 Rolling back restores zap's console logs on stderr. No state migrates either way.
+
+---
+
+## Unreleased — The Helm chart is the only install path
+
+The Helm chart is now the only way to install, upgrade and roll back the
+operator. Kustomize and the OLM bundle are gone.
+
+### Removed
+
+- `make deploy`, `make undeploy` and `make build-installer`.
+- The kustomize tree under `operator/config` (`default`, `manager`,
+  `certmanager`, `prometheus`, `network-policy`, and every `kustomization.yaml`).
+- The OLM bundle (`operator/bundle`, `bundle.Dockerfile` and the bundle
+  Makefile targets). It was never published: the release ships only the chart.
+
+`make install` and `make uninstall` remain. They apply `config/crd/bases` with
+kubectl, for `make run` against a cluster.
+
+### New chart values
+
+- `metrics.certManager.enabled` (default `false`): a cert-manager serving
+  certificate for the metrics endpoint, so the ServiceMonitor can verify TLS.
+- `networkPolicy.*` (default off): a NetworkPolicy that admits ingress to the
+  operator pods on the metrics port, from the namespaces
+  `networkPolicy.metricsNamespaceSelector` selects, and on the webhook port from
+  any source.
+- Twelve user-facing ClusterRoles (admin, editor and viewer for each of the four
+  kinds), always rendered. They carry the same names the kustomize install
+  gave them, so existing bindings keep working.
+
+### Migrating a `make deploy` install
+
+Do not run `make undeploy`, `kubectl delete -k` or a delete of the old full
+render. They delete the CRDs, and with them every KrakenD object. Leave the
+Namespace as well.
+
+1. Delete the old ValidatingWebhookConfiguration. Writes to the four KrakenD
+   kinds are unvalidated until the new pod is Ready.
+2. Delete the remaining operator objects by name.
+3. Delete the old certificate Secret, after its Certificate is gone.
+4. Apply this release's CRDs (see *CRD Upgrades*). Helm skips CRDs that
+   already exist.
+5. Run `helm install` with the release name `krakend-operator`, which keeps the
+   object names. Set `replicaCount: 1` and
+   `nodeSelector: {kubernetes.io/os: linux}` to keep the old shape.
+6. Verify (see *Post-Upgrade Verification*).
+
+```bash
+NS=krakend-operator-system
+kubectl delete validatingwebhookconfiguration krakend-operator-validating-webhook-configuration --ignore-not-found
+kubectl -n "$NS" delete --ignore-not-found \
+  deployment/krakend-operator-controller-manager \
+  service/krakend-operator-controller-manager-metrics-service service/krakend-operator-webhook-service \
+  serviceaccount/krakend-operator-controller-manager \
+  role/krakend-operator-leader-election-role rolebinding/krakend-operator-leader-election-rolebinding \
+  certificates.cert-manager.io/krakend-operator-serving-cert issuers.cert-manager.io/krakend-operator-selfsigned-issuer
+# Only after the Certificate is gone. Otherwise cert-manager can reissue the
+# Secret, and the reissued Secret carries no owner reference.
+kubectl -n "$NS" delete --ignore-not-found secret/webhook-server-cert
+kubectl delete --ignore-not-found clusterrolebinding krakend-operator-manager-rolebinding krakend-operator-metrics-auth-rolebinding
+kubectl delete --ignore-not-found clusterrole krakend-operator-manager-role krakend-operator-metrics-auth-role krakend-operator-metrics-reader \
+  krakend-operator-krakend{gateway,endpoint,backendpolicy,autoconfig}-{admin,editor,viewer}-role
+# Helm skips CRDs that already exist: apply this release's CRDs first (or use the raw URLs in *CRD Upgrades*).
+kubectl apply --server-side -f charts/krakend-operator/crds/
+helm install krakend-operator krakend-operator/krakend-operator -n "$NS" --set replicaCount=1
+```
+
+Notes:
+
+- The release recreates the twelve user roles under the same names, so existing
+  bindings resolve again.
+- The metrics Service is now `krakend-operator-metrics-service`. Update scrape
+  configs that name it; the ServiceMonitor selects by label.
+- `helm install --take-ownership` is not an option: the Deployment's selector
+  changes, and a selector is immutable.
+
+### OLM
+
+The bundle was never published. A self-built one is removed by deleting its
+Subscription and ClusterServiceVersion (OLM keeps the CRDs), then running
+`helm install` as above.
+
+### Rollback
+
+Use `helm rollback`, or `helm upgrade --version <earlier>`. There is no
+kustomize path forward; older tags still carry their `config/`.
 
 ---
 
