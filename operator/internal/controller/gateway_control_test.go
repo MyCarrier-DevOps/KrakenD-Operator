@@ -160,6 +160,27 @@ func TestGatewayReconcile_DeletesItsHPAWhileTheDeploymentIsRefused(t *testing.T)
 	}
 }
 
+// A Deployment write that fails for another reason refuses nothing: the HPA is
+// written as before.
+func TestGatewayReconcile_AFailedDeploymentWriteStillWritesTheHPA(t *testing.T) {
+	s := serveGateway(t)
+	s.failDeploymentWrites()
+	s.editSpec(t, func(spec *v1alpha1.KrakenDGatewaySpec) {
+		spec.Image = "img:v2"
+		spec.Autoscaling = &v1alpha1.AutoscalingSpec{MaxReplicas: 5}
+	})
+
+	if err := reconcileGateway(t, s.r, s.gw); err == nil || len(notControlledIn(err)) != 0 {
+		t.Fatalf("err = %v, want the failed Deployment write and no refusal", err)
+	}
+
+	var hpa autoscalingv2.HorizontalPodAutoscaler
+	getObject(t, s.c, s.gw, s.gw.Name, &hpa)
+	if hpa.Spec.MaxReplicas != 5 {
+		t.Errorf("HPA maxReplicas = %d, want 5", hpa.Spec.MaxReplicas)
+	}
+}
+
 // What the gateway controls, or an object orphaned from it that still carries
 // its selector labels, is written as always; an object of an optional kind
 // that nothing controls and that lacks the labels is not, and the caller can
