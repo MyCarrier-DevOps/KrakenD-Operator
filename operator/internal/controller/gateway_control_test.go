@@ -188,6 +188,9 @@ func TestGatewayReconcile_AFailedDeploymentWriteStillWritesTheHPA(t *testing.T) 
 func TestGatewayReconcile_NoVirtualServiceForARefusedService(t *testing.T) {
 	for name, also := range map[string]func(gw *v1alpha1.KrakenDGateway) []client.Object{
 		"the Service": func(*v1alpha1.KrakenDGateway) []client.Object { return nil },
+		"the Service, while the ServiceAccount holds the Deployment": func(gw *v1alpha1.KrakenDGateway) []client.Object {
+			return []client.Object{otherControllersServiceAccount(&gw.ObjectMeta)}
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			gw := reconciledGateway()
