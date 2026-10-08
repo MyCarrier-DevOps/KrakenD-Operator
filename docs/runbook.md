@@ -880,10 +880,11 @@ resources, probes, `postRestartJob`) is not checked and never draws this error. 
 repeats, check the operator pod's CPU and memory. A
 write that breaks endpoints which pass today is refused with a `422` naming
 the endpoints the check reached, even when the budget runs out first. The
-`500` that remains on a large gateway needs endpoints that already fail, or a
-gateway update whose stored root fails on its own: fix that root first (see
-the root denial above); the policy case is described under `breaks gateway`
-below.
+`500` that remains on a large gateway needs endpoints that already fail, a
+gateway update whose stored root fails on its own (fix that root first, see
+the root denial above), or a decision that cannot finish in the budget (see
+`breaks gateway` below, whose causes apply to a gateway update too, including
+an endpoint that fails because a policy it references fails on its own).
 
 ### Admission refuses a policy with `breaks gateway`
 
@@ -907,11 +908,15 @@ breaks gateway <ns>/<name>: ...`.
   example right after their owners changed them), or an endpoint that fails
   because a policy it references fails on its own, which the controller never
   excludes while the whole render passes: fix that policy, or the endpoint's
-  inline override of it. Each request scans the
-  endpoints in a random order, so a retry also reaches others; but on a gateway
-  of several hundred served endpoints it may not converge. It stops when the
-  gateway controller records their exclusions: retry after its next
-  reconcile;
+  inline override of it. The decision itself can also be too large for the
+  budget: many endpoints that lost an entry (resolve the clashes in
+  `status.conflicts`), a write to a policy whose stored content fails on its
+  own (every endpoint that uses it is judged first; fix the policy), or many
+  distinct policies not checked yet since a restart (a retry helps). For
+  failing, not yet recorded endpoints, each request scans the endpoints in a
+  random order, so a retry also reaches others; but on a gateway of several
+  hundred served endpoints it may not converge. It stops when the gateway
+  controller records their exclusions: retry after its next reconcile;
 - fix the policy, or ask those endpoints' owners;
 - a gateway whose root fails on its own, or whose failing endpoints all already
   failed with the stored policy, gets a warning instead. On a create there is no
