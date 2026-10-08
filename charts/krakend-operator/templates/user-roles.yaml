@@ -1,0 +1,32 @@
+{{- /*
+The operator does not use these roles. They exist for cluster admins to bind
+(with a RoleBinding or ClusterRoleBinding) to the people who manage each kind.
+They carry no aggregation labels, so nothing is granted until they are bound.
+*/ -}}
+{{- $fullname := include "krakend-operator.fullname" . }}
+{{- range $kind, $resource := dict "krakendgateway" "krakendgateways" "krakendendpoint" "krakendendpoints" "krakendbackendpolicy" "krakendbackendpolicies" "krakendautoconfig" "krakendautoconfigs" }}
+{{- range $role, $verbs := dict "admin" (list "*") "editor" (list "create" "delete" "get" "list" "patch" "update" "watch") "viewer" (list "get" "list" "watch") }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $fullname }}-{{ $kind }}-{{ $role }}-role
+  labels:
+    {{- include "krakend-operator.labels" $ | nindent 4 }}
+rules:
+- apiGroups:
+  - gateway.krakend.io
+  resources:
+  - {{ $resource }}
+  verbs:
+  {{- range $verbs }}
+  - {{ if eq . "*" }}'*'{{ else }}{{ . }}{{ end }}
+  {{- end }}
+- apiGroups:
+  - gateway.krakend.io
+  resources:
+  - {{ $resource }}/status
+  verbs:
+  - get
+---
+{{ end }}
+{{- end }}
