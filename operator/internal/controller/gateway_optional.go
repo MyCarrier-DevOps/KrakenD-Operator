@@ -18,7 +18,6 @@ package controller
 
 import (
 	"context"
-	stderrors "errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -160,13 +159,9 @@ func (r *KrakenDGatewayReconciler) optionalReader(gvk schema.GroupVersionKind) c
 	return r.APIReader
 }
 
-// errNotControlled is what applyOwned and the Deployment write return, wrapped
-// in a notControlledError, for an existing object the gateway may not take
-// over.
-var errNotControlled = stderrors.New("exists and the gateway does not control it")
-
-// notControlledError names an existing object the gateway refused to take
-// over: its kind, its place, and the controller that owns it, if any.
+// notControlledError is what applyOwned and the Deployment write return for an
+// existing object the gateway refused to take over. It names the object's
+// kind, its place, and the controller that owns it, if any.
 type notControlledError struct {
 	kind, namespace, name string
 	controller            string
@@ -181,8 +176,6 @@ func (e *notControlledError) Error() string {
 	return fmt.Sprintf("%s %s/%s has no controller and lacks the labels %s",
 		e.kind, e.namespace, e.name, labels.Set(e.consent))
 }
-
-func (e *notControlledError) Unwrap() error { return errNotControlled }
 
 // refuseUncontrolled returns a notControlledError when obj, as fetched, exists
 // and gw may not take it over. The gateway controls it, or it has no
@@ -270,8 +263,8 @@ func (r *KrakenDGatewayReconciler) setResourcesControlled(
 
 // applyOwned creates or updates obj, which gw controls, with what build sets.
 // kind names obj in the error, and consent are the labels that hand an
-// existing obj over (see refuseUncontrolled). An existing obj that gw may not take over
-// (see refuseUncontrolled) is left as it is and a notControlledError returned.
+// existing obj over. An existing obj that gw may not take over
+// (refuseUncontrolled) is left as it is and a notControlledError returned.
 func (r *KrakenDGatewayReconciler) applyOwned(
 	ctx context.Context, gw *v1alpha1.KrakenDGateway, obj client.Object, kind string, consent map[string]string,
 	build func(),
