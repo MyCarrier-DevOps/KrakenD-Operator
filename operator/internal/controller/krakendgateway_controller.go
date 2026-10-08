@@ -1362,7 +1362,10 @@ type infraInputs struct {
 // as it is while a hold applies: no config has passed validation yet, no
 // ConfigMap holds the applied config, or a plugin ConfigMap is missing. It
 // returns the ConfigMap collection error separately, because collection is
-// housekeeping that must not hold back the rest of the stage.
+// housekeeping that must not hold back the rest of the stage. A refused
+// Deployment is collected for as a held one is: the refusal lasts while the
+// config stage keeps publishing, and that Deployment mounts nothing of the
+// gateway's.
 func (r *KrakenDGatewayReconciler) reconcileDeploymentUnlessHeld(
 	ctx context.Context,
 	gw *v1alpha1.KrakenDGateway,
@@ -1389,7 +1392,11 @@ func (r *KrakenDGatewayReconciler) reconcileDeploymentUnlessHeld(
 	default:
 		obs, err = r.reconcileDeployment(ctx, gw, in)
 		if err != nil {
-			return deploymentObservation{failed: true, refused: len(notControlledIn(err)) > 0}, nil, err
+			obs = deploymentObservation{failed: true, refused: len(notControlledIn(err)) > 0}
+			if obs.refused {
+				gcErr = r.collectConfigMaps(ctx, gw, in.configMapName, "")
+			}
+			return obs, gcErr, err
 		}
 		// The template now mounts in.configMapName.
 		gcErr = r.collectConfigMaps(ctx, gw, in.configMapName, "")
