@@ -111,6 +111,8 @@ jobs:
           cache-from: type=gha,scope=operator-image
           cache-to: type=gha,mode=max,scope=operator-image
       - uses: azure/setup-helm@v5
+        with:
+          version: v4.3.0
       - name: Run e2e tests
         working-directory: operator
         env:
