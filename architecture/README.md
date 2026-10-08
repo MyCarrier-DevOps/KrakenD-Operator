@@ -1418,12 +1418,17 @@ write would replace, so a stale cache read cannot bypass it: a missed object
 fails the create with `AlreadyExists`, and a stale controlled or labelled read
 fails the update on its `resourceVersion` whenever the write changes anything.
 
-Two children name a sibling, and follow its refusal. The HPA scales the
-Deployment named like the gateway: while the Deployment step refuses that
-Deployment, the HPA is not written, and one the gateway controls is deleted.
-The VirtualService routes to the Service named like the gateway: while the pass
-refuses that Service, the VirtualService is not written, one the gateway
-controls is deleted, and `IstioConfigured` is `False` with reason
+Two children name a sibling, and follow its control. The HPA scales the
+Deployment named like the gateway: while the gateway may not take that
+Deployment over, the HPA is not written, and one the gateway controls is
+deleted. The Deployment step's refusal decides when the step runs. On a hold,
+where it does not (no config applied yet, no ConfigMap holding it, a missing
+plugin ConfigMap, or a ServiceAccount the gateway does not control), the
+pass's read of the Deployment decides, and the hold reports nothing more about
+that Deployment. The VirtualService routes to the Service named like the
+gateway, and the Service step runs on every pass: while it refuses that
+Service, the VirtualService is not written, one the gateway controls is
+deleted, and `IstioConfigured` is `False` with reason
 `ResourceNotControlled`. A refused Deployment raises no `Progressing`, and
 config ConfigMaps are still collected beside it, since the config stage keeps
 publishing one per applied config while the refusal lasts.
