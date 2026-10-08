@@ -7,7 +7,7 @@ This directory contains the operator source code, built with [controller-runtime
 - Go 1.26+
 - Docker or Podman
 - kubectl configured for a Kubernetes 1.33+ cluster
-- helm 3 or 4 (the end-to-end tests render the chart)
+- Helm 3.18 or later (the end-to-end tests render the chart)
 
 ## Project Layout
 
@@ -90,6 +90,9 @@ make run        # Run the operator outside the cluster
 ```
 
 ## Deploying
+
+Helm never updates CRDs that are already installed. After changing the API
+types, run `make install` before `helm upgrade`.
 
 ```bash
 helm upgrade --install krakend-operator ../charts/krakend-operator \
