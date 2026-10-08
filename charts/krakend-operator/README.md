@@ -15,6 +15,8 @@ helm repo update
 helm install krakend-operator krakend-operator/krakend-operator -n krakend-operator-system --create-namespace
 ```
 
+Migrating from `make deploy`: see the [upgrade guide](../../docs/upgrade-guide.md#unreleased--the-helm-chart-is-the-only-install-path).
+
 ## Configuration
 
 See [values.yaml](values.yaml) for the full list of configurable parameters.
