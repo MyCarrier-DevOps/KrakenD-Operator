@@ -24,6 +24,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
@@ -267,6 +268,43 @@ func TestGatewayReconcile_CollectsConfigRevisionsWhileTheDeploymentIsRefused(t *
 	if got := remainingConfigMaps(t, c, gw); len(got) != configMapHistoryLimit || !slices.Contains(got, applied) {
 		t.Errorf("config ConfigMaps after 6 applied configs = %v, want %d with the applied %s among them",
 			got, configMapHistoryLimit, applied)
+	}
+}
+
+// A refused Deployment can still mount a config ConfigMap of the gateway's, as
+// one another controller claimed after the gateway wrote it does. With no live
+// ReplicaSet to keep it, collection keeps the ConfigMap its template mounts, as
+// it does on a hold.
+func TestGatewayReconcile_KeepsWhatARefusedDeploymentMounts(t *testing.T) {
+	gw := reconciledGateway()
+	gw.UID = "gw-uid"
+	gw.Status.ConfigChecksum = "r5"
+	at := func(h int) time.Time { return testNow.Add(time.Duration(h) * time.Hour) }
+	claimed := legacyDeployment(gw)
+	claimed.OwnerReferences = []metav1.OwnerReference{{
+		APIVersion: "argoproj.io/v1alpha1", Kind: "Rollout", Name: "x", UID: "rollout-uid", Controller: new(true),
+	}}
+	claimed.Spec.Template.Spec.Volumes[0].ConfigMap.Name = "test-gw-config-r0"
+	c := fakeClientBuilder().WithObjects(gw, claimed,
+		ownedConfigMap(gw, "test-gw-config-r0", at(0), true),
+		ownedConfigMap(gw, "test-gw-config-r1", at(1), true),
+		ownedConfigMap(gw, "test-gw-config-r2", at(2), true),
+		ownedConfigMap(gw, "test-gw-config-r3", at(3), true),
+		ownedConfigMap(gw, "test-gw-config-r4", at(4), true),
+		ownedConfigMap(gw, "test-gw-config-r5", at(5), true),
+	).WithStatusSubresource(gw).Build()
+	r := newTestGatewayReconciler(c, renderOf(`{"version":3,"name":"r6"}`), &mockValidator{})
+
+	if err := reconcileGateway(t, r, gw); len(notControlledIn(err)) != 1 {
+		t.Fatalf("err = %v, want the Deployment's refusal", err)
+	}
+
+	applied := resources.ConfigMapName(gw, getGateway(t, c, gw).Status.ConfigChecksum)
+	want := []string{"test-gw-config-r0", "test-gw-config-r4", "test-gw-config-r5", applied}
+	slices.Sort(want)
+	if got := remainingConfigMaps(t, c, gw); !slices.Equal(got, want) {
+		t.Errorf("remaining ConfigMaps = %v, want %v (the applied one, the history and the one the refused "+
+			"Deployment mounts)", got, want)
 	}
 }
 
