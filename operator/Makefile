@@ -1,56 +1,8 @@
-# VERSION defines the project version for the bundle.
-# Update this value when you upgrade the version of your project.
-# To re-generate a bundle for another specific version without changing the standard setup, you can:
-# - use the VERSION as arg of the bundle target (e.g make bundle VERSION=0.0.2)
-# - use environment variables to overwrite this value (e.g export VERSION=0.0.2)
+# VERSION is the version the image reports (docker-build).
 VERSION ?= 0.0.1
 
-# CHANNELS define the bundle channels used in the bundle.
-# Add a new line here if you would like to change its default config. (E.g CHANNELS = "candidate,fast,stable")
-# To re-generate a bundle for other specific channels without changing the standard setup, you can:
-# - use the CHANNELS as arg of the bundle target (e.g make bundle CHANNELS=candidate,fast,stable)
-# - use environment variables to overwrite this value (e.g export CHANNELS="candidate,fast,stable")
-ifneq ($(origin CHANNELS), undefined)
-BUNDLE_CHANNELS := --channels=$(CHANNELS)
-endif
-
-# DEFAULT_CHANNEL defines the default channel used in the bundle.
-# Add a new line here if you would like to change its default config. (E.g DEFAULT_CHANNEL = "stable")
-# To re-generate a bundle for any other default channel without changing the default setup, you can:
-# - use the DEFAULT_CHANNEL as arg of the bundle target (e.g make bundle DEFAULT_CHANNEL=stable)
-# - use environment variables to overwrite this value (e.g export DEFAULT_CHANNEL="stable")
-ifneq ($(origin DEFAULT_CHANNEL), undefined)
-BUNDLE_DEFAULT_CHANNEL := --default-channel=$(DEFAULT_CHANNEL)
-endif
-BUNDLE_METADATA_OPTS ?= $(BUNDLE_CHANNELS) $(BUNDLE_DEFAULT_CHANNEL)
-
-# IMAGE_TAG_BASE defines the docker.io namespace and part of the image name for remote images.
-# This variable is used to construct full image tags for bundle and catalog images.
-#
-# For example, running 'make bundle-build bundle-push catalog-build catalog-push' will build and push both
-# ghcr.io/mycarrier-devops/krakend-operator-bundle:$VERSION and ghcr.io/mycarrier-devops/krakend-operator-catalog:$VERSION.
-IMAGE_TAG_BASE ?= ghcr.io/mycarrier-devops/krakend-operator
-
-# BUNDLE_IMG defines the image:tag used for the bundle.
-# You can use it as an arg. (E.g make bundle-build BUNDLE_IMG=<some-registry>/<project-name-bundle>:<tag>)
-BUNDLE_IMG ?= $(IMAGE_TAG_BASE)-bundle:v$(VERSION)
-
-# BUNDLE_GEN_FLAGS are the flags passed to the operator-sdk generate bundle command
-BUNDLE_GEN_FLAGS ?= -q --overwrite --version $(VERSION) $(BUNDLE_METADATA_OPTS)
-
-# USE_IMAGE_DIGESTS defines if images are resolved via tags or digests
-# You can enable this value if you would like to use SHA Based Digests
-# To enable set flag to true
-USE_IMAGE_DIGESTS ?= false
-ifeq ($(USE_IMAGE_DIGESTS), true)
-	BUNDLE_GEN_FLAGS += --use-image-digests
-endif
-
-# Set the Operator SDK version to use. The `operator-sdk` target installs exactly this version under bin/.
-# This is useful for CI or a project to utilize a specific version of the operator-sdk toolkit.
-OPERATOR_SDK_VERSION ?= v1.42.2
 # Image URL to use all building/pushing image targets
-IMG ?= $(IMAGE_TAG_BASE):latest
+IMG ?= ghcr.io/mycarrier-devops/krakend-operator:latest
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
@@ -121,81 +73,36 @@ generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and
 	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./..."
 
 .PHONY: verify-manifests
-# Fail if any generated manifest output drifts from source (review id
-# 3807285642, #5's original CI drift gate; broadened by review id
-# 3811443563, #3). Covers every generated-output location, not just
-# config/crd/bases:
+# Fail if any generated manifest output drifts from source. Covers every
+# generated-output location, not just config/crd/bases:
 #   - config/crd/bases, config/rbac/role.yaml, config/webhook/manifests.yaml
 #     (controller-gen output, via the `manifests` target)
-#   - bundle/manifests/ (operator-sdk bundle output, via the `bundle` target;
-#     drifted twice in this PR before this gate covered it — once as a
-#     missed webhook-service manifest that `git diff` alone never caught
-#     because it was untracked, not modified)
-# and catches NEW untracked files under config/ and bundle/manifests/ as a
-# whole (not just modifications to already-tracked files) — `git diff
-# --exit-code` alone is blind to a newly-generated file that was never
-# committed, which is exactly the historical webhook-service incident above.
+#   - ../charts/krakend-operator/crds and ../charts/krakend-operator/files,
+#     the chart's copies of the CRDs and of the manager ClusterRole, which the
+#     `manifests` target copies from the controller-gen output. The chart's
+#     templates/clusterrole.yaml renders the role copy, so the chart cannot
+#     drift from the +kubebuilder:rbac markers.
+# It also catches NEW untracked files under those paths as a whole, not just
+# modifications to already-tracked files: `git diff --exit-code` alone is blind
+# to a newly-generated file that was never committed.
 #
-# EXCLUDED on purpose, not an oversight: config/manager/kustomization.yaml.
-# `kustomize edit set image` (run by the `bundle` target) rewrites it as a
-# function of the IMG this target happens to be invoked with (default
-# :latest here, but e.g. `make deploy IMG=...:e2e` legitimately leaves a
-# different committed value), so gating on it would make this target
-# permanently red for reasons unrelated to source changes.
-#
-# The two *.clusterserviceversion.yaml files (bundle/manifests and
-# config/manifests/bases) ARE gated. The generator stamps metadata.createdAt
-# with the current time on every run, so the comparison ignores that one
-# line (`git diff -I 'createdAt:'`) and nothing else.
-#
-# ../charts/krakend-operator/files/manager-role.yaml: the chart's
-# ClusterRole rules, copied from config/rbac/role.yaml by `manifests` and
-# rendered by templates/clusterrole.yaml, so the chart cannot drift from the
-# +kubebuilder:rbac markers. Gated here like the chart's CRD copy.
-#
-# ../charts/krakend-operator/crds (review id 3812030497, round-5 #1): the
-# Helm chart's CRD copy, kept in sync by the `manifests` target's own `cp`
-# step above. Gating it here is part (b) of that fix — part (a) alone (the
-# cp with nothing to enforce it) would let the chart copy drift again the
-# next time someone edits a CRD type without running `make manifests`
-# locally before commit.
-VERIFY_MANIFESTS_PATHS = config/crd/bases config/rbac/role.yaml config/webhook/manifests.yaml bundle/manifests ../charts/krakend-operator/crds ../charts/krakend-operator/files config/manifests/bases
-# NOTE: this target mutates config/manager/kustomization.yaml as a side
-# effect of its `bundle` dependency (`kustomize edit set image`), which
-# runs to completion as a prerequisite before this recipe's own body
-# starts. The recipe restores it via `git checkout --` as its FIRST line
-# (review id 3812913986, round-6 #1) rather than its last: neither check
-# below reads or gates on that file (it's deliberately excluded from the
-# drift comparison — see the EXCLUDED-on-purpose block above, and note
-# it's absent from $(VERIFY_MANIFESTS_PATHS)), so restoring it up front
-# can't hide any real drift, and it means the file is already clean before
-# either check can `exit 1` and abort the recipe. Restoring it only at the
-# end (as before round-6) left it dirty on gate failure — exactly when a
-# developer can least tell a tool-made edit from their own in-progress
-# change. Safe to reset unconditionally here: `bundle`/`deploy`/`install`
-# are the only targets that touch it, and none of them are meant to be run
-# with review-relevant local edits to that file pending review — if you
-# were mid-edit on it, re-apply your change after running this target.
-#
-# NOTE: the untracked-file check below trips on ANY local, non-gitignored
-# scratch file dropped under one of the gated dirs above — not just
-# operator-generated drift. That's intentional (review id 3812030514,
-# round-5 #4): narrowing the check to only recognize controller-gen/
-# operator-sdk output would reopen the exact gap this gate exists to close
-# (a genuinely new generated file going undetected). CI is never affected,
-# since CI checkouts don't carry local scratch files. If this trips locally,
-# `git clean -n -- $(VERIFY_MANIFESTS_PATHS)` to see what would be removed.
-verify-manifests: manifests bundle ## Verify generated manifests (CRDs/RBAC/webhook/bundle/charts-CRDs) match committed source. Resets config/manager/kustomization.yaml (mutated by the bundle dependency) before checking. May fail on local untracked scratch files under gated dirs (not a bug, CI-safe — see Makefile comment above this target).
-	git checkout -- config/manager/kustomization.yaml
+# The untracked-file check trips on ANY local, non-gitignored scratch file
+# dropped under one of the gated paths, not only on generated drift. That is
+# intentional: narrowing it to controller-gen output would reopen the gap this
+# gate exists to close. CI is never affected, since CI checkouts carry no local
+# scratch files. If this trips locally,
+# `git clean -n -- $(VERIFY_MANIFESTS_PATHS)` shows what would be removed.
+VERIFY_MANIFESTS_PATHS = config/crd/bases config/rbac/role.yaml config/webhook/manifests.yaml ../charts/krakend-operator/crds ../charts/krakend-operator/files
+verify-manifests: manifests generate ## Verify generated manifests (CRDs/RBAC/webhook/chart copies) match committed source. May fail on local untracked scratch files under gated paths (not a bug, CI-safe; see the Makefile comment above this target).
 	@untracked=$$(git status --porcelain -- $(VERIFY_MANIFESTS_PATHS) | grep '^??' || true); \
 	if [ -n "$$untracked" ]; then \
 	  echo "generated manifests drifted: new untracked file(s):"; \
 	  echo "$$untracked"; \
-	  echo "run 'make manifests && make bundle' and commit the result"; \
+	  echo "run 'make manifests' and commit the result"; \
 	  exit 1; \
 	fi
-	git diff --exit-code -I 'createdAt:' -- $(VERIFY_MANIFESTS_PATHS) || \
-	  (echo "generated manifests are out of date — run 'make manifests && make bundle' and commit the result" \
+	git diff --exit-code -- $(VERIFY_MANIFESTS_PATHS) || \
+	  (echo "generated manifests are out of date — run 'make manifests' and commit the result" \
 	    && exit 1)
 
 .PHONY: fmt
@@ -365,71 +272,3 @@ mv $(1) $(1)-$(3) ;\
 } ;\
 ln -sf $(1)-$(3) $(1)
 endef
-
-.PHONY: operator-sdk
-OPERATOR_SDK ?= $(LOCALBIN)/operator-sdk
-operator-sdk: ## Download the pinned operator-sdk locally if necessary.
-	@[ -f "$(OPERATOR_SDK)-$(OPERATOR_SDK_VERSION)" ] || { \
-	set -e ;\
-	mkdir -p $(LOCALBIN) ;\
-	OS=$$(go env GOOS) && ARCH=$$(go env GOARCH) && \
-	curl -sSLo $(OPERATOR_SDK)-$(OPERATOR_SDK_VERSION) https://github.com/operator-framework/operator-sdk/releases/download/$(OPERATOR_SDK_VERSION)/operator-sdk_$${OS}_$${ARCH} ;\
-	chmod +x $(OPERATOR_SDK)-$(OPERATOR_SDK_VERSION) ;\
-	} ;\
-	ln -sf operator-sdk-$(OPERATOR_SDK_VERSION) $(OPERATOR_SDK)
-
-.PHONY: bundle
-bundle: manifests kustomize operator-sdk ## Generate bundle manifests and metadata, then validate generated files.
-	$(OPERATOR_SDK) generate kustomize manifests -q
-	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMG)
-	$(KUSTOMIZE) build config/manifests | $(OPERATOR_SDK) generate bundle $(BUNDLE_GEN_FLAGS)
-	$(OPERATOR_SDK) bundle validate ./bundle
-
-.PHONY: bundle-build
-bundle-build: ## Build the bundle image.
-	$(CONTAINER_TOOL) build -f bundle.Dockerfile -t $(BUNDLE_IMG) .
-
-.PHONY: bundle-push
-bundle-push: ## Push the bundle image.
-	$(MAKE) docker-push IMG=$(BUNDLE_IMG)
-
-.PHONY: opm
-OPM = $(LOCALBIN)/opm
-opm: ## Download opm locally if necessary.
-ifeq (,$(wildcard $(OPM)))
-ifeq (,$(shell which opm 2>/dev/null))
-	@{ \
-	set -e ;\
-	mkdir -p $(dir $(OPM)) ;\
-	OS=$(shell go env GOOS) && ARCH=$(shell go env GOARCH) && \
-	curl -sSLo $(OPM) https://github.com/operator-framework/operator-registry/releases/download/v1.55.0/$${OS}-$${ARCH}-opm ;\
-	chmod +x $(OPM) ;\
-	}
-else
-OPM = $(shell which opm)
-endif
-endif
-
-# A comma-separated list of bundle images (e.g. make catalog-build BUNDLE_IMGS=example.com/operator-bundle:v0.1.0,example.com/operator-bundle:v0.2.0).
-# These images MUST exist in a registry and be pull-able.
-BUNDLE_IMGS ?= $(BUNDLE_IMG)
-
-# The image tag given to the resulting catalog image (e.g. make catalog-build CATALOG_IMG=example.com/operator-catalog:v0.2.0).
-CATALOG_IMG ?= $(IMAGE_TAG_BASE)-catalog:v$(VERSION)
-
-# Set CATALOG_BASE_IMG to an existing catalog image tag to add $BUNDLE_IMGS to that image.
-ifneq ($(origin CATALOG_BASE_IMG), undefined)
-FROM_INDEX_OPT := --from-index $(CATALOG_BASE_IMG)
-endif
-
-# Build a catalog image by adding bundle images to an empty catalog using the operator package manager tool, 'opm'.
-# This recipe invokes 'opm' in 'semver' bundle add mode. For more information on add modes, see:
-# https://github.com/operator-framework/community-operators/blob/7f1438c/docs/packaging-operator.md#updating-your-existing-operator
-.PHONY: catalog-build
-catalog-build: opm ## Build a catalog image.
-	$(OPM) index add --container-tool $(CONTAINER_TOOL) --mode semver --tag $(CATALOG_IMG) --bundles $(BUNDLE_IMGS) $(FROM_INDEX_OPT)
-
-# Push the catalog image.
-.PHONY: catalog-push
-catalog-push: ## Push a catalog image.
-	$(MAKE) docker-push IMG=$(CATALOG_IMG)
