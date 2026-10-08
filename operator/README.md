@@ -1,6 +1,6 @@
 # KrakenD Operator — Development Guide
 
-This directory contains the operator source code, built with [Operator SDK](https://sdk.operatorframework.io/) and [controller-runtime](https://github.com/kubernetes-sigs/controller-runtime).
+This directory contains the operator source code, built with [controller-runtime](https://github.com/kubernetes-sigs/controller-runtime) and [controller-gen](https://github.com/kubernetes-sigs/controller-tools).
 
 ## Prerequisites
 
@@ -8,7 +8,6 @@ This directory contains the operator source code, built with [Operator SDK](http
 - Docker or Podman
 - kubectl configured for a Kubernetes 1.33+ cluster
 - helm 3 or 4 (the end-to-end tests render the chart)
-- operator-sdk v1.42+
 
 ## Project Layout
 
@@ -23,7 +22,6 @@ internal/
   webhook/      Validating and mutating webhooks
   util/         Shared utilities (conditions, labels)
 config/         Kustomize manifests (CRDs, RBAC, manager, samples)
-bundle/         OLM operator bundle
 ```
 
 ## Building
@@ -32,7 +30,6 @@ bundle/         OLM operator bundle
 make build                  # Build the manager binary
 make generate               # Generate deepcopy methods
 make manifests              # Generate CRD and RBAC manifests
-make bundle                 # Generate OLM bundle
 ```
 
 ## Testing
