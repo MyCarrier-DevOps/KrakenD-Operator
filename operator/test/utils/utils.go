@@ -64,15 +64,11 @@ func warnError(err error) {
 	fmt.Fprintf(GinkgoWriter, "warning: %v\n", err) //nolint:errcheck // best-effort log
 }
 
-// Run executes the provided command within this context.
-// If a kubeconfig has been set (ephemeral K3s cluster), it is injected via KUBECONFIG env var.
-func Run(cmd *exec.Cmd) (string, error) {
+// prepareCommand runs cmd in the project directory with the environment the e2e suite needs:
+// KUBECONFIG when an ephemeral K3s cluster is set, and CONTAINER_HOST when DOCKER_HOST is.
+func prepareCommand(cmd *exec.Cmd) {
 	dir, _ := GetProjectDir() //nolint:errcheck // best-effort directory resolution
 	cmd.Dir = dir
-
-	if err := os.Chdir(cmd.Dir); err != nil {
-		fmt.Fprintf(GinkgoWriter, "chdir dir: %q\n", err) //nolint:errcheck // best-effort log
-	}
 
 	cmd.Env = append(os.Environ(), "GO111MODULE=on")
 	if kubeconfigPath != "" {
@@ -83,6 +79,17 @@ func Run(cmd *exec.Cmd) (string, error) {
 	if dh := os.Getenv("DOCKER_HOST"); dh != "" {
 		cmd.Env = append(cmd.Env, "CONTAINER_HOST="+dh)
 	}
+}
+
+// Run executes the provided command within this context.
+// If a kubeconfig has been set (ephemeral K3s cluster), it is injected via KUBECONFIG env var.
+func Run(cmd *exec.Cmd) (string, error) {
+	prepareCommand(cmd)
+
+	if err := os.Chdir(cmd.Dir); err != nil {
+		fmt.Fprintf(GinkgoWriter, "chdir dir: %q\n", err) //nolint:errcheck // best-effort log
+	}
+
 	command := strings.Join(cmd.Args, " ")
 	fmt.Fprintf(GinkgoWriter, "running: %q\n", command) //nolint:errcheck // best-effort log
 	output, err := cmd.CombinedOutput()
