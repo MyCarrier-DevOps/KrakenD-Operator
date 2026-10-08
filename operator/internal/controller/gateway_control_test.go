@@ -162,6 +162,46 @@ func TestGatewayReconcile_DeletesItsHPAWhileTheDeploymentIsRefused(t *testing.T)
 	}
 }
 
+// While the Deployment is held its step does not run, so nothing refuses the
+// Deployment named like the gateway, but the pass's read still tells whether
+// the gateway controls it. One it does not control is never the target of an
+// HPA the gateway writes, and the gateway's own HPA is deleted.
+func TestGatewayReconcile_NoHPAForAForeignDeploymentWhileItIsHeld(t *testing.T) {
+	for name, tc := range map[string]struct {
+		setup func(gw *v1alpha1.KrakenDGateway)
+		rend  renderer.Renderer
+		val   renderer.Validator
+	}{
+		"a plugin ConfigMap is missing": {
+			setup: func(gw *v1alpha1.KrakenDGateway) {
+				gw.Spec.Plugins = &v1alpha1.PluginsSpec{Sources: []v1alpha1.PluginSource{
+					{ConfigMapRef: &v1alpha1.ConfigMapKeyRef{Name: "missing", Key: "auth.so"}},
+				}}
+			},
+			rend: renderOf(`{"version":3}`), val: &mockValidator{},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			gw := reconciledGateway()
+			gw.UID = "gw-uid"
+			gw.Spec.Autoscaling = &v1alpha1.AutoscalingSpec{MinReplicas: new(int32(1)), MaxReplicas: 1}
+			tc.setup(gw)
+			hpa := &autoscalingv2.HorizontalPodAutoscaler{ObjectMeta: metav1.ObjectMeta{
+				Name: gw.Name, Namespace: gw.Namespace, OwnerReferences: ownedBy(gw),
+			}}
+			c := fakeClientBuilder().WithObjects(gw, foreignDeployment(gw), hpa).WithStatusSubresource(gw).Build()
+			r := newTestGatewayReconciler(c, tc.rend, tc.val)
+
+			_ = reconcileGateway(t, r, gw)
+
+			if err := c.Get(t.Context(), client.ObjectKeyFromObject(hpa), hpa); !apierrors.IsNotFound(err) {
+				t.Errorf("HPA get err = %v (target %+v), want NotFound: the gateway's HPA must not scale a "+
+					"Deployment the gateway does not control", err, hpa.Spec.ScaleTargetRef)
+			}
+		})
+	}
+}
+
 // Nothing rolls a refused Deployment, which is somebody else's: a newly applied
 // config raises no Progressing beside it. ResourcesControlled reports the
 // refusal instead.
