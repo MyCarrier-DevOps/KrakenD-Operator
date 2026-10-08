@@ -209,7 +209,9 @@ helm rollback krakend-operator -n krakend-operator-system
 
 To go back to an earlier chart version without `helm rollback`, run
 `helm upgrade --version <previous-version>`. The chart is the only install path,
-so there is no other route back; older tags still carry their `config/`.
+so there is no other route back. After migrating a `make deploy` install,
+`helm rollback` has no earlier revision to return to; see
+[Unreleased — the Helm chart is the only install path](#unreleased--the-helm-chart-is-the-only-install-path).
 
 > **Note:** CRD changes cannot be rolled back via Helm. If a CRD schema change is incompatible, restore from backup.
 
@@ -3158,13 +3160,22 @@ Namespace as well.
 1. Delete the old ValidatingWebhookConfiguration. Writes to the four KrakenD
    kinds are unvalidated until the new pod is Ready.
 2. Delete the remaining operator objects by name.
-3. Delete the old certificate Secret, after its Certificate is gone.
-4. Apply this release's CRDs (see *CRD Upgrades*). Helm skips CRDs that
+3. If you enabled the Prometheus or network-policy overlays, delete their
+   objects too, before the chart install. The old ServiceMonitor selects the
+   chart's Services, so it would keep scraping them and show the webhook
+   Service as a down target. The old NetworkPolicy selects the chart's pods
+   and admits only the metrics port, so on a CNI that enforces NetworkPolicy
+   it cuts the webhook port and every write to the four KrakenD kinds fails
+   while `webhooks.failurePolicy` is `Fail`. A Certificate you created for the
+   overlay's `metrics-server-cert` Secret is yours to delete; set
+   `metrics.certManager.enabled: true` instead.
+4. Delete the old certificate Secret, after its Certificate is gone.
+5. Apply this release's CRDs (see *CRD Upgrades*). Helm skips CRDs that
    already exist.
-5. Run `helm install` with the release name `krakend-operator`, which keeps the
+6. Run `helm install` with the release name `krakend-operator`, which keeps the
    object names. Set `replicaCount: 1` and
    `nodeSelector: {kubernetes.io/os: linux}` to keep the old shape.
-6. Verify (see *Post-Upgrade Verification*).
+7. Verify (see *Post-Upgrade Verification*).
 
 ```bash
 NS=krakend-operator-system
@@ -3175,15 +3186,23 @@ kubectl -n "$NS" delete --ignore-not-found \
   serviceaccount/krakend-operator-controller-manager \
   role/krakend-operator-leader-election-role rolebinding/krakend-operator-leader-election-rolebinding \
   certificates.cert-manager.io/krakend-operator-serving-cert issuers.cert-manager.io/krakend-operator-selfsigned-issuer
+# Only if you enabled the overlays. The ServiceMonitor needs the prometheus-operator
+# CRDs, so it is a separate command: a missing type does not fail the others.
+kubectl -n "$NS" delete --ignore-not-found networkpolicy/krakend-operator-allow-metrics-traffic
+kubectl -n "$NS" delete --ignore-not-found servicemonitors.monitoring.coreos.com/krakend-operator-controller-manager-metrics-monitor
 # Only after the Certificate is gone. Otherwise cert-manager can reissue the
 # Secret, and the reissued Secret carries no owner reference.
 kubectl -n "$NS" delete --ignore-not-found secret/webhook-server-cert
 kubectl delete --ignore-not-found clusterrolebinding krakend-operator-manager-rolebinding krakend-operator-metrics-auth-rolebinding
 kubectl delete --ignore-not-found clusterrole krakend-operator-manager-role krakend-operator-metrics-auth-role krakend-operator-metrics-reader \
   krakend-operator-krakend{gateway,endpoint,backendpolicy,autoconfig}-{admin,editor,viewer}-role
-# Helm skips CRDs that already exist: apply this release's CRDs first (or use the raw URLs in *CRD Upgrades*).
+# Helm skips CRDs that already exist: apply this release's CRDs first, from a
+# checkout of the tag v<version> (or use the raw URLs in *CRD Upgrades*).
 kubectl apply --server-side -f charts/krakend-operator/crds/
-helm install krakend-operator krakend-operator/krakend-operator -n "$NS" --set replicaCount=1
+helm repo add krakend-operator https://mycarrier-devops.github.io/KrakenD-Operator
+helm repo update
+helm install krakend-operator krakend-operator/krakend-operator -n "$NS" --version <version> \
+  --set replicaCount=1 --set-string 'nodeSelector.kubernetes\.io/os=linux'
 ```
 
 Notes:
@@ -3203,8 +3222,17 @@ Subscription and ClusterServiceVersion (OLM keeps the CRDs), then running
 
 ### Rollback
 
-Use `helm rollback`, or `helm upgrade --version <earlier>`. There is no
-kustomize path forward; older tags still carry their `config/`.
+Right after the migration the release has only revision 1, so `helm rollback`
+has nothing to return to. To go back to an older operator, run
+`helm upgrade --version <previous>`. Going back to a kustomize install is not
+supported.
+
+A chart older than this release does not render the twelve user roles or the
+`krakend-operator-metrics-auth-role`, its binding and
+`krakend-operator-metrics-reader`, so that upgrade deletes them and bindings to
+them stop granting access. Re-create those bindings against your own roles
+before you downgrade, or upgrade again to a chart from this release or later
+to restore the roles.
 
 ---
 
